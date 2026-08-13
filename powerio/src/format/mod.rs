@@ -1,4 +1,4 @@
-//! Readers and writers for supported case formats, all meeting at [`Network`].
+//! Readers and writers for supported case formats, all meeting at [`BalancedNetwork`].
 //!
 //! Each format module owns its reader and/or writer: MATPOWER `.m`,
 //! PowerModels JSON, PSS/E `.raw`, PowerWorld `.aux`, egret `ModelData` JSON,
@@ -8,9 +8,9 @@
 //! only. Case input and
 //! output formats meet here, so adding a writable format is one module plus
 //! one hub registration.
-//! [`parse_file`] reads Network cases, detecting the format from its extension;
+//! [`parse_file`] reads BalancedNetwork cases, detecting the format from its extension;
 //! [`parse_display_file`] reads display artifacts such as PowerWorld `.pwd`.
-//! [`write_as`] serializes a `Network` to text targets. Directory formats,
+//! [`write_as`] serializes a `BalancedNetwork` to text targets. Directory formats,
 //! such as PyPSA CSV folders, use explicit filesystem helpers. Non-finite
 //! numeric values, such as MATPOWER `Inf`/`NaN` angle limits, are written as
 //! JSON `null`.
@@ -20,7 +20,7 @@
 //! Conversion is two-tier:
 //!
 //! - **Same format writes return the original text.** A reader keeps its source
-//!   text (see [`Network`]), so writing back to the same format returns every
+//!   text (see [`BalancedNetwork`]), so writing back to the same format returns every
 //!   field, comment, and numeric token.
 //! - **Cross-format keeps maximal fidelity with itemized loss.** Whatever the
 //!   target format cannot represent is reported in the [`Conversion`] `warnings`,
@@ -35,7 +35,7 @@ use std::sync::Arc;
 use serde_json::{Map, Value};
 
 use crate::gen_cost::{GenCostPatch, MissingGenCostPolicy};
-use crate::network::{Branch, BranchRatingSet, Bus, BusId, BusType, Network, SourceFormat};
+use crate::network::{BalancedNetwork, Branch, BranchRatingSet, Bus, BusId, BusType, SourceFormat};
 use crate::{Error, Result};
 use routing::{Detection, JsonClass, SourceFormat as DetectedFormat, TransmissionFormat};
 
@@ -83,7 +83,7 @@ pub enum TargetFormat {
     PandapowerJson,
     /// MATPOWER `.m` (round-trip; byte-exact when the case kept its source).
     Matpower,
-    /// Compatibility alias for [`Network::to_json`] and [`Network::from_json`].
+    /// Compatibility alias for [`BalancedNetwork::to_json`] and [`BalancedNetwork::from_json`].
     /// New code should call those methods directly.
     #[doc(hidden)]
     PowerioJson,
@@ -172,7 +172,7 @@ impl FromStr for TargetFormat {
 }
 
 /// A display artifact format. These files are not power network cases and do
-/// not parse to [`Network`].
+/// not parse to [`BalancedNetwork`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum DisplayFormat {
@@ -302,7 +302,7 @@ impl DisplayData {
 
 fn display_file_guidance() -> Error {
     Error::UnknownFormat(
-        "a PowerWorld .pwd is display data, not a Network case; \
+        "a PowerWorld .pwd is display data, not a BalancedNetwork case; \
          use parse_display_file(path, None)"
             .into(),
     )
@@ -564,7 +564,7 @@ fn read_source(source: Arc<String>, fmt: TargetFormat, name_hint: Option<&str>) 
         }
         // The canonical snapshot: validated deserialization of the model itself.
         // It carries its own name and source_format, so the hint doesn't apply.
-        TargetFormat::PowerioJson => Network::from_json(&source),
+        TargetFormat::PowerioJson => BalancedNetwork::from_json(&source),
         // PSLF read normally enters through the `is_pslf_name`/`.epc` fast path in
         // parse_file / parse_str; this arm keeps the funnel total.
         TargetFormat::Pslf => pslf::parse_pslf_source(source, name_hint, &mut warnings),
@@ -612,7 +612,7 @@ pub(crate) fn geographic_meta(buses: &[Bus]) -> Option<crate::geo::GeoMeta> {
 /// `baseMVA` would otherwise parse to a hollow network; reject it in the
 /// [`read_source`] funnel so every parse path (file and in-memory) is guarded,
 /// and in the PyPSA folder reader, which bypasses the funnel.
-pub(crate) fn reject_empty_case(net: &Network, format: &'static str) -> Result<()> {
+pub(crate) fn reject_empty_case(net: &BalancedNetwork, format: &'static str) -> Result<()> {
     if net.buses.is_empty() {
         return Err(Error::FormatRead {
             format,
@@ -724,7 +724,7 @@ pub fn parse_str_with_name(text: &str, format: &str, name_hint: Option<&str>) ->
 #[derive(Debug, Clone)]
 #[non_exhaustive]
 pub struct Parsed {
-    pub network: Network,
+    pub network: BalancedNetwork,
     pub warnings: Vec<String>,
     /// The source document for formats whose downstream adapters reuse the
     /// reader's parse (see [`SourceDocument`]); `None` for every other format.
@@ -733,7 +733,7 @@ pub struct Parsed {
 
 impl Parsed {
     /// Wrap a reader result for a format without a shared source document.
-    pub(crate) fn without_document(network: Network, warnings: Vec<String>) -> Self {
+    pub(crate) fn without_document(network: BalancedNetwork, warnings: Vec<String>) -> Self {
         Self {
             network,
             warnings,
@@ -768,7 +768,7 @@ pub struct Conversion {
     pub warnings: Vec<String>,
 }
 
-/// Optional write-time policies layered on top of the neutral [`Network`].
+/// Optional write-time policies layered on top of the neutral [`BalancedNetwork`].
 ///
 /// The default is a no-op and preserves the old `write_as` / `convert_*`
 /// behavior. Non-default options work on a cloned network and never mutate the
@@ -786,7 +786,7 @@ impl WriteOptions {
     }
 }
 
-/// Convert a [`Network`] to `format`. Writing back to the source format returns
+/// Convert a [`BalancedNetwork`] to `format`. Writing back to the source format returns
 /// the retained source text; otherwise the network is serialized into the target.
 ///
 /// # Errors
@@ -796,7 +796,7 @@ impl WriteOptions {
 /// snapshot, so it is written as `null` with a fidelity warning naming the
 /// field: that output serves the one-way transports but does not read back
 /// (the validating reader rejects the `null`).
-pub fn write_as(net: &Network, format: TargetFormat) -> Result<Conversion> {
+pub fn write_as(net: &BalancedNetwork, format: TargetFormat) -> Result<Conversion> {
     if is_echo(net, format) {
         if let Some(src) = &net.source {
             return Ok(Conversion {
@@ -858,10 +858,10 @@ pub fn write_as(net: &Network, format: TargetFormat) -> Result<Conversion> {
     Ok(conv)
 }
 
-/// Convert a [`Network`] with write-time cost policies. The old [`write_as`]
+/// Convert a [`BalancedNetwork`] with write-time cost policies. The old [`write_as`]
 /// behavior is preserved when `options` is default.
 pub fn write_as_with_options(
-    net: &Network,
+    net: &BalancedNetwork,
     format: TargetFormat,
     options: &WriteOptions,
 ) -> Result<Conversion> {
@@ -938,7 +938,7 @@ pub(super) fn allocate_circuit_id<K: Ord + Clone>(
 /// modern records (12 named ratings, load DG/LOADTYPE columns, the system-wide
 /// block) and any unmodeled section the echo would have preserved. Name the
 /// downgrade instead of performing it silently.
-fn warn_psse_downgrade(net: &Network, format: TargetFormat, conv: &mut Conversion) {
+fn warn_psse_downgrade(net: &BalancedNetwork, format: TargetFormat, conv: &mut Conversion) {
     if let (TargetFormat::Psse { rev }, SourceFormat::Psse, Some(src)) =
         (format, net.source_format, net.source.as_ref())
     {
@@ -956,7 +956,7 @@ fn warn_psse_downgrade(net: &Network, format: TargetFormat, conv: &mut Conversio
 /// field. PSS/E (`BASFRQ`) and pandapower (`f_hz`) carry it; MATPOWER,
 /// PowerModels, egret, and PowerWorld have nowhere to put it, so a 50 Hz case
 /// would silently read back as the 60 Hz default. Report the loss instead.
-fn warn_dropped_frequency(net: &Network, format: TargetFormat, conv: &mut Conversion) {
+fn warn_dropped_frequency(net: &BalancedNetwork, format: TargetFormat, conv: &mut Conversion) {
     let carries_frequency = matches!(
         format,
         TargetFormat::Psse { .. } | TargetFormat::PandapowerJson
@@ -980,7 +980,7 @@ fn warn_dropped_frequency(net: &Network, format: TargetFormat, conv: &mut Conver
 /// path; MATPOWER, PSS/E, PowerModels, egret, PSLF, and Surge have nowhere to
 /// put them, matching the `base_frequency` behavior. `powerio geo extract`
 /// writes the sidecar as the escape hatch.
-fn warn_dropped_locations(net: &Network, format: TargetFormat, conv: &mut Conversion) {
+fn warn_dropped_locations(net: &BalancedNetwork, format: TargetFormat, conv: &mut Conversion) {
     let carries_locations = matches!(
         format,
         TargetFormat::PowerWorld | TargetFormat::PandapowerJson
@@ -1004,14 +1004,18 @@ fn warn_dropped_locations(net: &Network, format: TargetFormat, conv: &mut Conver
 /// transformer record is the one such target; PSS/E writes representable
 /// magnetizing admittance and the MATPOWER shaped writers keep the legacy total
 /// projection on the branch row, so neither drops it.
-fn warn_dropped_transformer_charging(net: &Network, format: TargetFormat, conv: &mut Conversion) {
+fn warn_dropped_transformer_charging(
+    net: &BalancedNetwork,
+    format: TargetFormat,
+    conv: &mut Conversion,
+) {
     if !matches!(format, TargetFormat::Pslf) {
         return;
     }
     let n = net
         .branches
         .iter()
-        .filter(|b| b.is_transformer() && b.legacy_total_charging_b() != 0.0)
+        .filter(|b| b.is_transformer() && b.total_charging_b() != 0.0)
         .count();
     if n > 0 {
         conv.warnings.push(format!(
@@ -1040,7 +1044,7 @@ pub(super) fn branch_rating_set_drop_warning(
 
 pub(super) fn warn_extra_branch_rating_sets(
     target: &str,
-    net: &Network,
+    net: &BalancedNetwork,
     warnings: &mut Vec<String>,
 ) {
     for (branch_index, branch) in net.branches.iter().enumerate() {
@@ -1059,7 +1063,7 @@ pub(super) fn warn_extra_branch_rating_sets(
 /// `from`.
 ///
 /// This is the canonical file-conversion helper shared by the bindings. It
-/// parses `path` once, writes the resulting [`Network`] to `to`, and returns the
+/// parses `path` once, writes the resulting [`BalancedNetwork`] to `to`, and returns the
 /// converted text plus any fidelity warnings, read side first. An echo (writing
 /// back to the source format) returns the retained text with no warnings.
 ///
@@ -1096,7 +1100,7 @@ pub fn convert_file_with_options(
 /// Convert in-memory case `text` of the named `format` (see
 /// [`target_format_from_name`]) to `to`.
 ///
-/// Parses `text` once and writes the resulting [`Network`] to `to` without a
+/// Parses `text` once and writes the resulting [`BalancedNetwork`] to `to` without a
 /// temporary file. Warnings are ordered read side first, as in
 /// [`convert_file`].
 ///
@@ -1136,7 +1140,7 @@ pub fn convert_str_with_options(
 /// [`Error::UnknownFormat`] for a non-directory format name; the writer's own
 /// [`Error`] otherwise.
 pub fn write_dir(
-    net: &Network,
+    net: &BalancedNetwork,
     to: &str,
     out_dir: impl AsRef<std::path::Path>,
 ) -> Result<Vec<String>> {
@@ -1154,7 +1158,7 @@ pub fn write_dir(
 /// systematically lacks the designation (the binary does not store it), so
 /// the silent case would be common; `to_normalized` synthesizes a slack at
 /// the largest pmax in service generator bus for consumers that need one.
-fn warn_missing_reference(net: &Network, format: TargetFormat, conv: &mut Conversion) {
+fn warn_missing_reference(net: &BalancedNetwork, format: TargetFormat, conv: &mut Conversion) {
     let needs_ref = matches!(
         format,
         TargetFormat::Matpower
@@ -1172,7 +1176,7 @@ fn warn_missing_reference(net: &Network, format: TargetFormat, conv: &mut Conver
 /// The slackless-network warning itself, shared with the PyPSA folder writer
 /// (which produces `PypsaCsvOutputs`, not a [`Conversion`], so it cannot go
 /// through [`warn_missing_reference`]).
-pub(super) fn missing_reference_warning(net: &Network) -> Option<String> {
+pub(super) fn missing_reference_warning(net: &BalancedNetwork) -> Option<String> {
     (!net.buses.iter().any(|b| b.kind == BusType::Ref)).then(|| {
         "no reference (slack) bus in the source network; power flow tools \
          reject such cases; to_normalized synthesizes a slack at the \
@@ -1193,7 +1197,7 @@ pub(super) fn missing_reference_warning(net: &Network) -> Option<String> {
 // line's tap from `effective_tap()` (the literal `1.0`) and its shift from
 // `0.0 * DEG_TO_RAD` (exactly `0.0`), so an epsilon compare would be wrong here.
 #[allow(clippy::float_cmp)]
-fn warn_normalized_tap(net: &Network, format: TargetFormat, conv: &mut Conversion) {
+fn warn_normalized_tap(net: &BalancedNetwork, format: TargetFormat, conv: &mut Conversion) {
     if matches!(format, TargetFormat::Matpower) {
         return;
     }
@@ -1204,7 +1208,7 @@ fn warn_normalized_tap(net: &Network, format: TargetFormat, conv: &mut Conversio
 // `tap == 1.0` / `shift == 0.0` are exact by construction (see
 // `warn_normalized_tap`), so an epsilon compare would be wrong here.
 #[allow(clippy::float_cmp)]
-pub(super) fn normalized_tap_warning(net: &Network) -> Option<String> {
+pub(super) fn normalized_tap_warning(net: &BalancedNetwork) -> Option<String> {
     if !net.is_normalized() {
         return None;
     }
@@ -1264,7 +1268,7 @@ pub(crate) fn bus_kv(buses: &[Bus], bus_pos: &HashMap<BusId, usize>, bus: BusId)
 /// Each text writer calls this at its quoting seam and warns when the result
 /// differs from the input (the substitution silently alters operator-facing
 /// names): the PSS/E single-quoted bus name and the PowerWorld double-quoted bus
-/// name both interpolate a `Network` name straight into a quoted field, where an
+/// name both interpolate a `BalancedNetwork` name straight into a quoted field, where an
 /// embedded quote (or, for PSS/E, the `/` inline-comment delimiter) would shift
 /// every later column of the record.
 /// A line terminator is always replaced, whatever `forbidden` holds: no text
@@ -1302,7 +1306,7 @@ pub(crate) fn zbase(v_kv: f64, base_mva: f64) -> f64 {
 /// Whether writing `net` to `target` echoes the retained source text: the
 /// target is the source format and the source is still attached. An echo
 /// reproduces the input byte for byte, so read fidelity warnings don't apply.
-fn is_echo(net: &Network, target: TargetFormat) -> bool {
+fn is_echo(net: &BalancedNetwork, target: TargetFormat) -> bool {
     let Some(src) = &net.source else { return false };
     if !same_format(target, net.source_format) {
         return false;

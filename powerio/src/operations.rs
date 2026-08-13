@@ -1,12 +1,12 @@
-//! Network operations: deriving or rewriting a [`Network`].
+//! BalancedNetwork operations: deriving or rewriting a [`BalancedNetwork`].
 //!
 //! These are model-level transforms, distinct from the format readers/writers and
-//! from the per unit [`to_normalized`](Network::to_normalized) form.
-//! [`subset`](Network::subset) carves a study footprint out of a larger case;
-//! [`merge_bus`](Network::merge_bus) collapses two buses into one (re-homing the
-//! incident elements), and [`reduce_zero_impedance`](Network::reduce_zero_impedance)
+//! from the per unit [`to_normalized`](BalancedNetwork::to_normalized) form.
+//! [`subset`](BalancedNetwork::subset) carves a study footprint out of a larger case;
+//! [`merge_bus`](BalancedNetwork::merge_bus) collapses two buses into one (re-homing the
+//! incident elements), and [`reduce_zero_impedance`](BalancedNetwork::reduce_zero_impedance)
 //! builds on it to remove jumper branches.
-//! [`reduce_passthrough_buses`](Network::reduce_passthrough_buses) folds dummy-bus
+//! [`reduce_passthrough_buses`](BalancedNetwork::reduce_passthrough_buses) folds dummy-bus
 //! line sections back into one equivalent branch.
 
 use std::collections::HashSet;
@@ -14,7 +14,7 @@ use std::collections::HashSet;
 use serde_json::Value;
 
 use crate::network::{
-    Branch, Bus, BusId, BusType, Extras, Generator, Network, Shunt, SourceFormat,
+    BalancedNetwork, Branch, Bus, BusId, BusType, Extras, Generator, Shunt, SourceFormat,
 };
 
 /// The endpoint of `b` other than `m` (assumes `m` is an endpoint).
@@ -33,7 +33,7 @@ fn combine_rate(a: f64, b: f64) -> f64 {
     }
 }
 
-/// Bus-kind importance, so a [`merge_bus`](Network::merge_bus) keeps the stronger
+/// Bus-kind importance, so a [`merge_bus`](BalancedNetwork::merge_bus) keeps the stronger
 /// designation (a slack outranks a PV bus, which outranks PQ, which outranks an
 /// isolated stub).
 fn kind_priority(kind: BusType) -> u8 {
@@ -45,7 +45,7 @@ fn kind_priority(kind: BusType) -> u8 {
     }
 }
 
-/// Which buses a [`subset`](Network::subset) keeps: inclusive ranges over area,
+/// Which buses a [`subset`](BalancedNetwork::subset) keeps: inclusive ranges over area,
 /// zone, base kV, and bus number, ANDed together. An unset (`None`) filter
 /// matches every bus, so [`Selector::default`] selects the whole network.
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -76,7 +76,7 @@ impl Selector {
     }
 }
 
-impl Network {
+impl BalancedNetwork {
     /// Carve out the sub-network whose buses match `sel`.
     ///
     /// In-scope buses keep their loads, shunts, generators, and storage; a branch,
@@ -96,7 +96,7 @@ impl Network {
     // A flat filter pipeline, one stanza per element table; splitting it would add
     // indirection without clarity.
     #[expect(clippy::too_many_lines)]
-    pub fn subset(&self, sel: &Selector, keep_boundary: bool) -> Network {
+    pub fn subset(&self, sel: &Selector, keep_boundary: bool) -> BalancedNetwork {
         let in_scope: HashSet<BusId> = self
             .buses
             .iter()
@@ -230,7 +230,7 @@ impl Network {
             })
             .collect::<Vec<_>>();
 
-        let net = Network {
+        let net = BalancedNetwork {
             name: format!("{} (subset)", self.name),
             base_mva: self.base_mva,
             base_frequency: self.base_frequency,
@@ -403,7 +403,7 @@ impl Network {
     }
 
     /// Whether `m` is a collapsible degree-2 passthrough bus (see
-    /// [`reduce_passthrough_buses`](Network::reduce_passthrough_buses)).
+    /// [`reduce_passthrough_buses`](BalancedNetwork::reduce_passthrough_buses)).
     fn is_passthrough(&self, m: BusId) -> bool {
         let Some(bus) = self.buses.iter().find(|b| b.id == m) else {
             return false;
@@ -485,7 +485,7 @@ impl Network {
             to: other_end(s2, m),
             r: s1.r + s2.r,
             x: s1.x + s2.x,
-            b: s1.legacy_total_charging_b() + s2.legacy_total_charging_b(),
+            b: s1.total_charging_b() + s2.total_charging_b(),
             charging: None,
             rate_a: combine_rate(s1.rate_a, s2.rate_a),
             rate_b: combine_rate(s1.rate_b, s2.rate_b),
@@ -616,8 +616,8 @@ mod tests {
 
     /// Two area-1 buses (1, 2) and one area-2 bus (3); a line within area 1 and a
     /// line crossing into area 2.
-    fn two_area_net() -> Network {
-        let mut net = Network::in_memory(
+    fn two_area_net() -> BalancedNetwork {
+        let mut net = BalancedNetwork::in_memory(
             "net",
             100.0,
             vec![bus(1, 1, 230.0), bus(2, 1, 230.0), bus(3, 2, 230.0)],
@@ -723,7 +723,7 @@ mod tests {
     fn reduce_passthrough_keeps_a_generator_regulated_bus() {
         // Bus 2 is a degree-2 junction with no injection, but a generator on bus 1
         // regulates it, so it is not an inert passthrough.
-        let mut net = Network::in_memory(
+        let mut net = BalancedNetwork::in_memory(
             "net",
             100.0,
             vec![bus(1, 1, 230.0), bus(2, 1, 230.0), bus(3, 1, 230.0)],
@@ -829,7 +829,7 @@ mod tests {
         let mut s2 = line(2, 3);
         s2.rate_a = 80.0;
         let s3 = line(3, 4); // rate_a 0 == no limit
-        let mut net = Network::in_memory(
+        let mut net = BalancedNetwork::in_memory(
             "net",
             100.0,
             vec![
@@ -866,7 +866,7 @@ mod tests {
     #[test]
     fn reduce_passthrough_keeps_a_bus_with_injection() {
         // Bus 2 is degree 2 but carries a load, so it is not inert.
-        let mut net = Network::in_memory(
+        let mut net = BalancedNetwork::in_memory(
             "net",
             100.0,
             vec![bus(1, 1, 230.0), bus(2, 1, 230.0), bus(3, 1, 230.0)],
@@ -882,7 +882,7 @@ mod tests {
         // Section 2-3 is a transformer, so bus 2 is a real terminal, not a junction.
         let mut xfmr = line(2, 3);
         xfmr.tap = 1.0;
-        let mut net = Network::in_memory(
+        let mut net = BalancedNetwork::in_memory(
             "net",
             100.0,
             vec![bus(1, 1, 230.0), bus(2, 1, 230.0), bus(3, 1, 230.0)],
@@ -895,7 +895,7 @@ mod tests {
     #[test]
     fn retype_isolated_marks_stranded_buses() {
         // Bus 3 has no incident branch.
-        let mut net = Network::in_memory(
+        let mut net = BalancedNetwork::in_memory(
             "net",
             100.0,
             vec![bus(1, 1, 230.0), bus(2, 1, 230.0), bus(3, 1, 230.0)],
@@ -915,7 +915,7 @@ mod tests {
         // The only branch is out of service, so both of its ends are stranded.
         let mut br = line(1, 2);
         br.in_service = false;
-        let mut net = Network::in_memory(
+        let mut net = BalancedNetwork::in_memory(
             "net",
             100.0,
             vec![bus(1, 1, 230.0), bus(2, 1, 230.0)],
@@ -927,7 +927,7 @@ mod tests {
 
     #[test]
     fn retype_isolated_is_idempotent() {
-        let mut net = Network::in_memory(
+        let mut net = BalancedNetwork::in_memory(
             "net",
             100.0,
             vec![bus(1, 1, 230.0), bus(2, 1, 230.0), bus(3, 1, 230.0)],
@@ -942,7 +942,7 @@ mod tests {
         // Buses 1-2 a real line, 2-3 a zero-impedance jumper.
         let mut jumper = line(2, 3);
         jumper.x = 0.0;
-        let mut net = Network::in_memory(
+        let mut net = BalancedNetwork::in_memory(
             "net",
             100.0,
             vec![bus(1, 1, 230.0), bus(2, 1, 230.0), bus(3, 1, 230.0)],
@@ -965,7 +965,7 @@ mod tests {
         let mut jumper = line(2, 3);
         jumper.x = 0.0;
         jumper.in_service = false;
-        let mut net = Network::in_memory(
+        let mut net = BalancedNetwork::in_memory(
             "net",
             100.0,
             vec![bus(1, 1, 230.0), bus(2, 1, 230.0), bus(3, 1, 230.0)],
@@ -986,7 +986,7 @@ mod tests {
         // onto one node, so the jumper is left in place.
         let mut jumper = line(2, 3);
         jumper.x = 0.0;
-        let mut net = Network::in_memory(
+        let mut net = BalancedNetwork::in_memory(
             "net",
             100.0,
             vec![bus(1, 1, 230.0), bus(2, 1, 138.0), bus(3, 1, 13.8)],
@@ -1011,7 +1011,7 @@ mod tests {
         // merge_bus (via reduce_zero_impedance): a collapse drops the stale source.
         let mut jumper = line(2, 3);
         jumper.x = 0.0;
-        let mut net = Network::in_memory(
+        let mut net = BalancedNetwork::in_memory(
             "net",
             100.0,
             vec![bus(1, 1, 230.0), bus(2, 1, 230.0), bus(3, 1, 230.0)],
@@ -1022,7 +1022,7 @@ mod tests {
         assert!(net.source.is_none(), "a merge invalidates the source");
 
         // A no-op reduction keeps the byte-exact echo.
-        let mut net = Network::in_memory(
+        let mut net = BalancedNetwork::in_memory(
             "net",
             100.0,
             vec![bus(1, 1, 230.0), bus(2, 1, 230.0)],
@@ -1033,7 +1033,7 @@ mod tests {
         assert!(net.source.is_some(), "a no-op leaves the source intact");
 
         // reduce_passthrough_buses (via collapse_passthrough).
-        let mut net = Network::in_memory(
+        let mut net = BalancedNetwork::in_memory(
             "net",
             100.0,
             vec![bus(1, 1, 230.0), bus(2, 1, 230.0), bus(3, 1, 230.0)],
@@ -1044,7 +1044,7 @@ mod tests {
         assert!(net.source.is_none());
 
         // retype_isolated_buses: bus 3 is stranded.
-        let mut net = Network::in_memory(
+        let mut net = BalancedNetwork::in_memory(
             "net",
             100.0,
             vec![bus(1, 1, 230.0), bus(2, 1, 230.0), bus(3, 1, 230.0)],
@@ -1055,7 +1055,7 @@ mod tests {
         assert!(net.source.is_none());
 
         // repair: an out-of-domain voltage is clamped.
-        let mut net = Network::in_memory("net", 100.0, vec![bus(1, 1, 230.0)], Vec::new());
+        let mut net = BalancedNetwork::in_memory("net", 100.0, vec![bus(1, 1, 230.0)], Vec::new());
         net.buses[0].vm = -1.0;
         net.source = retained();
         assert!(!net.repair().is_empty());

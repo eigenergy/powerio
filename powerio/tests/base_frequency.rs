@@ -1,7 +1,7 @@
 //! System base frequency carries through the formats that record it and is
 //! reported as a fidelity loss by the ones that don't.
 //!
-//! `Network::base_frequency` (50 or 60 Hz, default 60) threads through PSS/E
+//! `BalancedNetwork::base_frequency` (50 or 60 Hz, default 60) threads through PSS/E
 //! `BASFRQ` and pandapower `f_hz`. MATPOWER, PowerModels, egret, and PowerWorld
 //! have no frequency field, so a non-default value writes with a warning rather
 //! than silently reading back as 60 Hz.
@@ -11,8 +11,8 @@
 #![allow(clippy::float_cmp)]
 
 use powerio::{
-    DEFAULT_BASE_FREQUENCY, Network, TargetFormat, parse_pandapower_json, parse_psse, parse_str,
-    write_as, write_pandapower_json, write_psse,
+    BalancedNetwork, DEFAULT_BASE_FREQUENCY, TargetFormat, parse_pandapower_json, parse_psse,
+    parse_str, write_as, write_pandapower_json, write_psse,
 };
 
 /// A 50 Hz PSS/E header round-trips: the reader takes `BASFRQ`, the writer emits
@@ -116,7 +116,10 @@ fn json_transport_round_trips_and_defaults() {
         0 / END OF BUS DATA, BEGIN LOAD DATA\nQ\n";
     let net = parse_psse(raw).unwrap();
     let json = net.to_json().unwrap();
-    assert_eq!(Network::from_json(&json).unwrap().base_frequency, 50.0);
+    assert_eq!(
+        BalancedNetwork::from_json(&json).unwrap().base_frequency,
+        50.0
+    );
 
     // A JSON document with no base_frequency key falls back to the default.
     let without: serde_json::Value = {
@@ -124,7 +127,7 @@ fn json_transport_round_trips_and_defaults() {
         v.as_object_mut().unwrap().remove("base_frequency");
         v
     };
-    let restored = Network::from_json(&without.to_string()).unwrap();
+    let restored = BalancedNetwork::from_json(&without.to_string()).unwrap();
     assert_eq!(restored.base_frequency, DEFAULT_BASE_FREQUENCY);
 }
 

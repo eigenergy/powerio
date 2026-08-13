@@ -58,7 +58,7 @@ impl DerivedMetadata {
     }
 }
 
-/// Compact package metadata for `Network::to_normalized_solver_tables`.
+/// Compact package metadata for `BalancedNetwork::to_normalized_solver_tables`.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[non_exhaustive]

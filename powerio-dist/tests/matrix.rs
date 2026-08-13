@@ -9,8 +9,8 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use powerio_dist::{
-    Conversion, ConversionSidecar, DistLoadVoltageModel, DistNetwork, DistTargetFormat, Result,
-    parse_bmopf_str, parse_dss_file, parse_pmd_str,
+    Conversion, ConversionSidecar, DistLoadVoltageModel, DistTargetFormat, MulticonductorNetwork,
+    Result, parse_bmopf_str, parse_dss_file, parse_pmd_str,
 };
 
 fn fixture(rel: &str) -> PathBuf {
@@ -35,7 +35,7 @@ impl Fmt {
         }
     }
 
-    fn parse_conversion(self, conv: &Conversion) -> Result<DistNetwork> {
+    fn parse_conversion(self, conv: &Conversion) -> Result<MulticonductorNetwork> {
         self.parse_text_and_sidecars(&conv.text, &conv.sidecars)
     }
 
@@ -43,7 +43,7 @@ impl Fmt {
         self,
         text: &str,
         sidecars: &[ConversionSidecar],
-    ) -> Result<DistNetwork> {
+    ) -> Result<MulticonductorNetwork> {
         match self {
             Fmt::Dss => {
                 // Unique path per call: the harness tests run in parallel
@@ -225,7 +225,7 @@ const CASES: &[Case] = &[
     },
 ];
 
-fn parse_case(case: &Case) -> DistNetwork {
+fn parse_case(case: &Case) -> MulticonductorNetwork {
     let path = fixture(case.rel);
     match case.fmt {
         Fmt::Dss => parse_dss_file(&path).unwrap(),
@@ -313,7 +313,12 @@ fn close_power(x: f64, y: f64) -> bool {
     (x - y).abs() <= 4.0 * f64::EPSILON * x.abs().max(y.abs())
 }
 
-fn assert_loads_eq(a: &DistNetwork, b: &DistNetwork, what: &str, allow_derived_v_nom: bool) {
+fn assert_loads_eq(
+    a: &MulticonductorNetwork,
+    b: &MulticonductorNetwork,
+    what: &str,
+    allow_derived_v_nom: bool,
+) {
     if target_is_dss_leg(what) {
         assert_dss_loads_eq(a, b, what);
         return;
@@ -352,7 +357,7 @@ fn assert_loads_eq(a: &DistNetwork, b: &DistNetwork, what: &str, allow_derived_v
 /// `<load>_<terminal>`. The count therefore grows, and what has to survive is
 /// the per phase profile: each source load is matched by its own name when it
 /// came back whole, or by its parts, and the two must state the same power.
-fn assert_dss_loads_eq(a: &DistNetwork, b: &DistNetwork, what: &str) {
+fn assert_dss_loads_eq(a: &MulticonductorNetwork, b: &MulticonductorNetwork, what: &str) {
     let mut matched = 0usize;
     for x in &a.loads {
         let parts: Vec<&powerio_dist::DistLoad> = b
@@ -461,7 +466,12 @@ fn assert_maps_eq(x: &[String], y: &[String], what: &str, ctx: &str) {
 
 /// The model fields every format carries; the per cell comparisons run on
 /// this projection, with transformer carve outs where BMOPF restates them.
-fn assert_projection_eq(a: &DistNetwork, b: &DistNetwork, what: &str, transformers: bool) {
+fn assert_projection_eq(
+    a: &MulticonductorNetwork,
+    b: &MulticonductorNetwork,
+    what: &str,
+    transformers: bool,
+) {
     // JSON formats key elements by name, so order is not preserved across
     // a round trip; compare per name.
     assert_eq!(a.buses.len(), b.buses.len(), "{what}: bus count");
@@ -568,7 +578,7 @@ fn assert_projection_eq(a: &DistNetwork, b: &DistNetwork, what: &str, transforme
 /// Linecode matrices compare to within one ULP scale relative error: a
 /// basis change (the PMD capacitance form, the dss per length form) costs
 /// at most one rounding per direction.
-fn assert_linecodes_close(a: &DistNetwork, b: &DistNetwork, what: &str) {
+fn assert_linecodes_close(a: &MulticonductorNetwork, b: &MulticonductorNetwork, what: &str) {
     assert_eq!(a.linecodes.len(), b.linecodes.len(), "{what}: linecodes");
     let close = |x: f64, y: f64| (x - y).abs() <= 1e-12 * x.abs().max(y.abs()).max(1e-300);
     let mut xs: Vec<_> = a.linecodes.iter().collect();
@@ -610,7 +620,7 @@ fn assert_linecodes_close(a: &DistNetwork, b: &DistNetwork, what: &str) {
 
 /// Replaces every grounded terminal name with "G", on buses and in the
 /// terminal maps of the elements referencing them.
-fn normalize_grounded(net: &DistNetwork) -> DistNetwork {
+fn normalize_grounded(net: &MulticonductorNetwork) -> MulticonductorNetwork {
     let mut net = net.clone();
     let grounded: BTreeMap<String, Vec<String>> = net
         .buses
@@ -653,7 +663,10 @@ fn normalize_grounded(net: &DistNetwork) -> DistNetwork {
     net
 }
 
-fn normalize_bmopf_bus_metadata(net: &DistNetwork, usage_net: &DistNetwork) -> DistNetwork {
+fn normalize_bmopf_bus_metadata(
+    net: &MulticonductorNetwork,
+    usage_net: &MulticonductorNetwork,
+) -> MulticonductorNetwork {
     let mut net = net.clone();
     let mut usage: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
     let mut add = |bus: &str, terms: &[String]| {
@@ -894,7 +907,7 @@ fn emit_for_physics_check() {
                 ("via_bmopf", powerio_dist::write_bmopf_json(&net).text),
                 ("via_pmd", powerio_dist::write_pmd_json(&net).text),
             ] {
-                let mid: DistNetwork = if suffix == "via_bmopf" {
+                let mid: MulticonductorNetwork = if suffix == "via_bmopf" {
                     parse_bmopf_str(&text).unwrap()
                 } else {
                     parse_pmd_str(&text).unwrap()
@@ -910,7 +923,7 @@ fn emit_for_physics_check() {
 /// Every terminal map of one network as `(element key, bus id, map)`, in a
 /// stable order. The bus id matters because the rename is per bus: dss
 /// spells a terminal as its node position within its own bus.
-fn terminal_maps(net: &DistNetwork) -> Vec<(String, String, Vec<String>)> {
+fn terminal_maps(net: &MulticonductorNetwork) -> Vec<(String, String, Vec<String>)> {
     let key = |s: &str| s.to_lowercase();
     // Element maps only. A bus's own terminal list is not a rename: dss
     // spells perfect grounding as node 0, so a grounded terminal legitimately

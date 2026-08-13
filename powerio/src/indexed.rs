@@ -1,12 +1,12 @@
-//! [`IndexedNetwork`]: the dense-indexed analysis view over a [`Network`].
+//! [`IndexedNetwork`]: the dense-indexed analysis view over a [`BalancedNetwork`].
 //!
-//! [`Network`] is the canonical data record: format neutral tables with no
+//! [`BalancedNetwork`] is the canonical data record: format neutral tables with no
 //! analysis behavior. The matrix builders, connectivity diagnostics, and the
 //! DC-OPF instance need things a plain table doesn't carry: a dense `[0, n)` bus
 //! index, demand and shunts aggregated per bus, the in-service subsets, and the
-//! reference bus. [`IndexCore`] derives those once from a borrowed `&Network`;
+//! reference bus. [`IndexCore`] derives those once from a borrowed `&BalancedNetwork`;
 //! [`IndexedNetwork`] pairs that core with the network and answers the queries.
-//! Keeping this off `Network` is what stops `Network` from turning into a god
+//! Keeping this off `BalancedNetwork` is what stops `BalancedNetwork` from turning into a god
 //! type: data on one side, derived analysis on the other.
 //!
 //! The derived core is one `HashMap` and four `Vec<f64>`. One-shot callers use
@@ -21,13 +21,13 @@ use std::collections::HashMap;
 
 use petgraph::graph::UnGraph;
 
-use crate::network::{Branch, BusId, BusType, Generator, Network};
+use crate::network::{BalancedNetwork, Branch, BusId, BusType, Generator};
 use crate::{Error, Result};
 
 /// The owned, network-independent derivation behind [`IndexedNetwork`]: the
 /// dense bus-id map plus the per-bus demand/shunt aggregates. Build it once with
 /// [`IndexCore::build`] and reuse it across many [`IndexedNetwork::with_core`]
-/// views of the same [`Network`].
+/// views of the same [`BalancedNetwork`].
 #[derive(Debug, Clone)]
 pub struct IndexCore {
     /// Stable bus id → dense index in `[0, n)`.
@@ -52,12 +52,12 @@ impl IndexCore {
     /// # Correctness
     /// Bus ids must be unique; a duplicate collapses two buses onto one dense
     /// index and silently corrupts every aggregate. The format readers and
-    /// [`Network::from_json`](crate::Network::from_json) run
-    /// [`Network::validate`](crate::Network::validate) before this, so a parsed
-    /// or JSON-sourced network always satisfies it; a hand-built [`Network`] must
+    /// [`BalancedNetwork::from_json`](crate::BalancedNetwork::from_json) run
+    /// [`BalancedNetwork::validate`](crate::BalancedNetwork::validate) before this, so a parsed
+    /// or JSON-sourced network always satisfies it; a hand-built [`BalancedNetwork`] must
     /// call `validate` itself. Backstopped here by a `debug_assert`.
     #[must_use]
-    pub fn build(net: &Network) -> Self {
+    pub fn build(net: &BalancedNetwork) -> Self {
         let n = net.buses.len();
         let bus_id_to_idx: HashMap<BusId, usize> = net
             .buses
@@ -68,7 +68,7 @@ impl IndexCore {
         debug_assert_eq!(
             bus_id_to_idx.len(),
             n,
-            "duplicate bus id in network (run Network::check_references first)"
+            "duplicate bus id in network (run BalancedNetwork::check_references first)"
         );
         let mut pd = vec![0.0; n];
         let mut qd = vec![0.0; n];
@@ -96,14 +96,14 @@ impl IndexCore {
     }
 }
 
-/// A `Network` paired with its derived [`IndexCore`]. The network is borrowed for
+/// A `BalancedNetwork` paired with its derived [`IndexCore`]. The network is borrowed for
 /// the common case, but owned when it had to be star-lowered (a 3-winding
 /// transformer expanded into a star bus plus three branches via
-/// `Network::expand_transformers_3w`); the core is owned ([`IndexedNetwork::new`])
+/// `BalancedNetwork::expand_transformers_3w`); the core is owned ([`IndexedNetwork::new`])
 /// or borrowed from a cached [`IndexCore`] ([`IndexedNetwork::with_core`]).
 #[derive(Debug)]
 pub struct IndexedNetwork<'n> {
-    net: Cow<'n, Network>,
+    net: Cow<'n, BalancedNetwork>,
     core: Cow<'n, IndexCore>,
 }
 
@@ -112,7 +112,7 @@ impl<'n> IndexedNetwork<'n> {
     /// repeated queries on a long-lived handle, cache an [`IndexCore`] and use
     /// [`with_core`](Self::with_core) so the derivation isn't rebuilt per call.
     #[must_use]
-    pub fn new(net: &'n Network) -> Self {
+    pub fn new(net: &'n BalancedNetwork) -> Self {
         let net = net.expand_transformers_3w();
         let core = IndexCore::build(&net);
         Self {
@@ -127,7 +127,7 @@ impl<'n> IndexedNetwork<'n> {
     /// it and rebuilds the core over the expanded form, since the cached core was
     /// derived from the unexpanded network.
     #[must_use]
-    pub fn with_core(net: &'n Network, core: &'n IndexCore) -> Self {
+    pub fn with_core(net: &'n BalancedNetwork, core: &'n IndexCore) -> Self {
         match net.expand_transformers_3w() {
             Cow::Borrowed(net) => Self {
                 net: Cow::Borrowed(net),
@@ -146,7 +146,7 @@ impl<'n> IndexedNetwork<'n> {
     /// The underlying network (the star-lowered form when a 3-winding transformer
     /// was expanded).
     #[inline]
-    pub fn network(&self) -> &Network {
+    pub fn network(&self) -> &BalancedNetwork {
         &self.net
     }
 
@@ -166,7 +166,7 @@ impl<'n> IndexedNetwork<'n> {
     /// `base_mva` itself stays at the system base — for MW recovery and
     /// write-back — so use this, not `base_mva`, wherever the intent is "÷ base
     /// to get per unit". The effect is that a per-unit matrix builder yields the
-    /// same matrix for a network and its [`to_normalized`](Network::to_normalized)
+    /// same matrix for a network and its [`to_normalized`](BalancedNetwork::to_normalized)
     /// form.
     #[inline]
     pub fn per_unit_base(&self) -> f64 {
@@ -182,7 +182,7 @@ impl<'n> IndexedNetwork<'n> {
     /// this is the identity. The angle analogue of
     /// [`per_unit_base`](Self::per_unit_base): a builder gets the same radians
     /// whether it is handed a network or its
-    /// [`to_normalized`](Network::to_normalized) form, so the matrix comes out
+    /// [`to_normalized`](BalancedNetwork::to_normalized) form, so the matrix comes out
     /// the same.
     #[inline]
     pub fn angle_radians(&self, angle: f64) -> f64 {
@@ -403,7 +403,8 @@ impl ConnectivityReport {
 mod tests {
     use super::{IndexCore, IndexedNetwork};
     use crate::network::{
-        Bus, BusId, BusType, Extras, Impedance, Load, Network, Shunt, Transformer3W, Winding,
+        BalancedNetwork, Bus, BusId, BusType, Extras, Impedance, Load, Shunt, Transformer3W,
+        Winding,
     };
 
     fn bus(id: usize, kind: BusType) -> Bus {
@@ -426,8 +427,8 @@ mod tests {
         }
     }
 
-    fn agg_net() -> Network {
-        let mut net = Network::in_memory(
+    fn agg_net() -> BalancedNetwork {
+        let mut net = BalancedNetwork::in_memory(
             "agg",
             100.0,
             vec![bus(1, BusType::Ref), bus(2, BusType::Pq)],
@@ -517,7 +518,7 @@ mod tests {
         // Three buses joined only by a 3-winding transformer; bus 1 is the
         // reference. The view star-lowers it into one grounded component plus a
         // synthetic star bus that carries the magnetizing shunt.
-        let mut net = Network::in_memory(
+        let mut net = BalancedNetwork::in_memory(
             "t3w",
             100.0,
             vec![
@@ -552,7 +553,7 @@ mod tests {
 
     #[test]
     fn out_of_service_three_winding_is_not_expanded() {
-        let mut net = Network::in_memory(
+        let mut net = BalancedNetwork::in_memory(
             "t3w",
             100.0,
             vec![

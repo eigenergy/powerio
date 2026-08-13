@@ -15,8 +15,8 @@
 use std::path::Path;
 
 use powerio::{
-    Branch, Bus, BusId, BusType, CoordinateSpace, CoordsKind, GenCaps, Generator, GeoMeta,
-    Location, Network, SourceFormat,
+    BalancedNetwork, Branch, Bus, BusId, BusType, CoordinateSpace, CoordsKind, GenCaps, Generator,
+    GeoMeta, Location, SourceFormat,
 };
 
 /// A v4-vintage snapshot, written by `powerio convert case30.m --to powerio-json`.
@@ -30,7 +30,7 @@ fn golden_v4() -> String {
 #[test]
 fn golden_v4_snapshot_still_parses() {
     let text = golden_v4();
-    let net = Network::from_json(&text).expect("the v4 golden must still parse");
+    let net = BalancedNetwork::from_json(&text).expect("the v4 golden must still parse");
     assert_eq!(net.buses.len(), 30);
     assert_eq!(net.branches.len(), 41);
     assert_eq!(net.generators.len(), 6);
@@ -56,7 +56,7 @@ fn golden_v4_snapshot_still_parses() {
         again.contains(r#""caps":{"#) && !again.contains(r#""caps":["#),
         "the live serializer must still emit caps as an object"
     );
-    let back = Network::from_json(&again).unwrap();
+    let back = BalancedNetwork::from_json(&again).unwrap();
     assert_eq!(back.buses.len(), net.buses.len());
     assert_eq!(back.generators.len(), net.generators.len());
 }
@@ -74,8 +74,8 @@ fn snapshot_ignores_unknown_fields_and_defaults_omitted_caps() {
     v["generators"][0].as_object_mut().unwrap().remove("caps");
 
     let text = serde_json::to_string(&v).unwrap();
-    let parsed =
-        Network::from_json(&text).expect("an unknown field and an omitted caps must still parse");
+    let parsed = BalancedNetwork::from_json(&text)
+        .expect("an unknown field and an omitted caps must still parse");
     assert_eq!(parsed.generators.len(), 1);
     assert!(
         !parsed.generators[0].has_caps(),
@@ -83,7 +83,7 @@ fn snapshot_ignores_unknown_fields_and_defaults_omitted_caps() {
     );
 }
 
-fn small_net() -> Network {
+fn small_net() -> BalancedNetwork {
     let bus = |id, kind| Bus::new(BusId(id), kind, 230.0);
     // Length-agnostic: GEN_EXTRA_KEYS is pub(crate), so the integration crate
     // can't write `[None; GEN_EXTRA_KEYS.len()]`; `GenCaps::default()` tracks the
@@ -98,7 +98,7 @@ fn small_net() -> Network {
     g.mbase = 100.0;
     g.caps = caps;
     let branch = Branch::new(BusId(1), BusId(2), 0.01, 0.1);
-    let mut net = Network::new("schema_lock", 100.0);
+    let mut net = BalancedNetwork::new("schema_lock", 100.0);
     net.buses = vec![bus(1, BusType::Ref), bus(2, BusType::Pq)];
     net.branches = vec![branch];
     net.generators = vec![g];
@@ -117,7 +117,7 @@ fn uid_survives_snapshot_roundtrip_and_stays_off_the_wire_when_absent() {
     // from parsers that never set it are byte-identical to the pre-uid vintage.
     assert!(v["buses"][0].get("uid").is_none());
 
-    let parsed = Network::from_json(&serde_json::to_string(&v).unwrap()).unwrap();
+    let parsed = BalancedNetwork::from_json(&serde_json::to_string(&v).unwrap()).unwrap();
     assert_eq!(parsed.generators[0].uid.as_deref(), Some("gen-a"));
     assert_eq!(parsed.buses[0].uid, None);
 }
@@ -128,7 +128,7 @@ fn geo_fields_roundtrip_and_stay_off_the_wire_when_absent() {
     let text = net.to_json().unwrap();
     assert!(!text.contains(r#""geo""#));
     assert!(!text.contains(r#""location""#));
-    let parsed = Network::from_json(&text).unwrap();
+    let parsed = BalancedNetwork::from_json(&text).unwrap();
     assert_eq!(parsed.to_json().unwrap(), text);
 
     let v: serde_json::Value = serde_json::from_str(&text).unwrap();
@@ -154,7 +154,7 @@ fn geo_fields_roundtrip_and_stay_off_the_wire_when_absent() {
     assert_eq!(v["buses"][0]["location"]["x"], serde_json::json!(-80.0));
     assert_eq!(v["buses"][0]["location"]["y"], serde_json::json!(35.0));
 
-    let parsed = Network::from_json(&serde_json::to_string(&v).unwrap()).unwrap();
+    let parsed = BalancedNetwork::from_json(&serde_json::to_string(&v).unwrap()).unwrap();
     assert_eq!(parsed.geo, with_geo.geo);
     assert_eq!(parsed.buses[0].location, with_geo.buses[0].location);
 }

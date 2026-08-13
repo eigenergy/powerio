@@ -9,7 +9,7 @@ Verb taxonomy:
 - `parse_*`: bytes, paths, or text to typed parsed values. Transmission parsers
   return a balanced network handle; distribution parsers return a
   multiconductor network handle; display parsers return display data.
-- `to_*`: `Network` to a new value
+- `to_*`: `BalancedNetwork` to a new value
 - `convert_file`: path to target text convenience
 - `write_*`: filesystem outputs (`write_gridfm`, `write_pypsa_csv_folder`,
   `write_dcopf_bundle`); the Rust
@@ -39,7 +39,7 @@ Verb taxonomy:
 | Materialize operating point | `pkg.materialize_operating_point(i)` | `pkg.materialize_operating_point(i)` | — | `pio_package_materialize_operating_point` |
 | `.pio.json` study block | `pkg.study()` | `pkg.study()` | — | `pio_package_study_json` |
 | Materialize study commit | `pkg.materialize_study_commit(i)` | `pkg.materialize_study_commit(i)` | — | `pio_package_materialize_study_commit` |
-| Parse SCOPF instance | `build_scopf_instance_from_str` | `parse_scopf(text, from_="goc3-json")` | Julia document adapter | `pio_scopf_parse_str` |
+| Parse SCOPF instance | `parse_scopf_str` | `parse_scopf(text, from_="goc3-json")` | Julia document adapter | `pio_scopf_parse_str` |
 | Normalized copy | `net.to_normalized()` | `net.to_normalized()` | `to_normalized(net)` | `pio_normalize` |
 | Dense tables | typed table API | `to_dense` | `to_dense` | `pio_*` extractors |
 | PyPSA CSV folder | `read_pypsa_csv_folder` / `write_pypsa_csv_folder` | `read_pypsa_csv_folder` / `net.write_pypsa_csv_folder` | `parse_file(dir; from="pypsa-csv")` / `write_pypsa_csv_folder` | `pio_parse_file` / `pio_write_dir` + `"pypsa-csv"` |
@@ -123,7 +123,7 @@ the distribution C conversion helpers.
 | Parse path | `powerio_dist::parse_file(path, from)` | `dist.parse_file(path, from_=None)` | `parse_file(DistNetwork, path; from=nothing)` | `pio_dist_parse_file` |
 | Parse text | `powerio_dist::parse_str(text, format)` | `dist.parse_str(text, format)` | `parse_str(DistNetwork, text, format)` | `pio_dist_parse_str` |
 | File conversion | `powerio_dist::convert_file(path, to, from)` | `dist.convert_file(path, to, from_=None)` | `convert_file(DistNetwork, path, to; from=nothing)` | `pio_dist_convert_file(path, from, to, ...)` |
-| Target format type | `DistTargetFormat` (`FromStr`, `name()`) | format name strings | `DistNetwork` plus format strings | format name strings |
+| Target format type | `DistTargetFormat` (`FromStr`, `name()`) | format name strings | `MulticonductorNetwork` plus format strings | format name strings |
 | Text conversion | `powerio_dist::convert_str(text, to, format)` | `dist.convert_str(text, to, format)` | `convert_str(DistNetwork, text, to, format)` | `pio_dist_convert_str(text, from, to, ...)` |
 | Parsed conversion | `net.to_format(to)` | `case.to_format(to)` | `to_format(net, to)` | `pio_dist_to_format` |
 | Parse warnings | `net.warnings` | `case.warnings` | `warnings(net)` | `pio_dist_warnings` |

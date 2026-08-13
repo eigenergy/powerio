@@ -1,4 +1,4 @@
-//! [`DistNetwork`] into strict BMOPF JSON.
+//! [`MulticonductorNetwork`] into strict BMOPF JSON.
 //!
 //! Output is schema valid wherever the schema permits the data.
 //!
@@ -16,9 +16,9 @@ use crate::diagnostics::{DiagnosticSeverity, DiagnosticStage, StructuredDiagnost
 use crate::geo::CoordinateSpace;
 use crate::model::{
     ActivePowerReference, ActivePowerUnit, Configuration, ControlVoltageReference,
-    DistControlProfile, DistGenerator, DistIbr, DistLoadVoltageModel, DistNetwork, DistTransformer,
-    Extras, Mat, ReactivePowerReference, ReactivePowerUnit, VoltVarControl, VoltWattControl,
-    VoltageSource, Winding, WindingConn, n_winding_impedance_base, pair_keys,
+    DistControlProfile, DistGenerator, DistIbr, DistLoadVoltageModel, DistTransformer, Extras, Mat,
+    MulticonductorNetwork, ReactivePowerReference, ReactivePowerUnit, VoltVarControl,
+    VoltWattControl, VoltageSource, Winding, WindingConn, n_winding_impedance_base, pair_keys,
 };
 
 /// The `$id` of the BMOPF schema this writer targets, and the value it
@@ -85,7 +85,7 @@ const BMOPF_DELTA_ROLLS_EXTRA: &str = "bmopf_delta_rolls";
 /// quadratically: the winding count feeding the `x_sc` pair table and the
 /// conductor count an absent matrix is materialized at as zeros. The BMOPF
 /// and DSS readers cap the same quantities at 64 on their way in, but a
-/// `DistNetwork` can also arrive without those caps (the model JSON C entry
+/// `MulticonductorNetwork` can also arrive without those caps (the model JSON C entry
 /// point deserializes one unchecked), and a linear-size model could otherwise
 /// demand O(n²) memory here. No physical element comes near this bound.
 const MAX_DIM: usize = 64;
@@ -136,7 +136,7 @@ pub struct BmopfWriteOptions {
 ///
 /// Never in practice: the document is maps, strings, and finite numbers,
 /// which always serialize.
-pub fn write_bmopf_json(net: &DistNetwork) -> Conversion {
+pub fn write_bmopf_json(net: &MulticonductorNetwork) -> Conversion {
     write_bmopf_json_with_options(net, &BmopfWriteOptions::default())
 }
 
@@ -146,7 +146,10 @@ pub fn write_bmopf_json(net: &DistNetwork) -> Conversion {
 ///
 /// Never in practice: the document is maps, strings, and finite numbers,
 /// which always serialize.
-pub fn write_bmopf_json_with_options(net: &DistNetwork, options: &BmopfWriteOptions) -> Conversion {
+pub fn write_bmopf_json_with_options(
+    net: &MulticonductorNetwork,
+    options: &BmopfWriteOptions,
+) -> Conversion {
     let mut w = Writer {
         options: *options,
         warnings: Vec::new(),
@@ -268,7 +271,7 @@ impl Writer {
     /// timestamp, and nothing that depends on the immediate source format
     /// (which a round trip would change) — so canonical output is idempotent.
     /// The vintage lives in `$schema` (the canonical bmopf-report `$id`).
-    fn meta(&mut self, net: &DistNetwork) -> Value {
+    fn meta(&mut self, net: &MulticonductorNetwork) -> Value {
         let mut m = Map::new();
         m.insert("$schema".into(), json!(BMOPF_SCHEMA_ID));
         m.insert(
@@ -298,7 +301,7 @@ impl Writer {
         Value::Object(m)
     }
 
-    fn document(&mut self, net: &DistNetwork) -> Value {
+    fn document(&mut self, net: &MulticonductorNetwork) -> Value {
         let mut doc = Map::new();
         if let Some(name) = &net.name {
             doc.insert("name".into(), json!(name));
@@ -343,7 +346,7 @@ impl Writer {
         Value::Object(doc)
     }
 
-    fn buses(&mut self, net: &DistNetwork, doc: &mut Map<String, Value>) {
+    fn buses(&mut self, net: &MulticonductorNetwork, doc: &mut Map<String, Value>) {
         let mut buses = Map::new();
         for b in &net.buses {
             let mut o = Map::new();
@@ -386,7 +389,7 @@ impl Writer {
         doc.insert("bus".into(), Value::Object(buses));
     }
 
-    fn linecodes(&mut self, net: &DistNetwork, doc: &mut Map<String, Value>) {
+    fn linecodes(&mut self, net: &MulticonductorNetwork, doc: &mut Map<String, Value>) {
         if !net.linecodes.is_empty() {
             let mut codes = Map::new();
             for c in &net.linecodes {
@@ -437,7 +440,7 @@ impl Writer {
         &mut self,
         o: &mut Map<String, Value>,
         b: &crate::model::DistBus,
-        net: &DistNetwork,
+        net: &MulticonductorNetwork,
     ) {
         let Some(location) = b.location else {
             return;
@@ -506,7 +509,7 @@ impl Writer {
         o.insert("latitude".into(), self.num(location.y, "bus latitude"));
     }
 
-    fn warn_unemitted_untyped(&mut self, net: &DistNetwork) {
+    fn warn_unemitted_untyped(&mut self, net: &MulticonductorNetwork) {
         for u in &net.untyped {
             if Self::is_emitted_untyped(u) {
                 continue;
@@ -540,7 +543,7 @@ impl Writer {
     /// untyped transformer subtypes keep their place under `transformer`.
     fn untyped_bmopf_tables(
         &mut self,
-        net: &DistNetwork,
+        net: &MulticonductorNetwork,
         doc: &mut Map<String, Value>,
         extras: &mut Map<String, Value>,
     ) {
@@ -611,7 +614,11 @@ impl Writer {
     /// this writer built. A value that is not a table has no slot for a named
     /// entry; warn once per name and replace it with an empty table, which
     /// the untyped objects of that class then fill.
-    fn clear_non_table_extras_slots(&mut self, net: &DistNetwork, extras: &mut Map<String, Value>) {
+    fn clear_non_table_extras_slots(
+        &mut self,
+        net: &MulticonductorNetwork,
+        extras: &mut Map<String, Value>,
+    ) {
         let classes: BTreeSet<&str> = net
             .untyped
             .iter()
@@ -690,7 +697,7 @@ impl Writer {
     }
 
     /// Lines and switches.
-    fn branches(&mut self, net: &DistNetwork, doc: &mut Map<String, Value>) {
+    fn branches(&mut self, net: &MulticonductorNetwork, doc: &mut Map<String, Value>) {
         if !net.lines.is_empty() {
             let mut lines = Map::new();
             for l in &net.lines {
@@ -740,7 +747,7 @@ impl Writer {
 
     /// Rated capacitor banks (schema 0.1.0 `capacitor`), distinct from the
     /// raw admittance `shunt` table.
-    fn capacitors(&mut self, net: &DistNetwork, doc: &mut Map<String, Value>) {
+    fn capacitors(&mut self, net: &MulticonductorNetwork, doc: &mut Map<String, Value>) {
         if net.capacitors.is_empty() {
             return;
         }
@@ -759,7 +766,7 @@ impl Writer {
     }
 
     /// Loads, generators, shunts, and the voltage sources.
-    fn injections(&mut self, net: &DistNetwork, doc: &mut Map<String, Value>) {
+    fn injections(&mut self, net: &MulticonductorNetwork, doc: &mut Map<String, Value>) {
         let mut loads = Map::new();
         for l in &net.loads {
             let mut o = Map::new();
@@ -848,7 +855,7 @@ impl Writer {
         doc.insert("voltage_source".into(), Value::Object(sources));
     }
 
-    fn control_profiles(&mut self, net: &DistNetwork, doc: &mut Map<String, Value>) {
+    fn control_profiles(&mut self, net: &MulticonductorNetwork, doc: &mut Map<String, Value>) {
         if net.control_profiles.is_empty() {
             return;
         }
@@ -942,7 +949,7 @@ impl Writer {
         Value::Object(o)
     }
 
-    fn ibrs(&mut self, net: &DistNetwork, doc: &mut Map<String, Value>) {
+    fn ibrs(&mut self, net: &MulticonductorNetwork, doc: &mut Map<String, Value>) {
         if net.ibrs.is_empty() {
             return;
         }
@@ -1151,7 +1158,7 @@ impl Writer {
     /// Transformers keyed by subtype; wye-wye three phase units decompose
     /// into one single_phase entry per phase, the convention the public
     /// example networks use.
-    fn transformers(&mut self, net: &DistNetwork) -> Map<String, Value> {
+    fn transformers(&mut self, net: &MulticonductorNetwork) -> Map<String, Value> {
         let mut by_subtype: Map<String, Value> = Map::new();
         let insert = |sub: &str, name: String, v: Value, map: &mut Map<String, Value>| {
             map.entry(sub.to_string())
@@ -2186,7 +2193,7 @@ enum PhaseArrangement {
     Incoherent,
 }
 
-fn bmopf_voltage_sources(net: &DistNetwork) -> Vec<SourceEmit> {
+fn bmopf_voltage_sources(net: &MulticonductorNetwork) -> Vec<SourceEmit> {
     let emitted: Vec<SourceEmit> = net.sources.iter().map(SourceEmit::from).collect();
     let bus_ids: BTreeMap<String, String> = net
         .buses
@@ -2617,7 +2624,7 @@ fn bmopf_delta_roll(t: &DistTransformer, idx: usize, w: &Winding) -> Option<i64>
 /// is the one the schema prescribes for an absent `terminal_conventions`
 /// block: an `n` or `N` label is neutral, every other label is a phase.
 /// Labels keep first-seen order. A network with no bus terminal gives `None`.
-fn authored_terminal_conventions(net: &DistNetwork) -> Option<Value> {
+fn authored_terminal_conventions(net: &MulticonductorNetwork) -> Option<Value> {
     let mut phase: Vec<&String> = Vec::new();
     let mut neutral: Vec<&String> = Vec::new();
     for b in &net.buses {
@@ -2729,7 +2736,7 @@ mod tests {
     fn oversized_model_dimensions_are_clamped_not_expanded() {
         use crate::model::{DistLineCode, DistShunt, DistTransformer, Winding, WindingConn};
 
-        let mut net = crate::model::DistNetwork::default();
+        let mut net = crate::model::MulticonductorNetwork::default();
         // A linecode whose R rows imply a huge dimension while X is empty
         // would materialize dim x dim zeros for X.
         let mut lc = DistLineCode::new("big", Vec::new(), Vec::new());

@@ -19,14 +19,14 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use powerio::network::{BusId, Network};
+use powerio::network::{BalancedNetwork, BusId};
 use powerio::parse_file;
 
 mod common;
 use common::{activsg2000_fetched as fetched, ckt, powerworld_vendored as vendored};
 
 /// Branch identity: from, to, trimmed circuit ID.
-fn branch_ids(net: &Network) -> BTreeSet<(usize, usize, String)> {
+fn branch_ids(net: &BalancedNetwork) -> BTreeSet<(usize, usize, String)> {
     net.branches
         .iter()
         .map(|b| (b.from.0, b.to.0, ckt(b)))
@@ -117,7 +117,7 @@ fn activsg200_aux_vs_psse_structural() {
 
     // The RAW reader does not carry circuit IDs yet, so branch parity here is
     // the multiset of bus pairs. Same one branch delta as the .m.
-    let pairs = |net: &Network| -> BTreeMap<(usize, usize), usize> {
+    let pairs = |net: &BalancedNetwork| -> BTreeMap<(usize, usize), usize> {
         let mut out = BTreeMap::new();
         for b in &net.branches {
             *out.entry((b.from.0, b.to.0)).or_default() += 1;
@@ -150,7 +150,7 @@ fn activsg2000_june2016_aux_vs_matpower_values() {
     assert_eq!(aux.generators.len(), m.generators.len(), "gen count");
     // MATPOWER carries no circuit IDs, so branch identity parity is the
     // multiset of bus pairs.
-    let pairs = |net: &Network| -> BTreeMap<(usize, usize), usize> {
+    let pairs = |net: &BalancedNetwork| -> BTreeMap<(usize, usize), usize> {
         let mut out = BTreeMap::new();
         for b in &net.branches {
             *out.entry((b.from.0, b.to.0)).or_default() += 1;
@@ -235,7 +235,7 @@ fn activsg2000_june2016_aux_vs_matpower_values() {
     // Branch values on every branch. Parallel circuits have no shared ID
     // between the formats, so branches are grouped per bus pair in file order
     // (both exporters write parallels adjacently, circuit order preserved).
-    let group = |net: &Network| -> BTreeMap<(usize, usize), Vec<powerio::Branch>> {
+    let group = |net: &BalancedNetwork| -> BTreeMap<(usize, usize), Vec<powerio::Branch>> {
         let mut out: BTreeMap<(usize, usize), Vec<powerio::Branch>> = BTreeMap::new();
         for b in &net.branches {
             out.entry((b.from.0, b.to.0)).or_default().push(b.clone());

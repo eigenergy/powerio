@@ -21,7 +21,6 @@ from typing import Any, Optional
 from . import Conversion, _powerio
 
 __all__ = [
-    "DistNetwork",
     "MulticonductorNetwork",
     "convert_file",
     "convert_str",
@@ -30,7 +29,7 @@ __all__ = [
 ]
 
 
-class DistNetwork:
+class MulticonductorNetwork:
     """A parsed multiconductor distribution network in wire coordinates.
 
     Buses carry named terminals, lines carry conductor impedance matrices, and
@@ -120,7 +119,7 @@ class DistNetwork:
 
     def apply_geo_layer(
         self, text: str, name_hint: Optional[str] = None
-    ) -> tuple["DistNetwork", Any]:
+    ) -> tuple["MulticonductorNetwork", Any]:
         """Apply a geographic sidecar and return ``(placed, report)``.
 
         ``text`` is any form :func:`powerio.parse_geo` accepts. This network
@@ -128,15 +127,12 @@ class DistNetwork:
         same-format write re-serializes.
         """
         inner, report = self._inner.apply_geo_layer(text, name_hint)
-        return DistNetwork(inner), report
+        return MulticonductorNetwork(inner), report
 
     def __repr__(self) -> str:
         return self._inner.__repr__()
 
 
-# v1 name for the wire coordinate distribution model. ``DistNetwork`` remains
-# available in 0.4 because it is the existing handle name.
-MulticonductorNetwork = DistNetwork
 
 
 def parse_file(path: Any, from_: Optional[str] = None) -> MulticonductorNetwork:
@@ -146,19 +142,19 @@ def parse_file(path: Any, from_: Optional[str] = None) -> MulticonductorNetwork:
     ``.dss`` is OpenDSS, and ``.json`` holding the ENGINEERING ``data_model``
     key is PMD JSON, otherwise BMOPF JSON.
     """
-    return DistNetwork(_powerio.dist_parse_file(str(path), from_))
+    return MulticonductorNetwork(_powerio.dist_parse_file(str(path), from_))
 
 
 def parse_str(text: str, format: str) -> MulticonductorNetwork:
     """Parse an in-memory distribution network of the named ``format``."""
-    return DistNetwork(_powerio.dist_parse_str(text, format))
+    return MulticonductorNetwork(_powerio.dist_parse_str(text, format))
 
 
 def convert_file(path: Any, to: str, from_: Optional[str] = None) -> Conversion:
     """Convert a distribution network file to ``to`` in one call.
 
     The warnings carry both the parse warnings and the writer's fidelity
-    losses (there is no :class:`DistNetwork` to query them from).
+    losses (there is no :class:`MulticonductorNetwork` to query them from).
     """
     text, warnings = _powerio.dist_convert_file(str(path), to, from_)
     return Conversion(text, warnings)
@@ -170,7 +166,27 @@ def convert_str(text: str, to: str, format: str) -> Conversion:
     The signature matches :func:`powerio.convert_str`: input, target, source,
     except ``format`` is required (there is no extension to infer from and no
     default). The warnings carry both the parse warnings and the writer's
-    fidelity losses (there is no :class:`DistNetwork` to query them from).
+    fidelity losses (there is no :class:`MulticonductorNetwork` to query them from).
     """
     text, warnings = _powerio.dist_convert_str(text, to, format)
     return Conversion(text, warnings)
+
+
+# The 0.8 model name. A module level ``__getattr__`` keeps it importable for one
+# release while telling the caller what to write instead; 1.0.0 removes it.
+_RENAMED_IN_0_9 = {"DistNetwork": "MulticonductorNetwork"}
+
+
+def __getattr__(name: str) -> Any:
+    replacement = _RENAMED_IN_0_9.get(name)
+    if replacement is None:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    import warnings as _warnings
+
+    _warnings.warn(
+        f"powerio.dist.{name} is renamed to powerio.dist.{replacement}; "
+        f"powerio.dist.{name} is removed in 1.0.0",
+        DeprecationWarning,
+        stacklevel=2,
+    )
+    return globals()[replacement]

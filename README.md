@@ -155,7 +155,7 @@ powerio
 
 ### Current Format Fidelity
 
-Every network reader lowers to `Network`. The table separates writing back to
+Every network reader lowers to `BalancedNetwork`. The table separates writing back to
 the original file type from converting to a different file type.
 
 | file type | read | write | writing back to the original file type | converting to another file type |
@@ -292,7 +292,7 @@ The command writes the tables consumed by
 `<dir>/<case>/raw/`. Compatible cases can be stacked by scenario ID.
 
 `read_gridfm_dataset` in `powerio-matrix` and `pio.read_gridfm` in Python
-reconstruct a `Network` from a dataset. The reconstructed network can be
+reconstruct a `BalancedNetwork` from a dataset. The reconstructed network can be
 written to any supported balanced case format:
 
 ```

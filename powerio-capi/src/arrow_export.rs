@@ -1,6 +1,6 @@
 //! Raw network tables over the Arrow C Data Interface.
 //!
-//! Builds the parsed [`Network`] element tables (bus/branch/gen/load/shunt) as
+//! Builds the parsed [`BalancedNetwork`] element tables (bus/branch/gen/load/shunt) as
 //! Arrow record batches and lends them across the C ABI zero-copy via
 //! [`arrow::ffi::to_ffi`]. This is the in-memory, self-describing sibling of
 //! the `powerio-json` snapshot and the `pio_branches`-style numeric
@@ -25,7 +25,7 @@ use arrow::ffi::{FFI_ArrowArray, FFI_ArrowSchema};
 use arrow::record_batch::RecordBatch;
 #[cfg(feature = "matrix")]
 use powerio::IndexedNetwork;
-use powerio::{BusId, IndexCore, Network, NormalizedSolverTables, SolverArcTerminal};
+use powerio::{BalancedNetwork, BusId, IndexCore, NormalizedSolverTables, SolverArcTerminal};
 
 /// Table selectors for [`pio_to_arrow`](crate::pio_to_arrow); the C
 /// header mirrors these as `PIO_ARROW_TABLE_*`.
@@ -86,7 +86,7 @@ const _: () = assert!(
 /// returned FFI structs own the columnar buffers until the consumer releases
 /// them.
 pub fn export(
-    net: &Network,
+    net: &BalancedNetwork,
     core: &IndexCore,
     table: i32,
 ) -> Result<(FFI_ArrowArray, FFI_ArrowSchema), String> {
@@ -323,11 +323,11 @@ fn units_axis() -> serde_json::Value {
     })
 }
 
-fn solver_tables(net: &Network) -> Result<NormalizedSolverTables, String> {
+fn solver_tables(net: &BalancedNetwork) -> Result<NormalizedSolverTables, String> {
     net.to_normalized_solver_tables().map_err(|e| e.to_string())
 }
 
-fn bus_batch(net: &Network) -> Result<RecordBatch, ArrowError> {
+fn bus_batch(net: &BalancedNetwork) -> Result<RecordBatch, ArrowError> {
     let b = &net.buses;
     batch(vec![
         ("id", i64s(b.iter().map(|x| ext(x.id)).collect())),
@@ -345,17 +345,14 @@ fn bus_batch(net: &Network) -> Result<RecordBatch, ArrowError> {
     ])
 }
 
-fn branch_batch(net: &Network) -> Result<RecordBatch, ArrowError> {
+fn branch_batch(net: &BalancedNetwork) -> Result<RecordBatch, ArrowError> {
     let br = &net.branches;
     batch(vec![
         ("from", i64s(br.iter().map(|x| ext(x.from)).collect())),
         ("to", i64s(br.iter().map(|x| ext(x.to)).collect())),
         ("r", f64s(br.iter().map(|x| x.r).collect())),
         ("x", f64s(br.iter().map(|x| x.x).collect())),
-        (
-            "b",
-            f64s(br.iter().map(|x| x.legacy_total_charging_b()).collect()),
-        ),
+        ("b", f64s(br.iter().map(|x| x.total_charging_b()).collect())),
         ("rate_a", f64s(br.iter().map(|x| x.rate_a).collect())),
         ("rate_b", f64s(br.iter().map(|x| x.rate_b).collect())),
         ("rate_c", f64s(br.iter().map(|x| x.rate_c).collect())),
@@ -442,7 +439,7 @@ fn branch_batch(net: &Network) -> Result<RecordBatch, ArrowError> {
     ])
 }
 
-fn gen_batch(net: &Network) -> Result<RecordBatch, ArrowError> {
+fn gen_batch(net: &BalancedNetwork) -> Result<RecordBatch, ArrowError> {
     let g = &net.generators;
     batch(vec![
         ("bus", i64s(g.iter().map(|x| ext(x.bus)).collect())),
@@ -461,7 +458,7 @@ fn gen_batch(net: &Network) -> Result<RecordBatch, ArrowError> {
     ])
 }
 
-fn load_batch(net: &Network) -> Result<RecordBatch, ArrowError> {
+fn load_batch(net: &BalancedNetwork) -> Result<RecordBatch, ArrowError> {
     let l = &net.loads;
     batch(vec![
         ("bus", i64s(l.iter().map(|x| ext(x.bus)).collect())),
@@ -474,7 +471,7 @@ fn load_batch(net: &Network) -> Result<RecordBatch, ArrowError> {
     ])
 }
 
-fn shunt_batch(net: &Network) -> Result<RecordBatch, ArrowError> {
+fn shunt_batch(net: &BalancedNetwork) -> Result<RecordBatch, ArrowError> {
     let s = &net.shunts;
     batch(vec![
         ("bus", i64s(s.iter().map(|x| ext(x.bus)).collect())),
@@ -487,7 +484,7 @@ fn shunt_batch(net: &Network) -> Result<RecordBatch, ArrowError> {
     ])
 }
 
-fn switch_batch(net: &Network) -> Result<RecordBatch, ArrowError> {
+fn switch_batch(net: &BalancedNetwork) -> Result<RecordBatch, ArrowError> {
     let s = &net.switches;
     batch(vec![
         ("from", i64s(s.iter().map(|x| ext(x.from)).collect())),
@@ -878,7 +875,7 @@ macro_rules! real_matrix_batch {
 }
 
 #[cfg(feature = "matrix")]
-fn matrix_bus_batch(net: &Network, core: &IndexCore) -> Result<RecordBatch, String> {
+fn matrix_bus_batch(net: &BalancedNetwork, core: &IndexCore) -> Result<RecordBatch, String> {
     let view = IndexedNetwork::with_core(net, core);
     let refs = view.reference_bus_indices();
     let components = view.connected_component_labels();
@@ -923,12 +920,12 @@ fn matrix_bus_batch(net: &Network, core: &IndexCore) -> Result<RecordBatch, Stri
 }
 
 #[cfg(not(feature = "matrix"))]
-fn matrix_bus_batch(_net: &Network, _core: &IndexCore) -> Result<RecordBatch, String> {
+fn matrix_bus_batch(_net: &BalancedNetwork, _core: &IndexCore) -> Result<RecordBatch, String> {
     Err(matrix_feature_error())
 }
 
 #[cfg(feature = "matrix")]
-fn matrix_branch_batch(net: &Network, core: &IndexCore) -> Result<RecordBatch, String> {
+fn matrix_branch_batch(net: &BalancedNetwork, core: &IndexCore) -> Result<RecordBatch, String> {
     let view = IndexedNetwork::with_core(net, core);
     let parts = powerio_matrix::build_incidence(
         &view,
@@ -965,12 +962,12 @@ fn matrix_branch_batch(net: &Network, core: &IndexCore) -> Result<RecordBatch, S
 }
 
 #[cfg(not(feature = "matrix"))]
-fn matrix_branch_batch(_net: &Network, _core: &IndexCore) -> Result<RecordBatch, String> {
+fn matrix_branch_batch(_net: &BalancedNetwork, _core: &IndexCore) -> Result<RecordBatch, String> {
     Err(matrix_feature_error())
 }
 
 #[cfg(feature = "matrix")]
-fn matrix_ybus_batch(net: &Network, core: &IndexCore) -> Result<RecordBatch, String> {
+fn matrix_ybus_batch(net: &BalancedNetwork, core: &IndexCore) -> Result<RecordBatch, String> {
     let view = IndexedNetwork::with_core(net, core);
     let parts = powerio_matrix::build_ybus(&view, &powerio_matrix::BuildOptions::default())
         .map_err(|e| e.to_string())?;
@@ -1017,7 +1014,7 @@ fn matrix_ybus_batch(net: &Network, core: &IndexCore) -> Result<RecordBatch, Str
 }
 
 #[cfg(not(feature = "matrix"))]
-fn matrix_ybus_batch(_net: &Network, _core: &IndexCore) -> Result<RecordBatch, String> {
+fn matrix_ybus_batch(_net: &BalancedNetwork, _core: &IndexCore) -> Result<RecordBatch, String> {
     Err(matrix_feature_error())
 }
 
@@ -1075,7 +1072,7 @@ fn push_ybus_row(
 }
 
 #[cfg(feature = "matrix")]
-fn matrix_incidence_batch(net: &Network, core: &IndexCore) -> Result<RecordBatch, String> {
+fn matrix_incidence_batch(net: &BalancedNetwork, core: &IndexCore) -> Result<RecordBatch, String> {
     let view = IndexedNetwork::with_core(net, core);
     let parts = powerio_matrix::build_incidence(
         &view,
@@ -1088,12 +1085,15 @@ fn matrix_incidence_batch(net: &Network, core: &IndexCore) -> Result<RecordBatch
 }
 
 #[cfg(not(feature = "matrix"))]
-fn matrix_incidence_batch(_net: &Network, _core: &IndexCore) -> Result<RecordBatch, String> {
+fn matrix_incidence_batch(
+    _net: &BalancedNetwork,
+    _core: &IndexCore,
+) -> Result<RecordBatch, String> {
     Err(matrix_feature_error())
 }
 
 #[cfg(feature = "matrix")]
-fn matrix_bprime_batch(net: &Network, core: &IndexCore) -> Result<RecordBatch, String> {
+fn matrix_bprime_batch(net: &BalancedNetwork, core: &IndexCore) -> Result<RecordBatch, String> {
     let view = IndexedNetwork::with_core(net, core);
     let matrix = powerio_matrix::build_bprime(&view, &powerio_matrix::BuildOptions::default())
         .map_err(|e| e.to_string())?;
@@ -1101,12 +1101,15 @@ fn matrix_bprime_batch(net: &Network, core: &IndexCore) -> Result<RecordBatch, S
 }
 
 #[cfg(not(feature = "matrix"))]
-fn matrix_bprime_batch(_net: &Network, _core: &IndexCore) -> Result<RecordBatch, String> {
+fn matrix_bprime_batch(_net: &BalancedNetwork, _core: &IndexCore) -> Result<RecordBatch, String> {
     Err(matrix_feature_error())
 }
 
 #[cfg(feature = "matrix")]
-fn matrix_bdoubleprime_batch(net: &Network, core: &IndexCore) -> Result<RecordBatch, String> {
+fn matrix_bdoubleprime_batch(
+    net: &BalancedNetwork,
+    core: &IndexCore,
+) -> Result<RecordBatch, String> {
     let view = IndexedNetwork::with_core(net, core);
     let matrix =
         powerio_matrix::build_bdoubleprime(&view, &powerio_matrix::BuildOptions::default())
@@ -1116,7 +1119,10 @@ fn matrix_bdoubleprime_batch(net: &Network, core: &IndexCore) -> Result<RecordBa
 }
 
 #[cfg(not(feature = "matrix"))]
-fn matrix_bdoubleprime_batch(_net: &Network, _core: &IndexCore) -> Result<RecordBatch, String> {
+fn matrix_bdoubleprime_batch(
+    _net: &BalancedNetwork,
+    _core: &IndexCore,
+) -> Result<RecordBatch, String> {
     Err(matrix_feature_error())
 }
 
@@ -1255,20 +1261,20 @@ mod tests {
     use super::*;
     use arrow::ffi::from_ffi;
 
-    fn net(name: &str) -> Network {
+    fn net(name: &str) -> BalancedNetwork {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../tests/data")
             .join(name);
         powerio::parse_file(&path, None).unwrap().network
     }
 
-    fn terminal_projection_net() -> Network {
+    fn terminal_projection_net() -> BalancedNetwork {
         use powerio::{Branch, BranchCharging, Bus, BusId, BusType};
 
         let mut branch = Branch::new(BusId(1), BusId(2), 0.01, 0.1);
         branch.charging = Some(BranchCharging::new(0.01, 0.02, 0.03, 0.05));
         branch.rate_a = 100.0;
-        Network::in_memory(
+        BalancedNetwork::in_memory(
             "terminal-projection",
             100.0,
             vec![
@@ -1280,10 +1286,10 @@ mod tests {
     }
 
     #[cfg(feature = "matrix")]
-    fn incidence_filter_net() -> Network {
+    fn incidence_filter_net() -> BalancedNetwork {
         use powerio::{Branch, Bus, BusId, BusType};
 
-        Network::in_memory(
+        BalancedNetwork::in_memory(
             "incidence-filter",
             100.0,
             vec![
@@ -1299,7 +1305,7 @@ mod tests {
         )
     }
 
-    fn round_trip(net: &Network, table: i32) -> StructArray {
+    fn round_trip(net: &BalancedNetwork, table: i32) -> StructArray {
         let core = IndexCore::build(net);
         let (array, schema) = export(net, &core, table).unwrap();
         // from_ffi consumes the array and borrows the schema (zero-copy import).
@@ -1351,7 +1357,7 @@ mod tests {
     }
 
     #[cfg(feature = "matrix")]
-    fn matrix_record_batch(net: &Network, table: i32) -> RecordBatch {
+    fn matrix_record_batch(net: &BalancedNetwork, table: i32) -> RecordBatch {
         let core = IndexCore::build(net);
         match table {
             PIO_ARROW_TABLE_YBUS => matrix_ybus_batch(net, &core).unwrap(),
@@ -1820,7 +1826,7 @@ mod tests {
     }
 
     #[cfg(feature = "matrix")]
-    fn transformer_3w_net() -> Network {
+    fn transformer_3w_net() -> BalancedNetwork {
         // Three buses joined only by a 3-winding transformer. The indexed view
         // star-lowers it, adding a synthetic star bus, so the matrix bus axis has
         // one more row than the handle's bus count.

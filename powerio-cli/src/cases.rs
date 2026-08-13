@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::Context;
 use powerio_matrix::format::routing::{Detection, JsonClass, SourceFormat as DetectedFormat};
-use powerio_matrix::network::Network;
+use powerio_matrix::network::BalancedNetwork;
 use powerio_pkg::{MulticonductorToBalancedOptions, lower_multiconductor_to_balanced};
 
 /// Extensions (lowercase) that identify a transmission case file.
@@ -160,11 +160,11 @@ fn has_case_extension(path: &Path) -> bool {
 
 /// A case loaded to the transmission model, whatever family it came from.
 pub struct LoadedCase {
-    pub network: Network,
+    pub network: BalancedNetwork,
     pub warnings: Vec<String>,
 }
 
-/// Load one case file as a transmission [`Network`]. Distribution inputs
+/// Load one case file as a transmission [`BalancedNetwork`]. Distribution inputs
 /// (`.dss`, BMOPF/PMD `.json`) parse to the multiconductor model and go
 /// through the explicit balanced lowering pass, whose approximations and
 /// dropped fields surface as warnings. A `.dss` redirect fragment (no voltage
@@ -228,7 +228,7 @@ pub fn load_network(path: &Path) -> anyhow::Result<LoadedCase> {
 /// lowers to the same `lowered-multiconductor` fallback and the exports
 /// overwrite each other.
 fn lower_to_balanced(
-    mut net: powerio_dist::DistNetwork,
+    mut net: powerio_dist::MulticonductorNetwork,
     stem: Option<&str>,
     path: &Path,
 ) -> anyhow::Result<LoadedCase> {

@@ -1,4 +1,4 @@
-//! Map a parsed [`AuxFile`] to the typed [`Network`], and write a `Network`
+//! Map a parsed [`AuxFile`] to the typed [`BalancedNetwork`], and write a `BalancedNetwork`
 //! back out as aux text.
 //!
 //! Only the power flow core object types (Bus, Load, Shunt, Gen, Branch) feed
@@ -13,7 +13,7 @@ use std::sync::Arc;
 use super::auxiliary::{AuxFile, AuxObject, parse_aux};
 use crate::format::{Conversion, sanitize_quoted, warn_extra_branch_rating_sets};
 use crate::network::{
-    Branch, Bus, BusId, BusType, Extras, Generator, Load, LoadVoltageModel, Network, Shunt,
+    BalancedNetwork, Branch, Bus, BusId, BusType, Extras, Generator, Load, LoadVoltageModel, Shunt,
     SourceFormat,
 };
 use crate::{Error, Result};
@@ -40,7 +40,7 @@ pub(crate) fn parse_powerworld_source(
     source: Arc<String>,
     name_hint: Option<&str>,
     warnings: &mut Vec<String>,
-) -> Result<Network> {
+) -> Result<BalancedNetwork> {
     let content: &str = &source;
     // PowerWorld `.aux` does not carry the system base in the case data, so we
     // default to 100 MVA (the de-facto standard, and what our own writer records
@@ -108,7 +108,7 @@ pub(crate) fn parse_powerworld_source(
     }
     warnings.extend(unmodeled.into_iter().map(|(object, rows)| {
         format!(
-            "PowerWorld .aux DATA {object} has {rows} row(s) not modeled in Network; \
+            "PowerWorld .aux DATA {object} has {rows} row(s) not modeled in BalancedNetwork; \
              retained only in source text for same-format writeback"
         )
     }));
@@ -140,7 +140,7 @@ pub(crate) fn parse_powerworld_source(
     }
     derive_bus_kinds(&mut buses, &generators);
 
-    let net = Network {
+    let net = BalancedNetwork {
         name,
         base_mva,
         base_frequency: crate::network::DEFAULT_BASE_FREQUENCY,
@@ -163,7 +163,7 @@ pub(crate) fn parse_powerworld_source(
     Ok(net)
 }
 
-/// Parse the auxiliary sections of a PowerWorld-sourced [`Network`]'s retained
+/// Parse the auxiliary sections of a PowerWorld-sourced [`BalancedNetwork`]'s retained
 /// source. The typed model carries the power flow core; everything else in the
 /// original file (contingencies, limit sets, substations, ...) is reachable
 /// here.
@@ -172,7 +172,7 @@ pub(crate) fn parse_powerworld_source(
 ///
 /// # Errors
 /// As [`parse_aux`], on a retained source that no longer parses.
-pub fn aux_sections(net: &Network) -> Option<Result<AuxFile>> {
+pub fn aux_sections(net: &BalancedNetwork) -> Option<Result<AuxFile>> {
     if net.source_format != SourceFormat::PowerWorld {
         return None;
     }
@@ -668,7 +668,7 @@ fn read_branch(r: &Row, bus_labels: &HashMap<&str, BusId>) -> Result<Branch> {
 // A flat serializer: one section per PowerWorld object type; splitting it would
 // add indirection without clarity.
 #[expect(clippy::too_many_lines)]
-pub fn write_powerworld(net: &Network) -> Conversion {
+pub fn write_powerworld(net: &BalancedNetwork) -> Conversion {
     let mut warnings = Vec::new();
     let mut nonfinite = false;
     let mut sanitized_names = 0usize;
@@ -836,7 +836,7 @@ pub fn write_powerworld(net: &Network) -> Conversion {
                     circuit,
                     n(br.r),
                     n(br.x),
-                    n(br.legacy_total_charging_b()),
+                    n(br.total_charging_b()),
                     n(br.rate_a),
                     n(br.rate_b),
                     n(br.rate_c),

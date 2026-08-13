@@ -8,7 +8,7 @@
 /// converted `angmin`/`angmax` pair.
 ///
 /// `angmin == angmax == 0` states no constraint, the MATPOWER spelling that
-/// `Network::to_normalized` widens to a pad, so a raw case and a normalized
+/// `BalancedNetwork::to_normalized` widens to a pad, so a raw case and a normalized
 /// one describe the same branch. Reading that pair as a zero wide window would
 /// give a zero synthesized limit, which the instance then reads back as
 /// unlimited. A window wider than the half turn is held at `pi` by

@@ -8,7 +8,7 @@ use std::sync::Arc;
 
 use powerio_dist::dss::parse_dss_file;
 use powerio_dist::{
-    CoordinateSpace, CoordsKind, DistBus, DistNetwork, GeoMeta, Location, parse_pmd_file,
+    CoordinateSpace, CoordsKind, DistBus, GeoMeta, Location, MulticonductorNetwork, parse_pmd_file,
     parse_pmd_str, write_bmopf_json, write_pmd_json,
 };
 
@@ -52,7 +52,7 @@ fn dss_parse_agrees_with_the_pmd_parse() {
     let ours = parse_dss_file(fixture("opendss/ieee13/IEEE13Nodeckt.dss")).unwrap();
     let pmd = parse_pmd_file(fixture("pmd/ieee13.json")).unwrap();
 
-    let bus_set = |n: &DistNetwork| -> BTreeSet<String> {
+    let bus_set = |n: &MulticonductorNetwork| -> BTreeSet<String> {
         n.buses.iter().map(|b| b.id.to_lowercase()).collect()
     };
     assert_eq!(bus_set(&ours), bus_set(&pmd));
@@ -140,7 +140,7 @@ fn pmd_round_trips_to_model_equality() {
     let net = parse_pmd_file(fixture("pmd/ieee13.json")).unwrap();
     let out = write_pmd_json(&net);
     let again = parse_pmd_str(&out.text).unwrap();
-    let strip = |n: &DistNetwork| {
+    let strip = |n: &MulticonductorNetwork| {
         let mut n = n.clone();
         n.source = Some(Arc::new(String::new()));
         n.extras.clear(); // pmd_settings/pmd_files bookkeeping differs in formatting only
@@ -258,7 +258,7 @@ fn pmd_typed_locations_emit_only_when_geographic() {
         y: 35.0,
         kind: None,
     });
-    let mut net = DistNetwork::default();
+    let mut net = MulticonductorNetwork::default();
     net.buses = vec![bus];
 
     let unknown = write_pmd_json(&net);

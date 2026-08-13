@@ -3,7 +3,7 @@
 
 use std::path::Path;
 
-use powerio::network::{Branch, Bus, BusId, BusType, Network};
+use powerio::network::{BalancedNetwork, Branch, Bus, BusId, BusType};
 use powerio::{Error, parse_powerworld, parse_psse, write_powerworld};
 
 fn bus(id: usize, kind: BusType) -> Bus {
@@ -18,7 +18,7 @@ fn branch(from: usize, to: usize) -> Branch {
 fn validate_rejects_duplicate_bus_id() {
     // Two buses share id 1: dense indexing would collapse them onto one index
     // and silently corrupt every nodal aggregate, so validate() must reject it.
-    let net = Network::in_memory(
+    let net = BalancedNetwork::in_memory(
         "dup",
         100.0,
         vec![bus(1, BusType::Ref), bus(1, BusType::Pq)],
@@ -29,7 +29,7 @@ fn validate_rejects_duplicate_bus_id() {
 
 #[test]
 fn validate_rejects_dangling_branch_endpoint() {
-    let net = Network::in_memory(
+    let net = BalancedNetwork::in_memory(
         "dangling",
         100.0,
         vec![bus(1, BusType::Ref), bus(2, BusType::Pq)],
@@ -43,7 +43,7 @@ fn from_json_rejects_dangling_reference() {
     // to_json does not validate, so a hand-built (or hand-edited) invalid network
     // serializes fine; from_json must reject it on the way back in, since the
     // C ABI and Julia bridge ride on this transport.
-    let bad = Network::in_memory(
+    let bad = BalancedNetwork::in_memory(
         "bad",
         100.0,
         vec![bus(1, BusType::Ref), bus(2, BusType::Pq)],
@@ -51,7 +51,7 @@ fn from_json_rejects_dangling_reference() {
     );
     let json = bad.to_json().unwrap();
     assert!(matches!(
-        Network::from_json(&json),
+        BalancedNetwork::from_json(&json),
         Err(Error::FormatRead { .. })
     ));
 }
@@ -61,10 +61,10 @@ fn from_json_rejects_zero_bus_network() {
     // A bus-less network is content-free; read_source rejects it for every parse
     // path, and from_json (the JSON transport) must reject it too so the guard is
     // universal rather than skippable through the C ABI / Julia bridge.
-    let empty = Network::in_memory("empty", 100.0, vec![], vec![]);
+    let empty = BalancedNetwork::in_memory("empty", 100.0, vec![], vec![]);
     let json = empty.to_json().unwrap();
     assert!(matches!(
-        Network::from_json(&json),
+        BalancedNetwork::from_json(&json),
         Err(Error::FormatRead { .. })
     ));
 }
@@ -90,7 +90,7 @@ fn powerworld_rejects_malformed_numeric_field() {
     // rather than silently default it to 0.0.
     let mut br = branch(1, 2);
     br.x = 0.123_45; // distinctive token to corrupt
-    let net = Network::in_memory(
+    let net = BalancedNetwork::in_memory(
         "pw",
         100.0,
         vec![bus(1, BusType::Ref), bus(2, BusType::Pq)],

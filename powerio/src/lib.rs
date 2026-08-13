@@ -6,7 +6,7 @@
 //! case files are read only, and GO Challenge 3 and OPFData JSON have no
 //! canonical writer beyond same source echo; `.pwd` display files parse through
 //! [`parse_display_file`].
-//! Each reader produces a [`Network`]. [`Network::to_format`] returns the
+//! Each reader produces a [`BalancedNetwork`]. [`BalancedNetwork::to_format`] returns the
 //! serialized target and warnings for fields the target cannot represent. See
 //! [`crate::format`] for format routing and fidelity rules.
 //!
@@ -74,9 +74,9 @@ pub use indexed::{ConnectivityReport, IndexCore, IndexedNetwork};
 pub use network::{
     Area, BalancedNetwork, Branch, BranchCharging, BranchCurrentRatings, BranchRatingSet,
     BranchSolution, Bus, BusId, BusType, DEFAULT_BASE_FREQUENCY, Diagnostic, Extras, GenCaps,
-    GenCost, Generator, Hvdc, Impedance, Load, LoadVoltageModel, Network, Shunt, ShuntBlock,
-    SolverParams, SourceFormat, Storage, Switch, SwitchedShuntControl, SwitchedShuntMode,
-    Transformer3W, TransformerControl, TransformerControlMode, Winding,
+    GenCost, Generator, Hvdc, Impedance, Load, LoadVoltageModel, Shunt, ShuntBlock, SolverParams,
+    SourceFormat, Storage, Switch, SwitchedShuntControl, SwitchedShuntMode, Transformer3W,
+    TransformerControl, TransformerControlMode, Winding,
 };
 pub use normalize::{
     NormalizeOptions, NormalizeSourceRows, NormalizedNetwork, POWER_MODELS_ANGLE_BOUND_PAD,

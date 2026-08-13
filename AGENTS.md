@@ -8,7 +8,7 @@ A Cargo workspace of Rust crates plus a Python package. Parses power network
 case files, converts losslessly between formats, and emits sparse matrices and
 graph views for any downstream solver. Feeds the GridFM ML pipeline.
 
-- **`powerio`**: the parser, the format-neutral `Network` hub, the lossless
+- **`powerio`**: the parser, the format-neutral `BalancedNetwork` hub, the lossless
   writer, and the format converters. Light deps (thiserror, num-complex,
   petgraph, serde, serde_json, lexical-core); no matrix or TUI stack.
 - **`powerio-matrix`**: sparse matrices and graph views built on `powerio`
@@ -16,7 +16,7 @@ graph views for any downstream solver. Feeds the GridFM ML pipeline.
 - **`powerio-prob`**: problem instances (DC OPF, AC OPF, SCOPF) on `powerio`.
   Matrix free by default; `--features matrix` adds the sparse operators and
   the DC OPF bundle writer (`matrix::bundle::write_dcopf_bundle`).
-- **`powerio-dist`**: the multiconductor distribution model (`DistNetwork`)
+- **`powerio-dist`**: the multiconductor distribution model (`MulticonductorNetwork`)
   with OpenDSS `.dss`, PMD JSON, and BMOPF JSON converters. Deliberately does
   **not** depend on `powerio`.
 - **`powerio-pkg`**: the `.pio.json` document model (envelope, provenance,
@@ -37,7 +37,7 @@ graph views for any downstream solver. Feeds the GridFM ML pipeline.
   COO tables plus append only axis maps
   `matrix_bus` and `matrix_branch`.
 
-`Network` is the one canonical model (format neutral, loads/shunts first class);
+`BalancedNetwork` is the one canonical model (format neutral, loads/shunts first class);
 `IndexedNetwork` is the dense indexed analysis view derived from it.
 
 Formats. MATPOWER `.m`, PowerModels JSON, PSS/E `.raw` (v33/34/35),
@@ -45,12 +45,12 @@ PowerWorld `.aux`, PSLF `.epc`, egret JSON, pandapower JSON, PyPSA CSV folders,
 and Surge JSON all read and write. GO Challenge 3 JSON and DeepMind OPFData
 JSON are read only inputs; PowerWorld `.pwb` is a read only binary input with
 no writer. PowerWorld `.pwd` display files use the display API. GridFM Parquet
-datasets read and write through directory helpers. Bare `Network` model JSON
+datasets read and write through directory helpers. Bare `BalancedNetwork` model JSON
 moves through `Network::to_json`/`from_json`; since 0.7 it is not an advertised
 case format (`powerio-json` stays only as a hidden, warned CLI token and a C
 ABI v4 alias until 1.0). Distribution formats (OpenDSS `.dss`, PMD JSON, BMOPF
-JSON) meet at `powerio-dist`'s `DistNetwork` the same way.
-Every balanced case format meets at `Network`, so a new format is one
+JSON) meet at `powerio-dist`'s `MulticonductorNetwork` the same way.
+Every balanced case format meets at `BalancedNetwork`, so a new format is one
 reader/writer at the hub, not a pairwise converter.
 
 Matrix outputs (powerio-matrix):
@@ -67,7 +67,7 @@ Matrix outputs (powerio-matrix):
   `matrix::bundle::write_dcopf_bundle`, `--features matrix`): signed incidence `A` (n×m), branch susceptance `b`, DC OPF Laplacian `L = A diag(b) Aᵀ` and its reference-grounded form, flow map `B Aᵀ`, generator cost `Q`/`c`, bounds, thermal limits `f̄`, generator→bus `C_g`, nodal load `p_d`, `e_r`.
 - petgraph `UnGraph<bus_idx, branch_idx>` view + connectivity / radial diagnostics.
 - gridfm-datakit Parquet dataset (`gridfm` subcommand, `io::gridfm::write_gridfm_dataset`, `--features gridfm`): the `bus_data`/`gen_data`/`branch_data`/`y_bus_data` tables a single parsed case maps to, matching gridfm-datakit's column schema so gridfm-graphkit trains on it directly.
-- gridfm dataset → `Network` reader, the ML→classical return leg (`io::gridfm::read_gridfm_dataset` / `read_gridfm_scenarios` / `gridfm_base_case`, pure inverse `read_gridfm_network`; `--features gridfm`, issue #60). Lossy but complete for power flow: recovers bus types/voltages/limits, nodal load & shunt totals, generator dispatch & bounds (`vg` from bus `Vm`), branch `r/x/b/tap/shift/rate_a/angle-limits`, and `base_mva`; can't recover original bus ids (synthesized `1..n`), per element granularity (folded to one synthetic `Load`/`Shunt` per bus), piecewise/cubic costs, or HVDC/storage. Branches with unit effective tap and zero shift read back as lines (raw `tap 0`). Returns `GridfmRead { network, scenario, warnings }`; sets `SourceFormat::Gridfm`. One reader ⇒ gridfm → any classical writer for free. CLI: `convert <dataset-dir> --from gridfm [--scenario N] --to <fmt>` (kept out of the `parse_file` hub that has no parquet dependency). `y_bus_data` is ignored on read (branches carry raw `r/x/b`). Python: `read_gridfm(dir, scenario=0)` / `read_gridfm_scenarios(dir)` → `GridfmRead(network, scenario, warnings)`.
+- gridfm dataset → `BalancedNetwork` reader, the ML→classical return leg (`io::gridfm::read_gridfm_dataset` / `read_gridfm_scenarios` / `gridfm_base_case`, pure inverse `read_gridfm_network`; `--features gridfm`, issue #60). Lossy but complete for power flow: recovers bus types/voltages/limits, nodal load & shunt totals, generator dispatch & bounds (`vg` from bus `Vm`), branch `r/x/b/tap/shift/rate_a/angle-limits`, and `base_mva`; can't recover original bus ids (synthesized `1..n`), per element granularity (folded to one synthetic `Load`/`Shunt` per bus), piecewise/cubic costs, or HVDC/storage. Branches with unit effective tap and zero shift read back as lines (raw `tap 0`). Returns `GridfmRead { network, scenario, warnings }`; sets `SourceFormat::Gridfm`. One reader ⇒ gridfm → any classical writer for free. CLI: `convert <dataset-dir> --from gridfm [--scenario N] --to <fmt>` (kept out of the `parse_file` hub that has no parquet dependency). `y_bus_data` is ignored on read (branches carry raw `r/x/b`). Python: `read_gridfm(dir, scenario=0)` / `read_gridfm_scenarios(dir)` → `GridfmRead(network, scenario, warnings)`.
 
 ## Commands
 
@@ -257,8 +257,8 @@ fuzz/                        # libFuzzer targets (detached workspace; see fuzz/R
   Cross-format conversion keeps maximal fidelity and reports anything the target
   can't represent in `Conversion::warnings`; never drop it silently.
 - **Adding a format.** A reader and/or writer in `powerio/src/format/<name>.rs`
-  that produces/consumes `Network`; register in `format/mod.rs`, re-export from
-  `powerio/src/lib.rs`, add a CLI/`TargetFormat` arm. `Network` is the unifying
+  that produces/consumes `BalancedNetwork`; register in `format/mod.rs`, re-export from
+  `powerio/src/lib.rs`, add a CLI/`TargetFormat` arm. `BalancedNetwork` is the unifying
   hub.
 - **JSON transport.** `Network::to_json`/`from_json` (serde) is the structured
   transport; over the C ABI it is `pio_to_json`/`pio_from_json`. The

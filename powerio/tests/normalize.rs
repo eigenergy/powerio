@@ -1,4 +1,4 @@
-//! `Network::to_normalized`: per-unit / radians / tap / filter / source ids / bus
+//! `BalancedNetwork::to_normalized`: per-unit / radians / tap / filter / source ids / bus
 //! types, plus the no-false-write-back invariant and `parse_str == parse`.
 
 use std::path::{Path, PathBuf};

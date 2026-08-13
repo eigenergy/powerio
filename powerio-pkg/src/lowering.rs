@@ -15,7 +15,7 @@ use serde::{Deserialize, Serialize};
 
 use powerio::{
     BalancedNetwork, Branch, BranchCharging, Bus, BusId, BusType, Extras as BalancedExtras,
-    Generator, Load, Network, Shunt, SourceFormat,
+    Generator, Load, Shunt, SourceFormat,
 };
 use powerio_dist::{
     DistBus, DistLine, DistLineCode, DistLoadVoltageModel, Mat, MulticonductorNetwork,
@@ -307,7 +307,7 @@ impl<'a> LoweringState<'a> {
         self.record_capacitor_drops();
         self.err_if_errors()?;
 
-        let mut network = Network::new(
+        let mut network = BalancedNetwork::new(
             self.net
                 .name
                 .clone()

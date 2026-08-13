@@ -3,7 +3,10 @@ use powerio_dist::{
     write_dss, write_pmd_json,
 };
 
-fn load_model<'a>(net: &'a powerio_dist::DistNetwork, name: &str) -> &'a DistLoadVoltageModel {
+fn load_model<'a>(
+    net: &'a powerio_dist::MulticonductorNetwork,
+    name: &str,
+) -> &'a DistLoadVoltageModel {
     &net.loads
         .iter()
         .find(|l| l.name.eq_ignore_ascii_case(name))

@@ -107,7 +107,7 @@ fn activsg200_canonical_write_is_idempotent() {
     assert_eq!(first, again);
 }
 
-/// The typed Network mapping reads the real export's power flow core.
+/// The typed BalancedNetwork mapping reads the real export's power flow core.
 #[test]
 fn activsg200_maps_the_power_flow_core() {
     let net = parse_file(fixture("ACTIVSg200.aux"), None).unwrap().network;

@@ -17,8 +17,7 @@ conventions while keeping separate types; code that needs both holds a
 
 ### `BalancedNetwork`
 
-`powerio::BalancedNetwork` (an alias of `powerio::Network`) is the scalar
-positive sequence model for transmission power flow, OPF, matrices, and graph
+`powerio::BalancedNetwork` is the scalar positive sequence model for transmission power flow, OPF, matrices, and graph
 analysis. Every electrical quantity is a single `f64`, with no phase or conductor
 dimension. Source bus IDs are not dense matrix indices; the dense solver view
 is derived separately and preserves source IDs. Loads and shunts have
@@ -26,8 +25,7 @@ separate records rather than fields folded onto bus rows.
 
 ### `MulticonductorNetwork`
 
-`powerio_dist::MulticonductorNetwork` (an alias of `powerio_dist::DistNetwork`)
-is the wire coordinate model for conductor level distribution. Bus IDs are
+`powerio_dist::MulticonductorNetwork` is the wire coordinate model for conductor level distribution. Bus IDs are
 strings; terminals are ordered string names; every element carries a terminal
 map; grounding is explicit; units are SI and radians. A neutral carries
 grounding and reduction semantics beyond a phase label. Format defaults and
@@ -75,7 +73,7 @@ available as an operating point.
 
 For balanced model JSON, `NetworkPackage::attach_normalized_solver_table_metadata`
 records compact metadata for
-`powerio::Network::to_normalized_solver_tables()`: pass name, units, row counts,
+`powerio::BalancedNetwork::to_normalized_solver_tables()`: pass name, units, row counts,
 dense bus ids, reference/component indices, branch to arc indices, and source row
 provenance. The document does not duplicate the full table rows; it records enough
 metadata for a compiler cache or sidecar artifact to verify table identity.

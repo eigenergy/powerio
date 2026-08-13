@@ -2,8 +2,8 @@
 
 A `.pio.json` file stores one typed network model payload and the record of how
 it was produced. The `model` field contains the JSON representation of either
-`powerio::Network` (balanced) or
-`powerio_dist::DistNetwork` (multiconductor). The document metadata records
+`powerio::BalancedNetwork` (balanced) or
+`powerio_dist::MulticonductorNetwork` (multiconductor). The document metadata records
 provenance, source maps, structured diagnostics, validation results, lowering
 history, optional operating points, and optional study commits.
 `powerio_pkg::NetworkPackage` is the
@@ -34,7 +34,7 @@ receiving consumer is PowerIO or a binding that wants provenance, diagnostics,
 operating points, and the explicit model kind. Use BMOPF, OpenDSS, PMD JSON, or
 another supported case format when the next tool expects that format.
 
-`powerio-json` is bare balanced `Network` JSON, without package metadata or
+`powerio-json` is bare balanced `BalancedNetwork` JSON, without package metadata or
 source maps. Version 0.7 removes it from advertised CLI file formats. Use
 `Network::to_json` and `Network::from_json` for model JSON. The C ABI exposes
 the same operations as `pio_to_json` and `pio_from_json`.
@@ -113,7 +113,7 @@ golden file by `powerio/tests/snapshot_schema.rs`.
 
 ### The balanced model JSON {#pio-payload-balanced}
 
-`model.balanced_network` is the serde form of `powerio::Network`, stamped when
+`model.balanced_network` is the serde form of `powerio::BalancedNetwork`, stamped when
 `model_kind` is `balanced`: the scalar positive sequence transmission model.
 The tables are
 `buses`, `loads`, `shunts`, `branches`, `switches`, `generators`, `storage`,
@@ -122,16 +122,16 @@ The tables are
 the MATPOWER conventions: MW and MVAr power, per unit voltage magnitudes and
 impedances on the system base, degree angles. Every element carries an `extras`
 map for source format fields the model does not name. The field reference is the
-[`powerio::Network` rustdoc](../powerio/network/struct.Network.html).
+[`powerio::BalancedNetwork` rustdoc](../powerio/network/struct.Network.html).
 
 ### The multiconductor model JSON {#pio-payload-multiconductor}
 
 `model.multiconductor_network` is the serde form of
-`powerio_dist::DistNetwork`, stamped when `model_kind` is `multiconductor`:
+`powerio_dist::MulticonductorNetwork`, stamped when `model_kind` is `multiconductor`:
 the wire coordinate distribution model, in SI units with radian angles.
 [Compiler IR](compiler-ir.md) describes the model family. The field reference
 is the
-[`powerio_dist::DistNetwork` rustdoc](../powerio_dist/model/struct.DistNetwork.html).
+[`powerio_dist::MulticonductorNetwork` rustdoc](../powerio_dist/model/struct.DistNetwork.html).
 Do not extract this object as a distribution case file. Use `.pio.json` for
 PowerIO artifacts; when a receiving tool expects BMOPF, PMD JSON, or OpenDSS,
 write that case format through `powerio convert`.
@@ -181,7 +181,7 @@ The block shape is:
 
 GO Challenge 3 documents use this block for the scheduling time series. The
 static `model` reflects the first interval that can be represented by
-`Network`; `operating_points` carries replayable updates for every interval.
+`BalancedNetwork`; `operating_points` carries replayable updates for every interval.
 `NetworkPackage::materialize_operating_point(index)` returns a new static
 document with `origin.kind = "derived"` and
 `origin.pass = "materialize-operating-point"`.
@@ -212,7 +212,7 @@ identity resolution, materialization, and language APIs.
 ## Derived metadata
 
 `derived.normalized_solver_tables` records the compact identity metadata for
-`powerio::Network::to_normalized_solver_tables()` without embedding every table
+`powerio::BalancedNetwork::to_normalized_solver_tables()` without embedding every table
 row in the document. The full tables are a derived artifact; this metadata lets a
 compiler cache prove it was built from the same lowering pass and row order.
 

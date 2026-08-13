@@ -69,7 +69,7 @@ pub struct PwdSubstation {
 
 /// Decoded PowerWorld display file content.
 ///
-/// A `.pwd` is not a case file and does not carry a [`Network`](crate::Network).
+/// A `.pwd` is not a case file and does not carry a [`BalancedNetwork`](crate::BalancedNetwork).
 /// This structure exposes the display metadata the reader validates plus the
 /// supported drawing object subset.
 #[derive(Debug, Clone, PartialEq)]

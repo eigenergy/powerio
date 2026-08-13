@@ -194,13 +194,13 @@ fn phase_reference(terminals: &[&str], grounded: &[&str]) -> (Vec<f64>, Vec<f64>
     (magnitudes, angles)
 }
 
-fn preflight_network(terminals: &[&str], grounded: &[&str]) -> powerio_dist::DistNetwork {
-    use powerio_dist::{DistBus, DistLine, DistLineCode, DistNetwork, VoltageSource};
+fn preflight_network(terminals: &[&str], grounded: &[&str]) -> powerio_dist::MulticonductorNetwork {
+    use powerio_dist::{DistBus, DistLine, DistLineCode, MulticonductorNetwork, VoltageSource};
 
     let n = terminals.len();
     let terminal_map = strings(terminals);
     let (v_magnitude, v_angle) = phase_reference(terminals, grounded);
-    let mut net = DistNetwork::default();
+    let mut net = MulticonductorNetwork::default();
     for id in ["sourcebus", "loadbus"] {
         let mut bus = DistBus::new(id, terminal_map.clone());
         bus.grounded = strings(grounded);
@@ -244,7 +244,7 @@ fn has_diagnostic_code(diagnostics: &[StructuredDiagnostic], code: &str) -> bool
         .any(|d| d.code == DiagnosticCode::new(code))
 }
 
-fn assert_lowering_rejects(net: &powerio_dist::DistNetwork, code: &str) {
+fn assert_lowering_rejects(net: &powerio_dist::MulticonductorNetwork, code: &str) {
     let err = lower_multiconductor_to_balanced(net, MulticonductorToBalancedOptions::default())
         .expect_err("lowering must reject unsupported input");
     assert!(
@@ -1258,9 +1258,9 @@ mpc.branch = [
 
 #[test]
 fn sane_validation_records_multiconductor_structure_findings() {
-    use powerio_dist::{DistBus, DistLine, DistNetwork, UntypedObject};
+    use powerio_dist::{DistBus, DistLine, MulticonductorNetwork, UntypedObject};
 
-    let mut net = DistNetwork::default();
+    let mut net = MulticonductorNetwork::default();
     net.buses.push(DistBus::new("a", vec!["1".to_owned()]));
     net.lines.push(DistLine::new(
         "l1",
@@ -1738,7 +1738,7 @@ fn lowering_record_roundtrips() {
 fn load_voltage_model_survives_package_roundtrip() {
     // The typed load voltage model (DistLoadVoltageModel) is part of the
     // multiconductor payload; prove it round-trips through the package JSON.
-    use powerio_dist::{Configuration, DistLoad, DistLoadVoltageModel, DistNetwork};
+    use powerio_dist::{Configuration, DistLoad, DistLoadVoltageModel, MulticonductorNetwork};
 
     let zip = DistLoadVoltageModel::Zip {
         v_nom: vec![230.0, 230.0, 230.0],
@@ -1749,7 +1749,7 @@ fn load_voltage_model_survives_package_roundtrip() {
         beta_i: vec![0.3, 0.3, 0.3],
         beta_p: vec![0.3, 0.3, 0.3],
     };
-    let mut net = DistNetwork::default();
+    let mut net = MulticonductorNetwork::default();
     let mut load = DistLoad::new(
         "l1",
         "b1",
@@ -1893,7 +1893,7 @@ fn geo_types_share_the_same_json_shape() {
         serde_json::to_value(dist_geo).unwrap()
     );
 
-    let empty_dist = powerio_dist::DistNetwork::default();
+    let empty_dist = powerio_dist::MulticonductorNetwork::default();
     let v = serde_json::to_value(empty_dist).unwrap();
     assert!(v.get("geo").is_none());
     let bus = powerio_dist::DistBus::new("b1", vec!["1".to_owned()]);

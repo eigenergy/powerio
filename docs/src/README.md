@@ -51,7 +51,7 @@ Rendered API docs (rustdoc) for all crates: <https://powerio.dev>.
 
 | crate | responsibility |
 | --- | --- |
-| `powerio` | parsers, writers, `Network`, `IndexedNetwork`, normalization, format routing |
+| `powerio` | parsers, writers, `BalancedNetwork`, `IndexedNetwork`, normalization, format routing |
 | `powerio-matrix` | generic sparse matrices, graph views, and GridFM datasets |
 | `powerio-prob` | complete problem instances and optional matrix projections |
 | `powerio-dist` | multiconductor distribution model and converters |
@@ -62,6 +62,6 @@ Rendered API docs (rustdoc) for all crates: <https://powerio.dev>.
 
 Adding a format means adding one reader or writer at the hub rather than
 pairwise converters. `IndexedNetwork` is the dense \\([0,n)\\) analysis view derived from
-a balanced `Network`; matrix builders work from that view. Code that maps
+a balanced `BalancedNetwork`; matrix builders work from that view. Code that maps
 source bus IDs to dense rows must use `IndexedNetwork::bus_index`; it must not
 clamp IDs or assume 1-based contiguous IDs.

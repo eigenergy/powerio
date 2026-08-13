@@ -152,7 +152,7 @@ pair leaves extras.
 
 Rust uses `parse_display_file` and `parse_display_bytes`. Python exposes the
 same names and returns `DisplayData(kind="powerworld", data=PwdDisplay(...))`.
-Display files do not pass through `Network`, `Conversion`, or `.pio.json`.
+Display files do not pass through `BalancedNetwork`, `Conversion`, or `.pio.json`.
 
 ## Distribution graph projection
 

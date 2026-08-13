@@ -5,7 +5,7 @@ The advertised MCP surface is semantic and format neutral:
 ``convert``, ``save``, ``summary``, ``parse``, ``normalize``, ``matrix``,
 ``diagnostics``, ``display``.
 
-Network tools route balanced transmission models, multiconductor distribution
+BalancedNetwork tools route balanced transmission models, multiconductor distribution
 models, PyPSA CSV folders, and gridfm datasets through the lower level powerio
 APIs. Transmission parses serialize through the ``powerio-json`` transport.
 Distribution parses serialize through canonical ``bmopf-json``. Package

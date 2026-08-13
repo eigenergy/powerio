@@ -58,13 +58,13 @@ scopf = pio.parse_scopf(goc3_text, from_="goc3-json")
 
 ## Model names
 
-`powerio.Network` is the existing balanced transmission handle. v0.4 also
+`powerio.BalancedNetwork` is the existing balanced transmission handle. v0.4 also
 exports `powerio.BalancedNetwork` as the long term family name for the same
 handle.
 The old `powerio.Case` compatibility alias was removed in v0.4.
 
 For distribution models, use `powerio.dist.MulticonductorNetwork` or the
-existing `powerio.dist.DistNetwork` handle name. The old
+existing `powerio.dist.MulticonductorNetwork` handle name. The old
 `powerio.dist.DistCase` alias was removed in v0.4. `dist_net.graph()` returns
 the collapsed bus and terminal graph as Python data.
 
@@ -123,7 +123,7 @@ NetCDF and HDF5 time series are not supported. They are tracked in
 
 The native wheel includes the GridFM Parquet writer and reader.
 
-`read_gridfm(dir, scenario=0)` rebuilds a `Network` from a dataset, the inverse
+`read_gridfm(dir, scenario=0)` rebuilds a `BalancedNetwork` from a dataset, the inverse
 of `Network.write_gridfm`, returning a `GridfmRead(network, scenario, warnings)`
 namedtuple. The read is lossy but recovers everything a power flow needs;
 `warnings` lists what the gridfm schema couldn't round-trip (synthesized bus

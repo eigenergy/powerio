@@ -1,6 +1,6 @@
 //! Cross format conversion output and the format dispatcher.
 
-use crate::model::{DistNetwork, DistSourceFormat};
+use crate::model::{DistSourceFormat, MulticonductorNetwork};
 
 /// Extra files a writer generated beside the primary text payload.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -316,7 +316,7 @@ pub(crate) const BOM_WARNING: &str =
 /// tokenizer treat it as garbage in the first token. The retained source loses
 /// the mark, so a same-format echo differs by exactly those three bytes; the
 /// warning itemizes that.
-fn parse_text(text: &str, format: DistTargetFormat) -> crate::Result<DistNetwork> {
+fn parse_text(text: &str, format: DistTargetFormat) -> crate::Result<MulticonductorNetwork> {
     let stripped = text.trim_start_matches('\u{feff}');
     let mut net = match format {
         DistTargetFormat::Dss => crate::dss::parse_dss_str(stripped),
@@ -330,7 +330,7 @@ fn parse_text(text: &str, format: DistTargetFormat) -> crate::Result<DistNetwork
 }
 
 /// Parses `text` in the named format (see [`dist_target_from_name`]).
-pub fn parse_str(text: &str, format: &str) -> crate::Result<DistNetwork> {
+pub fn parse_str(text: &str, format: &str) -> crate::Result<MulticonductorNetwork> {
     parse_text(text, format.parse::<DistTargetFormat>()?)
 }
 
@@ -339,7 +339,7 @@ pub fn parse_str(text: &str, format: &str) -> crate::Result<DistNetwork> {
 pub fn parse_file(
     path: impl AsRef<std::path::Path>,
     from: Option<&str>,
-) -> crate::Result<DistNetwork> {
+) -> crate::Result<MulticonductorNetwork> {
     let path = path.as_ref();
     // Dss goes through the path-based parser (Redirect/Compile resolve
     // against the file's directory); the JSON readers take text.
@@ -369,7 +369,7 @@ pub fn parse_file(
 /// Prepend the reader's parse warnings and diagnostics to the writer's: the
 /// one-shot converters return no handle to query, so this is the only place
 /// the loud half of the parse can surface.
-fn convert(net: &DistNetwork, target: DistTargetFormat) -> Conversion {
+fn convert(net: &MulticonductorNetwork, target: DistTargetFormat) -> Conversion {
     let conv = net.to_format(target);
     let mut warnings = net.warnings.clone();
     warnings.extend(conv.warnings);
@@ -411,7 +411,7 @@ impl DistTargetFormat {
     }
 }
 
-impl DistNetwork {
+impl MulticonductorNetwork {
     /// Writes the network in `format`, bypassing byte exact source echo.
     pub fn to_canonical_format(&self, format: DistTargetFormat) -> Conversion {
         let mut conv = match format {
@@ -441,7 +441,7 @@ impl DistNetwork {
     /// byte for byte; every cross format write regenerates from the typed
     /// model and reports each fidelity loss in the warnings. The returned
     /// warnings hold only the writer's losses: parse warnings stay on
-    /// [`DistNetwork::warnings`] (the one-shot [`convert_str`]/[`convert_file`]
+    /// [`MulticonductorNetwork::warnings`] (the one-shot [`convert_str`]/[`convert_file`]
     /// merge the two). After mutating a parsed model, set `source = None`
     /// (and `source_format`), or the echo tier returns the original text
     /// and silently discards the edits.
@@ -516,7 +516,7 @@ mod tests {
     /// A PowerModels document shares `bus`, `load`, `shunt`, `switch`, and
     /// `name` with BMOPF, so none of those can be the discriminator. This
     /// is the exact document family that used to parse into a bogus
-    /// near-empty `DistNetwork`.
+    /// near-empty `MulticonductorNetwork`.
     #[test]
     fn a_powermodels_document_never_classifies_as_bmopf() {
         // The real key set a powerio PowerModels write produces.

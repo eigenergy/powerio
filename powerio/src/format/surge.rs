@@ -1,7 +1,7 @@
 //! Read and write Surge native `surge-json` network documents.
 //!
 //! Surge JSON is a versioned envelope around a richer network body. The reader
-//! maps the electrical core into `Network`, retains the original source for byte
+//! maps the electrical core into `BalancedNetwork`, retains the original source for byte
 //! exact same format writes, and reports source sections that stay only in the
 //! retained document.
 
@@ -12,9 +12,9 @@ use serde_json::{Map, Value};
 
 use super::{Conversion, Parsed, finish, jnum, warn_extra_branch_rating_sets};
 use crate::network::{
-    Branch, BranchCharging, BranchCurrentRatings, BranchSolution, Bus, BusId, BusType, Extras,
-    GEN_EXTRA_KEYS, GenCaps, GenCost, Generator, Hvdc, Load, LoadVoltageModel, Network, Shunt,
-    SourceFormat, Storage,
+    BalancedNetwork, Branch, BranchCharging, BranchCurrentRatings, BranchSolution, Bus, BusId,
+    BusType, Extras, GEN_EXTRA_KEYS, GenCaps, GenCost, Generator, Hvdc, Load, LoadVoltageModel,
+    Shunt, SourceFormat, Storage,
 };
 use crate::normalize;
 use crate::{Error, Result};
@@ -25,7 +25,7 @@ const SCHEMA_VERSION: &str = "0.1.0";
 const EPS: f64 = 1e-12;
 
 #[must_use]
-pub fn write_surge_json(net: &Network) -> Conversion {
+pub fn write_surge_json(net: &BalancedNetwork) -> Conversion {
     let mut warnings = Vec::new();
     let mut network = Map::new();
 
@@ -199,7 +199,7 @@ fn branch_obj((_i, branch): (usize, &Branch)) -> Value {
     obj.insert("circuit".into(), Value::String("1".into()));
     obj.insert("r".into(), jnum(branch.r));
     obj.insert("x".into(), jnum(branch.x));
-    obj.insert("b".into(), jnum(branch.legacy_total_charging_b()));
+    obj.insert("b".into(), jnum(branch.total_charging_b()));
     obj.insert("g_shunt_from".into(), jnum(charging.g_fr));
     obj.insert("b_shunt_from".into(), jnum(charging.b_fr));
     obj.insert("g_shunt_to".into(), jnum(charging.g_to));
@@ -470,7 +470,7 @@ pub(crate) fn parse_surge_source(
     source: Arc<String>,
     name_hint: Option<&str>,
     warnings: &mut Vec<String>,
-) -> Result<Network> {
+) -> Result<BalancedNetwork> {
     let root_value: Value = serde_json::from_str(&source).map_err(|e| Error::FormatRead {
         format: FMT,
         message: e.to_string(),
@@ -516,7 +516,7 @@ pub(crate) fn parse_surge_source(
         .unwrap_or("case")
         .to_string();
 
-    let net = Network {
+    let net = BalancedNetwork {
         name,
         base_mva: f_map_or(network, "base_mva", 100.0)?,
         base_frequency: f_map_or(network, "freq_hz", crate::network::DEFAULT_BASE_FREQUENCY)?,

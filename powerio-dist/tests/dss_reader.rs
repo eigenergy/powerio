@@ -9,7 +9,7 @@ use std::path::PathBuf;
 
 use powerio_dist::dss::{parse_dss_file, write_dss};
 use powerio_dist::{
-    Configuration, CoordinateSpace, CoordsKind, DistNetwork, IbrPrimeMover, IbrTopology,
+    Configuration, CoordinateSpace, CoordsKind, IbrPrimeMover, IbrTopology, MulticonductorNetwork,
     ReactivePowerReference, ReactivePowerUnit, WindingConn,
 };
 
@@ -19,7 +19,7 @@ fn fixture(rel: &str) -> PathBuf {
         .join(rel)
 }
 
-fn parse(rel: &str) -> DistNetwork {
+fn parse(rel: &str) -> MulticonductorNetwork {
     parse_dss_file(fixture(rel)).expect("fixture parses")
 }
 
@@ -32,7 +32,7 @@ fn temp_case_dir(name: &str) -> PathBuf {
 
 /// Bus id (lowercased) → phase terminal names, excluding the materialized
 /// grounded neutral, matching what the engine reports as the bus's nodes.
-fn phase_terminals(net: &DistNetwork) -> BTreeMap<String, Vec<String>> {
+fn phase_terminals(net: &MulticonductorNetwork) -> BTreeMap<String, Vec<String>> {
     net.buses
         .iter()
         .map(|b| {

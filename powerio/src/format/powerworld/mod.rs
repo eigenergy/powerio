@@ -5,7 +5,7 @@
 //! value rows, and `SUBDATA` blocks intact — and knows the grammar from the
 //! official format guide: legacy and concise headers, comma delimited (CSV)
 //! sections, multiline field lists and value rows, `//` comments, quoting,
-//! and `variablename:location` field suffixes. On top of it, the [`Network`]
+//! and `variablename:location` field suffixes. On top of it, the [`BalancedNetwork`]
 //! mapping consumes the power flow core types (Bus, Load, Shunt, Gen,
 //! Branch) by field name, so column order and extra columns don't matter.
 //! Object types outside the core stay reachable through [`aux_sections`] and
@@ -21,7 +21,7 @@
 //! files carry no case data, only the diagram; [`parse_pwd_file`] and
 //! [`parse_pwd`] read the decoded substation coordinates.
 //!
-//! [`Network`]: crate::network::Network
+//! [`BalancedNetwork`]: crate::network::BalancedNetwork
 
 mod auxiliary;
 mod map;
@@ -44,15 +44,15 @@ pub use pwb::parse_pwb;
 pub use pwd::{PwdDisplay, PwdSubstation, parse_pwd, parse_pwd_display, parse_pwd_file};
 
 use crate::Result;
-use crate::network::Network;
+use crate::network::BalancedNetwork;
 
-/// Parse a PowerWorld `.aux` into a [`Network`], reading the Bus/Load/Shunt/
+/// Parse a PowerWorld `.aux` into a [`BalancedNetwork`], reading the Bus/Load/Shunt/
 /// Gen/Branch `DATA` blocks by their declared field lists.
 ///
 /// # Errors
 /// [`crate::Error::FormatRead`] on malformed input or when the file has no
 /// `DATA` sections.
-pub fn parse_powerworld(content: &str) -> Result<Network> {
+pub fn parse_powerworld(content: &str) -> Result<BalancedNetwork> {
     // The caller owns `content` as a borrow, so retention needs one copy.
     let mut warnings = Vec::new();
     parse_powerworld_source(Arc::new(content.to_owned()), None, &mut warnings)

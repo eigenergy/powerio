@@ -12,7 +12,7 @@ use std::time::Instant;
 use sprs::CsMat;
 
 use powerio_matrix::matrix::{MatrixStats, sddm_check};
-use powerio_matrix::network::Network;
+use powerio_matrix::network::BalancedNetwork;
 use powerio_matrix::pipeline::{MatrixKind, RhsKind, matrix_stats_for_kind};
 use powerio_matrix::synth::{SynthSpec, Topology};
 
@@ -66,7 +66,7 @@ pub struct MatrixCell {
 
 #[derive(Debug, Clone)]
 pub struct InspectState {
-    pub case: Network,
+    pub case: BalancedNetwork,
     pub kind: MatrixKind,
     pub kind_idx: usize,
     pub matrices: BTreeMap<MatrixKindOrd, MatrixCell>,
@@ -150,7 +150,7 @@ impl SynthField {
 pub struct SynthState {
     pub spec: SynthSpec,
     pub field: SynthField,
-    pub generated: Option<Network>,
+    pub generated: Option<BalancedNetwork>,
 }
 
 impl Default for SynthState {
@@ -260,7 +260,7 @@ impl App {
         Ok(())
     }
 
-    pub fn build_inspect(&self, case: Network) -> powerio_matrix::Result<InspectState> {
+    pub fn build_inspect(&self, case: BalancedNetwork) -> powerio_matrix::Result<InspectState> {
         let opts = powerio_matrix::matrix::BuildOptions {
             scheme: self.scheme,
             ..Default::default()

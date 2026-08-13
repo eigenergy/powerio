@@ -1,9 +1,9 @@
-//! Read and write a [`Network`] as egret `ModelData` JSON.
+//! Read and write a [`BalancedNetwork`] as egret `ModelData` JSON.
 //!
 //! egret groups the network under `elements` (bus, load, branch, generator,
 //! shunt, dc_branch) with a small `system` block; values stay in MW/MVAr,
 //! degrees, with the base in `system.baseMVA`. Loads and shunts are first-class
-//! on the `Network`, generator cost becomes a polynomial/piecewise `cost_curve`,
+//! on the `BalancedNetwork`, generator cost becomes a polynomial/piecewise `cost_curve`,
 //! and a branch with a nonzero raw tap or a phase shift is typed `transformer`.
 //!
 //! The reader takes the power flow ModelData subset: numeric bus ids (as
@@ -17,15 +17,15 @@ use serde_json::{Map, Value};
 
 use super::{Conversion, finish, jnum, warn_extra_branch_rating_sets};
 use crate::network::{
-    Branch, Bus, BusId, BusType, Extras, GenCost, Generator, Hvdc, Load, LoadVoltageModel, Network,
-    Shunt, SourceFormat,
+    BalancedNetwork, Branch, Bus, BusId, BusType, Extras, GenCost, Generator, Hvdc, Load,
+    LoadVoltageModel, Shunt, SourceFormat,
 };
 use crate::{Error, Result};
 
 const FMT: &str = "egret JSON";
 
 #[must_use]
-pub fn write_egret_json(net: &Network) -> Conversion {
+pub fn write_egret_json(net: &BalancedNetwork) -> Conversion {
     let mut warnings = Vec::new();
 
     let mut bus = Map::new();
@@ -81,7 +81,7 @@ pub fn write_egret_json(net: &Network) -> Conversion {
     finish(root, warnings)
 }
 
-fn warn_egret_writer_losses(net: &Network, warnings: &mut Vec<String>) {
+fn warn_egret_writer_losses(net: &BalancedNetwork, warnings: &mut Vec<String>) {
     if !net.hvdc.is_empty() {
         warnings.push(format!(
             "{} dcline(s) dropped: egret HVDC mapping not implemented",
@@ -153,7 +153,7 @@ fn warn_egret_writer_losses(net: &Network, warnings: &mut Vec<String>) {
     }
 }
 
-fn reference_bus(net: &Network) -> Option<&Bus> {
+fn reference_bus(net: &BalancedNetwork) -> Option<&Bus> {
     let mut refs = net.buses.iter().filter(|b| b.kind == BusType::Ref);
     let first = refs.next()?;
     if refs.next().is_some() {
@@ -215,10 +215,7 @@ fn branch_obj(br: &Branch) -> Value {
     m.insert("to_bus".into(), Value::String(br.to.to_string()));
     m.insert("resistance".into(), jnum(br.r));
     m.insert("reactance".into(), jnum(br.x));
-    m.insert(
-        "charging_susceptance".into(),
-        jnum(br.legacy_total_charging_b()),
-    );
+    m.insert("charging_susceptance".into(), jnum(br.total_charging_b()));
     m.insert("in_service".into(), Value::Bool(br.in_service));
     m.insert("angle_diff_min".into(), jnum(br.angmin));
     m.insert("angle_diff_max".into(), jnum(br.angmax));
@@ -300,13 +297,13 @@ fn cost_curve(cost: &GenCost) -> Option<Value> {
     }
 }
 
-/// Parse egret `ModelData` JSON into a [`Network`].
+/// Parse egret `ModelData` JSON into a [`BalancedNetwork`].
 ///
 /// Inverts [`write_egret_json`]: the `elements` blocks map back to the typed
 /// model and `system.baseMVA`/`reference_bus` to the base and bus types. Takes
 /// the power flow subset (numeric bus ids, scalar values); a unit commitment
 /// case (`system.time_keys`) is rejected with a clear error.
-pub fn parse_egret_json(content: &str) -> Result<Network> {
+pub fn parse_egret_json(content: &str) -> Result<BalancedNetwork> {
     parse_egret_source(Arc::new(content.to_owned()), None)
 }
 
@@ -314,7 +311,10 @@ pub fn parse_egret_json(content: &str) -> Result<Network> {
 /// move the buffer into the retained source (no copy, byte-exact round-trip).
 /// `name_hint` (e.g. a file stem) names the network when the JSON has no
 /// `model_name`.
-pub(crate) fn parse_egret_source(source: Arc<String>, name_hint: Option<&str>) -> Result<Network> {
+pub(crate) fn parse_egret_source(
+    source: Arc<String>,
+    name_hint: Option<&str>,
+) -> Result<BalancedNetwork> {
     let content: &str = &source;
     let root: Value = serde_json::from_str(content).map_err(|e| bad(e.to_string()))?;
     let root = root
@@ -376,7 +376,7 @@ pub(crate) fn parse_egret_source(source: Arc<String>, name_hint: Option<&str>) -
         }
     }
 
-    let net = Network {
+    let net = BalancedNetwork {
         name,
         base_mva,
         base_frequency: crate::network::DEFAULT_BASE_FREQUENCY,

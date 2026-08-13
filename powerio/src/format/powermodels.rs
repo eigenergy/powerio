@@ -1,4 +1,4 @@
-//! Write a [`Network`] as PowerModels.jl network data JSON.
+//! Write a [`BalancedNetwork`] as PowerModels.jl network data JSON.
 //!
 //! Output is idiomatic PowerModels data with `per_unit = true`, the same form
 //! PowerModels itself exports: powers are divided by `baseMVA`, angles are in
@@ -7,7 +7,7 @@
 //! `1/baseMVA`). Because the data already declares per unit, `parse_file(out.json)`
 //! reads it with PowerModels' default `validate = true` without rerunning
 //! `make_per_unit!`, so it lands on the same network as `parse_file(case.m)`.
-//! Loads and shunts are first-class on the `Network`; branch terminal admittance
+//! Loads and shunts are first-class on the `BalancedNetwork`; branch terminal admittance
 //! writes as PowerModels' `g_fr`/`b_fr`/`g_to`/`b_to` fields, with MATPOWER
 //! `BR_B` expanded only when no richer terminal model is present. `transformer`
 //! follows PowerModels' rule (raw tap `≠ 0`). `hvdc`/`storage` are mapped to the
@@ -19,8 +19,8 @@ use serde_json::{Map, Value};
 
 use super::{Conversion, finish, jnum, warn_extra_branch_rating_sets};
 use crate::network::{
-    Branch, BranchCharging, BranchCurrentRatings, BranchSolution, Bus, BusId, BusType,
-    GEN_EXTRA_KEYS, GenCost, Generator, Hvdc, Load, LoadVoltageModel, Network, Shunt, SourceFormat,
+    BalancedNetwork, Branch, BranchCharging, BranchCurrentRatings, BranchSolution, Bus, BusId,
+    BusType, GEN_EXTRA_KEYS, GenCost, Generator, Hvdc, Load, LoadVoltageModel, Shunt, SourceFormat,
     Storage, Switch,
 };
 use crate::normalize::{self, GEN_PU_KEYS};
@@ -28,7 +28,7 @@ use crate::{Error, Result};
 
 #[must_use]
 #[expect(clippy::too_many_lines)]
-pub fn write_powermodels_json(net: &Network) -> Conversion {
+pub fn write_powermodels_json(net: &BalancedNetwork) -> Conversion {
     let mut warnings = Vec::new();
 
     // Per-unit write factors, the exact inverse of the reader's pscale/ascale:
@@ -416,18 +416,18 @@ fn switch_obj(sw: &Switch, idx: usize, p: f64) -> Value {
     Value::Object(m)
 }
 
-// ---- Reader: PowerModels JSON → Network -------------------------------------
+// ---- Reader: PowerModels JSON → BalancedNetwork -------------------------------------
 
 const FMT: &str = "PowerModels JSON";
 
-/// Parse PowerModels.jl network data JSON into a [`Network`]. Loads and shunts
+/// Parse PowerModels.jl network data JSON into a [`BalancedNetwork`]. Loads and shunts
 /// are read as separate elements and the raw text is retained, so writing back
 /// to PowerModels JSON is a byte-exact echo. `per_unit = true` input (powerio's own
 /// output, and PowerModels' own export) is converted to the neutral MW/degree
 /// convention (powers ×baseMVA, angles to degrees, cost coefficients un-scaled),
 /// following PowerModels' own exceptions (storage `ps`/`qs` stay raw, dcline
 /// `pt`/`qf`/`qt` flip sign); `per_unit = false` is read as-is.
-pub fn parse_powermodels_json(content: &str) -> Result<Network> {
+pub fn parse_powermodels_json(content: &str) -> Result<BalancedNetwork> {
     let mut warnings = Vec::new();
     parse_powermodels_json_source(Arc::new(content.to_owned()), None, &mut warnings)
 }
@@ -439,7 +439,7 @@ pub(crate) fn parse_powermodels_json_source(
     source: Arc<String>,
     name_hint: Option<&str>,
     warnings: &mut Vec<String>,
-) -> Result<Network> {
+) -> Result<BalancedNetwork> {
     let content: &str = &source;
     let root: Value = serde_json::from_str(content).map_err(|e| Error::FormatRead {
         format: FMT,
@@ -481,7 +481,7 @@ pub(crate) fn parse_powermodels_json_source(
         .unwrap_or("case")
         .to_string();
 
-    let net = Network {
+    let net = BalancedNetwork {
         name,
         base_mva,
         base_frequency: crate::network::DEFAULT_BASE_FREQUENCY,

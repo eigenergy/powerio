@@ -18,7 +18,7 @@ use super::layer::{ElementKey, GeoApplyReport, GeoFeature, GeoGeometry, GeoLayer
 use super::{Canvas, CoordinateSpace, GeoMeta, Location};
 use crate::format::PwdDisplay;
 use crate::format::powerworld::AuxFile;
-use crate::network::Network;
+use crate::network::BalancedNetwork;
 
 /// Scale of PowerWorld's auto generated layouts: `x = K·lon` and
 /// `y = K·mercdeg(lat)`, with the Mercator ordinate expressed in degrees.
@@ -110,7 +110,7 @@ pub fn geo_layer_from_aux_substations(aux: &AuxFile) -> GeoLayer {
 /// substation's point, and the layer's space becomes the network's
 /// [`GeoMeta`] when anything matched. Replaced locations and a coordinate
 /// space change are reported in the notes rather than happening silently.
-pub fn apply_substation_points(net: &mut Network, layer: &GeoLayer) -> GeoApplyReport {
+pub fn apply_substation_points(net: &mut BalancedNetwork, layer: &GeoLayer) -> GeoApplyReport {
     let mut report = GeoApplyReport::default();
     // Substation number -> bus rows, built once for the whole pass.
     let mut rows_by_substation: HashMap<String, Vec<usize>> = HashMap::new();
