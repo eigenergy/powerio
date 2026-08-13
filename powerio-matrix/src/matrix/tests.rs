@@ -626,10 +626,9 @@ fn a_radial_tie_gets_a_structurally_zero_lodf_column() {
 
 #[test]
 fn a_reactance_below_the_divisible_bound_is_zero_impedance() {
-    // #292. `x = 1e-300` gives `b = 1e300`, which is finite, so every
-    // finiteness check passed it. One such branch on a diagonal annihilates
-    // every real branch sharing it: the Laplacian comes out rank deficient in
-    // floating point and `sddm_check` reports nothing.
+    // #292. `x = 1e-300` gives a finite `b = 1e300`, so every finiteness check
+    // passed it and the Laplacian came out rank deficient in floating point
+    // with `sddm_check` reporting nothing.
     let net = Network::in_memory(
         "denormal-x",
         100.0,
@@ -659,9 +658,32 @@ fn a_reactance_below_the_divisible_bound_is_zero_impedance() {
 }
 
 #[test]
-fn a_tap_ratio_ybus_cannot_divide_by_is_refused() {
-    // #292. `effective_tap` only remaps an exact 0.0, so a tap of 1e-200
-    // underflowed `a_norm_sqr` to zero and scattered +/-Inf into Y_bus.
+fn a_reactance_the_builders_can_divide_by_is_stamped_by_both() {
+    // #292. Bounding `r² + x²` by the magnitude bound made Y_bus call this
+    // branch zero impedance while the DC builder stamped `b = 1e100`.
+    let net = Network::in_memory(
+        "small-but-divisible-x",
+        100.0,
+        vec![bus(1, BusType::Ref), bus(2, BusType::Pq)],
+        vec![br(1, 2, 0.0, 1e-100, 0.0)],
+    );
+    let view = IndexedNetwork::new(&net);
+    let opts = BuildOptions::default();
+
+    let inc = build_incidence(&view, DcConvention::PaperPure, &opts).unwrap();
+    assert_eq!(inc.skipped_zero_impedance.count, 0);
+    assert_relative_eq!(inc.b[0], 1e100, max_relative = 1e-12);
+
+    let ybus = build_ybus(&view, &opts).unwrap();
+    let ybus_stats = matrix_stats_for_kind(&ybus.b, &view, MatrixKind::YbusB, &opts);
+    assert_eq!(ybus_stats.skipped_zero_impedance, 0);
+    assert_relative_eq!(*ybus.b.get(0, 1).unwrap(), 1e100, max_relative = 1e-12);
+}
+
+#[test]
+fn a_tap_ratio_the_builders_cannot_divide_by_is_refused() {
+    // #292. A tap of 1e-200 underflowed `a_norm_sqr` to zero and scattered
+    // +/-Inf into Y_bus; `Matpower` divides `b` by the same tap.
     for tap in [1e-200, f64::NAN, f64::INFINITY] {
         let mut branch = br(1, 2, 0.01, 0.1, 0.0);
         branch.tap = tap;
@@ -675,7 +697,13 @@ fn a_tap_ratio_ybus_cannot_divide_by_is_refused() {
         let err = build_ybus(&view, &BuildOptions::default()).unwrap_err();
         assert!(
             matches!(err, crate::Error::DegenerateTap { row: 0, .. }),
-            "tap {tap}: {err}"
+            "Ybus, tap {tap}: {err}"
+        );
+        let err =
+            build_incidence(&view, DcConvention::Matpower, &BuildOptions::default()).unwrap_err();
+        assert!(
+            matches!(err, crate::Error::DegenerateTap { row: 0, .. }),
+            "incidence, tap {tap}: {err}"
         );
     }
 }
@@ -694,7 +722,10 @@ fn an_ordinary_tap_still_builds() {
             vec![branch],
         );
         let view = IndexedNetwork::new(&net);
-        build_ybus(&view, &BuildOptions::default()).unwrap_or_else(|e| panic!("tap {tap}: {e}"));
+        build_ybus(&view, &BuildOptions::default())
+            .unwrap_or_else(|e| panic!("Ybus, tap {tap}: {e}"));
+        build_incidence(&view, DcConvention::Matpower, &BuildOptions::default())
+            .unwrap_or_else(|e| panic!("incidence, tap {tap}: {e}"));
     }
 }
 

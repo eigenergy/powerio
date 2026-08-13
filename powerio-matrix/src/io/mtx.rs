@@ -98,12 +98,9 @@ pub fn write_vector_mtx(values: &[f64], path: impl AsRef<Path>) -> Result<()> {
 /// Whether the `symmetric` header would round trip: every stored entry has a
 /// stored mirror holding the identical bits.
 ///
-/// The writer emits only the lower triangle under that header, so a reader
-/// reconstructs `a[j][i]` from `a[i][j]`. Deciding this on a tolerance meant a
-/// matrix that was merely close went out as symmetric and came back changed by
-/// up to the tolerance — a `Bp` built in BX mode with a small phase shifter is
-/// asymmetric by exactly `2 g sin(theta) / t`, which sat under the old 1e-12.
-/// Anything short of exact goes out as `general`, which stores both triangles.
+/// The writer emits only the lower triangle under that header, so deciding this
+/// on a tolerance sent a merely close matrix out as symmetric and read it back
+/// changed by up to the tolerance. Anything short of exact goes out `general`.
 fn is_exactly_symmetric(a: &CsMat<f64>) -> bool {
     if a.rows() != a.cols() {
         return false;
@@ -150,10 +147,9 @@ mod tests {
     #[test]
     fn a_matrix_asymmetric_below_the_old_tolerance_writes_general() {
         // #292. The pair differs by 1e-15 relative, which the old 1e-12
-        // tolerance called symmetric — so only the lower triangle went out and
-        // a reader mirrored 3.0 back over the 3.000000000000001 that was
-        // assembled. A `Bp` in BX mode with a small phase shifter is asymmetric
-        // by exactly this little.
+        // tolerance called symmetric, so a reader mirrored 3.0 back over the
+        // 3.000000000000001 that was assembled. A `Bp` in BX mode with a small
+        // phase shifter is asymmetric by exactly this little.
         let mut tri = TriMat::new((2, 2));
         tri.add_triplet(0, 0, 5.0);
         tri.add_triplet(0, 1, 3.000_000_000_000_001);

@@ -412,11 +412,9 @@ fn lodf_from_dense_with_drop(
     let delta = |l: usize, k: usize| ptdf[l * n + from[k]] - ptdf[l * n + to[k]];
 
     // Outaging a bridge redistributes nothing, so its column is structurally
-    // zero. The magnitude test this replaces could not tell a true bridge from
-    // a branch carrying almost everything: a near bridge at
-    // `delta(k,k) = 1 - 1.1e-9` passed it, and its column came out amplified
-    // to ~1e9 with about seven digits gone — entries too large for
-    // `drop_tolerance` to catch.
+    // zero. The magnitude test this replaces let a near bridge at
+    // `delta(k,k) = 1 - 1.1e-9` through, amplifying its column to ~1e9 with
+    // about seven digits gone.
     let is_bridge = bridges(&from, &to, n);
 
     let mut lodf = CooBuilder::new(m); // m × m
@@ -644,9 +642,9 @@ fn branch_flow(
 /// where a magnitude test on the denominator cannot separate a true bridge from
 /// a branch that merely carries almost everything.
 ///
-/// Iterative Tarjan, O(n + m). The recursion a textbook writes overflows the
-/// stack on a real feeder. Entry is tracked by arc rather than by parent node,
-/// so a pair of parallel branches correctly leaves neither of them a bridge.
+/// Iterative Tarjan, O(n + m); the textbook recursion overflows the stack on a
+/// real feeder. Entry is tracked by arc rather than by parent node, so parallel
+/// branches leave neither of them a bridge.
 fn bridges(from: &[usize], to: &[usize], n: usize) -> Vec<bool> {
     let m = from.len();
     // Forward star: arc `2k` runs from[k] -> to[k], arc `2k+1` its reverse, so

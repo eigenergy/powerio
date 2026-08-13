@@ -44,17 +44,14 @@ pub(crate) use ybus::{YbusFlags, branch_admittance, branch_flows};
 
 use sprs::CsMat;
 
-/// The magnitude below which a reactance, an impedance denominator, or a tap
-/// ratio stops being a number the builders can divide by.
+/// The magnitude below which a reactance, an impedance, or a tap ratio stops
+/// being a number the builders can divide by.
 ///
 /// It is `f64::MIN_POSITIVE.sqrt()`: the square of anything smaller underflows
-/// to zero, so the value cannot take part in a product that stays meaningful.
-/// The reciprocal is above 1e153, and one branch stamping that into a Laplacian
-/// annihilates every real branch in the same accumulation — the matrix comes
-/// out rank deficient in floating point with every finiteness check passing.
-///
-/// A physical branch is nowhere near this: per unit reactances run from about
-/// 1e-6 to 10, so the bound rejects poison and nothing else.
+/// to zero, and the reciprocal is above 1e153, which annihilates every real
+/// branch sharing its diagonal. Each builder compares a magnitude against it —
+/// `|x|`, `hypot(r, x)`, the tap — never `r² + x²`, which is a square. Per unit
+/// reactances run from 1e-6 to 10, so it rejects poison and nothing else.
 pub(crate) const MIN_DIVISIBLE_MAGNITUDE: f64 = 1.491_668_146_240_041_3e-154;
 
 /// Which MATPOWER fast decoupled scheme to use.

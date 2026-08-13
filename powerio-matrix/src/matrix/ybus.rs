@@ -142,12 +142,15 @@ pub(crate) fn build_ybus_with_flags(case: &IndexedNetwork, flags: YbusFlags) -> 
 /// `flags` lets the Y_bus builder zero taps/shifts/charging; pass
 /// [`YbusFlags::default`] for the physical admittances (taps and shifts on).
 ///
-/// Returns `Ok(None)` for a zero-impedance branch (`r² + x² = 0`), which the
-/// callers skip (Y_bus) or zero out (gridfm). `row` only labels the error.
+/// Returns `Ok(None)` for a zero-impedance branch — one whose impedance
+/// magnitude is under [`MIN_DIVISIBLE_MAGNITUDE`](super::MIN_DIVISIBLE_MAGNITUDE) —
+/// which the callers skip (Y_bus) or zero out (gridfm). `row` only labels the
+/// error.
 ///
 /// # Errors
 /// [`Error::NonFiniteSusceptance`] when `r`/`x` are NaN/Inf, so a bad value can't
-/// slip a NaN into Y_bus or a Parquet column.
+/// slip a NaN into Y_bus or a Parquet column. [`Error::DegenerateTap`] when the
+/// tap ratio is one the four admittances cannot be divided by.
 #[allow(clippy::many_single_char_names)]
 pub(crate) fn branch_admittance(
     br: &crate::network::Branch,
@@ -157,20 +160,20 @@ pub(crate) fn branch_admittance(
 ) -> Result<Option<[Complex64; 4]>> {
     let r = if flags.zero_resistance { 0.0 } else { br.r };
     let x = br.x;
-    let denom = r * r + x * x;
-    // A denominator this small is zero impedance in every sense the builders
-    // can act on: `r = 1e-160, x = 0` leaves `denom` subnormal and `r / denom`
-    // above 1e160, which is not a shunt admittance, it is a poisoned row.
-    // Exact zero used to be the whole test.
-    if denom < super::MIN_DIVISIBLE_MAGNITUDE {
+    // Zero impedance in every sense the builder can act on; exact zero used to
+    // be the whole test. Bounded on the impedance magnitude, not on `r² + x²`:
+    // `incidence` bounds `|x|` by the same number, so bounding the square here
+    // would refuse an `x = 1e-100` the DC builder stamps.
+    if r.hypot(x) < super::MIN_DIVISIBLE_MAGNITUDE {
         if flags.skip_zero_impedance {
             return Ok(None);
         }
         return Err(Error::ZeroImpedance { row });
     }
-    // NaN/Inf r or x makes `denom` non-finite (and slips past the bound above),
-    // which would write NaN into Y_bus and silently break the downstream
-    // M-matrix/SDDM checks. Reject it the same way `incidence` does.
+    let denom = r * r + x * x;
+    // NaN leaves `hypot` NaN, which is not below the bound, so it arrives here
+    // rather than reading as zero impedance. Either would write NaN into Y_bus
+    // and silently break the downstream M-matrix/SDDM checks.
     if !denom.is_finite() {
         return Err(Error::NonFiniteSusceptance { row });
     }
@@ -189,10 +192,9 @@ pub(crate) fn branch_admittance(
     } else {
         br.effective_tap()
     };
-    // `effective_tap` only remaps an exact 0.0 to 1.0. A tap of 1e-200
+    // `effective_tap` only remaps an exact 0.0 to 1.0, so a tap of 1e-200
     // underflows `a_norm_sqr` to zero and scatters +/-Inf through the four
-    // admittances; a tap of 1e-8 scales `y_ff` by 1e16 and destroys the
-    // conditioning with nothing to say so.
+    // admittances.
     if !tap_mag.is_finite() || tap_mag.abs() < super::MIN_DIVISIBLE_MAGNITUDE {
         return Err(Error::DegenerateTap { row, tap: tap_mag });
     }
@@ -207,8 +209,8 @@ pub(crate) fn branch_admittance(
     let y_ft = -y_series / a.conj();
     let y_tf = -y_series / a;
     let out = [y_ff, y_ft, y_tf, y_tt];
-    // The guards above cover each input on its own; the products can still
-    // overflow when several sit near their bound at once.
+    // Each input is bounded on its own above; the products can still overflow
+    // when several sit near their bound at once.
     if out.iter().any(|y| !y.re.is_finite() || !y.im.is_finite()) {
         return Err(Error::NonFiniteSusceptance { row });
     }
