@@ -50,8 +50,12 @@ use powerio_matrix::io::gridfm::{
 pyo3::create_exception!(
     _powerio,
     PowerIOError,
-    pyo3::exceptions::PyException,
-    "Base error raised by the powerio parser, converter, or matrix builders."
+    pyo3::exceptions::PyValueError,
+    "Base error raised by the powerio parser, converter, or matrix builders.\n\n\
+     Subclasses `ValueError`: every failure it covers is a statement about a \
+     value the caller supplied, and `except ValueError` was what callers wrote \
+     before the hierarchy existed. I/O failures do not reach it; they raise the \
+     matching `OSError` subclass by value."
 );
 
 pyo3::create_exception!(

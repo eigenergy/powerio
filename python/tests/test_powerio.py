@@ -430,6 +430,9 @@ def test_error_subclasses_are_powerio_errors():
     # PowerIOError` keeps catching them (backward compatible).
     assert issubclass(powerio.PowerIOParseError, powerio.PowerIOError)
     assert issubclass(powerio.PowerIODataError, powerio.PowerIOError)
+    # And `ValueError`, so the handler callers wrote before the hierarchy
+    # existed still catches every failure it used to.
+    assert issubclass(powerio.PowerIOError, ValueError)
 
 
 def test_malformed_case_raises_parse_error():
