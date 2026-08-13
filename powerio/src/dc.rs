@@ -2,6 +2,16 @@
 
 use serde::{Deserialize, Serialize};
 
+/// The magnitude below which a reactance, an impedance, or a tap ratio stops
+/// being a number a builder can divide by.
+///
+/// It is `f64::MIN_POSITIVE.sqrt()`: the square of anything smaller underflows
+/// to zero, and the reciprocal is above 1e153, which annihilates every real
+/// branch sharing its diagonal. Each builder compares a magnitude against it —
+/// `|x|`, `hypot(r, x)`, the tap — never `r² + x²`, which is a square. Per unit
+/// reactances run from 1e-6 to 10, so it rejects poison and nothing else.
+pub const MIN_DIVISIBLE_MAGNITUDE: f64 = 1.491_668_146_240_041_3e-154;
+
 /// Rule for the DC branch susceptance `b`.
 ///
 /// `b` is positive for an inductive branch, the DC model convention MATPOWER

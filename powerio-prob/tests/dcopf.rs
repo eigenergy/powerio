@@ -400,6 +400,47 @@ fn zero_reactance_can_be_skipped_or_rejected() {
 }
 
 #[test]
+fn a_reactance_the_instance_cannot_divide_by_reads_as_zero_impedance() {
+    // #292, the rule the matrix builders apply: `x = 1e-300` gives a finite
+    // `b = 1e300` that annihilates every real branch sharing a bus with it.
+    let mut net = small_network();
+    net.branches.insert(0, branch(10, 30, 1e-300));
+    let view = IndexedNetwork::new(&net);
+    let skipped = build_dc_opf_instance(&view, &DcOpfOptions::default()).expect("skip");
+    assert_eq!(skipped.branches.skipped_zero_impedance, vec![0]);
+
+    let error = build_dc_opf_instance(
+        &view,
+        &DcOpfOptions {
+            skip_zero_impedance: false,
+            ..DcOpfOptions::default()
+        },
+    )
+    .expect_err("reject");
+    assert!(matches!(error, Error::ZeroImpedance { row: 0 }));
+}
+
+#[test]
+fn a_tap_the_instance_cannot_divide_by_is_refused() {
+    for tap in [1e-200, f64::NAN, f64::INFINITY] {
+        let mut net = small_network();
+        net.branches[0].tap = tap;
+        let error = build_dc_opf_instance(
+            &IndexedNetwork::new(&net),
+            &DcOpfOptions {
+                convention: DcConvention::Matpower,
+                ..DcOpfOptions::default()
+            },
+        )
+        .expect_err("a tap the susceptance divides by must be refused");
+        assert!(
+            matches!(error, Error::DegenerateTap { row: 0, .. }),
+            "tap {tap}: {error}"
+        );
+    }
+}
+
+#[test]
 fn zero_base_mva_is_rejected() {
     let mut net = small_network();
     net.base_mva = 0.0;

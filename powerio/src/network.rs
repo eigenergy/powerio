@@ -828,6 +828,22 @@ impl Branch {
         if self.tap == 0.0 { 1.0 } else { self.tap }
     }
 
+    /// [`effective_tap`](Self::effective_tap) for a builder that divides by it,
+    /// which the remap of an exact 0.0 does not make safe on its own.
+    ///
+    /// # Errors
+    /// [`Error::DegenerateTap`] under
+    /// [`MIN_DIVISIBLE_MAGNITUDE`](crate::dc::MIN_DIVISIBLE_MAGNITUDE), where a
+    /// tap scales an admittance past anything a matrix can carry. `row` only
+    /// labels the error.
+    pub fn divisible_tap(&self, row: usize) -> Result<f64> {
+        let tap = self.effective_tap();
+        if !tap.is_finite() || tap.abs() < crate::dc::MIN_DIVISIBLE_MAGNITUDE {
+            return Err(Error::DegenerateTap { row, tap });
+        }
+        Ok(tap)
+    }
+
     /// Per terminal shunt admittance, deriving the legacy symmetric MATPOWER
     /// charging model when the richer field is absent.
     #[must_use]
@@ -839,18 +855,21 @@ impl Branch {
     /// Series admittance `(g, b) = (r, −x) / (r² + x²)` of the branch pi
     /// model, the primitive beside [`effective_tap`](Self::effective_tap) and
     /// [`terminal_charging`](Self::terminal_charging). `Ok(None)` for a zero
-    /// impedance branch (`r² + x² = 0`); the caller decides whether that is a
-    /// skip or an error.
+    /// impedance branch — one whose impedance magnitude is under
+    /// [`MIN_DIVISIBLE_MAGNITUDE`](crate::dc::MIN_DIVISIBLE_MAGNITUDE); the
+    /// caller decides whether that is a skip or an error.
     ///
     /// # Errors
     /// [`Error::NonFiniteSusceptance`] when `r`/`x` are NaN/Inf, so a bad
     /// value cannot write NaN or a silent zero downstream. `row` only labels
     /// the error.
     pub fn series_admittance(&self, row: usize) -> Result<Option<(f64, f64)>> {
-        let denom = self.r * self.r + self.x * self.x;
-        if denom == 0.0 {
+        // The bound is on the impedance magnitude; `denom` is its square, and
+        // bounding that would refuse impedances the DC builders divide by.
+        if self.r.hypot(self.x) < crate::dc::MIN_DIVISIBLE_MAGNITUDE {
             return Ok(None);
         }
+        let denom = self.r * self.r + self.x * self.x;
         if !denom.is_finite() {
             return Err(Error::NonFiniteSusceptance { row });
         }

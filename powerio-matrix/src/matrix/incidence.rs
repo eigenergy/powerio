@@ -84,13 +84,9 @@ pub fn build_incidence(
             }
             continue;
         }
-        // `Matpower` divides by the tap here and Y_bus divides by it always, so
-        // one bound decides both. `effective_tap` only remaps an exact 0.0.
-        let tap = br.effective_tap();
-        if !tap.is_finite() || tap.abs() < crate::matrix::MIN_DIVISIBLE_MAGNITUDE {
-            return Err(Error::DegenerateTap { row: idx, tap });
-        }
-        let b_e = conv.branch_susceptance(br.r, br.x, tap);
+        // `Matpower` divides the susceptance by the tap, so it is bounded here
+        // by the same rule Y_bus and the instance builders apply.
+        let b_e = conv.branch_susceptance(br.r, br.x, br.divisible_tap(idx)?);
         // A NaN reactance slips past the guard above and poisons the whole
         // Laplacian.
         if !b_e.is_finite() {

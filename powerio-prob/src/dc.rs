@@ -285,18 +285,21 @@ pub fn build_dc_opf_instance(
             // DC flow, and its shift injection cancels at its own bus.
             continue;
         }
-        if branch.x == 0.0 {
+        // The reactance the DC matrix builders bound, on the same rule: an
+        // `x = 1e-300` gives a finite `b = 1e300` that annihilates every real
+        // branch sharing a bus with it. Exact zero used to be the whole test.
+        if branch.x.abs() < powerio::dc::MIN_DIVISIBLE_MAGNITUDE {
             if options.skip_zero_impedance {
                 skipped_zero_impedance.push(source_row);
                 continue;
             }
             return Err(Error::ZeroImpedance { row: source_row });
         }
-        let branch_b =
-            options
-                .convention
-                .branch_susceptance(branch.r, branch.x, branch.effective_tap())
-                * b_scale;
+        let branch_b = options.convention.branch_susceptance(
+            branch.r,
+            branch.x,
+            branch.divisible_tap(source_row)?,
+        ) * b_scale;
         if !branch_b.is_finite() {
             return Err(Error::NonFiniteSusceptance { row: source_row });
         }
