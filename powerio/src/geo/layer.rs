@@ -286,9 +286,6 @@ const LAT_ALIASES: &[&str] = &["lat", "latitude", "y"];
 const LON_ALIASES: &[&str] = &["lon", "lng", "longitude", "x"];
 const FROM_ALIASES: &[&str] = &["fbus", "from", "frombus"];
 const TO_ALIASES: &[&str] = &["tbus", "to", "tobus"];
-/// No bare `id`: GIS exports and RFC 7946 tooling write a feature row counter
-/// there, and a bare integer id is read as a positional row alias, so a
-/// counter would place the route on an unrelated branch.
 const BRANCH_ID_ALIASES: &[&str] = &["branch", "branchid", "branchnumber", "catsid"];
 const PATH_ALIASES: &[&str] = &["path", "geometry", "coordinates"];
 const FROM_LAT_ALIASES: &[&str] = &["lat1", "fromlat"];
@@ -464,7 +461,14 @@ fn point_key(record: &Record) -> ElementKey {
 /// Key for a branch record. A bare unsigned integer id is a positional row
 /// alias (read only); everything else matches by string id or name.
 fn branch_key(record: &Record) -> ElementKey {
-    let id = record.string(BRANCH_ID_ALIASES);
+    // GIS exports and RFC 7946 tooling write a feature row counter under `id`,
+    // which would place the route on an unrelated branch. A named identifier
+    // there still matches a uid, so only the integer case is dropped.
+    let id = record.string(BRANCH_ID_ALIASES).or_else(|| {
+        record
+            .string(&["id"])
+            .filter(|raw| raw.parse::<usize>().is_err())
+    });
     let index = id
         .as_deref()
         .and_then(|raw| raw.parse::<usize>().ok())
