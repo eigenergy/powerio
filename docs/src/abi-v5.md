@@ -34,7 +34,7 @@ the library itself.
 
 | form | shape |
 |---|---|
-| constructor | returns a new handle. Verbs: `parse`, `from_json`, `from_<subject>`, `from_source`, `normalize`, `lower_to_<subject>`, `apply_<noun>`, `open` |
+| constructor | returns a new handle. Verbs: `parse`, `from_json`, `from_<subject>`, `from_source`, `as_<subject>`, `normalize`, `lower_to_<subject>`, `apply_<noun>`, `open` |
 | destructor | `free`. One per subject. Returns void. Accepts NULL |
 | emitter | `size_t f(handle, out, cap, errbuf, errlen)`. Payload names: `to_json`, `summary`, `warnings`, `graph`, `validation`, `diagnostics`, `operating_points`, `study`, `geo`, `text`, `file`, `catalog`, `build_info` |
 | accessor | no verb. `n_<plural>` returns a count. `<plural>` fills an array. `<singular>` returns one value. `is_<adj>` and `has_<noun>` return `int32_t` |
@@ -61,6 +61,13 @@ not a convenience: `parse_bytes` is the entry point for untrusted text, and it i
 
 `_bytes` rather than `_str`, because a PowerWorld `.pwb` is binary and a NUL truncates it. v4
 called this `_str` and could not accept half the formats it named.
+
+That last sentence is a promise the Rust does not keep yet. `powerio::parse_str` takes `&str`,
+and there is no `parse_bytes` for case ingest — `parse_display_bytes` handles the `.pwd`
+sidecar, a different type. So `pio_balanced_parse_bytes` needs a new Rust entry point taking
+`&[u8]` and dispatching `.pwb` without touching the filesystem. That is real work, not part of
+the mechanical rename, and shipping the symbol without it would leave the security argument
+above describing something that is not there.
 
 The precedent is libxml2: one verb, and a suffix for where the bytes came from —
 `xmlReadFile`, `xmlReadMemory`, `xmlReadDoc`.
@@ -308,15 +315,23 @@ BMOPF payload schema was, and it is versioned where it lives.
 `pio_package_parse_bytes`.
 
 Four lose a repeated noun: `from_balanced_network` → `from_balanced`,
-`from_multiconductor_network` → `from_multiconductor`, and the two `to_*` twins. The handle is
-the network; saying it twice adds nothing.
+`from_multiconductor_network` → `from_multiconductor`, and the two extraction twins. The handle
+is the network; saying it twice adds nothing.
+
+The extraction direction is `as_`, so `pio_package_to_balanced_network` becomes
+`pio_package_as_balanced`. `to_` already means emitter here: `to_json` returns bytes. A verb
+cannot mean "returns a handle you must free" in one symbol and "fills your buffer" in the next.
+`as_` also matches what Rust and Python already ship (`NetworkPackage::as_balanced`,
+`Package.as_balanced`), so the rename moves the C ABI toward two surfaces rather than away from
+them. PowerIO.jl spells this `from_package` and dispatches on `model_kind`; that stays, because
+one Julia function over a tagged union is the Julia way to write it.
 
 Two get shorter: `pio_package_lower_multiconductor_to_balanced` → `pio_package_lower_to_balanced`
 (44 → 29), and `pio_package_multiconductor_to_balanced_preflight_json` →
 `pio_package_lower_to_balanced_check` (53 → 35). `lower` stays because `.pio.json` publishes
 `lowering_history`. `preflight` goes because it is an internal stage name.
 
-`pio_package_lower_to_balanced` and `pio_package_to_balanced` must not differ by one suffix.
+`pio_package_lower_to_balanced` and `pio_package_as_balanced` must not differ by one suffix.
 They return different handle types under mutually exclusive preconditions.
 
 Five lose `_json`: `to_json`, `validation_json`, `diagnostics_json`, `operating_points_json`,
