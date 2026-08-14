@@ -5,10 +5,14 @@ last C break powerio takes. Everything here is decided against one question:
 what does a caller in 2029 need this to be.
 
 The v4 surface is 84 functions, 5 opaque handles, zero `#[repr(C)]` structs,
-and 24 macros. This document lists every one of the 84 as kept, renamed,
-re-signatured, or removed.
+and 24 macros. This document lists every one of the 113 as kept, renamed,
+re-signatured, or removed. A name that appears in a caller's source is in
+scope, so the handles and the macros are audited on the same rules as the
+functions: a symbol table that renamed `pio_dist_network_free` and left the
+`PioDistNetwork` it takes would leave rule 2 unfinished in the signature of
+every function rule 2 touched.
 
-## The six rules
+## The seven rules
 
 **1. Every symbol names its subject.** v4 left the balanced model unnamed, so
 `pio_parse_str` was balanced, `pio_dist_parse_str` was multiconductor, and
@@ -63,6 +67,23 @@ schema drift is reported at runtime by `pio_multiconductor_capabilities` and
 `pio_document_versions`, which is the right tool: an integer checked once at
 load cannot express "I speak BMOPF 0.2 but not 0.3".
 
+**7. One verb per direction, and the format decides the shape.** v4 split
+reading by whether the input was a file or a directory: `pio_parse_file` for
+documents, `pio_read_dir` for datasets. The split does not survive contact with
+the formats. An OpenDSS `.dss` is a file that `Redirect`s a tree of other
+files, so it is a directory input wearing a file extension, and it goes through
+`parse_file`. Meanwhile `powerio`'s own `parse_file` already dispatches a PyPSA
+CSV directory before it looks at any extension
+(`powerio/src/format/mod.rs:441`), so the second entry point was reading
+something the first one already read.
+
+Whether a format stores itself as one file or many is the format's business.
+A caller has a path and a format token, and that is enough. So `pio_read_dir`
+goes, `pio_balanced_parse_file` takes a path of either kind, and PyPSA and
+gridfm stop being the two formats with their own verb. The same collapse
+applies to `read_pypsa_csv_folder` and `read_gridfm` in Rust and Python, which
+this document mandates and the binding PRs carry out.
+
 ## The table
 
 `R` renamed · `S` re-signatured · `X` removed · `=` kept unchanged
@@ -86,8 +107,8 @@ load cannot express "I speak BMOPF 0.2 but not 0.3".
 | `pio_parse_file` | `pio_balanced_parse_file` | R | rule 1 |
 | `pio_parse_str` | `pio_balanced_parse_str` | R | rule 1 |
 | `pio_from_json` | `pio_balanced_from_json` | R | rule 1 |
-| `pio_read_dir` | `pio_balanced_read_dataset` | R | `read_dir` named the mechanism; the concept is a dataset |
-| `pio_scenario_ids` | `pio_dataset_scenario_ids` | R S | `ptrdiff_t` was the only one in the ABI, invented by the `-1` sentinel; `size_t` + `errbuf` |
+| `pio_read_dir` | — | X | rule 7; `pio_balanced_parse_file` takes a directory |
+| `pio_scenario_ids` | `pio_balanced_scenario_ids` | R S | rule 1; `ptrdiff_t` was the only one in the ABI, invented by the `-1` sentinel; `size_t` + `errbuf` |
 | `pio_classify_str` | `pio_classify` | R S | gains an error channel; it had none, so 0 meant every failure |
 | `pio_normalize` | `pio_balanced_normalize` | R S | takes `const PioNormalizeOptions *`, `NULL` for defaults |
 | `pio_normalize_with_options` | — | X | folded into the options struct, rule 5 |
@@ -202,12 +223,80 @@ lives.
 | `pio_conversion_warnings` | rule 4; this is the symbol whose absence lost warnings |
 | `pio_conversion_free` | rule 4 |
 
+### Handles (5 → 5)
+
+A handle name appears in every signature that takes it, so rules 1 and 2 reach
+them or they do not hold.
+
+| v4 | v5 | | why |
+|---|---|---|---|
+| `PioNetwork` | `PioBalancedNetwork` | R | rule 1; it is the type `pio_balanced_*` takes |
+| `PioDistNetwork` | `PioMulticonductorNetwork` | R | rules 1, 2; `dist` is gone as a word, including here |
+| `PioPackage` | same | = | already names its subject |
+| `PioScopfInstance` | same | = | the noun is the instance; `pio_scopf_free` drops the repeat, the type keeps it |
+| `PioAcopfInstance` | same | = | same |
+| — | `PioConversion` | + | rule 4 |
+
+### Structs (0 → 1)
+
+`PioNormalizeOptions` is the ABI's first `#[repr(C)]` struct, `struct_size`
+leading, per rule 5. It is the mechanism that makes "last break" credible, so
+it is the one place v5 spends a new kind of name.
+
+`PioScopfInstance` and `PioAcopfInstance` keep `Instance` deliberately. Rule 1
+asks that a name state its subject, and the subject here is a built problem
+instance rather than a network. Dropping it from `pio_acopf_instance_free`
+removed a repeat of the type in the function name; dropping it from the type
+would remove the noun itself.
+
+### Macros (24 → 23)
+
+| v4 | v5 | | why |
+|---|---|---|---|
+| `PIO_ABI_VERSION` | same | = | becomes 5 |
+| `PIO_DIST_ABI_VERSION` | — | X | rule 6 |
+| `PIO_ERRBUF_MIN` | same | = | still the floor for `errbuf`; v4's claim that it also sufficed for `warnbuf` goes with rule 4 |
+| `PIO_ARROW_TABLE_*` (21) | same | = | append only, and the promise predates v5 |
+
 ## Counts
 
-84 v4 symbols → 78 v5 symbols. 7 removed, 3 added, 68 renamed, 41
-re-signatured, 5 unchanged. Seven disposal paths become five, and the header
-documents all of them (v4 documented five of seven and omitted
-`pio_acopf_instance_free` entirely).
+113 v4 names → 108 v5 names: 84 functions → 78, 5 handles → 6, 0 structs → 1,
+24 macros → 23. 10 removed (9 functions, 1 macro), 5 added, 69 renamed, 41
+re-signatured. Seven disposal paths become five, and the header documents all
+of them (v4 documented five of seven and omitted `pio_acopf_instance_free`
+entirely).
+
+## The three symbols whose meaning moves
+
+A rename is safe because the old name stops resolving. A re-signature is safe
+because the old call stops compiling. Neither protects a symbol whose *payload*
+changes meaning while the call still works, which is the v4 `pio_convert_file`
+bug in a different place. Three v5 entries are in that class, and each needs a
+mechanism rather than a sentence in this document.
+
+**`pio_balanced_n_buses` and `pio_balanced_bus_ids`** move from the case bus
+table to the star-lowered space, closing the trap `powerio.h` documents at
+lines 32-38. A caller who resolves the rename and keeps sizing per-bus buffers
+the v4 way now reads a different count. The mechanism is structural: v4's
+`pio_bus_ids` returned fewer ids than the extractors had rows, so the trailing
+rows had no id; v5 returns one id per row. A binding that asserts
+`length(ids) == n` fails loudly on v4 and passes on v5, and that assert is the
+migration test. The handle rename (`PioNetwork` → `PioBalancedNetwork`) forces
+every C declaration to be touched, so no C caller reaches the new behavior
+without editing the line.
+
+**`pio_scopf_to_json`** keeps its name and flips 1-based indices to 0-based.
+The document already carries `index_base` as a field, so the value is
+self-describing and a consumer that reads it is correct across the change; a
+consumer that assumed 1 is wrong and cannot tell. That field is the mechanism,
+and v5 makes reading it the documented requirement rather than an option.
+
+Its implementation is shared: `pio_scopf_to_json` and Python's `parse_scopf`
+both call `powerio_prob::scopf::json::to_json`. So the index base is one
+decision for both surfaces, and v5 takes it for both — the shared function
+emits 0-based and stamps `index_base: 0`, so C and Python continue to agree.
+Renumbering in the C layer alone would leave the two surfaces disagreeing about
+the same document, which is worse than either base.
 
 ## What does not change
 
@@ -221,8 +310,15 @@ Every symbol is resolved by `dlsym` at runtime, so a rename is a load-time
 failure rather than a silent misread — with one v4 precedent worth remembering:
 `pio_convert_file` kept its symbol, arity, and types while reordering two
 arguments, which linked fine and read the formats reversed. That is why the
-handshake is not optional, and why v5 changes a name whenever it changes
-behavior.
+handshake is not optional, and why the three symbols above carry a mechanism
+instead of a warning.
+
+Julia is the case where the C type system does not help. PowerIO.jl holds
+handles as `Ptr{Cvoid}`, so renaming `PioDistNetwork` costs it nothing and also
+protects it from nothing; the `ccall` signature changes carry the migration
+instead, and rule 3 changes every string and array returning call, which is
+most of the surface. The binding PR is large for that reason rather than
+because of the renames.
 
 A companion PowerIO.jl branch tracks this one so `julia-binding.yml` keeps both
 sides green.
