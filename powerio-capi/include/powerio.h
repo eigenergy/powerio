@@ -58,9 +58,12 @@
  *   pio_scopf_instance_free. Arrow buffers are freed through their own release
  *   callbacks.
  * - A handle is immutable after construction unless a function takes it
- *   non-const (pio_package_validate rewrites its diagnostics): concurrent
- *   reads from any number of threads are safe; a non-const entry point, and
- *   pio_network_free, need exclusive access, and free exactly once.
+ *   non-const: concurrent reads from any number of threads are safe; a
+ *   non-const entry point, and the free functions, need exclusive access, and
+ *   free exactly once. Two entry points take a handle non-const:
+ *   pio_package_validate rewrites its diagnostics and validation summary, and
+ *   pio_package_set_operating_points replaces its operating points and then
+ *   revalidates.
  * - Every entry point catches Rust panics at the boundary and returns the
  *   documented failure value (NULL, 0, -1, 0.0) rather than unwinding across
  *   the ABI (requires the default panic = "unwind"; a panic = "abort" build

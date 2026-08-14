@@ -13,6 +13,7 @@ run() { echo "=== $* ==="; "$@"; }
 run cargo fmt --all --check
 run ./scripts/ci-clippy.sh
 run ./scripts/capi-header-parity.sh
+run ./scripts/capi-header-regen.sh
 
 # The build job documents the workspace under -D warnings, so a doc comment can
 # fail CI while every test passes. An intra-doc link from a public item to a

@@ -163,6 +163,14 @@ jobs:
     # of sync with include/powerio.h.
     - name: Header symbol parity
       run: bash scripts/capi-header-parity.sh
+    # Symbol parity compares names only. Regenerating and diffing catches what
+    # names can't: a reordered argument, a changed type, a struct field. cbindgen
+    # gates optional features behind #ifdef, so one run covers every feature set
+    # and this step belongs in exactly one job.
+    - name: Install cbindgen
+      run: cargo install cbindgen --locked
+    - name: Header matches cbindgen output
+      run: bash scripts/capi-header-regen.sh
     # Drive the ABI from C against the built library: proves the header is valid
     # C, the symbols link, and the exercised signatures match. Dynamic-linked so
     # the platform resolves the Rust runtime deps.

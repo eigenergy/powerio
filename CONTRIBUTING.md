@@ -27,8 +27,11 @@ change to the `powerio-capi` surface:
 cbindgen --config powerio-capi/cbindgen.toml --crate powerio-capi --output powerio-capi/include/powerio.h
 ```
 
-CI checks header/source symbol parity and runs a C smoke test against the
-built library. A breaking change to an existing `pio_*` signature bumps
+CI runs two header checks and a C smoke test against the built library.
+`scripts/capi-header-parity.sh` compares symbol names and runs in every feature
+job; `scripts/capi-header-regen.sh` regenerates with cbindgen and diffs, which
+is what catches a reordered argument, a changed type, or a struct field, and
+runs once. A breaking change to an existing `pio_*` signature bumps
 `PIO_ABI_VERSION` (in `powerio-capi/src/lib.rs`; the header `#define` follows
 from regeneration) and requires a lockstep PowerIO.jl release targeting the new
 version. Additive symbols don't bump it. The history is in
