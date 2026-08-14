@@ -21,18 +21,17 @@ use crate::{Error, Result};
 /// # Errors
 /// [`Error::UnsupportedCostModel`] for a row that states no quadratic curve.
 pub(crate) fn quadratic_terms(cost: &GenCost, gen_index: usize) -> Result<(f64, f64, f64)> {
+    // One rule, stated once on the hub type. Rolling it again here diverged
+    // twice: the threshold applied to `2*c2` rather than to the source
+    // coefficient the artifact lives in, and a longer row whose leading
+    // coefficients are artifacts errored here while the hub read it.
     let (q, c, c0) = cost
-        .quadratic_with_constant()
+        .quadratic_with_constant_tol(GenCost::LEADING_COEFF_TOL)
         .ok_or(Error::UnsupportedCostModel {
             gen_index,
             model: cost.model,
             ncost: cost.ncost,
         })?;
-    let q = if q.abs() <= GenCost::LEADING_COEFF_TOL {
-        0.0
-    } else {
-        q
-    };
     Ok((q, c, c0))
 }
 

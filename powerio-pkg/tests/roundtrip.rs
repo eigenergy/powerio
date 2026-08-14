@@ -2359,6 +2359,30 @@ fn study_set_fields_rejects_fields_not_in_typed_model() {
 }
 
 #[test]
+fn study_set_fields_wrong_type_is_the_document_s_fault() {
+    // `set_fields` values are inserted untyped and only fail on the round trip
+    // back to the typed payload. That failure is the caller's document, so it
+    // must not be reported as a serialization failure of our own output: a
+    // consumer branching on the category would retry instead of fixing the file.
+    let study = study_block(vec![study_commit(vec![StudyEdit::SetFields {
+        update: ElementUpdate::new(
+            ElementRef::by_source_uid("loads", "load_1"),
+            fields(&[("p_mw", serde_json::json!("300"))]),
+        ),
+    }])]);
+
+    let err = balanced_package_with_gen()
+        .with_study(study)
+        .materialize_study_commit(0)
+        .expect_err("a string where a number belongs should not materialize");
+    assert_eq!(err.category(), powerio::ErrorCategory::Data, "{err}");
+    assert!(
+        !err.to_string().contains("serializing"),
+        "the document's type error read as our serialization failure: {err}"
+    );
+}
+
+#[test]
 fn study_validation_reports_bad_identity() {
     let study = study_block(vec![study_commit(vec![StudyEdit::DemandDelta {
         bus: ElementRef::by_source_uid("buses", "ghost"),

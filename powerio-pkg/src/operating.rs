@@ -547,7 +547,11 @@ pub(crate) fn apply_operating_point_to_model(
         })
         .collect();
 
-    let updated = serde_json::from_value(value)?;
+    // As in `study.rs`: the operating point's `set_fields` values are the
+    // document's, inserted untyped, so a wrong type here is the caller's data
+    // rather than our serialization.
+    let updated =
+        serde_json::from_value(value).map_err(|error| crate::Error::Payload(error.to_string()))?;
     validate_update_fields_survived(&updated, &point.updates, &resolved_rows)?;
     Ok((updated, updated_paths))
 }

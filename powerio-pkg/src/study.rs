@@ -306,7 +306,11 @@ pub(crate) fn apply_study_to_model(
         }
     }
 
-    let updated = serde_json::from_value(value)?;
+    // `set_fields` values come from the document and are inserted untyped, so
+    // this deserialization fails on a caller's edit, not on our output. The
+    // blanket From would report it as a serialization failure.
+    let updated =
+        serde_json::from_value(value).map_err(|error| crate::Error::Payload(error.to_string()))?;
     validate_update_fields_survived(&updated, &set_field_updates, &set_field_rows)?;
     Ok((updated, updated_paths))
 }
