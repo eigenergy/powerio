@@ -12,7 +12,7 @@
 - [DC OPF bundle](dcopf-bundle.md)
 - [Migrating to 0.7](migration-v0.7.md)
 - [C ABI Arrow policy](capi-arrow.md)
-- [C ABI v5 audit](abi-v5-audit.md)
+- [C ABI v5](abi-v5.md)
 - [Language APIs](languages.md)
 - [Python API](python.md)
 - [Performance](performance.md)
