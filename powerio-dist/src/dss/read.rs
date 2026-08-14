@@ -102,9 +102,14 @@ fn warn_stripped_boms(
 /// `Redirect`/`Compile`/`Buscoords` includes are confined to the directory of
 /// `path`: an include that resolves outside that directory is refused with a
 /// warning — whether it climbs out with `..`, is an absolute path outside the
-/// directory, or escapes through a symbolic link — so a case file cannot read
-/// arbitrary paths. (`Executor::resolve` documents the exact lexical rule that
-/// decides whether an absolute include counts as inside the directory.)
+/// directory, or escapes through a symbolic link. Inside that directory nothing
+/// is restricted: a case file reads any file placed beneath it, and the leading
+/// token of each line the parser does not recognize comes back in the warnings,
+/// so an untrusted case belongs in a directory of its own.
+/// (`Executor::resolve` documents the exact lexical rule that decides whether
+/// an absolute include counts as inside the directory.) The includes a single
+/// parse follows are budgeted in files and in bytes; a case that exhausts the
+/// budget stops following includes and records an `Error` finding.
 pub fn parse_dss_file(path: impl AsRef<Path>) -> Result<MulticonductorNetwork> {
     let path = path.as_ref();
     let text = std::fs::read_to_string(path).map_err(|source| Error::Io {

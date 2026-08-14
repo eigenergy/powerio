@@ -50,9 +50,13 @@ run cargo run -q -p powerio-cli -- gridfm tests/data/case9.m -o "$smoke_dir/grid
 run env "$lib_path_var=target/release" "$smoke_dir/smoke_release" \
     tests/data/case9.m "$smoke_dir/gridfm/case9/raw"
 
-# The generated schema must already match what the example emits.
+# The generated schema must already match what the example emits. Checked with
+# `git status --porcelain`, which also sees the new directory a version bump
+# creates; a diff of tracked files would report nothing while it goes
+# uncommitted.
 run cargo run -q -p powerio-pkg --example generate_schemas --features schema -- docs/schema
-if ! git diff --quiet -- docs/schema; then
+if [ -n "$(git status --porcelain -- docs/schema)" ]; then
+  git status --porcelain -- docs/schema
   echo "error: docs/schema is stale; commit the regenerated files" >&2
   exit 1
 fi

@@ -90,9 +90,17 @@ jobs:
     - uses: dtolnay/rust-toolchain@stable
     - uses: Swatinem/rust-cache@v2
     - name: Check generated JSON schemas
+      # `git status --porcelain` rather than `git diff`: a version bump moves
+      # the lineage, so the generator writes a NEW directory, and a diff of
+      # tracked files reports nothing while the document goes uncommitted.
       run: |
         cargo run -p powerio-pkg --example generate_schemas --features schema -- docs/schema
-        git diff --exit-code -- docs/schema
+        if [ -n "$(git status --porcelain -- docs/schema)" ]; then
+          git status --porcelain -- docs/schema
+          git diff -- docs/schema
+          echo "docs/schema is stale or missing this build's lineage; commit it" >&2
+          exit 1
+        fi
 
   build:
     runs-on: ubuntu-latest

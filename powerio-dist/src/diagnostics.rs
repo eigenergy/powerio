@@ -76,6 +76,11 @@ pub enum DiagnosticStage {
 /// the network is incomplete.
 pub const READ_DSS_INCLUDE_REFUSED: &str = "READ.DSS.INCLUDE_REFUSED";
 
+/// The reader stopped following `Redirect`/`Compile`/`Buscoords` includes
+/// because the case exceeded the include budget. Severity `Error`: the parse
+/// continued, but the network is incomplete.
+pub const READ_DSS_INCLUDE_BUDGET: &str = "READ.DSS.INCLUDE_BUDGET";
+
 /// A BMOPF field the schema types as a number holds something else. Severity
 /// `Error`: the field reads as `NaN`, which serializes on as an unbounded
 /// limit, so the parse states a fact the source never gave.

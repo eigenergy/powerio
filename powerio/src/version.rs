@@ -196,6 +196,22 @@ mod tests {
     }
 
     #[test]
+    fn the_frozen_lineage_is_never_behind_this_build() {
+        // FROZEN_LINEAGE is the last 0.x, the one a 1.x build also reads. It is
+        // a constant with nothing tying it to the crate version, so a 0.x
+        // released past it would be a lineage no 1.x build reads. Whoever cuts
+        // that release moves the constant or drops the carve-out.
+        let (major, minor) = current_lineage();
+        if major == 0 {
+            assert!(
+                (major, minor) <= FROZEN_LINEAGE,
+                "0.{minor} ships past the frozen lineage 0.{}",
+                FROZEN_LINEAGE.1
+            );
+        }
+    }
+
+    #[test]
     fn nothing_else_crosses_a_major_boundary() {
         assert!(!reads((1, 0), (0, 8)), "only the frozen lineage crosses");
         assert!(!reads((2, 0), FROZEN_LINEAGE), "2.0 froze nothing");

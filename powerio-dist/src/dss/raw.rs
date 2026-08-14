@@ -281,6 +281,20 @@ where
 /// Redirect nesting limit; OpenDSS recurses unbounded, this bounds cycles.
 const MAX_REDIRECT_DEPTH: usize = 64;
 
+/// Includes a single parse may follow. Depth bounds one branch, not the work:
+/// a file that redirects to itself twice expands into a binary tree of depth
+/// [`MAX_REDIRECT_DEPTH`], so 34 bytes never finish parsing. The largest
+/// fixture here (IEEE123Master.dss) follows 3.
+const MAX_TOTAL_INCLUDES: usize = 4096;
+
+/// Script text a single parse may pull in through includes. The include count
+/// alone still admits amplification: one large file that redirects to itself is
+/// re-executed once per load, so a few megabytes of input buy thousands of
+/// times that in scanning. Together the two budgets keep an include tree
+/// costing about what a single case file of this size costs. The root file is
+/// not charged against it, so a case without includes is never truncated.
+const MAX_TOTAL_INCLUDE_BYTES: usize = 64 << 20;
+
 /// Cap on the accumulated property assignments a single object may hold.
 /// `like=` splices the source object's whole prop list, so a self-referencing
 /// or mutually-referencing chain (`Edit Load.a like=a` repeated) doubles the
@@ -302,6 +316,12 @@ struct Executor<'l, L: Loader> {
     /// the in-memory loaders used by tests and string parsing (which installs
     /// a loader that reads nothing).
     root: Option<PathBuf>,
+    /// Includes followed and script bytes they pulled in, against
+    /// [`MAX_TOTAL_INCLUDES`] and [`MAX_TOTAL_INCLUDE_BYTES`]. `budget_spent`
+    /// keeps the refusal to one message however many includes follow it.
+    includes: usize,
+    include_bytes: usize,
+    budget_spent: bool,
 }
 
 /// Collapses `.` and `..` lexically, without touching the filesystem. A
@@ -631,26 +651,62 @@ impl<L: Loader> Executor<'_, L> {
             let message = ctx(format!(
                 "{verb} {file_arg}: refused; include escapes the case directory"
             ));
-            self.refuse(message);
+            self.refuse_escape(message);
         }
         resolved
     }
 
+    /// Records an include refused for leaving the case directory: the warning
+    /// line and the `Error` finding that keeps the run from exiting 0.
+    fn refuse_escape(&mut self, message: String) {
+        self.refuse(
+            message,
+            crate::diagnostics::READ_DSS_INCLUDE_REFUSED,
+            "place included files inside the case directory, or merge them into the case",
+        );
+    }
+
     /// Records a refused include: the warning line and the `Error` finding
     /// that keeps the run from exiting 0.
-    fn refuse(&mut self, message: String) {
+    fn refuse(&mut self, message: String, code: &'static str, suggested_action: &'static str) {
         self.raw.warn(message.clone());
         self.raw.diagnostics.push(
             crate::diagnostics::StructuredDiagnostic::new(
-                crate::diagnostics::READ_DSS_INCLUDE_REFUSED,
+                code,
                 crate::diagnostics::DiagnosticSeverity::Error,
                 crate::diagnostics::DiagnosticStage::Parse,
                 message,
             )
-            .with_suggested_action(
-                "place included files inside the case directory, or merge them into the case",
-            ),
+            .with_suggested_action(suggested_action),
         );
+    }
+
+    /// Charges one include against the budgets, returning whether to follow it.
+    /// Charged at the attempt, so the loader is never called past the budget
+    /// and the syscalls are bounded with the work. The counters live on the
+    /// executor rather than in `RawDss`, which `Clear` resets.
+    fn charge_include(&mut self, verb: &str, path: &Path, ctx: &dyn Fn(String) -> String) -> bool {
+        if self.budget_spent {
+            return false;
+        }
+        if self.includes >= MAX_TOTAL_INCLUDES || self.include_bytes >= MAX_TOTAL_INCLUDE_BYTES {
+            self.budget_spent = true;
+            let message = ctx(format!(
+                "{verb} {}: refused; the case exceeded the include budget of {MAX_TOTAL_INCLUDES} \
+                 files and {} MiB, so the rest of the includes were not followed",
+                path.display(),
+                MAX_TOTAL_INCLUDE_BYTES >> 20,
+            ));
+            self.refuse(
+                message,
+                crate::diagnostics::READ_DSS_INCLUDE_BUDGET,
+                "check the case for an include cycle; a file that redirects to itself expands \
+                 without bound",
+            );
+            return false;
+        }
+        self.includes += 1;
+        true
     }
 
     /// Records a failed include load. A containment refusal is the loader's
@@ -668,7 +724,7 @@ impl<L: Loader> Executor<'_, L> {
     ) {
         let message = ctx(format!("{verb} {}: {e}", path.display()));
         if Containment::refused_by_us(e) {
-            self.refuse(message);
+            self.refuse_escape(message);
         } else {
             self.raw.warn(message);
         }
@@ -688,8 +744,12 @@ impl<L: Loader> Executor<'_, L> {
                 .warn(ctx(format!("redirect depth limit at {}", path.display())));
             return;
         }
+        if !self.charge_include(verb, &path, ctx) {
+            return;
+        }
         match self.loader.load(&path) {
             Ok(text) => {
+                self.include_bytes += text.len();
                 let dir = path.parent().map(Path::to_path_buf).unwrap_or_default();
                 self.dirs.push(dir.clone());
                 self.run_script(&text, &path.display().to_string());
@@ -717,8 +777,12 @@ impl<L: Loader> Executor<'_, L> {
         let Some(path) = self.resolve_or_warn("buscoords", &p.value.text, ctx) else {
             return;
         };
+        if !self.charge_include("buscoords", &path, ctx) {
+            return;
+        }
         match self.loader.load(&path) {
             Ok(text) => {
+                self.include_bytes += text.len();
                 for (line_no, line) in text.lines().enumerate() {
                     let mut s = Scanner::new(line, None);
                     let Some(bus) = s.next_param() else { continue };
@@ -1029,6 +1093,9 @@ fn run_executor(text: &str, path: &str, root: Option<PathBuf>, loader: &mut impl
                 .unwrap_or_default(),
         ],
         root,
+        includes: 0,
+        include_bytes: 0,
+        budget_spent: false,
     };
     exec.run_script(text, path);
     exec.raw
@@ -1267,6 +1334,92 @@ mod tests {
         );
         assert!(raw.find("linecode", "lc1").is_some());
         assert!(raw.warnings.is_empty());
+    }
+
+    /// A loader that serves `text` for every path, gives up at `give_up`
+    /// loads, and reports how many it served. Without the include budget the
+    /// count runs away, so the test fails instead of hanging.
+    fn counting_loader(text: &str, give_up: usize, script: &str) -> (RawDss, usize) {
+        let mut loads = 0usize;
+        let raw = {
+            let mut loader = |_: &Path| {
+                loads += 1;
+                if loads > give_up {
+                    Err(std::io::Error::other("loader gave up"))
+                } else {
+                    Ok(text.to_string())
+                }
+            };
+            parse_raw_with(script, "test.dss", &mut loader)
+        };
+        (raw, loads)
+    }
+
+    fn budget_refusals(raw: &RawDss) -> usize {
+        raw.diagnostics
+            .iter()
+            .filter(|d| d.code.as_str() == crate::diagnostics::READ_DSS_INCLUDE_BUDGET)
+            .count()
+    }
+
+    #[test]
+    fn a_self_redirecting_include_stops_at_the_file_budget() {
+        // Two self redirects per file expand into a binary tree of depth
+        // MAX_REDIRECT_DEPTH: ~2^65 script runs, which is why the depth limit
+        // alone is not a bound.
+        let (raw, loads) = counting_loader(
+            "Redirect a.dss\nRedirect a.dss",
+            MAX_TOTAL_INCLUDES * 4,
+            "Redirect a.dss",
+        );
+        assert_eq!(loads, MAX_TOTAL_INCLUDES, "{loads} includes followed");
+        assert_eq!(budget_refusals(&raw), 1, "one refusal, however many follow");
+    }
+
+    #[test]
+    fn a_large_self_redirecting_include_stops_at_the_byte_budget() {
+        // The same tree with a big file: the file budget would let it re-scan
+        // MAX_TOTAL_INCLUDES copies of it, so the bytes are charged too. Each
+        // load carries a quarter megabyte on one long line.
+        let chunk = 256 << 10;
+        let text = format!("Redirect a.dss\nRedirect a.dss\n// {}", "a".repeat(chunk));
+        let (raw, loads) = counting_loader(&text, MAX_TOTAL_INCLUDES, "Redirect a.dss");
+        assert!(
+            loads <= MAX_TOTAL_INCLUDE_BYTES / chunk + 1,
+            "{loads} includes followed, {} bytes",
+            loads * chunk
+        );
+        assert!(
+            loads < MAX_TOTAL_INCLUDES,
+            "the byte budget is what stopped it"
+        );
+        assert_eq!(budget_refusals(&raw), 1);
+    }
+
+    #[test]
+    fn buscoords_is_charged_against_the_include_budget() {
+        // Buscoords does not recurse, but a redirect tree can load one per
+        // node and every line of it lands in `raw.buscoords`. An uncharged
+        // Buscoords would push the load count past the budget.
+        let (raw, loads) = counting_loader(
+            "Redirect a.dss\nRedirect a.dss\nBuscoords a.csv",
+            MAX_TOTAL_INCLUDES * 4,
+            "Redirect a.dss",
+        );
+        assert_eq!(loads, MAX_TOTAL_INCLUDES, "{loads} includes followed");
+        assert_eq!(budget_refusals(&raw), 1);
+    }
+
+    #[test]
+    fn clear_does_not_refund_the_include_budget() {
+        // `Clear` resets the parsed script, so a budget counted in RawDss
+        // would reset with it and the tree would run unbounded again.
+        let (_, loads) = counting_loader(
+            "Clear\nRedirect a.dss\nRedirect a.dss",
+            MAX_TOTAL_INCLUDES * 4,
+            "Redirect a.dss",
+        );
+        assert_eq!(loads, MAX_TOTAL_INCLUDES, "{loads} includes followed");
     }
 
     #[test]
