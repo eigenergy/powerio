@@ -85,7 +85,7 @@ fn small_instance_preserves_source_ids_and_uses_zero_based_indices() {
 }
 
 #[test]
-fn julia_wire_adapter_is_versioned_and_one_based() {
+fn the_julia_document_states_its_powerio_version_and_is_one_based() {
     let instance = small_instance();
     let internal = serde_json::to_value(&instance).expect("serialize internal instance");
     assert!(internal.get("static_data").is_some());

@@ -41,7 +41,7 @@ pub enum CoordsKind {
     Derived,
 }
 
-/// BalancedNetwork level coordinate metadata.
+/// Network level coordinate metadata.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct GeoMeta {

@@ -870,7 +870,9 @@ impl Branch {
     /// and the two terminal voltage ceilings give the widest voltage phasor
     /// difference the branch can hold. The difference over `|Z|` bounds the
     /// current, and the larger ceiling turns the current into power. Returns
-    /// `0.0` for a zero impedance branch, which stays unlimited.
+    /// `0.0` for a zero impedance branch — one under
+    /// [`MIN_DIVISIBLE_MAGNITUDE`](crate::dc::MIN_DIVISIBLE_MAGNITUDE), the
+    /// bound the rest of the builders divide by — which stays unlimited.
     ///
     /// The caller supplies the window in radians, because
     /// [`angmin`](Self::angmin) and [`angmax`](Self::angmax) are degrees in
@@ -882,8 +884,10 @@ impl Branch {
     /// separation two terminals can have.
     #[must_use]
     pub fn synthesize_rate_a(&self, angle_window_rad: f64, fr_vmax: f64, to_vmax: f64) -> f64 {
+        // The same bound `series_admittance_of` divides by, so the two agree on
+        // which branch has no impedance to bound a current with.
         let zmag = self.r.hypot(self.x);
-        if zmag == 0.0 {
+        if zmag < crate::dc::MIN_DIVISIBLE_MAGNITUDE {
             return 0.0;
         }
         let window = angle_window_rad.abs().min(std::f64::consts::PI);
