@@ -20,7 +20,7 @@ pub enum Error {
     /// Routed through the hub's variant so the message a caller sees is the
     /// same one every other powerio surface prints for the same failure.
     #[error(transparent)]
-    Io(std::io::Error),
+    Io(#[from] std::io::Error),
 
     #[error("output dimension mismatch: matrix is {n}x{n} but RHS has length {b_len}")]
     DimensionMismatch { n: usize, b_len: usize },
@@ -169,12 +169,6 @@ impl std::fmt::Display for ScenarioMismatch {
                 write!(f, "counts match but the bus ids are in a different order")
             }
         }
-    }
-}
-
-impl From<std::io::Error> for Error {
-    fn from(error: std::io::Error) -> Self {
-        Error::Io(error)
     }
 }
 

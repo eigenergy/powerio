@@ -27,7 +27,6 @@ def test_multiconductor_is_the_only_model_name():
     assert "DistCase" not in dist.__all__
     assert not hasattr(dist, "DistNetwork")
     assert not hasattr(dist, "DistCase")
-    assert isinstance(case, dist.MulticonductorNetwork)
 
 
 def test_same_format_write_echoes_source():

@@ -685,7 +685,7 @@ impl NetworkPackage {
         // fail here on a missing required field, and the bare serde message
         // ("missing field `producer`") does not say what it failed to be.
         let pkg: Self =
-            serde_json::from_str(text.trim_start_matches('\u{feff}')).map_err(Error::Envelope)?;
+            serde_json::from_str(text.trim_start_matches('\u{feff}')).map_err(Error::Malformed)?;
         if !powerio::version::supports(&pkg.powerio_version) {
             return Err(Error::UnsupportedVersion(powerio::version::reject(
                 ".pio.json",

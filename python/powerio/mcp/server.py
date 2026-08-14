@@ -341,6 +341,12 @@ def _transport_kind(text: str, json_format: Optional[str]) -> str:
     )
 
 
+def _header(schema: str) -> Dict[str, Any]:
+    """The two keys every tool response opens with: what it is, and which
+    powerio release wrote it."""
+    return {"schema": schema, _VERSION_KEY: powerio.__version__}
+
+
 def _severity_counts(diagnostics: list[Dict[str, Any]]) -> Dict[str, int]:
     counts = {key: 0 for key in ("fatal", "error", "warning", "info", "debug")}
     for item in diagnostics:
@@ -409,8 +415,7 @@ def _diagnostics_payload(package_json: str, verbose: bool = False) -> Dict[str, 
         ]
         text = f"{status}: " + ", ".join(parts)
     return {
-        "schema": "powerio.diagnostics",
-        _VERSION_KEY: powerio.__version__,
+        **_header("powerio.diagnostics"),
         "model_kind": kind,
         "summary": {
             "status": status,
@@ -644,8 +649,7 @@ def _load_any(
 def _transmission_summary(net: "powerio.BalancedNetwork") -> Dict[str, Any]:
     refs = net.reference_bus_indices()
     return {
-        "schema": "powerio.summary",
-        _VERSION_KEY: powerio.__version__,
+        **_header("powerio.summary"),
         "domain": "transmission",
         "model": "balanced",
         "name": net.name,
@@ -674,8 +678,7 @@ def _transmission_summary(net: "powerio.BalancedNetwork") -> Dict[str, Any]:
 
 def _distribution_summary(net: "dist.MulticonductorNetwork") -> Dict[str, Any]:
     return {
-        "schema": "powerio.summary",
-        _VERSION_KEY: powerio.__version__,
+        **_header("powerio.summary"),
         "domain": "distribution",
         "model": "multiconductor",
         "name": net.name,
@@ -936,8 +939,7 @@ def _parse_impl(
         summary = _summary(loaded)
         diag = _diagnostics_payload(package_json, verbose=True)
         return {
-            "schema": "powerio.parse",
-            _VERSION_KEY: powerio.__version__,
+            **_header("powerio.parse"),
             "transport": "package",
             "domain": loaded.domain,
             "model": summary["model"],
@@ -958,8 +960,7 @@ def _parse_impl(
         text, warnings = loaded.network.to_json(), loaded.warnings
     summary = _summary(loaded)
     return {
-        "schema": "powerio.parse",
-        _VERSION_KEY: powerio.__version__,
+        **_header("powerio.parse"),
         "domain": loaded.domain,
         "model": summary["model"],
         "source_format": summary["source_format"],
@@ -991,8 +992,7 @@ def _normalize_impl(
     normalized = _Loaded("transmission", norm, list(norm.read_warnings), "powerio-json")
     summary = _summary(normalized)
     return {
-        "schema": "powerio.normalize",
-        _VERSION_KEY: powerio.__version__,
+        **_header("powerio.normalize"),
         "domain": "transmission",
         "model": "balanced",
         "source_format": summary["source_format"],
@@ -1050,8 +1050,7 @@ def _matrix_impl(
         raise ValueError(f"matrix build failed: {exc}") from exc
     coo = mat.tocoo()
     return {
-        "schema": "powerio.matrix",
-        _VERSION_KEY: powerio.__version__,
+        **_header("powerio.matrix"),
         "domain": "transmission",
         "model": "balanced",
         "source_format": net.source_format,
@@ -1081,8 +1080,7 @@ def _display_impl(path: str, from_format: Optional[str] = None) -> dict:
         raise ValueError(f"unsupported display format: {data.kind!r}")
     pwd = data.data
     return {
-        "schema": "powerio.display",
-        _VERSION_KEY: powerio.__version__,
+        **_header("powerio.display"),
         "domain": "display",
         "model": "display",
         "source_format": "powerworld-pwd",

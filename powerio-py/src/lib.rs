@@ -310,6 +310,11 @@ fn package_pyerr(e: powerio_pkg::Error) -> PyErr {
     categorized_pyerr(category, e.to_string())
 }
 
+/// A JSON serialization failure, raised the way every other package failure is.
+fn serialize_pyerr(e: serde_json::Error) -> PyErr {
+    package_pyerr(e.into())
+}
+
 fn package_to_json(pkg: &NetworkPackage) -> PyResult<String> {
     let text = pkg.to_json_pretty().map_err(package_pyerr)?;
     NetworkPackage::from_json(&text).map_err(package_pyerr)?;
@@ -1768,15 +1773,14 @@ impl PyPackage {
 
     /// The operating point series as JSON, or `null` when absent.
     fn operating_points_json(&self) -> PyResult<String> {
-        serde_json::to_string(&self.pkg.operating_points)
-            .map_err(|e| package_pyerr(powerio_pkg::Error::Serialize(e)))
+        serde_json::to_string(&self.pkg.operating_points).map_err(serialize_pyerr)
     }
 
     /// Replace the operating point series from JSON and rerun validation.
     /// `null` or an empty series clears it.
     fn set_operating_points_json(&mut self, json: &str) -> PyResult<()> {
-        let series: Option<OperatingPointSeries> = serde_json::from_str(json)
-            .map_err(|e| package_pyerr(powerio_pkg::Error::Serialize(e)))?;
+        let series: Option<OperatingPointSeries> =
+            serde_json::from_str(json).map_err(serialize_pyerr)?;
         match series {
             Some(series) => self.pkg.set_operating_points(series),
             None => self.pkg.clear_operating_points(),
@@ -1787,8 +1791,7 @@ impl PyPackage {
 
     /// The study block as JSON, or `null` when absent.
     fn study_json(&self) -> PyResult<String> {
-        serde_json::to_string(&self.pkg.study)
-            .map_err(|e| package_pyerr(powerio_pkg::Error::Serialize(e)))
+        serde_json::to_string(&self.pkg.study).map_err(serialize_pyerr)
     }
 
     /// Materialize one operating point into a new static package handle.
@@ -1814,14 +1817,12 @@ impl PyPackage {
 
     /// The validation summary as JSON.
     fn validation_json(&self) -> PyResult<String> {
-        serde_json::to_string(&self.pkg.validation)
-            .map_err(|e| package_pyerr(powerio_pkg::Error::Serialize(e)))
+        serde_json::to_string(&self.pkg.validation).map_err(serialize_pyerr)
     }
 
     /// The structured diagnostics array as JSON.
     fn diagnostics_json(&self) -> PyResult<String> {
-        serde_json::to_string(&self.pkg.diagnostics)
-            .map_err(|e| package_pyerr(powerio_pkg::Error::Serialize(e)))
+        serde_json::to_string(&self.pkg.diagnostics).map_err(serialize_pyerr)
     }
 
     /// Readiness report for multiconductor to balanced lowering, as JSON.
@@ -1840,7 +1841,7 @@ impl PyPackage {
                 ..Default::default()
             },
         );
-        serde_json::to_string(&report).map_err(|e| package_pyerr(powerio_pkg::Error::Serialize(e)))
+        serde_json::to_string(&report).map_err(serialize_pyerr)
     }
 
     /// Lower a multiconductor package to a new balanced package handle.

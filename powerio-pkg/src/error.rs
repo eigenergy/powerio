@@ -15,7 +15,7 @@ pub enum Error {
     /// The document is not well formed JSON, or does not have the shape the
     /// document requires.
     #[error("invalid .pio.json package: {0}")]
-    Envelope(#[source] serde_json::Error),
+    Malformed(#[source] serde_json::Error),
 
     /// The document comes from a powerio lineage this build does not read.
     #[error("{0}")]
@@ -49,7 +49,7 @@ pub enum Error {
 impl From<serde_json::Error> for Error {
     /// A `serde_json` failure raised inside this crate is a serialization
     /// step, never a document the caller handed us: `from_json` names its own
-    /// failures through [`Error::Envelope`] before any of these can fire.
+    /// failures through [`Error::Malformed`] before any of these can fire.
     fn from(error: serde_json::Error) -> Self {
         Error::Serialize(error)
     }
@@ -62,7 +62,7 @@ impl Error {
         use powerio::ErrorCategory as C;
         match self {
             Error::Core(inner) => inner.category(),
-            Error::Envelope(_) | Error::UnsupportedVersion(_) | Error::Multiconductor(_) => {
+            Error::Malformed(_) | Error::UnsupportedVersion(_) | Error::Multiconductor(_) => {
                 C::Parse
             }
             Error::ModelKindMismatch | Error::NoSuchIndex(_) | Error::Payload(_) => C::Data,

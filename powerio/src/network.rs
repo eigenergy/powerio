@@ -861,16 +861,7 @@ impl Branch {
     /// value cannot write NaN or a silent zero downstream. `row` only labels
     /// the error.
     pub fn series_admittance(&self, row: usize) -> Result<Option<(f64, f64)>> {
-        // The bound is on the impedance magnitude; `denom` is its square, and
-        // bounding that would refuse impedances the DC builders divide by.
-        if self.r.hypot(self.x) < crate::dc::MIN_DIVISIBLE_MAGNITUDE {
-            return Ok(None);
-        }
-        let denom = self.r * self.r + self.x * self.x;
-        if !denom.is_finite() {
-            return Err(Error::NonFiniteSusceptance { row });
-        }
-        Ok(Some((self.r / denom, -self.x / denom)))
+        series_admittance_of(self.r, self.x, row)
     }
 
     /// Apparent power bound, per unit, for a branch the source left unrated
@@ -929,6 +920,33 @@ impl Branch {
     pub fn has_angle_limits(&self) -> bool {
         self.angmin > -360.0 || self.angmax < 360.0
     }
+}
+
+/// The series admittance `(g, b)` of an impedance, guarded.
+///
+/// `None` is an impedance too small to divide by, under
+/// [`MIN_DIVISIBLE_MAGNITUDE`](crate::dc::MIN_DIVISIBLE_MAGNITUDE); the caller
+/// decides whether that is a skip or an error. The bound is on the impedance
+/// magnitude, not on `r² + x²`, which is its square: bounding the square would
+/// refuse impedances the DC builders divide by.
+///
+/// Y_bus takes `r` already zeroed under the XB scheme, so it passes its own
+/// pair rather than a branch's.
+///
+/// # Errors
+/// [`Error::NonFiniteSusceptance`] when `r`/`x` are NaN/Inf, so a bad value
+/// cannot write NaN or a silent zero downstream. NaN leaves `hypot` NaN, which
+/// is not below the bound, so it arrives at that check rather than reading as
+/// zero impedance. `row` only labels the error.
+pub fn series_admittance_of(r: f64, x: f64, row: usize) -> Result<Option<(f64, f64)>> {
+    if r.hypot(x) < crate::dc::MIN_DIVISIBLE_MAGNITUDE {
+        return Ok(None);
+    }
+    let denom = r * r + x * x;
+    if !denom.is_finite() {
+        return Err(Error::NonFiniteSusceptance { row });
+    }
+    Ok(Some((r / denom, -x / denom)))
 }
 
 /// A transmission switch. Closed switches are preserved as data; matrix builders

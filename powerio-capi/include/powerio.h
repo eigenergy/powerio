@@ -313,8 +313,9 @@ char *pio_dist_capabilities_json(void);
  * [`PIO_ABI_VERSION`] does not cover these versions. A binding that
  * mirrors one of them must read it from here and refuse a library it does
  * not agree with. A key is `null` when the owning feature is not compiled
- * in. Keys are only added over time. `schema_version` is the version of
- * this document's own shape.
+ * in. Keys are only added over time. `powerio_version` covers every
+ * document powerio authors; `bmopf_schema` is the foreign schema this build
+ * speaks, whose version belongs to whoever owns it.
  */
 char *pio_schema_versions_json(void);
 

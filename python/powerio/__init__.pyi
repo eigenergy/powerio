@@ -3,8 +3,7 @@ from typing import Any, Dict, List, Literal, NamedTuple, Optional, Tuple, TypedD
 __version__: str
 
 Scheme = Literal["bx", "xb"]
-# "paper" is accepted until 1.0.0.
-Convention = Literal["series", "matpower", "paper"]
+Convention = Literal["series", "matpower", "reactance-only"]
 SensitivitySolver = Literal["auto", "dense", "iterative"]
 Units = Literal["perunit", "native"]
 GridfmOutputs = Dict[str, Any]

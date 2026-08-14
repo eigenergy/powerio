@@ -161,23 +161,15 @@ pub(crate) fn branch_admittance(
     let r = if flags.zero_resistance { 0.0 } else { br.r };
     let x = br.x;
     // Zero impedance in every sense the builder can act on; exact zero used to
-    // be the whole test. Bounded on the impedance magnitude, not on `r² + x²`:
-    // `incidence` bounds `|x|` by the same number, so bounding the square here
-    // would refuse an `x = 1e-100` the DC builder stamps.
-    if r.hypot(x) < super::MIN_DIVISIBLE_MAGNITUDE {
+    // be the whole test. The guard and the division are shared with the AC
+    // path, so the two cannot drift; only the skip-vs-error policy is local.
+    let Some((g, b)) = powerio::series_admittance_of(r, x, row)? else {
         if flags.skip_zero_impedance {
             return Ok(None);
         }
         return Err(powerio::Error::ZeroImpedance { row }.into());
-    }
-    let denom = r * r + x * x;
-    // NaN leaves `hypot` NaN, which is not below the bound, so it arrives here
-    // rather than reading as zero impedance. Either would write NaN into Y_bus
-    // and silently break the downstream M-matrix/SDDM checks.
-    if !denom.is_finite() {
-        return Err(powerio::Error::NonFiniteSusceptance { row }.into());
-    }
-    let y_series = Complex64::new(r / denom, -x / denom);
+    };
+    let y_series = Complex64::new(g, b);
 
     let charging = if flags.zero_charging {
         crate::network::BranchCharging::new(0.0, 0.0, 0.0, 0.0)

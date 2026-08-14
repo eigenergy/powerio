@@ -372,15 +372,14 @@ impl Reader<'_> {
         if let Some(name) = doc.get("name").and_then(Value::as_str) {
             self.net.name = Some(name.to_string());
         }
-        let stated = doc
-            .get("settings")
-            .and_then(Value::as_object)
+        let settings = doc.get("settings").and_then(Value::as_object);
+        let stated = settings
             .and_then(|s| s.get("base_frequency"))
             .and_then(Value::as_f64);
         if let Some(f) = stated {
             self.net.base_frequency = f;
         }
-        if let Some(settings) = doc.get("settings").and_then(Value::as_object) {
+        if let Some(settings) = settings {
             self.net
                 .extras
                 .insert("pmd_settings".into(), Value::Object(settings.clone()));
