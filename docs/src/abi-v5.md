@@ -175,6 +175,12 @@ shared object two compatibility promises. No mature C library does that.
 Foreign schema drift is reported at runtime by `pio_build_info`. An integer checked once at
 load cannot express "I speak BMOPF 0.2 but not 0.3".
 
+Removing the symbol costs the binding more than removing the constant. PowerIO.jl gates every
+distribution entry point on `_ensure_dist_compatible`, which resolves `pio_dist_abi_version`
+and reports a missing symbol as "use powerio-capi v0.3.1". Thirteen call sites reach it. The
+gate has to be rebuilt on `pio_has_feature("dist")` in the same change that repins the
+artifact, or a v5 library that fully supports distribution refuses every distribution call.
+
 **7. Cardinality is the axis, not storage.** v4 split reading by storage: `pio_parse_file` for
 documents, `pio_read_dir` for directories. That split does not survive the formats.
 
@@ -402,8 +408,16 @@ risk concentrations are the conversion handle lifetimes and the star-lowered bus
 changes numbers rather than symbols. `PIO_DIST_ABI_VERSION` must be deleted from the binding,
 or the artifact repin parks forever.
 
+Deleting that constant is not the whole of it. `_ensure_dist_compatible`, `schema_versions`,
+`dist_capabilities` and `matrix_available` all resolve symbols v5 removes. The first throws on
+a missing symbol, so every distribution call fails; the other three are guarded by
+`_exports_symbol`, so they report "unavailable" on a library that has the feature. All four
+move to `pio_has_feature` and `pio_build_info` in the same change as the repin.
+
 Every exported PowerIO.jl name survives. `open_source`, `entry_names` and `entry_name` are
-added. BMOPFTools and ExaModelsPower see nothing.
+added. BMOPFTools and ExaModelsPower see no API change, but `BMOPFTools.from_dss` reaches
+`pio_dist_abi_version` through `parse_file(MulticonductorNetwork, …)`, so it breaks if the
+gate above is not rebuilt.
 
 tellegen and PowerMCP are not affected. tellegen links the Rust crates. PowerMCP imports the
 Python wheel. Neither calls a `pio_` symbol.
