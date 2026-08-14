@@ -12,19 +12,39 @@ use crate::VERSION;
 /// The key every powerio authored document uses for [`VERSION`].
 pub const VERSION_KEY: &str = "powerio_version";
 
+/// The 0.x lineage a 1.x build also reads.
+///
+/// 0.9.0 shipped the documents 1.0 freezes, on purpose: its formats are what
+/// 1.0.0 publishes, and 1.0.0 removes deprecated items rather than changing
+/// what is written. A gate that refused `0.9.0` at 1.0.0 would make every
+/// consumer regenerate an archive whose bytes did not change.
+const FROZEN_LINEAGE: (u64, u64) = (0, 9);
+
 /// Whether this build reads a document stamped `version`.
 ///
 /// A document loads when it shares this build's lineage: the major version once
 /// it reaches 1, and the major and minor pair while the major is 0, which is
 /// what cargo and Pkg already mean by a 0.x bump. A version this function
 /// cannot parse as semver never loads.
+///
+/// One lineage crosses a major boundary: a 1.x build also reads
+/// [`FROZEN_LINEAGE`]. Nothing else does, and 2.0 reads neither.
 #[must_use]
 pub fn supports(version: &str) -> bool {
-    let Some((major, minor)) = lineage(version) else {
+    let Some(document) = lineage(version) else {
         return false;
     };
-    let (current_major, current_minor) = current_lineage();
-    major == current_major && (major != 0 || minor == current_minor)
+    reads(current_lineage(), document)
+}
+
+/// [`supports`], with the build's own lineage supplied rather than read from
+/// [`VERSION`]. Split out so the 1.x behavior is testable before 1.x exists.
+fn reads(build: (u64, u64), document: (u64, u64)) -> bool {
+    let ((build_major, build_minor), (major, minor)) = (build, document);
+    if major == build_major {
+        return major != 0 || minor == build_minor;
+    }
+    build_major == 1 && document == FROZEN_LINEAGE
 }
 
 /// The message for a document this build does not read.
@@ -46,11 +66,16 @@ pub fn reject(document: &str, version: &str) -> String {
 }
 
 /// The lineage this build reads, spelled for a message: `0.9.x` while the major
-/// is 0, `major version N` afterwards.
+/// is 0, `major version N` afterwards. A 1.x build names the 0.x lineage it also
+/// reads, so a caller holding a `0.9.0` document is not told to regenerate it.
 #[must_use]
 pub fn lineage_label() -> String {
     match current_lineage() {
         (0, minor) => format!("0.{minor}.x"),
+        (1, _) => format!(
+            "major version 1 and {}.{}.x",
+            FROZEN_LINEAGE.0, FROZEN_LINEAGE.1
+        ),
         (major, _) => format!("major version {major}"),
     }
 }
@@ -156,6 +181,25 @@ mod tests {
         assert!(!supports(&format!("0.{}.0", minor + 1)));
         assert!(!supports(&format!("0.{}.0", minor - 1)));
         assert!(!supports("1.0.0"));
+    }
+
+    #[test]
+    fn one_x_reads_the_lineage_it_froze() {
+        // 0.9.0 ships the documents 1.0 publishes, so a 1.x build reads a 0.9
+        // document rather than making every consumer regenerate an archive
+        // whose bytes did not change. Without this, the release goal — that
+        // 0.9.0's formats are 1.0.0's — is false for every document at rest.
+        assert!(reads((1, 0), FROZEN_LINEAGE));
+        assert!(reads((1, 7), FROZEN_LINEAGE));
+        assert!(reads((1, 0), (1, 4)), "a 1.x build reads any 1.x document");
+    }
+
+    #[test]
+    fn nothing_else_crosses_a_major_boundary() {
+        assert!(!reads((1, 0), (0, 8)), "only the frozen lineage crosses");
+        assert!(!reads((2, 0), FROZEN_LINEAGE), "2.0 froze nothing");
+        assert!(!reads((0, 9), (1, 0)), "0.9 cannot read the future");
+        assert!(!reads((0, 9), (0, 8)), "a 0.x minor is its own lineage");
     }
 
     #[test]

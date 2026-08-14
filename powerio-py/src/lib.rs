@@ -162,6 +162,14 @@ fn parse_convention(s: &str) -> PyResult<DcConvention> {
         "series" | "seriesimpedance" => Ok(DcConvention::SeriesImpedance),
         "matpower" | "mp" => Ok(DcConvention::Matpower),
         "reactanceonly" => Ok(DcConvention::ReactanceOnly),
+        // 0.8 spelled b = 1/x "paper"/"paper-pure" and made it the default.
+        // Name its successor: the nearest-looking option, "series", is a
+        // different formula, so a caller who guesses gets numbers instead of
+        // an error.
+        "paper" | "paperpure" => Err(PyValueError::new_err(
+            "convention 'paper-pure' is now 'reactance-only'; it is no longer \
+             the default, and 'series' is a different formula (b = x/(r²+x²))",
+        )),
         other => Err(PyValueError::new_err(format!(
             "unknown convention {other:?}; expected 'series', 'matpower', or 'reactance-only'"
         ))),

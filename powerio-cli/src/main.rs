@@ -97,7 +97,9 @@ enum Command {
         /// Output directory; the bundle lands in `<output>/<case>_dcopf/`.
         #[arg(short, long)]
         output: PathBuf,
-        /// DC susceptance convention.
+        /// DC susceptance convention. 0.8 defaulted to `paper-pure`, now
+        /// spelled `reactance-only`; the default is `series`, a different
+        /// formula, so an unqualified run changes numbers against 0.8.
         #[arg(long, value_enum, default_value = "series")]
         convention: DcConvArg,
         /// Unit system for power/cost quantities.
@@ -120,7 +122,9 @@ enum Command {
         /// Output directory; writes `<case>_ptdf.mtx` and `<case>_lodf.mtx`.
         #[arg(short, long)]
         output: PathBuf,
-        /// DC susceptance convention.
+        /// DC susceptance convention. 0.8 defaulted to `paper-pure`, now
+        /// spelled `reactance-only`; the default is `series`, a different
+        /// formula, so an unqualified run changes numbers against 0.8.
         #[arg(long, value_enum, default_value = "series")]
         convention: DcConvArg,
         /// Sensitivity solve path.

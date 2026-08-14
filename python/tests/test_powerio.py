@@ -909,8 +909,12 @@ def test_convention_aliases(case9):
     # Documented spellings all parse; separator/case-insensitive.
     for conv in ["reactance-only", "REACTANCE_ONLY", "series", "matpower", "mp"]:
         assert sp.issparse(case9.ptdf(conv))
-    with pytest.raises(ValueError):
-        case9.ptdf("paper-pure")
+    # 0.8's default spelling. The nearest-looking survivor, "series", is a
+    # different formula, so the error has to name the successor or a caller
+    # who guesses gets numbers instead of a failure.
+    for old in ["paper-pure", "paper", "PAPER_PURE"]:
+        with pytest.raises(ValueError, match="reactance-only"):
+            case9.ptdf(old)
     for scheme in ["bx", "XB"]:
         assert sp.issparse(case9.bprime(scheme))
 
