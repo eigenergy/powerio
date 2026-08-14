@@ -14,6 +14,11 @@ run cargo fmt --all --check
 run ./scripts/ci-clippy.sh
 run ./scripts/capi-header-parity.sh
 
+# The build job documents the workspace under -D warnings, so a doc comment can
+# fail CI while every test passes. An intra-doc link from a public item to a
+# private one is the easy way to do it.
+RUSTDOCFLAGS="-D warnings" run cargo doc --workspace --no-deps
+
 run cargo test -p powerio -p powerio-matrix -p powerio-prob -p powerio-cli \
     -p powerio-capi -p powerio-dist -p powerio-pkg
 run cargo test -p powerio-prob --features matrix

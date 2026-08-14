@@ -27,8 +27,9 @@ const FROZEN_LINEAGE: (u64, u64) = (0, 9);
 /// what cargo and Pkg already mean by a 0.x bump. A version this function
 /// cannot parse as semver never loads.
 ///
-/// One lineage crosses a major boundary: a 1.x build also reads
-/// [`FROZEN_LINEAGE`]. Nothing else does, and 2.0 reads neither.
+/// One lineage crosses a major boundary: a 1.x build also reads a `0.9`
+/// document, because 0.9.0 shipped the formats 1.0 freezes. Nothing else
+/// crosses, and 2.0 reads neither.
 #[must_use]
 pub fn supports(version: &str) -> bool {
     let Some(document) = lineage(version) else {
