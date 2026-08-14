@@ -434,10 +434,9 @@ def _load_package(package_json: str) -> _Loaded:
     try:
         pkg = powerio.Package.from_json(package_json)
         if kind == "multiconductor":
-            net = pkg.as_multiconductor()
             return _Loaded(
                 "distribution",
-                net,
+                pkg.as_multiconductor(),
                 _package_diagnostic_messages(value),
                 "bmopf-json",
                 package_json=package_json,

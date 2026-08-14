@@ -48,7 +48,7 @@ use powerio_matrix::io::gridfm::{
 };
 
 pyo3::create_exception!(
-    _powerio,
+    powerio,
     PowerIOError,
     pyo3::exceptions::PyValueError,
     "Base error raised by the powerio parser, converter, or matrix builders.\n\n\
@@ -59,7 +59,7 @@ pyo3::create_exception!(
 );
 
 pyo3::create_exception!(
-    _powerio,
+    powerio,
     PowerIOParseError,
     PowerIOError,
     "A case file is malformed or unparseable (missing/short rows, bad numbers, \
@@ -67,7 +67,7 @@ pyo3::create_exception!(
 );
 
 pyo3::create_exception!(
-    _powerio,
+    powerio,
     PowerIODataError,
     PowerIOError,
     "A well-formed case cannot satisfy a requested operation (no generators, \
@@ -649,7 +649,7 @@ fn build_options(scheme: Scheme, include_taps: bool, include_shifts: bool) -> Bu
 /// The derived [`IndexCore`] is built once and cached alongside `inner`, so the
 /// matrix builders and topology getters reuse it instead of rebuilding the
 /// bus-id map per call.
-#[pyclass(name = "_BalancedNetwork")]
+#[pyclass(name = "_BalancedNetwork", module = "powerio._powerio")]
 pub struct PyBalancedNetwork {
     inner: BalancedNetwork,
     core: IndexCore,
@@ -1011,7 +1011,7 @@ impl PyBalancedNetwork {
         })
     }
 
-    #[pyo3(signature = (clamp_angle_bounds=false, angle_bound_pad=None))]
+    #[pyo3(signature = (*, clamp_angle_bounds=false, angle_bound_pad=None))]
     fn to_normalized_with_options(
         &self,
         clamp_angle_bounds: bool,
@@ -1065,7 +1065,7 @@ impl PyBalancedNetwork {
         coo_triplets(py, &m)
     }
 
-    #[pyo3(signature = (include_taps=true, include_shifts=true))]
+    #[pyo3(signature = (*, include_taps=true, include_shifts=true))]
     fn lacpf<'py>(
         &self,
         py: Python<'py>,
@@ -1085,7 +1085,7 @@ impl PyBalancedNetwork {
     }
 
     /// `(Re(Y_bus), Im(Y_bus))` as two COO tuples.
-    #[pyo3(signature = (include_taps=true, include_shifts=true))]
+    #[pyo3(signature = (*, include_taps=true, include_shifts=true))]
     fn ybus_parts<'py>(
         &self,
         py: Python<'py>,
@@ -1265,7 +1265,7 @@ impl PyBalancedNetwork {
     /// Available when the extension is built with the Rust `gridfm` feature.
     #[cfg(feature = "gridfm")]
     #[allow(clippy::too_many_arguments)]
-    #[pyo3(signature = (out_dir, scenario=0, include_y_bus=true, include_taps=true, include_shifts=true, missing_gen_cost=None, default_gen_cost=None, gen_cost_csv=None))]
+    #[pyo3(signature = (out_dir, *, scenario=0, include_y_bus=true, include_taps=true, include_shifts=true, missing_gen_cost=None, default_gen_cost=None, gen_cost_csv=None))]
     fn write_gridfm<'py>(
         &self,
         py: Python<'py>,
@@ -1525,7 +1525,7 @@ fn dist_to_pyerr(e: powerio_dist::Error) -> PyErr {
 /// Low-level handle around a parsed multiconductor distribution network in
 /// wire coordinates (OpenDSS, PMD ENGINEERING JSON, BMOPF JSON). The
 /// user-facing `powerio.dist.MulticonductorNetwork` wraps it.
-#[pyclass(name = "_MulticonductorNetwork", frozen)]
+#[pyclass(name = "_MulticonductorNetwork", module = "powerio._powerio", frozen)]
 struct PyMulticonductorNetwork {
     net: powerio_dist::MulticonductorNetwork,
 }
@@ -1699,7 +1699,7 @@ fn dist_convert_str(text: &str, to: &str, format: &str) -> PyResult<(String, Vec
 /// Low level handle around a parsed `.pio.json` package. Parses the document
 /// once; the user facing `powerio.Package` wraps it. Not frozen: `validate`
 /// rewrites the handle's diagnostics in place, matching the Rust and C APIs.
-#[pyclass(name = "_Package")]
+#[pyclass(name = "_Package", module = "powerio._powerio")]
 struct PyPackage {
     pkg: NetworkPackage,
 }
@@ -1994,7 +1994,7 @@ fn pypsa_outputs_to_dict<'py>(
 #[cfg(feature = "gridfm")]
 #[allow(clippy::too_many_arguments)]
 #[pyfunction]
-#[pyo3(signature = (cases, out_dir, base_scenario=0, include_y_bus=true, include_taps=true, include_shifts=true, missing_gen_cost=None, default_gen_cost=None, gen_cost_csv=None))]
+#[pyo3(signature = (cases, out_dir, *, base_scenario=0, include_y_bus=true, include_taps=true, include_shifts=true, missing_gen_cost=None, default_gen_cost=None, gen_cost_csv=None))]
 fn write_gridfm_batch<'py>(
     py: Python<'py>,
     cases: Vec<PyRef<'py, PyBalancedNetwork>>,

@@ -247,6 +247,11 @@ class BalancedNetwork:
     def __init__(self, inner: "_powerio._BalancedNetwork"):
         self._inner = inner
 
+    def __dir__(self):
+        # The data attributes arrive through __getattr__, so name them here or
+        # they stay invisible to tab completion.
+        return sorted(set(super().__dir__()) | set(dir(self._inner)))
+
     def __getattr__(self, name: str):
         # Reached only when normal lookup misses, so the matrix methods below
         # win. Guard underscore names so a lookup before _inner exists raises
@@ -407,23 +412,29 @@ class BalancedNetwork:
         """MATPOWER FDPF Bpp matrix. ``scheme`` is ``"bx"`` or ``"xb"``."""
         return _to_csr(self._inner.bdoubleprime(scheme))
 
-    def lacpf(self, include_taps: bool = True, include_shifts: bool = True):
+    def lacpf(self, *, include_taps: bool = True, include_shifts: bool = True):
         """LACPF 2n×2n block ``[[G, -B], [-B, -G]]``."""
-        return _to_csr(self._inner.lacpf(include_taps, include_shifts))
+        return _to_csr(
+            self._inner.lacpf(include_taps=include_taps, include_shifts=include_shifts)
+        )
 
     def adjacency(self):
         """0/1 bus adjacency matrix."""
         return _to_csr(self._inner.adjacency())
 
-    def ybus_parts(self, include_taps: bool = True, include_shifts: bool = True):
+    def ybus_parts(self, *, include_taps: bool = True, include_shifts: bool = True):
         """:class:`YbusParts` ``(g, b)`` = ``(Re(Y_bus), Im(Y_bus))``, two real
         csr_matrix."""
-        g, b = self._inner.ybus_parts(include_taps, include_shifts)
+        g, b = self._inner.ybus_parts(
+            include_taps=include_taps, include_shifts=include_shifts
+        )
         return YbusParts(g=_to_csr(g), b=_to_csr(b))
 
-    def ybus(self, include_taps: bool = True, include_shifts: bool = True):
+    def ybus(self, *, include_taps: bool = True, include_shifts: bool = True):
         """``Y_bus = G + jB`` as a complex csr_matrix."""
-        g, b = self.ybus_parts(include_taps, include_shifts)
+        g, b = self.ybus_parts(
+            include_taps=include_taps, include_shifts=include_shifts
+        )
         return (g + 1j * b).tocsr()
 
     def ptdf(self, convention: str = "series", solver: str = "auto"):
@@ -457,6 +468,7 @@ class BalancedNetwork:
     def write_gridfm(
         self,
         out_dir: Any,
+        *,
         scenario: int = 0,
         include_y_bus: bool = True,
         include_taps: bool = True,
@@ -477,10 +489,10 @@ class BalancedNetwork:
         _require_gridfm()
         return self._inner.write_gridfm(
             str(out_dir),
-            scenario,
-            include_y_bus,
-            include_taps,
-            include_shifts,
+            scenario=scenario,
+            include_y_bus=include_y_bus,
+            include_taps=include_taps,
+            include_shifts=include_shifts,
             missing_gen_cost=missing_gen_cost,
             default_gen_cost=default_gen_cost,
             gen_cost_csv=None if gen_cost_csv is None else str(gen_cost_csv),
@@ -508,6 +520,7 @@ class BalancedNetwork:
 
     def to_normalized_with_options(
         self,
+        *,
         clamp_angle_bounds: bool = False,
         angle_bound_pad: Optional[float] = None,
     ) -> "BalancedNetwork":
@@ -521,7 +534,7 @@ class BalancedNetwork:
         """
         return BalancedNetwork(
             self._inner.to_normalized_with_options(
-                clamp_angle_bounds, angle_bound_pad
+                clamp_angle_bounds=clamp_angle_bounds, angle_bound_pad=angle_bound_pad
             )
         )
 
@@ -637,8 +650,6 @@ class BalancedNetwork:
                     b=br["b"],
                 )
         return g
-
-
 
 
 def parse_file(path: Any, from_: Optional[str] = None) -> BalancedNetwork:
@@ -895,6 +906,7 @@ def to_dense(network: BalancedNetwork) -> DenseNetwork:
 def write_gridfm_batch(
     networks: "list[BalancedNetwork]",
     out_dir: Any,
+    *,
     base_scenario: int = 0,
     include_y_bus: bool = True,
     include_taps: bool = True,
@@ -919,10 +931,10 @@ def write_gridfm_batch(
     return _powerio.write_gridfm_batch(
         inners,
         str(out_dir),
-        base_scenario,
-        include_y_bus,
-        include_taps,
-        include_shifts,
+        base_scenario=base_scenario,
+        include_y_bus=include_y_bus,
+        include_taps=include_taps,
+        include_shifts=include_shifts,
         missing_gen_cost=missing_gen_cost,
         default_gen_cost=default_gen_cost,
         gen_cost_csv=None if gen_cost_csv is None else str(gen_cost_csv),

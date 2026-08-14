@@ -33,6 +33,7 @@ pub enum ModelKind {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(tag = "kind", rename_all = "snake_case")]
+#[non_exhaustive]
 pub enum ModelPayload {
     Balanced {
         balanced_network: Box<BalancedNetwork>,

@@ -411,7 +411,9 @@ def test_to_normalized_with_options_clamps_angle_bounds():
     )
 
     with pytest.raises(powerio.PowerIODataError):
-        case.to_normalized_with_options(True, math.pi / 2.0)
+        case.to_normalized_with_options(
+            clamp_angle_bounds=True, angle_bound_pad=math.pi / 2.0
+        )
 
 
 def test_parse_bad_path_raises():
