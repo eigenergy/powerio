@@ -34,22 +34,36 @@ the library itself.
 
 | form | shape |
 |---|---|
-| constructor | returns a new handle. Verbs: `read`, `parse`, `from_json`, `from_<subject>`, `from_source`, `normalize`, `lower_to_<subject>`, `apply_<noun>`, `open` |
+| constructor | returns a new handle. Verbs: `parse`, `from_json`, `from_<subject>`, `from_source`, `normalize`, `lower_to_<subject>`, `apply_<noun>`, `open` |
 | destructor | `free`. One per subject. Returns void. Accepts NULL |
 | emitter | `size_t f(handle, out, cap, errbuf, errlen)`. Payload names: `to_json`, `summary`, `warnings`, `graph`, `validation`, `diagnostics`, `operating_points`, `study`, `geo`, `text`, `file`, `catalog`, `build_info` |
 | accessor | no verb. `n_<plural>` returns a count. `<plural>` fills an array. `<singular>` returns one value. `is_<adj>` and `has_<noun>` return `int32_t` |
 | mutator | `validate`, `set_<noun>`, `materialize_<noun>`. `PioPackage` only |
 | out-param | `int32_t f(handle, …, <out structs>, errbuf, errlen)`. For payloads that are not bytes: `to_arrow` |
 
-**Qualifiers.** One member today: `_check`, a preflight for the operation it attaches to.
-Nothing else may use the slot without being added to this list.
+**Qualifiers.** Two members: `_check`, a preflight for the operation it attaches to, and
+`_bytes`, which says the input is memory rather than a path. Nothing else may use the slot
+without being added to this list.
 
 **The rule that makes the grammar predictable:**
 
-> `read` takes a path. `parse` takes bytes.
+> There is one ingest verb, `parse`. It takes a path. A suffix appears only when the bytes
+> come from somewhere other than a path.
 
-That single distinction removes `_file`, `_str`, `_bytes`, `_dir`, `_dataset` and `_scenario`
-from the surface. The argument type already states what the suffix was trying to state.
+So `pio_balanced_parse(path, …)` and `pio_balanced_parse_bytes(data, len, …)`, and nothing
+else. `_file`, `_str`, `_dir`, `_dataset` and `_scenario` all disappear.
+
+The suffix does not name the storage shape, which rule 7 rejects. It names **who touches the
+filesystem**. A path argument means the library opens files and may follow an OpenDSS
+`Redirect` tree. A buffer argument means it opens nothing, which is a security property and
+not a convenience: `parse_bytes` is the entry point for untrusted text, and it is why the
+0.7.3 advisory fix works.
+
+`_bytes` rather than `_str`, because a PowerWorld `.pwb` is binary and a NUL truncates it. v4
+called this `_str` and could not accept half the formats it named.
+
+The precedent is libxml2: one verb, and a suffix for where the bytes came from —
+`xmlReadFile`, `xmlReadMemory`, `xmlReadDoc`.
 
 ## The seven rules
 
@@ -194,11 +208,12 @@ gridfm dataset has N. `pio_source_count` may return 0 for an empty container.
 Entries are named, not numbered. `int64_t` is gridfm's Parquet key type, not a property of
 containers; PGLib and GOC3 entries have no integer key.
 
-`pio_balanced_read` survives as a documented composition of open plus entry 0, not as a second
+`pio_balanced_parse` survives as a documented composition of open plus entry 0, not as a second
 route. SQLite documents `sqlite3_exec` the same way. GDAL and libarchive make open-then-
 enumerate the only path, and they are the honest counterexample; the shortcut wins here on the
-ratio, since almost every case is a single entry. `read` on a multi-entry source fails and
-names `pio_source_open`, so the shortcut can never silently disagree with the container form.
+ratio, since almost every case is a single entry. `pio_balanced_parse` on a multi-entry path
+fails and names `pio_source_open`, so the shortcut can never silently disagree with the
+container form.
 
 ## The symbol table
 
@@ -226,12 +241,12 @@ release. PowerIO.jl resolves everything by `dlsym` from a pinned artifact, so
 
 | v4 | v5 | | why |
 |---|---|---|---|
-| `pio_parse_file` | `pio_balanced_read` | R S | takes a path of any shape |
-| `pio_parse_str` | `pio_balanced_parse` | R S | takes `(const void *, size_t)`, so `.pwb` needs no temp file |
+| `pio_parse_file` | `pio_balanced_parse` | R S | takes a path of any shape: a file, a directory, or a file that pulls in a tree |
+| `pio_parse_str` | `pio_balanced_parse_bytes` | R S | `(const void *, size_t)`, so `.pwb` needs no temp file. Opens nothing, so it is the entry point for untrusted input |
 | `pio_from_json` | `pio_balanced_from_json` | R S | rules 1, 3 |
 | `pio_read_dir` | `pio_balanced_from_source` | R S | one entry of an opened source |
 | `pio_scenario_ids` | `pio_source_entry_names` | R S | re-homed onto the source; names, not integers |
-| `pio_classify_str` | `pio_classify` | R S | takes bytes; gains the error channel it never had |
+| `pio_classify_str` | `pio_classify_bytes` | R S | takes memory, so it carries the suffix; gains the error channel it never had |
 | `pio_normalize` | `pio_balanced_normalize` | R S | takes `const PioNormalizeOptions *` |
 | `pio_normalize_with_options` | — | X | folded into the options struct |
 | `pio_to_json` | `pio_balanced_to_json` | R S | rules 1, 3 |
@@ -269,13 +284,13 @@ The remaining extractors are plain renames for rule 1: `pio_n_branches`, `pio_n_
 
 ### Multiconductor
 
-Every `pio_dist_*` becomes `pio_multiconductor_*`. `parse_file` becomes `read`, `parse_str`
-becomes `parse`, `summary_json` becomes `summary`, `graph_json` becomes `graph`. `to_format`
+Every `pio_dist_*` becomes `pio_multiconductor_*`. `parse_file` becomes `parse`, `parse_str`
+becomes `parse_bytes`, `summary_json` becomes `summary`, `graph_json` becomes `graph`. `to_format`
 folds into `pio_multiconductor_write`. `pio_dist_convert_file` and `pio_dist_convert_str` are
 removed, as their balanced twins are. `warnings`, `free`, `to_json`, `from_json`, `geo_extract`
 and `geo_apply` follow the balanced pattern.
 
-`read` is where rule 7 is clearest. An OpenDSS `.dss` is the format most associated with a file
+`parse` is where rule 7 is clearest. An OpenDSS `.dss` is the format most associated with a file
 extension, and it is the one least likely to be a single file.
 
 The EXPERIMENTAL banner is retired. The dist C signatures were never the unstable part. The
@@ -283,8 +298,8 @@ BMOPF payload schema was, and it is versioned where it lives.
 
 ### Package, 18 → 18
 
-`pio_package_parse_file` becomes `pio_package_read`, and `pio_package_parse_str` becomes
-`pio_package_parse`.
+`pio_package_parse_file` becomes `pio_package_parse`, and `pio_package_parse_str` becomes
+`pio_package_parse_bytes`.
 
 Four lose a repeated noun: `from_balanced_network` → `from_balanced`,
 `from_multiconductor_network` → `from_multiconductor`, and the two `to_*` twins. The handle is
@@ -308,7 +323,7 @@ Five lose `_json`: `to_json`, `validation_json`, `diagnostics_json`, `operating_
 
 | v4 | v5 | | why |
 |---|---|---|---|
-| `pio_scopf_parse_str` | `pio_scopf_parse` | R S | one ingest verb pair |
+| `pio_scopf_parse_str` | `pio_scopf_parse_bytes` | R S | takes memory, so it carries the suffix; a SCOPF document arrives as bytes, never as a path |
 | `pio_scopf_to_json` | same | S | **0-based**; see the movers |
 | `pio_scopf_instance_free` | `pio_scopf_free` | R | the type carries the noun |
 | `pio_acopf_from_network` | — | X | no consumer; `acopf` appears nowhere in PowerIO.jl |
