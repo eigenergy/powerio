@@ -38,6 +38,51 @@ available, and `NULL`/`0` is a size query. `pio_string_free` is deleted with
 the whole owned-`char *` class, which removes an entire ownership rule and lets
 a caller use its own allocator.
 
+The invariants are the ones `copy_to_buf` already implements and `pio_warnings`
+already documents (`powerio-capi/src/lib.rs:606-627`), stated once here so all
+of them inherit it rather than the five that had it: the return is the total
+byte length excluding the NUL, the buffer is always NUL terminated, and a short
+buffer truncates on a UTF-8 boundary so a C caller never receives a split
+codepoint.
+
+A fallible symbol keeps `errbuf`/`errlen` and writes `errbuf[0] = '\0'` on
+entry, a message only on failure. Several of these can legitimately produce
+nothing, so without that clause a `0` return is both "empty" and "failed" and no
+caller can tell which. With it, `0` plus an empty `errbuf` is an empty result
+and `0` plus a message is a failure.
+
+**Caching, which the two-call shape forces a decision about.** A size query
+followed by a fill runs the serialization twice unless the handle keeps the
+result. Handles with no non-const entry point other than their `_free` may cache
+each payload in a `OnceLock<Result<String, String>>`, computed on first access
+and reused by both calls. That is `PioNetwork`, `PioScopfInstance`,
+`PioAcopfInstance`, `PioMulticonductorNetwork`, and `PioConversion`. `OnceLock<T>`
+is `Sync` when `T` is `Send + Sync`, so the existing `assert_send_sync` pins
+still hold and the header's promise that concurrent reads from any number of
+threads are safe survives verbatim. Note that `get_or_try_init` is unstable, so
+the stored value is the `Result` itself; a failed first attempt is retried
+rather than frozen, matching what `finish_string` does per call today.
+
+`PioPackage` is excluded, and the reason is the whole point of naming the
+classes separately. It is the one handle with mutating entry points —
+`pio_package_validate` and `pio_package_set_operating_points`
+(`lib.rs:1718`, `lib.rs:1815`) — and they rewrite exactly the fields that
+`to_json`, `validation`, `diagnostics`, and `operating_points` read back out. A
+cached read taken before `validate` and served again after it would return
+pre-validation text from a `const` accessor, immediately after the call whose
+purpose was to produce the new text. Those four recompute per call. A caller
+pays the two-call cost on a package and in exchange can never observe a stale
+read across a mutation.
+
+Three take no handle: `pio_multiconductor_capabilities`, `pio_document_versions`,
+and `pio_arrow_catalog` (`lib.rs:268`, `:289`, `:1406`). Their payloads are facts
+about the build rather than about a model, so they cache in a process-level
+`OnceLock` with nothing to go stale against.
+
+What a cache costs is bounded by what a caller asks for: a payload is retained
+only once it has been read, and only until the handle is freed. Nothing is
+computed eagerly, so a caller that never reads a network's JSON never stores it.
+
 **4. A conversion is a handle, because it has two outputs.** v4's seven
 `warnbuf` symbols silently truncated: `finish_conversion` discarded the needed
 length and there was no size query, so a long fidelity-loss list was lost with
