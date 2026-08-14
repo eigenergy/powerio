@@ -2036,7 +2036,7 @@
       "type": "object"
     },
     "GeoMeta": {
-      "description": "BalancedNetwork level coordinate metadata.",
+      "description": "Network level coordinate metadata.",
       "oneOf": [
         {
           "description": "x = longitude and y = latitude in decimal degrees. `None` means EPSG:4326.",
@@ -2129,7 +2129,7 @@
       "type": "object"
     },
     "GeoMeta2": {
-      "description": "BalancedNetwork level coordinate metadata.",
+      "description": "Network level coordinate metadata.",
       "oneOf": [
         {
           "description": "x = longitude and y = latitude in decimal degrees. `None` means EPSG:4326.",
