@@ -525,19 +525,18 @@ enum DcConvArg {
     SeriesImpedance,
     /// `b = 1/(x tau)`, with phase shift injections.
     Matpower,
-    /// `b = 1/x`. Accepted until 1.0.0; use `series`. The 0.8 spelling
-    /// `paper-pure` stays an alias so an existing command line still runs.
-    #[value(name = "reactance-only", alias = "paper-pure", alias = "paper")]
+    /// `b = 1/x`, ignoring resistance, taps, and shifts: the textbook DC
+    /// linearization a published result reproduces.
+    #[value(name = "reactance-only")]
     ReactanceOnly,
 }
 
 impl From<DcConvArg> for DcConvention {
-    #[allow(deprecated)]
     fn from(value: DcConvArg) -> Self {
         match value {
             DcConvArg::SeriesImpedance => Self::SeriesImpedance,
             DcConvArg::Matpower => Self::Matpower,
-            DcConvArg::ReactanceOnly => Self::PaperPure,
+            DcConvArg::ReactanceOnly => Self::ReactanceOnly,
         }
     }
 }
@@ -1141,12 +1140,12 @@ fn run_package(
         _ => print!("{text}"),
     }
     // The package is written either way — it is the record of what the reader
-    // saw — but a refused include is an `Error` finding in its own envelope,
+    // saw — but a refused include is an `Error` finding in its own document,
     // so the exit code has to say so, as `convert` does.
     fail_on_parse_errors(&parse_errors)
 }
 
-/// The package JSON and the `Error`-or-worse findings its envelope carries.
+/// The package JSON and the `Error`-or-worse findings its document carries.
 fn package_text(
     input: &Path,
     from: Option<FormatArg>,

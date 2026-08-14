@@ -34,7 +34,7 @@ class MulticonductorNetwork:
 
     Buses carry named terminals, lines carry conductor impedance matrices, and
     transformers carry per winding connections. This type is distinct from the
-    positive sequence :class:`powerio.Network`; balanced matrix builders do not
+    positive sequence :class:`powerio.BalancedNetwork`; balanced matrix builders do not
     accept it.
     """
 
@@ -101,7 +101,7 @@ class MulticonductorNetwork:
         Any sidecar the writer produces goes beside ``path``: a dss write of a
         network with bus coordinates emits a ``Buscoords`` directive, and the
         CSV it names is written too. Returns the fidelity warnings. See
-        :meth:`powerio.Network.write_file` for why this beats writing
+        :meth:`powerio.BalancedNetwork.write_file` for why this beats writing
         :meth:`to_format` text through ``open(path, "w")`` on Windows.
         """
         return self._inner.write_file(str(path), to)
@@ -170,23 +170,3 @@ def convert_str(text: str, to: str, format: str) -> Conversion:
     """
     text, warnings = _powerio.dist_convert_str(text, to, format)
     return Conversion(text, warnings)
-
-
-# The 0.8 model name. A module level ``__getattr__`` keeps it importable for one
-# release while telling the caller what to write instead; 1.0.0 removes it.
-_RENAMED_IN_0_9 = {"DistNetwork": "MulticonductorNetwork"}
-
-
-def __getattr__(name: str) -> Any:
-    replacement = _RENAMED_IN_0_9.get(name)
-    if replacement is None:
-        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
-    import warnings as _warnings
-
-    _warnings.warn(
-        f"powerio.dist.{name} is renamed to powerio.dist.{replacement}; "
-        f"powerio.dist.{name} is removed in 1.0.0",
-        DeprecationWarning,
-        stacklevel=2,
-    )
-    return globals()[replacement]

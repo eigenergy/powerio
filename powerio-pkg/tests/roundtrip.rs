@@ -2540,7 +2540,7 @@ fn multiconductor_nonfinite_ratings_and_scalars_roundtrip() {
 
 #[test]
 fn refused_include_lifts_as_an_error_diagnostic() {
-    // #275: a typed parse finding keeps its severity in the envelope, and
+    // #275: a typed parse finding keeps its severity in the document, and
     // its warning twin does not appear a second time.
     use powerio_pkg::{DiagnosticSeverity, ValidationStatus};
 

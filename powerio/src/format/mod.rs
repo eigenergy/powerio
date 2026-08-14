@@ -644,9 +644,9 @@ fn unknown_source_format(name: &str) -> Error {
 fn sniff_json(text: &str) -> Result<TargetFormat> {
     match routing::classify_json_text(text) {
         JsonClass::Package => Err(Error::UnknownFormat(
-            "JSON is a .pio.json package envelope, not a case format; read it with the \
-             package entry points (pio_package_parse_str in C, powerio.Package.from_json \
-             in Python, read_package in Julia)"
+            "JSON is a .pio.json package; read it with the package entry points \
+             (pio_package_parse_str in C, powerio.Package.from_json in Python, \
+             read_package in Julia)"
                 .into(),
         )),
         JsonClass::Case(Detection::Known(DetectedFormat::Transmission(format))) => {
@@ -1444,7 +1444,7 @@ mod tests {
     }
 
     #[test]
-    fn package_envelope_json_error_names_the_package_reader() {
+    fn package_json_error_names_the_package_reader() {
         let err = sniff_json(r#"{"model_kind":"balanced","model":{}}"#).unwrap_err();
         assert!(err.to_string().contains(".pio.json"), "got: {err}");
     }

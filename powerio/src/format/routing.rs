@@ -163,13 +163,13 @@ pub fn distribution_format_from_name(name: &str) -> Option<DistributionFormat> {
     }
 }
 
-/// Top level classification of bare JSON text: a `.pio.json` package envelope
-/// or a case document with its format detection. The envelope outcome lives in
+/// Top level classification of bare JSON text: a `.pio.json` package
+/// or a case document with its format detection. The package outcome lives in
 /// the classifier's result rather than a separate predicate, so every consumer
 /// handles it, and one parse answers both questions.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum JsonClass {
-    /// A `.pio.json` package envelope. A package is not a converter boundary
+    /// A `.pio.json` package. A package is not a converter boundary
     /// format, so it stays out of [`SourceFormat`]; callers route it to the
     /// package reader instead of a case parser.
     Package,
@@ -177,10 +177,10 @@ pub enum JsonClass {
     Case(Detection<JsonFormat>),
 }
 
-/// Classify a JSON document: a `.pio.json` package envelope, or a case
+/// Classify a JSON document: a `.pio.json` package, or a case
 /// document across the transmission and distribution domains.
 ///
-/// An envelope is recognized by a top level `model_kind` of `"balanced"` or
+/// A package is recognized by a top level `model_kind` of `"balanced"` or
 /// `"multiconductor"` plus a `model` key; the value check keeps a case
 /// document that happens to carry those key names from being misrouted.
 /// For a case, Unknown means there is no recognized top level marker, and
@@ -332,7 +332,7 @@ mod tests {
     };
 
     #[test]
-    fn classifies_package_envelope() {
+    fn classifies_package() {
         assert_eq!(
             classify_json_text(
                 r#"{"model_kind":"multiconductor","model":{"kind":"multiconductor"}}"#
@@ -343,8 +343,8 @@ mod tests {
             classify_json_text(r#"{"model_kind":"balanced","model":{}}"#),
             JsonClass::Package
         );
-        // A payload alone is not an envelope, and neither is a case document,
-        // even one that carries the envelope key names with case-file values.
+        // A payload alone is not a package, and neither is a case document,
+        // even one that carries the package key names with case-file values.
         assert_eq!(
             classify_json_text(r#"{"buses":[],"linecodes":[]}"#),
             JsonClass::Case(Detection::Unknown)

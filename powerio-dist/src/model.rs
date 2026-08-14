@@ -937,26 +937,18 @@ pub struct MulticonductorNetwork {
     /// Structured findings from the parse session. An `Error` entry means
     /// the network is incomplete (for example a refused include). Skipped
     /// in the `.pio.json` payload: the serialized spelling is a v0.9
-    /// decision, and package diagnostics live in the envelope.
+    /// decision, and package diagnostics live in the package document.
     #[serde(skip)]
     pub parse_diagnostics: Vec<crate::diagnostics::StructuredDiagnostic>,
     /// Retained source text for the byte-exact echo tier. Skipped in the
     /// `.pio.json` payload (mirrors `powerio::BalancedNetwork::source`): keeping it out
-    /// avoids serde's `rc` feature, and retained source is an envelope concern
+    /// avoids serde's `rc` feature, and retained source is a package concern
     /// surfaced through `Origin::File { retained_source, .. }`.
     #[serde(skip)]
     pub source: Option<Arc<String>>,
     pub source_format: Option<DistSourceFormat>,
     pub extras: Extras,
 }
-
-/// The 0.8 spelling of [`MulticonductorNetwork`], which named a crate rather
-/// than a model.
-#[deprecated(
-    since = "0.9.0",
-    note = "renamed to `MulticonductorNetwork`, beside `BalancedNetwork`; removed in 1.0.0"
-)]
-pub type DistNetwork = MulticonductorNetwork;
 
 impl Default for MulticonductorNetwork {
     /// An empty network at the OpenDSS default frequency. A derived 0 Hz

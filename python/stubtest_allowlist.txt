@@ -23,6 +23,6 @@ powerio.Scheme
 powerio.SensitivitySolver
 powerio.Shunt
 powerio.Units
-powerio._powerio.PyNetwork
-powerio._powerio._DistNetwork
+powerio._powerio._BalancedNetwork
+powerio._powerio._MulticonductorNetwork
 powerio._powerio._Package

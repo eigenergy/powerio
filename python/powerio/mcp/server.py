@@ -5,7 +5,7 @@ The advertised MCP surface is semantic and format neutral:
 ``convert``, ``save``, ``summary``, ``parse``, ``normalize``, ``matrix``,
 ``diagnostics``, ``display``.
 
-BalancedNetwork tools route balanced transmission models, multiconductor distribution
+The tools route balanced transmission models, multiconductor distribution
 models, PyPSA CSV folders, and gridfm datasets through the lower level powerio
 APIs. Transmission parses serialize through the ``powerio-json`` transport.
 Distribution parses serialize through canonical ``bmopf-json``. Package
@@ -240,6 +240,13 @@ def _json_object(text: str, *, purpose: str) -> Dict[str, Any]:
 
 
 def _package_value(text: str) -> Optional[Dict[str, Any]]:
+    """Recognize a `.pio.json` package by the same markers the Rust classifier uses.
+
+    Deliberately does not test `powerio_version`: a package written before
+    0.9.0 states none, and it has to be recognized before it can be rejected
+    with a message that says so. `powerio.Package.from_json` owns the version
+    gate.
+    """
     try:
         value = jsonlib.loads(text)
     except jsonlib.JSONDecodeError:
@@ -249,8 +256,7 @@ def _package_value(text: str) -> Optional[Dict[str, Any]]:
     model = value.get("model")
     if not isinstance(model, dict):
         return None
-    required = (_VERSION_KEY, "model_kind")
-    if not all(isinstance(value.get(key), str) for key in required):
+    if value.get("model_kind") not in ("balanced", "multiconductor"):
         return None
     if not isinstance(model.get("kind"), str):
         return None
@@ -297,8 +303,8 @@ def _format_from_json_class(
         return domain, format
     if status == "package":
         raise ValueError(
-            f"JSON{where} is a .pio.json package envelope, not a case; "
-            "pass it as `json_format=\"package\"` or read it as a package"
+            f"JSON{where} is a .pio.json package; pass it as "
+            "`json_format=\"package\"` or read it with the package tools"
         )
     if status == "ambiguous":
         raise ValueError(
@@ -363,7 +369,7 @@ def _package_diagnostic_messages(value: Dict[str, Any]) -> list[str]:
 def _diagnostics_payload(package_json: str, verbose: bool = False) -> Dict[str, Any]:
     value = _json_object(package_json, purpose="package_json")
     if _package_value(package_json) is None:
-        raise ValueError("package_json is not a .pio.json package envelope")
+        raise ValueError("package_json is not a .pio.json package")
     kind = _package_model_kind(value)
     # Validate with the Rust package reader so schema version and payload
     # consistency checks stay in one place.
@@ -418,7 +424,7 @@ def _diagnostics_payload(package_json: str, verbose: bool = False) -> Dict[str, 
 def _load_package(package_json: str) -> _Loaded:
     value = _json_object(package_json, purpose="package_json")
     if _package_value(package_json) is None:
-        raise ValueError("package_json is not a .pio.json package envelope")
+        raise ValueError("package_json is not a .pio.json package")
     kind = _package_model_kind(value)
     try:
         pkg = powerio.Package.from_json(package_json)
@@ -464,7 +470,7 @@ def _package_json_from_input(
                     raise ValueError(f"cannot read input: {exc}") from exc
                 if not _looks_like_package_json(text):
                     if from_l in _PACKAGE_JSON_FORMATS:
-                        raise ValueError("input is not a .pio.json package envelope")
+                        raise ValueError("input is not a .pio.json package")
                 else:
                     powerio.Package.from_json(text)
                     return text
@@ -476,7 +482,7 @@ def _package_json_from_input(
             powerio.Package.from_json(text)
             return text
         if from_l in _PACKAGE_JSON_FORMATS:
-            raise ValueError("content is not a .pio.json package envelope")
+            raise ValueError("content is not a .pio.json package")
         return powerio.Package.from_str(text, from_format).to_json()
     except powerio.PowerIOError as exc:
         raise ValueError(f"parse failed: {exc}") from exc

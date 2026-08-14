@@ -438,7 +438,7 @@ pub unsafe extern "C" fn pio_parse_str(
 ///
 /// - `transmission:<format>` (e.g. `transmission:powermodels-json`)
 /// - `distribution:<format>` (e.g. `distribution:pmd-json`)
-/// - `package` (a `.pio.json` envelope; read it with the package entry points)
+/// - `package` (a `.pio.json` package; read it with the package entry points)
 /// - `ambiguous` (strong markers from both domains; pass an explicit format)
 /// - `unknown` (no recognized marker, or not a JSON object)
 ///
@@ -1461,7 +1461,7 @@ unsafe fn finish_package(
 }
 
 /// Parse a `.pio.json` package file into an opaque package handle. This reads
-/// only the package envelope; case format names still enter through
+/// only the package; case format names still enter through
 /// [`pio_parse_file`] / [`pio_dist_parse_file`] and package constructors.
 /// Returns `NULL` on error and writes the message into `errbuf`. Free the handle
 /// with [`pio_package_free`].
@@ -4793,7 +4793,7 @@ mpc.branch = [
     }
 
     /// Write `net` as BMOPF JSON. Shared by the round trip tests that compare
-    /// a handle's output before and after crossing an envelope.
+    /// a handle's output before and after crossing the package boundary.
     #[cfg(feature = "dist")]
     unsafe fn bmopf(net: *const PioDistNetwork) -> String {
         let to = CString::new("bmopf").unwrap();
@@ -5400,14 +5400,14 @@ New Line.l1 bus1=a bus2=b phases=3
         );
     }
 
-    /// The package inverse pair: wrap a handle, cross the JSON envelope, and
+    /// The package inverse pair: wrap a handle, cross the JSON document, and
     /// extract an owned handle again, the binding materialization path.
     #[cfg(feature = "pkg")]
     mod package_inverse {
         use super::*;
         use std::ffi::CStr;
 
-        unsafe fn envelope_round_trip(pkg: *mut PioPackage) -> *mut PioPackage {
+        unsafe fn package_round_trip(pkg: *mut PioPackage) -> *mut PioPackage {
             let mut err = [0 as c_char; PIO_ERRBUF_MIN];
             let json = unsafe { pio_package_to_json(pkg, err.as_mut_ptr(), err.len()) };
             assert!(!json.is_null());
@@ -5438,7 +5438,7 @@ New Line.l1 bus1=a bus2=b phases=3
                 pio_network_free(mem);
             }
 
-            let pkg = unsafe { envelope_round_trip(pkg) };
+            let pkg = unsafe { package_round_trip(pkg) };
 
             // Wrong-kind extraction refuses with a directed message.
             #[cfg(feature = "dist")]
@@ -5532,7 +5532,7 @@ New Line.l1 bus1=a bus2=b phases=3
                 pio_dist_network_free(mem);
             }
 
-            let pkg = unsafe { envelope_round_trip(pkg) };
+            let pkg = unsafe { package_round_trip(pkg) };
             let back =
                 unsafe { pio_package_to_multiconductor_network(pkg, err.as_mut_ptr(), err.len()) };
             assert!(
@@ -5542,7 +5542,7 @@ New Line.l1 bus1=a bus2=b phases=3
             );
 
             // The extracted model writes the same BMOPF text as the original:
-            // nothing the model represents is lost crossing the envelope.
+            // nothing the model represents is lost crossing the package.
             unsafe {
                 assert_eq!(bmopf(back), bmopf(net));
                 let wrong = pio_package_to_balanced_network(pkg, err.as_mut_ptr(), err.len());

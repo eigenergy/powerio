@@ -363,14 +363,6 @@ pub struct BalancedNetwork {
     pub source: Option<Arc<String>>,
 }
 
-/// The 0.8 spelling of [`BalancedNetwork`], which did not say which of the two
-/// models it named.
-#[deprecated(
-    since = "0.9.0",
-    note = "renamed to `BalancedNetwork`, beside `MulticonductorNetwork`; removed in 1.0.0"
-)]
-pub type Network = BalancedNetwork;
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[non_exhaustive]
@@ -907,17 +899,6 @@ impl Branch {
         let separation =
             (fr_vmax * fr_vmax + to_vmax * to_vmax - 2.0 * fr_vmax * to_vmax * window.cos()).sqrt();
         fr_vmax.max(to_vmax) * separation / zmag
-    }
-
-    /// The 0.8 spelling of [`Self::total_charging_b`]. Nothing about it was
-    /// legacy: it is the projection every MATPOWER shaped writer needs.
-    #[deprecated(
-        since = "0.9.0",
-        note = "renamed to `total_charging_b`; removed in 1.0.0"
-    )]
-    #[must_use]
-    pub fn legacy_total_charging_b(&self) -> f64 {
-        self.total_charging_b()
     }
 
     /// Total susceptance projection for MATPOWER shaped formats that only carry

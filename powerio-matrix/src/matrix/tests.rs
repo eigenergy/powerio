@@ -1,6 +1,4 @@
-//! These cases pin `b = 1/x`, so they name `DcConvention::ReactanceOnly` until it
-//! is removed in 1.0.0.
-#![allow(deprecated)]
+//! These cases pin `b = 1/x`, so they name `DcConvention::ReactanceOnly`.
 
 use approx::assert_relative_eq;
 

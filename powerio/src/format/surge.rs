@@ -1,6 +1,6 @@
 //! Read and write Surge native `surge-json` network documents.
 //!
-//! Surge JSON is a versioned envelope around a richer network body. The reader
+//! Surge JSON is a versioned wrapper around a richer network body. The reader
 //! maps the electrical core into `BalancedNetwork`, retains the original source for byte
 //! exact same format writes, and reports source sections that stay only in the
 //! retained document.
@@ -476,7 +476,7 @@ pub(crate) fn parse_surge_source(
         message: e.to_string(),
     })?;
     let root = object(&root_value, "top level")?;
-    validate_envelope(root)?;
+    validate_wrapper(root)?;
     let network = object_field(root, "network")?;
 
     warnings.extend(source_loss_warnings_from_root(root, network));
@@ -545,7 +545,7 @@ pub(crate) fn parse_surge_source(
     Ok(net)
 }
 
-fn validate_envelope(root: &Map<String, Value>) -> Result<()> {
+fn validate_wrapper(root: &Map<String, Value>) -> Result<()> {
     let format = required_string_map(root, "format")?;
     if format != FORMAT_VALUE {
         return Err(format_error(format!(
@@ -1429,7 +1429,7 @@ mod tests {
     }
 
     #[test]
-    fn rejects_bad_envelope() {
+    fn rejects_bad_wrapper() {
         let err = parse_surge_json(
             r#"{"format":"surge-json","schema_version":"9","meta":{},"network":{}}"#,
         )

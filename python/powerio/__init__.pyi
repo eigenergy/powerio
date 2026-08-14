@@ -161,7 +161,7 @@ class DenseNetwork(NamedTuple):
 
 class BalancedNetwork:
     # Data attributes and the non-matrix methods delegate to the compiled
-    # `_powerio.PyNetwork` handle at runtime via `BalancedNetwork.__getattr__`.
+    # `_powerio._BalancedNetwork` handle at runtime via `BalancedNetwork.__getattr__`.
     name: str
     base_mva: float
     source_format: Literal[

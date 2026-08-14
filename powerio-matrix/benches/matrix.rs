@@ -6,7 +6,6 @@
 //!
 //! The benches hold `b = 1/x` so a timing series stays comparable across the
 //! 0.9.0 convention change.
-#![allow(deprecated)]
 
 use criterion::{Criterion, criterion_group, criterion_main};
 use powerio_matrix::matrix::{

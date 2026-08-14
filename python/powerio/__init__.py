@@ -244,7 +244,7 @@ class BalancedNetwork:
     ``scheme``/``convention``/``units`` string raises ``ValueError``.
     """
 
-    def __init__(self, inner: "_powerio.PyNetwork"):
+    def __init__(self, inner: "_powerio._BalancedNetwork"):
         self._inner = inner
 
     def __getattr__(self, name: str):
@@ -1084,23 +1084,3 @@ class Package:
 
     def __repr__(self) -> str:
         return repr(self._inner)
-
-
-# The 0.8 model name. A module level ``__getattr__`` keeps it importable for one
-# release while telling the caller what to write instead; 1.0.0 removes it.
-_RENAMED_IN_0_9 = {"Network": "BalancedNetwork"}
-
-
-def __getattr__(name: str) -> Any:
-    replacement = _RENAMED_IN_0_9.get(name)
-    if replacement is None:
-        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
-    import warnings as _warnings
-
-    _warnings.warn(
-        f"powerio.{name} is renamed to powerio.{replacement}; "
-        f"powerio.{name} is removed in 1.0.0",
-        DeprecationWarning,
-        stacklevel=2,
-    )
-    return globals()[replacement]

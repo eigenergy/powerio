@@ -21,15 +21,10 @@ pub const MIN_DIVISIBLE_MAGNITUDE: f64 = 1.491_668_146_240_041_3e-154;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[non_exhaustive]
 pub enum DcConvention {
-    /// `b = 1/x`, ignoring transformer taps and phase shifts.
+    /// `b = 1/x`, ignoring resistance, transformer taps, and phase shifts.
     ///
-    /// The serde alias keeps the 0.8 spelling readable, so a manifest or an
-    /// instance written before the rename still deserializes.
-    #[deprecated(
-        since = "0.9.0",
-        note = "use `SeriesImpedance`, which is the same rule with resistance included, or `Matpower`; removed in 1.0.0"
-    )]
-    #[serde(alias = "PaperPure")]
+    /// The textbook DC linearization, which a paper reproducing a published
+    /// result needs exactly as written.
     ReactanceOnly,
     /// `b = 1/(x tau)` with phase shift injections, matching MATPOWER
     /// `makeBdc`.
@@ -45,17 +40,10 @@ pub enum DcConvention {
 }
 
 impl DcConvention {
-    /// The 0.8 spelling of [`Self::ReactanceOnly`], which named neither the
-    /// tool nor the formula.
-    #[deprecated(since = "0.9.0", note = "renamed to `ReactanceOnly`; removed in 1.0.0")]
-    #[allow(deprecated, non_upper_case_globals)]
-    pub const PaperPure: Self = Self::ReactanceOnly;
-
     /// The branch susceptance from resistance, reactance, and effective tap.
     /// Only [`Self::Matpower`] reads the tap, and only
     /// [`Self::SeriesImpedance`] reads the resistance.
     #[must_use]
-    #[allow(deprecated)]
     pub fn branch_susceptance(self, resistance: f64, reactance: f64, effective_tap: f64) -> f64 {
         match self {
             Self::ReactanceOnly => 1.0 / reactance,
@@ -66,7 +54,6 @@ impl DcConvention {
 
     /// Whether phase shifts contribute to the nodal injection vector.
     #[must_use]
-    #[allow(deprecated)]
     pub fn includes_phase_shifts(self) -> bool {
         match self {
             Self::ReactanceOnly => false,

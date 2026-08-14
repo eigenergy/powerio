@@ -13,15 +13,15 @@ use thiserror::Error as ThisError;
 #[non_exhaustive]
 pub enum Error {
     /// The document is not well formed JSON, or does not have the shape the
-    /// envelope requires.
-    #[error("invalid .pio.json package envelope: {0}")]
+    /// document requires.
+    #[error("invalid .pio.json package: {0}")]
     Envelope(#[source] serde_json::Error),
 
     /// The document comes from a powerio lineage this build does not read.
     #[error("{0}")]
     UnsupportedVersion(String),
 
-    /// The envelope's `model_kind` disagrees with the payload it carries.
+    /// The document's `model_kind` disagrees with the payload it carries.
     #[error("model_kind does not match model.kind")]
     ModelKindMismatch,
 

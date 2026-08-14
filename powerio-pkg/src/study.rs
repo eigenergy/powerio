@@ -11,7 +11,7 @@ use crate::operating::{
     resolve_update_row, validate_update_fields_survived,
 };
 
-/// Additive study block stored on a package envelope.
+/// Additive study block stored on a package.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[non_exhaustive]
