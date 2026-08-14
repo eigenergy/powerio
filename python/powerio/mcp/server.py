@@ -864,7 +864,7 @@ def _save_impl(
             return dict(
                 loaded.network.write_gridfm(
                     out_path,
-                    int(opts.get("scenario", 0)),
+                    scenario=int(opts.get("scenario", 0)),
                     include_y_bus=bool(opts.get("include_y_bus", True)),
                     include_taps=bool(opts.get("include_taps", True)),
                     include_shifts=bool(opts.get("include_shifts", True)),

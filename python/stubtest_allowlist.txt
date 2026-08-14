@@ -22,6 +22,7 @@ powerio.Package.__init__
 powerio.Scheme
 powerio.SensitivitySolver
 powerio.Shunt
+powerio.Switch
 powerio.Units
 powerio._powerio._BalancedNetwork
 powerio._powerio._MulticonductorNetwork
