@@ -29,13 +29,12 @@
  * - Array extractors write up to `cap` values per output array and return the
  *   total available. NULL out or cap 0 is a count query. No extractor writes
  *   more than cap entries to an output array.
- * - Size a per-bus buffer from the extractor's own count query, not from
- *   pio_n_buses. A case with an in-service 3-winding transformer star-lowers
- *   before the dense extractors run, so pio_bus_demand / pio_bus_shunt and
- *   pio_n_islands see one added star bus per such transformer, while
- *   pio_n_buses and pio_bus_ids report the unexpanded table. Sizing off
- *   pio_n_buses reads short (never past cap); the trailing entries have no
- *   pio_bus_ids id. Aligning the two is a v5 change.
+ * - Every per-bus extractor reports the same space. A case with an in-service
+ *   3-winding transformer star-lowers before the dense extractors run, adding
+ *   one star bus per such transformer, and pio_n_buses, pio_bus_ids,
+ *   pio_bus_demand, pio_bus_shunt and pio_n_islands all count it. Through v4
+ *   the first two reported the unexpanded table instead, so a per-bus buffer
+ *   sized from pio_n_buses read short and its trailing entries had no id.
  * - Bus ids are int64 in the range 1..2^63-1 (a v4 invariant). pio_bus_ids and
  *   every per-bus column keyed to its ordering are int64; a source whose ids are
  *   strings or exceed 2^63-1 has no representation in this API and is mapped

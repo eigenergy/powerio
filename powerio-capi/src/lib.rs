@@ -775,7 +775,12 @@ pub unsafe extern "C" fn pio_normalize_with_options(
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_n_buses(net: *const PioNetwork) -> usize {
-    unsafe { guard(0, || network_ref(net).map_or(0, |c| c.net.buses.len())) }
+    // The star-lowered space, which is what every other per-bus extractor
+    // reports. Through v4 this counted the unexpanded table while
+    // pio_bus_demand, pio_bus_shunt and pio_n_islands counted the expansion, so
+    // a caller sizing a per-bus buffer from here read short by one entry per
+    // in-service 3-winding transformer.
+    unsafe { guard(0, || view(net).map_or(0, |v| v.n())) }
 }
 
 #[unsafe(no_mangle)]
@@ -1163,14 +1168,14 @@ unsafe fn fill<T: Copy>(out: *mut T, cap: usize, vals: impl ExactSizeIterator<It
 pub unsafe extern "C" fn pio_bus_ids(net: *const PioNetwork, out: *mut i64, cap: usize) -> usize {
     unsafe {
         guard(0, || {
-            network_ref(net).map_or(0, |c| {
+            // The star-lowered space, so every per-bus column keyed to this
+            // ordering has an id at every index. A star bus carries the
+            // synthesized id the expansion assigned it.
+            view(net).map_or(0, |v| {
                 fill(
                     out,
                     cap,
-                    c.net
-                        .buses
-                        .iter()
-                        .map(|b| i64::try_from(b.id.0).unwrap_or(-1)),
+                    (0..v.n()).map(|i| i64::try_from(v.bus_id(i).0).unwrap_or(-1)),
                 )
             })
         })
@@ -2858,6 +2863,76 @@ mod tests {
             pio_string_free(s);
             serde_json::from_str(&text).unwrap()
         }
+    }
+
+    #[test]
+    fn every_per_bus_extractor_counts_the_star_bus() {
+        // A 3-winding transformer star-lowers into an extra bus before the
+        // dense extractors run. Through v4 pio_n_buses and pio_bus_ids reported
+        // the unexpanded table while pio_bus_demand and pio_n_islands reported
+        // the expansion, so a caller sizing from pio_n_buses read short.
+        let case = case9_json_with_a_3w_transformer();
+        let text = CString::new(case).unwrap();
+        let mut err = [0 as c_char; PIO_ERRBUF_MIN];
+        unsafe {
+            let net = pio_from_json(text.as_ptr(), err.as_mut_ptr(), err.len());
+            assert!(
+                !net.is_null(),
+                "from_json failed: {}",
+                CStr::from_ptr(err.as_ptr()).to_str().unwrap()
+            );
+
+            let n = pio_n_buses(net);
+            let demand = pio_bus_demand(net, std::ptr::null_mut(), std::ptr::null_mut(), 0);
+            let shunt = pio_bus_shunt(net, std::ptr::null_mut(), std::ptr::null_mut(), 0);
+            let ids = pio_bus_ids(net, std::ptr::null_mut(), 0);
+
+            assert_eq!(n, 10, "9 buses plus one star point");
+            assert_eq!(demand, n, "pio_bus_demand must agree with pio_n_buses");
+            assert_eq!(shunt, n, "pio_bus_shunt must agree with pio_n_buses");
+            assert_eq!(ids, n, "pio_bus_ids must agree with pio_n_buses");
+
+            // Every index a per-bus column addresses has an id, the star point
+            // included: sizing from pio_n_buses is now sufficient.
+            let mut buf = vec![-1i64; n];
+            assert_eq!(pio_bus_ids(net, buf.as_mut_ptr(), buf.len()), n);
+            assert!(
+                buf.iter().all(|&id| id > 0),
+                "every dense index carries an id, got {buf:?}"
+            );
+
+            pio_network_free(net);
+        }
+    }
+
+    /// case9 with one in-service 3-winding transformer spliced in, as model
+    /// JSON. Built here rather than vendored: the fixtures are real MATPOWER
+    /// cases and none of them carries a 3-winding transformer.
+    fn case9_json_with_a_3w_transformer() -> String {
+        let net = case9();
+        let mut doc: serde_json::Value = unsafe {
+            let mut err = [0 as c_char; PIO_ERRBUF_MIN];
+            let raw = pio_to_json(net, err.as_mut_ptr(), err.len());
+            assert!(!raw.is_null());
+            let text = CStr::from_ptr(raw).to_str().unwrap().to_owned();
+            pio_string_free(raw);
+            pio_network_free(net);
+            serde_json::from_str(&text).unwrap()
+        };
+        let winding = |bus: i64| {
+            serde_json::json!({
+                "bus": bus, "tap": 1.0, "shift": 0.0, "nominal_kv": 0.0,
+                "rate_a": 0.0, "rate_b": 0.0, "rate_c": 0.0
+            })
+        };
+        let z = serde_json::json!({ "r": 0.0, "x": 0.05, "base_mva": 100.0 });
+        doc["transformers_3w"] = serde_json::json!([{
+            "windings": [winding(4), winding(5), winding(6)],
+            "z": [z, z, z],
+            "star_vm": 1.0, "star_va": 0.0, "mag_g": 0.0, "mag_b": 0.0,
+            "in_service": true, "name": "t3", "extras": {}
+        }]);
+        doc.to_string()
     }
 
     #[test]
