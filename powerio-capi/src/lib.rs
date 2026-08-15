@@ -949,24 +949,24 @@ pub unsafe extern "C" fn pio_is_radial(net: *const PioNetwork) -> i32 {
 /// `matpower` is a byte-exact echo when the handle was parsed from MATPOWER.
 /// ABI v4 also accepts `powerio-json` as a compatibility alias for
 /// [`pio_to_json`]. Model JSON cannot represent a non-finite `f64` (`Inf`/`NaN`):
-/// it writes `null`, records the field in `warnbuf`, and fails validation when
+/// it writes `null`, records the field in `out_warnings`, and fails validation when
 /// read back.
 ///
 /// Returns the text as an owned C string (free with [`pio_string_free`]),
 /// `NULL` on error (message into `errbuf`). Fidelity warnings, if any, are
-/// written `\n`-joined into `warnbuf`; a returned string has no handle to
-/// attach them to.
+/// published through `out_warnings` as one owned C string (free it with
+/// [`pio_string_free`]), or NULL when there are none; a returned string has no
+/// handle to attach them to. Pass NULL to discard them.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_to_format(
     net: *const PioNetwork,
     to: *const c_char,
-    warnbuf: *mut c_char,
-    warnlen: usize,
+    out_warnings: *mut *mut c_char,
     errbuf: *mut c_char,
     errlen: usize,
 ) -> *mut c_char {
     unsafe {
-        finish_conversion(warnbuf, warnlen, errbuf, errlen, || {
+        finish_conversion(out_warnings, errbuf, errlen, || {
             let c = network_ref(net).ok_or_else(|| "network handle is NULL".to_string())?;
             let target = target_format_from_c(to)?;
             let conv = c.net.to_format(target).map_err(|e| e.to_string())?;
@@ -975,22 +975,49 @@ pub unsafe extern "C" fn pio_to_format(
     }
 }
 
+/// Write `warnings` to `out_warnings` as one owned, `\n`-joined C string, or
+/// NULL when there are none. NULL `out_warnings` discards them.
+///
+/// A caller buffer cannot work here. Warnings are unbounded in a way an error
+/// message is not: one per lossy element, so a large case produces more than
+/// any fixed size a caller can guess, and guessing is what PowerIO.jl was doing
+/// with a 64 KiB buffer. The errbuf idiom stays for errors, which are one
+/// message.
+unsafe fn set_out_warnings(out_warnings: *mut *mut c_char, warnings: &[String]) {
+    unsafe {
+        if out_warnings.is_null() {
+            return;
+        }
+        *out_warnings = if warnings.is_empty() {
+            std::ptr::null_mut()
+        } else {
+            // An interior NUL cannot reach here: warnings are library-authored
+            // text. If one ever did, reporting no warnings beats truncating at
+            // the NUL and reporting a prefix as the whole set.
+            into_cstring(warnings.join("\n")).unwrap_or(std::ptr::null_mut())
+        };
+    }
+}
+
 /// Finish a text-conversion entry point: run `f` (producing the converted text
 /// with its fidelity warnings, or an error message) under the panic guard,
-/// write the warnings into `warnbuf`, and hand back the owned C string, or
-/// write the error and return NULL. The shared tail of [`pio_to_format`],
-/// [`pio_convert_file`], and [`pio_convert_str`], mirroring [`finish_network`].
+/// publish the warnings through `out_warnings`, and hand back the owned C
+/// string, or write the error and return NULL. The shared tail of
+/// [`pio_to_format`], [`pio_convert_file`], and [`pio_convert_str`], mirroring
+/// [`finish_network`].
 unsafe fn finish_conversion(
-    warnbuf: *mut c_char,
-    warnlen: usize,
+    out_warnings: *mut *mut c_char,
     errbuf: *mut c_char,
     errlen: usize,
     f: impl FnOnce() -> Result<(String, Vec<String>), String>,
 ) -> *mut c_char {
     unsafe {
+        // Set before running f: a caller reads it on every return path, and a
+        // stale value from an earlier call must not be mistaken for this one's.
+        set_out_warnings(out_warnings, &[]);
         match catch_unwind(AssertUnwindSafe(f)) {
             Ok(Ok((text, warnings))) => {
-                copy_to_buf(warnbuf, warnlen, &warnings.join("\n"));
+                set_out_warnings(out_warnings, &warnings);
                 finish_cstring(text, errbuf, errlen)
             }
             Ok(Err(msg)) => {
@@ -1009,19 +1036,19 @@ unsafe fn finish_conversion(
 /// path, as [`pio_parse_file`]) to format `to`, without keeping a handle.
 /// Returns the converted text as an owned C string (free with
 /// [`pio_string_free`]), `NULL` on error. Fidelity warnings, read side first,
-/// are written `\n`-joined into `warnbuf`.
+/// are published through `out_warnings` as one owned C string (free it with
+/// [`pio_string_free`]), NULL when there are none. Pass NULL to discard them.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_convert_file(
     path: *const c_char,
     from: *const c_char,
     to: *const c_char,
-    warnbuf: *mut c_char,
-    warnlen: usize,
+    out_warnings: *mut *mut c_char,
     errbuf: *mut c_char,
     errlen: usize,
 ) -> *mut c_char {
     unsafe {
-        finish_conversion(warnbuf, warnlen, errbuf, errlen, || {
+        finish_conversion(out_warnings, errbuf, errlen, || {
             let path = cstr(path).ok_or_else(|| "path is NULL or not UTF-8".to_string())?;
             let from = optional_cstr(from, "from")?;
             let target = target_format_from_c(to)?;
@@ -1042,13 +1069,12 @@ pub unsafe extern "C" fn pio_convert_str(
     text: *const c_char,
     from: *const c_char,
     to: *const c_char,
-    warnbuf: *mut c_char,
-    warnlen: usize,
+    out_warnings: *mut *mut c_char,
     errbuf: *mut c_char,
     errlen: usize,
 ) -> *mut c_char {
     unsafe {
-        finish_conversion(warnbuf, warnlen, errbuf, errlen, || {
+        finish_conversion(out_warnings, errbuf, errlen, || {
             let text = cstr(text).ok_or_else(|| "text is NULL or not UTF-8".to_string())?;
             let from = cstr(from).ok_or_else(|| "from is NULL or not UTF-8".to_string())?;
             let target = target_format_from_c(to)?;
@@ -1062,18 +1088,19 @@ pub unsafe extern "C" fn pio_convert_str(
 /// (`pypsa-csv`/`pypsa`) is the currently supported directory format; a text format name is
 /// an error pointing back at [`pio_to_format`]. Returns `0` on success and
 /// `-1` on error (message into `errbuf`). Fidelity warnings, if any, are
-/// written `\n`-joined into `warnbuf`.
+/// published through `out_warnings` as one owned C string (free it with
+/// [`pio_string_free`]), NULL when there are none. Pass NULL to discard them.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_write_dir(
     net: *const PioNetwork,
     to: *const c_char,
     out_dir: *const c_char,
-    warnbuf: *mut c_char,
-    warnlen: usize,
+    out_warnings: *mut *mut c_char,
     errbuf: *mut c_char,
     errlen: usize,
 ) -> i32 {
     unsafe {
+        set_out_warnings(out_warnings, &[]);
         let r = catch_unwind(AssertUnwindSafe(|| {
             let c = network_ref(net).ok_or_else(|| "network handle is NULL".to_string())?;
             let to = cstr(to).ok_or_else(|| "to is NULL or not UTF-8".to_string())?;
@@ -1083,7 +1110,7 @@ pub unsafe extern "C" fn pio_write_dir(
         }));
         match r {
             Ok(Ok(warnings)) => {
-                copy_to_buf(warnbuf, warnlen, &warnings.join("\n"));
+                set_out_warnings(out_warnings, &warnings);
                 0
             }
             Ok(Err(msg)) => {
@@ -2503,13 +2530,12 @@ fn warn_dropped_sidecars(
 pub unsafe extern "C" fn pio_dist_to_format(
     net: *const PioDistNetwork,
     to: *const c_char,
-    warnbuf: *mut c_char,
-    warnlen: usize,
+    out_warnings: *mut *mut c_char,
     errbuf: *mut c_char,
     errlen: usize,
 ) -> *mut c_char {
     unsafe {
-        finish_conversion(warnbuf, warnlen, errbuf, errlen, || {
+        finish_conversion(out_warnings, errbuf, errlen, || {
             let c = net
                 .as_ref()
                 .ok_or_else(|| "network handle is NULL".to_string())?;
@@ -2534,13 +2560,12 @@ pub unsafe extern "C" fn pio_dist_convert_file(
     path: *const c_char,
     from: *const c_char,
     to: *const c_char,
-    warnbuf: *mut c_char,
-    warnlen: usize,
+    out_warnings: *mut *mut c_char,
     errbuf: *mut c_char,
     errlen: usize,
 ) -> *mut c_char {
     unsafe {
-        finish_conversion(warnbuf, warnlen, errbuf, errlen, || {
+        finish_conversion(out_warnings, errbuf, errlen, || {
             let path = required_cstr(path, "path")?;
             let from = optional_cstr(from, "from")?;
             let to = dist_target_from_c(to)?;
@@ -2566,13 +2591,12 @@ pub unsafe extern "C" fn pio_dist_convert_str(
     text: *const c_char,
     from: *const c_char,
     to: *const c_char,
-    warnbuf: *mut c_char,
-    warnlen: usize,
+    out_warnings: *mut *mut c_char,
     errbuf: *mut c_char,
     errlen: usize,
 ) -> *mut c_char {
     unsafe {
-        finish_conversion(warnbuf, warnlen, errbuf, errlen, || {
+        finish_conversion(out_warnings, errbuf, errlen, || {
             let text = required_cstr(text, "text")?;
             let to = dist_target_from_c(to)?;
             let from = required_cstr(from, "from")?;
@@ -2724,17 +2748,10 @@ mod tests {
     /// `pio_to_format` with a Rust-side format name, asserting success.
     unsafe fn to_format(net: *const PioNetwork, to: &str) -> String {
         let to = CString::new(to).unwrap();
-        let mut warn = [0 as c_char; 512];
+        let mut warn_out: *mut c_char = std::ptr::null_mut();
         let mut err = [0 as c_char; 256];
         unsafe {
-            let s = pio_to_format(
-                net,
-                to.as_ptr(),
-                warn.as_mut_ptr(),
-                warn.len(),
-                err.as_mut_ptr(),
-                err.len(),
-            );
+            let s = pio_to_format(net, to.as_ptr(), &mut warn_out, err.as_mut_ptr(), err.len());
             assert!(
                 !s.is_null(),
                 "to_format failed: {}",
@@ -3089,10 +3106,10 @@ mod tests {
             "size_t pio_ref_bus_indices(const PioNetwork *net, int64_t *out, size_t cap);",
             "size_t pio_n_islands(const PioNetwork *net);",
             "int32_t pio_is_radial(const PioNetwork *net);",
-            "char *pio_to_format(const PioNetwork *net, const char *to, char *warnbuf, size_t warnlen, char *errbuf, size_t errlen);",
-            "char *pio_convert_file(const char *path, const char *from, const char *to, char *warnbuf, size_t warnlen, char *errbuf, size_t errlen);",
-            "char *pio_convert_str(const char *text, const char *from, const char *to, char *warnbuf, size_t warnlen, char *errbuf, size_t errlen);",
-            "int32_t pio_write_dir(const PioNetwork *net, const char *to, const char *out_dir, char *warnbuf, size_t warnlen, char *errbuf, size_t errlen);",
+            "char *pio_to_format(const PioNetwork *net, const char *to, char **out_warnings, char *errbuf, size_t errlen);",
+            "char *pio_convert_file(const char *path, const char *from, const char *to, char **out_warnings, char *errbuf, size_t errlen);",
+            "char *pio_convert_str(const char *text, const char *from, const char *to, char **out_warnings, char *errbuf, size_t errlen);",
+            "int32_t pio_write_dir(const PioNetwork *net, const char *to, const char *out_dir, char **out_warnings, char *errbuf, size_t errlen);",
             "void pio_string_free(char *s);",
             "size_t pio_bus_ids(const PioNetwork *net, int64_t *out, size_t cap);",
             "size_t pio_branches(const PioNetwork *net, int64_t *from, int64_t *to, double *r, double *x, double *b, double *tap, double *shift, uint8_t *in_service, size_t cap);",
@@ -3135,9 +3152,9 @@ mod tests {
             "char *pio_dist_to_json(const PioDistNetwork *net, char *errbuf, size_t errlen);",
             "char *pio_dist_graph_json(const PioDistNetwork *net, char *errbuf, size_t errlen);",
             "PioDistNetwork *pio_dist_from_json(const char *text, char *errbuf, size_t errlen);",
-            "char *pio_dist_to_format(const PioDistNetwork *net, const char *to, char *warnbuf, size_t warnlen, char *errbuf, size_t errlen);",
-            "char *pio_dist_convert_file(const char *path, const char *from, const char *to, char *warnbuf, size_t warnlen, char *errbuf, size_t errlen);",
-            "char *pio_dist_convert_str(const char *text, const char *from, const char *to, char *warnbuf, size_t warnlen, char *errbuf, size_t errlen);",
+            "char *pio_dist_to_format(const PioDistNetwork *net, const char *to, char **out_warnings, char *errbuf, size_t errlen);",
+            "char *pio_dist_convert_file(const char *path, const char *from, const char *to, char **out_warnings, char *errbuf, size_t errlen);",
+            "char *pio_dist_convert_str(const char *text, const char *from, const char *to, char **out_warnings, char *errbuf, size_t errlen);",
             "char *pio_dist_geo_extract(const PioDistNetwork *net, char *errbuf, size_t errlen);",
             "PioDistNetwork *pio_dist_geo_apply(const PioDistNetwork *net, const char *layer, const char *name_hint, char *errbuf, size_t errlen);",
         ]
@@ -3252,7 +3269,6 @@ mod tests {
                 std::ptr::null(),
                 to.as_ptr(),
                 std::ptr::null_mut(),
-                0,
                 err.as_mut_ptr(),
                 err.len(),
             );
@@ -3366,15 +3382,14 @@ mod tests {
     fn convert_matpower_echo() {
         let path = data_path("case14.m");
         let to = CString::new("matpower").unwrap();
-        let mut warn = [0 as c_char; 256];
+        let mut warn_out: *mut c_char = std::ptr::null_mut();
         let mut err = [0 as c_char; 256];
         unsafe {
             let s = pio_convert_file(
                 path.as_ptr(),
                 std::ptr::null(),
                 to.as_ptr(),
-                warn.as_mut_ptr(),
-                warn.len(),
+                &mut warn_out,
                 err.as_mut_ptr(),
                 err.len(),
             );
@@ -3394,15 +3409,14 @@ mod tests {
         let path = data_path("case14.m");
         let old_target = CString::new("powermodels-json").unwrap();
         let old_source = CString::new("matpower").unwrap();
-        let mut warn = [0 as c_char; 512];
+        let mut warn_out: *mut c_char = std::ptr::null_mut();
         let mut err = [0 as c_char; PIO_ERRBUF_MIN];
         unsafe {
             let s = pio_convert_file(
                 path.as_ptr(),
                 old_target.as_ptr(),
                 old_source.as_ptr(),
-                warn.as_mut_ptr(),
-                warn.len(),
+                &mut warn_out,
                 err.as_mut_ptr(),
                 err.len(),
             );
@@ -3426,15 +3440,14 @@ mod tests {
         let text = CString::new(src).unwrap();
         let from = CString::new("matpower").unwrap();
         let to = CString::new("powermodels-json").unwrap();
-        let mut warn = [0 as c_char; 512];
+        let mut warn_out: *mut c_char = std::ptr::null_mut();
         let mut err = [0 as c_char; 256];
         unsafe {
             let s = pio_convert_str(
                 text.as_ptr(),
                 from.as_ptr(),
                 to.as_ptr(),
-                warn.as_mut_ptr(),
-                warn.len(),
+                &mut warn_out,
                 err.as_mut_ptr(),
                 err.len(),
             );
@@ -3458,15 +3471,14 @@ mod tests {
         let text = CString::new(src).unwrap();
         let old_target = CString::new("powermodels-json").unwrap();
         let old_source = CString::new("matpower").unwrap();
-        let mut warn = [0 as c_char; 512];
+        let mut warn_out: *mut c_char = std::ptr::null_mut();
         let mut err = [0 as c_char; PIO_ERRBUF_MIN];
         unsafe {
             let s = pio_convert_str(
                 text.as_ptr(),
                 old_target.as_ptr(),
                 old_source.as_ptr(),
-                warn.as_mut_ptr(),
-                warn.len(),
+                &mut warn_out,
                 err.as_mut_ptr(),
                 err.len(),
             );
@@ -3520,15 +3532,14 @@ mod tests {
             "from is not UTF-8"
         );
 
-        let mut warn = [0 as c_char; 256];
+        let mut warn_out: *mut c_char = std::ptr::null_mut();
         err.fill(0);
         let s = unsafe {
             pio_convert_file(
                 path.as_ptr(),
                 bad_from.as_ptr().cast::<c_char>(),
                 to.as_ptr(),
-                warn.as_mut_ptr(),
-                warn.len(),
+                &mut warn_out,
                 err.as_mut_ptr(),
                 err.len(),
             )
@@ -3843,24 +3854,25 @@ mpc.branch = [
         // caller's warning buffer, not vanish.
         let path = data_path("t_case9_dcline.m");
         let to = CString::new("psse").unwrap();
-        let mut warn = [0 as c_char; 512];
+        let mut warn_out: *mut c_char = std::ptr::null_mut();
         let mut err = [0 as c_char; 256];
         unsafe {
             let s = pio_convert_file(
                 path.as_ptr(),
                 std::ptr::null(),
                 to.as_ptr(),
-                warn.as_mut_ptr(),
-                warn.len(),
+                &mut warn_out,
                 err.as_mut_ptr(),
                 err.len(),
             );
             assert!(!s.is_null());
-            let w = CStr::from_ptr(warn.as_ptr()).to_str().unwrap();
+            assert!(!warn_out.is_null(), "expected fidelity warnings");
+            let w = CStr::from_ptr(warn_out).to_str().unwrap().to_owned();
             assert!(
                 w.contains("converter detail"),
                 "expected an HVDC converter-detail warning, got {w:?}"
             );
+            pio_string_free(warn_out);
             pio_string_free(s);
         }
     }
@@ -4714,7 +4726,6 @@ mpc.branch = [
                 to.as_ptr(),
                 dir.as_ptr(),
                 std::ptr::null_mut(),
-                0,
                 err.as_mut_ptr(),
                 err.len(),
             );
@@ -4741,17 +4752,10 @@ mpc.branch = [
     #[cfg(feature = "dist")]
     unsafe fn bmopf(net: *const PioDistNetwork) -> String {
         let to = CString::new("bmopf").unwrap();
-        let mut warn = [0 as c_char; 4096];
+        let mut warn_out: *mut c_char = std::ptr::null_mut();
         let mut err = [0 as c_char; PIO_ERRBUF_MIN];
         let s = unsafe {
-            pio_dist_to_format(
-                net,
-                to.as_ptr(),
-                warn.as_mut_ptr(),
-                warn.len(),
-                err.as_mut_ptr(),
-                err.len(),
-            )
+            pio_dist_to_format(net, to.as_ptr(), &mut warn_out, err.as_mut_ptr(), err.len())
         };
         assert!(!s.is_null());
         let text = unsafe { std::ffi::CStr::from_ptr(s) }
@@ -4901,16 +4905,9 @@ mpc.branch = [
 
             // Cross format write: schema compatible BMOPF JSON out.
             let to = CString::new("bmopf").unwrap();
-            let mut warn = [0 as c_char; 4096];
+            let mut warn_out: *mut c_char = std::ptr::null_mut();
             let s = unsafe {
-                pio_dist_to_format(
-                    net,
-                    to.as_ptr(),
-                    warn.as_mut_ptr(),
-                    warn.len(),
-                    err.as_mut_ptr(),
-                    err.len(),
-                )
+                pio_dist_to_format(net, to.as_ptr(), &mut warn_out, err.as_mut_ptr(), err.len())
             };
             assert!(!s.is_null());
             let text = unsafe { CStr::from_ptr(s) }.to_str().unwrap();
@@ -4920,23 +4917,13 @@ mpc.branch = [
             // Same format write echoes the retained source byte for byte.
             let to = CString::new("dss").unwrap();
             let s = unsafe {
-                pio_dist_to_format(
-                    net,
-                    to.as_ptr(),
-                    warn.as_mut_ptr(),
-                    warn.len(),
-                    err.as_mut_ptr(),
-                    err.len(),
-                )
+                pio_dist_to_format(net, to.as_ptr(), &mut warn_out, err.as_mut_ptr(), err.len())
             };
             assert!(!s.is_null());
             let echoed = unsafe { CStr::from_ptr(s) }.to_str().unwrap();
             let source = std::fs::read_to_string(fourwire()).unwrap();
             assert_eq!(echoed, source);
-            assert_eq!(
-                unsafe { CStr::from_ptr(warn.as_ptr()) }.to_str().unwrap(),
-                ""
-            );
+            assert!(warn_out.is_null(), "a byte exact echo loses nothing");
             unsafe { pio_string_free(s) };
 
             unsafe { pio_dist_network_free(net) };
@@ -5028,15 +5015,14 @@ mpc.branch = [
             let text = CString::new(source).unwrap();
             let from = CString::new("dss").unwrap();
             let to = CString::new("pmd").unwrap();
-            let mut warn = [0 as c_char; 4096];
+            let mut warn_out: *mut c_char = std::ptr::null_mut();
             let mut err = [0 as c_char; PIO_ERRBUF_MIN];
             let s = unsafe {
                 pio_dist_convert_str(
                     text.as_ptr(),
                     from.as_ptr(),
                     to.as_ptr(),
-                    warn.as_mut_ptr(),
-                    warn.len(),
+                    &mut warn_out,
                     err.as_mut_ptr(),
                     err.len(),
                 )
@@ -5086,7 +5072,7 @@ New Line.l1 bus1=a bus2=b phases=3
             let text = CString::new(source).unwrap();
             let from = CString::new("dss").unwrap();
             let to = CString::new("dss").unwrap();
-            let mut warn = [0 as c_char; 8192];
+            let mut warn_out: *mut c_char = std::ptr::null_mut();
             let mut err = [0 as c_char; PIO_ERRBUF_MIN];
             // Convert through bmopf so the dss writer runs instead of an
             // echo of the source text.
@@ -5096,8 +5082,7 @@ New Line.l1 bus1=a bus2=b phases=3
                     text.as_ptr(),
                     from.as_ptr(),
                     bmopf_target.as_ptr(),
-                    warn.as_mut_ptr(),
-                    warn.len(),
+                    &mut warn_out,
                     err.as_mut_ptr(),
                     err.len(),
                 )
@@ -5119,14 +5104,13 @@ New Line.l1 bus1=a bus2=b phases=3
             }
             let with_coords = CString::new(doc.to_string()).unwrap();
             let bmopf_from = CString::new("bmopf").unwrap();
-            let mut warn2 = [0 as c_char; 8192];
+            let mut warn2_out: *mut c_char = std::ptr::null_mut();
             let s = unsafe {
                 pio_dist_convert_str(
                     with_coords.as_ptr(),
                     bmopf_from.as_ptr(),
                     to.as_ptr(),
-                    warn2.as_mut_ptr(),
-                    warn2.len(),
+                    &mut warn2_out,
                     err.as_mut_ptr(),
                     err.len(),
                 )
@@ -5138,7 +5122,12 @@ New Line.l1 bus1=a bus2=b phases=3
             );
             let dss = unsafe { CStr::from_ptr(s) }.to_str().unwrap().to_owned();
             unsafe { pio_string_free(s) };
-            let warnings = unsafe { CStr::from_ptr(warn2.as_ptr()) }.to_str().unwrap();
+            assert!(!warn2_out.is_null(), "expected a dropped sidecar warning");
+            let warnings = unsafe { CStr::from_ptr(warn2_out) }
+                .to_str()
+                .unwrap()
+                .to_owned();
+            unsafe { pio_string_free(warn2_out) };
 
             // Guard the premise: the writer must emit the directive, or the
             // warning assertion below proves nothing.
@@ -5160,15 +5149,14 @@ New Line.l1 bus1=a bus2=b phases=3
             let text = CString::new(source).unwrap();
             let old_target = CString::new("pmd").unwrap();
             let old_source = CString::new("dss").unwrap();
-            let mut warn = [0 as c_char; 4096];
+            let mut warn_out: *mut c_char = std::ptr::null_mut();
             let mut err = [0 as c_char; PIO_ERRBUF_MIN];
             let s = unsafe {
                 pio_dist_convert_str(
                     text.as_ptr(),
                     old_target.as_ptr(),
                     old_source.as_ptr(),
-                    warn.as_mut_ptr(),
-                    warn.len(),
+                    &mut warn_out,
                     err.as_mut_ptr(),
                     err.len(),
                 )
@@ -5215,15 +5203,14 @@ New Line.l1 bus1=a bus2=b phases=3
         fn convert_file_round_trips_through_bmopf() {
             let path = fourwire_cstr();
             let to = CString::new("bmopf-json").unwrap();
-            let mut warn = [0 as c_char; 4096];
+            let mut warn_out: *mut c_char = std::ptr::null_mut();
             let mut err = [0 as c_char; PIO_ERRBUF_MIN];
             let s = unsafe {
                 pio_dist_convert_file(
                     path.as_ptr(),
                     std::ptr::null(),
                     to.as_ptr(),
-                    warn.as_mut_ptr(),
-                    warn.len(),
+                    &mut warn_out,
                     err.as_mut_ptr(),
                     err.len(),
                 )
@@ -5243,15 +5230,14 @@ New Line.l1 bus1=a bus2=b phases=3
             let path = fourwire_cstr();
             let old_target = CString::new("pmd").unwrap();
             let old_source = CString::new("dss").unwrap();
-            let mut warn = [0 as c_char; 4096];
+            let mut warn_out: *mut c_char = std::ptr::null_mut();
             let mut err = [0 as c_char; PIO_ERRBUF_MIN];
             let s = unsafe {
                 pio_dist_convert_file(
                     path.as_ptr(),
                     old_target.as_ptr(),
                     old_source.as_ptr(),
-                    warn.as_mut_ptr(),
-                    warn.len(),
+                    &mut warn_out,
                     err.as_mut_ptr(),
                     err.len(),
                 )

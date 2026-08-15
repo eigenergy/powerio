@@ -581,18 +581,18 @@ int32_t pio_is_radial(const PioNetwork *net);
  * `matpower` is a byte-exact echo when the handle was parsed from MATPOWER.
  * ABI v4 also accepts `powerio-json` as a compatibility alias for
  * [`pio_to_json`]. Model JSON cannot represent a non-finite `f64` (`Inf`/`NaN`):
- * it writes `null`, records the field in `warnbuf`, and fails validation when
+ * it writes `null`, records the field in `out_warnings`, and fails validation when
  * read back.
  *
  * Returns the text as an owned C string (free with [`pio_string_free`]),
  * `NULL` on error (message into `errbuf`). Fidelity warnings, if any, are
- * written `\n`-joined into `warnbuf`; a returned string has no handle to
- * attach them to.
+ * published through `out_warnings` as one owned C string (free it with
+ * [`pio_string_free`]), or NULL when there are none; a returned string has no
+ * handle to attach them to. Pass NULL to discard them.
  */
 char *pio_to_format(const PioNetwork *net,
                     const char *to,
-                    char *warnbuf,
-                    size_t warnlen,
+                    char **out_warnings,
                     char *errbuf,
                     size_t errlen);
 
@@ -601,13 +601,13 @@ char *pio_to_format(const PioNetwork *net,
  * path, as [`pio_parse_file`]) to format `to`, without keeping a handle.
  * Returns the converted text as an owned C string (free with
  * [`pio_string_free`]), `NULL` on error. Fidelity warnings, read side first,
- * are written `\n`-joined into `warnbuf`.
+ * are published through `out_warnings` as one owned C string (free it with
+ * [`pio_string_free`]), NULL when there are none. Pass NULL to discard them.
  */
 char *pio_convert_file(const char *path,
                        const char *from,
                        const char *to,
-                       char *warnbuf,
-                       size_t warnlen,
+                       char **out_warnings,
                        char *errbuf,
                        size_t errlen);
 
@@ -621,8 +621,7 @@ char *pio_convert_file(const char *path,
 char *pio_convert_str(const char *text,
                       const char *from,
                       const char *to,
-                      char *warnbuf,
-                      size_t warnlen,
+                      char **out_warnings,
                       char *errbuf,
                       size_t errlen);
 
@@ -631,13 +630,13 @@ char *pio_convert_str(const char *text,
  * (`pypsa-csv`/`pypsa`) is the currently supported directory format; a text format name is
  * an error pointing back at [`pio_to_format`]. Returns `0` on success and
  * `-1` on error (message into `errbuf`). Fidelity warnings, if any, are
- * written `\n`-joined into `warnbuf`.
+ * published through `out_warnings` as one owned C string (free it with
+ * [`pio_string_free`]), NULL when there are none. Pass NULL to discard them.
  */
 int32_t pio_write_dir(const PioNetwork *net,
                       const char *to,
                       const char *out_dir,
-                      char *warnbuf,
-                      size_t warnlen,
+                      char **out_warnings,
                       char *errbuf,
                       size_t errlen);
 
@@ -1139,8 +1138,7 @@ PioDistNetwork *pio_dist_from_json(const char *text, char *errbuf, size_t errlen
  */
 char *pio_dist_to_format(const PioDistNetwork *net,
                          const char *to,
-                         char *warnbuf,
-                         size_t warnlen,
+                         char **out_warnings,
                          char *errbuf,
                          size_t errlen);
 #endif
@@ -1156,8 +1154,7 @@ char *pio_dist_to_format(const PioDistNetwork *net,
 char *pio_dist_convert_file(const char *path,
                             const char *from,
                             const char *to,
-                            char *warnbuf,
-                            size_t warnlen,
+                            char **out_warnings,
                             char *errbuf,
                             size_t errlen);
 #endif
@@ -1174,8 +1171,7 @@ char *pio_dist_convert_file(const char *path,
 char *pio_dist_convert_str(const char *text,
                            const char *from,
                            const char *to,
-                           char *warnbuf,
-                           size_t warnlen,
+                           char **out_warnings,
                            char *errbuf,
                            size_t errlen);
 #endif
