@@ -117,6 +117,26 @@ pub enum ErrorCategory {
     Output,
 }
 
+impl ErrorCategory {
+    /// The token for this category, as it appears in a C `errbuf` message and
+    /// in `pio_build_info`.
+    #[must_use]
+    pub fn token(self) -> &'static str {
+        match self {
+            ErrorCategory::Io => "io",
+            ErrorCategory::UnknownFormat => "unknown_format",
+            ErrorCategory::Parse => "parse",
+            ErrorCategory::Data => "data",
+            ErrorCategory::Output => "output",
+        }
+    }
+
+    /// Every category token, for a consumer that wants the closed set without
+    /// hardcoding it. The C ABI reports errors as text and defines no error
+    /// codes, so a binding that branches on the kind of failure matches these.
+    pub const TOKENS: [&'static str; 5] = ["io", "unknown_format", "parse", "data", "output"];
+}
+
 impl Error {
     /// Classify this error. The match is exhaustive over the variant set (no
     /// wildcard), so adding an `Error` variant is a compile error here until it
@@ -198,5 +218,25 @@ mod tests {
             Error::Io(std::io::Error::from(std::io::ErrorKind::NotFound)).category(),
             Io
         );
+    }
+}
+
+#[cfg(test)]
+mod category_token_tests {
+    use super::ErrorCategory;
+
+    // TOKENS is written out so C consumers get the closed set without a
+    // parser; this keeps it from drifting from token().
+    #[test]
+    fn tokens_lists_every_category_exactly_once() {
+        let every = [
+            ErrorCategory::Io,
+            ErrorCategory::UnknownFormat,
+            ErrorCategory::Parse,
+            ErrorCategory::Data,
+            ErrorCategory::Output,
+        ];
+        let from_tokens: Vec<&str> = every.iter().map(|c| c.token()).collect();
+        assert_eq!(from_tokens, ErrorCategory::TOKENS.to_vec());
     }
 }

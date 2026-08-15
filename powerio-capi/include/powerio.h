@@ -125,20 +125,30 @@ struct ArrowSchema;
  * against (the `PIO_ABI_VERSION` macro in `powerio.h`) and refuses a
  * mismatched library before calling another function.
  *
- * Under the v4 compatibility policy, new data uses new symbols or versioned
- * Arrow, `.pio.json`, or format specific JSON schemas. Existing signatures do
- * not change without an ABI version increment.
+ * New data uses new symbols or versioned Arrow, `.pio.json`, or format
+ * specific JSON schemas. Existing signatures do not change without an ABI
+ * version increment.
+ *
+ * 5 is the current version. It bumped because every ABI visible JSON document
+ * changed shape: `pio_schema_versions_json` dropped four keys,
+ * `pio_dist_capabilities_json` renamed `schema_version` to `powerio_version`,
+ * and the Arrow metadata key became `powerio.version`. A binding built against
+ * 4 would pass a handshake it should fail and read `null` for keys it mirrors.
  */
-#define PIO_ABI_VERSION 4
+#define PIO_ABI_VERSION 5
 
 #if defined(PIO_DIST)
 /**
- * ABI version of the optional `pio_dist_*` C API. This is separate from
- * [`PIO_ABI_VERSION`] so distribution C entry points can evolve without forcing
- * a core ABI bump. Version 1 is the supported dist API with conversion
- * order `(input, from, to, ...)`. Distribution JSON payload versions remain in
- * those payloads; this integer tracks the C entry points and their documented
- * behavior.
+ * Frozen at 1 and no longer meaningful. It existed to absorb distribution
+ * volatility, but that volatility lives in the BMOPF schema, which changes a
+ * reader, a writer and an emitted token, and no C signature. One shared object
+ * carrying two compatibility promises is a thing no mature C library does.
+ *
+ * The symbol stays because PowerIO.jl gates thirteen distribution call sites on
+ * resolving it, and removing it would break every distribution call on a
+ * library that fully supports distribution. Foreign schema drift is reported at
+ * runtime by [`pio_build_info`] instead, which can express "BMOPF 0.2 but not
+ * 0.3"; an integer checked once at load cannot.
  */
 #define PIO_DIST_ABI_VERSION 1
 #endif
@@ -237,13 +247,6 @@ struct ArrowSchema;
 #define PIO_ARROW_TABLE_MATRIX_BRANCH 20
 #endif
 
-#if defined(PIO_PROB)
-/**
- * Opaque matrix free AC OPF instance.
- */
-typedef struct PioAcopfInstance PioAcopfInstance;
-#endif
-
 #if defined(PIO_DIST)
 /**
  * Opaque parsed distribution network handle (the multiconductor wire coordinate
@@ -321,6 +324,22 @@ char *pio_dist_capabilities_json(void);
  * speaks, whose version belongs to whoever owns it.
  */
 char *pio_schema_versions_json(void);
+
+/**
+ * Everything a loader needs to decide what this library can do, as one owned
+ * JSON document. Free the returned string with [`pio_string_free`]. Infallible.
+ *
+ * `curl_version_info` is the shape: one call, one report, and new keys arrive
+ * without a new symbol. Keys are only added. A caller with no JSON parser
+ * keeps using [`pio_has_feature`] and [`pio_abi_version`], which say the same
+ * things one answer at a time.
+ *
+ * `error_categories` lists the tokens that prefix an `errbuf` message. The ABI
+ * reports errors as text, so a consumer that wants to branch on the kind of
+ * failure matches these rather than parsing prose. They are stable; a new
+ * category may be added.
+ */
+char *pio_build_info(void);
 
 /**
  * Whether the matrix Arrow table API is usable in this build. Returns 1
@@ -1019,37 +1038,6 @@ char *pio_scopf_to_json(const PioScopfInstance *instance, char *errbuf, size_t e
  * Free a SCOPF instance handle. `NULL` is a no-op; free each handle once.
  */
 void pio_scopf_instance_free(PioScopfInstance *instance);
-#endif
-
-#if defined(PIO_PROB)
-/**
- * Build the matrix free AC OPF instance from a parsed network handle.
- * `units` (nullable) selects the power and admittance unit system:
- * `"per-unit"` (the NULL default) or `"native"` (MW/MVAr). Zero impedance
- * branches are skipped and recorded in the instance, matching the builder
- * default. Free the handle with `pio_acopf_instance_free`. Returns `NULL`
- * on error and writes the message into `errbuf`.
- */
-PioAcopfInstance *pio_acopf_from_network(const PioNetwork *net,
-                                         const char *units,
-                                         char *errbuf,
-                                         size_t errlen);
-#endif
-
-#if defined(PIO_PROB)
-/**
- * Serialize an AC OPF instance as its model JSON (dense 0-based indices; the
- * `AcOpfInstance` serde shape). Free the returned string with
- * `pio_string_free`. Returns `NULL` for a null handle or serialization error.
- */
-char *pio_acopf_to_json(const PioAcopfInstance *instance, char *errbuf, size_t errlen);
-#endif
-
-#if defined(PIO_PROB)
-/**
- * Free an AC OPF instance handle. `NULL` is a no-op; free each handle once.
- */
-void pio_acopf_instance_free(PioAcopfInstance *instance);
 #endif
 
 #if defined(PIO_DIST)

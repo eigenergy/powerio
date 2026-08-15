@@ -198,17 +198,27 @@ unsafe fn finish_network(
 /// against (the `PIO_ABI_VERSION` macro in `powerio.h`) and refuses a
 /// mismatched library before calling another function.
 ///
-/// Under the v4 compatibility policy, new data uses new symbols or versioned
-/// Arrow, `.pio.json`, or format specific JSON schemas. Existing signatures do
-/// not change without an ABI version increment.
-pub const PIO_ABI_VERSION: u32 = 4;
+/// New data uses new symbols or versioned Arrow, `.pio.json`, or format
+/// specific JSON schemas. Existing signatures do not change without an ABI
+/// version increment.
+///
+/// 5 is the current version. It bumped because every ABI visible JSON document
+/// changed shape: `pio_schema_versions_json` dropped four keys,
+/// `pio_dist_capabilities_json` renamed `schema_version` to `powerio_version`,
+/// and the Arrow metadata key became `powerio.version`. A binding built against
+/// 4 would pass a handshake it should fail and read `null` for keys it mirrors.
+pub const PIO_ABI_VERSION: u32 = 5;
 
-/// ABI version of the optional `pio_dist_*` C API. This is separate from
-/// [`PIO_ABI_VERSION`] so distribution C entry points can evolve without forcing
-/// a core ABI bump. Version 1 is the supported dist API with conversion
-/// order `(input, from, to, ...)`. Distribution JSON payload versions remain in
-/// those payloads; this integer tracks the C entry points and their documented
-/// behavior.
+/// Frozen at 1 and no longer meaningful. It existed to absorb distribution
+/// volatility, but that volatility lives in the BMOPF schema, which changes a
+/// reader, a writer and an emitted token, and no C signature. One shared object
+/// carrying two compatibility promises is a thing no mature C library does.
+///
+/// The symbol stays because PowerIO.jl gates thirteen distribution call sites on
+/// resolving it, and removing it would break every distribution call on a
+/// library that fully supports distribution. Foreign schema drift is reported at
+/// runtime by [`pio_build_info`] instead, which can express "BMOPF 0.2 but not
+/// 0.3"; an integer checked once at load cannot.
 #[cfg(feature = "dist")]
 pub const PIO_DIST_ABI_VERSION: u32 = 1;
 
@@ -306,6 +316,50 @@ fn schema_versions_json_ptr() -> *mut c_char {
         powerio::version::VERSION_KEY: powerio::VERSION,
         "abi": PIO_ABI_VERSION,
         "bmopf_schema": bmopf_schema,
+    });
+    into_cstring(doc.to_string()).unwrap_or(std::ptr::null_mut())
+}
+
+/// Everything a loader needs to decide what this library can do, as one owned
+/// JSON document. Free the returned string with [`pio_string_free`]. Infallible.
+///
+/// `curl_version_info` is the shape: one call, one report, and new keys arrive
+/// without a new symbol. Keys are only added. A caller with no JSON parser
+/// keeps using [`pio_has_feature`] and [`pio_abi_version`], which say the same
+/// things one answer at a time.
+///
+/// `error_categories` lists the tokens that prefix an `errbuf` message. The ABI
+/// reports errors as text, so a consumer that wants to branch on the kind of
+/// failure matches these rather than parsing prose. They are stable; a new
+/// category may be added.
+#[unsafe(no_mangle)]
+pub extern "C" fn pio_build_info() -> *mut c_char {
+    unsafe { guard(std::ptr::null_mut(), build_info_ptr) }
+}
+
+/// The body of [`pio_build_info`], called inside the panic guard.
+fn build_info_ptr() -> *mut c_char {
+    #[cfg(feature = "dist")]
+    let bmopf_schema = Some(powerio_dist::BMOPF_SCHEMA_VERSION);
+    #[cfg(not(feature = "dist"))]
+    let bmopf_schema: Option<&str> = None;
+
+    let doc = serde_json::json!({
+        powerio::version::VERSION_KEY: powerio::VERSION,
+        "abi": PIO_ABI_VERSION,
+        "features": {
+            "arrow": cfg!(feature = "arrow"),
+            "matrix": cfg!(feature = "matrix"),
+            "gridfm": cfg!(feature = "gridfm"),
+            "dist": cfg!(feature = "dist"),
+            "pkg": cfg!(feature = "pkg"),
+            "prob": cfg!(feature = "prob"),
+        },
+        // Foreign schemas this build speaks. The version belongs to whoever
+        // owns the schema, which is why an integer checked once at load cannot
+        // express it.
+        "foreign_schemas": { "bmopf": bmopf_schema },
+        "error_categories": powerio::ErrorCategory::TOKENS,
     });
     into_cstring(doc.to_string()).unwrap_or(std::ptr::null_mut())
 }
@@ -2170,100 +2224,6 @@ pub unsafe extern "C" fn pio_scopf_instance_free(instance: *mut PioScopfInstance
     }
 }
 
-/// Opaque matrix free AC OPF instance.
-#[cfg(feature = "prob")]
-pub struct PioAcopfInstance {
-    instance: powerio_prob::AcOpfInstance,
-}
-
-#[cfg(feature = "prob")]
-const _: fn() = || {
-    fn assert_send_sync<T: Send + Sync>() {}
-    assert_send_sync::<PioAcopfInstance>();
-};
-
-/// Build the matrix free AC OPF instance from a parsed network handle.
-/// `units` (nullable) selects the power and admittance unit system:
-/// `"per-unit"` (the NULL default) or `"native"` (MW/MVAr). Zero impedance
-/// branches are skipped and recorded in the instance, matching the builder
-/// default. Free the handle with `pio_acopf_instance_free`. Returns `NULL`
-/// on error and writes the message into `errbuf`.
-#[cfg(feature = "prob")]
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn pio_acopf_from_network(
-    net: *const PioNetwork,
-    units: *const c_char,
-    errbuf: *mut c_char,
-    errlen: usize,
-) -> *mut PioAcopfInstance {
-    unsafe {
-        finish_handle(
-            errbuf,
-            errlen,
-            "panic while building AC OPF instance",
-            || {
-                let view = view(net).ok_or_else(|| "network handle is NULL".to_string())?;
-                let options = powerio_prob::AcOpfOptions {
-                    units: units_from_c(units)?,
-                    ..powerio_prob::AcOpfOptions::default()
-                };
-                let instance = powerio_prob::build_ac_opf_instance(&view, &options)
-                    .map_err(|error| error.to_string())?;
-                Ok(PioAcopfInstance { instance })
-            },
-        )
-    }
-}
-
-/// Serialize an AC OPF instance as its model JSON (dense 0-based indices; the
-/// `AcOpfInstance` serde shape). Free the returned string with
-/// `pio_string_free`. Returns `NULL` for a null handle or serialization error.
-#[cfg(feature = "prob")]
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn pio_acopf_to_json(
-    instance: *const PioAcopfInstance,
-    errbuf: *mut c_char,
-    errlen: usize,
-) -> *mut c_char {
-    unsafe {
-        finish_string(
-            errbuf,
-            errlen,
-            "panic while serializing AC OPF instance",
-            || {
-                let instance = instance
-                    .as_ref()
-                    .ok_or_else(|| "AC OPF instance handle is NULL".to_string())?;
-                serde_json::to_string(&instance.instance).map_err(|error| error.to_string())
-            },
-        )
-    }
-}
-
-/// Free an AC OPF instance handle. `NULL` is a no-op; free each handle once.
-#[cfg(feature = "prob")]
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn pio_acopf_instance_free(instance: *mut PioAcopfInstance) {
-    unsafe {
-        guard((), || {
-            if !instance.is_null() {
-                drop(Box::from_raw(instance));
-            }
-        });
-    }
-}
-
-/// The unit system for a problem instance build: `"per-unit"` (aliases
-/// `"perunit"`, `"pu"`; the NULL default) or `"native"`. The alias table is
-/// `Units: FromStr` in powerio-prob, shared with the Python binding.
-#[cfg(feature = "prob")]
-fn units_from_c(units: *const c_char) -> Result<powerio_prob::Units, String> {
-    let Some(units) = optional_cstr(units, "units")? else {
-        return Ok(powerio_prob::Units::PerUnit);
-    };
-    units.parse::<powerio_prob::Units>()
-}
-
 // ---------------------------------------------------------------------------
 // Distribution API (`dist` feature). The multiconductor model behind its own
 // opaque `PioDistNetwork` handle and the `pio_dist_*` entry points. It is gated
@@ -2884,11 +2844,41 @@ mod tests {
     }
 
     #[test]
+    fn build_info_reports_the_build_in_one_document() {
+        let raw = pio_build_info();
+        assert!(!raw.is_null());
+        let doc: serde_json::Value =
+            serde_json::from_str(unsafe { CStr::from_ptr(raw) }.to_str().unwrap()).unwrap();
+        unsafe { pio_string_free(raw) };
+
+        assert_eq!(doc["abi"], serde_json::json!(PIO_ABI_VERSION));
+        assert_eq!(
+            doc[powerio::version::VERSION_KEY],
+            serde_json::json!(powerio::VERSION)
+        );
+        // Every feature this build knows about answers here and through
+        // pio_has_feature; the two must not disagree.
+        for name in ["arrow", "matrix", "gridfm", "dist", "pkg", "prob"] {
+            let c = CString::new(name).unwrap();
+            let probed = unsafe { pio_has_feature(c.as_ptr()) } == 1;
+            assert_eq!(
+                doc["features"][name],
+                serde_json::json!(probed),
+                "{name} disagrees between pio_build_info and pio_has_feature"
+            );
+        }
+        assert_eq!(
+            doc["error_categories"],
+            serde_json::json!(powerio::ErrorCategory::TOKENS)
+        );
+    }
+
+    #[test]
     fn version_api() {
         // The ABI version is the load-time compatibility check; the version
         // string is static, NUL-terminated, and non-empty.
         assert_eq!(pio_abi_version(), PIO_ABI_VERSION);
-        assert_eq!(PIO_ABI_VERSION, 4);
+        assert_eq!(PIO_ABI_VERSION, 5);
         let v = unsafe { CStr::from_ptr(pio_version()) }.to_str().unwrap();
         assert_eq!(v, env!("CARGO_PKG_VERSION"));
         assert!(!v.is_empty());
@@ -3040,7 +3030,7 @@ mod tests {
     fn c_header_abi_manifest_is_pinned() {
         let actual = c_header_abi_manifest(include_str!("../include/powerio.h"));
         let expected = [
-            "#define PIO_ABI_VERSION 4",
+            "#define PIO_ABI_VERSION 5",
             "#define PIO_DIST_ABI_VERSION 1",
             "#define PIO_ERRBUF_MIN 256",
             "#define PIO_ARROW_TABLE_BUS 0",
@@ -3064,7 +3054,6 @@ mod tests {
             "#define PIO_ARROW_TABLE_BDOUBLEPRIME 18",
             "#define PIO_ARROW_TABLE_MATRIX_BUS 19",
             "#define PIO_ARROW_TABLE_MATRIX_BRANCH 20",
-            "typedef struct PioAcopfInstance PioAcopfInstance;",
             "typedef struct PioDistNetwork PioDistNetwork;",
             "typedef struct PioNetwork PioNetwork;",
             "typedef struct PioPackage PioPackage;",
@@ -3073,6 +3062,7 @@ mod tests {
             "uint32_t pio_dist_abi_version(void);",
             "char *pio_dist_capabilities_json(void);",
             "char *pio_schema_versions_json(void);",
+            "char *pio_build_info(void);",
             "int32_t pio_matrix_available(void);",
             "int32_t pio_has_feature(const char *feature);",
             "const char *pio_version(void);",
@@ -3137,9 +3127,6 @@ mod tests {
             "PioScopfInstance *pio_scopf_parse_str(const char *text, const char *from, char *errbuf, size_t errlen);",
             "char *pio_scopf_to_json(const PioScopfInstance *instance, char *errbuf, size_t errlen);",
             "void pio_scopf_instance_free(PioScopfInstance *instance);",
-            "PioAcopfInstance *pio_acopf_from_network(const PioNetwork *net, const char *units, char *errbuf, size_t errlen);",
-            "char *pio_acopf_to_json(const PioAcopfInstance *instance, char *errbuf, size_t errlen);",
-            "void pio_acopf_instance_free(PioAcopfInstance *instance);",
             "PioDistNetwork *pio_dist_parse_file(const char *path, const char *from, char *errbuf, size_t errlen);",
             "PioDistNetwork *pio_dist_parse_str(const char *text, const char *format, char *errbuf, size_t errlen);",
             "void pio_dist_network_free(PioDistNetwork *net);",
@@ -4352,50 +4339,6 @@ mpc.branch = [
         }
     }
 
-    #[cfg(feature = "prob")]
-    #[test]
-    fn acopf_handle_builds_from_network_and_serializes() {
-        let net = case9();
-        let mut err = [0 as c_char; PIO_ERRBUF_MIN];
-        unsafe {
-            let instance =
-                pio_acopf_from_network(net, std::ptr::null(), err.as_mut_ptr(), err.len());
-            assert!(
-                !instance.is_null(),
-                "pio_acopf_from_network failed: {}",
-                CStr::from_ptr(err.as_ptr()).to_str().unwrap()
-            );
-            let json = pio_acopf_to_json(instance, err.as_mut_ptr(), err.len());
-            assert!(!json.is_null());
-            let v: serde_json::Value =
-                serde_json::from_str(CStr::from_ptr(json).to_str().unwrap()).unwrap();
-            assert_eq!(v["n_buses"], 9);
-            assert_eq!(v["units"], "PerUnit");
-            assert_eq!(v["generators"]["c0"].as_array().unwrap().len(), 3);
-            assert_eq!(v["branches"]["g"].as_array().unwrap().len(), 9);
-            pio_string_free(json);
-            pio_acopf_instance_free(instance);
-
-            let native = CString::new("native").unwrap();
-            let instance =
-                pio_acopf_from_network(net, native.as_ptr(), err.as_mut_ptr(), err.len());
-            assert!(!instance.is_null());
-            pio_acopf_instance_free(instance);
-            pio_acopf_instance_free(std::ptr::null_mut());
-
-            let bogus = CString::new("percent").unwrap();
-            let instance = pio_acopf_from_network(net, bogus.as_ptr(), err.as_mut_ptr(), err.len());
-            assert!(instance.is_null());
-            assert!(
-                CStr::from_ptr(err.as_ptr())
-                    .to_str()
-                    .unwrap()
-                    .contains("unknown units")
-            );
-            pio_network_free(net);
-        }
-    }
-
     #[test]
     fn geo_parse_normalizes_and_apply_returns_a_placed_handle() {
         let net = case9();
@@ -4870,9 +4813,9 @@ mpc.branch = [
         }
 
         #[test]
-        fn dist_abi_version_is_separate() {
+        fn dist_abi_version_is_frozen_at_one() {
             assert_eq!(pio_abi_version(), PIO_ABI_VERSION);
-            assert_eq!(PIO_ABI_VERSION, 4);
+            assert_eq!(PIO_ABI_VERSION, 5);
             assert_eq!(pio_dist_abi_version(), PIO_DIST_ABI_VERSION);
             assert_eq!(PIO_DIST_ABI_VERSION, 1);
             let feature = CString::new("dist").unwrap();
