@@ -7,6 +7,7 @@
 //! inverts the reader's column layout for the cross-format write path (same
 //! format writes echo the retained source).
 
+use std::collections::hash_map::Entry;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fmt::Write as _;
 use std::sync::Arc;
@@ -48,10 +49,17 @@ pub(crate) fn parse_pslf_source(
     let mut once = HashSet::new();
 
     let mut buses = Vec::new();
-    let mut bus_voltage = HashMap::new();
+    let mut bus_schedule = HashMap::new();
     for rec in doc.records("bus data") {
         let bus = read_bus(rec)?;
-        bus_voltage.insert(bus.id, (bus.vm, bus.base_kv));
+        bus_schedule.insert(
+            bus.id,
+            BusSchedule {
+                vm: bus.vm,
+                vsched: num_at(&rec.rhs, 1, bus.vm, "bus vsched", rec)?,
+                base_kv: bus.base_kv,
+            },
+        );
         buses.push(bus);
     }
 
@@ -103,7 +111,7 @@ pub(crate) fn parse_pslf_source(
 
     let mut generators = Vec::new();
     for rec in doc.records("generator data") {
-        generators.push(read_generator(rec, &bus_voltage, warnings)?);
+        generators.push(read_generator(rec, &bus_schedule, warnings)?);
     }
 
     let dc_converters = read_dc_converters(&doc, warnings);
@@ -647,28 +655,51 @@ fn read_transformer(rec: &Record) -> Result<TransformerRecord> {
     }))
 }
 
+/// What a `bus data` record says about one bus's voltage, for the generator
+/// rows that key off it: the solved magnitude, the scheduled magnitude, and the
+/// nominal kV that converts between per unit and the `reg_kv` column.
+#[derive(Clone, Copy)]
+struct BusSchedule {
+    vm: f64,
+    vsched: f64,
+    base_kv: f64,
+}
+
 /// Map one `generator data` record.
 ///
-/// EPC stores generator voltage setpoints as controlled kV (`reg_kv`) when
-/// present. Older or sparse rows leave it zero, so fall back to the solved bus
+/// EPC states generator voltage setpoints as controlled kV (`reg_kv`), which a
+/// bus with no nominal kV cannot express. The bus's own `vsched` column is the
+/// scheduled magnitude in per unit and needs no base, so it carries the
+/// setpoint for those buses; a row with neither falls back to the solved bus
 /// voltage.
 fn read_generator(
     rec: &Record,
-    bus_voltage: &HashMap<BusId, (f64, f64)>,
+    bus_schedule: &HashMap<BusId, BusSchedule>,
     warnings: &mut Vec<String>,
 ) -> Result<Generator> {
     let bus = BusId(req_id(&rec.lhs, 0, "generator bus", rec)?);
-    let (bus_vm, base_kv) = bus_voltage.get(&bus).copied().unwrap_or((1.0, 0.0));
+    let schedule = bus_schedule.get(&bus).copied().unwrap_or(BusSchedule {
+        vm: 1.0,
+        vsched: 1.0,
+        base_kv: 0.0,
+    });
     let reg_kv = num_at(&rec.rhs, 3, 0.0, "generator reg_kv", rec)?;
-    let vg = if reg_kv > 0.0 && base_kv > 0.0 {
-        reg_kv / base_kv
+    let vg = if reg_kv > 0.0 && schedule.base_kv > 0.0 {
+        reg_kv / schedule.base_kv
+    } else if schedule.vsched > 0.0 {
+        if reg_kv > 0.0 {
+            warnings.push(format!(
+                "PSLF generator at bus {bus}: reg_kv present but bus base kV is missing; used the bus vsched setpoint"
+            ));
+        }
+        schedule.vsched
     } else {
         if reg_kv > 0.0 {
             warnings.push(format!(
                 "PSLF generator at bus {bus}: reg_kv present but bus base kV is missing; used bus voltage"
             ));
         }
-        bus_vm
+        schedule.vm
     };
     Ok(Generator {
         bus,
@@ -1155,6 +1186,35 @@ pub fn write_pslf(net: &BalancedNetwork) -> Conversion {
     let _ = writeln!(s, "!");
 
     // ---- bus data ----
+    // `vsched` is the scheduled voltage in per unit, distinct from the solved
+    // `volt`. A bus with no base kV cannot state its generators' setpoint as
+    // `reg_kv` (kV), and this is the only per unit column that can, so the
+    // setpoint rides here for those buses. Where the bus states a base kV,
+    // `reg_kv` carries the setpoint per generator and `vsched` stays the bus
+    // voltage: routing it through `reg_kv = vg * base_kv` and back is not exact
+    // in binary, so writing `vg` here too would make a re-serialize differ in
+    // the last digit.
+    //
+    // One column per bus, so generators that disagree on a base-kV-less bus
+    // keep only the first.
+    let mut setpoint_of: HashMap<BusId, f64> = HashMap::new();
+    let mut split_setpoint: HashSet<BusId> = HashSet::new();
+    for g in net
+        .generators
+        .iter()
+        .filter(|g| g.vg.is_finite() && g.vg > 0.0)
+    {
+        match setpoint_of.entry(g.bus) {
+            Entry::Vacant(slot) => {
+                slot.insert(g.vg);
+            }
+            Entry::Occupied(slot) => {
+                if (slot.get() - g.vg).abs() > 1e-9 {
+                    split_setpoint.insert(g.bus);
+                }
+            }
+        }
+    }
     let _ = writeln!(
         s,
         "bus data [{}] ty vsched volt angle ar zone vmax vmin",
@@ -1168,7 +1228,11 @@ pub fn write_pslf(net: &BalancedNetwork) -> Conversion {
             name_tok(b.name.as_deref().unwrap_or("")),
             num(b.base_kv),
             pslf_type(b.kind),
-            num(b.vm),
+            num(if b.base_kv > 0.0 {
+                b.vm
+            } else {
+                setpoint_of.get(&b.id).copied().unwrap_or(b.vm)
+            }),
             num(b.vm),
             num(b.va),
             b.area,
@@ -1382,12 +1446,15 @@ pub fn write_pslf(net: &BalancedNetwork) -> Conversion {
             // rhs indices the reader reads: status 0, reg_kv 3, pgen 8, pmax 9,
             // pmin 10, qgen 11, qmax 12, qmin 13, mbase 14. `reg_name` is left as
             // 0 because this writer only represents own-terminal regulation.
+            // Without a base kV the setpoint rides the bus `vsched` column
+            // instead, so it is lost only where that column already speaks for
+            // a different generator on the same bus.
             let reg_kv = if g.vg.is_finite() && r.base_kv > 0.0 {
                 g.vg * r.base_kv
             } else {
-                if g.vg.is_finite() && (g.vg - 1.0).abs() > 1e-9 {
+                if g.vg.is_finite() && split_setpoint.contains(&g.bus) {
                     warnings.push(format!(
-                        "PSLF generator at bus {}: voltage setpoint {} p.u. could not be written because bus base kV is missing",
+                        "PSLF generator at bus {}: voltage setpoint {} p.u. could not be written because bus base kV is missing and the bus schedules a different setpoint",
                         g.bus, g.vg
                     ));
                 }

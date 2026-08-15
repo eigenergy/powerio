@@ -420,15 +420,28 @@ const TRANSMISSION_FORMATS: [TransmissionFormat; 8] = [
     },
 ];
 
+// The `→ PSLF .epc` column drops by 5 on every source whose buses carry no base
+// kV: the generator voltage setpoint now rides the bus `vsched` column, which is
+// per unit and needs no base, instead of being lost with `reg_kv`.
+//
+// The egret writer emits `dc_branch`, which its reader already read, so the four
+// dclines survive a conversion into egret instead of being dropped there. The
+// `egret JSON` source row pays for it: those dclines now reach the next hop and
+// report what each target does with them, where before the row had none to
+// carry. Same trade on `→ Surge JSON`, where the reactive limits, the loss
+// model, and both terminal voltage setpoints now round trip.
+//
+// The `→ PowerModels JSON` column loses a blanket dcline warning that named no
+// loss: every `Hvdc` field has a PowerModels slot and reads back exactly.
 const TRANSMISSION_WARNING_BASELINE: [[usize; 8]; 8] = [
-    [0, 0, 8, 8, 0, 5, 0, 11],
-    [6, 0, 14, 14, 1, 11, 24, 16],
-    [13, 1, 0, 1, 1, 3, 1, 10],
-    [12, 0, 0, 0, 0, 2, 0, 5],
-    [0, 0, 8, 8, 0, 5, 0, 11],
+    [0, 0, 8, 8, 0, 5, 0, 6],
+    [6, 0, 14, 14, 0, 11, 21, 11],
+    [13, 0, 0, 1, 0, 3, 0, 5],
+    [12, 0, 0, 0, 0, 2, 0, 0],
+    [1, 0, 9, 9, 0, 6, 1, 11],
     [6, 0, 11, 11, 5, 0, 0, 11],
-    [2, 2, 10, 10, 2, 7, 2, 17],
-    [17, 5, 5, 5, 5, 7, 5, 8],
+    [1, 0, 9, 9, 0, 6, 0, 11],
+    [17, 4, 5, 5, 4, 7, 7, 8],
 ];
 
 const DEEPMIND_OPFDATA_WARNING_BASELINE: [usize; 8] = [3, 2, 5, 5, 3, 4, 2, 4];

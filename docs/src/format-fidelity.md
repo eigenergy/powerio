@@ -135,7 +135,9 @@ code `READ.TRANSMISSION.PARSE_WARNING`. GridFM package reads use
 - **MATPOWER** canonical output (for a case that did not originate as MATPOWER)
   omits dcline; the byte exact echo path keeps it when the case was read from
   MATPOWER. Storage is written as an `mpc.storage` block.
-- **egret** output drops HVDC and storage. The reader takes the power flow
+- **egret** output writes HVDC as `dc_branch`, the element its reader already
+  read, so the power, voltage, and loss fields survive a round trip; only a
+  dcline cost curve is dropped, and storage. The reader takes the power flow
   ModelData subset (numeric bus ids, scalar values); unit commitment cases
   (`system.time_keys`) are rejected.
 - **pandapower JSON** writes the power flow core as split oriented
@@ -183,7 +185,14 @@ code `READ.TRANSMISSION.PARSE_WARNING`. GridFM package reads use
   and warns about source sections that stay only in the retained document. The
   writer emits a canonical Surge network body for the supported power flow core;
   richer MATPOWER generator capability or ramp columns and unsupported cost
-  shapes are reported in `Conversion::warnings`.
+  shapes are reported in `Conversion::warnings`. An HVDC link carries the
+  terminal voltage setpoints, the reactive limits, and the loss model on its
+  converter terminals; a Surge link states no terminal reactive flow, no cost
+  curve, and no received power (the reader derives it from the setpoint and the
+  loss model), so those are warned. A link that states converter or control
+  detail — firing angles, converter transformer taps, commutation impedance, a
+  DC voltage schedule — beyond the neutral converter this writer emits is
+  warned on the way in.
 - **DeepMind OPFData JSON** reads one raw JSON document from a FullTop or N-1
   release into the balanced transmission model. Topology, limits, loads,
   shunts, and quadratic costs come

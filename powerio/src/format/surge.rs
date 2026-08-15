@@ -401,19 +401,44 @@ fn storage_gen_obj(storage: &Storage, counts: &mut BTreeMap<BusId, usize>) -> Va
     Value::Object(obj)
 }
 
+/// The converter detail a Surge link states that [`Hvdc`] does not model, and
+/// the value that stands for "nothing stated".
+///
+/// [`read_hvdc_link`] drops every one of these, so the reader warns for a link
+/// that sets any of them to something else. This writer has no converter model
+/// to draw on, so it emits exactly these values: the link it writes reads back
+/// whole, and says so.
+const LCC_TERMINAL_DEFAULTS: [(&str, f64); 11] = [
+    ("n_bridges", 1.0),
+    ("alpha_min", 5.0),
+    ("alpha_max", 90.0),
+    ("base_voltage_kv", 0.0),
+    ("commutation_reactance_ohm", 0.0),
+    ("commutation_resistance_ohm", 0.0),
+    ("tap", 1.0),
+    ("tap_min", 0.9),
+    ("tap_max", 1.1),
+    ("tap_step", 0.006_25),
+    ("turns_ratio", 1.0),
+];
+
+/// As [`LCC_TERMINAL_DEFAULTS`], for the fields the link itself carries.
+const LCC_LINK_DEFAULTS: [(&str, f64); 2] =
+    [("scheduled_voltage_kv", 0.0), ("resistance_ohm", 0.0)];
+
 fn hvdc_link_obj(dc: &Hvdc, i: usize, warnings: &mut Vec<String>) -> Value {
+    // The reactive limits, the loss model, and both terminal voltage setpoints
+    // ride the converter terminals below. What a Surge link states nowhere is
+    // the terminal reactive flow, the cost curve, and a received power that
+    // disagrees with the loss model: the link carries a scheduled setpoint, and
+    // the reader derives the far end from it.
     if dc.qf != 0.0
         || dc.qt != 0.0
-        || dc.qminf != 0.0
-        || dc.qmaxf != 0.0
-        || dc.qmint != 0.0
-        || dc.qmaxt != 0.0
-        || dc.loss0 != 0.0
-        || dc.loss1 != 0.0
         || dc.cost.is_some()
+        || (dc.pt - delivered_power(dc.pf, dc.loss0, dc.loss1)).abs() > 1e-9
     {
         warnings.push(format!(
-            "dcline {} reactive limits, loss model, or cost mapped best effort in Surge JSON",
+            "dcline {} terminal reactive flow, received power, or cost dropped: a Surge link states the scheduled setpoint and the loss model only",
             i + 1
         ));
     }
@@ -432,31 +457,53 @@ fn hvdc_link_obj(dc: &Hvdc, i: usize, warnings: &mut Vec<String>) -> Value {
             .into(),
         ),
     );
-    obj.insert("rectifier".into(), lcc_terminal_obj(dc.from, dc.in_service));
-    obj.insert("inverter".into(), lcc_terminal_obj(dc.to, dc.in_service));
+    // The reader sums both terminals' loss terms back into `loss0`/`loss1`, so
+    // the whole loss model rides the rectifier and the inverter states none.
+    obj.insert(
+        "rectifier".into(),
+        lcc_terminal_obj(
+            dc.from,
+            dc.in_service,
+            dc.vf,
+            dc.qminf,
+            dc.qmaxf,
+            dc.loss0,
+            dc.loss1,
+        ),
+    );
+    obj.insert(
+        "inverter".into(),
+        lcc_terminal_obj(dc.to, dc.in_service, dc.vt, dc.qmint, dc.qmaxt, 0.0, 0.0),
+    );
     obj.insert("scheduled_setpoint".into(), jnum(dc.pf));
     obj.insert("p_dc_min_mw".into(), jnum(dc.pmin));
     obj.insert("p_dc_max_mw".into(), jnum(dc.pmax));
-    obj.insert("scheduled_voltage_kv".into(), jnum(0.0));
-    obj.insert("resistance_ohm".into(), jnum(0.0));
+    for (key, value) in LCC_LINK_DEFAULTS {
+        obj.insert(key.into(), jnum(value));
+    }
     Value::Object(obj)
 }
 
-fn lcc_terminal_obj(bus: BusId, in_service: bool) -> Value {
+fn lcc_terminal_obj(
+    bus: BusId,
+    in_service: bool,
+    ac_setpoint: f64,
+    q_min: f64,
+    q_max: f64,
+    loss_constant: f64,
+    loss_linear: f64,
+) -> Value {
     let mut obj = Map::new();
     obj.insert("bus".into(), Value::from(bus.0 as u64));
     obj.insert("in_service".into(), Value::Bool(in_service));
-    obj.insert("n_bridges".into(), Value::from(1_u64));
-    obj.insert("alpha_min".into(), jnum(5.0));
-    obj.insert("alpha_max".into(), jnum(90.0));
-    obj.insert("base_voltage_kv".into(), jnum(0.0));
-    obj.insert("commutation_reactance_ohm".into(), jnum(0.0));
-    obj.insert("commutation_resistance_ohm".into(), jnum(0.0));
-    obj.insert("tap".into(), jnum(1.0));
-    obj.insert("tap_min".into(), jnum(0.9));
-    obj.insert("tap_max".into(), jnum(1.1));
-    obj.insert("tap_step".into(), jnum(0.00625));
-    obj.insert("turns_ratio".into(), jnum(1.0));
+    obj.insert("ac_setpoint".into(), jnum(ac_setpoint));
+    obj.insert("q_min_mvar".into(), jnum(q_min));
+    obj.insert("q_max_mvar".into(), jnum(q_max));
+    obj.insert("loss_constant_mw".into(), jnum(loss_constant));
+    obj.insert("loss_linear".into(), jnum(loss_linear));
+    for (key, value) in LCC_TERMINAL_DEFAULTS {
+        obj.insert(key.into(), jnum(value));
+    }
     Value::Object(obj)
 }
 
@@ -986,12 +1033,21 @@ fn read_hvdc_link(value: &Value) -> Result<Hvdc> {
         && bool_map_or(from_terminal, "in_service", true)?
         && bool_map_or(to_terminal, "in_service", true)?;
 
+    let loss0 = f_map_or(from_terminal, "loss_constant_mw", 0.0)?
+        + f_map_or(to_terminal, "loss_constant_mw", 0.0)?;
+    let loss1 =
+        f_map_or(from_terminal, "loss_linear", 0.0)? + f_map_or(to_terminal, "loss_linear", 0.0)?;
+
     Ok(Hvdc {
         from,
         to,
         in_service,
         pf: setpoint,
-        pt: -setpoint,
+        // A Surge link states the sending end and the loss model, not the
+        // received power, so derive it. [`Hvdc::pt`] is MATPOWER's PT column:
+        // power arriving at the to end, positive, the sign every other reader
+        // here stores.
+        pt: delivered_power(setpoint, loss0, loss1),
         qf: 0.0,
         qt: 0.0,
         vf: f_map_or(from_terminal, "ac_setpoint", 1.0)?,
@@ -1002,14 +1058,18 @@ fn read_hvdc_link(value: &Value) -> Result<Hvdc> {
         qmaxf: f_map_or(from_terminal, "q_max_mvar", 0.0)?,
         qmint: f_map_or(to_terminal, "q_min_mvar", 0.0)?,
         qmaxt: f_map_or(to_terminal, "q_max_mvar", 0.0)?,
-        loss0: f_map_or(from_terminal, "loss_constant_mw", 0.0)?
-            + f_map_or(to_terminal, "loss_constant_mw", 0.0)?,
-        loss1: f_map_or(from_terminal, "loss_linear", 0.0)?
-            + f_map_or(to_terminal, "loss_linear", 0.0)?,
+        loss0,
+        loss1,
         cost: None,
         uid: None,
         extras: Extras::new(),
     })
+}
+
+/// The power an HVDC line delivers for a sending end setpoint, under the
+/// MATPOWER loss model `loss0 + loss1 * Pf`.
+fn delivered_power(pf: f64, loss0: f64, loss1: f64) -> f64 {
+    pf - loss0 - loss1 * pf
 }
 
 fn source_loss_warnings_from_root(
@@ -1080,13 +1140,59 @@ fn source_loss_warnings_from_root(
         "generator commitment, ramping, fuel, market, reserve, emission, classification, or richer storage fields retained only in source text",
         generator_has_source_only_fields,
     );
-    if has_nonempty(network, "hvdc") {
-        warnings.push(
-            "Surge HVDC converter, reactive, loss, and control details mapped best effort".into(),
-        );
+    let converter_detail = network
+        .get("hvdc")
+        .and_then(Value::as_object)
+        .and_then(|hvdc| hvdc.get("links"))
+        .and_then(Value::as_array)
+        .map_or(0, |links| {
+            links
+                .iter()
+                .filter(|link| states_converter_detail(link))
+                .count()
+        });
+    if converter_detail > 0 {
+        warnings.push(format!(
+            "{converter_detail} Surge HVDC link(s) state converter or control detail (firing angles, converter transformer taps, commutation impedance, DC voltage schedule) the balanced model does not carry"
+        ));
     }
 
     warnings
+}
+
+/// Whether a Surge HVDC link states converter or control detail that
+/// [`read_hvdc_link`] drops.
+///
+/// A field left out, or set to the value [`LCC_TERMINAL_DEFAULTS`] and
+/// [`LCC_LINK_DEFAULTS`] name, states nothing this model could have held, so it
+/// is not a loss.
+// Exact comparison on purpose: these are the literals the writer emits, so a
+// value that survived the JSON round trip is bit-identical, and one that did
+// not is a number some other producer chose.
+#[allow(clippy::float_cmp)]
+fn states_converter_detail(link: &Value) -> bool {
+    let Some(link) = link.as_object() else {
+        return false;
+    };
+    let stated = |obj: &Map<String, Value>, key: &str, default: f64| {
+        obj.get(key)
+            .and_then(Value::as_f64)
+            .is_some_and(|value| value != default)
+    };
+    if LCC_LINK_DEFAULTS
+        .into_iter()
+        .any(|(key, default)| stated(link, key, default))
+    {
+        return true;
+    }
+    ["rectifier", "inverter", "converter1", "converter2"]
+        .into_iter()
+        .filter_map(|key| link.get(key).and_then(Value::as_object))
+        .any(|terminal| {
+            LCC_TERMINAL_DEFAULTS
+                .into_iter()
+                .any(|(key, default)| stated(terminal, key, default))
+        })
 }
 
 fn warn_count(

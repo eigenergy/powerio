@@ -10,8 +10,9 @@
 //! Loads and shunts are first-class on the `BalancedNetwork`; branch terminal admittance
 //! writes as PowerModels' `g_fr`/`b_fr`/`g_to`/`b_to` fields, with MATPOWER
 //! `BR_B` expanded only when no richer terminal model is present. `transformer`
-//! follows PowerModels' rule (raw tap `≠ 0`). `hvdc`/`storage` are mapped to the
-//! closest PowerModels blocks and emit a warning when present.
+//! follows PowerModels' rule (raw tap `≠ 0`). `hvdc` maps onto `dcline` field
+//! for field; `storage` is mapped to the closest PowerModels block and emits a
+//! warning when present.
 
 use std::sync::Arc;
 
@@ -27,7 +28,6 @@ use crate::normalize::{self, GEN_PU_KEYS};
 use crate::{Error, Result};
 
 #[must_use]
-#[expect(clippy::too_many_lines)]
 pub fn write_powermodels_json(net: &BalancedNetwork) -> Conversion {
     let mut warnings = Vec::new();
 
@@ -79,12 +79,6 @@ pub fn write_powermodels_json(net: &BalancedNetwork) -> Conversion {
     for (i, sw) in net.switches.iter().enumerate() {
         let idx = i + 1;
         switch.insert(idx.to_string(), switch_obj(sw, idx, p));
-    }
-    if !dcline.is_empty() {
-        warnings.push(format!(
-            "{} dcline(s) mapped with warnings to the PowerModels dcline schema",
-            dcline.len()
-        ));
     }
     if !storage.is_empty() {
         warnings.push(format!(
@@ -292,6 +286,13 @@ fn shunt_obj(s: &Shunt, idx: usize, p: f64) -> Value {
     Value::Object(m)
 }
 
+/// One PowerModels `dcline` entry.
+///
+/// Every field [`Hvdc`] holds has a slot here — the four power/reactive flows,
+/// both terminal voltages, the aggregate bounds, the four reactive limits, the
+/// loss model, and the cost curve — so this mapping reports no loss. The
+/// per-end active bounds PowerModels adds are derived below and do not displace
+/// the aggregate pair, which rides `mp_pmin`/`mp_pmax` and reads back exactly.
 fn dcline_obj(dc: &Hvdc, idx: usize, p: f64) -> Value {
     let mut m = Map::new();
     m.insert("index".into(), Value::from(idx as u64));
