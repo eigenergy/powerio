@@ -57,24 +57,24 @@ mod generate {
             .ok_or("schemars returned a non-object schema root")?;
         root.insert("$id".to_owned(), json!(id));
 
-        let properties: Vec<String> = root
+        let properties = root
             .get("properties")
             .and_then(serde_json::Value::as_object)
-            .ok_or("schemars returned a root with no properties")?
-            .keys()
-            .cloned()
-            .collect();
+            .ok_or("schemars returned a root with no properties")?;
+        // A name that no longer exists would silently demand a field the
+        // document cannot carry, so it is an error rather than a no-op.
+        if let Some(missing) = also_required
+            .iter()
+            .find(|name| !properties.contains_key(**name))
+        {
+            return Err(format!("`{missing}` is required but is not a property of {rel}").into());
+        }
         let required = root
             .entry("required")
             .or_insert_with(|| json!([]))
             .as_array_mut()
             .ok_or("schemars returned a non-array `required`")?;
         for name in also_required {
-            // A name that no longer exists would silently demand a field the
-            // document cannot carry, so it is an error rather than a no-op.
-            if !properties.iter().any(|property| property == name) {
-                return Err(format!("`{name}` is required but is not a property of {rel}").into());
-            }
             if !required.iter().any(|value| value == name) {
                 required.push(json!(name));
             }

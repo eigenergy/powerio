@@ -311,17 +311,13 @@ fn package_pyerr(e: powerio_pkg::Error) -> PyErr {
     // A package failure is a PowerIOError like every other failure. It used to
     // raise a bare `ValueError` for everything, so `except powerio.PowerIOError`
     // did not catch it, and every distinct cause read as one opaque string.
-    if let powerio_pkg::Error::Core(inner) = e {
-        return core_pyerr(inner);
+    // A wrapped failure raises what it would have raised on its own: same
+    // class, and `e.filename` still set on a missing file.
+    match e {
+        powerio_pkg::Error::Core(inner) => core_pyerr(inner),
+        powerio_pkg::Error::Multiconductor(inner) => dist_to_pyerr(inner),
+        other => categorized_pyerr(other.category(), other.to_string()),
     }
-    // Same reason: a distribution failure reached through a package is the same
-    // failure as one reached directly, so it raises the same class and keeps
-    // `e.filename` on a missing file.
-    if let powerio_pkg::Error::Multiconductor(inner) = e {
-        return dist_to_pyerr(inner);
-    }
-    let category = e.category();
-    categorized_pyerr(category, e.to_string())
 }
 
 /// A JSON serialization failure, raised the way every other package failure is.

@@ -7,7 +7,6 @@
 //! inverts the reader's column layout for the cross-format write path (same
 //! format writes echo the retained source).
 
-use std::collections::hash_map::Entry;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fmt::Write as _;
 use std::sync::Arc;
@@ -694,20 +693,20 @@ fn read_generator(
         } else {
             schedule.vm
         }
-    } else if schedule.vsched > 0.0 {
-        if reg_kv > 0.0 {
-            warnings.push(format!(
-                "PSLF generator at bus {bus}: reg_kv present but bus base kV is missing; used the bus vsched setpoint"
-            ));
-        }
-        schedule.vsched
     } else {
+        // No base kV to divide by: `vsched` is the only per unit column that
+        // can carry a setpoint, and the solved voltage is the last resort.
+        let (source, vg) = if schedule.vsched > 0.0 {
+            ("the bus vsched setpoint", schedule.vsched)
+        } else {
+            ("bus voltage", schedule.vm)
+        };
         if reg_kv > 0.0 {
             warnings.push(format!(
-                "PSLF generator at bus {bus}: reg_kv present but bus base kV is missing; used bus voltage"
+                "PSLF generator at bus {bus}: reg_kv present but bus base kV is missing; used {source}"
             ));
         }
-        schedule.vm
+        vg
     };
     Ok(Generator {
         bus,
@@ -1204,23 +1203,11 @@ pub fn write_pslf(net: &BalancedNetwork) -> Conversion {
     // the last digit.
     //
     // One column per bus, so generators that disagree on a base-kV-less bus
-    // keep only the first.
+    // keep only the first; the rest are what the generator loop reports.
     let mut setpoint_of: HashMap<BusId, f64> = HashMap::new();
-    let mut split_setpoint: HashSet<BusId> = HashSet::new();
-    for g in net
-        .generators
-        .iter()
-        .filter(|g| g.vg.is_finite() && g.vg > 0.0)
-    {
-        match setpoint_of.entry(g.bus) {
-            Entry::Vacant(slot) => {
-                slot.insert(g.vg);
-            }
-            Entry::Occupied(slot) => {
-                if (slot.get() - g.vg).abs() > 1e-9 {
-                    split_setpoint.insert(g.bus);
-                }
-            }
+    for g in &net.generators {
+        if g.vg.is_finite() && g.vg > 0.0 {
+            setpoint_of.entry(g.bus).or_insert(g.vg);
         }
     }
     let _ = writeln!(
@@ -1455,12 +1442,15 @@ pub fn write_pslf(net: &BalancedNetwork) -> Conversion {
             // pmin 10, qgen 11, qmax 12, qmin 13, mbase 14. `reg_name` is left as
             // 0 because this writer only represents own-terminal regulation.
             // Without a base kV the setpoint rides the bus `vsched` column
-            // instead, so it is lost only where that column already speaks for
-            // a different generator on the same bus.
+            // instead, so it is lost only where that column carries a different
+            // generator's.
             let reg_kv = if g.vg.is_finite() && r.base_kv > 0.0 {
                 g.vg * r.base_kv
             } else {
-                if g.vg.is_finite() && split_setpoint.contains(&g.bus) {
+                let scheduled = setpoint_of.get(&g.bus);
+                if g.vg.is_finite()
+                    && scheduled.is_some_and(|written| (written - g.vg).abs() > 1e-9)
+                {
                     warnings.push(format!(
                         "PSLF generator at bus {}: voltage setpoint {} p.u. could not be written because bus base kV is missing and the bus schedules a different setpoint",
                         g.bus, g.vg

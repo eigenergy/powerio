@@ -432,11 +432,7 @@ fn hvdc_link_obj(dc: &Hvdc, i: usize, warnings: &mut Vec<String>) -> Value {
     // the terminal reactive flow, the cost curve, and a received power that
     // disagrees with the loss model: the link carries a scheduled setpoint, and
     // the reader derives the far end from it.
-    if dc.qf != 0.0
-        || dc.qt != 0.0
-        || dc.cost.is_some()
-        || (dc.pt - delivered_power(dc.pf, dc.loss0, dc.loss1)).abs() > 1e-9
-    {
+    if dc.qf != 0.0 || dc.qt != 0.0 || dc.cost.is_some() || !dc.pt_matches_loss_model(1e-9) {
         warnings.push(format!(
             "dcline {} terminal reactive flow, received power, or cost dropped: a Surge link states the scheduled setpoint and the loss model only",
             i + 1
@@ -1047,7 +1043,7 @@ fn read_hvdc_link(value: &Value) -> Result<Hvdc> {
         // received power, so derive it. [`Hvdc::pt`] is MATPOWER's PT column:
         // power arriving at the to end, positive, the sign every other reader
         // here stores.
-        pt: delivered_power(setpoint, loss0, loss1),
+        pt: Hvdc::delivered_power(setpoint, loss0, loss1),
         qf: 0.0,
         qt: 0.0,
         vf: f_map_or(from_terminal, "ac_setpoint", 1.0)?,
@@ -1064,12 +1060,6 @@ fn read_hvdc_link(value: &Value) -> Result<Hvdc> {
         uid: None,
         extras: Extras::new(),
     })
-}
-
-/// The power an HVDC line delivers for a sending end setpoint, under the
-/// MATPOWER loss model `loss0 + loss1 * Pf`.
-fn delivered_power(pf: f64, loss0: f64, loss1: f64) -> f64 {
-    pf - loss0 - loss1 * pf
 }
 
 fn source_loss_warnings_from_root(
@@ -1140,22 +1130,13 @@ fn source_loss_warnings_from_root(
         "generator commitment, ramping, fuel, market, reserve, emission, classification, or richer storage fields retained only in source text",
         generator_has_source_only_fields,
     );
-    let converter_detail = network
-        .get("hvdc")
-        .and_then(Value::as_object)
-        .and_then(|hvdc| hvdc.get("links"))
-        .and_then(Value::as_array)
-        .map_or(0, |links| {
-            links
-                .iter()
-                .filter(|link| states_converter_detail(link))
-                .count()
-        });
-    if converter_detail > 0 {
-        warnings.push(format!(
-            "{converter_detail} Surge HVDC link(s) state converter or control detail (firing angles, converter transformer taps, commutation impedance, DC voltage schedule) the balanced model does not carry"
-        ));
-    }
+    warn_count_in(
+        &mut warnings,
+        network.get("hvdc").and_then(Value::as_object),
+        "links",
+        "HVDC link(s) state converter or control detail (firing angles, converter transformer taps, commutation impedance, DC voltage schedule) the balanced model does not carry",
+        states_converter_detail,
+    );
 
     warnings
 }
@@ -1166,22 +1147,10 @@ fn source_loss_warnings_from_root(
 /// A field left out, or set to the value [`LCC_TERMINAL_DEFAULTS`] and
 /// [`LCC_LINK_DEFAULTS`] name, states nothing this model could have held, so it
 /// is not a loss.
-// Exact comparison on purpose: these are the literals the writer emits, so a
-// value that survived the JSON round trip is bit-identical, and one that did
-// not is a number some other producer chose.
-#[allow(clippy::float_cmp)]
-fn states_converter_detail(link: &Value) -> bool {
-    let Some(link) = link.as_object() else {
-        return false;
-    };
-    let stated = |obj: &Map<String, Value>, key: &str, default: f64| {
-        obj.get(key)
-            .and_then(Value::as_f64)
-            .is_some_and(|value| value != default)
-    };
+fn states_converter_detail(link: &Map<String, Value>) -> bool {
     if LCC_LINK_DEFAULTS
         .into_iter()
-        .any(|(key, default)| stated(link, key, default))
+        .any(|(key, default)| num_not_default(link, key, default))
     {
         return true;
     }
@@ -1191,7 +1160,7 @@ fn states_converter_detail(link: &Value) -> bool {
         .any(|terminal| {
             LCC_TERMINAL_DEFAULTS
                 .into_iter()
-                .any(|(key, default)| stated(terminal, key, default))
+                .any(|(key, default)| num_not_default(terminal, key, default))
         })
 }
 
@@ -1202,8 +1171,20 @@ fn warn_count(
     message: &str,
     predicate: fn(&Map<String, Value>) -> bool,
 ) {
-    let count = network
-        .get(section)
+    warn_count_in(warnings, Some(network), section, message, predicate);
+}
+
+/// [`warn_count`] over a section that sits inside `parent` rather than at the
+/// top of the network body; `None` counts nothing, for a parent that is absent.
+fn warn_count_in(
+    warnings: &mut Vec<String>,
+    parent: Option<&Map<String, Value>>,
+    section: &str,
+    message: &str,
+    predicate: fn(&Map<String, Value>) -> bool,
+) {
+    let count = parent
+        .and_then(|parent| parent.get(section))
         .and_then(Value::as_array)
         .map_or(0, |items| {
             items

@@ -1302,6 +1302,27 @@ pub struct Hvdc {
 }
 
 impl Hvdc {
+    /// The power arriving at the `to` end for a sending end setpoint, under the
+    /// MATPOWER dcline loss model `Pt = Pf - loss0 - loss1·Pf`.
+    ///
+    /// [`pf`](Self::pf), [`pt`](Self::pt), and [`loss0`](Self::loss0) are one
+    /// relation, not three independent fields, and a format that states only
+    /// the sending end reconstructs the far end from it. Stated here so every
+    /// reader spells the same rule: `loss0` and `pf` scale together, so this
+    /// holds in per unit as in MW.
+    #[must_use]
+    pub fn delivered_power(pf: f64, loss0: f64, loss1: f64) -> f64 {
+        pf - loss0 - loss1 * pf
+    }
+
+    /// Whether [`pt`](Self::pt) agrees with this line's own loss model to
+    /// `tol`. A writer whose format states no received power reports the lines
+    /// that fail this, because those are the ones it cannot reproduce.
+    #[must_use]
+    pub fn pt_matches_loss_model(&self, tol: f64) -> bool {
+        (self.pt - Self::delivered_power(self.pf, self.loss0, self.loss1)).abs() <= tol
+    }
+
     #[must_use]
     pub fn new(from: BusId, to: BusId) -> Self {
         Self {
@@ -2487,15 +2508,19 @@ mod tests {
         );
     }
 
+    /// The bound at one corner of the voltage box: the law of cosines over the
+    /// angle window, scaled by the larger terminal ceiling and the impedance.
+    fn expected_rate(window: f64, fr: f64, to: f64, zmag: f64) -> f64 {
+        let separation = (fr * fr + to * to - 2.0 * fr * to * window.cos()).sqrt();
+        fr.max(to) * separation / zmag
+    }
+
     #[test]
     fn synthesized_rate_follows_the_angle_window_and_the_voltage_bands() {
         let br = Branch::new(BusId(1), BusId(2), 0.03, 0.04);
-        let expected = |window: f64, fr: f64, to: f64| {
-            let separation = (fr * fr + to * to - 2.0 * fr * to * window.cos()).sqrt();
-            fr.max(to) * separation / 0.05
-        };
+        let expected = |window: f64, fr: f64, to: f64| expected_rate(window, fr, to, 0.05);
         // A band pinned to one value, so the four corners collapse to one and
-        // the bound is the plain law of cosines above.
+        // the bound is the plain law of cosines.
         let at = |v: f64| (v, v);
         close(
             br.synthesize_rate_a(0.5, at(1.1), at(1.06)),
@@ -2534,10 +2559,7 @@ mod tests {
         // enforces it.
         let br = Branch::new(BusId(1), BusId(2), 0.0, 0.01);
         let (vmin, vmax) = (0.9, 1.1);
-        let corner = |window: f64, fr: f64, to: f64| {
-            let separation = (fr * fr + to * to - 2.0 * fr * to * window.cos()).sqrt();
-            vmax * separation / 0.01
-        };
+        let corner = |window: f64, fr: f64, to: f64| expected_rate(window, fr, to, 0.01);
 
         let narrow = 2.0_f64.to_radians();
         let bound = br.synthesize_rate_a(narrow, (vmin, vmax), (vmin, vmax));

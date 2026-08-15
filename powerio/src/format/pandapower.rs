@@ -651,8 +651,7 @@ pub(crate) fn parse_pandapower_source(
                 to,
                 in_service: row.bool_or("in_service", true),
                 pf,
-                // MATPOWER PT = PF - (l0 + l1 * PF)
-                pt: pf - loss_mw - pf * loss_percent / 100.0,
+                pt: Hvdc::delivered_power(pf, loss_mw, loss_percent / 100.0),
                 qf: 0.0,
                 qt: 0.0,
                 vf: row.f_or("vm_from_pu", 1.0),

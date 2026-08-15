@@ -123,8 +123,10 @@ mod tests {
 
         let b = DcConvention::SeriesImpedance.branch_susceptance(r, x, 1.0);
         // b = x/(r² + x²) = 1/(2 · 1e160).
-        assert!(b > 0.0, "the branch is not dropped");
-        assert!((b / 5e-161 - 1.0).abs() < 1e-12, "got {b}");
+        assert!(
+            (b / 5e-161 - 1.0).abs() < 1e-12,
+            "the branch is not dropped, got {b}"
+        );
 
         let (g, susceptance) = series_admittance_parts(r, x);
         assert!((g / 5e-161 - 1.0).abs() < 1e-12, "got {g}");

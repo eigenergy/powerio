@@ -67,9 +67,7 @@ pub fn write_egret_json(net: &BalancedNetwork) -> Conversion {
     elements.insert("shunt".into(), Value::Object(shunt));
     elements.insert("branch".into(), Value::Object(branch));
     elements.insert("generator".into(), Value::Object(generator));
-    if !dc_branch.is_empty() {
-        elements.insert("dc_branch".into(), Value::Object(dc_branch));
-    }
+    elements.insert("dc_branch".into(), Value::Object(dc_branch));
 
     let mut system = Map::new();
     system.insert("baseMVA".into(), jnum(net.base_mva));

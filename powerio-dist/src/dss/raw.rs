@@ -260,14 +260,21 @@ impl RawDss {
     }
 
     fn clear(&mut self) {
-        *self = RawDss::default();
-    }
-
-    /// Whether a diagnostic with `code` is still on this document. `Clear`
-    /// resets the findings along with the objects, so a caller that must not
-    /// lose one asks before assuming it is still recorded.
-    fn reported(&self, code: &str) -> bool {
-        self.diagnostics.iter().any(|d| d.code.as_str() == code)
+        // `Clear` resets the circuit, not the record of how the script was
+        // read. A warning or an `Error` finding already emitted describes input
+        // the caller wrote, and no later command un-writes it — dropping them
+        // here returned a network that had refused an include, or skipped one
+        // that escaped the case directory, with an empty `warnings` and nothing
+        // for `powerio package` to lift into a finding.
+        let (warnings, diagnostics) = (
+            std::mem::take(&mut self.warnings),
+            std::mem::take(&mut self.diagnostics),
+        );
+        *self = RawDss {
+            warnings,
+            diagnostics,
+            ..RawDss::default()
+        };
     }
 }
 
@@ -691,12 +698,8 @@ impl<L: Loader> Executor<'_, L> {
     /// Charges one include against the budgets, returning whether to follow it.
     /// Charged at the attempt, so the loader is never called past the budget
     /// and the syscalls are bounded with the work. The counters live on the
-    /// executor rather than in `RawDss`, which `Clear` resets.
-    ///
-    /// The refusal itself does land in `RawDss`, so a `Clear` after the budget
-    /// is spent wipes it. Every later include is still refused — the counters
-    /// survive — so the record is restated rather than left to the reset: a
-    /// truncated network that reports nothing reads as a whole one.
+    /// executor rather than in `RawDss`, which `Clear` resets. The refusal it
+    /// emits stays put too: `RawDss::clear` keeps the parse record.
     fn charge_include(&mut self, verb: &str, path: &Path, ctx: &dyn Fn(String) -> String) -> bool {
         let over_budget = self.budget_spent
             || self.includes >= MAX_TOTAL_INCLUDES
@@ -705,11 +708,8 @@ impl<L: Loader> Executor<'_, L> {
             self.includes += 1;
             return true;
         }
-        self.budget_spent = true;
-        if !self
-            .raw
-            .reported(crate::diagnostics::READ_DSS_INCLUDE_BUDGET)
-        {
+        if !self.budget_spent {
+            self.budget_spent = true;
             let message = ctx(format!(
                 "{verb} {}: refused; the case exceeded the include budget of {MAX_TOTAL_INCLUDES} \
                  files and {} MiB, so the rest of the includes were not followed",
