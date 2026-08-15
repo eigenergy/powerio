@@ -54,7 +54,8 @@ real power a shunt draws at one per unit voltage; a nodal balance subtracts it
 beside `pd`), `q`/`c`/`c0` (cost diag/linear/constant),
 `pmax`/`pmin`
 (generation bounds), `e_r` (reference indicator: \\(1\\) at every reference bus, else \\(0\\)),
-`p_shift` (phase shift injection, all zero unless `Matpower` + shifters).
+`p_shift` (phase shift injection; zero only under `ReactanceOnly`, which ignores
+shifts, or when the case has no phase shifter).
 Branch-indexed (length \\(m\\)): `b` (susceptances), `fmax` (thermal limits; \\(0\\) means
 unlimited per MATPOWER), and the radian limits `angle_min` and `angle_max`.
 Generator space data
@@ -72,8 +73,8 @@ each generator. A bus with one generator keeps that generator's curve.
 
 ## Manifest (`dcopf_meta.json`)
 
-Schema `powerio.dcopf` version `0.4.0` writes Matrix Market files plus
-structured metadata:
+Schema `powerio.dcopf`, stamped with the writing release in `powerio_version`,
+writes Matrix Market files plus structured metadata:
 
 - `dimensions`: `n_buses`, `n_source_branches`, `n_branch_columns`,
   `n_generators`, `n_reference_buses`, and `n_grounded_buses`.

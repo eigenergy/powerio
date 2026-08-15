@@ -866,13 +866,20 @@ impl Branch {
 
     /// Apparent power bound, per unit, for a branch the source left unrated
     /// (`rate_a == 0`, which reads as unlimited). `angle_window_rad` is the
-    /// widest angle difference the branch may hold, in radians. That window
-    /// and the two terminal voltage ceilings give the widest voltage phasor
-    /// difference the branch can hold. The difference over `|Z|` bounds the
-    /// current, and the larger ceiling turns the current into power. Returns
-    /// `0.0` for a zero impedance branch — one under
+    /// widest angle difference the branch may hold, in radians. That window and
+    /// the two terminal voltage bands give the widest voltage phasor difference
+    /// the branch can hold. The difference over `|Z|` bounds the current, and
+    /// the larger ceiling turns the current into power. Returns `0.0` for a zero
+    /// impedance branch — one under
     /// [`MIN_DIVISIBLE_MAGNITUDE`](crate::dc::MIN_DIVISIBLE_MAGNITUDE), the
     /// bound the rest of the builders divide by — which stays unlimited.
+    ///
+    /// Both ends of each band are needed, not just the ceilings. `|V_f e^{jδ} −
+    /// V_t|²` is convex in `(V_f, V_t)`, so its largest value over the voltage
+    /// box sits at a corner — and below a window of roughly 10° that corner is
+    /// the mixed one, one terminal high and the other low, not both high.
+    /// Reading only the ceilings there understates the bound several fold and
+    /// hands an OPF a limit tighter than the branch physically has.
     ///
     /// The caller supplies the window in radians, because
     /// [`angmin`](Self::angmin) and [`angmax`](Self::angmax) are degrees in
@@ -883,7 +890,12 @@ impl Branch {
     /// magnitude of the window and holds it at `π`, the widest phasor
     /// separation two terminals can have.
     #[must_use]
-    pub fn synthesize_rate_a(&self, angle_window_rad: f64, fr_vmax: f64, to_vmax: f64) -> f64 {
+    pub fn synthesize_rate_a(
+        &self,
+        angle_window_rad: f64,
+        (fr_vmin, fr_vmax): (f64, f64),
+        (to_vmin, to_vmax): (f64, f64),
+    ) -> f64 {
         // The same bound `series_admittance_of` divides by, so the two agree on
         // which branch has no impedance to bound a current with.
         let zmag = self.r.hypot(self.x);
@@ -891,9 +903,20 @@ impl Branch {
             return 0.0;
         }
         let window = angle_window_rad.abs().min(std::f64::consts::PI);
-        let separation =
-            (fr_vmax * fr_vmax + to_vmax * to_vmax - 2.0 * fr_vmax * to_vmax * window.cos()).sqrt();
-        fr_vmax.max(to_vmax) * separation / zmag
+        let cos_window = window.cos();
+        // Clamped at zero before the root: the law of cosines is nonnegative in
+        // exact arithmetic, and rounding on two nearly equal voltages can carry
+        // it a few ulp under.
+        let separation = |vf: f64, vt: f64| {
+            (vf * vf + vt * vt - 2.0 * vf * vt * cos_window)
+                .max(0.0)
+                .sqrt()
+        };
+        let widest = separation(fr_vmax, to_vmax)
+            .max(separation(fr_vmax, to_vmin))
+            .max(separation(fr_vmin, to_vmax))
+            .max(separation(fr_vmin, to_vmin));
+        fr_vmax.max(to_vmax) * widest / zmag
     }
 
     /// Total susceptance projection for MATPOWER shaped formats that only carry
@@ -943,14 +966,14 @@ impl Branch {
 /// is not below the bound, so it arrives at that check rather than reading as
 /// zero impedance. `row` only labels the error.
 pub fn series_admittance_of(r: f64, x: f64, row: usize) -> Result<Option<(f64, f64)>> {
-    if r.hypot(x) < crate::dc::MIN_DIVISIBLE_MAGNITUDE {
+    let magnitude = r.hypot(x);
+    if magnitude < crate::dc::MIN_DIVISIBLE_MAGNITUDE {
         return Ok(None);
     }
-    let denom = r * r + x * x;
-    if !denom.is_finite() {
+    if !magnitude.is_finite() {
         return Err(Error::NonFiniteSusceptance { row });
     }
-    Ok(Some((r / denom, -x / denom)))
+    Ok(Some(crate::dc::series_admittance_parts(r, x)))
 }
 
 /// A transmission switch. Closed switches are preserved as data; matrix builders
@@ -2465,34 +2488,72 @@ mod tests {
     }
 
     #[test]
-    fn synthesized_rate_follows_the_angle_window_and_the_voltage_ceilings() {
+    fn synthesized_rate_follows_the_angle_window_and_the_voltage_bands() {
         let br = Branch::new(BusId(1), BusId(2), 0.03, 0.04);
         let expected = |window: f64, fr: f64, to: f64| {
             let separation = (fr * fr + to * to - 2.0 * fr * to * window.cos()).sqrt();
             fr.max(to) * separation / 0.05
         };
+        // A band pinned to one value, so the four corners collapse to one and
+        // the bound is the plain law of cosines above.
+        let at = |v: f64| (v, v);
         close(
-            br.synthesize_rate_a(0.5, 1.1, 1.06),
+            br.synthesize_rate_a(0.5, at(1.1), at(1.06)),
             expected(0.5, 1.1, 1.06),
         );
 
         // A wider window gives a looser bound.
-        assert!(br.synthesize_rate_a(0.8, 1.1, 1.06) > br.synthesize_rate_a(0.5, 1.1, 1.06));
+        assert!(
+            br.synthesize_rate_a(0.8, at(1.1), at(1.06))
+                > br.synthesize_rate_a(0.5, at(1.1), at(1.06))
+        );
 
         // The magnitude of the window is what counts, and it holds at π.
         close(
-            br.synthesize_rate_a(-0.5, 1.1, 1.06),
+            br.synthesize_rate_a(-0.5, at(1.1), at(1.06)),
             expected(0.5, 1.1, 1.06),
         );
         for window in [6.0, 2.0 * std::f64::consts::PI, -360.0] {
             close(
-                br.synthesize_rate_a(window, 1.1, 1.06),
+                br.synthesize_rate_a(window, at(1.1), at(1.06)),
                 expected(std::f64::consts::PI, 1.1, 1.06),
             );
         }
 
         let ideal = Branch::new(BusId(1), BusId(2), 0.0, 0.0);
-        close(ideal.synthesize_rate_a(0.5, 1.1, 1.1), 0.0);
+        close(ideal.synthesize_rate_a(0.5, at(1.1), at(1.1)), 0.0);
+    }
+
+    #[test]
+    fn a_narrow_window_bounds_at_the_mixed_voltage_corner() {
+        // The phasor difference is convex in the two voltages, so its largest
+        // value over the band box is at a corner. Below roughly 10° that corner
+        // is one terminal at its ceiling and the other at its floor, not both at
+        // their ceilings. Reading only the ceilings there returns a bound
+        // several times tighter than the branch physically has, and an OPF
+        // enforces it.
+        let br = Branch::new(BusId(1), BusId(2), 0.0, 0.01);
+        let (vmin, vmax) = (0.9, 1.1);
+        let corner = |window: f64, fr: f64, to: f64| {
+            let separation = (fr * fr + to * to - 2.0 * fr * to * window.cos()).sqrt();
+            vmax * separation / 0.01
+        };
+
+        let narrow = 2.0_f64.to_radians();
+        let bound = br.synthesize_rate_a(narrow, (vmin, vmax), (vmin, vmax));
+        close(bound, corner(narrow, vmax, vmin));
+        assert!(
+            bound > 5.0 * corner(narrow, vmax, vmax),
+            "the mixed corner dominates here: {bound} vs {}",
+            corner(narrow, vmax, vmax)
+        );
+
+        // Past the crossover both ceilings win again, and the bound follows.
+        let wide = 30.0_f64.to_radians();
+        close(
+            br.synthesize_rate_a(wide, (vmin, vmax), (vmin, vmax)),
+            corner(wide, vmax, vmax),
+        );
     }
 
     fn bus(id: usize) -> Bus {

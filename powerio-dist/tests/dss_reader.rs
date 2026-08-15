@@ -698,6 +698,43 @@ fn a_self_redirecting_case_file_returns() {
     );
 }
 
+/// `Clear` resets the findings along with the objects, so a case that spends
+/// the include budget and then clears must restate the refusal: the counters
+/// live on the executor and keep refusing every later include, so without it
+/// the reader returns a network missing everything those includes carried, with
+/// nothing in `warnings` and nothing for `powerio package` to lift into an
+/// `Error` finding.
+#[test]
+fn a_clear_after_the_include_budget_does_not_erase_the_refusal() {
+    let dir = temp_case_dir("dss-include-bomb-clear");
+    std::fs::write(dir.join("a.dss"), "Redirect a.dss\nRedirect a.dss\n").unwrap();
+    std::fs::write(dir.join("lines.dss"), "New Line.after bus1=b1 bus2=b2\n").unwrap();
+    std::fs::write(
+        dir.join("root.dss"),
+        "New Circuit.bomb\nRedirect a.dss\nClear\nNew Circuit.after\nRedirect lines.dss\n",
+    )
+    .unwrap();
+
+    let net = parse_dss_file(dir.join("root.dss")).expect("the parse returns");
+    assert!(
+        net.lines.iter().all(|l| l.name != "after"),
+        "the budget is spent, so the include after the Clear is still refused"
+    );
+    assert!(
+        net.warnings.iter().any(|w| w.contains("include budget")),
+        "the refusal survives the Clear: {:?}",
+        net.warnings
+    );
+    assert_eq!(
+        net.parse_diagnostics
+            .iter()
+            .filter(|d| d.code.as_str() == "READ.DSS.INCLUDE_BUDGET")
+            .count(),
+        1,
+        "restated once, not once per refused include"
+    );
+}
+
 #[test]
 fn regcontrol_warns_and_keeps_taps() {
     let net = parse("opendss/ieee13/IEEE13Nodeckt.dss");

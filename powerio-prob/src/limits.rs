@@ -46,12 +46,13 @@ impl ThermalLimits {
         branch: &powerio::Branch,
         angle_min_rad: f64,
         angle_max_rad: f64,
-        vmax_from: f64,
-        vmax_to: f64,
+        from: &powerio::Bus,
+        to: &powerio::Bus,
     ) -> f64 {
         if self.synthesize_unrated && branch.rate_a <= 0.0 {
             let window = angle_window(angle_min_rad, angle_max_rad);
-            branch.synthesize_rate_a(window, vmax_from, vmax_to) * self.admittance_scale
+            branch.synthesize_rate_a(window, (from.vmin, from.vmax), (to.vmin, to.vmax))
+                * self.admittance_scale
         } else {
             branch.rate_a * self.power_scale
         }

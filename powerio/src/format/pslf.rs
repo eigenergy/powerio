@@ -684,8 +684,16 @@ fn read_generator(
         base_kv: 0.0,
     });
     let reg_kv = num_at(&rec.rhs, 3, 0.0, "generator reg_kv", rec)?;
-    let vg = if reg_kv > 0.0 && schedule.base_kv > 0.0 {
-        reg_kv / schedule.base_kv
+    let vg = if schedule.base_kv > 0.0 {
+        // `reg_kv` is the setpoint whenever the bus states a base to divide by.
+        // A row leaving it zero states no setpoint, so the solved bus voltage
+        // stands in; `vsched` is not consulted here, because on such a bus it
+        // is the bus's own schedule and not this generator's.
+        if reg_kv > 0.0 {
+            reg_kv / schedule.base_kv
+        } else {
+            schedule.vm
+        }
     } else if schedule.vsched > 0.0 {
         if reg_kv > 0.0 {
             warnings.push(format!(

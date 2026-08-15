@@ -328,7 +328,7 @@ pub fn build_dc_opf_instance(
         to_bus.push(to);
         b.push(branch_b);
         shift.push(shift_rad);
-        f_max.push(thermal.of(branch, amin, amax, buses[from].vmax, buses[to].vmax));
+        f_max.push(thermal.of(branch, amin, amax, &buses[from], &buses[to]));
         angle_min.push(amin);
         angle_max.push(amax);
         branch_rows.push(source_row);

@@ -160,6 +160,12 @@ pub struct NetworkPackage {
     /// that lets a document opt out of the gate by dropping the field, and a
     /// field an older lineage spells differently then arrives as its `serde`
     /// default with no error and no warning.
+    ///
+    /// `serde(default)` is what lets the reader name a missing field instead of
+    /// failing on it, but the published schema still demands it — see
+    /// `examples/generate_schemas.rs`, which puts it back in `required`, because
+    /// a producer that validated against the `$id` and omitted it would pass
+    /// there and be refused by [`NetworkPackage::from_json`].
     #[serde(default)]
     pub powerio_version: String,
     pub producer: Producer,

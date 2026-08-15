@@ -1711,6 +1711,17 @@ fn report_geo_apply(report: &powerio_matrix::geo::GeoApplyReport) {
         "unplaced: {} bus(es) with no location, {} branch(es) with no route",
         report.unlocated_buses, report.unlocated_branches
     );
+    // A point sidecar or a substation join states no polylines, so every branch
+    // lands in that second count on a run that placed everything it could. Say
+    // what it means, rather than leave a successful apply reading as a partial
+    // one. `GeoApplyReport::require_located` is the strict gate for a caller
+    // that does want a route on every branch.
+    if report.unlocated_branches > 0 {
+        eprintln!(
+            "note: a branch with no route renders from its bus endpoints; only a source \
+             stating intermediate geometry gives it one"
+        );
+    }
     for note in &report.notes {
         eprintln!("note: {note}");
     }

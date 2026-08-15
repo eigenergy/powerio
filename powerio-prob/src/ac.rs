@@ -365,13 +365,7 @@ pub fn build_ac_opf_instance(
         let amax = case.angle_radians(branch.angmax);
         tap.push(branch.divisible_tap(source_row)?);
         shift.push(case.angle_radians(branch.shift));
-        s_max.push(thermal.of(
-            branch,
-            amin,
-            amax,
-            network.buses[from].vmax,
-            network.buses[to].vmax,
-        ));
+        s_max.push(thermal.of(branch, amin, amax, &network.buses[from], &network.buses[to]));
         angle_min.push(amin);
         angle_max.push(amax);
         branch_rows.push(source_row);

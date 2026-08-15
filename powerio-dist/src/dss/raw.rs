@@ -262,6 +262,13 @@ impl RawDss {
     fn clear(&mut self) {
         *self = RawDss::default();
     }
+
+    /// Whether a diagnostic with `code` is still on this document. `Clear`
+    /// resets the findings along with the objects, so a caller that must not
+    /// lose one asks before assuming it is still recorded.
+    fn reported(&self, code: &str) -> bool {
+        self.diagnostics.iter().any(|d| d.code.as_str() == code)
+    }
 }
 
 /// Supplies included file text, so tests can run without a filesystem.
@@ -685,12 +692,24 @@ impl<L: Loader> Executor<'_, L> {
     /// Charged at the attempt, so the loader is never called past the budget
     /// and the syscalls are bounded with the work. The counters live on the
     /// executor rather than in `RawDss`, which `Clear` resets.
+    ///
+    /// The refusal itself does land in `RawDss`, so a `Clear` after the budget
+    /// is spent wipes it. Every later include is still refused — the counters
+    /// survive — so the record is restated rather than left to the reset: a
+    /// truncated network that reports nothing reads as a whole one.
     fn charge_include(&mut self, verb: &str, path: &Path, ctx: &dyn Fn(String) -> String) -> bool {
-        if self.budget_spent {
-            return false;
+        let over_budget = self.budget_spent
+            || self.includes >= MAX_TOTAL_INCLUDES
+            || self.include_bytes >= MAX_TOTAL_INCLUDE_BYTES;
+        if !over_budget {
+            self.includes += 1;
+            return true;
         }
-        if self.includes >= MAX_TOTAL_INCLUDES || self.include_bytes >= MAX_TOTAL_INCLUDE_BYTES {
-            self.budget_spent = true;
+        self.budget_spent = true;
+        if !self
+            .raw
+            .reported(crate::diagnostics::READ_DSS_INCLUDE_BUDGET)
+        {
             let message = ctx(format!(
                 "{verb} {}: refused; the case exceeded the include budget of {MAX_TOTAL_INCLUDES} \
                  files and {} MiB, so the rest of the includes were not followed",
@@ -703,10 +722,8 @@ impl<L: Loader> Executor<'_, L> {
                 "check the case for an include cycle; a file that redirects to itself expands \
                  without bound",
             );
-            return false;
         }
-        self.includes += 1;
-        true
+        false
     }
 
     /// Records a failed include load. A containment refusal is the loader's

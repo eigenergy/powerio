@@ -562,24 +562,30 @@ fn iterative_ptdf_lodf_entries(
     let mut lodf_nnz = 0usize;
     let mut lodf_dropped = 0usize;
     for outage in 0..m {
-        rhs.fill(0.0);
-        if let Some(rf) = g.reduced(from[outage]) {
-            rhs[rf] += 1.0;
-        }
-        if let Some(rt) = g.reduced(to[outage]) {
-            rhs[rt] -= 1.0;
-        }
-        let theta = solver.solve(&rhs)?;
-        let outage_delta = branch_flow(outage, &from, &to, &inc.b, &g, &theta);
-        let denom = 1.0 - outage_delta;
-        let islands = is_bridge[outage] || denom.abs() < LODF_ISLAND_TOLERANCE;
+        // A bridge redistributes nothing, so its whole column past the diagonal
+        // is zero and the solve that would have produced it is not run. On a
+        // radial feeder every branch is a bridge, which is every solve here.
+        let solved = if is_bridge[outage] {
+            None
+        } else {
+            rhs.fill(0.0);
+            if let Some(rf) = g.reduced(from[outage]) {
+                rhs[rf] += 1.0;
+            }
+            if let Some(rt) = g.reduced(to[outage]) {
+                rhs[rt] -= 1.0;
+            }
+            let theta = solver.solve(&rhs)?;
+            let denom = 1.0 - branch_flow(outage, &from, &to, &inc.b, &g, &theta);
+            (denom.abs() >= LODF_ISLAND_TOLERANCE).then_some((theta, denom))
+        };
         for branch in 0..m {
             let v = if branch == outage {
                 -1.0
-            } else if islands {
-                0.0
+            } else if let Some((theta, denom)) = solved.as_ref() {
+                branch_flow(branch, &from, &to, &inc.b, &g, theta) / denom
             } else {
-                branch_flow(branch, &from, &to, &inc.b, &g, &theta) / denom
+                0.0
             };
             if branch == outage || v.abs() > options.drop_tolerance {
                 lodf_entry(branch, outage, v)?;
