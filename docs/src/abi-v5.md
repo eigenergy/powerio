@@ -12,7 +12,7 @@ were three rounds of design. They disagreed with each other. This is the settled
 
 Every symbol has this form:
 
-```
+```text
 pio_<subject>_<operation>[_<qualifier>]
 ```
 

@@ -62,4 +62,15 @@ if [ -n "$(git status --porcelain -- docs/schema)" ]; then
   exit 1
 fi
 
+# docs.yml runs both, and neither is reachable from cargo: an unannotated code
+# fence in the book is compiled as a Rust doctest, so a naming pattern or a
+# shell snippet fails a job nothing else here covers. Skipped when mdbook is
+# absent rather than failing a run that is otherwise complete.
+if command -v mdbook >/dev/null 2>&1; then
+  run mdbook build docs --dest-dir target/doc/guide
+  run mdbook test docs
+else
+  echo "=== skipped: mdbook not installed (cargo install mdbook) ==="
+fi
+
 echo "=== all green ==="
