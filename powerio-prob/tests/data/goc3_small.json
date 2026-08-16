@@ -63,7 +63,8 @@
         "p_syn_res_ub": 0.0, "p_nsyn_res_ub": 0.0,
         "p_ramp_res_up_online_ub": 0.0, "p_ramp_res_up_offline_ub": 0.0,
         "p_ramp_res_down_online_ub": 0.0, "p_ramp_res_down_offline_ub": 0.0,
-        "startup_states": []
+        "startup_states": [],
+        "q_bound_cap": 0, "q_linear_cap": 0
       },
       {
         "uid": "sd_01", "device_type": "consumer", "bus": "bus_01",
@@ -77,7 +78,8 @@
         "p_syn_res_ub": 0.0, "p_nsyn_res_ub": 0.0,
         "p_ramp_res_up_online_ub": 0.0, "p_ramp_res_up_offline_ub": 0.0,
         "p_ramp_res_down_online_ub": 0.0, "p_ramp_res_down_offline_ub": 0.0,
-        "startup_states": []
+        "startup_states": [],
+        "q_bound_cap": 0, "q_linear_cap": 0
       }
     ],
     "active_zonal_reserve": [

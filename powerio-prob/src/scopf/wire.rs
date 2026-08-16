@@ -22,7 +22,7 @@ use super::types::{
     ScopfEnergyWindowPeriodMinPrRow, ScopfEnergyWindows, ScopfFixedPhaseRow, ScopfFixedRatioRow,
     ScopfLengths, ScopfPriceBlockRow, ScopfPriceBlocks, ScopfReactiveReserveRow,
     ScopfReactiveReserveSetRow, ScopfShuntRow, ScopfStaticData, ScopfTransformerRow,
-    ScopfTransformerSurvivorRow, ScopfVariablePhaseRow, ScopfVariableRatioRow,
+    ScopfTransformerSurvivorRow, ScopfVariablePhaseRow, ScopfVariableRatioRow, ScopfViolationCost,
 };
 use super::{ScopfInstance, ScopfResult};
 
@@ -75,7 +75,7 @@ wire_fields!(ScopfBusRow {
     values: [i, uid, v_min, v_max],
 });
 wire_fields!(ScopfShuntRow {
-    index: [],
+    index: [j_sh],
     values: [uid, bus, g_sh, b_sh],
 });
 wire_fields!(ScopfAcLineRow {
@@ -148,7 +148,15 @@ wire_fields!(ScopfDeviceRow {
         p_min,
         q_max,
         q_min,
-        sus
+        sus,
+        q_bound_cap,
+        q_linear_cap,
+        beta_ub,
+        beta_lb,
+        q_0_ub,
+        q_0_lb,
+        beta,
+        q_p0
     ],
 });
 wire_fields!(ScopfActiveReserveRow {
@@ -190,7 +198,12 @@ wire_fields!(ScopfLengths {
         l_t => "L_T",
         l_n_p => "L_N_p",
         l_n_q => "L_N_q",
+        k => "K",
     ],
+});
+wire_fields!(ScopfViolationCost {
+    index: [],
+    values: [p_bus, q_bus, s, e],
 });
 wire_fields!(ScopfEnergyWindowMaxPrRow {
     index: [w_en_max_pr_ind],
@@ -250,6 +263,9 @@ pub fn to_wire_value(instance: &ScopfInstance) -> ScopfResult<Value> {
         price_blocks,
         ac_contingency_survivors,
         dc_contingency_flows,
+        violation_cost,
+        producers_first,
+        device_classes_contiguous,
     } = instance;
     let mut wire = Map::new();
     wire.insert("static".to_owned(), wire_static(static_data)?);
@@ -266,6 +282,12 @@ pub fn to_wire_value(instance: &ScopfInstance) -> ScopfResult<Value> {
     wire.insert(
         "dc_contingency_flows".to_owned(),
         wire_rows(dc_contingency_flows)?,
+    );
+    wire.insert("violation_cost".to_owned(), wire_object(violation_cost)?);
+    wire.insert("producers_first".to_owned(), Value::from(*producers_first));
+    wire.insert(
+        "device_classes_contiguous".to_owned(),
+        Value::from(*device_classes_contiguous),
     );
     Ok(serde_json::to_value(WireEnvelope {
         schema: SCOPF_WIRE_SCHEMA,

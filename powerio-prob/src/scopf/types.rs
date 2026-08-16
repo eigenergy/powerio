@@ -15,6 +15,7 @@ pub struct ScopfBusRow {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[non_exhaustive]
 pub struct ScopfShuntRow {
+    pub j_sh: usize,
     pub uid: String,
     pub bus: BusId,
     pub g_sh: f64,
@@ -114,6 +115,11 @@ pub struct ScopfFixedRatioRow {
 ///
 /// Producers and consumers share this layout. Vector fields use the internal
 /// zero based period order.
+///
+/// The reactive capability block is the `q_bound_cap`/`q_linear_cap` pair and
+/// the parameters of the mode each one selects. The two modes are mutually
+/// exclusive and a device can select neither. A parameter of a mode the device
+/// did not select is `None`. Read the two flags before the parameters.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[non_exhaustive]
 pub struct ScopfDeviceRow {
@@ -151,6 +157,16 @@ pub struct ScopfDeviceRow {
     pub q_max: Vec<f64>,
     pub q_min: Vec<f64>,
     pub sus: Vec<Vec<f64>>,
+    pub q_bound_cap: i64,
+    pub q_linear_cap: i64,
+    pub beta_ub: Option<f64>,
+    pub beta_lb: Option<f64>,
+    pub q_0_ub: Option<f64>,
+    pub q_0_lb: Option<f64>,
+    pub beta: Option<f64>,
+    /// The intercept of the linear capability line. The GOC3 document calls
+    /// this `q_0`, which this row already uses for `initial_status.q`.
+    pub q_p0: Option<f64>,
 }
 
 /// One active power zonal reserve row.
@@ -221,6 +237,8 @@ pub struct ScopfLengths {
     pub l_t: usize,
     pub l_n_p: usize,
     pub l_n_q: usize,
+    /// Contingency count.
+    pub k: usize,
 }
 
 /// Static buses, branches, devices, controls, reserves, and memberships.
@@ -408,10 +426,24 @@ pub struct ScopfDcContingencyFlowRow {
     pub dt: f64,
 }
 
+/// The case's four violation prices. The GOC3 document spells them
+/// `p_bus_vio_cost`, `q_bus_vio_cost`, `s_vio_cost`, and `e_vio_cost` under
+/// `network.violation_cost`. Any one of them can be absent and is then `None`:
+/// GOCompetition's 14 bus validation case has no `e_vio_cost`.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
+pub struct ScopfViolationCost {
+    pub p_bus: Option<f64>,
+    pub q_bus: Option<f64>,
+    pub s: Option<f64>,
+    pub e: Option<f64>,
+}
+
 /// Matrix free SCOPF input data.
 ///
 /// Internal class, period, contingency, window, and flattened row indices are
-/// zero based. Source UIDs and external bus IDs remain separate fields.
+/// zero based and follow the source document order of the section that owns
+/// them. Source UIDs and external bus IDs remain separate fields.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[non_exhaustive]
 pub struct ScopfInstance {
@@ -422,4 +454,13 @@ pub struct ScopfInstance {
     pub price_blocks: ScopfPriceBlocks,
     pub ac_contingency_survivors: ScopfAcContingencySurvivors,
     pub dc_contingency_flows: Vec<ScopfDcContingencyFlowRow>,
+    pub violation_cost: ScopfViolationCost,
+    /// Whether the producer block precedes the consumer block in document
+    /// order. A model that stacks both classes into one variable vector needs
+    /// this to place its per-class offsets.
+    pub producers_first: bool,
+    /// Whether each device class occupies one unbroken run of the
+    /// `simple_dispatchable_device` section. A per-class offset into a stacked
+    /// variable vector is a bijection only when this holds.
+    pub device_classes_contiguous: bool,
 }

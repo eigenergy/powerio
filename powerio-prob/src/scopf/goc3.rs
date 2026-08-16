@@ -170,9 +170,11 @@ fn load_section(items: powerio::Result<Vec<Goc3Record<'_>>>, what: &str) -> Resu
 /// The GOC3 lookup tables a SCOPF client reads, built once by
 /// [`Goc3Adapter::from_document`] and shared by every projection in this module. The
 /// Rust analog of `parse_goc3_json`'s return value in `src/goc3.jl`, scoped
-/// to what the SCOPF projections need (it does not carry `violation_cost`; a
-/// caller that needs it reads the source GOC3 JSON directly).
+/// to what the SCOPF projections need.
 pub(super) struct Goc3Adapter {
+    /// The `network.violation_cost` object, if the document has one. Each of
+    /// the four prices inside it is separately optional.
+    pub(super) violation_cost: Map<String, Value>,
     /// The `reliability.contingency` array, if the document has one. Kept
     /// lazily validated ([`Goc3Adapter::contingencies`] errors when absent)
     /// so a document with no `reliability` section still parses
@@ -212,6 +214,13 @@ impl Goc3Adapter {
             .and_then(|r| r.get("contingency"))
             .and_then(Value::as_array)
             .cloned();
+        let violation_cost = document
+            .network()
+            .map_err(|error| rd(&error))?
+            .get("violation_cost")
+            .and_then(Value::as_object)
+            .cloned()
+            .unwrap_or_default();
         let time_series = document.time_series_input().map_err(|error| rd(&error))?;
         let general = time_series
             .get("general")
@@ -301,6 +310,7 @@ impl Goc3Adapter {
             "reactive_zonal_reserve time series",
         )?;
         Ok(Self {
+            violation_cost,
             contingencies,
             dt,
             bus,
