@@ -843,7 +843,31 @@ struct DcConverter {
     in_service: bool,
     p: f64,
     q: f64,
+    /// Whether the record stated converter fields beyond the ones mapped here.
+    states_detail: bool,
     extras: Extras,
+}
+
+/// Whether a DC record states numeric data beyond the values the reader maps.
+///
+/// `mapped` are the values read out of the record; every other nonzero number
+/// on the rhs is converter or control data (firing angles, transformer taps, a
+/// DC voltage schedule) the balanced model does not carry, kept only in extras.
+/// A zero states nothing: EPC reads a zero field as absent (`reg_kv` and
+/// `rate1` above lean on the same convention), and the writer below emits
+/// exactly that shape, so a powerio-written file reads back without the
+/// warning while a real GE export still reports what stays behind.
+///
+/// Counting rather than indexing keeps the test independent of how a producer
+/// splits the record across continuation lines: `rhs` is the joined numeric
+/// side, and `mapped` is a subset of it.
+fn dc_states_detail(rhs: &[String], mapped: &[f64]) -> bool {
+    let stated = rhs
+        .iter()
+        .filter(|tok| tok.parse::<f64>().is_ok_and(|v| v != 0.0))
+        .count();
+    let consumed = mapped.iter().filter(|v| **v != 0.0).count();
+    stated > consumed
 }
 
 /// Read all `dc converter data` rows into a DC bus keyed map.
@@ -860,12 +884,19 @@ fn read_dc_converters(
             let l2 = line_tokens(rec, 1);
             let mut extras = extras(rec, "dc converter data", 8, 15);
             extras.insert("pslf_device".into(), Value::String("dc_converter".into()));
+            let in_service = on_at(&rec.rhs, 0, true, "dc converter status", rec)?;
+            let p = num_at(&l2, 2, 0.0, "dc converter p", rec)?;
+            let q = num_at(&l2, 3, 0.0, "dc converter q", rec)?;
             Ok(DcConverter {
                 ac_bus: BusId(req_id(&rec.lhs, 0, "dc converter AC bus", rec)?),
                 dc_bus: req_id(&rec.lhs, 3, "dc converter DC bus", rec)?,
-                in_service: on_at(&rec.rhs, 0, true, "dc converter status", rec)?,
-                p: num_at(&l2, 2, 0.0, "dc converter p", rec)?,
-                q: num_at(&l2, 3, 0.0, "dc converter q", rec)?,
+                in_service,
+                p,
+                q,
+                states_detail: dc_states_detail(
+                    &rec.rhs,
+                    &[f64::from(i32::from(in_service)), p, q],
+                ),
                 extras,
             })
         })();
@@ -894,7 +925,7 @@ fn read_dc_lines(
 ) -> Vec<Hvdc> {
     let mut out = Vec::new();
     for rec in doc.records("dc line data") {
-        let parsed = (|| -> Result<Hvdc> {
+        let parsed = (|| -> Result<(bool, Hvdc)> {
             let from_dc = req_id(&rec.lhs, 0, "dc line from bus", rec)?;
             let to_dc = req_id(&rec.lhs, 3, "dc line to bus", rec)?;
             let from = converters.get(&from_dc).ok_or_else(|| Error::FormatRead {
@@ -905,12 +936,16 @@ fn read_dc_lines(
                 format: FMT,
                 message: format!("dc line references DC bus {to_dc} with no converter"),
             })?;
+            let in_service = on_at(&rec.rhs, 0, true, "dc line status", rec)?;
             let rate = num_at(&rec.rhs, 6, 0.0, "dc line rate1", rec)?;
             let pmax = if rate > 0.0 {
                 rate
             } else {
                 from.p.abs().max(to.p.abs())
             };
+            let states_detail = from.states_detail
+                || to.states_detail
+                || dc_states_detail(&rec.rhs, &[f64::from(i32::from(in_service)), rate]);
             let mut extras = extras(rec, "dc line data", 8, 20);
             extras.insert("pslf_device".into(), Value::String("dc_line".into()));
             extras.insert(
@@ -921,37 +956,43 @@ fn read_dc_lines(
                 "pslf_to_converter".into(),
                 Value::Object(to.extras.clone().into_iter().collect()),
             );
-            Ok(Hvdc {
-                from: from.ac_bus,
-                to: to.ac_bus,
-                in_service: on_at(&rec.rhs, 0, true, "dc line status", rec)?
-                    && from.in_service
-                    && to.in_service,
-                pf: from.p,
-                pt: to.p,
-                qf: from.q,
-                qt: to.q,
-                vf: 1.0,
-                vt: 1.0,
-                pmin: -pmax,
-                pmax,
-                qminf: from.q.min(0.0),
-                qmaxf: from.q.max(0.0),
-                qmint: to.q.min(0.0),
-                qmaxt: to.q.max(0.0),
-                loss0: 0.0,
-                loss1: 0.0,
-                cost: None,
-                uid: None,
-                extras,
-            })
+            Ok((
+                states_detail,
+                Hvdc {
+                    from: from.ac_bus,
+                    to: to.ac_bus,
+                    in_service: in_service && from.in_service && to.in_service,
+                    pf: from.p,
+                    pt: to.p,
+                    qf: from.q,
+                    qt: to.q,
+                    vf: 1.0,
+                    vt: 1.0,
+                    pmin: -pmax,
+                    pmax,
+                    qminf: from.q.min(0.0),
+                    qmaxf: from.q.max(0.0),
+                    qmint: to.q.min(0.0),
+                    qmaxt: to.q.max(0.0),
+                    loss0: 0.0,
+                    loss1: 0.0,
+                    cost: None,
+                    uid: None,
+                    extras,
+                },
+            ))
         })();
         match parsed {
-            Ok(line) => {
-                warnings.push(
-                    "PSLF DC line/converter data mapped to BalancedNetwork HVDC with unsupported control fields retained in extras"
-                        .into(),
-                );
+            // The record and its two converters carry the warning only when one
+            // of them stated data the mapping left behind; see
+            // [`dc_states_detail`].
+            Ok((states_detail, line)) => {
+                if states_detail {
+                    warnings.push(
+                        "PSLF DC line/converter data mapped to BalancedNetwork HVDC with unsupported control fields retained in extras"
+                            .into(),
+                    );
+                }
                 out.push(line);
             }
             Err(err) => warnings.push(format!("dc line at line {} not mapped: {err}", rec.line_no)),
@@ -1483,7 +1524,9 @@ pub fn write_pslf(net: &BalancedNetwork) -> Conversion {
     // keyed by a DC bus number. Synthesize a distinct DC bus per converter (these
     // are internal join keys, not AC buses) and emit the from/to converter rows
     // plus the line row that read_dc_converters/read_dc_lines rejoin into one
-    // `BalancedNetwork::Hvdc`.
+    // `BalancedNetwork::Hvdc`. Every unmapped field is written as 0, the shape
+    // `dc_states_detail` reads as "nothing stated", so this writer's own output
+    // reads back without the retained-control-fields warning.
     if !net.hvdc.is_empty() {
         let _ = writeln!(
             s,
@@ -1817,6 +1860,59 @@ mod tests {
 
     fn close(actual: f64, expected: f64) {
         assert!((actual - expected).abs() < 1e-9, "{actual} != {expected}");
+    }
+
+    /// A DC record whose converter or line rows state real control fields —
+    /// firing angles, taps, a voltage schedule — warns that they stay only in
+    /// extras; the same records with those fields zeroed (the shape our writer
+    /// emits) do not, because a zero states nothing in EPC.
+    #[test]
+    fn dc_control_detail_warns_and_the_neutral_shape_does_not() {
+        let epc = |converter_tail: &str| {
+            r#"title
+d
+!
+solution parameters
+sbase 100
+!
+bus data [2] ty vsched volt angle ar zone vmax vmin
+1 "A" 230 : 0 1 1 0 1 1 1.1 0.9
+2 "B" 230 : 1 1 1 0 1 1 1.1 0.9
+dc converter data [2] id name kv dc_bus
+1 "A" 230 11 : 1 /
+0 0 10 2 TAIL
+2 "B" 230 12 : 1 /
+0 0 -9.5 -1.5
+dc line data [1] from name kv to st rate1
+11 "dc" 0 12 : 1 0 0 0 0 0 10
+end
+"#
+            .replace(" TAIL", converter_tail)
+        };
+
+        // Firing angle limits stated on the rectifier: retained-only data.
+        let mut warnings = Vec::new();
+        let net = parse_pslf_source(Arc::new(epc(" 15 90")), None, &mut warnings).unwrap();
+        assert_eq!(net.hvdc.len(), 1);
+        assert!(
+            warnings
+                .iter()
+                .any(|w| w.contains("unsupported control fields")),
+            "stated firing angles must be reported: {warnings:?}"
+        );
+
+        // The neutral shape the writer emits: nothing beyond status/p/q/rate.
+        let mut warnings = Vec::new();
+        let net = parse_pslf_source(Arc::new(epc("")), None, &mut warnings).unwrap();
+        assert_eq!(net.hvdc.len(), 1);
+        assert!(
+            !warnings
+                .iter()
+                .any(|w| w.contains("unsupported control fields")),
+            "zeros state nothing: {warnings:?}"
+        );
+        let dc = &net.hvdc[0];
+        assert!((dc.pf - 10.0).abs() < 1e-12 && (dc.pmax - 10.0).abs() < 1e-12);
     }
 
     #[test]

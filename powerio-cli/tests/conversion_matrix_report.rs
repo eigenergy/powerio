@@ -433,15 +433,24 @@ const TRANSMISSION_FORMATS: [TransmissionFormat; 8] = [
 //
 // The `→ PowerModels JSON` column loses a blanket dcline warning that named no
 // loss: every `Hvdc` field has a PowerModels slot and reads back exactly.
+//
+// The PSLF dc reader warns about control fields retained only in extras when
+// the record states some — a real GE export with firing angles or taps — and
+// no longer for the all-zero shape powerio's own writer emits, where nothing
+// is retained. That is −4 (the dcline case, once per dc line) on every cell of
+// the `PSLF .epc` source row, and −4 more on every `→ PSLF .epc` cell whose
+// payload carries dclines (PowerModels, PSS/E, egret, Surge; −8 on PSLF→PSLF,
+// which paid on both legs). What remains in those cells is the genuine EPC
+// loss: no cost data, and one rate1 column for an asymmetric pmin/pmax pair.
 const TRANSMISSION_WARNING_BASELINE: [[usize; 8]; 8] = [
     [0, 0, 8, 8, 0, 5, 0, 6],
-    [6, 0, 14, 14, 0, 11, 21, 11],
-    [13, 0, 0, 1, 0, 3, 0, 5],
+    [6, 0, 14, 14, 0, 11, 21, 7],
+    [13, 0, 0, 1, 0, 3, 0, 1],
     [12, 0, 0, 0, 0, 2, 0, 0],
-    [1, 0, 9, 9, 0, 6, 1, 11],
+    [1, 0, 9, 9, 0, 6, 1, 7],
     [6, 0, 11, 11, 5, 0, 0, 11],
-    [1, 0, 9, 9, 0, 6, 0, 11],
-    [17, 4, 5, 5, 4, 7, 7, 8],
+    [1, 0, 9, 9, 0, 6, 0, 7],
+    [13, 0, 1, 1, 0, 3, 3, 0],
 ];
 
 const DEEPMIND_OPFDATA_WARNING_BASELINE: [usize; 8] = [3, 2, 5, 5, 3, 4, 2, 4];

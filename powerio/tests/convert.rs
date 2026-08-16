@@ -1234,6 +1234,17 @@ fn hvdc_round_trips_through_pslf() {
     assert!(!net.hvdc.is_empty(), "fixture should have dclines");
 
     let pslf = write_pslf(&net);
+    // The writer zeroes every converter field the model does not carry, and the
+    // reader reads that shape as "nothing stated": its own output must come
+    // back without the retained-control-fields warning. A real GE export with
+    // firing angles or taps still gets it (pinned in the pslf unit tests).
+    let back_warnings = parse_str(&pslf.text, "pslf").unwrap().warnings;
+    assert!(
+        !back_warnings
+            .iter()
+            .any(|w| w.contains("unsupported control fields")),
+        "no retained-only data in powerio-written dc records: {back_warnings:?}"
+    );
     assert!(
         !pslf.warnings.iter().any(|w| w.contains("dcline")),
         "HVDC is now written, not dropped: {:?}",
