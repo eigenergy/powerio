@@ -98,7 +98,8 @@ pub struct DcBranchData {
     pub to_bus: Vec<usize>,
     /// Branch coefficient in the selected power unit per radian.
     pub b: Vec<f64>,
-    /// Phase shift in radians. Zero under [`DcConvention::PaperPure`].
+    /// Phase shift in radians. Zero unless the convention carries phase shift
+    /// injections.
     pub shift: Vec<f64>,
     /// Thermal limit in the selected power unit. Zero means unlimited.
     pub f_max: Vec<f64>,
@@ -278,10 +279,14 @@ pub fn build_dc_opf_instance(
             }
             return Err(Error::ZeroImpedance { row: source_row });
         }
-        let branch_b = options
-            .convention
-            .branch_susceptance(branch.x, branch.effective_tap())
-            * b_scale;
+        // Negated: the convention states `b`, and this field is the flow
+        // coefficient in `f = b (theta_from - theta_to)`, positive for an
+        // inductive branch.
+        let branch_b =
+            -options
+                .convention
+                .series_susceptance(branch.r, branch.x, branch.effective_tap())
+                * b_scale;
         if !branch_b.is_finite() {
             return Err(Error::NonFiniteSusceptance { row: source_row });
         }

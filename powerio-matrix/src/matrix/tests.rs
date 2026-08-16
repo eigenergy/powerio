@@ -1,3 +1,7 @@
+//! These cases pin `b = 1/x`, so they name `DcConvention::PaperPure` until it
+//! is removed in 1.0.0.
+#![allow(deprecated)]
+
 use approx::assert_relative_eq;
 
 use crate::indexed::IndexedNetwork;

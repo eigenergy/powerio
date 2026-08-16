@@ -113,7 +113,7 @@ pub struct SensitivityOptions {
 impl Default for SensitivityOptions {
     fn default() -> Self {
         Self {
-            convention: DcConvention::PaperPure,
+            convention: DcConvention::default(),
             solver: SensitivitySolver::Auto,
             drop_tolerance: PRUNE,
             cg_tolerance: DEFAULT_CG_TOLERANCE,

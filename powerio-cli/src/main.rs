@@ -100,7 +100,7 @@ enum Command {
         #[arg(short, long)]
         output: PathBuf,
         /// DC susceptance convention.
-        #[arg(long, value_enum, default_value = "paper-pure")]
+        #[arg(long, value_enum, default_value = "series")]
         convention: DcConvArg,
         /// Unit system for power/cost quantities.
         #[arg(long, value_enum, default_value = "per-unit")]
@@ -123,7 +123,7 @@ enum Command {
         #[arg(short, long)]
         output: PathBuf,
         /// DC susceptance convention.
-        #[arg(long, value_enum, default_value = "paper-pure")]
+        #[arg(long, value_enum, default_value = "series")]
         convention: DcConvArg,
         /// Sensitivity solve path.
         #[arg(long, value_enum, default_value = "auto")]
@@ -522,15 +522,22 @@ impl From<SchemeArg> for Scheme {
 
 #[derive(Clone, Copy, Debug, ValueEnum)]
 enum DcConvArg {
-    PaperPure,
+    /// `b = x/(r² + x²)`, with phase shift injections.
+    #[value(name = "series", alias = "series-impedance")]
+    SeriesImpedance,
+    /// `b = 1/(x tau)`, with phase shift injections.
     Matpower,
+    /// `b = 1/x`. Accepted until 1.0.0; use `series`.
+    PaperPure,
 }
 
 impl From<DcConvArg> for DcConvention {
+    #[allow(deprecated)]
     fn from(value: DcConvArg) -> Self {
         match value {
-            DcConvArg::PaperPure => Self::PaperPure,
+            DcConvArg::SeriesImpedance => Self::SeriesImpedance,
             DcConvArg::Matpower => Self::Matpower,
+            DcConvArg::PaperPure => Self::PaperPure,
         }
     }
 }

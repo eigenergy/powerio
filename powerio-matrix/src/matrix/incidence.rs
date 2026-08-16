@@ -90,7 +90,9 @@ pub fn build_incidence(
         if !tap.is_finite() || tap.abs() < crate::matrix::MIN_DIVISIBLE_MAGNITUDE {
             return Err(Error::DegenerateTap { row: idx, tap });
         }
-        let b_e = conv.branch_susceptance(br.x, tap);
+        // Negated once here: the convention states `b`, negative for an
+        // inductive branch, and `L` takes the M-matrix form.
+        let b_e = -conv.series_susceptance(br.r, br.x, tap);
         // A NaN reactance slips past the guard above and poisons the whole
         // Laplacian.
         if !b_e.is_finite() {
