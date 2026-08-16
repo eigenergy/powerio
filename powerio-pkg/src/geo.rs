@@ -155,6 +155,21 @@ impl GeoApplyTarget for DistApply<'_> {
              substation join"
         )
     }
+
+    fn unlocated_counts(&self) -> (usize, usize) {
+        (
+            self.net
+                .buses
+                .iter()
+                .filter(|bus| bus.location.is_none())
+                .count(),
+            self.net
+                .lines
+                .iter()
+                .filter(|line| line.route.is_none())
+                .count(),
+        )
+    }
 }
 
 /// Bus row lookups: payload row uid plus the lowercased string id.

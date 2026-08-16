@@ -291,8 +291,11 @@ class Network:
 
         ``text`` is any form :func:`parse_geo` accepts; this case is
         unchanged. The report carries ``matched_buses``, ``matched_branches``,
-        ``unmatched_features``, and ``notes``. The placed copy drops the
-        retained source text, so a same-format write re-serializes.
+        ``unmatched_features``, ``unlocated_buses``, ``unlocated_branches``,
+        and ``notes``. The two unlocated counts cover the whole case when the
+        pass ends, so a layer that matched nothing reads apart from a case
+        that needed nothing. The placed copy drops the retained source text,
+        so a same-format write re-serializes.
         """
         inner, report = self._inner.apply_geo_layer(text, name_hint)
         return Network(inner), report

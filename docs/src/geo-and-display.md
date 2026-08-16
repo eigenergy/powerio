@@ -63,7 +63,7 @@ removes the raw keys from `extras`. Writers emit from `location`.
 
 | Format | Fields | Space |
 | --- | --- | --- |
-| PowerWorld aux | `Latitude:1`/`Longitude:1` bus columns (`SubNum` stays in extras: it is identity rather than geometry) | geographic |
+| PowerWorld aux | `Latitude:1`/`Longitude:1` bus columns, else the bare `Latitude`/`Longitude` pair (`SubNum` stays in extras: it is identity rather than geometry) | geographic |
 | pandapower | bus `geo` GeoJSON Point strings | geographic |
 | PyPSA | `buses.csv` `x`/`y` | geographic |
 | OpenDSS | `Buscoords` | unknown; a diagnostic identifies values within longitude and latitude bounds |
@@ -109,14 +109,20 @@ buscoords CSV (`bus, x, y`), CSV and JSON records with aliased field names
 endpoint pairs), and GeoJSON Point and LineString features. Features reference
 elements by up to three key fields, matched in order: `uid`, then `id`, then
 case insensitive `name`. Branch routes additionally fall back to the unordered
-`(from, to)` bus pair. A bare integer branch id is accepted on read as a
-1-based positional row alias and never written; the durable identity is the
-payload `uid`.
+`(from, to)` bus pair. A bare integer branch id (`branch`, `branchid`,
+`branchnumber`, `catsid`) is accepted on read as a 1-based positional row
+alias and never written; the durable identity is the payload `uid`. A branch
+key never reads from a bare `id` property, because GIS exports and RFC 7946
+tooling put a feature row counter there.
 
 `Network::geo_layer()` extracts, and `Network::apply_geo_layer(&layer)`
-applies and returns a `GeoApplyReport` with matched and unmatched counts. The
-multiconductor equivalents attach through `powerio-pkg` (`dist_geo_layer`,
-`apply_dist_geo_layer`). The CLI wraps the same surface:
+applies and returns a `GeoApplyReport` with the matched and unmatched feature
+counts plus `unlocated_buses` and `unlocated_branches`, the elements that
+carry no geometry when the pass ends. The two together tell a layer that
+matched nothing from a model that needed nothing; `report.require_located()`
+is the strict caller's one line check. The multiconductor equivalents attach
+through `powerio-pkg` (`dist_geo_layer`, `apply_dist_geo_layer`). The CLI
+wraps the same surface:
 
 ```console
 $ powerio geo extract case.aux -o case.geo.json
@@ -130,12 +136,19 @@ The `.pwd` reader returns `DisplayData::PowerWorld` with a `PwdDisplay`: canvas
 dimensions, a timestamp, and substation symbols with number, name, and diagram
 coordinates.
 
-Three helpers connect it to the geo model. `geo_layer_from_pwd` lifts the
+Four helpers connect it to the geo model. `geo_layer_from_pwd` lifts the
 substation symbols into a diagram space `GeoLayer` (also reachable as
-`powerio geo extract case.pwd`); `apply_substation_points` joins those points
-onto buses through the `SubNum` extras key; and `pwd_mercator_to_lonlat` is a
-documented, approximate inverse of the projection PowerWorld's auto generated
-layouts use, for consumers that want to place a diagram on a map.
+`powerio geo extract case.pwd`); `geo_layer_from_aux_substations` lifts the
+`Latitude` and `Longitude` columns of an aux `Substation` table into a
+geographic one; `apply_substation_points` joins either onto buses through the
+`SubNum` extras key; and `pwd_mercator_to_lonlat` is a documented,
+approximate inverse of the projection PowerWorld's auto generated layouts
+use, for consumers that want to place a diagram on a map.
+
+A bus row of a complete case export carries its own coordinates as well. The
+aux reader promotes the substation `Latitude:1`/`Longitude:1` pair, and the
+bus's own bare `Latitude`/`Longitude` pair, into `Bus.location`; a promoted
+pair leaves extras.
 
 Rust uses `parse_display_file` and `parse_display_bytes`. Python exposes the
 same names and returns `DisplayData(kind="powerworld", data=PwdDisplay(...))`.

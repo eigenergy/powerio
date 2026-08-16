@@ -39,6 +39,9 @@ def test_network_apply_and_extract_round_trip():
     placed, report = net.apply_geo_layer(BUSCOORDS)
     assert report["matched_buses"] == 2
     assert report["unmatched_features"] == 0
+    # The counts cover the whole case, so a caller sees what the layer left.
+    assert report["unlocated_buses"] == 7
+    assert report["unlocated_branches"] == 9
     # The input case is unchanged; the placed copy carries the layer.
     with pytest.raises(ValueError):
         net.geo_layer()

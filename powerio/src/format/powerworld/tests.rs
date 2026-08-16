@@ -187,6 +187,28 @@ fn unmodeled_data_blocks_warn_on_parse() {
 }
 
 #[test]
+// Exact decimal fractions parsed from the fixture; bit equality is the assertion.
+#[allow(clippy::float_cmp)]
+fn bare_bus_latitude_and_longitude_promote_into_the_location() {
+    // Older complete case exports write the pair on the bus row itself,
+    // without the `:1` substation suffix.
+    let net = parse_powerworld(
+        "DATA (Bus, [BusNum, Latitude, Longitude])\n{\n1 34.2 -80.05\n2 34.3 \"\"\n}\n",
+    )
+    .unwrap();
+    let location = net.buses[0].location.expect("bus 1 location");
+    assert_eq!((location.x, location.y), (-80.05, 34.2));
+    assert!(!net.buses[0].extras.contains_key("Latitude"));
+    assert!(!net.buses[0].extras.contains_key("Longitude"));
+    // Half a pair promotes nothing, so the column stays in extras.
+    assert!(net.buses[1].location.is_none());
+    assert_eq!(
+        net.buses[1].extras.get("Latitude").and_then(|v| v.as_str()),
+        Some("34.3")
+    );
+}
+
+#[test]
 // Exact kV values parsed from the fixture; bit equality is the assertion.
 #[allow(clippy::float_cmp)]
 fn writer_sanitizes_bus_names_that_would_corrupt_a_value() {

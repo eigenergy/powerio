@@ -1,11 +1,14 @@
-//! PowerWorld `.pwd` display promotion into the geo model.
+//! PowerWorld substation promotion into the geo model.
 //!
-//! The `.pwd` reader decodes substation symbols in diagram coordinates.
-//! [`geo_layer_from_pwd`] lifts them into a diagram space [`GeoLayer`];
-//! [`apply_substation_points`] joins those points onto buses through the
-//! `SubNum` extras key; [`pwd_mercator_to_lonlat`] is the documented,
-//! approximate inverse of the projection PowerWorld's auto generated layouts
-//! use, for consumers that want to place a diagram on a map.
+//! Two PowerWorld files carry substation coordinates. The `.pwd` display
+//! holds symbols in diagram coordinates, which [`geo_layer_from_pwd`] lifts
+//! into a diagram space [`GeoLayer`]; [`pwd_mercator_to_lonlat`] is the
+//! documented, approximate inverse of the projection PowerWorld's auto
+//! generated layouts use, for consumers that want to place a diagram on a
+//! map. The `.aux` `Substation` table holds latitude and longitude, which
+//! [`geo_layer_from_aux_substations`] lifts into a geographic layer.
+//! [`apply_substation_points`] joins either layer onto buses through the
+//! `SubNum` extras key.
 
 use std::collections::HashMap;
 
@@ -14,6 +17,7 @@ use serde_json::Value;
 use super::layer::{ElementKey, GeoApplyReport, GeoFeature, GeoGeometry, GeoLayer, GeoTarget};
 use super::{Canvas, CoordinateSpace, GeoMeta, Location};
 use crate::format::PwdDisplay;
+use crate::format::powerworld::AuxFile;
 use crate::network::Network;
 
 /// Scale of PowerWorld's auto generated layouts: `x = K·lon` and
@@ -63,6 +67,59 @@ pub fn geo_layer_from_pwd(display: &PwdDisplay) -> GeoLayer {
                 kind: None,
             })
             .collect(),
+    }
+}
+
+/// Lift the aux `Substation` table into a geographic [`GeoLayer`] with
+/// substation targets keyed by substation number. The number comes from
+/// `SubNum` or `Number` and the point from `Latitude` and `Longitude`, the
+/// column names PowerWorld writes itself, so they take no aliases. A row
+/// whose number or coordinate is absent or is not a finite number is
+/// skipped. Rows stay in file order, so a repeated substation number keeps
+/// the last point once [`apply_substation_points`] runs.
+#[must_use]
+pub fn geo_layer_from_aux_substations(aux: &AuxFile) -> GeoLayer {
+    let mut features = Vec::new();
+    for object in aux.data_of("Substation") {
+        let (Some(number), Some(latitude), Some(longitude)) = (
+            object
+                .field_index("SubNum")
+                .or_else(|| object.field_index("Number")),
+            object.field_index("Latitude"),
+            object.field_index("Longitude"),
+        ) else {
+            continue;
+        };
+        for row in &object.rows {
+            let field = |column: usize| -> Option<(&str, f64)> {
+                let text = row.values.get(column)?.trim();
+                let value = text.parse::<f64>().ok().filter(|value| value.is_finite())?;
+                Some((text, value))
+            };
+            let (Some((number, _)), Some((_, lat)), Some((_, lon))) =
+                (field(number), field(latitude), field(longitude))
+            else {
+                continue;
+            };
+            features.push(GeoFeature {
+                target: GeoTarget::Substation,
+                key: ElementKey {
+                    uid: None,
+                    id: Some(substation_key(number)),
+                    name: None,
+                    index: None,
+                },
+                geometry: GeoGeometry::Point([lon, lat]),
+                from: None,
+                to: None,
+                kind: None,
+            });
+        }
+    }
+    GeoLayer {
+        space: CoordinateSpace::Geographic { crs: None },
+        kind: None,
+        features,
     }
 }
 
@@ -121,6 +178,7 @@ pub fn apply_substation_points(net: &mut Network, layer: &GeoLayer) -> GeoApplyR
             kind: layer.kind,
         });
     }
+    (report.unlocated_buses, report.unlocated_branches) = super::layer::unlocated_counts(net);
     report
 }
 
@@ -132,18 +190,22 @@ fn bus_substation(bus: &crate::network::Bus) -> Option<String> {
         .get("SubNum")
         .or_else(|| bus.extras.get("SubNumber"))?;
     match value {
-        Value::Number(number) => Some(number.to_string()),
+        Value::Number(number) => Some(substation_key(&number.to_string())),
         Value::String(text) => {
             let trimmed = text.trim();
-            (!trimmed.is_empty()).then(|| {
-                // "12.0" and "12" name the same substation.
-                trimmed
-                    .parse::<f64>()
-                    .ok()
-                    .filter(|v| v.fract() == 0.0 && v.abs() < 1e15)
-                    .map_or_else(|| trimmed.to_owned(), |v| format!("{v:.0}"))
-            })
+            (!trimmed.is_empty()).then(|| substation_key(trimmed))
         }
         _ => None,
     }
+}
+
+/// The join key for one substation number. Every source of a substation
+/// number goes through this: "12.0" and "12" name the same substation, and
+/// the two sides of the join must spell it the same way.
+fn substation_key(number: &str) -> String {
+    number
+        .parse::<f64>()
+        .ok()
+        .filter(|v| v.fract() == 0.0 && v.abs() < 1e15)
+        .map_or_else(|| number.to_owned(), |v| format!("{v:.0}"))
 }
