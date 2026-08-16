@@ -1,12 +1,88 @@
 # C ABI v5
 
-This is the C surface powerio freezes. v4 set a grammar. v5 applies it to every symbol v4
-left alone. This is the last breaking change to the C ABI.
+v5 touches twelve symbols and renames none. Everything a caller wrote against v4 still
+compiles except the seven signatures listed below, which change because their v4 shape lost
+data.
 
-One question decides everything here: what does a caller in 2029 need this to be.
+This document has two halves. The first records what shipped. The second is a design study
+that proposed replacing the whole surface; it was cut down to the first half, and it stays
+here because the reasoning behind several of its pieces is worth having when a later version
+does break something.
 
-This document replaces `abi-v5-audit.md`, `abi-v5-review.md`, and `abi-v5-followups.md`. Those
-were three rounds of design. They disagreed with each other. This is the settled result.
+## What v5 changes
+
+| symbol | change | why |
+|---|---|---|
+| `pio_to_format` | signature | warnings return as an owned string through `char **out_warnings` |
+| `pio_convert_file` | signature | same |
+| `pio_convert_str` | signature | same |
+| `pio_write_dir` | signature | same |
+| `pio_dist_to_format` | signature | same |
+| `pio_dist_convert_file` | signature | same |
+| `pio_dist_convert_str` | signature | same |
+| `pio_n_buses` | behavior | counts the star-lowered space, so it agrees with every per-bus extractor |
+| `pio_bus_ids` | behavior | same space, so `length(ids) == n_buses` |
+| `pio_acopf_from_network` | removed | no C consumer; re-cut additively when one exists |
+| `pio_acopf_to_json` | removed | same |
+| `pio_acopf_instance_free` | removed | goes with its handle |
+| `pio_build_info` | new | one document reporting version, ABI, features and foreign schema versions |
+| `pio_parse_bytes` | new | in-memory ingest that reaches the binary readers |
+
+Three JSON documents also changed shape, which is the reason the integer had to move at all:
+`pio_schema_versions_json` dropped four keys, `pio_dist_capabilities_json` renamed
+`schema_version` to `powerio_version`, and the Arrow metadata key became `powerio.version`. A
+binding built against 4 would pass the handshake and then read `null` for keys it mirrors.
+
+**Warnings.** The seven conversion entry points used to fill a caller `warnbuf` and silently
+truncate when the fidelity-loss list outran it. `finish_conversion` discarded the length that
+would have told the caller. The out-pointer replaces both problems: `NULL` means the
+conversion lost nothing, any other value is an owned string the caller frees with
+`pio_string_free`, and passing `NULL` for the parameter itself discards them. The call writes
+the out-pointer before it does any work, so a stale value from an earlier call is never
+mistaken for this one's. `pio_warnings` and `pio_dist_warnings` keep their caller buffer:
+they use the size-then-fill idiom and cannot truncate.
+
+**The bus space.** A case with an in-service 3-winding transformer star-lowers before the
+dense extractors run, adding one bus per transformer. Through v4 `pio_n_buses` and
+`pio_bus_ids` reported the unexpanded table while `pio_bus_demand`, `pio_bus_shunt` and
+`pio_n_islands` reported the expansion, so a per-bus buffer sized from `pio_n_buses` read
+short and its trailing entries had no id. The v4 header documented the mismatch and said
+aligning it was a v5 change. This is that change. `length(bus_ids) == n_buses` is the
+migration test.
+
+**`PIO_DIST_ABI_VERSION`** is frozen at 1 and no longer meaningful. It existed to absorb
+distribution volatility, and that volatility is in the BMOPF schema, which changes a reader, a
+writer and an emitted token but no C signature. The symbol stays because PowerIO.jl gates
+thirteen distribution call sites on resolving it. Foreign schema versions are reported at
+runtime by `pio_build_info` instead, which can express "I speak BMOPF 0.2" in a way an integer
+checked once at load cannot.
+
+**`pio_parse_bytes`** takes `(const uint8_t *, size_t)` and accepts every `pio_parse_str`
+format name plus `pwb`. PowerWorld binary has no text form and a NUL truncates it, so before
+this the only way to read one was `pio_parse_file`, which means a consumer holding an upload
+or an archive member had to stage a temporary file. It opens nothing, which is a security
+property rather than a convenience: it is the entry point for untrusted input, and it is why
+the 0.7.3 advisory fix works. The Rust and Python surfaces gained the same entry point in the
+same change, so the symbol is not a promise the library cannot keep.
+
+---
+
+# Design study: a full rewrite of the surface
+
+Everything below was written as a v5 proposal and **did not ship**. It renames essentially
+every symbol in an 85-symbol surface. The estimate for PowerIO.jl alone was ~98 edit sites
+across 12 files, in exchange for consistency rather than for a defect fixed.
+
+The premise that drove its scope was that v5 would be the last breaking change to the C ABI,
+so everything had to land at once. That premise is false. Every symbol resolves by `dlsym`
+behind an equality gate on `pio_abi_version`, powerio owns its one binding consumer, and that
+binding's artifact repin is automated. A later bump is routine. Nothing here has to happen in
+one release, and most of it does not have to happen at all.
+
+Read it as an argued menu. The pieces most worth revisiting are the options struct (rule 5),
+which is the only mechanism here that prevents future symbol bloat, and the conversion handle
+(rule 4), whose file-list argument identifies a live defect: OpenDSS sidecars are dropped
+today, so a written `.dss` can name a coordinates file the user does not have.
 
 ## The grammar
 
@@ -62,12 +138,9 @@ not a convenience: `parse_bytes` is the entry point for untrusted text, and it i
 `_bytes` rather than `_str`, because a PowerWorld `.pwb` is binary and a NUL truncates it. v4
 called this `_str` and could not accept half the formats it named.
 
-That last sentence is a promise the Rust does not keep yet. `powerio::parse_str` takes `&str`,
-and there is no `parse_bytes` for case ingest — `parse_display_bytes` handles the `.pwd`
-sidecar, a different type. So `pio_balanced_parse_bytes` needs a new Rust entry point taking
-`&[u8]` and dispatching `.pwb` without touching the filesystem. That is real work, not part of
-the mechanical rename, and shipping the symbol without it would leave the security argument
-above describing something that is not there.
+This is the one piece of the study that shipped, under the existing names rather than the
+proposed ones. `powerio::parse_bytes` and `pio_parse_bytes` exist as of v5; the rename to
+`pio_balanced_parse_bytes` does not.
 
 The precedent is libxml2: one verb, and a suffix for where the bytes came from —
 `xmlReadFile`, `xmlReadMemory`, `xmlReadDoc`.
@@ -439,12 +512,25 @@ Python wheel. Neither calls a `pio_` symbol.
 
 ## Open decisions
 
-These change the table. Settle them before implementation starts.
+These were left unsettled when the study was cut down.
 
 1. **`PioWriteOptions` with no fields.** Ship it empty so a later write option is an appended
    field, or omit it and accept that `write` gains options only through a second symbol.
-2. **Arrow generator cost tables.** Additive, so not freeze-critical. They are what lets
+2. **Arrow generator cost tables.** Additive, so nothing here gates them. They are what lets
    PowerIO.jl retire most of `exa.jl`, which rebuilds the ExaModelsPower payload from JSON
    because Arrow carries no cost.
 3. **The geo family.** Five symbols, no C consumer today. tellegen's Rust usage is a validated
    specification to build against, but shipping and deleting are both defensible.
+
+## What was deferred rather than rejected
+
+**Error codes.** Every fallible symbol returns `NULL` or `-1` and writes a message, so a
+caller that wants to branch on the failure has to match on English. `ErrorCategory` already
+exists in Rust with five variants and is deliberately not `#[non_exhaustive]`, so adding one
+is a compile error at every binding. v5 publishes the category tokens in `pio_build_info` so a
+binding can build its map ahead of time; the `int32_t` return is near-free during a broad
+re-signature and expensive on its own, so it waits for one.
+
+**The options structs.** Rule 5 is the only mechanism in this study that prevents the surface
+from growing a symbol per option. It costs nothing to adopt one struct at a time, on the next
+symbol that would otherwise need a `_with_options` twin.
