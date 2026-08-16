@@ -864,6 +864,21 @@ fn dc_states_beyond_record(d: &Hvdc) -> bool {
     // (SETVL -> kA -> SETVL). A record whose demand was measured at the
     // inverter writes back as a negative SETVL and re-reads at the same two
     // ends, so its received power is already what the rewrite states.
+    // An inverter-measured record writes back as `-pt`, so the rewrite states
+    // the received power exactly and derives the sent power from it. That makes
+    // `pf` the field the record cannot carry on its own, and a source stating
+    // one that disagrees with the drop model would lose it silently.
+    if d.extras.contains_key("psse_dc_setvl_at_inverter") {
+        let expected_pf = if vschd > 0.0 {
+            let i = d.pt / vschd;
+            d.pt + i * i * rdc
+        } else {
+            d.pt
+        };
+        if (d.pf - expected_pf).abs() > 1e-9 * d.pt.abs().max(1.0) {
+            return true;
+        }
+    }
     let expected_pt = if d.extras.contains_key("psse_dc_setvl_at_inverter") {
         d.pt
     } else if vschd > 0.0 {
@@ -2246,6 +2261,21 @@ fn read_dc_line(
         // No scheduled voltage under a power mode: no current to price the
         // drop with, and SETVL is already MW.
         _ => (setvl, setvl),
+    };
+    // RDC, SETVL and VSCHD are record fields, so the arithmetic above is
+    // arithmetic on untrusted numbers: a huge resistance or a subnormal
+    // voltage schedule overflows the squared current, and either end can come
+    // back non-finite. A non-finite setpoint is not a setpoint, and it would
+    // travel into every matrix and every writer downstream.
+    let (pf, pt) = if pf.is_finite() && pt.is_finite() {
+        (pf, pt)
+    } else {
+        warnings.push(format!(
+            "two-terminal DC record {} states a drop model that does not evaluate to a finite \
+             power; both ends read as zero",
+            index + 1
+        ));
+        (0.0, 0.0)
     };
     if unpriceable_current {
         warnings.push(format!(
