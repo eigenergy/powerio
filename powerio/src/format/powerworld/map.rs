@@ -657,12 +657,6 @@ fn read_branch(
         );
     }
     keep_extras(r, &[BRANCH_DEVICE_TYPE, "LineLength"], &mut extras);
-    if matches!(
-        extras.get(BRANCH_DEVICE_TYPE).and_then(|v| v.as_str()),
-        Some("Line" | "Transformer")
-    ) {
-        extras.remove(BRANCH_DEVICE_TYPE);
-    }
     // Transformer records in complete case exports carry their impedance and
     // tap under `:1` locations (values on the system base after correction);
     // line records use the bare names. Our writer's LineXFRatio is the tap
@@ -673,6 +667,21 @@ fn read_branch(
         &["LineTap:1", "Tapxfbase", "LineXFRatio", "LineTap"],
         1.0,
     )?;
+    let stored_tap = if is_xf { tap } else { 0.0 };
+    let shift = f_alias(r, &["LinePhase", "Phase"], 0.0)?;
+    // Drop the device type only when the writer would derive this exact value
+    // back. It derives from `tap != 0 || shift != 0`, so a record that states
+    // `Line` while stating a phase shift does not round trip: dropping it here
+    // rewrites the branch as a `Transformer`. Comparing against the rule
+    // rather than against the pair of names is what keeps the two in step.
+    let derived = if stored_tap != 0.0 || shift != 0.0 {
+        "Transformer"
+    } else {
+        "Line"
+    };
+    if extras.get(BRANCH_DEVICE_TYPE).and_then(|v| v.as_str()) == Some(derived) {
+        extras.remove(BRANCH_DEVICE_TYPE);
+    }
     Ok(Branch {
         from,
         to,
@@ -685,8 +694,8 @@ fn read_branch(
         rate_c: f_alias(r, &["LineAMVA:2", "LineCMVA", "LimitMVAC"], 0.0)?,
         rating_sets: Vec::new(),
         current_ratings: None,
-        tap: if is_xf { tap } else { 0.0 },
-        shift: f_alias(r, &["LinePhase", "Phase"], 0.0)?,
+        tap: stored_tap,
+        shift,
         in_service: on_alias(r, &["LineStatus", "Status"])?,
         angmin: -360.0,
         angmax: 360.0,

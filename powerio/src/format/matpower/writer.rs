@@ -41,6 +41,19 @@ pub(crate) fn write_matpower_conversion(net: &BalancedNetwork) -> Conversion {
     Conversion { text, warnings }
 }
 
+/// One bus name as a MATLAB single-quoted string body.
+///
+/// A single quote doubles, as MATLAB requires. A control character becomes a
+/// space: a single-quoted literal cannot span a line, so a name holding a
+/// newline writes a file MATPOWER's own loader will not parse, and powerio
+/// reading its own output back is no evidence otherwise.
+fn matlab_string(name: &str) -> String {
+    name.chars()
+        .map(|c| if c.is_control() { ' ' } else { c })
+        .collect::<String>()
+        .replace('\'', "''")
+}
+
 fn canonical_warnings(net: &BalancedNetwork) -> Vec<String> {
     // The canonical writer (see `canonical`) emits the standard bus/branch/gen/
     // gencost/dcline/dclinecost/storage blocks only. Report every neutral-model
@@ -88,6 +101,23 @@ fn canonical_warnings(net: &BalancedNetwork) -> Vec<String> {
         warnings.push(format!(
             "{current_ratings} branch current rating record(s) dropped: MATPOWER branch rows carry MVA ratings only"
         ));
+    }
+    // The 21-column gen row is all-or-nothing: MATPOWER's matrix is
+    // rectangular, so once any generator states capability or ramp data every
+    // row grows the columns and the ones with nothing to say pad with zeros.
+    // Zero is not "unspecified" in those columns — `RAMP_10 = 0` states a unit
+    // that cannot ramp — so the padding is a disclosure, and the readback
+    // cannot tell it from stated data.
+    let with_caps = net.generators.iter().any(Generator::has_caps);
+    if with_caps {
+        let padded = net.generators.iter().filter(|g| !g.has_caps()).count();
+        if padded > 0 {
+            warnings.push(format!(
+                "{padded} generator(s) with no capability or ramp data written with zeros in \
+                 columns 11-21: MATPOWER's gen matrix is rectangular, and a zero there reads \
+                 back as a stated limit rather than as absent"
+            ));
+        }
     }
     warn_extra_branch_rating_sets("MATPOWER .m", net, &mut warnings);
     let branch_solutions = net.branches.iter().filter(|b| b.solution.is_some()).count();
@@ -192,7 +222,7 @@ fn canonical(net: &BalancedNetwork) -> String {
     if net.buses.iter().any(|b| b.name.is_some()) {
         let _ = writeln!(s, "mpc.bus_name = {{");
         for b in &net.buses {
-            let name = b.name.as_deref().unwrap_or("").replace('\'', "''");
+            let name = matlab_string(b.name.as_deref().unwrap_or(""));
             let _ = writeln!(s, "\t'{name}';");
         }
         let _ = writeln!(s, "}};");

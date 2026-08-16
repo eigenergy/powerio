@@ -23,10 +23,13 @@
 //! Known limits, documented rather than guessed:
 //!
 //! - Status bytes: the 483 era generator record is the one located,
-//!   validated status in the corpus (bit 0 of the byte one past the f32
-//!   block, proven against the 94 open machines in the Texas7k aux). Every
-//!   other device in every available case is in service, so no other out of
-//!   service encoding is validated and those devices read as in service.
+//!   validated status (bit 0 of the byte one past the f32 block, checked
+//!   against the open machines an aux export of the same case states). No
+//!   other out of service encoding is located, so every other device reads as in
+//!   service. That is a limit of the decoding, not a property of the data: a
+//!   425 era file can hold open machines its `.aux` twin states and this
+//!   reader cannot see. `parse_pwb_with_warnings` reports the limit;
+//!   `parse_pwb` discards the warning.
 //!   The load record's post ID byte, once treated as a status, is 0x00 in
 //!   the 425 era files and 0x01 in the 2021 era ones with every load Closed
 //!   in both, so it is no status byte; the 425 era generator, the shunt,
@@ -119,6 +122,41 @@ type Probe<T> = std::result::Result<T, &'static str>;
 /// [`Error::FormatRead`] when the header is not the known magic, a record
 /// does not match the validated layouts, or a table cannot be located.
 pub fn parse_pwb(bytes: &[u8], name_hint: Option<&str>) -> Result<BalancedNetwork> {
+    parse_pwb_with_warnings(bytes, name_hint, &mut Vec::new())
+}
+
+/// As [`parse_pwb`], reporting what the decoded layout cannot state.
+///
+/// The one that bites is generator service status. Only the 483 era record has
+/// a located, validated status byte; the 425 era record's is unlocated, so
+/// every machine in such a file reads as in service and nothing in the model
+/// says the reader could not tell.
+///
+/// # Errors
+///
+/// As [`parse_pwb`].
+pub fn parse_pwb_with_warnings(
+    bytes: &[u8],
+    name_hint: Option<&str>,
+    warnings: &mut Vec<String>,
+) -> Result<BalancedNetwork> {
+    let net = parse_pwb_inner(bytes, name_hint)?;
+    // Headers admitting only the 425 era generator record: their status byte
+    // is unlocated (see the module docs), so the reader has no choice but to
+    // read every machine as running. A 508 file may carry either record, and
+    // which one matched is not observable here, so it is left unstated rather
+    // than guessed at.
+    if matches!(expect_header(bytes)?, 338 | 368 | 425) && !net.generators.is_empty() {
+        warnings.push(format!(
+            "{} generator(s) read as in service: this .pwb vintage's generator status byte is \
+             not located, so an open machine is indistinguishable from a closed one",
+            net.generators.len()
+        ));
+    }
+    Ok(net)
+}
+
+fn parse_pwb_inner(bytes: &[u8], name_hint: Option<&str>) -> Result<BalancedNetwork> {
     let header_constant = expect_header(bytes)?;
     reject_unsupported_vintage(bytes)?;
     // The header constant pins the generator record layout wherever the

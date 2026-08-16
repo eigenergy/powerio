@@ -366,3 +366,70 @@ fn dclinecost_must_cover_every_dcline() {
         "got {err:?}"
     );
 }
+
+/// A bus name holding a control character cannot ride a MATLAB single-quoted
+/// literal: the literal cannot span a line, so the written file stops being
+/// loadable by MATPOWER itself. powerio reading its own output back proves
+/// nothing here, so the assertion is on the emitted text.
+#[test]
+fn a_bus_name_never_breaks_the_cell_array() {
+    let mut net = BalancedNetwork::new("names", 100.0);
+    let mut bus = Bus::new(BusId(1), BusType::Ref, 345.0);
+    bus.name = Some("SUB A\nEVIL'X".to_string());
+    net.buses.push(bus);
+    net.buses.push(Bus::new(BusId(2), BusType::Pq, 345.0));
+    net.branches
+        .push(Branch::new(BusId(1), BusId(2), 0.01, 0.1));
+
+    let text = write_matpower(&net);
+    let names: Vec<&str> = text
+        .lines()
+        .skip_while(|l| !l.contains("bus_name"))
+        .skip(1)
+        .take_while(|l| !l.starts_with("};"))
+        .collect();
+    assert_eq!(names.len(), 2, "one entry per bus: {text}");
+    assert_eq!(names[0], "\t'SUB A EVIL''X';");
+    assert!(
+        parse_mpc(&text).is_ok(),
+        "the written case must still parse"
+    );
+}
+
+/// MATPOWER's gen matrix is rectangular, so one generator stating capability
+/// data grows the columns for every generator. The ones with nothing to say
+/// pad with zeros, and a zero in `RAMP_10` states a unit that cannot ramp
+/// rather than a unit that said nothing — a disclosure the readback cannot
+/// tell from stated data, so the writer names it.
+#[test]
+fn zero_padded_capability_columns_are_declared() {
+    let mut net = BalancedNetwork::new("caps", 100.0);
+    net.buses.push(Bus::new(BusId(1), BusType::Ref, 345.0));
+    net.buses.push(Bus::new(BusId(2), BusType::Pv, 345.0));
+    net.branches
+        .push(Branch::new(BusId(1), BusId(2), 0.01, 0.1));
+    let mut stated = Generator::new(BusId(1));
+    stated.caps[0] = Some(12.5);
+    net.generators.push(stated);
+    net.generators.push(Generator::new(BusId(2)));
+
+    let warnings = crate::format::write_as(&net, crate::format::TargetFormat::Matpower)
+        .unwrap()
+        .warnings;
+    assert!(
+        warnings.iter().any(|w| w.contains("columns 11-21")),
+        "the zero padding must be declared: {warnings:?}"
+    );
+
+    // A network where no generator states caps keeps the 10-column row and
+    // says nothing.
+    let mut plain = net.clone();
+    plain.generators[0].caps = [None; 11];
+    let warnings = crate::format::write_as(&plain, crate::format::TargetFormat::Matpower)
+        .unwrap()
+        .warnings;
+    assert!(
+        !warnings.iter().any(|w| w.contains("columns 11-21")),
+        "nothing to disclose when no generator states caps: {warnings:?}"
+    );
+}
