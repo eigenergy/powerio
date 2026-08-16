@@ -774,6 +774,23 @@ impl PyBalancedNetwork {
         IndexedNetwork::with_core(&self.inner, &self.core).reference_bus_indices()
     }
 
+    /// The star-lowered network: each in-service 3-winding transformer replaced
+    /// by its star bus and three branches. This is the space `bprime`, `ybus`,
+    /// `is_radial`, `n_connected_components` and `reference_bus_indices` are
+    /// computed over, while `buses` and `branches` mirror the case file. The
+    /// two differ only for a case that carries such a transformer; otherwise
+    /// this returns the same tables.
+    fn lowered(&self) -> PyBalancedNetwork {
+        let view = IndexedNetwork::with_core(&self.inner, &self.core);
+        let inner = view.network().clone();
+        let core = IndexCore::build(&inner);
+        PyBalancedNetwork {
+            inner,
+            core,
+            warnings: self.warnings.clone(),
+        }
+    }
+
     // --- tables (the format-neutral BalancedNetwork, as dict rows) --------------
 
     #[getter]

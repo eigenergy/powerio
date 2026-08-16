@@ -362,13 +362,20 @@ class BalancedNetwork:
 
         This allocates new arrays, preserves bus and branch source order, and
         sums loads and shunts per bus to match the Rust indexed analysis view.
+
+        That view is the star-lowered one, so a case with an in-service
+        3-winding transformer reports the star bus and its three branches here
+        even though :attr:`buses` and :attr:`branches` mirror the case file and
+        do not. ``reference_bus``, ``n_components`` and ``is_radial`` are
+        computed over the same lowered space, so all of them agree.
         """
         np = _require("numpy", "matrix")
-        buses = self._inner.buses
-        branches = self._inner.branches
-        generators = self._inner.generators
+        lowered = self._inner.lowered()
+        buses = lowered.buses
+        branches = lowered.branches
+        generators = lowered.generators
         bus_ids = np.asarray([b["id"] for b in buses], dtype=np.int64)
-        pd, qd, gs, bs = _bus_sums(np, buses, self._inner.loads, self._inner.shunts)
+        pd, qd, gs, bs = _bus_sums(np, buses, lowered.loads, lowered.shunts)
 
         branch = DenseBranch(
             from_id=np.asarray([br["from_id"] for br in branches], dtype=np.int64),
