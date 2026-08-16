@@ -1635,6 +1635,12 @@ pub fn write_pslf(net: &BalancedNetwork) -> Conversion {
     if net.generators.iter().any(|g| g.cost.is_some()) {
         warnings.push("generator cost curves dropped: PSLF .epc carries no cost data".into());
     }
+    let with_caps = net.generators.iter().filter(|g| g.has_caps()).count();
+    if with_caps > 0 {
+        warnings.push(format!(
+            "generator capability/ramp columns dropped for {with_caps} generator(s): the PSLF .epc generator records written here carry no MATPOWER capability columns"
+        ));
+    }
     if net.hvdc.iter().any(|d| d.cost.is_some()) {
         warnings.push("DC line cost curves dropped: PSLF .epc carries no cost data".into());
     }

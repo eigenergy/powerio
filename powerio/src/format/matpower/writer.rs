@@ -11,7 +11,7 @@ use std::collections::BTreeMap;
 use std::fmt::Write as _;
 
 use crate::format::{Conversion, warn_extra_branch_rating_sets};
-use crate::network::{BalancedNetwork, BusId, GenCost, SourceFormat};
+use crate::network::{BalancedNetwork, BusId, GenCost, Generator, SourceFormat};
 
 /// Serialize `net` to MATPOWER `.m` text. Echoes the retained source verbatim
 /// when `net` came from MATPOWER; otherwise emits canonical `.m`.
@@ -68,12 +68,6 @@ fn canonical_warnings(net: &BalancedNetwork) -> Vec<String> {
             "emergency voltage band(s) (EVHI/EVLO) dropped: this writer carries one voltage band"
                 .into(),
         );
-    }
-    let with_caps = net.generators.iter().filter(|g| g.has_caps()).count();
-    if with_caps > 0 {
-        warnings.push(format!(
-            "generator capability/ramp columns dropped for {with_caps} generator(s): the canonical MATPOWER writer emits only the standard gen columns"
-        ));
     }
     let non_matpower_charging = net
         .branches
@@ -214,11 +208,16 @@ fn canonical(net: &BalancedNetwork) -> String {
     let _ = writeln!(s, "];");
 
     if !net.generators.is_empty() {
+        // The 21-column layout (Pc1..APF) is standard MATPOWER and the reader
+        // reads it; emit it whenever any generator carries capability/ramp
+        // columns, padding absent slots with 0 (MATPOWER's own "unspecified")
+        // to keep the matrix rectangular.
+        let with_caps = net.generators.iter().any(Generator::has_caps);
         let _ = writeln!(s, "mpc.gen = [");
         for g in &net.generators {
-            let _ = writeln!(
+            let _ = write!(
                 s,
-                "\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{};",
+                "\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
                 g.bus,
                 g.pg,
                 g.qg,
@@ -230,6 +229,12 @@ fn canonical(net: &BalancedNetwork) -> String {
                 g.pmax,
                 g.pmin
             );
+            if with_caps {
+                for slot in &g.caps {
+                    let _ = write!(s, "\t{}", slot.unwrap_or(0.0));
+                }
+            }
+            let _ = writeln!(s, ";");
         }
         let _ = writeln!(s, "];");
 

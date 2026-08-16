@@ -475,6 +475,18 @@ const TRANSMISSION_FORMATS: [TransmissionFormat; 8] = [
 // only tokens beyond the mapped fields are retained now — so all three of
 // those source rows reach MATPOWER with nothing left to drop.
 //
+// The canonical MATPOWER writer emits the 21-column gen row (Pc1..APF) —
+// standard MATPOWER, and the reader has read it all along — whenever any
+// generator carries capability/ramp columns. The PowerModels source row's
+// MATPOWER cell lands on zero, and the MATPOWER source row pays honestly:
+// caps now survive payload prep, so the five cases that state them (all but
+// PGLib 5) report the drop at every target without a slot — +5 on PSS/E,
+// PowerWorld, pandapower, and PSLF, +20 on Surge (it reports per generator).
+// The egret and PSLF writers dropped caps silently before; both now say so,
+// which is the +5 on the MATPOWER and PowerModels rows' egret and PSLF cells.
+// The MATPOWER and PowerModels rows read identically now — same payload
+// data, same honest outcomes.
+//
 // A pandapower line states one rating, `max_i_ka`, carried as `rate_a`
 // through the file's own vn_kv; the reader no longer stores a second copy of
 // the same fact in amps, so the five per-case restatement drops leave every
@@ -483,8 +495,8 @@ const TRANSMISSION_FORMATS: [TransmissionFormat; 8] = [
 // targets cannot carry and the one-of-three cost set MATPOWER's
 // all-or-nothing gencost drops.
 const TRANSMISSION_WARNING_BASELINE: [[usize; 8]; 8] = [
-    [0, 0, 10, 9, 1, 6, 2, 8],
-    [5, 0, 15, 14, 1, 11, 22, 8],
+    [0, 0, 15, 14, 6, 11, 22, 13],
+    [0, 0, 15, 14, 6, 11, 22, 13],
     [0, 0, 0, 1, 0, 3, 0, 1],
     [0, 0, 0, 0, 0, 2, 0, 0],
     [0, 0, 9, 9, 0, 6, 1, 7],

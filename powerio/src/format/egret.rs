@@ -53,6 +53,12 @@ pub fn write_egret_json(net: &BalancedNetwork) -> Conversion {
     for (i, g) in net.generators.iter().enumerate() {
         generator.insert((i + 1).to_string(), gen_obj(g, &mut warnings));
     }
+    let with_caps = net.generators.iter().filter(|g| g.has_caps()).count();
+    if with_caps > 0 {
+        warnings.push(format!(
+            "generator capability/ramp columns dropped for {with_caps} generator(s): the egret generator records written here carry none"
+        ));
+    }
 
     let mut dc_branch = Map::new();
     for (i, dc) in net.hvdc.iter().enumerate() {
