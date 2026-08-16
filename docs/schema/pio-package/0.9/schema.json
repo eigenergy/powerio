@@ -4933,7 +4933,7 @@
       "type": "string"
     }
   },
-  "$id": "https://powerio.dev/schema/pio-package/0.8",
+  "$id": "https://powerio.dev/schema/pio-package/0.9",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "description": "A versioned package containing one model payload, provenance, diagnostics,\nvalidation results, and lowering history. Serializes to `.pio.json`.\n\n`model_kind` is stored explicitly and is authoritative; the payload is also\nself-describing (tagged by `kind`). [`NetworkPackage::kind_is_consistent`]\nasserts the two agree. The reader ignores unknown top level fields from a\nnewer producer.",
   "properties": {
