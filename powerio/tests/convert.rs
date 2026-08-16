@@ -1177,11 +1177,17 @@ fn hvdc_converts_and_round_trips() {
     assert_hvdc_survives(&net, &back, "PowerModels JSON");
 
     // egret `dc_branch` states the same fields the MATPOWER dcline row does, and
-    // the egret reader already read them.
+    // the egret reader already read them. Only the usage cost (from
+    // `mpc.dclinecost`, stated on dcline 5 -> 9 alone) has no egret slot.
     let egret = write_egret_json(&net);
-    assert!(
-        !egret.warnings.iter().any(|w| w.contains("dcline")),
-        "egret dc_branch carries the dclines whole: {:?}",
+    assert_eq!(
+        egret
+            .warnings
+            .iter()
+            .filter(|w| w.contains("dcline"))
+            .collect::<Vec<_>>(),
+        ["dcline 5 -> 9 cost curve dropped: egret dc_branch records carry no cost"],
+        "egret dc_branch carries every dcline field but the cost: {:?}",
         egret.warnings
     );
     let from_egret = parse_str(&egret.text, "egret-json").unwrap().network;
@@ -1211,17 +1217,26 @@ fn hvdc_converts_and_round_trips() {
         pw.warnings
     );
 
-    // Cross-format → MATPOWER also drops HVDC (the canonical writer emits no
-    // dcline block), so it must warn too. `net` itself is MATPOWER-sourced, so
-    // write_as would echo its source; convert through PowerModels first to reach
-    // the canonical MATPOWER path with HVDC still present.
+    // Cross-format → MATPOWER writes the same `mpc.dcline`/`mpc.dclinecost`
+    // blocks the reader reads. `net` itself is MATPOWER-sourced, so write_as
+    // would echo its source; convert through PowerModels first to reach the
+    // canonical MATPOWER path with HVDC still present.
     assert_eq!(back.source_format, SourceFormat::PowerModelsJson);
     let to_mp = write_as(&back, TargetFormat::Matpower).unwrap();
     assert!(
-        to_mp.warnings.iter().any(|w| w.contains("dcline")),
-        "cross-format → MATPOWER should warn on dropped dclines, got {:?}",
+        !to_mp.warnings.iter().any(|w| w.contains("dcline")),
+        "the canonical writer emits `mpc.dcline`, nothing to warn about: {:?}",
         to_mp.warnings
     );
+    let from_mp = parse_str(&to_mp.text, "matpower").unwrap().network;
+    assert_hvdc_survives(&net, &from_mp, "canonical MATPOWER .m");
+    // The usage cost rides `mpc.dclinecost`: stated on dcline 5 -> 9 only, and
+    // the zero padding rows on the other three read back as no cost.
+    let costs: Vec<_> = from_mp.hvdc.iter().map(|d| d.cost.is_some()).collect();
+    assert_eq!(costs, [false, false, false, true]);
+    let cost = from_mp.hvdc[3].cost.as_ref().unwrap();
+    assert_eq!((cost.model, cost.ncost), (2, 2));
+    assert_eq!(cost.coeffs, [7.3, 0.0]);
 }
 
 #[test]
@@ -1317,14 +1332,16 @@ fn surge_hvdc_carries_the_converter_terminal_fields_its_reader_reads() {
     }
 
     // dcline 2 states Pt = 1.96 with no losses, which the loss model cannot
-    // reproduce; that is the one line the writer reports.
+    // reproduce, and dcline 4 states a usage cost (from `mpc.dclinecost`) that
+    // a Surge link has no slot for; those are the two lines the writer reports.
     let dropped: Vec<_> = surge
         .warnings
         .iter()
         .filter(|w| w.contains("received power"))
         .collect();
-    assert_eq!(dropped.len(), 1, "one line disagrees, got {dropped:?}");
+    assert_eq!(dropped.len(), 2, "two lines disagree, got {dropped:?}");
     assert!(dropped[0].contains("dcline 2"), "got {dropped:?}");
+    assert!(dropped[1].contains("dcline 4"), "got {dropped:?}");
 }
 
 #[test]

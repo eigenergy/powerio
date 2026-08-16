@@ -11,7 +11,7 @@ use std::collections::BTreeMap;
 use std::fmt::Write as _;
 
 use crate::format::{Conversion, warn_extra_branch_rating_sets};
-use crate::network::{BalancedNetwork, BusId, SourceFormat};
+use crate::network::{BalancedNetwork, BusId, GenCost, SourceFormat};
 
 /// Serialize `net` to MATPOWER `.m` text. Echoes the retained source verbatim
 /// when `net` came from MATPOWER; otherwise emits canonical `.m`.
@@ -41,17 +41,11 @@ pub(crate) fn write_matpower_conversion(net: &BalancedNetwork) -> Conversion {
     Conversion { text, warnings }
 }
 
-#[expect(clippy::too_many_lines)]
 fn canonical_warnings(net: &BalancedNetwork) -> Vec<String> {
     // The canonical writer (see `canonical`) emits the standard bus/branch/gen/
-    // gencost/storage blocks only. Report every neutral-model field it can't.
+    // gencost/dcline/dclinecost/storage blocks only. Report every neutral-model
+    // field it can't.
     let mut warnings = Vec::new();
-    if !net.hvdc.is_empty() {
-        warnings.push(format!(
-            "{} HVDC dcline(s) dropped: the canonical MATPOWER writer emits no `mpc.dcline` block",
-            net.hvdc.len()
-        ));
-    }
     if !net.switches.is_empty() {
         warnings.push(format!(
             "{} switch(es) dropped: MATPOWER has no switch table",
@@ -151,7 +145,8 @@ fn canonical_warnings(net: &BalancedNetwork) -> Vec<String> {
 /// Canonical MATPOWER from the neutral model, for networks with no MATPOWER
 /// source. Loads and shunts are summed back onto their bus (MATPOWER carries one
 /// of each per bus). Emits valid `.m` (values equal, formatting normalized); not
-/// byte-exact. HVDC lines are not emitted.
+/// byte-exact. HVDC lines ride `mpc.dcline`/`mpc.dclinecost`, the same blocks
+/// the reader reads.
 #[allow(clippy::too_many_lines)] // flat per-section serializer; splitting adds noise
 fn canonical(net: &BalancedNetwork) -> String {
     // Aggregate demand and shunts onto their bus.
@@ -253,6 +248,70 @@ fn canonical(net: &BalancedNetwork) -> String {
                 .unwrap_or(0);
             for g in &net.generators {
                 let c = g.cost.as_ref().expect("checked all gens have cost");
+                let _ = write!(
+                    s,
+                    "\t{}\t{}\t{}\t{}",
+                    c.model, c.startup, c.shutdown, c.ncost
+                );
+                for j in 0..width {
+                    let _ = write!(s, "\t{}", c.coeffs.get(j).copied().unwrap_or(0.0));
+                }
+                let _ = writeln!(s, ";");
+            }
+            let _ = writeln!(s, "];");
+        }
+    }
+
+    if !net.hvdc.is_empty() {
+        let _ = writeln!(s, "mpc.dcline = [");
+        for d in &net.hvdc {
+            let _ = writeln!(
+                s,
+                "\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{};",
+                d.from,
+                d.to,
+                f64::from(d.in_service),
+                d.pf,
+                d.pt,
+                d.qf,
+                d.qt,
+                d.vf,
+                d.vt,
+                d.pmin,
+                d.pmax,
+                d.qminf,
+                d.qmaxf,
+                d.qmint,
+                d.qmaxt,
+                d.loss0,
+                d.loss1
+            );
+        }
+        let _ = writeln!(s, "];");
+
+        // `mpc.dclinecost` must cover every dcline when present, and a line
+        // with no usage cost takes the all-zero polynomial row `toggle_dcline`
+        // itself pads with — zero cost and no cost term price a line the same
+        // — so unlike `mpc.gencost` this block is never all-or-nothing.
+        if net.hvdc.iter().any(|d| d.cost.is_some()) {
+            let _ = writeln!(s, "mpc.dclinecost = [");
+            let width = net
+                .hvdc
+                .iter()
+                .filter_map(|d| d.cost.as_ref())
+                .map(|c| c.coeffs.len())
+                .max()
+                .unwrap_or(0)
+                .max(2);
+            let zero = GenCost {
+                model: 2,
+                startup: 0.0,
+                shutdown: 0.0,
+                ncost: 2,
+                coeffs: Vec::new(),
+            };
+            for d in &net.hvdc {
+                let c = d.cost.as_ref().unwrap_or(&zero);
                 let _ = write!(
                     s,
                     "\t{}\t{}\t{}\t{}",

@@ -343,3 +343,26 @@ fn piecewise_gencost_constructor_counts_breakpoints() {
     assert_eq!(reparsed_cost.ncost, 2);
     assert_eq!(reparsed_cost.coeffs, vec![0.0, 0.0, 1.0, 1.0]);
 }
+
+#[test]
+fn dclinecost_must_cover_every_dcline() {
+    // `toggle_dcline` requires one cost row per dcline; a short block is a
+    // malformed file, not a partial assignment.
+    let text = "function mpc = c\nmpc.version = '2';\nmpc.baseMVA = 100;\n\
+        mpc.bus = [\n\t1\t3\t0\t0\t0\t0\t1\t1\t0\t345\t1\t1.1\t0.9;\n\t2\t1\t0\t0\t0\t0\t1\t1\t0\t345\t1\t1.1\t0.9;\n];\n\
+        mpc.branch = [\n\t1\t2\t0.01\t0.1\t0\t0\t0\t0\t0\t0\t1\t-360\t360;\n];\n\
+        mpc.dcline = [\n\t1\t2\t1\t10\t9.5\t0\t0\t1\t1\t0\t10\t-10\t10\t-10\t10\t0\t0.05;\n\
+        \t2\t1\t1\t5\t5\t0\t0\t1\t1\t0\t10\t0\t0\t0\t0\t0\t0;\n];\n\
+        mpc.dclinecost = [\n\t2\t0\t0\t2\t7.3\t0;\n];\n";
+    let err = parse_mpc(text).unwrap_err();
+    assert!(
+        matches!(
+            err,
+            crate::Error::DcLineCostCountMismatch {
+                dclines: 2,
+                dclinecost: 1
+            }
+        ),
+        "got {err:?}"
+    );
+}

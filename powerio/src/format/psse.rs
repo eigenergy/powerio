@@ -735,6 +735,9 @@ pub fn write_psse_rev(net: &BalancedNetwork, rev: u32) -> Conversion {
     if net.generators.iter().any(|g| g.cost.is_some()) {
         warnings.push("generator cost curves dropped: PSS/E .raw has no cost data".into());
     }
+    if net.hvdc.iter().any(|d| d.cost.is_some()) {
+        warnings.push("DC line cost curves dropped: PSS/E .raw has no cost data".into());
+    }
     if net.branches.iter().any(Branch::has_angle_limits) {
         warnings.push(
             "branch angle limits (angmin/angmax) dropped: PSS/E branch records carry none".into(),

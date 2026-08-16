@@ -1596,6 +1596,9 @@ pub fn write_pslf(net: &BalancedNetwork) -> Conversion {
     if net.generators.iter().any(|g| g.cost.is_some()) {
         warnings.push("generator cost curves dropped: PSLF .epc carries no cost data".into());
     }
+    if net.hvdc.iter().any(|d| d.cost.is_some()) {
+        warnings.push("DC line cost curves dropped: PSLF .epc carries no cost data".into());
+    }
     // Transformer branches drop their charging entirely (warned separately
     // below), so exclude them here: only line records carry the collapsed total
     // susceptance this message describes.

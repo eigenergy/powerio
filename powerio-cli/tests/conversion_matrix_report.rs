@@ -442,15 +442,26 @@ const TRANSMISSION_FORMATS: [TransmissionFormat; 8] = [
 // payload carries dclines (PowerModels, PSS/E, egret, Surge; −8 on PSLF→PSLF,
 // which paid on both legs). What remains in those cells is the genuine EPC
 // loss: no cost data, and one rate1 column for an asymmetric pmin/pmax pair.
+// The canonical MATPOWER writer emits `mpc.dcline` and `mpc.dclinecost` — the
+// same blocks its reader reads — so the `→ MATPOWER .m` column stops dropping
+// dclines (−1 on the PowerModels, PSS/E, egret, Surge, and PSLF source rows;
+// egret and Surge land on zero). The `MATPOWER .m` source row pays the honest
+// price: the dcline case's lines now survive the payload-prep hop, so every
+// target that cannot carry them (or their `mpc.dclinecost` usage cost, stated
+// on one line and read since the reader learned the block) reports it —
+// PSS/E +2 (converter detail, cost), PowerWorld +1 (drop), pandapower +1
+// (drop), egret +1 (cost), Surge +2 (one Pt off its own loss model, one cost),
+// PSLF +2 (asymmetric pmin, cost). The PowerModels row carries the cost too,
+// +1 wherever the target has no slot for it (PSS/E, egret, Surge, PSLF).
 const TRANSMISSION_WARNING_BASELINE: [[usize; 8]; 8] = [
-    [0, 0, 8, 8, 0, 5, 0, 6],
-    [6, 0, 14, 14, 0, 11, 21, 7],
-    [13, 0, 0, 1, 0, 3, 0, 1],
+    [0, 0, 10, 9, 1, 6, 2, 8],
+    [5, 0, 15, 14, 1, 11, 22, 8],
+    [12, 0, 0, 1, 0, 3, 0, 1],
     [12, 0, 0, 0, 0, 2, 0, 0],
-    [1, 0, 9, 9, 0, 6, 1, 7],
+    [0, 0, 9, 9, 0, 6, 1, 7],
     [6, 0, 11, 11, 5, 0, 0, 11],
-    [1, 0, 9, 9, 0, 6, 0, 7],
-    [13, 0, 1, 1, 0, 3, 3, 0],
+    [0, 0, 9, 9, 0, 6, 0, 7],
+    [12, 0, 1, 1, 0, 3, 3, 0],
 ];
 
 const DEEPMIND_OPFDATA_WARNING_BASELINE: [usize; 8] = [3, 2, 5, 5, 3, 4, 2, 4];
