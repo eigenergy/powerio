@@ -1,4 +1,4 @@
-/* powerio C ABI, version 4. Parse, query, and convert networks through opaque
+/* powerio C ABI, version 5. Parse, query, and convert networks through opaque
  * handles. Extractors return numeric tables for matrix assembly. Check
  * pio_abi_version() against PIO_ABI_VERSION at load; the integer is the
  * compatibility check, the version string is informational.
@@ -29,12 +29,17 @@
  * - Array extractors write up to `cap` values per output array and return the
  *   total available. NULL out or cap 0 is a count query. No extractor writes
  *   more than cap entries to an output array.
- * - Every per-bus extractor reports the same space. A case with an in-service
- *   3-winding transformer star-lowers before the dense extractors run, adding
- *   one star bus per such transformer, and pio_n_buses, pio_bus_ids,
- *   pio_bus_demand, pio_bus_shunt and pio_n_islands all count it. Through v4
- *   the first two reported the unexpanded table instead, so a per-bus buffer
- *   sized from pio_n_buses read short and its trailing entries had no id.
+ * - Every element extractor reports the star-lowered space. A case with an
+ *   in-service 3-winding transformer lowers before the dense extractors run,
+ *   adding one star bus and three branches per such transformer, and
+ *   pio_n_buses, pio_bus_ids, pio_bus_demand, pio_bus_shunt, pio_n_islands,
+ *   pio_n_branches, pio_branches and pio_branch_charging all count them.
+ *   Through v4 the bus and branch tables reported the unexpanded network
+ *   instead, so a buffer sized from them read short, its trailing entries had
+ *   no id, and a matrix built from the pair left the star point isolated.
+ *   The raw Arrow tables (PIO_ARROW_TABLE_BUS, _BRANCH) are the case file's
+ *   own rows and stay unexpanded; the matrix tables (_MATRIX_BUS,
+ *   _MATRIX_BRANCH) are the lowered space these extractors agree with.
  * - Bus ids are int64 in the range 1..2^63-1 (a v4 invariant). pio_bus_ids and
  *   every per-bus column keyed to its ordering are int64; a source whose ids are
  *   strings or exceed 2^63-1 has no representation in this API and is mapped
@@ -45,13 +50,20 @@
  *   the message; a long message truncates on a UTF-8 character boundary and
  *   is always NUL-terminated. PIO_ERRBUF_MIN is the recommended size. The ABI
  *   reports errors as messages and defines no error codes.
- * - Warnings attach to the network handle; query them with pio_warnings,
- *   which returns the byte length needed (call with NULL/0 to size). Only
- *   functions returning no handle (pio_to_format, pio_convert_*,
- *   pio_write_dir) take a warnbuf.
+ * - Read warnings attach to the network handle; query them with pio_warnings,
+ *   which returns the byte length needed (call with NULL/0 to size).
+ * - Conversion warnings come back through a char **out_warnings out-param on
+ *   the functions that return no handle (pio_to_format, pio_convert_*,
+ *   pio_write_dir, and the pio_dist_* twins). NULL means the conversion lost
+ *   nothing; any other value is an owned string to free with pio_string_free.
+ *   Pass NULL for the parameter itself to discard them. The call writes it
+ *   before doing any work, so a value left from an earlier call is never read
+ *   as this one's. v4 filled a caller buffer here and truncated into it with
+ *   no signal.
  * - Strings returned by pio_to_format / pio_convert_file / pio_convert_str
  *   are owned by the library; free them with pio_string_free. Handles from
- *   pio_parse_file / pio_parse_str / pio_read_dir / pio_normalize are freed
+ *   pio_parse_file / pio_parse_str / pio_parse_bytes / pio_read_dir /
+ *   pio_normalize are freed
  *   with pio_network_free. Package handles use pio_package_free, distribution
  *   handles use pio_dist_network_free, and SCOPF handles use
  *   pio_scopf_instance_free. Arrow buffers are freed through their own release
@@ -90,12 +102,13 @@
  * freed with pio_package_free, and `--features prob` for the pio_scopf_*
  * entry points (guarded by PIO_PROB), behind a PioScopfInstance handle freed
  * with pio_scopf_instance_free.
- * The distribution C API is EXPERIMENTAL while the IEEE BMOPF schema is a
- * draft: supported dist C usage starts at PIO_DIST_ABI_VERSION = 1, with
- * pio_dist_convert_*(input, from, to, ...). Dist C signature changes bump
- * PIO_DIST_ABI_VERSION, not PIO_ABI_VERSION. Its JSON payloads (bmopf-json,
- * powerio-dist-json) carry their own meta.version and may evolve; pin a
- * version from the payload metadata.
+ * The dist C signatures follow PIO_ABI_VERSION like every other symbol.
+ * PIO_DIST_ABI_VERSION is frozen at 1 and carries no meaning: it existed to
+ * absorb IEEE BMOPF schema drift, and a schema revision changes a reader, a
+ * writer and an emitted token but no C signature. The symbol stays so a
+ * binding that gates distribution calls on resolving it keeps working. Read
+ * the foreign schema versions from pio_build_info instead; the JSON payloads
+ * (bmopf-json, powerio-dist-json) also carry their own meta.version.
  * Probe optional features at runtime with
  * pio_has_feature("arrow"|"matrix"|"gridfm"|"dist"|"pkg"|"prob").
  *
@@ -596,7 +609,7 @@ int32_t pio_is_radial(const PioNetwork *net);
  * Serialize `net` to the named format `to`: the one text serializer; every
  * format is named by a string. Accepts the [`pio_parse_str`] names:
  * `matpower` is a byte-exact echo when the handle was parsed from MATPOWER.
- * ABI v4 also accepts `powerio-json` as a compatibility alias for
+ * Also accepts `powerio-json` as an alias for
  * [`pio_to_json`]. Model JSON cannot represent a non-finite `f64` (`Inf`/`NaN`):
  * it writes `null`, records the field in `out_warnings`, and fails validation when
  * read back.

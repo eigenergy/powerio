@@ -1,4 +1,4 @@
-//! C ABI for `powerio`: ABI v4.
+//! C ABI for `powerio`: ABI v5.
 //!
 //! Functions parse, query, and convert networks through opaque handles. Feature
 //! gates add Arrow tables, directory datasets, distribution networks,
@@ -822,7 +822,11 @@ pub unsafe extern "C" fn pio_n_buses(net: *const PioNetwork) -> usize {
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_n_branches(net: *const PioNetwork) -> usize {
-    unsafe { guard(0, || network_ref(net).map_or(0, |c| c.net.branches.len())) }
+    // The star-lowered space, matching pio_n_buses: a 3-winding transformer
+    // becomes a star bus plus three branches, and a caller building a matrix
+    // from these tables needs both halves of that or the star bus is an
+    // isolated row.
+    unsafe { guard(0, || view(net).map_or(0, |v| v.branches().len())) }
 }
 
 #[unsafe(no_mangle)]
@@ -989,7 +993,7 @@ pub unsafe extern "C" fn pio_is_radial(net: *const PioNetwork) -> i32 {
 /// Serialize `net` to the named format `to`: the one text serializer; every
 /// format is named by a string. Accepts the [`pio_parse_str`] names:
 /// `matpower` is a byte-exact echo when the handle was parsed from MATPOWER.
-/// ABI v4 also accepts `powerio-json` as a compatibility alias for
+/// Also accepts `powerio-json` as an alias for
 /// [`pio_to_json`]. Model JSON cannot represent a non-finite `f64` (`Inf`/`NaN`):
 /// it writes `null`, records the field in `out_warnings`, and fails validation when
 /// read back.
@@ -1240,33 +1244,33 @@ pub unsafe extern "C" fn pio_branches(
 ) -> usize {
     unsafe {
         guard(0, || {
-            let Some(c) = network_ref(net) else { return 0 };
-            let net = &c.net;
+            let Some(v) = view(net) else { return 0 };
+            let branches = v.branches();
             fill(
                 from,
                 cap,
-                net.branches
+                branches
                     .iter()
                     .map(|br| i64::try_from(br.from.0).unwrap_or(-1)),
             );
             fill(
                 to,
                 cap,
-                net.branches
+                branches
                     .iter()
                     .map(|br| i64::try_from(br.to.0).unwrap_or(-1)),
             );
-            fill(r, cap, net.branches.iter().map(|br| br.r));
-            fill(x, cap, net.branches.iter().map(|br| br.x));
-            fill(b, cap, net.branches.iter().map(|br| br.total_charging_b()));
-            fill(tap, cap, net.branches.iter().map(|br| br.tap));
-            fill(shift, cap, net.branches.iter().map(|br| br.shift));
+            fill(r, cap, branches.iter().map(|br| br.r));
+            fill(x, cap, branches.iter().map(|br| br.x));
+            fill(b, cap, branches.iter().map(|br| br.total_charging_b()));
+            fill(tap, cap, branches.iter().map(|br| br.tap));
+            fill(shift, cap, branches.iter().map(|br| br.shift));
             fill(
                 in_service,
                 cap,
-                net.branches.iter().map(|br| u8::from(br.in_service)),
+                branches.iter().map(|br| u8::from(br.in_service)),
             );
-            net.branches.len()
+            branches.len()
         })
     }
 }
@@ -1284,29 +1288,29 @@ pub unsafe extern "C" fn pio_branch_charging(
 ) -> usize {
     unsafe {
         guard(0, || {
-            let Some(c) = network_ref(net) else { return 0 };
-            let net = &c.net;
+            let Some(v) = view(net) else { return 0 };
+            let branches = v.branches();
             fill(
                 g_fr,
                 cap,
-                net.branches.iter().map(|br| br.terminal_charging().g_fr),
+                branches.iter().map(|br| br.terminal_charging().g_fr),
             );
             fill(
                 b_fr,
                 cap,
-                net.branches.iter().map(|br| br.terminal_charging().b_fr),
+                branches.iter().map(|br| br.terminal_charging().b_fr),
             );
             fill(
                 g_to,
                 cap,
-                net.branches.iter().map(|br| br.terminal_charging().g_to),
+                branches.iter().map(|br| br.terminal_charging().g_to),
             );
             fill(
                 b_to,
                 cap,
-                net.branches.iter().map(|br| br.terminal_charging().b_to),
+                branches.iter().map(|br| br.terminal_charging().b_to),
             );
-            net.branches.len()
+            branches.len()
         })
     }
 }
@@ -2983,11 +2987,14 @@ mod tests {
     }
 
     #[test]
-    fn every_per_bus_extractor_counts_the_star_bus() {
-        // A 3-winding transformer star-lowers into an extra bus before the
-        // dense extractors run. Through v4 pio_n_buses and pio_bus_ids reported
-        // the unexpanded table while pio_bus_demand and pio_n_islands reported
-        // the expansion, so a caller sizing from pio_n_buses read short.
+    fn every_extractor_reports_the_star_lowered_space() {
+        // A 3-winding transformer star-lowers into one bus plus three branches
+        // before the dense extractors run. Through v4 the bus and branch
+        // tables reported the unexpanded network while pio_bus_demand and
+        // pio_n_islands reported the expansion, so a caller sizing from them
+        // read short. Both halves have to move together: 10 buses against 9
+        // branches leaves the star point an isolated row and the transformer
+        // contributing nothing.
         let case = case9_json_with_a_3w_transformer();
         let text = CString::new(case).unwrap();
         let mut err = [0 as c_char; PIO_ERRBUF_MIN];
@@ -3009,6 +3016,18 @@ mod tests {
             assert_eq!(shunt, n, "pio_bus_shunt must agree with pio_n_buses");
             assert_eq!(ids, n, "pio_bus_ids must agree with pio_n_buses");
 
+            let m = pio_n_branches(net);
+            let (ni, nf, nb) = (
+                std::ptr::null_mut::<i64>(),
+                std::ptr::null_mut::<f64>(),
+                std::ptr::null_mut::<u8>(),
+            );
+            let rows = pio_branches(net, ni, ni, nf, nf, nf, nf, nf, nb, 0);
+            let charging = pio_branch_charging(net, nf, nf, nf, nf, 0);
+            assert_eq!(m, 12, "9 branches plus three star legs");
+            assert_eq!(rows, m, "pio_branches must agree with pio_n_branches");
+            assert_eq!(charging, m, "pio_branch_charging must agree too");
+
             // Every index a per-bus column addresses has an id, the star point
             // included: sizing from pio_n_buses is now sufficient.
             let mut buf = vec![-1i64; n];
@@ -3017,6 +3036,39 @@ mod tests {
                 buf.iter().all(|&id| id > 0),
                 "every dense index carries an id, got {buf:?}"
             );
+
+            // The two tables close over each other: every branch endpoint is a
+            // bus this API reports, and every bus is reachable, so an incidence
+            // matrix built from these arrays has no isolated row.
+            let mut from = vec![-1i64; m];
+            let mut to = vec![-1i64; m];
+            assert_eq!(
+                pio_branches(
+                    net,
+                    from.as_mut_ptr(),
+                    to.as_mut_ptr(),
+                    nf,
+                    nf,
+                    nf,
+                    nf,
+                    nf,
+                    nb,
+                    m
+                ),
+                m
+            );
+            for id in from.iter().chain(&to) {
+                assert!(
+                    buf.contains(id),
+                    "branch endpoint {id} is not in pio_bus_ids"
+                );
+            }
+            for id in &buf {
+                assert!(
+                    from.contains(id) || to.contains(id),
+                    "bus {id} has no incident branch"
+                );
+            }
 
             pio_network_free(net);
         }

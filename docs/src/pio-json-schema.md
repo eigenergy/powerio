@@ -122,7 +122,7 @@ The tables are
 the MATPOWER conventions: MW and MVAr power, per unit voltage magnitudes and
 impedances on the system base, degree angles. Every element carries an `extras`
 map for source format fields the model does not name. The field reference is the
-[`powerio::BalancedNetwork` rustdoc](../powerio/network/struct.Network.html).
+[`powerio::BalancedNetwork` rustdoc](../powerio/network/struct.BalancedNetwork.html).
 
 ### The multiconductor model JSON {#pio-payload-multiconductor}
 
