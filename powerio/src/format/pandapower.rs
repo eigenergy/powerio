@@ -1511,9 +1511,29 @@ fn dcline_frame(net: &BalancedNetwork, warnings: &mut Vec<String>) -> Value {
     // An unbounded limit has no finite spelling; a null cell reads back as the
     // same unbounded default.
     let bound = |v: f64| if v.is_finite() { jnum(v) } else { Value::Null };
+    // pandapower enforces one voltage setpoint per bus across generators,
+    // ext_grids, and dclines (its power flow refuses to build otherwise),
+    // while MATPOWER lets each dcline state its own terminal setpoint. An
+    // in-service generator's vg claims its bus first; after that the first
+    // dcline terminal claims, and every later conflicting terminal is coerced
+    // to the claimed value and counted into a warning.
+    let mut claimed: HashMap<BusId, f64> = HashMap::new();
+    for g in net.generators.iter().filter(|g| g.in_service) {
+        claimed.entry(g.bus).or_insert(g.vg);
+    }
+    let mut coerced = 0usize;
+    let mut terminal = |bus: BusId, v: f64| -> f64 {
+        let held = *claimed.entry(bus).or_insert(v);
+        if (held - v).abs() > 1e-9 {
+            coerced += 1;
+        }
+        held
+    };
     let mut index = Vec::with_capacity(net.hvdc.len());
     let mut data = Vec::with_capacity(net.hvdc.len());
     for d in &net.hvdc {
+        let vf = terminal(d.from, d.vf);
+        let vt = terminal(d.to, d.vt);
         index.push(Value::from(data.len() as u64));
         data.push(vec![
             Value::Null,
@@ -1522,8 +1542,8 @@ fn dcline_frame(net: &BalancedNetwork, warnings: &mut Vec<String>) -> Value {
             jnum(d.pf),
             jnum(d.loss1 * 100.0),
             jnum(d.loss0),
-            jnum(d.vf),
-            jnum(d.vt),
+            jnum(vf),
+            jnum(vt),
             bound(d.pmax),
             bound(d.qminf),
             bound(d.qmaxf),
@@ -1531,6 +1551,11 @@ fn dcline_frame(net: &BalancedNetwork, warnings: &mut Vec<String>) -> Value {
             bound(d.qmaxt),
             Value::Bool(d.in_service),
         ]);
+    }
+    if coerced > 0 {
+        warnings.push(format!(
+            "{coerced} dcline terminal voltage setpoint(s) coerced to the bus's controlling setpoint: pandapower enforces one voltage setpoint per bus"
+        ));
     }
     let floors = net.hvdc.iter().filter(|d| d.pmin != 0.0).count();
     if floors > 0 {

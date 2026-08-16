@@ -607,6 +607,12 @@ const TRANSMISSION_FORMATS: [TransmissionFormat; 8] = [
 // payloads now carry dclines to drop honestly. Generator reactive output
 // rides `res_gen.q_mvar` — pandapower states Q as a power flow result, not
 // an input — so the solved snapshot's qg survives with no warning at all.
+// pandapower also enforces one voltage setpoint per bus, which MATPOWER's
+// dcline rows do not: the dcline case states vf 1.01 against a generator's
+// vg 1.0 at one bus and two dclines disagree at another, so the writer
+// coerces to the bus's controlling setpoint and says so — +1 on the rows
+// whose payloads carry those conflicting setpoints (MATPOWER, PowerModels,
+// egret, Surge; the PSS/E and PSLF payloads carry uniform setpoints).
 //
 // A pandapower line states one rating, `max_i_ka`, carried as `rate_a`
 // through the file's own vn_kv; the reader no longer stores a second copy of
@@ -616,13 +622,13 @@ const TRANSMISSION_FORMATS: [TransmissionFormat; 8] = [
 // targets cannot carry and the one-of-three cost set MATPOWER's
 // all-or-nothing gencost drops.
 const TRANSMISSION_WARNING_BASELINE: [[usize; 8]; 8] = [
-    [0, 0, 15, 14, 6, 13, 22, 13],
-    [0, 0, 15, 14, 6, 13, 22, 13],
+    [0, 0, 15, 14, 6, 14, 22, 13],
+    [0, 0, 15, 14, 6, 14, 22, 13],
     [0, 0, 0, 1, 0, 2, 0, 1],
     [0, 0, 0, 0, 0, 2, 0, 0],
-    [0, 0, 9, 9, 0, 7, 1, 7],
+    [0, 0, 9, 9, 0, 8, 1, 7],
     [1, 0, 7, 7, 0, 0, 0, 7],
-    [0, 0, 9, 9, 0, 6, 0, 7],
+    [0, 0, 9, 9, 0, 7, 0, 7],
     [0, 0, 1, 1, 0, 4, 3, 0],
 ];
 
