@@ -187,17 +187,13 @@ pub(crate) fn branch_admittance(
     let y_fr = Complex64::new(charging.g_fr, charging.b_fr);
     let y_to = Complex64::new(charging.g_to, charging.b_to);
 
+    // A tap of 1e-200 underflows `a_norm_sqr` to zero and scatters +/-Inf
+    // through the four admittances.
     let tap_mag = if flags.unity_taps {
         1.0
     } else {
-        br.effective_tap()
+        br.divisible_tap(row)?
     };
-    // `effective_tap` only remaps an exact 0.0 to 1.0, so a tap of 1e-200
-    // underflows `a_norm_sqr` to zero and scatters +/-Inf through the four
-    // admittances.
-    if !tap_mag.is_finite() || tap_mag.abs() < super::MIN_DIVISIBLE_MAGNITUDE {
-        return Err(Error::DegenerateTap { row, tap: tap_mag });
-    }
     // `shift_rad` is supplied already in radians and already zeroed when
     // `flags.zero_shifts` is set (the caller has the network, so it knows whether
     // the source angle is degrees or — for a normalized network — radians).

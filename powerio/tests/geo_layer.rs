@@ -160,6 +160,23 @@ fn a_capitalized_target_reads_as_a_substation() {
 }
 
 #[test]
+fn a_named_feature_id_still_matches_a_branch_uid() {
+    // Dropping the counter case must not drop the whole key: a foreign record
+    // that writes a source uid under `id` matches it.
+    let text = r#"[{"id": "tie-a", "lat1": 34.2, "lon1": -80.05, "lat2": 34.3, "lon2": -80.1}]"#;
+    let parsed = parse(text.as_bytes(), None);
+    let feature = &parsed.layer.features[0];
+    assert_eq!(feature.target, GeoTarget::Branch);
+    assert_eq!(feature.key.index, None);
+
+    let mut net = small_network();
+    net.branches[0].uid = Some("tie-a".to_owned());
+    let report = net.apply_geo_layer(&parsed.layer);
+    assert_eq!(report.matched_branches, 1);
+    assert!(net.branches[0].route.is_some());
+}
+
+#[test]
 fn positional_branch_id_is_a_read_only_row_alias() {
     let text = r#"[{"branch": 1, "lat1": 34.2, "lon1": -80.05, "lat2": 34.3, "lon2": -80.1}]"#;
     let parsed = parse(text.as_bytes(), None);

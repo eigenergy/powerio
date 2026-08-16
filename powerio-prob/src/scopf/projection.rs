@@ -12,7 +12,7 @@ use super::goc3::{
 use super::types::{
     ScopfAcContingencySurvivors, ScopfAcLineRow, ScopfAcLineSurvivorRow, ScopfActiveReserveRow,
     ScopfActiveReserveSetRow, ScopfBusRow, ScopfCostRow, ScopfDcContingencyFlowRow, ScopfDcLineRow,
-    ScopfDeviceRow, ScopfEnergyWindowMaxCsRow, ScopfEnergyWindowMaxPrRow,
+    ScopfDeviceClassLayout, ScopfDeviceRow, ScopfEnergyWindowMaxCsRow, ScopfEnergyWindowMaxPrRow,
     ScopfEnergyWindowMinCsRow, ScopfEnergyWindowMinPrRow, ScopfEnergyWindowPeriodMaxCsRow,
     ScopfEnergyWindowPeriodMaxPrRow, ScopfEnergyWindowPeriodMinCsRow,
     ScopfEnergyWindowPeriodMinPrRow, ScopfEnergyWindows, ScopfFixedPhaseRow, ScopfFixedRatioRow,
@@ -34,19 +34,32 @@ fn sdd_device_type(obj: &Map<String, Value>) -> &str {
 }
 
 /// One required 0/1 mode flag on a `simple_dispatchable_device` row. GOC3
-/// writes these as JSON numbers, so a boolean is rejected by name.
+/// writes these as JSON numbers, so a boolean is rejected by name. A writer
+/// that emits every number as a float states the same flag as `0.0`/`1.0`, so
+/// the value is read as a number and then required to be one of the two.
 fn require_flag(obj: &Map<String, Value>, uid: &str, key: &str) -> Result<i64> {
     let raw = obj.get(key).ok_or_else(|| {
         json_error(format!(
             "simple_dispatchable_device `{uid}` missing `{key}`"
         ))
     })?;
-    match raw.as_i64() {
-        Some(v @ (0 | 1)) => Ok(v),
-        _ => Err(json_error(format!(
+    // 0 and 1 are exact in binary floating point, so equality is the right
+    // test here: it takes the two flags and nothing near them.
+    #[allow(clippy::float_cmp)]
+    let flag = raw.as_f64().and_then(|value| {
+        if value == 0.0 {
+            Some(0)
+        } else if value == 1.0 {
+            Some(1)
+        } else {
+            None
+        }
+    });
+    flag.ok_or_else(|| {
+        json_error(format!(
             "simple_dispatchable_device `{uid}` `{key}` is not 0 or 1"
-        ))),
-    }
+        ))
+    })
 }
 
 fn validate_period_len(
@@ -1024,15 +1037,13 @@ fn build_violation_cost(tables: &Goc3Adapter) -> ScopfViolationCost {
     }
 }
 
-/// `(producers_first, contiguous)` over the `simple_dispatchable_device`
-/// section in document order: whether the producer run starts before the
-/// consumer run, and whether each class is one unbroken run. Document order is
-/// the index rule for every per-class index here, so the two facts are read
-/// off the same order and need no UID shape.
-fn device_class_blocks(tables: &Goc3Adapter) -> Result<(bool, bool)> {
+/// How the two device classes sit in the `simple_dispatchable_device`
+/// section, read in document order. Document order is the index rule for
+/// every per-class index here, so this needs no UID shape.
+fn device_class_blocks(tables: &Goc3Adapter) -> Result<ScopfDeviceClassLayout> {
     let mut runs: Vec<&str> = Vec::new();
-    for uid in tables.sdd_order() {
-        let kind = sdd_device_type(tables.sdd.get(&uid)?);
+    for uid in tables.sdd.uids() {
+        let kind = sdd_device_type(tables.sdd.get(uid)?);
         let kind = if kind == "consumer" {
             "consumer"
         } else {
@@ -1042,8 +1053,12 @@ fn device_class_blocks(tables: &Goc3Adapter) -> Result<(bool, bool)> {
             runs.push(kind);
         }
     }
-    let producers_first = runs.first() != Some(&"consumer");
-    Ok((producers_first, runs.len() <= 2))
+    if runs.len() > 2 {
+        return Ok(ScopfDeviceClassLayout::Interleaved);
+    }
+    Ok(ScopfDeviceClassLayout::Contiguous {
+        producers_first: runs.first() != Some(&"consumer"),
+    })
 }
 
 fn project_scopf_instance(tables: &Goc3Adapter) -> Result<ScopfInstance> {
@@ -1053,7 +1068,7 @@ fn project_scopf_instance(tables: &Goc3Adapter) -> Result<ScopfInstance> {
         cost_vector_pr,
         cost_vector_cs,
     } = build_static_projection(tables)?;
-    let (producers_first, device_classes_contiguous) = device_class_blocks(tables)?;
+    let device_class_layout = device_class_blocks(tables)?;
     Ok(ScopfInstance {
         static_data,
         lengths,
@@ -1062,8 +1077,7 @@ fn project_scopf_instance(tables: &Goc3Adapter) -> Result<ScopfInstance> {
         ac_contingency_survivors: build_ac_contingency_survivors(tables)?,
         dc_contingency_flows: build_dc_contingency_flows(tables)?,
         violation_cost: build_violation_cost(tables),
-        producers_first,
-        device_classes_contiguous,
+        device_class_layout,
     })
 }
 

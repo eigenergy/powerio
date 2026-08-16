@@ -104,21 +104,19 @@ cubic costs, HVDC, or storage. These losses are returned as warnings.
   phase shift injection. The signed incidence matrix \\(A\\) combines with
   \\(b\\) to form the DC bus susceptance matrix
   \\(L = A \operatorname{diag}(b) A^\mathsf{T}\\), which feeds PTDF/LODF and the
-  DC OPF matrix projection. Every convention states the series susceptance
-  \\(b\\), which is negative for an inductive branch, the same sign PowerModels
-  `calc_branch_y` gives. The builder negates it once, because \\(L\\) takes the
-  M-matrix form with negative off diagonal entries and positive diagonals.
+  DC OPF matrix projection. \\(b\\) is positive for an inductive branch, the DC
+  model convention MATPOWER `makeBdc` uses; the AC series susceptance
+  \\(\operatorname{Im}\\left(1/(r + jx)\right)\\) is its negation.
 
-  The default `SeriesImpedance` uses
-  \\(b = -x/(r^2 + x^2) = \operatorname{Im}\\left(1/(r + jx)\right)\\), so it
-  reads the whole series impedance and not the reactance alone, plus the phase
-  shift injection vector `p_shift`. A tap does not scale it. It reduces to
-  \\(b = -1/x\\) when the branch has no resistance.
+  The default `SeriesImpedance` uses \\(b = x/(r^2 + x^2)\\), so it reads the
+  whole series impedance, plus the phase shift
+  injection vector `p_shift`. A tap does not scale it. It reduces to
+  \\(b = 1/x\\) when the branch has no resistance.
 
   `Matpower` reproduces MATPOWER's `makeBdc`:
-  \\(b = -1/(x\tau)\\) for a transformer with tap ratio \\(\tau\\), plus `p_shift`.
+  \\(b = 1/(x\tau)\\) for a transformer with tap ratio \\(\tau\\), plus `p_shift`.
 
-  `PaperPure` is the textbook \\(b = -1/x\\) with taps and shifts ignored. The
+  `ReactanceOnly` (the 0.8 `PaperPure`) is the textbook \\(b = 1/x\\) with taps and shifts ignored. The
   resulting \\(L\\) matches MATPOWER `Bp` under `Scheme::Xb` when phase shifts
   are zero. It is deprecated in 0.9.0 and is removed in 1.0.0.
 

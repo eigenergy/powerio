@@ -2,47 +2,65 @@
 
 use serde::{Deserialize, Serialize};
 
-/// Electrical convention used for DC branch coefficients.
+/// The magnitude below which a reactance, an impedance, or a tap ratio stops
+/// being a number a builder can divide by.
 ///
-/// Every variant states the series susceptance `b`, which is negative for an
-/// inductive branch. This is the sign PowerModels `calc_branch_y` gives, and
-/// the caller that assembles a matrix negates it: powerio's bus susceptance
-/// matrix takes the M-matrix form, with negative off diagonal entries and
-/// positive diagonals.
+/// It is `f64::MIN_POSITIVE.sqrt()`: the square of anything smaller underflows
+/// to zero, and the reciprocal is above 1e153, which annihilates every real
+/// branch sharing its diagonal. Each builder compares a magnitude against it —
+/// `|x|`, `hypot(r, x)`, the tap — never `r² + x²`, which is a square. Per unit
+/// reactances run from 1e-6 to 10, so it rejects poison and nothing else.
+pub const MIN_DIVISIBLE_MAGNITUDE: f64 = 1.491_668_146_240_041_3e-154;
+
+/// Rule for the DC branch susceptance `b`.
+///
+/// `b` is positive for an inductive branch, the DC model convention MATPOWER
+/// `makeBdc` uses. It is the edge weight of the bus susceptance matrix and the
+/// coefficient in `f = b (theta_from - theta_to)`. The AC series susceptance
+/// `Im(1/(r + jx))` is its negation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[non_exhaustive]
 pub enum DcConvention {
-    /// Use `b = -1/x` and ignore transformer taps and phase shifts.
+    /// `b = 1/x`, ignoring transformer taps and phase shifts.
+    ///
+    /// The serde alias keeps the 0.8 spelling readable, so a manifest or an
+    /// instance written before the rename still deserializes.
     #[deprecated(
         since = "0.9.0",
         note = "use `SeriesImpedance`, which is the same rule with resistance included, or `Matpower`; removed in 1.0.0"
     )]
-    PaperPure,
-    /// Use `b = -1/(x tau)` and include phase shift injections, matching
-    /// MATPOWER `makeBdc`.
+    #[serde(alias = "PaperPure")]
+    ReactanceOnly,
+    /// `b = 1/(x tau)` with phase shift injections, matching MATPOWER
+    /// `makeBdc`.
     Matpower,
-    /// Use `b = -x/(r² + x²)` and include phase shift injections.
+    /// `b = x/(r² + x²)` with phase shift injections.
     ///
-    /// This is `Im(1/(r + jx))`, the branch's own series susceptance, so it
-    /// reads the whole series impedance and not the reactance alone. It
-    /// reduces to `-1/x` when the resistance is zero. A transformer tap does
-    /// not scale it. Equivalent to PowerModels `calc_branch_y`, whose DC
-    /// formulation uses the same quantity.
+    /// Reads the whole series impedance, so it describes a branch with a real
+    /// r/x ratio. A transformer tap does not
+    /// scale it, and it reduces to `1/x` when the resistance is zero.
+    /// PowerModels' DC formulation uses the same quantity.
     #[default]
     SeriesImpedance,
 }
 
 impl DcConvention {
-    /// The series susceptance `b` from resistance, reactance, and effective
-    /// tap. Negative for an inductive branch. Only [`Self::Matpower`] reads
-    /// the tap, and only [`Self::SeriesImpedance`] reads the resistance.
+    /// The 0.8 spelling of [`Self::ReactanceOnly`], which named neither the
+    /// tool nor the formula.
+    #[deprecated(since = "0.9.0", note = "renamed to `ReactanceOnly`; removed in 1.0.0")]
+    #[allow(deprecated, non_upper_case_globals)]
+    pub const PaperPure: Self = Self::ReactanceOnly;
+
+    /// The branch susceptance from resistance, reactance, and effective tap.
+    /// Only [`Self::Matpower`] reads the tap, and only
+    /// [`Self::SeriesImpedance`] reads the resistance.
     #[must_use]
     #[allow(deprecated)]
-    pub fn series_susceptance(self, resistance: f64, reactance: f64, effective_tap: f64) -> f64 {
+    pub fn branch_susceptance(self, resistance: f64, reactance: f64, effective_tap: f64) -> f64 {
         match self {
-            Self::PaperPure => -1.0 / reactance,
-            Self::Matpower => -1.0 / (reactance * effective_tap),
-            Self::SeriesImpedance => -reactance / (resistance * resistance + reactance * reactance),
+            Self::ReactanceOnly => 1.0 / reactance,
+            Self::Matpower => 1.0 / (reactance * effective_tap),
+            Self::SeriesImpedance => reactance / (resistance * resistance + reactance * reactance),
         }
     }
 
@@ -51,7 +69,7 @@ impl DcConvention {
     #[allow(deprecated)]
     pub fn includes_phase_shifts(self) -> bool {
         match self {
-            Self::PaperPure => false,
+            Self::ReactanceOnly => false,
             Self::Matpower | Self::SeriesImpedance => true,
         }
     }
@@ -64,49 +82,23 @@ mod tests {
     /// A resistanceless branch reads the same under both live conventions, so
     /// the new default only moves a case that carries resistance.
     #[test]
-    fn series_impedance_reduces_to_minus_one_over_x() {
-        let b = DcConvention::SeriesImpedance.series_susceptance(0.0, 0.25, 1.0);
-        assert!((b + 4.0).abs() < 1e-12);
+    fn series_impedance_reduces_to_one_over_x() {
+        let b = DcConvention::SeriesImpedance.branch_susceptance(0.0, 0.25, 1.0);
+        assert!((b - 4.0).abs() < 1e-12);
     }
 
-    /// `b = Im(1/(r + jx))` is negative for an inductive branch, the sign
-    /// PowerModels `calc_branch_y` gives.
+    /// Resistance lowers the susceptance, by more as `r` grows against `x`.
     #[test]
-    fn series_impedance_is_negative_for_an_inductive_branch() {
-        let b = DcConvention::SeriesImpedance.series_susceptance(0.01, 0.1, 1.0);
-        assert!(b < 0.0, "b = {b}");
-        assert!((b + 0.1 / (0.0001 + 0.01)).abs() < 1e-12);
-    }
-
-    /// Every live convention agrees on the sign, so a caller that negates once
-    /// cannot pick up a matrix of the wrong sign from the choice of variant.
-    #[test]
-    fn every_convention_agrees_on_the_sign() {
-        #[allow(deprecated)]
-        let all = [
-            DcConvention::PaperPure,
-            DcConvention::Matpower,
-            DcConvention::SeriesImpedance,
-        ];
-        for convention in all {
-            let b = convention.series_susceptance(0.01, 0.1, 1.0);
-            assert!(b < 0.0, "{convention:?} gave {b}");
-        }
-    }
-
-    /// Resistance moves the susceptance toward zero, by more as `r` grows
-    /// against `x`.
-    #[test]
-    fn resistance_lowers_the_susceptance_magnitude() {
-        let lossless = DcConvention::SeriesImpedance.series_susceptance(0.0, 0.1, 1.0);
-        let lossy = DcConvention::SeriesImpedance.series_susceptance(0.1, 0.1, 1.0);
-        assert!(lossy.abs() < lossless.abs());
-        assert!((lossy + 5.0).abs() < 1e-12);
+    fn resistance_lowers_the_susceptance() {
+        let lossless = DcConvention::SeriesImpedance.branch_susceptance(0.0, 0.1, 1.0);
+        let lossy = DcConvention::SeriesImpedance.branch_susceptance(0.1, 0.1, 1.0);
+        assert!(lossy < lossless);
+        assert!((lossy - 5.0).abs() < 1e-12);
     }
 
     #[test]
     fn matpower_scales_by_the_tap() {
-        let b = DcConvention::Matpower.series_susceptance(0.01, 0.2, 2.0);
-        assert!((b + 2.5).abs() < 1e-12);
+        let b = DcConvention::Matpower.branch_susceptance(0.01, 0.2, 2.0);
+        assert!((b - 2.5).abs() < 1e-12);
     }
 }

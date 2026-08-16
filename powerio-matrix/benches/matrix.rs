@@ -62,7 +62,7 @@ fn bench_dcopf_parts(c: &mut Criterion) {
         b.iter(|| {
             build_incidence(
                 black_box(&view),
-                black_box(DcConvention::PaperPure),
+                black_box(DcConvention::ReactanceOnly),
                 black_box(&BuildOptions::default()),
             )
             .unwrap()
@@ -70,7 +70,7 @@ fn bench_dcopf_parts(c: &mut Criterion) {
     });
 
     let incidence =
-        build_incidence(&view, DcConvention::PaperPure, &BuildOptions::default()).unwrap();
+        build_incidence(&view, DcConvention::ReactanceOnly, &BuildOptions::default()).unwrap();
     c.bench_function("dcopf_laplacian_case118", |b| {
         b.iter(|| build_weighted_laplacian(black_box(&incidence.a), black_box(&incidence.b)));
     });
@@ -90,7 +90,9 @@ fn bench_dense_sensitivities(c: &mut Criterion) {
     let net = network("case118");
     let view = IndexedNetwork::new(&net);
     c.bench_function("sensitivity_ptdf_lodf_case118", |b| {
-        b.iter(|| build_ptdf_lodf(black_box(&view), black_box(DcConvention::PaperPure)).unwrap());
+        b.iter(|| {
+            build_ptdf_lodf(black_box(&view), black_box(DcConvention::ReactanceOnly)).unwrap()
+        });
     });
 }
 

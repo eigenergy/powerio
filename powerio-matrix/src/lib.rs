@@ -24,9 +24,9 @@
 //! the model; [`IndexedNetwork`] maps them to dense indices in `[0, n)`. `tap == 0` means
 //! `tap = 1`. `build_bprime` and `build_bdoubleprime` follow MATPOWER `makeB`;
 //! Y_bus keeps tap magnitudes and phase shifts.
-//! Branch terminal admittance is stored per unit. DC incidence uses `b = 1/x`
-//! by default. [`DcConvention::Matpower`] uses `1/(x·τ)` and phase shift
-//! injection. The full reference across every matrix is in
+//! Branch terminal admittance is stored per unit. DC incidence uses
+//! `b = x/(r² + x²)` by default. [`DcConvention::Matpower`] uses `1/(x·τ)`, and
+//! both carry phase shift injection. The full reference across every matrix is in
 //! [the matrix guide](https://eigenergy.github.io/powerio/guide/matrices.html).
 
 // Re-export the powerio data layer so one import covers model and matrix types, and so

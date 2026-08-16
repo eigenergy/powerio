@@ -455,12 +455,34 @@ pub struct ScopfInstance {
     pub ac_contingency_survivors: ScopfAcContingencySurvivors,
     pub dc_contingency_flows: Vec<ScopfDcContingencyFlowRow>,
     pub violation_cost: ScopfViolationCost,
-    /// Whether the producer block precedes the consumer block in document
-    /// order. A model that stacks both classes into one variable vector needs
-    /// this to place its per-class offsets.
-    pub producers_first: bool,
-    /// Whether each device class occupies one unbroken run of the
-    /// `simple_dispatchable_device` section. A per-class offset into a stacked
-    /// variable vector is a bijection only when this holds.
-    pub device_classes_contiguous: bool,
+    pub device_class_layout: ScopfDeviceClassLayout,
+}
+
+/// How the two device classes sit in the `simple_dispatchable_device` section.
+///
+/// A model that stacks producers and consumers into one variable vector
+/// addresses a device by a per class offset, which is a bijection only when
+/// each class owns one unbroken run. Reading the order without that
+/// precondition is the one mistake this type makes unavailable.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", tag = "kind")]
+#[non_exhaustive]
+pub enum ScopfDeviceClassLayout {
+    /// Each class is one unbroken run. `producers_first` says which run
+    /// starts first.
+    Contiguous { producers_first: bool },
+    /// The two classes interleave, so no per class offset addresses a device.
+    Interleaved,
+}
+
+impl ScopfDeviceClassLayout {
+    /// Whether the producer run starts before the consumer run, or `None`
+    /// when the classes interleave and no offset scheme holds.
+    #[must_use]
+    pub fn producers_first(self) -> Option<bool> {
+        match self {
+            Self::Contiguous { producers_first } => Some(producers_first),
+            Self::Interleaved => None,
+        }
+    }
 }

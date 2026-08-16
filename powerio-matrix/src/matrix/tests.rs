@@ -1,4 +1,4 @@
-//! These cases pin `b = 1/x`, so they name `DcConvention::PaperPure` until it
+//! These cases pin `b = 1/x`, so they name `DcConvention::ReactanceOnly` until it
 //! is removed in 1.0.0.
 #![allow(deprecated)]
 
@@ -171,7 +171,8 @@ fn bprime_cancels_tap_magnitude_and_keeps_phase_shift() {
         "Ybus keeps the transformer tap magnitude"
     );
 
-    let inc = build_incidence(&view, DcConvention::PaperPure, &BuildOptions::default()).unwrap();
+    let inc =
+        build_incidence(&view, DcConvention::ReactanceOnly, &BuildOptions::default()).unwrap();
     let dc_l = build_weighted_laplacian(&inc.a, &inc.b).to_dense();
     assert_relative_eq!(dc_l[[0, 1]], -5.0, max_relative = 1e-12);
     assert!(
@@ -542,7 +543,7 @@ fn zero_impedance_policy_is_shared_across_matrix_builders() {
     assert_eq!(ybus_stats.skipped_zero_impedance, 1);
     assert_eq!(ybus_stats.skipped_zero_impedance_branches, vec![0]);
 
-    let inc = build_incidence(&view, DcConvention::PaperPure, &opts).unwrap();
+    let inc = build_incidence(&view, DcConvention::ReactanceOnly, &opts).unwrap();
     assert_eq!(inc.skipped_zero_impedance.count, 1);
     assert_eq!(inc.skipped_zero_impedance.branch_indices, vec![0]);
 }
@@ -560,7 +561,7 @@ fn zero_impedance_policy_can_error_instead_of_skipping() {
     assert!(matches!(bprime, crate::Error::ZeroImpedance { row: 0 }));
     let ybus = build_ybus(&view, &opts).unwrap_err();
     assert!(matches!(ybus, crate::Error::ZeroImpedance { row: 0 }));
-    let inc = build_incidence(&view, DcConvention::PaperPure, &opts).unwrap_err();
+    let inc = build_incidence(&view, DcConvention::ReactanceOnly, &opts).unwrap_err();
     assert!(matches!(inc, crate::Error::ZeroImpedance { row: 0 }));
 }
 
@@ -641,7 +642,8 @@ fn a_reactance_below_the_divisible_bound_is_zero_impedance() {
     );
     let view = IndexedNetwork::new(&net);
 
-    let inc = build_incidence(&view, DcConvention::PaperPure, &BuildOptions::default()).unwrap();
+    let inc =
+        build_incidence(&view, DcConvention::ReactanceOnly, &BuildOptions::default()).unwrap();
     assert_eq!(inc.skipped_zero_impedance.count, 1);
     assert_eq!(inc.skipped_zero_impedance.branch_indices, vec![0]);
 
@@ -649,7 +651,7 @@ fn a_reactance_below_the_divisible_bound_is_zero_impedance() {
         skip_zero_impedance: false,
         ..Default::default()
     };
-    let err = build_incidence(&view, DcConvention::PaperPure, &strict).unwrap_err();
+    let err = build_incidence(&view, DcConvention::ReactanceOnly, &strict).unwrap_err();
     assert!(
         matches!(err, crate::Error::ZeroImpedance { row: 0 }),
         "{err}"
@@ -674,7 +676,7 @@ fn a_reactance_the_builders_can_divide_by_is_stamped_by_both() {
     let view = IndexedNetwork::new(&net);
     let opts = BuildOptions::default();
 
-    let inc = build_incidence(&view, DcConvention::PaperPure, &opts).unwrap();
+    let inc = build_incidence(&view, DcConvention::ReactanceOnly, &opts).unwrap();
     assert_eq!(inc.skipped_zero_impedance.count, 0);
     assert_relative_eq!(inc.b[0], 1e100, max_relative = 1e-12);
 
@@ -747,7 +749,7 @@ fn self_loop_with_zero_reactance_drops_unconditionally() {
     let view = IndexedNetwork::new(&net);
 
     let opts = BuildOptions::default();
-    let inc = build_incidence(&view, DcConvention::PaperPure, &opts).unwrap();
+    let inc = build_incidence(&view, DcConvention::ReactanceOnly, &opts).unwrap();
     assert_eq!(inc.skipped_zero_impedance.count, 0);
     assert!(inc.skipped_zero_impedance.branch_indices.is_empty());
 
@@ -755,7 +757,7 @@ fn self_loop_with_zero_reactance_drops_unconditionally() {
         skip_zero_impedance: false,
         ..Default::default()
     };
-    build_incidence(&view, DcConvention::PaperPure, &strict)
+    build_incidence(&view, DcConvention::ReactanceOnly, &strict)
         .expect("a self-loop must not trip ZeroImpedance even when skip_zero_impedance is false");
 }
 

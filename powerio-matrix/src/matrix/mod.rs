@@ -44,15 +44,9 @@ pub(crate) use ybus::{YbusFlags, branch_admittance, branch_flows};
 
 use sprs::CsMat;
 
-/// The magnitude below which a reactance, an impedance, or a tap ratio stops
-/// being a number the builders can divide by.
-///
-/// It is `f64::MIN_POSITIVE.sqrt()`: the square of anything smaller underflows
-/// to zero, and the reciprocal is above 1e153, which annihilates every real
-/// branch sharing its diagonal. Each builder compares a magnitude against it —
-/// `|x|`, `hypot(r, x)`, the tap — never `r² + x²`, which is a square. Per unit
-/// reactances run from 1e-6 to 10, so it rejects poison and nothing else.
-pub(crate) const MIN_DIVISIBLE_MAGNITUDE: f64 = 1.491_668_146_240_041_3e-154;
+// The bound the matrix and instance builders share; it lives beside the DC
+// convention because both are properties of the branch primitives.
+pub(crate) use powerio::dc::MIN_DIVISIBLE_MAGNITUDE;
 
 /// Which MATPOWER fast decoupled scheme to use.
 ///

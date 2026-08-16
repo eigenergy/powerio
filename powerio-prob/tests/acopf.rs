@@ -306,6 +306,50 @@ fn zero_impedance_skip_or_reject() {
 }
 
 #[test]
+fn an_impedance_the_instance_cannot_divide_by_reads_as_zero_impedance() {
+    // #292, the rule the matrix builders apply: the bound is on the impedance
+    // magnitude, so `x = 1e-300` is refused and the `x = 1e-100` beside it,
+    // whose square is just as small, is still a branch the instance carries.
+    let mut net = small_network();
+    net.branches.insert(0, branch(10, 30, 0.0, 1e-300));
+    let view = IndexedNetwork::new(&net);
+    let skipped = build_ac_opf_instance(&view, &AcOpfOptions::default()).expect("skip");
+    assert_eq!(skipped.branches.skipped_zero_impedance, vec![0]);
+
+    let error = build_ac_opf_instance(
+        &view,
+        &AcOpfOptions {
+            skip_zero_impedance: false,
+            ..AcOpfOptions::default()
+        },
+    )
+    .expect_err("reject");
+    assert!(matches!(error, Error::ZeroImpedance { row: 0 }));
+
+    let mut small_x = small_network();
+    small_x.branches[0].r = 0.0;
+    small_x.branches[0].x = 1e-100;
+    let problem =
+        build_ac_opf_instance(&IndexedNetwork::new(&small_x), &AcOpfOptions::default()).expect("x");
+    assert_eq!(problem.branches.skipped_zero_impedance, Vec::<usize>::new());
+    assert_close(problem.branches.b[0], -1e100);
+}
+
+#[test]
+fn a_tap_the_instance_cannot_divide_by_is_refused() {
+    for tap in [1e-200, f64::NAN, f64::INFINITY] {
+        let mut net = small_network();
+        net.branches[0].tap = tap;
+        let error = build_ac_opf_instance(&IndexedNetwork::new(&net), &AcOpfOptions::default())
+            .expect_err("a tap the pi model divides by must be refused");
+        assert!(
+            matches!(error, Error::DegenerateTap { row: 0, .. }),
+            "tap {tap}: {error}"
+        );
+    }
+}
+
+#[test]
 fn out_of_service_exclusion() {
     let mut net = case9();
     net.generators[1].in_service = false;

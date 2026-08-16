@@ -183,6 +183,15 @@ fn an_unrated_branch_takes_a_synthesized_limit_on_request() {
     let wide = build_dc_opf_instance(&IndexedNetwork::new(&wide), &options).expect("wide bounds");
     assert_close(wide.branches.f_max[0], 1.1 * 2.2 / 0.2);
 
+    // `0/0` is the MATPOWER spelling of the same unconstrained branch, so it
+    // reaches the same bound. Reading it as a zero wide window would give a
+    // zero limit, which the instance reads back as unlimited.
+    let mut zero = net.clone();
+    zero.branches[0].angmin = 0.0;
+    zero.branches[0].angmax = 0.0;
+    let zero = build_dc_opf_instance(&IndexedNetwork::new(&zero), &options).expect("zero bounds");
+    assert_close(zero.branches.f_max[0], 1.1 * 2.2 / 0.2);
+
     let mut rated = net.clone();
     rated.branches[0].rate_a = 50.0;
     let kept = build_dc_opf_instance(&IndexedNetwork::new(&rated), &options).expect("rated branch");
@@ -391,6 +400,63 @@ fn zero_reactance_can_be_skipped_or_rejected() {
 }
 
 #[test]
+fn a_reactance_the_instance_cannot_divide_by_reads_as_zero_impedance() {
+    // #292, the rule the matrix builders apply: `x = 1e-300` gives a finite
+    // `b = 1e300` that annihilates every real branch sharing a bus with it.
+    let mut net = small_network();
+    net.branches.insert(0, branch(10, 30, 1e-300));
+    let view = IndexedNetwork::new(&net);
+    let skipped = build_dc_opf_instance(&view, &DcOpfOptions::default()).expect("skip");
+    assert_eq!(skipped.branches.skipped_zero_impedance, vec![0]);
+
+    let error = build_dc_opf_instance(
+        &view,
+        &DcOpfOptions {
+            skip_zero_impedance: false,
+            ..DcOpfOptions::default()
+        },
+    )
+    .expect_err("reject");
+    assert!(matches!(error, Error::ZeroImpedance { row: 0 }));
+}
+
+#[test]
+fn a_tap_the_instance_cannot_divide_by_is_refused() {
+    for tap in [1e-200, f64::NAN, f64::INFINITY] {
+        let mut net = small_network();
+        net.branches[0].tap = tap;
+        let error = build_dc_opf_instance(
+            &IndexedNetwork::new(&net),
+            &DcOpfOptions {
+                convention: DcConvention::Matpower,
+                ..DcOpfOptions::default()
+            },
+        )
+        .expect_err("a tap the susceptance divides by must be refused");
+        assert!(
+            matches!(error, Error::DegenerateTap { row: 0, .. }),
+            "tap {tap}: {error}"
+        );
+    }
+}
+
+#[test]
+fn a_cost_rounding_artifact_reaches_neither_space() {
+    // A model 2 row carrying a leading 1e-17 from the source's rounding states
+    // a linear curve. Generator space used to keep it, so the same case read
+    // two ways gave two curves.
+    let mut net = small_network();
+    net.generators[0].cost = Some(GenCost::new(2, 0.0, 0.0, vec![1e-17, 2.0, 5.0]));
+    let problem =
+        build_dc_opf_instance(&IndexedNetwork::new(&net), &DcOpfOptions::default()).expect("build");
+    assert_eq!(problem.generators.q[0].to_bits(), 0.0_f64.to_bits());
+    assert_eq!(
+        problem.nodal_generator_data().q[0].to_bits(),
+        0.0_f64.to_bits()
+    );
+}
+
+#[test]
 fn zero_base_mva_is_rejected() {
     let mut net = small_network();
     net.base_mva = 0.0;
@@ -490,10 +556,13 @@ mod matrix_tests {
         )
         .expect("manifest json");
         assert_eq!(manifest["schema"], "powerio.dcopf");
-        assert_eq!(manifest["schema_version"], "0.3.0");
+        assert_eq!(manifest["schema_version"], "0.4.0");
         let c0_gen =
             powerio_matrix::io::read_vector_mtx(bundle.dir.join("c0_gen.mtx")).expect("c0_gen");
         assert_eq!(c0_gen, problem.generators.c0);
+        // The shunt conductance a nodal balance subtracts beside `pd`.
+        let g_s = powerio_matrix::io::read_vector_mtx(bundle.dir.join("gs.mtx")).expect("gs");
+        assert_eq!(g_s, problem.g_s);
         let c0 = powerio_matrix::io::read_vector_mtx(bundle.dir.join("c0.mtx")).expect("c0");
         assert_eq!(c0, problem.nodal_generator_data().c0);
         assert_eq!(manifest["dimensions"]["n_buses"], problem.n_buses);

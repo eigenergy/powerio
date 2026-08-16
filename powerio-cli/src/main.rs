@@ -527,8 +527,10 @@ enum DcConvArg {
     SeriesImpedance,
     /// `b = 1/(x tau)`, with phase shift injections.
     Matpower,
-    /// `b = 1/x`. Accepted until 1.0.0; use `series`.
-    PaperPure,
+    /// `b = 1/x`. Accepted until 1.0.0; use `series`. The 0.8 spelling
+    /// `paper-pure` stays an alias so an existing command line still runs.
+    #[value(name = "reactance-only", alias = "paper-pure", alias = "paper")]
+    ReactanceOnly,
 }
 
 impl From<DcConvArg> for DcConvention {
@@ -537,7 +539,7 @@ impl From<DcConvArg> for DcConvention {
         match value {
             DcConvArg::SeriesImpedance => Self::SeriesImpedance,
             DcConvArg::Matpower => Self::Matpower,
-            DcConvArg::PaperPure => Self::PaperPure,
+            DcConvArg::ReactanceOnly => Self::PaperPure,
         }
     }
 }

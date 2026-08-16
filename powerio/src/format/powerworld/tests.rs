@@ -209,6 +209,39 @@ fn bare_bus_latitude_and_longitude_promote_into_the_location() {
 }
 
 #[test]
+// Exact decimal fractions parsed from the fixture; bit equality is the assertion.
+#[allow(clippy::float_cmp)]
+fn a_bus_row_promotes_one_coordinate_pair_and_keeps_the_other() {
+    // A complete case export carries both pairs. The substation pair wins,
+    // and the bus's own pair stays in extras as unmodeled data.
+    let net = parse_powerworld(
+        "DATA (Bus, [BusNum, Latitude:1, Longitude:1, Latitude, Longitude])\n\
+         {\n1 34.2 -80.05 30.1 -90.5\n2 \"\" -80.10 34.4 -80.20\n}\n",
+    )
+    .unwrap();
+    let location = net.buses[0].location.expect("bus 1 location");
+    assert_eq!((location.x, location.y), (-80.05, 34.2));
+    assert_eq!(
+        net.buses[0].extras.get("Latitude").and_then(|v| v.as_str()),
+        Some("30.1")
+    );
+    assert!(!net.buses[0].extras.contains_key("Latitude:1"));
+
+    // Half of the substation pair promotes nothing from that pair, so the
+    // bus's own pair promotes whole. Mixing the two would place the bus at
+    // the substation's longitude.
+    let location = net.buses[1].location.expect("bus 2 location");
+    assert_eq!((location.x, location.y), (-80.20, 34.4));
+    assert_eq!(
+        net.buses[1]
+            .extras
+            .get("Longitude:1")
+            .and_then(|v| v.as_str()),
+        Some("-80.10")
+    );
+}
+
+#[test]
 // Exact kV values parsed from the fixture; bit equality is the assertion.
 #[allow(clippy::float_cmp)]
 fn writer_sanitizes_bus_names_that_would_corrupt_a_value() {

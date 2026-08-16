@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 
 use powerio::{BusId, DcConvention, Error, IndexedNetwork, Result};
 
-use crate::{ReferenceBuses, nodal};
+use crate::{ReferenceBuses, limits, nodal};
 
 /// Unit system for power and generator cost data.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -104,7 +104,8 @@ pub struct DcGeneratorData {
 pub struct DcBranchData {
     pub from_bus: Vec<usize>,
     pub to_bus: Vec<usize>,
-    /// Branch coefficient in the selected power unit per radian.
+    /// Branch susceptance in the selected power unit per radian, positive for
+    /// an inductive branch.
     pub b: Vec<f64>,
     /// Phase shift in radians. Zero unless the convention carries phase shift
     /// injections.
@@ -160,8 +161,8 @@ pub struct DcOpfInstance {
     ///
     /// The DC approximation holds the voltage magnitude at one per unit, so a
     /// shunt draws the constant real power `g_s` and does not depend on the
-    /// angle. It belongs in the injection and not in the bus susceptance
-    /// matrix, whose row sums must stay zero. A nodal balance subtracts it
+    /// angle. It belongs in the injection: the bus susceptance matrix keeps
+    /// zero row sums and carries no shunt. A nodal balance subtracts it
     /// beside [`Self::p_d`], as MATPOWER `runpf` does.
     pub g_s: Vec<f64>,
     /// Nodal phase shift injection in dense bus order.
@@ -238,13 +239,7 @@ pub fn build_dc_opf_instance(
         let cost = generator.cost.as_ref().ok_or(Error::MissingGenCost {
             gen_index: source_row,
         })?;
-        let (q_raw, c_raw, c0_raw) =
-            cost.quadratic_with_constant()
-                .ok_or(Error::UnsupportedCostModel {
-                    gen_index: source_row,
-                    model: cost.model,
-                    ncost: cost.ncost,
-                })?;
+        let (q_raw, c_raw, c0_raw) = nodal::quadratic_terms(cost, source_row)?;
         bus_of_gen.push(bus);
         generator_rows.push(source_row);
         q.push(q_raw * q_scale);
@@ -284,21 +279,21 @@ pub fn build_dc_opf_instance(
             // DC flow, and its shift injection cancels at its own bus.
             continue;
         }
-        if branch.x == 0.0 {
+        // The reactance the DC matrix builders bound, on the same rule: an
+        // `x = 1e-300` gives a finite `b = 1e300` that annihilates every real
+        // branch sharing a bus with it. Exact zero used to be the whole test.
+        if branch.x.abs() < powerio::dc::MIN_DIVISIBLE_MAGNITUDE {
             if options.skip_zero_impedance {
                 skipped_zero_impedance.push(source_row);
                 continue;
             }
             return Err(Error::ZeroImpedance { row: source_row });
         }
-        // Negated: the convention states `b`, and this field is the flow
-        // coefficient in `f = b (theta_from - theta_to)`, positive for an
-        // inductive branch.
-        let branch_b =
-            -options
-                .convention
-                .series_susceptance(branch.r, branch.x, branch.effective_tap())
-                * b_scale;
+        let branch_b = options.convention.branch_susceptance(
+            branch.r,
+            branch.x,
+            branch.divisible_tap(source_row)?,
+        ) * b_scale;
         if !branch_b.is_finite() {
             return Err(Error::NonFiniteSusceptance { row: source_row });
         }
@@ -320,7 +315,7 @@ pub fn build_dc_opf_instance(
         // A synthesized bound is per unit power already, so the admittance
         // multiplier is the one that puts it in the selected unit system.
         if options.synthesize_unrated_limits && branch.rate_a <= 0.0 {
-            let window = amin.abs().max(amax.abs());
+            let window = limits::angle_window(amin, amax);
             f_max
                 .push(branch.synthesize_rate_a(window, buses[from].vmax, buses[to].vmax) * b_scale);
         } else {

@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 
 use powerio::{BusId, Error, IndexedNetwork, Result};
 
-use crate::{ReferenceBuses, Units, nodal};
+use crate::{ReferenceBuses, Units, limits, nodal};
 
 /// Options for AC OPF instance assembly.
 ///
@@ -264,13 +264,7 @@ pub fn build_ac_opf_instance(
         let cost = generator.cost.as_ref().ok_or(Error::MissingGenCost {
             gen_index: source_row,
         })?;
-        let (q_raw, c_raw, c0_raw) =
-            cost.quadratic_with_constant()
-                .ok_or(Error::UnsupportedCostModel {
-                    gen_index: source_row,
-                    model: cost.model,
-                    ncost: cost.ncost,
-                })?;
+        let (q_raw, c_raw, c0_raw) = nodal::quadratic_terms(cost, source_row)?;
         bus_of_gen.push(bus);
         generator_rows.push(source_row);
         cost_q.push(q_raw * q_scale);
@@ -332,7 +326,7 @@ pub fn build_ac_opf_instance(
             // lands on the bus diagonal, exactly as `build_ybus` folds it.
             // With t = tap·e^{jθ}: Yff + Yft + Ytf + Ytt
             //   = (y + y_fr)/tap² + (y + y_to) − y·2cos(θ)/tap.
-            let tap = branch.effective_tap();
+            let tap = branch.divisible_tap(source_row)?;
             let tap_squared = tap * tap;
             let cross = 2.0 * case.angle_radians(branch.shift).cos() / tap;
             g_s[from] += ((series_g + charging.g_fr) / tap_squared + (series_g + charging.g_to)
@@ -353,12 +347,12 @@ pub fn build_ac_opf_instance(
         b_to.push(charging.b_to * y_scale);
         let amin = case.angle_radians(branch.angmin);
         let amax = case.angle_radians(branch.angmax);
-        tap.push(branch.effective_tap());
+        tap.push(branch.divisible_tap(source_row)?);
         shift.push(case.angle_radians(branch.shift));
         // A synthesized bound is per unit power already, so the admittance
         // multiplier is the one that puts it in the selected unit system.
         if options.synthesize_unrated_limits && branch.rate_a <= 0.0 {
-            let window = amin.abs().max(amax.abs());
+            let window = limits::angle_window(amin, amax);
             s_max.push(
                 branch.synthesize_rate_a(window, network.buses[from].vmax, network.buses[to].vmax)
                     * y_scale,

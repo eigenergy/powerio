@@ -1,6 +1,8 @@
 use powerio::BusId;
 use powerio_prob::scopf::wire::{SCOPF_WIRE_SCHEMA, SCOPF_WIRE_VERSION, to_wire_value};
-use powerio_prob::{ScopfError, ScopfInstance, build_scopf_instance_from_str};
+use powerio_prob::{
+    ScopfDeviceClassLayout, ScopfError, ScopfInstance, build_scopf_instance_from_str,
+};
 use serde_json::Value;
 
 const SMALL: &str = include_str!("data/goc3_small.json");
@@ -454,8 +456,12 @@ fn violation_prices_are_each_optional() {
 #[test]
 fn device_class_blocks_are_read_in_document_order() {
     let instance = small_instance();
-    assert!(instance.producers_first);
-    assert!(instance.device_classes_contiguous);
+    assert_eq!(
+        instance.device_class_layout,
+        ScopfDeviceClassLayout::Contiguous {
+            producers_first: true
+        }
+    );
 
     let mut doc: Value = serde_json::from_str(SMALL).expect("fixture json");
     let devices = doc["network"]["simple_dispatchable_device"]
@@ -464,8 +470,12 @@ fn device_class_blocks_are_read_in_document_order() {
     devices.swap(0, 1);
     let text = serde_json::to_string(&doc).expect("serialize");
     let instance = build_scopf_instance_from_str(&text, "goc3-json").expect("build");
-    assert!(!instance.producers_first);
-    assert!(instance.device_classes_contiguous);
+    assert_eq!(
+        instance.device_class_layout,
+        ScopfDeviceClassLayout::Contiguous {
+            producers_first: false
+        }
+    );
 }
 
 #[test]
@@ -485,9 +495,15 @@ fn interleaved_device_classes_are_reported() {
     ts.push(third_ts);
     let text = serde_json::to_string(&doc).expect("serialize");
     let instance = build_scopf_instance_from_str(&text, "goc3-json").expect("build");
-    assert!(
-        !instance.device_classes_contiguous,
+    assert_eq!(
+        instance.device_class_layout,
+        ScopfDeviceClassLayout::Interleaved,
         "producer, consumer, producer is three runs"
+    );
+    assert_eq!(
+        instance.device_class_layout.producers_first(),
+        None,
+        "no offset scheme holds, so there is no order to read"
     );
 }
 
@@ -538,6 +554,10 @@ fn the_validation_case_indexes_every_row_in_document_order() {
         }
     }
 
-    assert!(instance.producers_first);
-    assert!(instance.device_classes_contiguous);
+    assert_eq!(
+        instance.device_class_layout,
+        ScopfDeviceClassLayout::Contiguous {
+            producers_first: true
+        }
+    );
 }
