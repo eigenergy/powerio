@@ -88,7 +88,7 @@
         39,
         40
       ],
-      "powerio_version": "0.8.3",
+      "powerio_version": "0.9.0",
       "row_axis": "matrix_branch",
       "source_row": [
         0,
@@ -308,7 +308,7 @@
         0,
         0
       ],
-      "powerio_version": "0.8.3",
+      "powerio_version": "0.9.0",
       "row_axis": "matrix_bus",
       "source_row": [
         0,
@@ -465,7 +465,7 @@
         29
       ],
       "format": "coo",
-      "powerio_version": "0.8.3",
+      "powerio_version": "0.9.0",
       "row_axis": "matrix_bus",
       "row_count": 30,
       "row_index": [
@@ -816,7 +816,7 @@
         29
       ],
       "format": "coo",
-      "powerio_version": "0.8.3",
+      "powerio_version": "0.9.0",
       "row_axis": "matrix_bus",
       "row_count": 30,
       "row_index": [
@@ -1137,7 +1137,7 @@
         38
       ],
       "format": "coo",
-      "powerio_version": "0.8.3",
+      "powerio_version": "0.9.0",
       "row_axis": "matrix_bus",
       "row_count": 30,
       "row_index": [
@@ -1656,7 +1656,7 @@
         "0xbfed86f059c32c96",
         "0x3ff9d6124e8ac704"
       ],
-      "powerio_version": "0.8.3",
+      "powerio_version": "0.9.0",
       "row_axis": "matrix_bus",
       "row_count": 30,
       "row_index": [
