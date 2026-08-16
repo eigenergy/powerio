@@ -1,553 +1,132 @@
-# C ABI v5
+# Migrating to C ABI 5
 
-v5 touches twelve symbols and renames none. Everything a caller wrote against v4 still
-compiles except the seven signatures listed below, which change because their v4 shape lost
-data.
+ABI 5 ships with powerio 0.9.0. It touches seventeen symbols and renames none, so a binding written against ABI 4 keeps compiling except at the seven signatures below. That is the danger: most of this migration is behavior and JSON shape, which the compiler cannot find for you.
 
-This document has two halves. The first records what shipped. The second is a design study
-that proposed replacing the whole surface; it was cut down to the first half, and it stays
-here because the reasoning behind several of its pieces is worth having when a later version
-does break something.
+`PIO_ABI_VERSION` is 5. Bindings gate on equality, so a binding built against 4 refuses a 0.9.0 library and a binding built against 5 refuses everything earlier. There is no partial compatibility to arrange.
 
-## What v5 changes
+## What changed
 
-| symbol | change | why |
-|---|---|---|
-| `pio_to_format` | signature | warnings return as an owned string through `char **out_warnings` |
-| `pio_convert_file` | signature | same |
-| `pio_convert_str` | signature | same |
-| `pio_write_dir` | signature | same |
-| `pio_dist_to_format` | signature | same |
-| `pio_dist_convert_file` | signature | same |
-| `pio_dist_convert_str` | signature | same |
-| `pio_n_buses` | behavior | counts the star-lowered space, so it agrees with every per-bus extractor |
-| `pio_bus_ids` | behavior | same space, so `length(ids) == n_buses` |
-| `pio_acopf_from_network` | removed | no C consumer; re-cut additively when one exists |
-| `pio_acopf_to_json` | removed | same |
-| `pio_acopf_instance_free` | removed | goes with its handle |
-| `pio_build_info` | new | one document reporting version, ABI, features and foreign schema versions |
-| `pio_parse_bytes` | new | in-memory ingest that reaches the binary readers |
+| symbol | change |
+|---|---|
+| `pio_to_format` | signature: warnings return through `char **out_warnings` |
+| `pio_convert_file` | signature: same |
+| `pio_convert_str` | signature: same |
+| `pio_write_dir` | signature: same |
+| `pio_dist_to_format` | signature: same |
+| `pio_dist_convert_file` | signature: same |
+| `pio_dist_convert_str` | signature: same |
+| `pio_n_buses` | behavior: reports the star-lowered space |
+| `pio_bus_ids` | behavior: same |
+| `pio_n_branches` | behavior: same |
+| `pio_branches` | behavior: same |
+| `pio_branch_charging` | behavior: same |
+| `pio_acopf_from_network` | removed |
+| `pio_acopf_to_json` | removed |
+| `pio_acopf_instance_free` | removed |
+| `pio_build_info` | new |
+| `pio_parse_bytes` | new |
 
-Five JSON documents also changed shape while their symbols kept their signatures, which is the
-reason the integer had to move at all. A binding built against 4 would pass the handshake and
-then read `null` for keys it mirrors.
+The `PioAcopfInstance` typedef goes with its three symbols. Nothing else in the header moved.
+
+## Conversion warnings
+
+The seven conversion entry points filled a caller buffer and truncated into it when the fidelity loss list outran the buffer. The length that would have told the caller was discarded, and the header advertised 256 bytes as sufficient. They take an out-pointer now.
+
+```c
+/* ABI 4 */
+char warnbuf[PIO_ERRBUF_MIN];
+char *text = pio_to_format(net, "matpower", warnbuf, sizeof warnbuf, errbuf, sizeof errbuf);
+
+/* ABI 5 */
+char *warnings = NULL;
+char *text = pio_to_format(net, "matpower", &warnings, errbuf, sizeof errbuf);
+if (warnings) {
+    /* the conversion lost something; the string is yours */
+    pio_string_free(warnings);
+}
+```
+
+`NULL` on return means the conversion lost nothing. Any other value is an owned string you free with `pio_string_free`. Passing `NULL` for the parameter itself discards the warnings without allocating. The call writes the out-pointer before it does any work, so a value left over from an earlier call is never read as this one's.
+
+**The trap.** You own the string whether or not you asked for it. The first binding to migrate passed a real pointer, decided downstream that it did not want the text, and returned without freeing. It compiled, ran, and leaked on every conversion whose source format differed from its target. Decide at the call site: pass `NULL` to discard, or pass a pointer and free unconditionally.
+
+`pio_warnings` and `pio_dist_warnings` are unchanged. They use the size-then-fill idiom and cannot truncate.
+
+## The star-lowered space
+
+A case with an in-service 3-winding transformer lowers before the dense extractors run, adding one star bus and three branches per transformer. Through ABI 4 the bus and branch tables reported the unexpanded case file while `pio_bus_demand`, `pio_bus_shunt` and `pio_n_islands` reported the expansion. A per-bus buffer sized from `pio_n_buses` read short, its trailing entries had no id, and a matrix built from the pair left the star point isolated.
+
+Five symbols move to the lowered space so the whole surface agrees: `pio_n_buses`, `pio_bus_ids`, `pio_n_branches`, `pio_branches`, `pio_branch_charging`.
+
+Two assertions are the migration test, and they hold on 5 and fail on 4:
+
+```c
+assert(pio_bus_ids(net, NULL, 0) == pio_n_buses(net));
+/* and: every branch endpoint is a bus the API reports */
+```
+
+Assert the closure rather than the counts. On the case9 variant carrying one in-service 3-winding transformer, ABI 4 reported 9 buses and 9 branches and ABI 5 reports 10 and 12. Every one of those four numbers is plausible read on its own, so a test that pins a count passes for the wrong reason as easily as the right one.
+
+The Arrow tables keep the distinction explicit rather than resolving it. `PIO_ARROW_TABLE_BUS` and `PIO_ARROW_TABLE_BRANCH` are the case file's own rows and stay unexpanded. `PIO_ARROW_TABLE_MATRIX_BUS` and `PIO_ARROW_TABLE_MATRIX_BRANCH` are the lowered space these extractors now agree with. A consumer that joins a raw table against an extractor column is reading two spaces and needs to pick one.
+
+## Removed
+
+The three `pio_acopf_*` symbols had no C consumer. They are deleted rather than carried through the freeze, and will be re-cut additively when a consumer exists and can say what shape it needs. Deleting rather than deprecating is safe here: the symbol stops resolving, so a caller fails at load instead of reading something wrong.
+
+## New
+
+```c
+char *pio_build_info(void);
+PioNetwork *pio_parse_bytes(const uint8_t *bytes, size_t len, const char *format,
+                            char *errbuf, size_t errlen);
+```
+
+`pio_build_info` returns one owned JSON document, shaped after `curl_version_info`, holding `powerio_version`, `abi`, `features` (`arrow`, `matrix`, `gridfm`, `dist`, `pkg`, `prob`), `foreign_schemas` (`bmopf`), and `error_categories`. That last key is the one worth binding early: the ABI reports failures as text and defines no error codes, so a caller that wants to branch on the kind of failure matches these tokens rather than parsing English.
+
+`pio_parse_bytes` accepts every format name `pio_parse_str` takes plus `pwb`. PowerWorld binary has no text form and a NUL truncates it, so before this the only route to one was `pio_parse_file`, and a consumer holding an upload or an archive member had to stage a temporary file. It opens nothing, which is a security property rather than a convenience: it is the entry point for input you do not control, and it is why the 0.7.3 advisory fix works.
+
+## The JSON documents, which is why the integer moved
+
+Six documents changed shape while their symbols kept their signatures. This is the part that a compiler cannot catch, and on its own it is the reason ABI 5 exists: a binding built against 4 would pass the handshake and then read `null` for keys it mirrors.
 
 | document | change |
 |---|---|
 | `pio_schema_versions_json` | dropped four keys |
 | `pio_dist_capabilities_json` | `schema_version` → `powerio_version` |
-| `pio_arrow_catalog_json` | same rename at the top level; the per-table `schema_version` is gone |
-| `pio_scopf_to_json` | same rename; gains `violation_cost`, `device_class_layout`, `j_sh` on shunt rows, and eight generator row fields |
+| `pio_arrow_catalog_json` | same rename; the per-table `schema_version` is gone |
+| `pio_scopf_to_json` | same rename, plus new fields |
+| `pio_package_to_json` | same rename |
+| `pio_dist_summary_json` | same rename |
 | `pio_summary_json` | gains `topology.n_buses` and `topology.n_branches` |
 | Arrow schema metadata | key became `powerio.version` |
 
-The rename is the same edit everywhere: one release version now covers every document powerio
-authors, so a per-document `schema_version` frozen at `1.0.0` said nothing a caller could act
-on. `pio_scopf_to_json` keeps 1-based indices; the design study below proposed flipping them
-to 0-based and that did not ship.
+The rename is one edit everywhere. One release version now covers every document powerio authors, so a per-document `schema_version` frozen at `1.0.0` said nothing a caller could act on.
 
-`pio_summary_json`'s `counts` block stays the case file's own inventory, so a 3-winding
-transformer counts once there rather than as the bus and three branches it lowers to. The two
-new `topology` fields are the lowered space, which is what every extractor reports.
+`pio_scopf_to_json` gains `violation_cost`, `device_class_layout`, `lengths.K`, `j_sh` on shunt rows, and eight generator row fields. Its indices stay 1-based.
 
-**Warnings.** The seven conversion entry points used to fill a caller `warnbuf` and silently
-truncate when the fidelity-loss list outran it. `finish_conversion` discarded the length that
-would have told the caller. The out-pointer replaces both problems: `NULL` means the
-conversion lost nothing, any other value is an owned string the caller frees with
-`pio_string_free`, and passing `NULL` for the parameter itself discards them. The call writes
-the out-pointer before it does any work, so a stale value from an earlier call is never
-mistaken for this one's. `pio_warnings` and `pio_dist_warnings` keep their caller buffer:
-they use the size-then-fill idiom and cannot truncate.
+`pio_summary_json`'s `counts` block stays the case file's own inventory, so a 3-winding transformer counts once there rather than as the bus and three branches it lowers to. The two new `topology` fields are the lowered space, which is what the extractors report. Reading `counts` where you want `topology` is the same class of error the bus space change fixes.
 
-**The bus space.** A case with an in-service 3-winding transformer star-lowers before the
-dense extractors run, adding one bus per transformer. Through v4 `pio_n_buses` and
-`pio_bus_ids` reported the unexpanded table while `pio_bus_demand`, `pio_bus_shunt` and
-`pio_n_islands` reported the expansion, so a per-bus buffer sized from `pio_n_buses` read
-short and its trailing entries had no id. The v4 header documented the mismatch and said
-aligning it was a v5 change. This is that change. `length(bus_ids) == n_buses` is the
-migration test.
+`pio_dist_graph_json`, `pio_package_validation_json`, `pio_package_diagnostics_json`, `pio_package_operating_points_json`, `pio_package_study_json` and `pio_package_multiconductor_to_balanced_preflight_json` are byte for byte what ABI 4 emitted.
 
-**`PIO_DIST_ABI_VERSION`** is frozen at 1 and no longer meaningful. It existed to absorb
-distribution volatility, and that volatility is in the BMOPF schema, which changes a reader, a
-writer and an emitted token but no C signature. The symbol stays because PowerIO.jl gates
-thirteen distribution call sites on resolving it. Foreign schema versions are reported at
-runtime by `pio_build_info` instead, which can express "I speak BMOPF 0.2" in a way an integer
-checked once at load cannot.
+## `PIO_DIST_ABI_VERSION`
 
-**`pio_parse_bytes`** takes `(const uint8_t *, size_t)` and accepts every `pio_parse_str`
-format name plus `pwb`. PowerWorld binary has no text form and a NUL truncates it, so before
-this the only way to read one was `pio_parse_file`, which means a consumer holding an upload
-or an archive member had to stage a temporary file. It opens nothing, which is a security
-property rather than a convenience: it is the entry point for untrusted input, and it is why
-the 0.7.3 advisory fix works. The Rust and Python surfaces gained the same entry point in the
-same change, so the symbol is not a promise the library cannot keep.
+Frozen at 1 and no longer meaningful. It existed to absorb distribution volatility, and that volatility lives in the BMOPF schema, which changes a reader, a writer and an emitted token but no C signature. One shared object carrying two compatibility promises is a thing no mature C library does.
 
----
+The symbol stays because PowerIO.jl gates twelve distribution call sites on resolving it, and removing it would make a library that fully supports distribution refuse every distribution call. Do not build new gates on it. Read foreign schema versions from `pio_build_info`, which can say "BMOPF 0.2 but not 0.3" where an integer checked once at load cannot.
 
-# Design study: a full rewrite of the surface
+## What a real migration cost
 
-Everything below was written as a v5 proposal and **did not ship**. It renames essentially
-every symbol in an 85-symbol surface. The estimate for PowerIO.jl alone was ~98 edit sites
-across 12 files, in exchange for consistency rather than for a defect fixed.
+PowerIO.jl is the one binding powerio owns, and its ABI 5 change is the honest estimate. Six categories of edit:
 
-The premise that drove its scope was that v5 would be the last breaking change to the C ABI,
-so everything had to land at once. That premise is false. Every symbol resolves by `dlsym`
-behind an equality gate on `pio_abi_version`, powerio owns its one binding consumer, and that
-binding's artifact repin is automated. A later bump is routine. Nothing here has to happen in
-one release, and most of it does not have to happen at all.
+1. The warnings channel, at seven call sites across two files. The fixed 64 KiB buffer, the truncation marker and the machinery around them were deleted rather than adapted.
+2. `pio_parse_bytes` bound as one new `ccall` plus two wrapper methods.
+3. `pio_build_info` bound as one call, guarded to return nothing on an older library.
+4. The ABI constant, one line.
+5. A sentinel spelling: the dense view's `reference_bus` reports `nothing` rather than the C `-1`.
+6. The removed `pio_acopf_*` symbols cost nothing, because nothing called them.
 
-Read it as an argued menu. The pieces most worth revisiting are the options struct (rule 5),
-which is the only mechanism here that prevents future symbol bloat, and the conversion handle
-(rule 4), whose file-list argument identifies a live defect: OpenDSS sidecars are dropped
-today, so a written `.dss` can name a coordinates file the user does not have.
+The star-lowered space required no binding edit at all, which is the point worth carrying away: the numbers changed and the code did not. A binding that sizes buffers from one extractor and fills them from another was already correct or already broken; ABI 5 decides which. Assert the closure and find out.
 
-## The grammar
+## What did not change
 
-Every symbol has this form:
-
-```text
-pio_<subject>_<operation>[_<qualifier>]
-```
-
-**Subjects.** The subject is the handle the function takes or returns. An empty subject means
-the library itself.
-
-| subject | handle |
-|---|---|
-| *(empty)* | the shared object |
-| `balanced` | `PioBalancedNetwork` |
-| `multiconductor` | `PioMulticonductorNetwork` |
-| `package` | `PioPackage` |
-| `scopf` | `PioScopfInstance` |
-| `conversion` | `PioConversion` |
-| `source` | `PioSource` |
-| `geo` | a geographic layer; no handle |
-
-**Operations.** There are six forms. Only four use a verb, and those verbs are a closed list.
-
-| form | shape |
-|---|---|
-| constructor | returns a new handle. Verbs: `parse`, `from_json`, `from_<subject>`, `from_source`, `as_<subject>`, `normalize`, `lower_to_<subject>`, `apply_<noun>`, `open` |
-| destructor | `free`. One per subject. Returns void. Accepts NULL |
-| emitter | `size_t f(handle, out, cap, errbuf, errlen)`. Payload names: `to_json`, `summary`, `warnings`, `graph`, `validation`, `diagnostics`, `operating_points`, `study`, `geo`, `text`, `file`, `catalog`, `build_info` |
-| accessor | no verb. `n_<plural>` returns a count. `<plural>` fills an array. `<singular>` returns one value. `is_<adj>` and `has_<noun>` return `int32_t` |
-| mutator | `validate`, `set_<noun>`, `materialize_<noun>`. `PioPackage` only |
-| out-param | `int32_t f(handle, …, <out structs>, errbuf, errlen)`. For payloads that are not bytes: `to_arrow` |
-
-**Qualifiers.** Two members: `_check`, a preflight for the operation it attaches to, and
-`_bytes`, which says the input is memory rather than a path. Nothing else may use the slot
-without being added to this list.
-
-**The rule that makes the grammar predictable:**
-
-> There is one ingest verb, `parse`. It takes a path. A suffix appears only when the bytes
-> come from somewhere other than a path.
-
-So `pio_balanced_parse(path, …)` and `pio_balanced_parse_bytes(data, len, …)`, and nothing
-else. `_file`, `_str`, `_dir`, `_dataset` and `_scenario` all disappear.
-
-The suffix does not name the storage shape, which rule 7 rejects. It names **who touches the
-filesystem**. A path argument means the library opens files and may follow an OpenDSS
-`Redirect` tree. A buffer argument means it opens nothing, which is a security property and
-not a convenience: `parse_bytes` is the entry point for untrusted text, and it is why the
-0.7.3 advisory fix works.
-
-`_bytes` rather than `_str`, because a PowerWorld `.pwb` is binary and a NUL truncates it. v4
-called this `_str` and could not accept half the formats it named.
-
-This is the one piece of the study that shipped, under the existing names rather than the
-proposed ones. `powerio::parse_bytes` and `pio_parse_bytes` exist as of v5; the rename to
-`pio_balanced_parse_bytes` does not.
-
-The precedent is libxml2: one verb, and a suffix for where the bytes came from —
-`xmlReadFile`, `xmlReadMemory`, `xmlReadDoc`.
-
-## The seven rules
-
-**1. Every symbol names its subject.** v4 left the balanced model unnamed. `pio_parse_str` was
-balanced, `pio_dist_parse_str` was multiconductor. The reader had to know which omission meant
-what. Both models are peers. Both are named.
-
-Names are spelled out. The reason is not that `mc` reads as Monte Carlo; that claim does not
-survive checking, and psspy has no Monte Carlo entry points. The reason is that
-`balanced_network` and `multiconductor_network` are already the `.pio.json` payload keys, the
-Rust type names, the Python class names and the Julia exported types. A C header you cannot
-grep with the word the file format uses is the one surface out of step. Spelling them out
-costs 3.9 characters of mean symbol length. v5 averages 22.7 characters. cairo averages 24.0.
-
-**2. `dist` is gone as a word.** v4 used `dist` in 15 symbols and `multiconductor` in 4, in one
-header, for one model. The crate keeps the name `powerio-dist`, and that is fine: a package
-name is not a symbol prefix, and libcurl exports `curl_easy_*`. The word is also spent
-elsewhere. psspy ships 23 `dist_*` functions and every one means *disturbance*.
-
-**3. One buffer idiom. No raw pointer to library memory crosses the boundary.** v4 had three
-idioms. 27 symbols returned an owned `char *` that the caller freed with `pio_string_free`. 5
-filled a caller buffer. 9 filled caller arrays. v5 keeps the last two:
-
-```c
-size_t pio_x(const PioHandle *h, char *out, size_t cap, char *errbuf, size_t errlen);
-```
-
-The return is the total available. `NULL` or `0` is a size query. `pio_string_free` is deleted
-with the class it freed.
-
-Everything that crosses is either bytes copied into memory the caller owns, or an opaque
-handle with exactly one free function. The library still allocates handles. It no longer hands
-out pointers into its own memory.
-
-These invariants hold for every buffer symbol:
-
-- the return excludes the NUL
-- the buffer is always NUL terminated
-- a short buffer truncates on a UTF-8 boundary, so a C caller never receives a split codepoint
-- a fallible symbol writes `errbuf[0] = '\0'` on entry, and a message only on failure
-
-That last one matters. Several of these symbols can legitimately return nothing. Without it, a
-`0` return means both "empty" and "failed", and the caller cannot tell.
-
-**Caching.** A size query followed by a fill would run the serialization twice. Handles with no
-mutator may cache each payload in a `OnceLock<Result<String, String>>`. That is
-`PioBalancedNetwork`, `PioMulticonductorNetwork`, `PioScopfInstance`, `PioConversion` and
-`PioSource`. `OnceLock<T>` is `Sync` when `T` is, so the header's promise that concurrent reads
-are safe still holds.
-
-`PioPackage` is excluded. It has two mutators, `pio_package_validate` and
-`pio_package_set_operating_points`, and they rewrite the fields its accessors read. A cached
-read taken before `validate` and served after it would return pre-validation text from a
-`const` accessor. Its four document accessors recompute per call.
-
-**4. A conversion is a handle, because it has two outputs.** v4's seven `warnbuf` symbols
-truncated silently. `finish_conversion` discarded the needed length. There was no size query.
-A long fidelity-loss list was lost with no signal, and the header told callers that 256 bytes
-always sufficed.
-
-A conversion has text and warnings. Both need a size query. Neither can attach to the network
-handle, because write-time warnings are produced at write time.
-
-A `PioConversion` owns its text and warnings. It does not borrow the network. It stays valid
-after that handle is freed, so the two have no ordering requirement.
-
-It also reports the files a write produced. `pio_conversion_n_files` and
-`pio_conversion_file` replace a newline-joined list, because a newline is a legal byte in a
-POSIX filename. This closes a live defect: OpenDSS sidecars are dropped today, so a written
-`.dss` can name a coordinates file the user does not have.
-
-**5. One extensible options struct.** With no `repr(C)` structs, every new option needs a new
-symbol. Over three years that bloats the surface or forces a v6.
-
-```c
-typedef struct PioNormalizeOptions {
-  size_t  struct_size;
-  int32_t clamp_angle_bounds;   /* 0 false, any nonzero true */
-  double  angle_bound_pad;      /* radians; 0 is a valid explicit value */
-} PioNormalizeOptions;
-```
-
-The precedent is the Linux extensible syscall convention: `openat2`, `clone3`,
-`sched_setattr`. Win32 `cbSize` is the older and coarser form. Vulkan is not a precedent; its
-`sType` and `pNext` chain solves a different problem.
-
-The rules, all of which must be stated or the mechanism does not work:
-
-- The library reads a field only if its offset and size fall within
-  `min(opts->struct_size, sizeof(PioNormalizeOptions))` as the library was compiled.
-- A newer caller against an older library is safe by that same clause.
-- If the caller's tail beyond the library's own size is **nonzero**, the call fails. The caller
-  asked for something this build does not do. Silence would be wrong.
-- Fields are append only. No reorder, no removal, no type change.
-- The struct has no implicit padding. Reserved fields are named.
-- The caller zero-fills before setting fields.
-- `NULL` means all defaults. That is the only way to ask for defaults without stating a size.
-
-Booleans cross as `int32_t`. The header contains no `bool` today, and
-`pio_normalize_with_options` already converts explicitly.
-
-**6. One ABI integer.** `PIO_DIST_ABI_VERSION` existed to absorb distribution volatility. That
-volatility is in the BMOPF schema, which the IEEE task force owns and powerio reproduces. A
-BMOPF revision changes a reader, a writer and an emitted token. It changes no C signature.
-
-So the second integer never fires for its stated reason. What it does instead is give one
-shared object two compatibility promises. No mature C library does that.
-
-Foreign schema drift is reported at runtime by `pio_build_info`. An integer checked once at
-load cannot express "I speak BMOPF 0.2 but not 0.3".
-
-Removing the symbol costs the binding more than removing the constant. PowerIO.jl gates every
-distribution entry point on `_ensure_dist_compatible`, which resolves `pio_dist_abi_version`
-and reports a missing symbol as "use powerio-capi v0.3.1". Thirteen call sites reach it. The
-gate has to be rebuilt on `pio_has_feature("dist")` in the same change that repins the
-artifact, or a v5 library that fully supports distribution refuses every distribution call.
-
-**7. Cardinality is the axis, not storage.** v4 split reading by storage: `pio_parse_file` for
-documents, `pio_read_dir` for directories. That split does not survive the formats.
-
-An OpenDSS `.dss` is one file that pulls in a tree. A PyPSA case is a directory. powerio's own
-`parse_file` already dispatches a PyPSA directory before it looks at any extension. One file is
-not one case for much of the software powerio reads.
-
-What does survive is how many cases a path yields. Almost every format yields one. A gridfm
-dataset directory yields N over one shared topology. A PowerModels JSON with
-`multinetwork=true` also yields N, and powerio reads the first and warns about the rest today.
-
-So every path opens to a source:
-
-```c
-PioSource *pio_source_open(const char *path, const char *from,
-                           const PioReadOptions *opts, char *errbuf, size_t errlen);
-size_t     pio_source_count(const PioSource *);
-size_t     pio_source_entry_names(const PioSource *, char *out, size_t cap,
-                                  char *errbuf, size_t errlen);   /* NUL separated */
-size_t     pio_source_entry_name(const PioSource *, size_t index, char *out, size_t cap,
-                                 char *errbuf, size_t errlen);
-void       pio_source_free(PioSource *);
-
-PioBalancedNetwork *pio_balanced_from_source(const PioSource *, size_t index,
-                                             char *errbuf, size_t errlen);
-```
-
-A matpower file is a source with one entry. A PyPSA folder is a source with one entry. A
-gridfm dataset has N. `pio_source_count` may return 0 for an empty container.
-
-Entries are named, not numbered. `int64_t` is gridfm's Parquet key type, not a property of
-containers; PGLib and GOC3 entries have no integer key.
-
-`pio_balanced_parse` survives as a documented composition of open plus entry 0, not as a second
-route. SQLite documents `sqlite3_exec` the same way. GDAL and libarchive make open-then-
-enumerate the only path, and they are the honest counterexample; the shortcut wins here on the
-ratio, since almost every case is a single entry. `pio_balanced_parse` on a multi-entry path
-fails and names `pio_source_open`, so the shortcut can never silently disagree with the
-container form.
-
-## The symbol table
-
-`=` unchanged · `R` renamed · `S` re-signatured · `X` removed · `N` new
-
-### Handshake, 7 → 4
-
-| v4 | v5 | | why |
-|---|---|---|---|
-| `pio_abi_version` | same | = | the gate; call it before you trust anything else |
-| `pio_version` | same | = | build identity; the artifact repin compares it, and an ABI integer cannot |
-| `pio_has_feature` | same | = | the cheap path for a caller with no JSON parser |
-| `pio_schema_versions_json` | — | X | three keys, none unique; all duplicate another symbol |
-| `pio_dist_capabilities_json` | — | X | a dist-gated symbol is the wrong home for the fact rule 6 needs |
-| `pio_dist_abi_version` | — | X | rule 6 |
-| `pio_matrix_available` | — | X | `pio_has_feature("matrix")` says it |
-| — | `pio_build_info` | N | one report: version, abi, features, capabilities, foreign schemas |
-
-`pio_abi_version` and `pio_version` are both kept because neither derives from the other. The
-integer is the gate and changes only on a break. The string is identity and changes every
-release. PowerIO.jl resolves everything by `dlsym` from a pinned artifact, so
-`pio_abi_version` is powerio's soname.
-
-### Balanced model
-
-| v4 | v5 | | why |
-|---|---|---|---|
-| `pio_parse_file` | `pio_balanced_parse` | R S | takes a path of any shape: a file, a directory, or a file that pulls in a tree |
-| `pio_parse_str` | `pio_balanced_parse_bytes` | R S | `(const void *, size_t)`, so `.pwb` needs no temp file. Opens nothing, so it is the entry point for untrusted input |
-| `pio_from_json` | `pio_balanced_from_json` | R S | rules 1, 3 |
-| `pio_read_dir` | `pio_balanced_from_source` | R S | one entry of an opened source |
-| `pio_scenario_ids` | `pio_source_entry_names` | R S | re-homed onto the source; names, not integers |
-| `pio_classify_str` | `pio_classify_bytes` | R S | takes memory, so it carries the suffix; gains the error channel it never had |
-| `pio_normalize` | `pio_balanced_normalize` | R S | takes `const PioNormalizeOptions *` |
-| `pio_normalize_with_options` | — | X | folded into the options struct |
-| `pio_to_json` | `pio_balanced_to_json` | R S | rules 1, 3 |
-| `pio_to_format` | — | X | folded into `pio_balanced_write` with a NULL path |
-| `pio_write_dir` | — | X | folded; it wrote one format, and that format is a case |
-| `pio_convert_file` | — | X | three same-typed strings; it shipped with two reversed and still linked |
-| `pio_convert_str` | — | X | same |
-| — | `pio_balanced_write` | N | one write verb. NULL path serializes; a real path writes a file, a directory, or a file plus sidecars |
-| `pio_network_free` | `pio_balanced_free` | R | rule 1 |
-| `pio_to_arrow` | `pio_balanced_to_arrow` | R | rule 1 |
-| `pio_warnings` | `pio_balanced_warnings` | R | rule 1; already rule-3 shaped |
-| `pio_summary_json` | `pio_balanced_summary` | R S | `_json` named the encoding, not the payload |
-| `pio_source_format` | `pio_balanced_source_format` | R S | returns the format token, not a Rust `Debug` spelling |
-| `pio_network_name` | `pio_balanced_name` | R S | the handle is the network |
-| `pio_n_buses` | `pio_balanced_n_buses` | R S | **the star-lowered space**, so `length(bus_ids) == n_buses` |
-| `pio_bus_ids` | `pio_balanced_bus_ids` | R S | same space |
-| `pio_n_gens` | `pio_balanced_n_generators` | R | the one abbreviated noun |
-| `pio_gens` | `pio_balanced_generators` | R | same |
-| `pio_geo_extract` | `pio_balanced_geo` | R S | emitter; `extract` is not a verb in the list |
-| `pio_geo_apply` | `pio_balanced_apply_geo` | R S | constructor; gains a `PioGeoApplyReport *` |
-
-The remaining extractors are plain renames for rule 1: `pio_n_branches`, `pio_n_switches`,
-`pio_n_islands`, `pio_base_mva`, `pio_is_radial`, `pio_ref_bus_index`, `pio_ref_bus_indices`,
-`pio_branches`, `pio_branch_charging`, `pio_switches`, `pio_bus_demand`, `pio_bus_shunt`.
-
-### Source, new
-
-`pio_source_open`, `pio_source_count`, `pio_source_entry_names`, `pio_source_entry_name`,
-`pio_source_free`. See rule 7.
-
-### Conversion, new
-
-`pio_conversion_text`, `pio_conversion_warnings`, `pio_conversion_n_files`,
-`pio_conversion_file`, `pio_conversion_free`. See rule 4.
-
-### Multiconductor
-
-Every `pio_dist_*` becomes `pio_multiconductor_*`. `parse_file` becomes `parse`, `parse_str`
-becomes `parse_bytes`, `summary_json` becomes `summary`, `graph_json` becomes `graph`. `to_format`
-folds into `pio_multiconductor_write`. `pio_dist_convert_file` and `pio_dist_convert_str` are
-removed, as their balanced twins are. `warnings`, `free`, `to_json`, `from_json`, `geo_extract`
-and `geo_apply` follow the balanced pattern.
-
-`parse` is where rule 7 is clearest. An OpenDSS `.dss` is the format most associated with a file
-extension, and it is the one least likely to be a single file.
-
-The EXPERIMENTAL banner is retired. The dist C signatures were never the unstable part. The
-BMOPF payload schema was, and it is versioned where it lives.
-
-### Package, 18 → 18
-
-`pio_package_parse_file` becomes `pio_package_parse`, and `pio_package_parse_str` becomes
-`pio_package_parse_bytes`.
-
-Four lose a repeated noun: `from_balanced_network` → `from_balanced`,
-`from_multiconductor_network` → `from_multiconductor`, and the two extraction twins. The handle
-is the network; saying it twice adds nothing.
-
-The extraction direction is `as_`, so `pio_package_to_balanced_network` becomes
-`pio_package_as_balanced`. `to_` already means emitter here: `to_json` returns bytes. A verb
-cannot mean "returns a handle you must free" in one symbol and "fills your buffer" in the next.
-`as_` also matches what Rust and Python already ship (`NetworkPackage::as_balanced`,
-`Package.as_balanced`), so the rename moves the C ABI toward two surfaces rather than away from
-them. PowerIO.jl spells this `from_package` and dispatches on `model_kind`; that stays, because
-one Julia function over a tagged union is the Julia way to write it.
-
-Two get shorter: `pio_package_lower_multiconductor_to_balanced` → `pio_package_lower_to_balanced`
-(44 → 29), and `pio_package_multiconductor_to_balanced_preflight_json` →
-`pio_package_lower_to_balanced_check` (53 → 35). `lower` stays because `.pio.json` publishes
-`lowering_history`. `preflight` goes because it is an internal stage name.
-
-`pio_package_lower_to_balanced` and `pio_package_as_balanced` must not differ by one suffix.
-They return different handle types under mutually exclusive preconditions.
-
-Five lose `_json`: `to_json`, `validation_json`, `diagnostics_json`, `operating_points_json`,
-`study_json`. The suffix named an encoding that no sibling symbol varies.
-
-`free`, `validate`, `set_operating_points`, `materialize_operating_point` and
-`materialize_study_commit` keep their names.
-
-### Problem instances, 6 → 3
-
-| v4 | v5 | | why |
-|---|---|---|---|
-| `pio_scopf_parse_str` | `pio_scopf_parse_bytes` | R S | takes memory, so it carries the suffix; a SCOPF document arrives as bytes, never as a path |
-| `pio_scopf_to_json` | same | S | **0-based**; see the movers |
-| `pio_scopf_instance_free` | `pio_scopf_free` | R | the type carries the noun |
-| `pio_acopf_from_network` | — | X | no consumer; `acopf` appears nowhere in PowerIO.jl |
-| `pio_acopf_to_json` | — | X | same |
-| `pio_acopf_instance_free` | — | X | goes with its handle |
-
-The freeze forbids breaking changes, not additions. Delete now. Re-cut additively when a C
-consumer exists and can say what shape it needs.
-
-### Geographic and Arrow
-
-| v4 | v5 | | why |
-|---|---|---|---|
-| `pio_geo_parse` | same | S | returns `PioConversion *`, so the tolerant reader's notes stop being discarded |
-| `pio_arrow_catalog_json` | `pio_arrow_catalog` | R S | drop `_json` |
-| `pio_string_free` | — | X | rule 3 removes the class |
-
-`pio_geo_parse` keeps its verb. It parses. `normalize` is already the per-unit transform in the
-same header, and in the geospatial domain `GEOSNormalize_r` canonicalizes a geometry that is
-already parsed.
-
-Arrow stays balanced only. `arrow_export.rs` contains no multiconductor tables, and
-`powerio-dist` has no Arrow dependency. A table id is cheap to add later; a shipped table's
-column order is frozen, so the cost of guessing lands on the columns.
-
-### Handles, structs, macros
-
-New handles: `PioConversion`, `PioSource`. `PioNetwork` becomes `PioBalancedNetwork`.
-`PioDistNetwork` becomes `PioMulticonductorNetwork`. `PioAcopfInstance` is removed.
-
-New structs: `PioNormalizeOptions`, `PioReadOptions`, `PioWriteOptions`, `PioGeoApplyReport`.
-All follow rule 5. `PioWriteOptions` ships with only `struct_size`, so a later write option is
-an appended field rather than a second symbol.
-
-`PIO_ABI_VERSION` becomes 5. `PIO_DIST_ABI_VERSION` is removed. `PIO_ERRBUF_MIN` stays. The 21
-`PIO_ARROW_TABLE_*` ids stay, and stay append only.
-
-## The symbols whose meaning moves
-
-A rename is safe: the old name stops resolving. A re-signature is safe: the old call stops
-compiling. Neither protects a symbol whose payload changes while the call still works.
-
-**`pio_balanced_n_buses` and `pio_balanced_bus_ids`** move to the star-lowered space. v4
-returned fewer ids than the extractors had rows, so trailing rows had no id. v5 returns one id
-per row. A binding that asserts `length(ids) == n` fails on v4 and passes on v5. That assert is
-the migration test. The handle rename forces every C declaration to be edited, so no caller
-reaches the new behavior without touching the line.
-
-**`pio_scopf_to_json`** keeps its name and changes 1-based indices to 0-based. The document
-carries `index_base`, but a field is only a mechanism if something reads it, and nothing does
-today. A 0-based index is still a valid 1-based index, so a missed conversion reads the wrong
-element rather than failing.
-
-So v5 requires the binding to normalize: **PowerIO.jl converts to 1-based at the boundary.**
-The wire value is 0. The value a Julia caller sees is 1. Julia arrays are 1-based, and a
-binding should speak its own language. Python, whose lists are 0-based, passes it through.
-
-## What does not change
-
-Arrow table ids and column order. The format tokens, which are strings and were never symbols.
-The opaque handle design. The panic guard on every entry point. `errbuf` and `errlen` last.
-
-## What this costs PowerIO.jl
-
-Every symbol resolves by `dlsym`, so a rename fails at load rather than reading wrong. One v4
-precedent is worth remembering: `pio_convert_file` kept its symbol, arity and types while two
-arguments were reordered. It linked, and it read the formats reversed.
-
-Julia is where the C type system does not help. PowerIO.jl holds handles as `Ptr{Cvoid}`, so
-renaming a handle costs it nothing and protects it from nothing. The `ccall` signature changes
-carry the migration, and rule 3 changes most of the surface.
-
-Roughly 98 symbol reference sites across 12 files. 22 `_take_string` sites become the
-size-query helper, and `_take_string`, `_WARNLEN` and the truncation guess are deleted. The two
-risk concentrations are the conversion handle lifetimes and the star-lowered bus space, which
-changes numbers rather than symbols. `PIO_DIST_ABI_VERSION` must be deleted from the binding,
-or the artifact repin parks forever.
-
-Deleting that constant is not the whole of it. `_ensure_dist_compatible`, `schema_versions`,
-`dist_capabilities` and `matrix_available` all resolve symbols v5 removes. The first throws on
-a missing symbol, so every distribution call fails; the other three are guarded by
-`_exports_symbol`, so they report "unavailable" on a library that has the feature. All four
-move to `pio_has_feature` and `pio_build_info` in the same change as the repin.
-
-Every exported PowerIO.jl name survives. `open_source`, `entry_names` and `entry_name` are
-added. BMOPFTools and ExaModelsPower see no API change, but `BMOPFTools.from_dss` reaches
-`pio_dist_abi_version` through `parse_file(MulticonductorNetwork, …)`, so it breaks if the
-gate above is not rebuilt.
-
-tellegen and PowerMCP are not affected. tellegen links the Rust crates. PowerMCP imports the
-Python wheel. Neither calls a `pio_` symbol.
-
-## Open decisions
-
-These were left unsettled when the study was cut down.
-
-1. **`PioWriteOptions` with no fields.** Ship it empty so a later write option is an appended
-   field, or omit it and accept that `write` gains options only through a second symbol.
-2. **Arrow generator cost tables.** Additive, so nothing here gates them. They are what lets
-   PowerIO.jl retire most of `exa.jl`, which rebuilds the ExaModelsPower payload from JSON
-   because Arrow carries no cost.
-3. **The geo family.** Five symbols, no C consumer today. tellegen's Rust usage is a validated
-   specification to build against, but shipping and deleting are both defensible.
-
-## What was deferred rather than rejected
-
-**Error codes.** Every fallible symbol returns `NULL` or `-1` and writes a message, so a
-caller that wants to branch on the failure has to match on English. `ErrorCategory` already
-exists in Rust with five variants and is deliberately not `#[non_exhaustive]`, so adding one
-is a compile error at every binding. v5 publishes the category tokens in `pio_build_info` so a
-binding can build its map ahead of time; the `int32_t` return is near-free during a broad
-re-signature and expensive on its own, so it waits for one.
-
-**The options structs.** Rule 5 is the only mechanism in this study that prevents the surface
-from growing a symbol per option. It costs nothing to adopt one struct at a time, on the next
-symbol that would otherwise need a `_with_options` twin.
+Arrow table ids and column order. The format tokens, which are strings and were never symbols. The opaque handle design. The panic guard on every entry point. `errbuf` and `errlen` last. `pio_abi_version`, `pio_version` and `pio_has_feature`.
