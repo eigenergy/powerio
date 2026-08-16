@@ -649,8 +649,18 @@ pub fn write_psse_rev(net: &BalancedNetwork, rev: u32) -> Conversion {
         // other mode states the rectifier power in MW; a demand the source
         // measured at the inverter (negative SETVL) comes back measured at
         // the rectifier, which names the same operating point.
-        let setvl = if mdc == 2 && vschd > 0.0 {
+        let setvl = if let Some(stated) = dc_f64(&dc.extras, "psse_dc_setvl") {
+            // A current schedule the reader could not price. It reads as zero
+            // power, so only the retained record can state it back.
+            stated
+        } else if mdc == 2 && vschd > 0.0 {
             1000.0 * dc.pf / vschd
+        } else if dc.extras.contains_key("psse_dc_setvl_at_inverter") {
+            // The source measured its demand at the inverter, which SETVL
+            // states as a negative number. Writing the rectifier power instead
+            // names a different operating point: the re-read would price the
+            // drop off the larger end.
+            -dc.pt
         } else {
             dc.pf
         };
@@ -849,10 +859,14 @@ fn quoted_circuit_id<K: Ord + Clone>(
 fn dc_states_beyond_record(d: &Hvdc) -> bool {
     let rdc = dc_f64(&d.extras, "psse_dc_rdc").unwrap_or(0.0);
     let vschd = dc_f64(&d.extras, "psse_dc_vschd").unwrap_or(0.0);
-    // The drop the rewrite reproduces from the replayed RDC/VSCHD and a
-    // rectifier-measured demand. A whisker of tolerance covers the units
-    // round trip of a current-mode record (SETVL -> kA -> SETVL).
-    let expected_pt = if vschd > 0.0 {
+    // The drop the rewrite reproduces from the replayed RDC/VSCHD. A whisker
+    // of tolerance covers the units round trip of a current-mode record
+    // (SETVL -> kA -> SETVL). A record whose demand was measured at the
+    // inverter writes back as a negative SETVL and re-reads at the same two
+    // ends, so its received power is already what the rewrite states.
+    let expected_pt = if d.extras.contains_key("psse_dc_setvl_at_inverter") {
+        d.pt
+    } else if vschd > 0.0 {
         let i = d.pf / vschd;
         d.pf - i * i * rdc
     } else {
@@ -1109,6 +1123,7 @@ pub(crate) fn parse_psse_source(
                     &fields(rectifier),
                     &fields(inverter),
                     hvdc.len(),
+                    warnings,
                 )?);
             }
             Section::Area => areas.push(read_area(&f)?),
@@ -2182,11 +2197,23 @@ fn read_transformer_3w(
 /// RDC/VSCHD, and the default converter tails — restates nothing and is not
 /// kept, so a record powerio itself wrote reads back with empty extras and
 /// rewrites identically.
-fn read_dc_line(l1: &[String], rect: &[String], inv: &[String], index: usize) -> Result<Hvdc> {
+fn read_dc_line(
+    l1: &[String],
+    rect: &[String],
+    inv: &[String],
+    index: usize,
+    warnings: &mut Vec<String>,
+) -> Result<Hvdc> {
     let mdc = int_at(l1, 1, 1)?;
     let rdc = num_at(l1, 2, 0.0)?;
     let setvl = num_at(l1, 3, 0.0)?;
     let vschd = num_at(l1, 4, 0.0)?;
+    // Which end the record measured its demand at, so the writer can state it
+    // the same way. Without this a negative SETVL comes back positive and the
+    // re-read prices the drop off the rectifier power instead of the inverter
+    // power, moving the received power by the difference between the two.
+    let mut measured_at_inverter = false;
+    let mut unpriceable_current = false;
     let (pf, pt) = match (mdc, vschd > 0.0) {
         // Current demand: SETVL amps -> kA; power at the rectifier is V·I.
         (2, true) => {
@@ -2194,9 +2221,18 @@ fn read_dc_line(l1: &[String], rect: &[String], inv: &[String], index: usize) ->
             let pf = vschd * i;
             (pf, pf - i * i * rdc)
         }
+        // Current demand with no scheduled voltage: there is nothing to price
+        // the amps with. Reading them as MW is how a 2000 A schedule becomes a
+        // 2000 MW line, so the operating point reads as zero and the record is
+        // retained verbatim for the write back.
+        (2, false) => {
+            unpriceable_current = true;
+            (0.0, 0.0)
+        }
         // Power demand measured at the inverter: the rectifier supplies it
         // plus the drop.
         (1, true) if setvl < 0.0 => {
+            measured_at_inverter = true;
             let pt = -setvl;
             let i = pt / vschd;
             (pt + i * i * rdc, pt)
@@ -2207,8 +2243,17 @@ fn read_dc_line(l1: &[String], rect: &[String], inv: &[String], index: usize) ->
             let i = setvl / vschd;
             (setvl, setvl - i * i * rdc)
         }
+        // No scheduled voltage under a power mode: no current to price the
+        // drop with, and SETVL is already MW.
         _ => (setvl, setvl),
     };
+    if unpriceable_current {
+        warnings.push(format!(
+            "two-terminal DC record {} schedules a current with no scheduled voltage; the \
+             demand cannot be priced into power and both ends read as zero",
+            index + 1
+        ));
+    }
     let mut extras = Extras::new();
     if let Some(name) = l1
         .first()
@@ -2226,6 +2271,12 @@ fn read_dc_line(l1: &[String], rect: &[String], inv: &[String], index: usize) ->
     }
     if vschd != 0.0 {
         extras.insert("psse_dc_vschd".into(), jnum(vschd));
+    }
+    if measured_at_inverter {
+        extras.insert("psse_dc_setvl_at_inverter".into(), Value::Bool(true));
+    }
+    if unpriceable_current {
+        extras.insert("psse_dc_setvl".into(), jnum(setvl));
     }
     for (key, fields, start, default) in [
         ("psse_dc_control_tail", l1, 5, DEFAULT_CONTROL_TAIL),
@@ -3929,6 +3980,105 @@ Q
         let dc = parse_psse(&record("1", "350.0", "0.0")).unwrap().hvdc[0].clone();
         close(dc.pf, 350.0);
         close(dc.pt, 350.0);
+    }
+
+    /// Every SETVL spelling must survive a write and a re-read. The negative
+    /// one is the trap: writing the rectifier power back instead of the
+    /// inverter demand names a different operating point, because the re-read
+    /// then prices the line drop off the larger end.
+    #[test]
+    fn every_setvl_spelling_round_trips() {
+        let record = |mdc: &str, setvl: &str, vschd: &str| {
+            format!(
+                "0, 100.00, 33, 0, 0, 60.00 / x
+CASE
+COMMENT
+                 1,'B1          ', 230.0,3,1,1,1,1.0,0.0,1.1,0.9,1.1,0.9
+                 4,'B4          ', 230.0,1,1,1,1,1.0,0.0,1.1,0.9,1.1,0.9
+                 5,'B5          ', 230.0,1,1,1,1,1.0,0.0,1.1,0.9,1.1,0.9
+                 0 / END OF BUS DATA, BEGIN LOAD DATA
+                 0 / END OF LOAD DATA, BEGIN FIXED SHUNT DATA
+                 0 / END OF FIXED SHUNT DATA, BEGIN GENERATOR DATA
+                 0 / END OF GENERATOR DATA, BEGIN BRANCH DATA
+                 0 / END OF BRANCH DATA, BEGIN TRANSFORMER DATA
+                 0 / END OF TRANSFORMER DATA, BEGIN AREA DATA
+                 0 / END OF AREA DATA, BEGIN TWO-TERMINAL DC DATA
+                 'DC1', {mdc}, 2.5, {setvl}, {vschd}, 0.0, 0.0, 0.0, 'I', 0.0, 20, 1.0
+                 4, 1, 15.0, 5.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.5, 0.51, 0.00625, 0, 0, 0, '1', 0.0
+                 5, 1, 15.0, 5.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.5, 0.51, 0.00625, 0, 0, 0, '1', 0.0
+                 0 / END OF TWO-TERMINAL DC DATA, BEGIN VSC DC LINE DATA
+Q
+"
+            )
+        };
+
+        for (mdc, setvl, vschd) in [
+            ("1", "350.0", "500.0"),
+            ("1", "-350.0", "500.0"),
+            ("2", "200.0", "500.0"),
+            ("1", "350.0", "0.0"),
+        ] {
+            let net = parse_psse(&record(mdc, setvl, vschd)).unwrap();
+            let dc = net.hvdc[0].clone();
+            let back = parse_psse(&write_psse(&net).text).unwrap();
+            let dc2 = &back.hvdc[0];
+            close(dc2.pf, dc.pf);
+            close(dc2.pt, dc.pt);
+            assert!(
+                (dc2.pf - dc.pf).abs() < 1e-12 && (dc2.pt - dc.pt).abs() < 1e-12,
+                "MDC {mdc} SETVL {setvl} VSCHD {vschd} moved: \
+                 {} -> {} and {} -> {}",
+                dc.pf,
+                dc2.pf,
+                dc.pt,
+                dc2.pt
+            );
+        }
+    }
+
+    /// A current schedule with no scheduled voltage cannot be priced into
+    /// power at all. Reading the amps as MW is how a 2000 A schedule becomes a
+    /// 2000 MW line, so both ends read as zero, the record is retained, and
+    /// the reader says why.
+    #[test]
+    fn a_current_schedule_with_no_voltage_is_not_read_as_power() {
+        let text = "0, 100.00, 33, 0, 0, 60.00 / x
+CASE
+COMMENT
+                 1,'B1          ', 230.0,3,1,1,1,1.0,0.0,1.1,0.9,1.1,0.9
+                 4,'B4          ', 230.0,1,1,1,1,1.0,0.0,1.1,0.9,1.1,0.9
+                 5,'B5          ', 230.0,1,1,1,1,1.0,0.0,1.1,0.9,1.1,0.9
+                 0 / END OF BUS DATA, BEGIN LOAD DATA
+                 0 / END OF LOAD DATA, BEGIN FIXED SHUNT DATA
+                 0 / END OF FIXED SHUNT DATA, BEGIN GENERATOR DATA
+                 0 / END OF GENERATOR DATA, BEGIN BRANCH DATA
+                 0 / END OF BRANCH DATA, BEGIN TRANSFORMER DATA
+                 0 / END OF TRANSFORMER DATA, BEGIN AREA DATA
+                 0 / END OF AREA DATA, BEGIN TWO-TERMINAL DC DATA
+                 'DC1', 2, 2.5, 2000.0, 0.0, 0.0, 0.0, 0.0, 'I', 0.0, 20, 1.0
+                 4, 1, 15.0, 5.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.5, 0.51, 0.00625, 0, 0, 0, '1', 0.0
+                 5, 1, 15.0, 5.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.5, 0.51, 0.00625, 0, 0, 0, '1', 0.0
+                 0 / END OF TWO-TERMINAL DC DATA, BEGIN VSC DC LINE DATA
+Q
+";
+        let parsed = crate::format::parse_str(text, "psse").unwrap();
+        let dc = &parsed.network.hvdc[0];
+        close(dc.pf, 0.0);
+        close(dc.pt, 0.0);
+        assert!(
+            parsed
+                .warnings
+                .iter()
+                .any(|w| w.contains("cannot be priced into power")),
+            "{:?}",
+            parsed.warnings
+        );
+        // The record still round trips: the amps are retained verbatim.
+        let out = write_psse(&parsed.network).text;
+        assert!(
+            out.lines().any(|l| l.contains("2000")),
+            "the schedule must survive the write: {out}"
+        );
     }
 
     #[test]
