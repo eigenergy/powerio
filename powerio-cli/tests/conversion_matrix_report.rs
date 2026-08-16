@@ -674,7 +674,15 @@ const DISTRIBUTION_FORMATS: [DistributionFormat; 3] = [
 // part restates the `kv`/`phases`/`conn` extras the dss reader attaches, and
 // each of those is dropped again on the way into BMOPF or PMD: +8 on the two
 // rows whose source is a dss deck, +2 on the BMOPF→dss row.
-const DISTRIBUTION_WARNING_BASELINE: [[usize; 3]; 3] = [[0, 140, 88], [20, 0, 27], [15, 57, 0]];
+// BMOPF -> PMD drops by 12: the scalar bus voltage bounds now ride PMD's
+// `vm_lb`/`vm_ub` (one entry per terminal, volts over `voltage_scale_factor`)
+// instead of being reported as having no ENGINEERING field. PMD -> dss rises
+// by the same 12: the PMD hop used to lose those bounds silently, so the dss
+// leg had nothing to report; now they arrive and dss — which has no per-bus
+// voltage bound — drops them loudly. What remains on the BMOPF source row is
+// the genuine superset-to-subset loss: named terminals and generator cost,
+// which neither dss nor ENGINEERING states, and the bounds on the dss leg.
+const DISTRIBUTION_WARNING_BASELINE: [[usize; 3]; 3] = [[0, 140, 88], [20, 0, 15], [27, 57, 0]];
 
 const DISTRIBUTION_CASES: [(&str, &str, DistributionFormat); 7] = [
     (

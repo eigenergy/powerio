@@ -1042,3 +1042,46 @@ fn a_saturating_numeric_terminal_name_does_not_merge_renamed_conductors() {
     // the rename itself.
     assert!(load <= 64 && generator <= 64, "{load} and {generator}");
 }
+
+/// A BMOPF bus states per-terminal voltage magnitude bounds in volts; PMD's
+/// ENGINEERING bus states the same bounds as `vm_lb`/`vm_ub`, per terminal, in
+/// the unit `voltage_scale_factor` scales to volts — the rule `vm_nom` already
+/// follows. The scalar bound broadcasts on the way out and the uniform vector
+/// collapses on the way back, so the pair survives the trip exactly and the
+/// writer no longer reports a loss the format does not have to take. A
+/// non-uniform vector from a third-party file collapses to its first entry
+/// with a warning, the same rule the BMOPF reader applies to its arrays.
+#[test]
+fn bus_voltage_bounds_ride_vm_lb_and_vm_ub() {
+    let base = powerio_dist::parse_file(fixture("bmopf/example_ieee13.json"), None).unwrap();
+    assert!(
+        base.buses.iter().any(|b| b.v_min.is_some()),
+        "the fixture states bounds"
+    );
+
+    let pmd = base.to_format(powerio_dist::DistTargetFormat::PmdJson);
+    assert!(
+        !pmd.warnings
+            .iter()
+            .any(|w| w.contains("v_min") || w.contains("v_max")),
+        "the scalar pair has ENGINEERING fields: {:?}",
+        pmd.warnings
+    );
+
+    let back = parse_pmd_str(&pmd.text).unwrap();
+    for (a, b) in base.buses.iter().zip(&back.buses) {
+        assert_eq!(a.v_min, b.v_min, "bus {} v_min", a.id);
+        assert_eq!(a.v_max, b.v_max, "bus {} v_max", a.id);
+    }
+
+    // Third-party input with a non-uniform vector: first entry, said loudly.
+    let doc = r#"{"data_model":"ENGINEERING","settings":{"voltage_scale_factor":1000.0},
+        "bus":{"b1":{"terminals":[1,2],"grounded":[],"vm_lb":[2.02,2.04]}}}"#;
+    let net = parse_pmd_str(doc).unwrap();
+    assert_eq!(net.buses[0].v_min, Some(2020.0));
+    assert!(
+        net.warnings.iter().any(|w| w.contains("non-uniform")),
+        "{:?}",
+        net.warnings
+    );
+}

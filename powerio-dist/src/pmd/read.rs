@@ -435,7 +435,17 @@ impl Reader<'_> {
             let Value::Object(o) = v else { continue };
             let mut extras = take_extras(
                 o,
-                &["terminals", "grounded", "rg", "xg", "status", "lat", "lon"],
+                &[
+                    "terminals",
+                    "grounded",
+                    "rg",
+                    "xg",
+                    "status",
+                    "lat",
+                    "lon",
+                    "vm_lb",
+                    "vm_ub",
+                ],
             );
             if let Some(x) = o.get("lon") {
                 extras.insert("x".into(), x.clone());
@@ -453,10 +463,28 @@ impl Reader<'_> {
                 extras.insert("xg".into(), o.get("xg").cloned().unwrap_or(Value::Null));
             }
             stash_status(o, &mut extras, &format!("bus {id}"), &mut self.net.warnings);
+            // `vm_lb`/`vm_ub` are per-terminal vectors in the ENGINEERING
+            // voltage unit (volts over `voltage_scale_factor`); the model's
+            // scalar bound takes the uniform value, the same collapse the
+            // BMOPF reader applies to its per-terminal arrays.
+            let bound = |key: &str, warnings: &mut Vec<String>| -> Option<f64> {
+                let vals = floats(key, o.get(key))?;
+                let first = vals.first().copied()?;
+                if vals.iter().any(|v| v.to_bits() != first.to_bits()) {
+                    warnings.push(format!(
+                        "bus {id}: `{key}` is non-uniform across terminals; collapsed to the first entry"
+                    ));
+                }
+                Some(first * 1e3)
+            };
+            let v_min = bound("vm_lb", &mut self.net.warnings);
+            let v_max = bound("vm_ub", &mut self.net.warnings);
             self.net.buses.push(DistBus {
                 id: id.clone(),
                 terminals: ints_as_strings(o.get("terminals")),
                 grounded: ints_as_strings(o.get("grounded")),
+                v_min,
+                v_max,
                 extras,
                 ..DistBus::default()
             });
