@@ -713,6 +713,53 @@ pub fn parse_str_with_name(text: &str, format: &str, name_hint: Option<&str>) ->
     read_source(Arc::new(text.to_owned()), fmt, name_hint)
 }
 
+/// Parse in-memory case `bytes` of the named `format`. Accepts every name
+/// [`parse_str`] does, plus `pwb`: PowerWorld binary has no text form, so this
+/// is the only in-memory entry point that reaches it. Text formats decode as
+/// UTF-8 and take the [`parse_str`] path from there.
+///
+/// A caller that already holds the file's bytes — an upload, an archive
+/// member, a database blob — parses them here rather than staging a temporary
+/// file for [`parse_file`].
+///
+/// # Errors
+/// [`Error::UnknownFormat`] if `format` is unrecognized; [`Error::FormatRead`]
+/// if a text format's bytes are not UTF-8; the reader's own [`Error`] on
+/// malformed input.
+pub fn parse_bytes(bytes: &[u8], format: &str) -> Result<Parsed> {
+    parse_bytes_with_name(bytes, format, None)
+}
+
+/// [`parse_bytes`] with a name hint, as [`parse_str_with_name`] is to
+/// [`parse_str`].
+///
+/// # Errors
+/// As [`parse_bytes`].
+pub fn parse_bytes_with_name(
+    bytes: &[u8],
+    format: &str,
+    name_hint: Option<&str>,
+) -> Result<Parsed> {
+    if format.eq_ignore_ascii_case("pwb") {
+        // Total reader, no fidelity warnings; same call parse_file makes.
+        let network = powerworld::parse_pwb(bytes, name_hint)?;
+        return Ok(Parsed::without_document(network, Vec::new()));
+    }
+    // A display format reaches a different return type, so name the entry
+    // point that returns it instead of failing as an unknown case format.
+    if display_format_from_name(format).is_some() {
+        return Err(Error::UnknownFormat(format!(
+            "{format} is display data, not a BalancedNetwork case; \
+             use parse_display_bytes(bytes, \"{format}\")"
+        )));
+    }
+    let text = std::str::from_utf8(bytes).map_err(|e| Error::FormatRead {
+        format: "case text",
+        message: format!("not valid UTF-8: {e}"),
+    })?;
+    parse_str_with_name(text, format, name_hint)
+}
+
 /// Output of a parse: the network plus the reader's fidelity warnings,
 /// tables and columns the model cannot carry, reported instead of dropped
 /// silently. Empty for readers that don't report read warnings (currently

@@ -390,10 +390,28 @@ PioNetwork *pio_parse_file(const char *path,
  * directories, not text; parse them with [`pio_parse_file`] and
  * `from = "pypsa-csv"`. Read fidelity warnings attach to the handle
  * ([`pio_warnings`]). Returns `NULL` on error and writes the message into
- * `errbuf`. Free the handle with [`pio_network_free`]. ABI v4 also accepts
- * `powerio-json`/`json` as compatibility aliases for [`pio_from_json`].
+ * `errbuf`. Free the handle with [`pio_network_free`]. Also accepts
+ * `powerio-json`/`json` as aliases for [`pio_from_json`].
  */
 PioNetwork *pio_parse_str(const char *text, const char *format, char *errbuf, size_t errlen);
+
+/**
+ * Parse `len` bytes of in-memory case data of the named `format` into a
+ * network handle. Accepts every [`pio_parse_str`] format name plus `pwb`:
+ * PowerWorld binary has no text form, so before this call the only way to
+ * reach that reader was [`pio_parse_file`], which means staging a temporary
+ * file. `bytes` need not be NUL-terminated and may contain interior NULs;
+ * text formats are decoded as UTF-8 and fail with a message if they are not.
+ *
+ * Read fidelity warnings attach to the handle ([`pio_warnings`]). Returns
+ * `NULL` on error and writes the message into `errbuf`. Free the handle with
+ * [`pio_network_free`].
+ */
+PioNetwork *pio_parse_bytes(const uint8_t *bytes,
+                            size_t len,
+                            const char *format,
+                            char *errbuf,
+                            size_t errlen);
 
 /**
  * Classify in-memory JSON case `text` by its top level markers, without

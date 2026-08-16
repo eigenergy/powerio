@@ -263,6 +263,23 @@ def test_parse_str_general():
     assert c.n_buses == 9
 
 
+def test_parse_bytes_reaches_the_binary_reader():
+    # PowerWorld binary has no text form, so parse_str cannot read one; this is
+    # the in-memory door for an upload or an archive member.
+    pwb = (DATA / "powerworld" / "ACTIVSg200.pwb").read_bytes()
+    c = powerio.parse_bytes(pwb, "pwb")
+    assert c.n_buses == 200
+    assert c.n_branches == 246
+
+    # Text formats agree with the path parse.
+    m = (DATA / "case9.m").read_bytes()
+    assert powerio.parse_bytes(m, "matpower").n_buses == 9
+
+    # Bytes a text format cannot decode raise, rather than blaming the case.
+    with pytest.raises(powerio.PowerIOError, match="UTF-8"):
+        powerio.parse_bytes(b"\xff\xfe\x00", "matpower")
+
+
 def test_read_warnings_surface():
     # The genuine pandapower fixture carries a switch table the reader cannot
     # model, so the parse reports it; the MATPOWER reader is total and reports

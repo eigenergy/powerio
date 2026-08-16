@@ -468,8 +468,8 @@ pub unsafe extern "C" fn pio_parse_file(
 /// directories, not text; parse them with [`pio_parse_file`] and
 /// `from = "pypsa-csv"`. Read fidelity warnings attach to the handle
 /// ([`pio_warnings`]). Returns `NULL` on error and writes the message into
-/// `errbuf`. Free the handle with [`pio_network_free`]. ABI v4 also accepts
-/// `powerio-json`/`json` as compatibility aliases for [`pio_from_json`].
+/// `errbuf`. Free the handle with [`pio_network_free`]. Also accepts
+/// `powerio-json`/`json` as aliases for [`pio_from_json`].
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_parse_str(
     text: *const c_char,
@@ -482,6 +482,43 @@ pub unsafe extern "C" fn pio_parse_str(
             let text = cstr(text).ok_or_else(|| "text is NULL or not UTF-8".to_string())?;
             let format = cstr(format).ok_or_else(|| "format is NULL or not UTF-8".to_string())?;
             powerio::parse_str(text, format)
+                .map(|p| (p.network, p.warnings))
+                .map_err(|e| e.to_string())
+        })
+    }
+}
+
+/// Parse `len` bytes of in-memory case data of the named `format` into a
+/// network handle. Accepts every [`pio_parse_str`] format name plus `pwb`:
+/// PowerWorld binary has no text form, so before this call the only way to
+/// reach that reader was [`pio_parse_file`], which means staging a temporary
+/// file. `bytes` need not be NUL-terminated and may contain interior NULs;
+/// text formats are decoded as UTF-8 and fail with a message if they are not.
+///
+/// Read fidelity warnings attach to the handle ([`pio_warnings`]). Returns
+/// `NULL` on error and writes the message into `errbuf`. Free the handle with
+/// [`pio_network_free`].
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pio_parse_bytes(
+    bytes: *const u8,
+    len: usize,
+    format: *const c_char,
+    errbuf: *mut c_char,
+    errlen: usize,
+) -> *mut PioNetwork {
+    unsafe {
+        finish_network(errbuf, errlen, "panic while parsing", || {
+            let format = required_cstr(format, "format")?;
+            // A zero length read is an empty case, and every reader rejects
+            // one with its own message; a NULL pointer is a caller bug.
+            let slice = if len == 0 {
+                &[][..]
+            } else if bytes.is_null() {
+                return Err("bytes is NULL".to_string());
+            } else {
+                std::slice::from_raw_parts(bytes, len)
+            };
+            powerio::parse_bytes(slice, format)
                 .map(|p| (p.network, p.warnings))
                 .map_err(|e| e.to_string())
         })
@@ -2704,6 +2741,86 @@ mod tests {
         assert!((actual - expected).abs() < 1e-12, "{actual} != {expected}");
     }
 
+    #[test]
+    fn parse_bytes_reads_binary_and_text_without_a_file() {
+        let read = |name: &str| {
+            std::fs::read(
+                std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                    .join("../tests/data")
+                    .join(name),
+            )
+            .unwrap()
+        };
+        let mut err = [0 as c_char; PIO_ERRBUF_MIN];
+        unsafe {
+            // The reason the symbol exists: PowerWorld binary has no text form,
+            // so pio_parse_str cannot reach this reader at all.
+            let pwb = read("powerworld/ACTIVSg200.pwb");
+            let fmt = CString::new("pwb").unwrap();
+            let net = pio_parse_bytes(
+                pwb.as_ptr(),
+                pwb.len(),
+                fmt.as_ptr(),
+                err.as_mut_ptr(),
+                err.len(),
+            );
+            assert!(
+                !net.is_null(),
+                "pwb bytes: {}",
+                CStr::from_ptr(err.as_ptr()).to_str().unwrap()
+            );
+            assert_eq!(pio_n_buses(net), 200);
+            pio_network_free(net);
+
+            // A text format agrees with the path parse of the same file.
+            let m = read("case9.m");
+            let fmt = CString::new("matpower").unwrap();
+            let from_bytes = pio_parse_bytes(
+                m.as_ptr(),
+                m.len(),
+                fmt.as_ptr(),
+                err.as_mut_ptr(),
+                err.len(),
+            );
+            assert!(!from_bytes.is_null());
+            let from_path = case9();
+            assert_eq!(pio_n_buses(from_bytes), pio_n_buses(from_path));
+            assert_eq!(pio_n_branches(from_bytes), pio_n_branches(from_path));
+            pio_network_free(from_bytes);
+            pio_network_free(from_path);
+
+            // Bytes that are not UTF-8 fail with a message, not a panic.
+            let junk = [0xffu8, 0xfe, 0x00, 0x01];
+            let bad = pio_parse_bytes(
+                junk.as_ptr(),
+                junk.len(),
+                fmt.as_ptr(),
+                err.as_mut_ptr(),
+                err.len(),
+            );
+            assert!(bad.is_null());
+            assert!(
+                CStr::from_ptr(err.as_ptr())
+                    .to_str()
+                    .unwrap()
+                    .contains("UTF-8"),
+                "expected a UTF-8 message, got {}",
+                CStr::from_ptr(err.as_ptr()).to_str().unwrap()
+            );
+
+            // A NULL buffer with a nonzero length is a caller bug, reported
+            // rather than dereferenced.
+            let null_bytes = pio_parse_bytes(
+                std::ptr::null(),
+                8,
+                fmt.as_ptr(),
+                err.as_mut_ptr(),
+                err.len(),
+            );
+            assert!(null_bytes.is_null());
+        }
+    }
+
     fn case9() -> *mut PioNetwork {
         let path = data_path("case9.m");
         let mut err = [0 as c_char; 256];
@@ -3160,6 +3277,7 @@ mod tests {
             "const char *pio_version(void);",
             "PioNetwork *pio_parse_file(const char *path, const char *from, char *errbuf, size_t errlen);",
             "PioNetwork *pio_parse_str(const char *text, const char *format, char *errbuf, size_t errlen);",
+            "PioNetwork *pio_parse_bytes(const uint8_t *bytes, size_t len, const char *format, char *errbuf, size_t errlen);",
             "size_t pio_classify_str(const char *text, char *outbuf, size_t outlen);",
             "char *pio_to_json(const PioNetwork *net, char *errbuf, size_t errlen);",
             "PioNetwork *pio_from_json(const char *text, char *errbuf, size_t errlen);",

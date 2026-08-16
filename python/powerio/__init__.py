@@ -67,6 +67,7 @@ __all__ = [
     "dist",
     "from_json",
     "from_ppc",
+    "parse_bytes",
     "parse_display_bytes",
     "parse_display_file",
     "parse_file",
@@ -675,6 +676,16 @@ def parse_display_bytes(data: bytes, format: str) -> DisplayData:
 def parse_str(text: str, format: str = "matpower") -> BalancedNetwork:
     """Parse a case from in-memory text in the named ``format``."""
     return BalancedNetwork(_powerio.parse_str(text, format))
+
+
+def parse_bytes(data: bytes, format: str) -> BalancedNetwork:
+    """Parse a case from in-memory bytes in the named ``format``.
+
+    Accepts every :func:`parse_str` format name plus ``"pwb"``. PowerWorld
+    binary has no text form, so this is the only way to read one without a
+    file on disk. Text formats must be UTF-8.
+    """
+    return BalancedNetwork(_powerio.parse_bytes(data, format))
 
 
 def parse_scopf(text: str, from_: str = "goc3-json") -> dict[str, Any]:

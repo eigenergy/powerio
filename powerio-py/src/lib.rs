@@ -1340,6 +1340,17 @@ fn parse_str(text: &str, format: Option<&str>) -> PyResult<PyBalancedNetwork> {
         .map_err(core_pyerr)
 }
 
+/// Parse a case from in-memory bytes in the named `format`. Accepts every
+/// `parse_str` name plus `pwb`: PowerWorld binary has no text form, so this is
+/// the only in-memory way to read one. Text formats must be UTF-8.
+#[pyfunction]
+#[pyo3(signature = (data, format))]
+fn parse_bytes(data: &[u8], format: &str) -> PyResult<PyBalancedNetwork> {
+    powerio_matrix::parse_bytes(data, format)
+        .map(case_from_parsed)
+        .map_err(core_pyerr)
+}
+
 /// Parse a display file from a path, inferring the format from the extension
 /// unless `from_` is given. Returns `(kind, payload)`.
 #[pyfunction]
@@ -2081,6 +2092,7 @@ fn _powerio(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyBalancedNetwork>()?;
     m.add_function(wrap_pyfunction!(parse_file, m)?)?;
     m.add_function(wrap_pyfunction!(parse_str, m)?)?;
+    m.add_function(wrap_pyfunction!(parse_bytes, m)?)?;
     m.add_function(wrap_pyfunction!(parse_display_file, m)?)?;
     m.add_function(wrap_pyfunction!(parse_display_bytes, m)?)?;
     m.add_function(wrap_pyfunction!(from_json, m)?)?;
