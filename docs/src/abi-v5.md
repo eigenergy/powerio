@@ -28,10 +28,27 @@ does break something.
 | `pio_build_info` | new | one document reporting version, ABI, features and foreign schema versions |
 | `pio_parse_bytes` | new | in-memory ingest that reaches the binary readers |
 
-Three JSON documents also changed shape, which is the reason the integer had to move at all:
-`pio_schema_versions_json` dropped four keys, `pio_dist_capabilities_json` renamed
-`schema_version` to `powerio_version`, and the Arrow metadata key became `powerio.version`. A
-binding built against 4 would pass the handshake and then read `null` for keys it mirrors.
+Five JSON documents also changed shape while their symbols kept their signatures, which is the
+reason the integer had to move at all. A binding built against 4 would pass the handshake and
+then read `null` for keys it mirrors.
+
+| document | change |
+|---|---|
+| `pio_schema_versions_json` | dropped four keys |
+| `pio_dist_capabilities_json` | `schema_version` → `powerio_version` |
+| `pio_arrow_catalog_json` | same rename at the top level; the per-table `schema_version` is gone |
+| `pio_scopf_to_json` | same rename; gains `violation_cost`, `device_class_layout`, `j_sh` on shunt rows, and eight generator row fields |
+| `pio_summary_json` | gains `topology.n_buses` and `topology.n_branches` |
+| Arrow schema metadata | key became `powerio.version` |
+
+The rename is the same edit everywhere: one release version now covers every document powerio
+authors, so a per-document `schema_version` frozen at `1.0.0` said nothing a caller could act
+on. `pio_scopf_to_json` keeps 1-based indices; the design study below proposed flipping them
+to 0-based and that did not ship.
+
+`pio_summary_json`'s `counts` block stays the case file's own inventory, so a 3-winding
+transformer counts once there rather than as the bus and three branches it lowers to. The two
+new `topology` fields are the lowered space, which is what every extractor reports.
 
 **Warnings.** The seven conversion entry points used to fill a caller `warnbuf` and silently
 truncate when the fidelity-loss list outran it. `finish_conversion` discarded the length that

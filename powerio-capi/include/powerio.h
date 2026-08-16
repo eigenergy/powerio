@@ -573,6 +573,13 @@ size_t pio_source_format(const PioNetwork *net, char *out, size_t cap);
 /**
  * Serialize a compact balanced network summary as JSON for display and scalar
  * queries without serializing [`pio_to_json`]'s full payload.
+ *
+ * `counts` is the case file's own inventory, so it counts a 3-winding
+ * transformer once under `transformers_3w` rather than as the star bus and
+ * three branches it lowers to. `topology.n_buses` and `topology.n_branches`
+ * are that lowered space, the one [`pio_n_buses`] and [`pio_branches`]
+ * report and the one the rest of `topology` is computed over. The two differ
+ * only for a case with an in-service 3-winding transformer.
  */
 char *pio_summary_json(const PioNetwork *net, char *errbuf, size_t errlen);
 
@@ -792,10 +799,12 @@ int32_t pio_to_arrow(const PioNetwork *net,
  *
  * The catalog is feature based rather than handle based: it describes what
  * this library build can export, not what a particular network contains. Top
- * level fields are `schema_version`, `producer`, and `tables`. Each table
- * entry includes `id`, `name`, `schema_version`, `format`,
- * `feature_requirements`, `available`, `row_axis`, `col_axis`, `units`, and
- * `columns`. Each column entry includes `name`, `type`, and `nullable`.
+ * level fields are `powerio_version`, `producer`, and `tables`. Each table
+ * entry includes `id`, `name`, `format`, `feature_requirements`, `available`,
+ * `row_axis`, `col_axis`, `units`, and `columns`. Each column entry includes
+ * `name`, `type`, and `nullable`. Through v4 both levels carried a
+ * `schema_version`; one release version now covers every document powerio
+ * authors, so the top level names it and the per-table copy is gone.
  *
  * Free the returned string with [`pio_string_free`]. On error this returns
  * NULL and writes the message into `errbuf`. Only built with the `arrow` cargo

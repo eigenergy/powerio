@@ -154,7 +154,7 @@ jobs:
             <dt>.pio.json format</dt>
             <dd><a href="guide/pio-json-schema.html">field reference &amp; versioning</a>
                 <a href="guide/compiler-ir.html">compiler IR</a>
-                <a href="guide/pio-json-schema.html#pio-package">pio-package/0.2</a></dd>
+                <a href="guide/pio-json-schema.html#pio-package">pio-package schema</a></dd>
           </div>
           <div>
             <dt>bindings</dt>
@@ -186,7 +186,14 @@ jobs:
         <a href="$target">$1</a>
         HTML
         }
-        redirect_schema_page pio-package/0.2
+        # Every lineage that has ever been published, not just the current one:
+        # a schema's $id names a path on this site and README.md promises it
+        # stays served, so a retired lineage 404ing breaks the document that
+        # already shipped quoting it.
+        for schema in docs/schema/*/*/schema.json; do
+          lineage="${schema#docs/schema/}"
+          redirect_schema_page "${lineage%/schema.json}"
+        done
     - uses: actions/upload-pages-artifact@v5
       with:
         path: target/doc

@@ -883,6 +883,13 @@ pub unsafe extern "C" fn pio_source_format(
 
 /// Serialize a compact balanced network summary as JSON for display and scalar
 /// queries without serializing [`pio_to_json`]'s full payload.
+///
+/// `counts` is the case file's own inventory, so it counts a 3-winding
+/// transformer once under `transformers_3w` rather than as the star bus and
+/// three branches it lowers to. `topology.n_buses` and `topology.n_branches`
+/// are that lowered space, the one [`pio_n_buses`] and [`pio_branches`]
+/// report and the one the rest of `topology` is computed over. The two differ
+/// only for a case with an in-service 3-winding transformer.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_summary_json(
     net: *const PioNetwork,
@@ -922,6 +929,8 @@ pub unsafe extern "C" fn pio_summary_json(
                         "warnings": c.warnings.len(),
                     },
                     "topology": {
+                        "n_buses": v.n(),
+                        "n_branches": v.branches().len(),
                         "reference_bus_ids": reference_bus_ids,
                         "reference_bus_indices": reference_bus_indices,
                         "n_components": v.n_connected_components(),
@@ -1520,10 +1529,12 @@ pub unsafe extern "C" fn pio_to_arrow(
 ///
 /// The catalog is feature based rather than handle based: it describes what
 /// this library build can export, not what a particular network contains. Top
-/// level fields are `schema_version`, `producer`, and `tables`. Each table
-/// entry includes `id`, `name`, `schema_version`, `format`,
-/// `feature_requirements`, `available`, `row_axis`, `col_axis`, `units`, and
-/// `columns`. Each column entry includes `name`, `type`, and `nullable`.
+/// level fields are `powerio_version`, `producer`, and `tables`. Each table
+/// entry includes `id`, `name`, `format`, `feature_requirements`, `available`,
+/// `row_axis`, `col_axis`, `units`, and `columns`. Each column entry includes
+/// `name`, `type`, and `nullable`. Through v4 both levels carried a
+/// `schema_version`; one release version now covers every document powerio
+/// authors, so the top level names it and the per-table copy is gone.
 ///
 /// Free the returned string with [`pio_string_free`]. On error this returns
 /// NULL and writes the message into `errbuf`. Only built with the `arrow` cargo
@@ -3069,6 +3080,20 @@ mod tests {
                     "bus {id} has no incident branch"
                 );
             }
+
+            // The summary carries both spaces and says which is which: counts
+            // is the case file's inventory, so the transformer is one row
+            // there, and topology is the space the extractors report.
+            let raw = pio_summary_json(net, err.as_mut_ptr(), err.len());
+            assert!(!raw.is_null());
+            let summary: serde_json::Value =
+                serde_json::from_str(CStr::from_ptr(raw).to_str().unwrap()).unwrap();
+            pio_string_free(raw);
+            assert_eq!(summary["counts"]["buses"], 9);
+            assert_eq!(summary["counts"]["branches"], 9);
+            assert_eq!(summary["counts"]["transformers_3w"], 1);
+            assert_eq!(summary["topology"]["n_buses"], n);
+            assert_eq!(summary["topology"]["n_branches"], m);
 
             pio_network_free(net);
         }
