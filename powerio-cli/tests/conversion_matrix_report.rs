@@ -1,3 +1,85 @@
+//! The conversion matrix: every source format converted into every target,
+//! with the losses accounted for. This file is both the CI gate and the
+//! generator of the PR comment; the notes here are for whoever works on a
+//! cell next.
+//!
+//! # What a cell asserts
+//!
+//! Each cell runs source parse → target write → target readback over every
+//! case, and holds four properties:
+//!
+//! 1. **Warning parity** — observed warnings equal the reviewed baseline
+//!    (the `*_WARNING_BASELINE` arrays below), text-attributed in the details
+//!    report.
+//! 2. **Core survival** — element counts and total load/generation survive.
+//! 3. **Electrical survival** — the admittance matrix, entry for entry by bus
+//!    id pair, and the per-bus load/generation injections. Warnings account
+//!    for *dropped* data, never for corrupted electrics, so these hold on
+//!    yellow cells too; together they pin the power flow problem itself
+//!    (same `Y_bus`, same injections, same solution), which is the cheap,
+//!    dependency-free stand-in for cross-validating an AC solve.
+//! 4. **Lossless means lossless** — a cell claiming green (zero warnings)
+//!    must leave the full typed model bit-identical (to a last-ulp float
+//!    tolerance), field for field, extras included. A cell that is silent
+//!    while the model changed fails outright. This is what keeps the matrix
+//!    from going farcically green: suppressing a warning without carrying
+//!    the data trips the parity gate.
+//!
+//! # How to make a cell greener (in order of preference)
+//!
+//! 1. **Carry the data.** Most wins here were reader/writer asymmetries: a
+//!    writer refusing to emit a block its own reader parses (`mpc.dcline`,
+//!    `mpc.bus_name`, the 21-column gen row, egret `startup_cost`,
+//!    pandapower `dcline`/`res_gen`). Check the reader first — if it reads a
+//!    field, the writer can almost always state it.
+//! 2. **Stop retaining restatements.** A reader that keeps what powerio's
+//!    own writer synthesizes (positional ids, zero component splits, default
+//!    converter tails, raw record echoes) makes every downstream hop "drop"
+//!    data that never said anything. Retain an extra only when the record
+//!    states more than a rewrite would produce; compare against the writer's
+//!    actual defaults, not a guess.
+//! 3. **Warn only on losses.** Absent source data is not a drop
+//!    (`mpc.gencost` on a costless network); synthesized-defaults
+//!    disclosures are (pandapower `vn_kv = 1`); derived fields that restate
+//!    a typed field are not separate data (pandapower `max_i_ka` vs
+//!    `rate_a`).
+//!
+//! Never delete a warning without carrying the data or proving it restated
+//! the model — the parity gate will catch the former, but only on cells that
+//! reach zero.
+//!
+//! # Gotchas that cost time
+//!
+//! - **Payload prep drops silently.** `transmission_payloads` converts each
+//!   MATPOWER case *into the source format* first, and that leg's warnings
+//!   are not counted. A fidelity fix upstream (e.g. caps or dclines
+//!   surviving into the payload) therefore changes *other* rows' counts —
+//!   that is the "drop late, loudly" trade, and it is intentional: rows pay
+//!   for the data they now carry.
+//! - **Baseline edits must be derived, not tuned.** Regenerate with
+//!   `MAX_WARNING_DETAILS_PER_PAIR` lifted, attribute every count delta to a
+//!   warning text, and write the derivation into the comment above the
+//!   arrays. The test asserting observed == baseline on both `main` and the
+//!   branch is what makes a diff reviewable.
+//! - **Element order is not identity.** pandapower regroups lines and
+//!   trafos; several formats sort by id. The parity check sorts by identity
+//!   key before diffing; anything order-sensitive you add must do the same.
+//! - **`charging: None` and the symmetric split are one fact**, as are a
+//!   rating in MVA and the same rating in amps through the file's own
+//!   voltage. Canonicalize representations before comparing.
+//! - **Formats state solved values in different places.** pandapower puts
+//!   reactive output in `res_gen`, not the `gen` input table; PSS/E states a
+//!   DC line's received power only through `SETVL`/`RDC`/`VSCHD`. Look for a
+//!   result-table or derived spelling before concluding a format "cannot
+//!   carry" a field.
+//!
+//! # Known structural gaps (checked, not worth faking)
+//!
+//! PowerWorld aux HVDC is unimplemented because no vendored export states
+//! its DC vocabulary — inventing field names would fake a green. dss deck
+//! tokens (`vminpu`, `pf`, source `MVAsc`) and BMOPF named terminals have no
+//! slots in their neighbors; those rows stay honestly yellow.
+
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
@@ -160,6 +242,10 @@ struct Cell {
     baseline_warnings: usize,
     failures: Vec<String>,
     warning_counts: BTreeMap<(String, String), usize>,
+    /// Typed-model fields that changed across the conversion despite the leg
+    /// reporting no warning. Harmless for a yellow cell (its losses are
+    /// declared); fatal for a green claim — see [`Cell::ok`].
+    silent_model_diffs: Vec<String>,
 }
 
 impl Cell {
@@ -169,11 +255,22 @@ impl Cell {
             baseline_warnings,
             failures: Vec::new(),
             warning_counts: BTreeMap::new(),
+            silent_model_diffs: Vec::new(),
         }
     }
 
     fn ok(&self) -> bool {
-        self.failures.is_empty() && self.observed_warnings == self.baseline_warnings
+        self.failures.is_empty()
+            && self.observed_warnings == self.baseline_warnings
+            && !self.claims_silent_loss()
+    }
+
+    /// A green cell asserts the pair converts losslessly, so it must earn it:
+    /// zero warnings AND a typed model that survives field for field. A cell
+    /// that warns is yellow and its diffs are the declared losses; a cell that
+    /// is silent while the model changed is lying, and fails outright.
+    fn claims_silent_loss(&self) -> bool {
+        self.observed_warnings == 0 && !self.silent_model_diffs.is_empty()
     }
 
     fn parity(&self) -> bool {
@@ -189,6 +286,19 @@ impl Cell {
                 .or_default() += 1;
         }
     }
+}
+
+/// The silent-loss appendix for a failing cell: names the fields that changed
+/// under a green claim, or stays empty when the failure is a plain count/
+/// invariant mismatch.
+fn silent_loss_note(cell: &Cell) -> String {
+    if !cell.claims_silent_loss() {
+        return String::new();
+    }
+    format!(
+        " [claims lossless but the model changed: {}]",
+        cell.silent_model_diffs.join("; ")
+    )
 }
 
 fn write_matrix_section(markdown: &mut String, title: &str, report: &MatrixReport) {
@@ -569,12 +679,13 @@ fn run_transmission_matrix() -> MatrixReport {
             }
             if !cell.ok() {
                 failures.push(format!(
-                    "transmission {} -> {}: observed {} warnings, baseline {}; {}",
+                    "transmission {} -> {}: observed {} warnings, baseline {}; {}{}",
                     source.name,
                     target.name,
                     cell.observed_warnings,
                     cell.baseline_warnings,
-                    cell.failures.join("; ")
+                    cell.failures.join("; "),
+                    silent_loss_note(&cell),
                 ));
             }
             row.push(cell);
@@ -596,11 +707,12 @@ fn run_transmission_matrix() -> MatrixReport {
         }
         if !cell.ok() {
             failures.push(format!(
-                "transmission {source} -> {}: observed {} warnings, baseline {}; {}",
+                "transmission {source} -> {}: observed {} warnings, baseline {}; {}{}",
                 target.name,
                 cell.observed_warnings,
                 cell.baseline_warnings,
-                cell.failures.join("; ")
+                cell.failures.join("; "),
+                silent_loss_note(&cell),
             ));
         }
         row.push(cell);
@@ -669,6 +781,24 @@ fn validate_transmission_pair(
                             payload.label, target.name, payload.core, actual
                         ));
                     }
+                    record_model_diffs(
+                        payload.label,
+                        &transmission_value(&payload.network),
+                        &transmission_value(&parsed.network),
+                        cell,
+                    );
+                    if let Some(diff) = ybus_changed(&payload.network, &parsed.network) {
+                        cell.failures.push(format!(
+                            "{} Y_bus changed for {}: {diff}",
+                            payload.label, target.name
+                        ));
+                    }
+                    if let Some(diff) = injections_moved(&payload.network, &parsed.network) {
+                        cell.failures.push(format!(
+                            "{} bus injections moved for {}: {diff}",
+                            payload.label, target.name
+                        ));
+                    }
                 }
                 Err(err) => cell.failures.push(format!(
                     "{} output did not parse as {}: {err}",
@@ -680,6 +810,180 @@ fn validate_transmission_pair(
             "{} did not write as {}: {err}",
             payload.label, target.name
         )),
+    }
+}
+
+/// The electrical invariant: the admittance matrix, entry for entry by bus id
+/// pair, must survive every conversion — warnings account for *dropped*
+/// data, never for corrupted electrics, so this holds on yellow cells too. A
+/// format may relocate admittance (pandapower rides MATPOWER transformer
+/// charging as bus shunts) or restate it in other units, but `Y_bus` is where
+/// all of those spellings meet. Returns the first offending entry, or `None`
+/// when the matrices agree to 1e-8 relative.
+fn ybus_changed(before: &BalancedNetwork, after: &BalancedNetwork) -> Option<String> {
+    let entries = |net: &BalancedNetwork| -> Option<BTreeMap<(usize, usize), (f64, f64)>> {
+        let view = powerio_matrix::IndexedNetwork::new(net);
+        let parts =
+            powerio_matrix::build_ybus(&view, &powerio_matrix::BuildOptions::default()).ok()?;
+        let mut map = BTreeMap::new();
+        for (value, (i, j)) in &parts.g {
+            map.entry((view.bus_id(i).0, view.bus_id(j).0))
+                .or_insert((0.0, 0.0))
+                .0 = *value;
+        }
+        for (value, (i, j)) in &parts.b {
+            map.entry((view.bus_id(i).0, view.bus_id(j).0))
+                .or_insert((0.0, 0.0))
+                .1 = *value;
+        }
+        Some(map)
+    };
+    let (a, b) = (entries(before)?, entries(after)?);
+    for key in a.keys().chain(b.keys().filter(|k| !a.contains_key(*k))) {
+        let (ga, ba) = a.get(key).copied().unwrap_or((0.0, 0.0));
+        let (gb, bb) = b.get(key).copied().unwrap_or((0.0, 0.0));
+        let tol = |x: f64, y: f64| (x - y).abs() > 1e-8 * x.abs().max(y.abs()).max(1.0);
+        if tol(ga, gb) || tol(ba, bb) {
+            return Some(format!(
+                "Y[{}, {}] was {ga}+j{ba}, now {gb}+j{bb}",
+                key.0, key.1
+            ));
+        }
+    }
+    None
+}
+
+/// The other half of the AC operating point: per-bus demand and generation.
+/// `Y_bus` above pins the network matrices; this pins the injections at each
+/// bus, so together a conversion that passes both leaves the power flow
+/// problem itself unchanged — whatever it dropped in costs, limits, names, or
+/// extras. No conversion may move power between buses; formats only merge or
+/// split devices at one bus.
+fn injections_moved(before: &BalancedNetwork, after: &BalancedNetwork) -> Option<String> {
+    let per_bus = |net: &BalancedNetwork| {
+        let mut map: BTreeMap<usize, [f64; 4]> = BTreeMap::new();
+        for l in &net.loads {
+            let e = map.entry(l.bus.0).or_default();
+            e[0] += l.p;
+            e[1] += l.q;
+        }
+        for g in net.generators.iter().filter(|g| g.in_service) {
+            let e = map.entry(g.bus.0).or_default();
+            e[2] += g.pg;
+            e[3] += g.qg;
+        }
+        map
+    };
+    let (a, b) = (per_bus(before), per_bus(after));
+    for key in a.keys().chain(b.keys().filter(|k| !a.contains_key(*k))) {
+        let x = a.get(key).copied().unwrap_or_default();
+        let y = b.get(key).copied().unwrap_or_default();
+        for (label, i) in [("load p", 0), ("load q", 1), ("gen p", 2), ("gen q", 3)] {
+            if (x[i] - y[i]).abs() > 1e-8 * x[i].abs().max(y[i].abs()).max(1.0) {
+                return Some(format!("bus {key} {label}: {} -> {}", x[i], y[i]));
+            }
+        }
+    }
+    None
+}
+
+/// A [`BalancedNetwork`] as a JSON value with the conversion-neutral identity
+/// fields cleared and two representation choices canonicalized, so the model
+/// diff below compares data, not provenance or spelling:
+///
+/// - `charging: None` and the symmetric split it abbreviates are one fact;
+///   both sides expand to the explicit terminal form.
+/// - Element order is a table-layout artifact (pandapower re-groups lines and
+///   trafos; several formats sort by id); everything sorts by identity.
+fn transmission_value(net: &BalancedNetwork) -> serde_json::Value {
+    let mut net = net.clone();
+    net.name = String::new();
+    net.source = None;
+    net.source_format = powerio_matrix::SourceFormat::Matpower;
+    for br in &mut net.branches {
+        br.charging = Some(br.terminal_charging());
+    }
+    net.buses.sort_by_key(|b| b.id);
+    net.branches.sort_by_key(|a| (a.from, a.to));
+    net.loads.sort_by_key(|l| l.bus);
+    net.shunts.sort_by_key(|s| s.bus);
+    net.generators.sort_by_key(|g| g.bus);
+    net.storage.sort_by_key(|s| s.bus);
+    net.hvdc.sort_by_key(|d| (d.from, d.to));
+    serde_json::to_value(&net).unwrap()
+}
+
+/// A [`MulticonductorNetwork`] as a JSON value with identity fields cleared.
+fn distribution_value(net: &MulticonductorNetwork) -> serde_json::Value {
+    let mut net = net.clone();
+    net.name = None;
+    net.source = None;
+    net.source_format = None;
+    net.warnings = Vec::new();
+    serde_json::to_value(&net).unwrap()
+}
+
+/// Record every typed-model field the conversion changed. Yellow cells keep
+/// these as context (their warnings declare the losses); a cell claiming green
+/// fails on any of them — that is what keeps the matrix from going farcically
+/// green by suppressing warnings instead of carrying data.
+fn record_model_diffs(
+    label: &str,
+    before: &serde_json::Value,
+    after: &serde_json::Value,
+    cell: &mut Cell,
+) {
+    let mut diffs = Vec::new();
+    diff_values(before, after, "", &mut diffs);
+    cell.silent_model_diffs
+        .extend(diffs.into_iter().map(|d| format!("{label}: {d}")));
+}
+
+/// The number of diff paths kept per pair; enough to name the disease without
+/// drowning the report.
+const MAX_MODEL_DIFFS: usize = 24;
+
+/// Recursive structural diff. Numbers compare within 1e-9 relative — the
+/// writers print shortest round-trip floats, so anything beyond a last-ulp
+/// text wobble is a real change — and everything else compares exactly.
+fn diff_values(a: &serde_json::Value, b: &serde_json::Value, path: &str, out: &mut Vec<String>) {
+    use serde_json::Value;
+    if out.len() >= MAX_MODEL_DIFFS {
+        return;
+    }
+    match (a, b) {
+        (Value::Number(x), Value::Number(y)) => {
+            let (x, y) = (
+                x.as_f64().unwrap_or(f64::NAN),
+                y.as_f64().unwrap_or(f64::NAN),
+            );
+            let tol = 1e-9 * x.abs().max(y.abs()).max(1.0);
+            if !((x - y).abs() <= tol || (x.is_nan() && y.is_nan())) {
+                out.push(format!("{path}: {x} -> {y}"));
+            }
+        }
+        (Value::Array(xs), Value::Array(ys)) => {
+            if xs.len() != ys.len() {
+                out.push(format!("{path}: {} entries -> {}", xs.len(), ys.len()));
+                return;
+            }
+            for (i, (x, y)) in xs.iter().zip(ys).enumerate() {
+                diff_values(x, y, &format!("{path}[{i}]"), out);
+            }
+        }
+        (Value::Object(xs), Value::Object(ys)) => {
+            for key in xs.keys().chain(ys.keys().filter(|k| !xs.contains_key(*k))) {
+                let sub = format!("{path}.{key}");
+                match (xs.get(key), ys.get(key)) {
+                    (Some(x), Some(y)) => diff_values(x, y, &sub, out),
+                    (Some(x), None) => out.push(format!("{sub}: {x} -> absent")),
+                    (None, Some(y)) => out.push(format!("{sub}: absent -> {y}")),
+                    (None, None) => unreachable!(),
+                }
+            }
+        }
+        (x, y) if x == y => {}
+        (x, y) => out.push(format!("{path}: {x} -> {y}")),
     }
 }
 
@@ -827,12 +1131,13 @@ fn run_distribution_matrix() -> MatrixReport {
             }
             if !cell.ok() {
                 failures.push(format!(
-                    "distribution {} -> {}: observed {} warnings, baseline {}; {}",
+                    "distribution {} -> {}: observed {} warnings, baseline {}; {}{}",
                     source.name,
                     target.name,
                     cell.observed_warnings,
                     cell.baseline_warnings,
-                    cell.failures.join("; ")
+                    cell.failures.join("; "),
+                    silent_loss_note(&cell),
                 ));
             }
             row.push(cell);
@@ -890,6 +1195,12 @@ fn validate_distribution_pair(
                     payload.label, target.name, payload.core, actual
                 ));
             }
+            record_model_diffs(
+                payload.label,
+                &distribution_value(&payload.network),
+                &distribution_value(&parsed),
+                cell,
+            );
         }
         Err(err) => cell.failures.push(format!(
             "{} output did not parse as {}: {err}",
