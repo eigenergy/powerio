@@ -1,5 +1,9 @@
 #!/usr/bin/env bash
 # Check that every exported pio_* Rust symbol is declared in powerio.h.
+#
+# Symbol NAMES only. A reordered argument, a changed type, or a struct field all
+# pass this check — capi-header-regen.sh is the one that catches those. This one
+# is cheap enough to run in every feature job; that one needs cbindgen.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 

@@ -20,7 +20,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-#if PIO_ABI_VERSION != 4
+#if PIO_ABI_VERSION != 5
 #error "PIO_ABI_VERSION changed without updating the C ABI smoke test"
 #endif
 
@@ -103,21 +103,24 @@ int main(int argc, char **argv) {
     free(from);
     free(x);
 
-    /* Byte-exact MATPOWER echo: matpower is a format string, not a symbol. */
-    char warn[PIO_ERRBUF_MIN];
-    warn[0] = '\0';
-    char *echo = pio_to_format(c, "matpower", warn, sizeof warn, err, sizeof err);
+    /* Byte-exact MATPOWER echo: matpower is a format string, not a symbol.
+     * Warnings come back as an owned string through an out pointer, NULL when
+     * the conversion lost nothing; the caller frees it like any other. */
+    char *warn = NULL;
+    char *echo = pio_to_format(c, "matpower", &warn, err, sizeof err);
     CHECK(echo != NULL && strlen(echo) > 0, err);
+    pio_string_free(warn);
     pio_string_free(echo);
 
-    /* Cross-format convert reaches the converter and returns owned text. */
-    char *raw = pio_convert_file(argv[1], NULL, "psse", NULL, 0, err, sizeof err);
+    /* Cross-format convert reaches the converter and returns owned text.
+     * A NULL out_warnings discards them. */
+    char *raw = pio_convert_file(argv[1], NULL, "psse", NULL, err, sizeof err);
     CHECK(raw != NULL, err);
     pio_string_free(raw);
 
     /* The canonical snapshot: serialize to powerio-json, parse it back, and
      * confirm the counts survive. Lossless, validated on read. */
-    char *json = pio_to_format(c, "powerio-json", NULL, 0, err, sizeof err);
+    char *json = pio_to_format(c, "powerio-json", NULL, err, sizeof err);
     CHECK(json != NULL, err);
     PioNetwork *c2 = pio_parse_str(json, "powerio-json", err, sizeof err);
     CHECK(c2 != NULL, err);
@@ -184,14 +187,24 @@ int main(int argc, char **argv) {
         CHECK(pio_n_buses(cs) == nb && pio_n_branches(cs) == m && pio_n_gens(cs) == ng,
               "pio_parse_str disagrees with pio_parse_file on table sizes");
 
+        /* The byte entry point takes an explicit length, so the buffer need
+         * not be NUL-terminated; it also reaches the binary readers, which
+         * pio_parse_str cannot. */
+        PioNetwork *cb = pio_parse_bytes((const uint8_t *)buf, rd, "matpower",
+                                         err, sizeof err);
+        CHECK(cb != NULL, err);
+        CHECK(pio_n_buses(cb) == nb && pio_n_branches(cb) == m,
+              "pio_parse_bytes disagrees with pio_parse_file on table sizes");
+        pio_network_free(cb);
+
         /* In-memory convert: parse + serialize fused, no filesystem. */
         char *pm = pio_convert_str(buf, "matpower", "powermodels-json",
-                                   NULL, 0, err, sizeof err);
+                                   NULL, err, sizeof err);
         CHECK(pm != NULL, err);
         pio_string_free(pm);
 
         char *old_order = pio_convert_str(buf, "powermodels-json", "matpower",
-                                          NULL, 0, err, sizeof err);
+                                          NULL, err, sizeof err);
         if (old_order != NULL) {
             pio_string_free(old_order);
             CHECK(0, "pio_convert_str accepted target/source argument order");
@@ -208,7 +221,7 @@ int main(int argc, char **argv) {
         CHECK(cn != NULL, err);
         CHECK(pio_n_buses(cn) <= nb && pio_n_buses(cn) > 0, "normalized bus count out of range");
         CHECK(pio_ref_bus_indices(cn, NULL, 0) >= 1, "normalized case lost its reference bus");
-        char *njson = pio_to_format(cn, "powerio-json", NULL, 0, err, sizeof err);
+        char *njson = pio_to_format(cn, "powerio-json", NULL, err, sizeof err);
         CHECK(njson != NULL, err);
         pio_string_free(njson);
         pio_network_free(cn);
@@ -219,17 +232,19 @@ int main(int argc, char **argv) {
     /* Directory writer: 0 on success, -1 on error (message in errbuf). The
      * format is a string here too; pypsa-csv is the one directory format. */
     {
-        warn[0] = '\0';
         char outdir[512];
         snprintf(outdir, sizeof outdir, "%s-pypsa-smoke", argv[1]);
-        int rc = pio_write_dir(c, "pypsa-csv", outdir, warn, sizeof warn, err, sizeof err);
+        char *dirwarn = (char *)0x1; /* a poison value the call must overwrite */
+        int rc = pio_write_dir(c, "pypsa-csv", outdir, &dirwarn, err, sizeof err);
         CHECK(rc == 0, err);
+        CHECK(dirwarn != (char *)0x1, "pio_write_dir left out_warnings untouched");
+        pio_string_free(dirwarn);
         char buses[600];
         snprintf(buses, sizeof buses, "%s/buses.csv", outdir);
         FILE *bf = fopen(buses, "rb");
         CHECK(bf != NULL, "PyPSA folder missing buses.csv");
         fclose(bf);
-        rc = pio_write_dir(NULL, "pypsa-csv", outdir, NULL, 0, err, sizeof err);
+        rc = pio_write_dir(NULL, "pypsa-csv", outdir, NULL, err, sizeof err);
         CHECK(rc == -1, "NULL network handle should fail the directory write");
         printf("pypsa csv directory write OK: %s\n", outdir);
     }
@@ -270,32 +285,37 @@ int main(int argc, char **argv) {
         CHECK(d != NULL, err);
 
         char warn[1024];
-        /* Warnings use the size-then-fill idiom of pio_warnings: the return is
-         * the byte length needed (0 here, this case is clean). */
+        /* Read warnings keep the size-then-fill idiom of pio_warnings: the
+         * return is the byte length needed (0 here, this case is clean).
+         * Conversion warnings are the out-pointer idiom instead. */
         pio_dist_warnings(d, warn, sizeof warn);
 
-        char *bmopf = pio_dist_to_format(d, "bmopf", warn, sizeof warn, err, sizeof err);
+        char *cwarn = NULL;
+        char *bmopf = pio_dist_to_format(d, "bmopf", &cwarn, err, sizeof err);
         CHECK(bmopf != NULL, err);
         CHECK(strstr(bmopf, "\"bus\"") != NULL, "BMOPF output lost the bus table");
+        pio_string_free(cwarn);
         pio_string_free(bmopf);
 
         /* Same-format write echoes the retained source byte for byte. */
-        char *echo2 = pio_dist_to_format(d, "dss", warn, sizeof warn, err, sizeof err);
+        char *echo2 = pio_dist_to_format(d, "dss", &cwarn, err, sizeof err);
         CHECK(echo2 != NULL, err);
         CHECK(strcmp(echo2, dss) == 0, "dss echo is not byte exact");
+        CHECK(cwarn == NULL, "a byte-exact echo should report no warnings");
         pio_string_free(echo2);
         pio_dist_network_free(d);
 
         /* One-shot string conversion into PMD ENGINEERING JSON; parameter
          * order is input, source, target, like pio_dist_convert_file. */
-        char *pmd = pio_dist_convert_str(dss, "dss", "pmd", warn, sizeof warn, err, sizeof err);
+        char *pmd = pio_dist_convert_str(dss, "dss", "pmd", &cwarn, err, sizeof err);
         CHECK(pmd != NULL, err);
         CHECK(strstr(pmd, "\"data_model\": \"ENGINEERING\"") != NULL,
               "PMD output lost the data_model marker");
+        pio_string_free(cwarn);
         pio_string_free(pmd);
 
         char *old_dist_order = pio_dist_convert_str(dss, "pmd", "dss",
-                                                    warn, sizeof warn, err, sizeof err);
+                                                    NULL, err, sizeof err);
         if (old_dist_order != NULL) {
             pio_string_free(old_dist_order);
             CHECK(0, "pio_dist_convert_str accepted target/source argument order");

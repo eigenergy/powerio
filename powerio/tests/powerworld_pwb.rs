@@ -18,6 +18,43 @@ fn read_pwb(path: &Path) -> BalancedNetwork {
     parse_pwb(&bytes, path.file_stem().and_then(|s| s.to_str())).unwrap()
 }
 
+/// `parse_bytes` is the in-memory door to this reader. `parse_str` cannot be:
+/// the format is binary, so there is no `&str` to hand it. A caller holding an
+/// upload or an archive member parses it without staging a temporary file.
+#[test]
+fn parse_bytes_reaches_the_binary_reader() {
+    let path = vendored("ACTIVSg200.pwb");
+    let bytes = std::fs::read(&path).unwrap();
+
+    let parsed = powerio::parse_bytes(&bytes, "pwb").unwrap();
+    assert!(parsed.warnings.is_empty(), "the pwb reader is total");
+    assert_eq!(parsed.network.buses.len(), 200);
+    assert_eq!(parsed.network.branches.len(), 246);
+
+    // The name hint plays the role the file stem plays in parse_file.
+    let named = powerio::parse_bytes_with_name(&bytes, "PWB", Some("from-memory")).unwrap();
+    assert_eq!(named.network.name, "from-memory");
+
+    // Text formats go through the same door and agree with the path parse.
+    let m = std::fs::read(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../tests/data/case9.m"
+    ))
+    .unwrap();
+    let from_bytes = powerio::parse_bytes(&m, "matpower").unwrap().network;
+    assert_eq!(from_bytes.buses.len(), 9);
+
+    // A text format handed non-UTF-8 bytes reports that, rather than panicking
+    // or blaming the case data.
+    let err = powerio::parse_bytes(&[0xff, 0xfe, 0x00], "matpower").unwrap_err();
+    assert!(err.to_string().contains("UTF-8"), "{err}");
+
+    // A display sibling is a different return type; the error names the entry
+    // point that returns it.
+    let err = powerio::parse_bytes(&bytes, "pwd").unwrap_err();
+    assert!(err.to_string().contains("parse_display_bytes"), "{err}");
+}
+
 /// Every decoded quantity of the vendored 200 bus binary against the same
 /// vintage aux export, element by element.
 #[test]

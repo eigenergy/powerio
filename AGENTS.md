@@ -302,8 +302,8 @@ fuzz/                        # libFuzzer targets (detached workspace; see fuzz/R
   `Im(1/(r+jx))` is its negation. Default `SeriesImpedance`: `b = x/(r² + x²)`,
   which reads the whole series impedance, plus a phase shift injection, with no
   tap scaling. `Matpower` uses `1/(x·τ)` plus the injection. `ReactanceOnly`
-  (`b = 1/x`, taps and shifts ignored) is deprecated in 0.9.0 and removed in
-  1.0.0; with zero phase shifts it equals MATPOWER `Bp` in the XB scheme.
+  (`b = 1/x`, taps and shifts ignored) is the textbook DC linearization and
+  stays; with zero phase shifts it equals MATPOWER `Bp` in the XB scheme.
 - **DC OPF lives in `powerio-prob`.** `DcOpfInstance` keeps generator-space
   data (`generators: DcGeneratorData`); `nodal_generator_data()` scatters it to
   bus space through `C_g` for length-n `Q`, `c`, bounds, and `has_gen`. Cost map: MATPOWER `c2 p² + c1 p` → `q = 2c2`, `c = c1`, constant `c0` retained. Per-unit by default (`Units::PerUnit` scales `q` by `base²`, `c` by `base`).

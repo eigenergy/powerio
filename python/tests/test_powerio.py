@@ -263,6 +263,56 @@ def test_parse_str_general():
     assert c.n_buses == 9
 
 
+def test_to_dense_reports_the_star_lowered_space():
+    # A 3-winding transformer lowers to a star bus plus three branches before
+    # the matrix builders run. to_dense says it matches that view, so its
+    # tables have to be that view: it used to take buses and branches from the
+    # case mirror while reading reference_bus, n_components and is_radial off
+    # the lowered one, and hand back a struct describing neither.
+    case = json.loads(powerio.parse_file(DATA / "case9.m").to_json())
+    winding = lambda bus: {  # noqa: E731
+        "bus": bus, "tap": 1.0, "shift": 0.0, "nominal_kv": 0.0,
+        "rate_a": 0.0, "rate_b": 0.0, "rate_c": 0.0,
+    }
+    z = {"r": 0.0, "x": 0.05, "base_mva": 100.0}
+    case["transformers_3w"] = [{
+        "windings": [winding(4), winding(5), winding(6)], "z": [z, z, z],
+        "star_vm": 1.0, "star_va": 0.0, "mag_g": 0.0, "mag_b": 0.0,
+        "in_service": True, "name": "t3", "extras": {},
+    }]
+    net = powerio.from_json(json.dumps(case))
+
+    # The element tables stay the case file's own rows.
+    assert net.n_buses == 9
+    assert net.n_branches == 9
+
+    dense = net.to_dense()
+    assert (dense.n, dense.m) == (10, 12)
+    assert net.bprime().shape == (dense.n, dense.n)
+
+    ids = set(dense.bus_ids.tolist())
+    endpoints = set(dense.branch.from_id.tolist()) | set(dense.branch.to_id.tolist())
+    assert endpoints <= ids, "a branch names a bus the dense view does not report"
+    assert endpoints == ids, f"isolated bus: {ids - endpoints}"
+
+
+def test_parse_bytes_reaches_the_binary_reader():
+    # PowerWorld binary has no text form, so parse_str cannot read one; this is
+    # the in-memory door for an upload or an archive member.
+    pwb = (DATA / "powerworld" / "ACTIVSg200.pwb").read_bytes()
+    c = powerio.parse_bytes(pwb, "pwb")
+    assert c.n_buses == 200
+    assert c.n_branches == 246
+
+    # Text formats agree with the path parse.
+    m = (DATA / "case9.m").read_bytes()
+    assert powerio.parse_bytes(m, "matpower").n_buses == 9
+
+    # Bytes a text format cannot decode raise, rather than blaming the case.
+    with pytest.raises(powerio.PowerIOError, match="UTF-8"):
+        powerio.parse_bytes(b"\xff\xfe\x00", "matpower")
+
+
 def test_read_warnings_surface():
     # The genuine pandapower fixture carries a switch table the reader cannot
     # model, so the parse reports it; the MATPOWER reader is total and reports

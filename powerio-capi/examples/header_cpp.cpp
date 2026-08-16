@@ -5,7 +5,7 @@
 #include <cstddef>
 #include <cstdint>
 
-static_assert(PIO_ABI_VERSION == 4);
+static_assert(PIO_ABI_VERSION == 5);
 static_assert(PIO_ERRBUF_MIN == 256);
 
 #ifdef PIO_DIST

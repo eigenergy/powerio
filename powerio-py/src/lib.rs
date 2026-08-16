@@ -774,6 +774,23 @@ impl PyBalancedNetwork {
         IndexedNetwork::with_core(&self.inner, &self.core).reference_bus_indices()
     }
 
+    /// The star-lowered network: each in-service 3-winding transformer replaced
+    /// by its star bus and three branches. This is the space `bprime`, `ybus`,
+    /// `is_radial`, `n_connected_components` and `reference_bus_indices` are
+    /// computed over, while `buses` and `branches` mirror the case file. The
+    /// two differ only for a case that carries such a transformer; otherwise
+    /// this returns the same tables.
+    fn lowered(&self) -> PyBalancedNetwork {
+        let view = IndexedNetwork::with_core(&self.inner, &self.core);
+        let inner = view.network().clone();
+        let core = IndexCore::build(&inner);
+        PyBalancedNetwork {
+            inner,
+            core,
+            warnings: self.warnings.clone(),
+        }
+    }
+
     // --- tables (the format-neutral BalancedNetwork, as dict rows) --------------
 
     #[getter]
@@ -1336,6 +1353,17 @@ fn parse_file(path: &str, from_: Option<&str>) -> PyResult<PyBalancedNetwork> {
 #[pyo3(signature = (text, format=None))]
 fn parse_str(text: &str, format: Option<&str>) -> PyResult<PyBalancedNetwork> {
     powerio_matrix::parse_str(text, format.unwrap_or("matpower"))
+        .map(case_from_parsed)
+        .map_err(core_pyerr)
+}
+
+/// Parse a case from in-memory bytes in the named `format`. Accepts every
+/// `parse_str` name plus `pwb`: PowerWorld binary has no text form, so this is
+/// the only in-memory way to read one. Text formats must be UTF-8.
+#[pyfunction]
+#[pyo3(signature = (data, format))]
+fn parse_bytes(data: &[u8], format: &str) -> PyResult<PyBalancedNetwork> {
+    powerio_matrix::parse_bytes(data, format)
         .map(case_from_parsed)
         .map_err(core_pyerr)
 }
@@ -2081,6 +2109,7 @@ fn _powerio(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyBalancedNetwork>()?;
     m.add_function(wrap_pyfunction!(parse_file, m)?)?;
     m.add_function(wrap_pyfunction!(parse_str, m)?)?;
+    m.add_function(wrap_pyfunction!(parse_bytes, m)?)?;
     m.add_function(wrap_pyfunction!(parse_display_file, m)?)?;
     m.add_function(wrap_pyfunction!(parse_display_bytes, m)?)?;
     m.add_function(wrap_pyfunction!(from_json, m)?)?;
