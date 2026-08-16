@@ -2273,10 +2273,10 @@ fn psse_to_matpower_omits_missing_costs_without_synthesizing_zero() {
     let conv = write_as(&net, TargetFormat::Matpower).unwrap();
     assert!(conv.text.contains("mpc.gen = ["));
     assert!(!conv.text.contains("mpc.gencost = ["));
+    // No costs in the source means nothing was dropped: the omitted block is
+    // the source's own shape, not a loss, so it earns no warning.
     assert!(
-        conv.warnings.iter().any(|w| {
-            w.contains("generator costs absent") && w.contains("no zero costs synthesized")
-        }),
+        !conv.warnings.iter().any(|w| w.contains("cost")),
         "{:?}",
         conv.warnings
     );

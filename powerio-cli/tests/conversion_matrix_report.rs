@@ -453,15 +453,21 @@ const TRANSMISSION_FORMATS: [TransmissionFormat; 8] = [
 // (drop), egret +1 (cost), Surge +2 (one Pt off its own loss model, one cost),
 // PSLF +2 (asymmetric pmin, cost). The PowerModels row carries the cost too,
 // +1 wherever the target has no slot for it (PSS/E, egret, Surge, PSLF).
+//
+// The MATPOWER writer no longer warns when a costless network omits
+// `mpc.gencost`: absence is the source's own shape, not a drop, and no other
+// writer warns on it. That is −6 (one per case) on the PSS/E, PowerWorld, and
+// PSLF source rows, whose payloads carry no cost data. What remains in those
+// three cells is the passthrough-extras drop alone.
 const TRANSMISSION_WARNING_BASELINE: [[usize; 8]; 8] = [
     [0, 0, 10, 9, 1, 6, 2, 8],
     [5, 0, 15, 14, 1, 11, 22, 8],
-    [12, 0, 0, 1, 0, 3, 0, 1],
-    [12, 0, 0, 0, 0, 2, 0, 0],
+    [6, 0, 0, 1, 0, 3, 0, 1],
+    [6, 0, 0, 0, 0, 2, 0, 0],
     [0, 0, 9, 9, 0, 6, 1, 7],
     [6, 0, 11, 11, 5, 0, 0, 11],
     [0, 0, 9, 9, 0, 6, 0, 7],
-    [12, 0, 1, 1, 0, 3, 3, 0],
+    [6, 0, 1, 1, 0, 3, 3, 0],
 ];
 
 const DEEPMIND_OPFDATA_WARNING_BASELINE: [usize; 8] = [3, 2, 5, 5, 3, 4, 2, 4];

@@ -116,13 +116,12 @@ fn canonical_warnings(net: &BalancedNetwork) -> Vec<String> {
             "{voltage_loads} voltage dependent load model(s) dropped: MATPOWER carries only static Pd/Qd"
         ));
     }
+    // A network with no costs at all writes no `mpc.gencost` and loses nothing
+    // — absence is the source's own shape, not a drop, so it earns no warning
+    // (`MissingGenCostPolicy::zero` synthesizes costs for callers who need
+    // them). Only a partial set is a real loss: the block is all-or-nothing.
     let with_cost = net.generators.iter().filter(|g| g.cost.is_some()).count();
-    if !net.generators.is_empty() && with_cost == 0 {
-        warnings.push(format!(
-            "generator costs absent for {} generator(s): omitted `mpc.gencost`; no zero costs synthesized",
-            net.generators.len()
-        ));
-    } else if with_cost > 0 && with_cost < net.generators.len() {
+    if with_cost > 0 && with_cost < net.generators.len() {
         warnings.push(format!(
             "gen cost dropped: {with_cost} of {} generators carry cost data, but MATPOWER's `mpc.gencost` block is all-or-nothing",
             net.generators.len()
