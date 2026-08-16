@@ -31,8 +31,9 @@ run cargo test -p powerio-capi --features arrow
 run cargo test -p powerio-capi --features dist
 run cargo test -p powerio-capi --features arrow,matrix,gridfm,dist,pkg,prob
 
-# The C smoke test in the two configurations that exercise the most surface.
-# `cargo test` never compiles it, so a stale assertion in it reaches CI intact.
+# The C smoke test and the C++ header check, in the two configurations that
+# exercise the most surface. `cargo test` compiles neither, so a stale
+# assertion in either reaches CI intact.
 smoke_dir=$(mktemp -d)
 trap 'rm -rf "$smoke_dir"' EXIT
 lib_path_var=DYLD_LIBRARY_PATH
@@ -42,11 +43,18 @@ run cargo build -q -p powerio-capi --release --features dist
 cc -DPIO_DIST -I powerio-capi/include powerio-capi/examples/smoke.c \
    -L target/release -lpowerio_capi -o "$smoke_dir/smoke_dist"
 run env "$lib_path_var=target/release" "$smoke_dir/smoke_dist" tests/data/case9.m
+c++ -std=c++17 -DPIO_DIST -I powerio-capi/include powerio-capi/examples/header_cpp.cpp \
+   -L target/release -lpowerio_capi -o "$smoke_dir/header_cpp_dist"
+run env "$lib_path_var=target/release" "$smoke_dir/header_cpp_dist"
 
 run cargo build -q -p powerio-capi --release --features arrow,matrix,gridfm,dist,pkg,prob
 cc -DPIO_ARROW -DPIO_MATRIX -DPIO_GRIDFM -DPIO_DIST -DPIO_PKG -DPIO_PROB \
    -I powerio-capi/include powerio-capi/examples/smoke.c \
    -L target/release -lpowerio_capi -o "$smoke_dir/smoke_release"
+c++ -std=c++17 -DPIO_ARROW -DPIO_MATRIX -DPIO_GRIDFM -DPIO_DIST -DPIO_PKG -DPIO_PROB \
+   -I powerio-capi/include powerio-capi/examples/header_cpp.cpp \
+   -L target/release -lpowerio_capi -o "$smoke_dir/header_cpp_release"
+run env "$lib_path_var=target/release" "$smoke_dir/header_cpp_release"
 run cargo run -q -p powerio-cli -- gridfm tests/data/case9.m -o "$smoke_dir/gridfm"
 run env "$lib_path_var=target/release" "$smoke_dir/smoke_release" \
     tests/data/case9.m "$smoke_dir/gridfm/case9/raw"
