@@ -86,9 +86,14 @@ pub struct InjectionChange {
     pub quantity: Injection,
     pub before: f64,
     pub after: f64,
-    /// Whether the two sides disagree only about which elements are in
-    /// service. The connected totals match, so the file still holds the same
-    /// numbers; a solver reading it would nonetheless see a different problem.
+    /// Whether the per-bus totals over *every* element agree while the
+    /// in-service totals do not.
+    ///
+    /// That is weaker than "only the statuses differ": the tallies are per bus,
+    /// so two changes at one bus that cancel — an idle load switched on while a
+    /// live one of the same size is switched off — also satisfy it. Read it as
+    /// "the numbers in the file are unchanged", which is what it checks, and
+    /// not as a promise about which elements moved.
     pub status_only: bool,
 }
 
