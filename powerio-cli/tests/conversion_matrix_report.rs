@@ -474,13 +474,21 @@ const TRANSMISSION_FORMATS: [TransmissionFormat; 8] = [
 // encodes), and the PSLF reader stops echoing whole records into extras —
 // only tokens beyond the mapped fields are retained now — so all three of
 // those source rows reach MATPOWER with nothing left to drop.
+//
+// A pandapower line states one rating, `max_i_ka`, carried as `rate_a`
+// through the file's own vn_kv; the reader no longer stores a second copy of
+// the same fact in amps, so the five per-case restatement drops leave every
+// pandapower source cell (−5 each on MATPOWER, PSS/E, PowerWorld, egret,
+// PSLF; egret lands on zero). What remains on that row is genuine: costs the
+// targets cannot carry and the one-of-three cost set MATPOWER's
+// all-or-nothing gencost drops.
 const TRANSMISSION_WARNING_BASELINE: [[usize; 8]; 8] = [
     [0, 0, 10, 9, 1, 6, 2, 8],
     [5, 0, 15, 14, 1, 11, 22, 8],
     [0, 0, 0, 1, 0, 3, 0, 1],
     [0, 0, 0, 0, 0, 2, 0, 0],
     [0, 0, 9, 9, 0, 6, 1, 7],
-    [6, 0, 11, 11, 5, 0, 0, 11],
+    [1, 0, 6, 6, 0, 0, 0, 6],
     [0, 0, 9, 9, 0, 6, 0, 7],
     [0, 0, 1, 1, 0, 3, 3, 0],
 ];

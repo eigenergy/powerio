@@ -14,8 +14,8 @@ use super::{
     warn_extra_branch_rating_sets, zbase,
 };
 use crate::network::{
-    BalancedNetwork, Branch, BranchCharging, BranchCurrentRatings, Bus, BusId, BusType, Extras,
-    GenCost, Generator, Hvdc, Load, LoadVoltageModel, Shunt, SourceFormat, Storage,
+    BalancedNetwork, Branch, BranchCharging, Bus, BusId, BusType, Extras, GenCost, Generator, Hvdc,
+    Load, LoadVoltageModel, Shunt, SourceFormat, Storage,
 };
 use crate::{Error, Result};
 
@@ -377,13 +377,13 @@ pub(crate) fn parse_pandapower_source(
                 rate_b: 0.0,
                 rate_c: 0.0,
                 rating_sets: Vec::new(),
-                current_ratings: (max_i_ka > 0.0 && max_i_ka < MAX_I_KA).then_some(
-                    BranchCurrentRatings {
-                        c_rating_a: max_i_ka * par,
-                        c_rating_b: 0.0,
-                        c_rating_c: 0.0,
-                    },
-                ),
+                // The line states one rating: `max_i_ka`, carried as `rate_a`
+                // through the file's own vn_kv (the writer inverts the same
+                // conversion). A second copy in amps would restate that one
+                // fact, and every downstream hop would warn about dropping the
+                // restatement. Formats that state current ratings alongside
+                // MVA ratings (Surge) still fill this field.
+                current_ratings: None,
                 tap: 0.0,
                 shift: 0.0,
                 in_service: row.bool_or("in_service", true),
