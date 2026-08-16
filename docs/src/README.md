@@ -39,6 +39,12 @@ Where to look:
   generator cost policy.
 - [Matrix outputs](https://powerio.dev/guide/matrices.html) and the
   [DC OPF bundle](https://powerio.dev/guide/dcopf-bundle.html).
+- [C ABI](https://powerio.dev/guide/capi.html): the versioning policy, the
+  version history, and the [ABI 5 migration guide](https://powerio.dev/guide/abi-v5.html).
+- [Migrating](https://powerio.dev/guide/migration.html): one guide per release
+  that breaks something.
+- [Corpus harness](https://powerio.dev/guide/corpus-harness.html): running the
+  conversion invariants over a directory of case files.
 - [Language APIs](https://powerio.dev/guide/languages.html) and
   [Python](https://powerio.dev/guide/python.html).
 - [Performance](https://powerio.dev/guide/performance.html) and

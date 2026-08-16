@@ -227,38 +227,25 @@ own byte and resource limits. The panic guards require the default
 `panic = "unwind"`; a build with `panic = "abort"` terminates the process on a
 panic.
 
-## ABI history
+## ABI version
 
 Compare `pio_abi_version()` against the `PIO_ABI_VERSION` your binary was
-compiled against before any other call; a mismatch means the library and the
-header disagree on the rules below. Breaking changes bump the version, additive
+compiled against before any other call. The comparison is equality: a mismatch
+means the library and the header disagree, and there is no partial
+compatibility to negotiate. Breaking changes bump the version, additive
 symbols do not.
 
-| ABI | Breaking change |
-|---|---|
-| 1 | First versioned surface: opaque handles, typed extractors, JSON transport (#54). |
-| 2 | `pio_parse` → `pio_parse_file`, `pio_convert` → `pio_convert_file`, `pio_write_matpower` → `pio_to_matpower` with an `errbuf` (#69). |
-| 3 | `pio_case_free` → `pio_network_free`; `PioCase` → `PioNetwork` (opaque typedef) (#77). |
-| 4 | The naming grammar: case formats use `pio_to_format`/`pio_parse_str`; directory formats use `pio_write_dir`/`pio_read_dir`; `pio_normalize`, `pio_to_arrow`, cap/count extractors, byte length `pio_warnings`, reference bus and island queries, demand and shunt extractors, and string/file conversion entry points use fixed signatures. Balanced model JSON uses the additive `pio_to_json`/`pio_from_json` pair; `powerio-json` remains a compatibility format token. |
+`PIO_ABI_VERSION` is 5, shipped with powerio 0.9.0. The versioning policy, the
+per-version history, and the ABI 5 migration guide live in the book, which is
+the one place to update when the integer moves:
 
-One v4 break deserves a callout: `pio_convert_file` kept its symbol, arity,
-and parameter types but reordered arguments 2 and 3 from `(path, to, from)`
-to `(path, from, to)`. Every other v4 change renames a symbol or changes an
-arity, so a stale caller fails at link or load; this one links fine and reads
-the formats reversed. It is the reason the `pio_abi_version()` handshake is
-not optional.
+- <https://powerio.dev/guide/capi.html>
+- <https://powerio.dev/guide/abi-v5.html>
 
-The grammar v4 fixed is the freeze: existing signatures never change again,
-new data means new symbols, and rich or multiconductor data rides the Arrow,
-model JSON, and `.pio.json` schemas. Any future signature break would bump
-`PIO_ABI_VERSION` in lockstep with PowerIO.jl.
-
-The optional `pio_dist_*` surface has its own version check:
-`pio_dist_abi_version()` against `PIO_DIST_ABI_VERSION`, after confirming
-`pio_has_feature("dist")`. Supported direct C use of the distribution surface
-starts at `PIO_DIST_ABI_VERSION = 1`, with one-shot conversion ordered as
-`pio_dist_convert_*(input, from, to, ...)`. The dist conversion symbols that
-appeared before this split should be treated as experimental.
+`PIO_DIST_ABI_VERSION` is frozen at 1 and carries no meaning. It stays exported
+so a binding that gates distribution calls on resolving it keeps working; read
+foreign schema versions from `pio_build_info` instead. One-shot distribution
+conversion is ordered `pio_dist_convert_*(input, from, to, ...)`.
 
 Every public `PIO_*` macro, opaque typedef, and `pio_*` prototype in
 `powerio.h` is pinned by a Cargo test, and CI compiles the C smoke program
