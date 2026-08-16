@@ -121,6 +121,21 @@ pub struct Ingest {
     /// Files no reader claimed and whose name did not announce a case: a
     /// corpus's licences, notes and spreadsheets.
     pub skipped: usize,
+    /// Entries that resolved outside the corpus root and were not read.
+    pub escaped: usize,
+}
+
+/// Whether `path` really lives under `root` once symlinks are resolved.
+///
+/// Both sides are canonicalized: comparing the walked path textually would
+/// accept a symlink whose name sits under the root and whose target does not.
+/// A path that cannot be canonicalized is treated as outside, since a file the
+/// harness cannot resolve is one it should not open.
+fn within(root: &Path, path: &Path) -> bool {
+    match (root.canonicalize(), path.canonicalize()) {
+        (Ok(root), Ok(path)) => path.starts_with(&root),
+        _ => false,
+    }
 }
 
 /// Whether a path announces itself as a case file. Used only to decide whether
@@ -145,6 +160,7 @@ pub fn ingest(corpus: &Path, work: &Path) -> Result<Ingest> {
         .with_context(|| format!("create work directory {}", work.display()))?;
     let mut files_seen = 0usize;
     let mut skipped = 0usize;
+    let mut escaped = 0usize;
     let mut unreadable = Vec::new();
     let mut parsed: Vec<Parsed> = Vec::new();
 
@@ -164,6 +180,14 @@ pub fn ingest(corpus: &Path, work: &Path) -> Result<Ingest> {
             }
         };
         let path = entry.path();
+        // `follow_links(false)` stops the walk descending a symlinked
+        // directory, but a symlinked FILE is still handed over and reading it
+        // reads its target. A corpus is not trusted to point only at itself,
+        // so anything resolving outside the root is skipped rather than read.
+        if !within(corpus, path) {
+            escaped += 1;
+            continue;
+        }
         let is_pypsa_dir = entry.file_type().is_dir() && path.join("network.csv").is_file();
         if entry.file_type().is_dir() && !is_pypsa_dir {
             continue;
@@ -212,6 +236,7 @@ pub fn ingest(corpus: &Path, work: &Path) -> Result<Ingest> {
         unreadable,
         files_seen,
         skipped,
+        escaped,
     };
     write_json(&work.join(INGEST_FILE), &ingest)?;
     Ok(ingest)
@@ -445,16 +470,32 @@ pub fn compare(work: &Path) -> Result<Comparisons> {
     Ok(out)
 }
 
+/// The largest bucket compared pairwise.
+///
+/// Every member is written into every other member's format and compared
+/// against every other member, so the work is quadratic in the bucket size and
+/// each leg re-parses. An archive holding hundreds of spellings of one case
+/// would otherwise run for hours with no way to tell it apart from a hang.
+/// Bigger buckets keep the first [`MAX_BUCKET_MEMBERS`] members and say so.
+const MAX_BUCKET_MEMBERS: usize = 24;
+
+/// The members of a bucket that take part in the pairwise comparison.
+fn compared_members(bucket: &Bucket) -> &[Member] {
+    let n = bucket.members.len().min(MAX_BUCKET_MEMBERS);
+    &bucket.members[..n]
+}
+
 fn compare_transmission(bucket: &Bucket, out: &mut Vec<Comparison>) {
     // Re-read rather than trusting a cached copy: the corpus is the authority
     // and reading it again costs nothing next to the writes.
+    let members = compared_members(bucket);
     let networks: Vec<Option<BalancedNetwork>> =
-        bucket.members.iter().map(|m| balanced(&m.path)).collect();
-    for (i, member) in bucket.members.iter().enumerate() {
+        members.iter().map(|m| balanced(&m.path)).collect();
+    for (i, member) in members.iter().enumerate() {
         let Some(source) = networks[i].as_ref() else {
             continue;
         };
-        for (j, other) in bucket.members.iter().enumerate() {
+        for (j, other) in members.iter().enumerate() {
             let Some(target) = powerio_matrix::target_format_from_name(&other.format) else {
                 continue;
             };
@@ -465,7 +506,7 @@ fn compare_transmission(bucket: &Bucket, out: &mut Vec<Comparison>) {
             };
             out.push(convert_leg(bucket, member, other, via, source, target));
         }
-        for (j, other) in bucket.members.iter().enumerate().skip(i + 1) {
+        for (j, other) in members.iter().enumerate().skip(i + 1) {
             let Some(sibling) = networks[j].as_ref() else {
                 continue;
             };
@@ -488,16 +529,14 @@ fn compare_transmission(bucket: &Bucket, out: &mut Vec<Comparison>) {
 /// impedance matrix per phase pair, and powerio builds no admittance matrix
 /// for it.
 fn compare_distribution(bucket: &Bucket, out: &mut Vec<Comparison>) {
-    let networks: Vec<Option<powerio_dist::MulticonductorNetwork>> = bucket
-        .members
-        .iter()
-        .map(|m| multiconductor(&m.path))
-        .collect();
-    for (i, member) in bucket.members.iter().enumerate() {
+    let members = compared_members(bucket);
+    let networks: Vec<Option<powerio_dist::MulticonductorNetwork>> =
+        members.iter().map(|m| multiconductor(&m.path)).collect();
+    for (i, member) in members.iter().enumerate() {
         let Some(source) = networks[i].as_ref() else {
             continue;
         };
-        for (j, other) in bucket.members.iter().enumerate() {
+        for (j, other) in members.iter().enumerate() {
             let Some(target) = powerio_dist::dist_target_from_name(&other.format) else {
                 continue;
             };
@@ -1040,6 +1079,14 @@ fn findings_for(comparison: &Comparison, sanitizer: &Sanitizer) -> Vec<Finding> 
         );
     }
     if !comparison.model_diffs.is_empty() {
+        // A serde path is mostly powerio's own field names, but an `Extras`
+        // map contributes whatever token the source stated, so the path is
+        // templated like any other text the corpus touched.
+        let paths: Vec<String> = comparison
+            .model_diffs
+            .iter()
+            .map(|p| sanitizer.template(p))
+            .collect();
         let declared = !comparison.warnings.is_empty();
         push(
             if declared {
@@ -1052,7 +1099,7 @@ fn findings_for(comparison: &Comparison, sanitizer: &Sanitizer) -> Vec<Finding> 
             } else {
                 "undeclared-loss"
             },
-            serde_json::json!({ "paths": comparison.model_diffs }),
+            serde_json::json!({ "paths": paths }),
         );
     }
     let mut templates: BTreeMap<String, usize> = BTreeMap::new();

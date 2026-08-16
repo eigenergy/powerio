@@ -291,7 +291,22 @@ fn first_moved(
     None
 }
 
+/// Whether two values differ by more than `tol` relative.
+///
+/// A non-finite value on either side counts as a difference unless both sides
+/// are the same kind of non-finite. Every comparison against NaN is false, so
+/// the plain arithmetic would report a setpoint that turned into NaN as "no
+/// change" — the one answer that must never be given about a value that stopped
+/// being a number.
 fn beyond_tol(x: f64, y: f64, tol: f64) -> bool {
+    if !x.is_finite() || !y.is_finite() {
+        // Two NaNs are the same absence of a number; every other pairing
+        // involving a non-finite value is a change. Compared bitwise on
+        // purpose: there is no margin of error to speak of once a value has
+        // left the reals.
+        #[allow(clippy::float_cmp)]
+        return !(x.is_nan() && y.is_nan()) && x != y;
+    }
     (x - y).abs() > tol * x.abs().max(y.abs()).max(1.0)
 }
 

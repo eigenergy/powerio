@@ -13,6 +13,15 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+/// The shortest string treated as identifying.
+///
+/// Two characters would match a field name in nearly every path the report
+/// emits (`.p`, `.q`, `.id`), so masking them costs more than it buys. The
+/// consequence is stated rather than hidden: a corpus whose identifiers are one
+/// or two characters is not protected by this module, and a report from one
+/// should be read before it is shared.
+const MIN_IDENTIFYING: usize = 3;
+
 /// A string from the corpus that reached the report.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Leak {
@@ -134,7 +143,7 @@ impl Sanitizer {
         let mut vocabulary = vocabulary();
         vocabulary.extend(self.allowed.iter().cloned());
         self.secrets.iter().filter(move |s| {
-            s.chars().count() >= 4
+            s.chars().count() >= MIN_IDENTIFYING
                 && s.chars().any(char::is_alphabetic)
                 && !vocabulary.contains(s.as_str())
         })
@@ -338,9 +347,14 @@ fn collect_strings(value: &serde_json::Value, out: &mut BTreeSet<String>) {
             }
         }
         serde_json::Value::Object(xs) => {
-            // Keys are field names from powerio's own model, so they are
-            // vocabulary rather than case data; only values are learned.
-            for x in xs.values() {
+            // Keys are learned as well as values. Most are powerio's own field
+            // names — and those land in [`vocabulary`], which is built the same
+            // way, so they are exempt. An `Extras` map is the exception that
+            // makes this necessary: its keys are whatever token the source
+            // stated, so a deck naming a property after a feeder puts that name
+            // in a key and nowhere else.
+            for (key, x) in xs {
+                out.insert(key.clone());
                 collect_strings(x, out);
             }
         }

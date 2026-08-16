@@ -172,3 +172,60 @@ fn values_leave_as_magnitudes_rather_than_numbers() {
     assert_eq!(anonymize::ratio(200.0, 100.0), Some(0.5));
     assert_eq!(anonymize::ratio(0.0, 100.0), None);
 }
+
+/// An `Extras` key is whatever token the source stated, so it is case data in a
+/// position the report reaches through a serde path. Learning only values left
+/// it unmasked and unaudited.
+#[test]
+fn an_extras_key_is_learned_like_any_other_name() {
+    let mut sanitizer = anonymize::Sanitizer::new();
+    let value = serde_json::json!({
+        "loads": [{ "p": 1.0, "extras": { "AcmeUtility_FeederCode_88": 1 } }]
+    });
+    sanitizer.learn_network(&value);
+    assert!(
+        sanitizer
+            .audit(".loads[#].extras.AcmeUtility_FeederCode_88")
+            .is_err(),
+        "an extras key must be auditable"
+    );
+    assert!(
+        !sanitizer
+            .template(".loads[#].extras.AcmeUtility_FeederCode_88")
+            .contains("AcmeUtility"),
+        "an extras key must be masked"
+    );
+    // powerio's own field names are vocabulary and survive, or every path in
+    // the report would read as a redaction.
+    assert_eq!(sanitizer.template(".loads[#].p"), ".loads[#].p");
+}
+
+/// A corpus may hold a symlink whose name sits under the root and whose target
+/// does not. The walk does not descend symlinked directories, but it still
+/// hands over symlinked files, and reading one reads its target.
+#[test]
+fn a_symlink_out_of_the_corpus_is_not_read() {
+    let outside = tempfile::tempdir().unwrap();
+    let secret = outside.path().join("elsewhere.m");
+    std::fs::write(&secret, std::fs::read_to_string(data("case9.m")).unwrap()).unwrap();
+
+    let corpus = tempfile::tempdir().unwrap();
+    let work = tempfile::tempdir().unwrap();
+    std::fs::write(
+        corpus.path().join("inside.m"),
+        std::fs::read_to_string(data("case9.m")).unwrap(),
+    )
+    .unwrap();
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(&secret, corpus.path().join("link.m")).unwrap();
+
+    let ingest = corpus::ingest(corpus.path(), work.path()).unwrap();
+    let members: usize = ingest.buckets.iter().map(|b| b.members.len()).sum();
+    #[cfg(unix)]
+    {
+        assert_eq!(members, 1, "only the file that really lives here is read");
+        assert_eq!(ingest.escaped, 1, "and the escape is counted");
+    }
+    #[cfg(not(unix))]
+    assert_eq!(members, 1);
+}
