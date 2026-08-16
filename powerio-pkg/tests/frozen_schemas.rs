@@ -18,11 +18,16 @@ fn fnv1a(bytes: &[u8]) -> u64 {
 
 #[test]
 fn retired_schema_documents_stay_published_byte_for_byte() {
-    let frozen: [(&str, usize, u64); 3] = [
+    let frozen: [(&str, usize, u64); 4] = [
         (
             "../docs/schema/pio-package/0.1/schema.json",
             125_750,
             0xe5af_9f64_b26e_edc2,
+        ),
+        (
+            "../docs/schema/pio-package/0.2/schema.json",
+            130_344,
+            0x944c_3d7a_721d_1da9,
         ),
         (
             "../docs/schema/pio-payload-balanced/1/schema.json",
@@ -46,7 +51,7 @@ fn retired_schema_documents_stay_published_byte_for_byte() {
         assert_eq!(
             (bytes.len(), fnv1a(&bytes)),
             (len, hash),
-            "{path} changed, but it is frozen at its v0.7.3 bytes: documents in the wild \
+            "{path} changed, but it is frozen at the bytes its release published: documents in the wild \
              validate against it by URL, so edits belong in a NEW identifier path, not here \
              (see docs/schema/README.md)"
         );

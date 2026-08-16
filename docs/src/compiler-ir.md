@@ -52,7 +52,7 @@ the document without guessing whether it holds balanced or multiconductor data.
 
 A `.pio.json` document always carries:
 
-- `schema_version` (semver), the one version number for the whole document;
+- `powerio_version` (semver), the powerio release that wrote the document;
 - `producer` metadata;
 - `model_kind`, explicit and authoritative;
 - `model`, the typed model payload, tagged by `kind`;
@@ -89,7 +89,7 @@ requirements are in [the `.pio.json` format chapter](pio-json-schema.md).
 ### Model JSON stability
 
 The model JSON changes are document changes, covered by the one
-`schema_version`. Model rows carry stable `uid` identities that operating
+`powerio_version`. Model rows carry stable `uid` identities that operating
 point updates resolve against. The bump rules are in
 [the `.pio.json` format chapter](pio-json-schema.md).
 

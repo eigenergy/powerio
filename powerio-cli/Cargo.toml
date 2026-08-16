@@ -20,6 +20,9 @@ path = "src/main.rs"
 doc = false
 
 [dependencies]
+# The hub crate directly, for `powerio::version`: the CLI authors a summary
+# document and must stamp it with the same key every other one carries.
+powerio.workspace = true
 powerio-matrix = { workspace = true, features = ["gridfm"] }
 powerio-prob = { workspace = true, features = ["matrix"] }
 # Unconditional: the CLI always ships the distribution surface (`convert

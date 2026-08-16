@@ -16,9 +16,6 @@ use super::{Canvas, CoordinateSpace, CoordsKind, GeoMeta, Location};
 use crate::network::{BusId, Network};
 use crate::{Error, Result};
 
-/// Version of the `powerio_geo` foreign member this crate writes.
-pub const GEO_LAYER_VERSION: &str = "0.1.0";
-
 /// Suggested extension for the canonical document.
 pub const GEO_LAYER_EXTENSION: &str = "geo.json";
 
@@ -198,13 +195,16 @@ impl GeoLayer {
         Ok(self.to_geojson())
     }
 
-    /// Serialize the canonical wire form: a GeoJSON FeatureCollection with the
+    /// Serialize the canonical form: a GeoJSON FeatureCollection with the
     /// `powerio_geo` foreign member. Valid RFC 7946 GeoJSON when the space is
     /// geographic, so GIS tools open it directly.
     #[must_use]
     pub fn to_geojson(&self) -> String {
         let mut member = Map::new();
-        member.insert("version".to_owned(), json!(GEO_LAYER_VERSION));
+        member.insert(
+            crate::version::VERSION_KEY.to_owned(),
+            json!(crate::VERSION),
+        );
         let detail = match &self.space {
             CoordinateSpace::Geographic { crs } | CoordinateSpace::Projected { crs } => {
                 crs.as_ref().map(crs_entry)
@@ -1031,7 +1031,7 @@ impl BalancedBusIndex {
             .as_ref()
             .and_then(|uid| self.uids.get(uid))
             .or_else(|| {
-                // A numeric id is the external BusId; a string id (one wire
+                // A numeric id is the external BusId; a string id (one serialized
                 // form serves the string-keyed multiconductor model too)
                 // matches the bus name.
                 let id = key.id.as_ref()?;

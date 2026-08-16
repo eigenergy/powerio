@@ -24,7 +24,7 @@ Matrix schema metadata carries:
 
 ```text
 powerio.table
-powerio.schema_version
+powerio.version
 powerio.format
 powerio.row_axis
 powerio.col_axis
@@ -51,13 +51,13 @@ Shape:
 
 ```json
 {
-  "schema_version": "1",
+  "powerio_version": "0.9.0",
   "producer": "powerio-capi",
   "tables": [
     {
       "id": 17,
       "name": "bprime",
-      "schema_version": "1",
+      "powerio_version": "0.9.0",
       "format": "coo",
       "feature_requirements": ["arrow", "matrix"],
       "available": true,
@@ -97,5 +97,5 @@ behavior.
 `PioNetwork` Arrow tables describe a network or a generic matrix projection.
 They do not carry solver cost policy or a solver formulation. `powerio-prob`
 owns complete problem instances. The C `prob` feature currently exposes a
-matrix free SCOPF instance through a versioned JSON wire document. DC OPF
+matrix free SCOPF instance through a JSON document. DC OPF
 instances and bundles have no C entry points.

@@ -81,7 +81,7 @@ next to a DSS master, a GeoJSON export from a GIS tool, a layout computed by a
 renderer. The container is `GeoLayer`, surfaced as `DisplayData::Geo` beside
 the PowerWorld `.pwd` display path.
 
-The canonical wire form is a GeoJSON FeatureCollection with one foreign
+The canonical form is a GeoJSON FeatureCollection with one foreign
 member, suggested extension `.geo.json`:
 
 ```json

@@ -28,27 +28,11 @@ use crate::study::{StudyBlock, apply_study_to_model, check_study_identities};
 use crate::summary::{ObjectSummary, ObjectTopology, ObjectUnits};
 use crate::validation::{ValidationPass, ValidationStatus, ValidationSummary};
 
-/// The `.pio.json` format version (semver), the one version number for the
-/// whole document, payload included. While the major is 0, an incompatible
-/// change to any field bumps the minor and additive changes bump the patch
-/// (cargo 0.x semantics); from 1.0.0 on, incompatible changes bump the major.
-/// The reader rejects a file from a different lineage with an error telling
-/// the caller to regenerate it from the source case.
-///
-/// 0.2.0: the `schema`, `payload_schema`, and `payload_schema_version` fields
-/// were removed, and the multiconductor bus `vsym_min`/`vsym_max` arrays
-/// became the per-sequence scalars `vpos_min`/`vpos_max`/`vneg_max`/
-/// `vzero_max`/`vn_max` (BMOPF schema 0.1.0).
-///
-/// 0.2.1: multiconductor bounds, ratings, and line lengths accept `null`
-/// for a nonfinite value (#268). Same 0.2 lineage; the reader accepts both.
-pub const PIO_PACKAGE_SCHEMA_VERSION: &str = "0.2.1";
-
 pub const READ_TRANSMISSION_PARSE_WARNING: &str = "READ.TRANSMISSION.PARSE_WARNING";
 pub const READ_GRIDFM_FIDELITY_WARNING: &str = "READ.GRIDFM.FIDELITY_WARNING";
 
-fn default_schema_version() -> String {
-    PIO_PACKAGE_SCHEMA_VERSION.to_owned()
+fn default_powerio_version() -> String {
+    powerio::VERSION.to_owned()
 }
 
 /// Optional derived metadata: matrix statistics, solver table metadata, and
@@ -166,16 +150,17 @@ impl From<&NormalizedSolverTables> for NormalizedSolverTableMetadata {
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[non_exhaustive]
 pub struct NetworkPackage {
-    /// The `.pio.json` format version (semver); see
-    /// [`PIO_PACKAGE_SCHEMA_VERSION`].
+    /// The powerio version that wrote this document; see
+    /// [`powerio::version`].
     ///
-    /// Required. It used to default to the current version when absent, which
-    /// let a document opt out of the lineage gate by dropping the field: a
-    /// 0.1-era payload then read under 0.2 rules, and a field the two spell
-    /// differently arrived as its `serde` default with no error and no
-    /// warning. That is the misreading the gate exists to stop, so a document
-    /// must now state its lineage.
-    pub schema_version: String,
+    /// A document that states none deserializes to the empty string, which no
+    /// lineage accepts, so the gate stays closed and the reader can name the
+    /// release that wrote it. It must never default to the current version:
+    /// that lets a document opt out of the gate by dropping the field, and a
+    /// field an older lineage spells differently then arrives as its `serde`
+    /// default with no error and no warning.
+    #[serde(default)]
+    pub powerio_version: String,
     pub producer: Producer,
     /// Stable content id, e.g. `"sha256:..."`. The scaffold leaves it `None`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -225,7 +210,7 @@ impl NetworkPackage {
         let diagnostics = Vec::new();
         let validation = ValidationSummary::from_diagnostics(&diagnostics);
         Self {
-            schema_version: default_schema_version(),
+            powerio_version: default_powerio_version(),
             producer: Producer::powerio(),
             package_id: None,
             created_at: None,
@@ -392,7 +377,7 @@ impl NetworkPackage {
         let validation = ValidationSummary::from_diagnostics(&diagnostics);
 
         Self {
-            schema_version: default_schema_version(),
+            powerio_version: default_powerio_version(),
             producer: Producer::powerio(),
             package_id: None,
             created_at: None,
@@ -492,9 +477,9 @@ impl NetworkPackage {
                 "package has no operating point {index}"
             ))
         })?;
-        // Applying resolves each update's row (identity first, wire row as
+        // Applying resolves each update's row (identity first, stated row as
         // fallback), so the stale provenance paths come from the same
-        // resolution rather than the wire row values.
+        // resolution rather than the stated row values.
         let (updated_model, updated_paths) = apply_operating_point_to_model(&self.model, point)?;
         let had_normalized_solver_tables = self.derived.normalized_solver_tables.is_some();
         let options = materialize_operating_point_options(index);
@@ -503,7 +488,7 @@ impl NetworkPackage {
         // make an explicit carry-or-clear decision here instead of silently
         // riding along stale.
         let mut package = Self {
-            schema_version: self.schema_version.clone(),
+            powerio_version: self.powerio_version.clone(),
             producer: self.producer.clone(),
             // A derived package is new content: it records the parent's id in
             // its origin and never inherits it as its own (as in
@@ -612,7 +597,7 @@ impl NetworkPackage {
         let options = materialize_study_commit_options(study, commit_index);
 
         let mut package = Self {
-            schema_version: base.schema_version.clone(),
+            powerio_version: base.powerio_version.clone(),
             producer: base.producer.clone(),
             package_id: None,
             created_at: base.created_at.clone(),
@@ -703,13 +688,10 @@ impl NetworkPackage {
                 "invalid .pio.json package envelope: {e}"
             ))
         })?;
-        if !Self::supports_schema_version(&pkg.schema_version) {
-            return Err(<serde_json::Error as serde::de::Error>::custom(format!(
-                "unsupported .pio.json schema_version {}; this reader supports {}; \
-                 regenerate the package from its source case",
-                pkg.schema_version,
-                supported_lineage_label()
-            )));
+        if !powerio::version::supports(&pkg.powerio_version) {
+            return Err(<serde_json::Error as serde::de::Error>::custom(
+                powerio::version::reject(".pio.json", &pkg.powerio_version),
+            ));
         }
         if !pkg.kind_is_consistent() {
             return Err(<serde_json::Error as serde::de::Error>::custom(
@@ -719,19 +701,17 @@ impl NetworkPackage {
         Ok(pkg)
     }
 
-    /// Whether this reader accepts the document's `schema_version`.
+    /// Whether this reader accepts the document's `powerio_version`.
     ///
     /// The `.pio.json` compatibility rule: unknown top level fields from a
     /// newer producer are ignored, versions in the reader's lineage load, and
-    /// anything else is rejected before payload use. The lineage is the major
-    /// version once it reaches 1, and the exact major.minor pair while the
-    /// major is 0 (cargo 0.x semantics: a 0.x minor bump is incompatible).
+    /// anything else is rejected before payload use.
+    #[deprecated(
+        since = "0.9.0",
+        note = "use `powerio::version::supports`, which every powerio authored document shares; removed in 1.0.0"
+    )]
     pub fn supports_schema_version(version: &str) -> bool {
-        let Some((major, minor)) = schema_lineage(version) else {
-            return false;
-        };
-        let (current_major, current_minor) = supported_lineage();
-        major == current_major && (major != 0 || minor == current_minor)
+        powerio::version::supports(version)
     }
 
     #[must_use]
@@ -907,67 +887,6 @@ fn materialize_study_commit_options(
     options
 }
 
-fn schema_lineage(version: &str) -> Option<(u64, u64)> {
-    // Accept a semver core `MAJOR.MINOR.PATCH` with an optional prerelease
-    // (`-...`) or build (`+...`) tag: same-lineage additive versions load, so a
-    // forward-compatible writer that stamps e.g. `0.2.1-rc.1` is not rejected.
-    // Split the build tag off first: `+` cannot appear in a prerelease, but a
-    // hyphen is legal inside build metadata (`1.0.0+build-x`), so splitting on
-    // `-` first would cut inside the build tag and reject a valid version.
-    let (rest, build) = match version.split_once('+') {
-        Some((rest, build)) => (rest, Some(build)),
-        None => (version, None),
-    };
-    let (core, pre) = match rest.split_once('-') {
-        Some((core, pre)) => (core, Some(pre)),
-        None => (rest, None),
-    };
-    if pre.is_some_and(|s| !valid_semver_suffix(s))
-        || build.is_some_and(|s| !valid_semver_suffix(s))
-    {
-        return None;
-    }
-    let mut parts = core.split('.');
-    let major = parts.next()?;
-    let minor = parts.next()?;
-    let patch = parts.next()?;
-    if parts.next().is_some() {
-        return None;
-    }
-    let major = parse_semver_number(major)?;
-    let minor = parse_semver_number(minor)?;
-    parse_semver_number(patch)?;
-    Some((major, minor))
-}
-
-fn parse_semver_number(s: &str) -> Option<u64> {
-    if s.is_empty() || !s.bytes().all(|b| b.is_ascii_digit()) || (s.len() > 1 && s.starts_with('0'))
-    {
-        return None;
-    }
-    s.parse().ok()
-}
-
-fn valid_semver_suffix(s: &str) -> bool {
-    !s.is_empty()
-        && s.split('.').all(|part| {
-            !part.is_empty() && part.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
-        })
-}
-
-fn supported_lineage() -> (u64, u64) {
-    schema_lineage(PIO_PACKAGE_SCHEMA_VERSION).expect("package schema version is valid semver")
-}
-
-/// The lineage this reader accepts, spelled for error messages: `0.2.x` while
-/// the major is 0, `major version N` afterwards.
-fn supported_lineage_label() -> String {
-    match supported_lineage() {
-        (0, minor) => format!("0.{minor}.x"),
-        (major, _) => format!("major version {major}"),
-    }
-}
-
 /// Add a stable UID to each payload row that does not have one.
 ///
 /// Source UIDs remain unchanged. Generated values use `{table}:{row}` and stay
@@ -1008,7 +927,7 @@ const SANE_VALIDATION_CODES: [&str; 10] = [
 ];
 
 /// Check every operating point update against the payload's identity index:
-/// unknown `source_uid`, a wire `row` that contradicts the resolved row,
+/// unknown `source_uid`, a stated `row` that contradicts the resolved row,
 /// ambiguous (duplicate) payload uids, and rows out of range all become Error
 /// diagnostics, so `pio_package_validate` rejects a package whose updates
 /// reference unknown identities without materializing it.
@@ -2338,28 +2257,50 @@ fn multiconductor_source_maps(
 #[cfg(test)]
 mod tests {
     #[test]
-    fn schema_lineage_parses_semver_suffixes() {
-        assert_eq!(super::schema_lineage("1.2.3"), Some((1, 2)));
-        assert_eq!(super::schema_lineage("1.0.0-rc.1"), Some((1, 0)));
-        // A hyphen inside build metadata is legal semver; splitting on `-`
-        // first used to cut inside the build tag and reject the version.
-        assert_eq!(super::schema_lineage("1.0.0+build-x"), Some((1, 0)));
-        assert_eq!(super::schema_lineage("0.2.0+2026-07-21"), Some((0, 2)));
-        assert_eq!(super::schema_lineage("1.0.0-rc-1+b-2"), Some((1, 0)));
-        assert_eq!(super::schema_lineage("1.0"), None);
-        assert_eq!(super::schema_lineage("1.0.0-"), None);
-        assert_eq!(super::schema_lineage("01.0.0"), None);
+    fn a_package_states_the_powerio_version_that_wrote_it() {
+        let net = powerio::BalancedNetwork::in_memory("demo", 100.0, vec![], vec![]);
+        let pkg = super::NetworkPackage::from_balanced(net);
+        assert_eq!(pkg.powerio_version, powerio::VERSION);
+        let text = pkg.to_json().unwrap();
+        assert!(
+            text.contains(&format!("\"powerio_version\":\"{}\"", powerio::VERSION)),
+            "{text}"
+        );
+        assert!(
+            !text.contains("schema_version"),
+            "the per document schema number is gone: {text}"
+        );
     }
 
     #[test]
-    fn version_gate_is_exact_minor_while_major_is_zero() {
-        use super::NetworkPackage;
-        assert!(NetworkPackage::supports_schema_version("0.2.0"));
-        assert!(NetworkPackage::supports_schema_version("0.2.7"));
-        assert!(!NetworkPackage::supports_schema_version("0.1.1"));
-        assert!(!NetworkPackage::supports_schema_version("0.3.0"));
-        assert!(!NetworkPackage::supports_schema_version("1.0.0"));
-        assert!(!NetworkPackage::supports_schema_version("garbage"));
+    fn a_package_from_an_older_lineage_is_refused_by_name() {
+        // What every 0.8.x release wrote: `schema_version`, no
+        // `powerio_version`. The reader must name the release rather than
+        // report a missing field.
+        let net = powerio::BalancedNetwork::in_memory("demo", 100.0, vec![], vec![]);
+        let text = super::NetworkPackage::from_balanced(net)
+            .to_json()
+            .unwrap()
+            .replacen("\"powerio_version\"", "\"schema_version\"", 1);
+        let err = super::NetworkPackage::from_json(&text)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("before powerio 0.9.0"), "{err}");
+        assert!(err.contains("regenerate"), "{err}");
+    }
+
+    #[test]
+    fn a_package_from_a_future_lineage_is_refused_with_both_versions() {
+        let net = powerio::BalancedNetwork::in_memory("demo", 100.0, vec![], vec![]);
+        let mut pkg = super::NetworkPackage::from_balanced(net);
+        pkg.powerio_version = "9.9.9".to_owned();
+        let text = pkg.to_json().unwrap();
+        let err = super::NetworkPackage::from_json(&text)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("9.9.9"), "{err}");
+        assert!(err.contains(powerio::VERSION), "{err}");
+        assert!(err.contains("regenerate"), "{err}");
     }
 
     #[test]

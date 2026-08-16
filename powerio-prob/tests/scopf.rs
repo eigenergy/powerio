@@ -1,5 +1,5 @@
 use powerio::BusId;
-use powerio_prob::scopf::wire::{SCOPF_WIRE_SCHEMA, SCOPF_WIRE_VERSION, to_wire_value};
+use powerio_prob::scopf::json::{SCOPF_SCHEMA, to_json_value};
 use powerio_prob::{
     ScopfDeviceClassLayout, ScopfError, ScopfInstance, build_scopf_instance_from_str,
 };
@@ -99,29 +99,29 @@ fn julia_wire_adapter_is_versioned_and_one_based() {
             .is_some()
     );
 
-    let wire = to_wire_value(&instance).expect("serialize wire value");
-    assert_eq!(wire["schema"], SCOPF_WIRE_SCHEMA);
-    assert_eq!(wire["schema_version"], SCOPF_WIRE_VERSION);
-    assert_eq!(wire["index_base"], 1);
-    assert_eq!(wire["instance"]["static"]["acl_branch"][0]["j_ln"], 1);
-    assert_eq!(wire["instance"]["static"]["active_reserve"][0]["n_p"], 1);
-    assert_eq!(wire["instance"]["price_blocks"]["producer"][0]["t"], 1);
-    assert_eq!(wire["instance"]["static"]["bus"][0]["i"], 1);
+    let doc = to_json_value(&instance).expect("serialize the document");
+    assert_eq!(doc["schema"], SCOPF_SCHEMA);
+    assert_eq!(doc["powerio_version"], powerio::VERSION);
+    assert_eq!(doc["index_base"], 1);
+    assert_eq!(doc["instance"]["static"]["acl_branch"][0]["j_ln"], 1);
+    assert_eq!(doc["instance"]["static"]["active_reserve"][0]["n_p"], 1);
+    assert_eq!(doc["instance"]["price_blocks"]["producer"][0]["t"], 1);
+    assert_eq!(doc["instance"]["static"]["bus"][0]["i"], 1);
     assert!(
-        wire["instance"]["static"]["active_reserve"][0]
+        doc["instance"]["static"]["active_reserve"][0]
             .get("σ_rgu")
             .is_some()
     );
-    assert!(wire["instance"]["lengths"].get("L_J_ln").is_some());
+    assert!(doc["instance"]["lengths"].get("L_J_ln").is_some());
     // Renumbering is per declared field: counts and value fields pass
     // through unchanged even where a name doubles as an index elsewhere
     // (`p_max` on price blocks vs devices, `L_T` vs `t`).
     assert_eq!(
-        wire["instance"]["lengths"]["L_T"],
+        doc["instance"]["lengths"]["L_T"],
         u64::try_from(instance.lengths.l_t).expect("period count")
     );
     assert_eq!(
-        wire["instance"]["price_blocks"]["producer"][0]["p_max"],
+        doc["instance"]["price_blocks"]["producer"][0]["p_max"],
         instance.price_blocks.producer[0].p_max
     );
 }

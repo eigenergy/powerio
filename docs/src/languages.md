@@ -39,7 +39,7 @@ Verb taxonomy:
 | Materialize operating point | `pkg.materialize_operating_point(i)` | `pkg.materialize_operating_point(i)` | — | `pio_package_materialize_operating_point` |
 | `.pio.json` study block | `pkg.study()` | `pkg.study()` | — | `pio_package_study_json` |
 | Materialize study commit | `pkg.materialize_study_commit(i)` | `pkg.materialize_study_commit(i)` | — | `pio_package_materialize_study_commit` |
-| Parse SCOPF instance | `build_scopf_instance_from_str` | `parse_scopf(text, from_="goc3-json")` | versioned wire adapter | `pio_scopf_parse_str` |
+| Parse SCOPF instance | `build_scopf_instance_from_str` | `parse_scopf(text, from_="goc3-json")` | Julia document adapter | `pio_scopf_parse_str` |
 | Normalized copy | `net.to_normalized()` | `net.to_normalized()` | `to_normalized(net)` | `pio_normalize` |
 | Dense tables | typed table API | `to_dense` | `to_dense` | `pio_*` extractors |
 | PyPSA CSV folder | `read_pypsa_csv_folder` / `write_pypsa_csv_folder` | `read_pypsa_csv_folder` / `net.write_pypsa_csv_folder` | `parse_file(dir; from="pypsa-csv")` / `write_pypsa_csv_folder` | `pio_parse_file` / `pio_write_dir` + `"pypsa-csv"` |

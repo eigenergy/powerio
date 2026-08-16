@@ -10,7 +10,6 @@ use crate::{DcOpfInstance, Units};
 use super::build_dc_opf_matrices;
 
 const DCOPF_SCHEMA: &str = "powerio.dcopf";
-const DCOPF_SCHEMA_VERSION: &str = "0.4.0";
 
 /// Cost policy information recorded in a bundle manifest.
 #[derive(Debug, Clone)]
@@ -44,7 +43,6 @@ pub struct DcOpfOutputs {
 #[derive(Serialize)]
 struct DcOpfMeta<'a> {
     schema: &'static str,
-    schema_version: &'static str,
     case_name: &'a str,
     base_mva: f64,
     dimensions: DcOpfDimensions,
@@ -191,7 +189,6 @@ pub fn write_dcopf_bundle(
     };
     let meta = DcOpfMeta {
         schema: DCOPF_SCHEMA,
-        schema_version: DCOPF_SCHEMA_VERSION,
         case_name: &instance.name,
         base_mva: instance.base_mva,
         dimensions: DcOpfDimensions {

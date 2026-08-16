@@ -158,14 +158,14 @@ impl Serialize for StudyEdit {
         match self {
             Self::DemandDelta { bus, p_mw, q_mvar } => {
                 #[derive(Serialize)]
-                struct Wire<'a> {
+                struct Stated<'a> {
                     kind: &'static str,
                     bus: &'a ElementRef,
                     p_mw: f64,
                     #[serde(skip_serializing_if = "Option::is_none")]
                     q_mvar: Option<f64>,
                 }
-                Wire {
+                Stated {
                     kind: "demand_delta",
                     bus,
                     p_mw: *p_mw,
@@ -175,12 +175,12 @@ impl Serialize for StudyEdit {
             }
             Self::RatingDelta { branch, delta_mw } => {
                 #[derive(Serialize)]
-                struct Wire<'a> {
+                struct Stated<'a> {
                     kind: &'static str,
                     branch: &'a ElementRef,
                     delta_mw: f64,
                 }
-                Wire {
+                Stated {
                     kind: "rating_delta",
                     branch,
                     delta_mw: *delta_mw,
@@ -189,11 +189,11 @@ impl Serialize for StudyEdit {
             }
             Self::SetFields { update } => {
                 #[derive(Serialize)]
-                struct Wire<'a> {
+                struct Stated<'a> {
                     kind: &'static str,
                     update: &'a ElementUpdate,
                 }
-                Wire {
+                Stated {
                     kind: "set_fields",
                     update,
                 }
@@ -217,39 +217,39 @@ impl<'de> Deserialize<'de> for StudyEdit {
         match kind {
             "demand_delta" => {
                 #[derive(Deserialize)]
-                struct Wire {
+                struct Stated {
                     bus: ElementRef,
                     p_mw: f64,
                     #[serde(default)]
                     q_mvar: Option<f64>,
                 }
-                let wire = serde_json::from_value::<Wire>(value).map_err(D::Error::custom)?;
+                let stated = serde_json::from_value::<Stated>(value).map_err(D::Error::custom)?;
                 Ok(Self::DemandDelta {
-                    bus: wire.bus,
-                    p_mw: wire.p_mw,
-                    q_mvar: wire.q_mvar,
+                    bus: stated.bus,
+                    p_mw: stated.p_mw,
+                    q_mvar: stated.q_mvar,
                 })
             }
             "rating_delta" => {
                 #[derive(Deserialize)]
-                struct Wire {
+                struct Stated {
                     branch: ElementRef,
                     delta_mw: f64,
                 }
-                let wire = serde_json::from_value::<Wire>(value).map_err(D::Error::custom)?;
+                let stated = serde_json::from_value::<Stated>(value).map_err(D::Error::custom)?;
                 Ok(Self::RatingDelta {
-                    branch: wire.branch,
-                    delta_mw: wire.delta_mw,
+                    branch: stated.branch,
+                    delta_mw: stated.delta_mw,
                 })
             }
             "set_fields" => {
                 #[derive(Deserialize)]
-                struct Wire {
+                struct Stated {
                     update: ElementUpdate,
                 }
-                let wire = serde_json::from_value::<Wire>(value).map_err(D::Error::custom)?;
+                let stated = serde_json::from_value::<Stated>(value).map_err(D::Error::custom)?;
                 Ok(Self::SetFields {
-                    update: wire.update,
+                    update: stated.update,
                 })
             }
             other => Ok(Self::Unknown {

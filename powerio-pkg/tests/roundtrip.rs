@@ -5,10 +5,10 @@ use std::collections::BTreeMap;
 use powerio_pkg::{
     Confidence, DiagnosticCode, DiagnosticSeverity, DiagnosticStage, ElementRef, ElementUpdate,
     MappingKind, ModelKind, MulticonductorToBalancedOptions, MulticonductorToBalancedReadiness,
-    NetworkPackage, OperatingPoint, OperatingPointSeries, Origin, PIO_PACKAGE_SCHEMA_VERSION,
-    READ_TRANSMISSION_PARSE_WARNING, SequenceTransformConvention, SourceDescriptor, SourceMapEntry,
-    SourceRef, StructuredDiagnostic, StudyBlock, StudyCommit, StudyEdit, TimeAxis,
-    ValidationStatus, check_multiconductor_to_balanced_lowering, ensure_payload_uids,
+    NetworkPackage, OperatingPoint, OperatingPointSeries, Origin, READ_TRANSMISSION_PARSE_WARNING,
+    SequenceTransformConvention, SourceDescriptor, SourceMapEntry, SourceRef, StructuredDiagnostic,
+    StudyBlock, StudyCommit, StudyEdit, TimeAxis, ValidationStatus,
+    check_multiconductor_to_balanced_lowering, ensure_payload_uids,
     lower_multiconductor_to_balanced,
 };
 
@@ -264,57 +264,71 @@ fn assert_json_roundtrips(pkg: &NetworkPackage) {
 }
 
 #[test]
-fn schema_version_is_present_and_required() {
+fn powerio_version_is_present_and_required() {
     let pkg = balanced_package();
-    assert_eq!(pkg.schema_version, PIO_PACKAGE_SCHEMA_VERSION);
+    assert_eq!(pkg.powerio_version, powerio::VERSION);
 
     // A document without the field is refused. Defaulting it to the current
-    // version would let a 0.1-era package skip the lineage gate by dropping
-    // the field: every payload difference between the two lineages would then
-    // arrive as a serde default, with no error and no warning.
+    // version would let a package from an older lineage skip the gate by
+    // dropping the field: every payload difference between the two lineages
+    // would then arrive as a serde default, with no error and no warning.
     let mut v = serde_json::to_value(&pkg).unwrap();
-    v.as_object_mut().unwrap().remove("schema_version");
+    v.as_object_mut().unwrap().remove("powerio_version");
     let err = NetworkPackage::from_json(&serde_json::to_string(&v).unwrap()).unwrap_err();
-    assert!(
-        err.to_string().contains("schema_version"),
-        "the error must name the missing field: {err}"
-    );
+    let msg = err.to_string();
+    assert!(msg.contains("before powerio 0.9.0"), "got: {msg}");
+    assert!(msg.contains("regenerate"), "got: {msg}");
 }
 
 #[test]
 fn version_gate_rejects_other_lineages_and_says_regenerate() {
     let pkg = balanced_package();
     let mut v = serde_json::to_value(&pkg).unwrap();
+    let (major, minor) = lineage(powerio::VERSION);
+    assert_eq!(major, 0, "update this test at 1.0.0");
 
-    // A file from the 0.1.x lineage (every release through 0.7.2) is rejected
-    // with an error naming the supported lineage and the remedy.
-    v["schema_version"] = serde_json::json!("0.1.1");
+    // A file from the previous minor is rejected with an error naming this
+    // build's lineage and the remedy. While the major is 0 a minor bump is
+    // incompatible, which is what cargo and Pkg already mean by 0.x.
+    v["powerio_version"] = serde_json::json!(format!("0.{}.1", minor - 1));
     let err = NetworkPackage::from_json(&serde_json::to_string(&v).unwrap()).unwrap_err();
     let msg = err.to_string();
-    assert!(
-        msg.contains("unsupported .pio.json schema_version 0.1.1"),
-        "got: {msg}"
-    );
-    assert!(msg.contains("0.2.x"), "got: {msg}");
+    assert!(msg.contains(&format!("0.{}.1", minor - 1)), "got: {msg}");
+    assert!(msg.contains(&format!("0.{minor}.x")), "got: {msg}");
     assert!(msg.contains("regenerate"), "got: {msg}");
 
     // Same lineage, additive patch: loads.
-    v["schema_version"] = serde_json::json!("0.2.3");
+    v["powerio_version"] = serde_json::json!(format!("0.{minor}.99"));
     NetworkPackage::from_json(&serde_json::to_string(&v).unwrap()).unwrap();
 
     // Later lineages and garbage: rejected.
-    for bad in ["0.3.0", "1.0.0", "not-semver"] {
-        v["schema_version"] = serde_json::json!(bad);
+    for bad in [
+        format!("0.{}.0", minor + 1),
+        "1.0.0".into(),
+        "not-semver".into(),
+    ] {
+        v["powerio_version"] = serde_json::json!(bad);
         NetworkPackage::from_json(&serde_json::to_string(&v).unwrap()).unwrap_err();
     }
 
-    // Fields this lineage removed are ignored as unknown, as any unknown top
+    // Fields an older lineage wrote are ignored as unknown, as any unknown top
     // level field from another producer is; the version gate is the only
     // arbiter.
-    v["schema_version"] = serde_json::json!(PIO_PACKAGE_SCHEMA_VERSION);
+    v["powerio_version"] = serde_json::json!(powerio::VERSION);
+    v["schema_version"] = serde_json::json!("0.2.1");
     v["payload_schema"] = serde_json::json!("https://powerio.dev/schema/pio-payload-balanced/1");
     v["payload_schema_version"] = serde_json::json!("1.1.0");
     NetworkPackage::from_json(&serde_json::to_string(&v).unwrap()).unwrap();
+}
+
+/// The `(major, minor)` of a semver string, for tests that must express a
+/// neighbouring lineage without hardcoding this release's number.
+fn lineage(version: &str) -> (u64, u64) {
+    let core = version.split(['-', '+']).next().unwrap();
+    let mut parts = core.split('.');
+    let major = parts.next().unwrap().parse().unwrap();
+    let minor = parts.next().unwrap().parse().unwrap();
+    (major, minor)
 }
 
 #[test]
@@ -1050,37 +1064,41 @@ fn unknown_future_fields_are_tolerated() {
 }
 
 #[test]
-fn future_same_lineage_schema_version_is_tolerated() {
+fn a_future_patch_of_this_lineage_is_tolerated() {
     // A newer patch in the reader's lineage with a field this reader does not
     // know: both are additive, so the document loads.
+    let (_, minor) = lineage(powerio::VERSION);
+    let future = format!("0.{minor}.99");
     let pkg = balanced_package();
     let mut v = serde_json::to_value(&pkg).unwrap();
     v.as_object_mut()
         .unwrap()
-        .insert("schema_version".to_owned(), serde_json::json!("0.2.9"));
+        .insert("powerio_version".to_owned(), serde_json::json!(future));
     v.as_object_mut()
         .unwrap()
         .insert("future_field".to_owned(), serde_json::json!({"x": 1}));
     let json = serde_json::to_string(&v).unwrap();
 
-    let back = NetworkPackage::from_json(&json).expect("same lineage schema version loads");
-    assert_eq!(back.schema_version, "0.2.9");
+    let back = NetworkPackage::from_json(&json).expect("same lineage patch loads");
+    assert_eq!(back.powerio_version, future);
     assert_eq!(back.model_kind(), ModelKind::Balanced);
 }
 
 #[test]
-fn same_lineage_prerelease_or_build_schema_version_is_tolerated() {
-    for version in ["0.2.0-rc.1", "0.2.0+build.5", "0.2.1-alpha.2+exp"] {
+fn a_prerelease_or_build_tag_of_this_lineage_is_tolerated() {
+    let (_, minor) = lineage(powerio::VERSION);
+    for suffix in ["-rc.1", "+build.5", "-alpha.2+exp"] {
+        let version = format!("0.{minor}.0{suffix}");
         let pkg = balanced_package();
         let mut v = serde_json::to_value(&pkg).unwrap();
         v.as_object_mut()
             .unwrap()
-            .insert("schema_version".to_owned(), serde_json::json!(version));
+            .insert("powerio_version".to_owned(), serde_json::json!(version));
         let json = serde_json::to_string(&v).unwrap();
 
         let back = NetworkPackage::from_json(&json)
             .unwrap_or_else(|e| panic!("same-lineage {version} should load: {e}"));
-        assert_eq!(back.schema_version, version);
+        assert_eq!(back.powerio_version, version);
     }
 }
 
@@ -1118,24 +1136,22 @@ fn normalized_solver_table_metadata_records_dense_identities() {
 }
 
 #[test]
-fn incompatible_schema_major_is_rejected() {
+fn an_incompatible_major_is_rejected() {
     let pkg = balanced_package();
     let mut v = serde_json::to_value(&pkg).unwrap();
     v.as_object_mut()
         .unwrap()
-        .insert("schema_version".to_owned(), serde_json::json!("1.0.0"));
+        .insert("powerio_version".to_owned(), serde_json::json!("1.0.0"));
     let json = serde_json::to_string(&v).unwrap();
 
     let err = NetworkPackage::from_json(&json).expect_err("major version mismatch must fail");
-    assert!(
-        err.to_string()
-            .contains("unsupported .pio.json schema_version 1.0.0"),
-        "{err}"
-    );
+    let msg = err.to_string();
+    assert!(msg.contains("`powerio_version` 1.0.0"), "{msg}");
+    assert!(msg.contains("regenerate"), "{msg}");
 }
 
 #[test]
-fn invalid_schema_version_is_rejected() {
+fn a_version_that_is_not_semver_is_rejected() {
     let pkg = balanced_package();
     for version in [
         "0",
@@ -1150,13 +1166,13 @@ fn invalid_schema_version_is_rejected() {
         let mut v = serde_json::to_value(&pkg).unwrap();
         v.as_object_mut()
             .unwrap()
-            .insert("schema_version".to_owned(), serde_json::json!(version));
+            .insert("powerio_version".to_owned(), serde_json::json!(version));
         let json = serde_json::to_string(&v).unwrap();
 
         let err = NetworkPackage::from_json(&json).expect_err("invalid semver must fail");
         assert!(
             err.to_string()
-                .contains(&format!("unsupported .pio.json schema_version {version}")),
+                .contains(&format!("`powerio_version` {version}")),
             "{err}"
         );
     }
@@ -1784,10 +1800,7 @@ fn package_synthesizes_row_identity() {
     assert_eq!(net.branches[0].uid.as_deref(), Some("branches:0"));
 
     let v = serde_json::to_value(&pkg).unwrap();
-    assert_eq!(
-        v["schema_version"],
-        serde_json::json!(PIO_PACKAGE_SCHEMA_VERSION)
-    );
+    assert_eq!(v["powerio_version"], serde_json::json!(powerio::VERSION));
     assert_eq!(
         v["model"]["balanced_network"]["buses"][0]["uid"],
         serde_json::json!("buses:0")

@@ -101,7 +101,7 @@ def test_parse_metadata(case9):
 def test_parse_scopf_uses_public_versioned_wire_document():
     instance = powerio.parse_scopf(SCOPF_SMALL.read_text())
     assert instance["schema"] == "powerio.scopf.julia"
-    assert instance["schema_version"] == "1.0.0"
+    assert instance["powerio_version"] == powerio.__version__
     assert instance["index_base"] == 1
     assert instance["instance"]["lengths"]["I"] == 2
     assert instance["instance"]["static"]["acl_branch"][0]["j_ln"] == 1
@@ -682,7 +682,7 @@ def _real_matrix_arrow_payload(matrix, table):
         "row_count": csr.shape[0],
         "row_index": row_index,
         "row_axis": "matrix_bus",
-        "schema_version": "1",
+        "powerio_version": powerio.__version__,
         "table": table,
         "value_bits": value_bits,
     }
@@ -716,7 +716,7 @@ def _ybus_arrow_payload(case):
         "row_count": g.shape[0],
         "row_index": row_index,
         "row_axis": "matrix_bus",
-        "schema_version": "1",
+        "powerio_version": powerio.__version__,
         "table": "ybus",
         "g_bits": g_bits,
         "b_bits": b_bits,
@@ -733,7 +733,7 @@ def _matrix_axis_payload(case):
             "index": list(range(case.n_buses)),
             "is_reference": [1 if bus["kind"] == "REF" else 0 for bus in case.buses],
             "row_axis": "matrix_bus",
-            "schema_version": "1",
+            "powerio_version": powerio.__version__,
             "source_row": list(range(case.n_buses)),
             "table": "matrix_bus",
         },
@@ -744,7 +744,7 @@ def _matrix_axis_payload(case):
             ],
             "index": list(range(len(inc.branch_of_col))),
             "row_axis": "matrix_branch",
-            "schema_version": "1",
+            "powerio_version": powerio.__version__,
             "source_row": [int(idx) for idx in inc.branch_of_col],
             "table": "matrix_branch",
             "to_bus_id": [

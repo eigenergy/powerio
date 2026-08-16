@@ -1874,7 +1874,7 @@ fn geo_report_dict<'py>(
     Ok(out)
 }
 
-/// Parse SCOPF source text and return the versioned wire document as JSON.
+/// Parse SCOPF source text and return its Julia compatibility document as JSON.
 #[pyfunction(signature = (text, from_ = "goc3-json"))]
 fn parse_scopf(text: &str, from_: &str) -> PyResult<String> {
     let instance =
@@ -1884,7 +1884,7 @@ fn parse_scopf(text: &str, from_: &str) -> PyResult<String> {
             }
             error => PowerIOParseError::new_err(error.to_string()),
         })?;
-    powerio_prob::scopf::wire::to_wire_json(&instance)
+    powerio_prob::scopf::json::to_json(&instance)
         .map_err(|error| PowerIOParseError::new_err(error.to_string()))
 }
 

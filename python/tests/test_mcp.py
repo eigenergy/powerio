@@ -61,7 +61,7 @@ def test_tool_surface_is_semantic():
 def test_summary_transmission_schema():
     s = server.summary(path=str(DATA / "case9.m"))
     assert s["schema"] == "powerio.summary"
-    assert s["schema_version"] == "0.1"
+    assert s["powerio_version"] == powerio.__version__
     assert s["domain"] == "transmission"
     assert s["model"] == "balanced"
     assert s["json_format"] == "powerio-json"
@@ -99,7 +99,7 @@ def test_distribution_aliases_route_to_core_parser():
 def test_parse_transmission_transport_round_trip(tmp_path):
     parsed = server.parse(path=str(DATA / "case9.m"))
     assert parsed["schema"] == "powerio.parse"
-    assert parsed["schema_version"] == "0.1"
+    assert parsed["powerio_version"] == powerio.__version__
     assert parsed["domain"] == "transmission"
     assert parsed["model"] == "balanced"
     assert parsed["source_format"] == "Matpower"
@@ -144,7 +144,7 @@ def test_package_transport_flows_through_summary_matrix_and_save(tmp_path):
     assert "package_json" in parsed
     package = json.loads(parsed["package_json"])
     # The reader accepts the 0.2 lineage; do not pin the patch version.
-    assert package["schema_version"].startswith("0.2.")
+    assert package["powerio_version"] == powerio.__version__
     assert package["model_kind"] == "balanced"
     assert package["model"]["kind"] == "balanced"
 
@@ -231,7 +231,7 @@ def test_normalize_rejects_distribution():
 def test_normalize_payload_has_schema_marker():
     norm = server.normalize(path=str(DATA / "case9.m"))
     assert norm["schema"] == "powerio.normalize"
-    assert norm["schema_version"] == "0.1"
+    assert norm["powerio_version"] == powerio.__version__
     assert norm["domain"] == "transmission"
     assert norm["model"] == "balanced"
 
@@ -265,7 +265,7 @@ def test_gridfm_routes_through_generic_verbs(tmp_path):
 def test_matrix_kinds_aliases_and_errors():
     m = server.matrix("b", path=str(DATA / "case9.m"))
     assert m["schema"] == "powerio.matrix"
-    assert m["schema_version"] == "0.1"
+    assert m["powerio_version"] == powerio.__version__
     assert m["domain"] == "transmission"
     assert m["model"] == "balanced"
     assert m["source_format"] == "Matpower"
@@ -409,7 +409,7 @@ def test_mcp_write_refuses_symlink_escape_from_allowed_root(monkeypatch, tmp_pat
 def test_display_decodes_powerworld_pwd():
     d = server.display(str(PWD))
     assert d["schema"] == "powerio.display"
-    assert d["schema_version"] == "0.1"
+    assert d["powerio_version"] == powerio.__version__
     assert d["domain"] == "display"
     assert d["model"] == "display"
     assert d["source_format"] == "powerworld-pwd"

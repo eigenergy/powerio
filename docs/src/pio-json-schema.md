@@ -42,20 +42,20 @@ the same operations as `pio_to_json` and `pio_from_json`.
 ABI v4 continues to accept `powerio-json` in `pio_parse_str` and
 `pio_to_format`. Those format tokens are compatibility aliases. Removing them requires a future C ABI version change.
 
-## Versioning: `pio-package/0.2` {#pio-package}
+## Versioning {#pio-package}
 
-One version number covers the whole document, model JSON included:
-`schema_version`, semver, currently `0.2.1`. A `.pio.json` file is a
-regenerable snapshot, so the reader's only versioning job is telling the caller
-when a file needs regenerating.
+Every document powerio authors states one number, `powerio_version`: the
+powerio release that wrote it. There is no separate schema number for the
+document, the payload, or the model JSON. A `.pio.json` file is a regenerable
+snapshot, so the reader's only versioning job is telling the caller when a file
+needs regenerating.
 
-- While the major is 0, an incompatible change to any field bumps the minor
-  (cargo 0.x semantics) and additive changes bump the patch. From 1.0.0 on,
-  incompatible changes bump the major.
-- A reader accepts its own lineage: the exact major.minor pair while the major
-  is 0, the major alone afterwards. Anything else is rejected with an error
-  naming the supported lineage and telling the caller to regenerate the
-  package from its source case.
+- A reader accepts its own lineage: the major and minor pair while the major is
+  0, the major alone afterwards. That is what cargo and Pkg already mean by a
+  0.x bump. Anything else is rejected with an error naming the release that
+  wrote the document and the release that must regenerate it.
+- A document that states no `powerio_version` came from 0.8.x or earlier. The
+  reader names that release rather than reporting a missing field.
 - A reader tolerates unknown top-level fields (they are ignored without
   error), so a same lineage document from a newer producer still loads.
 
@@ -68,7 +68,7 @@ documents. It does not define a standalone case format.
 
 | field | type | required | notes |
 |---|---|---|---|
-| `schema_version` | string (semver) | yes | document version; required on read; other lineages rejected |
+| `powerio_version` | string (semver) | yes | the powerio release that wrote the document; other lineages rejected |
 | `producer` | object | yes | `{tool, version, git_commit?, features[]}` |
 | `package_id` | string | no | stable content id, e.g. `"sha256:..."`; unset by the scaffold |
 | `created_at` | string (RFC 3339) | no | unset by default for deterministic output |
@@ -105,10 +105,10 @@ later families can be added).
 ## The Model JSON
 
 Each payload is what its Rust model serializes; changes to it are changes to
-the document and follow the `schema_version` rules above. The generated JSON
+the document and follow the `powerio_version` rules above. The generated JSON
 Schema is derived from the serde models and checked in CI against the committed
 `docs/schema/**/schema.json` files. The model's rustdoc is the field reference,
-and the balanced payload's wire form is additionally held to a committed
+and the balanced payload's serialized form is additionally held to a committed
 golden file by `powerio/tests/snapshot_schema.rs`.
 
 ### The balanced model JSON {#pio-payload-balanced}
@@ -272,7 +272,7 @@ bindings, or MCP operations.
 
 ```json
 {
-  "schema_version": "0.2.1",
+  "powerio_version": "0.9.0",
   "producer": { "tool": "powerio", "version": "0.8.0" },
   "model_kind": "multiconductor",
   "model": {

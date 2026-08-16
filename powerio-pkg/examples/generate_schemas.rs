@@ -24,13 +24,15 @@ mod generate {
             .nth(1)
             .map_or_else(|| PathBuf::from("docs/schema"), PathBuf::from);
 
-        // One published document per format lineage; it embeds every payload
+        // One published document per powerio lineage; it embeds every payload
         // type. The `$id` names the published location and is not written into
-        // `.pio.json` files.
+        // `.pio.json` files. The lineage is the same one the reader accepts, so
+        // the path moves when and only when a document stops loading.
+        let lineage = powerio::version::lineage_path();
         write_schema::<powerio_pkg::NetworkPackage>(
             &out,
-            "pio-package/0.2",
-            "https://powerio.dev/schema/pio-package/0.2",
+            &format!("pio-package/{lineage}"),
+            &format!("https://powerio.dev/schema/pio-package/{lineage}"),
         )?;
 
         Ok(())
