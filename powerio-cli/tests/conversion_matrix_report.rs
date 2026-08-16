@@ -722,7 +722,11 @@ const DISTRIBUTION_FORMATS: [DistributionFormat; 3] = [
 // voltage bound — drops them loudly. What remains on the BMOPF source row is
 // the genuine superset-to-subset loss: named terminals and generator cost,
 // which neither dss nor ENGINEERING states, and the bounds on the dss leg.
-const DISTRIBUTION_WARNING_BASELINE: [[usize; 3]; 3] = [[0, 140, 88], [20, 0, 15], [27, 57, 0]];
+// The PMD reader no longer copies an array vm_nom into the `kv` extra: the
+// typed voltage model carries those volts entry for entry, so the copy only
+// fed a token dss could not parse and BMOPF could only drop — −1 on both
+// cells of the PMD source row.
+const DISTRIBUTION_WARNING_BASELINE: [[usize; 3]; 3] = [[0, 140, 88], [20, 0, 15], [26, 56, 0]];
 
 const DISTRIBUTION_CASES: [(&str, &str, DistributionFormat); 7] = [
     (

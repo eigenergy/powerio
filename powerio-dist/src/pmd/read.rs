@@ -653,7 +653,12 @@ impl Reader<'_> {
                     "model",
                 ],
             );
-            if let Some(kv) = o.get("vm_nom") {
+            // A scalar vm_nom rides along as the dss-style kv hint so the
+            // original token replays verbatim. The array form restates the
+            // typed voltage model's v_nom entry for entry — the PMD writer
+            // falls back to v_nom for it, and the dss writer can only warn
+            // about a token it cannot parse — so it is not copied.
+            if let Some(kv) = o.get("vm_nom").filter(|v| !v.is_array()) {
                 extras.insert("kv".into(), kv.clone());
             }
             if let Some(model) = o.get("model").and_then(Value::as_str) {
