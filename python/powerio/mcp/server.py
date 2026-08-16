@@ -5,7 +5,7 @@ The advertised MCP surface is semantic and format neutral:
 ``convert``, ``save``, ``summary``, ``parse``, ``normalize``, ``matrix``,
 ``diagnostics``, ``display``.
 
-BalancedNetwork tools route balanced transmission models, multiconductor distribution
+The tools route balanced transmission models, multiconductor distribution
 models, PyPSA CSV folders, and gridfm datasets through the lower level powerio
 APIs. Transmission parses serialize through the ``powerio-json`` transport.
 Distribution parses serialize through canonical ``bmopf-json``. Package
@@ -240,6 +240,13 @@ def _json_object(text: str, *, purpose: str) -> Dict[str, Any]:
 
 
 def _package_value(text: str) -> Optional[Dict[str, Any]]:
+    """Recognize a `.pio.json` package by the same markers the Rust classifier uses.
+
+    Deliberately does not test `powerio_version`: a package written before
+    0.9.0 states none, and it has to be recognized before it can be rejected
+    with a message that says so. `powerio.Package.from_json` owns the version
+    gate.
+    """
     try:
         value = jsonlib.loads(text)
     except jsonlib.JSONDecodeError:
@@ -249,8 +256,7 @@ def _package_value(text: str) -> Optional[Dict[str, Any]]:
     model = value.get("model")
     if not isinstance(model, dict):
         return None
-    required = (_VERSION_KEY, "model_kind")
-    if not all(isinstance(value.get(key), str) for key in required):
+    if value.get("model_kind") not in ("balanced", "multiconductor"):
         return None
     if not isinstance(model.get("kind"), str):
         return None
@@ -297,8 +303,8 @@ def _format_from_json_class(
         return domain, format
     if status == "package":
         raise ValueError(
-            f"JSON{where} is a .pio.json package envelope, not a case; "
-            "pass it as `json_format=\"package\"` or read it as a package"
+            f"JSON{where} is a .pio.json package; pass it as "
+            "`json_format=\"package\"` or read it with the package tools"
         )
     if status == "ambiguous":
         raise ValueError(
@@ -335,6 +341,12 @@ def _transport_kind(text: str, json_format: Optional[str]) -> str:
     )
 
 
+def _header(schema: str) -> Dict[str, Any]:
+    """The two keys every tool response opens with: what it is, and which
+    powerio release wrote it."""
+    return {"schema": schema, _VERSION_KEY: powerio.__version__}
+
+
 def _severity_counts(diagnostics: list[Dict[str, Any]]) -> Dict[str, int]:
     counts = {key: 0 for key in ("fatal", "error", "warning", "info", "debug")}
     for item in diagnostics:
@@ -363,7 +375,7 @@ def _package_diagnostic_messages(value: Dict[str, Any]) -> list[str]:
 def _diagnostics_payload(package_json: str, verbose: bool = False) -> Dict[str, Any]:
     value = _json_object(package_json, purpose="package_json")
     if _package_value(package_json) is None:
-        raise ValueError("package_json is not a .pio.json package envelope")
+        raise ValueError("package_json is not a .pio.json package")
     kind = _package_model_kind(value)
     # Validate with the Rust package reader so schema version and payload
     # consistency checks stay in one place.
@@ -403,8 +415,7 @@ def _diagnostics_payload(package_json: str, verbose: bool = False) -> Dict[str, 
         ]
         text = f"{status}: " + ", ".join(parts)
     return {
-        "schema": "powerio.diagnostics",
-        _VERSION_KEY: powerio.__version__,
+        **_header("powerio.diagnostics"),
         "model_kind": kind,
         "summary": {
             "status": status,
@@ -418,15 +429,14 @@ def _diagnostics_payload(package_json: str, verbose: bool = False) -> Dict[str, 
 def _load_package(package_json: str) -> _Loaded:
     value = _json_object(package_json, purpose="package_json")
     if _package_value(package_json) is None:
-        raise ValueError("package_json is not a .pio.json package envelope")
+        raise ValueError("package_json is not a .pio.json package")
     kind = _package_model_kind(value)
     try:
         pkg = powerio.Package.from_json(package_json)
         if kind == "multiconductor":
-            net = pkg.as_multiconductor()
             return _Loaded(
                 "distribution",
-                net,
+                pkg.as_multiconductor(),
                 _package_diagnostic_messages(value),
                 "bmopf-json",
                 package_json=package_json,
@@ -464,7 +474,7 @@ def _package_json_from_input(
                     raise ValueError(f"cannot read input: {exc}") from exc
                 if not _looks_like_package_json(text):
                     if from_l in _PACKAGE_JSON_FORMATS:
-                        raise ValueError("input is not a .pio.json package envelope")
+                        raise ValueError("input is not a .pio.json package")
                 else:
                     powerio.Package.from_json(text)
                     return text
@@ -476,7 +486,7 @@ def _package_json_from_input(
             powerio.Package.from_json(text)
             return text
         if from_l in _PACKAGE_JSON_FORMATS:
-            raise ValueError("content is not a .pio.json package envelope")
+            raise ValueError("content is not a .pio.json package")
         return powerio.Package.from_str(text, from_format).to_json()
     except powerio.PowerIOError as exc:
         raise ValueError(f"parse failed: {exc}") from exc
@@ -638,8 +648,7 @@ def _load_any(
 def _transmission_summary(net: "powerio.BalancedNetwork") -> Dict[str, Any]:
     refs = net.reference_bus_indices()
     return {
-        "schema": "powerio.summary",
-        _VERSION_KEY: powerio.__version__,
+        **_header("powerio.summary"),
         "domain": "transmission",
         "model": "balanced",
         "name": net.name,
@@ -668,8 +677,7 @@ def _transmission_summary(net: "powerio.BalancedNetwork") -> Dict[str, Any]:
 
 def _distribution_summary(net: "dist.MulticonductorNetwork") -> Dict[str, Any]:
     return {
-        "schema": "powerio.summary",
-        _VERSION_KEY: powerio.__version__,
+        **_header("powerio.summary"),
         "domain": "distribution",
         "model": "multiconductor",
         "name": net.name,
@@ -856,7 +864,7 @@ def _save_impl(
             return dict(
                 loaded.network.write_gridfm(
                     out_path,
-                    int(opts.get("scenario", 0)),
+                    scenario=int(opts.get("scenario", 0)),
                     include_y_bus=bool(opts.get("include_y_bus", True)),
                     include_taps=bool(opts.get("include_taps", True)),
                     include_shifts=bool(opts.get("include_shifts", True)),
@@ -930,8 +938,7 @@ def _parse_impl(
         summary = _summary(loaded)
         diag = _diagnostics_payload(package_json, verbose=True)
         return {
-            "schema": "powerio.parse",
-            _VERSION_KEY: powerio.__version__,
+            **_header("powerio.parse"),
             "transport": "package",
             "domain": loaded.domain,
             "model": summary["model"],
@@ -952,8 +959,7 @@ def _parse_impl(
         text, warnings = loaded.network.to_json(), loaded.warnings
     summary = _summary(loaded)
     return {
-        "schema": "powerio.parse",
-        _VERSION_KEY: powerio.__version__,
+        **_header("powerio.parse"),
         "domain": loaded.domain,
         "model": summary["model"],
         "source_format": summary["source_format"],
@@ -985,8 +991,7 @@ def _normalize_impl(
     normalized = _Loaded("transmission", norm, list(norm.read_warnings), "powerio-json")
     summary = _summary(normalized)
     return {
-        "schema": "powerio.normalize",
-        _VERSION_KEY: powerio.__version__,
+        **_header("powerio.normalize"),
         "domain": "transmission",
         "model": "balanced",
         "source_format": summary["source_format"],
@@ -1044,8 +1049,7 @@ def _matrix_impl(
         raise ValueError(f"matrix build failed: {exc}") from exc
     coo = mat.tocoo()
     return {
-        "schema": "powerio.matrix",
-        _VERSION_KEY: powerio.__version__,
+        **_header("powerio.matrix"),
         "domain": "transmission",
         "model": "balanced",
         "source_format": net.source_format,
@@ -1075,8 +1079,7 @@ def _display_impl(path: str, from_format: Optional[str] = None) -> dict:
         raise ValueError(f"unsupported display format: {data.kind!r}")
     pwd = data.data
     return {
-        "schema": "powerio.display",
-        _VERSION_KEY: powerio.__version__,
+        **_header("powerio.display"),
         "domain": "display",
         "model": "display",
         "source_format": "powerworld-pwd",

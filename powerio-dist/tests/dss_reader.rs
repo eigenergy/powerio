@@ -673,6 +673,31 @@ fn series_and_non_ground_impedance_reactors_stay_untyped() {
     assert!(net.untyped.iter().all(|o| o.name != "rmod"));
 }
 
+/// A case whose include redirects to itself twice expands into a binary tree
+/// of the depth limit: bounded per branch, unbounded in total. The reader stops
+/// at the include budget and says so, rather than running until the process is
+/// killed. This is the confined file path, which is the reachable one.
+#[test]
+fn a_self_redirecting_case_file_returns() {
+    let dir = temp_case_dir("dss-include-bomb");
+    std::fs::write(dir.join("a.dss"), "Redirect a.dss\nRedirect a.dss\n").unwrap();
+    std::fs::write(dir.join("root.dss"), "New Circuit.bomb\nRedirect a.dss\n").unwrap();
+
+    let net = parse_dss_file(dir.join("root.dss")).expect("the parse returns");
+    assert!(
+        net.warnings.iter().any(|w| w.contains("include budget")),
+        "{:?}",
+        net.warnings
+    );
+    assert_eq!(
+        net.parse_diagnostics
+            .iter()
+            .filter(|d| d.code.as_str() == "READ.DSS.INCLUDE_BUDGET")
+            .count(),
+        1
+    );
+}
+
 #[test]
 fn regcontrol_warns_and_keeps_taps() {
     let net = parse("opendss/ieee13/IEEE13Nodeckt.dss");

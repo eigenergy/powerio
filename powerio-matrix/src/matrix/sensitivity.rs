@@ -774,13 +774,22 @@ fn dense_to_csr_with_drop(
     (CsMat::new((rows, cols), indptr, indices, data), dropped)
 }
 
-fn dense_inverse(a: &[f64], n: usize) -> Option<Vec<f64>> {
-    // The pivot floor tracks the matrix's own scale. A fixed 1e-12 is at once
-    // too strict for a legitimately small scaled matrix and far too loose for
-    // one whose entries run to 1e12.
+/// The smallest pivot a dense factorization of `a` accepts.
+///
+/// It tracks the matrix's own scale. A fixed 1e-12 is at once too strict for a
+/// legitimately small scaled matrix and far too loose for one whose entries run
+/// to 1e12. Accepting 1e-300 instead lets a square root divide a column by
+/// 1e-150 twice and return entries near 1e300 with no error, which is the shape
+/// a near disconnected island joined by one very high impedance branch takes,
+/// and which `check_reference_coverage` passes.
+#[allow(clippy::cast_precision_loss)]
+fn pivot_floor(a: &[f64], n: usize) -> f64 {
     let scale = a.iter().fold(0.0_f64, |m, v| m.max(v.abs()));
-    #[allow(clippy::cast_precision_loss)]
-    let floor = n as f64 * f64::EPSILON * scale;
+    n as f64 * f64::EPSILON * scale
+}
+
+fn dense_inverse(a: &[f64], n: usize) -> Option<Vec<f64>> {
+    let floor = pivot_floor(a, n);
     let mut a = a.to_vec();
     let mut inv = vec![0.0; n * n];
     for i in 0..n {
@@ -960,14 +969,8 @@ struct DenseCholesky {
 
 impl DenseCholesky {
     fn factor(a: &[f64], n: usize) -> Option<Self> {
-        // A pivot is accepted against the matrix's own scale. `s > 0.0` alone
-        // accepts 1e-300, whose square root divides the column by 1e-150 twice
-        // and returns entries near 1e300 with no error — the shape a near
-        // disconnected island joined by one very high impedance branch takes,
-        // which `check_reference_coverage` passes.
-        let scale = a.iter().fold(0.0_f64, |m, v| m.max(v.abs()));
-        #[allow(clippy::cast_precision_loss)]
-        let floor = n as f64 * f64::EPSILON * scale;
+        // `s > 0.0` alone would accept a pivot of 1e-300; see `pivot_floor`.
+        let floor = pivot_floor(a, n);
         let mut l = vec![0.0; n * n];
         for i in 0..n {
             for j in 0..=i {

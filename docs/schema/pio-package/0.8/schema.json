@@ -2036,7 +2036,7 @@
       "type": "object"
     },
     "GeoMeta": {
-      "description": "BalancedNetwork level coordinate metadata.",
+      "description": "Network level coordinate metadata.",
       "oneOf": [
         {
           "description": "x = longitude and y = latitude in decimal degrees. `None` means EPSG:4326.",
@@ -2129,7 +2129,7 @@
       "type": "object"
     },
     "GeoMeta2": {
-      "description": "BalancedNetwork level coordinate metadata.",
+      "description": "Network level coordinate metadata.",
       "oneOf": [
         {
           "description": "x = longitude and y = latitude in decimal degrees. `None` means EPSG:4326.",
@@ -2745,7 +2745,7 @@
       ]
     },
     "ModelPayload": {
-      "description": "The one IR payload a package carries, tagged by `kind` in JSON so the payload\nis self-describing in addition to the top-level `model_kind`.\n\nThe payload is the serde snapshot of the PowerIO Rust IR\n([`powerio::BalancedNetwork`] / [`powerio_dist::MulticonductorNetwork`]); changes to it are\ndocument changes under the package `schema_version`. See\n`docs/src/pio-json-schema.md`.",
+      "description": "The one IR payload a package carries, tagged by `kind` in JSON so the payload\nis self-describing in addition to the top-level `model_kind`.\n\nThe payload is the serde snapshot of the PowerIO Rust IR\n([`powerio::BalancedNetwork`] / [`powerio_dist::MulticonductorNetwork`]); changes to it are\ndocument changes under the package `powerio_version`. See\n`docs/src/pio-json-schema.md`.",
       "oneOf": [
         {
           "properties": {
@@ -4046,7 +4046,7 @@
       "type": "object"
     },
     "StudyBlock": {
-      "description": "Additive study block stored on a package envelope.",
+      "description": "Additive study block stored on a package.",
       "properties": {
         "app": {
           "additionalProperties": true,

@@ -20,13 +20,13 @@ def test_parse_file_counts_and_source_format():
     assert isinstance(case.warnings, list)
 
 
-def test_multiconductor_alias_and_distcase_removed():
+def test_multiconductor_is_the_only_model_name():
     case = dist.parse_file(FOURWIRE)
-    assert dist.MulticonductorNetwork is dist.DistNetwork
+    assert isinstance(case, dist.MulticonductorNetwork)
     assert "MulticonductorNetwork" in dist.__all__
     assert "DistCase" not in dist.__all__
+    assert not hasattr(dist, "DistNetwork")
     assert not hasattr(dist, "DistCase")
-    assert isinstance(case, dist.MulticonductorNetwork)
 
 
 def test_same_format_write_echoes_source():

@@ -131,7 +131,7 @@ map for source format fields the model does not name. The field reference is the
 the wire coordinate distribution model, in SI units with radian angles.
 [Compiler IR](compiler-ir.md) describes the model family. The field reference
 is the
-[`powerio_dist::MulticonductorNetwork` rustdoc](../powerio_dist/model/struct.DistNetwork.html).
+[`powerio_dist::MulticonductorNetwork` rustdoc](../powerio_dist/model/struct.MulticonductorNetwork.html).
 Do not extract this object as a distribution case file. Use `.pio.json` for
 PowerIO artifacts; when a receiving tool expects BMOPF, PMD JSON, or OpenDSS,
 write that case format through `powerio convert`.

@@ -44,9 +44,9 @@ pub enum CoordinateSpace {
 ```
 
 Balanced networks use `powerio::geo::{Location, CoordsKind, CoordinateSpace,
-GeoMeta, Canvas}` through `Network.geo` and `Bus.location`. Multiconductor
-networks use the matching `powerio_dist::geo` types through `DistNetwork.geo`
-and `DistBus.location`. A package serialization test keeps the two JSON shapes
+GeoMeta, Canvas}` through `BalancedNetwork.geo` and `Bus.location`.
+Multiconductor networks use the matching `powerio_dist::geo` types through
+`MulticonductorNetwork.geo` and `DistBus.location`. A package serialization test keeps the two JSON shapes
 identical. Branches carry optional polyline routing (`Branch.route`,
 `DistLine.route`) when a source provides intermediate geometry; endpoint only
 rendering derives from the bus locations.
@@ -156,7 +156,7 @@ Display files do not pass through `BalancedNetwork`, `Conversion`, or `.pio.json
 
 ## Distribution graph projection
 
-`DistNetwork::graph()` returns a bus and terminal graph without requiring
+`MulticonductorNetwork::graph()` returns a bus and terminal graph without requiring
 coordinates. Python exposes `dist_net.graph()`, and the C `dist` feature
 exposes `pio_dist_graph_json`. Graph topology and geographic placement remain
 separate data.

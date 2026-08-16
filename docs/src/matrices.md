@@ -116,9 +116,10 @@ cubic costs, HVDC, or storage. These losses are returned as warnings.
   `Matpower` reproduces MATPOWER's `makeBdc`:
   \\(b = 1/(x\tau)\\) for a transformer with tap ratio \\(\tau\\), plus `p_shift`.
 
-  `ReactanceOnly` (the 0.8 `PaperPure`) is the textbook \\(b = 1/x\\) with taps and shifts ignored. The
-  resulting \\(L\\) matches MATPOWER `Bp` under `Scheme::Xb` when phase shifts
-  are zero. It is deprecated in 0.9.0 and is removed in 1.0.0.
+  `ReactanceOnly` is the textbook \\(b = 1/x\\) with resistance, taps, and
+  shifts ignored. The resulting \\(L\\) matches MATPOWER `Bp` under
+  `Scheme::Xb` when phase shifts are zero. Reproducing a published result needs
+  it exactly as written, so it stays.
 
 ## Output
 

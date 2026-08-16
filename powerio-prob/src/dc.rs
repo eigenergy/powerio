@@ -223,6 +223,11 @@ pub fn build_dc_opf_instance(
     let n_buses = case.n();
     let base = case.per_unit_base();
     let (p_scale, b_scale) = options.units.power_scales(base);
+    let thermal = limits::ThermalLimits {
+        synthesize_unrated: options.synthesize_unrated_limits,
+        power_scale: p_scale,
+        admittance_scale: b_scale,
+    };
     let (q_scale, c_scale) = options.units.cost_scales(base);
 
     let mut bus_of_gen = Vec::new();
@@ -323,15 +328,7 @@ pub fn build_dc_opf_instance(
         to_bus.push(to);
         b.push(branch_b);
         shift.push(shift_rad);
-        // A synthesized bound is per unit power already, so the admittance
-        // multiplier is the one that puts it in the selected unit system.
-        if options.synthesize_unrated_limits && branch.rate_a <= 0.0 {
-            let window = limits::angle_window(amin, amax);
-            f_max
-                .push(branch.synthesize_rate_a(window, buses[from].vmax, buses[to].vmax) * b_scale);
-        } else {
-            f_max.push(branch.rate_a * p_scale);
-        }
+        f_max.push(thermal.of(branch, amin, amax, buses[from].vmax, buses[to].vmax));
         angle_min.push(amin);
         angle_max.push(amax);
         branch_rows.push(source_row);

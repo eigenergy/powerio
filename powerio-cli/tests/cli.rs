@@ -550,7 +550,7 @@ fn convert_exits_nonzero_on_an_include_refused_through_a_symbolic_link() {
 
 #[test]
 fn package_exits_nonzero_on_a_refused_include() {
-    // The package envelope carries the same `Error` finding convert fails on,
+    // The package carries the same `Error` finding convert fails on,
     // so the package subcommand has to fail with it too — otherwise a script
     // gating on the exit code accepts a package built from a truncated network.
     let tmp = tempfile::tempdir().unwrap();

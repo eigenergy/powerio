@@ -287,12 +287,8 @@ pub(crate) fn operating_points_drop_code(document: &powerio::SourceDocument) -> 
 }
 
 fn goc3_operating_points(document: &Goc3Document) -> crate::Result<Option<OperatingPointSeries>> {
-    let network = document
-        .network()
-        .map_err(|error| crate::Error::Payload(error.to_string()))?;
-    let time_series = document
-        .time_series_input()
-        .map_err(|error| crate::Error::Payload(error.to_string()))?;
+    let network = document.network()?;
+    let time_series = document.time_series_input()?;
     let Some(general) = time_series.get("general").and_then(Value::as_object) else {
         return Ok(None);
     };
@@ -320,11 +316,7 @@ fn goc3_operating_points(document: &Goc3Document) -> crate::Result<Option<Operat
     let duration_hours = intervals
         .map(|values| values.iter().filter_map(Value::as_f64).collect::<Vec<_>>())
         .unwrap_or_default();
-    let device_ts = uid_map(
-        document
-            .time_series_input_records("simple_dispatchable_device")
-            .map_err(|error| crate::Error::Payload(error.to_string()))?,
-    );
+    let device_ts = uid_map(document.time_series_input_records("simple_dispatchable_device")?);
 
     let mut points = (0..periods).map(OperatingPoint::new).collect::<Vec<_>>();
 
@@ -337,10 +329,7 @@ fn goc3_operating_points(document: &Goc3Document) -> crate::Result<Option<Operat
 
     add_goc3_device_updates(document, &device_ts, base_mva, &mut points)?;
     add_goc3_status_updates(document, "ac_line", "branches", 0, &mut points)?;
-    let line_count = document
-        .network_records("ac_line")
-        .map_err(|error| crate::Error::Payload(error.to_string()))?
-        .len();
+    let line_count = document.network_records("ac_line")?.len();
     add_goc3_status_updates(
         document,
         "two_winding_transformer",
@@ -367,10 +356,7 @@ fn add_goc3_device_updates(
     base_mva: f64,
     points: &mut [OperatingPoint],
 ) -> crate::Result<()> {
-    for device in document
-        .dispatchable_devices()
-        .map_err(|error| crate::Error::Payload(error.to_string()))?
-    {
+    for device in document.dispatchable_devices()? {
         let Some(uid) = device.uid else {
             continue;
         };
@@ -437,17 +423,11 @@ fn add_goc3_status_updates(
     row_offset: usize,
     points: &mut [OperatingPoint],
 ) -> crate::Result<()> {
-    let source_items = document
-        .network_records(source_section)
-        .map_err(|error| crate::Error::Payload(error.to_string()))?;
+    let source_items = document.network_records(source_section)?;
     if document.time_series_output().is_none() {
         return Ok(());
     }
-    let status_by_uid = uid_map(
-        document
-            .time_series_output_records(source_section)
-            .map_err(|error| crate::Error::Payload(error.to_string()))?,
-    );
+    let status_by_uid = uid_map(document.time_series_output_records(source_section)?);
     for (row, item) in source_items.iter().enumerate() {
         let Some(uid) = item.uid.as_ref() else {
             continue;
@@ -567,7 +547,11 @@ pub(crate) fn apply_operating_point_to_model(
         })
         .collect();
 
-    let updated = serde_json::from_value(value)?;
+    // As in `study.rs`: the operating point's `set_fields` values are the
+    // document's, inserted untyped, so a wrong type here is the caller's data
+    // rather than our serialization.
+    let updated =
+        serde_json::from_value(value).map_err(|error| crate::Error::Payload(error.to_string()))?;
     validate_update_fields_survived(&updated, &point.updates, &resolved_rows)?;
     Ok((updated, updated_paths))
 }

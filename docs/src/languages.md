@@ -28,7 +28,7 @@ Verb taxonomy:
 | Parse display path | `parse_display_file(path, from)` | `parse_display_file(path, from_=None)` | — | n/a |
 | Parse display bytes | `parse_display_bytes(bytes, format)` | `parse_display_bytes(data, format)` | — | n/a |
 | Parse IO | n/a | — | `parse_file(io, format)` | n/a |
-| JSON to Network | `Network::from_json` | `from_json` | `from_json` | `pio_parse_str` + `"powerio-json"` |
+| JSON to Network | `BalancedNetwork::from_json` | `from_json` | `from_json` | `pio_from_json` |
 | File conversion | `convert_file(path, to, from)` | `convert_file(path, to, from_=None)` | `convert_file(path, to; from=nothing)` | `pio_convert_file` |
 | Text conversion | `convert_str(text, to, format)` | `convert_str(text, to, format)` | `convert_str(text, to; from=format)` | `pio_convert_str` |
 | Parsed conversion | `net.to_format(to)` | `net.to_format(to)` | `to_format(net, to)` | `pio_to_format` |
@@ -120,11 +120,11 @@ the distribution C conversion helpers.
 
 | Concept | Rust | Python | Julia | C ABI |
 |---|---|---|---|---|
-| Parse path | `powerio_dist::parse_file(path, from)` | `dist.parse_file(path, from_=None)` | `parse_file(DistNetwork, path; from=nothing)` | `pio_dist_parse_file` |
-| Parse text | `powerio_dist::parse_str(text, format)` | `dist.parse_str(text, format)` | `parse_str(DistNetwork, text, format)` | `pio_dist_parse_str` |
-| File conversion | `powerio_dist::convert_file(path, to, from)` | `dist.convert_file(path, to, from_=None)` | `convert_file(DistNetwork, path, to; from=nothing)` | `pio_dist_convert_file(path, from, to, ...)` |
+| Parse path | `powerio_dist::parse_file(path, from)` | `dist.parse_file(path, from_=None)` | `parse_file(MulticonductorNetwork, path; from=nothing)` | `pio_dist_parse_file` |
+| Parse text | `powerio_dist::parse_str(text, format)` | `dist.parse_str(text, format)` | `parse_str(MulticonductorNetwork, text, format)` | `pio_dist_parse_str` |
+| File conversion | `powerio_dist::convert_file(path, to, from)` | `dist.convert_file(path, to, from_=None)` | `convert_file(MulticonductorNetwork, path, to; from=nothing)` | `pio_dist_convert_file(path, from, to, ...)` |
 | Target format type | `DistTargetFormat` (`FromStr`, `name()`) | format name strings | `MulticonductorNetwork` plus format strings | format name strings |
-| Text conversion | `powerio_dist::convert_str(text, to, format)` | `dist.convert_str(text, to, format)` | `convert_str(DistNetwork, text, to, format)` | `pio_dist_convert_str(text, from, to, ...)` |
+| Text conversion | `powerio_dist::convert_str(text, to, format)` | `dist.convert_str(text, to, format)` | `convert_str(MulticonductorNetwork, text, to, format)` | `pio_dist_convert_str(text, from, to, ...)` |
 | Parsed conversion | `net.to_format(to)` | `case.to_format(to)` | `to_format(net, to)` | `pio_dist_to_format` |
 | Parse warnings | `net.warnings` | `case.warnings` | `warnings(net)` | `pio_dist_warnings` |
 | Graph projection | `net.graph()` | `case.graph()` | — | `pio_dist_graph_json` |

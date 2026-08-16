@@ -363,14 +363,6 @@ pub struct BalancedNetwork {
     pub source: Option<Arc<String>>,
 }
 
-/// The 0.8 spelling of [`BalancedNetwork`], which did not say which of the two
-/// models it named.
-#[deprecated(
-    since = "0.9.0",
-    note = "renamed to `BalancedNetwork`, beside `MulticonductorNetwork`; removed in 1.0.0"
-)]
-pub type Network = BalancedNetwork;
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[non_exhaustive]
@@ -869,16 +861,7 @@ impl Branch {
     /// value cannot write NaN or a silent zero downstream. `row` only labels
     /// the error.
     pub fn series_admittance(&self, row: usize) -> Result<Option<(f64, f64)>> {
-        // The bound is on the impedance magnitude; `denom` is its square, and
-        // bounding that would refuse impedances the DC builders divide by.
-        if self.r.hypot(self.x) < crate::dc::MIN_DIVISIBLE_MAGNITUDE {
-            return Ok(None);
-        }
-        let denom = self.r * self.r + self.x * self.x;
-        if !denom.is_finite() {
-            return Err(Error::NonFiniteSusceptance { row });
-        }
-        Ok(Some((self.r / denom, -self.x / denom)))
+        series_admittance_of(self.r, self.x, row)
     }
 
     /// Apparent power bound, per unit, for a branch the source left unrated
@@ -887,7 +870,9 @@ impl Branch {
     /// and the two terminal voltage ceilings give the widest voltage phasor
     /// difference the branch can hold. The difference over `|Z|` bounds the
     /// current, and the larger ceiling turns the current into power. Returns
-    /// `0.0` for a zero impedance branch, which stays unlimited.
+    /// `0.0` for a zero impedance branch — one under
+    /// [`MIN_DIVISIBLE_MAGNITUDE`](crate::dc::MIN_DIVISIBLE_MAGNITUDE), the
+    /// bound the rest of the builders divide by — which stays unlimited.
     ///
     /// The caller supplies the window in radians, because
     /// [`angmin`](Self::angmin) and [`angmax`](Self::angmax) are degrees in
@@ -899,25 +884,16 @@ impl Branch {
     /// separation two terminals can have.
     #[must_use]
     pub fn synthesize_rate_a(&self, angle_window_rad: f64, fr_vmax: f64, to_vmax: f64) -> f64 {
+        // The same bound `series_admittance_of` divides by, so the two agree on
+        // which branch has no impedance to bound a current with.
         let zmag = self.r.hypot(self.x);
-        if zmag == 0.0 {
+        if zmag < crate::dc::MIN_DIVISIBLE_MAGNITUDE {
             return 0.0;
         }
         let window = angle_window_rad.abs().min(std::f64::consts::PI);
         let separation =
             (fr_vmax * fr_vmax + to_vmax * to_vmax - 2.0 * fr_vmax * to_vmax * window.cos()).sqrt();
         fr_vmax.max(to_vmax) * separation / zmag
-    }
-
-    /// The 0.8 spelling of [`Self::total_charging_b`]. Nothing about it was
-    /// legacy: it is the projection every MATPOWER shaped writer needs.
-    #[deprecated(
-        since = "0.9.0",
-        note = "renamed to `total_charging_b`; removed in 1.0.0"
-    )]
-    #[must_use]
-    pub fn legacy_total_charging_b(&self) -> f64 {
-        self.total_charging_b()
     }
 
     /// Total susceptance projection for MATPOWER shaped formats that only carry
@@ -948,6 +924,33 @@ impl Branch {
     pub fn has_angle_limits(&self) -> bool {
         self.angmin > -360.0 || self.angmax < 360.0
     }
+}
+
+/// The series admittance `(g, b)` of an impedance, guarded.
+///
+/// `None` is an impedance too small to divide by, under
+/// [`MIN_DIVISIBLE_MAGNITUDE`](crate::dc::MIN_DIVISIBLE_MAGNITUDE); the caller
+/// decides whether that is a skip or an error. The bound is on the impedance
+/// magnitude, not on `r² + x²`, which is its square: bounding the square would
+/// refuse impedances the DC builders divide by.
+///
+/// Y_bus takes `r` already zeroed under the XB scheme, so it passes its own
+/// pair rather than a branch's.
+///
+/// # Errors
+/// [`Error::NonFiniteSusceptance`] when `r`/`x` are NaN/Inf, so a bad value
+/// cannot write NaN or a silent zero downstream. NaN leaves `hypot` NaN, which
+/// is not below the bound, so it arrives at that check rather than reading as
+/// zero impedance. `row` only labels the error.
+pub fn series_admittance_of(r: f64, x: f64, row: usize) -> Result<Option<(f64, f64)>> {
+    if r.hypot(x) < crate::dc::MIN_DIVISIBLE_MAGNITUDE {
+        return Ok(None);
+    }
+    let denom = r * r + x * x;
+    if !denom.is_finite() {
+        return Err(Error::NonFiniteSusceptance { row });
+    }
+    Ok(Some((r / denom, -x / denom)))
 }
 
 /// A transmission switch. Closed switches are preserved as data; matrix builders

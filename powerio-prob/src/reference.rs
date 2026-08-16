@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use powerio::Result;
+use crate::Result;
 
 /// The reference (slack) buses of a problem instance, as dense bus indices in
 /// ascending order.
@@ -41,7 +41,7 @@ impl ReferenceBuses {
     pub fn single(&self) -> Result<usize> {
         match self.0.as_slice() {
             [bus] => Ok(*bus),
-            other => Err(powerio::Error::ReferenceBusCount { found: other.len() }),
+            other => Err(powerio::Error::ReferenceBusCount { found: other.len() }.into()),
         }
     }
 }

@@ -212,10 +212,12 @@ fn a_network_of_two_islands_grounds_a_bus_in_each() {
     );
     assert!(matches!(
         problem.reference_buses.single(),
-        Err(powerio::Error::ReferenceBusCount { found: 2 })
+        Err(powerio_prob::Error::Core(
+            powerio::Error::ReferenceBusCount { found: 2 }
+        ))
     ));
 
-    // The set keeps its wire form as a plain array of dense bus indices.
+    // The set serializes as a plain array of dense bus indices.
     let json = serde_json::to_value(&problem).expect("serialize");
     assert_eq!(json["reference_buses"], serde_json::json!([0, 2]));
 

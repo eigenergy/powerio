@@ -1,10 +1,9 @@
 //! DC OPF matrix forge: incidence, Laplacian, OPF instance, and the export
 //! bundle. Run against vendored MATPOWER cases.
 //!
-//! These cases pin `b = 1/x`, so they name `DcConvention::ReactanceOnly` until it
-//! is removed in 1.0.0. `SeriesImpedance` gives a different weight for any
-//! branch that carries resistance.
-#![allow(deprecated)]
+//! These cases pin `b = 1/x`, so they name `DcConvention::ReactanceOnly`.
+//! `SeriesImpedance` gives a different weight for any branch that carries
+//! resistance.
 
 use powerio_matrix::IndexedNetwork;
 use powerio_matrix::io::{read_mtx, write_sensitivity_mtx_with_options};
@@ -645,7 +644,7 @@ fn matpower_convention_tap_and_shift() {
 
     let view = IndexedNetwork::new(&case);
 
-    // PaperPure ignores tap and shift: b = 1/x, no phase injection.
+    // ReactanceOnly ignores tap and shift: b = 1/x, no phase injection.
     let pp = build_incidence(&view, DcConvention::ReactanceOnly, &BuildOptions::default()).unwrap();
     assert!((pp.b[0] - 1.0 / x).abs() < 1e-12);
     assert!(pp.p_shift.iter().all(|&v| v == 0.0));

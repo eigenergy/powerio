@@ -1,4 +1,7 @@
-Vendored for testing only; neither file ships in a released artifact.
+Vendored for testing only. `goc3_small.json` is powerio's own synthetic case.
+`goc3_14bus_20220707.json` is third party and carries no license to
+redistribute, so `powerio-prob/Cargo.toml` excludes it from the published
+crate; it exists in this repository and nowhere downstream.
 
 `goc3_small.json` is a synthetic case derived from the hand checked test data
 in PowerIO.jl.

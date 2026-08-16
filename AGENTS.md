@@ -19,7 +19,7 @@ graph views for any downstream solver. Feeds the GridFM ML pipeline.
 - **`powerio-dist`**: the multiconductor distribution model (`MulticonductorNetwork`)
   with OpenDSS `.dss`, PMD JSON, and BMOPF JSON converters. Deliberately does
   **not** depend on `powerio`.
-- **`powerio-pkg`**: the `.pio.json` document model (envelope, provenance,
+- **`powerio-pkg`**: the `.pio.json` document model (provenance,
   diagnostics, validation, operating points, study blocks, lowering). Depends
   on `powerio` and `powerio-dist`.
 - **`powerio-cli`**: the `powerio` binary: the clap CLI and the ratatui TUI
@@ -198,12 +198,12 @@ powerio-prob/                 # problem instances on powerio
 └── src/matrix/bundle.rs     # DC OPF bundle directory + manifest (feature = "matrix")
 
 powerio-dist/                 # multiconductor distribution model (no powerio dep)
-├── src/model.rs             # DistNetwork + element tables
+├── src/model.rs             # MulticonductorNetwork + element tables
 ├── src/dss/ pmd/ bmopf/     # per format readers/writers
 ├── src/convert.rs           # hub: parse/convert + structured diagnostics
 └── src/{graph,geo,diagnostics,error}.rs
 
-powerio-pkg/                  # .pio.json compiler package envelope
+powerio-pkg/                  # .pio.json compiler package
 ├── src/package.rs           # NetworkPackage, schema version, materialization
 ├── src/operating.rs         # replayable operating point overlays
 ├── src/lowering.rs          # multiconductor → balanced lowering

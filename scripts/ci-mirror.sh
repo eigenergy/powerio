@@ -14,6 +14,11 @@ run cargo fmt --all --check
 run ./scripts/ci-clippy.sh
 run ./scripts/capi-header-parity.sh
 
+# The build job documents the workspace under -D warnings, so a doc comment can
+# fail CI while every test passes. An intra-doc link from a public item to a
+# private one is the easy way to do it.
+RUSTDOCFLAGS="-D warnings" run cargo doc --workspace --no-deps
+
 run cargo test -p powerio -p powerio-matrix -p powerio-prob -p powerio-cli \
     -p powerio-capi -p powerio-dist -p powerio-pkg
 run cargo test -p powerio-prob --features matrix
@@ -45,9 +50,13 @@ run cargo run -q -p powerio-cli -- gridfm tests/data/case9.m -o "$smoke_dir/grid
 run env "$lib_path_var=target/release" "$smoke_dir/smoke_release" \
     tests/data/case9.m "$smoke_dir/gridfm/case9/raw"
 
-# The generated schema must already match what the example emits.
+# The generated schema must already match what the example emits. Checked with
+# `git status --porcelain`, which also sees the new directory a version bump
+# creates; a diff of tracked files would report nothing while it goes
+# uncommitted.
 run cargo run -q -p powerio-pkg --example generate_schemas --features schema -- docs/schema
-if ! git diff --quiet -- docs/schema; then
+if [ -n "$(git status --porcelain -- docs/schema)" ]; then
+  git status --porcelain -- docs/schema
   echo "error: docs/schema is stale; commit the regenerated files" >&2
   exit 1
 fi

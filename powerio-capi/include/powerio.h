@@ -252,7 +252,7 @@ typedef struct PioDistNetwork PioDistNetwork;
 #endif
 
 /**
- * Opaque parsed network handle. Carries the parsed [`Network`], the
+ * Opaque parsed network handle. Carries the parsed [`BalancedNetwork`], the
  * [`IndexCore`] derived from it once at parse time (so every indexed query
  * reuses the same bus-id map and per-bus aggregates instead of rebuilding
  * them), and the reader's fidelity warnings ([`pio_warnings`]).
@@ -313,8 +313,9 @@ char *pio_dist_capabilities_json(void);
  * [`PIO_ABI_VERSION`] does not cover these versions. A binding that
  * mirrors one of them must read it from here and refuse a library it does
  * not agree with. A key is `null` when the owning feature is not compiled
- * in. Keys are only added over time. `schema_version` is the version of
- * this document's own shape.
+ * in. Keys are only added over time. `powerio_version` covers every
+ * document powerio authors; `bmopf_schema` is the foreign schema this build
+ * speaks, whose version belongs to whoever owns it.
  */
 char *pio_schema_versions_json(void);
 
@@ -379,7 +380,7 @@ PioNetwork *pio_parse_str(const char *text, const char *format, char *errbuf, si
  *
  * - `transmission:<format>` (e.g. `transmission:powermodels-json`)
  * - `distribution:<format>` (e.g. `distribution:pmd-json`)
- * - `package` (a `.pio.json` envelope; read it with the package entry points)
+ * - `package` (a `.pio.json` package; read it with the package entry points)
  * - `ambiguous` (strong markers from both domains; pass an explicit format)
  * - `unknown` (no recognized marker, or not a JSON object)
  *
@@ -467,7 +468,7 @@ void pio_network_free(PioNetwork *net);
 /**
  * Normalize `net` into a NEW network handle: per unit, radians, out of service
  * filtered, source bus ids preserved, bus types canonicalized (see
- * `Network::to_normalized`). A value transform, not a serialization, hence
+ * `BalancedNetwork::to_normalized`). A value transform, not a serialization, hence
  * the verb, while the `to_*` family re-encodes unchanged data. The result is
  * independent of `net`; free both with [`pio_network_free`]. Every extractor
  * and serializer works on it unchanged (the handle is per unit, not MW).
@@ -755,7 +756,7 @@ char *pio_arrow_catalog_json(char *errbuf, size_t errlen);
 #if defined(PIO_PKG)
 /**
  * Parse a `.pio.json` package file into an opaque package handle. This reads
- * only the package envelope; case format names still enter through
+ * only the package; case format names still enter through
  * [`pio_parse_file`] / [`pio_dist_parse_file`] and package constructors.
  * Returns `NULL` on error and writes the message into `errbuf`. Free the handle
  * with [`pio_package_free`].
@@ -1003,7 +1004,7 @@ PioScopfInstance *pio_scopf_parse_str(const char *text,
 
 #if defined(PIO_PROB)
 /**
- * Serialize a SCOPF instance using the versioned wire schema. The JSON records
+ * Serialize a SCOPF instance as its Julia compatibility document. The JSON records
  * its schema version and index base. Free the returned string with
  * `pio_string_free`. Returns `NULL` for a null handle or serialization error.
  */

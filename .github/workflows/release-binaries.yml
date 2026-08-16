@@ -133,6 +133,25 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           key: ${{ matrix.rust_target }}
+      # The tarballs and the draft release are named for the tag, and PowerIO.jl
+      # pins them by it. A tag pushed without the workspace version bump would
+      # ship a library that calls itself the previous version, stamps it into
+      # every document it writes, and serves its schema under the previous
+      # lineage. crates.yml catches the mismatch, but only after a human has
+      # published the release.
+      - name: Check the tag against the workspace version
+        if: github.ref_type == 'tag'
+        shell: bash
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          pkgid="$(cargo pkgid -p powerio)"
+          version="${pkgid##*#}"
+          version="${version##*@}"
+          if [ "v$version" != "$TAG" ]; then
+            echo "tag $TAG does not match workspace version $version; bump Cargo.toml" >&2
+            exit 1
+          fi
       - name: Install cross linker
         if: matrix.cross_gcc != ''
         run: |

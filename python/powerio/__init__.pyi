@@ -3,8 +3,7 @@ from typing import Any, Dict, List, Literal, NamedTuple, Optional, Tuple, TypedD
 __version__: str
 
 Scheme = Literal["bx", "xb"]
-# "paper" is accepted until 1.0.0.
-Convention = Literal["series", "matpower", "paper"]
+Convention = Literal["series", "matpower", "reactance-only"]
 SensitivitySolver = Literal["auto", "dense", "iterative"]
 Units = Literal["perunit", "native"]
 GridfmOutputs = Dict[str, Any]
@@ -61,15 +60,38 @@ class Branch(TypedDict):
     r: float
     x: float
     b: float
+    g_fr: float
+    b_fr: float
+    g_to: float
+    b_to: float
     rate_a: float
     rate_b: float
     rate_c: float
     rating_sets: List[BranchRatingSet]
+    c_rating_a: Optional[float]
+    c_rating_b: Optional[float]
+    c_rating_c: Optional[float]
     tap: float
     shift: float
     in_service: bool
     angmin: float
     angmax: float
+    pf: Optional[float]
+    qf: Optional[float]
+    pt: Optional[float]
+    qt: Optional[float]
+    uid: Optional[str]
+
+class Switch(TypedDict):
+    from_id: int
+    to_id: int
+    closed: bool
+    thermal_rating: Optional[float]
+    current_rating: Optional[float]
+    pf: Optional[float]
+    qf: Optional[float]
+    pt: Optional[float]
+    qt: Optional[float]
     uid: Optional[str]
 
 class Gen(TypedDict):
@@ -161,7 +183,7 @@ class DenseNetwork(NamedTuple):
 
 class BalancedNetwork:
     # Data attributes and the non-matrix methods delegate to the compiled
-    # `_powerio.PyNetwork` handle at runtime via `BalancedNetwork.__getattr__`.
+    # `_powerio._BalancedNetwork` handle at runtime via `BalancedNetwork.__getattr__`.
     name: str
     base_mva: float
     source_format: Literal[
@@ -193,6 +215,7 @@ class BalancedNetwork:
     loads: List[Load]
     shunts: List[Shunt]
     branches: List[Branch]
+    switches: List[Switch]
     generators: List[Gen]
     def reference_bus_index(self) -> int: ...
     def reference_bus_indices(self) -> List[int]: ...
@@ -222,12 +245,12 @@ class BalancedNetwork:
     def to_dense(self) -> DenseNetwork: ...
     def bprime(self, scheme: Scheme = ...) -> Any: ...
     def bdoubleprime(self, scheme: Scheme = ...) -> Any: ...
-    def lacpf(self, include_taps: bool = ..., include_shifts: bool = ...) -> Any: ...
+    def lacpf(self, *, include_taps: bool = ..., include_shifts: bool = ...) -> Any: ...
     def adjacency(self) -> Any: ...
     def ybus_parts(
-        self, include_taps: bool = ..., include_shifts: bool = ...
+        self, *, include_taps: bool = ..., include_shifts: bool = ...
     ) -> YbusParts: ...
-    def ybus(self, include_taps: bool = ..., include_shifts: bool = ...) -> Any: ...
+    def ybus(self, *, include_taps: bool = ..., include_shifts: bool = ...) -> Any: ...
     def ptdf(self, convention: Convention = ..., solver: SensitivitySolver = ...) -> Any: ...
     def lodf(self, convention: Convention = ..., solver: SensitivitySolver = ...) -> Any: ...
     def weighted_laplacian(self, convention: Convention = ...) -> Any: ...
@@ -235,6 +258,7 @@ class BalancedNetwork:
     def write_gridfm(
         self,
         out_dir: Any,
+        *,
         scenario: int = ...,
         include_y_bus: bool = ...,
         include_taps: bool = ...,
@@ -247,6 +271,7 @@ class BalancedNetwork:
     def to_normalized(self) -> "BalancedNetwork": ...
     def to_normalized_with_options(
         self,
+        *,
         clamp_angle_bounds: bool = ...,
         angle_bound_pad: Optional[float] = ...,
     ) -> "BalancedNetwork": ...
@@ -322,14 +347,17 @@ class Package:
         cls, network: BalancedNetwork, include_solver_metadata: bool = ...
     ) -> Package: ...
     @classmethod
-    def from_multiconductor(cls, network: Any) -> Package: ...
+    def from_multiconductor(cls, network: dist.MulticonductorNetwork) -> Package: ...
     @property
     def model_kind(self) -> Literal["balanced", "multiconductor", "unknown"]: ...
     def to_json(self) -> str: ...
     def as_balanced(self) -> BalancedNetwork: ...
-    def as_multiconductor(self) -> Any: ...
+    def as_multiconductor(self) -> dist.MulticonductorNetwork: ...
     def operating_points(self) -> Optional[Dict[str, Any]]: ...
+    def set_operating_points(self, points: Optional[Dict[str, Any]]) -> None: ...
+    def study(self) -> Optional[Dict[str, Any]]: ...
     def materialize_operating_point(self, index: int) -> Package: ...
+    def materialize_study_commit(self, index: int) -> Package: ...
     def validate(self) -> None: ...
     def validation(self) -> Dict[str, Any]: ...
     def diagnostics(self) -> List[Dict[str, Any]]: ...
@@ -341,6 +369,7 @@ class Package:
 def write_gridfm_batch(
     networks: List[BalancedNetwork],
     out_dir: Any,
+    *,
     base_scenario: int = ...,
     include_y_bus: bool = ...,
     include_taps: bool = ...,

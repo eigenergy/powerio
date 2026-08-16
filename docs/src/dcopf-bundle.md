@@ -33,8 +33,9 @@ Market files and `dcopf_meta.json`.
   the coefficient in \\(f = b_e(\theta_f - \theta_t)\\). `SeriesImpedance` by
   default: \\(b_e = x/(r^2 + x^2)\\) plus the phase shift injection `p_shift`,
   with no tap scaling. `Matpower` uses \\(b_e = 1/(x \tau)\\) plus `p_shift`.
-  `ReactanceOnly` (\\(b_e = 1/x\\), taps and shifts ignored) is deprecated in 0.9.0
-  and is removed in 1.0.0. Recorded in the manifest.
+  `ReactanceOnly` (\\(b_e = 1/x\\), taps and shifts ignored) stays: it is the
+  textbook DC linearization, and reproducing a published result needs it exactly
+  as written. Recorded in the manifest.
 
 ## Matrices
 

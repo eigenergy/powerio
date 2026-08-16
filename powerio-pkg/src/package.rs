@@ -484,7 +484,7 @@ impl NetworkPackage {
         let had_normalized_solver_tables = self.derived.normalized_solver_tables.is_some();
         let options = materialize_operating_point_options(index);
         // Built field by field rather than cloned: cloning would deep copy the
-        // whole payload only to overwrite it, and a future envelope field must
+        // whole payload only to overwrite it, and a future top level field must
         // make an explicit carry-or-clear decision here instead of silently
         // riding along stale.
         let mut package = Self {
@@ -681,11 +681,11 @@ impl NetworkPackage {
     pub fn from_json(text: &str) -> crate::Result<Self> {
         // Tolerate a leading UTF-8 byte order mark, as the format readers do.
         // Name the format in the error: a document the JSON classifier calls a
-        // package envelope (right `model_kind` and `model` markers) can still
+        // package (right `model_kind` and `model` markers) can still
         // fail here on a missing required field, and the bare serde message
         // ("missing field `producer`") does not say what it failed to be.
         let pkg: Self =
-            serde_json::from_str(text.trim_start_matches('\u{feff}')).map_err(Error::Envelope)?;
+            serde_json::from_str(text.trim_start_matches('\u{feff}')).map_err(Error::Malformed)?;
         if !powerio::version::supports(&pkg.powerio_version) {
             return Err(Error::UnsupportedVersion(powerio::version::reject(
                 ".pio.json",
@@ -696,19 +696,6 @@ impl NetworkPackage {
             return Err(Error::ModelKindMismatch);
         }
         Ok(pkg)
-    }
-
-    /// Whether this reader accepts the document's `powerio_version`.
-    ///
-    /// The `.pio.json` compatibility rule: unknown top level fields from a
-    /// newer producer are ignored, versions in the reader's lineage load, and
-    /// anything else is rejected before payload use.
-    #[deprecated(
-        since = "0.9.0",
-        note = "use `powerio::version::supports`, which every powerio authored document shares; removed in 1.0.0"
-    )]
-    pub fn supports_schema_version(version: &str) -> bool {
-        powerio::version::supports(version)
     }
 
     #[must_use]
@@ -2301,8 +2288,8 @@ mod tests {
     }
 
     #[test]
-    fn envelope_shaped_rejection_names_the_format() {
-        // Classifier-recognized envelope markers with a missing required
+    fn package_shaped_rejection_names_the_format() {
+        // Classifier-recognized package markers with a missing required
         // field: the failure must say what the document failed to be.
         let err = super::NetworkPackage::from_json(
             r#"{"model_kind":"balanced","model":{"kind":"balanced"}}"#,

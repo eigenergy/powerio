@@ -39,7 +39,9 @@ pub enum Error {
     #[error("branch row {row} has non-finite DC susceptance b = 1/x (x is NaN, Inf, or denormal)")]
     NonFiniteSusceptance { row: usize },
 
-    #[error("branch row {row} has a tap ratio of {tap} that Y_bus cannot divide by")]
+    // Raised from incidence assembly and both OPF builders too, not only from
+    // Y_bus, so the message names the division rather than one caller.
+    #[error("branch row {row} has a tap ratio of {tap} too small to divide by")]
     DegenerateTap { row: usize, tap: f64 },
 
     #[error("generator {gen_index} has no cost data")]

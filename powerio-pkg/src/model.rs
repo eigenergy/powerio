@@ -28,11 +28,12 @@ pub enum ModelKind {
 ///
 /// The payload is the serde snapshot of the PowerIO Rust IR
 /// ([`powerio::BalancedNetwork`] / [`powerio_dist::MulticonductorNetwork`]); changes to it are
-/// document changes under the package `schema_version`. See
+/// document changes under the package `powerio_version`. See
 /// `docs/src/pio-json-schema.md`.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(tag = "kind", rename_all = "snake_case")]
+#[non_exhaustive]
 pub enum ModelPayload {
     Balanced {
         balanced_network: Box<BalancedNetwork>,

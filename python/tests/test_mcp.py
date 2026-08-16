@@ -195,6 +195,19 @@ def test_package_diagnostics():
     verbose = server.diagnostics(parsed["package_json"], verbose=True)
     assert verbose["diagnostics"] == json.loads(parsed["package_json"]).get("diagnostics", [])
 
+
+def test_pre_0_9_package_is_recognized_and_rejected_by_version():
+    """A package written before 0.9.0 states `schema_version`, so it has to be
+    recognized as a package before the version gate can name the problem."""
+    parsed = server.parse(path=str(DATA / "case9.m"), transport="package")
+    old = parsed["package_json"].replace('"powerio_version"', '"schema_version"', 1)
+    assert server._looks_like_package_json(old)
+    with pytest.raises(ValueError) as excinfo:
+        server.diagnostics(old)
+    message = str(excinfo.value)
+    assert "powerio_version" in message
+    assert "0.9.0" in message
+
 def test_minimal_bmopf_json_routes_without_format(tmp_path):
     parsed = server.parse(content=MINIMAL_BMOPF)
     assert parsed["domain"] == "distribution"

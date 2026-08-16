@@ -1,4 +1,4 @@
-//! BalancedNetwork operations: deriving or rewriting a [`BalancedNetwork`].
+//! Model operations: deriving or rewriting a [`BalancedNetwork`].
 //!
 //! These are model-level transforms, distinct from the format readers/writers and
 //! from the per unit [`to_normalized`](BalancedNetwork::to_normalized) form.

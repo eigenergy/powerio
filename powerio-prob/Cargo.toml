@@ -11,6 +11,10 @@ homepage.workspace = true
 documentation = "https://docs.rs/powerio-prob"
 keywords = ["power-systems", "optimization", "opf", "operations-research"]
 categories = ["science", "mathematics"]
+# GOCompetition publishes C3DataUtilities without a LICENSE file, so there is no
+# grant to redistribute its validation data. The fixture stays for local tests
+# and out of the published crate.
+exclude = ["tests/data/goc3_14bus_20220707.json"]
 
 [package.metadata.docs.rs]
 all-features = true

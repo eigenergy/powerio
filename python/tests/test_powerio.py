@@ -115,11 +115,11 @@ def test_parse_scopf_rejects_bad_input_and_unknown_format():
         powerio.parse_scopf(SCOPF_SMALL.read_text(), from_="matpower")
 
 
-def test_public_type_is_network(case9):
-    assert isinstance(case9, powerio.Network)
-    assert powerio.BalancedNetwork is powerio.Network
+def test_public_type_is_balanced_network(case9):
+    assert isinstance(case9, powerio.BalancedNetwork)
     assert "BalancedNetwork" in powerio.__all__
     assert not hasattr(powerio, "Case")
+    assert not hasattr(powerio, "Network")
     assert repr(case9).startswith("BalancedNetwork(")
 
 
@@ -411,7 +411,9 @@ def test_to_normalized_with_options_clamps_angle_bounds():
     )
 
     with pytest.raises(powerio.PowerIODataError):
-        case.to_normalized_with_options(True, math.pi / 2.0)
+        case.to_normalized_with_options(
+            clamp_angle_bounds=True, angle_bound_pad=math.pi / 2.0
+        )
 
 
 def test_parse_bad_path_raises():
@@ -574,11 +576,11 @@ def test_bprime_is_singular_laplacian(name):
 
 def test_bprime_xb_equals_weighted_laplacian(case9):
     # Exact cross-check across two boundary paths: Bp in the XB scheme is the
-    # paper-convention weighted Laplacian (b = 1/x). Catches a shared bug in
+    # reactance-only weighted Laplacian (b = 1/x). Catches a shared bug in
     # the COO conversion that the symmetric self-check can't.
     assert np.allclose(
         case9.bprime("xb").toarray(),
-        case9.weighted_laplacian("paper").toarray(),
+        case9.weighted_laplacian("reactance-only").toarray(),
     )
 
 
@@ -906,9 +908,15 @@ def test_from_ppc_names_the_table_and_row_for_malformed_input(case9):
 
 
 def test_convention_aliases(case9):
-    # Documented aliases all parse; separator/case-insensitive.
-    for conv in ["paper", "paper-pure", "PURE", "matpower", "mp"]:
+    # Documented spellings all parse; separator/case-insensitive.
+    for conv in ["reactance-only", "REACTANCE_ONLY", "series", "matpower", "mp"]:
         assert sp.issparse(case9.ptdf(conv))
+    # 0.8's default spelling. The nearest-looking survivor, "series", is a
+    # different formula, so the error has to name the successor or a caller
+    # who guesses gets numbers instead of a failure.
+    for old in ["paper-pure", "paper", "PAPER_PURE"]:
+        with pytest.raises(ValueError, match="reactance-only"):
+            case9.ptdf(old)
     for scheme in ["bx", "XB"]:
         assert sp.issparse(case9.bprime(scheme))
 
@@ -1237,7 +1245,7 @@ def test_read_gridfm_round_trips(case9, tmp_path):
     # runnable (serializes to MATPOWER and re-parses).
     out = case9.write_gridfm(str(tmp_path))
     r = powerio.read_gridfm(out["dir"])
-    assert isinstance(r.network, powerio.Network)
+    assert isinstance(r.network, powerio.BalancedNetwork)
     assert r.scenario == 0
     assert r.warnings and all(isinstance(w, str) for w in r.warnings)
     net = r.network
@@ -1258,7 +1266,7 @@ def test_read_gridfm_is_unpackable(case9, tmp_path):
     # GridfmRead is a namedtuple: tuple-unpack and attribute access both work.
     out = case9.write_gridfm(str(tmp_path))
     net, scenario, warnings = powerio.read_gridfm(out["dir"])
-    assert isinstance(net, powerio.Network)
+    assert isinstance(net, powerio.BalancedNetwork)
     assert scenario == 0
     assert isinstance(warnings, list)
 
@@ -1272,7 +1280,7 @@ def test_read_gridfm_scenarios_round_trips_each(tmp_path):
     reads = powerio.read_gridfm_scenarios(out["dir"])
     assert [r.scenario for r in reads] == [0, 1]
     for r in reads:
-        assert isinstance(r.network, powerio.Network)
+        assert isinstance(r.network, powerio.BalancedNetwork)
         assert r.network.n_buses == case.n_buses
 
 

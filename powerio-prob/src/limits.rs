@@ -1,8 +1,9 @@
-//! The branch angle window the synthesized thermal limit reads.
+//! The thermal limit an OPF instance carries for one branch.
 //!
 //! Both OPF builders synthesize a bound for an unrated branch from
-//! [`Branch::synthesize_rate_a`](powerio::Branch::synthesize_rate_a), and both
-//! read the window out of the same two fields, so the rule lives here once.
+//! [`Branch::synthesize_rate_a`](powerio::Branch::synthesize_rate_a), read the
+//! window out of the same two fields, and apply the same unrated test, so the
+//! rule lives here once.
 
 /// The widest angle difference a branch may hold, in radians, from its
 /// converted `angmin`/`angmax` pair.
@@ -18,6 +19,43 @@ pub(crate) fn angle_window(angle_min_rad: f64, angle_max_rad: f64) -> f64 {
         return std::f64::consts::PI;
     }
     angle_min_rad.abs().max(angle_max_rad.abs())
+}
+
+/// The rule an OPF builder applies to every branch's thermal bound.
+///
+/// The three fields are settled once per instance, so a builder holds one of
+/// these across its branch loop.
+pub(crate) struct ThermalLimits {
+    /// Whether a branch the source left unrated gets a synthesized bound.
+    pub synthesize_unrated: bool,
+    /// Multiplier that puts a stated `rate_a` in the selected unit system.
+    pub power_scale: f64,
+    /// Multiplier that puts an admittance in the selected unit system.
+    pub admittance_scale: f64,
+}
+
+impl ThermalLimits {
+    /// The bound for one branch.
+    ///
+    /// A branch the source left unrated (`rate_a == 0`, which reads as
+    /// unlimited) gets a synthesized bound. That bound is per unit power
+    /// already, so it takes `admittance_scale` where a stated `rate_a` takes
+    /// `power_scale`.
+    pub(crate) fn of(
+        &self,
+        branch: &powerio::Branch,
+        angle_min_rad: f64,
+        angle_max_rad: f64,
+        vmax_from: f64,
+        vmax_to: f64,
+    ) -> f64 {
+        if self.synthesize_unrated && branch.rate_a <= 0.0 {
+            let window = angle_window(angle_min_rad, angle_max_rad);
+            branch.synthesize_rate_a(window, vmax_from, vmax_to) * self.admittance_scale
+        } else {
+            branch.rate_a * self.power_scale
+        }
+    }
 }
 
 #[cfg(test)]
