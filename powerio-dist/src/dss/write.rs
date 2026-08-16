@@ -1,4 +1,4 @@
-//! [`DistNetwork`] into OpenDSS `.dss` text.
+//! [`MulticonductorNetwork`] into OpenDSS `.dss` text.
 //!
 //! The canonical writer regenerates a solvable case from the typed model:
 //! a `Clear`/`Set DefaultBaseFrequency` header, the circuit with its
@@ -19,8 +19,8 @@ use std::fmt::Write as _;
 use crate::convert::{Conversion, ConversionSidecar};
 use crate::model::{
     ActivePowerReference, Configuration, ControlVoltageReference, DistBus, DistControlProfile,
-    DistIbr, DistLoad, DistLoadVoltageModel, DistNetwork, DistTransformer, Extras, IbrPrimeMover,
-    IbrTopology, IbrVoltageAggregation, Mat, ReactivePowerReference, VoltVarControl,
+    DistIbr, DistLoad, DistLoadVoltageModel, DistTransformer, Extras, IbrPrimeMover, IbrTopology,
+    IbrVoltageAggregation, Mat, MulticonductorNetwork, ReactivePowerReference, VoltVarControl,
     VoltWattControl, Winding, WindingConn,
 };
 
@@ -66,12 +66,15 @@ impl Default for DssLoadVoltageBounds {
 }
 
 /// Writes canonical `.dss` text from the model.
-pub fn write_dss(net: &DistNetwork) -> Conversion {
+pub fn write_dss(net: &MulticonductorNetwork) -> Conversion {
     write_dss_with_options(net, &DssWriteOptions::default())
 }
 
 /// Writes canonical `.dss` text from the model with explicit options.
-pub fn write_dss_with_options(net: &DistNetwork, options: &DssWriteOptions) -> Conversion {
+pub fn write_dss_with_options(
+    net: &MulticonductorNetwork,
+    options: &DssWriteOptions,
+) -> Conversion {
     let mut w = DssWriter {
         out: String::new(),
         sidecars: Vec::new(),
@@ -133,7 +136,7 @@ struct ElementKv<'a> {
 /// point of the sqrt round trip and `Set VoltageBases` would drift one ulp
 /// per write. Transformer ratios use `(v_ref / 1e3) * 1e3`, the value a
 /// reparse of the emitted `kvs=` rebuilds, for the same reason.
-fn estimate_bus_kv(net: &DistNetwork) -> BTreeMap<String, f64> {
+fn estimate_bus_kv(net: &MulticonductorNetwork) -> BTreeMap<String, f64> {
     let mut kv: BTreeMap<String, f64> = BTreeMap::new();
     for vs in &net.sources {
         let phases = source_phases(net, vs);
@@ -415,7 +418,7 @@ fn dss_value_out(value: &str) -> (String, bool) {
 /// set. The engine counts conductors, not energized phases, so a phase
 /// at v_magnitude 0 keeps its place on the dot list; the emission site
 /// warns about the disagreement.
-fn source_phases(net: &DistNetwork, vs: &crate::model::VoltageSource) -> usize {
+fn source_phases(net: &MulticonductorNetwork, vs: &crate::model::VoltageSource) -> usize {
     if let Some(p) = extras_usize(&vs.extras, "phases") {
         return p.max(1);
     }
@@ -698,7 +701,7 @@ impl DssWriter {
         }
     }
 
-    fn network(&mut self, net: &DistNetwork) {
+    fn network(&mut self, net: &MulticonductorNetwork) {
         self.line_out("Clear");
         self.line_out(&format!(
             "Set DefaultBaseFrequency={}",
@@ -825,7 +828,7 @@ impl DssWriter {
         }
     }
 
-    fn buscoords(&mut self, net: &DistNetwork) {
+    fn buscoords(&mut self, net: &MulticonductorNetwork) {
         let rows: Vec<(&DistBus, crate::geo::Location)> = net
             .buses
             .iter()
@@ -875,7 +878,7 @@ impl DssWriter {
         self.sidecars.push(ConversionSidecar { path, text });
     }
 
-    fn sources(&mut self, net: &DistNetwork) {
+    fn sources(&mut self, net: &MulticonductorNetwork) {
         let mut order: Vec<usize> = (0..net.sources.len()).collect();
         if let Some(source_idx) = net
             .sources
@@ -945,7 +948,7 @@ impl DssWriter {
         self.out.push('\n');
     }
 
-    fn linecodes(&mut self, net: &DistNetwork) {
+    fn linecodes(&mut self, net: &MulticonductorNetwork) {
         let omega_nf = std::f64::consts::TAU * net.base_frequency * 1e-9;
         for c in &net.linecodes {
             self.check_name("linecode", &c.name);
@@ -1000,7 +1003,7 @@ impl DssWriter {
         self.out.push('\n');
     }
 
-    fn lines(&mut self, net: &DistNetwork) {
+    fn lines(&mut self, net: &MulticonductorNetwork) {
         for l in &net.lines {
             self.check_name("line", &l.name);
             let phases = l.terminal_map_from.len();
@@ -1055,7 +1058,7 @@ impl DssWriter {
         self.out.push('\n');
     }
 
-    fn switches(&mut self, net: &DistNetwork) {
+    fn switches(&mut self, net: &MulticonductorNetwork) {
         for sw in &net.switches {
             self.check_name("line", &sw.name);
             let phases = sw.terminal_map_from.len();
@@ -1110,7 +1113,7 @@ impl DssWriter {
         self.out.push('\n');
     }
 
-    fn transformers(&mut self, net: &DistNetwork) {
+    fn transformers(&mut self, net: &MulticonductorNetwork) {
         for t in &net.transformers {
             self.check_name("transformer", &t.name);
             let nw = t.windings.len();
@@ -1369,7 +1372,7 @@ impl DssWriter {
             .collect()
     }
 
-    fn loads(&mut self, net: &DistNetwork) {
+    fn loads(&mut self, net: &MulticonductorNetwork) {
         for load in &net.loads {
             for part in self.load_parts(load) {
                 self.write_load(&part);
@@ -1766,7 +1769,7 @@ impl DssWriter {
     /// The untyped [`DistShunt`](crate::model::DistShunt) B matrix keeps its
     /// own path ([`Self::write_kvar_shunt`]): it carries phase geometry a
     /// scalar rating cannot state.
-    fn capacitors(&mut self, net: &DistNetwork) {
+    fn capacitors(&mut self, net: &MulticonductorNetwork) {
         for c in &net.capacitors {
             if !is_positive_finite(c.q_rated) {
                 self.warn(format!(
@@ -1819,7 +1822,7 @@ impl DssWriter {
         }
     }
 
-    fn shunts(&mut self, net: &DistNetwork) {
+    fn shunts(&mut self, net: &MulticonductorNetwork) {
         for sh in &net.shunts {
             let stashed_delta = shunt_stashed_delta(sh);
             let inferred_phases =
@@ -1836,7 +1839,7 @@ impl DssWriter {
         self.out.push('\n');
     }
 
-    fn generators(&mut self, net: &DistNetwork) {
+    fn generators(&mut self, net: &MulticonductorNetwork) {
         for g in &net.generators {
             self.check_name("generator", &g.name);
             let phases = self.element_phases(
@@ -1899,7 +1902,7 @@ impl DssWriter {
         }
     }
 
-    fn ibrs(&mut self, net: &DistNetwork) {
+    fn ibrs(&mut self, net: &MulticonductorNetwork) {
         for ibr in &net.ibrs {
             self.check_name("pvsystem", &ibr.name);
             if ibr_is_fixed_dispatch(ibr) {
@@ -1949,7 +1952,7 @@ impl DssWriter {
         self.line_out(&line);
     }
 
-    fn write_pvsystem(&mut self, ibr: &DistIbr, net: &DistNetwork) {
+    fn write_pvsystem(&mut self, ibr: &DistIbr, net: &MulticonductorNetwork) {
         let phases = ibr_phases(ibr);
         let configuration = ibr_configuration(ibr);
         let conn = self.element_conn(&ibr.extras, configuration, &ibr.bus, &ibr.terminal_map);
@@ -1995,7 +1998,7 @@ impl DssWriter {
         self.line_out(&line);
     }
 
-    fn write_ibr_controls(&mut self, ibr: &DistIbr, net: &DistNetwork) {
+    fn write_ibr_controls(&mut self, ibr: &DistIbr, net: &MulticonductorNetwork) {
         let Some(profile) = ibr_profile(ibr, net) else {
             if let Some(name) = &ibr.control_profile {
                 self.warn(format!(
@@ -2281,7 +2284,10 @@ fn ibr_is_fixed_dispatch(ibr: &DistIbr) -> bool {
         && matches!((&ibr.q_min, &ibr.q_max), (Some(a), Some(b)) if a == b)
 }
 
-fn ibr_profile<'a>(ibr: &DistIbr, net: &'a DistNetwork) -> Option<&'a DistControlProfile> {
+fn ibr_profile<'a>(
+    ibr: &DistIbr,
+    net: &'a MulticonductorNetwork,
+) -> Option<&'a DistControlProfile> {
     let name = ibr.control_profile.as_ref()?;
     net.control_profiles
         .iter()
@@ -2522,7 +2528,7 @@ mod tests {
         }
     }
 
-    fn roundtrip(net: &DistNetwork) -> (String, String) {
+    fn roundtrip(net: &MulticonductorNetwork) -> (String, String) {
         let first = write_dss(net);
         let second = write_dss(&parse_dss_str(&first.text));
         (first.text, second.text)
@@ -2532,12 +2538,12 @@ mod tests {
     fn constant_power_loads_get_wide_voltage_bounds_by_default() {
         let (b, vs) = three_phase_source(2400.0);
         let load = load_on("sb", &["1"], Configuration::Wye);
-        let net = DistNetwork {
+        let net = MulticonductorNetwork {
             base_frequency: 60.0,
             buses: vec![b],
             sources: vec![vs],
             loads: vec![load],
-            ..DistNetwork::default()
+            ..MulticonductorNetwork::default()
         };
         let out = write_dss(&net);
         let line = out.text.lines().find(|l| l.contains("Load.ld")).unwrap();
@@ -2551,12 +2557,12 @@ mod tests {
         let mut load = load_on("sb", &["1"], Configuration::Wye);
         load.extras.insert("vminpu".into(), serde_json::json!(0.8));
         load.extras.insert("vmaxpu".into(), serde_json::json!(1.2));
-        let net = DistNetwork {
+        let net = MulticonductorNetwork {
             base_frequency: 60.0,
             buses: vec![b],
             sources: vec![vs],
             loads: vec![load],
-            ..DistNetwork::default()
+            ..MulticonductorNetwork::default()
         };
         let out = write_dss(&net);
         let line = out.text.lines().find(|l| l.contains("Load.ld")).unwrap();
@@ -2568,12 +2574,12 @@ mod tests {
     fn default_load_voltage_bounds_can_be_disabled() {
         let (b, vs) = three_phase_source(2400.0);
         let load = load_on("sb", &["1"], Configuration::Wye);
-        let net = DistNetwork {
+        let net = MulticonductorNetwork {
             base_frequency: 60.0,
             buses: vec![b],
             sources: vec![vs],
             loads: vec![load],
-            ..DistNetwork::default()
+            ..MulticonductorNetwork::default()
         };
         let options = DssWriteOptions {
             default_load_voltage_bounds: None,
@@ -2597,12 +2603,12 @@ mod tests {
             "test value no longer reproduces the drift"
         );
         let (b, vs) = three_phase_source(vln);
-        let net = DistNetwork {
+        let net = MulticonductorNetwork {
             name: Some("t".into()),
             base_frequency: 60.0,
             buses: vec![b],
             sources: vec![vs],
-            ..DistNetwork::default()
+            ..MulticonductorNetwork::default()
         };
         let (first, second) = roundtrip(&net);
         assert!(first.contains("Set VoltageBases="), "{first}");
@@ -2614,12 +2620,12 @@ mod tests {
         let (b, vs) = three_phase_source(2400.0);
         let mut load = load_on("sb", &["1", "2", "3"], Configuration::Delta);
         load.extras.insert("phases".into(), serde_json::json!("2"));
-        let net = DistNetwork {
+        let net = MulticonductorNetwork {
             base_frequency: 60.0,
             buses: vec![b],
             sources: vec![vs],
             loads: vec![load],
-            ..DistNetwork::default()
+            ..MulticonductorNetwork::default()
         };
         let out = write_dss(&net);
         let line = out.text.lines().find(|l| l.contains("Load.ld")).unwrap();
@@ -2632,12 +2638,12 @@ mod tests {
     #[test]
     fn ambiguous_delta_keeps_three_phases_loudly() {
         let (b, vs) = three_phase_source(2400.0);
-        let net = DistNetwork {
+        let net = MulticonductorNetwork {
             base_frequency: 60.0,
             buses: vec![b],
             sources: vec![vs],
             loads: vec![load_on("sb", &["1", "2", "3"], Configuration::Delta)],
-            ..DistNetwork::default()
+            ..MulticonductorNetwork::default()
         };
         let out = write_dss(&net);
         let line = out.text.lines().find(|l| l.contains("Load.ld")).unwrap();
@@ -2661,12 +2667,12 @@ mod tests {
         stashed
             .extras
             .insert("conn".into(), serde_json::json!("delta"));
-        let net = DistNetwork {
+        let net = MulticonductorNetwork {
             base_frequency: 60.0,
             buses: vec![b],
             sources: vec![vs],
             loads: vec![two_wire, stashed],
-            ..DistNetwork::default()
+            ..MulticonductorNetwork::default()
         };
         let out = write_dss(&net);
         let l1 = out.text.lines().find(|l| l.contains("Load.ld ")).unwrap();
@@ -2681,13 +2687,13 @@ mod tests {
         let (b, vs) = three_phase_source(2400.0);
         let mut load = load_on("sb", &["1", "2", "3", "4"], Configuration::Wye);
         load.name = "load 1".into();
-        let net = DistNetwork {
+        let net = MulticonductorNetwork {
             name: Some("my circuit".into()),
             base_frequency: 60.0,
             buses: vec![b, bus("a=b", &["1"], &[])],
             sources: vec![vs],
             loads: vec![load],
-            ..DistNetwork::default()
+            ..MulticonductorNetwork::default()
         };
         let out = write_dss(&net);
         let hits = |needle: &str| {
@@ -2725,7 +2731,7 @@ mod tests {
     #[test]
     fn unequal_per_phase_i_max_warns_that_emergamps_holds_one_phase() {
         let (b, vs) = three_phase_source(2400.0);
-        let net = DistNetwork {
+        let net = MulticonductorNetwork {
             base_frequency: 60.0,
             buses: vec![b, bus("b2", &["1", "2", "3"], &[])],
             sources: vec![vs],
@@ -2742,7 +2748,7 @@ mod tests {
                 s_max: None,
                 extras: Extras::new(),
             }],
-            ..DistNetwork::default()
+            ..MulticonductorNetwork::default()
         };
         let out = write_dss(&net);
         let line = out.text.lines().find(|l| l.contains("Line.l1 ")).unwrap();
@@ -2759,7 +2765,7 @@ mod tests {
     #[test]
     fn line_level_i_max_emits_emergamps_and_s_max_drops_with_a_warning() {
         let (b, vs) = three_phase_source(2400.0);
-        let net = DistNetwork {
+        let net = MulticonductorNetwork {
             base_frequency: 60.0,
             buses: vec![b, bus("b2", &["1"], &[])],
             sources: vec![vs],
@@ -2776,7 +2782,7 @@ mod tests {
                 s_max: Some(vec![600.0]),
                 extras: Extras::new(),
             }],
-            ..DistNetwork::default()
+            ..MulticonductorNetwork::default()
         };
         let out = write_dss(&net);
         let line = out.text.lines().find(|l| l.contains("Line.l1 ")).unwrap();
@@ -2848,12 +2854,12 @@ mod tests {
         let (b, vs) = three_phase_source(2400.0);
         let mut load = load_on("sb", &["1", "2", "3", "4"], Configuration::Wye);
         load.extras.insert("kv".into(), serde_json::json!("@kv"));
-        let net = DistNetwork {
+        let net = MulticonductorNetwork {
             base_frequency: 60.0,
             buses: vec![b],
             sources: vec![vs],
             loads: vec![load],
-            ..DistNetwork::default()
+            ..MulticonductorNetwork::default()
         };
         let out = write_dss(&net);
         assert!(
@@ -2906,11 +2912,11 @@ mod tests {
     fn non_numeric_terminal_positionalizes() {
         let mut load = load_on("b1", &["a", "n"], Configuration::Wye);
         load.extras.insert("kv".into(), serde_json::json!("0.23"));
-        let net = DistNetwork {
+        let net = MulticonductorNetwork {
             base_frequency: 60.0,
             buses: vec![bus("b1", &["a", "n"], &["n"])],
             loads: vec![load],
-            ..DistNetwork::default()
+            ..MulticonductorNetwork::default()
         };
         let (first, second) = roundtrip(&net);
         let line = first.lines().find(|l| l.contains("Load.ld")).unwrap();
@@ -2931,11 +2937,11 @@ mod tests {
         let (b, mut vs) = three_phase_source(2400.0);
         vs.extras
             .insert("rs".into(), serde_json::json!([[1.0, 0.1], [0.1, 1.0]]));
-        let net = DistNetwork {
+        let net = MulticonductorNetwork {
             base_frequency: 60.0,
             buses: vec![b],
             sources: vec![vs],
-            ..DistNetwork::default()
+            ..MulticonductorNetwork::default()
         };
         let out = write_dss(&net);
         assert!(!out.text.contains("z1="), "{}", out.text);
@@ -2959,12 +2965,12 @@ mod tests {
             i_max: Some(Vec::new()),
             extras: Extras::from([("pmd_rs".to_string(), serde_json::json!("oops"))]),
         };
-        let net = DistNetwork {
+        let net = MulticonductorNetwork {
             base_frequency: 60.0,
             buses: vec![b, bus("b2", &["1", "2", "3"], &[])],
             sources: vec![vs],
             switches: vec![sw],
-            ..DistNetwork::default()
+            ..MulticonductorNetwork::default()
         };
         let out = write_dss(&net);
         assert!(!out.text.contains("r0="), "{}", out.text);
@@ -3029,13 +3035,13 @@ mod tests {
             phases: 1,
             extras: Extras::new(),
         };
-        let net = DistNetwork {
+        let net = MulticonductorNetwork {
             base_frequency: 60.0,
             buses: vec![b, bus("b2", &["1", "2"], &[])],
             sources: vec![vs],
             linecodes: vec![lc],
             transformers: vec![t],
-            ..DistNetwork::default()
+            ..MulticonductorNetwork::default()
         };
         let out = write_dss(&net); // must not panic
         assert!(out.text.contains("rmatrix=(1 | 0.5 0)"), "{}", out.text);
@@ -3060,12 +3066,12 @@ mod tests {
             600e3,
             4160.0,
         );
-        let net = DistNetwork {
+        let net = MulticonductorNetwork {
             base_frequency: 60.0,
             buses: vec![b],
             sources: vec![vs],
             capacitors: vec![cap],
-            ..DistNetwork::default()
+            ..MulticonductorNetwork::default()
         };
         let out = write_dss(&net);
         let line = out
@@ -3111,12 +3117,12 @@ mod tests {
             vec![1e3, 1e3, 1e3],
             vec![100.0, 100.0, 100.0],
         );
-        let net = DistNetwork {
+        let net = MulticonductorNetwork {
             base_frequency: 60.0,
             buses: vec![b],
             sources: vec![vs],
             loads: vec![unbalanced, balanced],
-            ..DistNetwork::default()
+            ..MulticonductorNetwork::default()
         };
         let out = write_dss(&net);
         let loads: Vec<&str> = out
@@ -3165,12 +3171,12 @@ mod tests {
             voltage_model: DistLoadVoltageModel::ConstantImpedance { v_nom: Vec::new() },
             extras: Extras::new(),
         };
-        let net = DistNetwork {
+        let net = MulticonductorNetwork {
             base_frequency: 60.0,
             buses: vec![b, lv],
             sources: vec![vs],
             loads: vec![l],
-            ..DistNetwork::default()
+            ..MulticonductorNetwork::default()
         };
         let out = write_dss(&net);
         let loads: Vec<&str> = out
@@ -3207,12 +3213,12 @@ mod tests {
             vec![1000.0, 2000.0],
             vec![100.0, 200.0],
         );
-        let net = DistNetwork {
+        let net = MulticonductorNetwork {
             base_frequency: 60.0,
             buses: vec![b, lv],
             sources: vec![vs],
             loads: vec![l],
-            ..DistNetwork::default()
+            ..MulticonductorNetwork::default()
         };
         let out = write_dss(&net);
         let loads: Vec<&str> = out
@@ -3251,12 +3257,12 @@ mod tests {
             vec![1956.0],
         );
         l.extras.insert("phases".into(), 1.into());
-        let net = DistNetwork {
+        let net = MulticonductorNetwork {
             base_frequency: 60.0,
             buses: vec![b, lv],
             sources: vec![vs],
             loads: vec![l],
-            ..DistNetwork::default()
+            ..MulticonductorNetwork::default()
         };
         let out = write_dss(&net);
         assert_eq!(
@@ -3302,12 +3308,12 @@ mod tests {
             xsc_pct: vec![2.5, 2.5, 0.0],
             extras: Extras::new(),
         };
-        let net = DistNetwork {
+        let net = MulticonductorNetwork {
             base_frequency: 60.0,
             buses: vec![b, lv],
             sources: vec![vs],
             transformers: vec![t],
-            ..DistNetwork::default()
+            ..MulticonductorNetwork::default()
         };
         let out = write_dss(&net);
         let line = out
@@ -3341,12 +3347,12 @@ mod tests {
             vec![1e3, 2e3, 3e3],
             vec![0.0, 0.0, 0.0],
         );
-        let net = DistNetwork {
+        let net = MulticonductorNetwork {
             base_frequency: 60.0,
             buses: vec![b],
             sources: vec![vs],
             loads: vec![l],
-            ..DistNetwork::default()
+            ..MulticonductorNetwork::default()
         };
         let out = write_dss(&net);
         assert_eq!(
@@ -3378,12 +3384,12 @@ mod tests {
             b: vec![vec![b_phase, 0.0], vec![0.0, b_phase]],
             extras: Extras::new(),
         };
-        let net = DistNetwork {
+        let net = MulticonductorNetwork {
             base_frequency: 60.0,
             buses: vec![b],
             sources: vec![vs],
             shunts: vec![sh],
-            ..DistNetwork::default()
+            ..MulticonductorNetwork::default()
         };
         let out = write_dss(&net);
         let kv = 2400.0 * 3f64.sqrt() / 1e3;
@@ -3416,12 +3422,12 @@ mod tests {
             ],
             extras: Extras::new(),
         };
-        let net = DistNetwork {
+        let net = MulticonductorNetwork {
             base_frequency: 60.0,
             buses: vec![b],
             sources: vec![vs],
             shunts: vec![sh],
-            ..DistNetwork::default()
+            ..MulticonductorNetwork::default()
         };
         let out = write_dss(&net);
         let line = out
@@ -3448,12 +3454,12 @@ mod tests {
             b: vec![vec![0.0]],
             extras: Extras::new(),
         };
-        let net = DistNetwork {
+        let net = MulticonductorNetwork {
             base_frequency: 60.0,
             buses: vec![b],
             sources: vec![vs],
             shunts: vec![sh],
-            ..DistNetwork::default()
+            ..MulticonductorNetwork::default()
         };
         let out = write_dss(&net);
         let line = out
@@ -3492,12 +3498,12 @@ mod tests {
             b: bmat,
             extras,
         };
-        let net = DistNetwork {
+        let net = MulticonductorNetwork {
             base_frequency: 60.0,
             buses: vec![b],
             sources: vec![vs],
             shunts: vec![sh],
-            ..DistNetwork::default()
+            ..MulticonductorNetwork::default()
         };
         let out = write_dss(&net);
         let line = out
@@ -3529,12 +3535,12 @@ mod tests {
             b: bmat,
             extras: Extras::new(),
         };
-        let net = DistNetwork {
+        let net = MulticonductorNetwork {
             base_frequency: 60.0,
             buses: vec![b],
             sources: vec![vs],
             shunts: vec![sh],
-            ..DistNetwork::default()
+            ..MulticonductorNetwork::default()
         };
         let out = write_dss(&net);
         let line = out
@@ -3569,12 +3575,12 @@ mod tests {
             b: bmat,
             extras,
         };
-        let net = DistNetwork {
+        let net = MulticonductorNetwork {
             base_frequency: 60.0,
             buses: vec![b],
             sources: vec![vs],
             shunts: vec![sh],
-            ..DistNetwork::default()
+            ..MulticonductorNetwork::default()
         };
         let out = write_dss(&net);
         let line = out
@@ -3647,12 +3653,12 @@ mod tests {
         let mut load = load_on("sb", &["1", "2", "3", "4"], Configuration::Wye);
         load.extras
             .insert("daily".into(), serde_json::json!("a ) b"));
-        let net = DistNetwork {
+        let net = MulticonductorNetwork {
             base_frequency: 60.0,
             buses: vec![b],
             sources: vec![vs],
             loads: vec![load],
-            ..DistNetwork::default()
+            ..MulticonductorNetwork::default()
         };
         let (first, second) = roundtrip(&net);
         // A paren wrapper would close at the `)` and land `b)` on the next
@@ -3677,12 +3683,12 @@ mod tests {
         let (b, vs) = three_phase_source(2400.0);
         let mut load = load_on("sb", &["1", "2", "3", "4"], Configuration::Wye);
         load.extras.insert("daily".into(), serde_json::json!(bad));
-        let mut net = DistNetwork {
+        let mut net = MulticonductorNetwork {
             base_frequency: 60.0,
             buses: vec![b],
             sources: vec![vs],
             loads: vec![load],
-            ..DistNetwork::default()
+            ..MulticonductorNetwork::default()
         };
         net.options.push(("foo".into(), bad.into()));
         let out = write_dss(&net);
@@ -3774,11 +3780,11 @@ mod tests {
             .insert("basekv".into(), serde_json::json!("@base"));
         vs.extras.insert("pu".into(), serde_json::json!("unity"));
         vs.extras.insert("angle".into(), serde_json::json!([0.0]));
-        let net = DistNetwork {
+        let net = MulticonductorNetwork {
             base_frequency: 60.0,
             buses: vec![b],
             sources: vec![vs],
-            ..DistNetwork::default()
+            ..MulticonductorNetwork::default()
         };
         let out = write_dss(&net);
         for key in ["basekv", "pu", "angle"] {
@@ -3799,12 +3805,12 @@ mod tests {
     fn de_energized_source_phase_keeps_its_conductor() {
         let (b, mut vs) = three_phase_source(2400.0);
         vs.v_magnitude[2] = 0.0; // de-energized, but still a phase conductor
-        let net = DistNetwork {
+        let net = MulticonductorNetwork {
             name: Some("t".into()),
             base_frequency: 60.0,
             buses: vec![b],
             sources: vec![vs],
-            ..DistNetwork::default()
+            ..MulticonductorNetwork::default()
         };
         let (first, second) = roundtrip(&net);
         let line = first.lines().find(|l| l.contains("Circuit.")).unwrap();
@@ -3846,7 +3852,7 @@ mod tests {
             ],
             extras: Extras::new(),
         };
-        let net = DistNetwork {
+        let net = MulticonductorNetwork {
             name: Some("dg".into()),
             base_frequency: 60.0,
             buses: vec![
@@ -3854,7 +3860,7 @@ mod tests {
                 bus("Bx", &["1", "2", "3", "4"], &["4"]),
             ],
             sources: vec![wind, source],
-            ..DistNetwork::default()
+            ..MulticonductorNetwork::default()
         };
 
         let out = write_dss(&net).text;
@@ -3880,11 +3886,11 @@ mod tests {
     fn source_phases_stash_wins_and_does_not_double_emit() {
         let (b, mut vs) = three_phase_source(2400.0);
         vs.extras.insert("phases".into(), serde_json::json!("3"));
-        let net = DistNetwork {
+        let net = MulticonductorNetwork {
             base_frequency: 60.0,
             buses: vec![b],
             sources: vec![vs],
-            ..DistNetwork::default()
+            ..MulticonductorNetwork::default()
         };
         let out = write_dss(&net);
         let line = out.text.lines().find(|l| l.contains("Circuit.")).unwrap();
@@ -3907,13 +3913,13 @@ mod tests {
             extras: Extras::new(),
         };
         let load = load_on("sb", &["1"], Configuration::Wye);
-        let net = DistNetwork {
+        let net = MulticonductorNetwork {
             name: Some("t".into()),
             base_frequency: 60.0,
             buses: vec![bus("sb", &["1", "2", "3"], &[])],
             sources: vec![vs],
             loads: vec![load],
-            ..DistNetwork::default()
+            ..MulticonductorNetwork::default()
         };
         let first = write_dss(&net);
         let hits = |warnings: &[String], name: &str| {
@@ -3957,12 +3963,12 @@ mod tests {
                 ("phases".to_string(), serde_json::json!("2")),
             ]),
         };
-        let net = DistNetwork {
+        let net = MulticonductorNetwork {
             base_frequency: 60.0,
             buses: vec![b],
             sources: vec![vs],
             generators: vec![g],
-            ..DistNetwork::default()
+            ..MulticonductorNetwork::default()
         };
         let out = write_dss(&net);
         let line = out
@@ -3994,13 +4000,13 @@ mod tests {
             voltage_aggregation: None,
             extras: Extras::from([("kv".to_string(), serde_json::json!("0.416"))]),
         };
-        let net = DistNetwork {
+        let net = MulticonductorNetwork {
             name: Some("fixed".into()),
             base_frequency: 60.0,
             buses: vec![b],
             sources: vec![vs],
             ibrs: vec![ibr],
-            ..DistNetwork::default()
+            ..MulticonductorNetwork::default()
         };
 
         let out = write_dss(&net);
@@ -4055,14 +4061,14 @@ mod tests {
             volt_watt: None,
             extras: Extras::new(),
         };
-        let net = DistNetwork {
+        let net = MulticonductorNetwork {
             name: Some("controlled".into()),
             base_frequency: 60.0,
             buses: vec![b],
             sources: vec![vs],
             ibrs: vec![ibr],
             control_profiles: vec![profile],
-            ..DistNetwork::default()
+            ..MulticonductorNetwork::default()
         };
 
         let out = write_dss(&net);

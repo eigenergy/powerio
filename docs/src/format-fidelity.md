@@ -23,8 +23,8 @@ implementations and the matching powerio code:
 | Generator cost | \\(c_2 p^2 + c_1 p\\) maps to \\(q = 2c_2\\), \\(c = c_1\\); coefficients high order first | MATPOWER `idx_cost`, egret `matpower_parser` | `GenCost::quadratic` |
 | `source_id` | `["bus", id]` for bus-tied elements | PowerModels `matpower.jl` | `format::powermodels` |
 | PSLF shunts | EPC `pu_mw`/`pu_mvar` are per unit on `sbase`; `Network::Shunt` stores MW/MVAr at \\(V = 1\\) | paired EPC/RAW case checks | `format::pslf` |
-| GO Challenge 3 time series | `Network` stores the first interval as a static case; `.pio.json` documents carry replayable later intervals in `operating_points` | Rust GOC3 package tests | `format::goc3`, `powerio_pkg::operating` |
-| Surge angles | Surge JSON carries voltage angles, phase shifts, and angle limits in radians; `Network` stores degrees | Rust Surge round trip tests | `format::surge` |
+| GO Challenge 3 time series | `BalancedNetwork` stores the first interval as a static case; `.pio.json` documents carry replayable later intervals in `operating_points` | Rust GOC3 package tests | `format::goc3`, `powerio_pkg::operating` |
+| Surge angles | Surge JSON carries voltage angles, phase shifts, and angle limits in radians; `BalancedNetwork` stores degrees | Rust Surge round trip tests | `format::surge` |
 | DeepMind OPFData JSON | DeepMind OPFData carries p.u. powers and radian angles; `BalancedNetwork` stores the solved snapshot in MW/MVAr and degrees, with zero based links mapped to one based bus IDs | Paper Appendix A, the PyG loader, the smallest complete official fixture, and size independent FullTop and N-1 contract tests | `format::opfdata` |
 
 egret's own MATPOWER parser uses the same reductions (bus type as
@@ -169,17 +169,17 @@ code `READ.TRANSMISSION.PARSE_WARNING`. GridFM package reads use
   Nonnumeric bus names read back as dense synthetic ids with the originals on
   `Bus.name`.
 - **GO Challenge 3 JSON** reads ARPA-E GO Competition Challenge 3 input data
-  into the balanced transmission model. `Network` is static, so the reader maps
+  into the balanced transmission model. `BalancedNetwork` is static, so the reader maps
   the first time interval into generator/load bounds and status fields, keeps
   the original JSON for byte exact source echo, and warns about scheduling data
   left in the retained source. There is no canonical GOC3 writer from an
-  arbitrary `Network`; `TargetFormat::Goc3Json` only succeeds as a same format
-  source echo. When a GOC3 `Network` is wrapped in `.pio.json`, `powerio-pkg`
+  arbitrary `BalancedNetwork`; `TargetFormat::Goc3Json` only succeeds as a same format
+  source echo. When a GOC3 `BalancedNetwork` is wrapped in `.pio.json`, `powerio-pkg`
   extracts the full input time axis into `operating_points`. Materializing one
   point applies those updates to the static model JSON and clears the series.
 - **Surge JSON** reads and writes the versioned `surge-json` network document.
   The reader maps buses, loads, fixed shunts, branches, generators, storage, and
-  HVDC links into `Network`, retains the original source for same format echo,
+  HVDC links into `BalancedNetwork`, retains the original source for same format echo,
   and warns about source sections that stay only in the retained document. The
   writer emits a canonical Surge network body for the supported power flow core;
   richer MATPOWER generator capability or ramp columns and unsupported cost
@@ -211,7 +211,7 @@ code `READ.TRANSMISSION.PARSE_WARNING`. GridFM package reads use
   The raw source echoes byte exactly; there is no canonical writer, `.pt` cache
   reader, archive reader, downloader, or batch directory API.
 - **gridfm** (read, the `gridfm` feature in `powerio-matrix`) reconstructs a
-  `Network` from the gridfm-datakit Parquet dataset: lossy, but it recovers
+  `BalancedNetwork` from the gridfm-datakit Parquet dataset: lossy, but it recovers
   everything a power flow needs. That is bus types/voltages/limits, nodal load
   and shunt totals, generator
   dispatch and bounds, branch `r/x/b/tap/shift/rate_a`/angle limits, and `baseMVA`;

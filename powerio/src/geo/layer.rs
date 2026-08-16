@@ -13,7 +13,7 @@ use std::collections::HashMap;
 use serde_json::{Map, Value, json};
 
 use super::{Canvas, CoordinateSpace, CoordsKind, GeoMeta, Location};
-use crate::network::{BusId, Network};
+use crate::network::{BalancedNetwork, BusId};
 use crate::{Error, Result};
 
 /// Suggested extension for the canonical document.
@@ -792,7 +792,7 @@ fn push_once(warnings: &mut Vec<String>, warning: String) {
 // Extract and apply on the balanced network
 // ---------------------------------------------------------------------------
 
-impl Network {
+impl BalancedNetwork {
     /// Extract this network's coordinates as a standalone [`GeoLayer`]:
     /// one point per located bus, one route per routed branch. The layer
     /// carries the network's coordinate space and default provenance.
@@ -941,7 +941,7 @@ pub fn apply_geo_features(layer: &GeoLayer, target: &mut impl GeoApplyTarget) ->
 
 /// The balanced network as an apply target.
 struct BalancedApply<'a> {
-    net: &'a mut Network,
+    net: &'a mut BalancedNetwork,
     buses: BalancedBusIndex,
     branches: BalancedBranchIndex,
 }
@@ -983,7 +983,7 @@ impl GeoApplyTarget for BalancedApply<'_> {
 /// Buses with no location and branches with no route. Every apply pass over a
 /// balanced network reports through this one count, so the substation join
 /// and the feature join cannot disagree.
-pub(super) fn unlocated_counts(net: &Network) -> (usize, usize) {
+pub(super) fn unlocated_counts(net: &BalancedNetwork) -> (usize, usize) {
     (
         net.buses
             .iter()
@@ -1005,7 +1005,7 @@ struct BalancedBusIndex {
 }
 
 impl BalancedBusIndex {
-    fn new(net: &Network) -> Self {
+    fn new(net: &BalancedNetwork) -> Self {
         let mut index = Self {
             ids: HashMap::new(),
             uids: HashMap::new(),
@@ -1057,7 +1057,7 @@ struct BalancedBranchIndex {
 }
 
 impl BalancedBranchIndex {
-    fn new(net: &Network) -> Self {
+    fn new(net: &BalancedNetwork) -> Self {
         let mut index = Self {
             uids: HashMap::new(),
             pairs: HashMap::new(),

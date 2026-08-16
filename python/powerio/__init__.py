@@ -54,7 +54,6 @@ __all__ = [
     "DisplayData",
     "GridfmRead",
     "Incidence",
-    "Network",
     "Package",
     "PowerIODataError",
     "PowerIOError",
@@ -94,7 +93,7 @@ target format could not represent (empty for a faithful conversion).
 GridfmRead = namedtuple("GridfmRead", ["network", "scenario", "warnings"])
 GridfmRead.__doc__ = """Output of :func:`read_gridfm` / :func:`read_gridfm_scenarios`.
 
-``network`` is the reconstructed :class:`Network`; ``scenario`` is the source
+``network`` is the reconstructed :class:`BalancedNetwork`; ``scenario`` is the source
 scenario ID; ``warnings`` lists fields the GridFM schema cannot retain,
 including source bus IDs, per element load and shunt rows, HVDC, storage, and
 piecewise costs.
@@ -117,7 +116,7 @@ PwdSubstation = namedtuple("PwdSubstation", ["number", "name", "x", "y"])
 PwdSubstation.__doc__ = """One decoded PowerWorld display substation."""
 
 Incidence = namedtuple("Incidence", ["A", "b", "p_shift", "branch_of_col"])
-Incidence.__doc__ = """Output of :meth:`Network.incidence`.
+Incidence.__doc__ = """Output of :meth:`BalancedNetwork.incidence`.
 
 Shapes, with ``n`` buses and ``m`` in-service branches:
 - ``A``: signed incidence csr_matrix, ``(n, m)``.
@@ -130,8 +129,8 @@ Shapes, with ``n`` buses and ``m`` in-service branches:
 
 YbusParts = namedtuple("YbusParts", ["g", "b"])
 YbusParts.__doc__ = (
-    "Output of :meth:`Network.ybus_parts`: ``g`` = Re(Y_bus), ``b`` = Im(Y_bus), "
-    "each a real csr_matrix. ``Network.ybus()`` returns ``g + 1j*b``."
+    "Output of :meth:`BalancedNetwork.ybus_parts`: ``g`` = Re(Y_bus), ``b`` = Im(Y_bus), "
+    "each a real csr_matrix. ``BalancedNetwork.ybus()`` returns ``g + 1j*b``."
 )
 
 DenseBranch = namedtuple(
@@ -165,7 +164,7 @@ DenseNetwork = namedtuple(
         "is_radial",
     ],
 )
-DenseNetwork.__doc__ = """Copied dense NumPy table export of a parsed :class:`Network`."""
+DenseNetwork.__doc__ = """Copied dense NumPy table export of a parsed :class:`BalancedNetwork`."""
 
 
 def _require(module: str, extra: str):
@@ -227,7 +226,7 @@ def _wrap_display(raw) -> DisplayData:
     return DisplayData(kind, payload)
 
 
-class Network:
+class BalancedNetwork:
     """A parsed balanced power network.
 
     The data attributes (``buses``, ``branches``, ``gens``, ``loads``,
@@ -259,7 +258,7 @@ class Network:
         return getattr(self._inner, name)
 
     def __repr__(self) -> str:
-        # The inner handle's __repr__ already renders the public ``Network(...)``
+        # The inner handle's __repr__ already renders the public ``BalancedNetwork(...)``
         # form, so this is a straight delegate.
         return repr(self._inner)
 
@@ -286,7 +285,7 @@ class Network:
 
     def apply_geo_layer(
         self, text: str, name_hint: Optional[str] = None
-    ) -> tuple["Network", dict[str, Any]]:
+    ) -> tuple["BalancedNetwork", dict[str, Any]]:
         """Apply a geographic sidecar and return ``(placed, report)``.
 
         ``text`` is any form :func:`parse_geo` accepts; this case is
@@ -298,7 +297,7 @@ class Network:
         so a same-format write re-serializes.
         """
         inner, report = self._inner.apply_geo_layer(text, name_hint)
-        return Network(inner), report
+        return BalancedNetwork(inner), report
 
     def acopf_instance(self, units: Optional[str] = None) -> dict[str, Any]:
         """The matrix free AC OPF problem instance as Python data.
@@ -496,7 +495,7 @@ class Network:
         """
         return self._inner.write_pypsa_csv_folder(str(out_dir))
 
-    def to_normalized(self) -> "Network":
+    def to_normalized(self) -> "BalancedNetwork":
         """Return a normalized copy with per unit power and radian angles.
 
         The result removes out of service elements, preserves source bus IDs,
@@ -505,13 +504,13 @@ class Network:
         :class:`PowerIODataError` if the network cannot be
         normalized (no reference bus can be chosen, or a non-positive base MVA).
         """
-        return Network(self._inner.to_normalized())
+        return BalancedNetwork(self._inner.to_normalized())
 
     def to_normalized_with_options(
         self,
         clamp_angle_bounds: bool = False,
         angle_bound_pad: Optional[float] = None,
-    ) -> "Network":
+    ) -> "BalancedNetwork":
         """Return a normalized copy with explicit normalization options.
 
         ``clamp_angle_bounds=True`` applies the PowerModels angle difference
@@ -520,7 +519,7 @@ class Network:
         invert the interval widens to that same window. The default pad is
         1.0472 radians.
         """
-        return Network(
+        return BalancedNetwork(
             self._inner.to_normalized_with_options(
                 clamp_angle_bounds, angle_bound_pad
             )
@@ -640,19 +639,16 @@ class Network:
         return g
 
 
-# v1 name for the scalar positive sequence model. ``Network`` remains the
-# existing Python handle name in 0.4.
-BalancedNetwork = Network
 
 
-def parse_file(path: Any, from_: Optional[str] = None) -> Network:
+def parse_file(path: Any, from_: Optional[str] = None) -> BalancedNetwork:
     """Parse a case file from a path, inferring the format from the extension.
 
-    Read fidelity warnings are on ``Network.read_warnings`` (empty for readers
+    Read fidelity warnings are on ``BalancedNetwork.read_warnings`` (empty for readers
     that don't report any; currently pandapower JSON, PyPSA CSV, and PSLF EPC
     report them).
     """
-    return Network(_powerio.parse_file(str(path), from_))
+    return BalancedNetwork(_powerio.parse_file(str(path), from_))
 
 
 def parse_display_file(path: Any, from_: Optional[str] = None) -> DisplayData:
@@ -665,9 +661,9 @@ def parse_display_bytes(data: bytes, format: str) -> DisplayData:
     return _wrap_display(_powerio.parse_display_bytes(data, format))
 
 
-def parse_str(text: str, format: str = "matpower") -> Network:
+def parse_str(text: str, format: str = "matpower") -> BalancedNetwork:
     """Parse a case from in-memory text in the named ``format``."""
-    return Network(_powerio.parse_str(text, format))
+    return BalancedNetwork(_powerio.parse_str(text, format))
 
 
 def parse_scopf(text: str, from_: str = "goc3-json") -> dict[str, Any]:
@@ -694,16 +690,16 @@ def parse_geo(text: str, name_hint: Optional[str] = None) -> dict[str, Any]:
     return parsed
 
 
-def from_json(text: str) -> Network:
-    """Rebuild a case from JSON produced by :meth:`Network.to_json`."""
-    return Network(_powerio.from_json(text))
+def from_json(text: str) -> BalancedNetwork:
+    """Rebuild a case from JSON produced by :meth:`BalancedNetwork.to_json`."""
+    return BalancedNetwork(_powerio.from_json(text))
 
 
 # powerio bus kind -> MATPOWER/PYPOWER BUS_TYPE code.
 def _bus_sums(np, buses, loads, shunts):
     """Per bus `(pd, qd, gs, bs)` in bus order.
 
-    :meth:`Network.to_dense` and :meth:`Network.to_ppc` both fold the element
+    :meth:`BalancedNetwork.to_dense` and :meth:`BalancedNetwork.to_ppc` both fold the element
     tables onto their bus the way the Rust indexed analysis view does. This is
     that fold, once.
     """
@@ -783,8 +779,8 @@ def _ppc_to_matpower_text(ppc) -> str:
     return "\n".join(lines) + "\n"
 
 
-def from_ppc(ppc) -> Network:
-    """Case from a PYPOWER dict (``ppc``); the inverse of :meth:`Network.to_ppc`.
+def from_ppc(ppc) -> BalancedNetwork:
+    """Case from a PYPOWER dict (``ppc``); the inverse of :meth:`BalancedNetwork.to_ppc`.
 
     The tables route through the MATPOWER reader, so the semantics match a
     ``.m`` case exactly: bus ``PD``/``QD`` become loads, ``GS``/``BS`` become
@@ -821,7 +817,7 @@ def convert_file(
     FullTop or N-1 example of any published grid size; its element counts are
     read from the document. PyPSA CSV folders are read with
     ``from_="pypsa-csv"`` and written with
-    :meth:`Network.write_pypsa_csv_folder`. Returns a :class:`Conversion` with
+    :meth:`BalancedNetwork.write_pypsa_csv_folder`. Returns a :class:`Conversion` with
     the text and any fidelity warnings. ``out`` writes the text to a file
     exactly as produced; prefer it over ``open(out, "w").write(text)``, whose
     text mode newline translation on Windows doubles the carriage returns of
@@ -866,7 +862,7 @@ def convert_str(
 
 
 def to_format(
-    network: Network,
+    network: BalancedNetwork,
     to: str,
     missing_gen_cost: Optional[str] = None,
     default_gen_cost: Optional[str] = None,
@@ -881,23 +877,23 @@ def to_format(
     )
 
 
-def to_matpower(network: Network) -> str:
+def to_matpower(network: BalancedNetwork) -> str:
     """Serialize ``network`` to MATPOWER ``.m`` text."""
     return network.to_matpower()
 
 
-def to_json(network: Network) -> str:
+def to_json(network: BalancedNetwork) -> str:
     """Serialize ``network`` to the JSON transport."""
     return network.to_json()
 
 
-def to_dense(network: Network) -> DenseNetwork:
+def to_dense(network: BalancedNetwork) -> DenseNetwork:
     """Return copied dense NumPy tables for ``network``."""
     return network.to_dense()
 
 
 def write_gridfm_batch(
-    networks: "list[Network]",
+    networks: "list[BalancedNetwork]",
     out_dir: Any,
     base_scenario: int = 0,
     include_y_bus: bool = True,
@@ -914,7 +910,7 @@ def write_gridfm_batch(
     networks must share a base element set: the same bus/branch/gen counts and
     bus id order (otherwise :class:`PowerIODataError` is raised). Load, dispatch,
     branch status, and costs may vary per scenario. Returns the same dict as
-    :meth:`Network.write_gridfm`. Published wheels include the native writer;
+    :meth:`BalancedNetwork.write_gridfm`. Published wheels include the native writer;
     custom source builds without the Rust ``gridfm`` feature raise
     ``ImportError``.
     """
@@ -936,7 +932,7 @@ def write_gridfm_batch(
 def read_gridfm(dir: Any, scenario: int = 0) -> GridfmRead:
     """Read one scenario of a gridfm-datakit Parquet dataset back into a case.
 
-    The inverse of :meth:`Network.write_gridfm`. ``dir`` is resolved leniently:
+    The inverse of :meth:`BalancedNetwork.write_gridfm`. ``dir`` is resolved leniently:
     the ``raw/`` directory holding the parquet files, a ``<case>/`` directory with
     a ``raw/`` child, or a parent directory with one ``*/raw/`` child all work.
     ``scenario`` selects one snapshot from a batch (``0``, the base case, by
@@ -953,7 +949,7 @@ def read_gridfm(dir: Any, scenario: int = 0) -> GridfmRead:
     """
     _require_gridfm()
     inner, scen, warnings = _powerio.read_gridfm(str(dir), scenario)
-    return GridfmRead(Network(inner), scen, warnings)
+    return GridfmRead(BalancedNetwork(inner), scen, warnings)
 
 
 def read_gridfm_scenarios(dir: Any) -> "list[GridfmRead]":
@@ -967,14 +963,14 @@ def read_gridfm_scenarios(dir: Any) -> "list[GridfmRead]":
     """
     _require_gridfm()
     return [
-        GridfmRead(Network(inner), scen, warnings)
+        GridfmRead(BalancedNetwork(inner), scen, warnings)
         for inner, scen, warnings in _powerio.read_gridfm_scenarios(str(dir))
     ]
 
 
-def read_pypsa_csv_folder(path: Any) -> Network:
-    """Read a PyPSA CSV folder into a :class:`Network`."""
-    return Network(_powerio.read_pypsa_csv_folder(str(path)))
+def read_pypsa_csv_folder(path: Any) -> BalancedNetwork:
+    """Read a PyPSA CSV folder into a :class:`BalancedNetwork`."""
+    return BalancedNetwork(_powerio.read_pypsa_csv_folder(str(path)))
 
 
 from . import dist  # noqa: E402  (needs Conversion defined above)
@@ -1008,9 +1004,9 @@ class Package:
 
     @classmethod
     def from_balanced(
-        cls, network: Network, include_solver_metadata: bool = False
+        cls, network: BalancedNetwork, include_solver_metadata: bool = False
     ) -> "Package":
-        """Wrap a balanced :class:`Network` in a package."""
+        """Wrap a balanced :class:`BalancedNetwork` in a package."""
         return cls(
             _powerio._Package.from_balanced(network._inner, include_solver_metadata)
         )
@@ -1029,9 +1025,9 @@ class Package:
         """Serialize to pretty ``.pio.json``."""
         return self._inner.to_json()
 
-    def as_balanced(self) -> Network:
-        """Return the balanced payload as a :class:`Network`."""
-        return Network(self._inner.as_balanced())
+    def as_balanced(self) -> BalancedNetwork:
+        """Return the balanced payload as a :class:`BalancedNetwork`."""
+        return BalancedNetwork(self._inner.as_balanced())
 
     def as_multiconductor(self) -> "dist.MulticonductorNetwork":
         """Return the multiconductor payload."""
@@ -1088,3 +1084,23 @@ class Package:
 
     def __repr__(self) -> str:
         return repr(self._inner)
+
+
+# The 0.8 model name. A module level ``__getattr__`` keeps it importable for one
+# release while telling the caller what to write instead; 1.0.0 removes it.
+_RENAMED_IN_0_9 = {"Network": "BalancedNetwork"}
+
+
+def __getattr__(name: str) -> Any:
+    replacement = _RENAMED_IN_0_9.get(name)
+    if replacement is None:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    import warnings as _warnings
+
+    _warnings.warn(
+        f"powerio.{name} is renamed to powerio.{replacement}; "
+        f"powerio.{name} is removed in 1.0.0",
+        DeprecationWarning,
+        stacklevel=2,
+    )
+    return globals()[replacement]

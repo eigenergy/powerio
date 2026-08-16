@@ -1,7 +1,9 @@
 use super::parse_matpower as parse_mpc;
 use super::write_matpower;
 use crate::indexed::IndexedNetwork;
-use crate::network::{Branch, Bus, BusId, BusType, GenCost, Generator, Network, SourceFormat};
+use crate::network::{
+    BalancedNetwork, Branch, Bus, BusId, BusType, GenCost, Generator, SourceFormat,
+};
 
 const CASE_TINY: &str = r"
 function mpc = tiny
@@ -314,7 +316,7 @@ mpc.gencost = [
 fn piecewise_gencost_constructor_counts_breakpoints() {
     let mut generator = Generator::new(BusId(1));
     generator.cost = Some(GenCost::new(1, 0.0, 0.0, vec![0.0, 0.0, 1.0, 1.0]));
-    let mut net = Network::in_memory(
+    let mut net = BalancedNetwork::in_memory(
         "pwl_cost_constructor",
         100.0,
         vec![
@@ -329,7 +331,7 @@ fn piecewise_gencost_constructor_counts_breakpoints() {
     assert_eq!(cost.ncost, 2);
     assert_eq!(cost.coeffs, vec![0.0, 0.0, 1.0, 1.0]);
 
-    let restored = Network::from_json(&net.to_json().unwrap()).unwrap();
+    let restored = BalancedNetwork::from_json(&net.to_json().unwrap()).unwrap();
     let restored_cost = restored.generators[0].cost.as_ref().unwrap();
     assert_eq!(restored_cost.ncost, 2);
     assert_eq!(restored_cost.coeffs, vec![0.0, 0.0, 1.0, 1.0]);

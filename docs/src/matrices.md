@@ -1,6 +1,6 @@
 # Matrix outputs and conventions
 
-`powerio-matrix` builds sparse matrices and graph views from a parsed `Network`.
+`powerio-matrix` builds sparse matrices and graph views from a parsed `BalancedNetwork`.
 Builders take an `IndexedNetwork`, which maps source bus IDs to dense indices in
 \\([0,n)\\).
 

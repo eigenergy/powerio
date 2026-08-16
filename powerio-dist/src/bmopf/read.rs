@@ -1,4 +1,4 @@
-//! BMOPF JSON into the canonical [`DistNetwork`].
+//! BMOPF JSON into the canonical [`MulticonductorNetwork`].
 //!
 //! The format is fully explicit, so the reader materializes nothing and
 //! `defaulted` stays empty. Reading is liberal where writing is strict:
@@ -19,14 +19,14 @@ use crate::geo::{CoordinateSpace, CoordsKind, GeoMeta, Location};
 use crate::model::{
     ActivePowerReference, ActivePowerUnit, Configuration, ControlVoltageReference, DistBus,
     DistCapacitor, DistControlProfile, DistGenerator, DistIbr, DistLine, DistLineCode, DistLoad,
-    DistLoadVoltageModel, DistNetwork, DistShunt, DistSourceFormat, DistSwitch, DistTransformer,
-    Extras, IbrPrimeMover, IbrTopology, IbrVoltageAggregation, Mat, PowerFactorControl,
-    ReactivePowerReference, ReactivePowerUnit, UntypedObject, VoltVarControl, VoltWattControl,
-    VoltageSource, Winding, WindingConn, n_winding_impedance_base, n_winding_phase_count,
-    pair_keys,
+    DistLoadVoltageModel, DistShunt, DistSourceFormat, DistSwitch, DistTransformer, Extras,
+    IbrPrimeMover, IbrTopology, IbrVoltageAggregation, Mat, MulticonductorNetwork,
+    PowerFactorControl, ReactivePowerReference, ReactivePowerUnit, UntypedObject, VoltVarControl,
+    VoltWattControl, VoltageSource, Winding, WindingConn, n_winding_impedance_base,
+    n_winding_phase_count, pair_keys,
 };
 
-pub fn parse_bmopf_file(path: impl AsRef<Path>) -> Result<DistNetwork> {
+pub fn parse_bmopf_file(path: impl AsRef<Path>) -> Result<MulticonductorNetwork> {
     let path = path.as_ref();
     let text = std::fs::read_to_string(path).map_err(|source| Error::Io {
         path: path.display().to_string(),
@@ -35,7 +35,7 @@ pub fn parse_bmopf_file(path: impl AsRef<Path>) -> Result<DistNetwork> {
     parse_bmopf_str(&text)
 }
 
-pub fn parse_bmopf_str(text: &str) -> Result<DistNetwork> {
+pub fn parse_bmopf_str(text: &str) -> Result<MulticonductorNetwork> {
     let doc: Value = serde_json::from_str(text).map_err(|e| Error::Json {
         format: "BMOPF",
         message: e.to_string(),
@@ -46,11 +46,11 @@ pub fn parse_bmopf_str(text: &str) -> Result<DistNetwork> {
             message: "top level is not an object".into(),
         });
     };
-    let mut net = DistNetwork {
+    let mut net = MulticonductorNetwork {
         source: Some(Arc::new(text.to_string())),
         source_format: Some(DistSourceFormat::BmopfJson),
         base_frequency: 60.0,
-        ..DistNetwork::default()
+        ..MulticonductorNetwork::default()
     };
     report_non_numeric_fields(&doc, &mut net);
     let mut rd = Reader {
@@ -152,7 +152,7 @@ fn is_numeric_field(key: &str) -> bool {
 ///
 /// `extras` is skipped, since it round trips arbitrary consumer JSON where
 /// these names carry no schema meaning.
-fn report_non_numeric_fields(doc: &Map<String, Value>, net: &mut DistNetwork) {
+fn report_non_numeric_fields(doc: &Map<String, Value>, net: &mut MulticonductorNetwork) {
     /// What the value holds, or `None` when the schema allows it.
     fn not_numeric(v: &Value) -> Option<&'static str> {
         match v {
@@ -165,7 +165,7 @@ fn report_non_numeric_fields(doc: &Map<String, Value>, net: &mut DistNetwork) {
             Value::Object(_) => Some("an object"),
         }
     }
-    fn report(net: &mut DistNetwork, pointer: String, what: &str) {
+    fn report(net: &mut MulticonductorNetwork, pointer: String, what: &str) {
         let message = format!(
             "{pointer}: the schema types this field as a number and it holds {what}; \
              it reads as NaN and anything derived from it is undefined"
@@ -184,7 +184,7 @@ fn report_non_numeric_fields(doc: &Map<String, Value>, net: &mut DistNetwork) {
     }
     // A pointer costs an allocation, so it is built for a container the walk
     // descends into and for a field it reports, never for a sound leaf.
-    fn walk(obj: &Map<String, Value>, path: &str, net: &mut DistNetwork) {
+    fn walk(obj: &Map<String, Value>, path: &str, net: &mut MulticonductorNetwork) {
         for (key, value) in obj {
             if key == "extras" {
                 continue;
@@ -212,7 +212,7 @@ fn report_non_numeric_fields(doc: &Map<String, Value>, net: &mut DistNetwork) {
 }
 
 struct Reader<'a> {
-    net: &'a mut DistNetwork,
+    net: &'a mut MulticonductorNetwork,
     frequency_stated: bool,
 }
 
@@ -718,7 +718,7 @@ impl Reader<'_> {
         &mut self,
         class: &str,
         name: &str,
-        seen: impl Fn(&DistNetwork) -> bool,
+        seen: impl Fn(&MulticonductorNetwork) -> bool,
     ) -> bool {
         if !seen(self.net) {
             return false;
@@ -942,7 +942,7 @@ impl Reader<'_> {
     }
 
     fn lines(&mut self, items: &Map<String, Value>) {
-        // `DistNetwork::linecode` resolves a name case-insensitively, so the
+        // `MulticonductorNetwork::linecode` resolves a name case-insensitively, so the
         // taken set holds lowercase keys and a synthesized name avoids a
         // declared linecode that differs only in case.
         let mut taken: std::collections::BTreeSet<String> = self

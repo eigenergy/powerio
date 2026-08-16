@@ -3,22 +3,22 @@
 
 use powerio::format::powerworld::parse_aux;
 use powerio::{
-    Bus, BusId, BusType, CoordinateSpace, CoordsKind, GeoGeometry, GeoLayer, GeoTarget, Location,
-    Network, apply_substation_points, geo_layer_from_aux_substations, geo_layer_from_pwd,
-    parse_display_file, pwd_mercator_to_lonlat,
+    BalancedNetwork, Bus, BusId, BusType, CoordinateSpace, CoordsKind, GeoGeometry, GeoLayer,
+    GeoTarget, Location, apply_substation_points, geo_layer_from_aux_substations,
+    geo_layer_from_pwd, parse_display_file, pwd_mercator_to_lonlat,
 };
 
 fn parse(bytes: &[u8], hint: Option<&str>) -> powerio::GeoParsed {
     GeoLayer::parse_bytes(bytes, hint).expect("parse geo layer")
 }
 
-fn small_network() -> Network {
+fn small_network() -> BalancedNetwork {
     let mut bus1 = Bus::new(BusId(1), BusType::Ref, 230.0);
     bus1.name = Some("North".to_owned());
     let mut bus2 = Bus::new(BusId(2), BusType::Pq, 230.0);
     bus2.name = Some("South".to_owned());
     let branch = powerio::Branch::new(BusId(1), BusId(2), 0.01, 0.1);
-    let mut net = Network::in_memory("small", 100.0, vec![bus1, bus2], vec![branch]);
+    let mut net = BalancedNetwork::in_memory("small", 100.0, vec![bus1, bus2], vec![branch]);
     net.generators.push(powerio::Generator::new(BusId(1)));
     net
 }

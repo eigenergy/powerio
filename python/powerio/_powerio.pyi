@@ -3,7 +3,7 @@
 Hand-written to match powerio-py/src/lib.rs. Keep in sync when the Rust ABI
 changes; this is what makes the ``py.typed`` package statically checkable. The
 matrix methods return COO triplets as plain Python lists; the pure-Python
-``powerio.Network`` wrapper turns them into scipy/networkx objects.
+``powerio.BalancedNetwork`` wrapper turns them into scipy/networkx objects.
 """
 
 from typing import Any, Literal, Optional, Tuple

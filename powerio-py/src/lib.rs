@@ -26,8 +26,8 @@ use powerio_matrix::matrix::{
     build_weighted_laplacian, build_ybus,
 };
 use powerio_matrix::{
-    DisplayData, IndexCore, IndexedNetwork, MissingGenCostPolicy, Network, NormalizeOptions,
-    POWER_MODELS_ANGLE_BOUND_PAD, PwdDisplay, WriteOptions,
+    BalancedNetwork, DisplayData, IndexCore, IndexedNetwork, MissingGenCostPolicy,
+    NormalizeOptions, POWER_MODELS_ANGLE_BOUND_PAD, PwdDisplay, WriteOptions,
 };
 use powerio_pkg::{
     DiagnosticSeverity, NetworkPackage, OperatingPointSeries, Origin,
@@ -632,7 +632,7 @@ fn build_options(scheme: Scheme, include_taps: bool, include_shifts: bool) -> Bu
     }
 }
 
-/// Low level handle around a parsed [`Network`]. The public `powerio.Network`
+/// Low level handle around a parsed [`BalancedNetwork`]. The public `powerio.BalancedNetwork`
 /// (pure Python) wraps this: the IO getters and topology methods delegate
 /// straight to it, and the matrix methods turn its COO tuples into scipy.
 ///
@@ -641,7 +641,7 @@ fn build_options(scheme: Scheme, include_taps: bool, include_shifts: bool) -> Bu
 /// bus-id map per call.
 #[pyclass(name = "PyNetwork")]
 pub struct PyNetwork {
-    inner: Network,
+    inner: BalancedNetwork,
     core: IndexCore,
     warnings: Vec<String>,
 }
@@ -764,7 +764,7 @@ impl PyNetwork {
         IndexedNetwork::with_core(&self.inner, &self.core).reference_bus_indices()
     }
 
-    // --- tables (the format-neutral Network, as dict rows) --------------
+    // --- tables (the format-neutral BalancedNetwork, as dict rows) --------------
 
     #[getter]
     fn buses<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyList>> {
@@ -826,7 +826,7 @@ impl PyNetwork {
             d.set_item("r", br.r)?;
             d.set_item("x", br.x)?;
             let charging = br.terminal_charging();
-            d.set_item("b", br.legacy_total_charging_b())?;
+            d.set_item("b", br.total_charging_b())?;
             d.set_item("g_fr", charging.g_fr)?;
             d.set_item("b_fr", charging.b_fr)?;
             d.set_item("g_to", charging.g_to)?;
@@ -1300,7 +1300,7 @@ impl PyNetwork {
 
     fn __repr__(&self) -> String {
         format!(
-            "Network(name={:?}, n_buses={}, n_branches={}, n_gens={})",
+            "BalancedNetwork(name={:?}, n_buses={}, n_branches={}, n_gens={})",
             self.inner.name,
             self.inner.buses.len(),
             self.inner.branches.len(),
@@ -1356,10 +1356,10 @@ fn parse_display_bytes<'py>(
     display_data_to_py(py, display)
 }
 
-/// Rebuild a case from JSON produced by `Network.to_json()`.
+/// Rebuild a case from JSON produced by `BalancedNetwork.to_json()`.
 #[pyfunction]
 fn from_json(text: &str) -> PyResult<PyNetwork> {
-    let inner = powerio_matrix::Network::from_json(text).map_err(core_pyerr)?;
+    let inner = powerio_matrix::BalancedNetwork::from_json(text).map_err(core_pyerr)?;
     let core = IndexCore::build(&inner);
     Ok(PyNetwork {
         inner,
@@ -1514,10 +1514,10 @@ fn dist_to_pyerr(e: powerio_dist::Error) -> PyErr {
 
 /// Low-level handle around a parsed multiconductor distribution network in
 /// wire coordinates (OpenDSS, PMD ENGINEERING JSON, BMOPF JSON). The
-/// user-facing `powerio.dist.DistNetwork` wraps it.
+/// user-facing `powerio.dist.MulticonductorNetwork` wraps it.
 #[pyclass(name = "_DistNetwork", frozen)]
 struct PyDistNetwork {
-    net: powerio_dist::DistNetwork,
+    net: powerio_dist::MulticonductorNetwork,
 }
 
 #[pymethods]
@@ -1610,7 +1610,7 @@ impl PyDistNetwork {
     }
 
     /// Serialize to `to` and write it to `path` exactly as produced (no
-    /// newline translation; see `Network.write_file`). Returns the fidelity
+    /// newline translation; see `BalancedNetwork.write_file`). Returns the fidelity
     /// warnings.
     fn write_file(&self, path: &str, to: &str) -> PyResult<Vec<String>> {
         let target = to
@@ -1629,7 +1629,7 @@ impl PyDistNetwork {
 
     fn __repr__(&self) -> String {
         format!(
-            "DistNetwork(n_buses={}, n_lines={}, n_transformers={}, n_loads={})",
+            "MulticonductorNetwork(n_buses={}, n_lines={}, n_transformers={}, n_loads={})",
             self.net.buses.len(),
             self.net.lines.len(),
             self.net.transformers.len(),
@@ -1924,13 +1924,12 @@ fn geo_report_dict<'py>(
 /// Parse SCOPF source text and return its Julia compatibility document as JSON.
 #[pyfunction(signature = (text, from_ = "goc3-json"))]
 fn parse_scopf(text: &str, from_: &str) -> PyResult<String> {
-    let instance =
-        powerio_prob::build_scopf_instance_from_str(text, from_).map_err(|error| match error {
-            error @ powerio_prob::ScopfError::UnsupportedFormat(_) => {
-                PyValueError::new_err(error.to_string())
-            }
-            error => PowerIOParseError::new_err(error.to_string()),
-        })?;
+    let instance = powerio_prob::parse_scopf_str(text, from_).map_err(|error| match error {
+        error @ powerio_prob::ScopfError::UnsupportedFormat(_) => {
+            PyValueError::new_err(error.to_string())
+        }
+        error => PowerIOParseError::new_err(error.to_string()),
+    })?;
     powerio_prob::scopf::json::to_json(&instance)
         .map_err(|error| PowerIOParseError::new_err(error.to_string()))
 }

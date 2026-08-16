@@ -1,6 +1,6 @@
 # stubtest allowlist: known, by-design deviations between the hand-written
 # stubs and the runtime module. Typing-only names (TypedDicts, aliases) have
-# no runtime object; Network delegates several methods to the compiled handle
+# no runtime object; BalancedNetwork delegates several methods to the compiled handle
 # through __getattr__, so stubtest cannot see them; the extension classes
 # carry PyO3 constructor signatures stubtest cannot introspect.
 # Anything NOT listed here that drifts fails CI (python.yml).
@@ -13,11 +13,11 @@ powerio.Gen
 powerio.GenCost
 powerio.GridfmOutputs
 powerio.Load
-powerio.Network.__init__
-powerio.Network.connectivity_report
-powerio.Network.reference_bus_index
-powerio.Network.reference_bus_indices
-powerio.Network.write_dcopf_bundle
+powerio.BalancedNetwork.__init__
+powerio.BalancedNetwork.connectivity_report
+powerio.BalancedNetwork.reference_bus_index
+powerio.BalancedNetwork.reference_bus_indices
+powerio.BalancedNetwork.write_dcopf_bundle
 powerio.Package.__init__
 powerio.Scheme
 powerio.SensitivitySolver

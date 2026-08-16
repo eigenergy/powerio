@@ -10,7 +10,7 @@ use crate::matrix::{
     build_incidence, build_lacpf, build_weighted_laplacian, build_ybus, sddm_check,
     triplet::CooBuilder,
 };
-use crate::network::{Branch, BranchCharging, Bus, BusId, BusType, Network, Shunt};
+use crate::network::{BalancedNetwork, Branch, BranchCharging, Bus, BusId, BusType, Shunt};
 use crate::parse_psse;
 use crate::pipeline::{MatrixKind, matrix_stats_for_kind};
 
@@ -24,8 +24,8 @@ fn br(from: usize, to: usize, r: f64, x: f64, b: f64) -> Branch {
     branch
 }
 
-fn three_bus() -> Network {
-    Network::in_memory(
+fn three_bus() -> BalancedNetwork {
+    BalancedNetwork::in_memory(
         "tiny",
         100.0,
         vec![
@@ -41,8 +41,8 @@ fn three_bus() -> Network {
     )
 }
 
-fn zero_impedance_bus_pair() -> Network {
-    Network::in_memory(
+fn zero_impedance_bus_pair() -> BalancedNetwork {
+    BalancedNetwork::in_memory(
         "zero",
         100.0,
         vec![bus(1, BusType::Ref), bus(2, BusType::Pq)],
@@ -136,7 +136,7 @@ fn bprime_cancels_tap_magnitude_and_keeps_phase_shift() {
     let mut shifted = br(1, 2, 0.0, 0.2, 0.0);
     shifted.tap = 1.25;
     shifted.shift = 60.0;
-    let net = Network::in_memory(
+    let net = BalancedNetwork::in_memory(
         "phase-shifter",
         100.0,
         vec![bus(1, BusType::Ref), bus(2, BusType::Pq)],
@@ -185,7 +185,7 @@ fn bprime_cancels_tap_magnitude_and_keeps_phase_shift() {
 fn bprime_with_phase_shift_and_resistance_is_not_sddm() {
     let mut shifted = br(1, 2, 0.05, 0.2, 0.0);
     shifted.shift = 45.0;
-    let net = Network::in_memory(
+    let net = BalancedNetwork::in_memory(
         "asymmetric-bp",
         100.0,
         vec![bus(1, BusType::Ref), bus(2, BusType::Pq)],
@@ -235,13 +235,13 @@ fn bprime_folds_phase_shifted_self_loop_like_make_ybus() {
     loop_branch.tap = 1.25;
     loop_branch.shift = 60.0;
 
-    let base = Network::in_memory(
+    let base = BalancedNetwork::in_memory(
         "without-self-loop",
         100.0,
         vec![bus(1, BusType::Ref), bus(2, BusType::Pq)],
         vec![branch.clone()],
     );
-    let with_loop = Network::in_memory(
+    let with_loop = BalancedNetwork::in_memory(
         "with-self-loop",
         100.0,
         vec![bus(1, BusType::Ref), bus(2, BusType::Pq)],
@@ -328,7 +328,7 @@ fn bdoubleprime_keeps_shunts_charging_and_taps() {
     let mut branch = br(1, 2, 0.0, 0.2, 0.4);
     branch.tap = 2.0;
     branch.shift = 45.0;
-    let mut net = Network::in_memory(
+    let mut net = BalancedNetwork::in_memory(
         "bpp-shunts-charging-tap",
         100.0,
         vec![bus(1, BusType::Ref), bus(2, BusType::Pq)],
@@ -429,7 +429,7 @@ fn ybus_reciprocity_and_symmetry() {
 fn ybus_uses_asymmetric_terminal_admittance() {
     let mut branch = br(1, 2, 0.0, 0.1, 0.0);
     branch.charging = Some(BranchCharging::new(0.01, 0.02, 0.03, 0.04));
-    let net = Network::in_memory(
+    let net = BalancedNetwork::in_memory(
         "terminal-charging",
         100.0,
         vec![bus(1, BusType::Ref), bus(2, BusType::Pq)],
@@ -489,7 +489,7 @@ fn ybus_tap_scales_from_diagonal_only() {
     // Reciprocity/symmetry tests cannot see this asymmetric scaling.
     let mut branch = br(1, 2, 0.0, 0.2, 0.0); // x = 0.2, r = 0, no line charging
     branch.tap = 1.25;
-    let net = Network::in_memory(
+    let net = BalancedNetwork::in_memory(
         "tap2",
         100.0,
         vec![bus(1, BusType::Ref), bus(2, BusType::Pq)],
@@ -586,7 +586,7 @@ fn a_radial_tie_gets_a_structurally_zero_lodf_column() {
     // so its LODF column redistributes nothing. That used to rest on the
     // denominator landing under an absolute 1e-9; it is now the topology.
     // Both solver paths must agree.
-    let net = Network::in_memory(
+    let net = BalancedNetwork::in_memory(
         "two-loops-one-tie",
         100.0,
         vec![
@@ -649,7 +649,7 @@ fn a_reactance_below_the_divisible_bound_is_zero_impedance() {
     // #292. `x = 1e-300` gives a finite `b = 1e300`, so every finiteness check
     // passed it and the Laplacian came out rank deficient in floating point
     // with `sddm_check` reporting nothing.
-    let net = Network::in_memory(
+    let net = BalancedNetwork::in_memory(
         "denormal-x",
         100.0,
         vec![bus(1, BusType::Ref), bus(2, BusType::Pq)],
@@ -688,7 +688,7 @@ fn a_reactance_below_the_divisible_bound_is_zero_impedance() {
 fn a_reactance_the_builders_can_divide_by_is_stamped_by_both() {
     // #292. Bounding `r² + x²` by the magnitude bound made Y_bus call this
     // branch zero impedance while the DC builder stamped `b = 1e100`.
-    let net = Network::in_memory(
+    let net = BalancedNetwork::in_memory(
         "small-but-divisible-x",
         100.0,
         vec![bus(1, BusType::Ref), bus(2, BusType::Pq)],
@@ -714,7 +714,7 @@ fn a_tap_ratio_the_builders_cannot_divide_by_is_refused() {
     for tap in [1e-200, f64::NAN, f64::INFINITY] {
         let mut branch = br(1, 2, 0.01, 0.1, 0.0);
         branch.tap = tap;
-        let net = Network::in_memory(
+        let net = BalancedNetwork::in_memory(
             "degenerate-tap",
             100.0,
             vec![bus(1, BusType::Ref), bus(2, BusType::Pq)],
@@ -748,7 +748,7 @@ fn an_ordinary_tap_still_builds() {
     for tap in [0.0, 0.95, 1.0, 1.1] {
         let mut branch = br(1, 2, 0.01, 0.1, 0.0);
         branch.tap = tap;
-        let net = Network::in_memory(
+        let net = BalancedNetwork::in_memory(
             "ordinary-tap",
             100.0,
             vec![bus(1, BusType::Ref), bus(2, BusType::Pq)],
@@ -767,7 +767,7 @@ fn self_loop_with_zero_reactance_drops_unconditionally() {
     // A self-loop (from == to) is documented as always dropped, independent
     // of skip_zero_impedance; it must not be misrouted through the
     // zero-impedance accounting or the ZeroImpedance error path.
-    let net = Network::in_memory(
+    let net = BalancedNetwork::in_memory(
         "self-loop",
         100.0,
         vec![bus(1, BusType::Ref), bus(2, BusType::Pq)],

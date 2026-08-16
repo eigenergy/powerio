@@ -1,15 +1,15 @@
 //! Normalized dense tables for solver and compiler front ends.
 //!
-//! `Network::to_normalized` keeps source bus ids because it is still a network
+//! `BalancedNetwork::to_normalized` keeps source bus ids because it is still a network
 //! model. Solver inputs want dense row ids, stable row order, and enough
 //! provenance to map lowered data back to the source case. This module provides
-//! that table layout without changing the lossless `Network` representation.
+//! that table layout without changing the lossless `BalancedNetwork` representation.
 
 use serde::{Deserialize, Serialize};
 
 use crate::network::{
-    BranchCurrentRatings, BranchRatingSet, BusId, BusType, GenCaps, GenCost, Hvdc,
-    LoadVoltageModel, Network,
+    BalancedNetwork, BranchCurrentRatings, BranchRatingSet, BusId, BusType, GenCaps, GenCost, Hvdc,
+    LoadVoltageModel,
 };
 use crate::normalize::{NormalizeOptions, NormalizeSourceRows};
 use crate::{Error, IndexedNetwork, Result};
@@ -19,7 +19,7 @@ pub const NORMALIZED_SOLVER_TABLES_PASS: &str = "balanced-to-normalized-solver-t
 
 /// A row oriented, dense indexed, per unit/radian view of a balanced network.
 ///
-/// The source `Network` is first normalized with [`Network::to_normalized`], then
+/// The source `BalancedNetwork` is first normalized with [`BalancedNetwork::to_normalized`], then
 /// lowered through [`IndexedNetwork`] so 3-winding transformers appear as star
 /// buses and branches. Source ids are preserved as metadata; every reference used
 /// for computation is dense and zero based.
@@ -298,11 +298,11 @@ impl From<&GenCost> for SolverCostRow {
     }
 }
 
-impl Network {
+impl BalancedNetwork {
     /// Lower this balanced network into normalized dense solver tables.
     ///
     /// # Errors
-    /// Propagates [`Network::to_normalized`] errors and reports
+    /// Propagates [`BalancedNetwork::to_normalized`] errors and reports
     /// [`Error::UnknownBus`] if the derived normalized network contains an
     /// internal dangling bus reference.
     pub fn to_normalized_solver_tables(&self) -> Result<NormalizedSolverTables> {
@@ -311,7 +311,7 @@ impl Network {
 }
 
 impl NormalizedSolverTables {
-    pub fn from_network(source: &Network) -> Result<Self> {
+    pub fn from_network(source: &BalancedNetwork) -> Result<Self> {
         let (normalized, provenance) = normalized_for_solver(source)?;
         let view = IndexedNetwork::new(&normalized);
         let net = view.network();
@@ -362,7 +362,9 @@ impl NormalizedSolverTables {
 /// The normalized network and the row provenance for its star-lowered view.
 /// A network that is already normalized is its own source, so every element
 /// maps to its own row.
-fn normalized_for_solver(source: &Network) -> Result<(Network, NormalizeSourceRows)> {
+fn normalized_for_solver(
+    source: &BalancedNetwork,
+) -> Result<(BalancedNetwork, NormalizeSourceRows)> {
     if source.is_normalized() {
         let net = source.clone();
         let mut rows = NormalizeSourceRows::identity(&net);
@@ -774,7 +776,7 @@ mod tests {
 
     #[test]
     fn solver_tables_filter_out_of_service_rows_and_keep_source_rows() {
-        let mut net = Network::in_memory(
+        let mut net = BalancedNetwork::in_memory(
             "filtered",
             100.0,
             vec![
@@ -828,7 +830,7 @@ mod tests {
         // and generator and the isolated bus are the cases that separate this
         // from the filtered path: they survive here, so the map stays the
         // identity across every family instead of shifting positions.
-        let mut net = Network::in_memory(
+        let mut net = BalancedNetwork::in_memory(
             "identity",
             100.0,
             vec![
@@ -887,7 +889,7 @@ mod tests {
 
     #[test]
     fn solver_tables_scale_storage_and_hvdc_power_fields_to_per_unit() {
-        let mut net = Network::in_memory(
+        let mut net = BalancedNetwork::in_memory(
             "storage-hvdc",
             100.0,
             vec![bus(1, BusType::Ref), bus(2, BusType::Pq)],

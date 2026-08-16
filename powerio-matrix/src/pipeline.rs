@@ -1,6 +1,6 @@
 //! Orchestrates a single case → output directory.
 //!
-//! Given a parsed `Network`, builds the requested matrix family, writes
+//! Given a parsed `BalancedNetwork`, builds the requested matrix family, writes
 //! `.mtx` files, and emits a `meta.json` sidecar describing what was
 //! produced. Used by both the `batch` CLI subcommand and the TUI's
 //! batch export screen.
@@ -21,7 +21,7 @@ use crate::matrix::{
     build_bdoubleprime, build_bprime, build_lacpf, build_ybus, negate_into, sddm_check,
     skipped_zero_impedance,
 };
-use crate::network::Network;
+use crate::network::BalancedNetwork;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[non_exhaustive]
@@ -199,7 +199,7 @@ fn ends_with_digest(stem: &str) -> bool {
 }
 
 impl Pipeline {
-    pub fn run(&self, net: &Network, out_dir: impl AsRef<Path>) -> Result<PipelineOutputs> {
+    pub fn run(&self, net: &BalancedNetwork, out_dir: impl AsRef<Path>) -> Result<PipelineOutputs> {
         let out_dir = out_dir.as_ref();
         std::fs::create_dir_all(out_dir)?;
 

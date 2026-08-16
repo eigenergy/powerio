@@ -29,7 +29,7 @@
 use std::ffi::{CStr, CString, c_char};
 use std::panic::{AssertUnwindSafe, catch_unwind};
 
-use powerio::{IndexCore, IndexedNetwork, Network, NormalizeOptions, TargetFormat};
+use powerio::{BalancedNetwork, IndexCore, IndexedNetwork, NormalizeOptions, TargetFormat};
 
 #[cfg(feature = "arrow")]
 mod arrow_export;
@@ -44,12 +44,12 @@ pub use arrow_export::{
     PIO_ARROW_TABLE_SWITCH, PIO_ARROW_TABLE_YBUS,
 };
 
-/// Opaque parsed network handle. Carries the parsed [`Network`], the
+/// Opaque parsed network handle. Carries the parsed [`BalancedNetwork`], the
 /// [`IndexCore`] derived from it once at parse time (so every indexed query
 /// reuses the same bus-id map and per-bus aggregates instead of rebuilding
 /// them), and the reader's fidelity warnings ([`pio_warnings`]).
 pub struct PioNetwork {
-    net: Network,
+    net: BalancedNetwork,
     core: IndexCore,
     warnings: Vec<String>,
 }
@@ -149,9 +149,9 @@ unsafe fn guard<R>(fallback: R, f: impl FnOnce() -> R) -> R {
     catch_unwind(AssertUnwindSafe(f)).unwrap_or(fallback)
 }
 
-/// Box a `Network` into an owned network handle, building its [`IndexCore`] once so
+/// Box a `BalancedNetwork` into an owned network handle, building its [`IndexCore`] once so
 /// every indexed query reuses it. The one constructor for `*mut PioNetwork`.
-fn make_network(net: Network, warnings: Vec<String>) -> *mut PioNetwork {
+fn make_network(net: BalancedNetwork, warnings: Vec<String>) -> *mut PioNetwork {
     let core = IndexCore::build(&net);
     Box::into_raw(Box::new(PioNetwork {
         net,
@@ -160,7 +160,7 @@ fn make_network(net: Network, warnings: Vec<String>) -> *mut PioNetwork {
     }))
 }
 
-/// Finish a `*mut PioNetwork` entry point: run `f` (producing a `Network` with
+/// Finish a `*mut PioNetwork` entry point: run `f` (producing a `BalancedNetwork` with
 /// its read warnings, or an error message) under the panic guard, hand back an
 /// owned handle, or write the error, `panic_msg` if `f` panicked, into `errbuf`
 /// and return NULL. The shared tail of every handle-returning function
@@ -169,7 +169,7 @@ unsafe fn finish_network(
     errbuf: *mut c_char,
     errlen: usize,
     panic_msg: &str,
-    f: impl FnOnce() -> Result<(Network, Vec<String>), String>,
+    f: impl FnOnce() -> Result<(BalancedNetwork, Vec<String>), String>,
 ) -> *mut PioNetwork {
     unsafe {
         // make_network runs inside the guard: IndexCore::build is part of the
@@ -521,7 +521,7 @@ pub unsafe extern "C" fn pio_from_json(
     unsafe {
         finish_network(errbuf, errlen, "panic while parsing model JSON", || {
             let text = required_cstr(text, "text")?;
-            Network::from_json(text)
+            BalancedNetwork::from_json(text)
                 .map(|net| (net, Vec::new()))
                 .map_err(|e| e.to_string())
         })
@@ -655,7 +655,7 @@ unsafe fn view<'a>(net: *const PioNetwork) -> Option<IndexedNetwork<'a>> {
 
 /// Normalize `net` into a NEW network handle: per unit, radians, out of service
 /// filtered, source bus ids preserved, bus types canonicalized (see
-/// `Network::to_normalized`). A value transform, not a serialization, hence
+/// `BalancedNetwork::to_normalized`). A value transform, not a serialization, hence
 /// the verb, while the `to_*` family re-encodes unchanged data. The result is
 /// independent of `net`; free both with [`pio_network_free`]. Every extractor
 /// and serializer works on it unchanged (the handle is per unit, not MW).
@@ -1134,11 +1134,7 @@ pub unsafe extern "C" fn pio_branches(
             );
             fill(r, cap, net.branches.iter().map(|br| br.r));
             fill(x, cap, net.branches.iter().map(|br| br.x));
-            fill(
-                b,
-                cap,
-                net.branches.iter().map(|br| br.legacy_total_charging_b()),
-            );
+            fill(b, cap, net.branches.iter().map(|br| br.total_charging_b()));
             fill(tap, cap, net.branches.iter().map(|br| br.tap));
             fill(shift, cap, net.branches.iter().map(|br| br.shift));
             fill(
@@ -2127,8 +2123,8 @@ pub unsafe extern "C" fn pio_scopf_parse_str(
         finish_handle(errbuf, errlen, "panic while parsing SCOPF instance", || {
             let text = required_cstr(text, "text")?;
             let from = required_cstr(from, "from")?;
-            let instance = powerio_prob::build_scopf_instance_from_str(text, from)
-                .map_err(|error| error.to_string())?;
+            let instance =
+                powerio_prob::parse_scopf_str(text, from).map_err(|error| error.to_string())?;
             Ok(PioScopfInstance { instance })
         })
     }
@@ -2309,7 +2305,7 @@ unsafe fn finish_handle<H>(
 /// the `dist` cargo feature.
 #[cfg(feature = "dist")]
 pub struct PioDistNetwork {
-    net: powerio_dist::DistNetwork,
+    net: powerio_dist::MulticonductorNetwork,
 }
 
 // Same cross-thread read guarantee as `PioNetwork` (see that assertion): pin
@@ -2512,7 +2508,7 @@ pub unsafe extern "C" fn pio_dist_from_json(
     unsafe {
         finish_handle(errbuf, errlen, "panic while parsing model JSON", || {
             let text = required_cstr(text, "text")?;
-            serde_json::from_str::<powerio_dist::DistNetwork>(text)
+            serde_json::from_str::<powerio_dist::MulticonductorNetwork>(text)
                 .map(|net| PioDistNetwork { net })
                 .map_err(|e| format!("model JSON: {e}"))
         })
@@ -2742,7 +2738,7 @@ mod tests {
         let mut branch = Branch::new(BusId(1), BusId(2), 0.01, 0.1);
         branch.charging = Some(BranchCharging::new(0.01, 0.02, 0.03, 0.05));
         branch.rate_a = 100.0;
-        let net = Network::in_memory(
+        let net = BalancedNetwork::in_memory(
             "terminal-projection",
             100.0,
             vec![
@@ -4506,13 +4502,18 @@ mpc.branch = [
             (magnitudes, angles)
         }
 
-        fn preflight_network(terminals: &[&str], grounded: &[&str]) -> powerio_dist::DistNetwork {
-            use powerio_dist::{DistBus, DistLine, DistLineCode, DistNetwork, VoltageSource};
+        fn preflight_network(
+            terminals: &[&str],
+            grounded: &[&str],
+        ) -> powerio_dist::MulticonductorNetwork {
+            use powerio_dist::{
+                DistBus, DistLine, DistLineCode, MulticonductorNetwork, VoltageSource,
+            };
 
             let n = terminals.len();
             let terminal_map = strings(terminals);
             let (v_magnitude, v_angle) = phase_reference(terminals, grounded);
-            let mut net = DistNetwork::default();
+            let mut net = MulticonductorNetwork::default();
             for id in ["sourcebus", "loadbus"] {
                 let mut bus = DistBus::new(id, terminal_map.clone());
                 bus.grounded = strings(grounded);

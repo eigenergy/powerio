@@ -1,10 +1,10 @@
 use powerio::{
-    Branch, Bus, BusId, BusType, DcConvention, GenCost, Generator, IndexedNetwork, Network,
+    BalancedNetwork, Branch, Bus, BusId, BusType, DcConvention, GenCost, Generator, IndexedNetwork,
     parse_matpower_file,
 };
 use powerio_prob::{DcOpfOptions, Error, Units, build_dc_opf_instance};
 
-fn case9() -> Network {
+fn case9() -> BalancedNetwork {
     parse_matpower_file("../tests/data/case9.m").expect("parse case9")
 }
 
@@ -28,8 +28,8 @@ fn generator(bus: usize, c2: f64, c1: f64) -> Generator {
     generator
 }
 
-fn small_network() -> Network {
-    let mut network = Network::in_memory(
+fn small_network() -> BalancedNetwork {
+    let mut network = BalancedNetwork::in_memory(
         "small",
         100.0,
         vec![bus(10, BusType::Ref), bus(30, BusType::Pq)],
@@ -39,8 +39,8 @@ fn small_network() -> Network {
     network
 }
 
-fn two_island_network() -> Network {
-    let mut network = Network::in_memory(
+fn two_island_network() -> BalancedNetwork {
+    let mut network = BalancedNetwork::in_memory(
         "islands",
         100.0,
         vec![

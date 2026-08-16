@@ -3,9 +3,9 @@ use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use powerio_dist::{DistNetwork, DistTargetFormat};
+use powerio_dist::{DistTargetFormat, MulticonductorNetwork};
 use powerio_matrix::{
-    Network, TargetFormat, parse_file as parse_transmission_file, parse_matpower_file,
+    BalancedNetwork, TargetFormat, parse_file as parse_transmission_file, parse_matpower_file,
     parse_str as parse_transmission_str, write_as as write_transmission_as,
 };
 
@@ -444,7 +444,7 @@ const TRANSMISSION_CASES: [(&str, &str); 6] = [
 
 struct TransmissionPayload {
     label: &'static str,
-    network: Network,
+    network: BalancedNetwork,
     parse_warnings: Vec<String>,
     core: TransmissionCore,
 }
@@ -598,7 +598,7 @@ fn validate_transmission_pair(
     }
 }
 
-fn transmission_core(net: &Network) -> TransmissionCore {
+fn transmission_core(net: &BalancedNetwork) -> TransmissionCore {
     let rounded = |x: f64| (x * 1e3).round() as i64;
     TransmissionCore {
         buses: net.buses.len(),
@@ -694,7 +694,7 @@ const DISTRIBUTION_CASES: [(&str, &str, DistributionFormat); 7] = [
 
 struct DistributionPayload {
     label: &'static str,
-    network: DistNetwork,
+    network: MulticonductorNetwork,
     parse_warnings: Vec<String>,
     core: DistributionCore,
 }
@@ -804,7 +804,7 @@ fn validate_distribution_pair(
 fn parse_distribution_text(
     text: &str,
     format: DistributionFormat,
-) -> powerio_dist::Result<DistNetwork> {
+) -> powerio_dist::Result<MulticonductorNetwork> {
     if format.target != DistTargetFormat::Dss {
         return powerio_dist::parse_str(text, format.token);
     }
@@ -845,7 +845,7 @@ fn core_survives(
         && after.load_q == before.load_q
 }
 
-fn distribution_core(net: &DistNetwork) -> DistributionCore {
+fn distribution_core(net: &MulticonductorNetwork) -> DistributionCore {
     let rounded = |x: f64| (x * 1e3).round() as i64;
     DistributionCore {
         buses: net.buses.len(),

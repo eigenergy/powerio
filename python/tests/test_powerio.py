@@ -120,7 +120,7 @@ def test_public_type_is_network(case9):
     assert powerio.BalancedNetwork is powerio.Network
     assert "BalancedNetwork" in powerio.__all__
     assert not hasattr(powerio, "Case")
-    assert repr(case9).startswith("Network(")
+    assert repr(case9).startswith("BalancedNetwork(")
 
 
 def test_parse_infers_format_from_extension():
@@ -325,7 +325,7 @@ def test_to_normalized_is_per_unit_and_in_memory(case9):
     # Powers are per unit (divided by baseMVA).
     g, rg = n.generators[0], case9.generators[0]
     assert abs(g["pmax"] - rg["pmax"] / case9.base_mva) < 1e-9
-    # The result is a full Network, so the matrix builders work on it.
+    # The result is a full BalancedNetwork, so the matrix builders work on it.
     assert n.bprime().shape == (n.n_buses, n.n_buses)
 
 
@@ -1208,7 +1208,7 @@ def test_gridfm_include_y_bus_false_omits_table(case9, tmp_path):
 def test_gridfm_batch_stacks_and_keys_by_scenario(tmp_path):
     pl = pytest.importorskip("polars")
     # Same topology twice → two scenarios stacked in one dataset. (The Python
-    # Network is read-only, so the two snapshots share values; the test pins the
+    # BalancedNetwork is read-only, so the two snapshots share values; the test pins the
     # row-stack and scenario keying, which the Rust tests pair with perturbation.)
     case = load("case9")
     out = powerio.write_gridfm_batch([case, case], str(tmp_path))
@@ -1232,7 +1232,7 @@ def test_gridfm_batch_stacks_and_keys_by_scenario(tmp_path):
 
 @gridfm_only
 def test_read_gridfm_round_trips(case9, tmp_path):
-    # write → read back: the recovered Network mirrors the source's element counts
+    # write → read back: the recovered BalancedNetwork mirrors the source's element counts
     # and base_mva, surfaces fidelity warnings, sets source_format Gridfm, and is
     # runnable (serializes to MATPOWER and re-parses).
     out = case9.write_gridfm(str(tmp_path))
@@ -1265,7 +1265,7 @@ def test_read_gridfm_is_unpackable(case9, tmp_path):
 
 @gridfm_only
 def test_read_gridfm_scenarios_round_trips_each(tmp_path):
-    # The batch write stacks two scenarios; the read side rebuilds one Network per
+    # The batch write stacks two scenarios; the read side rebuilds one BalancedNetwork per
     # scenario id, ascending.
     case = load("case9")
     out = powerio.write_gridfm_batch([case, case], str(tmp_path))

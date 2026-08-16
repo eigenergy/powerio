@@ -56,7 +56,7 @@ use std::collections::hash_map::Entry;
 
 use super::map::{BRANCH_DEVICE_TYPE, LINE_CIRCUIT, derive_bus_kinds};
 use crate::network::{
-    Branch, Bus, BusId, BusType, Extras, Generator, Load, Network, Shunt, SourceFormat,
+    BalancedNetwork, Branch, Bus, BusId, BusType, Extras, Generator, Load, Shunt, SourceFormat,
 };
 use crate::{Error, Result};
 
@@ -112,13 +112,13 @@ impl SearchBudget {
 /// allocate; the texts document why each check exists.
 type Probe<T> = std::result::Result<T, &'static str>;
 
-/// Parse `.pwb` bytes into a [`Network`]. `name_hint` (the file stem) names
+/// Parse `.pwb` bytes into a [`BalancedNetwork`]. `name_hint` (the file stem) names
 /// the network; the binary carries no case name in the decoded region.
 ///
 /// # Errors
 /// [`Error::FormatRead`] when the header is not the known magic, a record
 /// does not match the validated layouts, or a table cannot be located.
-pub fn parse_pwb(bytes: &[u8], name_hint: Option<&str>) -> Result<Network> {
+pub fn parse_pwb(bytes: &[u8], name_hint: Option<&str>) -> Result<BalancedNetwork> {
     let header_constant = expect_header(bytes)?;
     reject_unsupported_vintage(bytes)?;
     // The header constant pins the generator record layout wherever the
@@ -270,7 +270,7 @@ fn search_table_chain(
     device_glue: DeviceGlue,
     wide_bus_glue: bool,
     budget: &SearchBudget,
-) -> Option<Result<Network>> {
+) -> Option<Result<BalancedNetwork>> {
     // A count word can be forged by record interiors and the case
     // description, so table location is a depth first search: a candidate at
     // any stage is kept only if every later table parses behind it. The
@@ -468,9 +468,9 @@ fn search_table_chain(
 
 /// Keep the table chain with the largest decoded electrical core.
 fn keep_best_chain(
-    best: &mut Option<(usize, Result<Network>)>,
+    best: &mut Option<(usize, Result<BalancedNetwork>)>,
     score: usize,
-    net: Result<Network>,
+    net: Result<BalancedNetwork>,
 ) {
     let candidate_ok = net.is_ok();
     let replace = match best.as_ref() {
@@ -537,9 +537,9 @@ fn checked_network(
     shunts: Vec<Shunt>,
     branches: Vec<Branch>,
     generators: Vec<Generator>,
-) -> Result<Network> {
+) -> Result<BalancedNetwork> {
     derive_bus_kinds(&mut buses, &generators);
-    let net = Network {
+    let net = BalancedNetwork {
         name: name_hint.unwrap_or("case").to_string(),
         base_mva: MVA_BASE,
         base_frequency: crate::network::DEFAULT_BASE_FREQUENCY,
@@ -1912,8 +1912,8 @@ fn read_legacy_branch_tail(c: &mut Cur<'_>, tail_start: usize) -> Probe<(&'stati
 mod tests {
     use super::*;
 
-    fn empty_network(name: &str) -> Network {
-        Network {
+    fn empty_network(name: &str) -> BalancedNetwork {
+        BalancedNetwork {
             name: name.to_string(),
             base_mva: MVA_BASE,
             base_frequency: crate::network::DEFAULT_BASE_FREQUENCY,

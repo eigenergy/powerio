@@ -338,7 +338,7 @@ enum FormatArg {
     PowerWorld,
     #[value(name = "pandapower-json", alias = "pandapower", alias = "pp")]
     PandapowerJson,
-    /// Deprecated: bare `Network` model JSON.
+    /// Deprecated: bare `BalancedNetwork` model JSON.
     #[value(name = "powerio-json", alias = "powerio", alias = "json", hide = true)]
     PowerioJson,
     #[value(name = "pypsa-csv", alias = "pypsa")]
@@ -1288,7 +1288,7 @@ fn set_package_source(
 }
 
 fn transmission_summary_json(
-    net: &powerio_matrix::Network,
+    net: &powerio_matrix::BalancedNetwork,
     warnings: &[String],
 ) -> serde_json::Value {
     let view = powerio_matrix::IndexedNetwork::new(net);
@@ -1321,7 +1321,7 @@ fn transmission_summary_json(
     })
 }
 
-fn distribution_summary_json(net: &powerio_dist::DistNetwork) -> serde_json::Value {
+fn distribution_summary_json(net: &powerio_dist::MulticonductorNetwork) -> serde_json::Value {
     json!({
         "schema": "powerio.summary",
         powerio::version::VERSION_KEY: powerio::VERSION,
@@ -1781,7 +1781,7 @@ fn convert_to_pypsa_folder(
 /// A single-file case input parsed to its own family model.
 enum FamilyCase {
     Transmission(powerio_matrix::Parsed),
-    Distribution(powerio_dist::DistNetwork),
+    Distribution(powerio_dist::MulticonductorNetwork),
 }
 
 /// Parse a single-file case to whichever family model it belongs to. With no
@@ -1851,7 +1851,7 @@ fn parse_classified_case(case: &cases::ClassifiedCase, input: &Path) -> anyhow::
     }
 }
 
-/// Read `input` into the neutral [`powerio_matrix::Network`] through the shared
+/// Read `input` into the neutral [`powerio_matrix::BalancedNetwork`] through the shared
 /// format hub, which picks the reader from `from` or the extension (sniffing a
 /// `.json` with the shared top level shape classifier). The distribution
 /// formats are rejected up front: every caller of this function consumes the
@@ -1860,7 +1860,7 @@ fn parse_classified_case(case: &cases::ClassifiedCase, input: &Path) -> anyhow::
 fn read_network(
     input: &std::path::Path,
     from: Option<FormatArg>,
-) -> anyhow::Result<powerio_matrix::Network> {
+) -> anyhow::Result<powerio_matrix::BalancedNetwork> {
     if let Some(f) = from {
         if f == FormatArg::PowerioJson {
             warn_deprecated_powerio_json();
@@ -2266,7 +2266,7 @@ mpc.branch = [
             y: 35.0,
             kind: None,
         });
-        let mut net = powerio_dist::DistNetwork::default();
+        let mut net = powerio_dist::MulticonductorNetwork::default();
         net.geo = Some(powerio_dist::GeoMeta {
             space: powerio_dist::CoordinateSpace::Geographic { crs: None },
             kind: Some(powerio_dist::CoordsKind::Source),

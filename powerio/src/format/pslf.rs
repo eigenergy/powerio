@@ -2,7 +2,7 @@
 //!
 //! EPC files contain named data sections with colon separated record bodies.
 //! The reader keeps raw physical lines plus token lists on both sides of each
-//! colon, then maps the static power flow core into [`Network`]. Records outside
+//! colon, then maps the static power flow core into [`BalancedNetwork`]. Records outside
 //! that model stay in retained source text and read warnings. [`write_pslf`]
 //! inverts the reader's column layout for the cross-format write path (same
 //! format writes echo the retained source).
@@ -15,8 +15,8 @@ use serde_json::{Number, Value};
 
 use super::{Conversion, sanitize_quoted, warn_extra_branch_rating_sets};
 use crate::network::{
-    Branch, Bus, BusId, BusType, Extras, Generator, Hvdc, Impedance, Load, LoadVoltageModel,
-    Network, Shunt, SourceFormat, Transformer3W, Winding,
+    BalancedNetwork, Branch, Bus, BusId, BusType, Extras, Generator, Hvdc, Impedance, Load,
+    LoadVoltageModel, Shunt, SourceFormat, Transformer3W, Winding,
 };
 use crate::{Error, Result};
 
@@ -26,12 +26,12 @@ const FMT: &str = "PSLF .epc";
 /// toggles on it with no un-escaping, so an embedded quote would shift the record.
 const NAME_FORBIDDEN: &[char] = &['"'];
 
-/// Parse a PSLF `.epc` case into a [`Network`].
+/// Parse a PSLF `.epc` case into a [`BalancedNetwork`].
 ///
 /// Read warnings are available through the shared [`crate::parse_file`] /
 /// [`crate::parse_str`] entry points. This direct helper keeps the older
 /// format-module convention and returns only the typed network.
-pub fn parse_pslf(content: &str) -> Result<Network> {
+pub fn parse_pslf(content: &str) -> Result<BalancedNetwork> {
     let mut warnings = Vec::new();
     parse_pslf_source(Arc::new(content.to_owned()), None, &mut warnings)
 }
@@ -41,7 +41,7 @@ pub(crate) fn parse_pslf_source(
     source: Arc<String>,
     name_hint: Option<&str>,
     warnings: &mut Vec<String>,
-) -> Result<Network> {
+) -> Result<BalancedNetwork> {
     let doc = parse_document(&source, warnings);
     let base_mva = doc.base_mva(warnings);
     let name = doc.name(name_hint);
@@ -111,7 +111,7 @@ pub(crate) fn parse_pslf_source(
 
     warn_unmodeled_sections(&doc, warnings);
 
-    let net = Network {
+    let net = BalancedNetwork {
         name,
         base_mva,
         base_frequency: crate::network::DEFAULT_BASE_FREQUENCY,
@@ -135,7 +135,7 @@ pub(crate) fn parse_pslf_source(
 }
 
 /// EPC source document: structural parse of the file before mapping to
-/// [`Network`].
+/// [`BalancedNetwork`].
 ///
 /// This intentionally keeps sections as raw records instead of making a PSLF
 /// specific object model. The reader only maps the static power flow sections;
@@ -708,7 +708,7 @@ fn read_load(
         // Fold components into P/Q so matrix builders see the total demand that
         // the solved power flow used. The split stays typed for richer writers.
         warnings.push(
-            "PSLF ZIP load components folded into Network load p/q; component fields retained in the typed load voltage model"
+            "PSLF ZIP load components folded into BalancedNetwork load p/q; component fields retained in the typed load voltage model"
                 .into(),
         );
     }
@@ -763,7 +763,7 @@ fn read_shunt(rec: &Record, base_mva: f64) -> Result<Shunt> {
 /// Map one `svd data` record as a fixed shunt at its initial G/B value.
 ///
 /// The control target, limits, and switching fields stay in extras until
-/// `Network` grows a typed controlled shunt model.
+/// `BalancedNetwork` grows a typed controlled shunt model.
 fn read_svd(
     rec: &Record,
     base_mva: f64,
@@ -846,7 +846,7 @@ fn read_dc_converters(
 
 /// Map two-terminal DC lines through their converter rows.
 ///
-/// EPC separates the DC line from each AC converter. `Network::Hvdc` needs AC
+/// EPC separates the DC line from each AC converter. `BalancedNetwork::Hvdc` needs AC
 /// terminal buses and setpoints on one row, so this joins by DC bus id and
 /// retains converter extras under the HVDC record.
 fn read_dc_lines(
@@ -911,7 +911,7 @@ fn read_dc_lines(
         match parsed {
             Ok(line) => {
                 warnings.push(
-                    "PSLF DC line/converter data mapped to Network HVDC with unsupported control fields retained in extras"
+                    "PSLF DC line/converter data mapped to BalancedNetwork HVDC with unsupported control fields retained in extras"
                         .into(),
                 );
                 out.push(line);
@@ -1074,7 +1074,7 @@ struct BusRef<'a> {
 /// Serialize `net` to PSLF `.epc` text.
 ///
 /// The inverse of the reader's column layout: it emits the same colon separated
-/// `lhs : rhs` records, so a `.epc` -> [`Network`] -> `.epc` round trip preserves
+/// `lhs : rhs` records, so a `.epc` -> [`BalancedNetwork`] -> `.epc` round trip preserves
 /// the power flow core. Where a PSLF read stashed a field the neutral model does
 /// not name under a `pslf_*` extras key (the ZIP load split, the per unit shunt
 /// G/B, the branch circuit id, the transformer winding base), the writer replays
@@ -1085,7 +1085,7 @@ struct BusRef<'a> {
 // A flat serializer: one stanza per EPC section; splitting it would add
 // indirection without clarity.
 #[expect(clippy::too_many_lines)]
-pub fn write_pslf(net: &Network) -> Conversion {
+pub fn write_pslf(net: &BalancedNetwork) -> Conversion {
     let mut warnings = Vec::new();
     let mut nonfinite = false;
     let mut sanitized_names = 0usize;
@@ -1282,7 +1282,7 @@ pub fn write_pslf(net: &Network) -> Conversion {
                 i32::from(br.in_service),
                 num(br.r),
                 num(br.x),
-                num(br.legacy_total_charging_b()),
+                num(br.total_charging_b()),
                 num(br.rate_a),
                 num(br.rate_b),
                 num(br.rate_c),
@@ -1418,7 +1418,7 @@ pub fn write_pslf(net: &Network) -> Conversion {
     // keyed by a DC bus number. Synthesize a distinct DC bus per converter (these
     // are internal join keys, not AC buses) and emit the from/to converter rows
     // plus the line row that read_dc_converters/read_dc_lines rejoin into one
-    // `Network::Hvdc`.
+    // `BalancedNetwork::Hvdc`.
     if !net.hvdc.is_empty() {
         let _ = writeln!(
             s,
@@ -1805,7 +1805,7 @@ end
 
     #[test]
     fn transformer_charging_drop_is_warned_on_write() {
-        let mut net = Network::in_memory(
+        let mut net = BalancedNetwork::in_memory(
             "charging",
             100.0,
             vec![

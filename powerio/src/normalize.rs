@@ -1,22 +1,22 @@
 //! The universal normalization shared by the PowerModels reader/writer and
-//! [`Network::to_normalized`].
+//! [`BalancedNetwork::to_normalized`].
 //!
 //! Two things live here so there is one implementation of each:
 //!
 //! - **Per-unit scaling factors and the gen-cost rescale** ([`cost_to_pu`] /
 //!   [`cost_from_pu`], [`DEG_TO_RAD`] / [`RAD_TO_DEG`], [`GEN_PU_KEYS`]). The
 //!   PowerModels writer scales raw model values into its per-unit JSON; the
-//!   reader inverts it; [`Network::to_normalized`] scales the same way into a new
-//!   `Network`. The cost rescale is the one piece subtle enough that a second copy
+//!   reader inverts it; [`BalancedNetwork::to_normalized`] scales the same way into a new
+//!   `BalancedNetwork`. The cost rescale is the one piece subtle enough that a second copy
 //!   would drift, so it has a single home.
-//! - **[`Network::to_normalized`]**: a derived, computation-ready form, per unit,
+//! - **[`BalancedNetwork::to_normalized`]**: a derived, computation-ready form, per unit,
 //!   radians, out of service filtered, source ID preserving, bus types canonicalized.
 
 use std::collections::{HashMap, HashSet};
 
 use crate::network::{
-    Branch, Bus, BusId, BusType, GEN_EXTRA_KEYS, GenCost, Generator, Hvdc, Load, LoadVoltageModel,
-    Network, Shunt, SourceFormat, Storage, Switch, Transformer3W,
+    BalancedNetwork, Branch, Bus, BusId, BusType, GEN_EXTRA_KEYS, GenCost, Generator, Hvdc, Load,
+    LoadVoltageModel, Shunt, SourceFormat, Storage, Switch, Transformer3W,
 };
 use crate::{Error, Result};
 
@@ -31,18 +31,18 @@ pub(crate) const RAD_TO_DEG: f64 = 180.0 / std::f64::consts::PI;
 /// The gen capability columns that are per-unitized (the ramp rates). The PQ-curve
 /// points (`pc1`/`pc2`/`qc*`) and `apf` stay raw, exactly as PowerModels'
 /// `make_per_unit!` leaves them, so a column is scaled in one place and can't drift
-/// between the reader, the writer, and [`Network::to_normalized`].
+/// between the reader, the writer, and [`BalancedNetwork::to_normalized`].
 pub(crate) const GEN_PU_KEYS: [&str; 4] = ["ramp_agc", "ramp_10", "ramp_30", "ramp_q"];
 
 /// Default branch angle difference bound used by PowerModels parse time repair.
 #[allow(clippy::approx_constant)]
 pub const POWER_MODELS_ANGLE_BOUND_PAD: f64 = 1.0472;
 
-/// Options for [`Network::to_normalized_with_options`].
+/// Options for [`BalancedNetwork::to_normalized_with_options`].
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct NormalizeOptions {
     /// Clamp branch angle difference bounds to the interval PowerModels relaxations
-    /// accept. Disabled by default so [`Network::to_normalized`] stays unchanged.
+    /// accept. Disabled by default so [`BalancedNetwork::to_normalized`] stays unchanged.
     pub clamp_angle_bounds: bool,
     /// Replacement magnitude, in radians, for clamped angle bounds.
     pub angle_bound_pad: f64,
@@ -57,10 +57,10 @@ impl Default for NormalizeOptions {
     }
 }
 
-/// Output of [`Network::to_normalized_with_options`].
+/// Output of [`BalancedNetwork::to_normalized_with_options`].
 #[derive(Clone, Debug)]
 pub struct NormalizedNetwork {
-    pub network: Network,
+    pub network: BalancedNetwork,
     pub warnings: Vec<String>,
 }
 
@@ -81,9 +81,9 @@ pub struct NormalizedNetwork {
 /// normalized network's own list.
 ///
 /// The map is valid only for the [`NormalizedNetwork`] returned beside it. A
-/// later mutation of that network ([`Network::merge_bus`],
-/// [`Network::reduce_zero_impedance`], [`Network::reduce_passthrough_buses`],
-/// [`Network::subset`], or a hand edit) invalidates every entry; run the pass
+/// later mutation of that network ([`BalancedNetwork::merge_bus`],
+/// [`BalancedNetwork::reduce_zero_impedance`], [`BalancedNetwork::reduce_passthrough_buses`],
+/// [`BalancedNetwork::subset`], or a hand edit) invalidates every entry; run the pass
 /// again instead of patching the map.
 #[derive(Clone, Debug)]
 #[non_exhaustive]
@@ -103,7 +103,7 @@ impl NormalizeSourceRows {
     /// The map for a network that is already normalized: it is its own source,
     /// so every element maps to its own row. Positional over `net` itself —
     /// [`Self::pad_to_lowered`] extends it to the star-lowered view.
-    pub(crate) fn identity(net: &Network) -> Self {
+    pub(crate) fn identity(net: &BalancedNetwork) -> Self {
         let ident = |n: usize| (0..n).map(Some).collect();
         Self {
             buses: ident(net.buses.len()),
@@ -120,9 +120,9 @@ impl NormalizeSourceRows {
 
     /// Grow the families the star lowering appends to so each length matches the
     /// lowered form of `net`. The appended entries have no source row. The
-    /// lengths come from [`Network::lowered_lengths`], which counts them off the
+    /// lengths come from [`BalancedNetwork::lowered_lengths`], which counts them off the
     /// transformer records, so padding never builds the lowering itself.
-    pub(crate) fn pad_to_lowered(&mut self, net: &Network) {
+    pub(crate) fn pad_to_lowered(&mut self, net: &BalancedNetwork) {
         let lengths = net.lowered_lengths();
         self.buses.resize(lengths.buses, None);
         self.branches.resize(lengths.branches, None);
@@ -557,8 +557,8 @@ fn norm_transformers_3w(
         .unzip()
 }
 
-impl Network {
-    /// A normalized, computation-ready copy of this network. The raw `Network` is
+impl BalancedNetwork {
+    /// A normalized, computation-ready copy of this network. The raw `BalancedNetwork` is
     /// kept lossless (MATPOWER units, 1-based sparse ids, out-of-service elements
     /// retained); `to_normalized` derives the form a solver or ML pipeline wants:
     ///
@@ -595,7 +595,7 @@ impl Network {
     /// Scope is the universal canonicalization only. It does not synthesize a
     /// missing `rate_a` or restrict the gen-cost model — those are solver
     /// preparation choices a consumer applies on top. Use
-    /// [`Network::to_normalized_with_options`] for the opt in PowerModels angle
+    /// [`BalancedNetwork::to_normalized_with_options`] for the opt in PowerModels angle
     /// bound repair. The cost *rescale* is
     /// universal and lives here; the model *restriction* does not.
     ///
@@ -605,13 +605,13 @@ impl Network {
     /// whole network with `NaN`/`Inf` or sign-flipped values.
     /// [`Error::ReferenceBusCount`] if no reference bus can be established — no `REF`
     /// survives and there is no in-service generator to anchor one.
-    pub fn to_normalized(&self) -> Result<Network> {
+    pub fn to_normalized(&self) -> Result<BalancedNetwork> {
         Ok(self
             .to_normalized_with_options(&NormalizeOptions::default())?
             .network)
     }
 
-    /// Like [`Network::to_normalized`], with opt in solver preparation repairs
+    /// Like [`BalancedNetwork::to_normalized`], with opt in solver preparation repairs
     /// that report fidelity warnings.
     pub fn to_normalized_with_options(
         &self,
@@ -620,7 +620,7 @@ impl Network {
         Ok(self.normalize_inner(options)?.0)
     }
 
-    /// Like [`Network::to_normalized_with_options`], also returning the
+    /// Like [`BalancedNetwork::to_normalized_with_options`], also returning the
     /// [`NormalizeSourceRows`] row provenance.
     ///
     /// The rows are positional over the
@@ -632,8 +632,8 @@ impl Network {
     /// case that carries one. Resolve a row through the view:
     ///
     /// ```
-    /// # use powerio::{IndexedNetwork, Network, NormalizeOptions};
-    /// # fn f(raw: &Network) -> powerio::Result<()> {
+    /// # use powerio::{IndexedNetwork, BalancedNetwork, NormalizeOptions};
+    /// # fn f(raw: &BalancedNetwork) -> powerio::Result<()> {
     /// let (normalized, rows) = raw.to_normalized_with_source_rows(&NormalizeOptions::default())?;
     /// let view = IndexedNetwork::new(&normalized.network);
     /// for (dense, source) in rows.buses.iter().enumerate() {
@@ -739,7 +739,7 @@ impl Network {
             }
         }
 
-        let net = Network {
+        let net = BalancedNetwork {
             name: self.name.clone(),
             base_mva: base,
             base_frequency: self.base_frequency,
@@ -785,7 +785,7 @@ mod tests {
         (a - b).abs() < 1e-9
     }
 
-    fn angle_bound_fixture() -> Network {
+    fn angle_bound_fixture() -> BalancedNetwork {
         let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("../tests/data/angle_bounds_clamp.m");
         crate::parse_file(path, None).unwrap().network
@@ -894,7 +894,7 @@ mod tests {
             extras: Extras::new(),
         };
         // Bus 3 is isolated, so to_normalized drops it.
-        let mut net = Network::in_memory(
+        let mut net = BalancedNetwork::in_memory(
             "n",
             100.0,
             vec![
@@ -984,7 +984,7 @@ mod tests {
             regulated_bus: None,
             uid: None,
         };
-        let mut net = Network::in_memory("n", 100.0, vec![mkbus(1), mkbus(2)], Vec::new());
+        let mut net = BalancedNetwork::in_memory("n", 100.0, vec![mkbus(1), mkbus(2)], Vec::new());
         net.generators = vec![mkgen(1, f64::NAN), mkgen(2, 10.0)];
 
         let norm = net.to_normalized().unwrap();

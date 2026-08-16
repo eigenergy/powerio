@@ -1086,8 +1086,22 @@ fn build_scopf_instance(document: &Goc3Document) -> Result<ScopfInstance> {
     project_scopf_instance(&tables)
 }
 
-/// Parse source text and build its SCOPF instance.
+/// The 0.8 spelling of [`parse_scopf_str`], which described how the function
+/// was built rather than what it does. Python has always spelled it
+/// `parse_scopf`.
+///
+/// # Errors
+/// As [`parse_scopf_str`].
+#[deprecated(
+    since = "0.9.0",
+    note = "renamed to `parse_scopf_str`; removed in 1.0.0"
+)]
 pub fn build_scopf_instance_from_str(text: &str, from: &str) -> Result<ScopfInstance> {
+    parse_scopf_str(text, from)
+}
+
+/// Parse source text and build its SCOPF instance.
+pub fn parse_scopf_str(text: &str, from: &str) -> Result<ScopfInstance> {
     if from != "goc3-json" {
         return Err(ScopfError::UnsupportedFormat(from.to_owned()));
     }

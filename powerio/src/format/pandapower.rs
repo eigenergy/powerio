@@ -14,8 +14,8 @@ use super::{
     warn_extra_branch_rating_sets, zbase,
 };
 use crate::network::{
-    Branch, BranchCharging, BranchCurrentRatings, Bus, BusId, BusType, Extras, GenCost, Generator,
-    Hvdc, Load, LoadVoltageModel, Network, Shunt, SourceFormat, Storage,
+    BalancedNetwork, Branch, BranchCharging, BranchCurrentRatings, Bus, BusId, BusType, Extras,
+    GenCost, Generator, Hvdc, Load, LoadVoltageModel, Shunt, SourceFormat, Storage,
 };
 use crate::{Error, Result};
 
@@ -31,12 +31,12 @@ pub fn parse_pandapower_json(content: &str) -> Result<Parsed> {
     Ok(Parsed::without_document(network, warnings))
 }
 
-#[allow(clippy::too_many_lines)] // direct table-to-Network mapper; split helpers obscure column mapping
+#[allow(clippy::too_many_lines)] // direct table-to-BalancedNetwork mapper; split helpers obscure column mapping
 pub(crate) fn parse_pandapower_source(
     source: Arc<String>,
     name_hint: Option<&str>,
     warnings: &mut Vec<String>,
-) -> Result<Network> {
+) -> Result<BalancedNetwork> {
     let content: &str = &source;
     let root: Value = serde_json::from_str(content).map_err(|e| bad(e.to_string()))?;
     let root = root
@@ -739,7 +739,7 @@ pub(crate) fn parse_pandapower_source(
         }
     }
 
-    let net = Network {
+    let net = BalancedNetwork {
         name,
         base_mva,
         base_frequency: f_hz,
@@ -820,7 +820,7 @@ fn warn_nonempty_table(
 }
 
 #[must_use]
-pub fn write_pandapower_json(net: &Network) -> Conversion {
+pub fn write_pandapower_json(net: &BalancedNetwork) -> Conversion {
     if net.source_format == SourceFormat::PandapowerJson {
         if let Some(source) = &net.source {
             return Conversion {
@@ -874,7 +874,7 @@ pub fn write_pandapower_json(net: &Network) -> Conversion {
     finish(root, warnings)
 }
 
-fn warn_pandapower_writer_losses(net: &Network, warnings: &mut Vec<String>) {
+fn warn_pandapower_writer_losses(net: &BalancedNetwork, warnings: &mut Vec<String>) {
     if !net.hvdc.is_empty() {
         warnings.push(format!(
             "{} dcline(s) dropped: the pandapower JSON writer does not model HVDC",
@@ -914,14 +914,14 @@ fn warn_pandapower_writer_losses(net: &Network, warnings: &mut Vec<String>) {
     }
 }
 
-fn warn_pandapower_generator_losses(net: &Network, warnings: &mut Vec<String>) {
+fn warn_pandapower_generator_losses(net: &BalancedNetwork, warnings: &mut Vec<String>) {
     let with_caps = net.generators.iter().filter(|g| g.has_caps()).count();
     if with_caps > 0 {
         warnings.push(format!("generator capability/ramp columns dropped for {with_caps} generator(s): pandapower gen tables have no MATPOWER capability columns"));
     }
 }
 
-fn warn_pandapower_branch_losses(net: &Network, warnings: &mut Vec<String>) {
+fn warn_pandapower_branch_losses(net: &BalancedNetwork, warnings: &mut Vec<String>) {
     let constrained = net.branches.iter().filter(|b| b.has_angle_limits()).count();
     if constrained > 0 {
         warnings.push(format!("{constrained} branch angle limit(s) dropped: pandapower line/trafo tables do not carry MATPOWER angle limits"));
@@ -965,7 +965,7 @@ fn warn_pandapower_charging_shunts(count: usize, warnings: &mut Vec<String>) {
     }
 }
 
-fn bus_frame(net: &Network, warnings: &mut Vec<String>) -> Value {
+fn bus_frame(net: &BalancedNetwork, warnings: &mut Vec<String>) -> Value {
     let columns = [
         "name",
         "vn_kv",
@@ -1145,7 +1145,7 @@ fn load_values_for_pandapower(l: &Load, warnings: &mut Vec<String>) -> Pandapowe
     }
 }
 
-fn load_frame(net: &Network, warnings: &mut Vec<String>) -> Value {
+fn load_frame(net: &BalancedNetwork, warnings: &mut Vec<String>) -> Value {
     let columns = [
         "name",
         "bus",
@@ -1191,7 +1191,7 @@ fn load_frame(net: &Network, warnings: &mut Vec<String>) -> Value {
 }
 
 fn shunt_frame(
-    net: &Network,
+    net: &BalancedNetwork,
     charging: &[(BusId, f64, f64, bool)],
     kv_of: &HashMap<BusId, f64>,
     warnings: &mut Vec<String>,
@@ -1237,7 +1237,7 @@ fn shunt_frame(
     frame("shunt", &columns, index, data, warnings)
 }
 
-fn gen_frame(net: &Network, warnings: &mut Vec<String>) -> Value {
+fn gen_frame(net: &BalancedNetwork, warnings: &mut Vec<String>) -> Value {
     let columns = [
         "name",
         "bus",
@@ -1290,7 +1290,7 @@ fn gen_frame(net: &Network, warnings: &mut Vec<String>) -> Value {
 // the same bus table, so any difference is a real voltage level split.
 #[allow(clippy::float_cmp)]
 fn branch_frames(
-    net: &Network,
+    net: &BalancedNetwork,
     kv_of: &HashMap<BusId, f64>,
     warnings: &mut Vec<String>,
 ) -> (Value, Value, Vec<(BusId, f64, f64, bool)>) {
@@ -1446,7 +1446,7 @@ fn branch_frames(
     )
 }
 
-fn ext_grid_frame(net: &Network, warnings: &mut Vec<String>) -> Value {
+fn ext_grid_frame(net: &BalancedNetwork, warnings: &mut Vec<String>) -> Value {
     let columns = [
         "name",
         "bus",
@@ -1478,7 +1478,7 @@ fn ext_grid_frame(net: &Network, warnings: &mut Vec<String>) -> Value {
     frame("ext_grid", &columns, index, data, warnings)
 }
 
-fn poly_cost_frame(net: &Network, warnings: &mut Vec<String>) -> Value {
+fn poly_cost_frame(net: &BalancedNetwork, warnings: &mut Vec<String>) -> Value {
     let columns = [
         "element",
         "et",
@@ -3039,8 +3039,8 @@ mod tests {
         }
     }
 
-    fn test_net(buses: Vec<Bus>) -> Network {
-        Network {
+    fn test_net(buses: Vec<Bus>) -> BalancedNetwork {
+        BalancedNetwork {
             name: "t".into(),
             base_mva: 100.0,
             base_frequency: crate::network::DEFAULT_BASE_FREQUENCY,

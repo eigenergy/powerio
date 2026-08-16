@@ -7,8 +7,8 @@ use std::path::{Path, PathBuf};
 
 use powerio::TransformerControlMode;
 use powerio::{
-    Branch, BranchCharging, BranchCurrentRatings, BranchRatingSet, BranchSolution, Bus, BusId,
-    BusType, Error, Load, LoadVoltageModel, MissingGenCostPolicy, Network, SourceFormat,
+    BalancedNetwork, Branch, BranchCharging, BranchCurrentRatings, BranchRatingSet, BranchSolution,
+    Bus, BusId, BusType, Error, Load, LoadVoltageModel, MissingGenCostPolicy, SourceFormat,
     TargetFormat, WriteOptions, convert_file, parse_file, parse_gen_cost_csv, parse_matpower,
     parse_matpower_file, parse_powermodels_json, parse_powerworld, parse_pslf, parse_psse,
     parse_str, read_pypsa_csv_folder, write_as, write_as_with_options, write_egret_json,
@@ -101,8 +101,8 @@ fn audit_bus(id: usize, kind: BusType) -> Bus {
     Bus::new(BusId(id), kind, 230.0)
 }
 
-fn rich_audit_network() -> Network {
-    let mut net = Network::in_memory(
+fn rich_audit_network() -> BalancedNetwork {
+    let mut net = BalancedNetwork::in_memory(
         "rich-audit",
         100.0,
         vec![audit_bus(1, BusType::Ref), audit_bus(2, BusType::Pq)],
@@ -133,8 +133,8 @@ fn rich_audit_network() -> Network {
     net
 }
 
-fn terminal_projection_network() -> Network {
-    let mut net = Network::in_memory(
+fn terminal_projection_network() -> BalancedNetwork {
+    let mut net = BalancedNetwork::in_memory(
         "terminal-projection",
         100.0,
         vec![audit_bus(1, BusType::Ref), audit_bus(2, BusType::Pq)],
@@ -238,7 +238,7 @@ fn rich_writer_warnings_cover_simple_formats() {
 fn extra_branch_rating_sets_survive_powerio_json() {
     let net = rich_audit_network();
 
-    let back = Network::from_json(&net.to_json().unwrap()).unwrap();
+    let back = BalancedNetwork::from_json(&net.to_json().unwrap()).unwrap();
 
     assert_eq!(back.branches[0].rating_sets.len(), 1);
     assert_eq!(back.branches[0].rating_sets[0].name, "RATE4");
@@ -294,7 +294,7 @@ struct Core {
     base_mva: i64,
 }
 
-fn core(net: &Network) -> Core {
+fn core(net: &BalancedNetwork) -> Core {
     let r = |x: f64| (x * 1e6).round() as i64;
     Core {
         buses: net.buses.len(),
@@ -1105,7 +1105,7 @@ fn powermodels_json_to_matpower_two_way() {
     assert_eq!(reparsed.generators.len(), orig.generators.len());
     assert_eq!(reparsed.base_mva, orig.base_mva);
     // Total demand survives the bus→load split and the fold back onto the bus.
-    let load_of = |c: &powerio::Network| c.loads.iter().map(|l| l.p).sum::<f64>();
+    let load_of = |c: &powerio::BalancedNetwork| c.loads.iter().map(|l| l.p).sum::<f64>();
     assert!((load_of(&orig) - load_of(&reparsed)).abs() < 1e-9);
 }
 
@@ -1588,7 +1588,7 @@ fn pandapower_genuine_fixture_reads() {
         144.0e-9 * 10.0 * 2.0 * std::f64::consts::PI * 50.0 * zb,
     );
 
-    // storage and dcline land on Network.storage / Network.hvdc.
+    // storage and dcline land on BalancedNetwork.storage / BalancedNetwork.hvdc.
     assert_eq!(net.storage.len(), 1);
     let st = &net.storage[0];
     assert_eq!(st.bus, BusId(7));
@@ -1757,7 +1757,7 @@ fn pypsa_empty_folder_rejected_via_parse_file() {
 // Knock the 4-7 transformer and the bus 9 shunt out of service so case14
 // carries transformers, a shunt, and out-of-service elements in one case,
 // exercising the OOS transformer and OOS shunt write paths.
-fn knock_out_case14(net: &mut Network) {
+fn knock_out_case14(net: &mut BalancedNetwork) {
     let xf = net
         .branches
         .iter_mut()
@@ -2005,7 +2005,7 @@ fn pypsa_written_folder_joins_on_bus_names() {
 
 #[test]
 fn slackless_network_conversion_warns_for_power_flow_targets() {
-    use powerio::network::{Branch, Bus, BusType, Network};
+    use powerio::network::{BalancedNetwork, Branch, Bus, BusType};
     fn bus(id: usize, kind: BusType) -> Bus {
         Bus::new(BusId(id), kind, 1.0)
     }
@@ -2015,7 +2015,7 @@ fn slackless_network_conversion_warns_for_power_flow_targets() {
     // PowerWorld .pwb stores no slack designation; converting its network to
     // a format whose solvers need one must say so instead of silently
     // emitting a case every power flow tool rejects.
-    let net = Network::in_memory(
+    let net = BalancedNetwork::in_memory(
         "noslack",
         100.0,
         vec![bus(1, BusType::Pv), bus(2, BusType::Pq)],
@@ -2036,7 +2036,7 @@ fn slackless_network_conversion_warns_for_power_flow_targets() {
         );
     }
     // A network with a slack stays warning free on this dimension.
-    let with_ref = Network::in_memory(
+    let with_ref = BalancedNetwork::in_memory(
         "slack",
         100.0,
         vec![bus(1, BusType::Ref), bus(2, BusType::Pq)],

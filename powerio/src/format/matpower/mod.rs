@@ -15,17 +15,17 @@ use std::sync::Arc;
 pub use writer::write_matpower;
 pub(crate) use writer::write_matpower_conversion;
 
-use crate::network::{Generator, Network, SourceFormat};
+use crate::network::{BalancedNetwork, Generator, SourceFormat};
 use crate::{Error, Result};
 
-/// Parse the MATPOWER case in `content` into a [`Network`].
-pub fn parse_matpower(content: &str) -> Result<Network> {
+/// Parse the MATPOWER case in `content` into a [`BalancedNetwork`].
+pub fn parse_matpower(content: &str) -> Result<BalancedNetwork> {
     // The caller owns `content` as a borrow, so retention needs one copy.
     parse_matpower_source(Arc::new(content.to_owned()), None)
 }
 
 /// Parse the MATPOWER case at `path`, using the file stem as the network name.
-pub fn parse_matpower_file(path: impl AsRef<Path>) -> Result<Network> {
+pub fn parse_matpower_file(path: impl AsRef<Path>) -> Result<BalancedNetwork> {
     let path = path.as_ref();
     let content = std::fs::read_to_string(path)?;
     let name = path
@@ -44,7 +44,7 @@ pub fn parse_matpower_file(path: impl AsRef<Path>) -> Result<Network> {
 pub(crate) fn parse_matpower_source(
     source: Arc<String>,
     name_hint: Option<&str>,
-) -> Result<Network> {
+) -> Result<BalancedNetwork> {
     let name = name_hint
         .map(str::to_owned)
         .or_else(|| matpower_function_name(&source).map(str::to_owned))
@@ -76,7 +76,7 @@ fn matpower_function_name(source: &str) -> Option<&str> {
     None
 }
 
-fn parse_matpower_named(source: Arc<String>, name: &str) -> Result<Network> {
+fn parse_matpower_named(source: Arc<String>, name: &str) -> Result<BalancedNetwork> {
     // Locate each assignment's text directly in `source` and build the network
     // from those borrowed slices in one pass; the typed model owns its data, so
     // the borrows end with `located` and the source Arc moves into the network.
@@ -97,12 +97,12 @@ fn parse_matpower_named(source: Arc<String>, name: &str) -> Result<Network> {
     Ok(net)
 }
 
-/// Build a [`Network`] from a per-field assignment-text accessor `get`, which
+/// Build a [`BalancedNetwork`] from a per-field assignment-text accessor `get`, which
 /// returns the raw `mpc.<field> = …;` text for a field name. MATPOWER folds
 /// demand and shunts onto the bus row; [`rows::bus_row`] splits them back out
 /// into the hub's first-class [`Load`](crate::network::Load) /
 /// [`Shunt`](crate::network::Shunt). The caller attaches the source afterward.
-fn build_case<'a>(name: &str, get: impl Fn(&str) -> Option<&'a str>) -> Result<Network> {
+fn build_case<'a>(name: &str, get: impl Fn(&str) -> Option<&'a str>) -> Result<BalancedNetwork> {
     let base_mva = get("baseMVA")
         .and_then(|raw| matlab::scalar_from_assignment(raw, "baseMVA").transpose())
         .transpose()?
@@ -146,7 +146,7 @@ fn build_case<'a>(name: &str, get: impl Fn(&str) -> Option<&'a str>) -> Result<N
         }
     }
 
-    Ok(Network {
+    Ok(BalancedNetwork {
         name: name.to_string(),
         base_mva,
         base_frequency: crate::network::DEFAULT_BASE_FREQUENCY,

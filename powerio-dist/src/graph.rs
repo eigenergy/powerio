@@ -5,7 +5,7 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 
 use crate::model::{
-    DistBus, DistIbr, DistNetwork, DistTransformer, VoltageSource, Winding, pair_keys,
+    DistBus, DistIbr, DistTransformer, MulticonductorNetwork, VoltageSource, Winding, pair_keys,
 };
 
 /// Upper bound on the winding count the transformer edge expansion is
@@ -80,7 +80,7 @@ pub enum DistGraphEdgeKind {
     Transformer,
 }
 
-impl DistNetwork {
+impl MulticonductorNetwork {
     /// Project this network into a render ready bus and terminal graph.
     #[must_use]
     pub fn graph(&self) -> DistGraph {
@@ -91,7 +91,7 @@ impl DistNetwork {
 impl DistGraph {
     /// Build the graph projection for one distribution network.
     #[must_use]
-    pub fn from_network(net: &DistNetwork) -> Self {
+    pub fn from_network(net: &MulticonductorNetwork) -> Self {
         let mut builder = GraphBuilder::new(&net.buses);
 
         for line in &net.lines {
@@ -244,7 +244,7 @@ impl GraphBuilder {
     fn add_transformer_edges(&mut self, transformer: &DistTransformer) {
         // One edge per winding pair, so the winding count expands
         // quadratically. Every reader caps it at the same bound, but a
-        // `DistNetwork` can also arrive without those caps (the model JSON
+        // `MulticonductorNetwork` can also arrive without those caps (the model JSON
         // C entry point deserializes one unchecked). No physical
         // transformer comes near it.
         let n_windings = transformer.windings.len().min(MAX_WINDING_PAIRS_DIM);
@@ -520,7 +520,7 @@ mod tests {
 
     #[test]
     fn graph_accumulates_terminal_attachments_and_generation() {
-        let mut net = DistNetwork::new();
+        let mut net = MulticonductorNetwork::new();
         net.buses
             .push(DistBus::new("b1", strings(&["a", "b", "n"])));
         net.loads.push(DistLoad::new(
@@ -565,7 +565,7 @@ mod tests {
     #[test]
     fn transformer_edge_expansion_is_bounded() {
         // One edge per winding pair. Every reader caps the winding count,
-        // but the model JSON C entry point deserializes a `DistNetwork`
+        // but the model JSON C entry point deserializes a `MulticonductorNetwork`
         // unchecked, so a linear-size model must not force quadratic work.
         let n = 4000;
         let windings: Vec<Winding> = (0..n)
@@ -579,9 +579,9 @@ mod tests {
                 )
             })
             .collect();
-        let net = DistNetwork {
+        let net = MulticonductorNetwork {
             transformers: vec![DistTransformer::new("t1", windings, Vec::new(), 3)],
-            ..DistNetwork::new()
+            ..MulticonductorNetwork::new()
         };
 
         let graph = net.graph();
@@ -599,9 +599,9 @@ mod tests {
             .insert("longitude".into(), serde_json::json!(-80.0));
         bus.extras
             .insert("latitude".into(), serde_json::json!(35.0));
-        let net = DistNetwork {
+        let net = MulticonductorNetwork {
             buses: vec![bus],
-            ..DistNetwork::new()
+            ..MulticonductorNetwork::new()
         };
 
         assert_eq!(net.graph().buses[0].xy, Some([-80.0, 35.0]));

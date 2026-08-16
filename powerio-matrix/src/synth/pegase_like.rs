@@ -5,12 +5,12 @@ use rand::Rng;
 use rand::SeedableRng;
 use rand_chacha::ChaCha8Rng;
 
-use crate::network::Network;
+use crate::network::BalancedNetwork;
 
 use super::SynthSpec;
 use super::tree::{make_branch, make_buses, net};
 
-pub fn generate_pegase_like(spec: &SynthSpec) -> Network {
+pub fn generate_pegase_like(spec: &SynthSpec) -> BalancedNetwork {
     let n = spec.n.max(2);
     let mut rng = ChaCha8Rng::seed_from_u64(spec.seed);
 

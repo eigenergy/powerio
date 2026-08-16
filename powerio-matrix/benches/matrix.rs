@@ -26,7 +26,7 @@ fn fixture(name: &str) -> &'static str {
     }
 }
 
-fn network(name: &str) -> powerio_matrix::Network {
+fn network(name: &str) -> powerio_matrix::BalancedNetwork {
     parse_matpower(fixture(name)).unwrap_or_else(|e| panic!("parse {name}: {e}"))
 }
 

@@ -11,7 +11,7 @@
 //! [`Hvdc`] (power-setpoint model; converter firing-angle/transformer detail
 //! rides through in extras). The other advanced sections (VSC and multi-terminal
 //! DC, FACTS, GNE) are not modeled: on write they're emitted as empty sections,
-//! on read they're skipped, and storage carried on the `Network` is reported as
+//! on read they're skipped, and storage carried on the `BalancedNetwork` is reported as
 //! dropped. Same-format round-trip is byte-exact via the retained source (see
 //! [`crate::write_as`]); this serializer is the cross-format path.
 
@@ -26,9 +26,9 @@ use super::{
     warn_extra_branch_rating_sets,
 };
 use crate::network::{
-    Area, Branch, BranchCharging, BranchRatingSet, Bus, BusId, BusType, Extras, Generator, Hvdc,
-    Impedance, Load, LoadVoltageModel, Network, Shunt, ShuntBlock, SolverParams, SourceFormat,
-    SwitchedShuntControl, SwitchedShuntMode, Transformer3W, TransformerControl,
+    Area, BalancedNetwork, Branch, BranchCharging, BranchRatingSet, Bus, BusId, BusType, Extras,
+    Generator, Hvdc, Impedance, Load, LoadVoltageModel, Shunt, ShuntBlock, SolverParams,
+    SourceFormat, SwitchedShuntControl, SwitchedShuntMode, Transformer3W, TransformerControl,
     TransformerControlMode, Winding,
 };
 use crate::{Error, Result};
@@ -129,7 +129,7 @@ fn branch_rating_set_rename_warning(
     )
 }
 
-fn warn_psse_extra_branch_ratings_dropped(net: &Network, warnings: &mut Vec<String>) {
+fn warn_psse_extra_branch_ratings_dropped(net: &BalancedNetwork, warnings: &mut Vec<String>) {
     warn_extra_branch_rating_sets("PSS/E v33", net, warnings);
 }
 
@@ -142,7 +142,7 @@ const NAME_FORBIDDEN: &[char] = &['\'', '/'];
 
 /// Serialize `net` to PSS/E `.raw` at the default revision (33).
 #[must_use]
-pub fn write_psse(net: &Network) -> Conversion {
+pub fn write_psse(net: &BalancedNetwork) -> Conversion {
     write_psse_rev(net, REV)
 }
 
@@ -161,7 +161,7 @@ pub fn write_psse(net: &Network) -> Conversion {
 // A flat serializer: one stanza per PSS/E record type; splitting it would add
 // indirection without clarity.
 #[expect(clippy::too_many_lines)]
-pub fn write_psse_rev(net: &Network, rev: u32) -> Conversion {
+pub fn write_psse_rev(net: &BalancedNetwork, rev: u32) -> Conversion {
     // v34+ wraps the global parameters in a system-wide data section, names
     // branches and carries 12 ratings, and adds load DG / load-type columns.
     let modern = rev >= 34;
@@ -864,10 +864,10 @@ const EMPTY_SECTIONS: [&str; 13] = [
 
 // ---- Reader -----------------------------------------------------------------
 
-/// Parse a PSS/E `.raw` (revisions 33-35) into a [`Network`]. Reads bus/load/
+/// Parse a PSS/E `.raw` (revisions 33-35) into a [`BalancedNetwork`]. Reads bus/load/
 /// fixed-shunt/generator/branch/2- and 3-winding transformer; skips the advanced
 /// sections.
-pub fn parse_psse(content: &str) -> Result<Network> {
+pub fn parse_psse(content: &str) -> Result<BalancedNetwork> {
     let mut warnings = Vec::new();
     parse_psse_source(Arc::new(content.to_owned()), None, &mut warnings)
 }
@@ -901,7 +901,7 @@ pub(crate) fn parse_psse_source(
     source: Arc<String>,
     name_hint: Option<&str>,
     warnings: &mut Vec<String>,
-) -> Result<Network> {
+) -> Result<BalancedNetwork> {
     let content: &str = &source;
     let mut lines = content.lines();
 
@@ -1075,7 +1075,7 @@ pub(crate) fn parse_psse_source(
 
     warn_unmodeled_sections(unmodeled_sections, warnings);
 
-    let mut net = Network {
+    let mut net = BalancedNetwork {
         name,
         base_mva,
         base_frequency,
@@ -1353,7 +1353,7 @@ fn warn_unmodeled_sections(totals: BTreeMap<String, usize>, warnings: &mut Vec<S
     }
 }
 
-fn drop_stale_control_pointers(net: &mut Network, warnings: &mut Vec<String>) {
+fn drop_stale_control_pointers(net: &mut BalancedNetwork, warnings: &mut Vec<String>) {
     let bus_ids: BTreeSet<BusId> = net.buses.iter().map(|b| b.id).collect();
     let missing = |bus: BusId| !bus_ids.contains(&bus);
 
@@ -2446,7 +2446,7 @@ Q
 
     #[test]
     fn branch_terminal_charging_writes_gi_bi_gj_bj() {
-        let mut net = Network::in_memory(
+        let mut net = BalancedNetwork::in_memory(
             "terminal-shunts",
             100.0,
             vec![test_bus(1, BusType::Ref), test_bus(2, BusType::Pq)],
@@ -2465,7 +2465,7 @@ Q
 
     #[test]
     fn transformer_magnetizing_admittance_writes_mag1_mag2() {
-        let mut net = Network::in_memory(
+        let mut net = BalancedNetwork::in_memory(
             "xfmr-mag",
             100.0,
             vec![test_bus(1, BusType::Ref), test_bus(2, BusType::Pq)],
@@ -2499,7 +2499,7 @@ Q
 
     #[test]
     fn transformer_to_side_terminal_admittance_warns_and_collapses_to_mag() {
-        let mut net = Network::in_memory(
+        let mut net = BalancedNetwork::in_memory(
             "xfmr-mag-collapse",
             100.0,
             vec![test_bus(1, BusType::Ref), test_bus(2, BusType::Pq)],
@@ -3038,7 +3038,7 @@ Q
 
     #[test]
     fn v34_warns_when_custom_rating_name_is_emitted_as_rate_slot() {
-        let mut net = Network::in_memory(
+        let mut net = BalancedNetwork::in_memory(
             "ratings",
             100.0,
             vec![

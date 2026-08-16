@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use powerio::{
-    Bus, BusId, BusType, Generator, Load, Network, Shunt, ShuntBlock, SourceFormat,
+    BalancedNetwork, Bus, BusId, BusType, Generator, Load, Shunt, ShuntBlock, SourceFormat,
     SwitchedShuntControl, SwitchedShuntMode, TargetFormat, parse_file, parse_pslf, parse_psse,
     parse_str, target_format_from_name, write_as, write_pslf,
 };
@@ -67,7 +67,7 @@ fn pslf_is_a_write_target() {
 
 #[test]
 fn pslf_write_read_round_trip_preserves_the_core() {
-    // .epc → Network → .epc → Network keeps the power flow core. (The two-winding
+    // .epc → BalancedNetwork → .epc → BalancedNetwork keeps the power flow core. (The two-winding
     // transformer and ZIP load split exercise the multi-line record and the
     // replayed pslf_* extras.)
     let net0 = parse_pslf(EPC_WITH_TRANSFORMER).unwrap();
@@ -204,7 +204,7 @@ fn pslf_write_preserves_generator_voltage_setpoint() {
     generator.qmin = -20.0;
     generator.vg = 1.04;
     generator.mbase = 100.0;
-    let mut net = Network::new("gen-vg", 100.0);
+    let mut net = BalancedNetwork::new("gen-vg", 100.0);
     net.buses.push(bus);
     net.generators.push(generator);
 
@@ -221,7 +221,7 @@ fn pslf_write_preserves_generator_voltage_setpoint() {
 
 #[test]
 fn pslf_write_reports_dropped_switched_shunt_control() {
-    let mut net = Network::new("switched-shunt", 100.0);
+    let mut net = BalancedNetwork::new("switched-shunt", 100.0);
     net.buses.push(Bus::new(BusId(1), BusType::Ref, 230.0));
     let mut shunt = Shunt::new(BusId(1), 0.0, 10.0);
     shunt.control = Some(SwitchedShuntControl::new(
@@ -247,7 +247,7 @@ fn pslf_write_reports_dropped_switched_shunt_control() {
 fn pslf_write_gives_parallel_devices_distinct_ids() {
     // Two loads and two shunts on one bus must not collapse onto (bus, "1"):
     // GE PSLF keys devices by (bus, id).
-    let mut net = Network::new("parallel", 100.0);
+    let mut net = BalancedNetwork::new("parallel", 100.0);
     net.buses.push(Bus::new(BusId(1), BusType::Ref, 230.0));
     net.loads.push(Load::new(BusId(1), 10.0, 3.0));
     net.loads.push(Load::new(BusId(1), 20.0, 6.0));

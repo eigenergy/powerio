@@ -4,7 +4,7 @@
 //! verified empirically against the engine (opendssdirect via
 //! `tools/verify_defaults.py`; rerun it when bumping the engine). The reader
 //! materializes these into explicit model values and records each
-//! materialization in `DistNetwork::defaulted`.
+//! materialization in `MulticonductorNetwork::defaulted`.
 //!
 //! The generator note: the constructor sets kW=1000, PF=0.88, kvar=60
 //! (`generator.cpp`, member init), while the property display strings claim

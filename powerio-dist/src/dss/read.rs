@@ -1,7 +1,7 @@
-//! `.dss` raw objects into the canonical [`DistNetwork`].
+//! `.dss` raw objects into the canonical [`MulticonductorNetwork`].
 //!
 //! Every OpenDSS default materializes into an explicit model value, recorded
-//! in [`DistNetwork::defaulted`] under the `"class.name"` key. Specified
+//! in [`MulticonductorNetwork::defaulted`] under the `"class.name"` key. Specified
 //! properties the typed fields do not capture go into the element's `extras`
 //! verbatim (string values), so a later writer can reproduce them. Bus specs
 //! resolve with the engine's fill rule: phase conductors default to nodes
@@ -26,10 +26,10 @@ use crate::geo::{CoordinateSpace, CoordsKind, GeoMeta, Location};
 use crate::model::{
     ActivePowerReference, ActivePowerUnit, Configuration, ControlVoltageReference, DistBus,
     DistControlProfile, DistGenerator, DistIbr, DistLine, DistLineCode, DistLoad,
-    DistLoadVoltageModel, DistNetwork, DistShunt, DistSourceFormat, DistSwitch, DistTransformer,
-    Extras, IbrPrimeMover, IbrTopology, Mat, PowerFactorControl, ReactivePowerReference,
-    ReactivePowerUnit, UntypedObject, VoltVarControl, VoltWattControl, VoltageSource, Winding,
-    WindingConn, pair_keys, square_from_rows,
+    DistLoadVoltageModel, DistShunt, DistSourceFormat, DistSwitch, DistTransformer, Extras,
+    IbrPrimeMover, IbrTopology, Mat, MulticonductorNetwork, PowerFactorControl,
+    ReactivePowerReference, ReactivePowerUnit, UntypedObject, VoltVarControl, VoltWattControl,
+    VoltageSource, Winding, WindingConn, pair_keys, square_from_rows,
 };
 
 /// Upper bound on any count property (`phases`, conductors, `windings`, tap
@@ -84,7 +84,11 @@ fn confined_bom_stripping_loader(
     }
 }
 
-fn warn_stripped_boms(net: &mut DistNetwork, root_had_bom: bool, stripped_paths: Vec<String>) {
+fn warn_stripped_boms(
+    net: &mut MulticonductorNetwork,
+    root_had_bom: bool,
+    stripped_paths: Vec<String>,
+) {
     if root_had_bom {
         net.warnings.push(crate::convert::BOM_WARNING.to_owned());
     }
@@ -101,7 +105,7 @@ fn warn_stripped_boms(net: &mut DistNetwork, root_had_bom: bool, stripped_paths:
 /// directory, or escapes through a symbolic link — so a case file cannot read
 /// arbitrary paths. (`Executor::resolve` documents the exact lexical rule that
 /// decides whether an absolute include counts as inside the directory.)
-pub fn parse_dss_file(path: impl AsRef<Path>) -> Result<DistNetwork> {
+pub fn parse_dss_file(path: impl AsRef<Path>) -> Result<MulticonductorNetwork> {
     let path = path.as_ref();
     let text = std::fs::read_to_string(path).map_err(|source| Error::Io {
         path: path.display().to_string(),
@@ -125,7 +129,7 @@ pub fn parse_dss_file(path: impl AsRef<Path>) -> Result<DistNetwork> {
 /// is recorded as a warning. This keeps untrusted text (an uploaded case, say)
 /// from reading arbitrary local files. Use [`parse_dss_file`] to follow
 /// includes, which then stay confined to the case directory.
-pub fn parse_dss_str(text: &str) -> DistNetwork {
+pub fn parse_dss_str(text: &str) -> MulticonductorNetwork {
     let stripped = text.trim_start_matches('\u{feff}');
     let mut no_includes = |_path: &Path| -> std::io::Result<String> {
         Err(std::io::Error::new(
@@ -140,16 +144,16 @@ pub fn parse_dss_str(text: &str) -> DistNetwork {
 }
 
 /// Lowers an executed raw script into the typed model.
-pub fn network_from_raw(raw: &RawDss, source: Arc<String>) -> DistNetwork {
+pub fn network_from_raw(raw: &RawDss, source: Arc<String>) -> MulticonductorNetwork {
     let mut rd = Reader {
-        net: DistNetwork {
+        net: MulticonductorNetwork {
             name: raw.circuit_name.clone(),
             base_frequency: dd::BASE_FREQUENCY,
             source: Some(source),
             source_format: Some(DistSourceFormat::Dss),
             warnings: raw.warnings.clone(),
             parse_diagnostics: raw.diagnostics.clone(),
-            ..DistNetwork::default()
+            ..MulticonductorNetwork::default()
         },
         buses: BTreeMap::new(),
         bus_order: Vec::new(),
@@ -255,7 +259,7 @@ pub fn network_from_raw(raw: &RawDss, source: Arc<String>) -> DistNetwork {
 /// named `max(4, highest node + 1)`, the number PowerModelsDistribution
 /// and the public BMOPF examples give the materialized neutral, and every
 /// element terminal map is rewritten from "0" to it.
-fn finish_buses(mut rd: Reader, raw: &RawDss) -> DistNetwork {
+fn finish_buses(mut rd: Reader, raw: &RawDss) -> MulticonductorNetwork {
     let mut coords: BTreeMap<String, (f64, f64)> = BTreeMap::new();
     for c in &raw.buscoords {
         coords.insert(c.bus.to_ascii_lowercase(), (c.x, c.y));
@@ -370,7 +374,7 @@ struct BusState {
 }
 
 struct Reader<'a> {
-    net: DistNetwork,
+    net: MulticonductorNetwork,
     buses: BTreeMap<String, BusState>,
     bus_order: Vec<String>,
     /// Linecode name (lowercase) → meters per its length unit, `None` when
@@ -2387,7 +2391,7 @@ fn grow(
 mod tests {
     use super::*;
 
-    fn has_warning(net: &DistNetwork, needle: &str) -> bool {
+    fn has_warning(net: &MulticonductorNetwork, needle: &str) -> bool {
         net.warnings.iter().any(|w| w.contains(needle))
     }
 

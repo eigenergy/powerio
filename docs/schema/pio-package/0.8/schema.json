@@ -58,6 +58,127 @@
       ],
       "type": "object"
     },
+    "BalancedNetwork": {
+      "description": "A balanced network with stable source bus IDs and separate element tables.",
+      "properties": {
+        "areas": {
+          "default": [],
+          "description": "Area records: scheduled interchange and per-area swing bus. Distinct from\nthe bare `area` number on each [`Bus`]; this is the area's metadata, which\nevery conversion dropped before. `#[serde(default)]` so older JSON still\ndeserializes.",
+          "items": {
+            "$ref": "#/$defs/Area"
+          },
+          "type": "array"
+        },
+        "base_frequency": {
+          "default": 60.0,
+          "description": "System base frequency in hertz (50 or 60). Threaded through the formats\nthat record it (PSS/E `BASFRQ`, pandapower `f_hz`) and defaulted to\n[`DEFAULT_BASE_FREQUENCY`] for the rest. Load-bearing for any\nreactance↔henry conversion (pandapower line charging) and reported as a\nfidelity loss when a non-default value writes to a format with no\nfrequency field.",
+          "format": "double",
+          "type": "number"
+        },
+        "base_mva": {
+          "format": "double",
+          "type": "number"
+        },
+        "branches": {
+          "items": {
+            "$ref": "#/$defs/Branch"
+          },
+          "type": "array"
+        },
+        "buses": {
+          "items": {
+            "$ref": "#/$defs/Bus"
+          },
+          "type": "array"
+        },
+        "generators": {
+          "items": {
+            "$ref": "#/$defs/Generator"
+          },
+          "type": "array"
+        },
+        "geo": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/GeoMeta"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "hvdc": {
+          "items": {
+            "$ref": "#/$defs/Hvdc"
+          },
+          "type": "array"
+        },
+        "loads": {
+          "items": {
+            "$ref": "#/$defs/Load"
+          },
+          "type": "array"
+        },
+        "name": {
+          "type": "string"
+        },
+        "shunts": {
+          "items": {
+            "$ref": "#/$defs/Shunt"
+          },
+          "type": "array"
+        },
+        "solver": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SolverParams"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Solver / solution-control metadata when the source carries it, else `None`.\n`#[serde(default)]` so older JSON still deserializes."
+        },
+        "source_format": {
+          "$ref": "#/$defs/SourceFormat"
+        },
+        "storage": {
+          "items": {
+            "$ref": "#/$defs/Storage"
+          },
+          "type": "array"
+        },
+        "switches": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/Switch"
+          },
+          "type": "array"
+        },
+        "transformers_3w": {
+          "default": [],
+          "description": "Three-winding transformers, kept as typed records rather than folded into\n`branches`, so a star point and the per-winding data survive a round trip.\n`#[serde(default)]` so JSON written before the field existed still\ndeserializes. [`IndexedNetwork`](crate::IndexedNetwork) lowers each\nin-service record into a star bus plus three branches (via\n[`Transformer3W::star_expansion`]) before building any matrix, so a\n3-winding transformer does appear in `Y_bus`/connectivity; the canonical\nmodel keeps the typed record for round-trip fidelity.",
+          "items": {
+            "$ref": "#/$defs/Transformer3W"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "name",
+        "base_mva",
+        "buses",
+        "loads",
+        "shunts",
+        "branches",
+        "generators",
+        "storage",
+        "hvdc",
+        "source_format"
+      ],
+      "type": "object"
+    },
     "Branch": {
       "properties": {
         "angmax": {
@@ -145,7 +266,7 @@
           "type": "array"
         },
         "route": {
-          "description": "Polyline route in the network's coordinate space (`Network.geo`),\npresent only when a source provides intermediate geometry; endpoint\nonly rendering derives from the bus locations. `#[serde(default)]` so\nJSON written before the field existed still deserializes.",
+          "description": "Polyline route in the network's coordinate space (`BalancedNetwork.geo`),\npresent only when a source provides intermediate geometry; endpoint\nonly rendering derives from the bus locations. `#[serde(default)]` so\nJSON written before the field existed still deserializes.",
           "items": {
             "$ref": "#/$defs/Location"
           },
@@ -1147,7 +1268,7 @@
           "type": "string"
         },
         "route": {
-          "description": "Polyline route in the network's coordinate space (`DistNetwork.geo`),\npresent only when a source provides intermediate geometry.\n`#[serde(default)]` so JSON written before the field existed still\ndeserializes.",
+          "description": "Polyline route in the network's coordinate space (`MulticonductorNetwork.geo`),\npresent only when a source provides intermediate geometry.\n`#[serde(default)]` so JSON written before the field existed still\ndeserializes.",
           "items": {
             "$ref": "#/$defs/Location2"
           },
@@ -1546,182 +1667,6 @@
         }
       ]
     },
-    "DistNetwork": {
-      "description": "A multiconductor distribution network.\n\n`source` retains the original text for the byte exact echo tier;\n`defaulted` records, per element (`\"class.name\"` key), the fields the\nreader materialized from format defaults rather than the source text.",
-      "properties": {
-        "base_frequency": {
-          "description": "Hz.",
-          "format": "double",
-          "type": "number"
-        },
-        "buses": {
-          "items": {
-            "$ref": "#/$defs/DistBus"
-          },
-          "type": "array"
-        },
-        "capacitors": {
-          "items": {
-            "$ref": "#/$defs/DistCapacitor"
-          },
-          "type": "array"
-        },
-        "commands": {
-          "description": "Source commands and options the typed model does not interpret\n(`solve`, `set mode=...`), in order, as (verb, args).",
-          "items": {
-            "maxItems": 2,
-            "minItems": 2,
-            "prefixItems": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "string"
-              }
-            ],
-            "type": "array"
-          },
-          "type": "array"
-        },
-        "control_profiles": {
-          "items": {
-            "$ref": "#/$defs/DistControlProfile"
-          },
-          "type": "array"
-        },
-        "extras": {
-          "additionalProperties": true,
-          "type": "object"
-        },
-        "generators": {
-          "items": {
-            "$ref": "#/$defs/DistGenerator"
-          },
-          "type": "array"
-        },
-        "geo": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/GeoMeta2"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "ibrs": {
-          "items": {
-            "$ref": "#/$defs/DistIbr"
-          },
-          "type": "array"
-        },
-        "linecodes": {
-          "items": {
-            "$ref": "#/$defs/DistLineCode"
-          },
-          "type": "array"
-        },
-        "lines": {
-          "items": {
-            "$ref": "#/$defs/DistLine"
-          },
-          "type": "array"
-        },
-        "loads": {
-          "items": {
-            "$ref": "#/$defs/DistLoad"
-          },
-          "type": "array"
-        },
-        "name": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "options": {
-          "items": {
-            "maxItems": 2,
-            "minItems": 2,
-            "prefixItems": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "string"
-              }
-            ],
-            "type": "array"
-          },
-          "type": "array"
-        },
-        "shunts": {
-          "items": {
-            "$ref": "#/$defs/DistShunt"
-          },
-          "type": "array"
-        },
-        "source_format": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/DistSourceFormat"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "sources": {
-          "description": "BMOPF allows exactly one; the model allows any number and the BMOPF\nwriter warns beyond the first.",
-          "items": {
-            "$ref": "#/$defs/VoltageSource"
-          },
-          "type": "array"
-        },
-        "switches": {
-          "items": {
-            "$ref": "#/$defs/DistSwitch"
-          },
-          "type": "array"
-        },
-        "transformers": {
-          "items": {
-            "$ref": "#/$defs/DistTransformer"
-          },
-          "type": "array"
-        },
-        "untyped": {
-          "items": {
-            "$ref": "#/$defs/UntypedObject"
-          },
-          "type": "array"
-        },
-        "warnings": {
-          "items": {
-            "type": "string"
-          },
-          "type": "array"
-        }
-      },
-      "required": [
-        "base_frequency",
-        "buses",
-        "linecodes",
-        "lines",
-        "switches",
-        "transformers",
-        "loads",
-        "generators",
-        "shunts",
-        "sources",
-        "untyped",
-        "commands",
-        "options",
-        "warnings",
-        "extras"
-      ],
-      "type": "object"
-    },
     "DistShunt": {
       "properties": {
         "b": {
@@ -2091,7 +2036,7 @@
       "type": "object"
     },
     "GeoMeta": {
-      "description": "Network level coordinate metadata.",
+      "description": "BalancedNetwork level coordinate metadata.",
       "oneOf": [
         {
           "description": "x = longitude and y = latitude in decimal degrees. `None` means EPSG:4326.",
@@ -2184,7 +2129,7 @@
       "type": "object"
     },
     "GeoMeta2": {
-      "description": "Network level coordinate metadata.",
+      "description": "BalancedNetwork level coordinate metadata.",
       "oneOf": [
         {
           "description": "x = longitude and y = latitude in decimal degrees. `None` means EPSG:4326.",
@@ -2800,12 +2745,12 @@
       ]
     },
     "ModelPayload": {
-      "description": "The one IR payload a package carries, tagged by `kind` in JSON so the payload\nis self-describing in addition to the top-level `model_kind`.\n\nThe payload is the serde snapshot of the PowerIO Rust IR\n([`powerio::Network`] / [`powerio_dist::DistNetwork`]); changes to it are\ndocument changes under the package `schema_version`. See\n`docs/src/pio-json-schema.md`.",
+      "description": "The one IR payload a package carries, tagged by `kind` in JSON so the payload\nis self-describing in addition to the top-level `model_kind`.\n\nThe payload is the serde snapshot of the PowerIO Rust IR\n([`powerio::BalancedNetwork`] / [`powerio_dist::MulticonductorNetwork`]); changes to it are\ndocument changes under the package `schema_version`. See\n`docs/src/pio-json-schema.md`.",
       "oneOf": [
         {
           "properties": {
             "balanced_network": {
-              "$ref": "#/$defs/Network"
+              "$ref": "#/$defs/BalancedNetwork"
             },
             "kind": {
               "const": "balanced",
@@ -2825,7 +2770,7 @@
               "type": "string"
             },
             "multiconductor_network": {
-              "$ref": "#/$defs/DistNetwork"
+              "$ref": "#/$defs/MulticonductorNetwork"
             }
           },
           "required": [
@@ -2836,129 +2781,184 @@
         }
       ]
     },
-    "Network": {
-      "description": "A balanced network with stable source bus IDs and separate element tables.",
+    "MulticonductorNetwork": {
+      "description": "A multiconductor distribution network.\n\n`source` retains the original text for the byte exact echo tier;\n`defaulted` records, per element (`\"class.name\"` key), the fields the\nreader materialized from format defaults rather than the source text.",
       "properties": {
-        "areas": {
-          "default": [],
-          "description": "Area records: scheduled interchange and per-area swing bus. Distinct from\nthe bare `area` number on each [`Bus`]; this is the area's metadata, which\nevery conversion dropped before. `#[serde(default)]` so older JSON still\ndeserializes.",
-          "items": {
-            "$ref": "#/$defs/Area"
-          },
-          "type": "array"
-        },
         "base_frequency": {
-          "default": 60.0,
-          "description": "System base frequency in hertz (50 or 60). Threaded through the formats\nthat record it (PSS/E `BASFRQ`, pandapower `f_hz`) and defaulted to\n[`DEFAULT_BASE_FREQUENCY`] for the rest. Load-bearing for any\nreactance↔henry conversion (pandapower line charging) and reported as a\nfidelity loss when a non-default value writes to a format with no\nfrequency field.",
+          "description": "Hz.",
           "format": "double",
           "type": "number"
-        },
-        "base_mva": {
-          "format": "double",
-          "type": "number"
-        },
-        "branches": {
-          "items": {
-            "$ref": "#/$defs/Branch"
-          },
-          "type": "array"
         },
         "buses": {
           "items": {
-            "$ref": "#/$defs/Bus"
+            "$ref": "#/$defs/DistBus"
           },
           "type": "array"
         },
+        "capacitors": {
+          "items": {
+            "$ref": "#/$defs/DistCapacitor"
+          },
+          "type": "array"
+        },
+        "commands": {
+          "description": "Source commands and options the typed model does not interpret\n(`solve`, `set mode=...`), in order, as (verb, args).",
+          "items": {
+            "maxItems": 2,
+            "minItems": 2,
+            "prefixItems": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "string"
+              }
+            ],
+            "type": "array"
+          },
+          "type": "array"
+        },
+        "control_profiles": {
+          "items": {
+            "$ref": "#/$defs/DistControlProfile"
+          },
+          "type": "array"
+        },
+        "extras": {
+          "additionalProperties": true,
+          "type": "object"
+        },
         "generators": {
           "items": {
-            "$ref": "#/$defs/Generator"
+            "$ref": "#/$defs/DistGenerator"
           },
           "type": "array"
         },
         "geo": {
           "anyOf": [
             {
-              "$ref": "#/$defs/GeoMeta"
+              "$ref": "#/$defs/GeoMeta2"
             },
             {
               "type": "null"
             }
           ]
         },
-        "hvdc": {
+        "ibrs": {
           "items": {
-            "$ref": "#/$defs/Hvdc"
+            "$ref": "#/$defs/DistIbr"
+          },
+          "type": "array"
+        },
+        "linecodes": {
+          "items": {
+            "$ref": "#/$defs/DistLineCode"
+          },
+          "type": "array"
+        },
+        "lines": {
+          "items": {
+            "$ref": "#/$defs/DistLine"
           },
           "type": "array"
         },
         "loads": {
           "items": {
-            "$ref": "#/$defs/Load"
+            "$ref": "#/$defs/DistLoad"
           },
           "type": "array"
         },
         "name": {
-          "type": "string"
+          "type": [
+            "string",
+            "null"
+          ]
         },
-        "shunts": {
+        "options": {
           "items": {
-            "$ref": "#/$defs/Shunt"
+            "maxItems": 2,
+            "minItems": 2,
+            "prefixItems": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "string"
+              }
+            ],
+            "type": "array"
           },
           "type": "array"
         },
-        "solver": {
+        "shunts": {
+          "items": {
+            "$ref": "#/$defs/DistShunt"
+          },
+          "type": "array"
+        },
+        "source_format": {
           "anyOf": [
             {
-              "$ref": "#/$defs/SolverParams"
+              "$ref": "#/$defs/DistSourceFormat"
             },
             {
               "type": "null"
             }
-          ],
-          "default": null,
-          "description": "Solver / solution-control metadata when the source carries it, else `None`.\n`#[serde(default)]` so older JSON still deserializes."
+          ]
         },
-        "source_format": {
-          "$ref": "#/$defs/SourceFormat"
-        },
-        "storage": {
+        "sources": {
+          "description": "BMOPF allows exactly one; the model allows any number and the BMOPF\nwriter warns beyond the first.",
           "items": {
-            "$ref": "#/$defs/Storage"
+            "$ref": "#/$defs/VoltageSource"
           },
           "type": "array"
         },
         "switches": {
-          "default": [],
           "items": {
-            "$ref": "#/$defs/Switch"
+            "$ref": "#/$defs/DistSwitch"
           },
           "type": "array"
         },
-        "transformers_3w": {
-          "default": [],
-          "description": "Three-winding transformers, kept as typed records rather than folded into\n`branches`, so a star point and the per-winding data survive a round trip.\n`#[serde(default)]` so JSON written before the field existed still\ndeserializes. [`IndexedNetwork`](crate::IndexedNetwork) lowers each\nin-service record into a star bus plus three branches (via\n[`Transformer3W::star_expansion`]) before building any matrix, so a\n3-winding transformer does appear in `Y_bus`/connectivity; the canonical\nmodel keeps the typed record for round-trip fidelity.",
+        "transformers": {
           "items": {
-            "$ref": "#/$defs/Transformer3W"
+            "$ref": "#/$defs/DistTransformer"
+          },
+          "type": "array"
+        },
+        "untyped": {
+          "items": {
+            "$ref": "#/$defs/UntypedObject"
+          },
+          "type": "array"
+        },
+        "warnings": {
+          "items": {
+            "type": "string"
           },
           "type": "array"
         }
       },
       "required": [
-        "name",
-        "base_mva",
+        "base_frequency",
         "buses",
+        "linecodes",
+        "lines",
+        "switches",
+        "transformers",
         "loads",
-        "shunts",
-        "branches",
         "generators",
-        "storage",
-        "hvdc",
-        "source_format"
+        "shunts",
+        "sources",
+        "untyped",
+        "commands",
+        "options",
+        "warnings",
+        "extras"
       ],
       "type": "object"
     },
     "NormalizedSolverTableMetadata": {
-      "description": "Compact package metadata for `Network::to_normalized_solver_tables`.",
+      "description": "Compact package metadata for `BalancedNetwork::to_normalized_solver_tables`.",
       "properties": {
         "branch_from_arc_indices": {
           "items": {
@@ -3733,7 +3733,7 @@
       "type": "object"
     },
     "SourceFormat": {
-      "description": "Which format a [`Network`] was read from. Drives the same format byte exact\necho on write.",
+      "description": "Which format a [`BalancedNetwork`] was read from. Drives the same format byte exact\necho on write.",
       "oneOf": [
         {
           "enum": [
@@ -3763,7 +3763,7 @@
         },
         {
           "const": "Normalized",
-          "description": "A normalized derived form ([`Network::to_normalized`]): per unit, radians,\nfiltered, source bus ids preserved. Distinct from\n[`InMemory`](SourceFormat::InMemory) so consumers can tell a per unit\nproduct from a raw in memory network; it has no source text and a different\nunit basis than a parsed network.",
+          "description": "A normalized derived form ([`BalancedNetwork::to_normalized`]): per unit, radians,\nfiltered, source bus ids preserved. Distinct from\n[`InMemory`](SourceFormat::InMemory) so consumers can tell a per unit\nproduct from a raw in memory network; it has no source text and a different\nunit basis than a parsed network.",
           "type": "string"
         },
         {

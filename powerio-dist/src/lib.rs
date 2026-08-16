@@ -24,7 +24,7 @@
 //! format conversion writes from the typed model and reports fields the target
 //! cannot represent in [`Conversion::warnings`]. The DSS reader expands OpenDSS
 //! class defaults into explicit model values and records them in
-//! [`DistNetwork::defaulted`]. BMOPF output includes those values.
+//! [`MulticonductorNetwork::defaulted`]. BMOPF output includes those values.
 //! The per fixture results live in `docs/conversion-matrix.md`.
 //!
 //! # Float formatting
@@ -72,8 +72,8 @@ pub use graph::{
 pub use model::{
     ActivePowerReference, ActivePowerUnit, Configuration, ControlVoltageReference, DistBus,
     DistCapacitor, DistControlProfile, DistGenerator, DistIbr, DistLine, DistLineCode, DistLoad,
-    DistLoadVoltageModel, DistNetwork, DistShunt, DistSourceFormat, DistSwitch, DistTransformer,
-    Extras, IbrPrimeMover, IbrTopology, IbrVoltageAggregation, Mat, MulticonductorNetwork,
+    DistLoadVoltageModel, DistShunt, DistSourceFormat, DistSwitch, DistTransformer, Extras,
+    IbrPrimeMover, IbrTopology, IbrVoltageAggregation, Mat, MulticonductorNetwork,
     PowerFactorControl, ReactivePowerReference, ReactivePowerUnit, UntypedObject, VoltVarControl,
     VoltWattControl, VoltageSource, Winding, WindingConn,
 };

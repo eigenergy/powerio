@@ -153,7 +153,7 @@ fn canonical_write_is_idempotent() {
     assert_eq!(first, second, "canonical aux output must be idempotent");
 }
 
-// ---- Network mapping --------------------------------------------------------
+// ---- BalancedNetwork mapping --------------------------------------------------------
 
 use super::{parse_powerworld, write_powerworld};
 

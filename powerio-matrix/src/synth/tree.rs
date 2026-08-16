@@ -4,11 +4,11 @@ use rand::Rng;
 use rand::SeedableRng;
 use rand_chacha::ChaCha8Rng;
 
-use crate::network::{Branch, Bus, BusId, BusType, Network};
+use crate::network::{BalancedNetwork, Branch, Bus, BusId, BusType};
 
 use super::SynthSpec;
 
-pub fn generate_tree(spec: &SynthSpec) -> Network {
+pub fn generate_tree(spec: &SynthSpec) -> BalancedNetwork {
     let n = spec.n.max(2);
     let mut rng = ChaCha8Rng::seed_from_u64(spec.seed);
     let buses = make_buses(n);
@@ -23,10 +23,10 @@ pub fn generate_tree(spec: &SynthSpec) -> Network {
     net(format!("synth_tree_n{n}"), buses, branches)
 }
 
-/// Wrap synthesized buses and branches into an in-memory [`Network`]: no loads,
+/// Wrap synthesized buses and branches into an in-memory [`BalancedNetwork`]: no loads,
 /// shunts, generators, or source document.
-pub(super) fn net(name: String, buses: Vec<Bus>, branches: Vec<Branch>) -> Network {
-    Network::in_memory(name, 100.0, buses, branches)
+pub(super) fn net(name: String, buses: Vec<Bus>, branches: Vec<Branch>) -> BalancedNetwork {
+    BalancedNetwork::in_memory(name, 100.0, buses, branches)
 }
 
 /// Build `n` synthetic buses with ids `1..=n` and bus 1 designated reference.

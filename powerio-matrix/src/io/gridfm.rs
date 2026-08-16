@@ -4,12 +4,12 @@
 //! tables that [`gridfm-graphkit`](https://github.com/gridfm)'s
 //! `HeteroGridDatasetDisk` trains a GNN on. This module emits the same four
 //! tables — `bus_data`, `gen_data`, `branch_data`, `y_bus_data` — from one
-//! parsed [`Network`], so graphkit can train on powerio output directly and the
+//! parsed [`BalancedNetwork`], so graphkit can train on powerio output directly and the
 //! scenario-batch path (issue #14) has its on-disk format.
 //!
 //! The reverse — [`read_gridfm_dataset`] / [`read_gridfm_scenarios`] /
 //! [`gridfm_base_case`], with the pure [`read_gridfm_network`] over in-memory
-//! batches — rebuilds a [`Network`] from such a dataset (lossy but
+//! batches — rebuilds a [`BalancedNetwork`] from such a dataset (lossy but
 //! power flow complete; see [`GridfmRead`]), the ML→classical return leg
 //! (issue #60). One reader plus the existing writers means gridfm → any classical
 //! format. `y_bus_data` is ignored on read; branches carry raw `r/x/b`.
@@ -76,7 +76,7 @@ use crate::indexed::IndexedNetwork;
 use crate::matrix::{BuildOptions, YbusFlags, branch_admittance, branch_flows, build_ybus};
 use crate::network::{Branch, Bus, BusId, BusType, Generator, Load, Shunt, SourceFormat};
 use crate::{
-    ElementCounts, Error, GenCost, GenCostPatch, MissingGenCostPolicy, Network, Result,
+    BalancedNetwork, ElementCounts, Error, GenCost, GenCostPatch, MissingGenCostPolicy, Result,
     ScenarioMismatch,
 };
 
@@ -131,7 +131,7 @@ impl GridfmOptions {
     }
 }
 
-/// One snapshot in a gridfm scenario batch: a parsed [`Network`] and the scenario
+/// One snapshot in a gridfm scenario batch: a parsed [`BalancedNetwork`] and the scenario
 /// id stamped into its rows.
 ///
 /// powerio has no solver, so each snapshot is an operating point a caller (e.g. a
@@ -147,7 +147,7 @@ impl GridfmOptions {
 #[derive(Debug, Clone, Copy)]
 pub struct GridfmSnapshot<'a> {
     /// The parsed case for this scenario.
-    net: &'a Network,
+    net: &'a BalancedNetwork,
     /// The scenario id stamped into the `scenario`/`load_scenario_idx` columns.
     scenario: i64,
 }
@@ -157,7 +157,7 @@ impl<'a> GridfmSnapshot<'a> {
     /// For the common "k-th input is `base + k`" numbering, prefer
     /// [`numbered_snapshots`], which assigns ids with checked arithmetic.
     #[must_use]
-    pub fn new(net: &'a Network, scenario: i64) -> Self {
+    pub fn new(net: &'a BalancedNetwork, scenario: i64) -> Self {
         Self { net, scenario }
     }
 }
@@ -255,7 +255,7 @@ struct GridfmMeta {
 /// yields a non-finite admittance, and [`powerio::Error::UnknownBus`] if a generator or
 /// branch references a bus the network doesn't define.
 pub fn gridfm_record_batches(
-    net: &Network,
+    net: &BalancedNetwork,
     scenario: i64,
     opts: &GridfmOptions,
 ) -> Result<GridfmTables> {
@@ -356,7 +356,7 @@ fn snapshot_views<'a>(snapshots: &'a [GridfmSnapshot<'a>]) -> Result<Vec<Snapsho
     Ok(views)
 }
 
-fn validate_snapshot_inputs(net: &Network, scenario: i64) -> Result<()> {
+fn validate_snapshot_inputs(net: &BalancedNetwork, scenario: i64) -> Result<()> {
     if net.is_normalized() {
         return Err(Error::NormalizedGridfmSnapshot { scenario });
     }
@@ -384,7 +384,7 @@ fn validate_snapshot_inputs(net: &Network, scenario: i64) -> Result<()> {
     for (row, br) in net.branches.iter().enumerate() {
         finite(scenario, "branch", row, "r", br.r)?;
         finite(scenario, "branch", row, "x", br.x)?;
-        finite(scenario, "branch", row, "b", br.legacy_total_charging_b())?;
+        finite(scenario, "branch", row, "b", br.total_charging_b())?;
         finite(scenario, "branch", row, "tap", br.tap)?;
         finite(scenario, "branch", row, "shift", br.shift)?;
         not_nan(scenario, "branch", row, "angmin", br.angmin)?;
@@ -450,7 +450,7 @@ fn not_nan(
 }
 
 /// The base element shape a scenario batch shares.
-fn shape_of(net: &Network) -> ElementCounts {
+fn shape_of(net: &BalancedNetwork) -> ElementCounts {
     ElementCounts {
         buses: net.buses.len(),
         branches: net.branches.len(),
@@ -467,7 +467,7 @@ struct CostPolicyBatchReport {
 fn policy_adjusted_snapshots(
     snapshots: &[GridfmSnapshot],
     opts: &GridfmOptions,
-) -> Result<(Vec<Network>, CostPolicyBatchReport)> {
+) -> Result<(Vec<BalancedNetwork>, CostPolicyBatchReport)> {
     let mut report = CostPolicyBatchReport::default();
     let mut nets = Vec::with_capacity(snapshots.len());
     for snap in snapshots {
@@ -484,7 +484,10 @@ fn policy_adjusted_snapshots(
 /// one place the "k-th input is scenario `base + k`" rule lives, so the CLI and
 /// the Python binding can't drift. Checked: returns [`Error::ScenarioIdOverflow`]
 /// rather than wrapping or panicking if a scenario id exceeds `i64`.
-pub fn numbered_snapshots<'a>(nets: &[&'a Network], base: i64) -> Result<Vec<GridfmSnapshot<'a>>> {
+pub fn numbered_snapshots<'a>(
+    nets: &[&'a BalancedNetwork],
+    base: i64,
+) -> Result<Vec<GridfmSnapshot<'a>>> {
     nets.iter()
         .enumerate()
         .map(|(k, &net)| {
@@ -506,13 +509,13 @@ pub fn numbered_snapshots<'a>(nets: &[&'a Network], base: i64) -> Result<Vec<Gri
 /// `gridfm_meta.json` manifest.
 ///
 /// Expects a raw snapshot (powers in MW, angles in degrees); pass the parsed
-/// `Network`, not a [`to_normalized`](powerio::Network::to_normalized) per-unit
+/// `BalancedNetwork`, not a [`to_normalized`](powerio::BalancedNetwork::to_normalized) per-unit
 /// product, whose fields would be mislabeled.
 ///
 /// # Errors
 /// Propagates [`gridfm_record_batches`] and any filesystem/Parquet error.
 pub fn write_gridfm_dataset(
-    net: &Network,
+    net: &BalancedNetwork,
     scenario: i64,
     out_dir: impl AsRef<Path>,
     opts: &GridfmOptions,
@@ -871,7 +874,7 @@ fn branch_batch(snaps: &[SnapshotView], opts: &GridfmOptions) -> Result<RecordBa
 
             r_col.push(br.r);
             x_col.push(br.x);
-            b_col.push(br.legacy_total_charging_b());
+            b_col.push(br.total_charging_b());
             tap.push(br.effective_tap());
             shift.push(br.shift);
             ang_min.push(br.angmin);
@@ -1048,22 +1051,22 @@ fn with_scenario_pair(
     cols
 }
 
-// === Reader: gridfm dataset → Network (issue #60) ==========================
+// === Reader: gridfm dataset → BalancedNetwork (issue #60) ==========================
 //
 // The inverse of the writer above: select one `scenario` out of the gridfm tables
-// and rebuild a `Network`. Lossy but power flow complete — original bus ids are
+// and rebuild a `BalancedNetwork`. Lossy but power flow complete — original bus ids are
 // synthesized `1..n`, nodal load/shunt is folded to one synthetic element per
 // bus, and HVDC/storage/piecewise costs are gone (see [`GridfmRead::warnings`]).
 // `y_bus_data` is never read; branches carry raw `r/x/b`.
 
-/// One scenario read out of a gridfm dataset: the reconstructed [`Network`] plus
+/// One scenario read out of a gridfm dataset: the reconstructed [`BalancedNetwork`] plus
 /// the fidelity warnings the lossy read couldn't avoid (mirroring
 /// [`Conversion::warnings`](powerio::Conversion)).
 #[derive(Debug, Clone)]
 #[non_exhaustive]
 pub struct GridfmRead {
     /// The reconstructed network (`source_format = SourceFormat::Gridfm`).
-    pub network: Network,
+    pub network: BalancedNetwork,
     /// The scenario id these rows came from.
     pub scenario: i64,
     /// What the gridfm schema couldn't round-trip — synthesized bus ids, folded
@@ -1071,14 +1074,14 @@ pub struct GridfmRead {
     pub warnings: Vec<String>,
 }
 
-/// Build one [`Network`] from in-memory gridfm tables, selecting `scenario`'s
+/// Build one [`BalancedNetwork`] from in-memory gridfm tables, selecting `scenario`'s
 /// rows. The pure inverse of [`gridfm_record_batches`]: `base_mva` and `name`
 /// come from the caller (the disk path reads them from `gridfm_meta.json`).
 ///
 /// # Errors
 /// [`powerio::Error::FormatRead`] if a required column is missing or mistyped, a column
 /// carries nulls, a dense index is negative, or `scenario` isn't present; plus
-/// whatever [`Network::validate`] rejects (duplicate / dangling bus ids).
+/// whatever [`BalancedNetwork::validate`] rejects (duplicate / dangling bus ids).
 pub fn read_gridfm_network(
     tables: &GridfmTables,
     scenario: i64,
@@ -1091,7 +1094,7 @@ pub fn read_gridfm_network(
     build_network_from_columns(&bus, &gens, &branch, scenario, base_mva, name, Vec::new())
 }
 
-/// Read one `scenario` from a gridfm dataset on disk and rebuild a [`Network`].
+/// Read one `scenario` from a gridfm dataset on disk and rebuild a [`BalancedNetwork`].
 /// The inverse of [`write_gridfm_dataset`].
 ///
 /// `dir` is resolved leniently: the leaf `raw/` directory holding the parquet
@@ -1110,7 +1113,7 @@ pub fn read_gridfm_dataset(dir: impl AsRef<Path>, scenario: i64) -> Result<Gridf
     build_network_from_columns(&bus, &gens, &branch, scenario, base_mva, &name, warnings)
 }
 
-/// Read every scenario from a gridfm dataset, one [`Network`] per `scenario` id
+/// Read every scenario from a gridfm dataset, one [`BalancedNetwork`] per `scenario` id
 /// (sorted ascending) over the shared topology — the read side of the scenario
 /// batch (#57). Each scenario is rebuilt independently, so two scenarios may
 /// differ in branch status, bus types, and reference bus.
@@ -1136,7 +1139,7 @@ pub fn read_gridfm_scenarios(dir: impl AsRef<Path>) -> Result<Vec<GridfmRead>> {
 }
 
 /// The distinct scenario ids in a gridfm dataset, ascending — the keys
-/// [`read_gridfm_scenarios`] rebuilds a [`Network`] for. Reads only `bus_data`'s
+/// [`read_gridfm_scenarios`] rebuilds a [`BalancedNetwork`] for. Reads only `bus_data`'s
 /// scenario column, so it enumerates a dataset's scenarios without rebuilding
 /// every network; the C ABI's `pio_scenario_ids` is a thin wrapper over it.
 ///
@@ -1270,7 +1273,7 @@ fn branch_columns(batches: &[RecordBatch]) -> Result<BranchColumns> {
     })
 }
 
-/// The shared core: rebuild one scenario's [`Network`] from already-extracted
+/// The shared core: rebuild one scenario's [`BalancedNetwork`] from already-extracted
 /// columns. The columns are concatenated once by the caller and reused across
 /// scenarios, so a multi-scenario read doesn't re-copy each table per scenario.
 /// `warnings` is seeded with any manifest-level notes (e.g. a defaulted
@@ -1441,7 +1444,7 @@ fn build_network_from_columns(
         branches.push(branch);
     }
 
-    let mut net = Network::new(name, base_mva);
+    let mut net = BalancedNetwork::new(name, base_mva);
     net.buses = buses;
     net.loads = loads;
     net.shunts = shunts;
@@ -1804,7 +1807,7 @@ mod tests {
         "B",
     ];
 
-    fn case14() -> Network {
+    fn case14() -> BalancedNetwork {
         let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../tests/data/case14.m");
         crate::parse_matpower_file(path).unwrap()
     }
@@ -1860,7 +1863,7 @@ mod tests {
 
     #[test]
     fn branch_b_uses_terminal_charging_projection() {
-        let mut net = Network::in_memory(
+        let mut net = BalancedNetwork::in_memory(
             "terminal-projection",
             100.0,
             vec![bus(1, BusType::Ref), bus(2, BusType::Pq)],
@@ -2017,7 +2020,7 @@ mod tests {
         // No vendored fixture has r = x = 0, so build one: branch 0 is a zero-
         // impedance tie, branch 1 is normal. The tie's admittance and flow columns
         // must be zero (never NaN), and the manifest must count it.
-        let net = Network::in_memory(
+        let net = BalancedNetwork::in_memory(
             "zeroimp",
             100.0,
             vec![
@@ -2084,7 +2087,7 @@ mod tests {
     #[test]
     fn missing_reference_bus_errors() {
         // gridfm_record_batches' documented precondition: exactly one ref bus.
-        let net = Network::in_memory(
+        let net = BalancedNetwork::in_memory(
             "noref",
             100.0,
             vec![bus(1, BusType::Pq), bus(2, BusType::Pq)],
@@ -2155,7 +2158,7 @@ mod tests {
 
     #[test]
     fn non_finite_representable_cost_errors() {
-        let mut net = Network::in_memory(
+        let mut net = BalancedNetwork::in_memory(
             "badcost",
             100.0,
             vec![bus(1, BusType::Ref), bus(2, BusType::Pq)],
@@ -2218,7 +2221,7 @@ mod tests {
 
     /// case14 with every load and generator setpoint scaled — a perturbed
     /// operating point on the same topology, the scenario-batch invariant.
-    fn scaled(net: &Network, factor: f64) -> Network {
+    fn scaled(net: &BalancedNetwork, factor: f64) -> BalancedNetwork {
         let mut s = net.clone();
         for l in &mut s.loads {
             l.p *= factor;
@@ -2364,7 +2367,7 @@ mod tests {
     #[test]
     fn shape_mismatch_across_snapshots_errors() {
         let big = case14();
-        let small = Network::in_memory(
+        let small = BalancedNetwork::in_memory(
             "small",
             100.0,
             vec![bus(1, BusType::Ref), bus(2, BusType::Pq)],
@@ -2498,7 +2501,7 @@ mod tests {
         // for every generator (keeping its setpoint), while bus `Pg`/`Qg` aggregate
         // only in-service generation (`view.in_service_gens()`). Exercise the
         // `false` case on both.
-        let mut net = Network::in_memory(
+        let mut net = BalancedNetwork::in_memory(
             "genoutage",
             100.0,
             vec![bus(1, BusType::Ref), bus(2, BusType::Pq)],
@@ -2547,7 +2550,7 @@ mod tests {
         // exercise. Use non-flat voltages so an *in-service* branch carries real
         // flow, which makes the zero on the tripped branch meaningful (not just an
         // artifact of a flat start).
-        let mut net = Network::in_memory(
+        let mut net = BalancedNetwork::in_memory(
             "outage",
             100.0,
             vec![
@@ -2614,7 +2617,7 @@ mod tests {
     fn degenerate_cost_gen_zeros_columns_and_is_counted() {
         // Counterpart to the zero-impedance test: a piecewise (model 1) cost row
         // gets zeroed cp* columns and is counted; a polynomial row is kept.
-        let mut net = Network::in_memory(
+        let mut net = BalancedNetwork::in_memory(
             "degen",
             100.0,
             vec![bus(1, BusType::Ref), bus(2, BusType::Pq)],
@@ -2652,7 +2655,7 @@ mod tests {
 
     #[test]
     fn missing_gridfm_costs_are_split_and_fill_policy_reduces_missing_count() {
-        let mut net = Network::in_memory(
+        let mut net = BalancedNetwork::in_memory(
             "missing-cost",
             100.0,
             vec![bus(1, BusType::Ref), bus(2, BusType::Pq)],
@@ -2733,7 +2736,7 @@ mod tests {
     /// HVDC/storage are excluded from that guarantee.
     #[allow(clippy::type_complexity)]
     fn fingerprint(
-        net: &Network,
+        net: &BalancedNetwork,
     ) -> (
         usize,
         usize,
@@ -2762,7 +2765,7 @@ mod tests {
         )
     }
 
-    fn assert_fingerprint_close(got: &Network, want: &Network) {
+    fn assert_fingerprint_close(got: &BalancedNetwork, want: &BalancedNetwork) {
         let (g, w) = (fingerprint(got), fingerprint(want));
         assert_eq!(
             (g.0, g.1, g.2, g.3),
@@ -2828,7 +2831,7 @@ mod tests {
     #[test]
     fn read_scenarios_yields_distinct_networks() {
         // A 2-scenario batch (base + load×1.1): each scenario reads back to its own
-        // Network, and gridfm_base_case picks scenario 0.
+        // BalancedNetwork, and gridfm_base_case picks scenario 0.
         let base = case14();
         let up = scaled(&base, 1.1);
         let snaps = [
@@ -3049,7 +3052,7 @@ mod tests {
         // gen_data may be legitimately empty (a power flow case with no mpc.gen);
         // the scenario guard must not reject it — only a *partial* table (rows for
         // other scenarios but not this one) is an error.
-        let net = Network::in_memory(
+        let net = BalancedNetwork::in_memory(
             "nogen",
             100.0,
             vec![bus(1, BusType::Ref), bus(2, BusType::Pq)],
@@ -3066,7 +3069,7 @@ mod tests {
         // A genuine zero polynomial cost writes (0,0,0), indistinguishable from a
         // no-cost generator or a zeroed unrepresentable cost; the reader reads None
         // and the warning describes the ambiguity (not a false "piecewise/cubic").
-        let mut net = Network::in_memory(
+        let mut net = BalancedNetwork::in_memory(
             "zerocost",
             100.0,
             vec![bus(1, BusType::Ref), bus(2, BusType::Pq)],

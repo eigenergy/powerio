@@ -9,9 +9,9 @@
 use powerio_matrix::IndexedNetwork;
 use powerio_matrix::io::{read_mtx, write_sensitivity_mtx_with_options};
 use powerio_matrix::{
-    Branch, BuildOptions, Bus, BusId, BusType, DcConvention, Error, GenCost, Generator, Network,
-    Scheme, build_adjacency, build_bprime, build_flow_map, build_incidence, build_lodf, build_ptdf,
-    build_weighted_laplacian, build_ybus, ground_at, parse_matpower_file,
+    BalancedNetwork, Branch, BuildOptions, Bus, BusId, BusType, DcConvention, Error, GenCost,
+    Generator, Scheme, build_adjacency, build_bprime, build_flow_map, build_incidence, build_lodf,
+    build_ptdf, build_weighted_laplacian, build_ybus, ground_at, parse_matpower_file,
 };
 use powerio_matrix::{
     SensitivityOptions, SensitivitySolver, SensitivitySolverPath, build_ptdf_lodf,
@@ -27,13 +27,13 @@ const CASES: &[&str] = &[
     "../tests/data/case118.m",
 ];
 
-fn load(path: &str) -> Network {
+fn load(path: &str) -> BalancedNetwork {
     parse_matpower_file(path).unwrap_or_else(|e| panic!("parse {path}: {e}"))
 }
 
 /// In-memory network from hand-built buses/branches (no loads/shunts/source).
-fn net(name: &str, buses: Vec<Bus>, branches: Vec<Branch>) -> Network {
-    Network::in_memory(name, 100.0, buses, branches)
+fn net(name: &str, buses: Vec<Bus>, branches: Vec<Branch>) -> BalancedNetwork {
+    BalancedNetwork::in_memory(name, 100.0, buses, branches)
 }
 
 fn net_with_gens(
@@ -41,7 +41,7 @@ fn net_with_gens(
     buses: Vec<Bus>,
     branches: Vec<Branch>,
     generators: Vec<Generator>,
-) -> Network {
+) -> BalancedNetwork {
     let mut network = net(name, buses, branches);
     network.generators = generators;
     network
@@ -573,7 +573,7 @@ fn poly_gen(bus_id: usize, pmax: f64, c2: f64, c1: f64) -> Generator {
 
 /// Symmetric 3-bus triangle, slack at bus 1, unit susceptance on every branch.
 /// Branch order fixes the incidence columns: e0=1→2, e1=1→3, e2=2→3.
-fn triangle() -> Network {
+fn triangle() -> BalancedNetwork {
     net(
         "triangle",
         vec![

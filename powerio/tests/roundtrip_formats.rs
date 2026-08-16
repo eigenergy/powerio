@@ -1,7 +1,7 @@
 //! All-pairs converter harness. For every format with a reader, this checks the
 //! two-tier fidelity behavior against the vendored cases:
 //!
-//! - **core preservation** — MATPOWER → format → `Network` keeps the electrical
+//! - **core preservation** — MATPOWER → format → `BalancedNetwork` keeps the electrical
 //!   core (bus/branch/gen/load/shunt counts, total demand, total generation,
 //!   base);
 //! - **reader∘writer idempotence** — serialize → read → serialize is stable;
@@ -17,18 +17,18 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use powerio::{
-    BusType, Network, TargetFormat, parse_egret_json, parse_matpower_file, parse_powermodels_json,
-    parse_powerworld, parse_pslf, parse_psse, write_as, write_egret_json, write_powermodels_json,
-    write_powerworld, write_pslf, write_psse, write_psse_rev,
+    BalancedNetwork, BusType, TargetFormat, parse_egret_json, parse_matpower_file,
+    parse_powermodels_json, parse_powerworld, parse_pslf, parse_psse, write_as, write_egret_json,
+    write_powermodels_json, write_powerworld, write_pslf, write_psse, write_psse_rev,
 };
 
 mod common;
 use common::json_approx_eq;
 
-fn write_psse34(n: &Network) -> String {
+fn write_psse34(n: &BalancedNetwork) -> String {
     write_psse_rev(n, 34).text
 }
-fn write_psse35(n: &Network) -> String {
+fn write_psse35(n: &BalancedNetwork) -> String {
     write_psse_rev(n, 35).text
 }
 
@@ -55,7 +55,7 @@ struct Fingerprint {
     base_mva: i64,
 }
 
-fn fingerprint(net: &Network) -> Fingerprint {
+fn fingerprint(net: &BalancedNetwork) -> Fingerprint {
     let r = |x: f64| (x * 1e3).round() as i64;
     Fingerprint {
         buses: net.buses.len(),
@@ -137,7 +137,7 @@ fn round_value(x: f64) -> i64 {
     (x * 1e5).round() as i64
 }
 
-fn value_fingerprint(net: &Network, target: TargetFormat) -> ValueFingerprint {
+fn value_fingerprint(net: &BalancedNetwork, target: TargetFormat) -> ValueFingerprint {
     ValueFingerprint {
         base_mva: round_value(net.base_mva),
         buses: bus_values(net),
@@ -162,7 +162,7 @@ fn value_fingerprint(net: &Network, target: TargetFormat) -> ValueFingerprint {
     }
 }
 
-fn bus_values(net: &Network) -> Vec<BusValue> {
+fn bus_values(net: &BalancedNetwork) -> Vec<BusValue> {
     let mut buses: Vec<_> = net
         .buses
         .iter()
@@ -202,7 +202,7 @@ where
         .collect()
 }
 
-fn branch_values(net: &Network, target: TargetFormat) -> Vec<BranchValue> {
+fn branch_values(net: &BalancedNetwork, target: TargetFormat) -> Vec<BranchValue> {
     let mut branch_counts = BTreeMap::<(usize, usize), usize>::new();
     let mut branches: Vec<_> = net
         .branches
@@ -220,7 +220,7 @@ fn branch_values(net: &Network, target: TargetFormat) -> Vec<BranchValue> {
                 r: round_value(branch.r),
                 x: round_value(branch.x),
                 b: (!(target == TargetFormat::Pslf && branch.is_transformer()))
-                    .then_some(round_value(branch.legacy_total_charging_b())),
+                    .then_some(round_value(branch.total_charging_b())),
                 rate_a: round_value(branch.rate_a),
                 rate_b: round_value(branch.rate_b),
                 rate_c: round_value(branch.rate_c),
@@ -236,7 +236,7 @@ fn branch_values(net: &Network, target: TargetFormat) -> Vec<BranchValue> {
     branches
 }
 
-fn generator_values(net: &Network, target: TargetFormat) -> Vec<GeneratorValue> {
+fn generator_values(net: &BalancedNetwork, target: TargetFormat) -> Vec<GeneratorValue> {
     let mut generator_counts = BTreeMap::<usize, usize>::new();
     let mut generators: Vec<_> = net
         .generators
@@ -299,8 +299,8 @@ fn assert_value_fingerprint_eq(got: &ValueFingerprint, expected: &ValueFingerpri
 struct Roundtrippable {
     name: &'static str,
     format: TargetFormat,
-    write: fn(&Network) -> String,
-    read: fn(&str) -> Network,
+    write: fn(&BalancedNetwork) -> String,
+    read: fn(&str) -> BalancedNetwork,
 }
 
 fn roundtrippable() -> Vec<Roundtrippable> {

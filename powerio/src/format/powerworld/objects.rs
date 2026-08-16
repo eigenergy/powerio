@@ -1,7 +1,7 @@
 //! Typed views over aux object types the transmission core does not model.
 //!
 //! Contingencies, limit sets, and rating set names matter to transmission
-//! studies even though [`crate::network::Network`] does not model them. They
+//! studies even though [`crate::network::BalancedNetwork`] does not model them. They
 //! are retained losslessly by the generic layer ([`super::AuxFile`]); the
 //! views here give them names and structure. Everything stays read only: the
 //! data round trips through the retained source, untouched.

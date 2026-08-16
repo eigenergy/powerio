@@ -1,4 +1,4 @@
-//! Write a [`Network`] back out as a MATPOWER `.m` file.
+//! Write a [`BalancedNetwork`] back out as a MATPOWER `.m` file.
 //!
 //! When the network was read from MATPOWER text it carries its original source,
 //! and the writer echoes it verbatim — an exact round-trip that preserves every
@@ -11,12 +11,12 @@ use std::collections::BTreeMap;
 use std::fmt::Write as _;
 
 use crate::format::{Conversion, warn_extra_branch_rating_sets};
-use crate::network::{BusId, Network, SourceFormat};
+use crate::network::{BalancedNetwork, BusId, SourceFormat};
 
 /// Serialize `net` to MATPOWER `.m` text. Echoes the retained source verbatim
 /// when `net` came from MATPOWER; otherwise emits canonical `.m`.
 #[must_use]
-pub fn write_matpower(net: &Network) -> String {
+pub fn write_matpower(net: &BalancedNetwork) -> String {
     match &net.source {
         Some(text) if net.source_format == SourceFormat::Matpower => text.to_string(),
         _ => canonical(net),
@@ -27,7 +27,7 @@ pub fn write_matpower(net: &Network) -> String {
 /// network that kept its MATPOWER source) drops nothing; the canonical path
 /// can't carry everything the neutral model holds, so it itemizes what it leaves
 /// out — the cross-format leg of the fidelity behavior (see [`Conversion`]).
-pub(crate) fn write_matpower_conversion(net: &Network) -> Conversion {
+pub(crate) fn write_matpower_conversion(net: &BalancedNetwork) -> Conversion {
     let text = write_matpower(net);
     // Echoed retained MATPOWER source: byte-exact, nothing dropped.
     if net.source.is_some() && net.source_format == SourceFormat::Matpower {
@@ -42,7 +42,7 @@ pub(crate) fn write_matpower_conversion(net: &Network) -> Conversion {
 }
 
 #[expect(clippy::too_many_lines)]
-fn canonical_warnings(net: &Network) -> Vec<String> {
+fn canonical_warnings(net: &BalancedNetwork) -> Vec<String> {
     // The canonical writer (see `canonical`) emits the standard bus/branch/gen/
     // gencost/storage blocks only. Report every neutral-model field it can't.
     let mut warnings = Vec::new();
@@ -153,7 +153,7 @@ fn canonical_warnings(net: &Network) -> Vec<String> {
 /// of each per bus). Emits valid `.m` (values equal, formatting normalized); not
 /// byte-exact. HVDC lines are not emitted.
 #[allow(clippy::too_many_lines)] // flat per-section serializer; splitting adds noise
-fn canonical(net: &Network) -> String {
+fn canonical(net: &BalancedNetwork) -> String {
     // Aggregate demand and shunts onto their bus.
     let mut demand: BTreeMap<BusId, (f64, f64)> = BTreeMap::new();
     for l in &net.loads {

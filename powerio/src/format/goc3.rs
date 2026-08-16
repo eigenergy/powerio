@@ -1,6 +1,6 @@
-//! Read ARPA-E GO Challenge 3 JSON input data into the transmission `Network`.
+//! Read ARPA-E GO Challenge 3 JSON input data into the transmission `BalancedNetwork`.
 //!
-//! GO Challenge 3 is a unit commitment data model. `Network` is a static power
+//! GO Challenge 3 is a unit commitment data model. `BalancedNetwork` is a static power
 //! flow model, so this reader maps the first time interval into static generator
 //! and load bounds, retains the original JSON source, and reports the scheduling
 //! data it leaves in the source document.
@@ -12,8 +12,8 @@ use std::sync::Arc;
 use serde_json::{Map, Value};
 
 use crate::network::{
-    Branch, BranchCharging, BranchRatingSet, Bus, BusId, BusType, Extras, GenCost, Generator, Hvdc,
-    Load, Network, Shunt, SourceFormat, TransformerControl, TransformerControlMode,
+    BalancedNetwork, Branch, BranchCharging, BranchRatingSet, Bus, BusId, BusType, Extras, GenCost,
+    Generator, Hvdc, Load, Shunt, SourceFormat, TransformerControl, TransformerControlMode,
 };
 use crate::normalize;
 use crate::{Error, Result};
@@ -154,7 +154,7 @@ pub(crate) fn parse_goc3_source(
     source: Arc<String>,
     name_hint: Option<&str>,
     warnings: &mut Vec<String>,
-) -> Result<(Network, Arc<Goc3Document>)> {
+) -> Result<(BalancedNetwork, Arc<Goc3Document>)> {
     let document = Arc::new(Goc3Document::parse(&source)?);
     let root = document.root();
     let network = document.network()?;
@@ -250,7 +250,7 @@ pub(crate) fn parse_goc3_source(
 
     let hvdc = read_hvdc(network, base_mva, &bus_map)?;
 
-    let net = Network {
+    let net = BalancedNetwork {
         name,
         base_mva,
         base_frequency: crate::network::DEFAULT_BASE_FREQUENCY,
@@ -730,7 +730,7 @@ fn warn_static_reduction(
 ) {
     if root.get("time_series_input").is_some() {
         warnings.push(
-            "time_series_input reduced to the first interval for static Network dispatch and limits"
+            "time_series_input reduced to the first interval for static BalancedNetwork dispatch and limits"
                 .into(),
         );
     }

@@ -2,7 +2,7 @@ use std::collections::BTreeSet;
 
 use serde::{Deserialize, Serialize};
 
-use crate::network::{BusId, GenCost, Network};
+use crate::network::{BalancedNetwork, BusId, GenCost};
 use crate::{Error, Result};
 
 /// Policy for generators whose source format has no active-power cost row.
@@ -86,7 +86,7 @@ impl MissingGenCostPolicy {
 /// One explicit generator cost patch from a user supplied table.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GenCostPatch {
-    /// Zero based index into [`Network::generators`].
+    /// Zero based index into [`BalancedNetwork::generators`].
     pub gen_index: usize,
     /// Bus id expected on that generator, used to catch stale patch tables.
     pub bus: BusId,
@@ -102,7 +102,7 @@ pub struct GenCostPolicyReport {
     pub synthesized: usize,
 }
 
-impl Network {
+impl BalancedNetwork {
     /// Apply explicit cost patches, then a missing-cost policy.
     ///
     /// Patches replace the existing cost for the named generator. The missing-cost

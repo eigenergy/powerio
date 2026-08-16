@@ -10,8 +10,8 @@ use std::path::{Path, PathBuf};
 
 use super::{Parsed, bus_kv, set_bus_kind, warn_extra_branch_rating_sets, zbase};
 use crate::network::{
-    Branch, BranchCharging, Bus, BusId, BusType, Extras, GenCost, Generator, Hvdc, Load,
-    LoadVoltageModel, Network, Shunt, SourceFormat, Storage,
+    BalancedNetwork, Branch, BranchCharging, Bus, BusId, BusType, Extras, GenCost, Generator, Hvdc,
+    Load, LoadVoltageModel, Shunt, SourceFormat, Storage,
 };
 use crate::{Error, Result};
 
@@ -34,7 +34,7 @@ pub fn read_pypsa_csv_folder(path: impl AsRef<Path>) -> Result<Parsed> {
 }
 
 #[allow(clippy::too_many_lines)] // direct static-component CSV mapper; each block is one PyPSA table
-fn read_pypsa_csv_folder_inner(path: &Path, warnings: &mut Vec<String>) -> Result<Network> {
+fn read_pypsa_csv_folder_inner(path: &Path, warnings: &mut Vec<String>) -> Result<BalancedNetwork> {
     let network = read_csv_optional(&path.join("network.csv"))?;
     let network_row = network.as_ref().and_then(|t| t.rows.first());
     let name = network_row
@@ -213,7 +213,7 @@ fn read_pypsa_csv_folder_inner(path: &Path, warnings: &mut Vec<String>) -> Resul
             let from = bus_ref("lines.csv", i + 1, row, "bus0", &id_of_name)?;
             let to = bus_ref("lines.csv", i + 1, row, "bus1", &id_of_name)?;
             // PyPSA per-unitizes line ohms on the BUS0 v_nom
-            // (Network.calculate_dependent_values), not bus1.
+            // (BalancedNetwork.calculate_dependent_values), not bus1.
             let zb = zbase(bus_kv(&buses, &bus_pos, from), base_mva);
             let b = row.f("b").unwrap_or(0.0) * zb;
             let g = row.f("g").unwrap_or(0.0) * zb;
@@ -406,7 +406,7 @@ fn read_pypsa_csv_folder_inner(path: &Path, warnings: &mut Vec<String>) -> Resul
         ));
     }
 
-    let net = Network {
+    let net = BalancedNetwork {
         name,
         base_mva,
         base_frequency: crate::network::DEFAULT_BASE_FREQUENCY,
@@ -433,7 +433,10 @@ fn read_pypsa_csv_folder_inner(path: &Path, warnings: &mut Vec<String>) -> Resul
 }
 
 #[allow(clippy::too_many_lines)] // one fidelity warning block per dropped field family, then the table writes
-pub fn write_pypsa_csv_folder(net: &Network, out_dir: impl AsRef<Path>) -> Result<PypsaCsvOutputs> {
+pub fn write_pypsa_csv_folder(
+    net: &BalancedNetwork,
+    out_dir: impl AsRef<Path>,
+) -> Result<PypsaCsvOutputs> {
     let out_dir = out_dir.as_ref();
     std::fs::create_dir_all(out_dir)?;
     let mut files = Vec::new();
@@ -653,7 +656,7 @@ pub fn write_pypsa_csv_folder(net: &Network, out_dir: impl AsRef<Path>) -> Resul
     })
 }
 
-fn network_csv(net: &Network) -> String {
+fn network_csv(net: &BalancedNetwork) -> String {
     format!(
         "name,srid,powerio_base_mva\n{},4326,{}\n",
         esc(&net.name),
@@ -661,7 +664,7 @@ fn network_csv(net: &Network) -> String {
     )
 }
 
-fn buses_csv(net: &Network, key_of: &HashMap<BusId, String>) -> String {
+fn buses_csv(net: &BalancedNetwork, key_of: &HashMap<BusId, String>) -> String {
     // The coordinate columns appear only when the case carries locations, so
     // a case without geometry writes exactly as before. PyPSA defaults a
     // missing cell to 0, so a located case writes empty cells for the odd
@@ -701,7 +704,7 @@ fn buses_csv(net: &Network, key_of: &HashMap<BusId, String>) -> String {
 // information the PyPSA table cannot carry.
 #[allow(clippy::float_cmp)]
 fn generators_csv(
-    net: &Network,
+    net: &BalancedNetwork,
     key_of: &HashMap<BusId, String>,
     warnings: &mut Vec<String>,
 ) -> String {
@@ -817,7 +820,7 @@ fn generators_csv(
     s
 }
 
-fn loads_csv(net: &Network, key_of: &HashMap<BusId, String>) -> String {
+fn loads_csv(net: &BalancedNetwork, key_of: &HashMap<BusId, String>) -> String {
     let mut s = String::from("name,bus,p_set,q_set,active\n");
     for (i, l) in net.loads.iter().enumerate() {
         let _ = writeln!(
@@ -844,7 +847,7 @@ fn pypsa_loses_terminal_charging(br: &Branch) -> bool {
 }
 
 fn lines_csv(
-    net: &Network,
+    net: &BalancedNetwork,
     key_of: &HashMap<BusId, String>,
     kv_of: &HashMap<BusId, f64>,
 ) -> String {
@@ -877,7 +880,7 @@ fn lines_csv(
     s
 }
 
-fn transformers_csv(net: &Network, key_of: &HashMap<BusId, String>) -> String {
+fn transformers_csv(net: &BalancedNetwork, key_of: &HashMap<BusId, String>) -> String {
     let mut s = String::from("name,bus0,bus1,r,x,b,g,s_nom,tap_ratio,phase_shift,active\n");
     for (i, br) in net
         .branches
@@ -895,7 +898,7 @@ fn transformers_csv(net: &Network, key_of: &HashMap<BusId, String>) -> String {
         };
         let charging = br.charging.unwrap_or(BranchCharging {
             g_fr: 0.0,
-            b_fr: br.legacy_total_charging_b(),
+            b_fr: br.total_charging_b(),
             g_to: 0.0,
             b_to: 0.0,
         });
@@ -919,7 +922,7 @@ fn transformers_csv(net: &Network, key_of: &HashMap<BusId, String>) -> String {
 }
 
 fn shunts_csv(
-    net: &Network,
+    net: &BalancedNetwork,
     key_of: &HashMap<BusId, String>,
     kv_of: &HashMap<BusId, f64>,
 ) -> String {
@@ -939,7 +942,7 @@ fn shunts_csv(
     s
 }
 
-fn storage_csv(net: &Network, key_of: &HashMap<BusId, String>) -> String {
+fn storage_csv(net: &BalancedNetwork, key_of: &HashMap<BusId, String>) -> String {
     let mut s = String::from(
         "name,bus,p_nom,max_hours,p_set,q_set,state_of_charge_initial,efficiency_store,efficiency_dispatch,cyclic_state_of_charge\n",
     );
@@ -1263,8 +1266,8 @@ mod tests {
         }
     }
 
-    fn net_with(buses: Vec<Bus>) -> Network {
-        Network::in_memory("t", 100.0, buses, Vec::new())
+    fn net_with(buses: Vec<Bus>) -> BalancedNetwork {
+        BalancedNetwork::in_memory("t", 100.0, buses, Vec::new())
     }
 
     #[test]

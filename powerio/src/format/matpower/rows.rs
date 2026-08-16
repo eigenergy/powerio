@@ -1,4 +1,4 @@
-//! MATPOWER matrix rows → [`Network`](crate::network) elements.
+//! MATPOWER matrix rows → [`BalancedNetwork`](crate::network) elements.
 //!
 //! Column layouts are 0-based per the MATPOWER manual. Each `*_row` reads one
 //! parsed numeric row into the format-neutral element(s). A bus row fans out

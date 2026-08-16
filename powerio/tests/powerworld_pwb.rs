@@ -7,13 +7,13 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 use powerio::format::powerworld::parse_pwb;
-use powerio::network::Network;
+use powerio::network::BalancedNetwork;
 use powerio::parse_file;
 
 mod common;
 use common::{activsg2000_fetched as fetched, ckt, powerworld_vendored as vendored};
 
-fn read_pwb(path: &Path) -> Network {
+fn read_pwb(path: &Path) -> BalancedNetwork {
     let bytes = std::fs::read(path).unwrap();
     parse_pwb(&bytes, path.file_stem().and_then(|s| s.to_str())).unwrap()
 }

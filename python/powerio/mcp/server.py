@@ -5,7 +5,7 @@ The advertised MCP surface is semantic and format neutral:
 ``convert``, ``save``, ``summary``, ``parse``, ``normalize``, ``matrix``,
 ``diagnostics``, ``display``.
 
-Network tools route balanced transmission models, multiconductor distribution
+BalancedNetwork tools route balanced transmission models, multiconductor distribution
 models, PyPSA CSV folders, and gridfm datasets through the lower level powerio
 APIs. Transmission parses serialize through the ``powerio-json`` transport.
 Distribution parses serialize through canonical ``bmopf-json``. Package
@@ -635,7 +635,7 @@ def _load_any(
     return _parse_any(path, content, format, options)
 
 
-def _transmission_summary(net: "powerio.Network") -> Dict[str, Any]:
+def _transmission_summary(net: "powerio.BalancedNetwork") -> Dict[str, Any]:
     refs = net.reference_bus_indices()
     return {
         "schema": "powerio.summary",
@@ -666,7 +666,7 @@ def _transmission_summary(net: "powerio.Network") -> Dict[str, Any]:
     }
 
 
-def _distribution_summary(net: "dist.DistNetwork") -> Dict[str, Any]:
+def _distribution_summary(net: "dist.MulticonductorNetwork") -> Dict[str, Any]:
     return {
         "schema": "powerio.summary",
         _VERSION_KEY: powerio.__version__,
@@ -705,7 +705,7 @@ def _summary(loaded: _Loaded) -> Dict[str, Any]:
     return summary
 
 
-def _dist_json(net: "dist.DistNetwork") -> tuple[str, list[str]]:
+def _dist_json(net: "dist.MulticonductorNetwork") -> tuple[str, list[str]]:
     conv = net.to_format("bmopf-json")
     return conv.text, list(net.warnings) + list(conv.warnings)
 

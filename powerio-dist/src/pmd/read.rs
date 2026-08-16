@@ -1,4 +1,4 @@
-//! PMD ENGINEERING JSON into the canonical [`DistNetwork`].
+//! PMD ENGINEERING JSON into the canonical [`MulticonductorNetwork`].
 //!
 //! The reader applies PMD's own import corrections: `null` becomes +Inf
 //! under a `_ub`/`max` suffix, -Inf under `_lb`/`min`, NaN elsewhere, and
@@ -16,11 +16,11 @@ use serde_json::{Map, Value};
 use crate::error::{Error, Result};
 use crate::model::{
     Configuration, DistBus, DistGenerator, DistLine, DistLineCode, DistLoad, DistLoadVoltageModel,
-    DistNetwork, DistShunt, DistSourceFormat, DistSwitch, DistTransformer, Extras, Mat,
+    DistShunt, DistSourceFormat, DistSwitch, DistTransformer, Extras, Mat, MulticonductorNetwork,
     UntypedObject, VoltageSource, Winding, WindingConn,
 };
 
-pub fn parse_pmd_file(path: impl AsRef<Path>) -> Result<DistNetwork> {
+pub fn parse_pmd_file(path: impl AsRef<Path>) -> Result<MulticonductorNetwork> {
     let path = path.as_ref();
     let text = std::fs::read_to_string(path).map_err(|source| Error::Io {
         path: path.display().to_string(),
@@ -29,7 +29,7 @@ pub fn parse_pmd_file(path: impl AsRef<Path>) -> Result<DistNetwork> {
     parse_pmd_str(&text)
 }
 
-pub fn parse_pmd_str(text: &str) -> Result<DistNetwork> {
+pub fn parse_pmd_str(text: &str) -> Result<MulticonductorNetwork> {
     let doc: Value = serde_json::from_str(text).map_err(|e| Error::Json {
         format: "PMD",
         message: e.to_string(),
@@ -57,11 +57,11 @@ pub fn parse_pmd_str(text: &str) -> Result<DistNetwork> {
             });
         }
     }
-    let mut net = DistNetwork {
+    let mut net = MulticonductorNetwork {
         source: Some(Arc::new(text.to_string())),
         source_format: Some(DistSourceFormat::PmdJson),
         base_frequency: 60.0,
-        ..DistNetwork::default()
+        ..MulticonductorNetwork::default()
     };
     let mut rd = Reader { net: &mut net };
     rd.document(&doc);
@@ -70,7 +70,7 @@ pub fn parse_pmd_str(text: &str) -> Result<DistNetwork> {
 }
 
 struct Reader<'a> {
-    net: &'a mut DistNetwork,
+    net: &'a mut MulticonductorNetwork,
 }
 
 /// PMD's null restoration: the field suffix picks the value.

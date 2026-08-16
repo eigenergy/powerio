@@ -1,4 +1,4 @@
-//! [`DistNetwork`] into PMD ENGINEERING JSON.
+//! [`MulticonductorNetwork`] into PMD ENGINEERING JSON.
 //!
 //! The output reproduces what PMD's own dss2eng emits for the same network
 //! wherever the model carries the data: terminal integers, `ENABLED`
@@ -18,8 +18,8 @@ use serde_json::{Map, Value, json};
 use crate::convert::Conversion;
 use crate::geo::CoordinateSpace;
 use crate::model::{
-    Configuration, DistBus, DistLine, DistLineCode, DistLoadVoltageModel, DistNetwork,
-    DistTransformer, Extras, Mat, VoltageSource, Winding, WindingConn,
+    Configuration, DistBus, DistLine, DistLineCode, DistLoadVoltageModel, DistTransformer, Extras,
+    Mat, MulticonductorNetwork, VoltageSource, Winding, WindingConn,
 };
 
 /// Writes the ENGINEERING document.
@@ -28,7 +28,7 @@ use crate::model::{
 ///
 /// Never in practice: the document is maps, strings, finite numbers, and
 /// nulls, which always serialize.
-pub fn write_pmd_json(net: &DistNetwork) -> Conversion {
+pub fn write_pmd_json(net: &MulticonductorNetwork) -> Conversion {
     let mut w = Writer {
         warnings: Vec::new(),
         renamed_terminals: renamed_terminals(net),
@@ -45,7 +45,7 @@ pub fn write_pmd_json(net: &DistNetwork) -> Conversion {
 /// Upper bound on the conductor counts this writer expands quadratically:
 /// the switch series and shunt matrices and the voltage source Thevenin
 /// matrices are all sized from a terminal map, a linear model array. The
-/// readers cap the same quantity on their way in, but a `DistNetwork` can
+/// readers cap the same quantity on their way in, but a `MulticonductorNetwork` can
 /// also arrive without those caps (the model JSON C entry point
 /// deserializes one unchecked), and a linear-size model could otherwise
 /// demand O(n²) memory here. No physical element comes near this bound.
@@ -72,7 +72,7 @@ struct Writer {
 /// id to the same value, and two conductors then merge into one. Taking the
 /// smallest free integer cannot collide and cannot overflow: the search
 /// stops after at most one step per terminal already in the document.
-fn renamed_terminals(net: &DistNetwork) -> BTreeMap<String, i64> {
+fn renamed_terminals(net: &MulticonductorNetwork) -> BTreeMap<String, i64> {
     let mut used = BTreeSet::new();
     let mut names = BTreeSet::new();
     for terminal in all_terminal_names(net) {
@@ -118,7 +118,7 @@ impl Writer {
     }
 }
 
-fn all_terminal_names(net: &DistNetwork) -> impl Iterator<Item = &str> {
+fn all_terminal_names(net: &MulticonductorNetwork) -> impl Iterator<Item = &str> {
     let maps = net
         .lines
         .iter()
@@ -231,7 +231,12 @@ impl Writer {
             .unwrap_or_else(|| json!("ENABLED"))
     }
 
-    fn bus_coordinates(&mut self, o: &mut Map<String, Value>, b: &DistBus, net: &DistNetwork) {
+    fn bus_coordinates(
+        &mut self,
+        o: &mut Map<String, Value>,
+        b: &DistBus,
+        net: &MulticonductorNetwork,
+    ) {
         if let Some(location) = b.location {
             if !matches!(
                 net.geo.as_ref().map(|geo| &geo.space),
@@ -262,7 +267,7 @@ impl Writer {
         }
     }
 
-    fn document(&mut self, net: &DistNetwork) -> Value {
+    fn document(&mut self, net: &MulticonductorNetwork) -> Value {
         let mut doc = Map::new();
         doc.insert("data_model".into(), json!("ENGINEERING"));
         doc.insert(
@@ -378,7 +383,7 @@ impl Writer {
         Value::Object(doc)
     }
 
-    fn linecodes(&mut self, net: &DistNetwork, doc: &mut Map<String, Value>) {
+    fn linecodes(&mut self, net: &MulticonductorNetwork, doc: &mut Map<String, Value>) {
         // Linecodes the reader materialized from inline line impedance
         // re-inline on the line; they are skipped here unless a line
         // without the marker also references them.
@@ -420,7 +425,7 @@ impl Writer {
         }
     }
 
-    fn branches(&mut self, net: &DistNetwork, doc: &mut Map<String, Value>) {
+    fn branches(&mut self, net: &MulticonductorNetwork, doc: &mut Map<String, Value>) {
         if !net.lines.is_empty() {
             let mut lines = Map::new();
             for l in &net.lines {
@@ -531,7 +536,7 @@ impl Writer {
         }
     }
 
-    fn loads(&mut self, net: &DistNetwork, doc: &mut Map<String, Value>) {
+    fn loads(&mut self, net: &MulticonductorNetwork, doc: &mut Map<String, Value>) {
         if !net.loads.is_empty() {
             let mut loads = Map::new();
             for l in &net.loads {
@@ -616,7 +621,7 @@ impl Writer {
         }
     }
 
-    fn generators(&mut self, net: &DistNetwork, doc: &mut Map<String, Value>) {
+    fn generators(&mut self, net: &MulticonductorNetwork, doc: &mut Map<String, Value>) {
         if !net.generators.is_empty() {
             let mut gens = Map::new();
             for g in &net.generators {
@@ -676,7 +681,7 @@ impl Writer {
         }
     }
 
-    fn injections(&mut self, net: &DistNetwork, doc: &mut Map<String, Value>) {
+    fn injections(&mut self, net: &MulticonductorNetwork, doc: &mut Map<String, Value>) {
         self.loads(net, doc);
         self.generators(net, doc);
         // Typed BMOPF capacitor banks have no ENGINEERING conversion yet.
@@ -793,7 +798,7 @@ impl Writer {
         Value::Object(o)
     }
 
-    fn transformers(&mut self, net: &DistNetwork, doc: &mut Map<String, Value>) {
+    fn transformers(&mut self, net: &MulticonductorNetwork, doc: &mut Map<String, Value>) {
         if net.transformers.is_empty() {
             return;
         }
@@ -954,7 +959,7 @@ fn insert_tap_fields(o: &mut Map<String, Value>, t: &DistTransformer, phases: us
 /// bmopf sourced), following the dss2eng conventions: the per bus vbase is
 /// the source's nominal line to neutral kV without the pu factor folded
 /// in, and sbase is basemva in kVA (default 100 MVA).
-fn synthesized_settings(net: &DistNetwork) -> Value {
+fn synthesized_settings(net: &MulticonductorNetwork) -> Value {
     let mut settings = Map::new();
     settings.insert("base_frequency".into(), json!(net.base_frequency));
     settings.insert("power_scale_factor".into(), json!(1000.0));
@@ -1006,7 +1011,7 @@ pub(super) fn lag_polarity(windings: &[Winding]) -> Vec<i64> {
 
 /// Names (lowercased) of linecodes that re-inline on their lines: every
 /// referencing line carries the reader's `pmd_inline` marker.
-fn inlined_codes(net: &DistNetwork) -> BTreeSet<String> {
+fn inlined_codes(net: &MulticonductorNetwork) -> BTreeSet<String> {
     let mut inlined = BTreeSet::new();
     for c in &net.linecodes {
         let mut refs = net

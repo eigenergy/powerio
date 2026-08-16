@@ -14,7 +14,7 @@
 use std::path::{Path, PathBuf};
 
 use powerio::{
-    Network, TransformerControl, TransformerControlMode, parse_matpower_file, parse_psse,
+    BalancedNetwork, TransformerControl, TransformerControlMode, parse_matpower_file, parse_psse,
     write_psse_rev,
 };
 
@@ -24,7 +24,7 @@ fn data(name: &str) -> PathBuf {
         .join(name)
 }
 
-fn read_psse(name: &str) -> Network {
+fn read_psse(name: &str) -> BalancedNetwork {
     parse_psse(&std::fs::read_to_string(data(name)).unwrap()).unwrap()
 }
 
@@ -39,7 +39,7 @@ struct Core {
     gen_p: i64,
 }
 
-fn core(net: &Network) -> Core {
+fn core(net: &BalancedNetwork) -> Core {
     let r = |x: f64| (x * 1e3).round() as i64;
     Core {
         buses: net.buses.len(),

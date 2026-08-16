@@ -174,7 +174,7 @@ pub struct DistLine {
         schemars(schema_with = "crate::nonfinite::nullable_number")
     )]
     pub length: f64,
-    /// Polyline route in the network's coordinate space (`DistNetwork.geo`),
+    /// Polyline route in the network's coordinate space (`MulticonductorNetwork.geo`),
     /// present only when a source provides intermediate geometry.
     /// `#[serde(default)]` so JSON written before the field existed still
     /// deserializes.
@@ -897,7 +897,7 @@ impl UntypedObject {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[non_exhaustive]
-pub struct DistNetwork {
+pub struct MulticonductorNetwork {
     pub name: Option<String>,
     /// Hz.
     pub base_frequency: f64,
@@ -941,7 +941,7 @@ pub struct DistNetwork {
     #[serde(skip)]
     pub parse_diagnostics: Vec<crate::diagnostics::StructuredDiagnostic>,
     /// Retained source text for the byte-exact echo tier. Skipped in the
-    /// `.pio.json` payload (mirrors `powerio::Network::source`): keeping it out
+    /// `.pio.json` payload (mirrors `powerio::BalancedNetwork::source`): keeping it out
     /// avoids serde's `rc` feature, and retained source is an envelope concern
     /// surfaced through `Origin::File { retained_source, .. }`.
     #[serde(skip)]
@@ -950,15 +950,20 @@ pub struct DistNetwork {
     pub extras: Extras,
 }
 
-/// v1-facing name for the canonical multiconductor distribution model.
-pub type MulticonductorNetwork = DistNetwork;
+/// The 0.8 spelling of [`MulticonductorNetwork`], which named a crate rather
+/// than a model.
+#[deprecated(
+    since = "0.9.0",
+    note = "renamed to `MulticonductorNetwork`, beside `BalancedNetwork`; removed in 1.0.0"
+)]
+pub type DistNetwork = MulticonductorNetwork;
 
-impl Default for DistNetwork {
+impl Default for MulticonductorNetwork {
     /// An empty network at the OpenDSS default frequency. A derived 0 Hz
     /// default would put NaN into every capacitance the dss writer converts
     /// through omega.
     fn default() -> Self {
-        DistNetwork {
+        MulticonductorNetwork {
             name: None,
             base_frequency: crate::dss::defaults::BASE_FREQUENCY,
             geo: None,
@@ -987,7 +992,7 @@ impl Default for DistNetwork {
     }
 }
 
-impl DistNetwork {
+impl MulticonductorNetwork {
     #[must_use]
     pub fn new() -> Self {
         Self::default()
@@ -1019,7 +1024,7 @@ impl DistNetwork {
 /// and a stated 60 Hz is indistinguishable from a defaulted one downstream.
 /// Only a network carrying susceptance can lose anything, so a document that
 /// states no frequency and no charging stays quiet.
-pub(crate) fn warn_defaulted_frequency(net: &mut DistNetwork, field: &str) {
+pub(crate) fn warn_defaulted_frequency(net: &mut MulticonductorNetwork, field: &str) {
     let charging = net.linecodes.iter().any(|c| {
         [&c.b_from, &c.b_to]
             .iter()
@@ -1041,8 +1046,8 @@ pub(crate) fn warn_defaulted_frequency(net: &mut DistNetwork, field: &str) {
 /// phantom bus for any unresolved id (the empty string included) — so a
 /// typo or an absent field would otherwise parse cleanly into a
 /// topologically wrong network. Comparison is ASCII case insensitive,
-/// matching [`DistNetwork::bus`] and [`DistNetwork::linecode`].
-pub(crate) fn warn_unresolved_references(net: &mut DistNetwork) {
+/// matching [`MulticonductorNetwork::bus`] and [`MulticonductorNetwork::linecode`].
+pub(crate) fn warn_unresolved_references(net: &mut MulticonductorNetwork) {
     use std::collections::BTreeSet;
     let buses: BTreeSet<String> = net
         .buses

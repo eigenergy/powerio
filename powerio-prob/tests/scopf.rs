@@ -1,14 +1,12 @@
 use powerio::BusId;
 use powerio_prob::scopf::json::{SCOPF_SCHEMA, to_json_value};
-use powerio_prob::{
-    ScopfDeviceClassLayout, ScopfError, ScopfInstance, build_scopf_instance_from_str,
-};
+use powerio_prob::{ScopfDeviceClassLayout, ScopfError, ScopfInstance, parse_scopf_str};
 use serde_json::Value;
 
 const SMALL: &str = include_str!("data/goc3_small.json");
 
 fn small_instance() -> ScopfInstance {
-    build_scopf_instance_from_str(SMALL, "goc3-json").expect("build small SCOPF instance")
+    parse_scopf_str(SMALL, "goc3-json").expect("build small SCOPF instance")
 }
 
 #[test]
@@ -147,9 +145,8 @@ fn arbitrary_uids_preserve_document_order() {
     replace_exact_strings(&mut value, &replacements);
     let text = serde_json::to_string(&value).expect("serialize renamed fixture");
 
-    let first = build_scopf_instance_from_str(&text, "goc3-json").expect("build renamed fixture");
-    let second =
-        build_scopf_instance_from_str(&text, "goc3-json").expect("rebuild renamed fixture");
+    let first = parse_scopf_str(&text, "goc3-json").expect("build renamed fixture");
+    let second = parse_scopf_str(&text, "goc3-json").expect("rebuild renamed fixture");
     assert_eq!(first, second);
     assert_eq!(first.static_data.acl_branch[0].uid, "line-zeta");
     assert_eq!(first.static_data.acl_branch[0].j_ln, 0);
@@ -195,20 +192,20 @@ fn period_mismatch_is_rejected() {
 
 #[test]
 fn parse_errors_use_the_scopf_error_type() {
-    let result: Result<ScopfInstance, ScopfError> = build_scopf_instance_from_str("{", "goc3-json");
+    let result: Result<ScopfInstance, ScopfError> = parse_scopf_str("{", "goc3-json");
     assert!(matches!(result, Err(ScopfError::Source(_))));
 }
 
 #[test]
 fn source_format_is_explicit() {
-    let error = build_scopf_instance_from_str(SMALL, "powerio-json")
-        .expect_err("reject unsupported SCOPF format");
+    let error =
+        parse_scopf_str(SMALL, "powerio-json").expect_err("reject unsupported SCOPF format");
     assert!(matches!(error, ScopfError::UnsupportedFormat(_)));
 }
 
 fn build_from_value(value: &Value) -> Result<ScopfInstance, ScopfError> {
     let text = serde_json::to_string(value).expect("serialize test document");
-    build_scopf_instance_from_str(&text, "goc3-json")
+    parse_scopf_str(&text, "goc3-json")
 }
 
 fn replace_exact_strings(value: &mut Value, replacements: &[(&str, &str)]) {
@@ -258,7 +255,7 @@ fn reserve_zone_indices_agree_across_tables() {
     bus1["reactive_reserve_uids"] = serde_json::json!(["rzq_99"]);
     let text = serde_json::to_string(&doc).expect("serialize");
 
-    let instance = build_scopf_instance_from_str(&text, "goc3-json").expect("build");
+    let instance = parse_scopf_str(&text, "goc3-json").expect("build");
     let data = &instance.static_data;
 
     let n_p_of = |uid: &str| {
@@ -296,7 +293,7 @@ fn zero_series_impedance_is_rejected() {
     doc["network"]["ac_line"][0]["r"] = Value::from(0.0);
     doc["network"]["ac_line"][0]["x"] = Value::from(0.0);
     let text = serde_json::to_string(&doc).expect("serialize");
-    let error = build_scopf_instance_from_str(&text, "goc3-json").expect_err("zero impedance");
+    let error = parse_scopf_str(&text, "goc3-json").expect_err("zero impedance");
     assert!(error.to_string().contains("zero series impedance"));
 }
 
@@ -310,7 +307,7 @@ fn missing_device_type_defaults_to_producer() {
         .expect("device object")
         .remove("device_type");
     let text = serde_json::to_string(&doc).expect("serialize");
-    let instance = build_scopf_instance_from_str(&text, "goc3-json").expect("build");
+    let instance = parse_scopf_str(&text, "goc3-json").expect("build");
     assert_eq!(instance.static_data.prod[0].uid, "sd_00");
     assert_eq!(instance.lengths.l_j_pr, 1);
 }
@@ -318,7 +315,7 @@ fn missing_device_type_defaults_to_producer() {
 const VALIDATION_14BUS: &str = include_str!("data/goc3_14bus_20220707.json");
 
 fn validation_instance() -> ScopfInstance {
-    build_scopf_instance_from_str(VALIDATION_14BUS, "goc3-json")
+    parse_scopf_str(VALIDATION_14BUS, "goc3-json")
         .expect("build the GOCompetition 14 bus validation instance")
 }
 
@@ -367,7 +364,7 @@ fn reactive_capability_reads_only_the_declared_mode() {
         device.insert("q_0_ub".to_owned(), Value::from(2.0));
         device.insert("q_0_lb".to_owned(), Value::from(-2.0));
         let text = serde_json::to_string(&doc).expect("serialize");
-        build_scopf_instance_from_str(&text, "goc3-json").expect("build bound cap")
+        parse_scopf_str(&text, "goc3-json").expect("build bound cap")
     };
     let row = &bounded.static_data.prod[0];
     assert_eq!(row.q_bound_cap, 1);
@@ -388,7 +385,7 @@ fn reactive_capability_reads_only_the_declared_mode() {
         device.insert("beta".to_owned(), Value::from(0.25));
         device.insert("q_0".to_owned(), Value::from(1.5));
         let text = serde_json::to_string(&doc).expect("serialize");
-        build_scopf_instance_from_str(&text, "goc3-json").expect("build linear cap")
+        parse_scopf_str(&text, "goc3-json").expect("build linear cap")
     };
     let row = &linear.static_data.prod[0];
     assert_eq!(row.beta, Some(0.25));
@@ -416,7 +413,7 @@ fn both_reactive_capability_modes_are_rejected() {
     device.insert("q_bound_cap".to_owned(), Value::from(1));
     device.insert("q_linear_cap".to_owned(), Value::from(1));
     let text = serde_json::to_string(&doc).expect("serialize");
-    let error = build_scopf_instance_from_str(&text, "goc3-json").expect_err("both modes");
+    let error = parse_scopf_str(&text, "goc3-json").expect_err("both modes");
     assert!(error.to_string().contains("mutually exclusive"));
 }
 
@@ -428,7 +425,7 @@ fn a_missing_capability_flag_is_rejected() {
         .expect("device object")
         .remove("q_bound_cap");
     let text = serde_json::to_string(&doc).expect("serialize");
-    let error = build_scopf_instance_from_str(&text, "goc3-json").expect_err("missing flag");
+    let error = parse_scopf_str(&text, "goc3-json").expect_err("missing flag");
     assert!(error.to_string().contains("q_bound_cap"));
 }
 
@@ -446,7 +443,7 @@ fn violation_prices_are_each_optional() {
         .expect("violation cost object")
         .remove("e_vio_cost");
     let text = serde_json::to_string(&doc).expect("serialize");
-    let instance = build_scopf_instance_from_str(&text, "goc3-json").expect("build");
+    let instance = parse_scopf_str(&text, "goc3-json").expect("build");
     assert_eq!(instance.violation_cost.e, None);
     assert_eq!(instance.violation_cost.s, Some(1.0));
 }
@@ -469,7 +466,7 @@ fn device_class_blocks_are_read_in_document_order() {
         .expect("device array");
     devices.swap(0, 1);
     let text = serde_json::to_string(&doc).expect("serialize");
-    let instance = build_scopf_instance_from_str(&text, "goc3-json").expect("build");
+    let instance = parse_scopf_str(&text, "goc3-json").expect("build");
     assert_eq!(
         instance.device_class_layout,
         ScopfDeviceClassLayout::Contiguous {
@@ -494,7 +491,7 @@ fn interleaved_device_classes_are_reported() {
     third_ts["uid"] = Value::from("sd_02");
     ts.push(third_ts);
     let text = serde_json::to_string(&doc).expect("serialize");
-    let instance = build_scopf_instance_from_str(&text, "goc3-json").expect("build");
+    let instance = parse_scopf_str(&text, "goc3-json").expect("build");
     assert_eq!(
         instance.device_class_layout,
         ScopfDeviceClassLayout::Interleaved,

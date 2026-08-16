@@ -7,8 +7,8 @@ use std::sync::Arc;
 use powerio_dist::dss::{parse_dss_file, parse_dss_str};
 use powerio_dist::{
     BmopfWriteOptions, Configuration, CoordinateSpace, CoordsKind, DiagnosticSeverity,
-    DiagnosticStage, DistBus, DistLineCode, DistNetwork, DistTransformer, Extras, GeoMeta,
-    Location, VoltageSource, Winding, WindingConn, parse_bmopf_file, parse_bmopf_str,
+    DiagnosticStage, DistBus, DistLineCode, DistTransformer, Extras, GeoMeta, Location,
+    MulticonductorNetwork, VoltageSource, Winding, WindingConn, parse_bmopf_file, parse_bmopf_str,
     parse_pmd_str, write_bmopf_json, write_bmopf_json_with_options, write_dss,
 };
 
@@ -192,8 +192,8 @@ fn enwl_round_trips() {
 /// Model equality minus the retained source (which differs by format) and
 /// the stashed `meta` block (the writer regenerates its own provenance, so a
 /// round trip replaces the source document's).
-fn assert_model_eq(a: &DistNetwork, b: &DistNetwork) {
-    let strip = |n: &DistNetwork| {
+fn assert_model_eq(a: &MulticonductorNetwork, b: &MulticonductorNetwork) {
+    let strip = |n: &MulticonductorNetwork| {
         let mut n = n.clone();
         n.source = Some(Arc::new(String::new()));
         n.extras.remove("bmopf_meta");
@@ -902,13 +902,13 @@ fn single_phase_source(name: &str, phase: &str, angle: f64, extras: Extras) -> V
     source
 }
 
-fn split_source_network(sources: Vec<VoltageSource>) -> DistNetwork {
+fn split_source_network(sources: Vec<VoltageSource>) -> MulticonductorNetwork {
     let mut bus = DistBus::new(
         "sourcebus",
         vec!["1".into(), "2".into(), "3".into(), "4".into()],
     );
     bus.grounded = vec!["4".into()];
-    let mut net = DistNetwork::default();
+    let mut net = MulticonductorNetwork::default();
     net.name = Some("split".into());
     net.buses = vec![bus];
     net.sources = sources;
@@ -1690,7 +1690,7 @@ fn wye_wye_3_extras_drop_warns_once_not_per_phase() {
     let mut t = DistTransformer::new("t", vec![from, to], vec![4.0], 3);
     t.extras
         .insert("unknown_key".into(), serde_json::json!("x"));
-    let mut net = DistNetwork::default();
+    let mut net = MulticonductorNetwork::default();
     net.transformers.push(t);
 
     let out = write_bmopf_json(&net);
@@ -1765,7 +1765,7 @@ fn wye_wye_3_raw_no_load_splits_across_decomposition() {
     t.extras
         .insert("b_no_load".into(), serde_json::json!(-0.000_012));
 
-    let mut net = DistNetwork::default();
+    let mut net = MulticonductorNetwork::default();
     net.buses = vec![
         DistBus::new("a", vec!["1".into(), "2".into(), "3".into(), "n".into()]),
         DistBus::new("b", vec!["1".into(), "2".into(), "3".into(), "n".into()]),
@@ -2309,7 +2309,7 @@ fn linecode_constructor_sizes_x_only_matrix_from_x() {
     assert_eq!(lc.g_to, vec![vec![0.0]]);
     assert_eq!(lc.b_to, vec![vec![0.0]]);
 
-    let mut net = DistNetwork::default();
+    let mut net = MulticonductorNetwork::default();
     net.linecodes.push(lc);
     let out = write_bmopf_json(&net);
     assert_eq!(errors(&schema_validator(), &out.text), Vec::<String>::new());
@@ -2379,7 +2379,7 @@ fn matrixless_linecode_and_shunt_emit_required_zero_matrices_loudly() {
 /// `linecode`. A line named like a declared linecode must not take that name
 /// for its synthesized inline code, or every line that names the declared
 /// linecode resolves to the line's own impedance instead. The match is
-/// case-insensitive, like `DistNetwork::linecode`.
+/// case-insensitive, like `MulticonductorNetwork::linecode`.
 #[test]
 fn synthesized_inline_linecode_never_shadows_a_declared_one() {
     let text = doc_with(
@@ -2784,7 +2784,7 @@ fn a_winding_rating_that_is_not_positive_drops_only_its_own_resistance_term() {
     from.r_pct = 1.0;
     let mut to = Winding::new("a", names(), WindingConn::Wye, 240.0, 0.0);
     to.r_pct = 1.0;
-    let mut net = DistNetwork::default();
+    let mut net = MulticonductorNetwork::default();
     net.transformers
         .push(DistTransformer::new("t", vec![from, to], vec![4.0], 3));
 
@@ -2815,7 +2815,7 @@ fn a_from_rating_that_is_not_positive_drops_the_reactance_instead_of_zeroing_it(
     let names = || vec!["1".to_string(), "2".to_string(), "3".to_string()];
     let from = Winding::new("a", names(), WindingConn::Delta, 416.0, 0.0);
     let to = Winding::new("a", names(), WindingConn::Wye, 240.0, 1000.0);
-    let mut net = DistNetwork::default();
+    let mut net = MulticonductorNetwork::default();
     net.transformers
         .push(DistTransformer::new("t", vec![from, to], vec![4.0], 3));
 

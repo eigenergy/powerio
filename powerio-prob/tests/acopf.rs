@@ -1,14 +1,14 @@
 use powerio::{
-    Branch, BranchCharging, Bus, BusId, BusType, GenCost, Generator, IndexedNetwork, Network,
-    parse_matpower_file,
+    BalancedNetwork, Branch, BranchCharging, Bus, BusId, BusType, GenCost, Generator,
+    IndexedNetwork, parse_matpower_file,
 };
 use powerio_prob::{AcOpfOptions, Error, Units, build_ac_opf_instance};
 
-fn case9() -> Network {
+fn case9() -> BalancedNetwork {
     parse_matpower_file("../tests/data/case9.m").expect("parse case9")
 }
 
-fn case14() -> Network {
+fn case14() -> BalancedNetwork {
     parse_matpower_file("../tests/data/case14.m").expect("parse case14")
 }
 
@@ -34,8 +34,8 @@ fn generator(bus: usize, c2: f64, c1: f64, c0: f64) -> Generator {
     generator
 }
 
-fn small_network() -> Network {
-    let mut network = Network::in_memory(
+fn small_network() -> BalancedNetwork {
+    let mut network = BalancedNetwork::in_memory(
         "small",
         100.0,
         vec![bus(10, BusType::Ref), bus(30, BusType::Pq)],
