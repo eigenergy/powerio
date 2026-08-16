@@ -8,6 +8,7 @@
   - [Geographic and display data](geo-and-display.md)
   - [Study blocks](study-block.md)
 - [Format fidelity](format-fidelity.md)
+- [Corpus harness (design)](corpus-harness.md)
 - [Matrix outputs](matrices.md)
 - [DC OPF bundle](dcopf-bundle.md)
 - [Migrating to 0.7](migration-v0.7.md)
