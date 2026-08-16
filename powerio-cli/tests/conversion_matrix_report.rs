@@ -487,6 +487,17 @@ const TRANSMISSION_FORMATS: [TransmissionFormat; 8] = [
 // The MATPOWER and PowerModels rows read identically now — same payload
 // data, same honest outcomes.
 //
+// The pandapower writer emits the `dcline` and `res_gen` tables its reader
+// has read all along. Dclines now carry the sending power, the MATPOWER-
+// shaped loss pair, terminal voltage setpoints, reactive limits, and the
+// power cap; what the table has no column for is warned (a pmin floor, a
+// received power off the line's own loss model, a usage cost) — that is the
+// −1/+N reshuffle on every `→ pandapower JSON` cell with dclines, and the +1
+// on the pandapower source row's PSS/E, PowerWorld, and PSLF cells, whose
+// payloads now carry dclines to drop honestly. Generator reactive output
+// rides `res_gen.q_mvar` — pandapower states Q as a power flow result, not
+// an input — so the solved snapshot's qg survives with no warning at all.
+//
 // A pandapower line states one rating, `max_i_ka`, carried as `rate_a`
 // through the file's own vn_kv; the reader no longer stores a second copy of
 // the same fact in amps, so the five per-case restatement drops leave every
@@ -495,14 +506,14 @@ const TRANSMISSION_FORMATS: [TransmissionFormat; 8] = [
 // targets cannot carry and the one-of-three cost set MATPOWER's
 // all-or-nothing gencost drops.
 const TRANSMISSION_WARNING_BASELINE: [[usize; 8]; 8] = [
-    [0, 0, 15, 14, 6, 11, 22, 13],
-    [0, 0, 15, 14, 6, 11, 22, 13],
-    [0, 0, 0, 1, 0, 3, 0, 1],
+    [0, 0, 15, 14, 6, 13, 22, 13],
+    [0, 0, 15, 14, 6, 13, 22, 13],
+    [0, 0, 0, 1, 0, 2, 0, 1],
     [0, 0, 0, 0, 0, 2, 0, 0],
-    [0, 0, 9, 9, 0, 6, 1, 7],
-    [1, 0, 6, 6, 0, 0, 0, 6],
+    [0, 0, 9, 9, 0, 7, 1, 7],
+    [1, 0, 7, 7, 0, 0, 0, 7],
     [0, 0, 9, 9, 0, 6, 0, 7],
-    [0, 0, 1, 1, 0, 3, 3, 0],
+    [0, 0, 1, 1, 0, 4, 3, 0],
 ];
 
 const DEEPMIND_OPFDATA_WARNING_BASELINE: [usize; 8] = [3, 2, 5, 5, 3, 4, 2, 4];

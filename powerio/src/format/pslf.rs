@@ -470,7 +470,12 @@ fn line_tokens(rec: &Record, line: usize) -> Vec<String> {
 /// Map one `bus data` record into a [`Bus`].
 fn read_bus(rec: &Record) -> Result<Bus> {
     let id = BusId(req_id(&rec.lhs, 0, "bus id", rec)?);
-    let name = rec.lhs.get(1).map(|name| name.trim().to_string());
+    // An empty token (what the writer emits for an unnamed bus) is no name.
+    let name = rec
+        .lhs
+        .get(1)
+        .map(|name| name.trim().to_string())
+        .filter(|name| !name.is_empty());
     Ok(Bus {
         id,
         kind: pslf_bus_type(int_at(&rec.rhs, 0, 1, "bus type", rec)?),

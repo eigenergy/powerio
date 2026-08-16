@@ -261,6 +261,14 @@ fn gen_obj(g: &Generator, warnings: &mut Vec<String>) -> Value {
     if let Some(cost) = &g.cost {
         if let Some(curve) = cost_curve(cost) {
             m.insert("p_cost".into(), curve);
+            // The reader defaults both to zero, so only nonzero values need
+            // stating — and a zero-cost write then reads back identically.
+            if cost.startup != 0.0 {
+                m.insert("startup_cost".into(), jnum(cost.startup));
+            }
+            if cost.shutdown != 0.0 {
+                m.insert("shutdown_cost".into(), jnum(cost.shutdown));
+            }
         } else {
             warnings.push(format!(
                 "generator at bus {} has a cost model egret's writer can't express; cost dropped",

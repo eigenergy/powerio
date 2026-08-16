@@ -257,6 +257,13 @@ pub(crate) fn parse_pandapower_source(
     }
 
     let costs = read_poly_costs(obj, warnings)?;
+    // pandapower states a generator's reactive output as a power flow result,
+    // not an input: `res_gen.q_mvar` (and `res_ext_grid.p_mw`/`q_mvar` for the
+    // slack), index-aligned with the input tables. A solved net carries them,
+    // and so does a powerio-written snapshot; an unsolved net has none and the
+    // outputs read as zero, as before.
+    let res_gen = read_result_powers(obj, "res_gen")?;
+    let res_ext_grid = read_result_powers(obj, "res_ext_grid")?;
     let mut generators = Vec::new();
     if let Some(gen_frame) = read_frame(obj, "gen")? {
         for row in gen_frame.rows() {
@@ -272,7 +279,7 @@ pub(crate) fn parse_pandapower_source(
             generators.push(Generator {
                 bus,
                 pg: row.f_or("p_mw", 0.0) * row.f_or("scaling", 1.0),
-                qg: 0.0,
+                qg: res_gen.get(&idx).map_or(0.0, |r| r.1),
                 pmax: row.f_or("max_p_mw", row.f_or("p_mw", 0.0)),
                 pmin: row.f_or("min_p_mw", 0.0),
                 qmax: row.f_or("max_q_mvar", f64::INFINITY),
@@ -292,10 +299,11 @@ pub(crate) fn parse_pandapower_source(
             let idx = row.index_usize()?;
             let bus = bus_ref("ext_grid", &row, "bus", &bus_of_pp)?;
             set_bus_kind(&mut buses, &bus_pos, bus, BusType::Ref);
+            let solved = res_ext_grid.get(&idx).copied().unwrap_or((0.0, 0.0));
             generators.push(Generator {
                 bus,
-                pg: 0.0,
-                qg: 0.0,
+                pg: solved.0,
+                qg: solved.1,
                 pmax: row.f_or("max_p_mw", f64::INFINITY),
                 pmin: row.f_or("min_p_mw", f64::NEG_INFINITY),
                 qmax: row.f_or("max_q_mvar", f64::INFINITY),
@@ -762,8 +770,24 @@ pub(crate) fn parse_pandapower_source(
 }
 
 /// Every `_object` table key the reader consumes or warns about by name; any
+/// The solved (p_mw, q_mvar) per row index of a result table, empty when the
+/// net carries no results. See the `res_gen`/`res_ext_grid` notes at the gen
+/// reader: pandapower states reactive output only here.
+fn read_result_powers(obj: &Map<String, Value>, table: &str) -> Result<HashMap<usize, (f64, f64)>> {
+    let mut out = HashMap::new();
+    if let Some(frame) = read_frame(obj, table)? {
+        for row in frame.rows() {
+            out.insert(
+                row.index_usize()?,
+                (row.f_or("p_mw", 0.0), row.f_or("q_mvar", 0.0)),
+            );
+        }
+    }
+    Ok(out)
+}
+
 /// other non-empty DataFrame gets the generic ignored-table warning.
-const HANDLED_TABLES: [&str; 18] = [
+const HANDLED_TABLES: [&str; 20] = [
     "bus",
     "load",
     "sgen",
@@ -782,6 +806,8 @@ const HANDLED_TABLES: [&str; 18] = [
     "motor",
     "switch",
     "pwl_cost",
+    "res_gen",
+    "res_ext_grid",
 ];
 
 /// The pandapower tap changer kinds the trafo reader distinguishes: ratio
@@ -849,7 +875,13 @@ pub fn write_pandapower_json(net: &BalancedNetwork) -> Conversion {
         shunt_frame(net, &charging, &kv_of, &mut warnings),
     );
     object.insert("gen".into(), gen_frame(net, &mut warnings));
+    if net.generators.iter().any(|g| g.qg != 0.0) {
+        object.insert("res_gen".into(), res_gen_frame(net, &mut warnings));
+    }
     object.insert("ext_grid".into(), ext_grid_frame(net, &mut warnings));
+    if !net.hvdc.is_empty() {
+        object.insert("dcline".into(), dcline_frame(net, &mut warnings));
+    }
     object.insert("line".into(), line);
     object.insert("trafo".into(), trafo);
     object.insert("poly_cost".into(), poly_cost_frame(net, &mut warnings));
@@ -874,12 +906,6 @@ pub fn write_pandapower_json(net: &BalancedNetwork) -> Conversion {
 }
 
 fn warn_pandapower_writer_losses(net: &BalancedNetwork, warnings: &mut Vec<String>) {
-    if !net.hvdc.is_empty() {
-        warnings.push(format!(
-            "{} dcline(s) dropped: the pandapower JSON writer does not model HVDC",
-            net.hvdc.len()
-        ));
-    }
     if !net.transformers_3w.is_empty() {
         warnings.push(format!(
             "{} 3-winding transformer(s) dropped: the pandapower JSON writer emits no trafo3w table",
@@ -1443,6 +1469,99 @@ fn branch_frames(
         frame("trafo", &trafo_columns, trafo_index, trafo_data, warnings),
         charging,
     )
+}
+
+/// The solved generator outputs, index-aligned with [`gen_frame`]. pandapower
+/// has no `qg` input column — reactive output is a power flow result — so the
+/// snapshot's solved Q rides `res_gen.q_mvar`, exactly where a solved
+/// pandapower net states it and where the reader takes it back.
+fn res_gen_frame(net: &BalancedNetwork, warnings: &mut Vec<String>) -> Value {
+    let columns = ["p_mw", "q_mvar"];
+    let mut index = Vec::with_capacity(net.generators.len());
+    let mut data = Vec::with_capacity(net.generators.len());
+    for g in &net.generators {
+        index.push(Value::from(data.len() as u64));
+        data.push(vec![jnum(g.pg), jnum(g.qg)]);
+    }
+    frame("res_gen", &columns, index, data, warnings)
+}
+
+/// The `dcline` table, the exact inverse of the reader's mapping: sending
+/// power, the MATPOWER-shaped loss pair, terminal voltage setpoints, reactive
+/// limits, and the power cap. What the table has no column for is warned:
+/// a floor on the sending power, actual reactive flows, a received power off
+/// the line's own loss model, and a usage cost.
+fn dcline_frame(net: &BalancedNetwork, warnings: &mut Vec<String>) -> Value {
+    let columns = [
+        "name",
+        "from_bus",
+        "to_bus",
+        "p_mw",
+        "loss_percent",
+        "loss_mw",
+        "vm_from_pu",
+        "vm_to_pu",
+        "max_p_mw",
+        "min_q_from_mvar",
+        "max_q_from_mvar",
+        "min_q_to_mvar",
+        "max_q_to_mvar",
+        "in_service",
+    ];
+    // An unbounded limit has no finite spelling; a null cell reads back as the
+    // same unbounded default.
+    let bound = |v: f64| if v.is_finite() { jnum(v) } else { Value::Null };
+    let mut index = Vec::with_capacity(net.hvdc.len());
+    let mut data = Vec::with_capacity(net.hvdc.len());
+    for d in &net.hvdc {
+        index.push(Value::from(data.len() as u64));
+        data.push(vec![
+            Value::Null,
+            pp_bus(d.from),
+            pp_bus(d.to),
+            jnum(d.pf),
+            jnum(d.loss1 * 100.0),
+            jnum(d.loss0),
+            jnum(d.vf),
+            jnum(d.vt),
+            bound(d.pmax),
+            bound(d.qminf),
+            bound(d.qmaxf),
+            bound(d.qmint),
+            bound(d.qmaxt),
+            Value::Bool(d.in_service),
+        ]);
+    }
+    let floors = net.hvdc.iter().filter(|d| d.pmin != 0.0).count();
+    if floors > 0 {
+        warnings.push(format!(
+            "{floors} dcline sending power floor(s) (pmin) dropped: pandapower dcline caps max_p_mw only"
+        ));
+    }
+    let flows = net
+        .hvdc
+        .iter()
+        .filter(|d| d.qf != 0.0 || d.qt != 0.0)
+        .count();
+    if flows > 0 {
+        warnings.push(format!(
+            "{flows} dcline reactive flow value pair(s) (qf/qt) dropped: pandapower dcline states limits, not flows"
+        ));
+    }
+    let off_model = net
+        .hvdc
+        .iter()
+        .filter(|d| !d.pt_matches_loss_model(1e-9))
+        .count();
+    if off_model > 0 {
+        warnings.push(format!(
+            "{off_model} dcline received power value(s) dropped: pandapower dcline derives the receiving end from loss_mw/loss_percent, which disagree with the stated pt"
+        ));
+    }
+    if net.hvdc.iter().any(|d| d.cost.is_some()) {
+        warnings.push("DC line cost curves dropped: pandapower dcline carries no cost data".into());
+    }
+    frame("dcline", &columns, index, data, warnings)
 }
 
 fn ext_grid_frame(net: &BalancedNetwork, warnings: &mut Vec<String>) -> Value {

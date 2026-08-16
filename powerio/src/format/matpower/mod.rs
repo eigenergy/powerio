@@ -142,7 +142,8 @@ fn build_case<'a>(name: &str, get: impl Fn(&str) -> Option<&'a str>) -> Result<B
         let names = locate::parse_string_cell(raw);
         if names.len() == buses.len() {
             for (bus, label) in buses.iter_mut().zip(names) {
-                bus.name = Some(label);
+                // An empty cell is an unnamed bus, not a bus named "".
+                bus.name = (!label.is_empty()).then_some(label);
             }
         }
     }

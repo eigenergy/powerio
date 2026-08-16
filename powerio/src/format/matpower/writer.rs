@@ -185,6 +185,19 @@ fn canonical(net: &BalancedNetwork) -> String {
     }
     let _ = writeln!(s, "];");
 
+    // Bus names ride the same `mpc.bus_name` cell array the reader reads,
+    // one quoted entry per bus in bus order (the reader attaches by position
+    // and requires a full set). An unnamed bus writes the empty string, which
+    // reads back as unnamed.
+    if net.buses.iter().any(|b| b.name.is_some()) {
+        let _ = writeln!(s, "mpc.bus_name = {{");
+        for b in &net.buses {
+            let name = b.name.as_deref().unwrap_or("").replace('\'', "''");
+            let _ = writeln!(s, "\t'{name}';");
+        }
+        let _ = writeln!(s, "}};");
+    }
+
     let _ = writeln!(s, "mpc.branch = [");
     for br in &net.branches {
         let _ = writeln!(
