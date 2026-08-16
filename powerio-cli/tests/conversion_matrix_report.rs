@@ -471,7 +471,9 @@ const TRANSMISSION_FORMATS: [TransmissionFormat; 8] = [
 // power band, a loss model) instead of the retained name, so its counts are
 // unchanged everywhere. The PowerWorld readers apply the same rule (circuit
 // and device ids at their positional defaults, a device type the tap already
-// encodes), landing that source row's MATPOWER cell on zero too.
+// encodes), and the PSLF reader stops echoing whole records into extras —
+// only tokens beyond the mapped fields are retained now — so all three of
+// those source rows reach MATPOWER with nothing left to drop.
 const TRANSMISSION_WARNING_BASELINE: [[usize; 8]; 8] = [
     [0, 0, 10, 9, 1, 6, 2, 8],
     [5, 0, 15, 14, 1, 11, 22, 8],
@@ -480,7 +482,7 @@ const TRANSMISSION_WARNING_BASELINE: [[usize; 8]; 8] = [
     [0, 0, 9, 9, 0, 6, 1, 7],
     [6, 0, 11, 11, 5, 0, 0, 11],
     [0, 0, 9, 9, 0, 6, 0, 7],
-    [6, 0, 1, 1, 0, 3, 3, 0],
+    [0, 0, 1, 1, 0, 3, 3, 0],
 ];
 
 const DEEPMIND_OPFDATA_WARNING_BASELINE: [usize; 8] = [3, 2, 5, 5, 3, 4, 2, 4];

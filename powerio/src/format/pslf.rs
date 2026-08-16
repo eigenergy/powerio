@@ -95,7 +95,7 @@ pub(crate) fn parse_pslf_source(
 
     let mut transformers_3w = Vec::new();
     for rec in doc.records("transformer data") {
-        match read_transformer(rec)? {
+        match read_transformer(rec, base_mva)? {
             TransformerRecord::TwoWinding(branch) => branches.push(branch),
             TransformerRecord::ThreeWinding(t) => transformers_3w.push(t),
         }
@@ -486,7 +486,7 @@ fn read_bus(rec: &Record) -> Result<Bus> {
         name,
         uid: None,
         location: None,
-        extras: extras(rec, "bus data", 3, 21),
+        extras: extras(rec, 3, 21),
     })
 }
 
@@ -502,11 +502,13 @@ fn pslf_bus_type(code: i64) -> BusType {
 
 /// Map one `branch data` record into a line [`Branch`].
 fn read_branch(rec: &Record) -> Result<Branch> {
-    let mut extras = extras(rec, "branch data", 9, 10);
-    if let Some(circuit) = rec.lhs.get(6) {
+    let mut extras = extras(rec, 9, 10);
+    // `1` is the id the writer allocates and the section it emits when none is
+    // retained, so those tokens restate the default and are not kept.
+    if let Some(circuit) = rec.lhs.get(6).filter(|c| c.trim() != "1") {
         extras.insert("pslf_circuit".into(), Value::String(circuit.clone()));
     }
-    if let Some(section) = rec.lhs.get(7) {
+    if let Some(section) = rec.lhs.get(7).filter(|t| t.trim() != "1") {
         extras.insert("pslf_section_id".into(), string_or_number(section));
     }
     Ok(Branch {
@@ -551,7 +553,7 @@ enum TransformerRecord {
 /// The `.epc` record carries the three pairwise impedances and the primary
 /// winding's ratio/ratings; the secondary and tertiary winding ratios are not
 /// represented at these column positions, so they default to nominal.
-fn read_transformer(rec: &Record) -> Result<TransformerRecord> {
+fn read_transformer(rec: &Record, base_mva: f64) -> Result<TransformerRecord> {
     let rhs1 = line_rhs(rec, 0);
     let line2 = line_tokens(rec, 1);
     let tertiary = id_at(&rhs1, 9, 0, "transformer tertiary bus", rec)?;
@@ -578,8 +580,8 @@ fn read_transformer(rec: &Record) -> Result<TransformerRecord> {
         .map(|n| n.trim().to_string());
 
     if tertiary != 0 || pt_r != 0.0 || pt_x != 0.0 || ts_r != 0.0 || ts_x != 0.0 {
-        let mut extras = extras(rec, "transformer data", 8, 21);
-        if let Some(c) = circuit {
+        let mut extras = transformer_extras(rec, &[rate_a, rate_b, rate_c, shift, tap]);
+        if let Some(c) = circuit.filter(|c| c.trim() != "1") {
             extras.insert("pslf_circuit".into(), Value::String(c));
         }
         let nominal = |bus| Winding {
@@ -624,11 +626,16 @@ fn read_transformer(rec: &Record) -> Result<TransformerRecord> {
         return Ok(TransformerRecord::ThreeWinding(t3));
     }
 
-    let mut extras = extras(rec, "transformer data", 8, 21);
-    if let Some(c) = circuit {
+    let mut extras = transformer_extras(rec, &[rate_a, rate_b, rate_c, shift, tap]);
+    if let Some(c) = circuit.filter(|c| c.trim() != "1") {
         extras.insert("pslf_circuit".into(), Value::String(c));
     }
-    extras.insert("pslf_tbase".into(), number_value(tbase));
+    // Exact comparison on purpose: the writer emits the case base verbatim
+    // when no tbase is retained, so only a bit-different stated base is data.
+    #[allow(clippy::float_cmp)]
+    if tbase != base_mva {
+        extras.insert("pslf_tbase".into(), number_value(tbase));
+    }
     Ok(TransformerRecord::TwoWinding(Branch {
         from,
         to,
@@ -750,14 +757,19 @@ fn read_load(
                 .into(),
         );
     }
-    let mut extras = extras(rec, "load data", 5, 20);
+    let mut extras = extras(rec, 5, 20);
     capture_device_id(&mut extras, &rec.lhs);
-    extras.insert("pslf_mw".into(), number_value(p_const));
-    extras.insert("pslf_mvar".into(), number_value(q_const));
-    extras.insert("pslf_mw_i".into(), number_value(p_i));
-    extras.insert("pslf_mvar_i".into(), number_value(q_i));
-    extras.insert("pslf_mw_z".into(), number_value(p_z));
-    extras.insert("pslf_mvar_z".into(), number_value(q_z));
+    // With zero I/Z terms the record states the constant-power pair alone,
+    // which is exactly the typed p/q the writer falls back to; the six
+    // components say more only when the split distributes.
+    if has_zip_components {
+        extras.insert("pslf_mw".into(), number_value(p_const));
+        extras.insert("pslf_mvar".into(), number_value(q_const));
+        extras.insert("pslf_mw_i".into(), number_value(p_i));
+        extras.insert("pslf_mvar_i".into(), number_value(q_i));
+        extras.insert("pslf_mw_z".into(), number_value(p_z));
+        extras.insert("pslf_mvar_z".into(), number_value(q_z));
+    }
     Ok(Load {
         bus: BusId(req_id(&rec.lhs, 0, "load bus", rec)?),
         p: p_const + p_i + p_z,
@@ -783,10 +795,16 @@ fn read_load(
 fn read_shunt(rec: &Record, base_mva: f64) -> Result<Shunt> {
     let g_pu = num_at(&rec.rhs, 3, 0.0, "shunt pu_mw", rec)?;
     let b_pu = num_at(&rec.rhs, 4, 0.0, "shunt pu_mvar", rec)?;
-    let mut extras = extras(rec, "shunt data", 10, 29);
+    let mut extras = extras(rec, 10, 29);
     capture_device_id(&mut extras, &rec.lhs);
-    extras.insert("pslf_pu_mw".into(), number_value(g_pu));
-    extras.insert("pslf_pu_mvar".into(), number_value(b_pu));
+    // The writer divides MW back by the base when no pu extra is retained;
+    // keep the stated token only when that round trip is not bit-exact.
+    #[allow(clippy::float_cmp)]
+    for (key, pu) in [("pslf_pu_mw", g_pu), ("pslf_pu_mvar", b_pu)] {
+        if safe_div(pu * base_mva, base_mva) != pu {
+            extras.insert(key.into(), number_value(pu));
+        }
+    }
     Ok(Shunt {
         bus: BusId(req_id(&rec.lhs, 0, "shunt bus", rec)?),
         g: g_pu * base_mva,
@@ -816,7 +834,7 @@ fn read_svd(
     }
     let g_pu = num_at(&rec.rhs, 7, 0.0, "svd g", rec)?;
     let b_pu = num_at(&rec.rhs, 8, 0.0, "svd b", rec)?;
-    let mut extras = extras(rec, "svd data", 5, 30);
+    let mut extras = extras(rec, 5, 30);
     capture_device_id(&mut extras, &rec.lhs);
     extras.insert("pslf_device".into(), Value::String("svd".into()));
     extras.insert("pslf_pu_g".into(), number_value(g_pu));
@@ -882,8 +900,7 @@ fn read_dc_converters(
     for rec in doc.records("dc converter data") {
         let parsed = (|| -> Result<DcConverter> {
             let l2 = line_tokens(rec, 1);
-            let mut extras = extras(rec, "dc converter data", 8, 15);
-            extras.insert("pslf_device".into(), Value::String("dc_converter".into()));
+            let extras = extras(rec, 8, 15);
             let in_service = on_at(&rec.rhs, 0, true, "dc converter status", rec)?;
             let p = num_at(&l2, 2, 0.0, "dc converter p", rec)?;
             let q = num_at(&l2, 3, 0.0, "dc converter q", rec)?;
@@ -946,16 +963,17 @@ fn read_dc_lines(
             let states_detail = from.states_detail
                 || to.states_detail
                 || dc_states_detail(&rec.rhs, &[f64::from(i32::from(in_service)), rate]);
-            let mut extras = extras(rec, "dc line data", 8, 20);
-            extras.insert("pslf_device".into(), Value::String("dc_line".into()));
-            extras.insert(
-                "pslf_from_converter".into(),
-                Value::Object(from.extras.clone().into_iter().collect()),
-            );
-            extras.insert(
-                "pslf_to_converter".into(),
-                Value::Object(to.extras.clone().into_iter().collect()),
-            );
+            let mut extras = extras(rec, 8, 20);
+            // Converter extras ride under the joined HVDC record, but only
+            // when a converter actually stated tokens beyond the mapped ones.
+            for (key, conv) in [("pslf_from_converter", from), ("pslf_to_converter", to)] {
+                if !conv.extras.is_empty() {
+                    extras.insert(
+                        key.into(),
+                        Value::Object(conv.extras.clone().into_iter().collect()),
+                    );
+                }
+            }
             Ok((
                 states_detail,
                 Hvdc {
@@ -1026,14 +1044,13 @@ fn warn_unmodeled_sections(doc: &EpcDocument, warnings: &mut Vec<String>) {
 
 /// Common extras for mapped EPC rows.
 ///
-/// The `used_*` bounds are the fields consumed by the typed reader. Remaining
-/// tokens are retained so later PSLF work can recover more fields without
-/// needing the original case file at hand.
-fn extras(rec: &Record, section: &str, used_lhs: usize, used_rhs: usize) -> Extras {
+/// The `used_*` bounds are the fields consumed by the typed reader. Only the
+/// tokens beyond them are retained: the consumed fields live in the model and
+/// the writer regenerates the record from it, so a raw echo, the line number,
+/// and the section name would restate provenance the rewrite re-derives (and
+/// every cross-format hop would then warn about dropping a restatement).
+fn extras(rec: &Record, used_lhs: usize, used_rhs: usize) -> Extras {
     let mut extras = Extras::new();
-    extras.insert("pslf_section".into(), Value::String(section.into()));
-    extras.insert("pslf_line".into(), number_value(rec.line_no as f64));
-    extras.insert("pslf_raw".into(), string_array(rec.raw.iter().cloned()));
     if rec.lhs.len() > used_lhs {
         extras.insert(
             "pslf_lhs_extra".into(),
@@ -1049,11 +1066,32 @@ fn extras(rec: &Record, section: &str, used_lhs: usize, used_rhs: usize) -> Extr
     extras
 }
 
+/// Extras for a transformer record. The first-line rhs is consumed through
+/// index 21 and the type token (`xfmr`/`xf3`, lhs index 8) is re-derived from
+/// the impedance shape on write. The second physical line is consumed by
+/// position (ratings 6-8, shift 10, tap 16), so its retained tail is dropped
+/// when it states no more nonzero tokens than those mapped fields — the same
+/// stated-versus-consumed rule the dc records use.
+fn transformer_extras(rec: &Record, mapped_line2: &[f64]) -> Extras {
+    let mut extras = extras(rec, 9, 21);
+    let tail = rec.rhs.get(21..).unwrap_or_default();
+    if !dc_states_detail(tail, mapped_line2) {
+        extras.remove("pslf_rhs_extra");
+    }
+    extras
+}
+
 /// Capture a load/shunt/svd record's id (lhs token 3) into `extras["id"]` — the
 /// key the PSS/E reader uses — so the id survives cross-format writes and
 /// parallel devices on a bus stay distinguishable.
 fn capture_device_id(extras: &mut Extras, lhs: &[String]) {
-    if let Some(id) = lhs.get(3).map(|s| s.trim()).filter(|s| !s.is_empty()) {
+    // `1` is the positional default the writer's allocator re-derives, so it
+    // restates nothing; parallel devices keep their explicit non-default ids.
+    if let Some(id) = lhs
+        .get(3)
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty() && *s != "1")
+    {
         extras.insert("id".into(), Value::String(id.to_string()));
     }
 }
@@ -1370,9 +1408,10 @@ pub fn write_pslf(net: &BalancedNetwork) -> Conversion {
                 (br.from, br.to),
                 &mut branch_ids,
             );
+            let se = section_tok(&br.extras);
             let _ = writeln!(
                 s,
-                "{} {} {} {} {} {} \"{ck}\" 1 \"line\" : {} {} {} {} {} {} {}",
+                "{} {} {} {} {} {} \"{ck}\" {se} \"line\" : {} {} {} {} {} {} {}",
                 br.from,
                 name_tok(f.name),
                 num(f.base_kv),
@@ -1734,6 +1773,20 @@ fn device_id(
             clean.into_owned()
         });
     super::allocate_circuit_id(preferred.as_deref(), bus, used)
+}
+
+/// The branch section number token, replayed from `pslf_section_id` when a
+/// PSLF read kept one (a multi-section line), else `1` — the writer used to
+/// hardcode `1`, silently renumbering retained sections on write-back.
+fn section_tok(extras: &Extras) -> String {
+    match extras.get("pslf_section_id") {
+        Some(Value::String(t)) => sanitize_quoted(t, &['"', ':', ' ', '\t', '/'], '_').into_owned(),
+        Some(v) => v
+            .as_f64()
+            .filter(|x| x.is_finite())
+            .map_or_else(|| "1".into(), |x| x.to_string()),
+        None => "1".into(),
+    }
 }
 
 /// The branch/transformer circuit id token, replayed from `pslf_circuit` when a
