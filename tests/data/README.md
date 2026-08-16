@@ -26,6 +26,19 @@ ACTIVSg200 exports from the TAMU Electric Grid Test Case Repository;
 synthetic, no CEII. See `powerworld/README.md` for the full citation and
 retrieval date.
 
+## `opfdataset/`
+
+One solved case-14 example from DeepMind's OPFData `dataset_release_1`
+(CC BY 4.0, (c) 2024 DeepMind Technologies Limited). See
+`opfdataset/README.md` for the format contract, source archive, and hash.
+
+## `dist/`
+
+Distribution-side fixtures: the IEEE PES test feeders as distributed with
+OpenDSS, the IEEE PES Task Force on Benchmarking Multiconductor OPF draft
+schema and examples, PowerModelsDistribution renderings, and original micro
+cases. Provenance and per-directory licenses in `dist/README.md`.
+
 ## `pandapower/` and `pypsa/`
 
 Tool generated fixtures with regeneration scripts and license notes in their
@@ -37,6 +50,10 @@ Original to this repository: the PSS/E RAW files are hand written minimal
 cases (their title lines say what each exercises), and the egret JSON files
 are renderings of the MATPOWER cases above (plus a small dcline case) in
 egret's ModelData schema.
+
+Everything else in this tree (`powerio-json/`, `capi_matrix/`,
+`angle_bounds_clamp.m`, and the other unlisted fixtures) is original to this
+repository under its code license.
 
 ## `large/` (not committed)
 

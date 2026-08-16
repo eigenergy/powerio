@@ -1,8 +1,9 @@
 # License
 
-The schema and example networks in this directory are vendored byte exact
-from <https://github.com/frederikgeth/bmopf-report> at the commit pinned in
-`../README.md`. That repository carries no license file at the pinned
+The example networks in this directory are vendored byte exact from
+<https://github.com/frederikgeth/bmopf-report> at the commit pinned in
+`../README.md`; the schema comes from the same commit with the three
+corrections listed there applied on top. That repository carries no license file at the pinned
 commit; this directory tracks whatever license the IEEE PES Task Force on
 Benchmarking Multiconductor OPF publishes for it, and the files here are
 vendored for interoperability testing with the task force's knowledge
