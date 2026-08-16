@@ -214,7 +214,7 @@ pub const PIO_ABI_VERSION: u32 = 5;
 /// reader, a writer and an emitted token, and no C signature. One shared object
 /// carrying two compatibility promises is a thing no mature C library does.
 ///
-/// The symbol stays because PowerIO.jl gates thirteen distribution call sites on
+/// The symbol stays because PowerIO.jl gates twelve distribution call sites on
 /// resolving it, and removing it would break every distribution call on a
 /// library that fully supports distribution. Foreign schema drift is reported at
 /// runtime by [`pio_build_info`] instead, which can express "BMOPF 0.2 but not
