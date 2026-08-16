@@ -284,7 +284,9 @@ fn zip_load_components_sum_and_survive_in_extras() {
         Some("4.0"),
         "voltage dependent components kept in extras"
     );
-    assert_eq!(l.extras.get("LoadID").and_then(|v| v.as_str()), Some("1"));
+    // LoadID `1` is the writer's own positional fallback for the first load,
+    // so it is not retained: a rewrite re-derives it.
+    assert_eq!(l.extras.get("LoadID"), None);
 }
 
 #[test]

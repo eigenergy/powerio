@@ -124,19 +124,20 @@ pub(crate) fn parse_powerworld_source(
     }
     let mut loads = Vec::new();
     for r in merged_loads.rows() {
-        loads.push(read_load(r, &bus_labels)?);
+        loads.push(read_load(r, &bus_labels, loads.len())?);
     }
     let mut shunts = Vec::new();
     for r in merged_shunts.rows() {
-        shunts.push(read_shunt(r, &bus_labels)?);
+        shunts.push(read_shunt(r, &bus_labels, shunts.len())?);
     }
     let mut generators = Vec::new();
     for r in merged_gens.rows() {
         generators.push(read_gen(r, &bus_labels)?);
     }
     let mut branches = Vec::new();
+    let mut parallel: HashMap<(BusId, BusId), u32> = HashMap::new();
     for r in merged_branches.rows() {
-        branches.push(read_branch(r, &bus_labels)?);
+        branches.push(read_branch(r, &bus_labels, &mut parallel)?);
     }
     derive_bus_kinds(&mut buses, &generators);
 
@@ -392,6 +393,18 @@ fn f_alias(r: &Row, keys: &[&str], default: f64) -> Result<f64> {
 /// quoted values with), skipping absent or empty fields. The PowerWorld field
 /// name is the extras key, so the provenance is self describing and the writer
 /// can put the value back in the same field.
+/// Drop a retained id that states exactly the writer's own positional
+/// fallback for this element: it restates nothing, and a rewrite re-allocates
+/// the same id to the element with none retained. Explicit non-default ids
+/// (and padded ones — the comparison is verbatim) are kept as before.
+fn drop_default_id(extras: &mut Extras, keys: &[&str], default: &str) {
+    for k in keys {
+        if extras.get(*k).and_then(serde_json::Value::as_str) == Some(default) {
+            extras.remove(*k);
+        }
+    }
+}
+
 fn keep_extras(r: &Row, keys: &[&str], extras: &mut Extras) {
     for k in keys {
         if let Some(v) = r.get(k) {
@@ -521,7 +534,7 @@ fn bus_location(r: &Row) -> Option<(crate::geo::Location, [&'static str; 2])> {
     None
 }
 
-fn read_load(r: &Row, bus_labels: &HashMap<&str, BusId>) -> Result<Load> {
+fn read_load(r: &Row, bus_labels: &HashMap<&str, BusId>, index: usize) -> Result<Load> {
     // Complete case exports write ZIP components (constant power S, constant
     // current I, constant impedance Z, each MW/MVAr at nominal voltage); the
     // simple LoadMW/LoadMVR pair is our own writer's form. The typed model
@@ -552,6 +565,7 @@ fn read_load(r: &Row, bus_labels: &HashMap<&str, BusId>) -> Result<Load> {
         }
     }
     keep_extras(r, &["LoadID", "ID"], &mut extras);
+    drop_default_id(&mut extras, &["LoadID", "ID"], &(index + 1).to_string());
     Ok(Load {
         bus: bus_ref(r, &["BusNum"], &["BusName_NomVolt"], bus_labels)?,
         p,
@@ -563,9 +577,10 @@ fn read_load(r: &Row, bus_labels: &HashMap<&str, BusId>) -> Result<Load> {
     })
 }
 
-fn read_shunt(r: &Row, bus_labels: &HashMap<&str, BusId>) -> Result<Shunt> {
+fn read_shunt(r: &Row, bus_labels: &HashMap<&str, BusId>, index: usize) -> Result<Shunt> {
     let mut extras = Extras::new();
     keep_extras(r, &["ShuntID", "ID", "SSCMode", "ShuntMode"], &mut extras);
+    drop_default_id(&mut extras, &["ShuntID", "ID"], &(index + 1).to_string());
     Ok(Shunt {
         bus: bus_ref(r, &["BusNum"], &["BusName_NomVolt"], bus_labels)?,
         // Switched shunt nominal MW/MVAr in real exports (MWNom/MvarNom in
@@ -604,19 +619,50 @@ fn read_gen(r: &Row, bus_labels: &HashMap<&str, BusId>) -> Result<Generator> {
     })
 }
 
-fn read_branch(r: &Row, bus_labels: &HashMap<&str, BusId>) -> Result<Branch> {
+fn read_branch(
+    r: &Row,
+    bus_labels: &HashMap<&str, BusId>,
+    parallel: &mut HashMap<(BusId, BusId), u32>,
+) -> Result<Branch> {
     let is_xf = first(r, &[BRANCH_DEVICE_TYPE]).is_some_and(|v| v == "Transformer");
+    let from = bus_ref(
+        r,
+        &["BusNum", "BusNumFrom"],
+        &["BusName_NomVolt"],
+        bus_labels,
+    )?;
+    let to = bus_ref(
+        r,
+        &["BusNum:1", "BusNumTo"],
+        &["BusName_NomVolt:1"],
+        bus_labels,
+    )?;
+    let nth = parallel.entry((from, to)).or_insert(0);
+    *nth += 1;
     let mut extras = Extras::new();
     // Branch identity beyond the bus pair: circuit ID and device type. Kept
     // verbatim (PowerWorld pads circuit IDs) so aux → aux through the typed
-    // model reproduces them exactly.
-    if let Some(v) = r.get(LINE_CIRCUIT).or_else(|| r.get("Circuit")) {
+    // model reproduces them exactly — except when a value states exactly what
+    // the writer derives on its own: the positional circuit for this bus pair,
+    // or the Line/Transformer kind the tap already encodes. Exotic device
+    // types (Breaker, Series Cap, ...) are always kept.
+    if let Some(v) = r
+        .get(LINE_CIRCUIT)
+        .or_else(|| r.get("Circuit"))
+        .filter(|v| **v != nth.to_string())
+    {
         extras.insert(
             LINE_CIRCUIT.to_string(),
             serde_json::Value::String((*v).to_string()),
         );
     }
     keep_extras(r, &[BRANCH_DEVICE_TYPE, "LineLength"], &mut extras);
+    if matches!(
+        extras.get(BRANCH_DEVICE_TYPE).and_then(|v| v.as_str()),
+        Some("Line" | "Transformer")
+    ) {
+        extras.remove(BRANCH_DEVICE_TYPE);
+    }
     // Transformer records in complete case exports carry their impedance and
     // tap under `:1` locations (values on the system base after correction);
     // line records use the bare names. Our writer's LineXFRatio is the tap
@@ -628,18 +674,8 @@ fn read_branch(r: &Row, bus_labels: &HashMap<&str, BusId>) -> Result<Branch> {
         1.0,
     )?;
     Ok(Branch {
-        from: bus_ref(
-            r,
-            &["BusNum", "BusNumFrom"],
-            &["BusName_NomVolt"],
-            bus_labels,
-        )?,
-        to: bus_ref(
-            r,
-            &["BusNum:1", "BusNumTo"],
-            &["BusName_NomVolt:1"],
-            bus_labels,
-        )?,
+        from,
+        to,
         r: f_alias(r, &["LineR", "LineR:1", "R", "Rxfbase"], 0.0)?,
         x: f_alias(r, &["LineX", "LineX:1", "X", "Xxfbase"], 0.0)?,
         b: f_alias(r, &["LineC", "LineC:1", "B", "Bxfbase"], 0.0)?,

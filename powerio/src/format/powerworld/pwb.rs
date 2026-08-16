@@ -1735,10 +1735,16 @@ fn read_standard_branch_head(
             |s| String::from_utf8_lossy(s).into_owned(),
         )),
     );
-    extras.insert(
-        BRANCH_DEVICE_TYPE.into(),
-        serde_json::Value::String(device.into()),
-    );
+    // Line and Transformer restate what the tap already encodes (a pwb
+    // transformer always reads a nonzero tap), and the aux writer re-derives
+    // them; only an exotic device type would say more. Matches the aux
+    // reader's retention rule so both PowerWorld readers agree.
+    if !matches!(device, "Line" | "Transformer") {
+        extras.insert(
+            BRANCH_DEVICE_TYPE.into(),
+            serde_json::Value::String(device.into()),
+        );
+    }
     let br = Branch {
         from: BusId(from),
         to: BusId(to),
@@ -1827,10 +1833,6 @@ fn read_step_up_transformer_head(
     }
     let mut extras = Extras::new();
     extras.insert(LINE_CIRCUIT.into(), serde_json::Value::String(" 1".into()));
-    extras.insert(
-        BRANCH_DEVICE_TYPE.into(),
-        serde_json::Value::String("Transformer".into()),
-    );
     let br = Branch {
         from: BusId(from),
         to,
