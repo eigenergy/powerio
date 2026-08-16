@@ -68,7 +68,10 @@ pub(crate) struct NodalCosts {
 /// `q = 1 / Σ(1/qᵢ)`, the marginal weighted term `c = q Σ(cᵢ/qᵢ)`, and a
 /// constant that holds the cost of the split at zero total. A generator with
 /// no quadratic term keeps one marginal cost at every output, so it makes the
-/// bus curve linear at the lowest such cost.
+/// bus curve linear at the lowest such cost. It does not make the quadratic
+/// generators beside it free: each still runs where its marginal meets that
+/// flat rate, and the saving it books there is the constant
+/// `−½ Σ (c_flat − cᵢ)² / qᵢ`, independent of the bus total.
 ///
 /// The result is an approximation. It agrees with the generator space cost
 /// only while the least cost split stays inside the bound of each generator at
@@ -151,7 +154,16 @@ impl BusCost {
         match self.count {
             0 => (0.0, 0.0, 0.0),
             1 => self.only,
-            _ if self.flat_c.is_finite() => (0.0, self.flat_c, self.c0),
+            // A flat generator holds the bus marginal at its own rate, so each
+            // quadratic generator sits at the output where its marginal meets
+            // that rate. `Σ (c_flat - cᵢ)² / qᵢ` is what that split saves
+            // against paying the flat rate for the whole total.
+            _ if self.flat_c.is_finite() => {
+                let flat = self.flat_c;
+                let saving = flat * flat * self.reciprocal_q - 2.0 * flat * self.weighted_c
+                    + self.weighted_c_squared;
+                (0.0, flat, self.c0 - 0.5 * saving)
+            }
             _ => {
                 let q = 1.0 / self.reciprocal_q;
                 let c = q * self.weighted_c;
@@ -222,7 +234,38 @@ mod tests {
         let costs = combine_costs(1, &[0, 0], &[2.0, 0.0], &[1.0, 3.0], &[1.0, 2.0]);
         assert_eq!(costs.q, vec![0.0]);
         assert_eq!(costs.c, vec![3.0]);
-        assert_eq!(costs.c0, vec![3.0]);
+        // The quadratic generator runs at (3 - 1) / 2 = 1 whatever the total,
+        // and the 1 the bus saves there comes off the constant.
+        assert_eq!(costs.c0, vec![2.0]);
+    }
+
+    /// The flat branch, held to the same standard as the quadratic one: the
+    /// combined curve must equal the least cost split at every total, not just
+    /// carry the right slope. Reading `c0` as the plain sum of the generators'
+    /// constants overstated the bus by a fixed amount at every dispatch.
+    #[test]
+    fn a_flat_generator_still_leaves_its_neighbours_running() {
+        let (q, c, c0) = ([2.0, 5.0, 0.0], [1.0, 2.0, 3.0], [4.0, 6.0, 7.0]);
+        let costs = combine_costs(1, &[0, 0, 0], &q, &c, &c0);
+        assert_eq!(costs.q, vec![0.0]);
+        assert_eq!(costs.c, vec![3.0], "the flat rate is the bus marginal");
+
+        for total in [0.0_f64, 1.0, 7.5, 100.0] {
+            // Every quadratic generator meets the flat marginal; the flat one
+            // carries the remainder.
+            let split: Vec<f64> = (0..2).map(|i| (c[2] - c[i]) / q[i]).collect();
+            let flat = total - split.iter().sum::<f64>();
+            let generator_cost: f64 = (0..2)
+                .map(|i| 0.5 * q[i] * split[i] * split[i] + c[i] * split[i] + c0[i])
+                .sum::<f64>()
+                + c[2] * flat
+                + c0[2];
+            let bus_cost = costs.c[0] * total + costs.c0[0];
+            assert!(
+                (bus_cost - generator_cost).abs() < 1e-9,
+                "total {total}: bus {bus_cost} vs split {generator_cost}"
+            );
+        }
     }
 
     #[test]
