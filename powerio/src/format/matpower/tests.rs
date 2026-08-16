@@ -433,3 +433,37 @@ fn zero_padded_capability_columns_are_declared() {
         "nothing to disclose when no generator states caps: {warnings:?}"
     );
 }
+
+/// A MATPOWER bus row states one demand and one shunt with no status of their
+/// own, so an out of service element has no spelling there. Folding its value
+/// into the row states an idle element as live load: a solver reading the
+/// result sees demand the source said was off.
+#[test]
+fn an_out_of_service_load_does_not_become_live_demand() {
+    let mut net = BalancedNetwork::new("oos", 100.0);
+    net.buses.push(Bus::new(BusId(1), BusType::Ref, 345.0));
+    net.buses.push(Bus::new(BusId(2), BusType::Pq, 345.0));
+    net.branches
+        .push(Branch::new(BusId(1), BusId(2), 0.01, 0.1));
+    let mut idle = crate::network::Load::new(BusId(2), 90.0, 30.0);
+    idle.in_service = false;
+    net.loads.push(idle);
+    net.loads
+        .push(crate::network::Load::new(BusId(2), 10.0, 5.0));
+
+    let conversion = crate::format::write_as(&net, crate::format::TargetFormat::Matpower).unwrap();
+    let back = parse_mpc(&conversion.text).unwrap();
+    let demand: f64 = back.loads.iter().map(|l| l.p).sum();
+    assert!(
+        (demand - 10.0).abs() < 1e-9,
+        "only the in-service load may reach the bus row, got {demand} MW"
+    );
+    assert!(
+        conversion
+            .warnings
+            .iter()
+            .any(|w| w.contains("out of service load(s) dropped")),
+        "the dropped demand must be named: {:?}",
+        conversion.warnings
+    );
+}

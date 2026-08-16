@@ -54,6 +54,9 @@ fn matlab_string(name: &str) -> String {
         .replace('\'', "''")
 }
 
+// One block per field the canonical writer cannot carry; splitting it would
+// scatter a list that is only useful read end to end.
+#[allow(clippy::too_many_lines)]
 fn canonical_warnings(net: &BalancedNetwork) -> Vec<String> {
     // The canonical writer (see `canonical`) emits the standard bus/branch/gen/
     // gencost/dcline/dclinecost/storage blocks only. Report every neutral-model
@@ -119,6 +122,30 @@ fn canonical_warnings(net: &BalancedNetwork) -> Vec<String> {
             ));
         }
     }
+    // An out of service load or shunt has no spelling in a MATPOWER bus row:
+    // the row states one demand and one shunt with no status. Writing the
+    // value anyway states an idle element as live load, so it is dropped and
+    // named here.
+    let idle_load: (f64, f64) = net
+        .loads
+        .iter()
+        .filter(|l| !l.in_service)
+        .fold((0.0, 0.0), |acc, l| (acc.0 + l.p, acc.1 + l.q));
+    let idle_loads = net.loads.iter().filter(|l| !l.in_service).count();
+    if idle_loads > 0 {
+        warnings.push(format!(
+            "{idle_loads} out of service load(s) dropped, {:.4} MW and {:.4} MVAr: a MATPOWER \
+             bus row states one demand with no status, so an idle load would read back as live",
+            idle_load.0, idle_load.1
+        ));
+    }
+    let idle_shunts = net.shunts.iter().filter(|s| !s.in_service).count();
+    if idle_shunts > 0 {
+        warnings.push(format!(
+            "{idle_shunts} out of service shunt(s) dropped: a MATPOWER bus row states one shunt \
+             with no status"
+        ));
+    }
     warn_extra_branch_rating_sets("MATPOWER .m", net, &mut warnings);
     let branch_solutions = net.branches.iter().filter(|b| b.solution.is_some()).count();
     if branch_solutions > 0 {
@@ -172,15 +199,19 @@ fn canonical_warnings(net: &BalancedNetwork) -> Vec<String> {
 /// the reader reads.
 #[allow(clippy::too_many_lines)] // flat per-section serializer; splitting adds noise
 fn canonical(net: &BalancedNetwork) -> String {
-    // Aggregate demand and shunts onto their bus.
+    // Aggregate demand and shunts onto their bus. MATPOWER's bus row states
+    // one demand and one shunt per bus with no status of their own, so an out
+    // of service element cannot be written as anything but absent — folding
+    // its value in would state it as live load. `canonical_warnings` reports
+    // what that leaves out.
     let mut demand: BTreeMap<BusId, (f64, f64)> = BTreeMap::new();
-    for l in &net.loads {
+    for l in net.loads.iter().filter(|l| l.in_service) {
         let e = demand.entry(l.bus).or_default();
         e.0 += l.p;
         e.1 += l.q;
     }
     let mut shunt: BTreeMap<BusId, (f64, f64)> = BTreeMap::new();
-    for s in &net.shunts {
+    for s in net.shunts.iter().filter(|s| s.in_service) {
         let e = shunt.entry(s.bus).or_default();
         e.0 += s.g;
         e.1 += s.b;
