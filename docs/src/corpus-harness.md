@@ -10,7 +10,7 @@ this harness generalizes from seven vendored cases to any corpus. Both run
 the same code, `powerio-cli`'s `invariants` module, so the CI gate and the
 harness cannot drift apart.
 
-```
+```text
 powerio corpus ingest <corpus-dir> --work <scratch-dir>
 powerio corpus compare --work <scratch-dir>
 powerio corpus report --work <scratch-dir> -o findings.jsonl --summary summary.md
