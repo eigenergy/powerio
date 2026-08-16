@@ -561,6 +561,175 @@ fn zero_impedance_policy_can_error_instead_of_skipping() {
 }
 
 #[test]
+fn a_radial_tie_gets_a_structurally_zero_lodf_column() {
+    // #292. Two loops joined by one tie: outaging the tie islands the network,
+    // so its LODF column redistributes nothing. That used to rest on the
+    // denominator landing under an absolute 1e-9; it is now the topology.
+    // Both solver paths must agree.
+    let net = Network::in_memory(
+        "two-loops-one-tie",
+        100.0,
+        vec![
+            bus(1, BusType::Ref),
+            bus(2, BusType::Pq),
+            bus(3, BusType::Pq),
+            bus(4, BusType::Pq),
+            bus(5, BusType::Pq),
+            bus(6, BusType::Pq),
+        ],
+        vec![
+            br(1, 2, 0.0, 0.1, 0.0),
+            br(2, 3, 0.0, 0.1, 0.0),
+            br(3, 1, 0.0, 0.1, 0.0),
+            br(3, 4, 0.0, 0.1, 0.0), // the tie
+            br(4, 5, 0.0, 0.1, 0.0),
+            br(5, 6, 0.0, 0.1, 0.0),
+            br(6, 4, 0.0, 0.1, 0.0),
+        ],
+    );
+    let view = IndexedNetwork::new(&net);
+    let tie = 3;
+
+    for solver in [
+        crate::matrix::SensitivitySolver::Dense,
+        crate::matrix::SensitivitySolver::Iterative,
+    ] {
+        let out = crate::matrix::build_ptdf_lodf_with_options(
+            &view,
+            &crate::matrix::SensitivityOptions {
+                solver,
+                ..Default::default()
+            },
+        )
+        .unwrap_or_else(|e| panic!("{solver:?}: {e}"));
+        let lodf = out.lodf;
+        for (&v, (row, col)) in &lodf {
+            if col == tie && row != tie {
+                assert!(
+                    v.abs() < f64::MIN_POSITIVE,
+                    "{solver:?}: tie column carries {v} at row {row}"
+                );
+            }
+        }
+        // A branch inside a loop still redistributes.
+        let loop_col: f64 = lodf
+            .iter()
+            .filter(|&(_, (row, col))| col == 0 && row != 0)
+            .map(|(&v, _)| v.abs())
+            .sum();
+        assert!(
+            loop_col > 0.1,
+            "{solver:?}: loop branch redistributes nothing"
+        );
+    }
+}
+
+#[test]
+fn a_reactance_below_the_divisible_bound_is_zero_impedance() {
+    // #292. `x = 1e-300` gives a finite `b = 1e300`, so every finiteness check
+    // passed it and the Laplacian came out rank deficient in floating point
+    // with `sddm_check` reporting nothing.
+    let net = Network::in_memory(
+        "denormal-x",
+        100.0,
+        vec![bus(1, BusType::Ref), bus(2, BusType::Pq)],
+        vec![br(1, 2, 0.0, 1e-300, 0.0)],
+    );
+    let view = IndexedNetwork::new(&net);
+
+    let inc = build_incidence(&view, DcConvention::PaperPure, &BuildOptions::default()).unwrap();
+    assert_eq!(inc.skipped_zero_impedance.count, 1);
+    assert_eq!(inc.skipped_zero_impedance.branch_indices, vec![0]);
+
+    let strict = BuildOptions {
+        skip_zero_impedance: false,
+        ..Default::default()
+    };
+    let err = build_incidence(&view, DcConvention::PaperPure, &strict).unwrap_err();
+    assert!(
+        matches!(err, crate::Error::ZeroImpedance { row: 0 }),
+        "{err}"
+    );
+    let err = build_ybus(&view, &strict).unwrap_err();
+    assert!(
+        matches!(err, crate::Error::ZeroImpedance { row: 0 }),
+        "{err}"
+    );
+}
+
+#[test]
+fn a_reactance_the_builders_can_divide_by_is_stamped_by_both() {
+    // #292. Bounding `r² + x²` by the magnitude bound made Y_bus call this
+    // branch zero impedance while the DC builder stamped `b = 1e100`.
+    let net = Network::in_memory(
+        "small-but-divisible-x",
+        100.0,
+        vec![bus(1, BusType::Ref), bus(2, BusType::Pq)],
+        vec![br(1, 2, 0.0, 1e-100, 0.0)],
+    );
+    let view = IndexedNetwork::new(&net);
+    let opts = BuildOptions::default();
+
+    let inc = build_incidence(&view, DcConvention::PaperPure, &opts).unwrap();
+    assert_eq!(inc.skipped_zero_impedance.count, 0);
+    assert_relative_eq!(inc.b[0], 1e100, max_relative = 1e-12);
+
+    let ybus = build_ybus(&view, &opts).unwrap();
+    let ybus_stats = matrix_stats_for_kind(&ybus.b, &view, MatrixKind::YbusB, &opts);
+    assert_eq!(ybus_stats.skipped_zero_impedance, 0);
+    assert_relative_eq!(*ybus.b.get(0, 1).unwrap(), 1e100, max_relative = 1e-12);
+}
+
+#[test]
+fn a_tap_ratio_the_builders_cannot_divide_by_is_refused() {
+    // #292. A tap of 1e-200 underflowed `a_norm_sqr` to zero and scattered
+    // +/-Inf into Y_bus; `Matpower` divides `b` by the same tap.
+    for tap in [1e-200, f64::NAN, f64::INFINITY] {
+        let mut branch = br(1, 2, 0.01, 0.1, 0.0);
+        branch.tap = tap;
+        let net = Network::in_memory(
+            "degenerate-tap",
+            100.0,
+            vec![bus(1, BusType::Ref), bus(2, BusType::Pq)],
+            vec![branch],
+        );
+        let view = IndexedNetwork::new(&net);
+        let err = build_ybus(&view, &BuildOptions::default()).unwrap_err();
+        assert!(
+            matches!(err, crate::Error::DegenerateTap { row: 0, .. }),
+            "Ybus, tap {tap}: {err}"
+        );
+        let err =
+            build_incidence(&view, DcConvention::Matpower, &BuildOptions::default()).unwrap_err();
+        assert!(
+            matches!(err, crate::Error::DegenerateTap { row: 0, .. }),
+            "incidence, tap {tap}: {err}"
+        );
+    }
+}
+
+#[test]
+fn an_ordinary_tap_still_builds() {
+    // The bound rejects poison and nothing else: a real off nominal tap and
+    // the 0.0 that `effective_tap` remaps to unity both stay.
+    for tap in [0.0, 0.95, 1.0, 1.1] {
+        let mut branch = br(1, 2, 0.01, 0.1, 0.0);
+        branch.tap = tap;
+        let net = Network::in_memory(
+            "ordinary-tap",
+            100.0,
+            vec![bus(1, BusType::Ref), bus(2, BusType::Pq)],
+            vec![branch],
+        );
+        let view = IndexedNetwork::new(&net);
+        build_ybus(&view, &BuildOptions::default())
+            .unwrap_or_else(|e| panic!("Ybus, tap {tap}: {e}"));
+        build_incidence(&view, DcConvention::Matpower, &BuildOptions::default())
+            .unwrap_or_else(|e| panic!("incidence, tap {tap}: {e}"));
+    }
+}
+
+#[test]
 fn self_loop_with_zero_reactance_drops_unconditionally() {
     // A self-loop (from == to) is documented as always dropped, independent
     // of skip_zero_impedance; it must not be misrouted through the

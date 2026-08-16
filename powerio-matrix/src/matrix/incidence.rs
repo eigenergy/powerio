@@ -47,9 +47,11 @@ impl IncidenceParts {
 
 /// Build `A`, `b`, the phase shift injection, and the column→branch map.
 ///
-/// Self-loops (from == to) are dropped. Branches with `x == 0` have no finite DC
-/// susceptance; they are skipped when `opts.skip_zero_impedance` is true and
-/// rejected with [`Error::ZeroImpedance`] when it is false.
+/// Self-loops (from == to) are dropped. A branch whose reactance is too small
+/// to divide by has no DC susceptance the Laplacian can carry; it is skipped
+/// when `opts.skip_zero_impedance` is true and rejected with
+/// [`Error::ZeroImpedance`] when it is false. A tap ratio under the same bound
+/// is [`Error::DegenerateTap`] either way, as it is in Y_bus.
 pub fn build_incidence(
     case: &IndexedNetwork,
     conv: DcConvention,
@@ -69,8 +71,12 @@ pub fn build_incidence(
             bus_id: br.to,
             element_index: idx,
         })?;
-        if i == j || br.x == 0.0 {
-            if i != j && br.x == 0.0 {
+        // Zero impedance in every sense the builder can act on: `x = 1e-300`
+        // gives a finite `b = 1e300` that annihilates every real branch sharing
+        // a diagonal with it. Exact zero used to be the whole test.
+        let degenerate_x = br.x.abs() < crate::matrix::MIN_DIVISIBLE_MAGNITUDE;
+        if i == j || degenerate_x {
+            if i != j && degenerate_x {
                 if !opts.skip_zero_impedance {
                     return Err(Error::ZeroImpedance { row: idx });
                 }
@@ -78,9 +84,15 @@ pub fn build_incidence(
             }
             continue;
         }
-        let b_e = conv.branch_susceptance(br.x, br.effective_tap());
-        // A NaN reactance slips past the `x == 0.0` guard above, and a
-        // denormal `x` yields Inf; either poisons the whole Laplacian.
+        // `Matpower` divides by the tap here and Y_bus divides by it always, so
+        // one bound decides both. `effective_tap` only remaps an exact 0.0.
+        let tap = br.effective_tap();
+        if !tap.is_finite() || tap.abs() < crate::matrix::MIN_DIVISIBLE_MAGNITUDE {
+            return Err(Error::DegenerateTap { row: idx, tap });
+        }
+        let b_e = conv.branch_susceptance(br.x, tap);
+        // A NaN reactance slips past the guard above and poisons the whole
+        // Laplacian.
         if !b_e.is_finite() {
             return Err(Error::NonFiniteSusceptance { row: idx });
         }

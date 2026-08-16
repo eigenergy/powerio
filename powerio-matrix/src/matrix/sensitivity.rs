@@ -411,11 +411,17 @@ fn lodf_from_dense_with_drop(
     // along branch k.
     let delta = |l: usize, k: usize| ptdf[l * n + from[k]] - ptdf[l * n + to[k]];
 
+    // Outaging a bridge redistributes nothing, so its column is structurally
+    // zero. The magnitude test this replaces let a near bridge at
+    // `delta(k,k) = 1 - 1.1e-9` through, amplifying its column to ~1e9 with
+    // about seven digits gone.
+    let is_bridge = bridges(&from, &to, n);
+
     let mut lodf = CooBuilder::new(m); // m × m
     let mut dropped = 0usize;
     for k in 0..m {
         let denom = 1.0 - delta(k, k);
-        let islands = denom.abs() < LODF_ISLAND_TOLERANCE;
+        let islands = is_bridge[k] || denom.abs() < LODF_ISLAND_TOLERANCE;
         for l in 0..m {
             let v = if l == k {
                 -1.0
@@ -549,6 +555,10 @@ fn iterative_ptdf_lodf_entries(
         }
     }
 
+    // Same rule as the dense path: a bridge redistributes nothing, decided on
+    // the topology rather than on how close the denominator came to zero.
+    let is_bridge = bridges(&from, &to, n);
+
     let mut lodf_nnz = 0usize;
     let mut lodf_dropped = 0usize;
     for outage in 0..m {
@@ -562,7 +572,7 @@ fn iterative_ptdf_lodf_entries(
         let theta = solver.solve(&rhs)?;
         let outage_delta = branch_flow(outage, &from, &to, &inc.b, &g, &theta);
         let denom = 1.0 - outage_delta;
-        let islands = denom.abs() < LODF_ISLAND_TOLERANCE;
+        let islands = is_bridge[outage] || denom.abs() < LODF_ISLAND_TOLERANCE;
         for branch in 0..m {
             let v = if branch == outage {
                 -1.0
@@ -624,6 +634,83 @@ fn branch_flow(
 }
 
 /// Branch endpoints from the signed incidence: `+1` row is from, `−1` is to.
+/// Which branches are bridges of the graph the columns describe: an edge whose
+/// removal disconnects its endpoints.
+///
+/// Outaging a bridge moves no flow anywhere, which is the condition the LODF
+/// denominator `1 - delta(k,k)` approaches. Deciding it topologically is exact,
+/// where a magnitude test on the denominator cannot separate a true bridge from
+/// a branch that merely carries almost everything.
+///
+/// Iterative Tarjan, O(n + m); the textbook recursion overflows the stack on a
+/// real feeder. Entry is tracked by arc rather than by parent node, so parallel
+/// branches leave neither of them a bridge.
+fn bridges(from: &[usize], to: &[usize], n: usize) -> Vec<bool> {
+    let m = from.len();
+    // Forward star: arc `2k` runs from[k] -> to[k], arc `2k+1` its reverse, so
+    // `arc ^ 1` is the other direction of the same branch and `arc / 2` is the
+    // branch itself.
+    let mut head = vec![usize::MAX; n];
+    let mut next = vec![usize::MAX; 2 * m];
+    let mut dest = vec![0usize; 2 * m];
+    for k in 0..m {
+        for (arc, tail, other) in [(2 * k, from[k], to[k]), (2 * k + 1, to[k], from[k])] {
+            dest[arc] = other;
+            next[arc] = head[tail];
+            head[tail] = arc;
+        }
+    }
+
+    let mut disc = vec![usize::MAX; n];
+    let mut low = vec![0usize; n];
+    let mut is_bridge = vec![false; m];
+    let mut timer = 0usize;
+    // (node, the arc it was entered by, the next arc to examine)
+    let mut stack: Vec<(usize, usize, usize)> = Vec::new();
+
+    for root in 0..n {
+        if disc[root] != usize::MAX {
+            continue;
+        }
+        disc[root] = timer;
+        low[root] = timer;
+        timer += 1;
+        stack.push((root, usize::MAX, head[root]));
+        while let Some(top) = stack.last_mut() {
+            let (v, in_arc) = (top.0, top.1);
+            if top.2 == usize::MAX {
+                stack.pop();
+                if let Some(parent) = stack.last_mut() {
+                    let p = parent.0;
+                    low[p] = low[p].min(low[v]);
+                    // The subtree under v reaches nothing at or above p, so
+                    // the edge into v is the only way back.
+                    if low[v] > disc[p] {
+                        is_bridge[in_arc / 2] = true;
+                    }
+                }
+                continue;
+            }
+            let arc = top.2;
+            top.2 = next[arc];
+            // Skip the branch we arrived on, but not a parallel one beside it.
+            if arc == in_arc ^ 1 {
+                continue;
+            }
+            let w = dest[arc];
+            if disc[w] == usize::MAX {
+                disc[w] = timer;
+                low[w] = timer;
+                timer += 1;
+                stack.push((w, arc, head[w]));
+            } else {
+                low[v] = low[v].min(disc[w]);
+            }
+        }
+    }
+    is_bridge
+}
+
 fn endpoints(a: &CsMat<f64>, m: usize) -> (Vec<usize>, Vec<usize>) {
     let mut from = vec![0usize; m];
     let mut to = vec![0usize; m];
@@ -688,6 +775,12 @@ fn dense_to_csr_with_drop(
 }
 
 fn dense_inverse(a: &[f64], n: usize) -> Option<Vec<f64>> {
+    // The pivot floor tracks the matrix's own scale. A fixed 1e-12 is at once
+    // too strict for a legitimately small scaled matrix and far too loose for
+    // one whose entries run to 1e12.
+    let scale = a.iter().fold(0.0_f64, |m, v| m.max(v.abs()));
+    #[allow(clippy::cast_precision_loss)]
+    let floor = n as f64 * f64::EPSILON * scale;
     let mut a = a.to_vec();
     let mut inv = vec![0.0; n * n];
     for i in 0..n {
@@ -704,7 +797,7 @@ fn dense_inverse(a: &[f64], n: usize) -> Option<Vec<f64>> {
                 pivot_row = r;
             }
         }
-        if !pivot_abs.is_finite() || pivot_abs <= 1e-12 {
+        if !pivot_abs.is_finite() || pivot_abs <= floor {
             return None;
         }
         if pivot_row != col {
@@ -867,6 +960,14 @@ struct DenseCholesky {
 
 impl DenseCholesky {
     fn factor(a: &[f64], n: usize) -> Option<Self> {
+        // A pivot is accepted against the matrix's own scale. `s > 0.0` alone
+        // accepts 1e-300, whose square root divides the column by 1e-150 twice
+        // and returns entries near 1e300 with no error — the shape a near
+        // disconnected island joined by one very high impedance branch takes,
+        // which `check_reference_coverage` passes.
+        let scale = a.iter().fold(0.0_f64, |m, v| m.max(v.abs()));
+        #[allow(clippy::cast_precision_loss)]
+        let floor = n as f64 * f64::EPSILON * scale;
         let mut l = vec![0.0; n * n];
         for i in 0..n {
             for j in 0..=i {
@@ -875,13 +976,13 @@ impl DenseCholesky {
                     s -= l[i * n + k] * l[j * n + k];
                 }
                 if i == j {
-                    // `!(s > 0.0)` rejects negative, zero, AND NaN pivots:
-                    // `NaN <= 0.0` is false, so `s <= 0.0` would let a
+                    // `!(s > floor)` rejects negative, too small, AND NaN
+                    // pivots: `NaN <= x` is false, so `s <= floor` would let a
                     // NaN-poisoned matrix factor "successfully" into all-NaN.
                     // The negated comparison is the point (NaN incomparability),
                     // so the partial_cmp rewrite clippy suggests would obscure it.
                     #[allow(clippy::neg_cmp_op_on_partial_ord)]
-                    if !(s > 0.0) {
+                    if !(s > floor) {
                         return None;
                     }
                     l[i * n + i] = s.sqrt();
@@ -926,6 +1027,104 @@ impl DenseCholesky {
             }
         }
         inv
+    }
+}
+
+#[cfg(test)]
+mod bridge_tests {
+    use super::bridges;
+
+    #[test]
+    fn every_edge_of_a_path_is_a_bridge() {
+        // 0 - 1 - 2 - 3
+        let b = bridges(&[0, 1, 2], &[1, 2, 3], 4);
+        assert_eq!(b, vec![true, true, true]);
+    }
+
+    #[test]
+    fn no_edge_of_a_cycle_is_a_bridge() {
+        // 0 - 1 - 2 - 0
+        let b = bridges(&[0, 1, 2], &[1, 2, 0], 3);
+        assert_eq!(b, vec![false, false, false]);
+    }
+
+    #[test]
+    fn parallel_branches_leave_neither_a_bridge() {
+        // Two circuits on the same corridor: outaging one still leaves a path,
+        // so neither is a bridge. Tracking entry by node rather than by arc
+        // would call both of them bridges.
+        let b = bridges(&[0, 0], &[1, 1], 2);
+        assert_eq!(b, vec![false, false]);
+    }
+
+    #[test]
+    fn only_the_tie_between_two_loops_is_a_bridge() {
+        // Two triangles joined by one tie line: 0-1-2-0, tie 2-3, 3-4-5-3.
+        let from = [0, 1, 2, 2, 3, 4, 5];
+        let to = [1, 2, 0, 3, 4, 5, 3];
+        let b = bridges(&from, &to, 6);
+        assert_eq!(b, vec![false, false, false, true, false, false, false]);
+    }
+
+    #[test]
+    fn a_self_loop_is_not_a_bridge() {
+        let b = bridges(&[0, 1], &[1, 1], 2);
+        assert_eq!(b, vec![true, false]);
+    }
+
+    #[test]
+    fn separate_components_are_each_walked() {
+        // 0-1 and 2-3, no tie. Both edges are bridges of their own component,
+        // and the root loop must reach the second one.
+        let b = bridges(&[0, 2], &[1, 3], 4);
+        assert_eq!(b, vec![true, true]);
+    }
+
+    #[test]
+    fn a_long_path_does_not_overflow_the_stack() {
+        // The recursion a textbook writes dies here.
+        let n = 200_000;
+        let from: Vec<usize> = (0..n - 1).collect();
+        let to: Vec<usize> = (1..n).collect();
+        let b = bridges(&from, &to, n);
+        assert_eq!(b.len(), n - 1);
+        assert!(b.iter().all(|&x| x));
+    }
+}
+
+#[cfg(test)]
+mod pivot_tests {
+    use super::{DenseCholesky, dense_inverse};
+
+    /// #292. The pivot floor tracks the matrix's own scale, so it rejects the
+    /// same relative degeneracy at any magnitude and accepts a matrix that is
+    /// merely small.
+    #[test]
+    fn a_pivot_is_judged_against_the_matrix_scale() {
+        // Scaled up: against entries of 1e12 a pivot of 1e-6 carries no
+        // significant digits, and the old absolute 1e-12 accepted it.
+        let big = [1e12, 0.0, 0.0, 1e-6];
+        assert!(dense_inverse(&big, 2).is_none(), "1e-18 relative accepted");
+        assert!(DenseCholesky::factor(&big, 2).is_none());
+
+        // Scaled down: every entry is tiny but the matrix is perfectly
+        // conditioned, and the old absolute floor refused it outright.
+        let small = [1e-14, 0.0, 0.0, 1e-14];
+        let inv = dense_inverse(&small, 2).expect("a well conditioned small matrix inverts");
+        assert!((inv[0] - 1e14).abs() < 1.0, "{inv:?}");
+        assert!(DenseCholesky::factor(&small, 2).is_some());
+
+        // A genuinely singular matrix is still refused at any scale.
+        assert!(dense_inverse(&[1.0, 1.0, 1.0, 1.0], 2).is_none());
+        assert!(DenseCholesky::factor(&[1.0, 1.0, 1.0, 1.0], 2).is_none());
+    }
+
+    /// The `!(s > floor)` idiom must still reject a NaN pivot; `NaN > x` is
+    /// false, which is the whole reason the comparison is negated.
+    #[test]
+    fn a_nan_pivot_does_not_factor() {
+        assert!(DenseCholesky::factor(&[f64::NAN, 0.0, 0.0, 1.0], 2).is_none());
+        assert!(dense_inverse(&[f64::NAN, 0.0, 0.0, 1.0], 2).is_none());
     }
 }
 
