@@ -11,6 +11,7 @@ use powerio::{
 use powerio_dist::{DistSourceFormat, MulticonductorNetwork};
 
 use crate::diagnostics::{DiagnosticSeverity, DiagnosticStage, StructuredDiagnostic};
+use crate::error::Error;
 use crate::lowering::{
     LoweringRecord, MulticonductorToBalancedError, MulticonductorToBalancedOptions,
     MulticonductorToBalancedReadiness, check_multiconductor_to_balanced_lowering,
@@ -468,15 +469,14 @@ impl NetworkPackage {
     /// The returned package has the same metadata and model kind, with its
     /// payload updated for `index`, `operating_points` cleared, and sane
     /// validation recomputed for the updated payload.
-    pub fn materialize_operating_point(&self, index: usize) -> serde_json::Result<Self> {
-        let series = self.operating_points.as_ref().ok_or_else(|| {
-            <serde_json::Error as serde::de::Error>::custom("package has no operating points")
-        })?;
-        let point = series.unique_point(index)?.ok_or_else(|| {
-            <serde_json::Error as serde::de::Error>::custom(format!(
-                "package has no operating point {index}"
-            ))
-        })?;
+    pub fn materialize_operating_point(&self, index: usize) -> crate::Result<Self> {
+        let series = self
+            .operating_points
+            .as_ref()
+            .ok_or_else(|| crate::Error::Payload("package has no operating points".to_owned()))?;
+        let point = series
+            .unique_point(index)?
+            .ok_or_else(|| Error::NoSuchIndex(format!("package has no operating point {index}")))?;
         // Applying resolves each update's row (identity first, stated row as
         // fallback), so the stale provenance paths come from the same
         // resolution rather than the stated row values.
@@ -543,7 +543,7 @@ impl NetworkPackage {
             package
                 .attach_normalized_solver_table_metadata()
                 .map_err(|err| {
-                    <serde_json::Error as serde::de::Error>::custom(format!(
+                    Error::Payload(format!(
                         "failed to recompute normalized solver table metadata: {err}"
                     ))
                 })?;
@@ -556,7 +556,7 @@ impl NetworkPackage {
     pub fn materialize_balanced_operating_point(
         &self,
         index: usize,
-    ) -> serde_json::Result<Option<BalancedNetwork>> {
+    ) -> crate::Result<Option<BalancedNetwork>> {
         Ok(self
             .materialize_operating_point(index)?
             .model
@@ -569,7 +569,7 @@ impl NetworkPackage {
     pub fn materialize_multiconductor_operating_point(
         &self,
         index: usize,
-    ) -> serde_json::Result<Option<MulticonductorNetwork>> {
+    ) -> crate::Result<Option<MulticonductorNetwork>> {
         Ok(self
             .materialize_operating_point(index)?
             .model
@@ -582,10 +582,11 @@ impl NetworkPackage {
     /// The returned package folds commits `0..=commit_index`, clears
     /// `operating_points` and `study`, and records the replay pass in
     /// `lowering_history`.
-    pub fn materialize_study_commit(&self, commit_index: usize) -> serde_json::Result<Self> {
-        let study = self.study.as_ref().ok_or_else(|| {
-            <serde_json::Error as serde::de::Error>::custom("package has no study block")
-        })?;
+    pub fn materialize_study_commit(&self, commit_index: usize) -> crate::Result<Self> {
+        let study = self
+            .study
+            .as_ref()
+            .ok_or_else(|| crate::Error::Payload("package has no study block".to_owned()))?;
         let base = if let Some(index) = study.base_operating_point {
             self.materialize_operating_point(index)?
         } else {
@@ -646,7 +647,7 @@ impl NetworkPackage {
             package
                 .attach_normalized_solver_table_metadata()
                 .map_err(|err| {
-                    <serde_json::Error as serde::de::Error>::custom(format!(
+                    Error::Payload(format!(
                         "failed to recompute normalized solver table metadata: {err}"
                     ))
                 })?;
@@ -658,7 +659,7 @@ impl NetworkPackage {
     pub fn materialize_balanced_study_commit(
         &self,
         commit_index: usize,
-    ) -> serde_json::Result<Option<BalancedNetwork>> {
+    ) -> crate::Result<Option<BalancedNetwork>> {
         Ok(self
             .materialize_study_commit(commit_index)?
             .model
@@ -667,36 +668,32 @@ impl NetworkPackage {
     }
 
     /// Serialize to compact `.pio.json`.
-    pub fn to_json(&self) -> serde_json::Result<String> {
-        serde_json::to_string(self)
+    pub fn to_json(&self) -> crate::Result<String> {
+        serde_json::to_string(self).map_err(Error::Serialize)
     }
 
     /// Serialize to pretty `.pio.json`.
-    pub fn to_json_pretty(&self) -> serde_json::Result<String> {
-        serde_json::to_string_pretty(self)
+    pub fn to_json_pretty(&self) -> crate::Result<String> {
+        serde_json::to_string_pretty(self).map_err(Error::Serialize)
     }
 
     /// Deserialize from `.pio.json`.
-    pub fn from_json(text: &str) -> serde_json::Result<Self> {
+    pub fn from_json(text: &str) -> crate::Result<Self> {
         // Tolerate a leading UTF-8 byte order mark, as the format readers do.
         // Name the format in the error: a document the JSON classifier calls a
         // package envelope (right `model_kind` and `model` markers) can still
         // fail here on a missing required field, and the bare serde message
         // ("missing field `producer`") does not say what it failed to be.
-        let pkg: Self = serde_json::from_str(text.trim_start_matches('\u{feff}')).map_err(|e| {
-            <serde_json::Error as serde::de::Error>::custom(format!(
-                "invalid .pio.json package envelope: {e}"
-            ))
-        })?;
+        let pkg: Self =
+            serde_json::from_str(text.trim_start_matches('\u{feff}')).map_err(Error::Envelope)?;
         if !powerio::version::supports(&pkg.powerio_version) {
-            return Err(<serde_json::Error as serde::de::Error>::custom(
-                powerio::version::reject(".pio.json", &pkg.powerio_version),
-            ));
+            return Err(Error::UnsupportedVersion(powerio::version::reject(
+                ".pio.json",
+                &pkg.powerio_version,
+            )));
         }
         if !pkg.kind_is_consistent() {
-            return Err(<serde_json::Error as serde::de::Error>::custom(
-                "model_kind does not match model.kind",
-            ));
+            return Err(Error::ModelKindMismatch);
         }
         Ok(pkg)
     }

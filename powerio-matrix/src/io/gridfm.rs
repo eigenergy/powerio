@@ -247,12 +247,12 @@ struct GridfmMeta {
 /// for one snapshot.
 ///
 /// # Errors
-/// [`Error::ReferenceBusCount`] unless the case has exactly one reference bus
+/// [`powerio::Error::ReferenceBusCount`] unless the case has exactly one reference bus
 /// (graphkit needs a slack), [`Error::NormalizedGridfmSnapshot`] for a normalized
 /// input, [`Error::NonFiniteGridfmValue`] for a NaN/Inf physical quantity (or a
 /// NaN limit — `±Inf` limits are the valid unbounded sentinel) that would reach
-/// Parquet, [`Error::NonFiniteSusceptance`] if a finite branch impedance still
-/// yields a non-finite admittance, and [`Error::UnknownBus`] if a generator or
+/// Parquet, [`powerio::Error::NonFiniteSusceptance`] if a finite branch impedance still
+/// yields a non-finite admittance, and [`powerio::Error::UnknownBus`] if a generator or
 /// branch references a bus the network doesn't define.
 pub fn gridfm_record_batches(
     net: &Network,
@@ -738,7 +738,7 @@ fn gen_batch(snaps: &[SnapshotView]) -> Result<RecordBatch> {
         // One pass over the snapshot's generators: every column gets one push per
         // generator, in dense source order.
         for (row, g) in view.generators().iter().enumerate() {
-            let i = view.bus_index(g.bus).ok_or(Error::UnknownBus {
+            let i = view.bus_index(g.bus).ok_or(powerio::Error::UnknownBus {
                 bus_id: g.bus,
                 element_index: row,
             })?;
@@ -831,11 +831,11 @@ fn branch_batch(snaps: &[SnapshotView], opts: &GridfmOptions) -> Result<RecordBa
         idx.extend(0..branches.len() as i64);
 
         for (row, br) in branches.iter().enumerate() {
-            let i = view.bus_index(br.from).ok_or(Error::UnknownBus {
+            let i = view.bus_index(br.from).ok_or(powerio::Error::UnknownBus {
                 bus_id: br.from,
                 element_index: row,
             })?;
-            let j = view.bus_index(br.to).ok_or(Error::UnknownBus {
+            let j = view.bus_index(br.to).ok_or(powerio::Error::UnknownBus {
                 bus_id: br.to,
                 element_index: row,
             })?;
@@ -1076,7 +1076,7 @@ pub struct GridfmRead {
 /// come from the caller (the disk path reads them from `gridfm_meta.json`).
 ///
 /// # Errors
-/// [`Error::FormatRead`] if a required column is missing or mistyped, a column
+/// [`powerio::Error::FormatRead`] if a required column is missing or mistyped, a column
 /// carries nulls, a dense index is negative, or `scenario` isn't present; plus
 /// whatever [`Network::validate`] rejects (duplicate / dangling bus ids).
 pub fn read_gridfm_network(
@@ -1293,10 +1293,11 @@ fn build_network_from_columns(
         let mut avail = bus.scenario.clone();
         avail.sort_unstable();
         avail.dedup();
-        return Err(Error::FormatRead {
+        return Err(powerio::Error::FormatRead {
             format: "gridfm",
             message: format!("scenario {scenario} not present; available: {avail:?}"),
-        });
+        }
+        .into());
     }
 
     let bus_id = &bus.bus;
@@ -1515,12 +1516,12 @@ fn resolve_raw_dir(dir: &Path) -> Result<PathBuf> {
     // Surface read_dir / entry IO errors (missing dir, permissions) rather than
     // masking them as "no dataset found".
     let mut matches: Vec<PathBuf> = Vec::new();
-    let entries = std::fs::read_dir(dir).map_err(|e| Error::FormatRead {
+    let entries = std::fs::read_dir(dir).map_err(|e| powerio::Error::FormatRead {
         format: "gridfm",
         message: format!("reading directory {}: {e}", dir.display()),
     })?;
     for entry in entries {
-        let entry = entry.map_err(|e| Error::FormatRead {
+        let entry = entry.map_err(|e| powerio::Error::FormatRead {
             format: "gridfm",
             message: format!("reading an entry of {}: {e}", dir.display()),
         })?;
@@ -1531,21 +1532,23 @@ fn resolve_raw_dir(dir: &Path) -> Result<PathBuf> {
     }
     match matches.len() {
         1 => Ok(matches.pop().expect("len checked")),
-        0 => Err(Error::FormatRead {
+        0 => Err(powerio::Error::FormatRead {
             format: "gridfm",
             message: format!(
                 "no gridfm dataset under {}; expected bus_data.parquet in the directory, a \
                  raw/ child, or a single <case>/raw/ child",
                 dir.display()
             ),
-        }),
-        n => Err(Error::FormatRead {
+        }
+        .into()),
+        n => Err(powerio::Error::FormatRead {
             format: "gridfm",
             message: format!(
                 "{n} gridfm datasets under {}; point at the specific <case>/raw directory",
                 dir.display()
             ),
-        }),
+        }
+        .into()),
     }
 }
 
@@ -1604,21 +1607,23 @@ fn read_meta(raw: &Path) -> (f64, String, Vec<String>) {
 /// Open a parquet file and collect every record batch (one for powerio-written
 /// data, possibly several for an externally-written prediction).
 fn read_parquet(path: &Path) -> Result<Vec<RecordBatch>> {
-    let file = std::fs::File::open(path).map_err(|e| Error::FormatRead {
+    let file = std::fs::File::open(path).map_err(|e| powerio::Error::FormatRead {
         format: "gridfm",
         message: format!("opening {}: {e}", path.display()),
     })?;
     let reader = ParquetRecordBatchReaderBuilder::try_new(file)
         .and_then(ParquetRecordBatchReaderBuilder::build)
-        .map_err(|e| Error::FormatRead {
+        .map_err(|e| powerio::Error::FormatRead {
             format: "gridfm",
             message: format!("reading {}: {e}", path.display()),
         })?;
     reader
         .collect::<std::result::Result<Vec<_>, _>>()
-        .map_err(|e| Error::FormatRead {
-            format: "gridfm",
-            message: format!("decoding {}: {e}", path.display()),
+        .map_err(|e| {
+            Error::Core(powerio::Error::FormatRead {
+                format: "gridfm",
+                message: format!("decoding {}: {e}", path.display()),
+            })
         })
 }
 
@@ -1641,21 +1646,22 @@ fn require_scenario_block(
     table: &str,
 ) -> Result<()> {
     if rows.is_empty() && !scen_col.is_empty() {
-        return Err(Error::FormatRead {
+        return Err(powerio::Error::FormatRead {
             format: "gridfm",
             message: format!(
                 "scenario {scenario} has no {table} rows, but the table holds {} row(s) for other \
                  scenarios — a partial or corrupt dataset",
                 scen_col.len()
             ),
-        });
+        }
+        .into());
     }
     Ok(())
 }
 
 /// A dense `[0, n)` parquet index → 1-based [`BusId`]. Errors on a negative index.
 fn dense_bus_id(v: i64) -> Result<BusId> {
-    let idx = usize::try_from(v).map_err(|_| Error::FormatRead {
+    let idx = usize::try_from(v).map_err(|_| powerio::Error::FormatRead {
         format: "gridfm",
         message: format!("negative dense bus index {v}"),
     })?;
@@ -1664,9 +1670,11 @@ fn dense_bus_id(v: i64) -> Result<BusId> {
 
 /// Look up a named column, erroring if absent.
 fn column<'a>(b: &'a RecordBatch, name: &str) -> Result<&'a ArrayRef> {
-    b.column_by_name(name).ok_or_else(|| Error::FormatRead {
-        format: "gridfm",
-        message: format!("missing column `{name}`"),
+    b.column_by_name(name).ok_or_else(|| {
+        Error::Core(powerio::Error::FormatRead {
+            format: "gridfm",
+            message: format!("missing column `{name}`"),
+        })
     })
 }
 
@@ -1675,18 +1683,18 @@ fn i64_col(batches: &[RecordBatch], name: &str) -> Result<Vec<i64>> {
     let mut out = Vec::with_capacity(batches.iter().map(RecordBatch::num_rows).sum());
     for b in batches {
         let arr = column(b, name)?;
-        let col = arr
-            .as_any()
-            .downcast_ref::<Int64Array>()
-            .ok_or_else(|| Error::FormatRead {
+        let col = arr.as_any().downcast_ref::<Int64Array>().ok_or_else(|| {
+            powerio::Error::FormatRead {
                 format: "gridfm",
                 message: format!("column `{name}` is not Int64"),
-            })?;
+            }
+        })?;
         if col.null_count() > 0 {
-            return Err(Error::FormatRead {
+            return Err(powerio::Error::FormatRead {
                 format: "gridfm",
                 message: format!("column `{name}` has nulls"),
-            });
+            }
+            .into());
         }
         out.extend_from_slice(col.values());
     }
@@ -1698,18 +1706,18 @@ fn f64_col(batches: &[RecordBatch], name: &str) -> Result<Vec<f64>> {
     let mut out = Vec::with_capacity(batches.iter().map(RecordBatch::num_rows).sum());
     for b in batches {
         let arr = column(b, name)?;
-        let col = arr
-            .as_any()
-            .downcast_ref::<Float64Array>()
-            .ok_or_else(|| Error::FormatRead {
+        let col = arr.as_any().downcast_ref::<Float64Array>().ok_or_else(|| {
+            powerio::Error::FormatRead {
                 format: "gridfm",
                 message: format!("column `{name}` is not Float64"),
-            })?;
+            }
+        })?;
         if col.null_count() > 0 {
-            return Err(Error::FormatRead {
+            return Err(powerio::Error::FormatRead {
                 format: "gridfm",
                 message: format!("column `{name}` has nulls"),
-            });
+            }
+            .into());
         }
         out.extend_from_slice(col.values());
     }
@@ -2084,7 +2092,7 @@ mod tests {
         );
         let err = gridfm_record_batches(&net, 0, &GridfmOptions::default()).unwrap_err();
         assert!(
-            matches!(err, Error::ReferenceBusCount { .. }),
+            matches!(err, Error::Core(powerio::Error::ReferenceBusCount { .. })),
             "got {err:?}"
         );
     }
@@ -2877,10 +2885,10 @@ mod tests {
         assert!(
             matches!(
                 err,
-                Error::FormatRead {
+                Error::Core(powerio::Error::FormatRead {
                     format: "gridfm",
                     ..
-                }
+                })
             ),
             "got {err:?}"
         );
@@ -2894,10 +2902,10 @@ mod tests {
         assert!(
             matches!(
                 err,
-                Error::FormatRead {
+                Error::Core(powerio::Error::FormatRead {
                     format: "gridfm",
                     ..
-                }
+                })
             ),
             "got {err:?}"
         );
@@ -2907,10 +2915,10 @@ mod tests {
         assert!(
             matches!(
                 err,
-                Error::FormatRead {
+                Error::Core(powerio::Error::FormatRead {
                     format: "gridfm",
                     ..
-                }
+                })
             ),
             "got {err:?}"
         );
@@ -3091,10 +3099,10 @@ mod tests {
         assert!(
             matches!(
                 err,
-                Error::FormatRead {
+                Error::Core(powerio::Error::FormatRead {
                     format: "gridfm",
                     ..
-                }
+                })
             ),
             "got {err:?}"
         );

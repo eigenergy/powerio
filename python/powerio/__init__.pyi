@@ -9,7 +9,7 @@ SensitivitySolver = Literal["auto", "dense", "iterative"]
 Units = Literal["perunit", "native"]
 GridfmOutputs = Dict[str, Any]
 
-class PowerIOError(Exception):
+class PowerIOError(ValueError):
     """Base error from the powerio parser, converter, or matrix builders."""
 
 class PowerIOParseError(PowerIOError):

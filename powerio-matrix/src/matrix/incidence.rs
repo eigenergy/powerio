@@ -10,9 +10,9 @@ use sprs::CsMat;
 
 pub use powerio::DcConvention;
 
+use crate::Result;
 use crate::indexed::IndexedNetwork;
 use crate::matrix::triplet::CooBuilder;
-use crate::{Error, Result};
 
 use super::{BuildOptions, ZeroImpedanceSkips};
 
@@ -50,8 +50,8 @@ impl IncidenceParts {
 /// Self-loops (from == to) are dropped. A branch whose reactance is too small
 /// to divide by has no DC susceptance the Laplacian can carry; it is skipped
 /// when `opts.skip_zero_impedance` is true and rejected with
-/// [`Error::ZeroImpedance`] when it is false. A tap ratio under the same bound
-/// is [`Error::DegenerateTap`] either way, as it is in Y_bus.
+/// [`powerio::Error::ZeroImpedance`] when it is false. A tap ratio under the same bound
+/// is [`powerio::Error::DegenerateTap`] either way, as it is in Y_bus.
 pub fn build_incidence(
     case: &IndexedNetwork,
     conv: DcConvention,
@@ -63,11 +63,11 @@ pub fn build_incidence(
     let mut cols: Vec<Column> = Vec::new();
     let mut skipped_zero_impedance = Vec::new();
     for (idx, br) in case.in_service_branches() {
-        let i = case.bus_index(br.from).ok_or(Error::UnknownBus {
+        let i = case.bus_index(br.from).ok_or(powerio::Error::UnknownBus {
             bus_id: br.from,
             element_index: idx,
         })?;
-        let j = case.bus_index(br.to).ok_or(Error::UnknownBus {
+        let j = case.bus_index(br.to).ok_or(powerio::Error::UnknownBus {
             bus_id: br.to,
             element_index: idx,
         })?;
@@ -78,7 +78,7 @@ pub fn build_incidence(
         if i == j || degenerate_x {
             if i != j && degenerate_x {
                 if !opts.skip_zero_impedance {
-                    return Err(Error::ZeroImpedance { row: idx });
+                    return Err(powerio::Error::ZeroImpedance { row: idx }.into());
                 }
                 skipped_zero_impedance.push(idx);
             }
@@ -90,7 +90,7 @@ pub fn build_incidence(
         // A NaN reactance slips past the guard above and poisons the whole
         // Laplacian.
         if !b_e.is_finite() {
-            return Err(Error::NonFiniteSusceptance { row: idx });
+            return Err(powerio::Error::NonFiniteSusceptance { row: idx }.into());
         }
         // angle_radians, not to_radians: a normalized network's shift is
         // already in radians, so converting again would double-scale it.

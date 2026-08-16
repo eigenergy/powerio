@@ -1,6 +1,8 @@
 use std::path::{Path, PathBuf};
 
-use powerio::{GenCostPolicyReport, MissingGenCostPolicy, Result};
+use powerio::{GenCostPolicyReport, MissingGenCostPolicy};
+
+use crate::Result;
 use powerio_matrix::SparseMatrix;
 use powerio_matrix::io::{write_mtx, write_vector_mtx};
 use serde::Serialize;
@@ -245,7 +247,7 @@ pub fn write_dcopf_bundle(
     };
     let meta_path = dir.join("dcopf_meta.json");
     let json = serde_json::to_string_pretty(&meta)
-        .map_err(|error| powerio::Error::Mtx(error.to_string()))?;
+        .map_err(|error| powerio_matrix::Error::Mtx(error.to_string()))?;
     std::fs::write(&meta_path, json)?;
     files.push(meta_path);
 

@@ -23,7 +23,10 @@ pub use dc::{
     DcBranchData, DcGeneratorData, DcOpfInstance, DcOpfOptions, NodalGeneratorData, Units,
     build_dc_opf_instance,
 };
-pub use powerio::{DcConvention, Error, Result};
+pub use powerio::DcConvention;
+
+pub mod error;
+pub use error::{Error, Result};
 pub use reference::ReferenceBuses;
 pub use scopf::{
     ScopfDeviceClassLayout, ScopfError, ScopfInstance, ScopfResult, build_scopf_instance_from_str,

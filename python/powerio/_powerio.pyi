@@ -11,7 +11,7 @@ from typing import Any, Literal, Optional, Tuple
 __version__: str
 _has_gridfm: bool
 
-class PowerIOError(Exception):
+class PowerIOError(ValueError):
     """Base error from the powerio parser, converter, or matrix builders."""
 
 class PowerIOParseError(PowerIOError):

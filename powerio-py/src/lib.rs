@@ -50,8 +50,12 @@ use powerio_matrix::io::gridfm::{
 pyo3::create_exception!(
     _powerio,
     PowerIOError,
-    pyo3::exceptions::PyException,
-    "Base error raised by the powerio parser, converter, or matrix builders."
+    pyo3::exceptions::PyValueError,
+    "Base error raised by the powerio parser, converter, or matrix builders.\n\n\
+     Subclasses `ValueError`: every failure it covers is a statement about a \
+     value the caller supplied, and `except ValueError` was what callers wrote \
+     before the hierarchy existed. I/O failures do not reach it; they raise the \
+     matching `OSError` subclass by value."
 );
 
 pyo3::create_exception!(
@@ -79,21 +83,53 @@ pyo3::create_exception!(
 /// unmet operation precondition becomes [`PowerIODataError`]. Both subclass
 /// [`PowerIOError`], so existing `except PowerIOError` handlers keep working;
 /// output-side write failures fall back to the [`PowerIOError`] base.
-fn to_pyerr(e: powerio_matrix::Error) -> PyErr {
-    use powerio_matrix::{Error as E, ErrorCategory as C};
-    // `Io` carries the underlying `std::io::Error`; hand it to PyO3 by value so
-    // it picks the precise `OSError` subclass. (Returning here also keeps the
-    // `to_string()` below off the I/O path.)
-    if let E::Io(io) = e {
-        return io.into();
-    }
-    let msg = e.to_string();
-    match e.category() {
+/// Map a classified powerio failure onto the Python exception hierarchy.
+///
+/// Every crate's error carries the same `category()`, so one mapping serves
+/// all of them and the hierarchy cannot drift per surface.
+fn categorized_pyerr(category: powerio_matrix::ErrorCategory, msg: String) -> PyErr {
+    use powerio_matrix::ErrorCategory as C;
+    match category {
         C::UnknownFormat => PyValueError::new_err(msg),
         C::Parse => PowerIOParseError::new_err(msg),
         C::Data => PowerIODataError::new_err(msg),
-        // `Io` is handled above; `Output` (mtx/parquet) maps to the base.
+        // `Io` is unwrapped by the callers below when it still carries the
+        // original `std::io::Error`; `Output` (mtx/parquet) maps to the base.
         C::Io | C::Output => PowerIOError::new_err(msg),
+    }
+}
+
+fn core_pyerr(e: powerio_matrix::CoreError) -> PyErr {
+    // Hand I/O to PyO3 by value so it picks the precise `OSError` subclass.
+    if let powerio_matrix::CoreError::Io(io) = e {
+        return io.into();
+    }
+    let category = e.category();
+    categorized_pyerr(category, e.to_string())
+}
+
+fn to_pyerr(e: powerio_matrix::Error) -> PyErr {
+    use powerio_matrix::Error as E;
+    match e {
+        E::Io(io) => io.into(),
+        E::Core(inner) => core_pyerr(inner),
+        other => {
+            let category = other.category();
+            categorized_pyerr(category, other.to_string())
+        }
+    }
+}
+
+fn prob_pyerr(e: powerio_prob::Error) -> PyErr {
+    use powerio_prob::Error as E;
+    match e {
+        E::Io(io) => io.into(),
+        E::Core(inner) => core_pyerr(inner),
+        E::Matrix(inner) => to_pyerr(inner),
+        other => {
+            let category = other.category();
+            categorized_pyerr(category, other.to_string())
+        }
     }
 }
 
@@ -255,7 +291,7 @@ fn write_options(
             let text = std::fs::read_to_string(path).map_err(|e| {
                 PyValueError::new_err(format!("reading gen_cost_csv {path:?}: {e}"))
             })?;
-            powerio_matrix::parse_gen_cost_csv(&text).map_err(to_pyerr)?
+            powerio_matrix::parse_gen_cost_csv(&text).map_err(core_pyerr)?
         }
         None => Vec::new(),
     };
@@ -265,8 +301,15 @@ fn write_options(
     })
 }
 
-fn package_pyerr(e: serde_json::Error) -> PyErr {
-    PyValueError::new_err(format!("invalid .pio.json package: {e}"))
+fn package_pyerr(e: powerio_pkg::Error) -> PyErr {
+    // A package failure is a PowerIOError like every other failure. It used to
+    // raise a bare `ValueError` for everything, so `except powerio.PowerIOError`
+    // did not catch it, and every distinct cause read as one opaque string.
+    if let powerio_pkg::Error::Core(inner) = e {
+        return core_pyerr(inner);
+    }
+    let category = e.category();
+    categorized_pyerr(category, e.to_string())
 }
 
 fn package_to_json(pkg: &NetworkPackage) -> PyResult<String> {
@@ -483,7 +526,7 @@ fn build_package_from_path(
         return Ok(pkg);
     }
 
-    let parsed = powerio_matrix::parse_file(input, from_).map_err(to_pyerr)?;
+    let parsed = powerio_matrix::parse_file(input, from_).map_err(core_pyerr)?;
     let format = parsed.network.source_format.name();
     let retained_source = parsed.network.source.is_some();
     let mut pkg = NetworkPackage::from_parsed_balanced(parsed);
@@ -534,7 +577,7 @@ fn build_package_from_str(text: &str, from_: Option<&str>) -> PyResult<NetworkPa
     }
 
     let parsed = powerio_matrix::parse_str(text, source_format.as_deref().unwrap_or("matpower"))
-        .map_err(to_pyerr)?;
+        .map_err(core_pyerr)?;
     let mut pkg = NetworkPackage::from_parsed_balanced(parsed);
     pkg.run_sane_validation();
     Ok(pkg)
@@ -711,7 +754,7 @@ impl PyNetwork {
     fn reference_bus_index(&self) -> PyResult<usize> {
         IndexedNetwork::with_core(&self.inner, &self.core)
             .reference_bus_index()
-            .map_err(to_pyerr)
+            .map_err(core_pyerr)
     }
 
     /// Dense `[0, n)` indices of every reference (slack) bus, ascending. May be
@@ -894,7 +937,7 @@ impl PyNetwork {
 
     /// Serialize this case to the JSON transport.
     fn to_json(&self) -> PyResult<String> {
-        self.inner.to_json().map_err(to_pyerr)
+        self.inner.to_json().map_err(core_pyerr)
     }
 
     /// Serialize this case to another format. Returns `(text, warnings)`.
@@ -908,7 +951,7 @@ impl PyNetwork {
     ) -> PyResult<(String, Vec<String>)> {
         let target = to
             .parse::<powerio_matrix::TargetFormat>()
-            .map_err(to_pyerr)?;
+            .map_err(core_pyerr)?;
         let opts = write_options(
             missing_gen_cost,
             default_gen_cost,
@@ -918,7 +961,7 @@ impl PyNetwork {
         let conv = self
             .inner
             .to_format_with_options(target, &opts)
-            .map_err(to_pyerr)?;
+            .map_err(core_pyerr)?;
         Ok((conv.text, conv.warnings))
     }
 
@@ -949,7 +992,7 @@ impl PyNetwork {
     /// canonicalized. The raw case is unchanged; the result carries no retained
     /// source, so writing it serializes the per-unit model rather than echoing.
     fn to_normalized(&self) -> PyResult<PyNetwork> {
-        let inner = self.inner.to_normalized().map_err(to_pyerr)?;
+        let inner = self.inner.to_normalized().map_err(core_pyerr)?;
         let core = IndexCore::build(&inner);
         Ok(PyNetwork {
             inner,
@@ -971,7 +1014,7 @@ impl PyNetwork {
         let normalized = self
             .inner
             .to_normalized_with_options(&options)
-            .map_err(to_pyerr)?;
+            .map_err(core_pyerr)?;
         let core = IndexCore::build(&normalized.network);
         let mut warnings = self.warnings.clone();
         warnings.extend(normalized.warnings);
@@ -1119,7 +1162,7 @@ impl PyNetwork {
                 ..AcOpfOptions::default()
             },
         )
-        .map_err(to_pyerr)?;
+        .map_err(prob_pyerr)?;
         serde_json::to_string(&instance).map_err(|error| PyValueError::new_err(error.to_string()))
     }
 
@@ -1185,7 +1228,7 @@ impl PyNetwork {
         let mut policy_network = self.inner.clone();
         let cost_report = policy_network
             .apply_gen_cost_policy(&cost_opts.gen_cost_patches, cost_opts.missing_gen_cost)
-            .map_err(to_pyerr)?;
+            .map_err(core_pyerr)?;
         let view = IndexedNetwork::new(&policy_network);
         let instance = build_dc_opf_instance(
             &view,
@@ -1195,14 +1238,14 @@ impl PyNetwork {
                 ..DcOpfOptions::default()
             },
         )
-        .map_err(to_pyerr)?;
+        .map_err(prob_pyerr)?;
         let options = DcOpfBundleOptions {
             metadata: DcOpfBundleMetadata {
                 cost_policy: cost_opts.missing_gen_cost,
                 cost_report,
             },
         };
-        let outputs = write_bundle(&instance, out_dir, &options).map_err(to_pyerr)?;
+        let outputs = write_bundle(&instance, out_dir, &options).map_err(prob_pyerr)?;
         dir_files_dict(py, &outputs.dir, &outputs.files)
     }
 
@@ -1251,7 +1294,7 @@ impl PyNetwork {
         out_dir: &str,
     ) -> PyResult<Bound<'py, PyDict>> {
         let outputs =
-            powerio_matrix::write_pypsa_csv_folder(&self.inner, out_dir).map_err(to_pyerr)?;
+            powerio_matrix::write_pypsa_csv_folder(&self.inner, out_dir).map_err(core_pyerr)?;
         pypsa_outputs_to_dict(py, &outputs)
     }
 
@@ -1273,7 +1316,7 @@ impl PyNetwork {
 fn parse_file(path: &str, from_: Option<&str>) -> PyResult<PyNetwork> {
     powerio_matrix::parse_file(std::path::Path::new(path), from_)
         .map(case_from_parsed)
-        .map_err(to_pyerr)
+        .map_err(core_pyerr)
 }
 
 /// Parse a case from in-memory text in the named `format` (`matpower`,
@@ -1284,7 +1327,7 @@ fn parse_file(path: &str, from_: Option<&str>) -> PyResult<PyNetwork> {
 fn parse_str(text: &str, format: Option<&str>) -> PyResult<PyNetwork> {
     powerio_matrix::parse_str(text, format.unwrap_or("matpower"))
         .map(case_from_parsed)
-        .map_err(to_pyerr)
+        .map_err(core_pyerr)
 }
 
 /// Parse a display file from a path, inferring the format from the extension
@@ -1296,8 +1339,8 @@ fn parse_display_file<'py>(
     path: &str,
     from_: Option<&str>,
 ) -> PyResult<Bound<'py, PyAny>> {
-    let display =
-        powerio_matrix::parse_display_file(std::path::Path::new(path), from_).map_err(to_pyerr)?;
+    let display = powerio_matrix::parse_display_file(std::path::Path::new(path), from_)
+        .map_err(core_pyerr)?;
     display_data_to_py(py, display)
 }
 
@@ -1309,14 +1352,14 @@ fn parse_display_bytes<'py>(
     data: &[u8],
     format: &str,
 ) -> PyResult<Bound<'py, PyAny>> {
-    let display = powerio_matrix::parse_display_bytes(data, format).map_err(to_pyerr)?;
+    let display = powerio_matrix::parse_display_bytes(data, format).map_err(core_pyerr)?;
     display_data_to_py(py, display)
 }
 
 /// Rebuild a case from JSON produced by `Network.to_json()`.
 #[pyfunction]
 fn from_json(text: &str) -> PyResult<PyNetwork> {
-    let inner = powerio_matrix::Network::from_json(text).map_err(to_pyerr)?;
+    let inner = powerio_matrix::Network::from_json(text).map_err(core_pyerr)?;
     let core = IndexCore::build(&inner);
     Ok(PyNetwork {
         inner,
@@ -1330,7 +1373,7 @@ fn from_json(text: &str) -> PyResult<PyNetwork> {
 fn read_pypsa_csv_folder(path: &str) -> PyResult<PyNetwork> {
     powerio_matrix::read_pypsa_csv_folder(std::path::Path::new(path))
         .map(case_from_parsed)
-        .map_err(to_pyerr)
+        .map_err(core_pyerr)
 }
 
 /// Convert a case file to another format through the network model. Returns
@@ -1353,7 +1396,7 @@ fn convert_file(
 ) -> PyResult<(String, Vec<String>)> {
     let target = to
         .parse::<powerio_matrix::TargetFormat>()
-        .map_err(to_pyerr)?;
+        .map_err(core_pyerr)?;
     let opts = write_options(
         missing_gen_cost,
         default_gen_cost,
@@ -1362,7 +1405,7 @@ fn convert_file(
     )?;
     let conv =
         powerio_matrix::convert_file_with_options(std::path::Path::new(path), target, from_, &opts)
-            .map_err(to_pyerr)?;
+            .map_err(core_pyerr)?;
     if let Some(out) = out {
         std::fs::write(out, &conv.text)
             .map_err(|e| PowerIOError::new_err(format!("writing {out}: {e}")))?;
@@ -1385,7 +1428,7 @@ fn convert_str(
 ) -> PyResult<(String, Vec<String>)> {
     let target = to
         .parse::<powerio_matrix::TargetFormat>()
-        .map_err(to_pyerr)?;
+        .map_err(core_pyerr)?;
     let opts = write_options(
         missing_gen_cost,
         default_gen_cost,
@@ -1394,7 +1437,7 @@ fn convert_str(
     )?;
     let conv =
         powerio_matrix::convert_str_with_options(text, target, format.unwrap_or("matpower"), &opts)
-            .map_err(to_pyerr)?;
+            .map_err(core_pyerr)?;
     Ok((conv.text, conv.warnings))
 }
 
@@ -1686,7 +1729,7 @@ impl PyPackage {
         );
         if include_solver_metadata {
             pkg.attach_normalized_solver_table_metadata()
-                .map_err(to_pyerr)?;
+                .map_err(core_pyerr)?;
         }
         Ok(Self { pkg })
     }
@@ -1725,14 +1768,15 @@ impl PyPackage {
 
     /// The operating point series as JSON, or `null` when absent.
     fn operating_points_json(&self) -> PyResult<String> {
-        serde_json::to_string(&self.pkg.operating_points).map_err(package_pyerr)
+        serde_json::to_string(&self.pkg.operating_points)
+            .map_err(|e| package_pyerr(powerio_pkg::Error::Serialize(e)))
     }
 
     /// Replace the operating point series from JSON and rerun validation.
     /// `null` or an empty series clears it.
     fn set_operating_points_json(&mut self, json: &str) -> PyResult<()> {
-        let series: Option<OperatingPointSeries> =
-            serde_json::from_str(json).map_err(package_pyerr)?;
+        let series: Option<OperatingPointSeries> = serde_json::from_str(json)
+            .map_err(|e| package_pyerr(powerio_pkg::Error::Serialize(e)))?;
         match series {
             Some(series) => self.pkg.set_operating_points(series),
             None => self.pkg.clear_operating_points(),
@@ -1743,7 +1787,8 @@ impl PyPackage {
 
     /// The study block as JSON, or `null` when absent.
     fn study_json(&self) -> PyResult<String> {
-        serde_json::to_string(&self.pkg.study).map_err(package_pyerr)
+        serde_json::to_string(&self.pkg.study)
+            .map_err(|e| package_pyerr(powerio_pkg::Error::Serialize(e)))
     }
 
     /// Materialize one operating point into a new static package handle.
@@ -1769,12 +1814,14 @@ impl PyPackage {
 
     /// The validation summary as JSON.
     fn validation_json(&self) -> PyResult<String> {
-        serde_json::to_string(&self.pkg.validation).map_err(package_pyerr)
+        serde_json::to_string(&self.pkg.validation)
+            .map_err(|e| package_pyerr(powerio_pkg::Error::Serialize(e)))
     }
 
     /// The structured diagnostics array as JSON.
     fn diagnostics_json(&self) -> PyResult<String> {
-        serde_json::to_string(&self.pkg.diagnostics).map_err(package_pyerr)
+        serde_json::to_string(&self.pkg.diagnostics)
+            .map_err(|e| package_pyerr(powerio_pkg::Error::Serialize(e)))
     }
 
     /// Readiness report for multiconductor to balanced lowering, as JSON.
@@ -1793,7 +1840,7 @@ impl PyPackage {
                 ..Default::default()
             },
         );
-        serde_json::to_string(&report).map_err(package_pyerr)
+        serde_json::to_string(&report).map_err(|e| package_pyerr(powerio_pkg::Error::Serialize(e)))
     }
 
     /// Lower a multiconductor package to a new balanced package handle.
