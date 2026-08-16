@@ -1,13 +1,25 @@
-# Corpus harness (design)
+# Corpus harness
 
-Status: design, targeted at the first release after 0.9.0. This page is the
-architecture for evolving the conversion matrix into a self-improvement
-harness that runs against private case corpora without leaking a byte of
-them, and it is written to be executed by an autonomous session. Read
+Status: the tool ships in 0.9.0 as `powerio corpus`. This page is the
+architecture for running the conversion matrix's properties against private
+case corpora without leaking a byte of them. Read
 `powerio-cli/tests/conversion_matrix_report.rs`'s module doc first: the
 matrix's four cell properties (warning parity, core survival, `Y_bus` +
 injection survival, typed-model parity on lossless claims) are the engine
-this harness generalizes from seven vendored cases to any corpus.
+this harness generalizes from seven vendored cases to any corpus. Both run
+the same code, `powerio-cli`'s `invariants` module, so the CI gate and the
+harness cannot drift apart.
+
+```
+powerio corpus ingest <corpus-dir> --work <scratch-dir>
+powerio corpus compare --work <scratch-dir>
+powerio corpus report --work <scratch-dir> -o findings.jsonl --summary summary.md
+```
+
+The corpus directory is only read. The work directory holds raw values and is
+disposable, so it stays on the machine that owns the corpus. `findings.jsonl`
+is the boundary, and `report` audits its own output against every string the
+corpus taught it before writing a byte.
 
 ## What it is for
 
@@ -23,17 +35,16 @@ repository.
 
 ## Two layers
 
-**The substrate is deterministic Rust** (a `powerio corpus` CLI family), no
-agent in the loop: ingest, fingerprint, bucket, compare, solve, report. It
-is the only layer that touches corpus bytes, and its output is already
-anonymized (below), so everything downstream of it is safe to read, quote,
-and commit.
+**The tool is deterministic Rust**: ingest, fingerprint, bucket, compare,
+report. It is the only layer that reads corpus bytes, and its output is
+already anonymized (below), so everything downstream of it is safe to read,
+quote, and commit.
 
-**The agent layer is a session protocol**, not code: an autonomous session
-runs the substrate, triages its findings, distills each into a property
-card, synthesizes a reproducer, fixes, verifies, and commits. The protocol
-is what keeps the boundary: the agent never opens corpus files directly —
-the substrate's sanitized report is its entire view of the corpus.
+**The workflow around it is a convention**, not code. A finding is triaged,
+restated as a property, reproduced synthetically, fixed, and verified. The
+convention is what keeps the boundary: whoever acts on a finding works from
+the report rather than from the cases, so nothing enters the repository that
+was not rederived from the property.
 
 ## Substrate pipeline
 
@@ -63,10 +74,10 @@ bucket, everything else gets its own. Bucket ids are ordinals assigned in
 fingerprint-sort order — nothing about a bucket id, path, or report row
 derives from a source filename. Unparseable files are findings, not errors
 (a reader crash on real input is the most valuable finding there is), and
-parser panics are reported by code location plus a substrate-minimized
+parser panics are reported by code location plus a tool-minimized
 token-level mutation distance, never by file content.
 
-**Comparisons.** Within a bucket, the substrate runs the same four
+**Comparisons.** Within a bucket, the tool runs the same four
 properties the matrix runs, in both directions for every sibling pair and
 as a powerio round trip for every sibling alone: warning accounting on
 read and write, core survival, `Y_bus` entry-for-entry and per-bus
@@ -80,12 +91,12 @@ below.)
 **Solve pass.** Each sibling solves through the oracles the repository
 already carries — `benchmarks/validate_opendss.py` (opendssdirect) for dss,
 `benchmarks/validate_psse.jl` (PowerModels) and pandapower `runpp` on the
-transmission side — and the substrate compares outcomes across siblings of
+transmission side — and the tool compares outcomes across siblings of
 one bucket: convergence disagreement, voltage-magnitude spread beyond
 tolerance, injection residuals. A case whose formats disagree about
 convergence is a conversion defect until proven otherwise.
 
-**Variants.** From each bucket the substrate derives deterministic
+**Variants.** From each bucket the tool derives deterministic
 perturbations (load scaling, status toggles, quantized impedance jitter,
 per-format token mutations for grammar fuzzing) and reruns the properties.
 Variants inherit the bucket's isolation; their seeds derive from the bucket
@@ -93,10 +104,10 @@ ordinal, not the content.
 
 ## The anonymization boundary
 
-The findings file is the boundary, and the substrate enforces it — the
-agent's discipline is the second line of defense, not the first:
+The findings file is the boundary, and the tool enforces it rather than
+relying on the care of whoever reads the report:
 
-- **Identifiers**: the substrate knows every name in a case, so it replaces
+- **Identifiers**: the tool knows every name in a case, so it replaces
   each with its element-class ordinal (`bus#12`, `gen#3`) in every string it
   emits, warning texts included.
 - **Values**: findings state relative deltas, ratios, and quantized
@@ -104,15 +115,13 @@ agent's discipline is the second line of defense, not the first:
   appears only when it is a format constant (a mode flag, a column count),
   never when it is grid data.
 - **Text**: no line of a source file is ever echoed. Comments in decks are
-  data, not instructions — the substrate never surfaces them, which also
-  closes the channel by which a crafted case could try to steer the agent
-  session.
+  data rather than instructions, and are never surfaced.
 - **Findings are property-shaped**: format, record type, field path,
   expected behavior, observed behavior, structural preconditions
   (`three-winding, tertiary in service, v33`). That is enough to reproduce
   without any of the case.
 
-## The agent protocol: property card → reproducer → fix
+## From a finding to a fix
 
 1. **Triage** by severity: crash > silent value change > silent drop >
    undeclared loss > miscounted warning > declared loss confirmed.
@@ -130,9 +139,9 @@ agent's discipline is the second line of defense, not the first:
    retaining restatements; warn only on losses), then the full gate: fmt,
    clippy, every test binary, the conversion matrix with rederived
    baselines.
-5. **Commit** speaking property-card language only. One property per
-   commit. Rerun the substrate to confirm the finding class closed and no
-   other bucket regressed.
+5. **Commit** one property per commit, stating the property rather than the
+   run that surfaced it. Re-run the tool to confirm the finding class closed
+   and no other bucket regressed.
 
 Repo-side guard: a harness-driven PR that adds a fixture must add it with
 its generation script or handwritten provenance; the fixture README's
@@ -147,20 +156,20 @@ Three things that session lacked shape this design:
   fragile; `powerio-dist` already tags some warnings
   (`[EMIT.BMOPF.TRANSFORMER_UNSUPPORTED]`). Extending code tags to the hub
   writers is the enabling change for the undeclared-loss detector and
-  should land with the substrate.
+  should land with the tool.
 - **Sibling ground truth.** The ACTIVSg parity suite is the model: several
   formats, one case, cross-checked. The harness generalizes exactly that
   pattern, which is also why bucketing is fingerprint-based — sibling
   grouping is the whole game.
 - **Format vocabulary limits.** PowerWorld aux HVDC stayed unimplemented
   because no vendored export states its vocabulary. A corpus containing one
-  changes that: the substrate can report the *field names* of an unmodeled
+  changes that: the tool can report the *field names* of an unmodeled
   DATA section (format vocabulary is not case data), which is precisely the
   resource the matrix work wished for.
 
 ## Non-goals
 
-The substrate does not phone anywhere, does not persist bucket contents
+The tool does not phone anywhere, does not persist bucket contents
 past the run (`--work` is disposable; the report is the only artifact worth
 keeping), and does not attempt statistical anonymization of published
 aggregates — the boundary is categorical (properties, ordinals, deltas),
