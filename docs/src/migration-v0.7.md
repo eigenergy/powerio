@@ -18,10 +18,9 @@ use powerio_prob::{DcOpfInstance, DcOpfOptions, Units, build_dc_opf_instance};
 use powerio_prob::matrix::{DcOpfBundleOptions, write_dcopf_bundle};
 ```
 
-`DcOpfInstance` stores generators in generator space. It does not sum cost
-coefficients for several generators at one bus. Call
+`DcOpfInstance` stores generators in generator space. Call
 `DcOpfInstance::nodal_generator_data` only when a bus space formulation is
-required; it returns an error if the reduction would change the objective.
+required; it aggregates the generators at each bus.
 
 The default `powerio-prob` feature set contains no sparse matrix dependency.
 Enable `matrix` for incidence, Laplacian, flow, generator map, and bundle

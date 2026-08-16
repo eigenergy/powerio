@@ -132,7 +132,7 @@ pub fn write_dcopf_bundle(
     options: &DcOpfBundleOptions,
 ) -> Result<DcOpfOutputs> {
     let matrices = build_dc_opf_matrices(instance);
-    let nodal = instance.nodal_generator_data()?;
+    let nodal = instance.nodal_generator_data();
     // The case name comes from source file content, so it must not steer the
     // output path. `sanitize_stem` reduces it to one safe component and
     // disambiguates names that would otherwise sanitize alike, so a batch
@@ -218,8 +218,8 @@ pub fn write_dcopf_bundle(
             },
         },
         grounding: GroundingMeta {
-            reference_buses: &instance.reference_buses,
-            removed_rows_and_columns: &instance.reference_buses,
+            reference_buses: instance.reference_buses.as_ref(),
+            removed_rows_and_columns: instance.reference_buses.as_ref(),
             grounded_operator: "L_grounded",
             reference_selector: "e_r",
         },
@@ -233,7 +233,7 @@ pub fn write_dcopf_bundle(
         n: instance.n_buses,
         m: instance.n_branches(),
         n_gen: instance.n_generators(),
-        reference_buses: &instance.reference_buses,
+        reference_buses: instance.reference_buses.as_ref(),
         convention: instance.convention,
         units: instance.units,
         cost_policy: options.metadata.cost_policy,

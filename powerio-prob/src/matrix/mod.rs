@@ -38,7 +38,7 @@ pub fn build_dc_opf_matrices(instance: &DcOpfInstance) -> DcOpfMatrices {
     }
     let incidence = incidence.finish_csr();
     let laplacian = build_weighted_laplacian(&incidence, &instance.branches.b);
-    let grounded_laplacian = ground_at_each(&laplacian, &instance.reference_buses);
+    let grounded_laplacian = ground_at_each(&laplacian, instance.reference_buses.as_ref());
     let flow_map = build_flow_map(&incidence, &instance.branches.b);
 
     let n_gen = instance.n_generators();
@@ -54,6 +54,6 @@ pub fn build_dc_opf_matrices(instance: &DcOpfInstance) -> DcOpfMatrices {
         flow_map,
         generator_bus: generator_bus.finish_csr(),
         generator_cost: diagonal(&instance.generators.q),
-        reference_selector: reference_indicator(n, &instance.reference_buses),
+        reference_selector: reference_indicator(n, instance.reference_buses.as_ref()),
     }
 }

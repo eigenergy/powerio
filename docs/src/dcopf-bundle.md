@@ -63,9 +63,11 @@ The constant cost terms `c0`/`c0_gen` do not move the argmin; they exist so a
 consumer reporting objective values reconstructs the full cost.
 
 Generator space is canonical. The nodal `q`, `c`, `c0`, `pmax`, and `pmin`
-files are written only when each bus has at most one generator. The writer
-returns an error when several generators share a bus because summing their
-quadratic or linear costs would change the objective.
+files aggregate the generators at each bus. The bounds are the sum of the
+generator bounds. The cost curves combine by the parallel rule
+\\(q = 1 / \sum_i 1/q_i\\), which is the curve of the split that costs least, so
+it agrees with generator space only while that split stays inside the bound of
+each generator. A bus with one generator keeps that generator's curve.
 
 ## Manifest (`dcopf_meta.json`)
 

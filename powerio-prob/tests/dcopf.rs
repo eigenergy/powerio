@@ -39,6 +39,23 @@ fn small_network() -> Network {
     network
 }
 
+fn two_island_network() -> Network {
+    let mut network = Network::in_memory(
+        "islands",
+        100.0,
+        vec![
+            bus(10, BusType::Ref),
+            bus(30, BusType::Pq),
+            bus(50, BusType::Ref),
+            bus(70, BusType::Pq),
+        ],
+        vec![branch(10, 30, 0.2), branch(50, 70, 0.3)],
+    );
+    network.generators.push(generator(10, 1.0, 2.0));
+    network.generators.push(generator(50, 4.0, 6.0));
+    network
+}
+
 #[test]
 fn instance_is_complete_and_indexed() {
     let net = case9();
@@ -73,7 +90,7 @@ fn instance_is_complete_and_indexed() {
 }
 
 #[test]
-fn several_generators_at_one_bus_keep_separate_costs() {
+fn several_generators_at_one_bus_keep_separate_costs_and_aggregate() {
     let mut net = case9();
     let mut extra = net.generators[0].clone();
     extra.uid = Some("extra-generator".to_owned());
@@ -83,16 +100,122 @@ fn several_generators_at_one_bus_keep_separate_costs() {
     let view = IndexedNetwork::new(&net);
     let problem = build_dc_opf_instance(&view, &DcOpfOptions::default()).expect("build");
     assert_eq!(problem.n_generators(), 4);
-    assert_eq!(
-        problem.generators.bus_of_gen[0],
-        problem.generators.bus_of_gen[3]
-    );
+    let shared = problem.generators.bus_of_gen[0];
+    assert_eq!(shared, problem.generators.bus_of_gen[3]);
     assert!((problem.generators.q[0] - problem.generators.q[3]).abs() > 1e-12);
     assert!((problem.generators.c[0] - problem.generators.c[3]).abs() > 1e-12);
+
+    let gens = &problem.generators;
+    let nodal = problem.nodal_generator_data();
+    assert!(nodal.has_gen[shared]);
+    let parallel_q = 1.0 / (1.0 / gens.q[0] + 1.0 / gens.q[3]);
+    assert_close(nodal.q[shared], parallel_q);
+    assert_close(
+        nodal.c[shared],
+        parallel_q * (gens.c[0] / gens.q[0] + gens.c[3] / gens.q[3]),
+    );
+    assert_close(nodal.pmax[shared], gens.pmax[0] + gens.pmax[3]);
+    assert_close(nodal.pmin[shared], gens.pmin[0] + gens.pmin[3]);
+
+    // A bus with one generator keeps that generator's own curve, bit for bit.
+    let alone = gens.bus_of_gen[1];
+    assert_eq!(nodal.q[alone].to_bits(), gens.q[1].to_bits());
+    assert_eq!(nodal.c[alone].to_bits(), gens.c[1].to_bits());
+    assert_eq!(nodal.c0[alone].to_bits(), gens.c0[1].to_bits());
+
+    let idle = (0..problem.n_buses)
+        .find(|&bus| !nodal.has_gen[bus])
+        .expect("a bus without a generator");
+    assert_close(nodal.q[idle], 0.0);
+    assert_close(nodal.pmax[idle], 0.0);
+    assert_close(nodal.pmin[idle], 0.0);
+}
+
+#[test]
+fn an_unrated_branch_takes_a_synthesized_limit_on_request() {
+    let mut net = small_network();
+    net.branches[0].angmin = -30.0;
+    net.branches[0].angmax = 30.0;
+    let view = IndexedNetwork::new(&net);
+    let options = DcOpfOptions {
+        synthesize_unrated_limits: true,
+        ..DcOpfOptions::default()
+    };
+
+    let unlimited = build_dc_opf_instance(&view, &DcOpfOptions::default()).expect("default");
+    assert_close(unlimited.branches.f_max[0], 0.0);
+
+    // The bus voltage ceilings are 1.1, the reactance is 0.2, and the window
+    // is ±30°.
+    let window = 30.0_f64.to_radians();
+    let synthesized = build_dc_opf_instance(&view, &options).expect("synthesized");
+    assert_close(
+        synthesized.branches.f_max[0],
+        1.1 * (2.42 - 2.42 * window.cos()).sqrt() / 0.2,
+    );
+
+    let native = build_dc_opf_instance(
+        &view,
+        &DcOpfOptions {
+            units: Units::Native,
+            ..options
+        },
+    )
+    .expect("native");
+    assert_close(
+        native.branches.f_max[0],
+        synthesized.branches.f_max[0] * view.base_mva(),
+    );
+
+    // The normalized network states the same window in radians. Each builder
+    // converts by the convention of the network it holds, so the bound is the
+    // same one.
+    let normalized = net.to_normalized().expect("normalize");
+    let derived =
+        build_dc_opf_instance(&IndexedNetwork::new(&normalized), &options).expect("normalized");
+    assert_close(derived.branches.f_max[0], synthesized.branches.f_max[0]);
+
+    // Bounds that run past the half turn state no window, so the bound falls
+    // back to the voltage ceilings alone.
+    let mut wide = net.clone();
+    wide.branches[0].angmin = -360.0;
+    wide.branches[0].angmax = 360.0;
+    let wide = build_dc_opf_instance(&IndexedNetwork::new(&wide), &options).expect("wide bounds");
+    assert_close(wide.branches.f_max[0], 1.1 * 2.2 / 0.2);
+
+    let mut rated = net.clone();
+    rated.branches[0].rate_a = 50.0;
+    let kept = build_dc_opf_instance(&IndexedNetwork::new(&rated), &options).expect("rated branch");
+    assert_close(kept.branches.f_max[0], 0.5);
+}
+
+#[test]
+fn a_network_of_two_islands_grounds_a_bus_in_each() {
+    let net = two_island_network();
+    let problem =
+        build_dc_opf_instance(&IndexedNetwork::new(&net), &DcOpfOptions::default()).expect("build");
+
+    assert_eq!(problem.reference_buses.len(), 2);
+    assert!(!problem.reference_buses.is_empty());
+    assert_eq!(
+        problem.reference_buses.iter().copied().collect::<Vec<_>>(),
+        vec![0, 2]
+    );
     assert!(matches!(
-        problem.nodal_generator_data(),
-        Err(Error::MultipleGeneratorsAtBus { .. })
+        problem.reference_buses.single(),
+        Err(Error::ReferenceBusCount { found: 2 })
     ));
+
+    // The set keeps its wire form as a plain array of dense bus indices.
+    let json = serde_json::to_value(&problem).expect("serialize");
+    assert_eq!(json["reference_buses"], serde_json::json!([0, 2]));
+
+    let one_island = build_dc_opf_instance(
+        &IndexedNetwork::new(&small_network()),
+        &DcOpfOptions::default(),
+    )
+    .expect("build");
+    assert_eq!(one_island.reference_buses.single().expect("one bus"), 0);
 }
 
 #[test]
@@ -133,7 +256,7 @@ fn cost_constant_term_is_kept() {
     let problem =
         build_dc_opf_instance(&IndexedNetwork::new(&net), &DcOpfOptions::default()).expect("build");
     assert_close(problem.generators.c0[0], 5.0);
-    let nodal = problem.nodal_generator_data().expect("nodal");
+    let nodal = problem.nodal_generator_data();
     assert_close(nodal.c0[problem.generators.bus_of_gen[0]], 5.0);
 }
 
@@ -372,7 +495,7 @@ mod matrix_tests {
             powerio_matrix::io::read_vector_mtx(bundle.dir.join("c0_gen.mtx")).expect("c0_gen");
         assert_eq!(c0_gen, problem.generators.c0);
         let c0 = powerio_matrix::io::read_vector_mtx(bundle.dir.join("c0.mtx")).expect("c0");
-        assert_eq!(c0, problem.nodal_generator_data().expect("nodal").c0);
+        assert_eq!(c0, problem.nodal_generator_data().c0);
         assert_eq!(manifest["dimensions"]["n_buses"], problem.n_buses);
         assert_eq!(
             manifest["dimensions"]["n_generators"],

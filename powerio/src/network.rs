@@ -185,6 +185,40 @@ impl GenCost {
             _ => None,
         }
     }
+
+    /// Largest leading polynomial coefficient that
+    /// [`quadratic_with_constant_tol`](Self::quadratic_with_constant_tol)
+    /// reads as a rounding artifact of the source, not as a term of the curve.
+    pub const LEADING_COEFF_TOL: f64 = 1e-12;
+
+    /// `(q, c, c0)` as [`quadratic_with_constant`](Self::quadratic_with_constant)
+    /// gives it, after the leading coefficients at or below `tol` come off the
+    /// row.
+    ///
+    /// A model 2 row often carries a leading coefficient near `1e-17`, which
+    /// the source produced by rounding. Such a row states a linear curve and
+    /// reads as a quadratic one. Pass
+    /// [`LEADING_COEFF_TOL`](Self::LEADING_COEFF_TOL) to strip the artifact,
+    /// or `0.0` to strip an exact zero alone.
+    pub fn quadratic_with_constant_tol(&self, tol: f64) -> Option<(f64, f64, f64)> {
+        if self.model != 2 {
+            return None;
+        }
+        if self.coeffs.len() < self.ncost {
+            return None;
+        }
+        let row = &self.coeffs[..self.ncost];
+        let mut first = 0;
+        while first + 1 < row.len() && row[first].abs() <= tol {
+            first += 1;
+        }
+        match row.len() - first {
+            3 => Some((2.0 * row[first], row[first + 1], row[first + 2])),
+            2 => Some((0.0, row[first], row[first + 1])),
+            1 => Some((0.0, 0.0, row[first])),
+            _ => None,
+        }
+    }
 }
 
 /// Which format a [`Network`] was read from. Drives the same format byte exact
@@ -818,6 +852,34 @@ impl Branch {
             return Err(Error::NonFiniteSusceptance { row });
         }
         Ok(Some((self.r / denom, -self.x / denom)))
+    }
+
+    /// Apparent power bound, per unit, for a branch the source left unrated
+    /// (`rate_a == 0`, which reads as unlimited). `angle_window_rad` is the
+    /// widest angle difference the branch may hold, in radians. That window
+    /// and the two terminal voltage ceilings give the widest voltage phasor
+    /// difference the branch can hold. The difference over `|Z|` bounds the
+    /// current, and the larger ceiling turns the current into power. Returns
+    /// `0.0` for a zero impedance branch, which stays unlimited.
+    ///
+    /// The caller supplies the window in radians, because
+    /// [`angmin`](Self::angmin) and [`angmax`](Self::angmax) are degrees in
+    /// the neutral model and radians in a normalized network, and a branch
+    /// cannot tell which it holds. Convert them with
+    /// [`IndexedNetwork::angle_radians`](crate::IndexedNetwork::angle_radians),
+    /// which reads the convention of the network. The method takes the
+    /// magnitude of the window and holds it at `π`, the widest phasor
+    /// separation two terminals can have.
+    #[must_use]
+    pub fn synthesize_rate_a(&self, angle_window_rad: f64, fr_vmax: f64, to_vmax: f64) -> f64 {
+        let zmag = self.r.hypot(self.x);
+        if zmag == 0.0 {
+            return 0.0;
+        }
+        let window = angle_window_rad.abs().min(std::f64::consts::PI);
+        let separation =
+            (fr_vmax * fr_vmax + to_vmax * to_vmax - 2.0 * fr_vmax * to_vmax * window.cos()).sqrt();
+        fr_vmax.max(to_vmax) * separation / zmag
     }
 
     /// Total susceptance projection for MATPOWER shaped formats that only carry
@@ -2306,6 +2368,90 @@ mod tests {
 
         let truncated = GenCost::with_ncost(2, 0.0, 0.0, 3, vec![1.0]);
         assert_eq!(truncated.quadratic_with_constant(), None);
+    }
+
+    #[test]
+    fn a_leading_coefficient_below_the_tolerance_comes_off_the_row() {
+        let artifact = GenCost::new(2, 0.0, 0.0, vec![1e-17, 2.0, 5.0]);
+        assert_eq!(
+            artifact.quadratic_with_constant(),
+            Some((2e-17, 2.0, 5.0)),
+            "the untouched reader keeps the artifact"
+        );
+        assert_eq!(
+            artifact.quadratic_with_constant_tol(GenCost::LEADING_COEFF_TOL),
+            Some((0.0, 2.0, 5.0))
+        );
+        assert_eq!(
+            artifact.quadratic_with_constant_tol(0.0),
+            Some((2e-17, 2.0, 5.0)),
+            "a zero tolerance strips an exact zero alone"
+        );
+
+        // A row states a curve of a lower order once the leading zeros are off,
+        // so a cubic row the untouched reader refuses reads as a quadratic one.
+        let padded = GenCost::new(2, 0.0, 0.0, vec![0.0, 1.5, 2.0, 5.0]);
+        assert_eq!(padded.quadratic_with_constant(), None);
+        assert_eq!(
+            padded.quadratic_with_constant_tol(0.0),
+            Some((3.0, 2.0, 5.0))
+        );
+
+        let flat = GenCost::new(2, 0.0, 0.0, vec![1e-17, 1e-17, 1e-17]);
+        assert_eq!(
+            flat.quadratic_with_constant_tol(GenCost::LEADING_COEFF_TOL),
+            Some((0.0, 0.0, 1e-17)),
+            "the last coefficient stays, whatever its magnitude"
+        );
+
+        let piecewise = GenCost::new(1, 0.0, 0.0, vec![0.0, 0.0, 1.0, 1.0]);
+        assert_eq!(
+            piecewise.quadratic_with_constant_tol(GenCost::LEADING_COEFF_TOL),
+            None
+        );
+
+        let truncated = GenCost::with_ncost(2, 0.0, 0.0, 3, vec![1.0]);
+        assert_eq!(
+            truncated.quadratic_with_constant_tol(GenCost::LEADING_COEFF_TOL),
+            None
+        );
+
+        let quartic = GenCost::new(2, 0.0, 0.0, vec![1.0, 1.0, 1.0, 1.0, 1.0]);
+        assert_eq!(
+            quartic.quadratic_with_constant_tol(GenCost::LEADING_COEFF_TOL),
+            None
+        );
+    }
+
+    #[test]
+    fn synthesized_rate_follows_the_angle_window_and_the_voltage_ceilings() {
+        let br = Branch::new(BusId(1), BusId(2), 0.03, 0.04);
+        let expected = |window: f64, fr: f64, to: f64| {
+            let separation = (fr * fr + to * to - 2.0 * fr * to * window.cos()).sqrt();
+            fr.max(to) * separation / 0.05
+        };
+        close(
+            br.synthesize_rate_a(0.5, 1.1, 1.06),
+            expected(0.5, 1.1, 1.06),
+        );
+
+        // A wider window gives a looser bound.
+        assert!(br.synthesize_rate_a(0.8, 1.1, 1.06) > br.synthesize_rate_a(0.5, 1.1, 1.06));
+
+        // The magnitude of the window is what counts, and it holds at π.
+        close(
+            br.synthesize_rate_a(-0.5, 1.1, 1.06),
+            expected(0.5, 1.1, 1.06),
+        );
+        for window in [6.0, 2.0 * std::f64::consts::PI, -360.0] {
+            close(
+                br.synthesize_rate_a(window, 1.1, 1.06),
+                expected(std::f64::consts::PI, 1.1, 1.06),
+            );
+        }
+
+        let ideal = Branch::new(BusId(1), BusId(2), 0.0, 0.0);
+        close(ideal.synthesize_rate_a(0.5, 1.1, 1.1), 0.0);
     }
 
     fn bus(id: usize) -> Bus {

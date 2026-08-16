@@ -57,6 +57,7 @@ fn instance_is_complete_and_indexed() {
     assert_eq!(problem.n_source_branches, net.branches.len());
     assert_eq!(problem.n_generators(), 3);
     assert_eq!(problem.bus_ids.len(), problem.n_buses);
+    assert_eq!(problem.reference_buses.single().expect("one bus"), 0);
     for vector in [
         &problem.buses.p_d,
         &problem.buses.q_d,
@@ -319,6 +320,28 @@ fn out_of_service_exclusion() {
 }
 
 #[test]
+fn nodal_data_sums_the_reactive_range_and_flags_the_generator_buses() {
+    let mut net = small_network();
+    let mut extra = generator(10, 3.0, 4.0, 2.0);
+    extra.qmax = 10.0;
+    extra.qmin = -5.0;
+    net.generators.push(extra);
+    let problem =
+        build_ac_opf_instance(&IndexedNetwork::new(&net), &AcOpfOptions::default()).expect("build");
+
+    let gens = &problem.generators;
+    let nodal = problem.nodal_generator_data();
+    assert_eq!(nodal.has_gen, vec![true, false]);
+    assert_close(nodal.qmax[0], gens.qmax[0] + gens.qmax[1]);
+    assert_close(nodal.qmin[0], gens.qmin[0] + gens.qmin[1]);
+    assert_close(nodal.pmax[0], gens.pmax[0] + gens.pmax[1]);
+    assert_close(nodal.q[0], 1.0 / (1.0 / gens.q[0] + 1.0 / gens.q[1]));
+    // The bus without a generator holds a zero range.
+    assert_close(nodal.qmax[1], 0.0);
+    assert_close(nodal.qmin[1], 0.0);
+}
+
+#[test]
 fn vm_setpoints_follow_generator_voltage() {
     let mut net = small_network();
     net.buses[0].vm = 0.0;
@@ -345,6 +368,36 @@ fn vm_setpoints_follow_generator_voltage() {
     let problem = build_ac_opf_instance(&IndexedNetwork::new(&unset), &AcOpfOptions::default())
         .expect("build");
     assert_close(problem.vm_setpoints()[0], 1.01);
+}
+
+#[test]
+fn an_unrated_branch_takes_a_synthesized_limit_on_request() {
+    let mut net = small_network();
+    net.branches[0].angmin = -30.0;
+    net.branches[0].angmax = 30.0;
+    let view = IndexedNetwork::new(&net);
+    let options = AcOpfOptions {
+        synthesize_unrated_limits: true,
+        ..AcOpfOptions::default()
+    };
+
+    let unlimited = build_ac_opf_instance(&view, &AcOpfOptions::default()).expect("default");
+    assert_close(unlimited.branches.s_max[0], 0.0);
+
+    let window = 30.0_f64.to_radians();
+    let synthesized = build_ac_opf_instance(&view, &options).expect("synthesized");
+    assert_close(
+        synthesized.branches.s_max[0],
+        1.1 * (2.42 - 2.42 * window.cos()).sqrt() / 0.05_f64.hypot(0.2),
+    );
+
+    // The normalized network states the same window in radians. Each builder
+    // converts by the convention of the network it holds, so the bound is the
+    // same one.
+    let normalized = net.to_normalized().expect("normalize");
+    let derived =
+        build_ac_opf_instance(&IndexedNetwork::new(&normalized), &options).expect("normalized");
+    assert_close(derived.branches.s_max[0], synthesized.branches.s_max[0]);
 }
 
 #[test]

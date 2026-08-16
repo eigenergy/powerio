@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 
 use powerio::{BusId, Error, IndexedNetwork, Result};
 
-use crate::Units;
+use crate::{ReferenceBuses, Units, nodal};
 
 /// Options for AC OPF instance assembly.
 ///
@@ -14,6 +14,11 @@ pub struct AcOpfOptions {
     /// Skip non-self-loop branches with `r² + x² = 0`. If false, assembly
     /// returns [`Error::ZeroImpedance`].
     pub skip_zero_impedance: bool,
+    /// Give a branch with no thermal rating the bound
+    /// [`Branch::synthesize_rate_a`](powerio::Branch::synthesize_rate_a)
+    /// states. If false, `rate_a <= 0` reaches `s_max` as zero, which reads as
+    /// unlimited.
+    pub synthesize_unrated_limits: bool,
 }
 
 impl Default for AcOpfOptions {
@@ -21,6 +26,7 @@ impl Default for AcOpfOptions {
         Self {
             units: Units::default(),
             skip_zero_impedance: true,
+            synthesize_unrated_limits: false,
         }
     }
 }
@@ -109,6 +115,25 @@ pub struct AcGeneratorData {
     pub vg: Vec<f64>,
 }
 
+/// Generator data in dense bus order, aggregated over the generators at each
+/// bus. See [`AcOpfInstance::nodal_generator_data`].
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
+pub struct NodalAcGeneratorData {
+    pub q: Vec<f64>,
+    pub c: Vec<f64>,
+    pub c0: Vec<f64>,
+    pub pmax: Vec<f64>,
+    pub pmin: Vec<f64>,
+    pub qmax: Vec<f64>,
+    pub qmin: Vec<f64>,
+    /// Which buses host a generator. A bus without one has a zero range and a
+    /// zero cost, which a formulation must not read as a free generator. A
+    /// reactive limit loop reads it to tell a bus that holds its voltage from
+    /// one that cannot.
+    pub has_gen: Vec<bool>,
+}
+
 /// Matrix free AC OPF input data on the branch pi model.
 ///
 /// A problem instance is complete numerical input for one problem family. It
@@ -135,7 +160,7 @@ pub struct AcOpfInstance {
     pub skip_zero_impedance: bool,
     /// Dense bus index to external bus ID.
     pub bus_ids: Vec<BusId>,
-    pub reference_buses: Vec<usize>,
+    pub reference_buses: ReferenceBuses,
     pub buses: AcBusData,
     pub generators: AcGeneratorData,
     pub branches: AcBranchData,
@@ -150,6 +175,34 @@ impl AcOpfInstance {
     #[must_use]
     pub fn n_branches(&self) -> usize {
         self.branches.g.len()
+    }
+
+    /// Project generator cost and bounds to bus space.
+    ///
+    /// The bounds at a bus are the sum of the generator bounds, which is the
+    /// range the bus total can reach. The cost curves at a bus combine by the
+    /// parallel rule `q = 1 / Σ(1/qᵢ)`, the curve that the least cost split of
+    /// the bus total follows. That combination is an approximation: it agrees
+    /// with generator space only while the split stays inside the bound of
+    /// each generator. A bus with one generator keeps that generator's own
+    /// coefficients.
+    #[must_use]
+    pub fn nodal_generator_data(&self) -> NodalAcGeneratorData {
+        let n = self.n_buses;
+        let generators = &self.generators;
+        let bus_of_gen = &generators.bus_of_gen;
+        let costs =
+            nodal::combine_costs(n, bus_of_gen, &generators.q, &generators.c, &generators.c0);
+        NodalAcGeneratorData {
+            q: costs.q,
+            c: costs.c,
+            c0: costs.c0,
+            pmax: nodal::sum_by_bus(n, bus_of_gen, &generators.pmax),
+            pmin: nodal::sum_by_bus(n, bus_of_gen, &generators.pmin),
+            qmax: nodal::sum_by_bus(n, bus_of_gen, &generators.qmax),
+            qmin: nodal::sum_by_bus(n, bus_of_gen, &generators.qmin),
+            has_gen: nodal::buses_with_generators(n, bus_of_gen),
+        }
     }
 
     /// Conventional voltage magnitude start: the case voltage, overwritten by
@@ -253,6 +306,9 @@ pub fn build_ac_opf_instance(
     let mut angle_max = Vec::new();
     let mut branch_rows = Vec::new();
     let mut skipped_zero_impedance = Vec::new();
+    // Dense bus order is the position order of `network().buses`; the view
+    // already holds the star-lowered network when 3-winding expansion ran.
+    let network = case.network();
 
     for (source_row, branch) in case.in_service_branches() {
         let from = case.bus_index(branch.from).ok_or(Error::UnknownBus {
@@ -295,17 +351,26 @@ pub fn build_ac_opf_instance(
         b_fr.push(charging.b_fr * y_scale);
         g_to.push(charging.g_to * y_scale);
         b_to.push(charging.b_to * y_scale);
+        let amin = case.angle_radians(branch.angmin);
+        let amax = case.angle_radians(branch.angmax);
         tap.push(branch.effective_tap());
         shift.push(case.angle_radians(branch.shift));
-        s_max.push(branch.rate_a * p_scale);
-        angle_min.push(case.angle_radians(branch.angmin));
-        angle_max.push(case.angle_radians(branch.angmax));
+        // A synthesized bound is per unit power already, so the admittance
+        // multiplier is the one that puts it in the selected unit system.
+        if options.synthesize_unrated_limits && branch.rate_a <= 0.0 {
+            let window = amin.abs().max(amax.abs());
+            s_max.push(
+                branch.synthesize_rate_a(window, network.buses[from].vmax, network.buses[to].vmax)
+                    * y_scale,
+            );
+        } else {
+            s_max.push(branch.rate_a * p_scale);
+        }
+        angle_min.push(amin);
+        angle_max.push(amax);
         branch_rows.push(source_row);
     }
 
-    // Dense bus order is the position order of `network().buses`; the view
-    // already holds the star-lowered network when 3-winding expansion ran.
-    let network = case.network();
     let mut vm_min = Vec::with_capacity(n_buses);
     let mut vm_max = Vec::with_capacity(n_buses);
     let mut vm = Vec::with_capacity(n_buses);
@@ -324,7 +389,7 @@ pub fn build_ac_opf_instance(
         units: options.units,
         skip_zero_impedance: options.skip_zero_impedance,
         bus_ids: (0..n_buses).map(|index| case.bus_id(index)).collect(),
-        reference_buses: case.reference_bus_indices(),
+        reference_buses: ReferenceBuses::new(case.reference_bus_indices()),
         buses: AcBusData {
             p_d: case.pd().iter().map(|value| value * p_scale).collect(),
             q_d: case.qd().iter().map(|value| value * p_scale).collect(),
