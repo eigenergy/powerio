@@ -459,10 +459,21 @@ const TRANSMISSION_FORMATS: [TransmissionFormat; 8] = [
 // writer warns on it. That is −6 (one per case) on the PSS/E, PowerWorld, and
 // PSLF source rows, whose payloads carry no cost data. What remains in those
 // three cells is the passthrough-extras drop alone.
+//
+// The PSS/E reader keeps an extra only when the record states more than the
+// writer would synthesize on its own: circuit id `1`, a load's zero I/Y
+// components restating typed p/q, and a DC record's positional name, status
+// MDC, zero RDC/VSCHD, and default converter tails are not retained. A file
+// powerio itself wrote reads back with no extras at all, so the PSS/E source
+// row reaches MATPOWER with nothing left to drop — that cell lands on zero.
+// The dropped-converter-detail warning now keys on the line's own fields (a
+// received power off the setpoint, terminal voltages, reactive limits, a
+// power band, a loss model) instead of the retained name, so its counts are
+// unchanged everywhere.
 const TRANSMISSION_WARNING_BASELINE: [[usize; 8]; 8] = [
     [0, 0, 10, 9, 1, 6, 2, 8],
     [5, 0, 15, 14, 1, 11, 22, 8],
-    [6, 0, 0, 1, 0, 3, 0, 1],
+    [0, 0, 0, 1, 0, 3, 0, 1],
     [6, 0, 0, 0, 0, 2, 0, 0],
     [0, 0, 9, 9, 0, 6, 1, 7],
     [6, 0, 11, 11, 5, 0, 0, 11],

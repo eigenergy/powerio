@@ -640,11 +640,7 @@ pub fn write_psse_rev(net: &BalancedNetwork, rev: u32) -> Conversion {
         };
         let rdc = dc_f64(&dc.extras, "psse_dc_rdc").unwrap_or(0.0);
         let vschd = dc_f64(&dc.extras, "psse_dc_vschd").unwrap_or(0.0);
-        let l1_tail = dc_tail(
-            &dc.extras,
-            "psse_dc_control_tail",
-            "0.0, 0.0, 0.0, 'I', 0.0, 20, 1.0",
-        );
+        let l1_tail = dc_tail(&dc.extras, "psse_dc_control_tail", DEFAULT_CONTROL_TAIL);
         let rect_tail = dc_tail(&dc.extras, "psse_dc_rectifier_tail", DEFAULT_CONVERTER_TAIL);
         let inv_tail = dc_tail(&dc.extras, "psse_dc_inverter_tail", DEFAULT_CONVERTER_TAIL);
         let _ = writeln!(
@@ -714,11 +710,7 @@ pub fn write_psse_rev(net: &BalancedNetwork, rev: u32) -> Conversion {
     }
     let _ = writeln!(s, "Q");
 
-    if net
-        .hvdc
-        .iter()
-        .any(|d| !d.extras.contains_key("psse_dc_name"))
-    {
+    if net.hvdc.iter().any(dc_states_beyond_record) {
         warnings.push(
             "DC line converter detail (firing angles, converter transformer taps, reactive \
              output) defaulted: PSS/E two-terminal DC is written from the power setpoint and \
@@ -834,6 +826,27 @@ fn quoted_circuit_id<K: Ord + Clone>(
     super::allocate_circuit_id(sanitized.as_deref(), key, used)
 }
 
+/// Whether an HVDC line states DC-side data the two-terminal record cannot
+/// carry. The record states MDC/RDC/SETVL/VSCHD plus converter tails, and
+/// [`read_dc_line`] reads that shape back as `pf = pt = SETVL`, `pmax = |pf|`,
+/// and neutral terminals — so a line matching the neutral shape writes with no
+/// loss, and one that states more (a received power off the setpoint, terminal
+/// voltage setpoints, reactive limits, its own power band, or a loss model)
+/// earns the dropped-detail warning regardless of which format it came from.
+#[allow(clippy::float_cmp)] // the neutral shape is produced bit-exactly by the reader
+fn dc_states_beyond_record(d: &Hvdc) -> bool {
+    d.pt != d.pf
+        || d.vf != 1.0
+        || d.vt != 1.0
+        || d.pmin != 0.0
+        || d.pmax != d.pf.abs()
+        || [d.qf, d.qt, d.qminf, d.qmaxf, d.qmint, d.qmaxt]
+            .iter()
+            .any(|q| *q != 0.0)
+        || d.loss0 != 0.0
+        || d.loss1 != 0.0
+}
+
 /// The next positional circuit id for `bus` (for elements with no extras to carry
 /// a captured id, such as generators).
 fn positional_id(bus: BusId, counters: &mut BTreeMap<BusId, u32>) -> String {
@@ -848,6 +861,10 @@ fn positional_id(bus: BusId, counters: &mut BTreeMap<BusId, u32>) -> String {
 /// replay their own tail; these defaults serve a cross-format source.
 const DEFAULT_CONVERTER_TAIL: &str =
     "1, 15.0, 5.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.5, 0.51, 0.00625, 0, 0, 0, '1', 0.0";
+
+/// Control-line tail (everything after VSCHD) for a synthesized two-terminal DC
+/// record: compounding voltage, margin, metering code, and minimum firing data.
+const DEFAULT_CONTROL_TAIL: &str = "0.0, 0.0, 0.0, 'I', 0.0, 20, 1.0";
 
 const EMPTY_SECTIONS: [&str; 13] = [
     "0 / END OF AREA DATA, BEGIN TWO-TERMINAL DC DATA",
@@ -1064,7 +1081,12 @@ pub(crate) fn parse_psse_source(
                     next_continuation_line(&mut lines, "two-terminal DC", "rectifier line")?;
                 let inverter =
                     next_continuation_line(&mut lines, "two-terminal DC", "inverter line")?;
-                hvdc.push(read_dc_line(&f, &fields(rectifier), &fields(inverter))?);
+                hvdc.push(read_dc_line(
+                    &f,
+                    &fields(rectifier),
+                    &fields(inverter),
+                    hvdc.len(),
+                )?);
             }
             Section::Area => areas.push(read_area(&f)?),
             Section::SystemWide => parse_solver_line(&f, &mut solver),
@@ -1626,10 +1648,17 @@ fn read_bus(f: &[String]) -> Result<Bus> {
 
 /// Capture an element's circuit id (field `i`, a quoted 1-2 char string) into its
 /// extras under `"id"`, so a round trip keeps the id and parallel devices on a bus
-/// stay distinguishable.
+/// stay distinguishable. An id of `1` is the positional default the writer
+/// allocates when no id is retained, so it restates nothing and is not kept —
+/// parallel devices still round-trip, because the allocator hands `1` to the
+/// device with no retained id and every explicit non-`1` id is replayed.
 fn device_extras(f: &[String], i: usize) -> Extras {
     let mut extras = Extras::new();
-    if let Some(id) = f.get(i).map(|s| s.trim()).filter(|s| !s.is_empty()) {
+    if let Some(id) = f
+        .get(i)
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty() && *s != "1")
+    {
         extras.insert("id".into(), Value::String(id.to_string()));
     }
     extras
@@ -1646,15 +1675,21 @@ fn read_load(f: &[String], raw_rev: u32, warnings: &mut Vec<String>) -> Result<L
     let yp = num_at(f, 9, 0.0)?;
     let yq = num_at(f, 10, 0.0)?;
     let mut extras = device_extras(f, 1);
-    for (key, value) in [
-        ("psse_pl", pl),
-        ("psse_ql", ql),
-        ("psse_ip", ip),
-        ("psse_iq", iq),
-        ("psse_yp", yp),
-        ("psse_yq", yq),
-    ] {
-        extras.insert(key.into(), jnum(value));
+    // A record with zero I/Y components states the constant-power pair alone,
+    // and that pair is exactly the typed p/q the writer falls back to — so the
+    // six components are retained only when one of the distributing terms is
+    // nonzero and the split genuinely says more than the total.
+    if [ip, iq, yp, yq].iter().any(|v| *v != 0.0) {
+        for (key, value) in [
+            ("psse_pl", pl),
+            ("psse_ql", ql),
+            ("psse_ip", ip),
+            ("psse_iq", iq),
+            ("psse_yp", yp),
+            ("psse_yq", yq),
+        ] {
+            extras.insert(key.into(), jnum(value));
+        }
     }
     for (field, key, default) in [
         (11, "psse_owner", 1_i64),
@@ -2110,22 +2145,43 @@ fn read_transformer_3w(
 /// bus, which becomes the HVDC from/to. The HVDC is read as a power-setpoint
 /// model (`pf = pt = SETVL`, no reactive output); the converter detail beyond the
 /// buses (firing angles, converter transformer taps) is retained in extras for a
-/// faithful write-back, not modeled electrically.
-fn read_dc_line(l1: &[String], rect: &[String], inv: &[String]) -> Result<Hvdc> {
+/// faithful write-back, not modeled electrically. Detail matching what the
+/// writer would synthesize anyway — the positional `DC{n}` name, an MDC that
+/// only restates the service status, zero RDC/VSCHD, and the default converter
+/// tails — restates nothing and is not kept, so a record powerio itself wrote
+/// reads back with empty extras and rewrites identically.
+fn read_dc_line(l1: &[String], rect: &[String], inv: &[String], index: usize) -> Result<Hvdc> {
     let mdc = int_at(l1, 1, 1)?;
     let rdc = num_at(l1, 2, 0.0)?;
     let setvl = num_at(l1, 3, 0.0)?;
     let vschd = num_at(l1, 4, 0.0)?;
     let mut extras = Extras::new();
-    if let Some(name) = l1.first().filter(|n| !n.is_empty()) {
+    if let Some(name) = l1
+        .first()
+        .filter(|n| !n.is_empty() && **n != format!("DC{}", index + 1))
+    {
         extras.insert("psse_dc_name".into(), Value::String(name.clone()));
     }
-    extras.insert("psse_dc_mdc".into(), Value::from(mdc));
-    extras.insert("psse_dc_rdc".into(), jnum(rdc));
-    extras.insert("psse_dc_vschd".into(), jnum(vschd));
-    extras.insert("psse_dc_control_tail".into(), tail_array(l1, 5));
-    extras.insert("psse_dc_rectifier_tail".into(), tail_array(rect, 1));
-    extras.insert("psse_dc_inverter_tail".into(), tail_array(inv, 1));
+    // MDC 0 and 1 restate the service status the writer derives on its own;
+    // any other mode (2 = current demand in amps) is real control data.
+    if !(0..=1).contains(&mdc) {
+        extras.insert("psse_dc_mdc".into(), Value::from(mdc));
+    }
+    if rdc != 0.0 {
+        extras.insert("psse_dc_rdc".into(), jnum(rdc));
+    }
+    if vschd != 0.0 {
+        extras.insert("psse_dc_vschd".into(), jnum(vschd));
+    }
+    for (key, fields, start, default) in [
+        ("psse_dc_control_tail", l1, 5, DEFAULT_CONTROL_TAIL),
+        ("psse_dc_rectifier_tail", rect, 1, DEFAULT_CONVERTER_TAIL),
+        ("psse_dc_inverter_tail", inv, 1, DEFAULT_CONVERTER_TAIL),
+    ] {
+        if !tail_is_default(fields, start, default) {
+            extras.insert(key.into(), tail_array(fields, start));
+        }
+    }
     Ok(Hvdc {
         from: BusId(id_at(rect, 0, 0)?),
         to: BusId(id_at(inv, 0, 0)?),
@@ -2148,6 +2204,16 @@ fn read_dc_line(l1: &[String], rect: &[String], inv: &[String]) -> Result<Hvdc> 
         uid: None,
         extras,
     })
+}
+
+/// Whether the tail of `f` from `start` states exactly the writer's `default`
+/// tail, token for token (quotes stripped, as the field splitter leaves them).
+/// A matching tail restates the synthesized neutral shape and needs no
+/// retention; any textual difference — a real value, extra columns, even a
+/// different numeric spelling — keeps the tail, conservatively.
+fn tail_is_default(f: &[String], start: usize, default: &str) -> bool {
+    let defaults = default.split(", ").map(|t| t.trim_matches('\''));
+    f.iter().skip(start).map(String::as_str).eq(defaults)
 }
 
 /// The fields of `f` from index `start` as a JSON string array (for extras).
@@ -3163,13 +3229,17 @@ Q
         // With the ids stripped (a synthesized network, e.g. from MATPOWER), the
         // two loads on bus 2 still write with distinct positional ids, so the
         // output is valid PSS/E rather than two colliding (bus, '1') records.
+        // The reader keeps only the second: id `1` is the positional default
+        // the writer re-allocates on its own, so retaining it restates nothing.
         let mut synth = net.clone();
         for l in &mut synth.loads {
             l.extras.remove("id");
         }
-        let net3 = parse_psse(&write_psse(&synth).text).unwrap();
+        let out = write_psse(&synth).text;
+        assert!(out.contains("2, '1',") && out.contains("2, '2',"), "{out}");
+        let net3 = parse_psse(&out).unwrap();
         let ids: Vec<_> = net3.loads.iter().filter_map(&id).collect();
-        assert_eq!(ids, vec!["1".to_string(), "2".to_string()]);
+        assert_eq!(ids, vec!["2".to_string()]);
     }
 
     #[test]
@@ -3205,7 +3275,9 @@ Q
             .filter_map(|l| l.extras.get("id").and_then(Value::as_str))
             .collect();
 
-        assert_eq!(ids, vec!["A B", "1"]);
+        // The collision fallback allocated `1`, the positional default, which
+        // the reader has no reason to keep.
+        assert_eq!(ids, vec!["A B"]);
         assert!(
             conv.warnings
                 .iter()
@@ -3272,24 +3344,22 @@ Q
         };
         let net = parse_psse(raw).unwrap();
         assert_eq!(net.branches.len(), 2);
-        assert_eq!(ckt(&net.branches[0]).as_deref(), Some("1"));
+        // CKT `1` is the positional default the writer re-allocates on its own,
+        // so only the second circuit's id carries information worth keeping.
+        assert_eq!(ckt(&net.branches[0]).as_deref(), None);
         assert_eq!(ckt(&net.branches[1]).as_deref(), Some("2"));
 
-        // Round trip keeps both circuits distinct.
-        let net2 = parse_psse(&write_psse(&net).text).unwrap();
+        // Round trip keeps both circuits distinct: the id-less branch takes '1'
+        // positionally and the explicit '2' is replayed.
+        let out = write_psse(&net).text;
+        assert!(
+            out.contains("1, 2, '1',") && out.contains("1, 2, '2',"),
+            "{out}"
+        );
+        let net2 = parse_psse(&out).unwrap();
         assert_eq!(net2.branches.len(), 2);
-        assert_eq!(ckt(&net2.branches[0]).as_deref(), Some("1"));
+        assert_eq!(ckt(&net2.branches[0]).as_deref(), None);
         assert_eq!(ckt(&net2.branches[1]).as_deref(), Some("2"));
-
-        // With the captured ids stripped (a synthesized network), the two parallel
-        // branches still write with distinct positional circuit ids.
-        let mut synth = net.clone();
-        for b in &mut synth.branches {
-            b.extras.remove("id");
-        }
-        let net3 = parse_psse(&write_psse(&synth).text).unwrap();
-        let ids: Vec<_> = net3.branches.iter().filter_map(&ckt).collect();
-        assert_eq!(ids, vec!["1".to_string(), "2".to_string()]);
     }
 
     #[test]
