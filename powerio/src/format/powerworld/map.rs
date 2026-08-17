@@ -86,19 +86,23 @@ pub(crate) fn parse_powerworld_source(
     ]);
     let mut unmodeled: BTreeMap<&str, usize> = BTreeMap::new();
     for blk in aux.data() {
-        match blk.object_type.as_str() {
-            "Bus" => merged_buses.absorb(
+        // Simulator resolves object names case insensitively, and real
+        // exports use that: the UIUC 150 bus case spells every section
+        // `BUS`/`GEN`/`LOAD`. An exact match read such a file as a case with
+        // no buses.
+        match blk.object_type.to_ascii_lowercase().as_str() {
+            "bus" => merged_buses.absorb(
                 blk,
                 blk.field_index("BusNum").is_some() || blk.field_index("Number").is_some(),
             ),
-            "Load" => merged_loads.absorb(blk, true),
-            "Shunt" => merged_shunts.absorb(blk, true),
-            "Gen" => merged_gens.absorb(blk, true),
-            "Branch" => merged_branches.absorb(blk, true),
+            "load" => merged_loads.absorb(blk, true),
+            "shunt" => merged_shunts.absorb(blk, true),
+            "gen" => merged_gens.absorb(blk, true),
+            "branch" => merged_branches.absorb(blk, true),
             // Transformer sections augment existing branches with regulation
             // fields; a transformer with no Branch record carries no impedance
             // and cannot stand alone, so unmatched rows are not created.
-            "Transformer" => merged_branches.absorb(blk, false),
+            "transformer" => merged_branches.absorb(blk, false),
             _ => {
                 if !blk.rows.is_empty() {
                     *unmodeled.entry(&blk.object_type).or_default() += blk.rows.len();

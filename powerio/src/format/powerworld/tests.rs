@@ -266,6 +266,25 @@ fn writer_sanitizes_bus_names_that_would_corrupt_a_value() {
     );
 }
 
+/// Simulator resolves object names case insensitively, and real exports use
+/// that: the UIUC 150 bus aux spells every section `BUS`/`GEN`/`LOAD`. An
+/// exact match read the file as a case with no buses.
+#[test]
+fn uppercase_object_sections_read_like_their_canonical_spelling() {
+    let net = parse_powerworld(
+        "DATA (BUS, [BusNum, BusNomVolt])\n{\n1 115\n2 115\n}\n\
+         DATA (GEN, [BusNum, GenMW, GenStatus])\n{\n1 50 \"Closed\"\n}\n\
+         DATA (LOAD, [BusNum, LoadMW, LoadMVR, LoadStatus])\n{\n2 40 10 \"Closed\"\n}\n\
+         DATA (BRANCH, [BusNum, BusNum:1, LineCircuit, LineStatus, LineR, LineX])\n\
+         {\n1 2 \" 1\" \"Closed\" 0.01 0.1\n}\n",
+    )
+    .unwrap();
+    assert_eq!(net.buses.len(), 2);
+    assert_eq!(net.generators.len(), 1);
+    assert_eq!(net.loads.len(), 1);
+    assert_eq!(net.branches.len(), 1);
+}
+
 #[test]
 // Exact decimal fractions parsed from the fixture; bit equality is the assertion.
 #[allow(clippy::float_cmp)]
