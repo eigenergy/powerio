@@ -2572,7 +2572,11 @@ mod tests {
             vec!["1", "1", "BUS A", "2.5"]
         );
         assert_eq!(fields("1, 'O/H LINE', 2"), vec!["1", "O/H LINE", "2"]);
-        assert_eq!(fields("1, '', 3"), vec!["1", "", "3"], "column position holds");
+        assert_eq!(
+            fields("1, '', 3"),
+            vec!["1", "", "3"],
+            "column position holds"
+        );
     }
 
     #[test]
