@@ -18,6 +18,9 @@ permissions:
 
 jobs:
   dispatch:
+    # A prerelease tag is not a repin target: the receiving workflow only
+    # accepts a bare vX.Y.Z tag and would refuse it anyway.
+    if: github.event.release.prerelease == false
     runs-on: ubuntu-latest
     steps:
       - name: repository_dispatch powerio-release
