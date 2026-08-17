@@ -192,16 +192,37 @@ pub fn injection_change(
     before: &BalancedNetwork,
     after: &BalancedNetwork,
 ) -> Option<InjectionChange> {
-    let change = first_moved(&per_bus(before, true), &per_bus(after, true))?;
-    let status_only = first_moved(&per_bus(before, false), &per_bus(after, false)).is_none();
+    let change = first_moved(&per_bus(before, true), &per_bus(after, true), AC_INJECTIONS)?;
+    let status_only = first_moved(
+        &per_bus(before, false),
+        &per_bus(after, false),
+        AC_INJECTIONS,
+    )
+    .is_none();
     Some(InjectionChange {
         status_only,
         ..change
     })
 }
 
-fn per_bus(net: &BalancedNetwork, in_service_only: bool) -> BTreeMap<usize, [f64; 8]> {
-    let mut map: BTreeMap<usize, [f64; 8]> = BTreeMap::new();
+/// What each slot of [`per_bus`] holds.
+const AC_INJECTIONS: [Injection; 4] = [
+    Injection::LoadP,
+    Injection::LoadQ,
+    Injection::GenP,
+    Injection::GenQ,
+];
+
+/// What each slot of [`per_bus_dc`] holds.
+const DC_INJECTIONS: [Injection; 4] = [
+    Injection::DcFromP,
+    Injection::DcToP,
+    Injection::DcFromQ,
+    Injection::DcToQ,
+];
+
+fn per_bus(net: &BalancedNetwork, in_service_only: bool) -> BTreeMap<usize, [f64; 4]> {
+    let mut map: BTreeMap<usize, [f64; 4]> = BTreeMap::new();
     for l in net
         .loads
         .iter()
@@ -225,15 +246,15 @@ fn per_bus(net: &BalancedNetwork, in_service_only: bool) -> BTreeMap<usize, [f64
 
 /// Per-bus DC terminal power, the same tally for HVDC that [`per_bus`] is for
 /// loads and generators.
-fn per_bus_dc(net: &BalancedNetwork, in_service_only: bool) -> BTreeMap<usize, [f64; 8]> {
-    let mut map: BTreeMap<usize, [f64; 8]> = BTreeMap::new();
+fn per_bus_dc(net: &BalancedNetwork, in_service_only: bool) -> BTreeMap<usize, [f64; 4]> {
+    let mut map: BTreeMap<usize, [f64; 4]> = BTreeMap::new();
     for d in net.hvdc.iter().filter(|d| d.in_service || !in_service_only) {
         let from = map.entry(d.from.0).or_default();
-        from[4] += d.pf;
-        from[6] += d.qf;
+        from[0] += d.pf;
+        from[2] += d.qf;
         let to = map.entry(d.to.0).or_default();
-        to[5] += d.pt;
-        to[7] += d.qt;
+        to[1] += d.pt;
+        to[3] += d.qt;
     }
     map
 }
@@ -257,31 +278,37 @@ pub fn dc_terminal_change(
     before: &BalancedNetwork,
     after: &BalancedNetwork,
 ) -> Option<InjectionChange> {
-    let change = first_moved(&per_bus_dc(before, true), &per_bus_dc(after, true))?;
-    let status_only = first_moved(&per_bus_dc(before, false), &per_bus_dc(after, false)).is_none();
+    let change = first_moved(
+        &per_bus_dc(before, true),
+        &per_bus_dc(after, true),
+        DC_INJECTIONS,
+    )?;
+    let status_only = first_moved(
+        &per_bus_dc(before, false),
+        &per_bus_dc(after, false),
+        DC_INJECTIONS,
+    )
+    .is_none();
     Some(InjectionChange {
         status_only,
         ..change
     })
 }
 
-fn first_moved(
-    a: &BTreeMap<usize, [f64; 8]>,
-    b: &BTreeMap<usize, [f64; 8]>,
+/// The first slot whose tally moved, named by `quantities`, which states what
+/// each slot holds. One tally per domain rather than one wide one shared
+/// between them: a shared array lets a caller write an AC total into a DC slot
+/// with nothing to catch it, and makes every comparison scan the other
+/// domain's always-zero half.
+fn first_moved<const N: usize>(
+    a: &BTreeMap<usize, [f64; N]>,
+    b: &BTreeMap<usize, [f64; N]>,
+    quantities: [Injection; N],
 ) -> Option<InjectionChange> {
     for key in a.keys().chain(b.keys().filter(|k| !a.contains_key(*k))) {
-        let x = a.get(key).copied().unwrap_or_default();
-        let y = b.get(key).copied().unwrap_or_default();
-        for (quantity, i) in [
-            (Injection::LoadP, 0),
-            (Injection::LoadQ, 1),
-            (Injection::GenP, 2),
-            (Injection::GenQ, 3),
-            (Injection::DcFromP, 4),
-            (Injection::DcToP, 5),
-            (Injection::DcFromQ, 6),
-            (Injection::DcToQ, 7),
-        ] {
+        let x = a.get(key).copied().unwrap_or([0.0; N]);
+        let y = b.get(key).copied().unwrap_or([0.0; N]);
+        for (i, quantity) in quantities.into_iter().enumerate() {
             if beyond_tol(x[i], y[i], ELECTRICAL_TOL) {
                 return Some(InjectionChange {
                     bus: *key,
