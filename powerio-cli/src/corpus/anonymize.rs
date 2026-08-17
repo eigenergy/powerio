@@ -169,9 +169,9 @@ impl Sanitizer {
     ///
     /// This is the backstop, and it is decidable rather than heuristic over
     /// the set it covers: the harness parsed every case and walked every path,
-    /// so it knows the exact set of strings that must not appear. What it
-    /// covers is [`Sanitizer::identifying`] — masking is what handles the
-    /// rest.
+    /// so it knows the exact set of strings that must not appear. That set is
+    /// every secret long enough to identify and carrying a letter; masking is
+    /// what handles the rest.
     ///
     /// # Errors
     ///

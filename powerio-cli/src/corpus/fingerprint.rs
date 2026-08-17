@@ -47,7 +47,7 @@ fn quantize(x: f64, q: f64) -> i64 {
 
 /// What makes two files the same case.
 ///
-/// [`Fingerprint::key`] is the bucketing key. It deliberately leaves out the
+/// The whole struct is the bucketing key. It deliberately leaves out the
 /// load, generator and shunt counts: formats merge and split devices at a bus
 /// (PSS/E states three loads where MATPOWER states one bus demand), so those
 /// counts differ between honest siblings while the demand they sum to does
