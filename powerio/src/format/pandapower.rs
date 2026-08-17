@@ -1366,6 +1366,7 @@ fn branch_frames(
     let mut trafo_index = Vec::new();
     let mut trafo_data = Vec::new();
     let mut charging = Vec::new();
+    let mut negative_x_trafos = 0usize;
     for br in &net.branches {
         let v_from = *kv_of.get(&br.from).unwrap_or(&1.0);
         let v_to = *kv_of.get(&br.to).unwrap_or(&1.0);
@@ -1402,6 +1403,16 @@ fn branch_frames(
             if terminal.g_to != 0.0 || terminal.b_to != 0.0 {
                 charging.push((br.to, terminal.g_to, terminal.b_to, br.in_service));
             }
+            // A series capacitive branch states x < 0, which `vk_percent` — a
+            // magnitude in pandapower proper — cannot carry. The sign rides on
+            // vk_percent, the same signed spelling the reader takes it back
+            // from; without it the readback rectified the reactance and the
+            // branch's admittance flipped sign silently. pandapower itself
+            // reads the magnitude, which is what the warning is for.
+            let vk = if br.x < 0.0 { -z } else { z };
+            if br.x < 0.0 {
+                negative_x_trafos += 1;
+            }
             trafo_index.push(Value::from(trafo_data.len() as u64));
             trafo_data.push(vec![
                 Value::Null,
@@ -1411,7 +1422,7 @@ fn branch_frames(
                 jnum(sn),
                 jnum(v_from),
                 jnum(v_to),
-                jnum(z * sn * 100.0 / net.base_mva),
+                jnum(vk * sn * 100.0 / net.base_mva),
                 jnum(br.r * sn * 100.0 / net.base_mva),
                 jnum(0.0),
                 jnum(0.0),
@@ -1463,6 +1474,13 @@ fn branch_frames(
                 Value::Null,
             ]);
         }
+    }
+    if negative_x_trafos > 0 {
+        warnings.push(format!(
+            "{negative_x_trafos} series capacitive transformer branch(es) (x < 0) written with a \
+             negative vk_percent: powerio reads the sign back exactly, but pandapower itself \
+             treats vk_percent as a magnitude and will read the reactance positive"
+        ));
     }
     (
         frame("line", &line_columns, line_index, line_data, warnings),
@@ -2252,6 +2270,43 @@ mod tests {
     }
 
     /// `bus` table with the given pandas index values, all 110 kV in service.
+    /// A series capacitive transformer branch (x < 0, a series capacitor with
+    /// a tap) must keep its reactance sign through a write and readback. The
+    /// sign rides on `vk_percent`, which the reader already takes back signed;
+    /// the writer used to emit the magnitude, and 1/x flipped from a large
+    /// negative susceptance to a large positive one with nothing saying so.
+    #[test]
+    fn a_series_capacitive_transformer_keeps_its_reactance_sign() {
+        let mut net = BalancedNetwork::new("sc", 100.0);
+        for (id, kv) in [(1, 138.0), (2, 500.0)] {
+            let mut bus = crate::network::Bus::new(BusId(id), crate::network::BusType::Pq, 1.0);
+            bus.base_kv = kv;
+            net.buses.push(bus);
+        }
+        net.buses[0].kind = crate::network::BusType::Ref;
+        let mut br = Branch::new(BusId(1), BusId(2), 0.00044, -0.00422);
+        br.tap = 1.06772;
+        net.branches.push(br);
+
+        let conv = write_pandapower_json(&net);
+        assert!(
+            conv.warnings
+                .iter()
+                .any(|w| w.contains("negative vk_percent")),
+            "the nonstandard spelling must be declared: {:?}",
+            conv.warnings
+        );
+        let back = parse_pandapower_json(&conv.text).unwrap().network;
+        let b = &back.branches[0];
+        assert!(
+            b.x < 0.0,
+            "the reactance sign must survive the round trip, got x = {}",
+            b.x
+        );
+        assert!((b.x - -0.00422).abs() < 1e-9, "got x = {}", b.x);
+        assert!((b.r - 0.00044).abs() < 1e-9, "got r = {}", b.r);
+    }
+
     fn bus_table(indices: Value) -> (&'static str, Value) {
         let n = indices.as_array().unwrap().len();
         let data: Vec<Value> = (0..n).map(|_| json!([null, 110.0, true])).collect();
