@@ -805,7 +805,6 @@ fn diagnostics_roundtrip() {
         StructuredDiagnostic::new(
             "EMIT.PSSE.DROP_ANGLE_LIMITS",
             DiagnosticSeverity::Warning,
-            DiagnosticStage::Emit,
             "PSS/E RAW target cannot represent branch angle limits.",
         )
         .with_element_path("/model/balanced_network/branches/0/angmin")
@@ -823,7 +822,7 @@ fn diagnostics_roundtrip() {
     assert_eq!(d.code, DiagnosticCode::new("EMIT.PSSE.DROP_ANGLE_LIMITS"));
     assert_eq!(d.code.namespace(), "EMIT");
     assert_eq!(d.severity, DiagnosticSeverity::Warning);
-    assert_eq!(d.stage, DiagnosticStage::Emit);
+    assert_eq!(d.stage(), Some(DiagnosticStage::Emit));
     assert_eq!(
         d.element_path.as_deref(),
         Some("/model/balanced_network/branches/0/angmin")
@@ -2141,7 +2140,7 @@ fn package_balanced_reader_warnings_become_diagnostics() {
     assert!(pkg.diagnostics.iter().any(|d| {
         d.code.as_str() == READ_TRANSMISSION_PARSE_WARNING
             && d.severity == DiagnosticSeverity::Warning
-            && d.stage == DiagnosticStage::Read
+            && d.stage() == Some(DiagnosticStage::Read)
             && d.message == "ignored source table"
     }));
 
@@ -2575,7 +2574,6 @@ fn refused_include_lifts_as_an_error_diagnostic() {
         .push(powerio_dist::StructuredDiagnostic::new(
             powerio_dist::diagnostics::READ_DSS_INCLUDE_REFUSED,
             powerio_dist::DiagnosticSeverity::Error,
-            powerio_dist::DiagnosticStage::Parse,
             message,
         ));
 

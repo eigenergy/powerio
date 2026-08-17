@@ -16,9 +16,10 @@ categories = ["science", "parsing"]
 all-features = true
 
 [features]
-schema = ["dep:schemars"]
+schema = ["dep:schemars", "powerio-diag/schema"]
 
 [dependencies]
+powerio-diag = { workspace = true }
 thiserror = "2"
 serde.workspace = true
 # float_roundtrip: the default float parser can be one ULP off the shortest

@@ -8,6 +8,9 @@ A Cargo workspace of Rust crates plus a Python package. Parses power network
 case files, converts losslessly between formats, and emits sparse matrices and
 graph views for any downstream solver. Feeds the GridFM ML pipeline.
 
+- **`powerio-diag`**: the diagnostic record every crate reports through: the
+  dotted code and its grammar, severities, the ten stage namespaces, the coarse
+  error categories, and the `CODE: message` renderer. A leaf: serde only.
 - **`powerio`**: the parser, the format-neutral `BalancedNetwork` hub, the lossless
   writer, and the format converters. Light deps (thiserror, num-complex,
   petgraph, serde, serde_json, lexical-core); no matrix or TUI stack.
@@ -196,6 +199,9 @@ powerio-prob/                 # problem instances on powerio
 ├── src/ac.rs                # AcOpfInstance, build_ac_opf_instance
 ├── src/scopf/               # ScopfInstance, GOC3 projection, Julia document
 └── src/matrix/bundle.rs     # DC OPF bundle directory + manifest (feature = "matrix")
+
+powerio-diag/                 # the shared diagnostic record (serde only leaf)
+└── src/{code,record,registry,render,category}.rs
 
 powerio-dist/                 # multiconductor distribution model (no powerio dep)
 ├── src/model.rs             # MulticonductorNetwork + element tables

@@ -14,8 +14,13 @@ powerio             powerio-dist
    └──────► powerio-prob
                  │
                  └── optional "matrix" ──► powerio-matrix
+
+powerio-diag ◄──── powerio, powerio-dist, powerio-pkg
 ```
 
+- `powerio-diag` owns the diagnostic record, the code grammar, the stage
+  namespaces, and the error categories. It is a leaf below both model crates so
+  one finding type crosses all of them.
 - `powerio` owns the balanced network model, format routing, indexing,
   normalization, and shared GOC3 document parsing.
 - `powerio-dist` owns the multiconductor network model and distribution

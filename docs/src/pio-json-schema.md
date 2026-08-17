@@ -231,12 +231,17 @@ The block carries:
 ## Diagnostics
 
 Each diagnostic carries a stable dotted `code`, a `severity` (`debug`, `info`,
-`warning`, `error`, `fatal`; ordered worst-last), the `stage` it came from
-(`parse`, `read`, `canonicalize`, `validate`, `lower`, `emit`, `bind`,
-`partner`), a human `message`, and where known an `element_path`, a `source_ref`,
-a `details` object, a `suggested_action`, and a `safe_to_ignore` list. Code
-namespaces by leading segment: `PARSE`, `READ`, `IR`, `VALIDATE`, `FIDELITY`,
-`LOWER`, `EMIT`, `BINDING`, `PARTNER`, `PERF`.
+`warning`, `error`, `fatal`; ordered worst-last), a human `message`, and where
+known an `element_path`, a `source_ref`, a `details` object, a
+`suggested_action`, and a `safe_to_ignore` list. A code reads
+`NAMESPACE.SCOPE.SPECIFIC`, and its leading segment names the stage the finding
+came from: `PARSE`, `READ`, `CANONICALIZE`, `VALIDATE`, `LOWER`, `BUILD`,
+`EMIT`, `BIND`, `PARTNER`, `REQUEST`.
+
+`stage` is that leading segment, lowercased, and is optional: powerio writes it
+for a consumer that prefers an enum to a string split, a producer whose
+namespace is outside the ten omits it, and a reader that wants the truth decodes
+the code. A code powerio does not know is data, never a failure.
 
 ## Source maps
 

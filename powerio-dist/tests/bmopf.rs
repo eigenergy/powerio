@@ -422,7 +422,7 @@ fn single_phase_wye_delta_keeps_both_delta_terminals() {
         "transformer t1",
     );
     assert_eq!(diag.severity, DiagnosticSeverity::Warning);
-    assert_eq!(diag.stage, DiagnosticStage::Emit);
+    assert_eq!(diag.stage(), Some(DiagnosticStage::Emit));
     assert_eq!(diag.details["transformer"], serde_json::json!("t1"));
     assert_eq!(diag.details["connection"], serde_json::json!("wye/delta"));
     let doc: serde_json::Value = serde_json::from_str(&out.text).unwrap();
@@ -554,7 +554,7 @@ fn ieee13_conversion_warnings_name_every_loss() {
     );
     let diag = diagnostic(&out, "EMIT.BMOPF.REGCONTROL_DROPPED", "regcontrol Reg1");
     assert_eq!(diag.severity, DiagnosticSeverity::Warning);
-    assert_eq!(diag.stage, DiagnosticStage::Emit);
+    assert_eq!(diag.stage(), Some(DiagnosticStage::Emit));
     assert_eq!(diag.details["class"], serde_json::json!("regcontrol"));
     // No silent extras: every warning leads with a `class name:` element
     // identifier ("load 671: ...", "voltage source source: ...").
@@ -1332,7 +1332,7 @@ fn pmd_nonuniform_per_phase_taps_warn_with_stable_code() {
         "transformer reg",
     );
     assert_eq!(diag.severity, DiagnosticSeverity::Warning);
-    assert_eq!(diag.stage, DiagnosticStage::Emit);
+    assert_eq!(diag.stage(), Some(DiagnosticStage::Emit));
     assert_eq!(diag.details["winding"], serde_json::json!(2));
     assert_eq!(
         diag.details["source_taps"],
@@ -2530,7 +2530,7 @@ fn three_wire_wye_wye_is_unsupported_not_a_panic() {
         "transformer t3w",
     );
     assert_eq!(diag.severity, DiagnosticSeverity::Warning);
-    assert_eq!(diag.stage, DiagnosticStage::Emit);
+    assert_eq!(diag.stage(), Some(DiagnosticStage::Emit));
     assert_eq!(diag.details["transformer"], serde_json::json!("t3w"));
     assert_eq!(diag.details["phases"], serde_json::json!(3));
 }
@@ -2556,7 +2556,7 @@ fn dss_autotransformer_drop_has_stable_diagnostic() {
     );
     let diag = diagnostic(&out, "EMIT.BMOPF.AUTOTRANSFORMER_DROPPED", "autotrans at1");
     assert_eq!(diag.severity, DiagnosticSeverity::Warning);
-    assert_eq!(diag.stage, DiagnosticStage::Emit);
+    assert_eq!(diag.stage(), Some(DiagnosticStage::Emit));
     assert_eq!(diag.details["class"], serde_json::json!("autotrans"));
     assert_eq!(diag.details["name"], serde_json::json!("at1"));
     assert!(
@@ -3163,7 +3163,7 @@ fn a_non_numeric_bmopf_field_is_refused_rather_than_read_as_nan() {
             .collect();
         assert_eq!(found.len(), 1, "{spelling}: {:?}", net.parse_diagnostics);
         assert_eq!(found[0].severity, DiagnosticSeverity::Error, "{spelling}");
-        assert_eq!(found[0].stage, DiagnosticStage::Read, "{spelling}");
+        assert_eq!(found[0].stage(), Some(DiagnosticStage::Read), "{spelling}");
         assert_eq!(
             found[0].element_path.as_deref(),
             Some("/linecode/lc/i_max"),

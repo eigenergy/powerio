@@ -10,7 +10,7 @@ use powerio::{
 };
 use powerio_dist::{DistSourceFormat, MulticonductorNetwork};
 
-use crate::diagnostics::{DiagnosticSeverity, DiagnosticStage, StructuredDiagnostic};
+use crate::diagnostics::{DiagnosticSeverity, StructuredDiagnostic};
 use crate::error::Error;
 use crate::lowering::{
     LoweringRecord, MulticonductorToBalancedError, MulticonductorToBalancedOptions,
@@ -256,7 +256,6 @@ impl NetworkPackage {
                 self.diagnostics.push(StructuredDiagnostic::new(
                     operating_points_drop_code(document),
                     DiagnosticSeverity::Warning,
-                    DiagnosticStage::Read,
                     format!(
                         "time series could not be lifted into operating points; \
                          the package is static only: {error}"
@@ -291,56 +290,13 @@ impl NetworkPackage {
     {
         let diagnostics: Vec<StructuredDiagnostic> = warnings
             .into_iter()
-            .map(|w| {
-                StructuredDiagnostic::new(
-                    code,
-                    DiagnosticSeverity::Warning,
-                    DiagnosticStage::Read,
-                    w.into(),
-                )
-            })
+            .map(|w| StructuredDiagnostic::new(code, DiagnosticSeverity::Warning, w.into()))
             .collect();
         if diagnostics.is_empty() {
             return;
         }
         self.diagnostics.extend(diagnostics);
         self.validation = ValidationSummary::from_diagnostics(&self.diagnostics);
-    }
-
-    /// The dist crate mirrors the package diagnostic shape without a
-    /// dependency on this crate; this maps between the twin types.
-    fn lift_dist_diagnostic(d: &powerio_dist::StructuredDiagnostic) -> StructuredDiagnostic {
-        use powerio_dist::{DiagnosticSeverity as DS, DiagnosticStage as DG};
-        let severity = match d.severity {
-            DS::Debug => DiagnosticSeverity::Debug,
-            DS::Info => DiagnosticSeverity::Info,
-            DS::Warning => DiagnosticSeverity::Warning,
-            DS::Error => DiagnosticSeverity::Error,
-            DS::Fatal => DiagnosticSeverity::Fatal,
-        };
-        let stage = match d.stage {
-            DG::Parse => DiagnosticStage::Parse,
-            DG::Canonicalize => DiagnosticStage::Canonicalize,
-            DG::Validate => DiagnosticStage::Validate,
-            DG::Lower => DiagnosticStage::Lower,
-            DG::Emit => DiagnosticStage::Emit,
-            DG::Bind => DiagnosticStage::Bind,
-            DG::Partner => DiagnosticStage::Partner,
-            // The dist stage enum is non_exhaustive; `Read` and any stage a
-            // newer dist crate adds read as the read stage.
-            _ => DiagnosticStage::Read,
-        };
-        StructuredDiagnostic {
-            code: d.code.as_str().into(),
-            severity,
-            stage,
-            message: d.message.clone(),
-            element_path: d.element_path.clone(),
-            source_ref: None,
-            details: d.details.clone(),
-            suggested_action: d.suggested_action.clone(),
-            safe_to_ignore: d.safe_to_ignore.clone(),
-        }
     }
 
     /// Wrap a multiconductor network. Parse `warnings` are lifted into structured
@@ -358,11 +314,7 @@ impl NetworkPackage {
         // `Error`); each remaining warning string lifts at `Warning`. A
         // typed finding and its warning twin share one message, so the
         // filter keeps the pair from appearing twice.
-        let mut diagnostics: Vec<StructuredDiagnostic> = net
-            .parse_diagnostics
-            .iter()
-            .map(Self::lift_dist_diagnostic)
-            .collect();
+        let mut diagnostics: Vec<StructuredDiagnostic> = net.parse_diagnostics.clone();
         let typed: std::collections::BTreeSet<String> =
             diagnostics.iter().map(|d| d.message.clone()).collect();
         diagnostics.extend(
@@ -373,7 +325,6 @@ impl NetworkPackage {
                     StructuredDiagnostic::new(
                         "READ.DIST.PARSE_WARNING",
                         DiagnosticSeverity::Warning,
-                        DiagnosticStage::Read,
                         w.clone(),
                     )
                 }),
@@ -787,7 +738,6 @@ impl NetworkPackage {
             let diagnostic = StructuredDiagnostic::new(
                 "LOWER.MULTI_TO_BALANCED.WRONG_MODEL_KIND",
                 DiagnosticSeverity::Error,
-                DiagnosticStage::Lower,
                 format!(
                     "multiconductor to balanced lowering requires a multiconductor package, got {:?}",
                     self.model_kind
@@ -928,7 +878,6 @@ fn validate_operating_identity(
             StructuredDiagnostic::new(
                 "VALIDATE.PACKAGE.OPERATING_IDENTITY",
                 DiagnosticSeverity::Error,
-                DiagnosticStage::Validate,
                 message,
             )
             .with_element_path(format!(
@@ -952,7 +901,6 @@ fn validate_study(
             StructuredDiagnostic::new(
                 "VALIDATE.PACKAGE.STUDY_MODEL_KIND",
                 DiagnosticSeverity::Error,
-                DiagnosticStage::Validate,
                 "study blocks are only defined for balanced packages",
             )
             .with_element_path("/study"),
@@ -969,7 +917,6 @@ fn validate_study(
             StructuredDiagnostic::new(
                 "VALIDATE.PACKAGE.STUDY_IDENTITY",
                 DiagnosticSeverity::Error,
-                DiagnosticStage::Validate,
                 message,
             )
             .with_element_path(format!("/study/commits/{commit_pos}/edits/{edit_pos}"))
@@ -1008,7 +955,6 @@ fn sane_validate_balanced(
         structure.push(StructuredDiagnostic::new(
             "VALIDATE.BALANCED.STRUCTURE",
             DiagnosticSeverity::Error,
-            DiagnosticStage::Validate,
             err.to_string(),
         ));
     }
@@ -1032,7 +978,6 @@ fn sane_validate_balanced(
         let mut d = StructuredDiagnostic::new(
             "VALIDATE.BALANCED.VALUE_DOMAIN",
             DiagnosticSeverity::Warning,
-            DiagnosticStage::Validate,
             format!(
                 "{} field `{}` is outside its value domain; suggested value is {}",
                 finding.element, finding.field, finding.new
@@ -1102,7 +1047,6 @@ fn table_uid_duplicates<'a>(
                 StructuredDiagnostic::new(
                     "VALIDATE.BALANCED.PAYLOAD_IDENTITY",
                     DiagnosticSeverity::Error,
-                    DiagnosticStage::Validate,
                     format!(
                         "payload table `{table}` carries uid `{uid}` on rows {first} and {row}; \
                          identity resolution is ambiguous"
@@ -1239,7 +1183,6 @@ fn sane_validate_multiconductor(
             StructuredDiagnostic::new(
                 "VALIDATE.MULTI.UNTYPED_OBJECT",
                 DiagnosticSeverity::Warning,
-                DiagnosticStage::Validate,
                 format!(
                     "{} {} is preserved as an untyped object",
                     obj.class, obj.name
@@ -1253,7 +1196,6 @@ fn sane_validate_multiconductor(
         sources.push(StructuredDiagnostic::new(
             "VALIDATE.MULTI.NO_VOLTAGE_SOURCE",
             DiagnosticSeverity::Warning,
-            DiagnosticStage::Validate,
             "multiconductor package has no voltage source",
         ));
     }
@@ -1306,7 +1248,6 @@ fn validate_multiconductor_lines(
                 StructuredDiagnostic::new(
                     "VALIDATE.MULTI.STRUCTURE",
                     DiagnosticSeverity::Error,
-                    DiagnosticStage::Validate,
                     format!(
                         "line {} references unknown linecode `{}`",
                         line.name, line.linecode
@@ -1510,7 +1451,6 @@ fn multiconductor_bus_index(
                 StructuredDiagnostic::new(
                     "VALIDATE.MULTI.STRUCTURE",
                     DiagnosticSeverity::Error,
-                    DiagnosticStage::Validate,
                     format!("duplicate bus id `{}` conflicts with `{first}`", bus.id),
                 )
                 .with_element_path(format!("/model/multiconductor_network/buses/{i}/id")),
@@ -1534,7 +1474,6 @@ fn check_bus_ref(
             StructuredDiagnostic::new(
                 "VALIDATE.MULTI.STRUCTURE",
                 DiagnosticSeverity::Error,
-                DiagnosticStage::Validate,
                 format!("{what} references unknown bus `{bus}`"),
             )
             .with_element_path(path),
@@ -1555,7 +1494,6 @@ fn check_terminal_map(
             StructuredDiagnostic::new(
                 "VALIDATE.MULTI.TERMINAL_MAP",
                 DiagnosticSeverity::Error,
-                DiagnosticStage::Validate,
                 format!("{what} has an empty terminal map"),
             )
             .with_element_path(path),
@@ -1572,7 +1510,6 @@ fn check_terminal_map(
                 StructuredDiagnostic::new(
                     "VALIDATE.MULTI.TERMINAL_MAP",
                     DiagnosticSeverity::Error,
-                    DiagnosticStage::Validate,
                     format!("{what} references unknown terminal `{terminal}` on bus `{bus}`"),
                 )
                 .with_element_path(path),
