@@ -36,7 +36,9 @@ pub enum Error {
     #[error("branch row {row} has a zero matrix denominator under the selected build options")]
     ZeroImpedance { row: usize },
 
-    #[error("branch row {row} has non-finite DC susceptance b = 1/x (x is NaN, Inf, or denormal)")]
+    #[error(
+        "branch row {row} has a non-finite susceptance (r or x is NaN or Inf, or the four terminal admittances overflow)"
+    )]
     NonFiniteSusceptance { row: usize },
 
     // Raised from incidence assembly and both OPF builders too, not only from

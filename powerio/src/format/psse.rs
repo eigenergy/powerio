@@ -1577,6 +1577,11 @@ fn strip_inline_comment(line: &str) -> &str {
 /// `/comment`. Comma-delimited records keep empty fields (column position is
 /// significant — a blank quoted name must not shift later columns); records with
 /// no commas fall back to whitespace splitting.
+///
+/// Both paths trim after unquoting: PSS/E string columns are fixed width and
+/// blank padded, so `' 1'` and `'1 '` name one device and `'BUS A       '` is
+/// the name `BUS A`. The two delimiter styles used to disagree here, and the
+/// same record body tokenized differently depending on which a producer chose.
 fn fields(line: &str) -> Vec<String> {
     let code = strip_inline_comment(line);
     let comma_delimited = code.contains(',');
@@ -1592,24 +1597,32 @@ fn fields(line: &str) -> Vec<String> {
     });
     let mut cur = String::with_capacity(32);
     let mut quoted = false;
+    // A quoted span opened this field, so `''` holds its column instead of
+    // vanishing and shifting every later one, as it does under commas.
+    let mut was_quoted = false;
     for c in code.chars() {
         match c {
-            '\'' => quoted = !quoted,
+            '\'' => {
+                quoted = !quoted;
+                was_quoted = true;
+            }
             ',' if !quoted && comma_delimited => {
                 out.push(cur.trim().to_owned());
                 cur.clear();
+                was_quoted = false;
             }
             c if c.is_whitespace() && !quoted && !comma_delimited => {
-                if !cur.is_empty() {
-                    out.push(cur.clone());
+                if !cur.is_empty() || was_quoted {
+                    out.push(cur.trim().to_owned());
                     cur.clear();
+                    was_quoted = false;
                 }
             }
             c => cur.push(c),
         }
     }
     let last = cur.trim().to_owned();
-    if comma_delimited || !last.is_empty() {
+    if comma_delimited || was_quoted || !last.is_empty() {
         out.push(last);
     }
     out
@@ -2293,6 +2306,9 @@ fn read_dc_line(
              power; both ends read as zero",
             index + 1
         ));
+        // The end the demand was measured at is a claim about a drop model
+        // that was refused, and the writer would restate it as `-0.0`.
+        measured_at_inverter = false;
         (0.0, 0.0)
     };
     if unpriceable_current {
@@ -2550,6 +2566,33 @@ mod tests {
 
     fn close(actual: f64, expected: f64) {
         assert!((actual - expected).abs() < 1e-12, "{actual} != {expected}");
+    }
+
+    /// The tokenizer's rules, pinned: both delimiter styles produce the same
+    /// fields for one record body, quoted interiors trim (PSS/E strings are
+    /// fixed width and blank padded), a `/` inside quotes is text while one
+    /// outside ends the record, and a blank quoted field holds its column.
+    #[test]
+    fn fields_tokenize_the_same_record_the_same_way_in_both_delimiter_styles() {
+        assert_eq!(
+            fields("1, ' 1', 'BUS A       ', 2.5 / trailing comment"),
+            vec!["1", "1", "BUS A", "2.5"]
+        );
+        assert_eq!(
+            fields("1 ' 1' 'BUS A       ' 2.5 / trailing comment"),
+            vec!["1", "1", "BUS A", "2.5"]
+        );
+        assert_eq!(fields("1, 'O/H LINE', 2"), vec!["1", "O/H LINE", "2"]);
+        assert_eq!(
+            fields("1, '', 3"),
+            vec!["1", "", "3"],
+            "column position holds"
+        );
+        assert_eq!(
+            fields("1 '' 3"),
+            vec!["1", "", "3"],
+            "and holds under whitespace too"
+        );
     }
 
     #[test]
@@ -4549,6 +4592,29 @@ Q
         assert!(
             err.to_string().contains("bus record missing numeric id"),
             "malformed bus id should be reported directly: {err}"
+        );
+    }
+
+    #[test]
+    fn a_bus_id_past_the_int64_ceiling_is_refused() {
+        // The id column is read as f64 and cast, and the cast saturates: two
+        // distinct ids above the ceiling both land on usize::MAX-ish values
+        // that the C ABI reports as the same int64. Refuse them at the reader
+        // boundary instead of collapsing two buses onto one reported id.
+        let raw = r"0, 100.00, 33, 0, 0, 60.00 / synthetic out-of-range export
+CASE
+COMMENT
+1e300,'BUS1        ', 230.0000,3,1,1,1,1.00000,0.0000,1.1000,0.9000,1.1000,0.9000
+2,'BUS2        ', 138.0000,1,1,1,1,1.00000,0.0000,1.1000,0.9000,1.1000,0.9000
+0 / END OF BUS DATA, BEGIN LOAD DATA
+Q
+";
+
+        let err = parse_psse(raw).unwrap_err();
+
+        assert!(
+            err.to_string().contains("outside the int64 id space"),
+            "an out-of-range bus id should be refused: {err}"
         );
     }
 }

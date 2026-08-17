@@ -115,6 +115,36 @@ fn a_planted_string_fails_the_audit() {
     assert_eq!(leaks[0].line, 1);
 }
 
+/// The audit prefilters each secret on the word run it opens with, so most are
+/// excluded by a hash lookup instead of a scan. These are the shapes that
+/// would break if the prefilter were a plain "is this secret one of the line's
+/// tokens" test: a secret carrying a space or a dot spans several tokens, and
+/// one that opens with a non-word character has no leading run to filter on.
+#[test]
+fn the_audit_still_catches_secrets_that_span_tokens() {
+    let mut sanitizer = anonymize::Sanitizer::new();
+    for secret in ["BUS A", "FEEDER.ALPHA", "-WESTFIELD", "PLAIN"] {
+        sanitizer.learn_network(&serde_json::json!({ "name": secret }));
+    }
+    for (line, expected) in [
+        ("row names BUS A here", "BUS A"),
+        ("row names FEEDER.ALPHA here", "FEEDER.ALPHA"),
+        ("row names -WESTFIELD here", "-WESTFIELD"),
+        ("row names PLAIN here", "PLAIN"),
+    ] {
+        let leaks = sanitizer
+            .audit(line)
+            .expect_err(&format!("audit missed {expected} in {line:?}"));
+        assert!(
+            leaks.iter().any(|l| l.secret == expected),
+            "audit missed {expected}: {leaks:?}"
+        );
+    }
+    // A word run that only appears as part of a longer token is not a match,
+    // exactly as before: `word_boundaries` still decides.
+    assert!(sanitizer.audit("row names PLAINTEXT here").is_ok());
+}
+
 #[test]
 fn a_format_token_is_vocabulary_even_when_the_corpus_uses_it_as_a_directory() {
     let mut sanitizer = anonymize::Sanitizer::new();

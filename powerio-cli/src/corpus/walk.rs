@@ -164,12 +164,10 @@ impl HopDelta {
     /// grades the same move `core.regrouped`. Power moving is the line, there
     /// as here.
     pub(super) fn electrical(&self) -> bool {
-        let power_moved = self.core_changed.as_deref().is_some_and(|core| {
-            ["load p", "load q", "gen p", "base mva"]
-                .iter()
-                .any(|k| core.contains(k))
-        });
-        power_moved || self.ybus.is_some() || self.injection.is_some() || self.dc_terminal.is_some()
+        self.core_changed.as_deref().is_some_and(super::power_moved)
+            || self.ybus.is_some()
+            || self.injection.is_some()
+            || self.dc_terminal.is_some()
     }
 
     /// The signatures this delta teaches its edge. Values are left out: the
@@ -204,8 +202,6 @@ pub struct Hop {
     /// quantity [`super::compare`] measures, but from a walked input rather
     /// than the pristine case.
     pub leg: HopDelta,
-    /// Against the walk's origin: what the chain has lost by here.
-    pub cumulative: HopDelta,
     /// Set when converting the origin straight to this format gives a
     /// different network than arriving here along the walk. The chain's route
     /// changed the destination, which no single leg can state.
@@ -584,7 +580,6 @@ fn run_walk(
             warnings: Vec::new(),
             failure: None,
             leg: HopDelta::default(),
-            cumulative: HopDelta::default(),
             path_dependent: None,
             path_dependent_electrical: false,
             emptied: Vec::new(),
@@ -609,7 +604,6 @@ fn run_walk(
         };
 
         hop.leg = current.delta(&next);
-        hop.cumulative = origin.delta(&next);
         hop.emptied = origin.emptied(&next);
         hop.resurrected = next.emptied(&current);
 

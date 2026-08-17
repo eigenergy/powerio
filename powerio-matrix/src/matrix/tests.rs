@@ -532,6 +532,72 @@ fn ybus_rejects_nan_reactance() {
 }
 
 #[test]
+fn incidence_rejects_a_non_finite_reactance_under_every_convention() {
+    // Y_bus rejects an infinite reactance on the same handle, because
+    // `hypot(r, inf)` is infinite. The DC conventions divide instead, and
+    // `1/±inf` is `0.0`: without a guard the branch joins the Laplacian as a
+    // zero-weight edge, disconnecting the network with nothing to report.
+    for x in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+        let mut net = three_bus();
+        net.branches[0].x = x;
+        let view = IndexedNetwork::new(&net);
+        assert!(
+            matches!(
+                build_ybus(&view, &BuildOptions::default()),
+                Err(crate::Error::Core(
+                    powerio::Error::NonFiniteSusceptance { .. }
+                ))
+            ),
+            "Ybus accepted x = {x}"
+        );
+        for conv in [
+            DcConvention::ReactanceOnly,
+            DcConvention::Matpower,
+            DcConvention::SeriesImpedance,
+        ] {
+            let got = build_incidence(&view, conv, &BuildOptions::default());
+            assert!(
+                matches!(
+                    got,
+                    Err(crate::Error::Core(powerio::Error::NonFiniteSusceptance {
+                        row: 0
+                    }))
+                ),
+                "{conv:?} accepted x = {x}: {:?}",
+                got.map(|parts| parts.b)
+            );
+        }
+    }
+}
+
+#[test]
+fn incidence_rejects_a_reactance_and_tap_whose_product_overflows() {
+    // Both factors are finite and both clear their own bounds, but the
+    // Matpower rule divides by their product: `1e300 * 1e300` is infinite and
+    // `1/inf` is `0.0`, the same silent zero-weight edge.
+    let mut branch = br(1, 2, 0.0, 1e300, 0.0);
+    branch.tap = 1e300;
+    let net = BalancedNetwork::in_memory(
+        "overflowing-tap",
+        100.0,
+        vec![bus(1, BusType::Ref), bus(2, BusType::Pq)],
+        vec![branch],
+    );
+    let view = IndexedNetwork::new(&net);
+    let got = build_incidence(&view, DcConvention::Matpower, &BuildOptions::default());
+    assert!(
+        matches!(
+            got,
+            Err(crate::Error::Core(powerio::Error::NonFiniteSusceptance {
+                row: 0
+            }))
+        ),
+        "accepted an overflowing denominator: {:?}",
+        got.map(|parts| parts.b)
+    );
+}
+
+#[test]
 fn zero_impedance_policy_is_shared_across_matrix_builders() {
     let net = zero_impedance_bus_pair();
     let view = IndexedNetwork::new(&net);

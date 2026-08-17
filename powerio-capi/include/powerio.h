@@ -629,7 +629,9 @@ int32_t pio_is_radial(const PioNetwork *net);
  * `NULL` on error (message into `errbuf`). Fidelity warnings, if any, are
  * published through `out_warnings` as one owned C string (free it with
  * [`pio_string_free`]), or NULL when there are none; a returned string has no
- * handle to attach them to. Pass NULL to discard them.
+ * handle to attach them to. Pass NULL to discard them. `out_warnings` is
+ * written on every return path and is NULL whenever this returns NULL, so an
+ * error return leaves nothing to free.
  */
 char *pio_to_format(const PioNetwork *net,
                     const char *to,
@@ -644,6 +646,8 @@ char *pio_to_format(const PioNetwork *net,
  * [`pio_string_free`]), `NULL` on error. Fidelity warnings, read side first,
  * are published through `out_warnings` as one owned C string (free it with
  * [`pio_string_free`]), NULL when there are none. Pass NULL to discard them.
+ * `out_warnings` is written on every return path and is NULL whenever this
+ * returns NULL, so an error return leaves nothing to free.
  */
 char *pio_convert_file(const char *path,
                        const char *from,
@@ -659,7 +663,8 @@ char *pio_convert_file(const char *path,
  * string (free with [`pio_string_free`]), `NULL` on error. Fidelity warnings,
  * read side first, are published through `out_warnings` as one owned C string
  * (free it with [`pio_string_free`]), NULL when there are none. Pass NULL to
- * discard them.
+ * discard them. `out_warnings` is written on every return path and is NULL
+ * whenever this returns NULL, so an error return leaves nothing to free.
  */
 char *pio_convert_str(const char *text,
                       const char *from,
@@ -675,6 +680,8 @@ char *pio_convert_str(const char *text,
  * `-1` on error (message into `errbuf`). Fidelity warnings, if any, are
  * published through `out_warnings` as one owned C string (free it with
  * [`pio_string_free`]), NULL when there are none. Pass NULL to discard them.
+ * `out_warnings` is written on every return path and is NULL whenever this
+ * returns `-1`, so an error return leaves nothing to free.
  */
 int32_t pio_write_dir(const PioNetwork *net,
                       const char *to,
@@ -693,8 +700,9 @@ void pio_string_free(char *s);
  * entries, and return the total bus count. This ordering DEFINES the dense
  * index space every other per-bus array shares. Call once with `(NULL, 0)` to
  * size, allocate, then call again to fill. Ids are int64 in `1..2^63-1` (a v4
- * invariant); a source id that is a string or exceeds that range is mapped to
- * dense int64 at read, never passed through raw.
+ * invariant): a reader whose source ids are strings assigns dense ids and
+ * keeps the source name, and a numeric id past that range is refused at the
+ * read boundary rather than passed through.
  */
 size_t pio_bus_ids(const PioNetwork *net, int64_t *out, size_t cap);
 
@@ -1186,7 +1194,8 @@ PioDistNetwork *pio_dist_from_json(const char *text, char *errbuf, size_t errlen
  * [`pio_string_free`]), `NULL` on error. A cross format write's fidelity
  * losses are published through `out_warnings` as one owned C string (free it
  * with [`pio_string_free`]), NULL when there are none. Pass NULL to discard
- * them.
+ * them. `out_warnings` is written on every return path and is NULL whenever
+ * this returns NULL, so an error return leaves nothing to free.
  */
 char *pio_dist_to_format(const PioDistNetwork *net,
                          const char *to,
@@ -1203,7 +1212,9 @@ char *pio_dist_to_format(const PioDistNetwork *net,
  * error. The warnings published through `out_warnings` carry both the parse
  * warnings and the writer's fidelity losses (there is no handle to query them),
  * as one owned C string (free it with [`pio_string_free`]), NULL when there are
- * none. Pass NULL to discard them.
+ * none. Pass NULL to discard them. `out_warnings` is written on every return
+ * path and is NULL whenever this returns NULL, so an error return leaves
+ * nothing to free.
  */
 char *pio_dist_convert_file(const char *path,
                             const char *from,
@@ -1222,7 +1233,8 @@ char *pio_dist_convert_file(const char *path,
  * warnings published through `out_warnings` carry both the parse warnings and
  * the writer's fidelity losses (there is no handle to query them), as one owned
  * C string (free it with [`pio_string_free`]), NULL when there are none. Pass
- * NULL to discard them.
+ * NULL to discard them. `out_warnings` is written on every return path and is
+ * NULL whenever this returns NULL, so an error return leaves nothing to free.
  */
 char *pio_dist_convert_str(const char *text,
                            const char *from,

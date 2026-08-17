@@ -49,6 +49,11 @@ impl std::fmt::Display for YbusChange {
 }
 
 /// Which per-bus injection moved.
+///
+/// The DC entries are per-bus too: a two-terminal DC line contributes at the
+/// bus each of its ends sits on. They name the end by its converter role
+/// rather than by the line's `from`/`to`, which are branch words for a
+/// quantity tallied at a bus.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Injection {
     LoadP,
@@ -56,11 +61,11 @@ pub enum Injection {
     GenP,
     GenQ,
     /// Real power a DC line takes out of its rectifier bus.
-    DcFromP,
+    DcRectifierP,
     /// Real power a DC line delivers to its inverter bus.
-    DcToP,
-    DcFromQ,
-    DcToQ,
+    DcInverterP,
+    DcRectifierQ,
+    DcInverterQ,
 }
 
 impl Injection {
@@ -71,10 +76,10 @@ impl Injection {
             Self::LoadQ => "load q",
             Self::GenP => "gen p",
             Self::GenQ => "gen q",
-            Self::DcFromP => "dc rectifier p",
-            Self::DcToP => "dc inverter p",
-            Self::DcFromQ => "dc rectifier q",
-            Self::DcToQ => "dc inverter q",
+            Self::DcRectifierP => "dc rectifier p",
+            Self::DcInverterP => "dc inverter p",
+            Self::DcRectifierQ => "dc rectifier q",
+            Self::DcInverterQ => "dc inverter q",
         }
     }
 }
@@ -192,16 +197,37 @@ pub fn injection_change(
     before: &BalancedNetwork,
     after: &BalancedNetwork,
 ) -> Option<InjectionChange> {
-    let change = first_moved(&per_bus(before, true), &per_bus(after, true))?;
-    let status_only = first_moved(&per_bus(before, false), &per_bus(after, false)).is_none();
+    let change = first_moved(&per_bus(before, true), &per_bus(after, true), AC_INJECTIONS)?;
+    let status_only = first_moved(
+        &per_bus(before, false),
+        &per_bus(after, false),
+        AC_INJECTIONS,
+    )
+    .is_none();
     Some(InjectionChange {
         status_only,
         ..change
     })
 }
 
-fn per_bus(net: &BalancedNetwork, in_service_only: bool) -> BTreeMap<usize, [f64; 8]> {
-    let mut map: BTreeMap<usize, [f64; 8]> = BTreeMap::new();
+/// What each slot of [`per_bus`] holds.
+const AC_INJECTIONS: [Injection; 4] = [
+    Injection::LoadP,
+    Injection::LoadQ,
+    Injection::GenP,
+    Injection::GenQ,
+];
+
+/// What each slot of [`per_bus_dc`] holds.
+const DC_TERMINALS: [Injection; 4] = [
+    Injection::DcRectifierP,
+    Injection::DcInverterP,
+    Injection::DcRectifierQ,
+    Injection::DcInverterQ,
+];
+
+fn per_bus(net: &BalancedNetwork, in_service_only: bool) -> BTreeMap<usize, [f64; 4]> {
+    let mut map: BTreeMap<usize, [f64; 4]> = BTreeMap::new();
     for l in net
         .loads
         .iter()
@@ -225,15 +251,20 @@ fn per_bus(net: &BalancedNetwork, in_service_only: bool) -> BTreeMap<usize, [f64
 
 /// Per-bus DC terminal power, the same tally for HVDC that [`per_bus`] is for
 /// loads and generators.
-fn per_bus_dc(net: &BalancedNetwork, in_service_only: bool) -> BTreeMap<usize, [f64; 8]> {
-    let mut map: BTreeMap<usize, [f64; 8]> = BTreeMap::new();
+///
+/// The two converter roles keep separate slots rather than netting, so a bus
+/// hosting one line's rectifier and another's inverter states both. Netting
+/// them would let a conversion swap the ends of a pair and still compare
+/// equal.
+fn per_bus_dc(net: &BalancedNetwork, in_service_only: bool) -> BTreeMap<usize, [f64; 4]> {
+    let mut map: BTreeMap<usize, [f64; 4]> = BTreeMap::new();
     for d in net.hvdc.iter().filter(|d| d.in_service || !in_service_only) {
         let from = map.entry(d.from.0).or_default();
-        from[4] += d.pf;
-        from[6] += d.qf;
+        from[0] += d.pf;
+        from[2] += d.qf;
         let to = map.entry(d.to.0).or_default();
-        to[5] += d.pt;
-        to[7] += d.qt;
+        to[1] += d.pt;
+        to[3] += d.qt;
     }
     map
 }
@@ -257,31 +288,37 @@ pub fn dc_terminal_change(
     before: &BalancedNetwork,
     after: &BalancedNetwork,
 ) -> Option<InjectionChange> {
-    let change = first_moved(&per_bus_dc(before, true), &per_bus_dc(after, true))?;
-    let status_only = first_moved(&per_bus_dc(before, false), &per_bus_dc(after, false)).is_none();
+    let change = first_moved(
+        &per_bus_dc(before, true),
+        &per_bus_dc(after, true),
+        DC_TERMINALS,
+    )?;
+    let status_only = first_moved(
+        &per_bus_dc(before, false),
+        &per_bus_dc(after, false),
+        DC_TERMINALS,
+    )
+    .is_none();
     Some(InjectionChange {
         status_only,
         ..change
     })
 }
 
-fn first_moved(
-    a: &BTreeMap<usize, [f64; 8]>,
-    b: &BTreeMap<usize, [f64; 8]>,
+/// The first slot whose tally moved, named by `quantities`, which states what
+/// each slot holds. One tally per domain rather than one wide one shared
+/// between them: a shared array lets a caller write an AC total into a DC slot
+/// with nothing to catch it, and makes every comparison scan the other
+/// domain's always-zero half.
+fn first_moved<const N: usize>(
+    a: &BTreeMap<usize, [f64; N]>,
+    b: &BTreeMap<usize, [f64; N]>,
+    quantities: [Injection; N],
 ) -> Option<InjectionChange> {
     for key in a.keys().chain(b.keys().filter(|k| !a.contains_key(*k))) {
-        let x = a.get(key).copied().unwrap_or_default();
-        let y = b.get(key).copied().unwrap_or_default();
-        for (quantity, i) in [
-            (Injection::LoadP, 0),
-            (Injection::LoadQ, 1),
-            (Injection::GenP, 2),
-            (Injection::GenQ, 3),
-            (Injection::DcFromP, 4),
-            (Injection::DcToP, 5),
-            (Injection::DcFromQ, 6),
-            (Injection::DcToQ, 7),
-        ] {
+        let x = a.get(key).copied().unwrap_or([0.0; N]);
+        let y = b.get(key).copied().unwrap_or([0.0; N]);
+        for (i, quantity) in quantities.into_iter().enumerate() {
             if beyond_tol(x[i], y[i], ELECTRICAL_TOL) {
                 return Some(InjectionChange {
                     bus: *key,
@@ -326,16 +363,22 @@ fn beyond_tol(x: f64, y: f64, tol: f64) -> bool {
 #[must_use]
 pub fn status_disagreements(a: &BalancedNetwork, b: &BalancedNetwork) -> usize {
     let off = |net: &BalancedNetwork| {
-        (
+        [
             net.generators.iter().filter(|g| !g.in_service).count(),
             net.branches.iter().filter(|x| !x.in_service).count(),
             net.loads.iter().filter(|l| !l.in_service).count(),
             net.shunts.iter().filter(|s| !s.in_service).count(),
-        )
+            net.switches.iter().filter(|x| !x.closed).count(),
+            net.storage.iter().filter(|x| !x.in_service).count(),
+            net.hvdc.iter().filter(|d| !d.in_service).count(),
+            net.transformers_3w.iter().filter(|t| !t.in_service).count(),
+        ]
     };
-    let (ga, ba, la, sa) = off(a);
-    let (gb, bb, lb, sb) = off(b);
-    ga.abs_diff(gb) + ba.abs_diff(bb) + la.abs_diff(lb) + sa.abs_diff(sb)
+    off(a)
+        .iter()
+        .zip(off(b).iter())
+        .map(|(x, y)| x.abs_diff(*y))
+        .sum()
 }
 
 /// Element counts and the totals that must survive any conversion.
@@ -537,6 +580,12 @@ fn diff_values(a: &serde_json::Value, b: &serde_json::Value, path: &str, out: &m
         }
         (Value::Object(xs), Value::Object(ys)) => {
             for key in xs.keys().chain(ys.keys().filter(|k| !xs.contains_key(*k))) {
+                // Rechecked per key: the recursive call guards itself, but the
+                // two direct pushes below do not, and an object of many
+                // one-sided keys would otherwise carry the list past the cap.
+                if out.len() >= MAX_MODEL_DIFFS {
+                    return;
+                }
                 let sub = format!("{path}.{key}");
                 match (xs.get(key), ys.get(key)) {
                     (Some(x), Some(y)) => diff_values(x, y, &sub, out),

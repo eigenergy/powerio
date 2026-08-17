@@ -1959,6 +1959,34 @@ Q\n";
         assert_eq!(branch.num_rows(), 1);
     }
 
+    /// Rewrite every `powerio_version` stamp to one token. The stamp is the
+    /// crate version, so comparing it here would make a patch release rewrite
+    /// two fixtures whose matrix bytes did not move; the dedicated metadata
+    /// tests above already pin it against `powerio::VERSION`.
+    #[cfg(feature = "matrix")]
+    fn without_version_stamps(mut value: serde_json::Value) -> serde_json::Value {
+        match &mut value {
+            serde_json::Value::Object(map) => {
+                for (key, entry) in map.iter_mut() {
+                    if key == powerio::version::VERSION_KEY {
+                        *entry = serde_json::json!("<version>");
+                    } else {
+                        let taken = std::mem::take(entry);
+                        *entry = without_version_stamps(taken);
+                    }
+                }
+            }
+            serde_json::Value::Array(items) => {
+                for item in items.iter_mut() {
+                    let taken = std::mem::take(item);
+                    *item = without_version_stamps(taken);
+                }
+            }
+            _ => {}
+        }
+        value
+    }
+
     #[cfg(feature = "matrix")]
     #[test]
     fn matrix_arrow_golden_fixtures_match() {
@@ -1968,7 +1996,11 @@ Q\n";
             let fixture = dir.join(case_file.replace(".m", "_arrow_coo.json"));
             let expected: serde_json::Value =
                 serde_json::from_str(&std::fs::read_to_string(&fixture).unwrap()).unwrap();
-            assert_eq!(matrix_golden_json(case_file), expected, "{case_file}");
+            assert_eq!(
+                without_version_stamps(matrix_golden_json(case_file)),
+                without_version_stamps(expected),
+                "{case_file}"
+            );
         }
     }
 

@@ -65,11 +65,26 @@ impl DcConvention {
     /// The branch susceptance from resistance, reactance, and effective tap.
     /// Only [`Self::Matpower`] reads the tap, and only
     /// [`Self::SeriesImpedance`] reads the resistance.
+    ///
+    /// Non-finite in, non-finite out, which is what
+    /// [`Self::SeriesImpedance`] has always done and what the callers check.
+    /// The reciprocal rules need the guard because `1/±inf` is a finite `0.0`:
+    /// a branch Y_bus rejects outright would otherwise join the DC Laplacian as
+    /// a zero-weight edge with nothing to report it.
     #[must_use]
     pub fn branch_susceptance(self, resistance: f64, reactance: f64, effective_tap: f64) -> f64 {
+        // Guard the denominator, not its factors: `x * tap` can overflow to
+        // infinity from two finite factors and reach the same silent zero.
+        let reciprocal = |denominator: f64| {
+            if denominator.is_finite() {
+                1.0 / denominator
+            } else {
+                f64::NAN
+            }
+        };
         match self {
-            Self::ReactanceOnly => 1.0 / reactance,
-            Self::Matpower => 1.0 / (reactance * effective_tap),
+            Self::ReactanceOnly => reciprocal(reactance),
+            Self::Matpower => reciprocal(reactance * effective_tap),
             Self::SeriesImpedance => -series_admittance_parts(resistance, reactance).1,
         }
     }
@@ -109,6 +124,33 @@ mod tests {
     fn matpower_scales_by_the_tap() {
         let b = DcConvention::Matpower.branch_susceptance(0.01, 0.2, 2.0);
         assert!((b - 2.5).abs() < 1e-12);
+    }
+
+    /// `1/±inf` is `0.0`, which is finite, so a branch the Y_bus builder rejects
+    /// outright would enter the DC Laplacian as a zero-weight edge instead. The
+    /// tap divides the same denominator, so two finite factors whose product
+    /// overflows collapse the same way.
+    #[test]
+    fn a_non_finite_denominator_is_not_a_susceptance() {
+        for x in [f64::INFINITY, f64::NEG_INFINITY, f64::NAN] {
+            for conv in [
+                DcConvention::ReactanceOnly,
+                DcConvention::Matpower,
+                DcConvention::SeriesImpedance,
+            ] {
+                let b = conv.branch_susceptance(0.01, x, 1.0);
+                assert!(!b.is_finite(), "{conv:?} read x = {x} as b = {b}");
+            }
+        }
+        for (x, tap) in [
+            (0.1, f64::INFINITY),
+            (0.1, f64::NAN),
+            (1e300, 1e300),
+            (1e300, -1e300),
+        ] {
+            let b = DcConvention::Matpower.branch_susceptance(0.0, x, tap);
+            assert!(!b.is_finite(), "x = {x}, tap = {tap} read as b = {b}");
+        }
     }
 
     /// An impedance well inside [`MIN_DIVISIBLE_MAGNITUDE`] whose *square* is

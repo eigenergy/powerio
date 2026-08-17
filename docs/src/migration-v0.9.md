@@ -51,6 +51,8 @@ conv.branch_susceptance(r, x, tap)    // 0.9
 
 It returns a **positive** Laplacian edge weight, in every variant. PowerModels and tellegen write the negative one; that is their convention, and a caller that negates once cannot get a sign flipped matrix from the choice of variant.
 
+It also returns `NaN` for a denominator that is not finite, which `SeriesImpedance` already did. `1/±inf` is `0.0`, so `ReactanceOnly` and `Matpower` used to read an infinite reactance as a zero weight edge and drop the branch from the Laplacian without saying so; `Matpower` divides by `x * tap`, so two finite factors whose product overflows read the same way. The matrix and instance builders check the result and raise `NonFiniteSusceptance`. Every finite denominator is unchanged.
+
 On the other surfaces:
 
 ```sh
@@ -125,3 +127,7 @@ br.synthesize_rate_a(window, (fr_vmin, fr_vmax), (to_vmin, to_vmax))  // 0.9
 ```
 
 The phasor difference is convex in the two voltages, so its largest value over the band box sits at a corner. Below roughly 10° that corner is one terminal at its ceiling and the other at its floor. Reading only the ceilings returned a bound several times tighter than the branch physically has, and an OPF enforces it.
+
+## Bus ids have a ceiling
+
+`BusId::MAX` is `i64::MAX`, and `validate` refuses a network carrying an id above it, with the headroom a 3-winding star expansion needs reserved under the same ceiling. The readers parse an id through `as usize`, which saturates rather than failing, so two distinct out of range ids in a source file used to land on the same value and both surface as `-1` from `pio_bus_ids` — a branch endpoint then matched two bus rows. Real cases sit far below the ceiling; PSS/E stops at 999997.

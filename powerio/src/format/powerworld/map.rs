@@ -397,24 +397,6 @@ fn f_alias(r: &Row, keys: &[&str], default: f64) -> Result<f64> {
 /// quoted values with), skipping absent or empty fields. The PowerWorld field
 /// name is the extras key, so the provenance is self describing and the writer
 /// can put the value back in the same field.
-/// Drop a retained id that states exactly the writer's own positional
-/// fallback for this element: it restates nothing, and a rewrite re-allocates
-/// the same id to the element with none retained. Explicit non-default ids
-/// (and padded ones — the comparison is verbatim) are kept as before.
-fn drop_default_id(extras: &mut Extras, keys: &[&str], default: &str) {
-    for k in keys {
-        // Trimmed: PowerWorld pads ids, and the padded default is still the
-        // default. The pwb reader applies the same rule.
-        if extras
-            .get(*k)
-            .and_then(serde_json::Value::as_str)
-            .is_some_and(|v| v.trim() == default)
-        {
-            extras.remove(*k);
-        }
-    }
-}
-
 fn keep_extras(r: &Row, keys: &[&str], extras: &mut Extras) {
     for k in keys {
         if let Some(v) = r.get(k) {
@@ -575,7 +557,7 @@ fn read_load(r: &Row, bus_labels: &HashMap<&str, BusId>, index: usize) -> Result
         }
     }
     keep_extras(r, &["LoadID", "ID"], &mut extras);
-    drop_default_id(&mut extras, &["LoadID", "ID"], &(index + 1).to_string());
+    super::drop_positional_id(&mut extras, &["LoadID", "ID"], index);
     Ok(Load {
         bus: bus_ref(r, &["BusNum"], &["BusName_NomVolt"], bus_labels)?,
         p,
@@ -590,7 +572,7 @@ fn read_load(r: &Row, bus_labels: &HashMap<&str, BusId>, index: usize) -> Result
 fn read_shunt(r: &Row, bus_labels: &HashMap<&str, BusId>, index: usize) -> Result<Shunt> {
     let mut extras = Extras::new();
     keep_extras(r, &["ShuntID", "ID", "SSCMode", "ShuntMode"], &mut extras);
-    drop_default_id(&mut extras, &["ShuntID", "ID"], &(index + 1).to_string());
+    super::drop_positional_id(&mut extras, &["ShuntID", "ID"], index);
     Ok(Shunt {
         bus: bus_ref(r, &["BusNum"], &["BusName_NomVolt"], bus_labels)?,
         // Switched shunt nominal MW/MVAr in real exports (MWNom/MvarNom in
@@ -656,20 +638,18 @@ fn read_branch(
     // the writer derives on its own: the positional circuit for this bus pair,
     // or the Line/Transformer kind the tap already encodes. Exotic device
     // types (Breaker, Series Cap, ...) are always kept.
-    // Trim before comparing: PowerWorld pads circuit ids, so a real export
-    // spells the first circuit " 1", and the padded default is still the
-    // default (the pwb reader applies the same rule).
-    if let Some(v) = r
-        .get(LINE_CIRCUIT)
-        .or_else(|| r.get("Circuit"))
-        .filter(|v| v.trim() != nth.to_string())
-    {
+    if let Some(v) = r.get(LINE_CIRCUIT).or_else(|| r.get("Circuit")) {
         extras.insert(
             LINE_CIRCUIT.to_string(),
             serde_json::Value::String((*v).to_string()),
         );
     }
     keep_extras(r, &[BRANCH_DEVICE_TYPE, "LineLength"], &mut extras);
+    // The circuit counter is per bus pair, so the second parallel branch's "2"
+    // is as much a positional default as the first's "1". Dropped through the
+    // shared rule rather than by a filter on the insert, so the aux and pwb
+    // readers cannot disagree about what a default is.
+    super::drop_positional_id(&mut extras, &[LINE_CIRCUIT], *nth as usize - 1);
     // Transformer records in complete case exports carry their impedance and
     // tap under `:1` locations (values on the system base after correction);
     // line records use the bare names. Our writer's LineXFRatio is the tap

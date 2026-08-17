@@ -15,10 +15,11 @@ pub enum Error {
     #[error(transparent)]
     Core(#[from] powerio::Error),
 
-    /// An underlying I/O failure reading or writing a file.
+    /// An underlying I/O failure this crate raised itself.
     ///
-    /// Routed through the hub's variant so the message a caller sees is the
-    /// same one every other powerio surface prints for the same failure.
+    /// One the hub raised arrives as [`Error::Core`] wrapping
+    /// `powerio::Error::Io`, so a caller telling I/O apart from the rest reads
+    /// [`Error::category`] rather than matching this variant.
     #[error(transparent)]
     Io(#[from] std::io::Error),
 

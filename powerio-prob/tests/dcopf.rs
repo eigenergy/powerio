@@ -309,6 +309,57 @@ fn a_shuntless_case_carries_zero_conductance() {
 }
 
 #[test]
+fn a_non_finite_susceptance_is_refused_under_every_convention() {
+    // The DC conventions divide by the reactance, and `1/±inf` is `0.0`: the
+    // branch would join the instance as a zero-weight edge with nothing to
+    // report. The Matpower rule divides by `x * tap`, so two finite factors
+    // whose product overflows collapse the same way.
+    let cases: [(f64, f64); 5] = [
+        (f64::NAN, 1.0),
+        (f64::INFINITY, 1.0),
+        (f64::NEG_INFINITY, 1.0),
+        (0.2, f64::INFINITY),
+        (1e300, 1e300),
+    ];
+    for (x, tap) in cases {
+        let mut net = small_network();
+        net.branches[0].x = x;
+        net.branches[0].tap = tap;
+        let view = IndexedNetwork::new(&net);
+        for convention in [
+            DcConvention::ReactanceOnly,
+            DcConvention::Matpower,
+            DcConvention::SeriesImpedance,
+        ] {
+            // Only Matpower divides by the tap, so a reactance that is finite
+            // on its own binds that convention alone; the others read a
+            // perfectly good `1/x` and must keep building.
+            if x.is_finite() && convention != DcConvention::Matpower {
+                continue;
+            }
+            let got = build_dc_opf_instance(
+                &view,
+                &DcOpfOptions {
+                    convention,
+                    ..DcOpfOptions::default()
+                },
+            );
+            assert!(
+                matches!(
+                    got,
+                    Err(Error::Core(
+                        powerio::Error::NonFiniteSusceptance { row: 0 }
+                            | powerio::Error::DegenerateTap { row: 0, .. }
+                    ))
+                ),
+                "{convention:?} accepted x = {x}, tap = {tap}: {:?}",
+                got.map(|p| p.branches.b)
+            );
+        }
+    }
+}
+
+#[test]
 fn matpower_convention_applies_tap_and_phase_shift() {
     let mut net = small_network();
     net.branches[0].tap = 1.25;

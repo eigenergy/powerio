@@ -178,17 +178,11 @@ fn canonical_warnings(net: &BalancedNetwork) -> Vec<String> {
             net.generators.len()
         ));
     }
-    let has_extras = net.buses.iter().any(|b| !b.extras.is_empty())
-        || net.branches.iter().any(|b| !b.extras.is_empty())
-        || net.loads.iter().any(|l| !l.extras.is_empty())
-        || net.shunts.iter().any(|s| !s.extras.is_empty())
-        || net.storage.iter().any(|s| !s.extras.is_empty())
-        || net.hvdc.iter().any(|d| !d.extras.is_empty());
-    if has_extras {
-        warnings.push(
-            "source-format passthrough fields (extras) dropped: the canonical MATPOWER writer emits only named columns".to_string(),
-        );
-    }
+    // The canonical writer emits named columns only and replays no extras key,
+    // so the predicate is always false and the count is every element carrying
+    // one. This is the same helper the PSS/E, PSLF and PowerWorld writers use;
+    // the hand-rolled version here reported a bare yes/no.
+    crate::format::warn_dropped_extras("canonical MATPOWER .m", net, |_| false, &mut warnings);
     warnings
 }
 

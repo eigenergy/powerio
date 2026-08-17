@@ -128,8 +128,19 @@ impl Sanitizer {
     #[must_use]
     pub fn template(&self, text: &str) -> String {
         let mut out = mask_quoted(text);
+        // Prefiltered on this text's own tokens, the same necessary condition
+        // `audit` uses, so a message pays for sorting only the handful of
+        // secrets that could appear in it rather than every one the corpus
+        // taught. Replacement only ever inserts `<name>` and `#`, neither of
+        // which can introduce a secret (`name` is powerio's own vocabulary and
+        // never identifying), so filtering once against the starting text is
+        // enough.
+        let tokens: std::collections::HashSet<&str> = word_tokens(&out).collect();
+        let mut names: Vec<&String> = self
+            .identifying()
+            .filter(|s| leading_run(s).is_none_or(|r| tokens.contains(r)))
+            .collect();
         // Longest first, so a name that contains another is replaced whole.
-        let mut names: Vec<&String> = self.identifying().collect();
         names.sort_by_key(|n| std::cmp::Reverse(n.len()));
         for name in names {
             out = replace_tokens(&out, name, "<name>");
@@ -139,30 +150,51 @@ impl Sanitizer {
 
     /// The secrets worth checking for: long enough to identify, carrying a
     /// letter, and not part of powerio's own vocabulary.
+    ///
+    /// A digit only secret is deliberately outside this set. Auditing one
+    /// would match the report's own counts, ordinals and magnitudes, which are
+    /// numbers the harness computed rather than strings the corpus taught;
+    /// [`Sanitizer::template`] masks every digit run instead.
     fn identifying(&self) -> impl Iterator<Item = &String> {
-        let mut vocabulary = vocabulary();
-        vocabulary.extend(self.allowed.iter().cloned());
+        let vocabulary = vocabulary();
         self.secrets.iter().filter(move |s| {
             s.chars().count() >= MIN_IDENTIFYING
                 && s.chars().any(char::is_alphabetic)
                 && !vocabulary.contains(s.as_str())
+                && !self.allowed.contains(s.as_str())
         })
     }
 
     /// Confirm nothing the corpus taught us survived into `emitted`.
     ///
-    /// This is the backstop, and it is decidable rather than heuristic: the
-    /// harness parsed every case and walked every path, so it knows the exact
-    /// set of strings that must not appear.
+    /// This is the backstop, and it is decidable rather than heuristic over
+    /// the set it covers: the harness parsed every case and walked every path,
+    /// so it knows the exact set of strings that must not appear. That set is
+    /// every secret long enough to identify and carrying a letter; masking is
+    /// what handles the rest.
     ///
     /// # Errors
     ///
     /// Returns every secret found, with the line it appeared on.
     pub fn audit(&self, emitted: &str) -> Result<(), Vec<Leak>> {
-        let secrets: Vec<&String> = self.identifying().collect();
+        // Scanning every secret against every line is the whole cost here, and
+        // a corpus teaches hundreds of thousands of them. `leading_run` is a
+        // necessary condition for a match, so most secrets are excluded by one
+        // hash lookup and only the survivors pay for a scan.
+        let secrets: Vec<(&String, Option<&str>)> =
+            self.identifying().map(|s| (s, leading_run(s))).collect();
         let mut leaks = Vec::new();
+        let mut tokens: std::collections::HashSet<&str> = std::collections::HashSet::new();
         for (i, line) in emitted.lines().enumerate() {
-            for secret in &secrets {
+            tokens.clear();
+            tokens.extend(word_tokens(line));
+            for (secret, run) in &secrets {
+                // A secret whose leading run is absent from this line's tokens
+                // cannot match it; one that does not begin with a word
+                // character has no such run and is always scanned.
+                if run.is_some_and(|r| !tokens.contains(r)) {
+                    continue;
+                }
                 if contains_token(line, secret) {
                     leaks.push(Leak {
                         secret: (*secret).clone(),
@@ -184,7 +216,16 @@ impl Sanitizer {
 /// after one of these spellings is exempt from the audit; the tradeoff runs
 /// the safe way, since a spurious failure would stop a run cold while this
 /// costs one masked token.
-fn vocabulary() -> BTreeSet<String> {
+///
+/// Built once. It depends on nothing but the model's own field names, and
+/// `identifying()` runs per emitted message and per audited line, so rebuilding
+/// a network and serializing it there dominated both.
+fn vocabulary() -> &'static BTreeSet<String> {
+    static VOCABULARY: std::sync::OnceLock<BTreeSet<String>> = std::sync::OnceLock::new();
+    VOCABULARY.get_or_init(build_vocabulary)
+}
+
+fn build_vocabulary() -> BTreeSet<String> {
     use powerio_matrix::{BalancedNetwork, Branch, Bus, BusId, BusType, Generator, Load, Shunt};
     let mut net = BalancedNetwork::new("", 100.0);
     net.buses.push(Bus::new(BusId(1), BusType::Ref, 1.0));
@@ -210,7 +251,16 @@ pub fn ratio(before: f64, after: f64) -> Option<f64> {
         return None;
     }
     let r = after / before;
-    let scale = 10f64.powi(3 - 1 - r.abs().log10().floor() as i32);
+    // A zero ratio has no decade to round against: `log10(0)` is `-inf`, and
+    // the `as i32` saturation would make the exponent overflow.
+    if r == 0.0 {
+        return Some(0.0);
+    }
+    let decade = r.abs().log10().floor();
+    let scale = 10f64.powi(2 - decade as i32);
+    if !scale.is_finite() || scale == 0.0 {
+        return Some(r);
+    }
     Some((r * scale).round() / scale)
 }
 
@@ -261,17 +311,45 @@ fn word_boundaries(haystack: &str, needle: &str) -> Vec<usize> {
         return Vec::new();
     }
     let bytes = haystack.as_bytes();
-    let part = |b: u8| b.is_ascii_alphanumeric() || b == b'_';
     haystack
         .match_indices(needle)
         .filter(|(i, m)| {
-            let before = *i == 0 || !part(bytes[*i - 1]);
+            let before = *i == 0 || !word_part(bytes[*i - 1]);
             let end = *i + m.len();
-            let after = end >= bytes.len() || !part(bytes[end]);
+            let after = end >= bytes.len() || !word_part(bytes[end]);
             before && after
         })
         .map(|(i, _)| i)
         .collect()
+}
+
+/// Whether `b` is part of a word, matching [`word_boundaries`]'s rule.
+fn word_part(b: u8) -> bool {
+    b.is_ascii_alphanumeric() || b == b'_'
+}
+
+/// The maximal word run `needle` opens with, or `None` when it does not start
+/// with a word character.
+///
+/// This run is what [`Sanitizer::audit`] prefilters on, and the reason it is
+/// sound: a match of `needle` needs a non-word character (or the start of the
+/// line) before it, and the run is followed either by `needle`'s own next
+/// character — a non-word one, since the run is maximal — or by the match's
+/// own trailing boundary. So the run always lands in the line as a complete
+/// token, and a line whose tokens do not hold it cannot hold `needle`.
+fn leading_run(needle: &str) -> Option<&str> {
+    let end = needle
+        .bytes()
+        .position(|b| !word_part(b))
+        .unwrap_or(needle.len());
+    (end > 0).then(|| &needle[..end])
+}
+
+/// The maximal word runs of `line`, the tokens a secret's leading run must
+/// appear among.
+fn word_tokens(line: &str) -> impl Iterator<Item = &str> {
+    line.split(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
+        .filter(|t| !t.is_empty())
 }
 
 fn contains_token(haystack: &str, needle: &str) -> bool {
@@ -337,25 +415,32 @@ fn mask_digits(text: &str) -> String {
 }
 
 fn collect_strings(value: &serde_json::Value, out: &mut BTreeSet<String>) {
+    collect_strings_inner(value, false, out);
+}
+
+/// `in_extras` marks the subtree under an `extras` map, where the keys are
+/// whatever token the source stated — a deck naming a property after a feeder
+/// puts that name in a key and nowhere else. Everywhere else the keys are
+/// powerio's own field names, and learning those made `uid`, `route`,
+/// `charging` and every other optional field into a corpus secret: masked out
+/// of the serde paths the report is written in, and tripping [`audit`] on the
+/// harness's own vocabulary.
+fn collect_strings_inner(value: &serde_json::Value, in_extras: bool, out: &mut BTreeSet<String>) {
     match value {
         serde_json::Value::String(s) if !s.is_empty() => {
             out.insert(s.clone());
         }
         serde_json::Value::Array(xs) => {
             for x in xs {
-                collect_strings(x, out);
+                collect_strings_inner(x, in_extras, out);
             }
         }
         serde_json::Value::Object(xs) => {
-            // Keys are learned as well as values. Most are powerio's own field
-            // names — and those land in [`vocabulary`], which is built the same
-            // way, so they are exempt. An `Extras` map is the exception that
-            // makes this necessary: its keys are whatever token the source
-            // stated, so a deck naming a property after a feeder puts that name
-            // in a key and nowhere else.
             for (key, x) in xs {
-                out.insert(key.clone());
-                collect_strings(x, out);
+                if in_extras {
+                    out.insert(key.clone());
+                }
+                collect_strings_inner(x, in_extras || key == "extras", out);
             }
         }
         _ => {}

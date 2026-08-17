@@ -1011,7 +1011,9 @@ pub unsafe extern "C" fn pio_is_radial(net: *const PioNetwork) -> i32 {
 /// `NULL` on error (message into `errbuf`). Fidelity warnings, if any, are
 /// published through `out_warnings` as one owned C string (free it with
 /// [`pio_string_free`]), or NULL when there are none; a returned string has no
-/// handle to attach them to. Pass NULL to discard them.
+/// handle to attach them to. Pass NULL to discard them. `out_warnings` is
+/// written on every return path and is NULL whenever this returns NULL, so an
+/// error return leaves nothing to free.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_to_format(
     net: *const PioNetwork,
@@ -1072,8 +1074,14 @@ unsafe fn finish_conversion(
         set_out_warnings(out_warnings, &[]);
         match catch_unwind(AssertUnwindSafe(f)) {
             Ok(Ok((text, warnings))) => {
-                set_out_warnings(out_warnings, &warnings);
-                finish_cstring(text, errbuf, errlen)
+                // Build the returned string before publishing: an interior NUL
+                // in the text fails here, and a caller reading NULL as an error
+                // never frees what a publish would have left behind.
+                let out = finish_cstring(text, errbuf, errlen);
+                if !out.is_null() {
+                    set_out_warnings(out_warnings, &warnings);
+                }
+                out
             }
             Ok(Err(msg)) => {
                 copy_to_buf(errbuf, errlen, &msg);
@@ -1093,6 +1101,8 @@ unsafe fn finish_conversion(
 /// [`pio_string_free`]), `NULL` on error. Fidelity warnings, read side first,
 /// are published through `out_warnings` as one owned C string (free it with
 /// [`pio_string_free`]), NULL when there are none. Pass NULL to discard them.
+/// `out_warnings` is written on every return path and is NULL whenever this
+/// returns NULL, so an error return leaves nothing to free.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_convert_file(
     path: *const c_char,
@@ -1120,7 +1130,8 @@ pub unsafe extern "C" fn pio_convert_file(
 /// string (free with [`pio_string_free`]), `NULL` on error. Fidelity warnings,
 /// read side first, are published through `out_warnings` as one owned C string
 /// (free it with [`pio_string_free`]), NULL when there are none. Pass NULL to
-/// discard them.
+/// discard them. `out_warnings` is written on every return path and is NULL
+/// whenever this returns NULL, so an error return leaves nothing to free.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_convert_str(
     text: *const c_char,
@@ -1147,6 +1158,8 @@ pub unsafe extern "C" fn pio_convert_str(
 /// `-1` on error (message into `errbuf`). Fidelity warnings, if any, are
 /// published through `out_warnings` as one owned C string (free it with
 /// [`pio_string_free`]), NULL when there are none. Pass NULL to discard them.
+/// `out_warnings` is written on every return path and is NULL whenever this
+/// returns `-1`, so an error return leaves nothing to free.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_write_dir(
     net: *const PioNetwork,
@@ -1214,15 +1227,17 @@ unsafe fn fill<T: Copy>(out: *mut T, cap: usize, vals: impl ExactSizeIterator<It
 /// entries, and return the total bus count. This ordering DEFINES the dense
 /// index space every other per-bus array shares. Call once with `(NULL, 0)` to
 /// size, allocate, then call again to fill. Ids are int64 in `1..2^63-1` (a v4
-/// invariant); a source id that is a string or exceeds that range is mapped to
-/// dense int64 at read, never passed through raw.
+/// invariant): a reader whose source ids are strings assigns dense ids and
+/// keeps the source name, and a numeric id past that range is refused at the
+/// read boundary rather than passed through.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_bus_ids(net: *const PioNetwork, out: *mut i64, cap: usize) -> usize {
     unsafe {
         guard(0, || {
             // The star-lowered space, so every per-bus column keyed to this
             // ordering has an id at every index. A star bus carries the
-            // synthesized id the expansion assigned it.
+            // synthesized id the expansion assigned it, and the read boundary
+            // reserves the headroom for it, so the conversion cannot fail.
             view(net).map_or(0, |v| {
                 fill(
                     out,
@@ -2590,7 +2605,8 @@ fn warn_dropped_sidecars(
 /// [`pio_string_free`]), `NULL` on error. A cross format write's fidelity
 /// losses are published through `out_warnings` as one owned C string (free it
 /// with [`pio_string_free`]), NULL when there are none. Pass NULL to discard
-/// them.
+/// them. `out_warnings` is written on every return path and is NULL whenever
+/// this returns NULL, so an error return leaves nothing to free.
 #[cfg(feature = "dist")]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_dist_to_format(
@@ -2621,7 +2637,9 @@ pub unsafe extern "C" fn pio_dist_to_format(
 /// error. The warnings published through `out_warnings` carry both the parse
 /// warnings and the writer's fidelity losses (there is no handle to query them),
 /// as one owned C string (free it with [`pio_string_free`]), NULL when there are
-/// none. Pass NULL to discard them.
+/// none. Pass NULL to discard them. `out_warnings` is written on every return
+/// path and is NULL whenever this returns NULL, so an error return leaves
+/// nothing to free.
 #[cfg(feature = "dist")]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_dist_convert_file(
@@ -2654,7 +2672,8 @@ pub unsafe extern "C" fn pio_dist_convert_file(
 /// warnings published through `out_warnings` carry both the parse warnings and
 /// the writer's fidelity losses (there is no handle to query them), as one owned
 /// C string (free it with [`pio_string_free`]), NULL when there are none. Pass
-/// NULL to discard them.
+/// NULL to discard them. `out_warnings` is written on every return path and is
+/// NULL whenever this returns NULL, so an error return leaves nothing to free.
 #[cfg(feature = "dist")]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_dist_convert_str(
@@ -3658,6 +3677,52 @@ mod tests {
             assert_eq!(pio_bus_ids(c, ids.as_mut_ptr(), ids.len()), 9);
             assert!(ids.iter().all(|&id| id >= 1));
             pio_network_free(c);
+        }
+    }
+
+    #[test]
+    fn a_failed_conversion_publishes_no_warnings_to_free() {
+        // A bus name carrying a NUL rides through to the PSS/E text, so the
+        // shared tail has the fidelity warnings in hand when the C string it
+        // must return cannot be built. An error return has to leave
+        // `out_warnings` NULL: the caller is told not to read it, so anything
+        // published there is never freed.
+        let src = std::fs::read_to_string(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../tests/data/case9.m"),
+        )
+        .unwrap();
+        let names = (2..=9).fold(String::from("\t'BUS\u{0}1';\n"), |mut acc, i| {
+            acc.push_str(&format!("\t'BUS{i}';\n"));
+            acc
+        });
+        let tmp = tempfile::tempdir().unwrap();
+        let case = tmp.path().join("nul_bus_name.m");
+        std::fs::write(&case, format!("{src}\nmpc.bus_name = {{\n{names}}};\n")).unwrap();
+
+        let path = CString::new(case.to_str().unwrap()).unwrap();
+        let to = CString::new("psse").unwrap();
+        // A poison value the call must overwrite, as examples/smoke.c does.
+        let mut warn_out = std::ptr::dangling_mut::<c_char>();
+        let mut err = [0 as c_char; PIO_ERRBUF_MIN];
+        unsafe {
+            let s = pio_convert_file(
+                path.as_ptr(),
+                std::ptr::null(),
+                to.as_ptr(),
+                &mut warn_out,
+                err.as_mut_ptr(),
+                err.len(),
+            );
+            let msg = CStr::from_ptr(err.as_ptr()).to_str().unwrap();
+            assert!(s.is_null(), "the interior NUL should have failed the write");
+            assert!(
+                msg.contains("interior NUL"),
+                "the test no longer reaches the interior-NUL tail: {msg:?}"
+            );
+            assert!(
+                warn_out.is_null(),
+                "an error return left a warnings allocation the caller never frees"
+            );
         }
     }
 
@@ -5289,6 +5354,46 @@ mpc.branch = [
             unsafe {
                 pio_string_free(summary);
                 pio_dist_network_free(net);
+            }
+        }
+
+        #[test]
+        fn a_failed_conversion_publishes_no_warnings_to_free() {
+            // The dist half of the same tail. A JSON escaped NUL in a PMD name
+            // is a legal input string but an illegal C output string, so the
+            // conversion fails with the fidelity warnings already in hand.
+            let text = std::fs::read_to_string(
+                std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                    .join("../tests/data/dist/pmd/ieee13.json"),
+            )
+            .unwrap();
+            let injected = text.replacen("\"name\": \"", "\"name\": \"\\u0000", 1);
+            assert_ne!(injected, text, "no PMD name field to carry the NUL");
+            let text = CString::new(injected).unwrap();
+            let from = CString::new("pmd").unwrap();
+            let to = CString::new("dss").unwrap();
+            // A poison value the call must overwrite, as examples/smoke.c does.
+            let mut warn_out = std::ptr::dangling_mut::<c_char>();
+            let mut err = [0 as c_char; PIO_ERRBUF_MIN];
+            unsafe {
+                let s = pio_dist_convert_str(
+                    text.as_ptr(),
+                    from.as_ptr(),
+                    to.as_ptr(),
+                    &mut warn_out,
+                    err.as_mut_ptr(),
+                    err.len(),
+                );
+                let msg = CStr::from_ptr(err.as_ptr()).to_str().unwrap();
+                assert!(s.is_null(), "the interior NUL should have failed the write");
+                assert!(
+                    msg.contains("interior NUL"),
+                    "the test no longer reaches the interior-NUL tail: {msg:?}"
+                );
+                assert!(
+                    warn_out.is_null(),
+                    "an error return left a warnings allocation the caller never frees"
+                );
             }
         }
 

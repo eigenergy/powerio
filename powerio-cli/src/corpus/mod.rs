@@ -857,6 +857,21 @@ fn unavailable_label(side: &YbusUnavailable) -> String {
 
 /// Element-count and total deltas, never the absolute counts: how many loads a
 /// utility runs is case data, how many a conversion lost is a defect.
+/// Whether a [`core_delta`] string reports power moving rather than elements
+/// being regrouped.
+///
+/// Counts alone moving is a merge or a split, which formats do legitimately
+/// (MATPOWER states one bus demand where PSS/E states three loads). Power
+/// moving is a loss. The labels live in `core_delta` and `dist_core_delta`
+/// just above, so the test belongs beside them: read off the delta in two
+/// places, it is one rule that a fifth power-bearing field would silently
+/// break in whichever site nobody updated.
+pub(super) fn power_moved(core: &str) -> bool {
+    ["load p", "load q", "gen p", "base mva"]
+        .iter()
+        .any(|label| core.contains(label))
+}
+
 fn core_delta(
     before: &invariants::TransmissionCore,
     after: &invariants::TransmissionCore,
@@ -1116,13 +1131,7 @@ fn findings_for(comparison: &Comparison, sanitizer: &Sanitizer) -> Vec<Finding> 
         );
     }
     if let Some(core) = &comparison.core_changed {
-        // Counts alone moving is a merge or a split, which formats do
-        // legitimately (MATPOWER states one bus demand where PSS/E states
-        // three loads). Power moving is a loss.
-        let power_moved = core.contains("load p")
-            || core.contains("load q")
-            || core.contains("gen p")
-            || core.contains("base mva");
+        let power_moved = power_moved(core);
         push(
             if power_moved {
                 "core.power"
