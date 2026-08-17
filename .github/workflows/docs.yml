@@ -147,6 +147,8 @@ jobs:
                 <a href="guide/format-fidelity.html">format fidelity</a>
                 <a href="guide/matrices.html">matrices</a>
                 <a href="guide/dcopf-bundle.html">DC OPF bundle</a>
+                <a href="guide/capi.html">C ABI</a>
+                <a href="guide/migration.html">migrating</a>
                 <a href="guide/languages.html">language APIs</a>
                 <a href="guide/python.html">python</a></dd>
           </div>
