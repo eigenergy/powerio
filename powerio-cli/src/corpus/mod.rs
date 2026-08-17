@@ -27,6 +27,7 @@
 
 pub mod anonymize;
 pub mod fingerprint;
+pub mod walk;
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -44,8 +45,19 @@ const COMPARE_FILE: &str = "comparisons.json";
 
 /// Every key and enum spelling the findings file itself uses. Declared as
 /// vocabulary so the leak audit never mistakes the report's own schema for
-/// case data; keep it in step with [`Finding`] and [`findings_for`].
-const SCHEMA_KEYS: [&str; 25] = [
+/// case data; keep it in step with [`Finding`], [`findings_for`] and
+/// [`walk_findings`].
+const SCHEMA_KEYS: [&str; 35] = [
+    "hop",
+    "hops",
+    "path",
+    "origin",
+    "direct",
+    "emptied",
+    "resurrected",
+    "seed",
+    "revisit_of",
+    "walk",
     "bucket",
     "code",
     "severity",
@@ -151,11 +163,16 @@ fn names_a_case(path: &Path) -> bool {
 /// Walk `corpus`, parse everything readable, and bucket it by electrical
 /// fingerprint.
 ///
+/// `max_bytes` skips any file larger, counted into `skipped`: the pairwise
+/// compare is quadratic in a bucket and a walk re-parses per hop, so one
+/// interconnection scale case in an otherwise moderate corpus would own the
+/// whole run. `None` reads everything.
+///
 /// # Errors
 ///
 /// Fails when the corpus directory cannot be walked or the work directory
 /// cannot be written.
-pub fn ingest(corpus: &Path, work: &Path) -> Result<Ingest> {
+pub fn ingest(corpus: &Path, work: &Path, max_bytes: Option<u64>) -> Result<Ingest> {
     std::fs::create_dir_all(work)
         .with_context(|| format!("create work directory {}", work.display()))?;
     let mut files_seen = 0usize;
@@ -193,6 +210,13 @@ pub fn ingest(corpus: &Path, work: &Path) -> Result<Ingest> {
             continue;
         }
         files_seen += 1;
+        if let Some(cap) = max_bytes {
+            let over = entry.metadata().is_ok_and(|m| m.is_file() && m.len() > cap);
+            if over {
+                skipped += 1;
+                continue;
+            }
+        }
         match read_case(path) {
             // A file that parses to no buses is a library, not a case: dss
             // linecode and wiredata decks parse happily and carry no network.
@@ -343,14 +367,28 @@ fn read_case(path: &Path) -> std::result::Result<Case, Unreadable> {
         error,
         panicked,
     };
-    match catch_panic(|| powerio_matrix::parse_file(path, None)) {
+    let balanced_error = match catch_panic(|| powerio_matrix::parse_file(path, None)) {
         Ok(Ok(parsed)) => return Ok(Case::Balanced(Box::new(parsed.network), parsed.warnings)),
         Err(message) => return Err(unreadable(message, true)),
-        Ok(Err(_)) => {}
-    }
+        Ok(Err(err)) => err.to_string(),
+    };
     match catch_panic(|| powerio_dist::parse_file(path, None)) {
         Ok(Ok(net)) => Ok(Case::Multiconductor(Box::new(net))),
-        Ok(Err(err)) => Err(unreadable(err.to_string(), false)),
+        // A `.m` that failed the MATPOWER parse used to report "unknown
+        // distribution format `m`": the fallback reader's refusal displaced
+        // the diagnosis. When the distribution reader does not even claim the
+        // format, the transmission error is the one that says what is wrong.
+        Ok(Err(err)) => {
+            let message = err.to_string();
+            Err(unreadable(
+                if message.starts_with("unknown distribution format") {
+                    balanced_error
+                } else {
+                    message
+                },
+                false,
+            ))
+        }
         Err(message) => Err(unreadable(message, true)),
     }
 }
@@ -403,6 +441,10 @@ pub enum Via {
     /// directly. The only leg that can catch a reader both directions of a
     /// round trip agree about.
     Sibling,
+    /// One step of a [`walk`] chain. Its `from` is whatever the walk was in,
+    /// which is a network several formats deep rather than a corpus file, and
+    /// the ordinals are hop positions rather than bucket members.
+    Walk,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -584,10 +626,7 @@ fn dist_convert_leg(
     // includes. Reading it anyway loses every object the includes carry and
     // reports it as a conversion loss, which is a statement about the harness
     // rather than about powerio.
-    if text.lines().any(|line| {
-        let word = line.split_whitespace().next().unwrap_or("");
-        word.eq_ignore_ascii_case("redirect") || word.eq_ignore_ascii_case("compile")
-    }) {
+    if has_include(&text) {
         out.unresolved_include = true;
         return out;
     }
@@ -620,6 +659,16 @@ fn dist_convert_leg(
     out.model_diffs.sort();
     out.model_diffs.dedup();
     out
+}
+
+/// Whether a written OpenDSS deck pulls in files a string readback cannot
+/// resolve. Shared by the pairwise compare and the walk, which must skip the
+/// same decks for the same reason.
+fn has_include(text: &str) -> bool {
+    text.lines().any(|line| {
+        let word = line.split_whitespace().next().unwrap_or("");
+        word.eq_ignore_ascii_case("redirect") || word.eq_ignore_ascii_case("compile")
+    })
 }
 
 fn dist_core_delta(
@@ -862,7 +911,19 @@ fn read_json<T: for<'de> Deserialize<'de>>(path: &Path) -> Result<T> {
 /// written, or when the emitted report fails its own leak audit.
 pub fn report(work: &Path, findings_path: &Path, summary_path: Option<&Path>) -> Result<usize> {
     let ingest: Ingest = read_json(&work.join(INGEST_FILE))?;
-    let comparisons: Comparisons = read_json(&work.join(COMPARE_FILE))?;
+    // Either analysis feeds the report on its own: a run may compare, walk, or
+    // both. Only both missing means there is nothing to report yet.
+    let comparisons: Option<Comparisons> = read_json(&work.join(COMPARE_FILE)).ok();
+    let walks: Option<walk::Walks> = read_json(&work.join(walk::WALK_FILE)).ok();
+    if comparisons.is_none() && walks.is_none() {
+        anyhow::bail!(
+            "nothing to report in {}: run `powerio corpus compare` or `powerio corpus walk` first",
+            work.display()
+        );
+    }
+    let comparisons = comparisons.unwrap_or(Comparisons {
+        comparisons: Vec::new(),
+    });
 
     let mut sanitizer = Sanitizer::new();
     // The report's own schema. Without this a deck stating `delta` for a
@@ -908,6 +969,11 @@ pub fn report(work: &Path, findings_path: &Path, summary_path: Option<&Path>) ->
     }
     for comparison in &comparisons.comparisons {
         findings.extend(findings_for(comparison, &sanitizer));
+    }
+    if let Some(walks) = &walks {
+        for w in &walks.walks {
+            findings.extend(walk_findings(w, &sanitizer));
+        }
     }
 
     let jsonl = render_jsonl(&findings)?;
@@ -1112,6 +1178,122 @@ fn findings_for(comparison: &Comparison, sanitizer: &Sanitizer) -> Vec<Finding> 
             "declared",
             serde_json::json!({ "templates": templates }),
         );
+    }
+    out
+}
+
+/// Findings for one walk.
+///
+/// Only the properties a chain can state are reported here. A hop's own loss
+/// is the same quantity [`findings_for`] already grades, and re-reporting it
+/// per hop would bury the three findings that are new under a copy of the
+/// pairwise report.
+///
+/// Every finding carries the path that produced it, as format tokens, and the
+/// seed that replays it. Both are harness vocabulary rather than case data.
+fn walk_findings(w: &walk::Walk, sanitizer: &Sanitizer) -> Vec<Finding> {
+    let mut out = Vec::new();
+    let path: Vec<String> = w.hops.iter().map(|h| h.to.clone()).collect();
+    for (index, hop) in w.hops.iter().enumerate() {
+        let leg = Some(Leg {
+            from: if index == 0 {
+                w.origin.clone()
+            } else {
+                w.hops[index - 1].to.clone()
+            },
+            to: hop.to.clone(),
+            via: Via::Walk,
+            from_ordinal: index,
+            to_ordinal: index + 1,
+        });
+        let mut push =
+            |code: &'static str, severity: &'static str, mut detail: serde_json::Value| {
+                if let Some(map) = detail.as_object_mut() {
+                    map.insert("origin".into(), serde_json::json!(w.origin));
+                    map.insert("path".into(), serde_json::json!(path));
+                    map.insert("hop".into(), serde_json::json!(index));
+                    map.insert("seed".into(), serde_json::json!(w.seed.to_string()));
+                }
+                out.push(Finding {
+                    bucket: Some(w.bucket.clone()),
+                    code,
+                    severity,
+                    leg: leg.clone(),
+                    detail,
+                });
+            };
+
+        if let Some(failure) = &hop.failure {
+            let panicked = failure.contains("panicked");
+            push(
+                if panicked {
+                    "walk.panic"
+                } else {
+                    "walk.failure"
+                },
+                if panicked { "crash" } else { "silent-drop" },
+                serde_json::json!({ "message": sanitizer.template(failure) }),
+            );
+        }
+        if let Some(drift) = &hop.drift {
+            // Conversion should settle. A second pass through a format that
+            // lands somewhere else means the reader and writer are not a
+            // projection, and every later hop inherits the drift. Drift in
+            // retained extras alone is churn worth seeing; drift in an
+            // electrical property is a defect.
+            push(
+                "walk.drift",
+                if hop.drift_electrical {
+                    "silent-value-change"
+                } else {
+                    "declared"
+                },
+                serde_json::json!({
+                    "revisit_of": hop.revisit_of,
+                    "delta": sanitizer.template(drift),
+                }),
+            );
+        }
+        if let Some(delta) = &hop.path_dependent {
+            // The destination format is the same and the answer is not, so the
+            // route through the graph changed the result. No single leg can
+            // state this, which is the whole reason walks exist. Retention
+            // honestly thins along a chain, so extras-only path dependence is
+            // reported for triage rather than as a defect.
+            push(
+                "walk.path-dependent",
+                if hop.path_dependent_electrical {
+                    "silent-value-change"
+                } else {
+                    "declared"
+                },
+                serde_json::json!({ "direct": sanitizer.template(delta) }),
+            );
+        }
+        if !hop.resurrected.is_empty() {
+            // A table was empty and is not. When the hop's own electrical
+            // properties held, the rows are a regrouping the target format
+            // demands (pandapower states transformer charging as bus shunts);
+            // when they moved too, a writer invented data no reader gave it.
+            push(
+                "walk.resurrection",
+                if hop.leg.electrical() {
+                    "silent-value-change"
+                } else {
+                    "declared"
+                },
+                serde_json::json!({ "resurrected": hop.resurrected }),
+            );
+        }
+        if !hop.emptied.is_empty() {
+            // Not a defect. It says the hops after this one are graded against
+            // an empty table, so their silence is not evidence.
+            push(
+                "walk.absorbed",
+                "declared",
+                serde_json::json!({ "emptied": hop.emptied }),
+            );
+        }
     }
     out
 }
