@@ -11,15 +11,38 @@ the same code, `powerio-cli`'s `invariants` module, so the CI gate and the
 harness cannot drift apart.
 
 ```text
-powerio corpus ingest <corpus-dir> --work <scratch-dir>
+powerio corpus ingest <corpus-dir> --work <scratch-dir> [--max-bytes N]
 powerio corpus compare --work <scratch-dir>
+powerio corpus walk --work <scratch-dir> [--walks N] [--hops N] [--seed N] [--settle N]
 powerio corpus report --work <scratch-dir> -o findings.jsonl --summary summary.md
 ```
 
 The corpus directory is only read. The work directory holds raw values and is
 disposable, so it stays on the machine that owns the corpus. `findings.jsonl`
 is the boundary, and `report` audits its own output against every string the
-corpus taught it before writing a byte.
+corpus taught it before writing a byte. `compare` and `walk` are independent
+analyses over one ingest; `report` takes whichever ran.
+
+## Walks
+
+`compare` runs every leg from the pristine case, which is the right shape for
+a gate and blind to what only a chain can state. `walk` converts each bucket's
+case through random cycles of formats and grades three chain properties: the
+route must not change the destination (converting A→B→C must land where A→C
+does), conversion must settle (a second pass through a format is a no-op), and
+an emptied table must stay empty (rows reappearing means a writer stated data
+no reader gave it). A hop's own loss is graded by `compare` already, so walk
+findings carry only the chain properties, each with the format path and the
+seed that replays it.
+
+The run learns as it goes. A ledger in the work directory records, per
+directed format pair, every distinct signature that edge has produced —
+warning shapes, changed model path classes, chain findings — and the next path
+is drawn toward the pairs that have taught the least: an edge's weight is its
+novelty rate, so an unwalked edge scores 1 and a mined-out one decays toward
+zero without ever being excluded. The run ends when `--settle` consecutive
+walks teach the ledger nothing. The ledger persists across runs; delete it to
+start over.
 
 ## What it is for
 

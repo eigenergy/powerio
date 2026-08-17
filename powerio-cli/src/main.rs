@@ -254,11 +254,42 @@ enum CorpusCommand {
         /// repository.
         #[arg(short, long)]
         work: PathBuf,
+        /// Skip files larger than this many bytes (counted as skipped). The
+        /// compare is quadratic per bucket and a walk re-parses per hop, so
+        /// one interconnection scale case would own the whole run.
+        #[arg(long)]
+        max_bytes: Option<u64>,
     },
     /// Run the invariants over every bucket the ingest found.
     Compare {
         #[arg(short, long)]
         work: PathBuf,
+    },
+    /// Chain each case through random cycles of formats, and hold the chain to
+    /// the properties one leg cannot state: that the route does not change the
+    /// destination, that conversion settles, and that an emptied table stays
+    /// empty.
+    ///
+    /// Each run keeps a ledger of what every format pair has taught it and
+    /// draws the next path toward the pairs that have taught the least. The
+    /// ledger lives in the work directory and carries across runs.
+    Walk {
+        #[arg(short, long)]
+        work: PathBuf,
+        /// Walks per bucket, before the settle rule cuts the run short.
+        #[arg(long, default_value_t = 8)]
+        walks: usize,
+        /// Formats per walk. Six is two full cycles of the three format
+        /// families, which is where composition starts to show.
+        #[arg(long, default_value_t = 6)]
+        hops: usize,
+        /// Seed for the path draw. The same seed and ledger replay the run.
+        #[arg(long, default_value_t = 0x5EED)]
+        seed: u64,
+        /// Stop after this many consecutive walks that teach the ledger
+        /// nothing.
+        #[arg(long, default_value_t = 12)]
+        settle: usize,
     },
     /// Write the sanitized findings. Refuses to write anything that still
     /// carries a string the corpus taught it.
@@ -1160,8 +1191,12 @@ fn run_verify(input: &Path, kind: MatrixKind, scheme: Scheme) -> anyhow::Result<
 /// they run in order against one work directory.
 fn run_corpus(action: CorpusCommand) -> anyhow::Result<()> {
     match action {
-        CorpusCommand::Ingest { corpus, work } => {
-            let out = powerio_cli::corpus::ingest(&corpus, &work)?;
+        CorpusCommand::Ingest {
+            corpus,
+            work,
+            max_bytes,
+        } => {
+            let out = powerio_cli::corpus::ingest(&corpus, &work, max_bytes)?;
             let members: usize = out.buckets.iter().map(|b| b.members.len()).sum();
             println!(
                 "{} files seen, {members} cases in {} buckets, {} unreadable, {} skipped",
@@ -1174,6 +1209,21 @@ fn run_corpus(action: CorpusCommand) -> anyhow::Result<()> {
         CorpusCommand::Compare { work } => {
             let out = powerio_cli::corpus::compare(&work)?;
             println!("{} comparisons", out.comparisons.len());
+        }
+        CorpusCommand::Walk {
+            work,
+            walks,
+            hops,
+            seed,
+            settle,
+        } => {
+            let out = powerio_cli::corpus::walk::walk(&work, walks, hops, seed, settle)?;
+            let steps: usize = out.walks.iter().map(|w| w.hops.len()).sum();
+            println!(
+                "{} walks, {steps} hops, {} dry at the end",
+                out.walks.len(),
+                out.dry_streak
+            );
         }
         CorpusCommand::Report {
             work,

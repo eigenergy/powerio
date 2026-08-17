@@ -37,7 +37,7 @@ fn siblings_group_by_content_whatever_they_are_called() {
     let corpus = tempfile::tempdir().unwrap();
     build_corpus(corpus.path());
 
-    let ingest = corpus::ingest(corpus.path(), work.path()).unwrap();
+    let ingest = corpus::ingest(corpus.path(), work.path(), None).unwrap();
     let grouped: Vec<_> = ingest
         .buckets
         .iter()
@@ -72,7 +72,7 @@ fn the_report_carries_nothing_from_the_corpus() {
     let corpus = tempfile::tempdir().unwrap();
     build_corpus(corpus.path());
 
-    corpus::ingest(corpus.path(), work.path()).unwrap();
+    corpus::ingest(corpus.path(), work.path(), None).unwrap();
     corpus::compare(work.path()).unwrap();
     let findings = work.path().join("findings.jsonl");
     let summary = work.path().join("summary.md");
@@ -219,7 +219,7 @@ fn a_symlink_out_of_the_corpus_is_not_read() {
     #[cfg(unix)]
     std::os::unix::fs::symlink(&secret, corpus.path().join("link.m")).unwrap();
 
-    let ingest = corpus::ingest(corpus.path(), work.path()).unwrap();
+    let ingest = corpus::ingest(corpus.path(), work.path(), None).unwrap();
     let members: usize = ingest.buckets.iter().map(|b| b.members.len()).sum();
     #[cfg(unix)]
     {
