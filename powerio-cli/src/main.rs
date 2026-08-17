@@ -1220,9 +1220,9 @@ fn run_corpus(action: CorpusCommand) -> anyhow::Result<()> {
             let out = powerio_cli::corpus::walk::walk(&work, walks, hops, seed, settle)?;
             let steps: usize = out.walks.iter().map(|w| w.hops.len()).sum();
             println!(
-                "{} walks, {steps} hops, {} dry at the end",
+                "{} walks, {steps} hops, {} bucket(s) settled early",
                 out.walks.len(),
-                out.dry_streak
+                out.settled_buckets
             );
         }
         CorpusCommand::Report {

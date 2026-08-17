@@ -245,8 +245,9 @@ pub struct Walk {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Walks {
     pub walks: Vec<Walk>,
-    /// Walks that ended without adding a signature, at the end of the run.
-    pub dry_streak: usize,
+    /// Buckets whose walks were cut short by the settle rule: the sampler
+    /// stopped finding there before the walk budget ran out.
+    pub settled_buckets: usize,
 }
 
 /// What one directed edge has taught the harness.
@@ -450,10 +451,9 @@ pub fn walk(work: &Path, walks: usize, hops: usize, seed: u64, settle: usize) ->
     let mut ledger: Ledger = super::read_json(&ledger_path).unwrap_or_default();
 
     let mut out = Walks::default();
-    let mut dry = 0usize;
     let mut rng = Rng::new(seed);
 
-    'outer: for bucket in &ingest.buckets {
+    for bucket in &ingest.buckets {
         let Some((origin_format, origin)) = first_readable(bucket) else {
             continue;
         };
@@ -464,9 +464,13 @@ pub fn walk(work: &Path, walks: usize, hops: usize, seed: u64, settle: usize) ->
         // Direct conversions of this bucket's origin, computed at most once
         // per format across all its walks.
         let mut direct: BTreeMap<String, Option<Net>> = BTreeMap::new();
+        // The settle rule is per bucket: each bucket is a different case, and
+        // one going quiet says nothing about what the next can teach. A global
+        // streak would let a few quiet buckets starve every one after them.
+        let mut dry = 0usize;
         for _ in 0..walks {
             if dry >= settle {
-                break 'outer;
+                break;
             }
             let walk_seed = rng.next_u64();
             let path = draw_path(
@@ -489,9 +493,11 @@ pub fn walk(work: &Path, walks: usize, hops: usize, seed: u64, settle: usize) ->
             ledger.walks += 1;
             out.walks.push(walk);
         }
+        if dry >= settle {
+            out.settled_buckets += 1;
+        }
     }
 
-    out.dry_streak = dry;
     super::write_json(&ledger_path, &ledger)?;
     super::write_json(&work.join(WALK_FILE), &out)?;
     Ok(out)
