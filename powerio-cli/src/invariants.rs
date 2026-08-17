@@ -49,6 +49,11 @@ impl std::fmt::Display for YbusChange {
 }
 
 /// Which per-bus injection moved.
+///
+/// The DC entries are per-bus too: a two-terminal DC line contributes at the
+/// bus each of its ends sits on. They name the end by its converter role
+/// rather than by the line's `from`/`to`, which are branch words for a
+/// quantity tallied at a bus.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Injection {
     LoadP,
@@ -56,11 +61,11 @@ pub enum Injection {
     GenP,
     GenQ,
     /// Real power a DC line takes out of its rectifier bus.
-    DcFromP,
+    DcRectifierP,
     /// Real power a DC line delivers to its inverter bus.
-    DcToP,
-    DcFromQ,
-    DcToQ,
+    DcInverterP,
+    DcRectifierQ,
+    DcInverterQ,
 }
 
 impl Injection {
@@ -71,10 +76,10 @@ impl Injection {
             Self::LoadQ => "load q",
             Self::GenP => "gen p",
             Self::GenQ => "gen q",
-            Self::DcFromP => "dc rectifier p",
-            Self::DcToP => "dc inverter p",
-            Self::DcFromQ => "dc rectifier q",
-            Self::DcToQ => "dc inverter q",
+            Self::DcRectifierP => "dc rectifier p",
+            Self::DcInverterP => "dc inverter p",
+            Self::DcRectifierQ => "dc rectifier q",
+            Self::DcInverterQ => "dc inverter q",
         }
     }
 }
@@ -214,11 +219,11 @@ const AC_INJECTIONS: [Injection; 4] = [
 ];
 
 /// What each slot of [`per_bus_dc`] holds.
-const DC_INJECTIONS: [Injection; 4] = [
-    Injection::DcFromP,
-    Injection::DcToP,
-    Injection::DcFromQ,
-    Injection::DcToQ,
+const DC_TERMINALS: [Injection; 4] = [
+    Injection::DcRectifierP,
+    Injection::DcInverterP,
+    Injection::DcRectifierQ,
+    Injection::DcInverterQ,
 ];
 
 fn per_bus(net: &BalancedNetwork, in_service_only: bool) -> BTreeMap<usize, [f64; 4]> {
@@ -246,6 +251,11 @@ fn per_bus(net: &BalancedNetwork, in_service_only: bool) -> BTreeMap<usize, [f64
 
 /// Per-bus DC terminal power, the same tally for HVDC that [`per_bus`] is for
 /// loads and generators.
+///
+/// The two converter roles keep separate slots rather than netting, so a bus
+/// hosting one line's rectifier and another's inverter states both. Netting
+/// them would let a conversion swap the ends of a pair and still compare
+/// equal.
 fn per_bus_dc(net: &BalancedNetwork, in_service_only: bool) -> BTreeMap<usize, [f64; 4]> {
     let mut map: BTreeMap<usize, [f64; 4]> = BTreeMap::new();
     for d in net.hvdc.iter().filter(|d| d.in_service || !in_service_only) {
@@ -281,12 +291,12 @@ pub fn dc_terminal_change(
     let change = first_moved(
         &per_bus_dc(before, true),
         &per_bus_dc(after, true),
-        DC_INJECTIONS,
+        DC_TERMINALS,
     )?;
     let status_only = first_moved(
         &per_bus_dc(before, false),
         &per_bus_dc(after, false),
-        DC_INJECTIONS,
+        DC_TERMINALS,
     )
     .is_none();
     Some(InjectionChange {
