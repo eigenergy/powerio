@@ -1,0 +1,231 @@
+//! The corpus harness, held to its two defining properties: it groups a case's
+//! siblings whatever they are called, and nothing from a case reaches the
+//! report.
+
+use std::path::{Path, PathBuf};
+
+use powerio_cli::corpus::{self, anonymize, fingerprint::Fingerprint};
+use powerio_matrix::TargetFormat;
+
+fn data(rel: &str) -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .join("tests/data")
+        .join(rel)
+}
+
+/// Write `case9.m` into several formats under deliberately misleading names,
+/// so the only thing that can group them is the electrical content.
+fn build_corpus(dir: &Path) {
+    let net = powerio_matrix::parse_matpower_file(data("case9.m")).unwrap();
+    for (target, name) in [
+        (TargetFormat::Matpower, "CONFIDENTIAL_FeederAlpha_2019.m"),
+        (TargetFormat::Psse { rev: 33 }, "utility_export_q3.raw"),
+        (TargetFormat::EgretJson, "NDA_internal_model.json"),
+    ] {
+        let text = powerio_matrix::write_as(&net, target).unwrap().text;
+        std::fs::write(dir.join(name), text).unwrap();
+    }
+    // A file no reader can make sense of. A corpus always has one.
+    std::fs::write(dir.join("scratch_notes.raw"), "this is not a case\n").unwrap();
+}
+
+#[test]
+fn siblings_group_by_content_whatever_they_are_called() {
+    let work = tempfile::tempdir().unwrap();
+    let corpus = tempfile::tempdir().unwrap();
+    build_corpus(corpus.path());
+
+    let ingest = corpus::ingest(corpus.path(), work.path()).unwrap();
+    let grouped: Vec<_> = ingest
+        .buckets
+        .iter()
+        .filter(|b| b.members.len() > 1)
+        .collect();
+    assert_eq!(
+        grouped.len(),
+        1,
+        "the three spellings of one case belong in one bucket, got {:?}",
+        ingest
+            .buckets
+            .iter()
+            .map(|b| (b.id.clone(), b.members.len()))
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(grouped[0].members.len(), 3);
+    assert!(
+        grouped[0].id.starts_with("case-"),
+        "bucket ids are ordinals, never anything from a filename: {}",
+        grouped[0].id
+    );
+    assert_eq!(
+        ingest.unreadable.len(),
+        1,
+        "the junk file is a finding, not a crash"
+    );
+}
+
+#[test]
+fn the_report_carries_nothing_from_the_corpus() {
+    let work = tempfile::tempdir().unwrap();
+    let corpus = tempfile::tempdir().unwrap();
+    build_corpus(corpus.path());
+
+    corpus::ingest(corpus.path(), work.path()).unwrap();
+    corpus::compare(work.path()).unwrap();
+    let findings = work.path().join("findings.jsonl");
+    let summary = work.path().join("summary.md");
+    corpus::report(work.path(), &findings, Some(&summary)).unwrap();
+
+    let emitted = format!(
+        "{}{}",
+        std::fs::read_to_string(&findings).unwrap(),
+        std::fs::read_to_string(&summary).unwrap()
+    );
+    for secret in [
+        "CONFIDENTIAL",
+        "FeederAlpha",
+        "utility_export",
+        "NDA_internal",
+        "scratch_notes",
+    ] {
+        assert!(
+            !emitted.contains(secret),
+            "the report named a corpus file: {secret}"
+        );
+    }
+    assert!(
+        !emitted.contains(corpus.path().to_str().unwrap()),
+        "the report named the corpus directory"
+    );
+    // The report still has to be worth reading.
+    assert!(emitted.contains("case-"), "no buckets reached the report");
+}
+
+#[test]
+fn a_planted_string_fails_the_audit() {
+    let mut sanitizer = anonymize::Sanitizer::new();
+    sanitizer.learn_path(Path::new("/archive/SUBSTATION_WESTFIELD.raw"));
+    assert!(sanitizer.audit("bucket case-000: two rows differ").is_ok());
+    let leaks = sanitizer
+        .audit("bucket case-000: SUBSTATION_WESTFIELD lost a row")
+        .unwrap_err();
+    assert_eq!(leaks.len(), 1);
+    assert_eq!(leaks[0].line, 1);
+}
+
+#[test]
+fn a_format_token_is_vocabulary_even_when_the_corpus_uses_it_as_a_directory() {
+    let mut sanitizer = anonymize::Sanitizer::new();
+    sanitizer.learn_path(Path::new("/archive/psse/case.raw"));
+    sanitizer.allow("psse");
+    assert!(
+        sanitizer
+            .audit(r#"{"from":"psse","to":"matpower"}"#)
+            .is_ok(),
+        "a corpus laid out by format must not make the format unnameable"
+    );
+}
+
+#[test]
+fn a_case_with_dc_lines_is_not_the_ac_network_underneath_it() {
+    let plain = powerio_matrix::parse_matpower_file(data("case9.m")).unwrap();
+    let with_dc = powerio_matrix::parse_matpower_file(data("t_case9_dcline.m")).unwrap();
+    assert_ne!(
+        Fingerprint::of(&plain).primary(),
+        Fingerprint::of(&with_dc).primary(),
+        "a DC link changes the case, however alike the AC networks look"
+    );
+}
+
+#[test]
+fn service_status_stays_out_of_the_bucketing_key() {
+    // Two files that differ only in what is switched out must land together,
+    // because a reader that drops status is exactly what the sibling
+    // comparison exists to catch.
+    let base = powerio_matrix::parse_matpower_file(data("case9.m")).unwrap();
+    let mut switched = base.clone();
+    switched.branches[0].in_service = false;
+    switched.generators[0].in_service = false;
+    assert_eq!(
+        Fingerprint::of(&base).primary(),
+        Fingerprint::of(&switched).primary()
+    );
+    assert!(Fingerprint::of(&base).agrees_with(&Fingerprint::of(&switched)));
+}
+
+#[test]
+fn paths_collapse_to_their_class() {
+    assert_eq!(anonymize::collapse_path(".loads[3].p"), ".loads[#].p");
+    assert_eq!(
+        anonymize::collapse_path(".branches[47].extras.LineCircuit"),
+        ".branches[#].extras.LineCircuit"
+    );
+}
+
+#[test]
+fn values_leave_as_magnitudes_rather_than_numbers() {
+    assert_eq!(anonymize::magnitude(1475.69), Some(3));
+    assert_eq!(anonymize::magnitude(0.004), Some(-3));
+    assert_eq!(anonymize::magnitude(0.0), None);
+    assert_eq!(anonymize::ratio(200.0, 100.0), Some(0.5));
+    assert_eq!(anonymize::ratio(0.0, 100.0), None);
+}
+
+/// An `Extras` key is whatever token the source stated, so it is case data in a
+/// position the report reaches through a serde path. Learning only values left
+/// it unmasked and unaudited.
+#[test]
+fn an_extras_key_is_learned_like_any_other_name() {
+    let mut sanitizer = anonymize::Sanitizer::new();
+    let value = serde_json::json!({
+        "loads": [{ "p": 1.0, "extras": { "AcmeUtility_FeederCode_88": 1 } }]
+    });
+    sanitizer.learn_network(&value);
+    assert!(
+        sanitizer
+            .audit(".loads[#].extras.AcmeUtility_FeederCode_88")
+            .is_err(),
+        "an extras key must be auditable"
+    );
+    assert!(
+        !sanitizer
+            .template(".loads[#].extras.AcmeUtility_FeederCode_88")
+            .contains("AcmeUtility"),
+        "an extras key must be masked"
+    );
+    // powerio's own field names are vocabulary and survive, or every path in
+    // the report would read as a redaction.
+    assert_eq!(sanitizer.template(".loads[#].p"), ".loads[#].p");
+}
+
+/// A corpus may hold a symlink whose name sits under the root and whose target
+/// does not. The walk does not descend symlinked directories, but it still
+/// hands over symlinked files, and reading one reads its target.
+#[test]
+fn a_symlink_out_of_the_corpus_is_not_read() {
+    let outside = tempfile::tempdir().unwrap();
+    let secret = outside.path().join("elsewhere.m");
+    std::fs::write(&secret, std::fs::read_to_string(data("case9.m")).unwrap()).unwrap();
+
+    let corpus = tempfile::tempdir().unwrap();
+    let work = tempfile::tempdir().unwrap();
+    std::fs::write(
+        corpus.path().join("inside.m"),
+        std::fs::read_to_string(data("case9.m")).unwrap(),
+    )
+    .unwrap();
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(&secret, corpus.path().join("link.m")).unwrap();
+
+    let ingest = corpus::ingest(corpus.path(), work.path()).unwrap();
+    let members: usize = ingest.buckets.iter().map(|b| b.members.len()).sum();
+    #[cfg(unix)]
+    {
+        assert_eq!(members, 1, "only the file that really lives here is read");
+        assert_eq!(ingest.escaped, 1, "and the escape is counted");
+    }
+    #[cfg(not(unix))]
+    assert_eq!(members, 1);
+}

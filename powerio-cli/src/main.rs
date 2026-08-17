@@ -160,6 +160,19 @@ enum Command {
         #[arg(long, default_value_t = 0)]
         scenario: i64,
     },
+    /// Run the conversion invariants over a corpus of case files.
+    ///
+    /// The corpus directory is only ever read; the work directory is scratch
+    /// and holds raw values, so it stays on the machine that owns the corpus.
+    /// The report is the only output meant to travel, and it states codes,
+    /// class ordinals and magnitudes rather than anything from the cases.
+    ///
+    /// See the corpus harness guide for the session protocol that turns a
+    /// finding into a synthetic reproducer.
+    Corpus {
+        #[command(subcommand)]
+        action: CorpusCommand,
+    },
     /// Write the gridfm-datakit Parquet dataset for one or more cases.
     ///
     /// Each input is one scenario (an operating point on a shared base element
@@ -227,6 +240,37 @@ enum Command {
     Geo {
         #[command(subcommand)]
         command: GeoCommand,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+enum CorpusCommand {
+    /// Parse every readable file under a corpus and bucket it by electrical
+    /// fingerprint. Reads the corpus, writes only the work directory.
+    Ingest {
+        /// Corpus directory, walked recursively and never written.
+        corpus: PathBuf,
+        /// Scratch directory for this run. Disposable; put it outside any
+        /// repository.
+        #[arg(short, long)]
+        work: PathBuf,
+    },
+    /// Run the invariants over every bucket the ingest found.
+    Compare {
+        #[arg(short, long)]
+        work: PathBuf,
+    },
+    /// Write the sanitized findings. Refuses to write anything that still
+    /// carries a string the corpus taught it.
+    Report {
+        #[arg(short, long)]
+        work: PathBuf,
+        /// Findings file, one JSON object per line.
+        #[arg(short, long, default_value = "findings.jsonl")]
+        output: PathBuf,
+        /// Optional markdown roll-up of the same findings.
+        #[arg(long)]
+        summary: Option<PathBuf>,
     },
 }
 
@@ -669,6 +713,7 @@ fn main() -> anyhow::Result<()> {
             from,
             scenario,
         } => run_summary(&input, from, scenario),
+        Command::Corpus { action } => run_corpus(action),
         Command::Package {
             input,
             output,
@@ -1108,6 +1153,37 @@ fn run_verify(input: &Path, kind: MatrixKind, scheme: Scheme) -> anyhow::Result<
         stats.skipped_zero_impedance,
         sddm
     );
+    Ok(())
+}
+
+/// Dispatch one `powerio corpus` step. Each writes what the next reads, so
+/// they run in order against one work directory.
+fn run_corpus(action: CorpusCommand) -> anyhow::Result<()> {
+    match action {
+        CorpusCommand::Ingest { corpus, work } => {
+            let out = powerio_cli::corpus::ingest(&corpus, &work)?;
+            let members: usize = out.buckets.iter().map(|b| b.members.len()).sum();
+            println!(
+                "{} files seen, {members} cases in {} buckets, {} unreadable, {} skipped",
+                out.files_seen,
+                out.buckets.len(),
+                out.unreadable.len(),
+                out.skipped
+            );
+        }
+        CorpusCommand::Compare { work } => {
+            let out = powerio_cli::corpus::compare(&work)?;
+            println!("{} comparisons", out.comparisons.len());
+        }
+        CorpusCommand::Report {
+            work,
+            output,
+            summary,
+        } => {
+            let n = powerio_cli::corpus::report(&work, &output, summary.as_deref())?;
+            println!("{n} findings written to {}", output.display());
+        }
+    }
     Ok(())
 }
 

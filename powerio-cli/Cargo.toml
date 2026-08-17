@@ -12,6 +12,12 @@ documentation = "https://github.com/eigenergy/powerio#readme"
 keywords = ["matpower", "cli", "tui"]
 categories = ["command-line-utilities", "science"]
 
+# The conversion invariants and the corpus harness, so the matrix test and the
+# `corpus` subcommand run the same properties instead of two copies.
+[lib]
+name = "powerio_cli"
+path = "src/lib.rs"
+
 [[bin]]
 name = "powerio"
 path = "src/main.rs"
@@ -37,6 +43,7 @@ crossterm = "0.29"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 walkdir = "2"
+serde.workspace = true
 serde_json.workspace = true
 
 [dev-dependencies]

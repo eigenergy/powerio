@@ -85,6 +85,10 @@ use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
+use powerio_cli::invariants::{
+    DistributionCore, TransmissionCore, YbusUnavailable, distribution_core, distribution_value,
+    injection_change, model_diffs, transmission_core, transmission_value, ybus_change,
+};
 use powerio_dist::{DistTargetFormat, MulticonductorNetwork};
 use powerio_matrix::{
     BalancedNetwork, TargetFormat, parse_file as parse_transmission_file, parse_matpower_file,
@@ -650,19 +654,6 @@ struct TransmissionPayload {
     core: TransmissionCore,
 }
 
-#[derive(Debug, PartialEq, Eq)]
-struct TransmissionCore {
-    buses: usize,
-    branches: usize,
-    generators: usize,
-    loads: usize,
-    shunts: usize,
-    load_p: i64,
-    load_q: i64,
-    gen_p: i64,
-    base_mva: i64,
-}
-
 fn run_transmission_matrix() -> MatrixReport {
     let mut sources: Vec<_> = TRANSMISSION_FORMATS.iter().map(|fmt| fmt.name).collect();
     let targets = TRANSMISSION_FORMATS.iter().map(|fmt| fmt.name).collect();
@@ -793,13 +784,26 @@ fn validate_transmission_pair(
                         &transmission_value(&parsed.network),
                         cell,
                     );
-                    if let Some(diff) = ybus_changed(&payload.network, &parsed.network) {
-                        cell.failures.push(format!(
+                    match ybus_change(&payload.network, &parsed.network) {
+                        Ok(Some(diff)) => cell.failures.push(format!(
                             "{} Y_bus changed for {}: {diff}",
                             payload.label, target.name
-                        ));
+                        )),
+                        Ok(None) => {}
+                        // A network with no buildable admittance matrix is a
+                        // conversion failure. Reporting it as agreement is how
+                        // an invariant passes without checking anything.
+                        Err(side) => cell.failures.push(format!(
+                            "{} Y_bus could not be built for {} ({}) ",
+                            payload.label,
+                            target.name,
+                            match side {
+                                YbusUnavailable::Before => "source",
+                                YbusUnavailable::After => "result",
+                            }
+                        )),
                     }
-                    if let Some(diff) = injections_moved(&payload.network, &parsed.network) {
+                    if let Some(diff) = injection_change(&payload.network, &parsed.network) {
                         cell.failures.push(format!(
                             "{} bus injections moved for {}: {diff}",
                             payload.label, target.name
@@ -819,116 +823,6 @@ fn validate_transmission_pair(
     }
 }
 
-/// The electrical invariant: the admittance matrix, entry for entry by bus id
-/// pair, must survive every conversion — warnings account for *dropped*
-/// data, never for corrupted electrics, so this holds on yellow cells too. A
-/// format may relocate admittance (pandapower rides MATPOWER transformer
-/// charging as bus shunts) or restate it in other units, but `Y_bus` is where
-/// all of those spellings meet. Returns the first offending entry, or `None`
-/// when the matrices agree to 1e-8 relative.
-fn ybus_changed(before: &BalancedNetwork, after: &BalancedNetwork) -> Option<String> {
-    let entries = |net: &BalancedNetwork| -> Option<BTreeMap<(usize, usize), (f64, f64)>> {
-        let view = powerio_matrix::IndexedNetwork::new(net);
-        let parts =
-            powerio_matrix::build_ybus(&view, &powerio_matrix::BuildOptions::default()).ok()?;
-        let mut map = BTreeMap::new();
-        for (value, (i, j)) in &parts.g {
-            map.entry((view.bus_id(i).0, view.bus_id(j).0))
-                .or_insert((0.0, 0.0))
-                .0 = *value;
-        }
-        for (value, (i, j)) in &parts.b {
-            map.entry((view.bus_id(i).0, view.bus_id(j).0))
-                .or_insert((0.0, 0.0))
-                .1 = *value;
-        }
-        Some(map)
-    };
-    let (a, b) = (entries(before)?, entries(after)?);
-    for key in a.keys().chain(b.keys().filter(|k| !a.contains_key(*k))) {
-        let (ga, ba) = a.get(key).copied().unwrap_or((0.0, 0.0));
-        let (gb, bb) = b.get(key).copied().unwrap_or((0.0, 0.0));
-        let tol = |x: f64, y: f64| (x - y).abs() > 1e-8 * x.abs().max(y.abs()).max(1.0);
-        if tol(ga, gb) || tol(ba, bb) {
-            return Some(format!(
-                "Y[{}, {}] was {ga}+j{ba}, now {gb}+j{bb}",
-                key.0, key.1
-            ));
-        }
-    }
-    None
-}
-
-/// The other half of the AC operating point: per-bus demand and generation.
-/// `Y_bus` above pins the network matrices; this pins the injections at each
-/// bus, so together a conversion that passes both leaves the power flow
-/// problem itself unchanged — whatever it dropped in costs, limits, names, or
-/// extras. No conversion may move power between buses; formats only merge or
-/// split devices at one bus.
-fn injections_moved(before: &BalancedNetwork, after: &BalancedNetwork) -> Option<String> {
-    let per_bus = |net: &BalancedNetwork| {
-        let mut map: BTreeMap<usize, [f64; 4]> = BTreeMap::new();
-        for l in &net.loads {
-            let e = map.entry(l.bus.0).or_default();
-            e[0] += l.p;
-            e[1] += l.q;
-        }
-        for g in net.generators.iter().filter(|g| g.in_service) {
-            let e = map.entry(g.bus.0).or_default();
-            e[2] += g.pg;
-            e[3] += g.qg;
-        }
-        map
-    };
-    let (a, b) = (per_bus(before), per_bus(after));
-    for key in a.keys().chain(b.keys().filter(|k| !a.contains_key(*k))) {
-        let x = a.get(key).copied().unwrap_or_default();
-        let y = b.get(key).copied().unwrap_or_default();
-        for (label, i) in [("load p", 0), ("load q", 1), ("gen p", 2), ("gen q", 3)] {
-            if (x[i] - y[i]).abs() > 1e-8 * x[i].abs().max(y[i].abs()).max(1.0) {
-                return Some(format!("bus {key} {label}: {} -> {}", x[i], y[i]));
-            }
-        }
-    }
-    None
-}
-
-/// A [`BalancedNetwork`] as a JSON value with the conversion-neutral identity
-/// fields cleared and two representation choices canonicalized, so the model
-/// diff below compares data, not provenance or spelling:
-///
-/// - `charging: None` and the symmetric split it abbreviates are one fact;
-///   both sides expand to the explicit terminal form.
-/// - Element order is a table-layout artifact (pandapower re-groups lines and
-///   trafos; several formats sort by id); everything sorts by identity.
-fn transmission_value(net: &BalancedNetwork) -> serde_json::Value {
-    let mut net = net.clone();
-    net.name = String::new();
-    net.source = None;
-    net.source_format = powerio_matrix::SourceFormat::Matpower;
-    for br in &mut net.branches {
-        br.charging = Some(br.terminal_charging());
-    }
-    net.buses.sort_by_key(|b| b.id);
-    net.branches.sort_by_key(|a| (a.from, a.to));
-    net.loads.sort_by_key(|l| l.bus);
-    net.shunts.sort_by_key(|s| s.bus);
-    net.generators.sort_by_key(|g| g.bus);
-    net.storage.sort_by_key(|s| s.bus);
-    net.hvdc.sort_by_key(|d| (d.from, d.to));
-    serde_json::to_value(&net).unwrap()
-}
-
-/// A [`MulticonductorNetwork`] as a JSON value with identity fields cleared.
-fn distribution_value(net: &MulticonductorNetwork) -> serde_json::Value {
-    let mut net = net.clone();
-    net.name = None;
-    net.source = None;
-    net.source_format = None;
-    net.warnings = Vec::new();
-    serde_json::to_value(&net).unwrap()
-}
-
 /// Record every typed-model field the conversion changed. Yellow cells keep
 /// these as context (their warnings declare the losses); a cell claiming green
 /// fails on any of them — that is what keeps the matrix from going farcically
@@ -939,73 +833,11 @@ fn record_model_diffs(
     after: &serde_json::Value,
     cell: &mut Cell,
 ) {
-    let mut diffs = Vec::new();
-    diff_values(before, after, "", &mut diffs);
-    cell.silent_model_diffs
-        .extend(diffs.into_iter().map(|d| format!("{label}: {d}")));
-}
-
-/// The number of diff paths kept per pair; enough to name the disease without
-/// drowning the report.
-const MAX_MODEL_DIFFS: usize = 24;
-
-/// Recursive structural diff. Numbers compare within 1e-9 relative — the
-/// writers print shortest round-trip floats, so anything beyond a last-ulp
-/// text wobble is a real change — and everything else compares exactly.
-fn diff_values(a: &serde_json::Value, b: &serde_json::Value, path: &str, out: &mut Vec<String>) {
-    use serde_json::Value;
-    if out.len() >= MAX_MODEL_DIFFS {
-        return;
-    }
-    match (a, b) {
-        (Value::Number(x), Value::Number(y)) => {
-            let (x, y) = (
-                x.as_f64().unwrap_or(f64::NAN),
-                y.as_f64().unwrap_or(f64::NAN),
-            );
-            let tol = 1e-9 * x.abs().max(y.abs()).max(1.0);
-            if !((x - y).abs() <= tol || (x.is_nan() && y.is_nan())) {
-                out.push(format!("{path}: {x} -> {y}"));
-            }
-        }
-        (Value::Array(xs), Value::Array(ys)) => {
-            if xs.len() != ys.len() {
-                out.push(format!("{path}: {} entries -> {}", xs.len(), ys.len()));
-                return;
-            }
-            for (i, (x, y)) in xs.iter().zip(ys).enumerate() {
-                diff_values(x, y, &format!("{path}[{i}]"), out);
-            }
-        }
-        (Value::Object(xs), Value::Object(ys)) => {
-            for key in xs.keys().chain(ys.keys().filter(|k| !xs.contains_key(*k))) {
-                let sub = format!("{path}.{key}");
-                match (xs.get(key), ys.get(key)) {
-                    (Some(x), Some(y)) => diff_values(x, y, &sub, out),
-                    (Some(x), None) => out.push(format!("{sub}: {x} -> absent")),
-                    (None, Some(y)) => out.push(format!("{sub}: absent -> {y}")),
-                    (None, None) => unreachable!(),
-                }
-            }
-        }
-        (x, y) if x == y => {}
-        (x, y) => out.push(format!("{path}: {x} -> {y}")),
-    }
-}
-
-fn transmission_core(net: &BalancedNetwork) -> TransmissionCore {
-    let rounded = |x: f64| (x * 1e3).round() as i64;
-    TransmissionCore {
-        buses: net.buses.len(),
-        branches: net.branches.len(),
-        generators: net.generators.len(),
-        loads: net.loads.len(),
-        shunts: net.shunts.len(),
-        load_p: rounded(net.loads.iter().map(|load| load.p).sum()),
-        load_q: rounded(net.loads.iter().map(|load| load.q).sum()),
-        gen_p: rounded(net.generators.iter().map(|generator| generator.pg).sum()),
-        base_mva: rounded(net.base_mva),
-    }
+    cell.silent_model_diffs.extend(
+        model_diffs(before, after)
+            .iter()
+            .map(|d| format!("{label}: {d}")),
+    );
 }
 
 fn data(rel: &str) -> PathBuf {
@@ -1104,16 +936,6 @@ struct DistributionPayload {
     network: MulticonductorNetwork,
     parse_warnings: Vec<String>,
     core: DistributionCore,
-}
-
-#[derive(Debug, PartialEq, Eq)]
-struct DistributionCore {
-    buses: usize,
-    loads: usize,
-    generators: usize,
-    shunts: usize,
-    load_p: i64,
-    load_q: i64,
 }
 
 fn run_distribution_matrix() -> MatrixReport {
@@ -1257,26 +1079,4 @@ fn core_survives(
         && after.shunts == before.shunts
         && after.load_p == before.load_p
         && after.load_q == before.load_q
-}
-
-fn distribution_core(net: &MulticonductorNetwork) -> DistributionCore {
-    let rounded = |x: f64| (x * 1e3).round() as i64;
-    DistributionCore {
-        buses: net.buses.len(),
-        loads: net.loads.len(),
-        generators: net.generators.len(),
-        shunts: net.shunts.len(),
-        load_p: rounded(
-            net.loads
-                .iter()
-                .flat_map(|load| load.p_nom.iter())
-                .sum::<f64>(),
-        ),
-        load_q: rounded(
-            net.loads
-                .iter()
-                .flat_map(|load| load.q_nom.iter())
-                .sum::<f64>(),
-        ),
-    }
 }
