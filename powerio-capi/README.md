@@ -78,6 +78,19 @@ int main(void) {
 }
 ```
 
+## Exact DC certificate export
+
+Build with `matrix` to expose `pio_dc_n_buses` and `pio_dc_branches`. The latter returns the
+canonical dense endpoints, source branch row, and raw IEEE binary64 bits of every positive
+susceptance produced by the strict `PaperPure` incidence builder. It rejects zero reactance and
+nonpositive or nonfinite susceptance instead of skipping or changing the model.
+
+The accompanying command writes the versioned exact dyadic model consumed by the Lean checker:
+
+```sh
+cargo run -p powerio-capi --features matrix --bin qpf-model -- case.m
+```
+
 ## Julia (`ccall`)
 
 For a typed Julia API, use [PowerIO.jl](https://github.com/eigenergy/PowerIO.jl),

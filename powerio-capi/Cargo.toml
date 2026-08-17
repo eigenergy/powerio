@@ -14,6 +14,11 @@ publish = false
 name = "powerio_capi"
 crate-type = ["cdylib", "staticlib", "rlib"]
 
+[[bin]]
+name = "qpf-model"
+path = "src/bin/qpf-model.rs"
+required-features = ["matrix"]
+
 [features]
 # Distribution and package support are first class: every default powerio build
 # ships the pio_dist_* and pio_package_* surfaces. Opt out with

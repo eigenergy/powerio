@@ -275,6 +275,21 @@ typedef struct PioPackage PioPackage;
 typedef struct PioScopfInstance PioScopfInstance;
 #endif
 
+#if defined(PIO_MATRIX)
+/**
+ * One column of the positive weighted incidence factorization used by the
+ * paper DC convention. `susceptance_bits` is the IEEE 754 binary64 bit pattern
+ * of `b = 1/x`; consumers can bind the exact value PowerIO computed without a
+ * decimal round trip.
+ */
+typedef struct {
+    size_t from_index;
+    size_t to_index;
+    size_t source_row;
+    uint64_t susceptance_bits;
+} PioDcBranch;
+#endif
+
 #ifdef __cplusplus
 extern "C" {
 #endif // __cplusplus
@@ -651,6 +666,34 @@ size_t pio_branches(const PioNetwork *net,
                     double *shift,
                     uint8_t *in_service,
                     size_t cap);
+
+#if defined(PIO_MATRIX)
+/**
+ * Number of buses in the exact dense index space used by [`pio_dc_branches`].
+ * Returns `-1` and writes `errbuf` if the model cannot be represented under
+ * the strict positive `PaperPure` convention. Built with the `matrix` feature.
+ */
+ptrdiff_t pio_dc_n_buses(const PioNetwork *net, char *errbuf, size_t errlen);
+#endif
+
+#if defined(PIO_MATRIX)
+/**
+ * Write the branch columns of `A diag(b) A^T` under
+ * [`powerio::DcConvention::PaperPure`]. Rows use the dense ordering returned
+ * by [`pio_bus_ids`]. Inactive branches and self-loops are absent. A zero
+ * reactance, nonfinite susceptance, or unresolved endpoint is an error rather
+ * than a silently changed model.
+ *
+ * Call with `(NULL, 0)` to obtain the required count. Returns `-1` and writes
+ * `errbuf` on error; otherwise writes up to `cap` entries and returns the full
+ * count. Built with the `matrix` feature.
+ */
+ptrdiff_t pio_dc_branches(const PioNetwork *net,
+                          PioDcBranch *out,
+                          size_t cap,
+                          char *errbuf,
+                          size_t errlen);
+#endif
 
 /**
  * Write the branch terminal charging table as parallel arrays, each up to

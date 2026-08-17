@@ -54,6 +54,20 @@ pub struct PioNetwork {
     warnings: Vec<String>,
 }
 
+/// One column of the positive weighted incidence factorization used by the
+/// paper DC convention. `susceptance_bits` is the IEEE 754 binary64 bit pattern
+/// of `b = 1/x`; consumers can bind the exact value PowerIO computed without a
+/// decimal round trip.
+#[cfg(feature = "matrix")]
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PioDcBranch {
+    pub from_index: usize,
+    pub to_index: usize,
+    pub source_row: usize,
+    pub susceptance_bits: u64,
+}
+
 // The handle is immutable after construction and the C ABI documents concurrent
 // reads from any number of threads as safe (see the cbindgen header preamble).
 // That guarantee requires `PioNetwork: Send + Sync`; pin it at compile time so
@@ -1166,6 +1180,116 @@ pub unsafe extern "C" fn pio_branches(
             );
             net.branches.len()
         })
+    }
+}
+
+#[cfg(feature = "matrix")]
+fn paper_dc_parts(c: &PioNetwork) -> Result<powerio_matrix::IncidenceParts, String> {
+    let view = IndexedNetwork::with_core(&c.net, &c.core);
+    let strict = powerio_matrix::BuildOptions {
+        skip_zero_impedance: false,
+        ..powerio_matrix::BuildOptions::default()
+    };
+    powerio_matrix::build_incidence(&view, powerio_matrix::DcConvention::PaperPure, &strict)
+        .map_err(|e| e.to_string())
+}
+
+/// Number of buses in the exact dense index space used by [`pio_dc_branches`].
+/// Returns `-1` and writes `errbuf` if the model cannot be represented under
+/// the strict positive `PaperPure` convention. Built with the `matrix` feature.
+#[cfg(feature = "matrix")]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pio_dc_n_buses(
+    net: *const PioNetwork,
+    errbuf: *mut c_char,
+    errlen: usize,
+) -> isize {
+    unsafe {
+        match catch_unwind(AssertUnwindSafe(|| -> Result<isize, String> {
+            let c = network_ref(net).ok_or_else(|| "null network handle".to_owned())?;
+            let parts = paper_dc_parts(c)?;
+            isize::try_from(parts.n()).map_err(|_| "DC bus count exceeds isize".to_owned())
+        })) {
+            Ok(Ok(total)) => total,
+            Ok(Err(message)) => {
+                copy_to_buf(errbuf, errlen, &message);
+                -1
+            }
+            Err(_) => {
+                copy_to_buf(errbuf, errlen, "panic while counting DC buses");
+                -1
+            }
+        }
+    }
+}
+
+/// Write the branch columns of `A diag(b) A^T` under
+/// [`powerio::DcConvention::PaperPure`]. Rows use the dense ordering returned
+/// by [`pio_bus_ids`]. Inactive branches and self-loops are absent. A zero
+/// reactance, nonfinite susceptance, or unresolved endpoint is an error rather
+/// than a silently changed model.
+///
+/// Call with `(NULL, 0)` to obtain the required count. Returns `-1` and writes
+/// `errbuf` on error; otherwise writes up to `cap` entries and returns the full
+/// count. Built with the `matrix` feature.
+#[cfg(feature = "matrix")]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pio_dc_branches(
+    net: *const PioNetwork,
+    out: *mut PioDcBranch,
+    cap: usize,
+    errbuf: *mut c_char,
+    errlen: usize,
+) -> isize {
+    unsafe {
+        match catch_unwind(AssertUnwindSafe(|| -> Result<isize, String> {
+            let c = network_ref(net).ok_or_else(|| "null network handle".to_owned())?;
+            let view = IndexedNetwork::with_core(&c.net, &c.core);
+            let parts = paper_dc_parts(c)?;
+            let total = isize::try_from(parts.branch_of_col.len())
+                .map_err(|_| "DC branch count exceeds isize".to_owned())?;
+            if !out.is_null() {
+                for (column, (&source_row, &susceptance)) in parts
+                    .branch_of_col
+                    .iter()
+                    .zip(parts.b.iter())
+                    .take(cap)
+                    .enumerate()
+                {
+                    if !susceptance.is_finite() || susceptance <= 0.0 {
+                        return Err(format!(
+                            "DC branch row {source_row} has nonpositive susceptance"
+                        ));
+                    }
+                    let branch = view.branches().get(source_row).ok_or_else(|| {
+                        format!("DC branch column {column} points to missing row {source_row}")
+                    })?;
+                    let from_index = view.bus_index(branch.from).ok_or_else(|| {
+                        format!("DC branch row {source_row} has an unresolved from bus")
+                    })?;
+                    let to_index = view.bus_index(branch.to).ok_or_else(|| {
+                        format!("DC branch row {source_row} has an unresolved to bus")
+                    })?;
+                    *out.add(column) = PioDcBranch {
+                        from_index,
+                        to_index,
+                        source_row,
+                        susceptance_bits: susceptance.to_bits(),
+                    };
+                }
+            }
+            Ok(total)
+        })) {
+            Ok(Ok(total)) => total,
+            Ok(Err(message)) => {
+                copy_to_buf(errbuf, errlen, &message);
+                -1
+            }
+            Err(_) => {
+                copy_to_buf(errbuf, errlen, "panic while extracting DC branches");
+                -1
+            }
+        }
     }
 }
 
@@ -3122,6 +3246,8 @@ mod tests {
             "void pio_string_free(char *s);",
             "size_t pio_bus_ids(const PioNetwork *net, int64_t *out, size_t cap);",
             "size_t pio_branches(const PioNetwork *net, int64_t *from, int64_t *to, double *r, double *x, double *b, double *tap, double *shift, uint8_t *in_service, size_t cap);",
+            "ptrdiff_t pio_dc_n_buses(const PioNetwork *net, char *errbuf, size_t errlen);",
+            "ptrdiff_t pio_dc_branches(const PioNetwork *net, PioDcBranch *out, size_t cap, char *errbuf, size_t errlen);",
             "size_t pio_branch_charging(const PioNetwork *net, double *g_fr, double *b_fr, double *g_to, double *b_to, size_t cap);",
             "size_t pio_switches(const PioNetwork *net, int64_t *from, int64_t *to, uint8_t *closed, double *thermal_rating, double *current_rating, double *pf, double *qf, double *pt, double *qt, size_t cap);",
             "size_t pio_gens(const PioNetwork *net, int64_t *bus, double *pg, double *pmax, double *pmin, uint8_t *in_service, size_t cap);",
@@ -3332,6 +3458,67 @@ mod tests {
             assert!(from.iter().all(|&f| f >= 1));
             assert!(x.iter().all(|&xx| xx > 0.0));
             pio_network_free(c);
+        }
+    }
+
+    #[cfg(feature = "matrix")]
+    #[test]
+    fn extract_paper_dc_branch_columns() {
+        let c = case9();
+        unsafe {
+            let mut err = [0 as c_char; PIO_ERRBUF_MIN];
+            let count = pio_dc_branches(c, std::ptr::null_mut(), 0, err.as_mut_ptr(), err.len());
+            assert_eq!(count, 9);
+            let mut columns = vec![
+                PioDcBranch {
+                    from_index: 0,
+                    to_index: 0,
+                    source_row: 0,
+                    susceptance_bits: 0,
+                };
+                count as usize
+            ];
+            assert_eq!(
+                pio_dc_branches(
+                    c,
+                    columns.as_mut_ptr(),
+                    columns.len(),
+                    err.as_mut_ptr(),
+                    err.len(),
+                ),
+                count
+            );
+            assert_eq!(columns[0].from_index, 0);
+            assert_eq!(columns[0].to_index, 3);
+            assert_eq!(columns[0].source_row, 0);
+            assert_eq!(f64::from_bits(columns[0].susceptance_bits), 1.0 / 0.0576);
+            assert!(columns.iter().all(|column| {
+                let b = f64::from_bits(column.susceptance_bits);
+                column.from_index < 9 && column.to_index < 9 && b.is_finite() && b > 0.0
+            }));
+            pio_network_free(c);
+        }
+    }
+
+    #[cfg(feature = "matrix")]
+    #[test]
+    fn dc_branch_extractor_rejects_null_handle() {
+        unsafe {
+            let mut err = [0 as c_char; PIO_ERRBUF_MIN];
+            assert_eq!(
+                pio_dc_branches(
+                    std::ptr::null(),
+                    std::ptr::null_mut(),
+                    0,
+                    err.as_mut_ptr(),
+                    err.len(),
+                ),
+                -1
+            );
+            assert_eq!(
+                CStr::from_ptr(err.as_ptr()).to_str().unwrap(),
+                "null network handle"
+            );
         }
     }
 

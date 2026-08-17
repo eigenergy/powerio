@@ -120,7 +120,7 @@ struct ArrowSchema;
 
 [export]
 prefix = ""
-include = ["PioNetwork", "PioDistNetwork", "PioPackage", "PioScopfInstance"]
+include = ["PioNetwork", "PioDcBranch", "PioDistNetwork", "PioPackage", "PioScopfInstance"]
 
 [export.rename]
 "FFI_ArrowArray" = "struct ArrowArray"
@@ -134,6 +134,7 @@ include = ["PioNetwork", "PioDistNetwork", "PioPackage", "PioScopfInstance"]
 "feature = arrow" = "PIO_ARROW"
 "feature = dist" = "PIO_DIST"
 "feature = gridfm" = "PIO_GRIDFM"
+"feature = matrix" = "PIO_MATRIX"
 "feature = pkg" = "PIO_PKG"
 "feature = prob" = "PIO_PROB"
 
