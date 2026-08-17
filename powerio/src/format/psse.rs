@@ -770,6 +770,15 @@ pub fn write_psse_rev(net: &BalancedNetwork, rev: u32) -> Conversion {
     if !modern {
         warn_psse_extra_branch_ratings_dropped(net, &mut warnings);
     }
+    // This writer replays device ids and every `psse_*` key its reader
+    // retained; a foreign format's keys (LoadID, pslf_circuit, ...) have no
+    // record column and drop, declared once (#330).
+    super::warn_dropped_extras(
+        "PSS/E .raw",
+        net,
+        |key| key == "id" || key.starts_with("psse_"),
+        &mut warnings,
+    );
     let branch_solutions = net.branches.iter().filter(|b| b.solution.is_some()).count();
     if branch_solutions > 0 {
         warnings.push(format!(

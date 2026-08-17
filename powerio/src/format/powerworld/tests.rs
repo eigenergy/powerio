@@ -363,11 +363,11 @@ fn real_export_field_names_map_gen_shunt_and_transformer() {
     assert_eq!((br.tap, br.shift), (0.9875, -2.5));
     assert_eq!((br.rate_a, br.rate_b, br.rate_c), (250.0, 260.0, 270.0));
     assert!(br.is_transformer());
-    assert_eq!(
-        br.extras.get("LineCircuit").and_then(|v| v.as_str()),
-        Some(" 1"),
-        "circuit ID kept verbatim, padding included"
-    );
+    // A padded " 1" is the allocator's default with PowerWorld's padding on
+    // it; both PowerWorld readers drop it (trim-insensitively) so the pwb and
+    // aux reads of one case agree. An explicit non-default circuit is kept
+    // verbatim, padding included.
+    assert_eq!(br.extras.get("LineCircuit"), None);
 }
 
 #[test]

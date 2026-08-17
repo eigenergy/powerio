@@ -571,12 +571,32 @@ fn gen_table_continues(
 fn checked_network(
     name_hint: Option<&str>,
     mut buses: Vec<Bus>,
-    loads: Vec<Load>,
-    shunts: Vec<Shunt>,
-    branches: Vec<Branch>,
+    mut loads: Vec<Load>,
+    mut shunts: Vec<Shunt>,
+    mut branches: Vec<Branch>,
     generators: Vec<Generator>,
 ) -> Result<BalancedNetwork> {
     derive_bus_kinds(&mut buses, &generators);
+    // A device id equal to the aux allocator's positional default (padding
+    // aside) restates what a rewrite re-derives; dropping it here is the same
+    // rule the aux reader applies, so the two PowerWorld readers agree on one
+    // case. Done over the final tables because a record probe does not know
+    // its position.
+    for (i, l) in loads.iter_mut().enumerate() {
+        drop_positional_id(&mut l.extras, "LoadID", i);
+    }
+    for (i, s) in shunts.iter_mut().enumerate() {
+        drop_positional_id(&mut s.extras, "ShuntID", i);
+    }
+    // Branch circuits use the aux reader's positional rule: the counter is per
+    // bus pair, so the second parallel branch's "2" is the default the
+    // allocator re-derives from order.
+    let mut parallel: HashMap<(BusId, BusId), usize> = HashMap::new();
+    for br in &mut branches {
+        let nth = parallel.entry((br.from, br.to)).or_insert(0);
+        *nth += 1;
+        drop_positional_id(&mut br.extras, LINE_CIRCUIT, *nth - 1);
+    }
     let net = BalancedNetwork {
         name: name_hint.unwrap_or("case").to_string(),
         base_mva: MVA_BASE,
@@ -597,6 +617,19 @@ fn checked_network(
         source: None,
     };
     net.check_references(FMT).map(|()| net)
+}
+
+/// Remove `key` when its trimmed value is the 1-based positional default the
+/// aux writer would allocate for element `index`.
+fn drop_positional_id(extras: &mut Extras, key: &str, index: usize) {
+    let default = (index + 1).to_string();
+    if extras
+        .get(key)
+        .and_then(serde_json::Value::as_str)
+        .is_some_and(|v| v.trim() == default)
+    {
+        extras.remove(key);
+    }
 }
 
 // ---- Cursor -----------------------------------------------------------------
@@ -1357,7 +1390,7 @@ fn read_load(c: &mut Cur, bus: BusId, id: &[u8]) -> Probe<Load> {
     let mut extras = Extras::new();
     extras.insert(
         "LoadID".into(),
-        serde_json::Value::String(String::from_utf8_lossy(id).into_owned()),
+        serde_json::Value::String(String::from_utf8_lossy(id).trim().to_string()),
     );
     Ok(Load {
         bus,
@@ -1559,7 +1592,7 @@ fn read_shunt(c: &mut Cur, bus: BusId, id: &[u8]) -> Probe<Shunt> {
     let mut extras = Extras::new();
     extras.insert(
         "ShuntID".into(),
-        serde_json::Value::String(String::from_utf8_lossy(id).into_owned()),
+        serde_json::Value::String(String::from_utf8_lossy(id).trim().to_string()),
     );
     Ok(Shunt {
         bus,
@@ -1766,13 +1799,19 @@ fn read_standard_branch_head(
         _ => return Err("branch tail tag not in the validated set"),
     };
     let mut extras = Extras::new();
-    extras.insert(
-        LINE_CIRCUIT.into(),
-        serde_json::Value::String(circuit.map_or_else(
-            || " 1".to_string(),
-            |s| String::from_utf8_lossy(s).into_owned(),
-        )),
-    );
+    // The padded default (" 1") restates what the aux writer's allocator hands
+    // the first branch of a pair; keeping it made the two PowerWorld readers
+    // disagree, and the pwb → aux leg reported the disagreement as a loss.
+    // Only a circuit beyond the default is data (the aux reader's rule).
+    if let Some(s) = circuit {
+        // Trimmed: the 2-byte field pads for display, and the aux tokenizer
+        // hands the same id back unpadded, so keeping the padding made the
+        // pwb → aux leg diff on whitespace.
+        let circuit = String::from_utf8_lossy(s).trim().to_string();
+        if circuit != "1" {
+            extras.insert(LINE_CIRCUIT.into(), serde_json::Value::String(circuit));
+        }
+    }
     // Line and Transformer restate what the tap already encodes (a pwb
     // transformer always reads a nonzero tap), and the aux writer re-derives
     // them; only an exotic device type would say more. Matches the aux
@@ -1869,8 +1908,9 @@ fn read_step_up_transformer_head(
     if to.0 == from {
         return Err("step up transformer has identical endpoints");
     }
-    let mut extras = Extras::new();
-    extras.insert(LINE_CIRCUIT.into(), serde_json::Value::String(" 1".into()));
+    // The step-up record carries no circuit of its own; the old hardcoded
+    // " 1" restated the aux allocator's default.
+    let extras = Extras::new();
     let br = Branch {
         from: BusId(from),
         to,
