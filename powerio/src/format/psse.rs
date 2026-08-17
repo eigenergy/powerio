@@ -1577,6 +1577,11 @@ fn strip_inline_comment(line: &str) -> &str {
 /// `/comment`. Comma-delimited records keep empty fields (column position is
 /// significant — a blank quoted name must not shift later columns); records with
 /// no commas fall back to whitespace splitting.
+///
+/// Both paths trim after unquoting: PSS/E string columns are fixed width and
+/// blank padded, so `' 1'` and `'1 '` name one device and `'BUS A       '` is
+/// the name `BUS A`. The two delimiter styles used to disagree here, and the
+/// same record body tokenized differently depending on which a producer chose.
 fn fields(line: &str) -> Vec<String> {
     let code = strip_inline_comment(line);
     let comma_delimited = code.contains(',');
@@ -1601,7 +1606,7 @@ fn fields(line: &str) -> Vec<String> {
             }
             c if c.is_whitespace() && !quoted && !comma_delimited => {
                 if !cur.is_empty() {
-                    out.push(cur.clone());
+                    out.push(cur.trim().to_owned());
                     cur.clear();
                 }
             }
@@ -2550,6 +2555,24 @@ mod tests {
 
     fn close(actual: f64, expected: f64) {
         assert!((actual - expected).abs() < 1e-12, "{actual} != {expected}");
+    }
+
+    /// The tokenizer's rules, pinned: both delimiter styles produce the same
+    /// fields for one record body, quoted interiors trim (PSS/E strings are
+    /// fixed width and blank padded), a `/` inside quotes is text while one
+    /// outside ends the record, and a blank quoted field holds its column.
+    #[test]
+    fn fields_tokenize_the_same_record_the_same_way_in_both_delimiter_styles() {
+        assert_eq!(
+            fields("1, ' 1', 'BUS A       ', 2.5 / trailing comment"),
+            vec!["1", "1", "BUS A", "2.5"]
+        );
+        assert_eq!(
+            fields("1 ' 1' 'BUS A       ' 2.5 / trailing comment"),
+            vec!["1", "1", "BUS A", "2.5"]
+        );
+        assert_eq!(fields("1, 'O/H LINE', 2"), vec!["1", "O/H LINE", "2"]);
+        assert_eq!(fields("1, '', 3"), vec!["1", "", "3"], "column position holds");
     }
 
     #[test]
