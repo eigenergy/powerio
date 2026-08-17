@@ -1597,24 +1597,32 @@ fn fields(line: &str) -> Vec<String> {
     });
     let mut cur = String::with_capacity(32);
     let mut quoted = false;
+    // A quoted span opened this field, so `''` holds its column instead of
+    // vanishing and shifting every later one, as it does under commas.
+    let mut was_quoted = false;
     for c in code.chars() {
         match c {
-            '\'' => quoted = !quoted,
+            '\'' => {
+                quoted = !quoted;
+                was_quoted = true;
+            }
             ',' if !quoted && comma_delimited => {
                 out.push(cur.trim().to_owned());
                 cur.clear();
+                was_quoted = false;
             }
             c if c.is_whitespace() && !quoted && !comma_delimited => {
-                if !cur.is_empty() {
+                if !cur.is_empty() || was_quoted {
                     out.push(cur.trim().to_owned());
                     cur.clear();
+                    was_quoted = false;
                 }
             }
             c => cur.push(c),
         }
     }
     let last = cur.trim().to_owned();
-    if comma_delimited || !last.is_empty() {
+    if comma_delimited || was_quoted || !last.is_empty() {
         out.push(last);
     }
     out
@@ -2298,6 +2306,9 @@ fn read_dc_line(
              power; both ends read as zero",
             index + 1
         ));
+        // The end the demand was measured at is a claim about a drop model
+        // that was refused, and the writer would restate it as `-0.0`.
+        measured_at_inverter = false;
         (0.0, 0.0)
     };
     if unpriceable_current {
@@ -2576,6 +2587,11 @@ mod tests {
             fields("1, '', 3"),
             vec!["1", "", "3"],
             "column position holds"
+        );
+        assert_eq!(
+            fields("1 '' 3"),
+            vec!["1", "", "3"],
+            "and holds under whitespace too"
         );
     }
 

@@ -1111,7 +1111,12 @@ pub(super) fn warn_dropped_extras(
         + net.shunts.iter().filter(|e| carries(&e.extras)).count()
         + net.switches.iter().filter(|e| carries(&e.extras)).count()
         + net.storage.iter().filter(|e| carries(&e.extras)).count()
-        + net.hvdc.iter().filter(|e| carries(&e.extras)).count();
+        + net.hvdc.iter().filter(|e| carries(&e.extras)).count()
+        + net
+            .transformers_3w
+            .iter()
+            .filter(|e| carries(&e.extras))
+            .count();
     if dropped > 0 {
         warnings.push(format!(
             "{dropped} element(s) carry source-format passthrough fields (extras) the {target} \

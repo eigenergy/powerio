@@ -244,7 +244,16 @@ pub fn ratio(before: f64, after: f64) -> Option<f64> {
         return None;
     }
     let r = after / before;
-    let scale = 10f64.powi(3 - 1 - r.abs().log10().floor() as i32);
+    // A zero ratio has no decade to round against: `log10(0)` is `-inf`, and
+    // the `as i32` saturation would make the exponent overflow.
+    if r == 0.0 {
+        return Some(0.0);
+    }
+    let decade = r.abs().log10().floor();
+    let scale = 10f64.powi(2 - decade as i32);
+    if !scale.is_finite() || scale == 0.0 {
+        return Some(r);
+    }
     Some((r * scale).round() / scale)
 }
 
@@ -399,25 +408,32 @@ fn mask_digits(text: &str) -> String {
 }
 
 fn collect_strings(value: &serde_json::Value, out: &mut BTreeSet<String>) {
+    collect_strings_inner(value, false, out);
+}
+
+/// `in_extras` marks the subtree under an `extras` map, where the keys are
+/// whatever token the source stated — a deck naming a property after a feeder
+/// puts that name in a key and nowhere else. Everywhere else the keys are
+/// powerio's own field names, and learning those made `uid`, `route`,
+/// `charging` and every other optional field into a corpus secret: masked out
+/// of the serde paths the report is written in, and tripping [`audit`] on the
+/// harness's own vocabulary.
+fn collect_strings_inner(value: &serde_json::Value, in_extras: bool, out: &mut BTreeSet<String>) {
     match value {
         serde_json::Value::String(s) if !s.is_empty() => {
             out.insert(s.clone());
         }
         serde_json::Value::Array(xs) => {
             for x in xs {
-                collect_strings(x, out);
+                collect_strings_inner(x, in_extras, out);
             }
         }
         serde_json::Value::Object(xs) => {
-            // Keys are learned as well as values. Most are powerio's own field
-            // names — and those land in [`vocabulary`], which is built the same
-            // way, so they are exempt. An `Extras` map is the exception that
-            // makes this necessary: its keys are whatever token the source
-            // stated, so a deck naming a property after a feeder puts that name
-            // in a key and nowhere else.
             for (key, x) in xs {
-                out.insert(key.clone());
-                collect_strings(x, out);
+                if in_extras {
+                    out.insert(key.clone());
+                }
+                collect_strings_inner(x, in_extras || key == "extras", out);
             }
         }
         _ => {}

@@ -326,16 +326,22 @@ fn beyond_tol(x: f64, y: f64, tol: f64) -> bool {
 #[must_use]
 pub fn status_disagreements(a: &BalancedNetwork, b: &BalancedNetwork) -> usize {
     let off = |net: &BalancedNetwork| {
-        (
+        [
             net.generators.iter().filter(|g| !g.in_service).count(),
             net.branches.iter().filter(|x| !x.in_service).count(),
             net.loads.iter().filter(|l| !l.in_service).count(),
             net.shunts.iter().filter(|s| !s.in_service).count(),
-        )
+            net.switches.iter().filter(|x| !x.closed).count(),
+            net.storage.iter().filter(|x| !x.in_service).count(),
+            net.hvdc.iter().filter(|d| !d.in_service).count(),
+            net.transformers_3w.iter().filter(|t| !t.in_service).count(),
+        ]
     };
-    let (ga, ba, la, sa) = off(a);
-    let (gb, bb, lb, sb) = off(b);
-    ga.abs_diff(gb) + ba.abs_diff(bb) + la.abs_diff(lb) + sa.abs_diff(sb)
+    off(a)
+        .iter()
+        .zip(off(b).iter())
+        .map(|(x, y)| x.abs_diff(*y))
+        .sum()
 }
 
 /// Element counts and the totals that must survive any conversion.
@@ -537,6 +543,12 @@ fn diff_values(a: &serde_json::Value, b: &serde_json::Value, path: &str, out: &m
         }
         (Value::Object(xs), Value::Object(ys)) => {
             for key in xs.keys().chain(ys.keys().filter(|k| !xs.contains_key(*k))) {
+                // Rechecked per key: the recursive call guards itself, but the
+                // two direct pushes below do not, and an object of many
+                // one-sided keys would otherwise carry the list past the cap.
+                if out.len() >= MAX_MODEL_DIFFS {
+                    return;
+                }
                 let sub = format!("{path}.{key}");
                 match (xs.get(key), ys.get(key)) {
                     (Some(x), Some(y)) => diff_values(x, y, &sub, out),
