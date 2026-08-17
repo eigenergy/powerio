@@ -1092,6 +1092,45 @@ pub(super) fn branch_rating_set_drop_warning(
     )
 }
 
+/// Warn once when elements carry passthrough extras `target`'s writer does not
+/// replay. `consumed` is the writer's own rule: the keys it reads back into a
+/// record. Everything else was retained by a reader because the source stated
+/// more than a rewrite would synthesize, so dropping it without saying so is
+/// an undeclared loss (#330). One line, a count and the reason, matching the
+/// granularity of the other writer warnings.
+pub(super) fn warn_dropped_extras(
+    target: &str,
+    net: &BalancedNetwork,
+    consumed: impl Fn(&str) -> bool,
+    warnings: &mut Vec<String>,
+) {
+    let carries = |extras: &crate::network::Extras| extras.keys().any(|k| !consumed(k));
+    let dropped = net.buses.iter().filter(|e| carries(&e.extras)).count()
+        + net.branches.iter().filter(|e| carries(&e.extras)).count()
+        + net.loads.iter().filter(|e| carries(&e.extras)).count()
+        + net.shunts.iter().filter(|e| carries(&e.extras)).count()
+        + net.switches.iter().filter(|e| carries(&e.extras)).count()
+        + net.storage.iter().filter(|e| carries(&e.extras)).count()
+        + net.hvdc.iter().filter(|e| carries(&e.extras)).count();
+    if dropped > 0 {
+        warnings.push(format!(
+            "{dropped} element(s) carry source-format passthrough fields (extras) the {target} \
+             writer does not replay; dropped"
+        ));
+    }
+}
+
+/// Warn when a writer drops the area table. Its own line rather than the
+/// extras count: `areas` is a typed field, not a passthrough (#330).
+pub(super) fn warn_dropped_areas(target: &str, net: &BalancedNetwork, warnings: &mut Vec<String>) {
+    if !net.areas.is_empty() {
+        warnings.push(format!(
+            "{} area record(s) dropped: the {target} writer emits no area table",
+            net.areas.len()
+        ));
+    }
+}
+
 pub(super) fn warn_extra_branch_rating_sets(
     target: &str,
     net: &BalancedNetwork,

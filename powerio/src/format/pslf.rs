@@ -1687,6 +1687,34 @@ pub fn write_pslf(net: &BalancedNetwork) -> Conversion {
         ));
     }
     warn_extra_branch_rating_sets("PSLF .epc", net, &mut warnings);
+    // The keys this writer replays, spelled out rather than `pslf_*`: the
+    // record tails (`pslf_lhs_extra`/`pslf_rhs_extra`) and the DC converter
+    // stash are retained by the reader and never written back, so a prefix
+    // rule would declare them replayed when they are not (#330).
+    super::warn_dropped_extras(
+        "PSLF .epc",
+        net,
+        |key| {
+            matches!(
+                key,
+                "id" | "pslf_circuit"
+                    | "pslf_section_id"
+                    | "pslf_tbase"
+                    | "pslf_mw"
+                    | "pslf_mvar"
+                    | "pslf_mw_i"
+                    | "pslf_mvar_i"
+                    | "pslf_mw_z"
+                    | "pslf_mvar_z"
+                    | "pslf_pu_mw"
+                    | "pslf_pu_mvar"
+                    | "pslf_pu_g"
+                    | "pslf_pu_b"
+            )
+        },
+        &mut warnings,
+    );
+    super::warn_dropped_areas("PSLF .epc", net, &mut warnings);
     let branch_solutions = net.branches.iter().filter(|b| b.solution.is_some()).count();
     if branch_solutions > 0 {
         warnings.push(format!(

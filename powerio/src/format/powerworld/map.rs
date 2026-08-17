@@ -403,7 +403,13 @@ fn f_alias(r: &Row, keys: &[&str], default: f64) -> Result<f64> {
 /// (and padded ones — the comparison is verbatim) are kept as before.
 fn drop_default_id(extras: &mut Extras, keys: &[&str], default: &str) {
     for k in keys {
-        if extras.get(*k).and_then(serde_json::Value::as_str) == Some(default) {
+        // Trimmed: PowerWorld pads ids, and the padded default is still the
+        // default. The pwb reader applies the same rule.
+        if extras
+            .get(*k)
+            .and_then(serde_json::Value::as_str)
+            .is_some_and(|v| v.trim() == default)
+        {
             extras.remove(*k);
         }
     }
@@ -650,10 +656,13 @@ fn read_branch(
     // the writer derives on its own: the positional circuit for this bus pair,
     // or the Line/Transformer kind the tap already encodes. Exotic device
     // types (Breaker, Series Cap, ...) are always kept.
+    // Trim before comparing: PowerWorld pads circuit ids, so a real export
+    // spells the first circuit " 1", and the padded default is still the
+    // default (the pwb reader applies the same rule).
     if let Some(v) = r
         .get(LINE_CIRCUIT)
         .or_else(|| r.get("Circuit"))
-        .filter(|v| **v != nth.to_string())
+        .filter(|v| v.trim() != nth.to_string())
     {
         extras.insert(
             LINE_CIRCUIT.to_string(),
@@ -964,6 +973,17 @@ pub fn write_powerworld(net: &BalancedNetwork) -> Conversion {
         ));
     }
     warn_extra_branch_rating_sets("PowerWorld .aux", net, &mut warnings);
+    // The keys this writer replays: the two device ids, the branch circuit,
+    // and the device type. Anything else a reader retained — a foreign
+    // format's ids, ZIP components, LineLength — is dropped, and says so
+    // (#330).
+    super::super::warn_dropped_extras(
+        "PowerWorld .aux",
+        net,
+        |key| matches!(key, "LoadID" | "ShuntID" | "BranchDeviceType") || key == LINE_CIRCUIT,
+        &mut warnings,
+    );
+    super::super::warn_dropped_areas("PowerWorld .aux", net, &mut warnings);
     let branch_solutions = net.branches.iter().filter(|b| b.solution.is_some()).count();
     if branch_solutions > 0 {
         warnings.push(format!(
