@@ -10,6 +10,10 @@ models, PyPSA CSV folders, and gridfm datasets through the lower level powerio
 APIs. Transmission parses serialize through the ``model-json`` transport.
 Distribution parses serialize through canonical ``bmopf-json``. Package
 transport serializes either family through the ``.pio.json`` compiler package.
+
+The filesystem containment policy for ``path`` and ``out_path`` lives in
+``powerio.mcp.sandbox``, which imports no MCP SDK; the private helpers here
+are wrappers over it.
 """
 
 from __future__ import annotations
@@ -19,12 +23,12 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Optional
-from urllib.parse import unquote, urlparse
 
 from mcp.server.mcpserver import MCPServer
 
 import powerio
 from powerio import dist
+from powerio.mcp import sandbox
 
 mcp = MCPServer("powerio")
 
@@ -52,8 +56,6 @@ _BMOPF_JSON_FORMATS = frozenset({"bmopf", "bmopf-json", "bmopf_json"})
 _PACKAGE_JSON_FORMATS = frozenset(
     {"package", "pio", "pio-json", "pio_json", "pio-package", "pio_package"}
 )
-_ALLOWED_ROOTS_ENV = "POWERIO_MCP_ALLOWED_ROOTS"
-_LEGACY_ALLOWED_ROOT_ENV = "POWERIO_MCP_ROOT"
 _VERSION_KEY = "powerio_version"
 
 _MATRIX_KIND_ALIASES = {
@@ -152,81 +154,19 @@ def _looks_like_gridfm_dir(path: str) -> bool:
 
 
 def _allowed_roots() -> tuple[Path, ...]:
-    raw = os.environ.get(_ALLOWED_ROOTS_ENV) or os.environ.get(_LEGACY_ALLOWED_ROOT_ENV)
-    if not raw:
-        return ()
-    roots = []
-    for entry in raw.split(os.pathsep):
-        item = entry.strip()
-        if item:
-            roots.append(Path(item).expanduser().resolve(strict=False))
-    return tuple(roots)
+    return sandbox.allowed_roots()
 
 
 def _decode_local_path(value: str, *, purpose: str) -> Path:
-    parsed = urlparse(str(value))
-    windows_drive = os.name == "nt" and len(parsed.scheme) == 1
-    if parsed.scheme and not windows_drive:
-        if parsed.scheme != "file":
-            raise ValueError(f"`{purpose}` must be a local path or file:// URI")
-        netloc = unquote(parsed.netloc)
-        path = unquote(parsed.path)
-        if len(netloc) == 2 and netloc[0].isalpha() and netloc[1] == ":":
-            return Path(f"{netloc}{path}").expanduser()
-        if netloc.lower() not in ("", "localhost"):
-            raise ValueError(f"`{purpose}` file URI must be local")
-        if (
-            len(path) >= 3
-            and path[0] == "/"
-            and path[1].isalpha()
-            and path[2] == ":"
-            and (len(path) == 3 or path[3] in "/\\")
-        ):
-            path = path[1:]
-        return Path(path).expanduser()
-    return Path(str(value)).expanduser()
-
-
-def _path_for_policy(path: Path, *, for_write: bool) -> Path:
-    try:
-        if for_write and not path.exists():
-            parent = path.parent if path.parent != Path("") else Path(".")
-            candidate = parent.resolve(strict=True) / path.name
-            # `path.exists()` follows symlinks, so a final component that is a
-            # dangling symlink (its target absent) lands here. Joining the name
-            # onto the resolved parent would leave that symlink unresolved, so
-            # the containment check would pass on the link's own location while
-            # the real write followed it outside the roots. `realpath` resolves
-            # the final symlink (and is a no-op for a plain new name).
-            return Path(os.path.realpath(candidate))
-        return path.resolve(strict=True)
-    except FileNotFoundError:
-        if for_write:
-            raise
-        return path.resolve(strict=False)
+    return sandbox.decode_local_path(value, purpose=purpose)
 
 
 def _check_allowed_path(path: Path, *, for_write: bool, purpose: str) -> None:
-    roots = _allowed_roots()
-    if not roots:
-        return
-    try:
-        resolved = _path_for_policy(path, for_write=for_write)
-    except OSError as exc:
-        raise ValueError(
-            f"cannot resolve `{purpose}` against allowed MCP roots: {exc}"
-        ) from exc
-    for root in roots:
-        if resolved == root or root in resolved.parents:
-            return
-    root_list = ", ".join(str(root) for root in roots)
-    raise ValueError(f"`{purpose}` is outside allowed MCP roots: {root_list}")
+    sandbox.check_allowed_path(path, for_write=for_write, purpose=purpose)
 
 
 def _local_path(value: str, *, purpose: str, for_write: bool = False) -> str:
-    path = _decode_local_path(value, purpose=purpose)
-    _check_allowed_path(path, for_write=for_write, purpose=purpose)
-    return str(path)
+    return sandbox.checked_path(value, purpose=purpose, for_write=for_write)
 
 
 def _jsonish(text: str) -> bool:

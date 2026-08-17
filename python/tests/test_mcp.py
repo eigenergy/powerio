@@ -397,6 +397,19 @@ def test_mcp_allowed_roots_restrict_filesystem_paths(monkeypatch, tmp_path):
         server.summary(path=str(DATA / "case9.m"))
 
 
+@pytest.mark.parametrize("name", ["POWERIO_MCP_ROOT", "POWERIO_MCP_ALLOWED_ROOT"])
+def test_mcp_tools_honour_the_legacy_single_root_variables(
+    monkeypatch, tmp_path, name
+):
+    local_case = tmp_path / "case9.m"
+    local_case.write_text((DATA / "case9.m").read_text())
+    monkeypatch.setenv(name, str(tmp_path))
+
+    assert server.summary(path=str(local_case))["elements"]["buses"] == 9
+    with pytest.raises(ValueError, match="outside allowed MCP roots"):
+        server.summary(path=str(DATA / "case9.m"))
+
+
 @pytest.mark.skipif(os.name == "nt", reason="POSIX symlink semantics")
 def test_mcp_write_refuses_symlink_escape_from_allowed_root(monkeypatch, tmp_path):
     # A dangling symlink named as the output file, sitting inside an allowed
