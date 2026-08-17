@@ -153,16 +153,8 @@ def _looks_like_gridfm_dir(path: str) -> bool:
     )
 
 
-def _allowed_roots() -> tuple[Path, ...]:
-    return sandbox.allowed_roots()
-
-
 def _decode_local_path(value: str, *, purpose: str) -> Path:
     return sandbox.decode_local_path(value, purpose=purpose)
-
-
-def _check_allowed_path(path: Path, *, for_write: bool, purpose: str) -> None:
-    sandbox.check_allowed_path(path, for_write=for_write, purpose=purpose)
 
 
 def _local_path(value: str, *, purpose: str, for_write: bool = False) -> str:

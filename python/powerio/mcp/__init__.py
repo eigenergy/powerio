@@ -12,7 +12,11 @@ does not drag in the SDK.
 """
 
 import importlib
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from . import sandbox as sandbox
+    from .server import main as main
 
 __all__ = ["main", "sandbox"]
 
