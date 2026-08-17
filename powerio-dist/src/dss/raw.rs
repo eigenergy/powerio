@@ -1306,6 +1306,37 @@ mod tests {
         assert_eq!(raw.commands[2].args, "Voltages LN");
     }
 
+    /// `Clear` resets the circuit and nothing about containment. The root and
+    /// the include budget live on the executor precisely so this holds
+    /// (GHSA-wg3j-3v62-fv3f); if they ever moved onto `RawDss`, a case could
+    /// disarm the check by clearing first.
+    #[test]
+    fn clear_does_not_disarm_the_include_containment() {
+        let requested: std::cell::RefCell<Vec<String>> = std::cell::RefCell::new(Vec::new());
+        let mut loader = |p: &Path| {
+            requested.borrow_mut().push(p.display().to_string());
+            Err::<String, _>(std::io::Error::new(std::io::ErrorKind::NotFound, "x"))
+        };
+        let raw = parse_raw_with_confined(
+            "Redirect ../../secret.dss\nClear\nRedirect ../../secret.dss\nRedirect /etc/passwd",
+            "/case/dir/master.dss",
+            &mut loader,
+        );
+        assert!(
+            requested.borrow().is_empty(),
+            "an escaping include reached the loader after Clear: {:?}",
+            requested.borrow()
+        );
+        assert_eq!(
+            raw.warnings
+                .iter()
+                .filter(|w| w.contains("escapes the case directory"))
+                .count(),
+            3,
+            "every refusal is stated, and Clear does not erase the ones before it"
+        );
+    }
+
     #[test]
     fn clear_resets() {
         let raw = parse("New Line.l1 length=1\nClear\nNew Line.l2 length=2");

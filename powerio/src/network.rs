@@ -50,6 +50,11 @@ fn default_base_frequency() -> f64 {
 pub struct BusId(pub usize);
 
 impl BusId {
+    /// The largest id a network may carry. The C ABI reports bus ids as int64,
+    /// so an id past this ceiling has no distinct value there;
+    /// [`BalancedNetwork::validate`] refuses one.
+    pub const MAX: Self = Self(i64::MAX as usize);
+
     #[must_use]
     pub const fn new(id: usize) -> Self {
         Self(id)
@@ -2322,6 +2327,16 @@ impl BalancedNetwork {
         // rehashing.
         let mut ids = std::collections::HashSet::with_capacity(self.buses.len());
         for b in &self.buses {
+            // The readers parse ids through `as usize`, which saturates rather
+            // than failing, and the C ABI reports them as int64. Two distinct
+            // ids above the ceiling would surface as one value there, so a
+            // branch endpoint would match two bus rows.
+            if b.id > BusId::MAX {
+                return Err(Error::FormatRead {
+                    format,
+                    message: format!("bus id {} is outside the int64 id space", b.id),
+                });
+            }
             if !ids.insert(b.id) {
                 return Err(Error::FormatRead {
                     format,
@@ -2395,31 +2410,40 @@ impl BalancedNetwork {
                 check(w.bus, "3-winding transformer")?;
             }
         }
-        // Star expansion allocates synthetic bus ids `max_bus_id + 1 + k`, one
-        // per in-service 3-winding transformer; a bus id near usize::MAX would
-        // overflow that allocation (and in release wrap onto an existing bus).
-        // The base id `max + 1` is computed whenever any 3-winding transformer
-        // is present, even if none is in service, so the headroom is
-        // `max(1, in-service count)`. No real case sits there, so refuse it at
-        // the boundary like any other malformed reference.
-        if !self.transformers_3w.is_empty()
-            && let Some(max_id) = self.buses.iter().map(|b| b.id.0).max()
+        self.check_star_expansion_headroom(format)
+    }
+
+    /// Star expansion allocates synthetic bus ids `max_bus_id + 1 + k`, one per
+    /// in-service 3-winding transformer; a bus id near [`BusId::MAX`] would
+    /// push those past the ceiling the C ABI reports ids in. The base id
+    /// `max + 1` is computed whenever any 3-winding transformer is present,
+    /// even if none is in service, so the headroom is
+    /// `max(1, in-service count)`. No real case sits there, so refuse it at the
+    /// boundary like any other malformed reference.
+    fn check_star_expansion_headroom(&self, format: &'static str) -> crate::Result<()> {
+        if self.transformers_3w.is_empty() {
+            return Ok(());
+        }
+        let Some(max_id) = self.buses.iter().map(|b| b.id.0).max() else {
+            return Ok(());
+        };
+        let needed = self
+            .transformers_3w
+            .iter()
+            .filter(|t| t.in_service)
+            .count()
+            .max(1);
+        if max_id
+            .checked_add(needed)
+            .is_none_or(|top| top > BusId::MAX.0)
         {
-            let needed = self
-                .transformers_3w
-                .iter()
-                .filter(|t| t.in_service)
-                .count()
-                .max(1);
-            if max_id.checked_add(needed).is_none() {
-                return Err(Error::FormatRead {
-                    format,
-                    message: format!(
-                        "bus id {max_id} leaves no room to allocate synthetic star bus ids \
-                         for 3-winding transformers"
-                    ),
-                });
-            }
+            return Err(Error::FormatRead {
+                format,
+                message: format!(
+                    "bus id {max_id} leaves no room to allocate synthetic star bus ids \
+                     for 3-winding transformers"
+                ),
+            });
         }
         Ok(())
     }
@@ -2709,13 +2733,13 @@ mod tests {
 
     #[test]
     fn check_references_rejects_bus_ids_without_star_expansion_headroom() {
-        // A bus id at usize::MAX would make the synthetic star id
-        // `max_bus_id + 1 + k` overflow during indexed analysis; the parse
+        // A bus id at the top of the id space would make the synthetic star id
+        // `max_bus_id + 1 + k` run past it during indexed analysis; the parse
         // boundary refuses it like any other malformed reference.
         let mut net = BalancedNetwork::in_memory(
             "t",
             100.0,
-            vec![bus(1), bus(2), bus(3), bus(usize::MAX)],
+            vec![bus(1), bus(2), bus(3), bus(i64::MAX as usize)],
             Vec::new(),
         );
         net.transformers_3w.push(transformer_3w());
@@ -2731,12 +2755,12 @@ mod tests {
         // The headroom needed is the in-service transformer count (plus the
         // base id), not the total: an out-of-service unit allocates no star
         // bus, so a network that only fits the in-service count must not be
-        // rejected. max bus id usize::MAX - 1 fits one in-service star id
-        // (max + 1) but not two.
+        // rejected. A max bus id one under the ceiling fits one in-service
+        // star id (max + 1) but not two.
         let mut net = BalancedNetwork::in_memory(
             "t",
             100.0,
-            vec![bus(1), bus(2), bus(3), bus(usize::MAX - 1)],
+            vec![bus(1), bus(2), bus(3), bus(i64::MAX as usize - 1)],
             Vec::new(),
         );
         net.transformers_3w.push(transformer_3w());
@@ -2745,6 +2769,26 @@ mod tests {
         net.transformers_3w.push(out_of_service);
         net.validate()
             .expect("in-service count fits; must not be rejected");
+    }
+
+    #[test]
+    fn check_references_rejects_a_bus_id_past_the_int64_ceiling() {
+        // The C ABI reports bus ids as int64, so two distinct usize ids above
+        // the ceiling both surface as the same value and a branch endpoint
+        // matches two bus rows. Refuse them where every other malformed
+        // reference is refused.
+        let mut net = BalancedNetwork::in_memory(
+            "t",
+            100.0,
+            vec![bus(1), bus(i64::MAX as usize + 1)],
+            Vec::new(),
+        );
+        let err = net.validate().unwrap_err().to_string();
+        assert!(err.contains("outside the int64 id space"), "got {err}");
+
+        // The ceiling itself is a valid id.
+        net.buses[1].id = BusId(i64::MAX as usize);
+        net.validate().expect("the ceiling itself is representable");
     }
 
     #[test]

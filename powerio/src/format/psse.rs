@@ -4578,4 +4578,27 @@ Q
             "malformed bus id should be reported directly: {err}"
         );
     }
+
+    #[test]
+    fn a_bus_id_past_the_int64_ceiling_is_refused() {
+        // The id column is read as f64 and cast, and the cast saturates: two
+        // distinct ids above the ceiling both land on usize::MAX-ish values
+        // that the C ABI reports as the same int64. Refuse them at the reader
+        // boundary instead of collapsing two buses onto one reported id.
+        let raw = r"0, 100.00, 33, 0, 0, 60.00 / synthetic out-of-range export
+CASE
+COMMENT
+1e300,'BUS1        ', 230.0000,3,1,1,1,1.00000,0.0000,1.1000,0.9000,1.1000,0.9000
+2,'BUS2        ', 138.0000,1,1,1,1,1.00000,0.0000,1.1000,0.9000,1.1000,0.9000
+0 / END OF BUS DATA, BEGIN LOAD DATA
+Q
+";
+
+        let err = parse_psse(raw).unwrap_err();
+
+        assert!(
+            err.to_string().contains("outside the int64 id space"),
+            "an out-of-range bus id should be refused: {err}"
+        );
+    }
 }
