@@ -133,6 +133,11 @@ pub struct BmopfWriteOptions {
 /// Writes the strict BMOPF document. Every field the schema cannot carry
 /// is reported in the warnings.
 ///
+/// Transformer taps, neutral impedance, no load admittance, and the tables
+/// schema 0.1.0 dropped from the top level move under `extras` instead of
+/// being dropped; [the module docs](crate::bmopf) enumerate them, and state
+/// when the emitted `terminal_conventions` block stops being valid.
+///
 /// # Panics
 ///
 /// Never in practice: the document is maps, strings, and finite numbers,
@@ -141,7 +146,8 @@ pub fn write_bmopf_json(net: &MulticonductorNetwork) -> Conversion {
     write_bmopf_json_with_options(net, &BmopfWriteOptions::default())
 }
 
-/// Writes BMOPF JSON with explicit options.
+/// Writes BMOPF JSON with explicit options. Parks the same fields under
+/// `extras` as [`write_bmopf_json`].
 ///
 /// # Panics
 ///
@@ -1294,7 +1300,8 @@ impl Writer {
     /// `additionalProperties: false` subtype objects and into
     /// `extras.transformer.<subtype>.<name>`, warning per transformer.
     /// Subtypes the schema leaves undefined (`n_winding`, untyped
-    /// passthrough) are untouched.
+    /// passthrough) are untouched. The module docs enumerate the moved set
+    /// for consumers; extend both together.
     fn split_transformer_overflow(&mut self, by_subtype: &mut Map<String, Value>) {
         // The transformer fields the emitters still produce that lost their
         // subtype slots in schema 0.1.0. Listing the moved set (rather than
