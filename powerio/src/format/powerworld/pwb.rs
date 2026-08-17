@@ -583,10 +583,10 @@ fn checked_network(
     // case. Done over the final tables because a record probe does not know
     // its position.
     for (i, l) in loads.iter_mut().enumerate() {
-        drop_positional_id(&mut l.extras, "LoadID", i);
+        super::drop_positional_id(&mut l.extras, &["LoadID"], i);
     }
     for (i, s) in shunts.iter_mut().enumerate() {
-        drop_positional_id(&mut s.extras, "ShuntID", i);
+        super::drop_positional_id(&mut s.extras, &["ShuntID"], i);
     }
     // Branch circuits use the aux reader's positional rule: the counter is per
     // bus pair, so the second parallel branch's "2" is the default the
@@ -595,7 +595,7 @@ fn checked_network(
     for br in &mut branches {
         let nth = parallel.entry((br.from, br.to)).or_insert(0);
         *nth += 1;
-        drop_positional_id(&mut br.extras, LINE_CIRCUIT, *nth - 1);
+        super::drop_positional_id(&mut br.extras, &[LINE_CIRCUIT], *nth - 1);
     }
     let net = BalancedNetwork {
         name: name_hint.unwrap_or("case").to_string(),
@@ -617,19 +617,6 @@ fn checked_network(
         source: None,
     };
     net.check_references(FMT).map(|()| net)
-}
-
-/// Remove `key` when its trimmed value is the 1-based positional default the
-/// aux writer would allocate for element `index`.
-fn drop_positional_id(extras: &mut Extras, key: &str, index: usize) {
-    let default = (index + 1).to_string();
-    if extras
-        .get(key)
-        .and_then(serde_json::Value::as_str)
-        .is_some_and(|v| v.trim() == default)
-    {
-        extras.remove(key);
-    }
 }
 
 // ---- Cursor -----------------------------------------------------------------

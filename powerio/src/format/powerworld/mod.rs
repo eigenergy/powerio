@@ -44,7 +44,31 @@ pub use pwb::{parse_pwb, parse_pwb_with_warnings};
 pub use pwd::{PwdDisplay, PwdSubstation, parse_pwd, parse_pwd_display, parse_pwd_file};
 
 use crate::Result;
-use crate::network::BalancedNetwork;
+use crate::network::{BalancedNetwork, Extras};
+
+/// Drop a retained device id that states exactly the positional default the
+/// aux writer's allocator would hand element `index` anyway.
+///
+/// Shared by both PowerWorld readers on purpose. The aux reader and the binary
+/// reader must agree on what counts as a default, or one keeps an id the other
+/// drops and a pwb → aux leg reports the disagreement as a conversion loss.
+/// Trimmed before comparing: PowerWorld pads ids for display, and a padded
+/// default is still the default.
+///
+/// `keys` are the field aliases one id can arrive under; an explicit
+/// non-default id is kept verbatim, padding included.
+pub(super) fn drop_positional_id(extras: &mut Extras, keys: &[&str], index: usize) {
+    let default = (index + 1).to_string();
+    for key in keys {
+        if extras
+            .get(*key)
+            .and_then(serde_json::Value::as_str)
+            .is_some_and(|v| v.trim() == default)
+        {
+            extras.remove(*key);
+        }
+    }
+}
 
 /// Parse a PowerWorld `.aux` into a [`BalancedNetwork`], reading the Bus/Load/Shunt/
 /// Gen/Branch `DATA` blocks by their declared field lists.

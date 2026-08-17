@@ -160,22 +160,22 @@ impl Fingerprint {
     /// and sortable; agreement is decided here.
     #[must_use]
     pub fn agrees_with(&self, other: &Self) -> bool {
-        let close = |a: i64, b: i64, slack: i64| (a - b).abs() <= slack;
+        let close = |a: i64, b: i64, tolerance: i64| (a - b).abs() <= tolerance;
         self.impedances.len() == other.impedances.len()
             && std::iter::zip(&self.impedances, &other.impedances)
-                .all(|(a, b)| close(*a, *b, impedance_slack(*a)))
-            && close(self.load_p, other.load_p, power_slack(self.load_p))
-            && close(self.load_q, other.load_q, power_slack(self.load_q))
+                .all(|(a, b)| close(*a, *b, slack(*a)))
+            && close(self.load_p, other.load_p, slack(self.load_p))
+            && close(self.load_q, other.load_q, slack(self.load_q))
     }
 }
 
 /// One part in `1e4` of the value, and never less than one quantum: enough to
 /// absorb a fixed-width column's truncation, too little to merge two cases.
-fn impedance_slack(quantized: i64) -> i64 {
-    1.max(quantized.abs() / 10_000)
-}
-
-fn power_slack(quantized: i64) -> i64 {
+///
+/// One rule for impedances and for power. They were two identically-bodied
+/// functions, which is how a later change to one tolerance silently leaves the
+/// other behind.
+fn slack(quantized: i64) -> i64 {
     1.max(quantized.abs() / 10_000)
 }
 
