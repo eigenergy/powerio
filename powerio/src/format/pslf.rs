@@ -48,10 +48,17 @@ pub(crate) fn parse_pslf_source(
     let mut once = HashSet::new();
 
     let mut buses = Vec::new();
-    let mut bus_voltage = HashMap::new();
+    let mut bus_schedule = HashMap::new();
     for rec in doc.records("bus data") {
         let bus = read_bus(rec)?;
-        bus_voltage.insert(bus.id, (bus.vm, bus.base_kv));
+        bus_schedule.insert(
+            bus.id,
+            BusSchedule {
+                vm: bus.vm,
+                vsched: num_at(&rec.rhs, 1, bus.vm, "bus vsched", rec)?,
+                base_kv: bus.base_kv,
+            },
+        );
         buses.push(bus);
     }
 
@@ -88,7 +95,7 @@ pub(crate) fn parse_pslf_source(
 
     let mut transformers_3w = Vec::new();
     for rec in doc.records("transformer data") {
-        match read_transformer(rec)? {
+        match read_transformer(rec, base_mva)? {
             TransformerRecord::TwoWinding(branch) => branches.push(branch),
             TransformerRecord::ThreeWinding(t) => transformers_3w.push(t),
         }
@@ -103,7 +110,7 @@ pub(crate) fn parse_pslf_source(
 
     let mut generators = Vec::new();
     for rec in doc.records("generator data") {
-        generators.push(read_generator(rec, &bus_voltage, warnings)?);
+        generators.push(read_generator(rec, &bus_schedule, warnings)?);
     }
 
     let dc_converters = read_dc_converters(&doc, warnings);
@@ -463,7 +470,12 @@ fn line_tokens(rec: &Record, line: usize) -> Vec<String> {
 /// Map one `bus data` record into a [`Bus`].
 fn read_bus(rec: &Record) -> Result<Bus> {
     let id = BusId(req_id(&rec.lhs, 0, "bus id", rec)?);
-    let name = rec.lhs.get(1).map(|name| name.trim().to_string());
+    // An empty token (what the writer emits for an unnamed bus) is no name.
+    let name = rec
+        .lhs
+        .get(1)
+        .map(|name| name.trim().to_string())
+        .filter(|name| !name.is_empty());
     Ok(Bus {
         id,
         kind: pslf_bus_type(int_at(&rec.rhs, 0, 1, "bus type", rec)?),
@@ -479,7 +491,7 @@ fn read_bus(rec: &Record) -> Result<Bus> {
         name,
         uid: None,
         location: None,
-        extras: extras(rec, "bus data", 3, 21),
+        extras: extras(rec, 3, 21),
     })
 }
 
@@ -495,11 +507,13 @@ fn pslf_bus_type(code: i64) -> BusType {
 
 /// Map one `branch data` record into a line [`Branch`].
 fn read_branch(rec: &Record) -> Result<Branch> {
-    let mut extras = extras(rec, "branch data", 9, 10);
-    if let Some(circuit) = rec.lhs.get(6) {
+    let mut extras = extras(rec, 9, 10);
+    // `1` is the id the writer allocates and the section it emits when none is
+    // retained, so those tokens restate the default and are not kept.
+    if let Some(circuit) = rec.lhs.get(6).filter(|c| c.trim() != "1") {
         extras.insert("pslf_circuit".into(), Value::String(circuit.clone()));
     }
-    if let Some(section) = rec.lhs.get(7) {
+    if let Some(section) = rec.lhs.get(7).filter(|t| t.trim() != "1") {
         extras.insert("pslf_section_id".into(), string_or_number(section));
     }
     Ok(Branch {
@@ -544,7 +558,7 @@ enum TransformerRecord {
 /// The `.epc` record carries the three pairwise impedances and the primary
 /// winding's ratio/ratings; the secondary and tertiary winding ratios are not
 /// represented at these column positions, so they default to nominal.
-fn read_transformer(rec: &Record) -> Result<TransformerRecord> {
+fn read_transformer(rec: &Record, base_mva: f64) -> Result<TransformerRecord> {
     let rhs1 = line_rhs(rec, 0);
     let line2 = line_tokens(rec, 1);
     let tertiary = id_at(&rhs1, 9, 0, "transformer tertiary bus", rec)?;
@@ -571,8 +585,8 @@ fn read_transformer(rec: &Record) -> Result<TransformerRecord> {
         .map(|n| n.trim().to_string());
 
     if tertiary != 0 || pt_r != 0.0 || pt_x != 0.0 || ts_r != 0.0 || ts_x != 0.0 {
-        let mut extras = extras(rec, "transformer data", 8, 21);
-        if let Some(c) = circuit {
+        let mut extras = transformer_extras(rec, &[rate_a, rate_b, rate_c, shift, tap]);
+        if let Some(c) = circuit.filter(|c| c.trim() != "1") {
             extras.insert("pslf_circuit".into(), Value::String(c));
         }
         let nominal = |bus| Winding {
@@ -617,11 +631,16 @@ fn read_transformer(rec: &Record) -> Result<TransformerRecord> {
         return Ok(TransformerRecord::ThreeWinding(t3));
     }
 
-    let mut extras = extras(rec, "transformer data", 8, 21);
-    if let Some(c) = circuit {
+    let mut extras = transformer_extras(rec, &[rate_a, rate_b, rate_c, shift, tap]);
+    if let Some(c) = circuit.filter(|c| c.trim() != "1") {
         extras.insert("pslf_circuit".into(), Value::String(c));
     }
-    extras.insert("pslf_tbase".into(), number_value(tbase));
+    // Exact comparison on purpose: the writer emits the case base verbatim
+    // when no tbase is retained, so only a bit-different stated base is data.
+    #[allow(clippy::float_cmp)]
+    if tbase != base_mva {
+        extras.insert("pslf_tbase".into(), number_value(tbase));
+    }
     Ok(TransformerRecord::TwoWinding(Branch {
         from,
         to,
@@ -647,28 +666,59 @@ fn read_transformer(rec: &Record) -> Result<TransformerRecord> {
     }))
 }
 
+/// What a `bus data` record says about one bus's voltage, for the generator
+/// rows that key off it: the solved magnitude, the scheduled magnitude, and the
+/// nominal kV that converts between per unit and the `reg_kv` column.
+#[derive(Clone, Copy)]
+struct BusSchedule {
+    vm: f64,
+    vsched: f64,
+    base_kv: f64,
+}
+
 /// Map one `generator data` record.
 ///
-/// EPC stores generator voltage setpoints as controlled kV (`reg_kv`) when
-/// present. Older or sparse rows leave it zero, so fall back to the solved bus
+/// EPC states generator voltage setpoints as controlled kV (`reg_kv`), which a
+/// bus with no nominal kV cannot express. The bus's own `vsched` column is the
+/// scheduled magnitude in per unit and needs no base, so it carries the
+/// setpoint for those buses; a row with neither falls back to the solved bus
 /// voltage.
 fn read_generator(
     rec: &Record,
-    bus_voltage: &HashMap<BusId, (f64, f64)>,
+    bus_schedule: &HashMap<BusId, BusSchedule>,
     warnings: &mut Vec<String>,
 ) -> Result<Generator> {
     let bus = BusId(req_id(&rec.lhs, 0, "generator bus", rec)?);
-    let (bus_vm, base_kv) = bus_voltage.get(&bus).copied().unwrap_or((1.0, 0.0));
+    let schedule = bus_schedule.get(&bus).copied().unwrap_or(BusSchedule {
+        vm: 1.0,
+        vsched: 1.0,
+        base_kv: 0.0,
+    });
     let reg_kv = num_at(&rec.rhs, 3, 0.0, "generator reg_kv", rec)?;
-    let vg = if reg_kv > 0.0 && base_kv > 0.0 {
-        reg_kv / base_kv
+    let vg = if schedule.base_kv > 0.0 {
+        // `reg_kv` is the setpoint whenever the bus states a base to divide by.
+        // A row leaving it zero states no setpoint, so the solved bus voltage
+        // stands in; `vsched` is not consulted here, because on such a bus it
+        // is the bus's own schedule and not this generator's.
+        if reg_kv > 0.0 {
+            reg_kv / schedule.base_kv
+        } else {
+            schedule.vm
+        }
     } else {
+        // No base kV to divide by: `vsched` is the only per unit column that
+        // can carry a setpoint, and the solved voltage is the last resort.
+        let (source, vg) = if schedule.vsched > 0.0 {
+            ("the bus vsched setpoint", schedule.vsched)
+        } else {
+            ("bus voltage", schedule.vm)
+        };
         if reg_kv > 0.0 {
             warnings.push(format!(
-                "PSLF generator at bus {bus}: reg_kv present but bus base kV is missing; used bus voltage"
+                "PSLF generator at bus {bus}: reg_kv present but bus base kV is missing; used {source}"
             ));
         }
-        bus_vm
+        vg
     };
     Ok(Generator {
         bus,
@@ -712,14 +762,19 @@ fn read_load(
                 .into(),
         );
     }
-    let mut extras = extras(rec, "load data", 5, 20);
+    let mut extras = extras(rec, 5, 20);
     capture_device_id(&mut extras, &rec.lhs);
-    extras.insert("pslf_mw".into(), number_value(p_const));
-    extras.insert("pslf_mvar".into(), number_value(q_const));
-    extras.insert("pslf_mw_i".into(), number_value(p_i));
-    extras.insert("pslf_mvar_i".into(), number_value(q_i));
-    extras.insert("pslf_mw_z".into(), number_value(p_z));
-    extras.insert("pslf_mvar_z".into(), number_value(q_z));
+    // With zero I/Z terms the record states the constant-power pair alone,
+    // which is exactly the typed p/q the writer falls back to; the six
+    // components say more only when the split distributes.
+    if has_zip_components {
+        extras.insert("pslf_mw".into(), number_value(p_const));
+        extras.insert("pslf_mvar".into(), number_value(q_const));
+        extras.insert("pslf_mw_i".into(), number_value(p_i));
+        extras.insert("pslf_mvar_i".into(), number_value(q_i));
+        extras.insert("pslf_mw_z".into(), number_value(p_z));
+        extras.insert("pslf_mvar_z".into(), number_value(q_z));
+    }
     Ok(Load {
         bus: BusId(req_id(&rec.lhs, 0, "load bus", rec)?),
         p: p_const + p_i + p_z,
@@ -745,10 +800,16 @@ fn read_load(
 fn read_shunt(rec: &Record, base_mva: f64) -> Result<Shunt> {
     let g_pu = num_at(&rec.rhs, 3, 0.0, "shunt pu_mw", rec)?;
     let b_pu = num_at(&rec.rhs, 4, 0.0, "shunt pu_mvar", rec)?;
-    let mut extras = extras(rec, "shunt data", 10, 29);
+    let mut extras = extras(rec, 10, 29);
     capture_device_id(&mut extras, &rec.lhs);
-    extras.insert("pslf_pu_mw".into(), number_value(g_pu));
-    extras.insert("pslf_pu_mvar".into(), number_value(b_pu));
+    // The writer divides MW back by the base when no pu extra is retained;
+    // keep the stated token only when that round trip is not bit-exact.
+    #[allow(clippy::float_cmp)]
+    for (key, pu) in [("pslf_pu_mw", g_pu), ("pslf_pu_mvar", b_pu)] {
+        if safe_div(pu * base_mva, base_mva) != pu {
+            extras.insert(key.into(), number_value(pu));
+        }
+    }
     Ok(Shunt {
         bus: BusId(req_id(&rec.lhs, 0, "shunt bus", rec)?),
         g: g_pu * base_mva,
@@ -778,7 +839,7 @@ fn read_svd(
     }
     let g_pu = num_at(&rec.rhs, 7, 0.0, "svd g", rec)?;
     let b_pu = num_at(&rec.rhs, 8, 0.0, "svd b", rec)?;
-    let mut extras = extras(rec, "svd data", 5, 30);
+    let mut extras = extras(rec, 5, 30);
     capture_device_id(&mut extras, &rec.lhs);
     extras.insert("pslf_device".into(), Value::String("svd".into()));
     extras.insert("pslf_pu_g".into(), number_value(g_pu));
@@ -805,7 +866,31 @@ struct DcConverter {
     in_service: bool,
     p: f64,
     q: f64,
+    /// Whether the record stated converter fields beyond the ones mapped here.
+    states_detail: bool,
     extras: Extras,
+}
+
+/// Whether a DC record states numeric data beyond the values the reader maps.
+///
+/// `mapped` are the values read out of the record; every other nonzero number
+/// on the rhs is converter or control data (firing angles, transformer taps, a
+/// DC voltage schedule) the balanced model does not carry, kept only in extras.
+/// A zero states nothing: EPC reads a zero field as absent (`reg_kv` and
+/// `rate1` above lean on the same convention), and the writer below emits
+/// exactly that shape, so a powerio-written file reads back without the
+/// warning while a real GE export still reports what stays behind.
+///
+/// Counting rather than indexing keeps the test independent of how a producer
+/// splits the record across continuation lines: `rhs` is the joined numeric
+/// side, and `mapped` is a subset of it.
+fn dc_states_detail(rhs: &[String], mapped: &[f64]) -> bool {
+    let stated = rhs
+        .iter()
+        .filter(|tok| tok.parse::<f64>().is_ok_and(|v| v != 0.0))
+        .count();
+    let consumed = mapped.iter().filter(|v| **v != 0.0).count();
+    stated > consumed
 }
 
 /// Read all `dc converter data` rows into a DC bus keyed map.
@@ -820,14 +905,20 @@ fn read_dc_converters(
     for rec in doc.records("dc converter data") {
         let parsed = (|| -> Result<DcConverter> {
             let l2 = line_tokens(rec, 1);
-            let mut extras = extras(rec, "dc converter data", 8, 15);
-            extras.insert("pslf_device".into(), Value::String("dc_converter".into()));
+            let extras = extras(rec, 8, 15);
+            let in_service = on_at(&rec.rhs, 0, true, "dc converter status", rec)?;
+            let p = num_at(&l2, 2, 0.0, "dc converter p", rec)?;
+            let q = num_at(&l2, 3, 0.0, "dc converter q", rec)?;
             Ok(DcConverter {
                 ac_bus: BusId(req_id(&rec.lhs, 0, "dc converter AC bus", rec)?),
                 dc_bus: req_id(&rec.lhs, 3, "dc converter DC bus", rec)?,
-                in_service: on_at(&rec.rhs, 0, true, "dc converter status", rec)?,
-                p: num_at(&l2, 2, 0.0, "dc converter p", rec)?,
-                q: num_at(&l2, 3, 0.0, "dc converter q", rec)?,
+                in_service,
+                p,
+                q,
+                states_detail: dc_states_detail(
+                    &rec.rhs,
+                    &[f64::from(i32::from(in_service)), p, q],
+                ),
                 extras,
             })
         })();
@@ -856,7 +947,7 @@ fn read_dc_lines(
 ) -> Vec<Hvdc> {
     let mut out = Vec::new();
     for rec in doc.records("dc line data") {
-        let parsed = (|| -> Result<Hvdc> {
+        let parsed = (|| -> Result<(bool, Hvdc)> {
             let from_dc = req_id(&rec.lhs, 0, "dc line from bus", rec)?;
             let to_dc = req_id(&rec.lhs, 3, "dc line to bus", rec)?;
             let from = converters.get(&from_dc).ok_or_else(|| Error::FormatRead {
@@ -867,53 +958,64 @@ fn read_dc_lines(
                 format: FMT,
                 message: format!("dc line references DC bus {to_dc} with no converter"),
             })?;
+            let in_service = on_at(&rec.rhs, 0, true, "dc line status", rec)?;
             let rate = num_at(&rec.rhs, 6, 0.0, "dc line rate1", rec)?;
             let pmax = if rate > 0.0 {
                 rate
             } else {
                 from.p.abs().max(to.p.abs())
             };
-            let mut extras = extras(rec, "dc line data", 8, 20);
-            extras.insert("pslf_device".into(), Value::String("dc_line".into()));
-            extras.insert(
-                "pslf_from_converter".into(),
-                Value::Object(from.extras.clone().into_iter().collect()),
-            );
-            extras.insert(
-                "pslf_to_converter".into(),
-                Value::Object(to.extras.clone().into_iter().collect()),
-            );
-            Ok(Hvdc {
-                from: from.ac_bus,
-                to: to.ac_bus,
-                in_service: on_at(&rec.rhs, 0, true, "dc line status", rec)?
-                    && from.in_service
-                    && to.in_service,
-                pf: from.p,
-                pt: to.p,
-                qf: from.q,
-                qt: to.q,
-                vf: 1.0,
-                vt: 1.0,
-                pmin: -pmax,
-                pmax,
-                qminf: from.q.min(0.0),
-                qmaxf: from.q.max(0.0),
-                qmint: to.q.min(0.0),
-                qmaxt: to.q.max(0.0),
-                loss0: 0.0,
-                loss1: 0.0,
-                cost: None,
-                uid: None,
-                extras,
-            })
+            let states_detail = from.states_detail
+                || to.states_detail
+                || dc_states_detail(&rec.rhs, &[f64::from(i32::from(in_service)), rate]);
+            let mut extras = extras(rec, 8, 20);
+            // Converter extras ride under the joined HVDC record, but only
+            // when a converter actually stated tokens beyond the mapped ones.
+            for (key, conv) in [("pslf_from_converter", from), ("pslf_to_converter", to)] {
+                if !conv.extras.is_empty() {
+                    extras.insert(
+                        key.into(),
+                        Value::Object(conv.extras.clone().into_iter().collect()),
+                    );
+                }
+            }
+            Ok((
+                states_detail,
+                Hvdc {
+                    from: from.ac_bus,
+                    to: to.ac_bus,
+                    in_service: in_service && from.in_service && to.in_service,
+                    pf: from.p,
+                    pt: to.p,
+                    qf: from.q,
+                    qt: to.q,
+                    vf: 1.0,
+                    vt: 1.0,
+                    pmin: -pmax,
+                    pmax,
+                    qminf: from.q.min(0.0),
+                    qmaxf: from.q.max(0.0),
+                    qmint: to.q.min(0.0),
+                    qmaxt: to.q.max(0.0),
+                    loss0: 0.0,
+                    loss1: 0.0,
+                    cost: None,
+                    uid: None,
+                    extras,
+                },
+            ))
         })();
         match parsed {
-            Ok(line) => {
-                warnings.push(
-                    "PSLF DC line/converter data mapped to BalancedNetwork HVDC with unsupported control fields retained in extras"
-                        .into(),
-                );
+            // The record and its two converters carry the warning only when one
+            // of them stated data the mapping left behind; see
+            // [`dc_states_detail`].
+            Ok((states_detail, line)) => {
+                if states_detail {
+                    warnings.push(
+                        "PSLF DC line/converter data mapped to BalancedNetwork HVDC with unsupported control fields retained in extras"
+                            .into(),
+                    );
+                }
                 out.push(line);
             }
             Err(err) => warnings.push(format!("dc line at line {} not mapped: {err}", rec.line_no)),
@@ -947,14 +1049,13 @@ fn warn_unmodeled_sections(doc: &EpcDocument, warnings: &mut Vec<String>) {
 
 /// Common extras for mapped EPC rows.
 ///
-/// The `used_*` bounds are the fields consumed by the typed reader. Remaining
-/// tokens are retained so later PSLF work can recover more fields without
-/// needing the original case file at hand.
-fn extras(rec: &Record, section: &str, used_lhs: usize, used_rhs: usize) -> Extras {
+/// The `used_*` bounds are the fields consumed by the typed reader. Only the
+/// tokens beyond them are retained: the consumed fields live in the model and
+/// the writer regenerates the record from it, so a raw echo, the line number,
+/// and the section name would restate provenance the rewrite re-derives (and
+/// every cross-format hop would then warn about dropping a restatement).
+fn extras(rec: &Record, used_lhs: usize, used_rhs: usize) -> Extras {
     let mut extras = Extras::new();
-    extras.insert("pslf_section".into(), Value::String(section.into()));
-    extras.insert("pslf_line".into(), number_value(rec.line_no as f64));
-    extras.insert("pslf_raw".into(), string_array(rec.raw.iter().cloned()));
     if rec.lhs.len() > used_lhs {
         extras.insert(
             "pslf_lhs_extra".into(),
@@ -970,11 +1071,32 @@ fn extras(rec: &Record, section: &str, used_lhs: usize, used_rhs: usize) -> Extr
     extras
 }
 
+/// Extras for a transformer record. The first-line rhs is consumed through
+/// index 21 and the type token (`xfmr`/`xf3`, lhs index 8) is re-derived from
+/// the impedance shape on write. The second physical line is consumed by
+/// position (ratings 6-8, shift 10, tap 16), so its retained tail is dropped
+/// when it states no more nonzero tokens than those mapped fields — the same
+/// stated-versus-consumed rule the dc records use.
+fn transformer_extras(rec: &Record, mapped_line2: &[f64]) -> Extras {
+    let mut extras = extras(rec, 9, 21);
+    let tail = rec.rhs.get(21..).unwrap_or_default();
+    if !dc_states_detail(tail, mapped_line2) {
+        extras.remove("pslf_rhs_extra");
+    }
+    extras
+}
+
 /// Capture a load/shunt/svd record's id (lhs token 3) into `extras["id"]` — the
 /// key the PSS/E reader uses — so the id survives cross-format writes and
 /// parallel devices on a bus stay distinguishable.
 fn capture_device_id(extras: &mut Extras, lhs: &[String]) {
-    if let Some(id) = lhs.get(3).map(|s| s.trim()).filter(|s| !s.is_empty()) {
+    // `1` is the positional default the writer's allocator re-derives, so it
+    // restates nothing; parallel devices keep their explicit non-default ids.
+    if let Some(id) = lhs
+        .get(3)
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty() && *s != "1")
+    {
         extras.insert("id".into(), Value::String(id.to_string()));
     }
 }
@@ -1155,6 +1277,23 @@ pub fn write_pslf(net: &BalancedNetwork) -> Conversion {
     let _ = writeln!(s, "!");
 
     // ---- bus data ----
+    // `vsched` is the scheduled voltage in per unit, distinct from the solved
+    // `volt`. A bus with no base kV cannot state its generators' setpoint as
+    // `reg_kv` (kV), and this is the only per unit column that can, so the
+    // setpoint rides here for those buses. Where the bus states a base kV,
+    // `reg_kv` carries the setpoint per generator and `vsched` stays the bus
+    // voltage: routing it through `reg_kv = vg * base_kv` and back is not exact
+    // in binary, so writing `vg` here too would make a re-serialize differ in
+    // the last digit.
+    //
+    // One column per bus, so generators that disagree on a base-kV-less bus
+    // keep only the first; the rest are what the generator loop reports.
+    let mut setpoint_of: HashMap<BusId, f64> = HashMap::new();
+    for g in &net.generators {
+        if g.vg.is_finite() && g.vg > 0.0 {
+            setpoint_of.entry(g.bus).or_insert(g.vg);
+        }
+    }
     let _ = writeln!(
         s,
         "bus data [{}] ty vsched volt angle ar zone vmax vmin",
@@ -1168,7 +1307,11 @@ pub fn write_pslf(net: &BalancedNetwork) -> Conversion {
             name_tok(b.name.as_deref().unwrap_or("")),
             num(b.base_kv),
             pslf_type(b.kind),
-            num(b.vm),
+            num(if b.base_kv > 0.0 {
+                b.vm
+            } else {
+                setpoint_of.get(&b.id).copied().unwrap_or(b.vm)
+            }),
             num(b.vm),
             num(b.va),
             b.area,
@@ -1270,9 +1413,10 @@ pub fn write_pslf(net: &BalancedNetwork) -> Conversion {
                 (br.from, br.to),
                 &mut branch_ids,
             );
+            let se = section_tok(&br.extras);
             let _ = writeln!(
                 s,
-                "{} {} {} {} {} {} \"{ck}\" 1 \"line\" : {} {} {} {} {} {} {}",
+                "{} {} {} {} {} {} \"{ck}\" {se} \"line\" : {} {} {} {} {} {} {}",
                 br.from,
                 name_tok(f.name),
                 num(f.base_kv),
@@ -1382,12 +1526,18 @@ pub fn write_pslf(net: &BalancedNetwork) -> Conversion {
             // rhs indices the reader reads: status 0, reg_kv 3, pgen 8, pmax 9,
             // pmin 10, qgen 11, qmax 12, qmin 13, mbase 14. `reg_name` is left as
             // 0 because this writer only represents own-terminal regulation.
+            // Without a base kV the setpoint rides the bus `vsched` column
+            // instead, so it is lost only where that column carries a different
+            // generator's.
             let reg_kv = if g.vg.is_finite() && r.base_kv > 0.0 {
                 g.vg * r.base_kv
             } else {
-                if g.vg.is_finite() && (g.vg - 1.0).abs() > 1e-9 {
+                let scheduled = setpoint_of.get(&g.bus);
+                if g.vg.is_finite()
+                    && scheduled.is_some_and(|written| (written - g.vg).abs() > 1e-9)
+                {
                     warnings.push(format!(
-                        "PSLF generator at bus {}: voltage setpoint {} p.u. could not be written because bus base kV is missing",
+                        "PSLF generator at bus {}: voltage setpoint {} p.u. could not be written because bus base kV is missing and the bus schedules a different setpoint",
                         g.bus, g.vg
                     ));
                 }
@@ -1418,7 +1568,9 @@ pub fn write_pslf(net: &BalancedNetwork) -> Conversion {
     // keyed by a DC bus number. Synthesize a distinct DC bus per converter (these
     // are internal join keys, not AC buses) and emit the from/to converter rows
     // plus the line row that read_dc_converters/read_dc_lines rejoin into one
-    // `BalancedNetwork::Hvdc`.
+    // `BalancedNetwork::Hvdc`. Every unmapped field is written as 0, the shape
+    // `dc_states_detail` reads as "nothing stated", so this writer's own output
+    // reads back without the retained-control-fields warning.
     if !net.hvdc.is_empty() {
         let _ = writeln!(
             s,
@@ -1487,6 +1639,15 @@ pub fn write_pslf(net: &BalancedNetwork) -> Conversion {
     }
     if net.generators.iter().any(|g| g.cost.is_some()) {
         warnings.push("generator cost curves dropped: PSLF .epc carries no cost data".into());
+    }
+    let with_caps = net.generators.iter().filter(|g| g.has_caps()).count();
+    if with_caps > 0 {
+        warnings.push(format!(
+            "generator capability/ramp columns dropped for {with_caps} generator(s): the PSLF .epc generator records written here carry no MATPOWER capability columns"
+        ));
+    }
+    if net.hvdc.iter().any(|d| d.cost.is_some()) {
+        warnings.push("DC line cost curves dropped: PSLF .epc carries no cost data".into());
     }
     // Transformer branches drop their charging entirely (warned separately
     // below), so exclude them here: only line records carry the collapsed total
@@ -1625,6 +1786,20 @@ fn device_id(
     super::allocate_circuit_id(preferred.as_deref(), bus, used)
 }
 
+/// The branch section number token, replayed from `pslf_section_id` when a
+/// PSLF read kept one (a multi-section line), else `1` — the writer used to
+/// hardcode `1`, silently renumbering retained sections on write-back.
+fn section_tok(extras: &Extras) -> String {
+    match extras.get("pslf_section_id") {
+        Some(Value::String(t)) => sanitize_quoted(t, &['"', ':', ' ', '\t', '/'], '_').into_owned(),
+        Some(v) => v
+            .as_f64()
+            .filter(|x| x.is_finite())
+            .map_or_else(|| "1".into(), |x| x.to_string()),
+        None => "1".into(),
+    }
+}
+
 /// The branch/transformer circuit id token, replayed from `pslf_circuit` when a
 /// PSLF read kept it, else `"1"`.
 fn circuit_tok(extras: &Extras) -> String {
@@ -1752,6 +1927,59 @@ mod tests {
 
     fn close(actual: f64, expected: f64) {
         assert!((actual - expected).abs() < 1e-9, "{actual} != {expected}");
+    }
+
+    /// A DC record whose converter or line rows state real control fields —
+    /// firing angles, taps, a voltage schedule — warns that they stay only in
+    /// extras; the same records with those fields zeroed (the shape our writer
+    /// emits) do not, because a zero states nothing in EPC.
+    #[test]
+    fn dc_control_detail_warns_and_the_neutral_shape_does_not() {
+        let epc = |converter_tail: &str| {
+            r#"title
+d
+!
+solution parameters
+sbase 100
+!
+bus data [2] ty vsched volt angle ar zone vmax vmin
+1 "A" 230 : 0 1 1 0 1 1 1.1 0.9
+2 "B" 230 : 1 1 1 0 1 1 1.1 0.9
+dc converter data [2] id name kv dc_bus
+1 "A" 230 11 : 1 /
+0 0 10 2 TAIL
+2 "B" 230 12 : 1 /
+0 0 -9.5 -1.5
+dc line data [1] from name kv to st rate1
+11 "dc" 0 12 : 1 0 0 0 0 0 10
+end
+"#
+            .replace(" TAIL", converter_tail)
+        };
+
+        // Firing angle limits stated on the rectifier: retained-only data.
+        let mut warnings = Vec::new();
+        let net = parse_pslf_source(Arc::new(epc(" 15 90")), None, &mut warnings).unwrap();
+        assert_eq!(net.hvdc.len(), 1);
+        assert!(
+            warnings
+                .iter()
+                .any(|w| w.contains("unsupported control fields")),
+            "stated firing angles must be reported: {warnings:?}"
+        );
+
+        // The neutral shape the writer emits: nothing beyond status/p/q/rate.
+        let mut warnings = Vec::new();
+        let net = parse_pslf_source(Arc::new(epc("")), None, &mut warnings).unwrap();
+        assert_eq!(net.hvdc.len(), 1);
+        assert!(
+            !warnings
+                .iter()
+                .any(|w| w.contains("unsupported control fields")),
+            "zeros state nothing: {warnings:?}"
+        );
+        let dc = &net.hvdc[0];
+        assert!((dc.pf - 10.0).abs() < 1e-12 && (dc.pmax - 10.0).abs() < 1e-12);
     }
 
     #[test]

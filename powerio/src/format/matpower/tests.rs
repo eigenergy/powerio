@@ -343,3 +343,127 @@ fn piecewise_gencost_constructor_counts_breakpoints() {
     assert_eq!(reparsed_cost.ncost, 2);
     assert_eq!(reparsed_cost.coeffs, vec![0.0, 0.0, 1.0, 1.0]);
 }
+
+#[test]
+fn dclinecost_must_cover_every_dcline() {
+    // `toggle_dcline` requires one cost row per dcline; a short block is a
+    // malformed file, not a partial assignment.
+    let text = "function mpc = c\nmpc.version = '2';\nmpc.baseMVA = 100;\n\
+        mpc.bus = [\n\t1\t3\t0\t0\t0\t0\t1\t1\t0\t345\t1\t1.1\t0.9;\n\t2\t1\t0\t0\t0\t0\t1\t1\t0\t345\t1\t1.1\t0.9;\n];\n\
+        mpc.branch = [\n\t1\t2\t0.01\t0.1\t0\t0\t0\t0\t0\t0\t1\t-360\t360;\n];\n\
+        mpc.dcline = [\n\t1\t2\t1\t10\t9.5\t0\t0\t1\t1\t0\t10\t-10\t10\t-10\t10\t0\t0.05;\n\
+        \t2\t1\t1\t5\t5\t0\t0\t1\t1\t0\t10\t0\t0\t0\t0\t0\t0;\n];\n\
+        mpc.dclinecost = [\n\t2\t0\t0\t2\t7.3\t0;\n];\n";
+    let err = parse_mpc(text).unwrap_err();
+    assert!(
+        matches!(
+            err,
+            crate::Error::DcLineCostCountMismatch {
+                dclines: 2,
+                dclinecost: 1
+            }
+        ),
+        "got {err:?}"
+    );
+}
+
+/// A bus name holding a control character cannot ride a MATLAB single-quoted
+/// literal: the literal cannot span a line, so the written file stops being
+/// loadable by MATPOWER itself. powerio reading its own output back proves
+/// nothing here, so the assertion is on the emitted text.
+#[test]
+fn a_bus_name_never_breaks_the_cell_array() {
+    let mut net = BalancedNetwork::new("names", 100.0);
+    let mut bus = Bus::new(BusId(1), BusType::Ref, 345.0);
+    bus.name = Some("SUB A\nEVIL'X".to_string());
+    net.buses.push(bus);
+    net.buses.push(Bus::new(BusId(2), BusType::Pq, 345.0));
+    net.branches
+        .push(Branch::new(BusId(1), BusId(2), 0.01, 0.1));
+
+    let text = write_matpower(&net);
+    let names: Vec<&str> = text
+        .lines()
+        .skip_while(|l| !l.contains("bus_name"))
+        .skip(1)
+        .take_while(|l| !l.starts_with("};"))
+        .collect();
+    assert_eq!(names.len(), 2, "one entry per bus: {text}");
+    assert_eq!(names[0], "\t'SUB A EVIL''X';");
+    assert!(
+        parse_mpc(&text).is_ok(),
+        "the written case must still parse"
+    );
+}
+
+/// MATPOWER's gen matrix is rectangular, so one generator stating capability
+/// data grows the columns for every generator. The ones with nothing to say
+/// pad with zeros, and a zero in `RAMP_10` states a unit that cannot ramp
+/// rather than a unit that said nothing — a disclosure the readback cannot
+/// tell from stated data, so the writer names it.
+#[test]
+fn zero_padded_capability_columns_are_declared() {
+    let mut net = BalancedNetwork::new("caps", 100.0);
+    net.buses.push(Bus::new(BusId(1), BusType::Ref, 345.0));
+    net.buses.push(Bus::new(BusId(2), BusType::Pv, 345.0));
+    net.branches
+        .push(Branch::new(BusId(1), BusId(2), 0.01, 0.1));
+    let mut stated = Generator::new(BusId(1));
+    stated.caps[0] = Some(12.5);
+    net.generators.push(stated);
+    net.generators.push(Generator::new(BusId(2)));
+
+    let warnings = crate::format::write_as(&net, crate::format::TargetFormat::Matpower)
+        .unwrap()
+        .warnings;
+    assert!(
+        warnings.iter().any(|w| w.contains("columns 11-21")),
+        "the zero padding must be declared: {warnings:?}"
+    );
+
+    // A network where no generator states caps keeps the 10-column row and
+    // says nothing.
+    let mut plain = net.clone();
+    plain.generators[0].caps = [None; 11];
+    let warnings = crate::format::write_as(&plain, crate::format::TargetFormat::Matpower)
+        .unwrap()
+        .warnings;
+    assert!(
+        !warnings.iter().any(|w| w.contains("columns 11-21")),
+        "nothing to disclose when no generator states caps: {warnings:?}"
+    );
+}
+
+/// A MATPOWER bus row states one demand and one shunt with no status of their
+/// own, so an out of service element has no spelling there. Folding its value
+/// into the row states an idle element as live load: a solver reading the
+/// result sees demand the source said was off.
+#[test]
+fn an_out_of_service_load_does_not_become_live_demand() {
+    let mut net = BalancedNetwork::new("oos", 100.0);
+    net.buses.push(Bus::new(BusId(1), BusType::Ref, 345.0));
+    net.buses.push(Bus::new(BusId(2), BusType::Pq, 345.0));
+    net.branches
+        .push(Branch::new(BusId(1), BusId(2), 0.01, 0.1));
+    let mut idle = crate::network::Load::new(BusId(2), 90.0, 30.0);
+    idle.in_service = false;
+    net.loads.push(idle);
+    net.loads
+        .push(crate::network::Load::new(BusId(2), 10.0, 5.0));
+
+    let conversion = crate::format::write_as(&net, crate::format::TargetFormat::Matpower).unwrap();
+    let back = parse_mpc(&conversion.text).unwrap();
+    let demand: f64 = back.loads.iter().map(|l| l.p).sum();
+    assert!(
+        (demand - 10.0).abs() < 1e-9,
+        "only the in-service load may reach the bus row, got {demand} MW"
+    );
+    assert!(
+        conversion
+            .warnings
+            .iter()
+            .any(|w| w.contains("out of service load(s) dropped")),
+        "the dropped demand must be named: {:?}",
+        conversion.warnings
+    );
+}

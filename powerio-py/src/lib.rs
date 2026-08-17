@@ -166,7 +166,7 @@ fn parse_convention(s: &str) -> PyResult<DcConvention> {
         // Name its successor: the nearest-looking option, "series", is a
         // different formula, so a caller who guesses gets numbers instead of
         // an error.
-        "paper" | "paperpure" => Err(PyValueError::new_err(
+        "paper" | "paperpure" | "pure" => Err(PyValueError::new_err(
             "convention 'paper-pure' is now 'reactance-only'; it is no longer \
              the default, and 'series' is a different formula (b = x/(r²+x²))",
         )),
@@ -311,16 +311,30 @@ fn package_pyerr(e: powerio_pkg::Error) -> PyErr {
     // A package failure is a PowerIOError like every other failure. It used to
     // raise a bare `ValueError` for everything, so `except powerio.PowerIOError`
     // did not catch it, and every distinct cause read as one opaque string.
-    if let powerio_pkg::Error::Core(inner) = e {
-        return core_pyerr(inner);
+    // A wrapped failure raises what it would have raised on its own: same
+    // class, and `e.filename` still set on a missing file.
+    match e {
+        powerio_pkg::Error::Core(inner) => core_pyerr(inner),
+        powerio_pkg::Error::Multiconductor(inner) => dist_to_pyerr(inner),
+        other => categorized_pyerr(other.category(), other.to_string()),
     }
-    let category = e.category();
-    categorized_pyerr(category, e.to_string())
 }
 
 /// A JSON serialization failure, raised the way every other package failure is.
+///
+/// Only for JSON this crate wrote. The blanket `From<serde_json::Error>` names
+/// every failure `Error::Serialize`, whose category is `Output`, so a document
+/// the caller handed us must go through [`payload_pyerr`] instead of blaming
+/// our own writer for it.
 fn serialize_pyerr(e: serde_json::Error) -> PyErr {
     package_pyerr(e.into())
+}
+
+/// A failure reading JSON the caller supplied, raised as a data failure so
+/// `except powerio.PowerIOParseError` catches it and a consumer branching on
+/// the category fixes its input rather than retrying a write.
+fn payload_pyerr(e: serde_json::Error) -> PyErr {
+    package_pyerr(powerio_pkg::Error::Payload(e.to_string()))
 }
 
 fn package_to_json(pkg: &NetworkPackage) -> PyResult<String> {
@@ -1816,7 +1830,7 @@ impl PyPackage {
     /// `null` or an empty series clears it.
     fn set_operating_points_json(&mut self, json: &str) -> PyResult<()> {
         let series: Option<OperatingPointSeries> =
-            serde_json::from_str(json).map_err(serialize_pyerr)?;
+            serde_json::from_str(json).map_err(payload_pyerr)?;
         match series {
             Some(series) => self.pkg.set_operating_points(series),
             None => self.pkg.clear_operating_points(),

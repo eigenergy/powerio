@@ -455,8 +455,9 @@ pub fn parse_file(path: impl AsRef<std::path::Path>, from: Option<&str>) -> Resu
         let stem = path.file_stem().and_then(|s| s.to_str());
         // The binary reader is total (no fidelity warnings); wrap its network
         // in the shared [`Parsed`] shape.
-        let network = powerworld::parse_pwb(&bytes, stem)?;
-        return Ok(Parsed::without_document(network, Vec::new()));
+        let mut warnings = Vec::new();
+        let network = powerworld::parse_pwb_with_warnings(&bytes, stem, &mut warnings)?;
+        return Ok(Parsed::without_document(network, warnings));
     }
     if from.is_some_and(is_pslf_name) || (from.is_none() && ext.as_deref() == Some("epc")) {
         let text = std::fs::read_to_string(path)?;
@@ -741,9 +742,11 @@ pub fn parse_bytes_with_name(
     name_hint: Option<&str>,
 ) -> Result<Parsed> {
     if format.eq_ignore_ascii_case("pwb") {
-        // Total reader, no fidelity warnings; same call parse_file makes.
-        let network = powerworld::parse_pwb(bytes, name_hint)?;
-        return Ok(Parsed::without_document(network, Vec::new()));
+        // Same call parse_file makes; the reader reports only what the
+        // decoded layout cannot state.
+        let mut warnings = Vec::new();
+        let network = powerworld::parse_pwb_with_warnings(bytes, name_hint, &mut warnings)?;
+        return Ok(Parsed::without_document(network, warnings));
     }
     // A display format reaches a different return type, so name the entry
     // point that returns it instead of failing as an unknown case format.

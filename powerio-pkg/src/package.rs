@@ -160,6 +160,9 @@ pub struct NetworkPackage {
     /// that lets a document opt out of the gate by dropping the field, and a
     /// field an older lineage spells differently then arrives as its `serde`
     /// default with no error and no warning.
+    ///
+    /// The published schema lists it as `required`, so a document that omits it
+    /// validates against `serde` alone and not against the `$id`.
     #[serde(default)]
     pub powerio_version: String,
     pub producer: Producer,

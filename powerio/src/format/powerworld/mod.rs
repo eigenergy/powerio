@@ -40,7 +40,7 @@ pub use auxiliary::{
 pub(crate) use map::parse_powerworld_source;
 pub use map::{aux_sections, write_powerworld};
 pub use objects::{Contingency, contingencies, rating_set_names};
-pub use pwb::parse_pwb;
+pub use pwb::{parse_pwb, parse_pwb_with_warnings};
 pub use pwd::{PwdDisplay, PwdSubstation, parse_pwd, parse_pwd_display, parse_pwd_file};
 
 use crate::Result;

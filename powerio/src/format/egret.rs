@@ -53,6 +53,17 @@ pub fn write_egret_json(net: &BalancedNetwork) -> Conversion {
     for (i, g) in net.generators.iter().enumerate() {
         generator.insert((i + 1).to_string(), gen_obj(g, &mut warnings));
     }
+    let with_caps = net.generators.iter().filter(|g| g.has_caps()).count();
+    if with_caps > 0 {
+        warnings.push(format!(
+            "generator capability/ramp columns dropped for {with_caps} generator(s): the egret generator records written here carry none"
+        ));
+    }
+
+    let mut dc_branch = Map::new();
+    for (i, dc) in net.hvdc.iter().enumerate() {
+        dc_branch.insert((i + 1).to_string(), dc_branch_obj(dc, &mut warnings));
+    }
 
     warn_egret_writer_losses(net, &mut warnings);
 
@@ -62,6 +73,7 @@ pub fn write_egret_json(net: &BalancedNetwork) -> Conversion {
     elements.insert("shunt".into(), Value::Object(shunt));
     elements.insert("branch".into(), Value::Object(branch));
     elements.insert("generator".into(), Value::Object(generator));
+    elements.insert("dc_branch".into(), Value::Object(dc_branch));
 
     let mut system = Map::new();
     system.insert("baseMVA".into(), jnum(net.base_mva));
@@ -82,12 +94,6 @@ pub fn write_egret_json(net: &BalancedNetwork) -> Conversion {
 }
 
 fn warn_egret_writer_losses(net: &BalancedNetwork, warnings: &mut Vec<String>) {
-    if !net.hvdc.is_empty() {
-        warnings.push(format!(
-            "{} dcline(s) dropped: egret HVDC mapping not implemented",
-            net.hvdc.len()
-        ));
-    }
     if !net.transformers_3w.is_empty() {
         warnings.push(format!(
             "{} 3-winding transformer(s) dropped: the egret writer emits no 3-winding record",
@@ -255,6 +261,14 @@ fn gen_obj(g: &Generator, warnings: &mut Vec<String>) -> Value {
     if let Some(cost) = &g.cost {
         if let Some(curve) = cost_curve(cost) {
             m.insert("p_cost".into(), curve);
+            // The reader defaults both to zero, so only nonzero values need
+            // stating — and a zero-cost write then reads back identically.
+            if cost.startup != 0.0 {
+                m.insert("startup_cost".into(), jnum(cost.startup));
+            }
+            if cost.shutdown != 0.0 {
+                m.insert("shutdown_cost".into(), jnum(cost.shutdown));
+            }
         } else {
             warnings.push(format!(
                 "generator at bus {} has a cost model egret's writer can't express; cost dropped",
@@ -262,6 +276,38 @@ fn gen_obj(g: &Generator, warnings: &mut Vec<String>) -> Value {
             ));
         }
     }
+    Value::Object(m)
+}
+
+/// An egret `dc_branch` element, the inverse of [`read_dc_branch`]. egret's
+/// `dc_branch` states the same power, voltage, and loss fields the MATPOWER
+/// `dcline` row does, so every one of them is named here; only the `dclinecost`
+/// curve has no egret counterpart.
+fn dc_branch_obj(dc: &Hvdc, warnings: &mut Vec<String>) -> Value {
+    if dc.cost.is_some() {
+        warnings.push(format!(
+            "dcline {} -> {} cost curve dropped: egret dc_branch records carry no cost",
+            dc.from, dc.to
+        ));
+    }
+    let mut m = Map::new();
+    m.insert("from_bus".into(), Value::String(dc.from.to_string()));
+    m.insert("to_bus".into(), Value::String(dc.to.to_string()));
+    m.insert("in_service".into(), Value::Bool(dc.in_service));
+    m.insert("pf".into(), jnum(dc.pf));
+    m.insert("pt".into(), jnum(dc.pt));
+    m.insert("qf".into(), jnum(dc.qf));
+    m.insert("qt".into(), jnum(dc.qt));
+    m.insert("vf".into(), jnum(dc.vf));
+    m.insert("vt".into(), jnum(dc.vt));
+    m.insert("pmin".into(), jnum(dc.pmin));
+    m.insert("pmax".into(), jnum(dc.pmax));
+    m.insert("qminf".into(), jnum(dc.qminf));
+    m.insert("qmaxf".into(), jnum(dc.qmaxf));
+    m.insert("qmint".into(), jnum(dc.qmint));
+    m.insert("qmaxt".into(), jnum(dc.qmaxt));
+    m.insert("loss0".into(), jnum(dc.loss0));
+    m.insert("loss_factor".into(), jnum(dc.loss1));
     Value::Object(m)
 }
 

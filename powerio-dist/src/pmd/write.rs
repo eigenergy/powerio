@@ -343,11 +343,20 @@ impl Writer {
             o.insert("grounded".into(), json!(grounded));
             o.insert("status".into(), Self::status(&b.extras));
             self.bus_coordinates(&mut o, b, net);
-            // Voltage bound families have no ENGINEERING fields in volts;
-            // they drop loudly (PMD bounds are per unit).
+            // The scalar magnitude bounds have ENGINEERING fields: `vm_lb` and
+            // `vm_ub` are per-terminal vectors in the same unit every other
+            // voltage here uses (volts over `voltage_scale_factor`, the rule
+            // `vm_nom` follows above). The model's scalar broadcasts over the
+            // terminals, which is the inverse of the reader's uniform-vector
+            // collapse.
+            for (key, bound) in [("vm_lb", b.v_min), ("vm_ub", b.v_max)] {
+                if let Some(v) = bound {
+                    o.insert(key.into(), json!(vec![v / 1e3; b.terminals.len().max(1)]));
+                }
+            }
+            // The phase-to-neutral, phase-to-phase, and sequence bound families
+            // have no ENGINEERING analog; they drop loudly.
             for (key, present) in [
-                ("v_min", b.v_min.is_some()),
-                ("v_max", b.v_max.is_some()),
                 ("vpn_min", b.vpn_min.is_some()),
                 ("vpn_max", b.vpn_max.is_some()),
                 ("vpp_min", b.vpp_min.is_some()),

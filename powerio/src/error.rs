@@ -56,6 +56,11 @@ pub enum Error {
     #[error("`gen` has {gens} rows but `gencost` has {gencost}; expected {gens} (active only) or {} (active + reactive)", gens * 2)]
     GenCostCountMismatch { gens: usize, gencost: usize },
 
+    #[error(
+        "`dcline` has {dclines} rows but `dclinecost` has {dclinecost}; expected one cost row per dcline"
+    )]
+    DcLineCostCountMismatch { dclines: usize, dclinecost: usize },
+
     #[error("expected exactly one reference (slack) bus, found {found}")]
     ReferenceBusCount { found: usize },
 
@@ -168,6 +173,7 @@ impl Error {
             | Error::NonFiniteGenCost { .. }
             | Error::InvalidGenCostPatch { .. }
             | Error::GenCostCountMismatch { .. }
+            | Error::DcLineCostCountMismatch { .. }
             | Error::ReferenceBusCount { .. }
             | Error::InvalidBaseMva { .. }
             | Error::InvalidNormalizeOption { .. }

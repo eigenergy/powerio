@@ -15,7 +15,7 @@ use std::sync::Arc;
 pub use writer::write_matpower;
 pub(crate) use writer::write_matpower_conversion;
 
-use crate::network::{BalancedNetwork, Generator, SourceFormat};
+use crate::network::{BalancedNetwork, Generator, Hvdc, SourceFormat};
 use crate::{Error, Result};
 
 /// Parse the MATPOWER case in `content` into a [`BalancedNetwork`].
@@ -133,7 +133,8 @@ fn build_case<'a>(name: &str, get: impl Fn(&str) -> Option<&'a str>) -> Result<B
 
     let generators = parse_gens(&get)?;
     let storage = parse_optional(&get, "storage", rows::storage_row)?;
-    let hvdc = parse_optional(&get, "dcline", rows::hvdc_row)?;
+    let mut hvdc = parse_optional(&get, "dcline", rows::hvdc_row)?;
+    attach_dcline_costs(&get, &mut hvdc)?;
 
     // Bus names live in a `{...}` cell array; pull them (quotes kept) and attach
     // by position when the count matches.
@@ -141,7 +142,8 @@ fn build_case<'a>(name: &str, get: impl Fn(&str) -> Option<&'a str>) -> Result<B
         let names = locate::parse_string_cell(raw);
         if names.len() == buses.len() {
             for (bus, label) in buses.iter_mut().zip(names) {
-                bus.name = Some(label);
+                // An empty cell is an unnamed bus, not a bus named "".
+                bus.name = (!label.is_empty()).then_some(label);
             }
         }
     }
@@ -206,6 +208,37 @@ fn parse_optional<'a, T>(
         Some(raw) => parse_rows(raw, field, ctor),
         None => Ok(Vec::new()),
     }
+}
+
+/// Fold `mpc.dclinecost` into the dcline rows. Same row layout as `mpc.gencost`,
+/// one row per dcline in order (MATPOWER's `toggle_dcline` requires full
+/// coverage, so unlike `gencost` there is no reactive second block). A line
+/// with no usage cost is padded with an all-zero polynomial row, and a zero
+/// cost prices the line exactly as no cost term at all — so a zero row reads
+/// back as no cost, and write-then-read stays stable for networks whose lines
+/// carry none.
+fn attach_dcline_costs<'a>(
+    get: &impl Fn(&str) -> Option<&'a str>,
+    hvdc: &mut [Hvdc],
+) -> Result<()> {
+    let Some(raw) = get("dclinecost") else {
+        return Ok(());
+    };
+    let costs = parse_rows(raw, "dclinecost", rows::gencost_row)?;
+    if costs.len() != hvdc.len() {
+        return Err(Error::DcLineCostCountMismatch {
+            dclines: hvdc.len(),
+            dclinecost: costs.len(),
+        });
+    }
+    for (line, cost) in hvdc.iter_mut().zip(costs) {
+        let zero =
+            cost.startup == 0.0 && cost.shutdown == 0.0 && cost.coeffs.iter().all(|c| *c == 0.0);
+        if !zero {
+            line.cost = Some(cost);
+        }
+    }
+    Ok(())
 }
 
 /// Parse `mpc.gen` and fold in the active-power block of `mpc.gencost`.

@@ -284,7 +284,9 @@ fn zip_load_components_sum_and_survive_in_extras() {
         Some("4.0"),
         "voltage dependent components kept in extras"
     );
-    assert_eq!(l.extras.get("LoadID").and_then(|v| v.as_str()), Some("1"));
+    // LoadID `1` is the writer's own positional fallback for the first load,
+    // so it is not retained: a rewrite re-derives it.
+    assert_eq!(l.extras.get("LoadID"), None);
 }
 
 #[test]
@@ -464,4 +466,50 @@ fn unknown_header_argument_is_an_error() {
 fn unterminated_header_is_an_error() {
     let m = read_err("DATA (Bus, [BusNum\n");
     assert!(m.contains("unterminated section header"), "got: {m}");
+}
+
+/// The device type is dropped only when the writer derives the same value
+/// back. It derives from `tap != 0 || shift != 0`, so a record stating `Line`
+/// while stating a phase shift must keep the extra: dropping it rewrites the
+/// branch as a `Transformer`, and the typed model is identical either way, so
+/// nothing downstream would notice.
+#[test]
+fn a_line_that_states_a_phase_shift_stays_a_line() {
+    let src = "DATA (Bus, [BusNum])\n{\n1\n2\n}\n\
+         DATA (Branch, [BusNum, BusNum:1, LineCircuit, BranchDeviceType, LineStatus, LineR, LineX, LinePhase])\n\
+         {\n1 2 \" 1\" \"Line\" \"Closed\" 0.01 0.1 3.5\n}\n";
+    let mut net = parse_powerworld(src).unwrap();
+    net.source = None;
+    assert_eq!(
+        net.branches[0]
+            .extras
+            .get("BranchDeviceType")
+            .and_then(|v| v.as_str()),
+        Some("Line"),
+        "a Line with a phase shift is not what the writer would derive"
+    );
+    let out = super::write_powerworld(&net);
+    let row = out
+        .text
+        .lines()
+        .find(|l| l.trim_start().starts_with("1 2 "))
+        .unwrap();
+    assert!(
+        row.contains("\"Line\""),
+        "the branch must rewrite as a Line: {row}"
+    );
+
+    // A plain line states what the writer derives, so the extra is dropped and
+    // the round trip still lands on `Line`.
+    let plain = src.replace(" 3.5\n", " 0\n");
+    let mut net = parse_powerworld(&plain).unwrap();
+    net.source = None;
+    assert!(!net.branches[0].extras.contains_key("BranchDeviceType"));
+    let out = super::write_powerworld(&net);
+    let row = out
+        .text
+        .lines()
+        .find(|l| l.trim_start().starts_with("1 2 "))
+        .unwrap();
+    assert!(row.contains("\"Line\""), "{row}");
 }

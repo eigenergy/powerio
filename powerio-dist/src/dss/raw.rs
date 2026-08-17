@@ -260,7 +260,21 @@ impl RawDss {
     }
 
     fn clear(&mut self) {
-        *self = RawDss::default();
+        // `Clear` resets the circuit, not the record of how the script was
+        // read. A warning or an `Error` finding already emitted describes input
+        // the caller wrote, and no later command un-writes it — dropping them
+        // here returned a network that had refused an include, or skipped one
+        // that escaped the case directory, with an empty `warnings` and nothing
+        // for `powerio package` to lift into a finding.
+        let (warnings, diagnostics) = (
+            std::mem::take(&mut self.warnings),
+            std::mem::take(&mut self.diagnostics),
+        );
+        *self = RawDss {
+            warnings,
+            diagnostics,
+            ..RawDss::default()
+        };
     }
 }
 
@@ -684,12 +698,17 @@ impl<L: Loader> Executor<'_, L> {
     /// Charges one include against the budgets, returning whether to follow it.
     /// Charged at the attempt, so the loader is never called past the budget
     /// and the syscalls are bounded with the work. The counters live on the
-    /// executor rather than in `RawDss`, which `Clear` resets.
+    /// executor rather than in `RawDss`, which `Clear` resets. The refusal it
+    /// emits stays put too: `RawDss::clear` keeps the parse record.
     fn charge_include(&mut self, verb: &str, path: &Path, ctx: &dyn Fn(String) -> String) -> bool {
-        if self.budget_spent {
-            return false;
+        let over_budget = self.budget_spent
+            || self.includes >= MAX_TOTAL_INCLUDES
+            || self.include_bytes >= MAX_TOTAL_INCLUDE_BYTES;
+        if !over_budget {
+            self.includes += 1;
+            return true;
         }
-        if self.includes >= MAX_TOTAL_INCLUDES || self.include_bytes >= MAX_TOTAL_INCLUDE_BYTES {
+        if !self.budget_spent {
             self.budget_spent = true;
             let message = ctx(format!(
                 "{verb} {}: refused; the case exceeded the include budget of {MAX_TOTAL_INCLUDES} \
@@ -703,10 +722,8 @@ impl<L: Loader> Executor<'_, L> {
                 "check the case for an include cycle; a file that redirects to itself expands \
                  without bound",
             );
-            return false;
         }
-        self.includes += 1;
-        true
+        false
     }
 
     /// Records a failed include load. A containment refusal is the loader's

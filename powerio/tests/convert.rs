@@ -1126,22 +1126,72 @@ fn psse_reads_real_pti_files() {
     assert!(transformers > 0, "case5.raw should have transformers");
 }
 
+/// Every [`powerio::Hvdc`] value survived a write and re-read of `format`.
+///
+/// Endpoint identity alone would pass while a power or limit field silently
+/// changed, which is what a lossless mapping has to rule out.
+fn assert_hvdc_survives(before: &BalancedNetwork, after: &BalancedNetwork, format: &str) {
+    assert_eq!(after.hvdc.len(), before.hvdc.len(), "{format} dcline count");
+    for (i, (a, b)) in before.hvdc.iter().zip(&after.hvdc).enumerate() {
+        assert_eq!((b.from, b.to), (a.from, a.to), "{format} dcline {i} buses");
+        assert_eq!(b.in_service, a.in_service, "{format} dcline {i} status");
+        for (field, x, y) in [
+            ("pf", a.pf, b.pf),
+            ("pt", a.pt, b.pt),
+            ("qf", a.qf, b.qf),
+            ("qt", a.qt, b.qt),
+            ("vf", a.vf, b.vf),
+            ("vt", a.vt, b.vt),
+            ("pmin", a.pmin, b.pmin),
+            ("pmax", a.pmax, b.pmax),
+            ("qminf", a.qminf, b.qminf),
+            ("qmaxf", a.qmaxf, b.qmaxf),
+            ("qmint", a.qmint, b.qmint),
+            ("qmaxt", a.qmaxt, b.qmaxt),
+            ("loss0", a.loss0, b.loss0),
+            ("loss1", a.loss1, b.loss1),
+        ] {
+            assert!(
+                (x - y).abs() < 1e-9,
+                "{format} dcline {i} {field} changed: {x} != {y}"
+            );
+        }
+    }
+}
+
 #[test]
 fn hvdc_converts_and_round_trips() {
-    // t_case9_dcline.m carries HVDC dclines. PowerModels JSON and PSS/E round-trip
-    // them (PSS/E as two-terminal DC); egret/PowerWorld drop them with a warning.
+    // t_case9_dcline.m carries HVDC dclines. PowerModels JSON, egret JSON, and
+    // PSS/E round-trip them (PSS/E as two-terminal DC); PowerWorld and the
+    // canonical MATPOWER writer drop them with a warning.
     let net = parse_matpower_file(data("t_case9_dcline.m")).unwrap();
     assert!(!net.hvdc.is_empty(), "fixture should have dclines");
 
     let pm = write_powermodels_json(&net);
     assert!(
-        pm.warnings.iter().any(|w| w.contains("dcline")),
-        "PM should warn about dcline mapping"
+        !pm.warnings.iter().any(|w| w.contains("dcline")),
+        "every Hvdc field has a PowerModels slot, so nothing to warn about: {:?}",
+        pm.warnings
     );
     let back = parse_powermodels_json(&pm.text).unwrap();
-    assert_eq!(back.hvdc.len(), net.hvdc.len());
-    assert_eq!(back.hvdc[0].from, net.hvdc[0].from);
-    assert_eq!(back.hvdc[0].to, net.hvdc[0].to);
+    assert_hvdc_survives(&net, &back, "PowerModels JSON");
+
+    // egret `dc_branch` states the same fields the MATPOWER dcline row does, and
+    // the egret reader already read them. Only the usage cost (from
+    // `mpc.dclinecost`, stated on dcline 5 -> 9 alone) has no egret slot.
+    let egret = write_egret_json(&net);
+    assert_eq!(
+        egret
+            .warnings
+            .iter()
+            .filter(|w| w.contains("dcline"))
+            .collect::<Vec<_>>(),
+        ["dcline 5 -> 9 cost curve dropped: egret dc_branch records carry no cost"],
+        "egret dc_branch carries every dcline field but the cost: {:?}",
+        egret.warnings
+    );
+    let from_egret = parse_str(&egret.text, "egret-json").unwrap().network;
+    assert_hvdc_survives(&net, &from_egret, "egret JSON");
 
     // PSS/E writes the dclines as two-terminal DC records; the endpoints and
     // power setpoint survive a re-read, with the converter detail defaulted.
@@ -1160,25 +1210,33 @@ fn hvdc_converts_and_round_trips() {
         psse.warnings
     );
 
-    for conv in [write_egret_json(&net), write_powerworld(&net)] {
-        assert!(
-            conv.warnings.iter().any(|w| w.contains("dcline")),
-            "expected a dropped-dcline warning, got {:?}",
-            conv.warnings
-        );
-    }
+    let pw = write_powerworld(&net);
+    assert!(
+        pw.warnings.iter().any(|w| w.contains("dcline")),
+        "expected a dropped-dcline warning, got {:?}",
+        pw.warnings
+    );
 
-    // Cross-format → MATPOWER also drops HVDC (the canonical writer emits no
-    // dcline block), so it must warn too. `net` itself is MATPOWER-sourced, so
-    // write_as would echo its source; convert through PowerModels first to reach
-    // the canonical MATPOWER path with HVDC still present.
+    // Cross-format → MATPOWER writes the same `mpc.dcline`/`mpc.dclinecost`
+    // blocks the reader reads. `net` itself is MATPOWER-sourced, so write_as
+    // would echo its source; convert through PowerModels first to reach the
+    // canonical MATPOWER path with HVDC still present.
     assert_eq!(back.source_format, SourceFormat::PowerModelsJson);
     let to_mp = write_as(&back, TargetFormat::Matpower).unwrap();
     assert!(
-        to_mp.warnings.iter().any(|w| w.contains("dcline")),
-        "cross-format → MATPOWER should warn on dropped dclines, got {:?}",
+        !to_mp.warnings.iter().any(|w| w.contains("dcline")),
+        "the canonical writer emits `mpc.dcline`, nothing to warn about: {:?}",
         to_mp.warnings
     );
+    let from_mp = parse_str(&to_mp.text, "matpower").unwrap().network;
+    assert_hvdc_survives(&net, &from_mp, "canonical MATPOWER .m");
+    // The usage cost rides `mpc.dclinecost`: stated on dcline 5 -> 9 only, and
+    // the zero padding rows on the other three read back as no cost.
+    let costs: Vec<_> = from_mp.hvdc.iter().map(|d| d.cost.is_some()).collect();
+    assert_eq!(costs, [false, false, false, true]);
+    let cost = from_mp.hvdc[3].cost.as_ref().unwrap();
+    assert_eq!((cost.model, cost.ncost), (2, 2));
+    assert_eq!(cost.coeffs, [7.3, 0.0]);
 }
 
 #[test]
@@ -1191,6 +1249,17 @@ fn hvdc_round_trips_through_pslf() {
     assert!(!net.hvdc.is_empty(), "fixture should have dclines");
 
     let pslf = write_pslf(&net);
+    // The writer zeroes every converter field the model does not carry, and the
+    // reader reads that shape as "nothing stated": its own output must come
+    // back without the retained-control-fields warning. A real GE export with
+    // firing angles or taps still gets it (pinned in the pslf unit tests).
+    let back_warnings = parse_str(&pslf.text, "pslf").unwrap().warnings;
+    assert!(
+        !back_warnings
+            .iter()
+            .any(|w| w.contains("unsupported control fields")),
+        "no retained-only data in powerio-written dc records: {back_warnings:?}"
+    );
     assert!(
         !pslf.warnings.iter().any(|w| w.contains("dcline")),
         "HVDC is now written, not dropped: {:?}",
@@ -1225,6 +1294,83 @@ fn hvdc_round_trips_through_pslf() {
             "qt changed: {} != {}",
             a.qt,
             b.qt
+        );
+    }
+}
+
+#[test]
+fn surge_hvdc_carries_the_converter_terminal_fields_its_reader_reads() {
+    // A Surge converter terminal states the AC voltage setpoint, the reactive
+    // limits, and the loss model, and `read_hvdc_link` reads all three. The
+    // writer used to state none of them, so they were lost with no warning; the
+    // sending end's terminal voltage came back as 1.0 and the received power
+    // came back negated.
+    let net = parse_matpower_file(data("t_case9_dcline.m")).unwrap();
+    let surge = write_as(&net, TargetFormat::SurgeJson).unwrap();
+    let back = parse_str(&surge.text, "surge-json").unwrap().network;
+    assert_eq!(back.hvdc.len(), net.hvdc.len());
+
+    for (a, b) in net.hvdc.iter().zip(&back.hvdc) {
+        for (field, x, y) in [
+            ("vf", a.vf, b.vf),
+            ("vt", a.vt, b.vt),
+            ("qminf", a.qminf, b.qminf),
+            ("qmaxf", a.qmaxf, b.qmaxf),
+            ("qmint", a.qmint, b.qmint),
+            ("qmaxt", a.qmaxt, b.qmaxt),
+            ("loss0", a.loss0, b.loss0),
+            ("loss1", a.loss1, b.loss1),
+        ] {
+            assert!((x - y).abs() < 1e-9, "{field} changed: {x} != {y}");
+        }
+        // A Surge link states the setpoint and the loss model, so the received
+        // power is derived rather than read. It matches wherever the source's
+        // own Pt agrees with its loss model, and is warned about where it does
+        // not.
+        let derived = a.pf - a.loss0 - a.loss1 * a.pf;
+        assert!((b.pt - derived).abs() < 1e-9, "pt is the delivered power");
+    }
+
+    // dcline 2 states Pt = 1.96 with no losses, which the loss model cannot
+    // reproduce, and dcline 4 states a usage cost (from `mpc.dclinecost`) that
+    // a Surge link has no slot for; those are the two lines the writer reports.
+    let dropped: Vec<_> = surge
+        .warnings
+        .iter()
+        .filter(|w| w.contains("received power"))
+        .collect();
+    assert_eq!(dropped.len(), 2, "two lines disagree, got {dropped:?}");
+    assert!(dropped[0].contains("dcline 2"), "got {dropped:?}");
+    assert!(dropped[1].contains("dcline 4"), "got {dropped:?}");
+}
+
+#[test]
+fn pslf_carries_the_voltage_setpoint_of_a_bus_with_no_base_kv() {
+    // EPC states a generator setpoint as controlled kV (`reg_kv`), which a bus
+    // with no nominal kV cannot express. The bus `vsched` column is per unit
+    // and needs no base, so the setpoint rides there instead of being dropped.
+    let mut net = parse_matpower_file(data("case14.m")).unwrap();
+    net.source = None;
+    assert!(
+        net.buses.iter().all(|b| b.base_kv == 0.0),
+        "case14 states no base kV, which is what makes reg_kv unusable"
+    );
+
+    let pslf = write_as(&net, TargetFormat::Pslf).unwrap();
+    assert!(
+        !pslf.warnings.iter().any(|w| w.contains("voltage setpoint")),
+        "the setpoint is carried, not dropped: {:?}",
+        pslf.warnings
+    );
+    let back = parse_pslf(&pslf.text).unwrap();
+    assert_eq!(back.generators.len(), net.generators.len());
+    for (a, b) in net.generators.iter().zip(&back.generators) {
+        assert!(
+            (a.vg - b.vg).abs() < 1e-9,
+            "generator at bus {} setpoint changed: {} != {}",
+            a.bus,
+            a.vg,
+            b.vg
         );
     }
 }
@@ -2127,10 +2273,10 @@ fn psse_to_matpower_omits_missing_costs_without_synthesizing_zero() {
     let conv = write_as(&net, TargetFormat::Matpower).unwrap();
     assert!(conv.text.contains("mpc.gen = ["));
     assert!(!conv.text.contains("mpc.gencost = ["));
+    // No costs in the source means nothing was dropped: the omitted block is
+    // the source's own shape, not a loss, so it earns no warning.
     assert!(
-        conv.warnings.iter().any(|w| {
-            w.contains("generator costs absent") && w.contains("no zero costs synthesized")
-        }),
+        !conv.warnings.iter().any(|w| w.contains("cost")),
         "{:?}",
         conv.warnings
     );

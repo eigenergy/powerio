@@ -4989,7 +4989,7 @@
     },
     "powerio_version": {
       "default": "",
-      "description": "The powerio version that wrote this document; see\n[`powerio::version`].\n\nA document that states none deserializes to the empty string, which no\nlineage accepts, so the gate stays closed and the reader can name the\nrelease that wrote it. It must never default to the current version:\nthat lets a document opt out of the gate by dropping the field, and a\nfield an older lineage spells differently then arrives as its `serde`\ndefault with no error and no warning.",
+      "description": "The powerio version that wrote this document; see\n[`powerio::version`].\n\nA document that states none deserializes to the empty string, which no\nlineage accepts, so the gate stays closed and the reader can name the\nrelease that wrote it. It must never default to the current version:\nthat lets a document opt out of the gate by dropping the field, and a\nfield an older lineage spells differently then arrives as its `serde`\ndefault with no error and no warning.\n\nThe published schema lists it as `required`, so a document that omits it\nvalidates against `serde` alone and not against the `$id`.",
       "type": "string"
     },
     "producer": {
@@ -5031,7 +5031,8 @@
     "model_kind",
     "model",
     "origin",
-    "validation"
+    "validation",
+    "powerio_version"
   ],
   "title": "NetworkPackage",
   "type": "object"

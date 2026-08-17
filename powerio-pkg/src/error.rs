@@ -62,9 +62,16 @@ impl Error {
         use powerio::ErrorCategory as C;
         match self {
             Error::Core(inner) => inner.category(),
-            Error::Malformed(_) | Error::UnsupportedVersion(_) | Error::Multiconductor(_) => {
-                C::Parse
-            }
+            // `powerio_dist::Error` states no category of its own — that crate
+            // does not depend on the hub — so the mapping lives here. Reading it
+            // rather than flattening the variant away keeps a missing `.dss`
+            // an I/O failure on this path as it is on the direct one.
+            Error::Multiconductor(inner) => match inner {
+                powerio_dist::Error::Io { .. } => C::Io,
+                powerio_dist::Error::UnknownFormat(_) => C::UnknownFormat,
+                _ => C::Parse,
+            },
+            Error::Malformed(_) | Error::UnsupportedVersion(_) => C::Parse,
             Error::ModelKindMismatch | Error::NoSuchIndex(_) | Error::Payload(_) => C::Data,
             Error::Serialize(_) => C::Output,
         }

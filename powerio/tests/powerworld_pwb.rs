@@ -27,7 +27,17 @@ fn parse_bytes_reaches_the_binary_reader() {
     let bytes = std::fs::read(&path).unwrap();
 
     let parsed = powerio::parse_bytes(&bytes, "pwb").unwrap();
-    assert!(parsed.warnings.is_empty(), "the pwb reader is total");
+    // The reader loses no record it can decode, but this vintage's generator
+    // status byte is unlocated, so it reports what it could not tell rather
+    // than presenting every machine as running without comment.
+    assert!(
+        parsed
+            .warnings
+            .iter()
+            .all(|w| w.contains("generator(s) read as in service")),
+        "{:?}",
+        parsed.warnings
+    );
     assert_eq!(parsed.network.buses.len(), 200);
     assert_eq!(parsed.network.branches.len(), 246);
 

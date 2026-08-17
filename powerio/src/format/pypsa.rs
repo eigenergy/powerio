@@ -338,7 +338,7 @@ fn read_pypsa_csv_folder_inner(path: &Path, warnings: &mut Vec<String>) -> Resul
                 to,
                 in_service: row.bool("active").unwrap_or(true),
                 pf,
-                pt: pf * efficiency,
+                pt: Hvdc::delivered_power(pf, 0.0, 1.0 - efficiency),
                 qf: 0.0,
                 qt: 0.0,
                 vf: 1.0,
