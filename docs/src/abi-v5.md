@@ -87,7 +87,7 @@ PioNetwork *pio_parse_bytes(const uint8_t *bytes, size_t len, const char *format
 
 ## The JSON documents, which is why the integer moved
 
-Six documents changed shape while their symbols kept their signatures. This is the part that a compiler cannot catch, and on its own it is the reason ABI 5 exists: a binding built against 4 would pass the handshake and then read `null` for keys it mirrors.
+Seven documents changed shape while their symbols kept their signatures. This is the part that a compiler cannot catch, and on its own it is the reason ABI 5 exists: a binding built against 4 would pass the handshake and then read `null` for keys it mirrors.
 
 | document | change |
 |---|---|
