@@ -114,7 +114,11 @@ header = """
  * PIO_PKG): `.pio.json` compiler packages behind their own PioPackage handle,
  * freed with pio_package_free, and `--features prob` for the pio_scopf_*
  * entry points (guarded by PIO_PROB), behind a PioScopfInstance handle freed
- * with pio_scopf_instance_free.
+ * with pio_scopf_instance_free. Two entry points need a pair of features:
+ * pio_dist_geo_extract and pio_dist_geo_apply take a distribution handle but
+ * read the geo layer through the package crate, so they are built only when
+ * dist and pkg are both on (both are on by default). Each symbol's own #if
+ * states what it needs; a runtime loader probes pio_has_feature per name.
  * The dist C signatures follow PIO_ABI_VERSION like every other symbol.
  * PIO_DIST_ABI_VERSION is frozen at 1 and carries no meaning: it existed to
  * absorb IEEE BMOPF schema drift, and a schema revision changes a reader, a
