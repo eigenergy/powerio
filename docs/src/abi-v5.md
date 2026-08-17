@@ -48,7 +48,7 @@ if (warnings) {
 
 `NULL` on return means the conversion lost nothing. Any other value is an owned string you free with `pio_string_free`. Passing `NULL` for the parameter itself discards the warnings without allocating. The call writes the out-pointer before it does any work, so a value left over from an earlier call is never read as this one's.
 
-**The trap.** You own the string whether or not you asked for it. The first binding to migrate passed a real pointer, decided downstream that it did not want the text, and returned without freeing. It compiled, ran, and leaked on every conversion whose source format differed from its target. Decide at the call site: pass `NULL` to discard, or pass a pointer and free unconditionally.
+**The trap.** You own the string whether or not you asked for it. A binding that passes a real pointer and then decides downstream it does not want the text compiles, runs, and leaks on every conversion whose source format differs from its target — nothing about the call says the allocation happened. Decide at the call site: pass `NULL` to discard, or pass a pointer and free it unconditionally. PowerIO.jl's `_format_from_handle` is the worked example, threading a `want_warnings` flag down to the pointer itself.
 
 `pio_warnings` and `pio_dist_warnings` are unchanged. They use the size-then-fill idiom and cannot truncate.
 
