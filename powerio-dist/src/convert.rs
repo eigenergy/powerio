@@ -34,13 +34,40 @@ pub struct Conversion {
     pub text: String,
     /// Extra files referenced by `text`, such as OpenDSS `Buscoords` CSV.
     pub sidecars: Vec<ConversionSidecar>,
+    /// The writer's findings as `CODE: message` lines, rendered from
+    /// `diagnostics` so the text and the structure cannot disagree.
     pub warnings: Vec<String>,
-    /// Structured diagnostics for warning paths with stable codes.
-    ///
-    /// The legacy `warnings` strings remain the compatibility surface for C,
-    /// Python, Julia, and CLI callers. New code should prefer this field when
-    /// it needs stable assertions.
+    /// The same findings as structured records: a stable code, a severity, and
+    /// a message. A consumer that needs a stable assertion reads these.
     pub diagnostics: Vec<crate::diagnostics::StructuredDiagnostic>,
+}
+
+impl Conversion {
+    pub(crate) fn new(
+        text: String,
+        sidecars: Vec<ConversionSidecar>,
+        diagnostics: crate::diagnostics::Diagnostics,
+    ) -> Self {
+        Self {
+            text,
+            sidecars,
+            warnings: diagnostics.lines(),
+            diagnostics: diagnostics.into_records(),
+        }
+    }
+
+    /// Record one finding after the writer has run. Both channels move
+    /// together: the line is rendered from the record it is added with.
+    pub(crate) fn push(
+        &mut self,
+        info: &crate::diagnostics::DiagnosticInfo,
+        message: impl Into<String>,
+    ) {
+        let diagnostic = crate::diagnostics::StructuredDiagnostic::of(info, message);
+        self.warnings
+            .push(crate::diagnostics::render_line(&diagnostic));
+        self.diagnostics.push(diagnostic);
+    }
 }
 
 /// A writable distribution format.
@@ -324,7 +351,10 @@ fn parse_text(text: &str, format: DistTargetFormat) -> crate::Result<Multiconduc
         DistTargetFormat::PmdJson => crate::pmd::parse_pmd_str(stripped)?,
     };
     if stripped.len() != text.len() {
-        net.warnings.push(BOM_WARNING.to_owned());
+        net.note(
+            &crate::diagnostics::codes::PARSE_DSS_BOM_STRIPPED,
+            BOM_WARNING,
+        );
     }
     Ok(net)
 }
@@ -427,10 +457,13 @@ impl MulticonductorNetwork {
             .filter(|line| line.route.is_some())
             .count();
         if routed > 0 {
-            conv.warnings.push(format!(
-                "{routed} line route(s) dropped: {} has no polyline field",
-                format.name()
-            ));
+            conv.push(
+                &crate::diagnostics::codes::EMIT_MULTICONDUCTOR_ROUTE_DROPPED,
+                format!(
+                    "{routed} line route(s) dropped: {} has no polyline field",
+                    format.name()
+                ),
+            );
         }
         conv
     }

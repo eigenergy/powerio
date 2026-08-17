@@ -2934,6 +2934,7 @@
           "type": "array"
         },
         "warnings": {
+          "description": "The parse session's findings as `CODE: message` lines, rendered from\n`parse_diagnostics` so the text and the structure cannot disagree.",
           "items": {
             "type": "string"
           },

@@ -289,7 +289,7 @@ impl<'n> IndexedNetwork<'n> {
     pub fn reference_bus_index(&self) -> Result<usize> {
         match self.reference_bus_indices().as_slice() {
             [r] => Ok(*r),
-            other => Err(Error::ReferenceBusCount { found: other.len() }),
+            other => Err(Error::reference_bus_count(other.len())),
         }
     }
 

@@ -1,5 +1,6 @@
 use thiserror::Error;
 
+use crate::diagnostics::{DiagnosticInfo, codes};
 use crate::network::BusId;
 
 pub type Result<T> = std::result::Result<T, Error>;
@@ -63,8 +64,15 @@ pub enum Error {
     )]
     DcLineCostCountMismatch { dclines: usize, dclinecost: usize },
 
+    /// Raised from two stages: canonicalization, where no reference bus can be
+    /// established, and index build, where the count is not one. `code` is the
+    /// stage the raising site meant; use [`Error::no_reference_bus`] or
+    /// [`Error::reference_bus_count`] rather than the literal.
     #[error("expected exactly one reference (slack) bus, found {found}")]
-    ReferenceBusCount { found: usize },
+    ReferenceBusCount {
+        found: usize,
+        code: &'static DiagnosticInfo,
+    },
 
     #[error("base MVA must be a positive, finite number, got {base}")]
     InvalidBaseMva { base: f64 },
@@ -107,6 +115,60 @@ pub enum Error {
 pub use powerio_diag::ErrorCategory;
 
 impl Error {
+    /// No reference bus could be established while canonicalizing.
+    #[must_use]
+    pub fn no_reference_bus(found: usize) -> Self {
+        Error::ReferenceBusCount {
+            found,
+            code: &codes::CANONICALIZE_NORMALIZE_NO_REFERENCE_BUS,
+        }
+    }
+
+    /// An index or solver table build needs exactly one reference bus and the
+    /// case states `found`.
+    #[must_use]
+    pub fn reference_bus_count(found: usize) -> Self {
+        Error::ReferenceBusCount {
+            found,
+            code: &codes::BUILD_INDEX_REFERENCE_BUS_COUNT,
+        }
+    }
+
+    /// The registry entry for this error. The match is exhaustive over the
+    /// variant set (no wildcard), so adding an `Error` variant is a compile
+    /// error here until it is coded.
+    ///
+    /// A variant that fires from two stages carries the raising site's choice
+    /// rather than one default; [`Error::ReferenceBusCount`] is the one such
+    /// variant today, and a variant needing a third is a signal it is doing two
+    /// jobs.
+    pub fn code(&self) -> &'static DiagnosticInfo {
+        match self {
+            Error::MissingField(_)
+            | Error::ShortRow { .. }
+            | Error::BadFloat { .. }
+            | Error::UnbalancedBrackets(_) => &codes::PARSE_MATPOWER_MALFORMED,
+            Error::FormatRead { .. } => &codes::PARSE_SOURCE_MALFORMED,
+            Error::Io(_) => &codes::READ_IO_FAILED,
+            Error::UnknownBus { .. } => &codes::BUILD_INDEX_UNKNOWN_BUS,
+            Error::ZeroImpedance { .. } => &codes::BUILD_BRANCH_ZERO_IMPEDANCE,
+            Error::NonFiniteSusceptance { .. } => &codes::BUILD_BRANCH_NOT_A_NUMBER,
+            Error::DegenerateTap { .. } => &codes::BUILD_BRANCH_DEGENERATE_TAP,
+            Error::MissingGenCost { .. } => &codes::VALIDATE_GEN_COST_MISSING,
+            Error::NonFiniteGenCost { .. } => &codes::VALIDATE_GEN_COST_NOT_A_NUMBER,
+            Error::InvalidGenCostPatch { .. } => &codes::VALIDATE_GEN_COST_PATCH_INVALID,
+            Error::GenCostCountMismatch { .. } => &codes::VALIDATE_GEN_COST_COUNT_MISMATCH,
+            Error::DcLineCostCountMismatch { .. } => &codes::VALIDATE_DC_LINE_COST_COUNT_MISMATCH,
+            Error::ReferenceBusCount { code, .. } => code,
+            Error::InvalidBaseMva { .. } => &codes::CANONICALIZE_NORMALIZE_INVALID_BASE_MVA,
+            Error::InvalidNormalizeOption { .. } => &codes::CANONICALIZE_NORMALIZE_INVALID_OPTION,
+            Error::UngroundedComponent { .. } => &codes::BUILD_INDEX_UNGROUNDED_COMPONENT,
+            Error::UnlocatedElements { .. } => &codes::BUILD_GEO_UNLOCATED_ELEMENTS,
+            Error::UnknownFormat(_) => &codes::REQUEST_FORMAT_UNKNOWN,
+            Error::WriteUnsupported { .. } => &codes::REQUEST_FORMAT_WRITE_UNSUPPORTED,
+        }
+    }
+
     /// Classify this error. The match is exhaustive over the variant set (no
     /// wildcard), so adding an `Error` variant is a compile error here until it
     /// is categorized — categorization can't silently drift as the enum grows.
@@ -150,6 +212,94 @@ impl Error {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // Every error is a diagnostic that ended the operation, so the code's
+    // published category and `category()` are one fact. Two spellings that can
+    // disagree is what this refuses.
+    #[test]
+    fn every_error_code_publishes_the_category_the_variant_reports() {
+        let every: Vec<Error> = vec![
+            Error::MissingField("bus"),
+            Error::ShortRow {
+                field: "bus",
+                row: 1,
+                expected: 13,
+                got: 3,
+            },
+            Error::BadFloat {
+                field: "bus",
+                row: 1,
+                value: "x".into(),
+            },
+            Error::UnbalancedBrackets("bus"),
+            Error::FormatRead {
+                format: "psse",
+                message: "bad record".into(),
+            },
+            Error::Io(std::io::Error::from(std::io::ErrorKind::NotFound)),
+            Error::UnknownBus {
+                bus_id: BusId(7),
+                element_index: 0,
+            },
+            Error::ZeroImpedance { row: 1 },
+            Error::NonFiniteSusceptance { row: 1 },
+            Error::DegenerateTap { row: 1, tap: 0.0 },
+            Error::MissingGenCost { gen_index: 0 },
+            Error::NonFiniteGenCost {
+                field: "c2",
+                value: f64::NAN,
+            },
+            Error::InvalidGenCostPatch {
+                row: 1,
+                reason: "empty".into(),
+            },
+            Error::GenCostCountMismatch {
+                gens: 2,
+                gencost: 3,
+            },
+            Error::DcLineCostCountMismatch {
+                dclines: 1,
+                dclinecost: 2,
+            },
+            Error::no_reference_bus(0),
+            Error::reference_bus_count(2),
+            Error::InvalidBaseMva { base: 0.0 },
+            Error::InvalidNormalizeOption {
+                field: "angle_bound_pad",
+                value: 0.0,
+            },
+            Error::UngroundedComponent { components: 1 },
+            Error::UnlocatedElements {
+                buses: 1,
+                branches: 0,
+            },
+            Error::UnknownFormat("xyz".into()),
+            Error::WriteUnsupported { format: "goc3" },
+        ];
+        for error in &every {
+            let info = error.code();
+            assert_eq!(
+                info.category,
+                Some(error.category()),
+                "{} publishes {:?} but the variant reports {:?}",
+                info.code,
+                info.category,
+                error.category()
+            );
+        }
+    }
+
+    #[test]
+    fn the_two_reference_bus_stages_carry_different_codes() {
+        assert_eq!(
+            Error::no_reference_bus(0).code().code,
+            "CANONICALIZE.NORMALIZE.NO_REFERENCE_BUS"
+        );
+        assert_eq!(
+            Error::reference_bus_count(2).code().code,
+            "BUILD.INDEX.REFERENCE_BUS_COUNT"
+        );
+    }
 
     #[test]
     fn category_pins_the_intended_buckets() {

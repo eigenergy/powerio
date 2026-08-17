@@ -32,12 +32,14 @@
 
 pub mod category;
 pub mod code;
+pub mod collect;
 pub mod record;
 pub mod registry;
 pub mod render;
 
 pub use category::ErrorCategory;
 pub use code::{DiagnosticCode, DiagnosticStage, code_is_well_formed};
+pub use collect::Diagnostics;
 pub use record::{DiagnosticSeverity, SourceRef, StructuredDiagnostic};
-pub use registry::{CodeStatus, DiagnosticInfo, check_registry};
+pub use registry::{CodeStatus, DiagnosticInfo, check_registry, check_scope_ownership};
 pub use render::{render_line, render_lines};

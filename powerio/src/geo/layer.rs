@@ -92,7 +92,21 @@ pub struct ElementKey {
 #[non_exhaustive]
 pub struct GeoParsed {
     pub layer: GeoLayer,
+    /// The reader's notes as structured records.
+    pub diagnostics: Vec<crate::diagnostics::StructuredDiagnostic>,
+    /// The same notes as `CODE: message` lines.
     pub warnings: Vec<String>,
+}
+
+impl GeoParsed {
+    /// Record one note. Both channels move together: the line is rendered from
+    /// the record it is added with.
+    fn note(&mut self, info: &crate::diagnostics::DiagnosticInfo, message: impl Into<String>) {
+        let diagnostic = crate::diagnostics::StructuredDiagnostic::of(info, message);
+        self.warnings
+            .push(crate::diagnostics::render_line(&diagnostic));
+        self.diagnostics.push(diagnostic);
+    }
 }
 
 /// Result of applying a [`GeoLayer`] to a network.
@@ -145,6 +159,7 @@ impl GeoLayer {
                 kind: None,
                 features: Vec::new(),
             },
+            diagnostics: Vec::new(),
             warnings: Vec::new(),
         };
         let mut declared_space = false;
@@ -402,9 +417,10 @@ fn read_geojson_feature(feature: &Value, parsed: &mut GeoParsed) {
     match geometry.get("type").and_then(Value::as_str) {
         Some("Point") => {
             let Some(point) = geometry.get("coordinates").and_then(coordinate) else {
-                parsed
-                    .warnings
-                    .push("skipped a Point feature with unusable coordinates".to_owned());
+                parsed.note(
+                    &crate::diagnostics::codes::READ_GEO_SOURCE_MALFORMED,
+                    "skipped a Point feature with unusable coordinates",
+                );
                 return;
             };
             // Property values keep their case; only keys are normalized.
@@ -428,9 +444,10 @@ fn read_geojson_feature(feature: &Value, parsed: &mut GeoParsed) {
                 .map(|raw| coordinate_path(raw))
                 .unwrap_or_default();
             if path.len() < 2 {
-                parsed
-                    .warnings
-                    .push("skipped a LineString feature with fewer than 2 points".to_owned());
+                parsed.note(
+                    &crate::diagnostics::codes::READ_GEO_SOURCE_MALFORMED,
+                    "skipped a LineString feature with fewer than 2 points",
+                );
                 return;
             }
             push_branch_feature(&record, path, parsed);
@@ -440,7 +457,7 @@ fn read_geojson_feature(feature: &Value, parsed: &mut GeoParsed) {
             // unbounded distinct warnings would defeat the dedup below.
             let shown: String = other.chars().take(32).collect();
             push_once(
-                &mut parsed.warnings,
+                parsed,
                 format!("skipped unsupported GeoJSON geometry `{shown}`"),
             );
         }
@@ -491,7 +508,7 @@ fn push_branch_feature(record: &Record, path: Vec<[f64; 2]>, parsed: &mut GeoPar
         && (from.is_none() || to.is_none())
     {
         push_once(
-            &mut parsed.warnings,
+            parsed,
             "skipped a branch route with no id, uid, name, or endpoint pair".to_owned(),
         );
         return;
@@ -661,7 +678,7 @@ fn read_buscoords_row(cells: &[String], parsed: &mut GeoParsed) {
     };
     if cells.len() < 3 {
         push_once(
-            &mut parsed.warnings,
+            parsed,
             "skipped a buscoords row with fewer than 3 columns".to_owned(),
         );
         return;
@@ -679,7 +696,7 @@ fn read_buscoords_row(cells: &[String], parsed: &mut GeoParsed) {
         .filter(|v| v.is_finite());
     let (Some(x), Some(y)) = (x, y) else {
         push_once(
-            &mut parsed.warnings,
+            parsed,
             "skipped a buscoords row with unparseable coordinates".to_owned(),
         );
         return;
@@ -776,14 +793,20 @@ fn inferred_space(layer: &GeoLayer) -> CoordinateSpace {
 /// number of distinct notes from adversarial input would go quadratic.
 const MAX_READER_NOTES: usize = 16;
 
-fn push_once(warnings: &mut Vec<String>, warning: String) {
-    if warnings.len() >= MAX_READER_NOTES {
+fn push_once(parsed: &mut GeoParsed, warning: String) {
+    if parsed.diagnostics.len() >= MAX_READER_NOTES {
         return;
     }
-    if !warnings.contains(&warning) {
-        warnings.push(warning);
-        if warnings.len() == MAX_READER_NOTES {
-            warnings.push("further reader notes suppressed".to_owned());
+    if !parsed.diagnostics.iter().any(|d| d.message == warning) {
+        parsed.note(
+            &crate::diagnostics::codes::READ_GEO_SOURCE_MALFORMED,
+            warning,
+        );
+        if parsed.diagnostics.len() == MAX_READER_NOTES {
+            parsed.note(
+                &crate::diagnostics::codes::READ_GEO_NOTES_TRUNCATED,
+                "further reader notes suppressed",
+            );
         }
     }
 }

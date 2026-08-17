@@ -10,7 +10,7 @@ use powerio::{
 };
 use powerio_dist::{DistSourceFormat, MulticonductorNetwork};
 
-use crate::diagnostics::{DiagnosticSeverity, StructuredDiagnostic};
+use crate::diagnostics::{DiagnosticInfo, DiagnosticSeverity, StructuredDiagnostic, codes};
 use crate::error::Error;
 use crate::lowering::{
     LoweringRecord, MulticonductorToBalancedError, MulticonductorToBalancedOptions,
@@ -28,9 +28,6 @@ use crate::provenance::{
 use crate::study::{StudyBlock, apply_study_to_model, check_study_identities};
 use crate::summary::{ObjectSummary, ObjectTopology, ObjectUnits};
 use crate::validation::{ValidationPass, ValidationStatus, ValidationSummary};
-
-pub const READ_TRANSMISSION_PARSE_WARNING: &str = "READ.TRANSMISSION.PARSE_WARNING";
-pub const READ_GRIDFM_FIDELITY_WARNING: &str = "READ.GRIDFM.FIDELITY_WARNING";
 
 fn default_powerio_version() -> String {
     powerio::VERSION.to_owned()
@@ -238,11 +235,8 @@ impl NetworkPackage {
     /// operating point series derives from the reader's own parse, handed
     /// forward as [`powerio::Parsed::document`].
     pub fn from_parsed_balanced(parsed: powerio::Parsed) -> Self {
-        let mut package = Self::from_balanced_with_read_warnings(
-            parsed.network,
-            READ_TRANSMISSION_PARSE_WARNING,
-            parsed.warnings,
-        );
+        let mut package =
+            Self::from_balanced_with_read_diagnostics(parsed.network, parsed.diagnostics);
         if let Some(document) = &parsed.document {
             package.attach_operating_points(document);
         }
@@ -253,9 +247,8 @@ impl NetworkPackage {
         match operating_points_from_document(document) {
             Ok(series) => self.operating_points = series,
             Err(error) => {
-                self.diagnostics.push(StructuredDiagnostic::new(
+                self.diagnostics.push(StructuredDiagnostic::of(
                     operating_points_drop_code(document),
-                    DiagnosticSeverity::Warning,
                     format!(
                         "time series could not be lifted into operating points; \
                          the package is static only: {error}"
@@ -266,36 +259,29 @@ impl NetworkPackage {
         }
     }
 
-    /// Wrap a balanced network and lift reader warnings into structured
-    /// diagnostics under `code`.
-    pub fn from_balanced_with_read_warnings<I, S>(
-        net: BalancedNetwork,
-        code: &str,
-        warnings: I,
-    ) -> Self
+    /// Wrap a balanced network, carrying the reader's own findings forward.
+    ///
+    /// A reader's findings arrive coded, so the package records them as they
+    /// are rather than wrapping them under one code of its own.
+    pub fn from_balanced_with_read_diagnostics<I>(net: BalancedNetwork, diagnostics: I) -> Self
     where
-        I: IntoIterator<Item = S>,
-        S: Into<String>,
+        I: IntoIterator<Item = StructuredDiagnostic>,
     {
         let mut package = Self::from_balanced(net);
-        package.record_read_warnings(code, warnings);
+        package.record_read_diagnostics(diagnostics);
         package
     }
 
-    /// Append reader warnings to package diagnostics.
-    pub fn record_read_warnings<I, S>(&mut self, code: &str, warnings: I)
+    /// Append a reader's findings to the package's diagnostics.
+    pub fn record_read_diagnostics<I>(&mut self, diagnostics: I)
     where
-        I: IntoIterator<Item = S>,
-        S: Into<String>,
+        I: IntoIterator<Item = StructuredDiagnostic>,
     {
-        let diagnostics: Vec<StructuredDiagnostic> = warnings
-            .into_iter()
-            .map(|w| StructuredDiagnostic::new(code, DiagnosticSeverity::Warning, w.into()))
-            .collect();
-        if diagnostics.is_empty() {
+        let before = self.diagnostics.len();
+        self.diagnostics.extend(diagnostics);
+        if self.diagnostics.len() == before {
             return;
         }
-        self.diagnostics.extend(diagnostics);
         self.validation = ValidationSummary::from_diagnostics(&self.diagnostics);
     }
 
@@ -310,25 +296,11 @@ impl NetworkPackage {
         let source_maps = multiconductor_source_maps(&net, source_id.as_deref());
         let origin = multiconductor_origin(&net);
 
-        // Typed parse findings keep their severity (a refused include is an
-        // `Error`); each remaining warning string lifts at `Warning`. A
-        // typed finding and its warning twin share one message, so the
-        // filter keeps the pair from appearing twice.
-        let mut diagnostics: Vec<StructuredDiagnostic> = net.parse_diagnostics.clone();
-        let typed: std::collections::BTreeSet<String> =
-            diagnostics.iter().map(|d| d.message.clone()).collect();
-        diagnostics.extend(
-            net.warnings
-                .iter()
-                .filter(|w| !typed.contains(w.as_str()))
-                .map(|w| {
-                    StructuredDiagnostic::new(
-                        "READ.DIST.PARSE_WARNING",
-                        DiagnosticSeverity::Warning,
-                        w.clone(),
-                    )
-                }),
-        );
+        // Every parse finding is coded and keeps its own severity (a refused
+        // include is an `Error`). The reader's text lines are rendered from
+        // these same records, so there is nothing to lift and nothing to
+        // dedupe.
+        let diagnostics: Vec<StructuredDiagnostic> = net.parse_diagnostics.clone();
         let validation = ValidationSummary::from_diagnostics(&diagnostics);
 
         Self {
@@ -735,9 +707,8 @@ impl NetworkPackage {
         options: MulticonductorToBalancedOptions,
     ) -> Result<Self, MulticonductorToBalancedError> {
         let Some(net) = self.as_multiconductor() else {
-            let diagnostic = StructuredDiagnostic::new(
-                "LOWER.MULTI_TO_BALANCED.WRONG_MODEL_KIND",
-                DiagnosticSeverity::Error,
+            let diagnostic = StructuredDiagnostic::of(
+                &codes::LOWER_MULTI_TO_BALANCED_WRONG_MODEL_KIND,
                 format!(
                     "multiconductor to balanced lowering requires a multiconductor package, got {:?}",
                     self.model_kind
@@ -850,17 +821,17 @@ pub fn ensure_payload_uids(net: &mut BalancedNetwork) {
     fill!(transformers_3w);
 }
 
-const SANE_VALIDATION_CODES: [&str; 10] = [
-    "VALIDATE.BALANCED.STRUCTURE",
-    "VALIDATE.BALANCED.VALUE_DOMAIN",
-    "VALIDATE.BALANCED.PAYLOAD_IDENTITY",
-    "VALIDATE.MULTI.STRUCTURE",
-    "VALIDATE.MULTI.TERMINAL_MAP",
-    "VALIDATE.MULTI.UNTYPED_OBJECT",
-    "VALIDATE.MULTI.NO_VOLTAGE_SOURCE",
-    "VALIDATE.PACKAGE.OPERATING_IDENTITY",
-    "VALIDATE.PACKAGE.STUDY_MODEL_KIND",
-    "VALIDATE.PACKAGE.STUDY_IDENTITY",
+const SANE_VALIDATION_CODES: [&DiagnosticInfo; 10] = [
+    &codes::VALIDATE_BALANCED_STRUCTURE,
+    &codes::VALIDATE_BALANCED_VALUE_DOMAIN,
+    &codes::VALIDATE_BALANCED_PAYLOAD_IDENTITY,
+    &codes::VALIDATE_MULTI_STRUCTURE,
+    &codes::VALIDATE_MULTI_TERMINAL_MAP,
+    &codes::VALIDATE_MULTI_UNTYPED_OBJECT,
+    &codes::VALIDATE_MULTI_NO_VOLTAGE_SOURCE,
+    &codes::VALIDATE_PACKAGE_OPERATING_IDENTITY,
+    &codes::VALIDATE_PACKAGE_STUDY_MODEL_KIND,
+    &codes::VALIDATE_PACKAGE_STUDY_IDENTITY,
 ];
 
 /// Check every operating point update against the payload's identity index:
@@ -875,14 +846,10 @@ fn validate_operating_identity(
     let diagnostics: Vec<StructuredDiagnostic> = check_series_identities(model, series)
         .into_iter()
         .map(|(point_pos, update_pos, message)| {
-            StructuredDiagnostic::new(
-                "VALIDATE.PACKAGE.OPERATING_IDENTITY",
-                DiagnosticSeverity::Error,
-                message,
-            )
-            .with_element_path(format!(
-                "/operating_points/points/{point_pos}/updates/{update_pos}"
-            ))
+            StructuredDiagnostic::of(&codes::VALIDATE_PACKAGE_OPERATING_IDENTITY, message)
+                .with_element_path(format!(
+                    "/operating_points/points/{point_pos}/updates/{update_pos}"
+                ))
         })
         .collect();
     let status = validation_status(&diagnostics);
@@ -898,9 +865,8 @@ fn validate_study(
 ) -> (Vec<StructuredDiagnostic>, ValidationPass) {
     if !matches!(model, ModelPayload::Balanced { .. }) {
         let diagnostics = vec![
-            StructuredDiagnostic::new(
-                "VALIDATE.PACKAGE.STUDY_MODEL_KIND",
-                DiagnosticSeverity::Error,
+            StructuredDiagnostic::of(
+                &codes::VALIDATE_PACKAGE_STUDY_MODEL_KIND,
                 "study blocks are only defined for balanced packages",
             )
             .with_element_path("/study"),
@@ -914,12 +880,8 @@ fn validate_study(
     let diagnostics: Vec<StructuredDiagnostic> = check_study_identities(model, study)
         .into_iter()
         .map(|(commit_pos, edit_pos, message)| {
-            StructuredDiagnostic::new(
-                "VALIDATE.PACKAGE.STUDY_IDENTITY",
-                DiagnosticSeverity::Error,
-                message,
-            )
-            .with_element_path(format!("/study/commits/{commit_pos}/edits/{edit_pos}"))
+            StructuredDiagnostic::of(&codes::VALIDATE_PACKAGE_STUDY_IDENTITY, message)
+                .with_element_path(format!("/study/commits/{commit_pos}/edits/{edit_pos}"))
         })
         .collect();
     let status = validation_status(&diagnostics);
@@ -930,7 +892,7 @@ fn validate_study(
 }
 
 fn is_sane_validation_code(code: &str) -> bool {
-    SANE_VALIDATION_CODES.contains(&code)
+    SANE_VALIDATION_CODES.iter().any(|entry| entry.code == code)
 }
 
 fn validation_status(diagnostics: &[StructuredDiagnostic]) -> ValidationStatus {
@@ -952,9 +914,8 @@ fn sane_validate_balanced(
 ) -> (Vec<StructuredDiagnostic>, Vec<ValidationPass>) {
     let mut structure = Vec::new();
     if let Err(err) = net.validate() {
-        structure.push(StructuredDiagnostic::new(
-            "VALIDATE.BALANCED.STRUCTURE",
-            DiagnosticSeverity::Error,
+        structure.push(StructuredDiagnostic::of(
+            &codes::VALIDATE_BALANCED_STRUCTURE,
             err.to_string(),
         ));
     }
@@ -975,9 +936,8 @@ fn sane_validate_balanced(
                     finding.field
                 )
             });
-        let mut d = StructuredDiagnostic::new(
-            "VALIDATE.BALANCED.VALUE_DOMAIN",
-            DiagnosticSeverity::Warning,
+        let mut d = StructuredDiagnostic::of(
+            &codes::VALIDATE_BALANCED_VALUE_DOMAIN,
             format!(
                 "{} field `{}` is outside its value domain; suggested value is {}",
                 finding.element, finding.field, finding.new
@@ -1044,9 +1004,8 @@ fn table_uid_duplicates<'a>(
         let Some(uid) = uid else { continue };
         if let Some(&first) = first_row.get(uid) {
             diagnostics.push(
-                StructuredDiagnostic::new(
-                    "VALIDATE.BALANCED.PAYLOAD_IDENTITY",
-                    DiagnosticSeverity::Error,
+                StructuredDiagnostic::of(
+                    &codes::VALIDATE_BALANCED_PAYLOAD_IDENTITY,
                     format!(
                         "payload table `{table}` carries uid `{uid}` on rows {first} and {row}; \
                          identity resolution is ambiguous"
@@ -1180,9 +1139,8 @@ fn sane_validate_multiconductor(
 
     for (i, obj) in net.untyped.iter().enumerate() {
         untyped.push(
-            StructuredDiagnostic::new(
-                "VALIDATE.MULTI.UNTYPED_OBJECT",
-                DiagnosticSeverity::Warning,
+            StructuredDiagnostic::of(
+                &codes::VALIDATE_MULTI_UNTYPED_OBJECT,
                 format!(
                     "{} {} is preserved as an untyped object",
                     obj.class, obj.name
@@ -1193,9 +1151,8 @@ fn sane_validate_multiconductor(
     }
 
     if net.sources.is_empty() {
-        sources.push(StructuredDiagnostic::new(
-            "VALIDATE.MULTI.NO_VOLTAGE_SOURCE",
-            DiagnosticSeverity::Warning,
+        sources.push(StructuredDiagnostic::of(
+            &codes::VALIDATE_MULTI_NO_VOLTAGE_SOURCE,
             "multiconductor package has no voltage source",
         ));
     }
@@ -1245,9 +1202,8 @@ fn validate_multiconductor_lines(
             .any(|c| c.name.eq_ignore_ascii_case(&line.linecode))
         {
             structure.push(
-                StructuredDiagnostic::new(
-                    "VALIDATE.MULTI.STRUCTURE",
-                    DiagnosticSeverity::Error,
+                StructuredDiagnostic::of(
+                    &codes::VALIDATE_MULTI_STRUCTURE,
                     format!(
                         "line {} references unknown linecode `{}`",
                         line.name, line.linecode
@@ -1448,9 +1404,8 @@ fn multiconductor_bus_index(
         let key = bus.id.to_ascii_lowercase();
         if let Some(first) = first_seen.insert(key.clone(), bus.id.clone()) {
             diagnostics.push(
-                StructuredDiagnostic::new(
-                    "VALIDATE.MULTI.STRUCTURE",
-                    DiagnosticSeverity::Error,
+                StructuredDiagnostic::of(
+                    &codes::VALIDATE_MULTI_STRUCTURE,
                     format!("duplicate bus id `{}` conflicts with `{first}`", bus.id),
                 )
                 .with_element_path(format!("/model/multiconductor_network/buses/{i}/id")),
@@ -1471,9 +1426,8 @@ fn check_bus_ref(
 ) {
     if !bus_ids.contains(&bus.to_ascii_lowercase()) {
         diagnostics.push(
-            StructuredDiagnostic::new(
-                "VALIDATE.MULTI.STRUCTURE",
-                DiagnosticSeverity::Error,
+            StructuredDiagnostic::of(
+                &codes::VALIDATE_MULTI_STRUCTURE,
                 format!("{what} references unknown bus `{bus}`"),
             )
             .with_element_path(path),
@@ -1491,9 +1445,8 @@ fn check_terminal_map(
 ) {
     if terminal_map.is_empty() {
         diagnostics.push(
-            StructuredDiagnostic::new(
-                "VALIDATE.MULTI.TERMINAL_MAP",
-                DiagnosticSeverity::Error,
+            StructuredDiagnostic::of(
+                &codes::VALIDATE_MULTI_TERMINAL_MAP,
                 format!("{what} has an empty terminal map"),
             )
             .with_element_path(path),
@@ -1507,9 +1460,8 @@ fn check_terminal_map(
     for terminal in terminal_map {
         if !known.contains(terminal) {
             diagnostics.push(
-                StructuredDiagnostic::new(
-                    "VALIDATE.MULTI.TERMINAL_MAP",
-                    DiagnosticSeverity::Error,
+                StructuredDiagnostic::of(
+                    &codes::VALIDATE_MULTI_TERMINAL_MAP,
                     format!("{what} references unknown terminal `{terminal}` on bus `{bus}`"),
                 )
                 .with_element_path(path),

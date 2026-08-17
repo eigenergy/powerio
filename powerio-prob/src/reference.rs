@@ -41,7 +41,7 @@ impl ReferenceBuses {
     pub fn single(&self) -> Result<usize> {
         match self.0.as_slice() {
             [bus] => Ok(*bus),
-            other => Err(powerio::Error::ReferenceBusCount { found: other.len() }.into()),
+            other => Err(powerio::Error::reference_bus_count(other.len()).into()),
         }
     }
 }

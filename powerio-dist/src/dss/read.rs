@@ -15,6 +15,8 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use crate::diagnostics::codes as C;
+
 use super::defaults as dd;
 use super::lex::{BusSpec, Value, VarMap};
 use super::raw::{
@@ -90,11 +92,16 @@ fn warn_stripped_boms(
     stripped_paths: Vec<String>,
 ) {
     if root_had_bom {
-        net.warnings.push(crate::convert::BOM_WARNING.to_owned());
+        net.note(
+            &crate::diagnostics::codes::PARSE_DSS_BOM_STRIPPED,
+            crate::convert::BOM_WARNING,
+        );
     }
     for path in stripped_paths {
-        net.warnings
-            .push(format!("{path}: {}", crate::convert::BOM_WARNING));
+        net.note(
+            &crate::diagnostics::codes::PARSE_DSS_BOM_STRIPPED,
+            format!("{path}: {}", crate::convert::BOM_WARNING),
+        );
     }
 }
 
@@ -306,8 +313,9 @@ fn finish_buses(mut rd: Reader, raw: &RawDss) -> MulticonductorNetwork {
             .values()
             .all(|(x, y)| (-180.0..=180.0).contains(x) && (-90.0..=90.0).contains(y))
         {
-            net.warnings.push(
-                "OpenDSS buscoords fit longitude/latitude ranges; coordinate space remains unknown because Buscoords does not declare a CRS".to_owned(),
+            net.note(
+                &crate::diagnostics::codes::READ_DSS_COORDINATE_SPACE_UNKNOWN,
+                "OpenDSS buscoords fit longitude/latitude ranges; coordinate space remains unknown because Buscoords does not declare a CRS",
             );
         }
     }
@@ -476,8 +484,8 @@ struct XyCurveRaw {
 }
 
 impl Reader<'_> {
-    fn warn(&mut self, msg: impl Into<String>) {
-        self.net.warnings.push(msg.into());
+    fn warn(&mut self, info: &crate::diagnostics::DiagnosticInfo, msg: impl Into<String>) {
+        self.net.note(info, msg);
     }
 
     fn defaulted(&mut self, class: &str, name: &str, field: &'static str) {
@@ -499,9 +507,12 @@ impl Reader<'_> {
         p.and_then(|v| v.to_i64(Some(self.vars)).ok()).map(|i| {
             let n = usize::try_from(i).unwrap_or(0);
             if n > MAX_COUNT {
-                self.net.warnings.push(format!(
-                    "count property {n} exceeds the supported maximum of {MAX_COUNT}; clamped"
-                ));
+                self.net.note(
+                    &crate::diagnostics::codes::READ_DSS_VALUE_CLAMPED,
+                    format!(
+                        "count property {n} exceeds the supported maximum of {MAX_COUNT}; clamped"
+                    ),
+                );
                 MAX_COUNT
             } else {
                 n
@@ -519,9 +530,10 @@ impl Reader<'_> {
             return Some(f);
         }
         if !u.to_ascii_lowercase().starts_with("no") {
-            self.net.warnings.push(format!(
-                "{class} {name}: unknown units `{u}`; treated as none"
-            ));
+            self.net.note(
+                &crate::diagnostics::codes::READ_DSS_VALUE_UNSUPPORTED,
+                format!("{class} {name}: unknown units `{u}`; treated as none"),
+            );
         }
         None
     }
@@ -744,10 +756,13 @@ impl Reader<'_> {
         // reader falls back to the sequence values but says so and keeps
         // the text. A written property is never reported as defaulted.
         for (key, _) in &malformed {
-            self.warn(format!(
-                "{class} {name}: `{key}` does not parse as a {n}x{n} matrix; \
+            self.warn(
+                &C::READ_DSS_RETAINED_SOURCE_ONLY,
+                format!(
+                    "{class} {name}: `{key}` does not parse as a {n}x{n} matrix; \
                  sequence values apply and the text is kept in extras"
-            ));
+                ),
+            );
         }
         let any_written = [
             "rmatrix", "xmatrix", "cmatrix", "r1", "x1", "r0", "x0", "c1", "c0", "b1", "b0",
@@ -858,6 +873,9 @@ impl Reader<'_> {
 
     // ----- line / switch -------------------------------------------------
 
+    // One block per object field; splitting it would scatter a list that
+    // reads end to end.
+    #[expect(clippy::too_many_lines)]
     fn line(&mut self, obj: &RawObject) {
         let props = Props::new(obj);
         // `linecode=` assigns the line's phase count from the code
@@ -904,10 +922,13 @@ impl Reader<'_> {
             for k in ["linecode", "length", "r1", "x1", "rmatrix", "xmatrix"] {
                 if let Some(v) = props.by_name.get(k) {
                     extras.insert(k.to_string(), v.text.clone().into());
-                    self.warn(format!(
-                        "line {}: `{k}` is ignored by OpenDSS on switch=yes; kept in extras",
-                        obj.name
-                    ));
+                    self.warn(
+                        &C::READ_DSS_RETAINED_SOURCE_ONLY,
+                        format!(
+                            "line {}: `{k}` is ignored by OpenDSS on switch=yes; kept in extras",
+                            obj.name
+                        ),
+                    );
                 }
             }
             self.net.switches.push(DistSwitch {
@@ -1273,13 +1294,7 @@ impl Reader<'_> {
                 }
                 "wdg" => {
                     let k = self.usize_prop(Some(v)).unwrap_or(1).max(1);
-                    grow(
-                        &mut windings,
-                        k,
-                        &mut n_windings,
-                        &obj.name,
-                        &mut self.net.warnings,
-                    );
+                    grow(&mut windings, k, &mut n_windings, &obj.name, &mut self.net);
                     active = k - 1;
                 }
                 "bus" => windings[active].bus = Some(v.to_bus_spec()),
@@ -1310,7 +1325,7 @@ impl Reader<'_> {
                         items.len(),
                         &mut n_windings,
                         &obj.name,
-                        &mut self.net.warnings,
+                        &mut self.net,
                     );
                     apply_winding_strings(&mut windings, name, &items);
                 }
@@ -1321,11 +1336,14 @@ impl Reader<'_> {
                             items.len(),
                             &mut n_windings,
                             &obj.name,
-                            &mut self.net.warnings,
+                            &mut self.net,
                         );
                         apply_winding_numbers(&mut windings, name, &items);
                     }
-                    Err(e) => self.warn(format!("transformer {}: {name}: {e}", obj.name)),
+                    Err(e) => self.warn(
+                        &C::READ_DSS_VALUE_DEFAULTED,
+                        format!("transformer {}: {name}: {e}", obj.name),
+                    ),
                 },
                 "%loadloss" => {
                     // The engine splits load loss across the first two
@@ -1460,10 +1478,13 @@ impl Reader<'_> {
         let props = Props::new(obj);
         let phases = self.usize_or(&props, "phases", "reactor", &obj.name, dd::reactor::PHASES);
         if phases == 0 {
-            self.warn(format!(
-                "reactor {}: nonpositive `phases` value is not a typed shunt; kept untyped",
-                obj.name
-            ));
+            self.warn(
+                &C::READ_DSS_OBJECT_UNTYPED,
+                format!(
+                    "reactor {}: nonpositive `phases` value is not a typed shunt; kept untyped",
+                    obj.name
+                ),
+            );
             self.net.untyped.push(UntypedObject::from(obj));
             return;
         }
@@ -1478,10 +1499,13 @@ impl Reader<'_> {
                 .is_some_and(|return_bus| same_bus_ground_return(&bus, return_bus, phases));
 
         if bus2.is_some() && !grounding_return {
-            self.warn(format!(
-                "reactor {}: series reactors (bus2) are not typed yet; kept untyped",
-                obj.name
-            ));
+            self.warn(
+                &C::READ_DSS_OBJECT_UNTYPED,
+                format!(
+                    "reactor {}: series reactors (bus2) are not typed yet; kept untyped",
+                    obj.name
+                ),
+            );
             self.net.untyped.push(UntypedObject::from(obj));
             return;
         }
@@ -1490,10 +1514,13 @@ impl Reader<'_> {
             .iter()
             .find(|k| !matches!(**k, "r" | "x") && props.by_name.contains_key(**k))
         {
-            self.warn(format!(
-                "reactor {}: impedance form (`{form}`) is not typed yet; kept untyped",
-                obj.name
-            ));
+            self.warn(
+                &C::READ_DSS_OBJECT_UNTYPED,
+                format!(
+                    "reactor {}: impedance form (`{form}`) is not typed yet; kept untyped",
+                    obj.name
+                ),
+            );
             self.net.untyped.push(UntypedObject::from(obj));
             return;
         }
@@ -1508,10 +1535,13 @@ impl Reader<'_> {
                 } else {
                     "x"
                 };
-                self.warn(format!(
-                    "reactor {}: impedance form (`{form}`) is not typed yet; kept untyped",
-                    obj.name
-                ));
+                self.warn(
+                    &C::READ_DSS_OBJECT_UNTYPED,
+                    format!(
+                        "reactor {}: impedance form (`{form}`) is not typed yet; kept untyped",
+                        obj.name
+                    ),
+                );
                 self.net.untyped.push(UntypedObject::from(obj));
             }
             return;
@@ -1533,16 +1563,19 @@ impl Reader<'_> {
         // the resistance was dropped.
         let term = |v: Option<&Value>| v.map_or(Ok(0.0), |val| val.to_f64(Some(self.vars)));
         let (Ok(resistance), Ok(reactance)) = (term(props.get("r")), term(props.get("x"))) else {
-            self.warn(format!(
-                "reactor {}: `r`/`x` does not evaluate to a number; kept untyped",
-                obj.name
-            ));
+            self.warn(
+                &C::READ_DSS_OBJECT_UNTYPED,
+                format!(
+                    "reactor {}: `r`/`x` does not evaluate to a number; kept untyped",
+                    obj.name
+                ),
+            );
             self.net.untyped.push(UntypedObject::from(obj));
             return;
         };
         let denom = resistance * resistance + reactance * reactance;
         if !denom.is_finite() || denom <= 0.0 {
-            self.warn(format!(
+            self.warn(&C::READ_DSS_OBJECT_UNTYPED, format!(
                 "reactor {}: zero impedance grounding reactor is not a typed shunt; kept untyped",
                 obj.name
             ));
@@ -1574,13 +1607,19 @@ impl Reader<'_> {
         self.kvar_shunt_with_props(obj, &props, spec);
     }
 
+    // One block per object field; splitting it would scatter a list that
+    // reads end to end.
+    #[expect(clippy::too_many_lines)]
     fn kvar_shunt_with_props(&mut self, obj: &RawObject, props: &Props<'_>, spec: KvarShuntSpec) {
         let phases = self.usize_or(props, "phases", spec.class, &obj.name, spec.default_phases);
         if phases == 0 {
-            self.warn(format!(
-                "{} {}: nonpositive `phases` value is not a typed shunt; kept untyped",
-                spec.class, obj.name
-            ));
+            self.warn(
+                &C::READ_DSS_OBJECT_UNTYPED,
+                format!(
+                    "{} {}: nonpositive `phases` value is not a typed shunt; kept untyped",
+                    spec.class, obj.name
+                ),
+            );
             self.net.untyped.push(UntypedObject::from(obj));
             return;
         }
@@ -1593,20 +1632,26 @@ impl Reader<'_> {
         let bus = bus_spec(props.get("bus1"), "");
         if let Some(return_bus) = props.get("bus2").map(super::lex::Value::to_bus_spec) {
             if !same_bus_ground_return(&bus, &return_bus, phases) {
-                self.warn(format!(
-                    "{} {}: series {} (bus2) are not typed yet; kept untyped",
-                    spec.class, obj.name, spec.series_name
-                ));
+                self.warn(
+                    &C::READ_DSS_OBJECT_UNTYPED,
+                    format!(
+                        "{} {}: series {} (bus2) are not typed yet; kept untyped",
+                        spec.class, obj.name, spec.series_name
+                    ),
+                );
                 self.net.untyped.push(UntypedObject::from(obj));
                 return;
             }
         }
 
         if conn_delta && phases == 1 && bus.nodes.len() < 2 {
-            self.warn(format!(
-                "{} {}: single phase delta shunt needs two bus nodes; kept untyped",
-                spec.class, obj.name
-            ));
+            self.warn(
+                &C::READ_DSS_OBJECT_UNTYPED,
+                format!(
+                    "{} {}: single phase delta shunt needs two bus nodes; kept untyped",
+                    spec.class, obj.name
+                ),
+            );
             self.net.untyped.push(UntypedObject::from(obj));
             return;
         }
@@ -1635,10 +1680,13 @@ impl Reader<'_> {
         // into an infinity, so reject the squared value here too.
         let v_sq = v_ref * v_ref;
         if !v_ref.is_finite() || v_ref <= 0.0 || !v_sq.is_finite() || v_sq == 0.0 {
-            self.warn(format!(
-                "{} {}: invalid `kv` value is not a typed shunt; kept untyped",
-                spec.class, obj.name
-            ));
+            self.warn(
+                &C::READ_DSS_OBJECT_UNTYPED,
+                format!(
+                    "{} {}: invalid `kv` value is not a typed shunt; kept untyped",
+                    spec.class, obj.name
+                ),
+            );
             self.net.untyped.push(UntypedObject::from(obj));
             return;
         }
@@ -1660,10 +1708,13 @@ impl Reader<'_> {
         let Some(susceptance) =
             kvar_shunt_matrix(&map, phases, conn_delta, kvar, v_ref, spec.b_sign)
         else {
-            self.warn(format!(
-                "{} {}: delta shunt terminal map is not typed; kept untyped",
-                spec.class, obj.name
-            ));
+            self.warn(
+                &C::READ_DSS_OBJECT_UNTYPED,
+                format!(
+                    "{} {}: delta shunt terminal map is not typed; kept untyped",
+                    spec.class, obj.name
+                ),
+            );
             self.net.untyped.push(UntypedObject::from(obj));
             return;
         };
@@ -1800,10 +1851,13 @@ impl Reader<'_> {
             dd::pvsystem::PHASES,
         );
         if phases == 0 {
-            self.warn(format!(
-                "pvsystem {}: nonpositive `phases` value is not typed; kept untyped",
-                obj.name
-            ));
+            self.warn(
+                &C::READ_DSS_OBJECT_UNTYPED,
+                format!(
+                    "pvsystem {}: nonpositive `phases` value is not typed; kept untyped",
+                    obj.name
+                ),
+            );
             self.net.untyped.push(UntypedObject::from(obj));
             return;
         }
@@ -1896,10 +1950,13 @@ impl Reader<'_> {
             .and_then(|v| v.to_vector(Some(self.vars)).ok())
             .unwrap_or_default();
         if x.is_empty() || y.is_empty() {
-            self.warn(format!(
-                "xycurve {}: xarray/yarray are incomplete; kept untyped",
-                obj.name
-            ));
+            self.warn(
+                &C::READ_DSS_OBJECT_UNTYPED,
+                format!(
+                    "xycurve {}: xarray/yarray are incomplete; kept untyped",
+                    obj.name
+                ),
+            );
             self.net.untyped.push(UntypedObject::from(obj));
             return;
         }
@@ -1939,10 +1996,13 @@ impl Reader<'_> {
             && profile.volt_var.is_none()
             && profile.volt_watt.is_none()
         {
-            self.warn(format!(
-                "invcontrol {}: control mode is not typed; kept untyped",
-                obj.name
-            ));
+            self.warn(
+                &C::READ_DSS_OBJECT_UNTYPED,
+                format!(
+                    "invcontrol {}: control mode is not typed; kept untyped",
+                    obj.name
+                ),
+            );
             self.net.untyped.push(UntypedObject::from(obj));
             return;
         }
@@ -1960,10 +2020,13 @@ impl Reader<'_> {
                     ibr.extras.remove("%pminkvarmax");
                 }
             } else {
-                self.warn(format!(
-                    "invcontrol {}: DER `{der}` does not match a typed PVSystem",
-                    obj.name
-                ));
+                self.warn(
+                    &C::READ_DSS_REFERENCE_DROPPED,
+                    format!(
+                        "invcontrol {}: DER `{der}` does not match a typed PVSystem",
+                        obj.name
+                    ),
+                );
             }
         }
         self.net.control_profiles.push(profile);
@@ -1987,10 +2050,13 @@ impl Reader<'_> {
             .get(&curve_name.to_ascii_lowercase())
             .cloned()?;
         let base_v = self.control_base_voltage(derlist).unwrap_or_else(|| {
-            self.warn(format!(
-                "invcontrol {}: no rated voltage found for vvc_curve1; using 1 pu as 1 V",
-                obj.name
-            ));
+            self.warn(
+                &C::READ_DSS_VALUE_DEFAULTED,
+                format!(
+                    "invcontrol {}: no rated voltage found for vvc_curve1; using 1 pu as 1 V",
+                    obj.name
+                ),
+            );
             1.0
         });
         let q_ref = props
@@ -2105,7 +2171,10 @@ impl Reader<'_> {
     fn swtcontrol(&mut self, obj: &RawObject) {
         let props = Props::new(obj);
         let Some(target) = props.get("switchedobj").map(|v| v.text.clone()) else {
-            self.warn(format!("swtcontrol {}: no SwitchedObj; ignored", obj.name));
+            self.warn(
+                &C::READ_DSS_REFERENCE_DROPPED,
+                format!("swtcontrol {}: no SwitchedObj; ignored", obj.name),
+            );
             return;
         };
         // Element references compare class names case insensitively, like
@@ -2136,10 +2205,13 @@ impl Reader<'_> {
             .find(|s| s.name.eq_ignore_ascii_case(line_name))
         {
             Some(sw) => sw.open = open,
-            None => self.warn(format!(
-                "swtcontrol {}: switched object `{target}` is not a switch line",
-                obj.name
-            )),
+            None => self.warn(
+                &C::READ_DSS_REFERENCE_DROPPED,
+                format!(
+                    "swtcontrol {}: switched object `{target}` is not a switch line",
+                    obj.name
+                ),
+            ),
         }
     }
 
@@ -2148,7 +2220,7 @@ impl Reader<'_> {
         let target = props
             .get("transformer")
             .map_or_else(String::new, |v| v.text.clone());
-        self.warn(format!(
+        self.warn(&C::READ_DSS_VALUE_UNSUPPORTED, format!(
             "regcontrol {}: voltage regulation is ignored; transformer `{target}` keeps its written taps",
             obj.name
         ));
@@ -2371,17 +2443,20 @@ fn grow(
     requested: usize,
     count: &mut usize,
     name: &str,
-    warnings: &mut Vec<String>,
+    net: &mut MulticonductorNetwork,
 ) {
     // The winding count also arrives as the length of a token list (`buses=`,
     // `conns=`, `kvs=`, ...), which never passes through the scalar `usize_prop`
     // cap. Clamp here, the single point every winding-growth path funnels
     // through, so a long list cannot drive the O(n^2) `pair_keys` fanout.
     let n = if requested > MAX_COUNT {
-        warnings.push(format!(
-            "transformer {name}: winding count {requested} exceeds the supported maximum \
-             of {MAX_COUNT}; clamped"
-        ));
+        net.note(
+            &C::READ_DSS_VALUE_CLAMPED,
+            format!(
+                "transformer {name}: winding count {requested} exceeds the supported maximum \
+                 of {MAX_COUNT}; clamped"
+            ),
+        );
         MAX_COUNT
     } else {
         requested

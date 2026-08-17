@@ -122,7 +122,11 @@ type Probe<T> = std::result::Result<T, &'static str>;
 /// [`Error::FormatRead`] when the header is not the known magic, a record
 /// does not match the validated layouts, or a table cannot be located.
 pub fn parse_pwb(bytes: &[u8], name_hint: Option<&str>) -> Result<BalancedNetwork> {
-    parse_pwb_with_warnings(bytes, name_hint, &mut Vec::new())
+    parse_pwb_with_warnings(
+        bytes,
+        name_hint,
+        &mut crate::diagnostics::Diagnostics::new(),
+    )
 }
 
 /// As [`parse_pwb`], reporting what the decoded layout cannot state.
@@ -138,7 +142,7 @@ pub fn parse_pwb(bytes: &[u8], name_hint: Option<&str>) -> Result<BalancedNetwor
 pub fn parse_pwb_with_warnings(
     bytes: &[u8],
     name_hint: Option<&str>,
-    warnings: &mut Vec<String>,
+    warnings: &mut crate::diagnostics::Diagnostics,
 ) -> Result<BalancedNetwork> {
     let net = parse_pwb_inner(bytes, name_hint)?;
     // Headers admitting only the 425 era generator record: their status byte
@@ -147,11 +151,14 @@ pub fn parse_pwb_with_warnings(
     // which one matched is not observable here, so it is left unstated rather
     // than guessed at.
     if matches!(expect_header(bytes)?, 338 | 368 | 425) && !net.generators.is_empty() {
-        warnings.push(format!(
-            "{} generator(s) read as in service: this .pwb vintage's generator status byte is \
+        warnings.push(
+            &crate::diagnostics::codes::READ_POWERWORLD_VALUE_DEFAULTED,
+            format!(
+                "{} generator(s) read as in service: this .pwb vintage's generator status byte is \
              not located, so an open machine is indistinguishable from a closed one",
-            net.generators.len()
-        ));
+                net.generators.len()
+            ),
+        );
     }
     Ok(net)
 }

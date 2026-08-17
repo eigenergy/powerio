@@ -5,7 +5,10 @@
 //! the boundary without restating it. A caller that only wants the coarse
 //! split reads [`Error::category`], which is the same taxonomy the hub uses.
 
+use powerio_diag::DiagnosticInfo;
 use thiserror::Error as ThisError;
+
+use crate::diagnostics::codes;
 
 /// A matrix, sensitivity, or dataset failure.
 #[derive(Debug, ThisError)]
@@ -94,6 +97,34 @@ pub enum Error {
 }
 
 impl Error {
+    /// The registry entry for this error. The match is exhaustive over the
+    /// variant set, so a new variant must be coded here before it compiles.
+    ///
+    /// A hub failure keeps the hub's own code: restating it here would give one
+    /// failure two identities.
+    #[must_use]
+    pub fn code(&self) -> &'static DiagnosticInfo {
+        match self {
+            Error::Core(inner) => inner.code(),
+            Error::Io(_) => &codes::READ_MATRIX_IO_FAILED,
+            Error::DimensionMismatch { .. } | Error::ShapeMismatch { .. } => {
+                &codes::BUILD_MATRIX_SHAPE_MISMATCH
+            }
+            Error::SingularNetwork => &codes::BUILD_SENSITIVITY_SINGULAR,
+            Error::InvalidSensitivityOptions { .. } => &codes::BUILD_SENSITIVITY_INVALID_OPTION,
+            Error::SensitivitySolveDidNotConverge { .. } => {
+                &codes::BUILD_SENSITIVITY_NO_CONVERGENCE
+            }
+            Error::EmptyScenarioBatch => &codes::BUILD_GRIDFM_EMPTY_BATCH,
+            Error::ScenarioIdOverflow { .. } => &codes::BUILD_GRIDFM_SCENARIO_ID_OVERFLOW,
+            Error::NormalizedGridfmSnapshot { .. } => &codes::BUILD_GRIDFM_NORMALIZED_SNAPSHOT,
+            Error::NonFiniteGridfmValue { .. } => &codes::BUILD_GRIDFM_NOT_A_NUMBER,
+            Error::ScenarioShapeMismatch { .. } => &codes::BUILD_GRIDFM_SCENARIO_SHAPE_MISMATCH,
+            Error::Mtx(_) => &codes::EMIT_MTX_FAILED,
+            Error::Parquet(_) => &codes::EMIT_PARQUET_FAILED,
+        }
+    }
+
     /// Classify this error, using the hub's taxonomy.
     ///
     /// The match is exhaustive over the variant set, so a new variant must be
@@ -187,6 +218,54 @@ mod tests {
         assert_eq!(Error::EmptyScenarioBatch.category(), Data);
         assert_eq!(Error::Mtx("write failed".into()).category(), Output);
         assert_eq!(Error::Parquet("write failed".into()).category(), Output);
+    }
+
+    // Every error is a diagnostic that ended the operation, so the code's
+    // published category and `category()` are one fact.
+    #[test]
+    fn every_error_code_publishes_the_category_the_variant_reports() {
+        let every: Vec<Error> = vec![
+            powerio::Error::MissingField("bus").into(),
+            std::io::Error::from(std::io::ErrorKind::NotFound).into(),
+            Error::DimensionMismatch { n: 2, b_len: 3 },
+            Error::ShapeMismatch {
+                what: "p",
+                expected: 2,
+                got: 3,
+            },
+            Error::SingularNetwork,
+            Error::InvalidSensitivityOptions {
+                reason: "tol".into(),
+            },
+            Error::SensitivitySolveDidNotConverge {
+                iterations: 10,
+                relative_residual: 1.0,
+            },
+            Error::EmptyScenarioBatch,
+            Error::ScenarioIdOverflow { base: 1, index: 0 },
+            Error::NormalizedGridfmSnapshot { scenario: 1 },
+            Error::NonFiniteGridfmValue {
+                scenario: 1,
+                element: "bus",
+                row: 0,
+                field: "vm",
+                value: f64::NAN,
+            },
+            Error::ScenarioShapeMismatch {
+                index: 1,
+                reason: ScenarioMismatch::BusOrder,
+            },
+            Error::Mtx("write failed".into()),
+            Error::Parquet("write failed".into()),
+        ];
+        for error in &every {
+            assert_eq!(
+                error.code().category,
+                Some(error.category()),
+                "{}",
+                error.code().code
+            );
+        }
     }
 
     #[test]

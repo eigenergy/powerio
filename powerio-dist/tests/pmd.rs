@@ -904,9 +904,9 @@ fn wide_terminal_maps_do_not_expand_quadratically() {
     let out = write_pmd_json(&net);
     for what in ["switch s", "voltage source src"] {
         assert!(
-            out.warnings
-                .iter()
-                .any(|w| w.starts_with(what) && w.contains("exceed the supported maximum")),
+            out.diagnostics.iter().any(|d| {
+                d.message.starts_with(what) && d.message.contains("exceed the supported maximum")
+            }),
             "no clamp warning for {what}: {:?}",
             out.warnings
         );

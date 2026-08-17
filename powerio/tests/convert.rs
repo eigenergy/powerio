@@ -1182,9 +1182,10 @@ fn hvdc_converts_and_round_trips() {
     let egret = write_egret_json(&net);
     assert_eq!(
         egret
-            .warnings
+            .diagnostics
             .iter()
-            .filter(|w| w.contains("dcline"))
+            .filter(|d| d.message.contains("dcline"))
+            .map(|d| d.message.as_str())
             .collect::<Vec<_>>(),
         ["dcline 5 -> 9 cost curve dropped: egret dc_branch records carry no cost"],
         "egret dc_branch carries every dcline field but the cost: {:?}",
@@ -1757,7 +1758,7 @@ fn pandapower_genuine_fixture_reads() {
     // magnetizing admittance are typed.
     assert_eq!(parsed.warnings.len(), 1, "{:?}", parsed.warnings);
     assert!(
-        parsed.warnings.iter().any(|w| w
+        parsed.diagnostics.iter().any(|d| d.message
             == "`switch` table ignored (8 rows): switches are not modeled; open switches are not applied"),
         "{:?}",
         parsed.warnings
@@ -1839,7 +1840,11 @@ fn pypsa_genuine_export_reads() {
     close(net.shunts[0].b, 1e-4 * zb * 1.0);
 
     assert_eq!(
-        parsed.warnings,
+        parsed
+            .diagnostics
+            .iter()
+            .map(|d| d.message.as_str())
+            .collect::<Vec<_>>(),
         vec![
             "links.csv: 1 links read as HVDC lines; PyPSA links carry no reactive or voltage data (q limits 0, voltage setpoints 1.0)"
         ]

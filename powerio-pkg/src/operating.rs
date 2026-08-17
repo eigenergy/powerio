@@ -277,13 +277,13 @@ pub(crate) fn operating_points_from_document(
     }
 }
 
-/// Diagnostic code for a document whose series extraction failed, named per
-/// format alongside the dispatch above.
-pub(crate) fn operating_points_drop_code(document: &powerio::SourceDocument) -> &'static str {
-    match document {
-        powerio::SourceDocument::Goc3(_) => "READ.GOC3.OPERATING_POINTS_DROPPED",
-        _ => "READ.OPERATING_POINTS_DROPPED",
-    }
+/// The code for a document whose series extraction failed. One code for every
+/// format: which format it was is the document's own, and the per format
+/// spellings are retired.
+pub(crate) fn operating_points_drop_code(
+    _document: &powerio::SourceDocument,
+) -> &'static crate::diagnostics::DiagnosticInfo {
+    &crate::diagnostics::codes::READ_PACKAGE_OPERATING_POINTS_DROPPED
 }
 
 fn goc3_operating_points(document: &Goc3Document) -> crate::Result<Option<OperatingPointSeries>> {

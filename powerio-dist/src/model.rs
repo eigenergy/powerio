@@ -933,6 +933,8 @@ pub struct MulticonductorNetwork {
     /// <https://eigenergy.github.io/powerio/guide/pio-json-schema.html>.
     #[serde(skip)]
     pub defaulted: BTreeMap<String, Vec<&'static str>>,
+    /// The parse session's findings as `CODE: message` lines, rendered from
+    /// `parse_diagnostics` so the text and the structure cannot disagree.
     pub warnings: Vec<String>,
     /// Structured findings from the parse session. An `Error` entry means
     /// the network is incomplete (for example a refused include). Skipped
@@ -948,6 +950,28 @@ pub struct MulticonductorNetwork {
     pub source: Option<Arc<String>>,
     pub source_format: Option<DistSourceFormat>,
     pub extras: Extras,
+}
+
+impl MulticonductorNetwork {
+    /// Record one parse finding. Both channels move together: the line is
+    /// rendered from the record it is added with.
+    pub(crate) fn note(
+        &mut self,
+        info: &crate::diagnostics::DiagnosticInfo,
+        message: impl Into<String>,
+    ) {
+        let diagnostic = crate::diagnostics::StructuredDiagnostic::of(info, message);
+        self.warnings
+            .push(crate::diagnostics::render_line(&diagnostic));
+        self.parse_diagnostics.push(diagnostic);
+    }
+
+    /// Record one parse finding already built with the record's builders.
+    pub(crate) fn record(&mut self, diagnostic: crate::diagnostics::StructuredDiagnostic) {
+        self.warnings
+            .push(crate::diagnostics::render_line(&diagnostic));
+        self.parse_diagnostics.push(diagnostic);
+    }
 }
 
 impl Default for MulticonductorNetwork {
@@ -1025,10 +1049,13 @@ pub(crate) fn warn_defaulted_frequency(net: &mut MulticonductorNetwork, field: &
             .any(|v| v.is_finite() && v.abs() > 0.0)
     });
     if charging {
-        net.warnings.push(format!(
-            "document states no {field} and carries line susceptance; read at {} Hz",
-            net.base_frequency
-        ));
+        net.note(
+            &crate::diagnostics::codes::READ_MULTICONDUCTOR_VALUE_DEFAULTED,
+            format!(
+                "document states no {field} and carries line susceptance; read at {} Hz",
+                net.base_frequency
+            ),
+        );
     }
 }
 
@@ -1120,7 +1147,12 @@ pub(crate) fn warn_unresolved_references(net: &mut MulticonductorNetwork) {
             ));
         }
     }
-    net.warnings.extend(warnings);
+    for message in warnings {
+        net.note(
+            &crate::diagnostics::codes::VALIDATE_MULTICONDUCTOR_REFERENCE_UNDEFINED,
+            message,
+        );
+    }
 }
 
 fn zero_mat(n: usize) -> Mat {

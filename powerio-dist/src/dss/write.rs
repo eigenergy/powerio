@@ -17,6 +17,7 @@ use std::collections::BTreeMap;
 use std::fmt::Write as _;
 
 use crate::convert::{Conversion, ConversionSidecar};
+use crate::diagnostics::codes as C;
 use crate::model::{
     ActivePowerReference, Configuration, ControlVoltageReference, DistBus, DistControlProfile,
     DistIbr, DistLoad, DistLoadVoltageModel, DistTransformer, Extras, IbrPrimeMover, IbrTopology,
@@ -78,7 +79,7 @@ pub fn write_dss_with_options(
     let mut w = DssWriter {
         out: String::new(),
         sidecars: Vec::new(),
-        warnings: Vec::new(),
+        warnings: crate::diagnostics::Diagnostics::new(),
         options: options.clone(),
         grounded: net
             .buses
@@ -93,18 +94,13 @@ pub fn write_dss_with_options(
         kv_estimate: estimate_bus_kv(net),
     };
     w.network(net);
-    Conversion {
-        text: w.out,
-        sidecars: w.sidecars,
-        warnings: w.warnings,
-        diagnostics: Vec::new(),
-    }
+    Conversion::new(w.out, w.sidecars, w.warnings)
 }
 
 struct DssWriter {
     out: String,
     sidecars: Vec<ConversionSidecar>,
-    warnings: Vec<String>,
+    warnings: crate::diagnostics::Diagnostics,
     options: DssWriteOptions,
     /// Bus id (lowercase) → perfectly grounded terminal names.
     grounded: BTreeMap<String, Vec<String>>,
@@ -455,8 +451,8 @@ fn seq_parts(extras: &Extras, key: &str) -> Option<(f64, f64)> {
 }
 
 impl DssWriter {
-    fn warn(&mut self, msg: impl Into<String>) {
-        self.warnings.push(msg.into());
+    fn warn(&mut self, info: &crate::diagnostics::DiagnosticInfo, msg: impl Into<String>) {
+        self.warnings.push(info, msg);
     }
 
     /// The engine's bus fill rule gives every conductor the dot list does
@@ -468,17 +464,23 @@ impl DssWriter {
     /// the node list positionally and drops what the record cannot address.
     fn warn_map_arity(&mut self, class: &str, name: &str, map_len: usize, nconds: usize) {
         if map_len < nconds {
-            self.warn(format!(
-                "{class} {name}: terminal map lists {map_len} of {nconds} conductors; \
+            self.warn(
+                &C::EMIT_DSS_VALUE_COLLAPSED,
+                format!(
+                    "{class} {name}: terminal map lists {map_len} of {nconds} conductors; \
                  dss materializes a grounded neutral terminal and the reparsed model \
                  gains one"
-            ));
+                ),
+            );
         } else if map_len > nconds {
-            self.warn(format!(
-                "{class} {name}: terminal map lists {map_len} conductors but the record \
+            self.warn(
+                &C::EMIT_DSS_VALUE_COLLAPSED,
+                format!(
+                    "{class} {name}: terminal map lists {map_len} conductors but the record \
                  addresses {nconds}; dss discards the last {} and the model loses them",
-                map_len - nconds
-            ));
+                    map_len - nconds
+                ),
+            );
         }
     }
 
@@ -503,11 +505,14 @@ impl DssWriter {
             .as_f64()
             .or_else(|| v.as_str().and_then(|s| s.parse().ok()));
         if parsed.is_none() {
-            self.warn(format!(
-                "vsource {}: {key} extra `{v}` does not parse as a number; \
+            self.warn(
+                &C::EMIT_DSS_VALUE_DEFAULTED,
+                format!(
+                    "vsource {}: {key} extra `{v}` does not parse as a number; \
                  using the derived value",
-                vs.name
-            ));
+                    vs.name
+                ),
+            );
         }
         parsed
     }
@@ -519,10 +524,13 @@ impl DssWriter {
 
     fn check_name(&mut self, class: &str, name: &str) {
         if name_breaks_dss(name, false) {
-            self.warn(format!(
-                "{class} `{name}`: name contains characters dss cannot represent; \
+            self.warn(
+                &C::EMIT_DSS_VALUE_SUBSTITUTED,
+                format!(
+                    "{class} `{name}`: name contains characters dss cannot represent; \
                  output will not reparse identically"
-            ));
+                ),
+            );
         }
     }
 
@@ -535,10 +543,13 @@ impl DssWriter {
     fn bus_ref(&mut self, bus: &str, map: &[String]) -> String {
         let key = bus.to_ascii_lowercase();
         if name_breaks_dss(bus, true) {
-            self.warn(format!(
-                "bus `{bus}`: id contains characters dss cannot represent; \
+            self.warn(
+                &C::EMIT_DSS_VALUE_SUBSTITUTED,
+                format!(
+                    "bus `{bus}`: id contains characters dss cannot represent; \
                  output will not reparse identically"
-            ));
+                ),
+            );
         }
         let grounded = self.grounded.get(&key).cloned();
         let terminals = self.terminals.get(&key).cloned().unwrap_or_default();
@@ -552,10 +563,13 @@ impl DssWriter {
                     t.clone()
                 } else {
                     let pos = terminals.iter().position(|x| x == t).unwrap_or(i) + 1;
-                    self.warn(format!(
-                        "bus {bus}: terminal `{t}` is not a dss node number; \
+                    self.warn(
+                        &C::EMIT_DSS_VALUE_SUBSTITUTED,
+                        format!(
+                            "bus {bus}: terminal `{t}` is not a dss node number; \
                          emitted as node {pos}, its position on the bus"
-                    ));
+                        ),
+                    );
                     pos.to_string()
                 }
             })
@@ -586,7 +600,7 @@ impl DssWriter {
                 (true, Some(text)) => {
                     let (out, representable) = dss_value_out(&text);
                     if !representable {
-                        self.warn(format!(
+                        self.warn(&C::EMIT_DSS_EXTRAS_DROPPED, format!(
                             "{class} {name}: extra `{key}` value `{text}` contains every \
                              dss quote closer and splits when scanned bare; emitted as \
                              written and a reparse will not see the same value"
@@ -594,7 +608,7 @@ impl DssWriter {
                     }
                     let _ = write!(tail, " {key}={out}");
                 }
-                _ => self.warn(format!(
+                _ => self.warn(&C::EMIT_DSS_VALUE_SUBSTITUTED, format!(
                     "{class} {name}: extra `{key}` is not a dss property; dropped from the output"
                 )),
             }
@@ -620,10 +634,13 @@ impl DssWriter {
             })
             .collect();
         if short {
-            self.warn(format!(
-                "{what}: matrix rows are shorter than the lower triangle; \
+            self.warn(
+                &C::EMIT_DSS_VALUE_DEFAULTED,
+                format!(
+                    "{what}: matrix rows are shorter than the lower triangle; \
                  missing entries emitted as 0"
-            ));
+                ),
+            );
         }
         format!("({})", rows.join(" | "))
     }
@@ -654,11 +671,14 @@ impl DssWriter {
                     format!("`{key}` is not a numeric matrix")
                 }
             };
-            self.warn(format!(
-                "{what}: series impedance extras unusable ({}, {}); left in extras",
-                state(r_key, r.is_some()),
-                state(x_key, x.is_some()),
-            ));
+            self.warn(
+                &C::EMIT_DSS_EXTRAS_DROPPED,
+                format!(
+                    "{what}: series impedance extras unusable ({}, {}); left in extras",
+                    state(r_key, r.is_some()),
+                    state(x_key, x.is_some()),
+                ),
+            );
         }
         None
     }
@@ -681,18 +701,24 @@ impl DssWriter {
             Configuration::Delta => match terminal_map.len() {
                 2 => 1,
                 3 => {
-                    self.warn(format!(
-                        "{class} {name}: a delta terminal map with 3 conductors is 2 or 3 \
+                    self.warn(
+                        &C::EMIT_DSS_VALUE_DEFAULTED,
+                        format!(
+                            "{class} {name}: a delta terminal map with 3 conductors is 2 or 3 \
                          phase and no phases record disambiguates; emitted phases=3"
-                    ));
+                        ),
+                    );
                     3
                 }
                 n => {
-                    self.warn(format!(
-                        "{class} {name}: a delta terminal map with {n} conductors has no \
+                    self.warn(
+                        &C::EMIT_DSS_VALUE_DEFAULTED,
+                        format!(
+                            "{class} {name}: a delta terminal map with {n} conductors has no \
                          dss phases mapping; emitted phases={}",
-                        n.max(1)
-                    ));
+                            n.max(1)
+                        ),
+                    );
                     n.max(1)
                 }
             },
@@ -722,10 +748,13 @@ impl DssWriter {
         self.ibrs(net);
 
         for u in &net.untyped {
-            self.warn(format!(
-                "{} {}: untyped object is not regenerated in canonical dss output",
-                u.class, u.name
-            ));
+            self.warn(
+                &C::EMIT_DSS_RECORD_DROPPED,
+                format!(
+                    "{} {}: untyped object is not regenerated in canonical dss output",
+                    u.class, u.name
+                ),
+            );
         }
         for b in &net.buses {
             self.bus_extras(b);
@@ -739,9 +768,12 @@ impl DssWriter {
         // preserve it, so each drop is reported instead.
         for (key, value) in &net.options {
             if key.is_empty() {
-                self.warn(format!(
-                    "option `{value}` has no name; not regenerated in canonical dss output"
-                ));
+                self.warn(
+                    &C::EMIT_DSS_VALUE_DEFAULTED,
+                    format!(
+                        "option `{value}` has no name; not regenerated in canonical dss output"
+                    ),
+                );
                 continue;
             }
             // The engine resolves Set names by first match in option table
@@ -760,11 +792,14 @@ impl DssWriter {
             }
             let (text, representable) = dss_value_out(value);
             if !representable {
-                self.warn(format!(
-                    "option `{key}`: value `{value}` contains every dss quote closer \
+                self.warn(
+                    &C::EMIT_DSS_VALUE_SUBSTITUTED,
+                    format!(
+                        "option `{key}`: value `{value}` contains every dss quote closer \
                      and splits when scanned bare; emitted as written and a reparse \
                      will not see the same value"
-                ));
+                    ),
+                );
             }
             self.line_out(&format!("Set {key}={text}"));
         }
@@ -777,9 +812,10 @@ impl DssWriter {
             } else {
                 format!("{verb} {args}")
             };
-            self.warn(format!(
-                "command `{shown}` is not regenerated in canonical dss output"
-            ));
+            self.warn(
+                &C::EMIT_DSS_RECORD_DROPPED,
+                format!("command `{shown}` is not regenerated in canonical dss output"),
+            );
         }
         let mut bases: Vec<f64> = self
             .kv_estimate
@@ -801,10 +837,13 @@ impl DssWriter {
             if key == "x" || key == "y" {
                 continue; // legacy coordinate extras are superseded by `location`
             }
-            self.warnings.push(format!(
-                "bus {}: extra `{key}` is not regenerated in canonical dss output",
-                b.id
-            ));
+            self.warnings.push(
+                &C::EMIT_DSS_EXTRAS_DROPPED,
+                format!(
+                    "bus {}: extra `{key}` is not regenerated in canonical dss output",
+                    b.id
+                ),
+            );
         }
         for (field, present) in [
             ("v_min", b.v_min.is_some()),
@@ -820,10 +859,13 @@ impl DssWriter {
             ("vn_max", b.vn_max.is_some()),
         ] {
             if present {
-                self.warnings.push(format!(
-                    "bus {}: `{field}` voltage bounds have no dss expression; dropped",
-                    b.id
-                ));
+                self.warnings.push(
+                    &C::EMIT_DSS_FIELD_DROPPED,
+                    format!(
+                        "bus {}: `{field}` voltage bounds have no dss expression; dropped",
+                        b.id
+                    ),
+                );
             }
         }
     }
@@ -838,16 +880,22 @@ impl DssWriter {
             return;
         }
         let Some(path) = self.options.buscoords_filename.clone() else {
-            self.warn("typed bus locations have no OpenDSS buscoords filename; dropped");
+            self.warn(
+                &C::EMIT_DSS_FIELD_DROPPED,
+                "typed bus locations have no OpenDSS buscoords filename; dropped",
+            );
             return;
         };
         if path.is_empty() {
-            self.warn("typed bus locations have an empty OpenDSS buscoords filename; dropped");
+            self.warn(
+                &C::EMIT_DSS_FIELD_DROPPED,
+                "typed bus locations have an empty OpenDSS buscoords filename; dropped",
+            );
             return;
         }
         let (path_out, path_representable) = dss_value_out(&path);
         if !path_representable {
-            self.warn(format!(
+            self.warn(&C::EMIT_DSS_VALUE_SUBSTITUTED, format!(
                 "buscoords filename `{path}` contains every dss quote closer and splits when scanned bare; emitted as written and a reparse will not see the same value"
             ));
         }
@@ -855,15 +903,18 @@ impl DssWriter {
         let mut text = String::new();
         for (bus, location) in rows {
             if !location.x.is_finite() || !location.y.is_finite() {
-                self.warn(format!(
-                    "bus {}: nonfinite location is not emitted to OpenDSS buscoords",
-                    bus.id
-                ));
+                self.warn(
+                    &C::EMIT_DSS_FIELD_DROPPED,
+                    format!(
+                        "bus {}: nonfinite location is not emitted to OpenDSS buscoords",
+                        bus.id
+                    ),
+                );
                 continue;
             }
             let (bus_out, bus_representable) = dss_value_out(&bus.id);
             if !bus_representable {
-                self.warn(format!(
+                self.warn(&C::EMIT_DSS_FIELD_DROPPED, format!(
                     "bus {}: id contains every dss quote closer and splits in buscoords; coordinates dropped",
                     bus.id
                 ));
@@ -892,11 +943,14 @@ impl DssWriter {
             let phases = source_phases(net, vs);
             let energized = vs.v_magnitude.iter().filter(|&&v| v > 0.0).count();
             if energized > 0 && energized != phases {
-                self.warn(format!(
-                    "vsource {}: emitted phases={phases} but {energized} v_magnitude \
+                self.warn(
+                    &C::EMIT_DSS_VALUE_DEFAULTED,
+                    format!(
+                        "vsource {}: emitted phases={phases} but {energized} v_magnitude \
                      entries are positive; a reparse energizes all {phases}",
-                    vs.name
-                ));
+                        vs.name
+                    ),
+                );
             }
             self.warn_map_arity("vsource", &vs.name, vs.terminal_map.len(), phases + 1);
             let basekv = self
@@ -972,28 +1026,37 @@ impl DssWriter {
                 Some([amps, ..]) if amps.is_finite() => {
                     let _ = write!(s, " emergamps={}", num(*amps));
                 }
-                Some([_, ..]) => self.warn(format!(
-                    "linecode {}: first i_max entry is nonfinite (an unbounded \
+                Some([_, ..]) => self.warn(
+                    &C::EMIT_DSS_FIELD_DROPPED,
+                    format!(
+                        "linecode {}: first i_max entry is nonfinite (an unbounded \
                      conductor); emergamps not emitted",
-                    c.name
-                )),
-                Some([]) => self.warn(format!(
-                    "linecode {}: i_max is empty; emergamps not emitted",
-                    c.name
-                )),
+                        c.name
+                    ),
+                ),
+                Some([]) => self.warn(
+                    &C::EMIT_DSS_FIELD_DROPPED,
+                    format!("linecode {}: i_max is empty; emergamps not emitted", c.name),
+                ),
                 None => {}
             }
             if !c.g_from.iter().flatten().all(|&g| g == 0.0) {
-                self.warn(format!(
-                    "linecode {}: shunt conductance has no dss linecode field; dropped",
-                    c.name
-                ));
+                self.warn(
+                    &C::EMIT_DSS_FIELD_DROPPED,
+                    format!(
+                        "linecode {}: shunt conductance has no dss linecode field; dropped",
+                        c.name
+                    ),
+                );
             }
             if c.source.is_some() {
-                self.warn(format!(
-                    "linecode {}: matrix provenance `source` has no dss field; dropped",
-                    c.name
-                ));
+                self.warn(
+                    &C::EMIT_DSS_EXTRAS_DROPPED,
+                    format!(
+                        "linecode {}: matrix provenance `source` has no dss field; dropped",
+                        c.name
+                    ),
+                );
             }
             let mut extras = c.extras.clone();
             extras.remove("units"); // canonical output is in meters
@@ -1028,29 +1091,35 @@ impl DssWriter {
                     #[allow(clippy::float_cmp)]
                     let uneven = rest.iter().any(|a| *a != *amps);
                     if uneven {
-                        self.warn(format!(
-                            "line {}: i_max is not equal on all phases; emergamps \
+                        self.warn(
+                            &C::EMIT_DSS_VALUE_COLLAPSED,
+                            format!(
+                                "line {}: i_max is not equal on all phases; emergamps \
                              holds the first phase only",
-                            l.name
-                        ));
+                                l.name
+                            ),
+                        );
                     }
                 }
-                Some([_, ..]) => self.warn(format!(
-                    "line {}: first i_max entry is nonfinite (an unbounded \
+                Some([_, ..]) => self.warn(
+                    &C::EMIT_DSS_FIELD_DROPPED,
+                    format!(
+                        "line {}: first i_max entry is nonfinite (an unbounded \
                      conductor); emergamps not emitted",
-                    l.name
-                )),
-                Some([]) => self.warn(format!(
-                    "line {}: i_max is empty; emergamps not emitted",
-                    l.name
-                )),
+                        l.name
+                    ),
+                ),
+                Some([]) => self.warn(
+                    &C::EMIT_DSS_FIELD_DROPPED,
+                    format!("line {}: i_max is empty; emergamps not emitted", l.name),
+                ),
                 None => {}
             }
             if l.s_max.is_some() {
-                self.warn(format!(
-                    "line {}: `s_max` has no dss Line field; dropped",
-                    l.name
-                ));
+                self.warn(
+                    &C::EMIT_DSS_EXTRAS_DROPPED,
+                    format!("line {}: `s_max` has no dss Line field; dropped", l.name),
+                );
             }
             s.push_str(&self.extras_tail("line", &l.name, &extras));
             self.line_out(&s);
@@ -1072,15 +1141,18 @@ impl DssWriter {
                 Some([amps, ..]) if amps.is_finite() => {
                     let _ = write!(s, " emergamps={}", num(*amps));
                 }
-                Some([_, ..]) => self.warn(format!(
-                    "line {}: first i_max entry is nonfinite (an unbounded \
+                Some([_, ..]) => self.warn(
+                    &C::EMIT_DSS_FIELD_DROPPED,
+                    format!(
+                        "line {}: first i_max entry is nonfinite (an unbounded \
                      conductor); emergamps not emitted",
-                    sw.name
-                )),
-                Some([]) => self.warn(format!(
-                    "line {}: i_max is empty; emergamps not emitted",
-                    sw.name
-                )),
+                        sw.name
+                    ),
+                ),
+                Some([]) => self.warn(
+                    &C::EMIT_DSS_FIELD_DROPPED,
+                    format!("line {}: i_max is empty; emergamps not emitted", sw.name),
+                ),
                 None => {}
             }
             // A switch that came through the ENGINEERING model carries its
@@ -1144,12 +1216,15 @@ impl DssWriter {
                     if is_positive_finite(w.s_rating) {
                         Some(w.s_rating / 1e3)
                     } else {
-                        self.warn(format!(
-                            "transformer {}: winding {} has no usable rating; kva not \
+                        self.warn(
+                            &C::EMIT_DSS_VALUE_DEFAULTED,
+                            format!(
+                                "transformer {}: winding {} has no usable rating; kva not \
                              emitted (the OpenDSS default applies)",
-                            t.name,
-                            idx + 1
-                        ));
+                                t.name,
+                                idx + 1
+                            ),
+                        );
                         None
                     }
                 })
@@ -1182,10 +1257,10 @@ impl DssWriter {
                     let _ = write!(s, " xht={} xlt={}", num(t.xsc_pct[1]), num(xlt));
                 }
             } else {
-                self.warn(format!(
-                    "transformer {}: xsc_pct is empty; emitted xhl=0",
-                    t.name
-                ));
+                self.warn(
+                    &C::EMIT_DSS_VALUE_DEFAULTED,
+                    format!("transformer {}: xsc_pct is empty; emitted xhl=0", t.name),
+                );
                 s.push_str(" xhl=0");
             }
             s.push_str(&self.extras_tail("transformer", &t.name, &t.extras));
@@ -1221,24 +1296,30 @@ impl DssWriter {
         #[allow(clippy::float_cmp)]
         let lumped_on_primary = xhl == xht && xhl > 0.0 && xhl.is_finite();
         if !lumped_on_primary {
-            self.warn(format!(
-                "transformer {}: xlt={} is not a reactance dss can solve, and the \
+            self.warn(
+                &C::EMIT_DSS_VALUE_SUBSTITUTED,
+                format!(
+                    "transformer {}: xlt={} is not a reactance dss can solve, and the \
                  other two arms do not determine a replacement; emitted as stated",
-                t.name,
-                num(xlt)
-            ));
+                    t.name,
+                    num(xlt)
+                ),
+            );
             return xlt;
         }
         let repaired = 2.0 / 3.0 * xhl;
-        self.warn(format!(
-            "transformer {}: the source puts the whole leakage on the primary arm, \
+        self.warn(
+            &C::EMIT_DSS_VALUE_COLLAPSED,
+            format!(
+                "transformer {}: the source puts the whole leakage on the primary arm, \
              leaving xlt={}; dss solves that star as a collapsed secondary, so \
              xlt={} went out instead, holding xhl={}",
-            t.name,
-            num(xlt),
-            num(repaired),
-            num(xhl)
-        ));
+                t.name,
+                num(xlt),
+                num(repaired),
+                num(xhl)
+            ),
+        );
         repaired
     }
 
@@ -1266,24 +1347,30 @@ impl DssWriter {
                 3f64.sqrt()
             };
         let Some(v_pn) = self.kv_estimate.get(&bus).copied() else {
-            self.warn(format!(
-                "transformer {}: winding {} has no rated voltage and bus `{}` has \
+            self.warn(
+                &C::EMIT_DSS_VALUE_DEFAULTED,
+                format!(
+                    "transformer {}: winding {} has no rated voltage and bus `{}` has \
                  no voltage estimate; kv not emitted (the OpenDSS default applies)",
-                t.name,
-                idx + 1,
-                w.bus
-            ));
+                    t.name,
+                    idx + 1,
+                    w.bus
+                ),
+            );
             return None;
         };
         let kv = v_pn * scale / 1e3;
-        self.warn(format!(
-            "transformer {}: winding {} has no rated voltage; kv={} derived \
+        self.warn(
+            &C::EMIT_DSS_FIELD_DROPPED,
+            format!(
+                "transformer {}: winding {} has no rated voltage; kv={} derived \
              from the bus `{}` voltage estimate",
-            t.name,
-            idx + 1,
-            num(kv),
-            w.bus
-        ));
+                t.name,
+                idx + 1,
+                num(kv),
+                w.bus
+            ),
+        );
         Some(kv)
     }
 
@@ -1316,11 +1403,14 @@ impl DssWriter {
             return vec![Cow::Borrowed(l)];
         }
         if l.configuration == Configuration::Delta {
-            self.warn(format!(
-                "load {}: per phase power on a delta load has no dss expression; \
+            self.warn(
+                &C::EMIT_DSS_VALUE_COLLAPSED,
+                format!(
+                    "load {}: per phase power on a delta load has no dss expression; \
                  emitted one balanced Load carrying the total",
-                l.name
-            ));
+                    l.name
+                ),
+            );
             return vec![Cow::Borrowed(l)];
         }
         // Without a grounded terminal the map states the return last, the
@@ -1334,17 +1424,20 @@ impl DssWriter {
             None => ((0..l.terminal_map.len()).collect::<Vec<_>>(), None),
         };
         if !stated_per_phase || hot_indices.len() != n {
-            self.warn(format!(
-                "load {}: {} over a terminal map with {} phase conductors; \
+            self.warn(
+                &C::EMIT_DSS_VALUE_COLLAPSED,
+                format!(
+                    "load {}: {} over a terminal map with {} phase conductors; \
                  emitted one Load carrying the total",
-                l.name,
-                if stated_per_phase {
-                    format!("per phase power over {n} phases")
-                } else {
-                    "one power value".to_string()
-                },
-                hot_indices.len()
-            ));
+                    l.name,
+                    if stated_per_phase {
+                        format!("per phase power over {n} phases")
+                    } else {
+                        "one power value".to_string()
+                    },
+                    hot_indices.len()
+                ),
+            );
             return vec![Cow::Borrowed(l)];
         }
         hot_indices
@@ -1468,7 +1561,7 @@ impl DssWriter {
                 }
             }
             DistLoadVoltageModel::Exponential { .. } => {
-                self.warn(format!(
+                self.warn(&C::EMIT_DSS_VALUE_SUBSTITUTED, format!(
                     "load {}: exponential voltage model has no OpenDSS load model code; emitted constant power",
                     l.name
                 ));
@@ -1500,10 +1593,10 @@ impl DssWriter {
         if v.is_finite() {
             return num(v);
         }
-        self.warn(format!(
-            "{what}: {v} has no dss spelling; emitted {}",
-            num(fallback)
-        ));
+        self.warn(
+            &C::EMIT_DSS_VALUE_SUBSTITUTED,
+            format!("{what}: {v} has no dss spelling; emitted {}", num(fallback)),
+        );
         num(fallback)
     }
 
@@ -1514,11 +1607,14 @@ impl DssWriter {
                 .or_else(|| v.as_str().and_then(|s| s.parse().ok()))
             {
                 Some(kv) => return kv,
-                None => self.warn(format!(
-                    "{} {}: kv extra `{v}` does not parse as a number; \
+                None => self.warn(
+                    &C::EMIT_DSS_VALUE_DEFAULTED,
+                    format!(
+                        "{} {}: kv extra `{v}` does not parse as a number; \
                      using the bus voltage estimate",
-                    ctx.class, ctx.name
-                )),
+                        ctx.class, ctx.name
+                    ),
+                ),
             }
         }
         if let Some(kv) = ctx.typed_kv {
@@ -1534,11 +1630,14 @@ impl DssWriter {
             };
             v / 1e3
         } else {
-            self.warn(format!(
-                "{} {}: no kv in the source and no bus voltage estimate; \
+            self.warn(
+                &C::EMIT_DSS_VALUE_DEFAULTED,
+                format!(
+                    "{} {}: no kv in the source and no bus voltage estimate; \
                  emitted 12.47",
-                ctx.class, ctx.name
-            ));
+                    ctx.class, ctx.name
+                ),
+            );
             12.47
         }
     }
@@ -1556,7 +1655,7 @@ impl DssWriter {
             .iter()
             .any(|v| (*v - v_phase).abs() > 1e-9 * v.abs().max(v_phase.abs()).max(1.0))
         {
-            self.warn(format!(
+            self.warn(&C::EMIT_DSS_VALUE_COLLAPSED, format!(
                 "load {name}: nonuniform nominal voltage array has no OpenDSS scalar kv; emitted the first value"
             ));
         }
@@ -1602,32 +1701,41 @@ impl DssWriter {
     fn write_impedance_shunt(&mut self, sh: &crate::model::DistShunt, phases: usize) {
         self.check_name("reactor", &sh.name);
         let Some((conductance, susceptance)) = first_diag_admittance(&sh.g, &sh.b, phases) else {
-            self.warn(format!(
+            self.warn(&C::EMIT_DSS_RECORD_DROPPED, format!(
                 "shunt {}: conductance matrix has no diagonal admittance; dropped from the output",
                 sh.name
             ));
             return;
         };
         if has_off_diagonal(&sh.g) || has_off_diagonal(&sh.b) {
-            self.warn(format!(
-                "shunt {}: off diagonal admittance has no scalar reactor expression; \
+            self.warn(
+                &C::EMIT_DSS_VALUE_COLLAPSED,
+                format!(
+                    "shunt {}: off diagonal admittance has no scalar reactor expression; \
                  only the first diagonal admittance is regenerated",
-                sh.name
-            ));
+                    sh.name
+                ),
+            );
         }
         if !uniform_diag_admittance(&sh.g, &sh.b, phases, conductance, susceptance) {
-            self.warn(format!(
-                "shunt {}: diagonal admittances differ; only the first diagonal \
+            self.warn(
+                &C::EMIT_DSS_VALUE_COLLAPSED,
+                format!(
+                    "shunt {}: diagonal admittances differ; only the first diagonal \
                  admittance is regenerated",
-                sh.name
-            ));
+                    sh.name
+                ),
+            );
         }
         let denom = conductance * conductance + susceptance * susceptance;
         if !denom.is_finite() || denom <= 0.0 {
-            self.warn(format!(
-                "shunt {}: invalid grounding admittance; dropped from the output",
-                sh.name
-            ));
+            self.warn(
+                &C::EMIT_DSS_RECORD_DROPPED,
+                format!(
+                    "shunt {}: invalid grounding admittance; dropped from the output",
+                    sh.name
+                ),
+            );
             return;
         }
         let resistance = conductance / denom;
@@ -1681,27 +1789,36 @@ impl DssWriter {
         } else if b_min < 0.0 {
             ("reactor", b_min)
         } else {
-            self.warn(format!(
-                "shunt {}: no nonzero susceptance; dropped from the output",
-                sh.name
-            ));
+            self.warn(
+                &C::EMIT_DSS_RECORD_DROPPED,
+                format!(
+                    "shunt {}: no nonzero susceptance; dropped from the output",
+                    sh.name
+                ),
+            );
             return;
         };
         if b_max > 0.0 && b_min < 0.0 {
-            self.warn(format!(
-                "shunt {}: diagonal mixes capacitive and inductive phases; only the \
+            self.warn(
+                &C::EMIT_DSS_FIELD_DROPPED,
+                format!(
+                    "shunt {}: diagonal mixes capacitive and inductive phases; only the \
                  {class} phases are regenerated",
-                sh.name
-            ));
+                    sh.name
+                ),
+            );
         }
         self.check_name(class, &sh.name);
         let off_diag = has_off_diagonal(&sh.b);
         if off_diag && !conn_delta {
-            self.warn(format!(
-                "shunt {}: off diagonal susceptance has no {class} expression; \
+            self.warn(
+                &C::EMIT_DSS_VALUE_COLLAPSED,
+                format!(
+                    "shunt {}: off diagonal susceptance has no {class} expression; \
                  only the diagonal is regenerated",
-                sh.name
-            ));
+                    sh.name
+                ),
+            );
         }
         let edges = if conn_delta {
             delta_edges(sh.terminal_map.len(), phases)
@@ -1709,18 +1826,21 @@ impl DssWriter {
             Vec::new()
         };
         if conn_delta && edges.is_empty() {
-            self.warn(format!(
+            self.warn(&C::EMIT_DSS_RECORD_DROPPED, format!(
                 "shunt {}: delta terminal map has no branch expression; dropped from the output",
                 sh.name
             ));
             return;
         }
         if conn_delta && delta_branch_susceptance(&sh.b, &edges, sh.terminal_map.len()).is_none() {
-            self.warn(format!(
-                "shunt {}: delta susceptance matrix has no scalar {class} expression; \
+            self.warn(
+                &C::EMIT_DSS_VALUE_COLLAPSED,
+                format!(
+                    "shunt {}: delta susceptance matrix has no scalar {class} expression; \
                  only the average branch susceptance is regenerated",
-                sh.name
-            ));
+                    sh.name
+                ),
+            );
         }
         let configuration = if conn_delta {
             Configuration::Delta
@@ -1772,10 +1892,13 @@ impl DssWriter {
     fn capacitors(&mut self, net: &MulticonductorNetwork) {
         for c in &net.capacitors {
             if !is_positive_finite(c.q_rated) {
-                self.warn(format!(
-                    "capacitor {}: rating {} is not a positive number; dropped from the output",
-                    c.name, c.q_rated
-                ));
+                self.warn(
+                    &C::EMIT_DSS_VALUE_SUBSTITUTED,
+                    format!(
+                        "capacitor {}: rating {} is not a positive number; dropped from the output",
+                        c.name, c.q_rated
+                    ),
+                );
                 continue;
             }
             self.check_name("capacitor", &c.name);
@@ -1791,11 +1914,14 @@ impl DssWriter {
             self.warn_map_arity("capacitor", &c.name, c.terminal_map.len(), nconds);
             let typed_kv = is_positive_finite(c.v_nom).then(|| c.v_nom / 1e3);
             if typed_kv.is_none() {
-                self.warn(format!(
-                    "capacitor {}: nominal voltage {} is not a positive number; \
+                self.warn(
+                    &C::EMIT_DSS_VALUE_SUBSTITUTED,
+                    format!(
+                        "capacitor {}: nominal voltage {} is not a positive number; \
                      using the bus voltage estimate",
-                    c.name, c.v_nom
-                ));
+                        c.name, c.v_nom
+                    ),
+                );
             }
             let kv = self.element_kv(
                 &c.extras,
@@ -1880,19 +2006,25 @@ impl DssWriter {
                 let _ = write!(s, " minkvar={}", num(q.iter().sum::<f64>() / 1e3));
             }
             if g.cost.is_some() {
-                self.warn(format!(
-                    "generator {}: generation cost has no dss field; dropped",
-                    g.name
-                ));
+                self.warn(
+                    &C::EMIT_DSS_FIELD_DROPPED,
+                    format!(
+                        "generator {}: generation cost has no dss field; dropped",
+                        g.name
+                    ),
+                );
             }
             // Rating fields await the kVA mapping decision (#266); dropping
             // them stays loud in the meantime.
             for (key, present) in [("s_max", g.s_max.is_some()), ("i_max", g.i_max.is_some())] {
                 if present {
-                    self.warn(format!(
-                        "generator {}: `{key}` has no dss Generator field mapping yet; dropped",
-                        g.name
-                    ));
+                    self.warn(
+                        &C::EMIT_DSS_FIELD_DROPPED,
+                        format!(
+                            "generator {}: `{key}` has no dss Generator field mapping yet; dropped",
+                            g.name
+                        ),
+                    );
                 }
             }
             let mut extras = g.extras.clone();
@@ -2001,10 +2133,13 @@ impl DssWriter {
     fn write_ibr_controls(&mut self, ibr: &DistIbr, net: &MulticonductorNetwork) {
         let Some(profile) = ibr_profile(ibr, net) else {
             if let Some(name) = &ibr.control_profile {
-                self.warn(format!(
-                    "ibr {}: control_profile `{name}` not found; no InvControl emitted",
-                    ibr.name
-                ));
+                self.warn(
+                    &C::EMIT_DSS_RECORD_DROPPED,
+                    format!(
+                        "ibr {}: control_profile `{name}` not found; no InvControl emitted",
+                        ibr.name
+                    ),
+                );
             }
             return;
         };
@@ -2104,17 +2239,23 @@ impl DssWriter {
             vv.q_unit,
             None | Some(crate::model::ReactivePowerUnit::VaFraction)
         ) {
-            self.warn(format!(
-                "ibr {}: volt_var q_unit is absolute VAR; DSS export only maps VA_FRACTION",
-                ibr.name
-            ));
+            self.warn(
+                &C::EMIT_DSS_FIELD_DROPPED,
+                format!(
+                    "ibr {}: volt_var q_unit is absolute VAR; DSS export only maps VA_FRACTION",
+                    ibr.name
+                ),
+            );
             return None;
         }
         if vv.breakpoints.len() < 4 || vv.q_limits.len() < 2 || base_v <= 0.0 {
-            self.warn(format!(
-                "ibr {}: volt_var profile is incomplete; no XYcurve emitted",
-                ibr.name
-            ));
+            self.warn(
+                &C::EMIT_DSS_RECORD_DROPPED,
+                format!(
+                    "ibr {}: volt_var profile is incomplete; no XYcurve emitted",
+                    ibr.name
+                ),
+            );
             return None;
         }
         let xs: Vec<String> = vv
@@ -2143,17 +2284,23 @@ impl DssWriter {
             vw.p_unit,
             None | Some(crate::model::ActivePowerUnit::VaFraction)
         ) {
-            self.warn(format!(
-                "ibr {}: volt_watt p_unit is absolute W; DSS export only maps VA_FRACTION",
-                ibr.name
-            ));
+            self.warn(
+                &C::EMIT_DSS_FIELD_DROPPED,
+                format!(
+                    "ibr {}: volt_watt p_unit is absolute W; DSS export only maps VA_FRACTION",
+                    ibr.name
+                ),
+            );
             return None;
         }
         if vw.breakpoints.len() < 2 || vw.p_limits.len() < 2 || base_v <= 0.0 {
-            self.warn(format!(
-                "ibr {}: volt_watt profile is incomplete; no XYcurve emitted",
-                ibr.name
-            ));
+            self.warn(
+                &C::EMIT_DSS_RECORD_DROPPED,
+                format!(
+                    "ibr {}: volt_watt profile is incomplete; no XYcurve emitted",
+                    ibr.name
+                ),
+            );
             return None;
         }
         let xs: Vec<String> = vw
@@ -2179,14 +2326,14 @@ impl DssWriter {
         match reference.unwrap_or(ControlVoltageReference::PnPerPhase) {
             ControlVoltageReference::PgPerPhase | ControlVoltageReference::PgAveraged => Some(()),
             ControlVoltageReference::PnPerPhase | ControlVoltageReference::PnAveraged => {
-                self.warn(format!(
+                self.warn(&C::EMIT_DSS_VALUE_SUBSTITUTED, format!(
                     "ibr {}: PN voltage control is approximated by OpenDSS phase-to-ground InvControl",
                     ibr.name
                 ));
                 Some(())
             }
             ControlVoltageReference::PpPerPhase | ControlVoltageReference::PpAveraged => {
-                self.warn(format!(
+                self.warn(&C::EMIT_DSS_RECORD_DROPPED, format!(
                     "ibr {}: PP voltage control is not representable by OpenDSS InvControl; skipped",
                     ibr.name
                 ));
@@ -2217,10 +2364,13 @@ impl DssWriter {
                 | ControlVoltageReference::PpAveraged
         );
         if !averaged && ibr_phases(ibr) > 1 {
-            self.warn(format!(
-                "ibr {}: per phase InvControl needs split PVSystems; emitted AVG monitor",
-                ibr.name
-            ));
+            self.warn(
+                &C::EMIT_DSS_FIELD_DROPPED,
+                format!(
+                    "ibr {}: per phase InvControl needs split PVSystems; emitted AVG monitor",
+                    ibr.name
+                ),
+            );
         }
         "AVG"
     }
@@ -2250,19 +2400,25 @@ impl DssWriter {
             if matches!(key.as_str(), "kv" | "phases") {
                 continue;
             }
-            self.warn(format!(
-                "ibr {}: `{key}` has no OpenDSS export mapping; dropped",
-                ibr.name
-            ));
+            self.warn(
+                &C::EMIT_DSS_FIELD_DROPPED,
+                format!(
+                    "ibr {}: `{key}` has no OpenDSS export mapping; dropped",
+                    ibr.name
+                ),
+            );
         }
         if ibr.i_max.is_some() {
-            self.warn(format!(
-                "ibr {}: i_max has no OpenDSS PVSystem current limit field; dropped",
-                ibr.name
-            ));
+            self.warn(
+                &C::EMIT_DSS_FIELD_DROPPED,
+                format!(
+                    "ibr {}: i_max has no OpenDSS PVSystem current limit field; dropped",
+                    ibr.name
+                ),
+            );
         }
         if !matches!(ibr.prime_mover, IbrPrimeMover::Pv | IbrPrimeMover::Generic) {
-            self.warn(format!(
+            self.warn(&C::EMIT_DSS_FIELD_DROPPED, format!(
                 "ibr {}: prime_mover {:?} has no dedicated OpenDSS export path; emitted with the generic inverter mapping",
                 ibr.name, ibr.prime_mover
             ));

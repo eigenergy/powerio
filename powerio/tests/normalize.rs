@@ -360,7 +360,7 @@ mpc.branch = [
     let raw = parse_str(src, "matpower").unwrap().network;
     assert!(matches!(
         raw.to_normalized(),
-        Err(Error::ReferenceBusCount { found: 0 })
+        Err(Error::ReferenceBusCount { found: 0, .. })
     ));
 }
 
@@ -403,7 +403,7 @@ mpc.branch = [
     assert_eq!(view.reference_bus_indices(), vec![0, 1]);
     assert!(matches!(
         view.reference_bus_index(),
-        Err(Error::ReferenceBusCount { found: 2 })
+        Err(Error::ReferenceBusCount { found: 2, .. })
     ));
 }
 

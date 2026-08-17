@@ -13,6 +13,8 @@ use super::{
     Conversion, Parsed, bus_kv, finish, jnum, nonzero_differs, set_bus_kind,
     warn_extra_branch_rating_sets, zbase,
 };
+use crate::diagnostics::codes::EMIT_PANDAPOWER as F;
+use crate::diagnostics::{Diagnostics, codes};
 use crate::network::{
     BalancedNetwork, Branch, BranchCharging, Bus, BusId, BusType, Extras, GenCost, Generator, Hvdc,
     Load, LoadVoltageModel, Shunt, SourceFormat, Storage,
@@ -26,7 +28,7 @@ const MAX_I_KA: f64 = 99_999.0;
 /// Parse pandapower `pandapowerNet` JSON `content`. Returns [`Parsed`]: the
 /// network plus the reader's fidelity warnings.
 pub fn parse_pandapower_json(content: &str) -> Result<Parsed> {
-    let mut warnings = Vec::new();
+    let mut warnings = Diagnostics::new();
     let network = parse_pandapower_source(Arc::new(content.to_owned()), None, &mut warnings)?;
     Ok(Parsed::without_document(network, warnings))
 }
@@ -35,7 +37,7 @@ pub fn parse_pandapower_json(content: &str) -> Result<Parsed> {
 pub(crate) fn parse_pandapower_source(
     source: Arc<String>,
     name_hint: Option<&str>,
-    warnings: &mut Vec<String>,
+    warnings: &mut Diagnostics,
 ) -> Result<BalancedNetwork> {
     let content: &str = &source;
     let root: Value = serde_json::from_str(content).map_err(|e| bad(e.to_string()))?;
@@ -587,7 +589,7 @@ pub(crate) fn parse_pandapower_source(
             });
         }
         if tabular_rows > 0 {
-            warnings.push(format!(
+            warnings.push(&codes::READ_PANDAPOWER_FIELD_DROPPED, format!(
                 "`trafo`: {tabular_rows} row(s) have a tabular or unrecognized tap changer; those taps were ignored"
             ));
         }
@@ -738,10 +740,13 @@ pub(crate) fn parse_pandapower_source(
         }
         if let Ok(Some(frame)) = read_frame(obj, key) {
             if !frame.data.is_empty() {
-                warnings.push(format!(
-                    "`{key}` table ignored ({} rows): not mapped",
-                    frame.data.len()
-                ));
+                warnings.push(
+                    &codes::READ_PANDAPOWER_TABLE_UNSUPPORTED,
+                    format!(
+                        "`{key}` table ignored ({} rows): not mapped",
+                        frame.data.len()
+                    ),
+                );
             }
         }
     }
@@ -831,14 +836,17 @@ fn warn_nonempty_table(
     obj: &Map<String, Value>,
     name: &str,
     reason: &str,
-    warnings: &mut Vec<String>,
+    warnings: &mut Diagnostics,
 ) -> Result<()> {
     if let Some(frame) = read_frame(obj, name)? {
         if !frame.data.is_empty() {
-            warnings.push(format!(
-                "`{name}` table ignored ({} rows): {reason}",
-                frame.data.len()
-            ));
+            warnings.push(
+                &codes::READ_PANDAPOWER_TABLE_UNSUPPORTED,
+                format!(
+                    "`{name}` table ignored ({} rows): {reason}",
+                    frame.data.len()
+                ),
+            );
         }
     }
     Ok(())
@@ -848,14 +856,11 @@ fn warn_nonempty_table(
 pub fn write_pandapower_json(net: &BalancedNetwork) -> Conversion {
     if net.source_format == SourceFormat::PandapowerJson {
         if let Some(source) = &net.source {
-            return Conversion {
-                text: source.to_string(),
-                warnings: Vec::new(),
-            };
+            return Conversion::faithful(source.to_string());
         }
     }
 
-    let mut warnings = Vec::new();
+    let mut warnings = Diagnostics::new();
     warn_pandapower_writer_losses(net, &mut warnings);
 
     let mut object = Map::new();
@@ -902,12 +907,12 @@ pub fn write_pandapower_json(net: &BalancedNetwork) -> Conversion {
     );
     root.insert("_class".into(), Value::String("pandapowerNet".into()));
     root.insert("_object".into(), Value::Object(object));
-    finish(root, warnings)
+    finish(&F, root, warnings)
 }
 
-fn warn_pandapower_writer_losses(net: &BalancedNetwork, warnings: &mut Vec<String>) {
+fn warn_pandapower_writer_losses(net: &BalancedNetwork, warnings: &mut Diagnostics) {
     if !net.transformers_3w.is_empty() {
-        warnings.push(format!(
+        warnings.push(&F.record_dropped, format!(
             "{} 3-winding transformer(s) dropped: the pandapower JSON writer emits no trafo3w table",
             net.transformers_3w.len()
         ));
@@ -918,38 +923,44 @@ fn warn_pandapower_writer_losses(net: &BalancedNetwork, warnings: &mut Vec<Strin
         .any(|b| b.evhi.is_some() || b.evlo.is_some())
     {
         warnings.push(
-            "emergency voltage band(s) (EVHI/EVLO) dropped: this writer carries one voltage band"
-                .into(),
+            &F.field_dropped,
+            "emergency voltage band(s) (EVHI/EVLO) dropped: this writer carries one voltage band",
         );
     }
     if !net.storage.is_empty() {
-        warnings.push(format!(
-            "{} storage unit(s) dropped: the pandapower JSON writer does not model storage",
-            net.storage.len()
-        ));
+        warnings.push(
+            &F.record_dropped,
+            format!(
+                "{} storage unit(s) dropped: the pandapower JSON writer does not model storage",
+                net.storage.len()
+            ),
+        );
     }
     warn_pandapower_generator_losses(net, warnings);
     warn_pandapower_branch_losses(net, warnings);
     let no_kv = net.buses.iter().filter(|b| b.base_kv <= 0.0).count();
     if no_kv > 0 {
-        warnings.push(format!(
-            "{no_kv} bus(es) carry no base_kv; written with vn_kv = 1 so pandapower's \
+        warnings.push(
+            &F.value_defaulted,
+            format!(
+                "{no_kv} bus(es) carry no base_kv; written with vn_kv = 1 so pandapower's \
              ohm-based model stays defined (per-unit impedances are preserved exactly)"
-        ));
+            ),
+        );
     }
 }
 
-fn warn_pandapower_generator_losses(net: &BalancedNetwork, warnings: &mut Vec<String>) {
+fn warn_pandapower_generator_losses(net: &BalancedNetwork, warnings: &mut Diagnostics) {
     let with_caps = net.generators.iter().filter(|g| g.has_caps()).count();
     if with_caps > 0 {
-        warnings.push(format!("generator capability/ramp columns dropped for {with_caps} generator(s): pandapower gen tables have no MATPOWER capability columns"));
+        warnings.push(&F.field_dropped, format!("generator capability/ramp columns dropped for {with_caps} generator(s): pandapower gen tables have no MATPOWER capability columns"));
     }
 }
 
-fn warn_pandapower_branch_losses(net: &BalancedNetwork, warnings: &mut Vec<String>) {
+fn warn_pandapower_branch_losses(net: &BalancedNetwork, warnings: &mut Diagnostics) {
     let constrained = net.branches.iter().filter(|b| b.has_angle_limits()).count();
     if constrained > 0 {
-        warnings.push(format!("{constrained} branch angle limit(s) dropped: pandapower line/trafo tables do not carry MATPOWER angle limits"));
+        warnings.push(&F.field_dropped, format!("{constrained} branch angle limit(s) dropped: pandapower line/trafo tables do not carry MATPOWER angle limits"));
     }
     let rate_bc = net
         .branches
@@ -957,7 +968,7 @@ fn warn_pandapower_branch_losses(net: &BalancedNetwork, warnings: &mut Vec<Strin
         .filter(|b| nonzero_differs(b.rate_b, b.rate_a) || nonzero_differs(b.rate_c, b.rate_a))
         .count();
     if rate_bc > 0 {
-        warnings.push(format!(
+        warnings.push(&F.field_dropped, format!(
             "{rate_bc} branch rate_b/rate_c value set(s) dropped: pandapower carries one loading limit"
         ));
     }
@@ -967,30 +978,33 @@ fn warn_pandapower_branch_losses(net: &BalancedNetwork, warnings: &mut Vec<Strin
         .filter(|b| b.current_ratings.is_some())
         .count();
     if current_ratings > 0 {
-        warnings.push(format!(
+        warnings.push(&F.field_dropped, format!(
             "{current_ratings} branch current rating record(s) dropped: pandapower line/trafo tables carry MVA loading limits, not current ratings"
         ));
     }
-    warn_extra_branch_rating_sets("pandapower JSON", net, warnings);
+    warn_extra_branch_rating_sets(&F, "pandapower JSON", net, warnings);
     let branch_solutions = net.branches.iter().filter(|b| b.solution.is_some()).count();
     if branch_solutions > 0 {
-        warnings.push(format!(
+        warnings.push(&F.field_dropped, format!(
             "{branch_solutions} branch solution value set(s) dropped: pandapower branch result tables are not written"
         ));
     }
 }
 
-fn warn_pandapower_charging_shunts(count: usize, warnings: &mut Vec<String>) {
+fn warn_pandapower_charging_shunts(count: usize, warnings: &mut Diagnostics) {
     if count > 0 {
-        warnings.push(format!(
-            "{count} transformer terminal charging shunt(s) written into `shunt`: pandapower's \
+        warnings.push(
+            &F.value_collapsed,
+            format!(
+                "{count} transformer terminal charging shunt(s) written into `shunt`: pandapower's \
              trafo magnetizing model is inductive only, so MATPOWER transformer line \
              charging b rides as bus shunts (Y_bus exact)"
-        ));
+            ),
+        );
     }
 }
 
-fn bus_frame(net: &BalancedNetwork, warnings: &mut Vec<String>) -> Value {
+fn bus_frame(net: &BalancedNetwork, warnings: &mut Diagnostics) -> Value {
     let columns = [
         "name",
         "vn_kv",
@@ -1071,16 +1085,16 @@ fn zip_requires_nonzero_total(
     out: PandapowerLoadValues,
     kind: &str,
     total: &str,
-    warnings: &mut Vec<String>,
+    warnings: &mut Diagnostics,
 ) -> PandapowerLoadValues {
-    warnings.push(format!(
+    warnings.push(&F.value_substituted, format!(
         "pandapower load at bus {}: {kind} ZIP components need a nonzero total {total}; wrote typed p/q as constant power",
         l.bus
     ));
     constant_power_load_values(out.p_mw, out.q_mvar, out.scaling)
 }
 
-fn load_values_for_pandapower(l: &Load, warnings: &mut Vec<String>) -> PandapowerLoadValues {
+fn load_values_for_pandapower(l: &Load, warnings: &mut Diagnostics) -> PandapowerLoadValues {
     let mut out = constant_power_load_values(l.p, l.q, 1.0);
     let Some(model) = &l.voltage_model else {
         return out;
@@ -1105,20 +1119,20 @@ fn load_values_for_pandapower(l: &Load, warnings: &mut Vec<String>) -> Pandapowe
                 q_constant_power + q_constant_current + q_constant_impedance,
                 l.q,
             ) {
-                warnings.push(format!(
+                warnings.push(&F.value_substituted, format!(
                     "pandapower load at bus {}: stale voltage model components did not match typed p/q; wrote typed p/q as constant power",
                     l.bus
                 ));
                 return out;
             }
             if let Some(v_nom) = v_nom {
-                warnings.push(format!(
+                warnings.push(&F.field_dropped, format!(
                     "pandapower load at bus {}: nominal voltage {v_nom} has no load table field; dropped",
                     l.bus
                 ));
             }
             if let Some(load_type) = load_type {
-                warnings.push(format!(
+                warnings.push(&F.field_dropped, format!(
                     "pandapower load at bus {}: source load type {load_type} has no load table field; dropped",
                     l.bus
                 ));
@@ -1134,7 +1148,7 @@ fn load_values_for_pandapower(l: &Load, warnings: &mut Vec<String>) -> Pandapowe
                         out.q_mvar = l.q / s;
                     }
                 } else {
-                    warnings.push(format!(
+                    warnings.push(&F.value_substituted, format!(
                         "pandapower load at bus {}: non-finite or unusable scaling {s}; wrote scaling 1",
                         l.bus
                     ));
@@ -1161,7 +1175,7 @@ fn load_values_for_pandapower(l: &Load, warnings: &mut Vec<String>) -> Pandapowe
             out
         }
         LoadVoltageModel::Exponential { .. } => {
-            warnings.push(format!(
+            warnings.push(&F.value_substituted, format!(
                 "pandapower load at bus {}: exponential voltage model has no load table fields; wrote typed p/q as constant power",
                 l.bus
             ));
@@ -1170,7 +1184,7 @@ fn load_values_for_pandapower(l: &Load, warnings: &mut Vec<String>) -> Pandapowe
     }
 }
 
-fn load_frame(net: &BalancedNetwork, warnings: &mut Vec<String>) -> Value {
+fn load_frame(net: &BalancedNetwork, warnings: &mut Diagnostics) -> Value {
     let columns = [
         "name",
         "bus",
@@ -1219,7 +1233,7 @@ fn shunt_frame(
     net: &BalancedNetwork,
     charging: &[(BusId, f64, f64, bool)],
     kv_of: &HashMap<BusId, f64>,
-    warnings: &mut Vec<String>,
+    warnings: &mut Diagnostics,
 ) -> Value {
     let columns = [
         "bus",
@@ -1262,7 +1276,7 @@ fn shunt_frame(
     frame("shunt", &columns, index, data, warnings)
 }
 
-fn gen_frame(net: &BalancedNetwork, warnings: &mut Vec<String>) -> Value {
+fn gen_frame(net: &BalancedNetwork, warnings: &mut Diagnostics) -> Value {
     let columns = [
         "name",
         "bus",
@@ -1317,7 +1331,7 @@ fn gen_frame(net: &BalancedNetwork, warnings: &mut Vec<String>) -> Value {
 fn branch_frames(
     net: &BalancedNetwork,
     kv_of: &HashMap<BusId, f64>,
-    warnings: &mut Vec<String>,
+    warnings: &mut Diagnostics,
 ) -> (Value, Value, Vec<(BusId, f64, f64, bool)>) {
     let line_columns = [
         "name",
@@ -1443,7 +1457,7 @@ fn branch_frames(
                 && ((terminal.g_fr - terminal.g_to).abs() > f64::EPSILON
                     || (terminal.b_fr - terminal.b_to).abs() > f64::EPSILON)
             {
-                warnings.push(format!(
+                warnings.push(&F.value_collapsed, format!(
                     "branch {} -> {} terminal admittance collapsed to symmetric line charging: pandapower line tables cannot carry asymmetric terminal charging",
                     br.from, br.to
                 ));
@@ -1476,7 +1490,7 @@ fn branch_frames(
         }
     }
     if negative_x_trafos > 0 {
-        warnings.push(format!(
+        warnings.push(&F.value_substituted, format!(
             "{negative_x_trafos} series capacitive transformer branch(es) (x < 0) written with a \
              negative vk_percent: powerio reads the sign back exactly, but pandapower itself \
              treats vk_percent as a magnitude and will read the reactance positive"
@@ -1493,7 +1507,7 @@ fn branch_frames(
 /// has no `qg` input column — reactive output is a power flow result — so the
 /// snapshot's solved Q rides `res_gen.q_mvar`, exactly where a solved
 /// pandapower net states it and where the reader takes it back.
-fn res_gen_frame(net: &BalancedNetwork, warnings: &mut Vec<String>) -> Value {
+fn res_gen_frame(net: &BalancedNetwork, warnings: &mut Diagnostics) -> Value {
     let columns = ["p_mw", "q_mvar"];
     let mut index = Vec::with_capacity(net.generators.len());
     let mut data = Vec::with_capacity(net.generators.len());
@@ -1509,7 +1523,7 @@ fn res_gen_frame(net: &BalancedNetwork, warnings: &mut Vec<String>) -> Value {
 /// limits, and the power cap. What the table has no column for is warned:
 /// a floor on the sending power, actual reactive flows, a received power off
 /// the line's own loss model, and a usage cost.
-fn dcline_frame(net: &BalancedNetwork, warnings: &mut Vec<String>) -> Value {
+fn dcline_frame(net: &BalancedNetwork, warnings: &mut Diagnostics) -> Value {
     let columns = [
         "name",
         "from_bus",
@@ -1571,13 +1585,13 @@ fn dcline_frame(net: &BalancedNetwork, warnings: &mut Vec<String>) -> Value {
         ]);
     }
     if coerced > 0 {
-        warnings.push(format!(
+        warnings.push(&F.value_substituted, format!(
             "{coerced} dcline terminal voltage setpoint(s) coerced to the bus's controlling setpoint: pandapower enforces one voltage setpoint per bus"
         ));
     }
     let floors = net.hvdc.iter().filter(|d| d.pmin != 0.0).count();
     if floors > 0 {
-        warnings.push(format!(
+        warnings.push(&F.field_dropped, format!(
             "{floors} dcline sending power floor(s) (pmin) dropped: pandapower dcline caps max_p_mw only"
         ));
     }
@@ -1587,7 +1601,7 @@ fn dcline_frame(net: &BalancedNetwork, warnings: &mut Vec<String>) -> Value {
         .filter(|d| d.qf != 0.0 || d.qt != 0.0)
         .count();
     if flows > 0 {
-        warnings.push(format!(
+        warnings.push(&F.field_dropped, format!(
             "{flows} dcline reactive flow value pair(s) (qf/qt) dropped: pandapower dcline states limits, not flows"
         ));
     }
@@ -1597,17 +1611,20 @@ fn dcline_frame(net: &BalancedNetwork, warnings: &mut Vec<String>) -> Value {
         .filter(|d| !d.pt_matches_loss_model(1e-9))
         .count();
     if off_model > 0 {
-        warnings.push(format!(
+        warnings.push(&F.field_dropped, format!(
             "{off_model} dcline received power value(s) dropped: pandapower dcline derives the receiving end from loss_mw/loss_percent, which disagree with the stated pt"
         ));
     }
     if net.hvdc.iter().any(|d| d.cost.is_some()) {
-        warnings.push("DC line cost curves dropped: pandapower dcline carries no cost data".into());
+        warnings.push(
+            &F.field_dropped,
+            "DC line cost curves dropped: pandapower dcline carries no cost data",
+        );
     }
     frame("dcline", &columns, index, data, warnings)
 }
 
-fn ext_grid_frame(net: &BalancedNetwork, warnings: &mut Vec<String>) -> Value {
+fn ext_grid_frame(net: &BalancedNetwork, warnings: &mut Diagnostics) -> Value {
     let columns = [
         "name",
         "bus",
@@ -1639,7 +1656,7 @@ fn ext_grid_frame(net: &BalancedNetwork, warnings: &mut Vec<String>) -> Value {
     frame("ext_grid", &columns, index, data, warnings)
 }
 
-fn poly_cost_frame(net: &BalancedNetwork, warnings: &mut Vec<String>) -> Value {
+fn poly_cost_frame(net: &BalancedNetwork, warnings: &mut Diagnostics) -> Value {
     let columns = [
         "element",
         "et",
@@ -1692,19 +1709,20 @@ fn poly_cost_frame(net: &BalancedNetwork, warnings: &mut Vec<String>) -> Value {
         ]);
     }
     if dropped > 0 {
-        warnings.push(format!(
+        warnings.push(&F.field_dropped, format!(
             "{dropped} generator costs dropped: pandapower poly_cost carries polynomial (model 2) costs only"
         ));
     }
     if truncated > 0 {
-        warnings.push(format!(
+        warnings.push(&F.value_truncated, format!(
             "{truncated} generator costs truncated to quadratic: poly_cost carries cp0/cp1/cp2 only"
         ));
     }
     if empty > 0 {
-        warnings.push(format!(
-            "{empty} generator costs had no coefficients and were written as zero"
-        ));
+        warnings.push(
+            &F.value_defaulted,
+            format!("{empty} generator costs had no coefficients and were written as zero"),
+        );
     }
     frame("poly_cost", &columns, index, data, warnings)
 }
@@ -1721,7 +1739,7 @@ fn frame(
     columns: &[&str],
     index: Vec<Value>,
     data: Vec<Vec<Value>>,
-    warnings: &mut Vec<String>,
+    warnings: &mut Diagnostics,
 ) -> Value {
     // `jnum` writes a non-finite f64 as null, and the frame body is serialized
     // to a string below, so the hub's generic null-key warning in `finish`
@@ -1741,7 +1759,7 @@ fn frame(
         })
         .collect();
     if !nonfinite.is_empty() {
-        warnings.push(format!(
+        warnings.push(&F.not_a_number, format!(
             "`{table}`: non-finite value(s) written as null in column(s) {}; pandapower reads them as NaN",
             nonfinite.join(", ")
         ));
@@ -2018,7 +2036,7 @@ impl CostElement {
 
 fn read_poly_costs(
     root: &Map<String, Value>,
-    warnings: &mut Vec<String>,
+    warnings: &mut Diagnostics,
 ) -> Result<BTreeMap<(CostElement, usize), GenCost>> {
     let mut out = BTreeMap::new();
     let Some(frame) = read_frame(root, "poly_cost")? else {
@@ -2083,12 +2101,12 @@ fn read_poly_costs(
         }
     }
     if cq_rows > 0 {
-        warnings.push(format!(
+        warnings.push(&codes::READ_PANDAPOWER_FIELD_DROPPED, format!(
             "`poly_cost`: reactive cost coefficients (cq*) nonzero on {cq_rows} rows; only active power costs are read"
         ));
     }
     if unmapped_rows > 0 {
-        warnings.push(format!(
+        warnings.push(&codes::READ_PANDAPOWER_TABLE_UNSUPPORTED, format!(
             "`poly_cost`: {unmapped_rows} row(s) skipped; only gen/ext_grid/sgen costs map onto powerio generators"
         ));
     }
@@ -2915,7 +2933,7 @@ mod tests {
         .unwrap();
         assert_eq!(parsed.network.branches[0].tap, 1.0);
         assert!(
-            parsed.warnings.iter().any(|w| w
+            parsed.diagnostics.iter().any(|d| d.message
                 == "`trafo`: 1 row(s) have a tabular or unrecognized tap changer; those taps were ignored"),
             "{:?}",
             parsed.warnings
@@ -2995,9 +3013,9 @@ mod tests {
             parse_pandapower_json(&pp_net(vec![bus_table(json!([0])), ("svc", frame)])).unwrap();
         assert!(
             parsed
-                .warnings
+                .diagnostics
                 .iter()
-                .any(|w| w == "`svc` table ignored (1 rows): not mapped"),
+                .any(|d| d.message == "`svc` table ignored (1 rows): not mapped"),
             "{:?}",
             parsed.warnings
         );
@@ -3053,7 +3071,7 @@ mod tests {
         net.generators.push(g);
         let conv = write_pandapower_json(&net);
         assert!(
-            conv.warnings.iter().any(|w| w
+            conv.diagnostics.iter().any(|d| d.message
                 == "`gen`: non-finite value(s) written as null in column(s) `min_q_mvar` (1), `max_q_mvar` (1); pandapower reads them as NaN"),
             "{:?}",
             conv.warnings
@@ -3100,7 +3118,7 @@ mod tests {
             "`pwl_cost` table ignored (1 rows): piecewise costs are not mapped",
         ] {
             assert!(
-                parsed.warnings.iter().any(|w| w == expected),
+                parsed.diagnostics.iter().any(|d| d.message == expected),
                 "missing {expected:?} in {:?}",
                 parsed.warnings
             );
@@ -3128,7 +3146,7 @@ mod tests {
         let cost = parsed.network.generators[0].cost.as_ref().expect("cost");
         assert_eq!(cost.coeffs, vec![0.0, 2.5, 0.0]);
         assert!(
-            parsed.warnings.iter().any(|w| w
+            parsed.diagnostics.iter().any(|d| d.message
                 == "`poly_cost`: reactive cost coefficients (cq*) nonzero on 1 rows; only active power costs are read"),
             "{:?}",
             parsed.warnings
@@ -3438,9 +3456,11 @@ mod tests {
         net.branches.push(br);
         let conv = write_pandapower_json(&net);
         assert!(
-            conv.warnings.iter().any(|w| w
+            conv.diagnostics.iter().any(|d| d
+                .message
                 .starts_with("1 transformer terminal charging shunt(s) written into `shunt`")
-                || w.starts_with("2 transformer terminal charging shunt(s) written into `shunt`")),
+                || d.message
+                    .starts_with("2 transformer terminal charging shunt(s) written into `shunt`")),
             "{:?}",
             conv.warnings
         );
@@ -3466,9 +3486,9 @@ mod tests {
         let bus = written_frame(&conv.text, "bus");
         assert_eq!(col(&bus, "vn_kv"), vec![json!(1.0), json!(1.0)]);
         assert!(
-            conv.warnings
-                .iter()
-                .any(|w| w.starts_with("2 bus(es) carry no base_kv; written with vn_kv = 1")),
+            conv.diagnostics.iter().any(|d| d
+                .message
+                .starts_with("2 bus(es) carry no base_kv; written with vn_kv = 1")),
             "{:?}",
             conv.warnings
         );
@@ -3543,7 +3563,7 @@ mod tests {
         assert_eq!(col(&pc, "cp1_eur_per_mw"), vec![json!(2.0)]);
         assert_eq!(col(&pc, "cp2_eur_per_mw2"), vec![json!(3.0)]);
         assert!(
-            conv.warnings.iter().any(|w| w
+            conv.diagnostics.iter().any(|d| d.message
                 == "1 generator costs truncated to quadratic: poly_cost carries cp0/cp1/cp2 only"),
             "{:?}",
             conv.warnings
@@ -3576,7 +3596,7 @@ mod tests {
             "1 generator costs had no coefficients and were written as zero",
         ] {
             assert!(
-                conv.warnings.iter().any(|w| w == expected),
+                conv.diagnostics.iter().any(|d| d.message == expected),
                 "missing {expected:?} in {:?}",
                 conv.warnings
             );

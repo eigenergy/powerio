@@ -11,6 +11,8 @@ use std::sync::Arc;
 use serde_json::{Map, Value};
 
 use super::{Conversion, Parsed, finish, jnum, warn_extra_branch_rating_sets};
+use crate::diagnostics::codes::EMIT_SURGE as F;
+use crate::diagnostics::{Diagnostics, codes};
 use crate::network::{
     BalancedNetwork, Branch, BranchCharging, BranchCurrentRatings, BranchSolution, Bus, BusId,
     BusType, Extras, GEN_EXTRA_KEYS, GenCaps, GenCost, Generator, Hvdc, Load, LoadVoltageModel,
@@ -26,7 +28,7 @@ const EPS: f64 = 1e-12;
 
 #[must_use]
 pub fn write_surge_json(net: &BalancedNetwork) -> Conversion {
-    let mut warnings = Vec::new();
+    let mut warnings = Diagnostics::new();
     let mut network = Map::new();
 
     network.insert("name".into(), Value::String(net.name.clone()));
@@ -90,8 +92,8 @@ pub fn write_surge_json(net: &BalancedNetwork) -> Conversion {
     root.insert("meta".into(), Value::Object(meta));
     root.insert("network".into(), Value::Object(network));
 
-    warn_extra_branch_rating_sets(FMT, net, &mut warnings);
-    finish(root, warnings)
+    warn_extra_branch_rating_sets(&F, FMT, net, &mut warnings);
+    finish(&F, root, warnings)
 }
 
 fn bus_type(kind: BusType) -> &'static str {
@@ -255,7 +257,7 @@ fn next_id(prefix: &str, counts: &mut BTreeMap<BusId, usize>, bus: BusId) -> Str
 fn gen_obj(
     generator: &Generator,
     counts: &mut BTreeMap<BusId, usize>,
-    warnings: &mut Vec<String>,
+    warnings: &mut Diagnostics,
 ) -> Value {
     let mut obj = Map::new();
     obj.insert(
@@ -285,7 +287,7 @@ fn gen_obj(
         }
     }
     if generator.has_caps() {
-        warnings.push(format!(
+        warnings.push(&F.field_dropped, format!(
             "generator at bus {} has MATPOWER capability or ramp columns not represented in Surge JSON",
             generator.bus
         ));
@@ -293,7 +295,7 @@ fn gen_obj(
     Value::Object(obj)
 }
 
-fn cost_obj(cost: &GenCost, warnings: &mut Vec<String>) -> Option<Value> {
+fn cost_obj(cost: &GenCost, warnings: &mut Diagnostics) -> Option<Value> {
     match cost.model {
         2 => {
             let count = cost.ncost.min(cost.coeffs.len());
@@ -313,7 +315,8 @@ fn cost_obj(cost: &GenCost, warnings: &mut Vec<String>) -> Option<Value> {
             let count = cost.ncost.saturating_mul(2).min(cost.coeffs.len());
             if count % 2 != 0 {
                 warnings.push(
-                    "piecewise generator cost has an odd coefficient count; cost dropped".into(),
+                    &F.field_dropped,
+                    "piecewise generator cost has an odd coefficient count; cost dropped",
                 );
                 return None;
             }
@@ -331,10 +334,13 @@ fn cost_obj(cost: &GenCost, warnings: &mut Vec<String>) -> Option<Value> {
             Some(Value::Object(wrapper))
         }
         _ => {
-            warnings.push(format!(
-                "unsupported generator cost model {} dropped in Surge JSON",
-                cost.model
-            ));
+            warnings.push(
+                &F.field_dropped,
+                format!(
+                    "unsupported generator cost model {} dropped in Surge JSON",
+                    cost.model
+                ),
+            );
             None
         }
     }
@@ -426,14 +432,14 @@ const LCC_TERMINAL_DEFAULTS: [(&str, f64); 11] = [
 const LCC_LINK_DEFAULTS: [(&str, f64); 2] =
     [("scheduled_voltage_kv", 0.0), ("resistance_ohm", 0.0)];
 
-fn hvdc_link_obj(dc: &Hvdc, i: usize, warnings: &mut Vec<String>) -> Value {
+fn hvdc_link_obj(dc: &Hvdc, i: usize, warnings: &mut Diagnostics) -> Value {
     // The reactive limits, the loss model, and both terminal voltage setpoints
     // ride the converter terminals below. What a Surge link states nowhere is
     // the terminal reactive flow, the cost curve, and a received power that
     // disagrees with the loss model: the link carries a scheduled setpoint, and
     // the reader derives the far end from it.
     if dc.qf != 0.0 || dc.qt != 0.0 || dc.cost.is_some() || !dc.pt_matches_loss_model(1e-9) {
-        warnings.push(format!(
+        warnings.push(&F.field_dropped, format!(
             "dcline {} terminal reactive flow, received power, or cost dropped: a Surge link states the scheduled setpoint and the loss model only",
             i + 1
         ));
@@ -504,7 +510,7 @@ fn lcc_terminal_obj(
 }
 
 pub fn parse_surge_json(content: &str) -> Result<Parsed> {
-    let mut warnings = Vec::new();
+    let mut warnings = Diagnostics::new();
     let network = parse_surge_source(Arc::new(content.to_owned()), None, &mut warnings)?;
     Ok(Parsed::without_document(network, warnings))
 }
@@ -512,7 +518,7 @@ pub fn parse_surge_json(content: &str) -> Result<Parsed> {
 pub(crate) fn parse_surge_source(
     source: Arc<String>,
     name_hint: Option<&str>,
-    warnings: &mut Vec<String>,
+    warnings: &mut Diagnostics,
 ) -> Result<BalancedNetwork> {
     let root_value: Value = serde_json::from_str(&source).map_err(|e| Error::FormatRead {
         format: FMT,
@@ -522,7 +528,7 @@ pub(crate) fn parse_surge_source(
     validate_wrapper(root)?;
     let network = object_field(root, "network")?;
 
-    warnings.extend(source_loss_warnings_from_root(root, network));
+    warnings.absorb(source_loss_warnings_from_root(root, network));
 
     let mut buses = Vec::new();
     let mut shunts = Vec::new();
@@ -1065,18 +1071,24 @@ fn read_hvdc_link(value: &Value) -> Result<Hvdc> {
 fn source_loss_warnings_from_root(
     root: &Map<String, Value>,
     network: &Map<String, Value>,
-) -> Vec<String> {
-    let mut warnings = Vec::new();
+) -> Diagnostics {
+    let mut warnings = Diagnostics::new();
 
     let profile = root
         .get("meta")
         .and_then(Value::as_object)
         .and_then(|meta| string_map(meta, "profile"));
     if matches!(profile, Some("dispatch" | "results")) || has_nonempty(root, "dispatch") {
-        warnings.push("Surge dispatch profile data retained only in source text".into());
+        warnings.push(
+            &codes::READ_SURGE_RETAINED_SOURCE_ONLY,
+            "Surge dispatch profile data retained only in source text",
+        );
     }
     if matches!(profile, Some("results")) || has_nonempty(root, "solution") {
-        warnings.push("Surge solution profile data retained only in source text".into());
+        warnings.push(
+            &codes::READ_SURGE_RETAINED_SOURCE_ONLY,
+            "Surge solution profile data retained only in source text",
+        );
     }
 
     let top = [
@@ -1103,10 +1115,13 @@ fn source_loss_warnings_from_root(
         .filter(|key| has_nonempty(network, key))
         .collect();
     if !retained_top.is_empty() {
-        warnings.push(format!(
-            "Surge network sections retained only in source text: {}",
-            retained_top.join(", ")
-        ));
+        warnings.push(
+            &codes::READ_SURGE_RETAINED_SOURCE_ONLY,
+            format!(
+                "Surge network sections retained only in source text: {}",
+                retained_top.join(", ")
+            ),
+        );
     }
 
     warn_count(
@@ -1165,7 +1180,7 @@ fn states_converter_detail(link: &Map<String, Value>) -> bool {
 }
 
 fn warn_count(
-    warnings: &mut Vec<String>,
+    warnings: &mut Diagnostics,
     network: &Map<String, Value>,
     section: &str,
     message: &str,
@@ -1177,7 +1192,7 @@ fn warn_count(
 /// [`warn_count`] over a section that sits inside `parent` rather than at the
 /// top of the network body; `None` counts nothing, for a parent that is absent.
 fn warn_count_in(
-    warnings: &mut Vec<String>,
+    warnings: &mut Diagnostics,
     parent: Option<&Map<String, Value>>,
     section: &str,
     message: &str,
@@ -1194,7 +1209,10 @@ fn warn_count_in(
                 .count()
         });
     if count > 0 {
-        warnings.push(format!("{count} Surge {message}"));
+        warnings.push(
+            &codes::READ_SURGE_RETAINED_SOURCE_ONLY,
+            format!("{count} Surge {message}"),
+        );
     }
 }
 

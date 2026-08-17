@@ -14,6 +14,8 @@ use std::sync::Arc;
 use serde_json::{Number, Value};
 
 use super::{Conversion, sanitize_quoted, warn_extra_branch_rating_sets};
+use crate::diagnostics::codes::EMIT_PSLF as F;
+use crate::diagnostics::{Diagnostics, codes};
 use crate::network::{
     BalancedNetwork, Branch, Bus, BusId, BusType, Extras, Generator, Hvdc, Impedance, Load,
     LoadVoltageModel, Shunt, SourceFormat, Transformer3W, Winding,
@@ -32,7 +34,7 @@ const NAME_FORBIDDEN: &[char] = &['"'];
 /// [`crate::parse_str`] entry points. This direct helper keeps the older
 /// format-module convention and returns only the typed network.
 pub fn parse_pslf(content: &str) -> Result<BalancedNetwork> {
-    let mut warnings = Vec::new();
+    let mut warnings = Diagnostics::new();
     parse_pslf_source(Arc::new(content.to_owned()), None, &mut warnings)
 }
 
@@ -40,7 +42,7 @@ pub fn parse_pslf(content: &str) -> Result<BalancedNetwork> {
 pub(crate) fn parse_pslf_source(
     source: Arc<String>,
     name_hint: Option<&str>,
-    warnings: &mut Vec<String>,
+    warnings: &mut Diagnostics,
 ) -> Result<BalancedNetwork> {
     let doc = parse_document(&source, warnings);
     let base_mva = doc.base_mva(warnings);
@@ -88,9 +90,10 @@ pub(crate) fn parse_pslf_source(
         branches.push(branch);
     }
     if near_jump > 0 {
-        warnings.push(format!(
-            "{near_jump} branch(es) have |x| at or below the PSLF jump threshold"
-        ));
+        warnings.push(
+            &codes::READ_PSLF_VALUE_APPROXIMATED,
+            format!("{near_jump} branch(es) have |x| at or below the PSLF jump threshold"),
+        );
     }
 
     let mut transformers_3w = Vec::new();
@@ -102,9 +105,9 @@ pub(crate) fn parse_pslf_source(
     }
     if !transformers_3w.is_empty() {
         warnings.push(
+            &codes::READ_PSLF_VALUE_DEFAULTED,
             "PSLF 3-winding transformer(s) mapped with the primary winding ratio/ratings; \
-             secondary/tertiary winding ratios default to nominal"
-                .into(),
+             secondary/tertiary winding ratios default to nominal",
         );
     }
 
@@ -173,7 +176,7 @@ impl EpcDocument {
     }
 
     /// Read `sbase` from solution parameters, defaulting to 100 MVA.
-    fn base_mva(&self, warnings: &mut Vec<String>) -> f64 {
+    fn base_mva(&self, warnings: &mut Diagnostics) -> f64 {
         for line in &self.solution_parameters {
             let toks = tokens(line);
             if toks
@@ -185,7 +188,10 @@ impl EpcDocument {
                 }
             }
         }
-        warnings.push("no PSLF sbase solution parameter found; defaulting baseMVA to 100".into());
+        warnings.push(
+            &codes::READ_PSLF_VALUE_DEFAULTED,
+            "no PSLF sbase solution parameter found; defaulting baseMVA to 100",
+        );
         100.0
     }
 
@@ -232,7 +238,7 @@ struct Record {
 /// record onto the next physical line. The parser stops early at the next
 /// section header and reports the mismatch instead of consuming unrelated text.
 #[expect(clippy::too_many_lines)]
-fn parse_document(content: &str, warnings: &mut Vec<String>) -> EpcDocument {
+fn parse_document(content: &str, warnings: &mut Diagnostics) -> EpcDocument {
     let lines: Vec<&str> = content.lines().collect();
     let mut i = 0usize;
     let mut title = Vec::new();
@@ -272,10 +278,10 @@ fn parse_document(content: &str, warnings: &mut Vec<String>) -> EpcDocument {
         }
 
         let Some((name, count, header)) = parse_section_header(stripped) else {
-            warnings.push(format!(
-                "line {} ignored outside a PSLF data section",
-                i + 1
-            ));
+            warnings.push(
+                &codes::READ_PSLF_RECORD_DROPPED,
+                format!("line {} ignored outside a PSLF data section", i + 1),
+            );
             i += 1;
             continue;
         };
@@ -314,11 +320,10 @@ fn parse_document(content: &str, warnings: &mut Vec<String>) -> EpcDocument {
         }
 
         if records.len() != count {
-            warnings.push(format!(
-                "{}: declared {count}, parsed {}",
-                name,
-                records.len()
-            ));
+            warnings.push(
+                &codes::READ_PSLF_SOURCE_MALFORMED,
+                format!("{}: declared {count}, parsed {}", name, records.len()),
+            );
         }
         if sections
             .insert(
@@ -331,14 +336,18 @@ fn parse_document(content: &str, warnings: &mut Vec<String>) -> EpcDocument {
             )
             .is_some()
         {
-            warnings.push(format!(
-                "{name}: duplicate section replaced earlier records"
-            ));
+            warnings.push(
+                &codes::READ_PSLF_SOURCE_MALFORMED,
+                format!("{name}: duplicate section replaced earlier records"),
+            );
         }
     }
 
     if !end_seen {
-        warnings.push("PSLF file has no end marker".into());
+        warnings.push(
+            &codes::READ_PSLF_SOURCE_MALFORMED,
+            "PSLF file has no end marker",
+        );
     }
 
     EpcDocument {
@@ -686,7 +695,7 @@ struct BusSchedule {
 fn read_generator(
     rec: &Record,
     bus_schedule: &HashMap<BusId, BusSchedule>,
-    warnings: &mut Vec<String>,
+    warnings: &mut Diagnostics,
 ) -> Result<Generator> {
     let bus = BusId(req_id(&rec.lhs, 0, "generator bus", rec)?);
     let schedule = bus_schedule.get(&bus).copied().unwrap_or(BusSchedule {
@@ -714,7 +723,7 @@ fn read_generator(
             ("bus voltage", schedule.vm)
         };
         if reg_kv > 0.0 {
-            warnings.push(format!(
+            warnings.push(&codes::READ_PSLF_VALUE_DEFAULTED, format!(
                 "PSLF generator at bus {bus}: reg_kv present but bus base kV is missing; used {source}"
             ));
         }
@@ -744,7 +753,7 @@ fn read_generator(
 /// static load aggregation and preserved in the typed voltage model.
 fn read_load(
     rec: &Record,
-    warnings: &mut Vec<String>,
+    warnings: &mut Diagnostics,
     once: &mut HashSet<&'static str>,
 ) -> Result<Load> {
     let p_const = num_at(&rec.rhs, 1, 0.0, "load mw", rec)?;
@@ -757,9 +766,9 @@ fn read_load(
     if has_zip_components && once.insert("zip_load") {
         // Fold components into P/Q so matrix builders see the total demand that
         // the solved power flow used. The split stays typed for richer writers.
-        warnings.push(
+        warnings.push(&codes::READ_PSLF_RETAINED_SOURCE_ONLY,
             "PSLF ZIP load components folded into BalancedNetwork load p/q; component fields retained in the typed load voltage model"
-                .into(),
+                ,
         );
     }
     let mut extras = extras(rec, 5, 20);
@@ -828,13 +837,13 @@ fn read_shunt(rec: &Record, base_mva: f64) -> Result<Shunt> {
 fn read_svd(
     rec: &Record,
     base_mva: f64,
-    warnings: &mut Vec<String>,
+    warnings: &mut Diagnostics,
     once: &mut HashSet<&'static str>,
 ) -> Result<Shunt> {
     if once.insert("svd") {
-        warnings.push(
+        warnings.push(&codes::READ_PSLF_RETAINED_SOURCE_ONLY,
             "PSLF controlled shunts (svd data) reduced to fixed shunts at initial g/b; control fields retained in extras"
-                .into(),
+                ,
         );
     }
     let g_pu = num_at(&rec.rhs, 7, 0.0, "svd g", rec)?;
@@ -899,7 +908,7 @@ fn dc_states_detail(rhs: &[String], mapped: &[f64]) -> bool {
 /// file can still be read.
 fn read_dc_converters(
     doc: &EpcDocument,
-    warnings: &mut Vec<String>,
+    warnings: &mut Diagnostics,
 ) -> HashMap<usize, DcConverter> {
     let mut out = HashMap::new();
     for rec in doc.records("dc converter data") {
@@ -926,10 +935,10 @@ fn read_dc_converters(
             Ok(conv) => {
                 out.insert(conv.dc_bus, conv);
             }
-            Err(err) => warnings.push(format!(
-                "dc converter at line {} not mapped: {err}",
-                rec.line_no
-            )),
+            Err(err) => warnings.push(
+                &codes::READ_PSLF_RECORD_DROPPED,
+                format!("dc converter at line {} not mapped: {err}", rec.line_no),
+            ),
         }
     }
     out
@@ -943,7 +952,7 @@ fn read_dc_converters(
 fn read_dc_lines(
     doc: &EpcDocument,
     converters: &HashMap<usize, DcConverter>,
-    warnings: &mut Vec<String>,
+    warnings: &mut Diagnostics,
 ) -> Vec<Hvdc> {
     let mut out = Vec::new();
     for rec in doc.records("dc line data") {
@@ -1011,21 +1020,24 @@ fn read_dc_lines(
             // [`dc_states_detail`].
             Ok((states_detail, line)) => {
                 if states_detail {
-                    warnings.push(
+                    warnings.push(&codes::READ_PSLF_RETAINED_SOURCE_ONLY,
                         "PSLF DC line/converter data mapped to BalancedNetwork HVDC with unsupported control fields retained in extras"
-                            .into(),
+                            ,
                     );
                 }
                 out.push(line);
             }
-            Err(err) => warnings.push(format!("dc line at line {} not mapped: {err}", rec.line_no)),
+            Err(err) => warnings.push(
+                &codes::READ_PSLF_RECORD_DROPPED,
+                format!("dc line at line {} not mapped: {err}", rec.line_no),
+            ),
         }
     }
     out
 }
 
 /// Report nonempty EPC sections that are retained as source text only.
-fn warn_unmodeled_sections(doc: &EpcDocument, warnings: &mut Vec<String>) {
+fn warn_unmodeled_sections(doc: &EpcDocument, warnings: &mut Diagnostics) {
     const MODELED: &[&str] = &[
         "bus data",
         "branch data",
@@ -1039,10 +1051,13 @@ fn warn_unmodeled_sections(doc: &EpcDocument, warnings: &mut Vec<String>) {
     ];
     for (name, section) in &doc.sections {
         if section.declared_count > 0 && !MODELED.contains(&name.as_str()) {
-            warnings.push(format!(
-                "{name}: {} record(s) retained in source text only ({})",
-                section.declared_count, section.header
-            ));
+            warnings.push(
+                &codes::READ_PSLF_RETAINED_SOURCE_ONLY,
+                format!(
+                    "{name}: {} record(s) retained in source text only ({})",
+                    section.declared_count, section.header
+                ),
+            );
         }
     }
 }
@@ -1208,7 +1223,7 @@ struct BusRef<'a> {
 // indirection without clarity.
 #[expect(clippy::too_many_lines)]
 pub fn write_pslf(net: &BalancedNetwork) -> Conversion {
-    let mut warnings = Vec::new();
+    let mut warnings = Diagnostics::new();
     let mut nonfinite = false;
     let mut sanitized_names = 0usize;
     let mut sanitized_ids = 0usize;
@@ -1536,7 +1551,7 @@ pub fn write_pslf(net: &BalancedNetwork) -> Conversion {
                 if g.vg.is_finite()
                     && scheduled.is_some_and(|written| (written - g.vg).abs() > 1e-9)
                 {
-                    warnings.push(format!(
+                    warnings.push(&F.value_substituted, format!(
                         "PSLF generator at bus {}: voltage setpoint {} p.u. could not be written because bus base kV is missing and the bus schedules a different setpoint",
                         g.bus, g.vg
                     ));
@@ -1626,28 +1641,40 @@ pub fn write_pslf(net: &BalancedNetwork) -> Conversion {
         .filter(|d| (d.pmin + d.pmax).abs() > 1e-9)
         .count();
     if asymmetric_hvdc > 0 {
-        warnings.push(format!(
-            "{asymmetric_hvdc} HVDC line(s) have asymmetric power limits (pmin != -pmax); \
+        warnings.push(
+            &F.field_dropped,
+            format!(
+                "{asymmetric_hvdc} HVDC line(s) have asymmetric power limits (pmin != -pmax); \
              the PSLF .epc dc record carries only rate1 (= pmax), so pmin reads back as -pmax"
-        ));
+            ),
+        );
     }
     if !net.storage.is_empty() {
-        warnings.push(format!(
-            "{} storage unit(s) dropped: PSLF .epc has no storage record",
-            net.storage.len()
-        ));
+        warnings.push(
+            &F.record_dropped,
+            format!(
+                "{} storage unit(s) dropped: PSLF .epc has no storage record",
+                net.storage.len()
+            ),
+        );
     }
     if net.generators.iter().any(|g| g.cost.is_some()) {
-        warnings.push("generator cost curves dropped: PSLF .epc carries no cost data".into());
+        warnings.push(
+            &F.field_dropped,
+            "generator cost curves dropped: PSLF .epc carries no cost data",
+        );
     }
     let with_caps = net.generators.iter().filter(|g| g.has_caps()).count();
     if with_caps > 0 {
-        warnings.push(format!(
+        warnings.push(&F.field_dropped, format!(
             "generator capability/ramp columns dropped for {with_caps} generator(s): the PSLF .epc generator records written here carry no MATPOWER capability columns"
         ));
     }
     if net.hvdc.iter().any(|d| d.cost.is_some()) {
-        warnings.push("DC line cost curves dropped: PSLF .epc carries no cost data".into());
+        warnings.push(
+            &F.field_dropped,
+            "DC line cost curves dropped: PSLF .epc carries no cost data",
+        );
     }
     // Transformer branches drop their charging entirely (warned separately
     // below), so exclude them here: only line records carry the collapsed total
@@ -1658,7 +1685,7 @@ pub fn write_pslf(net: &BalancedNetwork) -> Conversion {
         .filter(|b| b.has_non_matpower_charging() && !b.is_transformer())
         .count();
     if terminal_charging > 0 {
-        warnings.push(format!(
+        warnings.push(&F.value_collapsed, format!(
             "{terminal_charging} branch terminal admittance record(s) collapsed to total susceptance: PSLF branch records written here cannot carry conductance or asymmetric terminal charging"
         ));
     }
@@ -1672,7 +1699,7 @@ pub fn write_pslf(net: &BalancedNetwork) -> Conversion {
         })
         .count();
     if transformer_charging > 0 {
-        warnings.push(format!(
+        warnings.push(&F.field_dropped, format!(
             "{transformer_charging} transformer charging admittance record(s) dropped: PSLF transformer records written here carry series impedance, tap, shift, and ratings only"
         ));
     }
@@ -1682,16 +1709,17 @@ pub fn write_pslf(net: &BalancedNetwork) -> Conversion {
         .filter(|b| b.current_ratings.is_some())
         .count();
     if current_ratings > 0 {
-        warnings.push(format!(
+        warnings.push(&F.field_dropped, format!(
             "{current_ratings} branch current rating record(s) dropped: PSLF branch records written here carry MVA ratings only"
         ));
     }
-    warn_extra_branch_rating_sets("PSLF .epc", net, &mut warnings);
+    warn_extra_branch_rating_sets(&F, "PSLF .epc", net, &mut warnings);
     // The keys this writer replays, spelled out rather than `pslf_*`: the
     // record tails (`pslf_lhs_extra`/`pslf_rhs_extra`) and the DC converter
     // stash are retained by the reader and never written back, so a prefix
     // rule would declare them replayed when they are not (#330).
     super::warn_dropped_extras(
+        &F,
         "PSLF .epc",
         net,
         |key| {
@@ -1714,10 +1742,10 @@ pub fn write_pslf(net: &BalancedNetwork) -> Conversion {
         },
         &mut warnings,
     );
-    super::warn_dropped_areas("PSLF .epc", net, &mut warnings);
+    super::warn_dropped_areas(&F, "PSLF .epc", net, &mut warnings);
     let branch_solutions = net.branches.iter().filter(|b| b.solution.is_some()).count();
     if branch_solutions > 0 {
-        warnings.push(format!(
+        warnings.push(&F.field_dropped, format!(
             "{branch_solutions} branch solution value set(s) dropped: PSLF solved flow fields are not written"
         ));
     }
@@ -1729,7 +1757,7 @@ pub fn write_pslf(net: &BalancedNetwork) -> Conversion {
         .filter(|g| g.regulated_bus.is_some())
         .count();
     if dropped_reg > 0 {
-        warnings.push(format!(
+        warnings.push(&F.field_dropped, format!(
             "{dropped_reg} generator(s) lost their remote regulated bus: the PSLF .epc generator \
              record this writer emits controls the unit's own terminal"
         ));
@@ -1743,41 +1771,53 @@ pub fn write_pslf(net: &BalancedNetwork) -> Conversion {
     });
     if drops_winding_detail {
         warnings.push(
+            &F.field_dropped,
             "PSLF 3-winding export carries the primary winding ratio/ratings only; \
-             secondary/tertiary winding ratios/ratings dropped"
-                .into(),
+             secondary/tertiary winding ratios/ratings dropped",
         );
     }
     // The `.epc` transformer record this writer emits has no regulating-control
     // columns (mode/limits/regulated bus), so a Branch carrying control loses it.
     let dropped_control = net.branches.iter().filter(|b| b.control.is_some()).count();
     if dropped_control > 0 {
-        warnings.push(format!(
-            "{dropped_control} transformer(s) lost their regulating control (mode/tap limits/\
+        warnings.push(
+            &F.field_dropped,
+            format!(
+                "{dropped_control} transformer(s) lost their regulating control (mode/tap limits/\
              regulated bus): the PSLF .epc transformer record carries no control columns"
-        ));
+            ),
+        );
     }
     // Switched shunts write as fixed `.epc` shunts (G/B); the switching control
     // has no column in the shunt record this writer emits.
     let dropped_sw = net.shunts.iter().filter(|s| s.control.is_some()).count();
     if dropped_sw > 0 {
-        warnings.push(format!(
-            "{dropped_sw} switched shunt(s) written as fixed: the PSLF .epc shunt record this \
+        warnings.push(
+            &F.field_dropped,
+            format!(
+                "{dropped_sw} switched shunt(s) written as fixed: the PSLF .epc shunt record this \
              writer emits has no switching-control columns (mode/band/step blocks)"
-        ));
+            ),
+        );
     }
     let sanitized = sanitized_names + sanitized_ids;
     if sanitized > 0 {
-        warnings.push(format!(
-            "{sanitized} quoted field(s) contained a double quote that would corrupt an EPC \
+        warnings.push(
+            &F.value_substituted,
+            format!(
+                "{sanitized} quoted field(s) contained a double quote that would corrupt an EPC \
              record; replaced with spaces"
-        ));
+            ),
+        );
     }
     if nonfinite {
-        warnings.push("non-finite values written as ±1e10 sentinels (PSLF has no Inf/NaN)".into());
+        warnings.push(
+            &F.not_a_number,
+            "non-finite values written as ±1e10 sentinels (PSLF has no Inf/NaN)",
+        );
     }
 
-    Conversion { text: s, warnings }
+    Conversion::new(s, warnings)
 }
 
 /// Neutral bus kind -> PSLF bus type code (inverse of [`pslf_bus_type`]).
@@ -1858,7 +1898,7 @@ fn same_load_total(a: f64, b: f64) -> bool {
 
 fn load_components_for_write(
     l: &Load,
-    warnings: &mut Vec<String>,
+    warnings: &mut Diagnostics,
 ) -> (f64, f64, f64, f64, f64, f64) {
     if let Some(LoadVoltageModel::Zip {
         p_constant_power,
@@ -1881,13 +1921,16 @@ fn load_components_for_write(
             l.q,
         ) {
             if v_nom.is_some() {
-                warnings.push(format!(
-                    "PSLF load at bus {}: nominal voltage has no load data field; dropped",
-                    l.bus
-                ));
+                warnings.push(
+                    &F.field_dropped,
+                    format!(
+                        "PSLF load at bus {}: nominal voltage has no load data field; dropped",
+                        l.bus
+                    ),
+                );
             }
             if load_type.is_some() || scaling.is_some() {
-                warnings.push(format!(
+                warnings.push(&F.field_dropped, format!(
                     "PSLF load at bus {}: PSS/E load type/scaling has no load data field; dropped",
                     l.bus
                 ));
@@ -1901,14 +1944,14 @@ fn load_components_for_write(
                 *q_constant_impedance,
             );
         }
-        warnings.push(format!(
+        warnings.push(&F.value_substituted, format!(
             "PSLF load at bus {}: stale voltage model components did not match typed p/q; wrote typed p/q as constant power",
             l.bus
         ));
         return (l.p, l.q, 0.0, 0.0, 0.0, 0.0);
     }
     if matches!(l.voltage_model, Some(LoadVoltageModel::Exponential { .. })) {
-        warnings.push(format!(
+        warnings.push(&F.field_dropped, format!(
             "PSLF load at bus {}: exponential voltage model has no PSLF load data columns; wrote typed p/q as constant power",
             l.bus
         ));
@@ -1931,7 +1974,7 @@ fn load_components_for_write(
     }) && (!same_load_total(mw + mw_i + mw_z, l.p)
         || !same_load_total(mvar + mvar_i + mvar_z, l.q))
     {
-        warnings.push(format!(
+        warnings.push(&F.value_substituted, format!(
             "PSLF load at bus {}: stale PSLF load extras did not match typed p/q; wrote typed p/q as constant power",
             l.bus
         ));
@@ -1986,22 +2029,24 @@ end
         };
 
         // Firing angle limits stated on the rectifier: retained-only data.
-        let mut warnings = Vec::new();
+        let mut warnings = Diagnostics::new();
         let net = parse_pslf_source(Arc::new(epc(" 15 90")), None, &mut warnings).unwrap();
         assert_eq!(net.hvdc.len(), 1);
         assert!(
             warnings
+                .lines()
                 .iter()
                 .any(|w| w.contains("unsupported control fields")),
             "stated firing angles must be reported: {warnings:?}"
         );
 
         // The neutral shape the writer emits: nothing beyond status/p/q/rate.
-        let mut warnings = Vec::new();
+        let mut warnings = Diagnostics::new();
         let net = parse_pslf_source(Arc::new(epc("")), None, &mut warnings).unwrap();
         assert_eq!(net.hvdc.len(), 1);
         assert!(
             !warnings
+                .lines()
                 .iter()
                 .any(|w| w.contains("unsupported control fields")),
             "zeros state nothing: {warnings:?}"
@@ -2035,7 +2080,7 @@ shunt data  [1] id ck se long_id st ar zone pu_mw pu_mvar
 end
 "#;
 
-        let mut warnings = Vec::new();
+        let mut warnings = Diagnostics::new();
         let net = parse_pslf_source(Arc::new(epc.to_string()), None, &mut warnings).unwrap();
 
         assert_eq!(net.source_format, SourceFormat::Pslf);
@@ -2048,13 +2093,13 @@ end
         close(net.loads[0].p, 13.0);
         close(net.loads[0].q, 5.0);
         close(net.shunts[0].b, 10.0);
-        assert!(warnings.iter().any(|w| w.contains("ZIP load")));
+        assert!(warnings.lines().iter().any(|w| w.contains("ZIP load")));
     }
 
     #[test]
     fn same_source_text_is_retained() {
         let epc = "title\nx\n!\nsolution parameters\nsbase 100\n!\nbus data [1]\n1 \"A\" 1 : 0 1 1 0 1 1 1.1 0.9\nend\n";
-        let mut warnings = Vec::new();
+        let mut warnings = Diagnostics::new();
         let net = parse_pslf_source(Arc::new(epc.to_string()), None, &mut warnings).unwrap();
         assert_eq!(net.source.as_deref().map(String::as_str), Some(epc));
     }

@@ -30,8 +30,7 @@ use powerio_matrix::{
     NormalizeOptions, POWER_MODELS_ANGLE_BOUND_PAD, PwdDisplay, WriteOptions,
 };
 use powerio_pkg::{
-    DiagnosticSeverity, NetworkPackage, OperatingPointSeries, Origin,
-    READ_TRANSMISSION_PARSE_WARNING, SourceDescriptor,
+    DiagnosticSeverity, NetworkPackage, OperatingPointSeries, Origin, SourceDescriptor,
 };
 use powerio_prob::matrix::{
     DcOpfBundleMetadata, DcOpfBundleOptions, write_dcopf_bundle as write_bundle,
@@ -366,6 +365,7 @@ fn package_to_balanced_py(pkg: &NetworkPackage) -> PyResult<PyBalancedNetwork> {
     Ok(PyBalancedNetwork {
         inner,
         core,
+        diagnostics: pkg.diagnostics.clone(),
         warnings,
     })
 }
@@ -510,11 +510,8 @@ fn build_package_from_path(
         {
             let read = gridfm_read_dataset(input.to_string_lossy().as_ref(), scenario)
                 .map_err(to_pyerr)?;
-            let mut pkg = NetworkPackage::from_balanced_with_read_warnings(
-                read.network,
-                powerio_pkg::READ_GRIDFM_FIDELITY_WARNING,
-                read.warnings,
-            );
+            let mut pkg =
+                NetworkPackage::from_balanced_with_read_diagnostics(read.network, read.diagnostics);
             set_package_source(&mut pkg, input, PackageSourceKind::Folder, "gridfm", false);
             pkg.run_sane_validation();
             return Ok(pkg);
@@ -667,6 +664,9 @@ fn build_options(scheme: Scheme, include_taps: bool, include_shifts: bool) -> Bu
 pub struct PyBalancedNetwork {
     inner: BalancedNetwork,
     core: IndexCore,
+    /// The reader's findings as structured records.
+    diagnostics: Vec<powerio_pkg::StructuredDiagnostic>,
+    /// The same findings as `CODE: message` lines.
     warnings: Vec<String>,
 }
 
@@ -678,6 +678,7 @@ fn case_from_parsed(parsed: powerio_matrix::Parsed) -> PyBalancedNetwork {
         inner: parsed.network,
         core,
         warnings: parsed.warnings,
+        diagnostics: parsed.diagnostics,
     }
 }
 
@@ -802,6 +803,7 @@ impl PyBalancedNetwork {
             inner,
             core,
             warnings: self.warnings.clone(),
+            diagnostics: self.diagnostics.clone(),
         }
     }
 
@@ -1039,6 +1041,7 @@ impl PyBalancedNetwork {
             inner,
             core,
             warnings: self.warnings.clone(),
+            diagnostics: self.diagnostics.clone(),
         })
     }
 
@@ -1059,9 +1062,12 @@ impl PyBalancedNetwork {
         let core = IndexCore::build(&normalized.network);
         let mut warnings = self.warnings.clone();
         warnings.extend(normalized.warnings);
+        let mut diagnostics = self.diagnostics.clone();
+        diagnostics.extend(normalized.diagnostics);
         Ok(PyBalancedNetwork {
             inner: normalized.network,
             core,
+            diagnostics,
             warnings,
         })
     }
@@ -1234,12 +1240,15 @@ impl PyBalancedNetwork {
         inner.source = None;
         let mut warnings = self.warnings.clone();
         warnings.extend(parsed.warnings);
+        let mut diagnostics = self.diagnostics.clone();
+        diagnostics.extend(parsed.diagnostics);
         // Locations never move buses, so the cached index stays valid.
         let core = self.core.clone();
         Ok((
             PyBalancedNetwork {
                 inner,
                 core,
+                diagnostics,
                 warnings,
             },
             geo_report_dict(py, &report)?,
@@ -1417,6 +1426,7 @@ fn from_json(text: &str) -> PyResult<PyBalancedNetwork> {
         inner,
         core,
         warnings: Vec::new(),
+        diagnostics: Vec::new(),
     })
 }
 
@@ -1613,7 +1623,11 @@ impl PyMulticonductorNetwork {
         let report = powerio_pkg::apply_dist_geo_layer(&mut net, &parsed.layer);
         net.source = None;
         net.source_format = None;
-        net.warnings.extend(parsed.warnings);
+        for diagnostic in parsed.diagnostics {
+            net.warnings
+                .push(powerio_pkg::diagnostics::render_line(&diagnostic));
+            net.parse_diagnostics.push(diagnostic);
+        }
         Ok((
             PyMulticonductorNetwork { net },
             geo_report_dict(py, &report)?,
@@ -1777,10 +1791,9 @@ impl PyPackage {
         network: PyRef<'_, PyBalancedNetwork>,
         include_solver_metadata: bool,
     ) -> PyResult<Self> {
-        let mut pkg = NetworkPackage::from_balanced_with_read_warnings(
+        let mut pkg = NetworkPackage::from_balanced_with_read_diagnostics(
             network.inner.clone(),
-            READ_TRANSMISSION_PARSE_WARNING,
-            network.warnings.clone(),
+            network.diagnostics.clone(),
         );
         if include_solver_metadata {
             pkg.attach_normalized_solver_table_metadata()
@@ -2082,6 +2095,7 @@ fn gridfm_read_to_py(read: GridfmRead) -> (PyBalancedNetwork, i64, Vec<String>) 
             inner: read.network,
             core,
             warnings: read.warnings.clone(),
+            diagnostics: read.diagnostics.clone(),
         },
         read.scenario,
         read.warnings,

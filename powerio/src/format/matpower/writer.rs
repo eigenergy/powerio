@@ -10,7 +10,11 @@
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
 
+use crate::diagnostics::Diagnostics;
 use crate::format::{Conversion, warn_extra_branch_rating_sets};
+
+/// The MATPOWER write side family, named once for the block below.
+use crate::diagnostics::codes::EMIT_MATPOWER as F;
 use crate::network::{BalancedNetwork, BusId, GenCost, Generator, SourceFormat};
 
 /// Serialize `net` to MATPOWER `.m` text. Echoes the retained source verbatim
@@ -31,14 +35,10 @@ pub(crate) fn write_matpower_conversion(net: &BalancedNetwork) -> Conversion {
     let text = write_matpower(net);
     // Echoed retained MATPOWER source: byte-exact, nothing dropped.
     if net.source.is_some() && net.source_format == SourceFormat::Matpower {
-        return Conversion {
-            text,
-            warnings: Vec::new(),
-        };
+        return Conversion::faithful(text);
     }
 
-    let warnings = canonical_warnings(net);
-    Conversion { text, warnings }
+    Conversion::new(text, canonical_warnings(net))
 }
 
 /// One bus name as a MATLAB single-quoted string body.
@@ -57,23 +57,29 @@ fn matlab_string(name: &str) -> String {
 // One block per field the canonical writer cannot carry; splitting it would
 // scatter a list that is only useful read end to end.
 #[allow(clippy::too_many_lines)]
-fn canonical_warnings(net: &BalancedNetwork) -> Vec<String> {
+fn canonical_warnings(net: &BalancedNetwork) -> Diagnostics {
     // The canonical writer (see `canonical`) emits the standard bus/branch/gen/
     // gencost/dcline/dclinecost/storage blocks only. Report every neutral-model
     // field it can't.
-    let mut warnings = Vec::new();
+    let mut warnings = Diagnostics::new();
     if !net.switches.is_empty() {
-        warnings.push(format!(
-            "{} switch(es) dropped: MATPOWER has no switch table",
-            net.switches.len()
-        ));
+        warnings.push(
+            &F.record_dropped,
+            format!(
+                "{} switch(es) dropped: MATPOWER has no switch table",
+                net.switches.len()
+            ),
+        );
     }
     if !net.transformers_3w.is_empty() {
-        warnings.push(format!(
-            "{} 3-winding transformer(s) dropped: the canonical MATPOWER writer emits no \
+        warnings.push(
+            &F.record_dropped,
+            format!(
+                "{} 3-winding transformer(s) dropped: the canonical MATPOWER writer emits no \
              3-winding record (star-expand them into branches before writing to keep them)",
-            net.transformers_3w.len()
-        ));
+                net.transformers_3w.len()
+            ),
+        );
     }
     if net
         .buses
@@ -81,8 +87,8 @@ fn canonical_warnings(net: &BalancedNetwork) -> Vec<String> {
         .any(|b| b.evhi.is_some() || b.evlo.is_some())
     {
         warnings.push(
-            "emergency voltage band(s) (EVHI/EVLO) dropped: this writer carries one voltage band"
-                .into(),
+            &F.field_dropped,
+            "emergency voltage band(s) (EVHI/EVLO) dropped: this writer carries one voltage band",
         );
     }
     let non_matpower_charging = net
@@ -91,7 +97,7 @@ fn canonical_warnings(net: &BalancedNetwork) -> Vec<String> {
         .filter(|b| b.has_non_matpower_charging())
         .count();
     if non_matpower_charging > 0 {
-        warnings.push(format!(
+        warnings.push(&F.value_collapsed, format!(
             "{non_matpower_charging} branch terminal admittance record(s) collapsed to total susceptance: MATPOWER cannot carry conductance or asymmetric terminal charging"
         ));
     }
@@ -101,7 +107,7 @@ fn canonical_warnings(net: &BalancedNetwork) -> Vec<String> {
         .filter(|b| b.current_ratings.is_some())
         .count();
     if current_ratings > 0 {
-        warnings.push(format!(
+        warnings.push(&F.field_dropped, format!(
             "{current_ratings} branch current rating record(s) dropped: MATPOWER branch rows carry MVA ratings only"
         ));
     }
@@ -115,11 +121,14 @@ fn canonical_warnings(net: &BalancedNetwork) -> Vec<String> {
     if with_caps {
         let padded = net.generators.iter().filter(|g| !g.has_caps()).count();
         if padded > 0 {
-            warnings.push(format!(
-                "{padded} generator(s) with no capability or ramp data written with zeros in \
+            warnings.push(
+                &F.value_defaulted,
+                format!(
+                    "{padded} generator(s) with no capability or ramp data written with zeros in \
                  columns 11-21: MATPOWER's gen matrix is rectangular, and a zero there reads \
                  back as a stated limit rather than as absent"
-            ));
+                ),
+            );
         }
     }
     // An out of service load or shunt has no spelling in a MATPOWER bus row:
@@ -133,23 +142,26 @@ fn canonical_warnings(net: &BalancedNetwork) -> Vec<String> {
         .fold((0.0, 0.0), |acc, l| (acc.0 + l.p, acc.1 + l.q));
     let idle_loads = net.loads.iter().filter(|l| !l.in_service).count();
     if idle_loads > 0 {
-        warnings.push(format!(
-            "{idle_loads} out of service load(s) dropped, {:.4} MW and {:.4} MVAr: a MATPOWER \
+        warnings.push(
+            &F.record_dropped,
+            format!(
+                "{idle_loads} out of service load(s) dropped, {:.4} MW and {:.4} MVAr: a MATPOWER \
              bus row states one demand with no status, so an idle load would read back as live",
-            idle_load.0, idle_load.1
-        ));
+                idle_load.0, idle_load.1
+            ),
+        );
     }
     let idle_shunts = net.shunts.iter().filter(|s| !s.in_service).count();
     if idle_shunts > 0 {
-        warnings.push(format!(
+        warnings.push(&F.record_dropped, format!(
             "{idle_shunts} out of service shunt(s) dropped: a MATPOWER bus row states one shunt \
              with no status"
         ));
     }
-    warn_extra_branch_rating_sets("MATPOWER .m", net, &mut warnings);
+    warn_extra_branch_rating_sets(&F, "MATPOWER .m", net, &mut warnings);
     let branch_solutions = net.branches.iter().filter(|b| b.solution.is_some()).count();
     if branch_solutions > 0 {
-        warnings.push(format!(
+        warnings.push(&F.field_dropped, format!(
             "{branch_solutions} branch solution value set(s) dropped: MATPOWER branch rows do not carry solved flow columns"
         ));
     }
@@ -163,7 +175,7 @@ fn canonical_warnings(net: &BalancedNetwork) -> Vec<String> {
         })
         .count();
     if voltage_loads > 0 {
-        warnings.push(format!(
+        warnings.push(&F.field_dropped, format!(
             "{voltage_loads} voltage dependent load model(s) dropped: MATPOWER carries only static Pd/Qd"
         ));
     }
@@ -173,7 +185,7 @@ fn canonical_warnings(net: &BalancedNetwork) -> Vec<String> {
     // them). Only a partial set is a real loss: the block is all-or-nothing.
     let with_cost = net.generators.iter().filter(|g| g.cost.is_some()).count();
     if with_cost > 0 && with_cost < net.generators.len() {
-        warnings.push(format!(
+        warnings.push(&F.field_dropped, format!(
             "gen cost dropped: {with_cost} of {} generators carry cost data, but MATPOWER's `mpc.gencost` block is all-or-nothing",
             net.generators.len()
         ));
@@ -182,7 +194,7 @@ fn canonical_warnings(net: &BalancedNetwork) -> Vec<String> {
     // so the predicate is always false and the count is every element carrying
     // one. This is the same helper the PSS/E, PSLF and PowerWorld writers use;
     // the hand-rolled version here reported a bare yes/no.
-    crate::format::warn_dropped_extras("canonical MATPOWER .m", net, |_| false, &mut warnings);
+    crate::format::warn_dropped_extras(&F, "canonical MATPOWER .m", net, |_| false, &mut warnings);
     warnings
 }
 

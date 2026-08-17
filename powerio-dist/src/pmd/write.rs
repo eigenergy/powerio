@@ -16,6 +16,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use serde_json::{Map, Value, json};
 
 use crate::convert::Conversion;
+use crate::diagnostics::codes as C;
 use crate::geo::CoordinateSpace;
 use crate::model::{
     Configuration, DistBus, DistLine, DistLineCode, DistLoadVoltageModel, DistTransformer, Extras,
@@ -30,16 +31,15 @@ use crate::model::{
 /// nulls, which always serialize.
 pub fn write_pmd_json(net: &MulticonductorNetwork) -> Conversion {
     let mut w = Writer {
-        warnings: Vec::new(),
+        warnings: crate::diagnostics::Diagnostics::new(),
         renamed_terminals: renamed_terminals(net),
     };
     let doc = w.document(net);
-    Conversion {
-        text: serde_json::to_string_pretty(&doc).expect("maps and finite numbers") + "\n",
-        sidecars: Vec::new(),
-        warnings: w.warnings,
-        diagnostics: Vec::new(),
-    }
+    Conversion::new(
+        serde_json::to_string_pretty(&doc).expect("maps and finite numbers") + "\n",
+        Vec::new(),
+        w.warnings,
+    )
 }
 
 /// Upper bound on the conductor counts this writer expands quadratically:
@@ -52,7 +52,7 @@ pub fn write_pmd_json(net: &MulticonductorNetwork) -> Conversion {
 const MAX_DIM: usize = 64;
 
 struct Writer {
-    warnings: Vec<String>,
+    warnings: crate::diagnostics::Diagnostics,
     /// One id per terminal name that is not numeric, for the whole network.
     renamed_terminals: BTreeMap<String, i64>,
 }
@@ -109,9 +109,10 @@ impl Writer {
                     return value;
                 }
                 let id = self.renamed_terminals.get(t).copied().unwrap_or(0);
-                self.warnings.push(format!(
-                    "{what}: terminal `{t}` is not numeric; emitted as {id}"
-                ));
+                self.warnings.push(
+                    &C::EMIT_PMD_VALUE_SUBSTITUTED,
+                    format!("{what}: terminal `{t}` is not numeric; emitted as {id}"),
+                );
                 id
             })
             .collect()
@@ -182,18 +183,21 @@ fn scale(m: &Mat, k: f64) -> Mat {
 }
 
 impl Writer {
-    fn warn(&mut self, msg: impl Into<String>) {
-        self.warnings.push(msg.into());
+    fn warn(&mut self, info: &crate::diagnostics::DiagnosticInfo, msg: impl Into<String>) {
+        self.warnings.push(info, msg);
     }
 
     /// The dimension a matrix is materialized at, clamped to [`MAX_DIM`]
     /// with a diagnostic naming the element.
     fn bounded_dim(&mut self, n: usize, what: &str) -> usize {
         if n > MAX_DIM {
-            self.warn(format!(
-                "{what}: {n} conductors exceed the supported maximum of \
+            self.warn(
+                &C::EMIT_PMD_VALUE_CLAMPED,
+                format!(
+                    "{what}: {n} conductors exceed the supported maximum of \
                  {MAX_DIM}; matrices emitted at {MAX_DIM}"
-            ));
+                ),
+            );
             MAX_DIM
         } else {
             n
@@ -209,9 +213,10 @@ impl Writer {
             {
                 continue;
             }
-            self.warn(format!(
-                "{what}: `{key}` has no ENGINEERING field; dropped from the output"
-            ));
+            self.warn(
+                &C::EMIT_PMD_FIELD_DROPPED,
+                format!("{what}: `{key}` has no ENGINEERING field; dropped from the output"),
+            );
         }
     }
 
@@ -242,7 +247,7 @@ impl Writer {
                 net.geo.as_ref().map(|geo| &geo.space),
                 Some(CoordinateSpace::Geographic { .. })
             ) {
-                self.warnings.push(format!(
+                self.warnings.push(&C::EMIT_PMD_FIELD_DROPPED, format!(
                     "bus {}: non-geographic or undeclared location is not emitted to PMD lon/lat",
                     b.id
                 ));
@@ -252,10 +257,13 @@ impl Writer {
                 o.insert("lon".into(), json!(location.x));
                 o.insert("lat".into(), json!(location.y));
             } else {
-                self.warnings.push(format!(
-                    "bus {}: nonfinite location is not emitted to PMD JSON",
-                    b.id
-                ));
+                self.warnings.push(
+                    &C::EMIT_PMD_FIELD_DROPPED,
+                    format!(
+                        "bus {}: nonfinite location is not emitted to PMD JSON",
+                        b.id
+                    ),
+                );
             }
             return;
         }
@@ -267,6 +275,9 @@ impl Writer {
         }
     }
 
+    // One block per object field; splitting it would scatter a list that
+    // reads end to end.
+    #[expect(clippy::too_many_lines)]
     fn document(&mut self, net: &MulticonductorNetwork) -> Value {
         let mut doc = Map::new();
         doc.insert("data_model".into(), json!("ENGINEERING"));
@@ -311,10 +322,13 @@ impl Writer {
             .unwrap_or(4);
         let max_dim = i64::try_from(MAX_DIM).expect("MAX_DIM is small");
         if max_conductor > max_dim {
-            self.warn(format!(
-                "terminal {max_conductor} exceeds the supported maximum conductor id \
+            self.warn(
+                &C::EMIT_PMD_VALUE_CLAMPED,
+                format!(
+                    "terminal {max_conductor} exceeds the supported maximum conductor id \
                  of {MAX_DIM}; conductor_ids enumerated to {MAX_DIM}"
-            ));
+                ),
+            );
         }
         let max_conductor = max_conductor.clamp(4, max_dim);
         doc.insert(
@@ -368,10 +382,13 @@ impl Writer {
                 ("vn_max", b.vn_max.is_some()),
             ] {
                 if present {
-                    self.warn(format!(
-                        "bus {}: `{key}` volt bounds have no ENGINEERING field; dropped",
-                        b.id
-                    ));
+                    self.warn(
+                        &C::EMIT_PMD_FIELD_DROPPED,
+                        format!(
+                            "bus {}: `{key}` volt bounds have no ENGINEERING field; dropped",
+                            b.id
+                        ),
+                    );
                 }
             }
             buses.insert(b.id.to_lowercase(), Value::Object(o));
@@ -384,10 +401,13 @@ impl Writer {
         self.transformers(net, &mut doc);
 
         for u in &net.untyped {
-            self.warn(format!(
-                "{} {}: class is not converted to ENGINEERING; dropped from the output",
-                u.class, u.name
-            ));
+            self.warn(
+                &C::EMIT_PMD_RECORD_DROPPED,
+                format!(
+                    "{} {}: class is not converted to ENGINEERING; dropped from the output",
+                    u.class, u.name
+                ),
+            );
         }
         Value::Object(doc)
     }
@@ -411,10 +431,13 @@ impl Writer {
                 o.insert("sm_ub".into(), json!(s_max));
             }
             if c.source.is_some() {
-                self.warn(format!(
-                    "linecode {}: matrix provenance `source` has no ENGINEERING field; dropped",
-                    c.name
-                ));
+                self.warn(
+                    &C::EMIT_PMD_FIELD_DROPPED,
+                    format!(
+                        "linecode {}: matrix provenance `source` has no ENGINEERING field; dropped",
+                        c.name
+                    ),
+                );
             }
             codes.insert(c.name.to_lowercase(), Value::Object(o));
         }
@@ -467,7 +490,7 @@ impl Writer {
                     }
                     _ => {
                         if inline {
-                            self.warn(format!(
+                            self.warn(&C::EMIT_PMD_VALUE_SUBSTITUTED, format!(
                                 "{what}: linecode `{}` is missing; emitted the reference instead of inline impedance",
                                 l.linecode
                             ));
@@ -606,7 +629,7 @@ impl Writer {
                     }
                     DistLoadVoltageModel::Exponential { v_nom, .. } => {
                         insert_vm_nom(v_nom);
-                        self.warn(format!(
+                        self.warn(&C::EMIT_PMD_VALUE_SUBSTITUTED, format!(
                             "{what}: exponential load model has no ENGINEERING field; emitted POWER"
                         ));
                         "POWER"
@@ -664,17 +687,21 @@ impl Writer {
                     o.insert("pg_ub".into(), json!(kw(b)));
                 }
                 if g.cost.is_some() {
-                    self.warn(format!(
-                        "{what}: generation cost has no ENGINEERING field; dropped"
-                    ));
+                    self.warn(
+                        &C::EMIT_PMD_FIELD_DROPPED,
+                        format!("{what}: generation cost has no ENGINEERING field; dropped"),
+                    );
                 }
                 // The ENGINEERING generator carries kVA-scale sm_ub/cm_ub;
                 // that mapping is a #266 decision, so the drop stays loud.
                 for (key, present) in [("s_max", g.s_max.is_some()), ("i_max", g.i_max.is_some())] {
                     if present {
-                        self.warn(format!(
-                            "{what}: `{key}` has no ENGINEERING generator mapping yet; dropped"
-                        ));
+                        self.warn(
+                            &C::EMIT_PMD_FIELD_DROPPED,
+                            format!(
+                                "{what}: `{key}` has no ENGINEERING generator mapping yet; dropped"
+                            ),
+                        );
                     }
                 }
                 o.insert("control_mode".into(), json!("FREQUENCYDROOP"));
@@ -695,7 +722,7 @@ impl Writer {
         self.generators(net, doc);
         // Typed BMOPF capacitor banks have no ENGINEERING conversion yet.
         for c in &net.capacitors {
-            self.warn(format!(
+            self.warn(&C::EMIT_PMD_RECORD_DROPPED, format!(
                 "capacitor {}: rated capacitor banks are not converted to ENGINEERING JSON; dropped",
                 c.name
             ));
@@ -771,9 +798,10 @@ impl Writer {
         } else {
             let (rs, xs) = thevenin(vs, n);
             if rs.iter().flatten().all(|&v| v == 0.0) {
-                self.warn(format!(
-                    "{what}: no short circuit data; emitted an ideal source (zero rs/xs)"
-                ));
+                self.warn(
+                    &C::EMIT_PMD_VALUE_DEFAULTED,
+                    format!("{what}: no short circuit data; emitted an ideal source (zero rs/xs)"),
+                );
             }
             o.insert("rs".into(), matrix(&rs));
             o.insert("xs".into(), matrix(&xs));

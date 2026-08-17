@@ -1,6 +1,6 @@
 //! Registry entries: how a crate declares the codes it emits.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet, btree_map::Entry};
 
 use crate::{DiagnosticSeverity, DiagnosticStage, ErrorCategory, code_is_well_formed};
 
@@ -75,6 +75,47 @@ impl DiagnosticInfo {
     }
 }
 
+/// Declare a crate's registry: one `DiagnosticInfo` constant per code, plus the
+/// `ALL` slice the gates run over.
+///
+/// Writing the slice by hand is how a registry drifts from the codes a crate
+/// actually declares, so the macro builds it from the same list.
+///
+/// ```
+/// powerio_diag::diagnostic_codes! {
+///     /// A field the target format has no record for.
+///     EMIT_PSSE_FIELD_DROPPED = "EMIT.PSSE.FIELD_DROPPED", Warning,
+///         "a field with no PSS/E record was dropped";
+///     REQUEST_FORMAT_UNKNOWN = "REQUEST.FORMAT.UNKNOWN", Fatal,
+///         "the named format is not one powerio reads", category = UnknownFormat;
+/// }
+/// assert_eq!(ALL.len(), 2);
+/// ```
+#[macro_export]
+macro_rules! diagnostic_codes {
+    ($(
+        $(#[$attr:meta])*
+        $name:ident = $code:literal, $severity:ident, $summary:literal
+        $(, category = $category:ident)?
+        $(, retired = $since:literal)? ;
+    )*) => {
+        $(
+            $(#[$attr])*
+            pub const $name: $crate::DiagnosticInfo = $crate::DiagnosticInfo::new(
+                $code,
+                $crate::DiagnosticSeverity::$severity,
+                $summary,
+            )
+            $(.with_category($crate::ErrorCategory::$category))?
+            $(.retired($since))?;
+        )*
+
+        /// Every code this registry declares, for the grammar and uniqueness
+        /// gates and for the generated reference.
+        pub const ALL: &[&$crate::DiagnosticInfo] = &[$(&$name),*];
+    };
+}
+
 /// Check a registry: every code matches the grammar, every namespace is one of
 /// the ten, and no code appears twice. Returns one message per problem, empty
 /// when the registry is sound.
@@ -89,9 +130,13 @@ where
     let mut problems = Vec::new();
     let mut seen: BTreeSet<&'static str> = BTreeSet::new();
     for entry in entries {
-        if !code_is_well_formed(entry.code) {
+        // A retired code is a historical identity, kept so it is never
+        // reassigned; some predate the grammar and cannot be made to satisfy
+        // it without reassigning them.
+        let retired = matches!(entry.status, CodeStatus::Retired { .. });
+        if !retired && !code_is_well_formed(entry.code) {
             problems.push(format!("{}: does not match the code grammar", entry.code));
-        } else if entry.stage().is_none() {
+        } else if !retired && entry.stage().is_none() {
             problems.push(format!(
                 "{}: namespace {} is not one of the ten",
                 entry.code,
@@ -103,6 +148,42 @@ where
         }
         if !seen.insert(entry.code) {
             problems.push(format!("{}: registered twice", entry.code));
+        }
+    }
+    problems
+}
+
+/// Check that no two crates declare codes under the same scope, i.e. the same
+/// `NAMESPACE.SCOPE` prefix. Returns one message per shared scope.
+///
+/// A scope names one reader, one writer, or one pass, so two crates claiming it
+/// means one of them is emitting from the other's territory. The workspace gate
+/// runs this over every registry at once; a single crate cannot see it.
+///
+/// Retired entries are skipped: they name no live emitter, and a retired code
+/// whose scope moved to another crate is exactly what retirement records.
+pub fn check_scope_ownership(registries: &[(&str, &[&DiagnosticInfo])]) -> Vec<String> {
+    let mut owner: BTreeMap<(&str, &str), &str> = BTreeMap::new();
+    let mut problems = Vec::new();
+    for (crate_name, entries) in registries {
+        for entry in *entries {
+            if matches!(entry.status, CodeStatus::Retired { .. }) {
+                continue;
+            }
+            let mut segments = entry.code.split('.');
+            let (Some(namespace), Some(scope)) = (segments.next(), segments.next()) else {
+                continue;
+            };
+            match owner.entry((namespace, scope)) {
+                Entry::Vacant(slot) => {
+                    slot.insert(crate_name);
+                }
+                Entry::Occupied(slot) if *slot.get() != *crate_name => problems.push(format!(
+                    "{namespace}.{scope}: claimed by both {} and {crate_name}",
+                    slot.get()
+                )),
+                Entry::Occupied(_) => {}
+            }
         }
     }
     problems
@@ -143,6 +224,30 @@ mod tests {
         assert!(problems.iter().any(|p| p.contains("code grammar")));
         assert!(problems.iter().any(|p| p.contains("not one of the ten")));
         assert!(problems.iter().any(|p| p.contains("no summary")));
+    }
+
+    #[test]
+    fn two_crates_cannot_claim_one_scope() {
+        const OTHER: DiagnosticInfo = DiagnosticInfo::new(
+            "EMIT.PSSE.DOWNGRADED",
+            DiagnosticSeverity::Warning,
+            "a newer revision was written into an older layout",
+        );
+        const ELSEWHERE: DiagnosticInfo = DiagnosticInfo::new(
+            "EMIT.BMOPF.TRANSFORMER_UNSUPPORTED",
+            DiagnosticSeverity::Warning,
+            "a transformer the BMOPF schema cannot state",
+        );
+        assert!(
+            check_scope_ownership(&[
+                ("powerio", &[&GOOD, &OTHER]),
+                ("powerio-dist", &[&ELSEWHERE])
+            ])
+            .is_empty()
+        );
+        let problems = check_scope_ownership(&[("powerio", &[&GOOD]), ("powerio-dist", &[&OTHER])]);
+        assert_eq!(problems.len(), 1);
+        assert!(problems[0].contains("EMIT.PSSE"), "{problems:?}");
     }
 
     #[test]

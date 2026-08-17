@@ -9,6 +9,8 @@ use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 
 use super::{Parsed, bus_kv, set_bus_kind, warn_extra_branch_rating_sets, zbase};
+use crate::diagnostics::codes::EMIT_PYPSA as F;
+use crate::diagnostics::{Diagnostics, codes};
 use crate::network::{
     BalancedNetwork, Branch, BranchCharging, Bus, BusId, BusType, Extras, GenCost, Generator, Hvdc,
     Load, LoadVoltageModel, Shunt, SourceFormat, Storage,
@@ -22,19 +24,22 @@ const FMT: &str = "PyPSA CSV";
 pub struct PypsaCsvOutputs {
     pub dir: PathBuf,
     pub files: Vec<PathBuf>,
+    /// The writer's findings as structured records.
+    pub diagnostics: Vec<crate::diagnostics::StructuredDiagnostic>,
+    /// The same findings as `CODE: message` lines.
     pub warnings: Vec<String>,
 }
 
 /// Read a PyPSA CSV folder at `path`. Returns [`Parsed`]: the network plus the
 /// reader's fidelity warnings.
 pub fn read_pypsa_csv_folder(path: impl AsRef<Path>) -> Result<Parsed> {
-    let mut warnings = Vec::new();
+    let mut warnings = Diagnostics::new();
     let network = read_pypsa_csv_folder_inner(path.as_ref(), &mut warnings)?;
     Ok(Parsed::without_document(network, warnings))
 }
 
 #[allow(clippy::too_many_lines)] // direct static-component CSV mapper; each block is one PyPSA table
-fn read_pypsa_csv_folder_inner(path: &Path, warnings: &mut Vec<String>) -> Result<BalancedNetwork> {
+fn read_pypsa_csv_folder_inner(path: &Path, warnings: &mut Diagnostics) -> Result<BalancedNetwork> {
     let network = read_csv_optional(&path.join("network.csv"))?;
     let network_row = network.as_ref().and_then(|t| t.rows.first());
     let name = network_row
@@ -357,7 +362,7 @@ fn read_pypsa_csv_folder_inner(path: &Path, warnings: &mut Vec<String>) -> Resul
             });
         }
         if !table.rows.is_empty() {
-            warnings.push(format!(
+            warnings.push(&codes::READ_PYPSA_VALUE_APPROXIMATED, format!(
                 "links.csv: {} links read as HVDC lines; PyPSA links carry no reactive or voltage data (q limits 0, voltage setpoints 1.0)",
                 table.rows.len()
             ));
@@ -365,10 +370,13 @@ fn read_pypsa_csv_folder_inner(path: &Path, warnings: &mut Vec<String>) -> Resul
     }
     if let Some(table) = read_csv_optional(&path.join("stores.csv"))? {
         if !table.rows.is_empty() {
-            warnings.push(format!(
-                "stores.csv ignored ({} rows): PyPSA stores are not mapped",
-                table.rows.len()
-            ));
+            warnings.push(
+                &codes::READ_PYPSA_TABLE_UNSUPPORTED,
+                format!(
+                    "stores.csv ignored ({} rows): PyPSA stores are not mapped",
+                    table.rows.len()
+                ),
+            );
         }
     }
 
@@ -401,7 +409,7 @@ fn read_pypsa_csv_folder_inner(path: &Path, warnings: &mut Vec<String>) -> Resul
         .collect();
     unread.sort();
     for file in unread {
-        warnings.push(format!(
+        warnings.push(&codes::READ_PYPSA_TABLE_UNSUPPORTED, format!(
             "`{file}` ignored: only the static element tables are read (time series and other tables are not modeled)"
         ));
     }
@@ -440,7 +448,7 @@ pub fn write_pypsa_csv_folder(
     let out_dir = out_dir.as_ref();
     std::fs::create_dir_all(out_dir)?;
     let mut files = Vec::new();
-    let mut warnings = Vec::new();
+    let mut warnings = Diagnostics::new();
     // Element tables must reference buses by the same key buses.csv is indexed
     // on, and PyPSA requires those keys to be unique for its joins. A bus is
     // keyed by its name only when the name collides with no other bus's name
@@ -482,19 +490,22 @@ pub fn write_pypsa_csv_folder(
     if !displaced.is_empty() {
         displaced.sort();
         displaced.dedup();
-        warnings.push(format!(
+        warnings.push(&codes::READ_PYPSA_NAME_REMAPPED, format!(
             "buses.csv: bus names {} collide with another bus name or id; those buses are keyed by their numeric id instead",
             displaced.join(", ")
         ));
     }
     if !net.hvdc.is_empty() {
-        warnings.push(format!(
-            "{} dcline(s) dropped: the PyPSA CSV writer does not model HVDC links",
-            net.hvdc.len()
-        ));
+        warnings.push(
+            &F.record_dropped,
+            format!(
+                "{} dcline(s) dropped: the PyPSA CSV writer does not model HVDC links",
+                net.hvdc.len()
+            ),
+        );
     }
     if !net.transformers_3w.is_empty() {
-        warnings.push(format!(
+        warnings.push(&F.record_dropped, format!(
             "{} 3-winding transformer(s) dropped: the PyPSA CSV writer emits no 3-winding transformer",
             net.transformers_3w.len()
         ));
@@ -505,12 +516,12 @@ pub fn write_pypsa_csv_folder(
         .any(|b| b.evhi.is_some() || b.evlo.is_some())
     {
         warnings.push(
-            "emergency voltage band(s) (EVHI/EVLO) dropped: this writer carries one voltage band"
-                .into(),
+            &F.field_dropped,
+            "emergency voltage band(s) (EVHI/EVLO) dropped: this writer carries one voltage band",
         );
     }
     if net.generators.iter().any(Generator::has_caps) {
-        warnings.push("generator capability/ramp columns dropped: PyPSA generator CSV has no MATPOWER capability columns".into());
+        warnings.push(&F.field_dropped, "generator capability/ramp columns dropped: PyPSA generator CSV has no MATPOWER capability columns");
     }
     let voltage_loads = net
         .loads
@@ -522,7 +533,7 @@ pub fn write_pypsa_csv_folder(
         })
         .count();
     if voltage_loads > 0 {
-        warnings.push(format!(
+        warnings.push(&F.field_dropped, format!(
             "{voltage_loads} voltage dependent load model(s) dropped: PyPSA loads.csv carries static p_set/q_set only"
         ));
     }
@@ -532,7 +543,7 @@ pub fn write_pypsa_csv_folder(
         .filter(|b| b.kind == BusType::Isolated)
         .count();
     if isolated > 0 {
-        warnings.push(format!(
+        warnings.push(&F.field_dropped, format!(
             "{isolated} isolated bus(es) written without status: PyPSA buses carry no active flag, they read back in service"
         ));
     }
@@ -542,7 +553,7 @@ pub fn write_pypsa_csv_folder(
         .filter(|b| b.is_transformer() && b.has_angle_limits())
         .count();
     if xf_angles > 0 {
-        warnings.push(format!(
+        warnings.push(&F.field_dropped, format!(
             "{xf_angles} transformer angle limit(s) dropped: transformers.csv carries no v_ang_min/v_ang_max"
         ));
     }
@@ -554,7 +565,7 @@ pub fn write_pypsa_csv_folder(
         })
         .count();
     if rate_bc > 0 {
-        warnings.push(format!(
+        warnings.push(&F.field_dropped, format!(
             "{rate_bc} branch rate_b/rate_c value set(s) dropped: PyPSA carries one s_nom rating"
         ));
     }
@@ -564,14 +575,14 @@ pub fn write_pypsa_csv_folder(
         .filter(|b| b.current_ratings.is_some())
         .count();
     if current_ratings > 0 {
-        warnings.push(format!(
+        warnings.push(&F.field_dropped, format!(
             "{current_ratings} branch current rating record(s) dropped: PyPSA static branch tables carry s_nom, not source current ratings"
         ));
     }
-    warn_extra_branch_rating_sets("PyPSA CSV", net, &mut warnings);
+    warn_extra_branch_rating_sets(&F, "PyPSA CSV", net, &mut warnings);
     let branch_solutions = net.branches.iter().filter(|b| b.solution.is_some()).count();
     if branch_solutions > 0 {
-        warnings.push(format!(
+        warnings.push(&F.field_dropped, format!(
             "{branch_solutions} branch solution value set(s) dropped: PyPSA result time series are not written"
         ));
     }
@@ -581,12 +592,16 @@ pub fn write_pypsa_csv_folder(
         .filter(|b| pypsa_loses_terminal_charging(b))
         .count();
     if terminal_charging > 0 {
-        warnings.push(format!(
+        warnings.push(&F.value_collapsed, format!(
             "{terminal_charging} branch terminal admittance record(s) collapsed: PyPSA CSV supports symmetric line shunts and one-sided transformer shunts only"
         ));
     }
-    warnings.extend(super::missing_reference_warning(net));
-    warnings.extend(super::normalized_tap_warning(net));
+    if let Some(message) = super::missing_reference_warning(net) {
+        warnings.push(&F.reference_missing, message);
+    }
+    if let Some(message) = super::normalized_tap_warning(net) {
+        warnings.push(&F.element_relabeled, message);
+    }
     // Exact compares are the point: any deviation from the symmetric, no-loss
     // shape the round trip preserves means a field is dropped on write.
     #[allow(clippy::float_cmp)]
@@ -606,7 +621,7 @@ pub fn write_pypsa_csv_folder(
         })
         .count();
     if lossy > 0 {
-        warnings.push(format!(
+        warnings.push(&F.value_collapsed, format!(
             "{lossy} storage units lose fields PyPSA storage_units cannot carry (asymmetric charge/discharge ratings collapse to p_nom = max; thermal_rating, qmin/qmax, r/x, p_loss/q_loss dropped)"
         ));
     }
@@ -652,7 +667,8 @@ pub fn write_pypsa_csv_folder(
     Ok(PypsaCsvOutputs {
         dir: out_dir.to_path_buf(),
         files,
-        warnings,
+        warnings: warnings.lines(),
+        diagnostics: warnings.into_records(),
     })
 }
 
@@ -706,7 +722,7 @@ fn buses_csv(net: &BalancedNetwork, key_of: &HashMap<BusId, String>) -> String {
 fn generators_csv(
     net: &BalancedNetwork,
     key_of: &HashMap<BusId, String>,
-    warnings: &mut Vec<String>,
+    warnings: &mut Diagnostics,
 ) -> String {
     let mut s = String::from(
         "name,bus,control,p_nom,p_set,q_set,p_min_pu,p_max_pu,marginal_cost,marginal_cost_quadratic,active,v_mag_pu_set\n",
@@ -778,22 +794,26 @@ fn generators_csv(
         );
     }
     if dropped > 0 {
-        warnings.push(format!(
+        warnings.push(&F.field_dropped, format!(
             "{dropped} generator costs dropped: PyPSA carries marginal_cost/marginal_cost_quadratic (model 2) only"
         ));
     }
     if truncated > 0 {
-        warnings.push(format!(
-            "{truncated} generator costs truncated to quadratic for PyPSA marginal cost columns"
-        ));
+        warnings.push(
+            &F.value_truncated,
+            format!(
+                "{truncated} generator costs truncated to quadratic for PyPSA marginal cost columns"
+            ),
+        );
     }
     if empty > 0 {
-        warnings.push(format!(
-            "{empty} generator costs had no coefficients and were written as zero"
-        ));
+        warnings.push(
+            &F.value_defaulted,
+            format!("{empty} generator costs had no coefficients and were written as zero"),
+        );
     }
     if unbounded > 0 {
-        warnings.push(format!(
+        warnings.push(&F.value_defaulted, format!(
             "{unbounded} non-finite generator p limit(s) written as the PyPSA defaults (p_min_pu 0, p_max_pu 1)"
         ));
     }
@@ -803,7 +823,7 @@ fn generators_csv(
         .filter(|g| g.qmin.is_finite() || g.qmax.is_finite())
         .count();
     if q_limited > 0 {
-        warnings.push(format!(
+        warnings.push(&F.field_dropped, format!(
             "{q_limited} generator reactive limit(s) dropped: PyPSA generators carry no q bounds"
         ));
     }
@@ -813,7 +833,7 @@ fn generators_csv(
         .filter(|g| g.mbase != 0.0 && g.mbase != net.base_mva)
         .count();
     if off_base > 0 {
-        warnings.push(format!(
+        warnings.push(&F.field_dropped, format!(
             "{off_base} generator machine base(s) (mbase) dropped: PyPSA carries no per generator MVA base"
         ));
     }
@@ -1577,7 +1597,7 @@ mod tests {
         net.storage = vec![st];
         let out = write_pypsa_csv_folder(&net, tmp_dir("storage-lossy")).unwrap();
         assert!(
-            out.warnings.iter().any(|w| w
+            out.diagnostics.iter().any(|d| d.message
                 == "1 storage units lose fields PyPSA storage_units cannot carry (asymmetric charge/discharge ratings collapse to p_nom = max; thermal_rating, qmin/qmax, r/x, p_loss/q_loss dropped)"),
             "{:?}",
             out.warnings
@@ -1623,7 +1643,7 @@ mod tests {
         let dir = tmp_dir("dup-keys");
         let out = write_pypsa_csv_folder(&net, &dir).unwrap();
         assert!(
-            out.warnings.iter().any(|w| w
+            out.diagnostics.iter().any(|d| d.message
                 == "buses.csv: bus names `X` collide with another bus name or id; those buses are keyed by their numeric id instead"),
             "{:?}",
             out.warnings
@@ -1718,7 +1738,7 @@ mod tests {
         assert_eq!(h.qf, 0.0);
         assert!(h.in_service);
         assert!(
-            parsed.warnings.iter().any(|w| w
+            parsed.diagnostics.iter().any(|d| d.message
                 == "links.csv: 1 links read as HVDC lines; PyPSA links carry no reactive or voltage data (q limits 0, voltage setpoints 1.0)"),
             "{:?}",
             parsed.warnings
@@ -1745,9 +1765,9 @@ mod tests {
         let parsed = read_pypsa_csv_folder(&dir).unwrap();
         assert!(
             parsed
-                .warnings
+                .diagnostics
                 .iter()
-                .any(|w| w == "stores.csv ignored (1 rows): PyPSA stores are not mapped"),
+                .any(|d| d.message == "stores.csv ignored (1 rows): PyPSA stores are not mapped"),
             "{:?}",
             parsed.warnings
         );
@@ -1796,7 +1816,7 @@ mod tests {
             ),
         ];
         let key_of: HashMap<BusId, String> = net.buses.iter().map(|b| (b.id, bus_key(b))).collect();
-        let mut warnings = Vec::new();
+        let mut warnings = Diagnostics::new();
         let csv = generators_csv(&net, &key_of, &mut warnings);
         assert_eq!(
             csv.lines().nth(1).unwrap(),
@@ -1816,7 +1836,7 @@ mod tests {
             "1 generator costs had no coefficients and were written as zero",
         ] {
             assert!(
-                warnings.iter().any(|w| w == expected),
+                warnings.records().iter().any(|d| d.message == expected),
                 "missing {expected:?} in {warnings:?}"
             );
         }

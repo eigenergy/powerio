@@ -19,6 +19,8 @@ use std::sync::Arc;
 use serde_json::{Map, Value};
 
 use super::{Conversion, finish, jnum, warn_extra_branch_rating_sets};
+use crate::diagnostics::codes::EMIT_POWERMODELS as F;
+use crate::diagnostics::{Diagnostics, codes};
 use crate::network::{
     BalancedNetwork, Branch, BranchCharging, BranchCurrentRatings, BranchSolution, Bus, BusId,
     BusType, GEN_EXTRA_KEYS, GenCost, Generator, Hvdc, Load, LoadVoltageModel, Shunt, SourceFormat,
@@ -29,7 +31,7 @@ use crate::{Error, Result};
 
 #[must_use]
 pub fn write_powermodels_json(net: &BalancedNetwork) -> Conversion {
-    let mut warnings = Vec::new();
+    let mut warnings = Diagnostics::new();
 
     // Per-unit write factors, the exact inverse of the reader's pscale/ascale:
     // powers ÷ baseMVA, angles degrees → radians. Cost rescale needs the base.
@@ -81,13 +83,16 @@ pub fn write_powermodels_json(net: &BalancedNetwork) -> Conversion {
         switch.insert(idx.to_string(), switch_obj(sw, idx, p));
     }
     if !storage.is_empty() {
-        warnings.push(format!(
-            "{} storage unit(s) mapped with warnings to the PowerModels storage schema",
-            storage.len()
-        ));
+        warnings.push(
+            &F.value_collapsed,
+            format!(
+                "{} storage unit(s) mapped with warnings to the PowerModels storage schema",
+                storage.len()
+            ),
+        );
     }
     if !net.transformers_3w.is_empty() {
-        warnings.push(format!(
+        warnings.push(&F.record_dropped, format!(
             "{} 3-winding transformer(s) dropped: the PowerModels JSON writer emits no 3-winding record",
             net.transformers_3w.len()
         ));
@@ -102,19 +107,19 @@ pub fn write_powermodels_json(net: &BalancedNetwork) -> Conversion {
         })
         .count();
     if voltage_loads > 0 {
-        warnings.push(format!(
+        warnings.push(&F.field_dropped, format!(
             "{voltage_loads} voltage dependent load model(s) dropped: PowerModels load records carry static pd/qd only"
         ));
     }
-    warn_extra_branch_rating_sets("PowerModels JSON", net, &mut warnings);
+    warn_extra_branch_rating_sets(&F, "PowerModels JSON", net, &mut warnings);
     if net
         .buses
         .iter()
         .any(|b| b.evhi.is_some() || b.evlo.is_some())
     {
         warnings.push(
-            "emergency voltage band(s) (EVHI/EVLO) dropped: this writer carries one voltage band"
-                .into(),
+            &F.field_dropped,
+            "emergency voltage band(s) (EVHI/EVLO) dropped: this writer carries one voltage band",
         );
     }
 
@@ -133,7 +138,7 @@ pub fn write_powermodels_json(net: &BalancedNetwork) -> Conversion {
     root.insert("storage".into(), Value::Object(storage));
     root.insert("switch".into(), Value::Object(switch));
 
-    finish(root, warnings)
+    finish(&F, root, warnings)
 }
 
 /// PowerModels back-reference `["bus"|"branch"|…, index]`.
@@ -429,7 +434,7 @@ const FMT: &str = "PowerModels JSON";
 /// following PowerModels' own exceptions (storage `ps`/`qs` stay raw, dcline
 /// `pt`/`qf`/`qt` flip sign); `per_unit = false` is read as-is.
 pub fn parse_powermodels_json(content: &str) -> Result<BalancedNetwork> {
-    let mut warnings = Vec::new();
+    let mut warnings = Diagnostics::new();
     parse_powermodels_json_source(Arc::new(content.to_owned()), None, &mut warnings)
 }
 
@@ -439,7 +444,7 @@ pub fn parse_powermodels_json(content: &str) -> Result<BalancedNetwork> {
 pub(crate) fn parse_powermodels_json_source(
     source: Arc<String>,
     name_hint: Option<&str>,
-    warnings: &mut Vec<String>,
+    warnings: &mut Diagnostics,
 ) -> Result<BalancedNetwork> {
     let content: &str = &source;
     let root: Value = serde_json::from_str(content).map_err(|e| Error::FormatRead {
@@ -471,7 +476,10 @@ pub(crate) fn parse_powermodels_json_source(
         .and_then(Value::as_bool)
         .unwrap_or(false)
     {
-        warnings.push("multinetwork=true: only the top-level single snapshot was read".into());
+        warnings.push(
+            &codes::READ_POWERMODELS_RECORD_DROPPED,
+            "multinetwork=true: only the top-level single snapshot was read",
+        );
     }
     let pscale = if per_unit { base_mva } else { 1.0 };
     let ascale = if per_unit { normalize::RAD_TO_DEG } else { 1.0 };
@@ -671,7 +679,7 @@ fn read_branches(
     root: &Map<String, Value>,
     pscale: f64,
     ascale: f64,
-    warnings: &mut Vec<String>,
+    warnings: &mut Diagnostics,
 ) -> Vec<Branch> {
     const NAMED: usize = 3;
     let mut discarded: Vec<String> = Vec::new();
@@ -692,11 +700,14 @@ fn read_branches(
         } else {
             String::new()
         };
-        warnings.push(format!(
-            "{} branch(es) carry an off-nominal `tap` without `transformer: true`, \
+        warnings.push(
+            &codes::READ_POWERMODELS_FIELD_DROPPED,
+            format!(
+                "{} branch(es) carry an off-nominal `tap` without `transformer: true`, \
              so the tap is discarded and the branch reads as a line: {head}{tail}",
-            discarded.len()
-        ));
+                discarded.len()
+            ),
+        );
     }
     branches
 }
@@ -1095,7 +1106,7 @@ mod tests {
                       "2":{"index":2,"f_bus":1,"t_bus":2,"br_r":0.01,"br_x":0.1,"tap":1.0},
                       "3":{"index":3,"f_bus":1,"t_bus":2,"br_r":0.01,"br_x":0.1,
                            "tap":1.05,"transformer":true}}}"#;
-        let mut warnings = Vec::new();
+        let mut warnings = Diagnostics::new();
         let net =
             parse_powermodels_json_source(Arc::new(doc.to_owned()), None, &mut warnings).unwrap();
         // The inference rule is unchanged: without the flag the tap is dropped
@@ -1105,10 +1116,11 @@ mod tests {
         assert_eq!(net.branches[2].tap, 1.05);
         // One aggregated warning naming the offending branch by its map key,
         // which is the identity a file without an inner `index` still has.
-        assert_eq!(warnings.len(), 1, "{warnings:?}");
+        let lines = warnings.lines();
+        assert_eq!(lines.len(), 1, "{lines:?}");
         assert!(
-            warnings[0].contains("1 branch(es)") && warnings[0].contains("`1` (1 -> 2) tap 1.05"),
-            "{warnings:?}"
+            lines[0].contains("1 branch(es)") && lines[0].contains("`1` (1 -> 2) tap 1.05"),
+            "{lines:?}"
         );
     }
 

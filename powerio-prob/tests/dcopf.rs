@@ -213,7 +213,7 @@ fn a_network_of_two_islands_grounds_a_bus_in_each() {
     assert!(matches!(
         problem.reference_buses.single(),
         Err(powerio_prob::Error::Core(
-            powerio::Error::ReferenceBusCount { found: 2 }
+            powerio::Error::ReferenceBusCount { found: 2, .. }
         ))
     ));
 

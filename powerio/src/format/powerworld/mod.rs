@@ -78,6 +78,6 @@ pub(super) fn drop_positional_id(extras: &mut Extras, keys: &[&str], index: usiz
 /// `DATA` sections.
 pub fn parse_powerworld(content: &str) -> Result<BalancedNetwork> {
     // The caller owns `content` as a borrow, so retention needs one copy.
-    let mut warnings = Vec::new();
+    let mut warnings = crate::diagnostics::Diagnostics::new();
     parse_powerworld_source(Arc::new(content.to_owned()), None, &mut warnings)
 }
