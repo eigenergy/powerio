@@ -655,11 +655,12 @@ pub fn write_psse_rev(net: &BalancedNetwork, rev: u32) -> Conversion {
             stated
         } else if mdc == 2 && vschd > 0.0 {
             1000.0 * dc.pf / vschd
-        } else if dc.extras.contains_key("psse_dc_setvl_at_inverter") {
+        } else if mdc == 1 && dc.extras.contains_key(SETVL_AT_INVERTER) {
             // The source measured its demand at the inverter, which SETVL
             // states as a negative number. Writing the rectifier power instead
             // names a different operating point: the re-read would price the
-            // drop off the larger end.
+            // drop off the larger end. Only MDC 1 reads the sign that way, so a
+            // blocked line states the one number both its ends read back as.
             -dc.pt
         } else {
             dc.pf
@@ -859,17 +860,20 @@ fn quoted_circuit_id<K: Ord + Clone>(
 fn dc_states_beyond_record(d: &Hvdc) -> bool {
     let rdc = dc_f64(&d.extras, "psse_dc_rdc").unwrap_or(0.0);
     let vschd = dc_f64(&d.extras, "psse_dc_vschd").unwrap_or(0.0);
+    // A blocked line writes MDC 0, under which the reader prices no drop and
+    // both ends read as the one stated number. Only a line that is both in
+    // service and scheduling a voltage has a current to price the loss with.
+    let priced = d.in_service && vschd > 0.0;
+    let at_inverter = d.in_service && d.extras.contains_key(SETVL_AT_INVERTER);
     // The drop the rewrite reproduces from the replayed RDC/VSCHD. A whisker
     // of tolerance covers the units round trip of a current-mode record
-    // (SETVL -> kA -> SETVL). A record whose demand was measured at the
-    // inverter writes back as a negative SETVL and re-reads at the same two
-    // ends, so its received power is already what the rewrite states.
-    // An inverter-measured record writes back as `-pt`, so the rewrite states
-    // the received power exactly and derives the sent power from it. That makes
-    // `pf` the field the record cannot carry on its own, and a source stating
-    // one that disagrees with the drop model would lose it silently.
-    if d.extras.contains_key("psse_dc_setvl_at_inverter") {
-        let expected_pf = if vschd > 0.0 {
+    // (SETVL -> kA -> SETVL). An inverter-measured record writes back as
+    // `-pt`, so the rewrite states the received power exactly and derives the
+    // sent power from it. That makes `pf` the field the record cannot carry on
+    // its own, and a source stating one that disagrees with the drop model
+    // would lose it silently.
+    if at_inverter {
+        let expected_pf = if priced {
             let i = d.pt / vschd;
             d.pt + i * i * rdc
         } else {
@@ -879,9 +883,9 @@ fn dc_states_beyond_record(d: &Hvdc) -> bool {
             return true;
         }
     }
-    let expected_pt = if d.extras.contains_key("psse_dc_setvl_at_inverter") {
+    let expected_pt = if at_inverter {
         d.pt
-    } else if vschd > 0.0 {
+    } else if priced {
         let i = d.pf / vschd;
         d.pf - i * i * rdc
     } else {
@@ -917,6 +921,11 @@ const DEFAULT_CONVERTER_TAIL: &str =
 /// Control-line tail (everything after VSCHD) for a synthesized two-terminal DC
 /// record: compounding voltage, margin, metering code, and minimum firing data.
 const DEFAULT_CONTROL_TAIL: &str = "0.0, 0.0, 0.0, 'I', 0.0, 20, 1.0";
+
+/// Extras key marking a demand the record measured at the inverter (SETVL
+/// negative under MDC 1). Read, written, and audited in three places, so it is
+/// spelled once.
+const SETVL_AT_INVERTER: &str = "psse_dc_setvl_at_inverter";
 
 const EMPTY_SECTIONS: [&str; 13] = [
     "0 / END OF AREA DATA, BEGIN TWO-TERMINAL DC DATA",
@@ -2303,7 +2312,7 @@ fn read_dc_line(
         extras.insert("psse_dc_vschd".into(), jnum(vschd));
     }
     if measured_at_inverter {
-        extras.insert("psse_dc_setvl_at_inverter".into(), Value::Bool(true));
+        extras.insert(SETVL_AT_INVERTER.into(), Value::Bool(true));
     }
     if unpriceable_current {
         extras.insert("psse_dc_setvl".into(), jnum(setvl));
@@ -4109,6 +4118,51 @@ Q
             out.lines().any(|l| l.contains("2000")),
             "the schedule must survive the write: {out}"
         );
+    }
+
+    /// A blocked line (`MDC = 0`) states one number both its ends read back as.
+    /// Pricing the drop model against it anyway made every out of service DC
+    /// record earn the dropped-detail warning for a record the rewrite
+    /// reproduces exactly.
+    #[test]
+    fn a_blocked_dc_record_prices_no_drop_and_earns_no_warning() {
+        let text = "0, 100.00, 33, 0, 0, 60.00 / x
+CASE
+COMMENT
+                 1,'B1          ', 230.0,3,1,1,1,1.0,0.0,1.1,0.9,1.1,0.9
+                 4,'B4          ', 230.0,1,1,1,1,1.0,0.0,1.1,0.9,1.1,0.9
+                 5,'B5          ', 230.0,1,1,1,1,1.0,0.0,1.1,0.9,1.1,0.9
+                 0 / END OF BUS DATA, BEGIN LOAD DATA
+                 0 / END OF LOAD DATA, BEGIN FIXED SHUNT DATA
+                 0 / END OF FIXED SHUNT DATA, BEGIN GENERATOR DATA
+                 0 / END OF GENERATOR DATA, BEGIN BRANCH DATA
+                 0 / END OF BRANCH DATA, BEGIN TRANSFORMER DATA
+                 0 / END OF TRANSFORMER DATA, BEGIN AREA DATA
+                 0 / END OF AREA DATA, BEGIN TWO-TERMINAL DC DATA
+                 'DC1', 0, 2.5, 350.0, 500.0, 0.0, 0.0, 0.0, 'I', 0.0, 20, 1.0
+                 4, 1, 15.0, 5.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.5, 0.51, 0.00625, 0, 0, 0, '1', 0.0
+                 5, 1, 15.0, 5.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.5, 0.51, 0.00625, 0, 0, 0, '1', 0.0
+                 0 / END OF TWO-TERMINAL DC DATA, BEGIN VSC DC LINE DATA
+Q
+";
+        let mut net = parse_psse(text).unwrap();
+        let dc = net.hvdc[0].clone();
+        assert!(!dc.in_service);
+        close(dc.pf, 350.0);
+        close(dc.pt, 350.0);
+
+        // Clear the retained source so the write synthesizes rather than echoes.
+        net.source = None;
+        let conv = write_psse(&net);
+        assert!(
+            !conv.warnings.iter().any(|w| w.contains("converter detail")),
+            "a record the rewrite reproduces exactly earns no warning: {:?}",
+            conv.warnings
+        );
+        let back = &parse_psse(&conv.text).unwrap().hvdc[0];
+        assert!(!back.in_service);
+        close(back.pf, 350.0);
+        close(back.pt, 350.0);
     }
 
     #[test]

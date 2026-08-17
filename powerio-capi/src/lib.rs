@@ -1118,7 +1118,9 @@ pub unsafe extern "C" fn pio_convert_file(
 /// path to infer from) to format `to` without keeping a handle. Returns the
 /// converted text as an owned C
 /// string (free with [`pio_string_free`]), `NULL` on error. Fidelity warnings,
-/// read side first, are written `\n`-joined into `warnbuf`.
+/// read side first, are published through `out_warnings` as one owned C string
+/// (free it with [`pio_string_free`]), NULL when there are none. Pass NULL to
+/// discard them.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_convert_str(
     text: *const c_char,
@@ -1472,9 +1474,14 @@ pub unsafe extern "C" fn pio_bus_shunt(
 /// conversion whose output type is Arrow structs rather than a string, and the
 /// bulk table surface of this ABI. Tables 0..5 are raw network tables; tables
 /// 6..14 are normalized solver tables with per unit/radian values and dense
-/// zero based row ids; the matrix tables carry COO triplets in that dense index
-/// space with dimensions in schema metadata. New columns extend the Arrow
-/// schema without changing an existing C signature.
+/// zero based row ids; tables 15..18 carry COO triplets in that dense index
+/// space with dimensions in schema metadata; tables 19 and 20 are the axis maps
+/// naming what each row and column of those triplets is (`matrix_bus` carries
+/// the bus id, source row, reference flag and island per index, `matrix_branch`
+/// the source row and endpoint ids). Every table entry in
+/// [`pio_arrow_catalog_json`] states which of the three it is under `format`.
+/// New columns extend the Arrow schema without changing an existing C
+/// signature.
 ///
 /// `table` is one of the `PIO_ARROW_TABLE_*` selectors. Raw table columns use
 /// EXTERNAL bus ids (the `pio_bus_ids` id space), not the gridfm schema. On
@@ -2579,9 +2586,11 @@ fn warn_dropped_sidecars(
 
 /// Serialize `net` to distribution format `to` (`dss`, `pmd`, or `bmopf`).
 /// Writing back to the format the handle was parsed from echoes the source text
-/// byte for byte; a cross format write reports every fidelity loss in `warnbuf`
-/// (`\n`-joined). Returns the text as an owned C string (free with
-/// [`pio_string_free`]), `NULL` on error.
+/// byte for byte. Returns the text as an owned C string (free with
+/// [`pio_string_free`]), `NULL` on error. A cross format write's fidelity
+/// losses are published through `out_warnings` as one owned C string (free it
+/// with [`pio_string_free`]), NULL when there are none. Pass NULL to discard
+/// them.
 #[cfg(feature = "dist")]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_dist_to_format(
@@ -2609,8 +2618,10 @@ pub unsafe extern "C" fn pio_dist_to_format(
 /// Convert distribution case `path` from optional source format `from` to format
 /// `to`; see [`pio_dist_parse_file`] for the inference rules. Returns the
 /// converted text as an owned C string (free with [`pio_string_free`]), `NULL` on
-/// error. The warnings written `\n`-joined into `warnbuf` carry both the parse
-/// warnings and the writer's fidelity losses (there is no handle to query them).
+/// error. The warnings published through `out_warnings` carry both the parse
+/// warnings and the writer's fidelity losses (there is no handle to query them),
+/// as one owned C string (free it with [`pio_string_free`]), NULL when there are
+/// none. Pass NULL to discard them.
 #[cfg(feature = "dist")]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_dist_convert_file(
@@ -2640,8 +2651,10 @@ pub unsafe extern "C" fn pio_dist_convert_file(
 /// (both required; `dss`, `pmd`, or `bmopf`). The parameter order is input,
 /// source, target, matching [`pio_dist_convert_file`]. Returns the converted text
 /// as an owned C string (free with [`pio_string_free`]), `NULL` on error. The
-/// warnings written `\n`-joined into `warnbuf` carry both the parse warnings and
-/// the writer's fidelity losses (there is no handle to query them).
+/// warnings published through `out_warnings` carry both the parse warnings and
+/// the writer's fidelity losses (there is no handle to query them), as one owned
+/// C string (free it with [`pio_string_free`]), NULL when there are none. Pass
+/// NULL to discard them.
 #[cfg(feature = "dist")]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_dist_convert_str(
