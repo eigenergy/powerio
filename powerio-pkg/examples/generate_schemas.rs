@@ -52,6 +52,7 @@ mod generate {
         also_required: &[&str],
     ) -> Result<(), Box<dyn std::error::Error>> {
         let mut schema = serde_json::to_value(schema_for!(T))?;
+        spell_nonfinite_floats(&mut schema)?;
         let root = schema
             .as_object_mut()
             .ok_or("schemars returned a non-object schema root")?;
@@ -85,6 +86,59 @@ mod generate {
         let mut text = serde_json::to_string_pretty(&schema)?;
         text.push('\n');
         fs::write(path, text)?;
+        Ok(())
+    }
+
+    /// Every document powerio authors spells a nonfinite float as
+    /// `"Infinity"`, `"-Infinity"`, or `"NaN"` (`powerio_diag::nonfinite`),
+    /// so every float position in the schema accepts a string spelling
+    /// beside the number. Fields whose number arm already admits `null`
+    /// (the multiconductor bounds) keep it: that is the read side leniency
+    /// for documents a pre-0.9 writer emitted.
+    fn spell_nonfinite_floats(
+        schema: &mut serde_json::Value,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        use serde_json::Value;
+
+        fn spell(node: &mut Value) {
+            match node {
+                Value::Object(map) => {
+                    let is_double = map.get("format") == Some(&Value::String("double".into()));
+                    let takes_number = match map.get("type") {
+                        Some(Value::String(t)) => t == "number",
+                        Some(Value::Array(ts)) => ts.iter().any(|t| t == "number"),
+                        _ => false,
+                    };
+                    if is_double && takes_number {
+                        let mut number_arm = serde_json::Map::new();
+                        number_arm.insert("type".into(), map.remove("type").unwrap());
+                        number_arm.insert("format".into(), map.remove("format").unwrap());
+                        map.insert(
+                            "anyOf".into(),
+                            serde_json::json!([
+                                number_arm,
+                                { "type": "string", "enum": ["Infinity", "-Infinity", "NaN"] }
+                            ]),
+                        );
+                    } else {
+                        for v in map.values_mut() {
+                            spell(v);
+                        }
+                    }
+                }
+                Value::Array(items) => {
+                    for v in items {
+                        spell(v);
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        if schema.get("$defs").is_none() {
+            return Err("schema has no $defs".into());
+        }
+        spell(schema);
         Ok(())
     }
 }

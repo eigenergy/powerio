@@ -1,16 +1,19 @@
-//! Payload spellings for nonfinite floats.
+//! Read side leniency for `null` at the bound fields.
 //!
-//! serde_json writes a nonfinite `f64` as JSON `null`. These modules read
-//! that `null` back, so a payload the library wrote always reads back
-//! (#268). A `null` element in an upper bound means unbounded above
-//! (+Inf); in a lower bound, unbounded below (-Inf); in a length, not
-//! known (NaN). This is the PMD convention.
+//! The multiconductor model writes a nonfinite `f64` as `"Infinity"`,
+//! `"-Infinity"`, or `"NaN"` like every powerio document
+//! (`powerio_diag::nonfinite`, threaded through the model's serde impls).
+//! Before 0.9.0 serde_json wrote it as JSON `null`, and these modules keep
+//! reading that `null` back by field role, so a payload an earlier writer
+//! emitted still reads (#268): a `null` element in an upper bound means
+//! unbounded above (+Inf); in a lower bound, unbounded below (-Inf); in a
+//! length, not known (NaN). The role defaults are the PMD convention.
 //!
 //! serde `with` modules receive `&T`, so the serialize signatures take
 //! references the lints would otherwise refuse.
 //!
-//! An `Option<f64>` field needs no module: a nonfinite writes as `null` and
-//! reads back as `None`, which is the same statement the bound made.
+//! An `Option<f64>` field needs no module: a nonfinite value spells itself
+//! as a string and round trips, and a pre-0.9 `null` reads back as `None`.
 #![allow(
     clippy::ref_option,
     clippy::trivially_copy_pass_by_ref,
@@ -160,6 +163,33 @@ mod tests {
         v.as_object_mut().unwrap().remove("i_max");
         let back: DistSwitch = serde_json::from_value(v).expect("omitted bound must parse");
         assert!(back.i_max.is_none());
+    }
+
+    /// The network type spells a nonfinite value as a string on every JSON
+    /// route (the unified powerio convention), and the bound modules keep
+    /// reading a pre-0.9 `null` element by field role.
+    #[test]
+    #[allow(clippy::float_cmp)]
+    fn network_spells_nonfinite_as_strings_and_reads_legacy_null() {
+        use crate::model::{DistLineCode, MulticonductorNetwork};
+
+        let mut net = MulticonductorNetwork::named("nf");
+        let mut code = DistLineCode::new("lc", vec![vec![0.1]], vec![vec![0.2]]);
+        code.i_max = Some(vec![f64::INFINITY, 400.0]);
+        net.linecodes.push(code);
+
+        let text = serde_json::to_string(&net).unwrap();
+        assert!(text.contains(r#""i_max":["Infinity",400.0]"#), "{text}");
+
+        let back: MulticonductorNetwork = serde_json::from_str(&text).unwrap();
+        assert_eq!(back.linecodes[0].i_max, Some(vec![f64::INFINITY, 400.0]));
+        assert_eq!(serde_json::to_string(&back).unwrap(), text);
+
+        // A pre-0.9 writer spelled the element `null`; the role default
+        // (+Inf for an ampacity) still applies on read.
+        let legacy = text.replace(r#""i_max":["Infinity",400.0]"#, r#""i_max":[null,400.0]"#);
+        let back: MulticonductorNetwork = serde_json::from_str(&legacy).unwrap();
+        assert_eq!(back.linecodes[0].i_max, Some(vec![f64::INFINITY, 400.0]));
     }
 
     /// A required field spelled `null` for a nonfinite value is still required:
