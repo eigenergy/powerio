@@ -141,6 +141,8 @@ pub mod codes {
         REQUEST_PACKAGE_NO_SUCH_INDEX = "REQUEST.PACKAGE.NO_SUCH_INDEX", Fatal,
             "the call names an operating point or study index the document does not carry",
             category = Data;
+        REQUEST_PACKAGE_WRONG_MODEL_KIND = "REQUEST.PACKAGE.WRONG_MODEL_KIND", Fatal,
+            "the call asks for a model family the document does not carry", category = Data;
         BUILD_PACKAGE_PAYLOAD_FAILED = "BUILD.PACKAGE.PAYLOAD_FAILED", Fatal,
             "the payload could not be built, applied, or serialized", category = Data;
         EMIT_PACKAGE_SERIALIZE_FAILED = "EMIT.PACKAGE.SERIALIZE_FAILED", Fatal,

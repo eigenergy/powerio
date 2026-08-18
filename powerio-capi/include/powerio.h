@@ -48,18 +48,27 @@
  * - errbuf/errlen caller buffers (the libpcap/curl idiom: allocation-free
  *   across the boundary, no thread-local state). NULL or length 0 discards
  *   the message; a long message truncates on a UTF-8 character boundary and
- *   is always NUL-terminated. PIO_ERRBUF_MIN is the recommended size. The ABI
- *   reports errors as messages and defines no error codes.
+ *   is always NUL-terminated. PIO_ERRBUF_MIN is the recommended size.
+ * - Every errbuf message and every warning line reads "CODE: message". The
+ *   code is a dotted diagnostic identity (EMIT.PSSE.FIELD_DROPPED,
+ *   BIND.CAPI.NULL_HANDLE); split at the first ": " to recover it, since a
+ *   code contains no colon and a message may contain any number. Branch on
+ *   the code, never on the prose: a message is not covered by any stability
+ *   promise. pio_build_info reports diagnostic_namespaces, the first segments
+ *   powerio emits, and error_categories, the coarse projection.
  * - Read warnings attach to the network handle; query them with pio_warnings,
  *   which returns the byte length needed (call with NULL/0 to size).
- * - Conversion warnings come back through a char **out_warnings out-param on
- *   the functions that return no handle (pio_to_format, pio_convert_*,
- *   pio_write_dir, and the pio_dist_* twins). NULL means the conversion lost
- *   nothing; any other value is an owned string to free with pio_string_free.
- *   Pass NULL for the parameter itself to discard them. The call writes it
- *   before doing any work, so a value left from an earlier call is never read
- *   as this one's. v4 filled a caller buffer here and truncated into it with
- *   no signal.
+ * - Conversion findings come back through a char **out_diagnostics_json
+ *   out-param on the functions that return no handle (pio_to_format,
+ *   pio_convert_*, pio_write_dir, and the pio_dist_* twins). NULL means the
+ *   conversion lost nothing; any other value is an owned JSON array of
+ *   diagnostic records to free with pio_string_free. Each record carries code,
+ *   severity and message, and where known element_path, source_ref, details
+ *   and suggested_action. Pass NULL for the parameter itself to discard them.
+ *   The call writes it before doing any work, so a value left from an earlier
+ *   call is never read as this one's. A warning is a record with severity
+ *   "warning", so this one channel replaces the v5 out_warnings rather than
+ *   sitting beside it.
  * - Strings returned by pio_to_format / pio_convert_file / pio_convert_str
  *   are owned by the library; free them with pio_string_free. Handles from
  *   pio_parse_file / pio_parse_str / pio_parse_bytes / pio_read_dir /
@@ -85,10 +94,17 @@
  * Arrow, `.pio.json`, and format-specific JSON schemas. The dense extractors
  * remain the balanced positive sequence projection. Arrow tables are append
  * only: existing PIO_ARROW_TABLE_* ids and column order do not change. A new
- * table takes the next id, and new columns append
- * at the end, and a consumer addresses columns by name, never by position.
+ * table takes the next id, new columns append at the end, and a consumer
+ * addresses columns by name, never by position.
  * Removing a supported format token or changing its documented C behavior
  * requires a PIO_ABI_VERSION bump.
+ *
+ * Diagnostic codes: a published code keeps its identity forever and is never
+ * reused for a different finding. A code may be retired, which stops it being
+ * emitted but never reassigns it, and refinement adds narrower codes rather
+ * than redefining a family. The namespace set grows only by addition, and a
+ * default severity may move in a minor release, so a consumer that needs a
+ * fixed policy pins by code. An unknown code is data, never a failure.
  *
  * Optional: build with `--features arrow` for pio_to_arrow (guarded by
  * PIO_ARROW), add `--features matrix` for the balanced matrix Arrow tables,
@@ -150,6 +166,10 @@ struct ArrowSchema;
  * `pio_dist_capabilities_json` renamed `schema_version` to `powerio_version`,
  * and the Arrow metadata key became `powerio.version`. A binding built against
  * 4 would pass a handshake it should fail and read `null` for keys it mirrors.
+ * The same bump carries the diagnostic grammar: every errbuf message and
+ * warning line reads `CODE: message`, and the seven conversion entry points
+ * publish structured records through `out_diagnostics_json` in place of the
+ * text `out_warnings` channel.
  */
 #define PIO_ABI_VERSION 5
 
@@ -350,10 +370,14 @@ char *pio_schema_versions_json(void);
  * keeps using [`pio_has_feature`] and [`pio_abi_version`], which say the same
  * things one answer at a time.
  *
- * `error_categories` lists the tokens that prefix an `errbuf` message. The ABI
- * reports errors as text, so a consumer that wants to branch on the kind of
- * failure matches these rather than parsing prose. They are stable; a new
- * category may be added.
+ * Every `errbuf` message and every warning line reads `CODE: message`, where
+ * the code is a dotted diagnostic identity such as
+ * `EMIT.PSSE.FIELD_DROPPED`. `diagnostic_namespaces` lists the first segments
+ * powerio emits, so a consumer that merges reports from several producers can
+ * tell powerio's findings from its own. `error_categories` lists the coarse
+ * projection each fatal code is published under, for a consumer that wants
+ * five buckets rather than the full code set. Both sets are stable; a member
+ * may be added.
  */
 char *pio_build_info(void);
 
@@ -511,7 +535,8 @@ ptrdiff_t pio_scenario_ids(const char *dir,
  * on a UTF-8 boundary; NULL/0 to skip). Returns the byte length of the full
  * joined text, excluding the NUL; call once with `(NULL, 0)` to size, then
  * pass a `char[len + 1]`. `0` means no warnings (or a NULL handle); readers
- * that are total attach none.
+ * that are total attach none. Each line reads `CODE: message`; split at the
+ * first `": "` to recover the code.
  */
 size_t pio_warnings(const PioNetwork *net, char *warnbuf, size_t warnlen);
 
@@ -622,20 +647,20 @@ int32_t pio_is_radial(const PioNetwork *net);
  * `matpower` is a byte-exact echo when the handle was parsed from MATPOWER.
  * Also accepts `powerio-json` as an alias for
  * [`pio_to_json`]. Model JSON cannot represent a non-finite `f64` (`Inf`/`NaN`):
- * it writes `null`, records the field in `out_warnings`, and fails validation when
- * read back.
+ * it writes `null`, records the field in `out_diagnostics_json`, and fails
+ * validation when read back.
  *
  * Returns the text as an owned C string (free with [`pio_string_free`]),
- * `NULL` on error (message into `errbuf`). Fidelity warnings, if any, are
- * published through `out_warnings` as one owned C string (free it with
- * [`pio_string_free`]), or NULL when there are none; a returned string has no
- * handle to attach them to. Pass NULL to discard them. `out_warnings` is
- * written on every return path and is NULL whenever this returns NULL, so an
- * error return leaves nothing to free.
+ * `NULL` on error (message into `errbuf`). The writer's findings, if any, are
+ * published through `out_diagnostics_json` as one owned JSON array of
+ * diagnostic records (free it with [`pio_string_free`]), or NULL when there
+ * are none; a returned string has no handle to attach them to. Pass NULL to
+ * discard them. `out_diagnostics_json` is written on every return path and is
+ * NULL whenever this returns NULL, so an error return leaves nothing to free.
  */
 char *pio_to_format(const PioNetwork *net,
                     const char *to,
-                    char **out_warnings,
+                    char **out_diagnostics_json,
                     char *errbuf,
                     size_t errlen);
 
@@ -643,16 +668,17 @@ char *pio_to_format(const PioNetwork *net,
  * Convert the case file at `path` from format `from` (NULL to infer from the
  * path, as [`pio_parse_file`]) to format `to`, without keeping a handle.
  * Returns the converted text as an owned C string (free with
- * [`pio_string_free`]), `NULL` on error. Fidelity warnings, read side first,
- * are published through `out_warnings` as one owned C string (free it with
- * [`pio_string_free`]), NULL when there are none. Pass NULL to discard them.
- * `out_warnings` is written on every return path and is NULL whenever this
- * returns NULL, so an error return leaves nothing to free.
+ * [`pio_string_free`]), `NULL` on error. The findings, read side first, are
+ * published through `out_diagnostics_json` as one owned JSON array of
+ * diagnostic records (free it with [`pio_string_free`]), NULL when there are
+ * none. Pass NULL to discard them. `out_diagnostics_json` is written on every
+ * return path and is NULL whenever this returns NULL, so an error return
+ * leaves nothing to free.
  */
 char *pio_convert_file(const char *path,
                        const char *from,
                        const char *to,
-                       char **out_warnings,
+                       char **out_diagnostics_json,
                        char *errbuf,
                        size_t errlen);
 
@@ -660,16 +686,17 @@ char *pio_convert_file(const char *path,
  * Convert in-memory case `text` from format `from` (required; there is no
  * path to infer from) to format `to` without keeping a handle. Returns the
  * converted text as an owned C
- * string (free with [`pio_string_free`]), `NULL` on error. Fidelity warnings,
- * read side first, are published through `out_warnings` as one owned C string
- * (free it with [`pio_string_free`]), NULL when there are none. Pass NULL to
- * discard them. `out_warnings` is written on every return path and is NULL
- * whenever this returns NULL, so an error return leaves nothing to free.
+ * string (free with [`pio_string_free`]), `NULL` on error. The findings, read
+ * side first, are published through `out_diagnostics_json` as one owned JSON
+ * array of diagnostic records (free it with [`pio_string_free`]), NULL when
+ * there are none. Pass NULL to discard them. `out_diagnostics_json` is written
+ * on every return path and is NULL whenever this returns NULL, so an error
+ * return leaves nothing to free.
  */
 char *pio_convert_str(const char *text,
                       const char *from,
                       const char *to,
-                      char **out_warnings,
+                      char **out_diagnostics_json,
                       char *errbuf,
                       size_t errlen);
 
@@ -677,16 +704,17 @@ char *pio_convert_str(const char *text,
  * Write `net` into `out_dir` as the named directory format `to`. PyPSA CSV
  * (`pypsa-csv`/`pypsa`) is the currently supported directory format; a text format name is
  * an error pointing back at [`pio_to_format`]. Returns `0` on success and
- * `-1` on error (message into `errbuf`). Fidelity warnings, if any, are
- * published through `out_warnings` as one owned C string (free it with
- * [`pio_string_free`]), NULL when there are none. Pass NULL to discard them.
- * `out_warnings` is written on every return path and is NULL whenever this
- * returns `-1`, so an error return leaves nothing to free.
+ * `-1` on error (message into `errbuf`). The writer's findings, if any, are
+ * published through `out_diagnostics_json` as one owned JSON array of
+ * diagnostic records (free it with [`pio_string_free`]), NULL when there are
+ * none. Pass NULL to discard them. `out_diagnostics_json` is written on every
+ * return path and is NULL whenever this returns `-1`, so an error return
+ * leaves nothing to free.
  */
 int32_t pio_write_dir(const PioNetwork *net,
                       const char *to,
                       const char *out_dir,
-                      char **out_warnings,
+                      char **out_diagnostics_json,
                       char *errbuf,
                       size_t errlen);
 
@@ -870,8 +898,8 @@ char *pio_package_to_json(const PioPackage *pkg, char *errbuf, size_t errlen);
 
 #if defined(PIO_PKG)
 /**
- * Wrap a balanced [`PioNetwork`] handle in a `.pio.json` package. The C handle
- * name is historical; the payload is `powerio::BalancedNetwork`.
+ * Wrap a balanced [`PioNetwork`] handle in a `.pio.json` package. A
+ * `PioNetwork` carries a `powerio::BalancedNetwork`.
  * `include_solver_metadata != 0` attaches compact normalized solver table
  * metadata.
  */
@@ -883,9 +911,8 @@ PioPackage *pio_package_from_balanced_network(const PioNetwork *net,
 
 #if (defined(PIO_PKG) && defined(PIO_DIST))
 /**
- * Wrap a multiconductor [`PioDistNetwork`] handle in a `.pio.json` package. The
- * C handle name is historical; the payload is
- * `powerio_dist::MulticonductorNetwork`.
+ * Wrap a multiconductor [`PioDistNetwork`] handle in a `.pio.json` package. A
+ * `PioDistNetwork` carries a `powerio_dist::MulticonductorNetwork`.
  */
 PioPackage *pio_package_from_multiconductor_network(const PioDistNetwork *net,
                                                     char *errbuf,
@@ -1139,7 +1166,8 @@ void pio_dist_network_free(PioDistNetwork *net);
  * represent or had to assume), `\n`-joined and written into the caller `warnbuf`
  * (truncated to fit, always NUL-terminated). Returns the total byte length of
  * the joined message; call with `NULL`/0 to size first, then fill — the same
- * idiom as [`pio_warnings`]. Returns 0 for a NULL handle.
+ * idiom as [`pio_warnings`]. Each line reads `CODE: message`. Returns 0 for a
+ * NULL handle.
  */
 size_t pio_dist_warnings(const PioDistNetwork *net, char *warnbuf, size_t warnlen);
 #endif
@@ -1192,14 +1220,15 @@ PioDistNetwork *pio_dist_from_json(const char *text, char *errbuf, size_t errlen
  * Writing back to the format the handle was parsed from echoes the source text
  * byte for byte. Returns the text as an owned C string (free with
  * [`pio_string_free`]), `NULL` on error. A cross format write's fidelity
- * losses are published through `out_warnings` as one owned C string (free it
- * with [`pio_string_free`]), NULL when there are none. Pass NULL to discard
- * them. `out_warnings` is written on every return path and is NULL whenever
- * this returns NULL, so an error return leaves nothing to free.
+ * losses are published through `out_diagnostics_json` as one owned JSON array
+ * of diagnostic records (free it with [`pio_string_free`]), NULL when there
+ * are none. Pass NULL to discard them. `out_diagnostics_json` is written on
+ * every return path and is NULL whenever this returns NULL, so an error return
+ * leaves nothing to free.
  */
 char *pio_dist_to_format(const PioDistNetwork *net,
                          const char *to,
-                         char **out_warnings,
+                         char **out_diagnostics_json,
                          char *errbuf,
                          size_t errlen);
 #endif
@@ -1209,17 +1238,17 @@ char *pio_dist_to_format(const PioDistNetwork *net,
  * Convert distribution case `path` from optional source format `from` to format
  * `to`; see [`pio_dist_parse_file`] for the inference rules. Returns the
  * converted text as an owned C string (free with [`pio_string_free`]), `NULL` on
- * error. The warnings published through `out_warnings` carry both the parse
- * warnings and the writer's fidelity losses (there is no handle to query them),
- * as one owned C string (free it with [`pio_string_free`]), NULL when there are
- * none. Pass NULL to discard them. `out_warnings` is written on every return
- * path and is NULL whenever this returns NULL, so an error return leaves
- * nothing to free.
+ * error. The records published through `out_diagnostics_json` carry both the
+ * parse findings and the writer's fidelity losses (there is no handle to query
+ * them), as one owned JSON array (free it with [`pio_string_free`]), NULL when
+ * there are none. Pass NULL to discard them. `out_diagnostics_json` is written
+ * on every return path and is NULL whenever this returns NULL, so an error
+ * return leaves nothing to free.
  */
 char *pio_dist_convert_file(const char *path,
                             const char *from,
                             const char *to,
-                            char **out_warnings,
+                            char **out_diagnostics_json,
                             char *errbuf,
                             size_t errlen);
 #endif
@@ -1230,16 +1259,17 @@ char *pio_dist_convert_file(const char *path,
  * (both required; `dss`, `pmd`, or `bmopf`). The parameter order is input,
  * source, target, matching [`pio_dist_convert_file`]. Returns the converted text
  * as an owned C string (free with [`pio_string_free`]), `NULL` on error. The
- * warnings published through `out_warnings` carry both the parse warnings and
- * the writer's fidelity losses (there is no handle to query them), as one owned
- * C string (free it with [`pio_string_free`]), NULL when there are none. Pass
- * NULL to discard them. `out_warnings` is written on every return path and is
- * NULL whenever this returns NULL, so an error return leaves nothing to free.
+ * records published through `out_diagnostics_json` carry both the parse
+ * findings and the writer's fidelity losses (there is no handle to query them),
+ * as one owned JSON array (free it with [`pio_string_free`]), NULL when there
+ * are none. Pass NULL to discard them. `out_diagnostics_json` is written on
+ * every return path and is NULL whenever this returns NULL, so an error return
+ * leaves nothing to free.
  */
 char *pio_dist_convert_str(const char *text,
                            const char *from,
                            const char *to,
-                           char **out_warnings,
+                           char **out_diagnostics_json,
                            char *errbuf,
                            size_t errlen);
 #endif

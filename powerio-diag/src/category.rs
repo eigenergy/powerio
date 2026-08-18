@@ -29,8 +29,8 @@ pub enum ErrorCategory {
 }
 
 impl ErrorCategory {
-    /// The token for this category, as it appears in a C `errbuf` message and
-    /// in `pio_build_info`.
+    /// The token for this category, as it appears in `pio_build_info`'s
+    /// `error_categories`. An `errbuf` message carries the code, not this.
     #[must_use]
     pub fn token(self) -> &'static str {
         match self {

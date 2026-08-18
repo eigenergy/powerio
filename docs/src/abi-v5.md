@@ -8,7 +8,7 @@ ABI 5 ships with powerio 0.9.0. It touches seventeen symbols and renames none, s
 
 | symbol | change |
 |---|---|
-| `pio_to_format` | signature: warnings return through `char **out_warnings` |
+| `pio_to_format` | signature: findings return through `char **out_diagnostics_json` |
 | `pio_convert_file` | signature: same |
 | `pio_convert_str` | signature: same |
 | `pio_write_dir` | signature: same |
@@ -28,9 +28,9 @@ ABI 5 ships with powerio 0.9.0. It touches seventeen symbols and renames none, s
 
 The `PioAcopfInstance` typedef goes with its three symbols. Nothing else in the header moved.
 
-## Conversion warnings
+## Conversion findings
 
-The seven conversion entry points filled a caller buffer and truncated into it when the fidelity loss list outran the buffer. The length that would have told the caller was discarded, and the header advertised 256 bytes as sufficient. They take an out-pointer now.
+The seven conversion entry points filled a caller buffer and truncated into it when the fidelity loss list outran the buffer. The length that would have told the caller was discarded, and the header advertised 256 bytes as sufficient. They take an out-pointer now, and what comes back is structured.
 
 ```c
 /* ABI 4 */
@@ -38,19 +38,37 @@ char warnbuf[PIO_ERRBUF_MIN];
 char *text = pio_to_format(net, "matpower", warnbuf, sizeof warnbuf, errbuf, sizeof errbuf);
 
 /* ABI 5 */
-char *warnings = NULL;
-char *text = pio_to_format(net, "matpower", &warnings, errbuf, sizeof errbuf);
-if (warnings) {
-    /* the conversion lost something; the string is yours */
-    pio_string_free(warnings);
+char *diagnostics = NULL;
+char *text = pio_to_format(net, "matpower", &diagnostics, errbuf, sizeof errbuf);
+if (diagnostics) {
+    /* a JSON array of records; the string is yours */
+    pio_string_free(diagnostics);
 }
 ```
 
-`NULL` on return means the conversion lost nothing. Any other value is an owned string you free with `pio_string_free`. Passing `NULL` for the parameter itself discards the warnings without allocating. The call writes the out-pointer before it does any work, so a value left over from an earlier call is never read as this one's.
+`NULL` on return means the conversion lost nothing. Any other value is an owned JSON array you free with `pio_string_free`. Each element carries `code`, `severity` and `message`, and where known `element_path`, `source_ref`, `details` and `suggested_action`. Passing `NULL` for the parameter itself discards the findings without allocating. The call writes the out-pointer before it does any work, so a value left over from an earlier call is never read as this one's.
 
-**The trap.** You own the string whether or not you asked for it. A binding that passes a real pointer and then decides downstream it does not want the text compiles, runs, and leaks on every conversion whose source format differs from its target — nothing about the call says the allocation happened. Decide at the call site: pass `NULL` to discard, or pass a pointer and free it unconditionally. PowerIO.jl's `_format_from_handle` is the worked example, threading a `want_warnings` flag down to the pointer itself.
+A warning is a record with severity `warning`, which is why there is one channel rather than two. A caller that only wants lines renders each record as `code + ": " + message`, which is exactly what the handle accessors below return.
 
-`pio_warnings` and `pio_dist_warnings` are unchanged. They use the size-then-fill idiom and cannot truncate.
+**The trap.** You own the string whether or not you asked for it. A binding that passes a real pointer and then decides downstream it does not want the payload compiles, runs, and leaks on every conversion whose source format differs from its target — nothing about the call says the allocation happened. Decide at the call site: pass `NULL` to discard, or pass a pointer and free it unconditionally.
+
+`pio_warnings` and `pio_dist_warnings` keep their signatures and stay the plain text view for a caller with no JSON parser. They use the size-then-fill idiom and cannot truncate.
+
+## Diagnostic codes
+
+Every `errbuf` message and every warning line reads `CODE: message`:
+
+```text
+REQUEST.FORMAT.UNKNOWN: unknown format `bogus`
+BIND.CAPI.NULL_HANDLE: network handle is NULL
+EMIT.PSSE.FIELD_DROPPED: generator cost curves dropped: PSS/E .raw has no cost data
+```
+
+Split at the first `": "`. The left side is `NAMESPACE.SCOPE.SPECIFIC` and contains no colon; the right side is prose, covered by no stability promise, so branch on the code and never on the message. The first segment names the stage and is the only segment to parse; treat the rest as opaque identity, and read more than three segments without complaint.
+
+`pio_build_info` reports `diagnostic_namespaces`, the ten first segments powerio emits, and `error_categories`, the coarse five bucket projection each fatal code is published under. A code whose first segment is outside the ten came from somewhere else, which is data rather than a failure.
+
+A published code keeps its identity forever. It may be retired, which stops it being emitted and never reassigns it, and a family may be refined by adding narrower codes beside it. A default severity may move in a minor release, so a consumer that needs a fixed policy pins by code.
 
 ## The star-lowered space
 
@@ -81,7 +99,7 @@ PioNetwork *pio_parse_bytes(const uint8_t *bytes, size_t len, const char *format
                             char *errbuf, size_t errlen);
 ```
 
-`pio_build_info` returns one owned JSON document, shaped after `curl_version_info`, holding `powerio_version`, `abi`, `features` (`arrow`, `matrix`, `gridfm`, `dist`, `pkg`, `prob`), `foreign_schemas` (`bmopf`), and `error_categories`. That last key is the one worth binding early: the ABI reports failures as text and defines no error codes, so a caller that wants to branch on the kind of failure matches these tokens rather than parsing English.
+`pio_build_info` returns one owned JSON document, shaped after `curl_version_info`, holding `powerio_version`, `abi`, `features` (`arrow`, `matrix`, `gridfm`, `dist`, `pkg`, `prob`), `foreign_schemas` (`bmopf`), `diagnostic_namespaces` and `error_categories`. The last two are the ones worth binding early: a caller that wants to branch on the kind of failure reads the code every message leads with, and these two report the sets a code decodes into.
 
 `pio_parse_bytes` accepts every format name `pio_parse_str` takes plus `pwb`. PowerWorld binary has no text form and a NUL truncates it, so before this the only route to one was `pio_parse_file`, and a consumer holding an upload or an archive member had to stage a temporary file. It opens nothing, which is a security property rather than a convenience: it is the entry point for input you do not control, and it is why the 0.7.3 advisory fix works.
 

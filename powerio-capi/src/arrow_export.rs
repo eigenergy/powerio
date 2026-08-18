@@ -54,8 +54,9 @@ pub const PIO_ARROW_TABLE_MATRIX_BRANCH: i32 = 20;
 // These values are the ABI: the `PIO_ARROW_TABLE_*` macros in include/powerio.h
 // are hand-synced to them. The set is append-only: these ids and each table's
 // column order are frozen, a new table takes the next id and extends
-// this assert, and new columns append (nullable) at the end so consumers read by
-// name. Pin them so a Rust-side edit that drifts from the header (a renumber, a
+// this assert, and new columns append at the end so consumers read by name.
+// Every exported field is non-nullable. Pin them so a Rust-side edit that
+// drifts from the header (a renumber, a
 // reorder, a dropped table) fails the build instead of silently exporting the
 // wrong table.
 const _: () = assert!(
@@ -82,6 +83,12 @@ const _: () = assert!(
         && PIO_ARROW_TABLE_MATRIX_BRANCH == 20
 );
 
+/// One table build or export failure as its errbuf line. Arrow's own error
+/// type carries no registry entry, so it takes the boundary's own.
+fn export_err(e: impl std::fmt::Display) -> String {
+    crate::diagnostics::coded(&crate::diagnostics::codes::EMIT_CAPI_SERIALIZE_FAILED, e)
+}
+
 /// Build the requested table and export it over the C Data Interface. The
 /// returned FFI structs own the columnar buffers until the consumer releases
 /// them.
@@ -91,38 +98,32 @@ pub fn export(
     table: i32,
 ) -> Result<(FFI_ArrowArray, FFI_ArrowSchema), String> {
     let rb = match table {
-        PIO_ARROW_TABLE_BUS => bus_batch(net).map_err(|e| e.to_string())?,
-        PIO_ARROW_TABLE_BRANCH => branch_batch(net).map_err(|e| e.to_string())?,
-        PIO_ARROW_TABLE_GEN => gen_batch(net).map_err(|e| e.to_string())?,
-        PIO_ARROW_TABLE_LOAD => load_batch(net).map_err(|e| e.to_string())?,
-        PIO_ARROW_TABLE_SHUNT => shunt_batch(net).map_err(|e| e.to_string())?,
-        PIO_ARROW_TABLE_SWITCH => switch_batch(net).map_err(|e| e.to_string())?,
-        PIO_ARROW_TABLE_SOLVER_BUS => {
-            solver_bus_batch(&solver_tables(net)?).map_err(|e| e.to_string())?
-        }
+        PIO_ARROW_TABLE_BUS => bus_batch(net).map_err(export_err)?,
+        PIO_ARROW_TABLE_BRANCH => branch_batch(net).map_err(export_err)?,
+        PIO_ARROW_TABLE_GEN => gen_batch(net).map_err(export_err)?,
+        PIO_ARROW_TABLE_LOAD => load_batch(net).map_err(export_err)?,
+        PIO_ARROW_TABLE_SHUNT => shunt_batch(net).map_err(export_err)?,
+        PIO_ARROW_TABLE_SWITCH => switch_batch(net).map_err(export_err)?,
+        PIO_ARROW_TABLE_SOLVER_BUS => solver_bus_batch(&solver_tables(net)?).map_err(export_err)?,
         PIO_ARROW_TABLE_SOLVER_LOAD => {
-            solver_load_batch(&solver_tables(net)?).map_err(|e| e.to_string())?
+            solver_load_batch(&solver_tables(net)?).map_err(export_err)?
         }
         PIO_ARROW_TABLE_SOLVER_SHUNT => {
-            solver_shunt_batch(&solver_tables(net)?).map_err(|e| e.to_string())?
+            solver_shunt_batch(&solver_tables(net)?).map_err(export_err)?
         }
         PIO_ARROW_TABLE_SOLVER_BRANCH => {
-            solver_branch_batch(&solver_tables(net)?).map_err(|e| e.to_string())?
+            solver_branch_batch(&solver_tables(net)?).map_err(export_err)?
         }
         PIO_ARROW_TABLE_SOLVER_SWITCH => {
-            solver_switch_batch(&solver_tables(net)?).map_err(|e| e.to_string())?
+            solver_switch_batch(&solver_tables(net)?).map_err(export_err)?
         }
-        PIO_ARROW_TABLE_SOLVER_ARC => {
-            solver_arc_batch(&solver_tables(net)?).map_err(|e| e.to_string())?
-        }
-        PIO_ARROW_TABLE_SOLVER_GEN => {
-            solver_gen_batch(&solver_tables(net)?).map_err(|e| e.to_string())?
-        }
+        PIO_ARROW_TABLE_SOLVER_ARC => solver_arc_batch(&solver_tables(net)?).map_err(export_err)?,
+        PIO_ARROW_TABLE_SOLVER_GEN => solver_gen_batch(&solver_tables(net)?).map_err(export_err)?,
         PIO_ARROW_TABLE_SOLVER_STORAGE => {
-            solver_storage_batch(&solver_tables(net)?).map_err(|e| e.to_string())?
+            solver_storage_batch(&solver_tables(net)?).map_err(export_err)?
         }
         PIO_ARROW_TABLE_SOLVER_HVDC => {
-            solver_hvdc_batch(&solver_tables(net)?).map_err(|e| e.to_string())?
+            solver_hvdc_batch(&solver_tables(net)?).map_err(export_err)?
         }
         PIO_ARROW_TABLE_YBUS => matrix_ybus_batch(net, core)?,
         PIO_ARROW_TABLE_INCIDENCE => matrix_incidence_batch(net, core)?,
@@ -130,13 +131,18 @@ pub fn export(
         PIO_ARROW_TABLE_BDOUBLEPRIME => matrix_bdoubleprime_batch(net, core)?,
         PIO_ARROW_TABLE_MATRIX_BUS => matrix_bus_batch(net, core)?,
         PIO_ARROW_TABLE_MATRIX_BRANCH => matrix_branch_batch(net, core)?,
-        other => return Err(format!("unknown Arrow table id {other}")),
+        other => {
+            return Err(crate::diagnostics::coded(
+                &crate::diagnostics::codes::REQUEST_CAPI_ARROW_TABLE_UNKNOWN,
+                format_args!("unknown Arrow table id {other}"),
+            ));
+        }
     };
 
     // The C Data Interface represents a record batch as a struct array. Build
     // the schema from the RecordBatch, not from ArrayData, so table metadata
     // such as matrix dimensions survives the FFI boundary.
-    let schema = FFI_ArrowSchema::try_from(rb.schema().as_ref()).map_err(|e| e.to_string())?;
+    let schema = FFI_ArrowSchema::try_from(rb.schema().as_ref()).map_err(export_err)?;
     let data = StructArray::from(rb).into_data();
     Ok((FFI_ArrowArray::new(&data), schema))
 }
@@ -324,7 +330,7 @@ fn units_axis() -> serde_json::Value {
 }
 
 fn solver_tables(net: &BalancedNetwork) -> Result<NormalizedSolverTables, String> {
-    net.to_normalized_solver_tables().map_err(|e| e.to_string())
+    net.to_normalized_solver_tables().map_err(export_err)
 }
 
 fn bus_batch(net: &BalancedNetwork) -> Result<RecordBatch, ArrowError> {
@@ -916,7 +922,7 @@ fn matrix_bus_batch(net: &BalancedNetwork, core: &IndexCore) -> Result<RecordBat
         ],
         axis_metadata("matrix_bus"),
     )
-    .map_err(|e| e.to_string())
+    .map_err(export_err)
 }
 
 #[cfg(not(feature = "matrix"))]
@@ -932,17 +938,18 @@ fn matrix_branch_batch(net: &BalancedNetwork, core: &IndexCore) -> Result<Record
         powerio_matrix::DcConvention::default(),
         &powerio_matrix::BuildOptions::default(),
     )
-    .map_err(|e| e.to_string())?;
+    .map_err(export_err)?;
 
     let mut index = Vec::with_capacity(parts.branch_of_col.len());
     let mut source_row = Vec::with_capacity(parts.branch_of_col.len());
     let mut from_bus_id = Vec::with_capacity(parts.branch_of_col.len());
     let mut to_bus_id = Vec::with_capacity(parts.branch_of_col.len());
     for (col, &idx) in parts.branch_of_col.iter().enumerate() {
-        let br = view
-            .branches()
-            .get(idx)
-            .ok_or_else(|| format!("incidence branch column {col} points to missing row {idx}"))?;
+        let br = view.branches().get(idx).ok_or_else(|| {
+            export_err(format_args!(
+                "incidence branch column {col} points to missing row {idx}"
+            ))
+        })?;
         index.push(usz(col));
         source_row.push((idx < net.branches.len()).then_some(idx).map_or(-1, usz));
         from_bus_id.push(ext(br.from));
@@ -958,7 +965,7 @@ fn matrix_branch_batch(net: &BalancedNetwork, core: &IndexCore) -> Result<Record
         ],
         axis_metadata("matrix_branch"),
     )
-    .map_err(|e| e.to_string())
+    .map_err(export_err)
 }
 
 #[cfg(not(feature = "matrix"))]
@@ -970,7 +977,7 @@ fn matrix_branch_batch(_net: &BalancedNetwork, _core: &IndexCore) -> Result<Reco
 fn matrix_ybus_batch(net: &BalancedNetwork, core: &IndexCore) -> Result<RecordBatch, String> {
     let view = IndexedNetwork::with_core(net, core);
     let parts = powerio_matrix::build_ybus(&view, &powerio_matrix::BuildOptions::default())
-        .map_err(|e| e.to_string())?;
+        .map_err(export_err)?;
     let mut cols = YbusColumns {
         row_index: Vec::with_capacity(parts.g.nnz() + parts.b.nnz()),
         col_index: Vec::with_capacity(parts.g.nnz() + parts.b.nnz()),
@@ -1010,7 +1017,7 @@ fn matrix_ybus_batch(net: &BalancedNetwork, core: &IndexCore) -> Result<RecordBa
             col: "matrix_bus",
         },
     )
-    .map_err(|e| e.to_string())
+    .map_err(export_err)
 }
 
 #[cfg(not(feature = "matrix"))]
@@ -1079,9 +1086,8 @@ fn matrix_incidence_batch(net: &BalancedNetwork, core: &IndexCore) -> Result<Rec
         powerio_matrix::DcConvention::default(),
         &powerio_matrix::BuildOptions::default(),
     )
-    .map_err(|e| e.to_string())?;
-    real_matrix_batch!("incidence", parts.a, "matrix_bus", "matrix_branch")
-        .map_err(|e| e.to_string())
+    .map_err(export_err)?;
+    real_matrix_batch!("incidence", parts.a, "matrix_bus", "matrix_branch").map_err(export_err)
 }
 
 #[cfg(not(feature = "matrix"))]
@@ -1096,8 +1102,8 @@ fn matrix_incidence_batch(
 fn matrix_bprime_batch(net: &BalancedNetwork, core: &IndexCore) -> Result<RecordBatch, String> {
     let view = IndexedNetwork::with_core(net, core);
     let matrix = powerio_matrix::build_bprime(&view, &powerio_matrix::BuildOptions::default())
-        .map_err(|e| e.to_string())?;
-    real_matrix_batch!("bprime", matrix, "matrix_bus", "matrix_bus").map_err(|e| e.to_string())
+        .map_err(export_err)?;
+    real_matrix_batch!("bprime", matrix, "matrix_bus", "matrix_bus").map_err(export_err)
 }
 
 #[cfg(not(feature = "matrix"))]
@@ -1113,9 +1119,8 @@ fn matrix_bdoubleprime_batch(
     let view = IndexedNetwork::with_core(net, core);
     let matrix =
         powerio_matrix::build_bdoubleprime(&view, &powerio_matrix::BuildOptions::default())
-            .map_err(|e| e.to_string())?;
-    real_matrix_batch!("bdoubleprime", matrix, "matrix_bus", "matrix_bus")
-        .map_err(|e| e.to_string())
+            .map_err(export_err)?;
+    real_matrix_batch!("bdoubleprime", matrix, "matrix_bus", "matrix_bus").map_err(export_err)
 }
 
 #[cfg(not(feature = "matrix"))]
@@ -1128,7 +1133,10 @@ fn matrix_bdoubleprime_batch(
 
 #[cfg(not(feature = "matrix"))]
 fn matrix_feature_error() -> String {
-    "matrix Arrow tables require the matrix cargo feature".to_owned()
+    crate::diagnostics::coded(
+        &crate::diagnostics::codes::REQUEST_CAPI_FEATURE_DISABLED,
+        "matrix Arrow tables require the matrix cargo feature",
+    )
 }
 
 #[cfg(feature = "matrix")]
