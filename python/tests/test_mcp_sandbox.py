@@ -141,3 +141,18 @@ def test_a_write_into_a_missing_directory_raises(monkeypatch, tmp_path):
         sandbox.checked_path(
             str(tmp_path / "nope" / "out.json"), purpose="out_path", for_write=True
         )
+
+
+def test_refusals_raise_the_exported_type(monkeypatch, tmp_path):
+    # Consumers match on the type; the prose is free to change.
+    assert "PathNotAllowed" in sandbox.__all__
+    assert issubclass(sandbox.PathNotAllowed, ValueError)
+    root = tmp_path / "root"
+    root.mkdir()
+    monkeypatch.setenv(sandbox.ALLOWED_ROOTS_ENV, str(root))
+    with pytest.raises(sandbox.PathNotAllowed):
+        sandbox.checked_path(str(tmp_path / "elsewhere.m"))
+    with pytest.raises(sandbox.PathNotAllowed):
+        sandbox.checked_path(
+            str(root / "nope" / "out.json"), purpose="out_path", for_write=True
+        )

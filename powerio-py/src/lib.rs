@@ -54,7 +54,8 @@ pyo3::create_exception!(
      Subclasses `ValueError`: every failure it covers is a statement about a \
      value the caller supplied, and `except ValueError` was what callers wrote \
      before the hierarchy existed. I/O failures do not reach it; they raise the \
-     matching `OSError` subclass by value."
+     matching `OSError` subclass by value. Failures mapped from the Rust core \
+     carry the diagnostic code string as a `.code` attribute."
 );
 
 pyo3::create_exception!(
@@ -86,16 +87,30 @@ pyo3::create_exception!(
 ///
 /// Every crate's error carries the same `category()`, so one mapping serves
 /// all of them and the hierarchy cannot drift per surface.
-fn categorized_pyerr(category: powerio_matrix::ErrorCategory, msg: String) -> PyErr {
+fn categorized_pyerr(
+    category: powerio_matrix::ErrorCategory,
+    code: &'static str,
+    msg: String,
+) -> PyErr {
     use powerio_matrix::ErrorCategory as C;
-    match category {
+    let err = match category {
         C::UnknownFormat => PyValueError::new_err(msg),
         C::Parse => PowerIOParseError::new_err(msg),
         C::Data => PowerIODataError::new_err(msg),
         // `Io` is unwrapped by the callers below when it still carries the
         // original `std::io::Error`; `Output` (mtx/parquet) maps to the base.
         C::Io | C::Output => PowerIOError::new_err(msg),
-    }
+    };
+    with_code(err, code)
+}
+
+/// Attach the diagnostic code as a `.code` attribute on the exception value,
+/// the Python counterpart of `Error::code()`.
+fn with_code(err: PyErr, code: &'static str) -> PyErr {
+    Python::attach(|py| {
+        let _ = err.value(py).setattr("code", code);
+    });
+    err
 }
 
 fn core_pyerr(e: powerio_matrix::CoreError) -> PyErr {
@@ -104,7 +119,8 @@ fn core_pyerr(e: powerio_matrix::CoreError) -> PyErr {
         return io.into();
     }
     let category = e.category();
-    categorized_pyerr(category, e.to_string())
+    let code = e.code().code;
+    categorized_pyerr(category, code, e.to_string())
 }
 
 fn to_pyerr(e: powerio_matrix::Error) -> PyErr {
@@ -114,7 +130,8 @@ fn to_pyerr(e: powerio_matrix::Error) -> PyErr {
         E::Core(inner) => core_pyerr(inner),
         other => {
             let category = other.category();
-            categorized_pyerr(category, other.to_string())
+            let code = other.code().code;
+            categorized_pyerr(category, code, other.to_string())
         }
     }
 }
@@ -127,7 +144,8 @@ fn prob_pyerr(e: powerio_prob::Error) -> PyErr {
         E::Matrix(inner) => to_pyerr(inner),
         other => {
             let category = other.category();
-            categorized_pyerr(category, other.to_string())
+            let code = other.code().code;
+            categorized_pyerr(category, code, other.to_string())
         }
     }
 }
@@ -315,7 +333,7 @@ fn package_pyerr(e: powerio_pkg::Error) -> PyErr {
     match e {
         powerio_pkg::Error::Core(inner) => core_pyerr(inner),
         powerio_pkg::Error::Multiconductor(inner) => dist_to_pyerr(inner),
-        other => categorized_pyerr(other.category(), other.to_string()),
+        other => categorized_pyerr(other.category(), other.code().code, other.to_string()),
     }
 }
 
@@ -1571,17 +1589,18 @@ fn write_with_sidecars(
 fn dist_to_pyerr(e: powerio_dist::Error) -> PyErr {
     use powerio_dist::Error as E;
     let msg = e.to_string();
+    let code = e.code().code;
     match e {
         // OSError(errno, strerror, filename) lets CPython pick the precise
         // subclass (FileNotFoundError etc.) while keeping the path on
         // e.filename, which a bare io::Error conversion would drop.
         E::Io { path, source } => match source.raw_os_error() {
             Some(errno) => pyo3::exceptions::PyOSError::new_err((errno, source.to_string(), path)),
-            None => PowerIOError::new_err(msg),
+            None => with_code(PowerIOError::new_err(msg), code),
         },
         E::UnknownFormat(_) => PyValueError::new_err(msg),
-        E::Json { .. } => PowerIOParseError::new_err(msg),
-        _ => PowerIOError::new_err(msg),
+        E::Json { .. } => with_code(PowerIOParseError::new_err(msg), code),
+        _ => with_code(PowerIOError::new_err(msg), code),
     }
 }
 

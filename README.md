@@ -249,6 +249,8 @@ pip install 'powerio[mcp]'
 powerio-mcp
 ```
 
+`python -m powerio.mcp` and the `powerio-mcp` console script are consumer entry points and do not move without a version bump.
+
 MCP clients can keep a case in `.pio.json` document JSON through the `package`
 transport:
 
