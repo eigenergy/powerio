@@ -132,10 +132,10 @@ pub fn export(
             solver_hvdc_batch(&solver_tables(net)?).map_err(export_err)?
         }
         PIO_ARROW_TABLE_SOLVER_GEN_COST => {
-            solver_gen_cost_batch(&solver_tables(net)?).map_err(|e| e.to_string())?
+            solver_gen_cost_batch(&solver_tables(net)?).map_err(export_err)?
         }
         PIO_ARROW_TABLE_SOLVER_GEN_COST_COEFF => {
-            solver_gen_cost_coeff_batch(&solver_tables(net)?).map_err(|e| e.to_string())?
+            solver_gen_cost_coeff_batch(&solver_tables(net)?).map_err(export_err)?
         }
         PIO_ARROW_TABLE_YBUS => matrix_ybus_batch(net, core)?,
         PIO_ARROW_TABLE_INCIDENCE => matrix_incidence_batch(net, core)?,
