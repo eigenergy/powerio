@@ -280,6 +280,22 @@ fn powerio_version_is_present_and_required() {
 }
 
 #[test]
+fn from_json_bytes_tolerates_a_byte_order_mark_and_refuses_non_utf8() {
+    let json = balanced_package().to_json().unwrap();
+    NetworkPackage::from_json_bytes(json.as_bytes()).expect("plain bytes load");
+
+    let mut with_bom = b"\xEF\xBB\xBF".to_vec();
+    with_bom.extend_from_slice(json.as_bytes());
+    NetworkPackage::from_json_bytes(&with_bom).expect("byte order mark is tolerated");
+
+    // 0xE9 is CP1252 e-acute, the classic single byte a Windows editor leaves.
+    let err = NetworkPackage::from_json_bytes(b"{\"powerio_version\xE9\": 1}").unwrap_err();
+    let msg = err.to_string();
+    assert!(msg.contains("UTF-8"), "got: {msg}");
+    assert!(msg.contains(".pio.json"), "got: {msg}");
+}
+
+#[test]
 fn version_gate_rejects_other_lineages_and_says_regenerate() {
     let pkg = balanced_package();
     let mut v = serde_json::to_value(&pkg).unwrap();

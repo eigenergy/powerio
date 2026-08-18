@@ -371,6 +371,25 @@ pub fn parse_str(text: &str, format: &str) -> crate::Result<MulticonductorNetwor
     parse_text(text, format.parse::<DistTargetFormat>()?)
 }
 
+/// Parses in-memory case `bytes` of the named `format`. The bytes decode as
+/// UTF-8 and take the [`parse_str`] path from there.
+///
+/// A caller that already holds the file's bytes — an upload, an archive
+/// member — parses them here rather than staging a temporary file for
+/// [`parse_file`]. Without this entry point a browser caller decodes through
+/// JS `File.text()`, which silently replaces every invalid byte with U+FFFD.
+///
+/// # Errors
+/// [`Error::FormatRead`](crate::Error::FormatRead) if the bytes are not
+/// UTF-8; otherwise as [`parse_str`].
+pub fn parse_bytes(bytes: &[u8], format: &str) -> crate::Result<MulticonductorNetwork> {
+    let text = std::str::from_utf8(bytes).map_err(|e| crate::Error::FormatRead {
+        format: "case text",
+        message: format!("not valid UTF-8: {e}"),
+    })?;
+    parse_str(text, format)
+}
+
 /// Parses `path`, taking the format from `from` when given, the `.dss`
 /// extension otherwise, and for `.json` the shared distribution classifier.
 pub fn parse_file(
@@ -744,6 +763,29 @@ mod tests {
                 .as_ref()
                 .is_some_and(|s| !s.starts_with('\u{feff}'))
         );
+    }
+
+    #[test]
+    fn parse_bytes_matches_parse_str_on_a_dss_fixture() {
+        let bytes = std::fs::read(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../tests/data/dist/micro/onephase_zip_load.dss"
+        ))
+        .unwrap();
+        let from_bytes = parse_bytes(&bytes, "dss").unwrap();
+        let from_str = parse_str(std::str::from_utf8(&bytes).unwrap(), "dss").unwrap();
+        assert_eq!(from_bytes.buses.len(), from_str.buses.len());
+        assert_eq!(from_bytes.loads.len(), from_str.loads.len());
+        assert_eq!(from_bytes.source, from_str.source);
+    }
+
+    #[test]
+    fn parse_bytes_refuses_non_utf8_and_names_the_encoding() {
+        // 0xE9 is CP1252 é, the classic single byte a Windows editor leaves.
+        let bytes = b"clear\nnew circuit.caf\xE9 basekv=12.47 bus1=src\n";
+        let err = parse_bytes(bytes, "dss").unwrap_err();
+        assert!(matches!(err, crate::Error::FormatRead { .. }), "{err}");
+        assert!(err.to_string().contains("UTF-8"), "{err}");
     }
 
     #[test]

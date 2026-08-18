@@ -21,6 +21,12 @@ pub enum Error {
         message: String,
     },
 
+    #[error("{format} read error: {message}")]
+    FormatRead {
+        format: &'static str,
+        message: String,
+    },
+
     #[error("unknown distribution format `{0}` (expected dss, bmopf, or pmd)")]
     UnknownFormat(String),
 }
@@ -33,6 +39,7 @@ impl Error {
         match self {
             Error::Io { .. } => &codes::READ_DIST_IO_FAILED,
             Error::Json { .. } => &codes::PARSE_DIST_MALFORMED,
+            Error::FormatRead { .. } => &codes::PARSE_DIST_SOURCE_MALFORMED,
             Error::UnknownFormat(_) => &codes::REQUEST_DIST_FORMAT_UNKNOWN,
         }
     }
@@ -42,7 +49,7 @@ impl Error {
     pub fn category(&self) -> ErrorCategory {
         match self {
             Error::Io { .. } => ErrorCategory::Io,
-            Error::Json { .. } => ErrorCategory::Parse,
+            Error::Json { .. } | Error::FormatRead { .. } => ErrorCategory::Parse,
             Error::UnknownFormat(_) => ErrorCategory::UnknownFormat,
         }
     }
@@ -62,6 +69,10 @@ mod tests {
             Error::Json {
                 format: "BMOPF",
                 message: "top level is not an object".into(),
+            },
+            Error::FormatRead {
+                format: "case text",
+                message: "not valid UTF-8".into(),
             },
             Error::UnknownFormat("xyz".into()),
         ];

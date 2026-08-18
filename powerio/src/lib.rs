@@ -52,8 +52,11 @@ pub mod solver_tables;
 pub mod version;
 
 pub use dc::DcConvention;
-pub use diagnostics::{Diagnostics, EmitFamily, StructuredDiagnostic};
+pub use diagnostics::{
+    DiagnosticCode, DiagnosticSeverity, Diagnostics, EmitFamily, StructuredDiagnostic,
+};
 pub use error::{Error, ErrorCategory, Result};
+pub use format::routing::{Detection, JSON_CLASSES, JsonClass, classify_json_text};
 pub use format::{
     Conversion, DisplayData, DisplayFormat, Parsed, PwdDisplay, PwdSubstation, PypsaCsvOutputs,
     SourceDocument, TargetFormat, WriteOptions, convert_file, convert_file_with_options,

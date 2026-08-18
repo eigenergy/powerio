@@ -29,3 +29,7 @@ reader can retire a lineage; the published document stays.
 The generator never removes files. Keep these documents byte for byte; do
 not regenerate or reformat them. The `frozen_schemas` test in powerio-pkg
 pins them.
+
+## Recognizing a document
+
+Two rules classify a bare JSON document. A package is a top level `model_kind` of `"balanced"` or `"multiconductor"` beside a `model` key; model JSON is `buses` beside another network key (the case formats spell it `bus`). `powerio::classify_json_text` is the reference implementation, and `powerio::JSON_CLASSES` carries the permanent family spellings; a consumer classifying a dropped file in TypeScript, Python, or Julia restates this rule.

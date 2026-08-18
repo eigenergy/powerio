@@ -131,3 +131,21 @@ fn every_json_fixture_classifies_as_stated() {
         );
     }
 }
+
+/// The classifier and the diagnostic vocabulary are crate root exports, so a
+/// consumer reaches them without spelling the module tree. This compiles only
+/// while those paths stay public.
+#[test]
+fn classifier_and_diagnostic_types_are_crate_root_exports() {
+    let class = powerio::classify_json_text(r#"{"model_kind":"balanced","model":{}}"#);
+    assert!(matches!(class, powerio::JsonClass::Package));
+    assert!(matches!(
+        powerio::classify_json_text("not json"),
+        powerio::JsonClass::Case(powerio::Detection::Unknown)
+    ));
+    assert_eq!(powerio::JSON_CLASSES.len(), 6);
+    let severity = powerio::DiagnosticSeverity::Warning;
+    assert!(severity < powerio::DiagnosticSeverity::Fatal);
+    let code_of: fn(&powerio::StructuredDiagnostic) -> &powerio::DiagnosticCode = |d| &d.code;
+    let _ = code_of;
+}
