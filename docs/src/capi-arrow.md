@@ -87,7 +87,6 @@ Shape:
     {
       "id": 17,
       "name": "bprime",
-      "powerio_version": "0.9.0",
       "format": "coo",
       "feature_requirements": ["arrow", "matrix"],
       "available": true,

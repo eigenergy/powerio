@@ -130,7 +130,7 @@ EMIT.PSSE.FIELD_DROPPED: generator cost curves dropped: PSS/E .raw has no cost d
 
 Split at the first `": "`. The left side is `NAMESPACE.SCOPE.SPECIFIC` and contains no colon; the right side is prose, covered by no stability promise, so branch on the code and never on the message. The first segment names the stage and is the only segment to parse; treat the rest as opaque identity, and read more than three segments without complaint.
 
-`pio_build_info` reports `diagnostic_namespaces`, the ten first segments powerio emits, and `error_categories`, the coarse five bucket projection each fatal code is published under. A code whose first segment is outside the ten came from somewhere else, which is data rather than a failure.
+`pio_build_info` reports `diagnostic_namespaces`, the ten first segments powerio emits, and `error_categories`, the coarse five bucket projection each fatal code is published under. A code whose first segment is outside the ten came from somewhere else, which is data rather than a failure. The three closed sets keep their own casings deliberately: a namespace is UPPERCASE because it is the first segment of a code and codes spell their segments uppercase, a category is snake case because ABI 4 published it that way and 0.8.x consumers read it, and a JSON class is kebab case because it is a format token and format tokens are kebab. Matching each set to the surface it indexes beats one casing that matches none of them.
 
 A published code keeps its identity forever. It may be retired, which stops it being emitted and never reassigns it, and a family may be refined by adding narrower codes beside it. A default severity may move in a minor release, so a consumer that needs a fixed policy pins by code.
 

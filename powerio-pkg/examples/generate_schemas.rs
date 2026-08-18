@@ -32,7 +32,7 @@ mod generate {
         write_schema::<powerio_pkg::NetworkPackage>(
             &out,
             &format!("pio-package/{lineage}"),
-            &format!("https://powerio.dev/schema/pio-package/{lineage}"),
+            &format!("https://powerio.dev/schema/pio-package/{lineage}/schema.json"),
             // `powerio_version` carries `serde(default)` so the reader can name
             // a missing field rather than fail on it, and schemars reads any
             // `serde` default as "optional" — `schemars(required)` does not

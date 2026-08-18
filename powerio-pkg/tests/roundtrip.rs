@@ -2201,7 +2201,7 @@ fn study_commit_materialization_folds_commits_and_set_fields() {
             },
             StudyEdit::RatingDelta {
                 branch: ElementRef::by_source_uid("branches", "branch_1"),
-                delta_mw: -10.0,
+                delta_mva: -10.0,
             },
         ]),
         study_commit(vec![
