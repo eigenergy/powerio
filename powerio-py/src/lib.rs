@@ -1037,6 +1037,16 @@ impl PyBalancedNetwork {
         Ok((conv.text, conv.warnings))
     }
 
+    /// Serialize this case to `to`, bypassing source echo for the same
+    /// format. Returns `(text, warnings)`.
+    fn to_canonical_format(&self, to: &str) -> PyResult<(String, Vec<String>)> {
+        let target = to
+            .parse::<powerio_matrix::TargetFormat>()
+            .map_err(core_pyerr)?;
+        let conv = self.inner.to_canonical_format(target).map_err(core_pyerr)?;
+        Ok((conv.text, conv.warnings))
+    }
+
     /// Serialize this case to `to` and write it to `path` exactly as
     /// produced. Returns the fidelity warnings. Prefer this over writing
     /// `to_format` text through `open(path, "w")`: Python's text mode

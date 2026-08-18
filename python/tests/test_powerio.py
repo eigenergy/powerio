@@ -1168,6 +1168,15 @@ def test_convert_str_matpower_echo_is_byte_exact():
     assert conv.warnings == []
 
 
+def test_to_canonical_format_bypasses_matpower_echo():
+    src = (DATA / "case14.m").read_text()
+    net = powerio.parse_str(src, "matpower")
+    assert net.to_format("matpower").text == src
+    canonical = net.to_canonical_format("matpower")
+    assert canonical.text != src
+    assert powerio.parse_str(canonical.text, "matpower").n_buses == net.n_buses
+
+
 def test_convert_str_named_input_format():
     raw = powerio.convert_file(str(DATA / "case30.m"), "psse").text
     back = powerio.convert_str(raw, "matpower", from_="psse")

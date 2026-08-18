@@ -92,6 +92,7 @@ class _BalancedNetwork:
         default_gen_cost: Optional[str] = ...,
         gen_cost_csv: Optional[str] = ...,
     ) -> Tuple[str, list[str]]: ...
+    def to_canonical_format(self, to: str) -> Tuple[str, list[str]]: ...
     def write_file(
         self,
         path: str,

@@ -333,6 +333,11 @@ class BalancedNetwork:
         )
         return Conversion(text, warnings)
 
+    def to_canonical_format(self, to: str) -> Conversion:
+        """Serialize to ``to`` from the typed model, bypassing source echo."""
+        text, warnings = self._inner.to_canonical_format(to)
+        return Conversion(text, warnings)
+
     def write_file(
         self,
         path: Any,

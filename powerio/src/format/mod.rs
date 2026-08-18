@@ -1823,6 +1823,24 @@ mpc.branch = [
     }
 
     #[test]
+    fn canonical_format_bypasses_same_format_matpower_echo() {
+        let case = "function mpc = t\n\
+                    % a comment the canonical writer does not keep\n\
+                    mpc.version = '2';\n\
+                    mpc.baseMVA = 100;\n\
+                    mpc.bus = [1 3 0 0 0 0 1 1.0 0 345 1 1.1 0.9;];\n\
+                    mpc.gen = [];\n\
+                    mpc.branch = [];\n";
+        let net = parse_str(case, "matpower").unwrap().network;
+        assert_eq!(write_as(&net, TargetFormat::Matpower).unwrap().text, case);
+
+        let canonical = net.to_canonical_format(TargetFormat::Matpower).unwrap();
+        assert_ne!(canonical.text, case);
+        let reparsed = parse_str(&canonical.text, "matpower").unwrap();
+        assert_eq!(reparsed.network.buses.len(), 1);
+    }
+
+    #[test]
     fn package_json_error_names_the_package_reader() {
         let err = sniff_json(r#"{"model_kind":"balanced","model":{}}"#).unwrap_err();
         assert!(err.to_string().contains(".pio.json"), "got: {err}");

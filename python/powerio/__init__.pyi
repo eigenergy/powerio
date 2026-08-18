@@ -240,6 +240,7 @@ class BalancedNetwork:
         default_gen_cost: Optional[str] = ...,
         gen_cost_csv: Optional[Any] = ...,
     ) -> "Conversion": ...
+    def to_canonical_format(self, to: str) -> "Conversion": ...
     def write_file(
         self,
         path: Any,

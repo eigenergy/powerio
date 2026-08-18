@@ -1794,6 +1794,26 @@ impl BalancedNetwork {
         crate::write_as(self, format)
     }
 
+    /// Serialize this network to `format`, bypassing byte exact source echo.
+    ///
+    /// [`to_format`](Self::to_format) returns the retained source text on a
+    /// same-format write; this always regenerates from the typed model, the
+    /// balanced twin of `MulticonductorNetwork::to_canonical_format` on the
+    /// distribution side.
+    ///
+    /// # Errors
+    /// As [`to_format`](Self::to_format).
+    pub fn to_canonical_format(
+        &self,
+        format: crate::TargetFormat,
+    ) -> crate::Result<crate::Conversion> {
+        // Writers echo off the retained source, so a sourceless clone is the
+        // one switch that turns every echo tier off at once.
+        let mut working = self.clone();
+        working.invalidate_source();
+        crate::write_as(&working, format)
+    }
+
     /// Serialize this network with write-time cost policies.
     ///
     /// The network itself is not mutated. Default options preserve
