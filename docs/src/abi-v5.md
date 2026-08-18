@@ -58,7 +58,7 @@ A warning is a record with severity `warning`, which is why there is one channel
 
 Every `errbuf` message and every warning line reads `CODE: message`:
 
-```
+```text
 REQUEST.FORMAT.UNKNOWN: unknown format `bogus`
 BIND.CAPI.NULL_HANDLE: network handle is NULL
 EMIT.PSSE.FIELD_DROPPED: generator cost curves dropped: PSS/E .raw has no cost data
