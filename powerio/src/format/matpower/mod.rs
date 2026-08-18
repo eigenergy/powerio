@@ -27,7 +27,8 @@ pub fn parse_matpower(content: &str) -> Result<BalancedNetwork> {
 /// Parse the MATPOWER case at `path`, using the file stem as the network name.
 pub fn parse_matpower_file(path: impl AsRef<Path>) -> Result<BalancedNetwork> {
     let path = path.as_ref();
-    let content = std::fs::read_to_string(path)?;
+    let content =
+        std::fs::read_to_string(path).map_err(|e| crate::format::named_io_error(path, &e))?;
     let name = path
         .file_stem()
         .and_then(|s| s.to_str())

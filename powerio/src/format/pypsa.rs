@@ -397,7 +397,8 @@ fn read_pypsa_csv_folder_inner(path: &Path, warnings: &mut Diagnostics) -> Resul
         "links.csv",
         "stores.csv",
     ];
-    let mut unread: Vec<String> = std::fs::read_dir(path)?
+    let mut unread: Vec<String> = std::fs::read_dir(path)
+        .map_err(|e| crate::format::named_io_error(path, &e))?
         .filter_map(std::result::Result::ok)
         .filter_map(|e| e.file_name().into_string().ok())
         .filter(|n| {
@@ -1042,7 +1043,7 @@ fn read_csv_optional(path: &Path) -> Result<Option<CsvTable>> {
     let text = match std::fs::read_to_string(path) {
         Ok(text) => text,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(e) => return Err(e.into()),
+        Err(e) => return Err(crate::format::named_io_error(path, &e)),
     };
     let name = path.file_name().and_then(|s| s.to_str()).unwrap_or("csv");
     let mut records = parse_csv(&text, name)?

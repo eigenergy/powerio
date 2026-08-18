@@ -551,8 +551,9 @@ PioNetwork *pio_parse_file(const char *path,
  * Parse in-memory case `text` of the named `format` into a network handle.
  * Unlike [`pio_parse_file`] there is no path to infer from, so `format` is
  * required: one of `matpower`/`m`, `powermodels`/`pm`, `egret`,
- * `pandapower-json`/`pandapower`/`pp`, `psse`/`raw`, `powerworld`/`aux`,
- * `pslf`/`epc`, `goc3-json`/`goc3`, or `surge-json`/`surge`. PyPSA CSV folders are
+ * `pandapower-json`/`pandapower`/`pp`, `psse`/`raw`, `psse34`, `psse35`,
+ * `powerworld`/`aux`, `pslf`/`epc`, `goc3-json`/`goc3`, `surge-json`/`surge`,
+ * or `opfdata-json`/`opfdata`. PyPSA CSV folders are
  * directories, not text; parse them with [`pio_parse_file`] and
  * `from = "pypsa-csv"`. Read fidelity warnings attach to the handle
  * ([`pio_warnings`]). Returns `NULL` on error and writes the message into

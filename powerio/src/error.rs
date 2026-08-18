@@ -71,15 +71,18 @@ pub enum Error {
     )]
     DcLineCostCountMismatch { dclines: usize, dclinecost: usize },
 
-    /// Raised from two stages: canonicalization, where no reference bus can be
-    /// established, and index build, where the count is not one. `code` is the
-    /// stage the raising site meant; use [`Error::no_reference_bus`] or
-    /// [`Error::reference_bus_count`] rather than the literal.
+    /// Normalization could not establish a reference bus. The reference set is
+    /// derived from generator presence: a bus keeps `REF` only while it hosts
+    /// an in-service generator, so a `REF` typed bus with no generator does not
+    /// count, and with no in-service generator there is nothing to promote.
+    #[error(
+        "cannot establish a reference bus: a reference bus must host an in-service generator, and this case has none"
+    )]
+    NoReferenceBus,
+
+    /// An index or solver table build needs exactly one reference bus.
     #[error("expected exactly one reference (slack) bus, found {found}")]
-    ReferenceBusCount {
-        found: usize,
-        code: &'static DiagnosticInfo,
-    },
+    ReferenceBusCount { found: usize },
 
     #[error("base MVA must be a positive, finite number, got {base}")]
     InvalidBaseMva { base: f64 },
@@ -122,33 +125,16 @@ pub enum Error {
 pub use powerio_diag::ErrorCategory;
 
 impl Error {
-    /// No reference bus could be established while canonicalizing.
-    #[must_use]
-    pub fn no_reference_bus(found: usize) -> Self {
-        Error::ReferenceBusCount {
-            found,
-            code: &codes::CANONICALIZE_NORMALIZE_NO_REFERENCE_BUS,
-        }
-    }
-
     /// An index or solver table build needs exactly one reference bus and the
     /// case states `found`.
     #[must_use]
     pub fn reference_bus_count(found: usize) -> Self {
-        Error::ReferenceBusCount {
-            found,
-            code: &codes::BUILD_INDEX_REFERENCE_BUS_COUNT,
-        }
+        Error::ReferenceBusCount { found }
     }
 
     /// The registry entry for this error. The match is exhaustive over the
     /// variant set (no wildcard), so adding an `Error` variant is a compile
     /// error here until it is coded.
-    ///
-    /// A variant that fires from two stages carries the raising site's choice
-    /// rather than one default; [`Error::ReferenceBusCount`] is the one such
-    /// variant today, and a variant needing a third is a signal it is doing two
-    /// jobs.
     pub fn code(&self) -> &'static DiagnosticInfo {
         match self {
             Error::MissingField(_)
@@ -167,7 +153,8 @@ impl Error {
             Error::InvalidGenCostPatch { .. } => &codes::VALIDATE_GEN_COST_PATCH_INVALID,
             Error::GenCostCountMismatch { .. } => &codes::VALIDATE_GEN_COST_COUNT_MISMATCH,
             Error::DcLineCostCountMismatch { .. } => &codes::VALIDATE_DC_LINE_COST_COUNT_MISMATCH,
-            Error::ReferenceBusCount { code, .. } => code,
+            Error::NoReferenceBus => &codes::CANONICALIZE_NORMALIZE_NO_REFERENCE_BUS,
+            Error::ReferenceBusCount { .. } => &codes::BUILD_INDEX_REFERENCE_BUS_COUNT,
             Error::InvalidBaseMva { .. } => &codes::CANONICALIZE_NORMALIZE_INVALID_BASE_MVA,
             Error::InvalidNormalizeOption { .. } => &codes::CANONICALIZE_NORMALIZE_INVALID_OPTION,
             Error::UngroundedComponent { .. } => &codes::BUILD_INDEX_UNGROUNDED_COMPONENT,
@@ -209,6 +196,7 @@ impl Error {
             | Error::InvalidGenCostPatch { .. }
             | Error::GenCostCountMismatch { .. }
             | Error::DcLineCostCountMismatch { .. }
+            | Error::NoReferenceBus
             | Error::ReferenceBusCount { .. }
             | Error::InvalidBaseMva { .. }
             | Error::InvalidNormalizeOption { .. }
@@ -275,7 +263,7 @@ mod tests {
                 dclines: 1,
                 dclinecost: 2,
             },
-            Error::no_reference_bus(0),
+            Error::NoReferenceBus,
             Error::reference_bus_count(2),
             Error::InvalidBaseMva { base: 0.0 },
             Error::InvalidNormalizeOption {
@@ -306,13 +294,16 @@ mod tests {
     #[test]
     fn the_two_reference_bus_stages_carry_different_codes() {
         assert_eq!(
-            Error::no_reference_bus(0).code().code,
+            Error::NoReferenceBus.code().code,
             "CANONICALIZE.NORMALIZE.NO_REFERENCE_BUS"
         );
         assert_eq!(
             Error::reference_bus_count(2).code().code,
             "BUILD.INDEX.REFERENCE_BUS_COUNT"
         );
+        // The canonicalize refusal states the generating rule; "found 0" would
+        // contradict a case whose bus table types a generator-less bus REF.
+        assert!(Error::NoReferenceBus.to_string().contains("generator"));
     }
 
     #[test]
