@@ -557,3 +557,12 @@ fn the_validation_case_indexes_every_row_in_document_order() {
         }
     );
 }
+
+#[test]
+#[allow(deprecated)]
+fn the_08_scopf_entry_point_still_answers() {
+    let old = powerio_prob::build_scopf_instance_from_str(SMALL, "goc3-json")
+        .expect("the 0.8 alias builds");
+    let new = parse_scopf_str(SMALL, "goc3-json").expect("build small SCOPF instance");
+    assert_eq!(old.lengths, new.lengths);
+}

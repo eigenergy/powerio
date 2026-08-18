@@ -29,4 +29,6 @@ pub mod diagnostics;
 pub mod error;
 pub use error::{Error, Result};
 pub use reference::ReferenceBuses;
+#[allow(deprecated)]
+pub use scopf::build_scopf_instance_from_str;
 pub use scopf::{ScopfDeviceClassLayout, ScopfError, ScopfInstance, ScopfResult, parse_scopf_str};

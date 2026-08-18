@@ -672,6 +672,12 @@ pub const SOURCE_FORMAT_NAMES: &str = "matpower/m, powermodels-json/powermodels/
 /// surface instead of echoing the token: this parser reads only balanced
 /// transmission formats. Otherwise the refusal enumerates the accepted names.
 fn unknown_source_format(name: &str) -> Error {
+    if name.eq_ignore_ascii_case("powerio-json") {
+        return Error::UnknownFormat(
+            "the `powerio-json` token was retired in 0.9.0: model JSON is not a case format              or a conversion target; write it with `to_json` (`pio_to_json` in C, `json_format              model-json` on the MCP server), package the case as `.pio.json`, and classify a              JSON document with `classify_json_text` (family `model-json`)"
+                .into(),
+        );
+    }
     if let Some(dist) = routing::distribution_format_from_name(name) {
         return Error::UnknownFormat(format!(
             "`{}` is a distribution format, and this parser reads only balanced \

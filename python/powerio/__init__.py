@@ -1114,3 +1114,22 @@ class Package:
 
     def __repr__(self) -> str:
         return repr(self._inner)
+
+# 0.8 names, aliased for one release. The deprecated inventory script reads
+# `_RENAMED_IN_*`; delete the dict and the hook together at 1.0.0.
+_RENAMED_IN_0_9_0 = {"Network": "BalancedNetwork"}
+
+
+def __getattr__(name):
+    if name in _RENAMED_IN_0_9_0:
+        import warnings
+
+        successor = _RENAMED_IN_0_9_0[name]
+        warnings.warn(
+            f"powerio.{name} was renamed powerio.{successor} in 0.9.0; "
+            "the alias goes away at 1.0.0",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        return globals()[successor]
+    raise AttributeError(f"module 'powerio' has no attribute {name!r}")

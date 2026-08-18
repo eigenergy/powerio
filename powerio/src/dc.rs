@@ -62,6 +62,15 @@ pub enum DcConvention {
 }
 
 impl DcConvention {
+    /// The 0.8 spelling of [`DcConvention::ReactanceOnly`]. Works in
+    /// expression and pattern position; goes away at 1.0.0.
+    #[allow(non_upper_case_globals)]
+    #[deprecated(
+        since = "0.9.0",
+        note = "renamed to DcConvention::ReactanceOnly in 0.9.0; the alias goes away at 1.0.0"
+    )]
+    pub const PaperPure: DcConvention = DcConvention::ReactanceOnly;
+
     /// The branch susceptance from resistance, reactance, and effective tap.
     /// Only [`Self::Matpower`] reads the tap, and only
     /// [`Self::SeriesImpedance`] reads the resistance.

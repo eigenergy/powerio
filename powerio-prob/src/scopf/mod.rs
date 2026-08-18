@@ -5,5 +5,7 @@ mod projection;
 mod types;
 
 pub use error::{ScopfError, ScopfResult};
+#[allow(deprecated)]
+pub use projection::build_scopf_instance_from_str;
 pub use projection::parse_scopf_str;
 pub use types::*;
