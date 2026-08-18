@@ -23,14 +23,11 @@ use powerio::network::{BalancedNetwork, BusId};
 use powerio::parse_file;
 
 mod common;
-use common::{activsg2000_fetched as fetched, ckt, powerworld_vendored as vendored};
+use common::{activsg2000_fetched as fetched, branch_keys, powerworld_vendored as vendored};
 
-/// Branch identity: from, to, trimmed circuit ID.
+/// Branch identity: from, to, circuit under the one id rule.
 fn branch_ids(net: &BalancedNetwork) -> BTreeSet<(usize, usize, String)> {
-    net.branches
-        .iter()
-        .map(|b| (b.from.0, b.to.0, ckt(b)))
-        .collect()
+    branch_keys(&net.branches).into_iter().collect()
 }
 
 #[test]
@@ -72,10 +69,9 @@ fn activsg200_aux_vs_matpower_structural() {
 
     // Impedance, charging, and tap agree on every matched branch to the .m
     // file's print precision.
-    let by_id: BTreeMap<(usize, usize, String), &powerio::Branch> = aux
-        .branches
-        .iter()
-        .map(|b| ((b.from.0, b.to.0, ckt(b)), b))
+    let by_id: BTreeMap<(usize, usize, String), &powerio::Branch> = branch_keys(&aux.branches)
+        .into_iter()
+        .zip(&aux.branches)
         .collect();
     for mb in &m.branches {
         let key = (mb.from.0, mb.to.0, "1".to_string());

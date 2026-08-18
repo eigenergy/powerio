@@ -60,13 +60,27 @@ pub fn rts_gmlc_fetched(name: &str) -> Option<PathBuf> {
 /// Branch circuit identity: the trimmed `LineCircuit` extra, `"1"` (the
 /// PowerWorld default) when absent.
 #[allow(dead_code)]
-pub fn ckt(b: &powerio::Branch) -> String {
-    b.extras
-        .get("LineCircuit")
-        .and_then(|v| v.as_str())
-        .unwrap_or("1")
-        .trim()
-        .to_string()
+/// Branch keys under the one id rule (#330): the retained circuit where the
+/// file stated one the writer would not re-derive, else the per-pair ordinal
+/// the readers dropped as a positional default. Aligned with `branches`, so
+/// zip the result back onto the slice.
+pub fn branch_keys(branches: &[powerio::Branch]) -> Vec<(usize, usize, String)> {
+    let mut nth: std::collections::BTreeMap<(usize, usize), usize> =
+        std::collections::BTreeMap::new();
+    branches
+        .iter()
+        .map(|b| {
+            let pair = (b.from.0, b.to.0);
+            let n = nth.entry(pair).or_insert(0);
+            *n += 1;
+            let ckt = b
+                .extras
+                .get("LineCircuit")
+                .and_then(|v| v.as_str())
+                .map_or_else(|| n.to_string(), |v| v.trim().to_string());
+            (pair.0, pair.1, ckt)
+        })
+        .collect()
 }
 
 /// The path a label resolves to in the gitignored local corpus manifest
