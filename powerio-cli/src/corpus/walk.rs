@@ -415,7 +415,10 @@ impl Net {
                     return Err("written deck redirects to include files".to_string());
                 }
                 match catch_panic(|| powerio_dist::parse_str(&written.text, to)) {
-                    Ok(Ok(parsed)) => Ok(Self::Dist(parsed)),
+                    Ok(Ok(parsed)) => {
+                        warnings.extend(parsed.warnings.iter().cloned());
+                        Ok(Self::Dist(parsed))
+                    }
                     Ok(Err(err)) => Err(format!("readback: {err}")),
                     Err(message) => Err(format!("readback panicked: {message}")),
                 }
