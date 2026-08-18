@@ -104,16 +104,17 @@ int main(int argc, char **argv) {
     free(x);
 
     /* Byte-exact MATPOWER echo: matpower is a format string, not a symbol.
-     * Warnings come back as an owned string through an out pointer, NULL when
-     * the conversion lost nothing; the caller frees it like any other. */
-    char *warn = NULL;
-    char *echo = pio_to_format(c, "matpower", &warn, err, sizeof err);
+     * Findings come back as an owned JSON array through an out pointer, NULL
+     * when the conversion lost nothing; the caller frees it like any other. */
+    char *diags = NULL;
+    char *echo = pio_to_format(c, "matpower", &diags, err, sizeof err);
     CHECK(echo != NULL && strlen(echo) > 0, err);
-    pio_string_free(warn);
+    CHECK(diags == NULL || diags[0] == '[', "diagnostics are a JSON array");
+    pio_string_free(diags);
     pio_string_free(echo);
 
     /* Cross-format convert reaches the converter and returns owned text.
-     * A NULL out_warnings discards them. */
+     * A NULL out_diagnostics_json discards them. */
     char *raw = pio_convert_file(argv[1], NULL, "psse", NULL, err, sizeof err);
     CHECK(raw != NULL, err);
     pio_string_free(raw);
@@ -234,11 +235,12 @@ int main(int argc, char **argv) {
     {
         char outdir[512];
         snprintf(outdir, sizeof outdir, "%s-pypsa-smoke", argv[1]);
-        char *dirwarn = (char *)0x1; /* a poison value the call must overwrite */
-        int rc = pio_write_dir(c, "pypsa-csv", outdir, &dirwarn, err, sizeof err);
+        char *dirdiags = (char *)0x1; /* a poison value the call must overwrite */
+        int rc = pio_write_dir(c, "pypsa-csv", outdir, &dirdiags, err, sizeof err);
         CHECK(rc == 0, err);
-        CHECK(dirwarn != (char *)0x1, "pio_write_dir left out_warnings untouched");
-        pio_string_free(dirwarn);
+        CHECK(dirdiags != (char *)0x1,
+              "pio_write_dir left out_diagnostics_json untouched");
+        pio_string_free(dirdiags);
         char buses[600];
         snprintf(buses, sizeof buses, "%s/buses.csv", outdir);
         FILE *bf = fopen(buses, "rb");
@@ -286,32 +288,35 @@ int main(int argc, char **argv) {
 
         char warn[1024];
         /* Read warnings keep the size-then-fill idiom of pio_warnings: the
-         * return is the byte length needed (0 here, this case is clean).
-         * Conversion warnings are the out-pointer idiom instead. */
+         * return is the byte length needed (0 here, this case is clean). Each
+         * line reads CODE: message. Conversion findings are the out-pointer
+         * idiom instead, and arrive as a JSON array. */
         pio_dist_warnings(d, warn, sizeof warn);
 
-        char *cwarn = NULL;
-        char *bmopf = pio_dist_to_format(d, "bmopf", &cwarn, err, sizeof err);
+        char *cdiags = NULL;
+        char *bmopf = pio_dist_to_format(d, "bmopf", &cdiags, err, sizeof err);
         CHECK(bmopf != NULL, err);
         CHECK(strstr(bmopf, "\"bus\"") != NULL, "BMOPF output lost the bus table");
-        pio_string_free(cwarn);
+        CHECK(cdiags == NULL || cdiags[0] == '[', "diagnostics are a JSON array");
+        pio_string_free(cdiags);
         pio_string_free(bmopf);
 
         /* Same-format write echoes the retained source byte for byte. */
-        char *echo2 = pio_dist_to_format(d, "dss", &cwarn, err, sizeof err);
+        cdiags = NULL;
+        char *echo2 = pio_dist_to_format(d, "dss", &cdiags, err, sizeof err);
         CHECK(echo2 != NULL, err);
         CHECK(strcmp(echo2, dss) == 0, "dss echo is not byte exact");
-        CHECK(cwarn == NULL, "a byte-exact echo should report no warnings");
+        CHECK(cdiags == NULL, "a byte-exact echo should report no findings");
         pio_string_free(echo2);
         pio_dist_network_free(d);
 
         /* One-shot string conversion into PMD ENGINEERING JSON; parameter
          * order is input, source, target, like pio_dist_convert_file. */
-        char *pmd = pio_dist_convert_str(dss, "dss", "pmd", &cwarn, err, sizeof err);
+        char *pmd = pio_dist_convert_str(dss, "dss", "pmd", &cdiags, err, sizeof err);
         CHECK(pmd != NULL, err);
         CHECK(strstr(pmd, "\"data_model\": \"ENGINEERING\"") != NULL,
               "PMD output lost the data_model marker");
-        pio_string_free(cwarn);
+        pio_string_free(cdiags);
         pio_string_free(pmd);
 
         char *old_dist_order = pio_dist_convert_str(dss, "pmd", "dss",

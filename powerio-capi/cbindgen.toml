@@ -61,18 +61,27 @@ header = """
  * - errbuf/errlen caller buffers (the libpcap/curl idiom: allocation-free
  *   across the boundary, no thread-local state). NULL or length 0 discards
  *   the message; a long message truncates on a UTF-8 character boundary and
- *   is always NUL-terminated. PIO_ERRBUF_MIN is the recommended size. The ABI
- *   reports errors as messages and defines no error codes.
+ *   is always NUL-terminated. PIO_ERRBUF_MIN is the recommended size.
+ * - Every errbuf message and every warning line reads "CODE: message". The
+ *   code is a dotted diagnostic identity (EMIT.PSSE.FIELD_DROPPED,
+ *   BIND.CAPI.NULL_HANDLE); split at the first ": " to recover it, since a
+ *   code contains no colon and a message may contain any number. Branch on
+ *   the code, never on the prose: a message is not covered by any stability
+ *   promise. pio_build_info reports diagnostic_namespaces, the first segments
+ *   powerio emits, and error_categories, the coarse projection.
  * - Read warnings attach to the network handle; query them with pio_warnings,
  *   which returns the byte length needed (call with NULL/0 to size).
- * - Conversion warnings come back through a char **out_warnings out-param on
- *   the functions that return no handle (pio_to_format, pio_convert_*,
- *   pio_write_dir, and the pio_dist_* twins). NULL means the conversion lost
- *   nothing; any other value is an owned string to free with pio_string_free.
- *   Pass NULL for the parameter itself to discard them. The call writes it
- *   before doing any work, so a value left from an earlier call is never read
- *   as this one's. v4 filled a caller buffer here and truncated into it with
- *   no signal.
+ * - Conversion findings come back through a char **out_diagnostics_json
+ *   out-param on the functions that return no handle (pio_to_format,
+ *   pio_convert_*, pio_write_dir, and the pio_dist_* twins). NULL means the
+ *   conversion lost nothing; any other value is an owned JSON array of
+ *   diagnostic records to free with pio_string_free. Each record carries code,
+ *   severity and message, and where known element_path, source_ref, details
+ *   and suggested_action. Pass NULL for the parameter itself to discard them.
+ *   The call writes it before doing any work, so a value left from an earlier
+ *   call is never read as this one's. A warning is a record with severity
+ *   "warning", so this one channel replaces the v5 out_warnings rather than
+ *   sitting beside it.
  * - Strings returned by pio_to_format / pio_convert_file / pio_convert_str
  *   are owned by the library; free them with pio_string_free. Handles from
  *   pio_parse_file / pio_parse_str / pio_parse_bytes / pio_read_dir /
@@ -98,10 +107,17 @@ header = """
  * Arrow, `.pio.json`, and format-specific JSON schemas. The dense extractors
  * remain the balanced positive sequence projection. Arrow tables are append
  * only: existing PIO_ARROW_TABLE_* ids and column order do not change. A new
- * table takes the next id, and new columns append
- * at the end, and a consumer addresses columns by name, never by position.
+ * table takes the next id, new columns append at the end, and a consumer
+ * addresses columns by name, never by position.
  * Removing a supported format token or changing its documented C behavior
  * requires a PIO_ABI_VERSION bump.
+ *
+ * Diagnostic codes: a published code keeps its identity forever and is never
+ * reused for a different finding. A code may be retired, which stops it being
+ * emitted but never reassigns it, and refinement adds narrower codes rather
+ * than redefining a family. The namespace set grows only by addition, and a
+ * default severity may move in a minor release, so a consumer that needs a
+ * fixed policy pins by code. An unknown code is data, never a failure.
  *
  * Optional: build with `--features arrow` for pio_to_arrow (guarded by
  * PIO_ARROW), add `--features matrix` for the balanced matrix Arrow tables,

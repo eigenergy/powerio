@@ -54,8 +54,9 @@ pub const PIO_ARROW_TABLE_MATRIX_BRANCH: i32 = 20;
 // These values are the ABI: the `PIO_ARROW_TABLE_*` macros in include/powerio.h
 // are hand-synced to them. The set is append-only: these ids and each table's
 // column order are frozen, a new table takes the next id and extends
-// this assert, and new columns append (nullable) at the end so consumers read by
-// name. Pin them so a Rust-side edit that drifts from the header (a renumber, a
+// this assert, and new columns append at the end so consumers read by name.
+// Every exported field is non-nullable. Pin them so a Rust-side edit that
+// drifts from the header (a renumber, a
 // reorder, a dropped table) fails the build instead of silently exporting the
 // wrong table.
 const _: () = assert!(

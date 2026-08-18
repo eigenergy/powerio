@@ -199,6 +199,8 @@ pub mod codes {
             "an element references a bus or linecode the document does not declare";
         EMIT_MULTICONDUCTOR_ROUTE_DROPPED = "EMIT.MULTICONDUCTOR.ROUTE_DROPPED", Warning,
             "a line polyline was dropped because the target has no polyline field";
+        EMIT_MULTICONDUCTOR_SIDECAR_DROPPED = "EMIT.MULTICONDUCTOR.SIDECAR_DROPPED", Warning,
+            "a companion file the case text refers to was not written";
 
         // Failures.
         READ_DIST_IO_FAILED = "READ.DIST.IO_FAILED", Fatal,

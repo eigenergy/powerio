@@ -1304,7 +1304,8 @@ pub fn convert_str_with_options(
 /// dispatches directory format names for the bindings. PyPSA CSV
 /// (`pypsa-csv`/`pypsa`) is the one such
 /// format today; a text format name is rejected by name, pointing at
-/// [`write_as`]. Returns the write's fidelity warnings.
+/// [`write_as`]. Returns the write's findings as structured records; render
+/// them with `diagnostics::render_lines` for a text channel.
 ///
 /// # Errors
 /// [`Error::UnknownFormat`] for a non-directory format name; the writer's own
@@ -1313,9 +1314,9 @@ pub fn write_dir(
     net: &BalancedNetwork,
     to: &str,
     out_dir: impl AsRef<std::path::Path>,
-) -> Result<Vec<String>> {
+) -> Result<Vec<StructuredDiagnostic>> {
     if is_pypsa_csv_name(to) {
-        return write_pypsa_csv_folder(net, out_dir.as_ref()).map(|o| o.warnings);
+        return write_pypsa_csv_folder(net, out_dir.as_ref()).map(|o| o.diagnostics);
     }
     Err(Error::UnknownFormat(format!(
         "{to} is not a directory format (directory targets: pypsa-csv/pypsa); \

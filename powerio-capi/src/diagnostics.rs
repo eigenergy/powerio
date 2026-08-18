@@ -26,6 +26,76 @@ pub mod codes {
             category = Data;
         BIND_CAPI_PANIC = "BIND.CAPI.PANIC", Fatal,
             "a panic was caught at the boundary and did not cross it", category = Data;
+        PARSE_CAPI_JSON_MALFORMED = "PARSE.CAPI.JSON_MALFORMED", Fatal,
+            "a JSON document handed to an entry point could not be decoded", category = Parse;
+        READ_CAPI_IO_FAILED = "READ.CAPI.IO_FAILED", Fatal,
+            "an entry point could not read the file it was given", category = Io;
+        EMIT_CAPI_SERIALIZE_FAILED = "EMIT.CAPI.SERIALIZE_FAILED", Fatal,
+            "a JSON document an entry point returns could not be serialized", category = Output;
+        BIND_CAPI_UNCODED_FAILURE = "BIND.CAPI.UNCODED_FAILURE", Fatal,
+            "a library failure reached the boundary carrying no finding of its own",
+            category = Data;
+    }
+}
+
+/// One errbuf message: `CODE: message`, the code from a registered entry.
+///
+/// Every failure this boundary reports is built here, so the token a consumer
+/// branches on is always present and appears exactly once.
+pub(crate) fn coded(info: &DiagnosticInfo, message: impl std::fmt::Display) -> String {
+    format!("{}: {message}", info.code)
+}
+
+/// A library error that knows its own registry entry. The five error types are
+/// the only ones with a code of their own; a failure raised at the boundary
+/// itself takes a `BIND.CAPI.*` entry through [`coded`].
+pub(crate) trait CodedError: std::fmt::Display {
+    fn info(&self) -> &'static DiagnosticInfo;
+}
+
+/// A library error as its errbuf line.
+pub(crate) fn err_line<E: CodedError>(e: E) -> String {
+    coded(e.info(), e)
+}
+
+impl CodedError for powerio::Error {
+    fn info(&self) -> &'static DiagnosticInfo {
+        self.code()
+    }
+}
+
+#[cfg(feature = "matrix")]
+impl CodedError for powerio_matrix::Error {
+    fn info(&self) -> &'static DiagnosticInfo {
+        self.code()
+    }
+}
+
+#[cfg(feature = "dist")]
+impl CodedError for powerio_dist::Error {
+    fn info(&self) -> &'static DiagnosticInfo {
+        self.code()
+    }
+}
+
+#[cfg(feature = "pkg")]
+impl CodedError for powerio_pkg::Error {
+    fn info(&self) -> &'static DiagnosticInfo {
+        self.code()
+    }
+}
+
+#[cfg(feature = "prob")]
+impl CodedError for powerio_prob::Error {
+    fn info(&self) -> &'static DiagnosticInfo {
+        self.code()
+    }
+}
+
+#[cfg(feature = "prob")]
+impl CodedError for powerio_prob::ScopfError {
+    fn info(&self) -> &'static DiagnosticInfo {
+        self.code()
     }
 }
 

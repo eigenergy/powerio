@@ -15,6 +15,13 @@ pub mod codes {
             "a generator cost model the instance builder cannot state", category = Data;
         READ_INSTANCE_IO_FAILED = "READ.INSTANCE.IO_FAILED", Fatal,
             "an instance file could not be read", category = Io;
+        PARSE_SCOPF_MALFORMED = "PARSE.SCOPF.MALFORMED", Fatal,
+            "the SCOPF document is not well formed JSON", category = Parse;
+        READ_SCOPF_INVALID_DOCUMENT = "READ.SCOPF.INVALID_DOCUMENT", Fatal,
+            "the SCOPF document decodes but does not describe an instance", category = Parse;
+        REQUEST_SCOPF_FORMAT_UNKNOWN = "REQUEST.SCOPF.FORMAT_UNKNOWN", Fatal,
+            "the named SCOPF source format is not one this build reads",
+            category = UnknownFormat;
     }
 }
 

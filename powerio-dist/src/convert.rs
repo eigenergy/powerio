@@ -13,15 +13,22 @@ pub struct ConversionSidecar {
 }
 
 impl ConversionSidecar {
-    /// The fidelity warning for a surface that could not write this
-    /// sidecar. `reason` says why in that surface's terms. All surfaces
-    /// must use this one formatter: consumers match on the warning text.
+    /// The finding for a surface that could not write this sidecar. `reason`
+    /// says why in that surface's terms.
+    #[must_use]
+    pub fn dropped_diagnostic(&self, reason: &str) -> crate::diagnostics::StructuredDiagnostic {
+        crate::diagnostics::StructuredDiagnostic::of(
+            &crate::diagnostics::codes::EMIT_MULTICONDUCTOR_SIDECAR_DROPPED,
+            format!("sidecar `{}` was not written: {reason}", self.path),
+        )
+    }
+
+    /// The same finding as a `CODE: message` line, for a surface with no
+    /// structured channel. Rendered from [`Self::dropped_diagnostic`] so the
+    /// two cannot disagree.
     #[must_use]
     pub fn dropped_warning(&self, reason: &str) -> String {
-        format!(
-            "fidelity: sidecar `{}` was not written: {reason}",
-            self.path
-        )
+        crate::diagnostics::render_line(&self.dropped_diagnostic(reason))
     }
 }
 

@@ -16,6 +16,20 @@ impl ScopfError {
     pub(super) fn invalid(message: impl Into<String>) -> Self {
         Self::InvalidDocument(message.into())
     }
+
+    /// The registry entry for this error. The match is exhaustive over the
+    /// variant set, so a new variant must be coded here before it compiles.
+    /// A wrapped hub failure keeps the hub's own code.
+    #[must_use]
+    pub fn code(&self) -> &'static powerio_diag::DiagnosticInfo {
+        use crate::diagnostics::codes;
+        match self {
+            Self::Json(_) => &codes::PARSE_SCOPF_MALFORMED,
+            Self::Source(inner) => inner.code(),
+            Self::UnsupportedFormat(_) => &codes::REQUEST_SCOPF_FORMAT_UNKNOWN,
+            Self::InvalidDocument(_) => &codes::READ_SCOPF_INVALID_DOCUMENT,
+        }
+    }
 }
 
 impl fmt::Display for ScopfError {

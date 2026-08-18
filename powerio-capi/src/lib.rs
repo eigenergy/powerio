@@ -34,6 +34,10 @@ use powerio::{
     TargetFormat,
 };
 
+use crate::diagnostics::{coded, codes, err_line};
+#[cfg(feature = "pkg")]
+use powerio_pkg::diagnostics::codes as pkg_codes;
+
 #[cfg(feature = "arrow")]
 mod arrow_export;
 pub mod diagnostics;
@@ -117,7 +121,13 @@ fn finish_cstring(s: String, errbuf: *mut c_char, errlen: usize) -> *mut c_char 
     match into_cstring(s) {
         Some(p) => p,
         None => {
-            unsafe { copy_to_buf(errbuf, errlen, "output contained an interior NUL byte") };
+            unsafe {
+                let msg = coded(
+                    &codes::BIND_CAPI_INTERIOR_NUL,
+                    "output contained an interior NUL byte",
+                );
+                copy_to_buf(errbuf, errlen, &msg);
+            };
             std::ptr::null_mut()
         }
     }
@@ -143,7 +153,7 @@ unsafe fn finish_string(
                 std::ptr::null_mut()
             }
             Err(_) => {
-                copy_to_buf(errbuf, errlen, panic_msg);
+                copy_to_buf(errbuf, errlen, &coded(&codes::BIND_CAPI_PANIC, panic_msg));
                 std::ptr::null_mut()
             }
         }
@@ -192,7 +202,7 @@ unsafe fn finish_network(
                 std::ptr::null_mut()
             }
             Err(_) => {
-                copy_to_buf(errbuf, errlen, panic_msg);
+                copy_to_buf(errbuf, errlen, &coded(&codes::BIND_CAPI_PANIC, panic_msg));
                 std::ptr::null_mut()
             }
         }
@@ -215,6 +225,10 @@ unsafe fn finish_network(
 /// `pio_dist_capabilities_json` renamed `schema_version` to `powerio_version`,
 /// and the Arrow metadata key became `powerio.version`. A binding built against
 /// 4 would pass a handshake it should fail and read `null` for keys it mirrors.
+/// The same bump carries the diagnostic grammar: every errbuf message and
+/// warning line reads `CODE: message`, and the seven conversion entry points
+/// publish structured records through `out_diagnostics_json` in place of the
+/// text `out_warnings` channel.
 pub const PIO_ABI_VERSION: u32 = 5;
 
 /// Frozen at 1 and no longer meaningful. It existed to absorb distribution
@@ -308,22 +322,30 @@ pub extern "C" fn pio_schema_versions_json() -> *mut c_char {
     unsafe { guard(std::ptr::null_mut(), schema_versions_json_ptr) }
 }
 
+/// The BMOPF schema version this build speaks, or `None` (serialized as
+/// `null`) when it cannot speak that format. Both handshake documents read it
+/// here so they cannot disagree about it.
+fn bmopf_schema_version() -> Option<&'static str> {
+    #[cfg(feature = "dist")]
+    {
+        Some(powerio_dist::BMOPF_SCHEMA_VERSION)
+    }
+    #[cfg(not(feature = "dist"))]
+    {
+        None
+    }
+}
+
 /// The body of [`pio_schema_versions_json`], called inside the panic guard.
 fn schema_versions_json_ptr() -> *mut c_char {
     // Every document powerio authors states one version, the release that
     // wrote it, so this report needs one key for all of them. What stays
     // separate is the C handshake integer and any foreign schema this build
     // speaks, whose version belongs to whoever owns that schema.
-    #[cfg(feature = "dist")]
-    let bmopf_schema = Some(powerio_dist::BMOPF_SCHEMA_VERSION);
-    // `None` serializes to `null`: the build cannot speak that format.
-    #[cfg(not(feature = "dist"))]
-    let bmopf_schema: Option<&str> = None;
-
     let doc = serde_json::json!({
         powerio::version::VERSION_KEY: powerio::VERSION,
         "abi": PIO_ABI_VERSION,
-        "bmopf_schema": bmopf_schema,
+        "bmopf_schema": bmopf_schema_version(),
     });
     into_cstring(doc.to_string()).unwrap_or(std::ptr::null_mut())
 }
@@ -336,10 +358,14 @@ fn schema_versions_json_ptr() -> *mut c_char {
 /// keeps using [`pio_has_feature`] and [`pio_abi_version`], which say the same
 /// things one answer at a time.
 ///
-/// `error_categories` lists the tokens that prefix an `errbuf` message. The ABI
-/// reports errors as text, so a consumer that wants to branch on the kind of
-/// failure matches these rather than parsing prose. They are stable; a new
-/// category may be added.
+/// Every `errbuf` message and every warning line reads `CODE: message`, where
+/// the code is a dotted diagnostic identity such as
+/// `EMIT.PSSE.FIELD_DROPPED`. `diagnostic_namespaces` lists the first segments
+/// powerio emits, so a consumer that merges reports from several producers can
+/// tell powerio's findings from its own. `error_categories` lists the coarse
+/// projection each fatal code is published under, for a consumer that wants
+/// five buckets rather than the full code set. Both sets are stable; a member
+/// may be added.
 #[unsafe(no_mangle)]
 pub extern "C" fn pio_build_info() -> *mut c_char {
     unsafe { guard(std::ptr::null_mut(), build_info_ptr) }
@@ -347,11 +373,6 @@ pub extern "C" fn pio_build_info() -> *mut c_char {
 
 /// The body of [`pio_build_info`], called inside the panic guard.
 fn build_info_ptr() -> *mut c_char {
-    #[cfg(feature = "dist")]
-    let bmopf_schema = Some(powerio_dist::BMOPF_SCHEMA_VERSION);
-    #[cfg(not(feature = "dist"))]
-    let bmopf_schema: Option<&str> = None;
-
     let doc = serde_json::json!({
         powerio::version::VERSION_KEY: powerio::VERSION,
         "abi": PIO_ABI_VERSION,
@@ -366,8 +387,9 @@ fn build_info_ptr() -> *mut c_char {
         // Foreign schemas this build speaks. The version belongs to whoever
         // owns the schema, which is why an integer checked once at load cannot
         // express it.
-        "foreign_schemas": { "bmopf": bmopf_schema },
+        "foreign_schemas": { "bmopf": bmopf_schema_version() },
         "error_categories": powerio::ErrorCategory::TOKENS,
+        "diagnostic_namespaces": powerio::diagnostics::DiagnosticStage::NAMESPACES,
     });
     into_cstring(doc.to_string()).unwrap_or(std::ptr::null_mut())
 }
@@ -420,17 +442,20 @@ pub extern "C" fn pio_version() -> *const c_char {
 }
 
 fn target_format_from_c(to: *const c_char) -> Result<TargetFormat, String> {
-    let to = unsafe { cstr(to) }.ok_or_else(|| "to is NULL or not UTF-8".to_string())?;
-    to.parse::<TargetFormat>().map_err(|e| e.to_string())
+    let to = required_cstr(to, "to")?;
+    to.parse::<TargetFormat>().map_err(err_line)
 }
 
 fn optional_cstr<'a>(p: *const c_char, name: &str) -> Result<Option<&'a str>, String> {
     if p.is_null() {
         Ok(None)
     } else {
-        unsafe { cstr(p) }
-            .map(Some)
-            .ok_or_else(|| format!("{name} is not UTF-8"))
+        unsafe { cstr(p) }.map(Some).ok_or_else(|| {
+            coded(
+                &codes::BIND_CAPI_INVALID_UTF8,
+                format!("{name} is not UTF-8"),
+            )
+        })
     }
 }
 
@@ -438,8 +463,38 @@ fn optional_cstr<'a>(p: *const c_char, name: &str) -> Result<Option<&'a str>, St
 /// offending parameter. Entry points use this for required strings.
 /// Used by the always-built `pio_classify_str` as well as the dist and pkg
 /// entry points, so it carries no feature gate.
+///
+/// The two ways a string argument fails carry different codes: a NULL pointer
+/// and bytes that are not UTF-8 are separate mistakes on the caller's side.
 fn required_cstr<'a>(p: *const c_char, name: &str) -> Result<&'a str, String> {
-    unsafe { cstr(p) }.ok_or_else(|| format!("{name} is NULL or not UTF-8"))
+    if p.is_null() {
+        return Err(coded(
+            &codes::BIND_CAPI_NULL_ARGUMENT,
+            format!("{name} is NULL"),
+        ));
+    }
+    unsafe { cstr(p) }.ok_or_else(|| {
+        coded(
+            &codes::BIND_CAPI_INVALID_UTF8,
+            format!("{name} is not UTF-8"),
+        )
+    })
+}
+
+/// The message for a NULL handle argument, naming the handle in `what`.
+fn null_handle(what: &str) -> String {
+    coded(&codes::BIND_CAPI_NULL_HANDLE, format!("{what} is NULL"))
+}
+
+/// The errbuf line for a lowering refusal. The pass reports every blocker as a
+/// coded record and the C surface carries one message, so take the first
+/// record's own line rather than inventing a code for it.
+#[cfg(feature = "pkg")]
+fn lowering_err_line(e: &powerio_pkg::MulticonductorToBalancedError) -> String {
+    e.diagnostics.first().map_or_else(
+        || coded(&codes::BIND_CAPI_UNCODED_FAILURE, e),
+        powerio::diagnostics::render_line,
+    )
 }
 
 /// Parse `path` (format from extension, or `from` if non-NULL) into a network
@@ -459,11 +514,11 @@ pub unsafe extern "C" fn pio_parse_file(
 ) -> *mut PioNetwork {
     unsafe {
         finish_network(errbuf, errlen, "panic while parsing", || {
-            let path = cstr(path).ok_or_else(|| "path is NULL or not UTF-8".to_string())?;
+            let path = required_cstr(path, "path")?;
             let from = optional_cstr(from, "from")?;
             powerio::parse_file(std::path::Path::new(path), from)
                 .map(|p| (p.network, p.diagnostics))
-                .map_err(|e| e.to_string())
+                .map_err(err_line)
         })
     }
 }
@@ -487,11 +542,11 @@ pub unsafe extern "C" fn pio_parse_str(
 ) -> *mut PioNetwork {
     unsafe {
         finish_network(errbuf, errlen, "panic while parsing", || {
-            let text = cstr(text).ok_or_else(|| "text is NULL or not UTF-8".to_string())?;
-            let format = cstr(format).ok_or_else(|| "format is NULL or not UTF-8".to_string())?;
+            let text = required_cstr(text, "text")?;
+            let format = required_cstr(format, "format")?;
             powerio::parse_str(text, format)
                 .map(|p| (p.network, p.diagnostics))
-                .map_err(|e| e.to_string())
+                .map_err(err_line)
         })
     }
 }
@@ -522,13 +577,13 @@ pub unsafe extern "C" fn pio_parse_bytes(
             let slice = if len == 0 {
                 &[][..]
             } else if bytes.is_null() {
-                return Err("bytes is NULL".to_string());
+                return Err(coded(&codes::BIND_CAPI_NULL_ARGUMENT, "bytes is NULL"));
             } else {
                 std::slice::from_raw_parts(bytes, len)
             };
             powerio::parse_bytes(slice, format)
                 .map(|p| (p.network, p.diagnostics))
-                .map_err(|e| e.to_string())
+                .map_err(err_line)
         })
     }
 }
@@ -599,10 +654,8 @@ pub unsafe extern "C" fn pio_to_json(
 ) -> *mut c_char {
     unsafe {
         finish_string(errbuf, errlen, "panic while serializing model JSON", || {
-            let net = net
-                .as_ref()
-                .ok_or_else(|| "network handle is NULL".to_string())?;
-            net.net.to_json().map_err(|e| e.to_string())
+            let net = net.as_ref().ok_or_else(|| null_handle("network handle"))?;
+            net.net.to_json().map_err(err_line)
         })
     }
 }
@@ -623,7 +676,7 @@ pub unsafe extern "C" fn pio_from_json(
             let text = required_cstr(text, "text")?;
             BalancedNetwork::from_json(text)
                 .map(|net| (net, Vec::new()))
-                .map_err(|e| e.to_string())
+                .map_err(err_line)
         })
     }
 }
@@ -649,11 +702,11 @@ pub unsafe extern "C" fn pio_read_dir(
 ) -> *mut PioNetwork {
     unsafe {
         finish_network(errbuf, errlen, "panic while reading dataset", || {
-            let dir = cstr(dir).ok_or_else(|| "dir is NULL or not UTF-8".to_string())?;
-            let from = cstr(from).ok_or_else(|| "from is NULL or not UTF-8".to_string())?;
+            let dir = required_cstr(dir, "dir")?;
+            let from = required_cstr(from, "from")?;
             powerio_matrix::read_dataset_dir(std::path::Path::new(dir), from, scenario)
                 .map(|read| (read.network, read.diagnostics))
-                .map_err(|e| e.to_string())
+                .map_err(err_line)
         })
     }
 }
@@ -676,15 +729,18 @@ pub unsafe extern "C" fn pio_scenario_ids(
 ) -> isize {
     unsafe {
         let r = catch_unwind(AssertUnwindSafe(|| {
-            let dir = cstr(dir).ok_or_else(|| "dir is NULL or not UTF-8".to_string())?;
-            let from = cstr(from).ok_or_else(|| "from is NULL or not UTF-8".to_string())?;
-            powerio_matrix::dataset_scenario_ids(std::path::Path::new(dir), from)
-                .map_err(|e| e.to_string())
+            let dir = required_cstr(dir, "dir")?;
+            let from = required_cstr(from, "from")?;
+            powerio_matrix::dataset_scenario_ids(std::path::Path::new(dir), from).map_err(err_line)
         }));
         match r {
             Ok(Ok(ids)) => {
                 let Ok(total) = isize::try_from(ids.len()) else {
-                    copy_to_buf(errbuf, errlen, "scenario count exceeds isize");
+                    let msg = coded(
+                        &codes::BIND_CAPI_INDEX_OUT_OF_RANGE,
+                        "scenario count exceeds isize",
+                    );
+                    copy_to_buf(errbuf, errlen, &msg);
                     return -1;
                 };
                 fill(out, cap, ids.iter().copied());
@@ -695,7 +751,8 @@ pub unsafe extern "C" fn pio_scenario_ids(
                 -1
             }
             Err(_) => {
-                copy_to_buf(errbuf, errlen, "panic while reading scenario ids");
+                let msg = coded(&codes::BIND_CAPI_PANIC, "panic while reading scenario ids");
+                copy_to_buf(errbuf, errlen, &msg);
                 -1
             }
         }
@@ -708,7 +765,8 @@ pub unsafe extern "C" fn pio_scenario_ids(
 /// on a UTF-8 boundary; NULL/0 to skip). Returns the byte length of the full
 /// joined text, excluding the NUL; call once with `(NULL, 0)` to size, then
 /// pass a `char[len + 1]`. `0` means no warnings (or a NULL handle); readers
-/// that are total attach none.
+/// that are total attach none. Each line reads `CODE: message`; split at the
+/// first `": "` to recover the code.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_warnings(
     net: *const PioNetwork,
@@ -769,11 +827,11 @@ pub unsafe extern "C" fn pio_normalize(
 ) -> *mut PioNetwork {
     unsafe {
         finish_network(errbuf, errlen, "panic while normalizing", || {
-            let c = network_ref(net).ok_or_else(|| "network handle is NULL".to_string())?;
+            let c = network_ref(net).ok_or_else(|| null_handle("network handle"))?;
             c.net
                 .to_normalized()
                 .map(|n| (n, c.diagnostics.clone()))
-                .map_err(|e| e.to_string())
+                .map_err(err_line)
         })
     }
 }
@@ -801,7 +859,7 @@ pub unsafe extern "C" fn pio_normalize_with_options(
             errlen,
             "panic while normalizing with options",
             || {
-                let c = network_ref(net).ok_or_else(|| "network handle is NULL".to_string())?;
+                let c = network_ref(net).ok_or_else(|| null_handle("network handle"))?;
                 let options = NormalizeOptions {
                     clamp_angle_bounds: clamp_angle_bounds != 0,
                     angle_bound_pad,
@@ -809,7 +867,7 @@ pub unsafe extern "C" fn pio_normalize_with_options(
                 let out = c
                     .net
                     .to_normalized_with_options(&options)
-                    .map_err(|e| e.to_string())?;
+                    .map_err(err_line)?;
                 let mut diagnostics = c.diagnostics.clone();
                 diagnostics.extend(out.diagnostics);
                 Ok((out.network, diagnostics))
@@ -910,7 +968,7 @@ pub unsafe extern "C" fn pio_summary_json(
             errlen,
             "panic while serializing summary JSON",
             || {
-                let c = network_ref(net).ok_or_else(|| "network handle is NULL".to_string())?;
+                let c = network_ref(net).ok_or_else(|| null_handle("network handle"))?;
                 let v = IndexedNetwork::with_core(&c.net, &c.core);
                 let reference_bus_indices = v.reference_bus_indices();
                 let reference_bus_ids: Vec<usize> = reference_bus_indices
@@ -945,7 +1003,8 @@ pub unsafe extern "C" fn pio_summary_json(
                         "is_radial": v.is_radial(),
                     },
                 });
-                serde_json::to_string(&summary).map_err(|e| e.to_string())
+                serde_json::to_string(&summary)
+                    .map_err(|e| coded(&codes::EMIT_CAPI_SERIALIZE_FAILED, e))
             },
         )
     }
@@ -1012,82 +1071,88 @@ pub unsafe extern "C" fn pio_is_radial(net: *const PioNetwork) -> i32 {
 /// `matpower` is a byte-exact echo when the handle was parsed from MATPOWER.
 /// Also accepts `powerio-json` as an alias for
 /// [`pio_to_json`]. Model JSON cannot represent a non-finite `f64` (`Inf`/`NaN`):
-/// it writes `null`, records the field in `out_warnings`, and fails validation when
-/// read back.
+/// it writes `null`, records the field in `out_diagnostics_json`, and fails
+/// validation when read back.
 ///
 /// Returns the text as an owned C string (free with [`pio_string_free`]),
-/// `NULL` on error (message into `errbuf`). Fidelity warnings, if any, are
-/// published through `out_warnings` as one owned C string (free it with
-/// [`pio_string_free`]), or NULL when there are none; a returned string has no
-/// handle to attach them to. Pass NULL to discard them. `out_warnings` is
-/// written on every return path and is NULL whenever this returns NULL, so an
-/// error return leaves nothing to free.
+/// `NULL` on error (message into `errbuf`). The writer's findings, if any, are
+/// published through `out_diagnostics_json` as one owned JSON array of
+/// diagnostic records (free it with [`pio_string_free`]), or NULL when there
+/// are none; a returned string has no handle to attach them to. Pass NULL to
+/// discard them. `out_diagnostics_json` is written on every return path and is
+/// NULL whenever this returns NULL, so an error return leaves nothing to free.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_to_format(
     net: *const PioNetwork,
     to: *const c_char,
-    out_warnings: *mut *mut c_char,
+    out_diagnostics_json: *mut *mut c_char,
     errbuf: *mut c_char,
     errlen: usize,
 ) -> *mut c_char {
     unsafe {
-        finish_conversion(out_warnings, errbuf, errlen, || {
-            let c = network_ref(net).ok_or_else(|| "network handle is NULL".to_string())?;
+        finish_conversion(out_diagnostics_json, errbuf, errlen, || {
+            let c = network_ref(net).ok_or_else(|| null_handle("network handle"))?;
             let target = target_format_from_c(to)?;
-            let conv = c.net.to_format(target).map_err(|e| e.to_string())?;
-            Ok((conv.text, conv.warnings))
+            let conv = c.net.to_format(target).map_err(err_line)?;
+            Ok((conv.text, conv.diagnostics))
         })
     }
 }
 
-/// Write `warnings` to `out_warnings` as one owned, `\n`-joined C string, or
-/// NULL when there are none. NULL `out_warnings` discards them.
+/// Write `diagnostics` to `out_diagnostics_json` as one owned JSON array, or
+/// NULL when there are none. NULL `out_diagnostics_json` discards them.
 ///
-/// A caller buffer cannot work here. Warnings are unbounded in a way an error
+/// A caller buffer cannot work here. Findings are unbounded in a way an error
 /// message is not: one per lossy element, so a large case produces more than
-/// any fixed size a caller can guess, and guessing is what PowerIO.jl was doing
-/// with a 64 KiB buffer. The errbuf idiom stays for errors, which are one
-/// message.
-unsafe fn set_out_warnings(out_warnings: *mut *mut c_char, warnings: &[String]) {
+/// any fixed size a caller can guess. The errbuf idiom stays for errors, which
+/// are one message.
+unsafe fn set_out_diagnostics(
+    out_diagnostics_json: *mut *mut c_char,
+    diagnostics: &[StructuredDiagnostic],
+) {
     unsafe {
-        if out_warnings.is_null() {
+        if out_diagnostics_json.is_null() {
             return;
         }
-        *out_warnings = if warnings.is_empty() {
+        *out_diagnostics_json = if diagnostics.is_empty() {
             std::ptr::null_mut()
         } else {
-            // An interior NUL cannot reach here: warnings are library-authored
-            // text. If one ever did, reporting no warnings beats truncating at
-            // the NUL and reporting a prefix as the whole set.
-            into_cstring(warnings.join("\n")).unwrap_or(std::ptr::null_mut())
+            // A serialization or interior NUL failure here would have to be
+            // reported through a channel the caller reads as "nothing was
+            // lost", so reporting no findings beats handing back a prefix of
+            // the set as the whole of it.
+            serde_json::to_string(diagnostics)
+                .ok()
+                .and_then(into_cstring)
+                .unwrap_or(std::ptr::null_mut())
         };
     }
 }
 
 /// Finish a text-conversion entry point: run `f` (producing the converted text
-/// with its fidelity warnings, or an error message) under the panic guard,
-/// publish the warnings through `out_warnings`, and hand back the owned C
+/// with its findings, or an error message) under the panic guard, publish the
+/// findings through `out_diagnostics_json`, and hand back the owned C
 /// string, or write the error and return NULL. The shared tail of
 /// [`pio_to_format`], [`pio_convert_file`], and [`pio_convert_str`], mirroring
 /// [`finish_network`].
 unsafe fn finish_conversion(
-    out_warnings: *mut *mut c_char,
+    out_diagnostics_json: *mut *mut c_char,
     errbuf: *mut c_char,
     errlen: usize,
-    f: impl FnOnce() -> Result<(String, Vec<String>), String>,
+    f: impl FnOnce() -> Result<(String, Vec<StructuredDiagnostic>), String>,
 ) -> *mut c_char {
     unsafe {
         // Set before running f: a caller reads it on every return path, and a
         // stale value from an earlier call must not be mistaken for this one's.
-        set_out_warnings(out_warnings, &[]);
+        set_out_diagnostics(out_diagnostics_json, &[]);
         match catch_unwind(AssertUnwindSafe(f)) {
-            Ok(Ok((text, warnings))) => {
+            Ok(Ok((text, diagnostics))) => {
                 // Build the returned string before publishing: an interior NUL
                 // in the text fails here, and a caller reading NULL as an error
                 // never frees what a publish would have left behind.
                 let out = finish_cstring(text, errbuf, errlen);
                 if !out.is_null() {
-                    set_out_warnings(out_warnings, &warnings);
+                    set_out_diagnostics(out_diagnostics_json, &diagnostics);
                 }
                 out
             }
@@ -1096,7 +1161,8 @@ unsafe fn finish_conversion(
                 std::ptr::null_mut()
             }
             Err(_) => {
-                copy_to_buf(errbuf, errlen, "panic while converting");
+                let msg = coded(&codes::BIND_CAPI_PANIC, "panic while converting");
+                copy_to_buf(errbuf, errlen, &msg);
                 std::ptr::null_mut()
             }
         }
@@ -1106,28 +1172,29 @@ unsafe fn finish_conversion(
 /// Convert the case file at `path` from format `from` (NULL to infer from the
 /// path, as [`pio_parse_file`]) to format `to`, without keeping a handle.
 /// Returns the converted text as an owned C string (free with
-/// [`pio_string_free`]), `NULL` on error. Fidelity warnings, read side first,
-/// are published through `out_warnings` as one owned C string (free it with
-/// [`pio_string_free`]), NULL when there are none. Pass NULL to discard them.
-/// `out_warnings` is written on every return path and is NULL whenever this
-/// returns NULL, so an error return leaves nothing to free.
+/// [`pio_string_free`]), `NULL` on error. The findings, read side first, are
+/// published through `out_diagnostics_json` as one owned JSON array of
+/// diagnostic records (free it with [`pio_string_free`]), NULL when there are
+/// none. Pass NULL to discard them. `out_diagnostics_json` is written on every
+/// return path and is NULL whenever this returns NULL, so an error return
+/// leaves nothing to free.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_convert_file(
     path: *const c_char,
     from: *const c_char,
     to: *const c_char,
-    out_warnings: *mut *mut c_char,
+    out_diagnostics_json: *mut *mut c_char,
     errbuf: *mut c_char,
     errlen: usize,
 ) -> *mut c_char {
     unsafe {
-        finish_conversion(out_warnings, errbuf, errlen, || {
-            let path = cstr(path).ok_or_else(|| "path is NULL or not UTF-8".to_string())?;
+        finish_conversion(out_diagnostics_json, errbuf, errlen, || {
+            let path = required_cstr(path, "path")?;
             let from = optional_cstr(from, "from")?;
             let target = target_format_from_c(to)?;
             let conv = powerio::convert_file(std::path::Path::new(path), target, from)
-                .map_err(|e| e.to_string())?;
-            Ok((conv.text, conv.warnings))
+                .map_err(err_line)?;
+            Ok((conv.text, conv.diagnostics))
         })
     }
 }
@@ -1135,27 +1202,28 @@ pub unsafe extern "C" fn pio_convert_file(
 /// Convert in-memory case `text` from format `from` (required; there is no
 /// path to infer from) to format `to` without keeping a handle. Returns the
 /// converted text as an owned C
-/// string (free with [`pio_string_free`]), `NULL` on error. Fidelity warnings,
-/// read side first, are published through `out_warnings` as one owned C string
-/// (free it with [`pio_string_free`]), NULL when there are none. Pass NULL to
-/// discard them. `out_warnings` is written on every return path and is NULL
-/// whenever this returns NULL, so an error return leaves nothing to free.
+/// string (free with [`pio_string_free`]), `NULL` on error. The findings, read
+/// side first, are published through `out_diagnostics_json` as one owned JSON
+/// array of diagnostic records (free it with [`pio_string_free`]), NULL when
+/// there are none. Pass NULL to discard them. `out_diagnostics_json` is written
+/// on every return path and is NULL whenever this returns NULL, so an error
+/// return leaves nothing to free.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_convert_str(
     text: *const c_char,
     from: *const c_char,
     to: *const c_char,
-    out_warnings: *mut *mut c_char,
+    out_diagnostics_json: *mut *mut c_char,
     errbuf: *mut c_char,
     errlen: usize,
 ) -> *mut c_char {
     unsafe {
-        finish_conversion(out_warnings, errbuf, errlen, || {
-            let text = cstr(text).ok_or_else(|| "text is NULL or not UTF-8".to_string())?;
-            let from = cstr(from).ok_or_else(|| "from is NULL or not UTF-8".to_string())?;
+        finish_conversion(out_diagnostics_json, errbuf, errlen, || {
+            let text = required_cstr(text, "text")?;
+            let from = required_cstr(from, "from")?;
             let target = target_format_from_c(to)?;
-            let conv = powerio::convert_str(text, target, from).map_err(|e| e.to_string())?;
-            Ok((conv.text, conv.warnings))
+            let conv = powerio::convert_str(text, target, from).map_err(err_line)?;
+            Ok((conv.text, conv.diagnostics))
         })
     }
 }
@@ -1163,32 +1231,32 @@ pub unsafe extern "C" fn pio_convert_str(
 /// Write `net` into `out_dir` as the named directory format `to`. PyPSA CSV
 /// (`pypsa-csv`/`pypsa`) is the currently supported directory format; a text format name is
 /// an error pointing back at [`pio_to_format`]. Returns `0` on success and
-/// `-1` on error (message into `errbuf`). Fidelity warnings, if any, are
-/// published through `out_warnings` as one owned C string (free it with
-/// [`pio_string_free`]), NULL when there are none. Pass NULL to discard them.
-/// `out_warnings` is written on every return path and is NULL whenever this
-/// returns `-1`, so an error return leaves nothing to free.
+/// `-1` on error (message into `errbuf`). The writer's findings, if any, are
+/// published through `out_diagnostics_json` as one owned JSON array of
+/// diagnostic records (free it with [`pio_string_free`]), NULL when there are
+/// none. Pass NULL to discard them. `out_diagnostics_json` is written on every
+/// return path and is NULL whenever this returns `-1`, so an error return
+/// leaves nothing to free.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_write_dir(
     net: *const PioNetwork,
     to: *const c_char,
     out_dir: *const c_char,
-    out_warnings: *mut *mut c_char,
+    out_diagnostics_json: *mut *mut c_char,
     errbuf: *mut c_char,
     errlen: usize,
 ) -> i32 {
     unsafe {
-        set_out_warnings(out_warnings, &[]);
+        set_out_diagnostics(out_diagnostics_json, &[]);
         let r = catch_unwind(AssertUnwindSafe(|| {
-            let c = network_ref(net).ok_or_else(|| "network handle is NULL".to_string())?;
-            let to = cstr(to).ok_or_else(|| "to is NULL or not UTF-8".to_string())?;
-            let out_dir =
-                cstr(out_dir).ok_or_else(|| "out_dir is NULL or not UTF-8".to_string())?;
-            powerio::write_dir(&c.net, to, std::path::Path::new(out_dir)).map_err(|e| e.to_string())
+            let c = network_ref(net).ok_or_else(|| null_handle("network handle"))?;
+            let to = required_cstr(to, "to")?;
+            let out_dir = required_cstr(out_dir, "out_dir")?;
+            powerio::write_dir(&c.net, to, std::path::Path::new(out_dir)).map_err(err_line)
         }));
         match r {
             Ok(Ok(warnings)) => {
-                set_out_warnings(out_warnings, &warnings);
+                set_out_diagnostics(out_diagnostics_json, &warnings);
                 0
             }
             Ok(Err(msg)) => {
@@ -1196,7 +1264,8 @@ pub unsafe extern "C" fn pio_write_dir(
                 -1
             }
             Err(_) => {
-                copy_to_buf(errbuf, errlen, "panic while writing directory");
+                let msg = coded(&codes::BIND_CAPI_PANIC, "panic while writing directory");
+                copy_to_buf(errbuf, errlen, &msg);
                 -1
             }
         }
@@ -1528,9 +1597,12 @@ pub unsafe extern "C" fn pio_to_arrow(
     unsafe {
         let r = catch_unwind(AssertUnwindSafe(|| {
             if out_array.is_null() || out_schema.is_null() {
-                return Err("out_array or out_schema is NULL".to_string());
+                return Err(coded(
+                    &codes::BIND_CAPI_NULL_ARGUMENT,
+                    "out_array or out_schema is NULL",
+                ));
             }
-            let c = network_ref(net).ok_or_else(|| "network handle is NULL".to_string())?;
+            let c = network_ref(net).ok_or_else(|| null_handle("network handle"))?;
             arrow_export::export(&c.net, &c.core, table)
         }));
         match r {
@@ -1548,7 +1620,8 @@ pub unsafe extern "C" fn pio_to_arrow(
                 -1
             }
             Err(_) => {
-                copy_to_buf(errbuf, errlen, "panic while exporting Arrow");
+                let msg = coded(&codes::BIND_CAPI_PANIC, "panic while exporting Arrow");
+                copy_to_buf(errbuf, errlen, &msg);
                 -1
             }
         }
@@ -1622,7 +1695,7 @@ unsafe fn finish_package(
                 std::ptr::null_mut()
             }
             Err(_) => {
-                copy_to_buf(errbuf, errlen, panic_msg);
+                copy_to_buf(errbuf, errlen, &coded(&codes::BIND_CAPI_PANIC, panic_msg));
                 std::ptr::null_mut()
             }
         }
@@ -1644,8 +1717,9 @@ pub unsafe extern "C" fn pio_package_parse_file(
     unsafe {
         finish_package(errbuf, errlen, "panic while parsing package", || {
             let path = required_cstr(path, "path")?;
-            let text = std::fs::read_to_string(path).map_err(|e| e.to_string())?;
-            powerio_pkg::NetworkPackage::from_json(&text).map_err(|e| e.to_string())
+            let text =
+                std::fs::read_to_string(path).map_err(|e| coded(&codes::READ_CAPI_IO_FAILED, e))?;
+            powerio_pkg::NetworkPackage::from_json(&text).map_err(err_line)
         })
     }
 }
@@ -1663,7 +1737,7 @@ pub unsafe extern "C" fn pio_package_parse_str(
     unsafe {
         finish_package(errbuf, errlen, "panic while parsing package", || {
             let text = required_cstr(text, "text")?;
-            powerio_pkg::NetworkPackage::from_json(text).map_err(|e| e.to_string())
+            powerio_pkg::NetworkPackage::from_json(text).map_err(err_line)
         })
     }
 }
@@ -1696,9 +1770,7 @@ unsafe fn finish_package_json(
 ) -> *mut c_char {
     unsafe {
         finish_string(errbuf, errlen, panic_msg, || {
-            let pkg = pkg
-                .as_ref()
-                .ok_or_else(|| "package handle is NULL".to_string())?;
+            let pkg = pkg.as_ref().ok_or_else(|| null_handle("package handle"))?;
             f(pkg)
         })
     }
@@ -1719,13 +1791,13 @@ pub unsafe extern "C" fn pio_package_to_json(
             errbuf,
             errlen,
             "panic while serializing package",
-            |p| p.package.to_json().map_err(|e| e.to_string()),
+            |p| p.package.to_json().map_err(err_line),
         )
     }
 }
 
-/// Wrap a balanced [`PioNetwork`] handle in a `.pio.json` package. The C handle
-/// name is historical; the payload is `powerio::BalancedNetwork`.
+/// Wrap a balanced [`PioNetwork`] handle in a `.pio.json` package. A
+/// `PioNetwork` carries a `powerio::BalancedNetwork`.
 /// `include_solver_metadata != 0` attaches compact normalized solver table
 /// metadata.
 #[cfg(feature = "pkg")]
@@ -1742,7 +1814,7 @@ pub unsafe extern "C" fn pio_package_from_balanced_network(
             errlen,
             "panic while packaging balanced network",
             || {
-                let net = network_ref(net).ok_or_else(|| "network handle is NULL".to_string())?;
+                let net = network_ref(net).ok_or_else(|| null_handle("network handle"))?;
                 let mut package = powerio_pkg::NetworkPackage::from_balanced_with_read_diagnostics(
                     net.net.clone(),
                     net.diagnostics.clone(),
@@ -1750,7 +1822,7 @@ pub unsafe extern "C" fn pio_package_from_balanced_network(
                 if include_solver_metadata != 0 {
                     package
                         .attach_normalized_solver_table_metadata()
-                        .map_err(|e| e.to_string())?;
+                        .map_err(err_line)?;
                 }
                 Ok(package)
             },
@@ -1758,9 +1830,8 @@ pub unsafe extern "C" fn pio_package_from_balanced_network(
     }
 }
 
-/// Wrap a multiconductor [`PioDistNetwork`] handle in a `.pio.json` package. The
-/// C handle name is historical; the payload is
-/// `powerio_dist::MulticonductorNetwork`.
+/// Wrap a multiconductor [`PioDistNetwork`] handle in a `.pio.json` package. A
+/// `PioDistNetwork` carries a `powerio_dist::MulticonductorNetwork`.
 #[cfg(all(feature = "pkg", feature = "dist"))]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_package_from_multiconductor_network(
@@ -1776,7 +1847,7 @@ pub unsafe extern "C" fn pio_package_from_multiconductor_network(
             || {
                 let net = net
                     .as_ref()
-                    .ok_or_else(|| "distribution network handle is NULL".to_string())?;
+                    .ok_or_else(|| null_handle("distribution network handle"))?;
                 Ok(powerio_pkg::NetworkPackage::from_multiconductor(
                     net.net.clone(),
                 ))
@@ -1804,20 +1875,17 @@ pub unsafe extern "C" fn pio_package_to_balanced_network(
             errlen,
             "panic while extracting balanced network",
             || {
-                let pkg = pkg
-                    .as_ref()
-                    .ok_or_else(|| "package handle is NULL".to_string())?;
+                let pkg = pkg.as_ref().ok_or_else(|| null_handle("package handle"))?;
                 let net = pkg.package.model.as_balanced().ok_or_else(|| {
-                    if cfg!(feature = "dist") {
-                        "package holds a multiconductor model, not balanced; use \
+                    let message = if cfg!(feature = "dist") {
+                        "package holds a multiconductor model where balanced was asked for; use \
                          pio_package_to_multiconductor_network"
-                            .to_string()
                     } else {
-                        "package holds a multiconductor model, not balanced; extracting \
-                         it needs a build with the `dist` feature \
+                        "package holds a multiconductor model where balanced was asked for; \
+                         extracting it needs a build with the `dist` feature \
                          (pio_package_to_multiconductor_network)"
-                            .to_string()
-                    }
+                    };
+                    coded(&pkg_codes::REQUEST_PACKAGE_WRONG_MODEL_KIND, message)
                 })?;
                 let mut net = net.clone();
                 // An in-memory package still holds the payload's #[serde(skip)]
@@ -1851,13 +1919,13 @@ pub unsafe extern "C" fn pio_package_to_multiconductor_network(
             errlen,
             "panic while extracting multiconductor network",
             || {
-                let pkg = pkg
-                    .as_ref()
-                    .ok_or_else(|| "package handle is NULL".to_string())?;
+                let pkg = pkg.as_ref().ok_or_else(|| null_handle("package handle"))?;
                 let net = pkg.package.model.as_multiconductor().ok_or_else(|| {
-                    "package holds a balanced model, not multiconductor; use \
-                     pio_package_to_balanced_network"
-                        .to_string()
+                    coded(
+                        &pkg_codes::REQUEST_PACKAGE_WRONG_MODEL_KIND,
+                        "package holds a balanced model where multiconductor was asked for; use \
+                         pio_package_to_balanced_network",
+                    )
                 })?;
                 let mut net = net.clone();
                 // Same in-memory strip as the balanced inverse: source and the
@@ -1888,9 +1956,7 @@ pub unsafe extern "C" fn pio_package_validate(
 ) -> i32 {
     unsafe {
         let result = catch_unwind(AssertUnwindSafe(|| {
-            let pkg = pkg
-                .as_mut()
-                .ok_or_else(|| "package handle is NULL".to_string())?;
+            let pkg = pkg.as_mut().ok_or_else(|| null_handle("package handle"))?;
             pkg.package.run_sane_validation();
             Ok::<_, String>(())
         }));
@@ -1901,7 +1967,8 @@ pub unsafe extern "C" fn pio_package_validate(
                 -1
             }
             Err(_) => {
-                copy_to_buf(errbuf, errlen, "panic while validating package");
+                let msg = coded(&codes::BIND_CAPI_PANIC, "panic while validating package");
+                copy_to_buf(errbuf, errlen, &msg);
                 -1
             }
         }
@@ -1923,7 +1990,10 @@ pub unsafe extern "C" fn pio_package_validation_json(
             errbuf,
             errlen,
             "panic while reading package validation",
-            |p| serde_json::to_string(&p.package.validation).map_err(|e| e.to_string()),
+            |p| {
+                serde_json::to_string(&p.package.validation)
+                    .map_err(|e| coded(&codes::EMIT_CAPI_SERIALIZE_FAILED, e))
+            },
         )
     }
 }
@@ -1943,7 +2013,10 @@ pub unsafe extern "C" fn pio_package_diagnostics_json(
             errbuf,
             errlen,
             "panic while reading package diagnostics",
-            |p| serde_json::to_string(&p.package.diagnostics).map_err(|e| e.to_string()),
+            |p| {
+                serde_json::to_string(&p.package.diagnostics)
+                    .map_err(|e| coded(&codes::EMIT_CAPI_SERIALIZE_FAILED, e))
+            },
         )
     }
 }
@@ -1964,7 +2037,10 @@ pub unsafe extern "C" fn pio_package_operating_points_json(
             errbuf,
             errlen,
             "panic while reading package operating points",
-            |p| serde_json::to_string(&p.package.operating_points).map_err(|e| e.to_string()),
+            |p| {
+                serde_json::to_string(&p.package.operating_points)
+                    .map_err(|e| coded(&codes::EMIT_CAPI_SERIALIZE_FAILED, e))
+            },
         )
     }
 }
@@ -1986,12 +2062,10 @@ pub unsafe extern "C" fn pio_package_set_operating_points(
 ) -> i32 {
     unsafe {
         let result = catch_unwind(AssertUnwindSafe(|| {
-            let pkg = pkg
-                .as_mut()
-                .ok_or_else(|| "package handle is NULL".to_string())?;
+            let pkg = pkg.as_mut().ok_or_else(|| null_handle("package handle"))?;
             let json = required_cstr(json, "json")?;
-            let series: Option<powerio_pkg::OperatingPointSeries> =
-                serde_json::from_str(json).map_err(|e| e.to_string())?;
+            let series: Option<powerio_pkg::OperatingPointSeries> = serde_json::from_str(json)
+                .map_err(|e| coded(&codes::PARSE_CAPI_JSON_MALFORMED, e))?;
             match series {
                 Some(series) => pkg.package.set_operating_points(series),
                 None => pkg.package.clear_operating_points(),
@@ -2032,7 +2106,10 @@ pub unsafe extern "C" fn pio_package_study_json(
             errbuf,
             errlen,
             "panic while reading package study block",
-            |p| serde_json::to_string(&p.package.study).map_err(|e| e.to_string()),
+            |p| {
+                serde_json::to_string(&p.package.study)
+                    .map_err(|e| coded(&codes::EMIT_CAPI_SERIALIZE_FAILED, e))
+            },
         )
     }
 }
@@ -2055,14 +2132,16 @@ pub unsafe extern "C" fn pio_package_materialize_operating_point(
             errlen,
             "panic while materializing package operating point",
             || {
-                let pkg = pkg
-                    .as_ref()
-                    .ok_or_else(|| "package handle is NULL".to_string())?;
-                let index = usize::try_from(index)
-                    .map_err(|_| "operating point index must be non-negative".to_string())?;
+                let pkg = pkg.as_ref().ok_or_else(|| null_handle("package handle"))?;
+                let index = usize::try_from(index).map_err(|_| {
+                    coded(
+                        &codes::BIND_CAPI_INDEX_OUT_OF_RANGE,
+                        "operating point index must be non-negative",
+                    )
+                })?;
                 pkg.package
                     .materialize_operating_point(index)
-                    .map_err(|e| e.to_string())
+                    .map_err(err_line)
             },
         )
     }
@@ -2086,14 +2165,16 @@ pub unsafe extern "C" fn pio_package_materialize_study_commit(
             errlen,
             "panic while materializing package study commit",
             || {
-                let pkg = pkg
-                    .as_ref()
-                    .ok_or_else(|| "package handle is NULL".to_string())?;
-                let index = usize::try_from(index)
-                    .map_err(|_| "study commit index must be non-negative".to_string())?;
+                let pkg = pkg.as_ref().ok_or_else(|| null_handle("package handle"))?;
+                let index = usize::try_from(index).map_err(|_| {
+                    coded(
+                        &codes::BIND_CAPI_INDEX_OUT_OF_RANGE,
+                        "study commit index must be non-negative",
+                    )
+                })?;
                 pkg.package
                     .materialize_study_commit(index)
-                    .map_err(|e| e.to_string())
+                    .map_err(err_line)
             },
         )
     }
@@ -2116,20 +2197,22 @@ pub unsafe extern "C" fn pio_package_multiconductor_to_balanced_preflight_json(
             errlen,
             "panic while preflighting package lowering",
             || {
-                let pkg = pkg
-                    .as_ref()
-                    .ok_or_else(|| "package handle is NULL".to_string())?;
+                let pkg = pkg.as_ref().ok_or_else(|| null_handle("package handle"))?;
                 let net = pkg.package.as_multiconductor().ok_or_else(|| {
-                    format!(
-                        "multiconductor preflight requires a multiconductor package, got {:?}",
-                        pkg.package.model_kind()
+                    coded(
+                        &pkg_codes::REQUEST_PACKAGE_WRONG_MODEL_KIND,
+                        format!(
+                            "multiconductor preflight requires a multiconductor package, got {:?}",
+                            pkg.package.model_kind()
+                        ),
                     )
                 })?;
                 let report = powerio_pkg::check_multiconductor_to_balanced_lowering(
                     net,
                     lowering_options(base_mva),
                 );
-                serde_json::to_string(&report).map_err(|e| e.to_string())
+                serde_json::to_string(&report)
+                    .map_err(|e| coded(&codes::EMIT_CAPI_SERIALIZE_FAILED, e))
             },
         )
     }
@@ -2149,12 +2232,10 @@ pub unsafe extern "C" fn pio_package_lower_multiconductor_to_balanced(
 ) -> *mut PioPackage {
     unsafe {
         finish_package(errbuf, errlen, "panic while lowering package", || {
-            let pkg = pkg
-                .as_ref()
-                .ok_or_else(|| "package handle is NULL".to_string())?;
+            let pkg = pkg.as_ref().ok_or_else(|| null_handle("package handle"))?;
             pkg.package
                 .lower_multiconductor_to_balanced(lowering_options(base_mva))
-                .map_err(|e| e.to_string())
+                .map_err(|e| lowering_err_line(&e))
         })
     }
 }
@@ -2183,8 +2264,8 @@ pub unsafe extern "C" fn pio_geo_parse(
         finish_string(errbuf, errlen, "panic while parsing geo layer", || {
             let text = required_cstr(text, "text")?;
             let name_hint = optional_cstr(name_hint, "name_hint")?;
-            let parsed = powerio::GeoLayer::parse_bytes(text.as_bytes(), name_hint)
-                .map_err(|e| e.to_string())?;
+            let parsed =
+                powerio::GeoLayer::parse_bytes(text.as_bytes(), name_hint).map_err(err_line)?;
             Ok(parsed.layer.to_geojson())
         })
     }
@@ -2202,11 +2283,8 @@ pub unsafe extern "C" fn pio_geo_extract(
 ) -> *mut c_char {
     unsafe {
         finish_string(errbuf, errlen, "panic while extracting geo layer", || {
-            let c = network_ref(net).ok_or_else(|| "network handle is NULL".to_string())?;
-            c.net
-                .geo_layer()
-                .extracted_geojson()
-                .map_err(|e| e.to_string())
+            let c = network_ref(net).ok_or_else(|| null_handle("network handle"))?;
+            c.net.geo_layer().extracted_geojson().map_err(err_line)
         })
     }
 }
@@ -2230,11 +2308,11 @@ pub unsafe extern "C" fn pio_geo_apply(
 ) -> *mut PioNetwork {
     unsafe {
         finish_network(errbuf, errlen, "panic while applying geo layer", || {
-            let c = network_ref(net).ok_or_else(|| "network handle is NULL".to_string())?;
+            let c = network_ref(net).ok_or_else(|| null_handle("network handle"))?;
             let layer = required_cstr(layer, "layer")?;
             let name_hint = optional_cstr(name_hint, "name_hint")?;
-            let parsed = powerio::GeoLayer::parse_bytes(layer.as_bytes(), name_hint)
-                .map_err(|e| e.to_string())?;
+            let parsed =
+                powerio::GeoLayer::parse_bytes(layer.as_bytes(), name_hint).map_err(err_line)?;
             let mut out = c.net.clone();
             let report = out.apply_geo_layer(&parsed.layer);
             out.source = None;
@@ -2299,8 +2377,7 @@ pub unsafe extern "C" fn pio_scopf_parse_str(
         finish_handle(errbuf, errlen, "panic while parsing SCOPF instance", || {
             let text = required_cstr(text, "text")?;
             let from = required_cstr(from, "from")?;
-            let instance =
-                powerio_prob::parse_scopf_str(text, from).map_err(|error| error.to_string())?;
+            let instance = powerio_prob::parse_scopf_str(text, from).map_err(err_line)?;
             Ok(PioScopfInstance { instance })
         })
     }
@@ -2324,7 +2401,7 @@ pub unsafe extern "C" fn pio_scopf_to_json(
             || {
                 let instance = instance
                     .as_ref()
-                    .ok_or_else(|| "SCOPF instance handle is NULL".to_string())?;
+                    .ok_or_else(|| null_handle("SCOPF instance handle"))?;
                 powerio_prob::scopf::json::to_json(&instance.instance)
                     .map_err(|error| error.to_string())
             },
@@ -2374,7 +2451,7 @@ unsafe fn finish_handle<H>(
                 std::ptr::null_mut()
             }
             Err(_) => {
-                copy_to_buf(errbuf, errlen, panic_msg);
+                copy_to_buf(errbuf, errlen, &coded(&codes::BIND_CAPI_PANIC, panic_msg));
                 std::ptr::null_mut()
             }
         }
@@ -2417,7 +2494,7 @@ pub unsafe extern "C" fn pio_dist_parse_file(
             let from = optional_cstr(from, "from")?;
             powerio_dist::parse_file(std::path::Path::new(path), from)
                 .map(|net| PioDistNetwork { net })
-                .map_err(|e| e.to_string())
+                .map_err(err_line)
         })
     }
 }
@@ -2441,7 +2518,7 @@ pub unsafe extern "C" fn pio_dist_parse_str(
             let format = required_cstr(format, "format")?;
             powerio_dist::parse_str(text, format)
                 .map(|net| PioDistNetwork { net })
-                .map_err(|e| e.to_string())
+                .map_err(err_line)
         })
     }
 }
@@ -2466,7 +2543,8 @@ pub unsafe extern "C" fn pio_dist_network_free(net: *mut PioDistNetwork) {
 /// represent or had to assume), `\n`-joined and written into the caller `warnbuf`
 /// (truncated to fit, always NUL-terminated). Returns the total byte length of
 /// the joined message; call with `NULL`/0 to size first, then fill — the same
-/// idiom as [`pio_warnings`]. Returns 0 for a NULL handle.
+/// idiom as [`pio_warnings`]. Each line reads `CODE: message`. Returns 0 for a
+/// NULL handle.
 #[cfg(feature = "dist")]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_dist_warnings(
@@ -2502,7 +2580,7 @@ pub unsafe extern "C" fn pio_dist_summary_json(
             || {
                 let net = net
                     .as_ref()
-                    .ok_or_else(|| "distribution network handle is NULL".to_string())?;
+                    .ok_or_else(|| null_handle("distribution network handle"))?;
                 let summary = serde_json::json!({
                     powerio::version::VERSION_KEY: powerio::VERSION,
                     "name": net.net.name.as_deref(),
@@ -2525,7 +2603,8 @@ pub unsafe extern "C" fn pio_dist_summary_json(
                         "warnings": net.net.warnings.len(),
                     },
                 });
-                serde_json::to_string(&summary).map_err(|e| e.to_string())
+                serde_json::to_string(&summary)
+                    .map_err(|e| coded(&codes::EMIT_CAPI_SERIALIZE_FAILED, e))
             },
         )
     }
@@ -2548,8 +2627,9 @@ pub unsafe extern "C" fn pio_dist_to_json(
         finish_string(errbuf, errlen, "panic while serializing model JSON", || {
             let net = net
                 .as_ref()
-                .ok_or_else(|| "distribution network handle is NULL".to_string())?;
-            serde_json::to_string(&net.net).map_err(|e| e.to_string())
+                .ok_or_else(|| null_handle("distribution network handle"))?;
+            serde_json::to_string(&net.net)
+                .map_err(|e| coded(&codes::EMIT_CAPI_SERIALIZE_FAILED, e))
         })
     }
 }
@@ -2568,8 +2648,9 @@ pub unsafe extern "C" fn pio_dist_graph_json(
         finish_string(errbuf, errlen, "panic while serializing graph JSON", || {
             let net = net
                 .as_ref()
-                .ok_or_else(|| "distribution network handle is NULL".to_string())?;
-            serde_json::to_string(&net.net.graph()).map_err(|e| e.to_string())
+                .ok_or_else(|| null_handle("distribution network handle"))?;
+            serde_json::to_string(&net.net.graph())
+                .map_err(|e| coded(&codes::EMIT_CAPI_SERIALIZE_FAILED, e))
         })
     }
 }
@@ -2592,55 +2673,59 @@ pub unsafe extern "C" fn pio_dist_from_json(
             let text = required_cstr(text, "text")?;
             serde_json::from_str::<powerio_dist::MulticonductorNetwork>(text)
                 .map(|net| PioDistNetwork { net })
-                .map_err(|e| format!("model JSON: {e}"))
+                .map_err(|e| {
+                    coded(
+                        &codes::PARSE_CAPI_JSON_MALFORMED,
+                        format!("model JSON: {e}"),
+                    )
+                })
         })
     }
 }
 
-/// Append a fidelity warning for each companion file the writer produced.
-/// The text-only C entry points cannot return these files, so the case text
-/// can refer to a file the caller does not have. The warning names it.
+/// Append a finding for each companion file the writer produced. The text-only
+/// C entry points cannot return these files, so the case text can refer to a
+/// file the caller does not have. The finding names it.
 #[cfg(feature = "dist")]
 fn warn_dropped_sidecars(
-    mut warnings: Vec<String>,
+    mut diagnostics: Vec<StructuredDiagnostic>,
     sidecars: &[powerio_dist::ConversionSidecar],
-) -> Vec<String> {
+) -> Vec<StructuredDiagnostic> {
     for sidecar in sidecars {
-        warnings.push(sidecar.dropped_warning(
+        diagnostics.push(sidecar.dropped_diagnostic(
             "this entry point returns the case text only, and that text refers to the file; \
              write it beside the case before loading",
         ));
     }
-    warnings
+    diagnostics
 }
 
 /// Serialize `net` to distribution format `to` (`dss`, `pmd`, or `bmopf`).
 /// Writing back to the format the handle was parsed from echoes the source text
 /// byte for byte. Returns the text as an owned C string (free with
 /// [`pio_string_free`]), `NULL` on error. A cross format write's fidelity
-/// losses are published through `out_warnings` as one owned C string (free it
-/// with [`pio_string_free`]), NULL when there are none. Pass NULL to discard
-/// them. `out_warnings` is written on every return path and is NULL whenever
-/// this returns NULL, so an error return leaves nothing to free.
+/// losses are published through `out_diagnostics_json` as one owned JSON array
+/// of diagnostic records (free it with [`pio_string_free`]), NULL when there
+/// are none. Pass NULL to discard them. `out_diagnostics_json` is written on
+/// every return path and is NULL whenever this returns NULL, so an error return
+/// leaves nothing to free.
 #[cfg(feature = "dist")]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_dist_to_format(
     net: *const PioDistNetwork,
     to: *const c_char,
-    out_warnings: *mut *mut c_char,
+    out_diagnostics_json: *mut *mut c_char,
     errbuf: *mut c_char,
     errlen: usize,
 ) -> *mut c_char {
     unsafe {
-        finish_conversion(out_warnings, errbuf, errlen, || {
-            let c = net
-                .as_ref()
-                .ok_or_else(|| "network handle is NULL".to_string())?;
+        finish_conversion(out_diagnostics_json, errbuf, errlen, || {
+            let c = net.as_ref().ok_or_else(|| null_handle("network handle"))?;
             let target = dist_target_from_c(to)?;
             let conv = c.net.to_format(target);
             Ok((
                 conv.text,
-                warn_dropped_sidecars(conv.warnings, &conv.sidecars),
+                warn_dropped_sidecars(conv.diagnostics, &conv.sidecars),
             ))
         })
     }
@@ -2649,32 +2734,32 @@ pub unsafe extern "C" fn pio_dist_to_format(
 /// Convert distribution case `path` from optional source format `from` to format
 /// `to`; see [`pio_dist_parse_file`] for the inference rules. Returns the
 /// converted text as an owned C string (free with [`pio_string_free`]), `NULL` on
-/// error. The warnings published through `out_warnings` carry both the parse
-/// warnings and the writer's fidelity losses (there is no handle to query them),
-/// as one owned C string (free it with [`pio_string_free`]), NULL when there are
-/// none. Pass NULL to discard them. `out_warnings` is written on every return
-/// path and is NULL whenever this returns NULL, so an error return leaves
-/// nothing to free.
+/// error. The records published through `out_diagnostics_json` carry both the
+/// parse findings and the writer's fidelity losses (there is no handle to query
+/// them), as one owned JSON array (free it with [`pio_string_free`]), NULL when
+/// there are none. Pass NULL to discard them. `out_diagnostics_json` is written
+/// on every return path and is NULL whenever this returns NULL, so an error
+/// return leaves nothing to free.
 #[cfg(feature = "dist")]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_dist_convert_file(
     path: *const c_char,
     from: *const c_char,
     to: *const c_char,
-    out_warnings: *mut *mut c_char,
+    out_diagnostics_json: *mut *mut c_char,
     errbuf: *mut c_char,
     errlen: usize,
 ) -> *mut c_char {
     unsafe {
-        finish_conversion(out_warnings, errbuf, errlen, || {
+        finish_conversion(out_diagnostics_json, errbuf, errlen, || {
             let path = required_cstr(path, "path")?;
             let from = optional_cstr(from, "from")?;
             let to = dist_target_from_c(to)?;
             let conv = powerio_dist::convert_file(std::path::Path::new(path), to, from)
-                .map_err(|e| e.to_string())?;
+                .map_err(err_line)?;
             Ok((
                 conv.text,
-                warn_dropped_sidecars(conv.warnings, &conv.sidecars),
+                warn_dropped_sidecars(conv.diagnostics, &conv.sidecars),
             ))
         })
     }
@@ -2684,30 +2769,31 @@ pub unsafe extern "C" fn pio_dist_convert_file(
 /// (both required; `dss`, `pmd`, or `bmopf`). The parameter order is input,
 /// source, target, matching [`pio_dist_convert_file`]. Returns the converted text
 /// as an owned C string (free with [`pio_string_free`]), `NULL` on error. The
-/// warnings published through `out_warnings` carry both the parse warnings and
-/// the writer's fidelity losses (there is no handle to query them), as one owned
-/// C string (free it with [`pio_string_free`]), NULL when there are none. Pass
-/// NULL to discard them. `out_warnings` is written on every return path and is
-/// NULL whenever this returns NULL, so an error return leaves nothing to free.
+/// records published through `out_diagnostics_json` carry both the parse
+/// findings and the writer's fidelity losses (there is no handle to query them),
+/// as one owned JSON array (free it with [`pio_string_free`]), NULL when there
+/// are none. Pass NULL to discard them. `out_diagnostics_json` is written on
+/// every return path and is NULL whenever this returns NULL, so an error return
+/// leaves nothing to free.
 #[cfg(feature = "dist")]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_dist_convert_str(
     text: *const c_char,
     from: *const c_char,
     to: *const c_char,
-    out_warnings: *mut *mut c_char,
+    out_diagnostics_json: *mut *mut c_char,
     errbuf: *mut c_char,
     errlen: usize,
 ) -> *mut c_char {
     unsafe {
-        finish_conversion(out_warnings, errbuf, errlen, || {
+        finish_conversion(out_diagnostics_json, errbuf, errlen, || {
             let text = required_cstr(text, "text")?;
             let to = dist_target_from_c(to)?;
             let from = required_cstr(from, "from")?;
-            let conv = powerio_dist::convert_str(text, to, from).map_err(|e| e.to_string())?;
+            let conv = powerio_dist::convert_str(text, to, from).map_err(err_line)?;
             Ok((
                 conv.text,
-                warn_dropped_sidecars(conv.warnings, &conv.sidecars),
+                warn_dropped_sidecars(conv.diagnostics, &conv.sidecars),
             ))
         })
     }
@@ -2719,7 +2805,7 @@ fn dist_target_from_c(to: *const c_char) -> Result<powerio_dist::DistTargetForma
     // The message comes from the real error so it can't drift from what the
     // powerio-dist dispatchers report for the same mistake.
     to.parse::<powerio_dist::DistTargetFormat>()
-        .map_err(|e| e.to_string())
+        .map_err(err_line)
 }
 
 /// Extract a multiconductor network's coordinates as the canonical GeoJSON
@@ -2737,10 +2823,10 @@ pub unsafe extern "C" fn pio_dist_geo_extract(
         finish_string(errbuf, errlen, "panic while extracting geo layer", || {
             let c = net
                 .as_ref()
-                .ok_or_else(|| "distribution network handle is NULL".to_string())?;
+                .ok_or_else(|| null_handle("distribution network handle"))?;
             powerio_pkg::dist_geo_layer(&c.net)
                 .extracted_geojson()
-                .map_err(|e| e.to_string())
+                .map_err(err_line)
         })
     }
 }
@@ -2765,11 +2851,11 @@ pub unsafe extern "C" fn pio_dist_geo_apply(
         finish_handle(errbuf, errlen, "panic while applying geo layer", || {
             let c = net
                 .as_ref()
-                .ok_or_else(|| "distribution network handle is NULL".to_string())?;
+                .ok_or_else(|| null_handle("distribution network handle"))?;
             let layer = required_cstr(layer, "layer")?;
             let name_hint = optional_cstr(name_hint, "name_hint")?;
-            let parsed = powerio::GeoLayer::parse_bytes(layer.as_bytes(), name_hint)
-                .map_err(|e| e.to_string())?;
+            let parsed =
+                powerio::GeoLayer::parse_bytes(layer.as_bytes(), name_hint).map_err(err_line)?;
             let mut out = c.net.clone();
             let report = powerio_pkg::apply_dist_geo_layer(&mut out, &parsed.layer);
             out.source = None;
@@ -2932,10 +3018,10 @@ mod tests {
     /// `pio_to_format` with a Rust-side format name, asserting success.
     unsafe fn to_format(net: *const PioNetwork, to: &str) -> String {
         let to = CString::new(to).unwrap();
-        let mut warn_out: *mut c_char = std::ptr::null_mut();
+        let mut diag_out: *mut c_char = std::ptr::null_mut();
         let mut err = [0 as c_char; 256];
         unsafe {
-            let s = pio_to_format(net, to.as_ptr(), &mut warn_out, err.as_mut_ptr(), err.len());
+            let s = pio_to_format(net, to.as_ptr(), &mut diag_out, err.as_mut_ptr(), err.len());
             assert!(
                 !s.is_null(),
                 "to_format failed: {}",
@@ -3204,6 +3290,21 @@ mod tests {
             doc["error_categories"],
             serde_json::json!(powerio::ErrorCategory::TOKENS)
         );
+        assert_eq!(
+            doc["diagnostic_namespaces"],
+            serde_json::json!(powerio::diagnostics::DiagnosticStage::NAMESPACES)
+        );
+        // The two handshake documents are built from one source for the facts
+        // they share, so read both and hold them to each other.
+        let schema: serde_json::Value = {
+            let p = pio_schema_versions_json();
+            let text = unsafe { CStr::from_ptr(p) }.to_str().unwrap().to_owned();
+            unsafe { pio_string_free(p) };
+            serde_json::from_str(&text).unwrap()
+        };
+        assert_eq!(schema["powerio_version"], doc["powerio_version"]);
+        assert_eq!(schema["abi"], doc["abi"]);
+        assert_eq!(schema["bmopf_schema"], doc["foreign_schemas"]["bmopf"]);
     }
 
     #[test]
@@ -3423,10 +3524,10 @@ mod tests {
             "size_t pio_ref_bus_indices(const PioNetwork *net, int64_t *out, size_t cap);",
             "size_t pio_n_islands(const PioNetwork *net);",
             "int32_t pio_is_radial(const PioNetwork *net);",
-            "char *pio_to_format(const PioNetwork *net, const char *to, char **out_warnings, char *errbuf, size_t errlen);",
-            "char *pio_convert_file(const char *path, const char *from, const char *to, char **out_warnings, char *errbuf, size_t errlen);",
-            "char *pio_convert_str(const char *text, const char *from, const char *to, char **out_warnings, char *errbuf, size_t errlen);",
-            "int32_t pio_write_dir(const PioNetwork *net, const char *to, const char *out_dir, char **out_warnings, char *errbuf, size_t errlen);",
+            "char *pio_to_format(const PioNetwork *net, const char *to, char **out_diagnostics_json, char *errbuf, size_t errlen);",
+            "char *pio_convert_file(const char *path, const char *from, const char *to, char **out_diagnostics_json, char *errbuf, size_t errlen);",
+            "char *pio_convert_str(const char *text, const char *from, const char *to, char **out_diagnostics_json, char *errbuf, size_t errlen);",
+            "int32_t pio_write_dir(const PioNetwork *net, const char *to, const char *out_dir, char **out_diagnostics_json, char *errbuf, size_t errlen);",
             "void pio_string_free(char *s);",
             "size_t pio_bus_ids(const PioNetwork *net, int64_t *out, size_t cap);",
             "size_t pio_branches(const PioNetwork *net, int64_t *from, int64_t *to, double *r, double *x, double *b, double *tap, double *shift, uint8_t *in_service, size_t cap);",
@@ -3469,9 +3570,9 @@ mod tests {
             "char *pio_dist_to_json(const PioDistNetwork *net, char *errbuf, size_t errlen);",
             "char *pio_dist_graph_json(const PioDistNetwork *net, char *errbuf, size_t errlen);",
             "PioDistNetwork *pio_dist_from_json(const char *text, char *errbuf, size_t errlen);",
-            "char *pio_dist_to_format(const PioDistNetwork *net, const char *to, char **out_warnings, char *errbuf, size_t errlen);",
-            "char *pio_dist_convert_file(const char *path, const char *from, const char *to, char **out_warnings, char *errbuf, size_t errlen);",
-            "char *pio_dist_convert_str(const char *text, const char *from, const char *to, char **out_warnings, char *errbuf, size_t errlen);",
+            "char *pio_dist_to_format(const PioDistNetwork *net, const char *to, char **out_diagnostics_json, char *errbuf, size_t errlen);",
+            "char *pio_dist_convert_file(const char *path, const char *from, const char *to, char **out_diagnostics_json, char *errbuf, size_t errlen);",
+            "char *pio_dist_convert_str(const char *text, const char *from, const char *to, char **out_diagnostics_json, char *errbuf, size_t errlen);",
             "char *pio_dist_geo_extract(const PioDistNetwork *net, char *errbuf, size_t errlen);",
             "PioDistNetwork *pio_dist_geo_apply(const PioDistNetwork *net, const char *layer, const char *name_hint, char *errbuf, size_t errlen);",
         ]
@@ -3592,7 +3693,7 @@ mod tests {
             assert!(null.is_null());
             assert_eq!(
                 CStr::from_ptr(err.as_ptr()).to_str().unwrap(),
-                "network handle is NULL"
+                "BIND.CAPI.NULL_HANDLE: network handle is NULL"
             );
             pio_network_free(c);
         }
@@ -3696,12 +3797,12 @@ mod tests {
     }
 
     #[test]
-    fn a_failed_conversion_publishes_no_warnings_to_free() {
+    fn a_failed_conversion_publishes_no_diagnostics_to_free() {
         // A bus name carrying a NUL rides through to the PSS/E text, so the
-        // shared tail has the fidelity warnings in hand when the C string it
+        // shared tail has the writer's findings in hand when the C string it
         // must return cannot be built. An error return has to leave
-        // `out_warnings` NULL: the caller is told not to read it, so anything
-        // published there is never freed.
+        // `out_diagnostics_json` NULL: the caller is told not to read it, so
+        // anything published there is never freed.
         let src = std::fs::read_to_string(
             std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../tests/data/case9.m"),
         )
@@ -3717,14 +3818,14 @@ mod tests {
         let path = CString::new(case.to_str().unwrap()).unwrap();
         let to = CString::new("psse").unwrap();
         // A poison value the call must overwrite, as examples/smoke.c does.
-        let mut warn_out = std::ptr::dangling_mut::<c_char>();
+        let mut diag_out = std::ptr::dangling_mut::<c_char>();
         let mut err = [0 as c_char; PIO_ERRBUF_MIN];
         unsafe {
             let s = pio_convert_file(
                 path.as_ptr(),
                 std::ptr::null(),
                 to.as_ptr(),
-                &mut warn_out,
+                &mut diag_out,
                 err.as_mut_ptr(),
                 err.len(),
             );
@@ -3735,8 +3836,8 @@ mod tests {
                 "the test no longer reaches the interior-NUL tail: {msg:?}"
             );
             assert!(
-                warn_out.is_null(),
-                "an error return left a warnings allocation the caller never frees"
+                diag_out.is_null(),
+                "an error return left a diagnostics allocation the caller never frees"
             );
         }
     }
@@ -3745,14 +3846,14 @@ mod tests {
     fn convert_matpower_echo() {
         let path = data_path("case14.m");
         let to = CString::new("matpower").unwrap();
-        let mut warn_out: *mut c_char = std::ptr::null_mut();
+        let mut diag_out: *mut c_char = std::ptr::null_mut();
         let mut err = [0 as c_char; 256];
         unsafe {
             let s = pio_convert_file(
                 path.as_ptr(),
                 std::ptr::null(),
                 to.as_ptr(),
-                &mut warn_out,
+                &mut diag_out,
                 err.as_mut_ptr(),
                 err.len(),
             );
@@ -3772,14 +3873,14 @@ mod tests {
         let path = data_path("case14.m");
         let old_target = CString::new("powermodels-json").unwrap();
         let old_source = CString::new("matpower").unwrap();
-        let mut warn_out: *mut c_char = std::ptr::null_mut();
+        let mut diag_out: *mut c_char = std::ptr::null_mut();
         let mut err = [0 as c_char; PIO_ERRBUF_MIN];
         unsafe {
             let s = pio_convert_file(
                 path.as_ptr(),
                 old_target.as_ptr(),
                 old_source.as_ptr(),
-                &mut warn_out,
+                &mut diag_out,
                 err.as_mut_ptr(),
                 err.len(),
             );
@@ -3803,14 +3904,14 @@ mod tests {
         let text = CString::new(src).unwrap();
         let from = CString::new("matpower").unwrap();
         let to = CString::new("powermodels-json").unwrap();
-        let mut warn_out: *mut c_char = std::ptr::null_mut();
+        let mut diag_out: *mut c_char = std::ptr::null_mut();
         let mut err = [0 as c_char; 256];
         unsafe {
             let s = pio_convert_str(
                 text.as_ptr(),
                 from.as_ptr(),
                 to.as_ptr(),
-                &mut warn_out,
+                &mut diag_out,
                 err.as_mut_ptr(),
                 err.len(),
             );
@@ -3834,14 +3935,14 @@ mod tests {
         let text = CString::new(src).unwrap();
         let old_target = CString::new("powermodels-json").unwrap();
         let old_source = CString::new("matpower").unwrap();
-        let mut warn_out: *mut c_char = std::ptr::null_mut();
+        let mut diag_out: *mut c_char = std::ptr::null_mut();
         let mut err = [0 as c_char; PIO_ERRBUF_MIN];
         unsafe {
             let s = pio_convert_str(
                 text.as_ptr(),
                 old_target.as_ptr(),
                 old_source.as_ptr(),
-                &mut warn_out,
+                &mut diag_out,
                 err.as_mut_ptr(),
                 err.len(),
             );
@@ -3892,17 +3993,17 @@ mod tests {
         assert!(c.is_null());
         assert_eq!(
             unsafe { CStr::from_ptr(err.as_ptr()) }.to_str().unwrap(),
-            "from is not UTF-8"
+            "BIND.CAPI.INVALID_UTF8: from is not UTF-8"
         );
 
-        let mut warn_out: *mut c_char = std::ptr::null_mut();
+        let mut diag_out: *mut c_char = std::ptr::null_mut();
         err.fill(0);
         let s = unsafe {
             pio_convert_file(
                 path.as_ptr(),
                 bad_from.as_ptr().cast::<c_char>(),
                 to.as_ptr(),
-                &mut warn_out,
+                &mut diag_out,
                 err.as_mut_ptr(),
                 err.len(),
             )
@@ -3910,7 +4011,7 @@ mod tests {
         assert!(s.is_null());
         assert_eq!(
             unsafe { CStr::from_ptr(err.as_ptr()) }.to_str().unwrap(),
-            "from is not UTF-8"
+            "BIND.CAPI.INVALID_UTF8: from is not UTF-8"
         );
     }
 
@@ -4211,31 +4312,37 @@ mpc.branch = [
     }
 
     #[test]
-    fn convert_emits_warning_into_buffer() {
-        // t_case9_dcline carries an HVDC dcline. PSS/E writes it as two-terminal DC
-        // but defaults the converter detail; that fidelity note must reach the
-        // caller's warning buffer, not vanish.
+    fn convert_publishes_its_findings_as_records() {
+        // t_case9_dcline carries an HVDC dcline. PSS/E writes it as two-terminal
+        // DC but defaults the converter detail. That finding must reach the
+        // caller as a record, with the code it is registered under.
         let path = data_path("t_case9_dcline.m");
         let to = CString::new("psse").unwrap();
-        let mut warn_out: *mut c_char = std::ptr::null_mut();
+        let mut diag_out: *mut c_char = std::ptr::null_mut();
         let mut err = [0 as c_char; 256];
         unsafe {
             let s = pio_convert_file(
                 path.as_ptr(),
                 std::ptr::null(),
                 to.as_ptr(),
-                &mut warn_out,
+                &mut diag_out,
                 err.as_mut_ptr(),
                 err.len(),
             );
             assert!(!s.is_null());
-            assert!(!warn_out.is_null(), "expected fidelity warnings");
-            let w = CStr::from_ptr(warn_out).to_str().unwrap().to_owned();
-            assert!(
-                w.contains("converter detail"),
-                "expected an HVDC converter-detail warning, got {w:?}"
+            assert!(!diag_out.is_null(), "expected the writer's findings");
+            let json = CStr::from_ptr(diag_out).to_str().unwrap().to_owned();
+            let records: Vec<StructuredDiagnostic> = serde_json::from_str(&json).unwrap();
+            let hit = records
+                .iter()
+                .find(|d| d.message.contains("converter detail"))
+                .unwrap_or_else(|| panic!("no HVDC converter-detail finding in {json}"));
+            assert_eq!(hit.code.as_str(), "EMIT.PSSE.VALUE_DEFAULTED");
+            assert_eq!(
+                hit.severity,
+                powerio::diagnostics::DiagnosticSeverity::Warning
             );
-            pio_string_free(warn_out);
+            pio_string_free(diag_out);
             pio_string_free(s);
         }
     }
@@ -5078,6 +5185,79 @@ mpc.branch = [
     }
 
     #[test]
+    fn every_errbuf_message_leads_with_its_code() {
+        // The token a consumer branches on is the leading code, and the split
+        // at the first ": " has to recover it whatever the prose does after.
+        let c = case9();
+        let unknown = CString::new("no-such-format").unwrap();
+        let mut err = [0 as c_char; PIO_ERRBUF_MIN];
+        unsafe {
+            let text = pio_to_format(
+                c,
+                unknown.as_ptr(),
+                std::ptr::null_mut(),
+                err.as_mut_ptr(),
+                err.len(),
+            );
+            assert!(text.is_null());
+            let msg = CStr::from_ptr(err.as_ptr()).to_str().unwrap();
+            let (code, rest) = msg.split_once(": ").expect("a coded message splits");
+            assert_eq!(code, "REQUEST.FORMAT.UNKNOWN");
+            assert!(!rest.is_empty());
+
+            err.fill(0);
+            let null = pio_to_format(
+                std::ptr::null(),
+                unknown.as_ptr(),
+                std::ptr::null_mut(),
+                err.as_mut_ptr(),
+                err.len(),
+            );
+            assert!(null.is_null());
+            let msg = CStr::from_ptr(err.as_ptr()).to_str().unwrap();
+            assert_eq!(
+                msg.split_once(": ").map(|(code, _)| code),
+                Some("BIND.CAPI.NULL_HANDLE")
+            );
+            pio_network_free(c);
+        }
+    }
+
+    #[test]
+    fn write_dir_publishes_its_findings_as_records() {
+        // PyPSA CSV cannot carry everything case30 states, so the directory
+        // write has findings; they reach the caller through the same channel
+        // the text conversions use, and the poison value proves the call
+        // writes the out-param before it does any work.
+        let path = data_path("case30.m");
+        let mut err = [0 as c_char; PIO_ERRBUF_MIN];
+        let tmp = tempfile::tempdir().unwrap();
+        let out = CString::new(tmp.path().join("pypsa").to_str().unwrap()).unwrap();
+        let to = CString::new("pypsa-csv").unwrap();
+        unsafe {
+            let c = pio_parse_file(path.as_ptr(), std::ptr::null(), err.as_mut_ptr(), err.len());
+            assert!(!c.is_null());
+            let mut diag_out = std::ptr::dangling_mut::<c_char>();
+            let rc = pio_write_dir(
+                c,
+                to.as_ptr(),
+                out.as_ptr(),
+                &mut diag_out,
+                err.as_mut_ptr(),
+                err.len(),
+            );
+            assert_eq!(rc, 0, "{}", CStr::from_ptr(err.as_ptr()).to_str().unwrap());
+            assert!(!diag_out.is_null(), "expected the writer's findings");
+            let json = CStr::from_ptr(diag_out).to_str().unwrap().to_owned();
+            let records: Vec<StructuredDiagnostic> = serde_json::from_str(&json).unwrap();
+            assert!(!records.is_empty());
+            assert!(records.iter().all(|d| d.code.is_well_formed()), "{json}");
+            pio_string_free(diag_out);
+            pio_network_free(c);
+        }
+    }
+
+    #[test]
     fn write_dir_rejects_text_formats_by_name() {
         let c = case9();
         let to = CString::new("matpower").unwrap();
@@ -5115,10 +5295,10 @@ mpc.branch = [
     #[cfg(feature = "dist")]
     unsafe fn bmopf(net: *const PioDistNetwork) -> String {
         let to = CString::new("bmopf").unwrap();
-        let mut warn_out: *mut c_char = std::ptr::null_mut();
+        let mut diag_out: *mut c_char = std::ptr::null_mut();
         let mut err = [0 as c_char; PIO_ERRBUF_MIN];
         let s = unsafe {
-            pio_dist_to_format(net, to.as_ptr(), &mut warn_out, err.as_mut_ptr(), err.len())
+            pio_dist_to_format(net, to.as_ptr(), &mut diag_out, err.as_mut_ptr(), err.len())
         };
         assert!(!s.is_null());
         let text = unsafe { std::ffi::CStr::from_ptr(s) }
@@ -5268,9 +5448,9 @@ mpc.branch = [
 
             // Cross format write: schema compatible BMOPF JSON out.
             let to = CString::new("bmopf").unwrap();
-            let mut warn_out: *mut c_char = std::ptr::null_mut();
+            let mut diag_out: *mut c_char = std::ptr::null_mut();
             let s = unsafe {
-                pio_dist_to_format(net, to.as_ptr(), &mut warn_out, err.as_mut_ptr(), err.len())
+                pio_dist_to_format(net, to.as_ptr(), &mut diag_out, err.as_mut_ptr(), err.len())
             };
             assert!(!s.is_null());
             let text = unsafe { CStr::from_ptr(s) }.to_str().unwrap();
@@ -5280,13 +5460,13 @@ mpc.branch = [
             // Same format write echoes the retained source byte for byte.
             let to = CString::new("dss").unwrap();
             let s = unsafe {
-                pio_dist_to_format(net, to.as_ptr(), &mut warn_out, err.as_mut_ptr(), err.len())
+                pio_dist_to_format(net, to.as_ptr(), &mut diag_out, err.as_mut_ptr(), err.len())
             };
             assert!(!s.is_null());
             let echoed = unsafe { CStr::from_ptr(s) }.to_str().unwrap();
             let source = std::fs::read_to_string(fourwire()).unwrap();
             assert_eq!(echoed, source);
-            assert!(warn_out.is_null(), "a byte exact echo loses nothing");
+            assert!(diag_out.is_null(), "a byte exact echo loses nothing");
             unsafe { pio_string_free(s) };
 
             unsafe { pio_dist_network_free(net) };
@@ -5388,14 +5568,14 @@ mpc.branch = [
             let from = CString::new("pmd").unwrap();
             let to = CString::new("dss").unwrap();
             // A poison value the call must overwrite, as examples/smoke.c does.
-            let mut warn_out = std::ptr::dangling_mut::<c_char>();
+            let mut diag_out = std::ptr::dangling_mut::<c_char>();
             let mut err = [0 as c_char; PIO_ERRBUF_MIN];
             unsafe {
                 let s = pio_dist_convert_str(
                     text.as_ptr(),
                     from.as_ptr(),
                     to.as_ptr(),
-                    &mut warn_out,
+                    &mut diag_out,
                     err.as_mut_ptr(),
                     err.len(),
                 );
@@ -5406,7 +5586,7 @@ mpc.branch = [
                     "the test no longer reaches the interior-NUL tail: {msg:?}"
                 );
                 assert!(
-                    warn_out.is_null(),
+                    diag_out.is_null(),
                     "an error return left a warnings allocation the caller never frees"
                 );
             }
@@ -5418,14 +5598,14 @@ mpc.branch = [
             let text = CString::new(source).unwrap();
             let from = CString::new("dss").unwrap();
             let to = CString::new("pmd").unwrap();
-            let mut warn_out: *mut c_char = std::ptr::null_mut();
+            let mut diag_out: *mut c_char = std::ptr::null_mut();
             let mut err = [0 as c_char; PIO_ERRBUF_MIN];
             let s = unsafe {
                 pio_dist_convert_str(
                     text.as_ptr(),
                     from.as_ptr(),
                     to.as_ptr(),
-                    &mut warn_out,
+                    &mut diag_out,
                     err.as_mut_ptr(),
                     err.len(),
                 )
@@ -5475,7 +5655,7 @@ New Line.l1 bus1=a bus2=b phases=3
             let text = CString::new(source).unwrap();
             let from = CString::new("dss").unwrap();
             let to = CString::new("dss").unwrap();
-            let mut warn_out: *mut c_char = std::ptr::null_mut();
+            let mut diag_out: *mut c_char = std::ptr::null_mut();
             let mut err = [0 as c_char; PIO_ERRBUF_MIN];
             // Convert through bmopf so the dss writer runs instead of an
             // echo of the source text.
@@ -5485,7 +5665,7 @@ New Line.l1 bus1=a bus2=b phases=3
                     text.as_ptr(),
                     from.as_ptr(),
                     bmopf_target.as_ptr(),
-                    &mut warn_out,
+                    &mut diag_out,
                     err.as_mut_ptr(),
                     err.len(),
                 )
@@ -5552,14 +5732,14 @@ New Line.l1 bus1=a bus2=b phases=3
             let text = CString::new(source).unwrap();
             let old_target = CString::new("pmd").unwrap();
             let old_source = CString::new("dss").unwrap();
-            let mut warn_out: *mut c_char = std::ptr::null_mut();
+            let mut diag_out: *mut c_char = std::ptr::null_mut();
             let mut err = [0 as c_char; PIO_ERRBUF_MIN];
             let s = unsafe {
                 pio_dist_convert_str(
                     text.as_ptr(),
                     old_target.as_ptr(),
                     old_source.as_ptr(),
-                    &mut warn_out,
+                    &mut diag_out,
                     err.as_mut_ptr(),
                     err.len(),
                 )
@@ -5606,14 +5786,14 @@ New Line.l1 bus1=a bus2=b phases=3
         fn convert_file_round_trips_through_bmopf() {
             let path = fourwire_cstr();
             let to = CString::new("bmopf-json").unwrap();
-            let mut warn_out: *mut c_char = std::ptr::null_mut();
+            let mut diag_out: *mut c_char = std::ptr::null_mut();
             let mut err = [0 as c_char; PIO_ERRBUF_MIN];
             let s = unsafe {
                 pio_dist_convert_file(
                     path.as_ptr(),
                     std::ptr::null(),
                     to.as_ptr(),
-                    &mut warn_out,
+                    &mut diag_out,
                     err.as_mut_ptr(),
                     err.len(),
                 )
@@ -5633,14 +5813,14 @@ New Line.l1 bus1=a bus2=b phases=3
             let path = fourwire_cstr();
             let old_target = CString::new("pmd").unwrap();
             let old_source = CString::new("dss").unwrap();
-            let mut warn_out: *mut c_char = std::ptr::null_mut();
+            let mut diag_out: *mut c_char = std::ptr::null_mut();
             let mut err = [0 as c_char; PIO_ERRBUF_MIN];
             let s = unsafe {
                 pio_dist_convert_file(
                     path.as_ptr(),
                     old_target.as_ptr(),
                     old_source.as_ptr(),
-                    &mut warn_out,
+                    &mut diag_out,
                     err.as_mut_ptr(),
                     err.len(),
                 )
