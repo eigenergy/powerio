@@ -171,6 +171,19 @@ int main(int argc, char **argv) {
     pio_string_free(json);
     pio_network_free(c2);
 
+    /* The geo reader is tolerant, so the rows it read past come back through
+     * the same diagnostics channel the conversion entry points use. */
+    {
+        char *geo_diags = NULL;
+        char *layer = pio_geo_parse("1, -89.6, 40.6\n2, west, north\n", NULL,
+                                    &geo_diags, err, sizeof err);
+        CHECK(layer != NULL, err);
+        CHECK(geo_diags != NULL && geo_diags[0] == '[',
+              "the skipped buscoords row should come back as a finding");
+        pio_string_free(geo_diags);
+        pio_string_free(layer);
+    }
+
 #ifdef PIO_PKG
     /* Compiler package surface: wrap the live balanced handle, validate the
      * package, serialize it, and parse it back. */

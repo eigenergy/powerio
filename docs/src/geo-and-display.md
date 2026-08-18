@@ -167,7 +167,8 @@ which can write the result back with `kind = synthetic` so the provenance
 survives.
 
 The C ABI exposes the document as strings: `pio_geo_parse` normalizes a
-tolerant sidecar to the canonical form, `pio_geo_extract` and `pio_geo_apply`
+tolerant sidecar to the canonical form and returns the reader's notes through
+`out_diagnostics_json`, `pio_geo_extract` and `pio_geo_apply`
 work on a parsed network handle (apply returns a new handle whose warnings
 carry the match report), and `pio_dist_geo_extract`/`pio_dist_geo_apply` are
 the multiconductor equivalents. Python mirrors the surface with `parse_geo`
