@@ -31,10 +31,16 @@ pub mod codes {
         READ_CAPI_IO_FAILED = "READ.CAPI.IO_FAILED", Fatal,
             "an entry point could not read the file it was given", category = Io;
         EMIT_CAPI_SERIALIZE_FAILED = "EMIT.CAPI.SERIALIZE_FAILED", Fatal,
-            "a JSON document an entry point returns could not be serialized", category = Output;
+            "a document or table an entry point returns could not be built or serialized",
+            category = Output;
         BIND_CAPI_UNCODED_FAILURE = "BIND.CAPI.UNCODED_FAILURE", Fatal,
             "a library failure reached the boundary carrying no finding of its own",
             category = Data;
+        REQUEST_CAPI_ARROW_TABLE_UNKNOWN = "REQUEST.CAPI.ARROW_TABLE_UNKNOWN", Fatal,
+            "the caller asked for an Arrow table id this surface does not have",
+            category = Data;
+        REQUEST_CAPI_FEATURE_DISABLED = "REQUEST.CAPI.FEATURE_DISABLED", Fatal,
+            "the build lacks the cargo feature the request needs", category = Data;
     }
 }
 

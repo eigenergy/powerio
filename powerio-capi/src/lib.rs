@@ -2402,8 +2402,7 @@ pub unsafe extern "C" fn pio_scopf_to_json(
                 let instance = instance
                     .as_ref()
                     .ok_or_else(|| null_handle("SCOPF instance handle"))?;
-                powerio_prob::scopf::json::to_json(&instance.instance)
-                    .map_err(|error| error.to_string())
+                powerio_prob::scopf::json::to_json(&instance.instance).map_err(err_line)
             },
         )
     }
@@ -5219,6 +5218,27 @@ mpc.branch = [
                 msg.split_once(": ").map(|(code, _)| code),
                 Some("BIND.CAPI.NULL_HANDLE")
             );
+
+            #[cfg(feature = "arrow")]
+            {
+                err.fill(0);
+                let mut array = std::mem::zeroed::<arrow::ffi::FFI_ArrowArray>();
+                let mut schema = std::mem::zeroed::<arrow::ffi::FFI_ArrowSchema>();
+                let rc = pio_to_arrow(
+                    c,
+                    9999,
+                    &mut array,
+                    &mut schema,
+                    err.as_mut_ptr(),
+                    err.len(),
+                );
+                assert_eq!(rc, -1);
+                let msg = CStr::from_ptr(err.as_ptr()).to_str().unwrap();
+                let (code, rest) = msg.split_once(": ").expect("a coded message splits");
+                assert_eq!(code, "REQUEST.CAPI.ARROW_TABLE_UNKNOWN");
+                assert_eq!(rest, "unknown Arrow table id 9999");
+            }
+
             pio_network_free(c);
         }
     }
