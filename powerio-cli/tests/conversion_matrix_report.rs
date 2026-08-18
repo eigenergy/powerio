@@ -1080,3 +1080,107 @@ fn core_survives(
         && after.load_p == before.load_p
         && after.load_q == before.load_q
 }
+
+/// Every corpus fixture, written to a `.pio.json` package and read back, per
+/// source format.
+///
+/// The matrix above measures what survives a case format hop; this measures
+/// what survives powerio's own document, which must be everything. It is the
+/// per fixture lossless signal, over the same corpus the matrix walks rather
+/// than over synthetic fixtures: a serde rename, a dropped `serde(default)`,
+/// or a field that fails to serialize shows up on the first case that carries
+/// it. The model JSON leg is checked alongside, since the package carries the
+/// same payload under `model.balanced_network`.
+#[test]
+fn every_fixture_echoes_through_a_package() {
+    let mut failures: Vec<String> = Vec::new();
+
+    for format in TRANSMISSION_FORMATS {
+        let payloads = match transmission_payloads(format) {
+            Ok(payloads) => payloads,
+            Err(err) => {
+                failures.push(err);
+                continue;
+            }
+        };
+        for payload in payloads {
+            let where_ = format!("{} as {}", payload.label, format.name);
+            if let Err(err) = model_json_echoes(&payload.network) {
+                failures.push(format!("{where_}: {err}"));
+            }
+            if let Err(err) = package_echoes(payload.network) {
+                failures.push(format!("{where_}: {err}"));
+            }
+        }
+    }
+
+    for format in DISTRIBUTION_FORMATS {
+        let payloads = match distribution_payloads(format) {
+            Ok(payloads) => payloads,
+            Err(err) => {
+                failures.push(err);
+                continue;
+            }
+        };
+        for payload in payloads {
+            let pkg = powerio_pkg::NetworkPackage::from_multiconductor(payload.network);
+            if let Err(err) = package_json_echoes(&pkg) {
+                failures.push(format!("{} as {}: {err}", payload.label, format.name));
+            }
+        }
+    }
+
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+/// A balanced network survives a model JSON write and readback unchanged.
+fn model_json_echoes(net: &BalancedNetwork) -> Result<(), String> {
+    let text = net
+        .to_json()
+        .map_err(|err| format!("model JSON write: {err}"))?;
+    let back =
+        BalancedNetwork::from_json(&text).map_err(|err| format!("model JSON readback: {err}"))?;
+    if transmission_value(&back) != transmission_value(net) {
+        return Err("model JSON changed the model".to_owned());
+    }
+    Ok(())
+}
+
+/// A balanced network survives a `.pio.json` write and readback unchanged.
+/// The comparison is against the package's own payload rather than the input
+/// network: wrapping assigns row uids, which is the document doing its job,
+/// while anything the write and readback change is a defect.
+fn package_echoes(net: BalancedNetwork) -> Result<(), String> {
+    let pkg = powerio_pkg::NetworkPackage::from_balanced(net);
+    let before = transmission_value(
+        pkg.as_balanced()
+            .ok_or("the package dropped its balanced payload")?,
+    );
+    let back = package_json_echoes(&pkg)?;
+    let after = transmission_value(
+        back.as_balanced()
+            .ok_or("the package came back without its balanced payload")?,
+    );
+    if before != after {
+        return Err(format!(
+            "the package round trip changed the model: {:?}",
+            model_diffs(&before, &after)
+        ));
+    }
+    Ok(())
+}
+
+/// The document itself is round-trip stable: write, read, write again, and the
+/// two texts agree byte for byte.
+fn package_json_echoes(
+    pkg: &powerio_pkg::NetworkPackage,
+) -> Result<powerio_pkg::NetworkPackage, String> {
+    let first = pkg.to_json().map_err(|err| format!("write: {err}"))?;
+    let back =
+        powerio_pkg::NetworkPackage::from_json(&first).map_err(|err| format!("read: {err}"))?;
+    let second = back.to_json().map_err(|err| format!("rewrite: {err}"))?;
+    if first != second {
+        return Err("the .pio.json document is not round-trip stable".to_owned());
+    }
+    Ok(back)
+}

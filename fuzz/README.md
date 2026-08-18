@@ -1,13 +1,18 @@
 # Fuzzing the parser surface
 
 libFuzzer harnesses for the readers that take untrusted input: `matpower`,
-`psse`, `pslf`, `powerworld_aux`, and `powerio_json` feed `parse_str`; `pwb` and
-`pwd` feed the PowerWorld binary decoders raw bytes; `dss` feeds the
-distribution family's tokenizer. The remaining `parse_str` formats
+`psse`, `pslf`, and `powerworld_aux` feed `parse_str`; `model_json` feeds the
+balanced model JSON reader; `pwb` and `pwd` feed the PowerWorld binary decoders
+raw bytes; `dss` feeds the distribution family's tokenizer. The remaining `parse_str` formats
 (PowerModels, egret, pandapower) ride serde_json rather than a hand-written
 tokenizer, so the harnesses cover every hand-rolled reader. The invariant
 under test is the parser trust model: any input returns `Ok` or a structured
 `Err`, never a panic and never undefined behavior.
+
+`json_classify` drives the `.json` classifier and its C entry point over
+arbitrary bytes, asserting that every answer is one of the documented families.
+A file picker dispatches on that answer, so an undocumented token is a defect
+even when nothing panics.
 
 `dss` and `pmd_json` also write the parsed network back and project its graph.
 A reader that accepts an unbounded count is only half the hazard; the other

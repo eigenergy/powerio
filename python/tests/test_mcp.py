@@ -64,7 +64,7 @@ def test_summary_transmission_schema():
     assert s["powerio_version"] == powerio.__version__
     assert s["domain"] == "transmission"
     assert s["model"] == "balanced"
-    assert s["json_format"] == "powerio-json"
+    assert s["json_format"] == "model-json"
     assert s["source_format"] == "Matpower"
     assert s["base_mva"] == 100.0
     assert s["elements"]["buses"] == 9
@@ -103,14 +103,20 @@ def test_parse_transmission_transport_round_trip(tmp_path):
     assert parsed["domain"] == "transmission"
     assert parsed["model"] == "balanced"
     assert parsed["source_format"] == "Matpower"
-    assert parsed["json_format"] == "powerio-json"
+    assert parsed["json_format"] == "model-json"
     assert powerio.from_json(parsed["json"]).n_buses == 9
+    assert server.summary(json=parsed["json"], json_format="model-json")[
+        "elements"
+    ]["buses"] == 9
+    # The pre-0.9 spellings stay accepted as inputs here.
     assert server.summary(json=parsed["json"], json_format="powerio-json")[
         "elements"
     ]["buses"] == 9
     assert server.summary(json=parsed["json"], json_format="powerio_json")[
         "elements"
     ]["buses"] == 9
+    # The transport is inferred from the document when no format is passed.
+    assert server.summary(json=parsed["json"])["elements"]["buses"] == 9
 
     out = tmp_path / "case9.m"
     server.save(out_path=str(out), json=parsed["json"], json_format=parsed["json_format"])
@@ -227,7 +233,7 @@ def test_powermodels_json_still_routes_as_transmission():
     pm = powerio.parse_file(str(DATA / "case9.m")).to_format("powermodels-json").text
     parsed = server.parse(content=pm)
     assert parsed["domain"] == "transmission"
-    assert parsed["json_format"] == "powerio-json"
+    assert parsed["json_format"] == "model-json"
     assert parsed["summary"]["elements"]["buses"] == 9
 
     packaged = server.parse(content=pm, transport="package")
@@ -308,7 +314,7 @@ def test_matrix_kinds_aliases_and_errors():
 def test_bad_json_transport_maps_cleanly():
     for bad in ("{}", "[]", "null", '{"buses": "nope"}'):
         with pytest.raises(ValueError, match="parse failed"):
-            server.matrix("bprime", json=bad, json_format="powerio-json")
+            server.matrix("bprime", json=bad, json_format="model-json")
 
 
 def test_save_text_folder_and_overwrite(tmp_path):

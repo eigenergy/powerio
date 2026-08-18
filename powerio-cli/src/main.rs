@@ -417,9 +417,6 @@ enum FormatArg {
     PowerWorld,
     #[value(name = "pandapower-json", alias = "pandapower", alias = "pp")]
     PandapowerJson,
-    /// Deprecated: bare `BalancedNetwork` model JSON.
-    #[value(name = "powerio-json", alias = "powerio", alias = "json", hide = true)]
-    PowerioJson,
     #[value(name = "pypsa-csv", alias = "pypsa")]
     PypsaCsv,
     /// GE PSLF .epc case (read and write).
@@ -473,7 +470,6 @@ impl FormatArg {
             FormatArg::Psse35 => TargetFormat::Psse { rev: 35 },
             FormatArg::PowerWorld => TargetFormat::PowerWorld,
             FormatArg::PandapowerJson => TargetFormat::PandapowerJson,
-            FormatArg::PowerioJson => TargetFormat::PowerioJson,
             FormatArg::Pslf => TargetFormat::Pslf,
             FormatArg::Goc3Json => TargetFormat::Goc3Json,
             FormatArg::SurgeJson => TargetFormat::SurgeJson,
@@ -509,7 +505,6 @@ impl FormatArg {
             | FormatArg::Psse35
             | FormatArg::PowerWorld
             | FormatArg::PandapowerJson
-            | FormatArg::PowerioJson
             | FormatArg::PypsaCsv
             | FormatArg::Pslf
             | FormatArg::Goc3Json
@@ -531,7 +526,6 @@ impl FormatArg {
             FormatArg::Psse35 => "psse35",
             FormatArg::PowerWorld => "powerworld",
             FormatArg::PandapowerJson => "pandapower-json",
-            FormatArg::PowerioJson => "powerio-json",
             FormatArg::PypsaCsv => "pypsa-csv",
             FormatArg::Pslf => "pslf",
             FormatArg::Goc3Json => "goc3-json",
@@ -544,13 +538,6 @@ impl FormatArg {
             FormatArg::BmopfJson => "bmopf-json",
         }
     }
-}
-
-fn warn_deprecated_powerio_json() {
-    eprintln!(
-        "warning: `powerio-json` is deprecated for CLI file handoffs; use `.pio.json` \
-         for PowerIO artifacts or the receiving tool's case format"
-    );
 }
 
 #[derive(Clone, Copy, Debug, ValueEnum)]
@@ -1425,7 +1412,7 @@ fn transmission_summary_json(
         "model": "balanced",
         "name": net.name,
         "source_format": format!("{:?}", net.source_format),
-        "json_format": "powerio-json",
+        "json_format": "model-json",
         "base_mva": net.base_mva,
         "elements": {
             "buses": net.buses.len(),
@@ -1498,10 +1485,6 @@ fn run_convert(
     scenario: i64,
     gen_cost_options: GenCostCliOptions<'_>,
 ) -> anyhow::Result<()> {
-    if to == FormatArg::PowerioJson {
-        warn_deprecated_powerio_json();
-    }
-
     // gridfm has no convert writer; the dataset writer is the `gridfm`
     // subcommand.
     if matches!(to, FormatArg::Gridfm) {
@@ -1918,9 +1901,6 @@ enum FamilyCase {
 /// diagnostics, stderr).
 fn parse_family_case(input: &Path, from: Option<FormatArg>) -> anyhow::Result<FamilyCase> {
     if let Some(f) = from {
-        if f == FormatArg::PowerioJson {
-            warn_deprecated_powerio_json();
-        }
         if f == FormatArg::Gridfm {
             anyhow::bail!(
                 "gridfm datasets are read by `convert --from gridfm` or the `gridfm` \
@@ -1988,9 +1968,6 @@ fn read_network(
     from: Option<FormatArg>,
 ) -> anyhow::Result<powerio_matrix::BalancedNetwork> {
     if let Some(f) = from {
-        if f == FormatArg::PowerioJson {
-            warn_deprecated_powerio_json();
-        }
         if matches!(f, FormatArg::Gridfm) {
             anyhow::bail!(
                 "gridfm datasets are read by `convert --from gridfm` or the `gridfm` \
@@ -2042,7 +2019,7 @@ mod tests {
         assert_eq!(value[powerio::version::VERSION_KEY], powerio::VERSION);
         assert_eq!(value["domain"], "transmission");
         assert_eq!(value["model"], "balanced");
-        assert_eq!(value["json_format"], "powerio-json");
+        assert_eq!(value["json_format"], "model-json");
         assert_eq!(value["elements"]["buses"], 9);
         assert_eq!(value["topology"]["connected_components"], 1);
     }

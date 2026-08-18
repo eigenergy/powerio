@@ -19,6 +19,7 @@ use std::sync::Arc;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use crate::diagnostics::Diagnostics;
 use crate::geo::{GeoMeta, Location};
 use crate::{Error, Result};
 
@@ -1725,9 +1726,9 @@ impl BalancedNetwork {
     /// `null`, which [`from_json`](BalancedNetwork::from_json) rejects on the way back
     /// (`null` is not an `f64`). The write stays total, the bindings
     /// materialize every parsed network through this transport, and readers
-    /// legitimately produce `Inf` limits, but such a snapshot does not round
-    /// trip; [`write_as`](crate::write_as) reports the degradation as a
-    /// fidelity warning naming the field.
+    /// legitimately produce `Inf` limits, but such a document does not round
+    /// trip; [`to_json_with_diagnostics`](BalancedNetwork::to_json_with_diagnostics)
+    /// reports the degradation as a fidelity record naming the field.
     ///
     /// # Errors
     /// A `serde_json` serialization failure (none arise from this model today).
@@ -1736,6 +1737,29 @@ impl BalancedNetwork {
             format: "JSON",
             message: e.to_string(),
         })
+    }
+
+    /// [`to_json`](BalancedNetwork::to_json) plus the records the write
+    /// produced: one per non-finite field, since serde writes each as a `null`
+    /// that [`from_json`](BalancedNetwork::from_json) then refuses. A caller
+    /// that needs to know whether the document reads back takes this form; a
+    /// caller that only needs the text takes `to_json`.
+    ///
+    /// # Errors
+    /// A `serde_json` serialization failure (none arise from this model today).
+    pub fn to_json_with_diagnostics(&self) -> crate::Result<(String, Diagnostics)> {
+        let text = self.to_json()?;
+        let mut diagnostics = Diagnostics::new();
+        for path in self.non_finite_fields() {
+            diagnostics.push(
+                &crate::diagnostics::codes::EMIT_PIO_JSON.not_a_number,
+                format!(
+                    "{path} is not finite; JSON has no Inf/NaN, so it is written as null \
+                     and this document will not read back through from_json"
+                ),
+            );
+        }
+        Ok((text, diagnostics))
     }
 
     /// The paths of every non-finite numeric field, empty when all values are

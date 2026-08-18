@@ -367,6 +367,10 @@ fn schema_versions_json_ptr() -> *mut c_char {
 /// projection each fatal code is published under, for a consumer that wants
 /// five buckets rather than the full code set. Both sets are stable; a member
 /// may be added.
+///
+/// `json_classes` lists the classification families [`pio_classify_str`]
+/// answers with, so a binding that routes a bare `.json` reads the closed set
+/// from the library rather than hardcoding it.
 #[unsafe(no_mangle)]
 pub extern "C" fn pio_build_info() -> *mut c_char {
     unsafe { guard(std::ptr::null_mut(), build_info_ptr) }
@@ -391,6 +395,7 @@ fn build_info_ptr() -> *mut c_char {
         "foreign_schemas": { "bmopf": bmopf_schema_version() },
         "error_categories": powerio::ErrorCategory::TOKENS,
         "diagnostic_namespaces": powerio::diagnostics::DiagnosticStage::NAMESPACES,
+        "json_classes": powerio::format::routing::JSON_CLASSES,
     });
     into_cstring(doc.to_string()).unwrap_or(std::ptr::null_mut())
 }
@@ -532,8 +537,8 @@ pub unsafe extern "C" fn pio_parse_file(
 /// directories, not text; parse them with [`pio_parse_file`] and
 /// `from = "pypsa-csv"`. Read fidelity warnings attach to the handle
 /// ([`pio_warnings`]). Returns `NULL` on error and writes the message into
-/// `errbuf`. Free the handle with [`pio_network_free`]. Also accepts
-/// `powerio-json`/`json` as aliases for [`pio_from_json`].
+/// `errbuf`. Free the handle with [`pio_network_free`]. Balanced model JSON is
+/// not a case format and has no token here: read it with [`pio_from_json`].
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_parse_str(
     text: *const c_char,
@@ -595,6 +600,7 @@ pub unsafe extern "C" fn pio_parse_bytes(
 /// - `transmission:<format>` (e.g. `transmission:powermodels-json`)
 /// - `distribution:<format>` (e.g. `distribution:pmd-json`)
 /// - `package` (a `.pio.json` package; read it with the package entry points)
+/// - `model-json` (bare balanced model JSON; read it with [`pio_from_json`])
 /// - `ambiguous` (strong markers from both domains; pass an explicit format)
 /// - `unknown` (no recognized marker, or not a JSON object)
 ///
@@ -603,6 +609,11 @@ pub unsafe extern "C" fn pio_parse_bytes(
 /// size-then-fill idiom of [`pio_warnings`]). Returns 0 for NULL `text`. The
 /// markers are the same ones the transmission parser's `.json` sniffing uses,
 /// so a binding can route a bare `.json` before choosing a parser.
+///
+/// That list is closed: the family (the label up to the first `:`) is always
+/// one of those six, the spellings are permanent, and a new family is an
+/// addition with a changelog line. `pio_build_info` reports the same set under
+/// `json_classes`, so a binding need not hardcode it.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_classify_str(
     text: *const c_char,
@@ -624,29 +635,26 @@ pub unsafe extern "C" fn pio_classify_str(
     }
 }
 
+/// The label is the classification family, plus `:<format>` for the two
+/// classes that detect one. Both halves come from the classifier, so the C
+/// vocabulary cannot drift from the Rust one.
 fn classify_label(text: &str) -> String {
-    use powerio::format::routing::{self, Detection, Domain, JsonClass};
-    match routing::classify_json_text(text) {
-        JsonClass::Package => "package".to_string(),
+    use powerio::format::routing::{self, Detection, JsonClass};
+    let class = routing::classify_json_text(text);
+    match class {
         JsonClass::Case(Detection::Known(format)) => {
-            let domain = match format.domain() {
-                Domain::Transmission => "transmission",
-                Domain::Distribution => "distribution",
-                _ => return "unknown".to_string(),
-            };
-            format!("{domain}:{}", format.name())
+            format!("{}:{}", class.family(), format.name())
         }
-        JsonClass::Case(Detection::Ambiguous) => "ambiguous".to_string(),
-        JsonClass::Case(Detection::Unknown) => "unknown".to_string(),
+        _ => class.family().to_string(),
     }
 }
 
 /// Serialize `net` to its model JSON: the same object a `.pio.json` package
-/// carries under `model.balanced_network`, without the surrounding document,
-/// and the same text the `powerio-json` format token writes. This is the
-/// bindings' data transport; the token remains as a compatibility alias for
-/// file based workflows. Returns an owned C string (free with
-/// [`pio_string_free`]), `NULL` on error.
+/// carries under `model.balanced_network`, without the surrounding document.
+/// This is the bindings' data transport and the only route to it: model JSON
+/// is powerio's own document rather than a case format, so it has no format
+/// token. Returns an owned C string (free with [`pio_string_free`]), `NULL` on
+/// error.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_to_json(
     net: *const PioNetwork,
@@ -662,10 +670,10 @@ pub unsafe extern "C" fn pio_to_json(
 }
 
 /// Parse model JSON produced by [`pio_to_json`] (or lifted from a `.pio.json`
-/// document's `model.balanced_network`) back into an owned handle, the
-/// inverse of [`pio_to_json`] and the function form of parsing under the
-/// `powerio-json` token. Returns `NULL` on error. Free with
-/// [`pio_network_free`].
+/// document's `model.balanced_network`) back into an owned handle, the inverse
+/// of [`pio_to_json`]. A bare `.json` file holding this document classifies as
+/// `model-json` through [`pio_classify_str`]. Returns `NULL` on error. Free
+/// with [`pio_network_free`].
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_from_json(
     text: *const c_char,
@@ -1265,10 +1273,8 @@ unsafe fn write_options_from_c(opts: *const PioWriteOptions) -> Result<WriteOpti
 /// Serialize `net` to the named format `to`: the one text serializer; every
 /// format is named by a string. Accepts the [`pio_parse_str`] names:
 /// `matpower` is a byte-exact echo when the handle was parsed from MATPOWER.
-/// Also accepts `powerio-json` as an alias for
-/// [`pio_to_json`]. Model JSON cannot represent a non-finite `f64` (`Inf`/`NaN`):
-/// it writes `null`, records the field in `out_diagnostics_json`, and fails
-/// validation when read back.
+/// Model JSON is not a case format and has no token here: write it with
+/// [`pio_to_json`].
 ///
 /// `opts` carries the write-time cost policies (NULL for every default); see
 /// [`PioWriteOptions`]. A non-default policy works on a copy, so the handle is
@@ -3282,10 +3288,8 @@ mod tests {
             vec![branch],
         );
         let text = CString::new(net.to_json().unwrap()).unwrap();
-        let format = CString::new("powerio-json").unwrap();
         let mut err = [0 as c_char; 256];
-        let c =
-            unsafe { pio_parse_str(text.as_ptr(), format.as_ptr(), err.as_mut_ptr(), err.len()) };
+        let c = unsafe { pio_from_json(text.as_ptr(), err.as_mut_ptr(), err.len()) };
         assert!(
             !c.is_null(),
             "parse returned null: {}",
@@ -3579,6 +3583,10 @@ mod tests {
         assert_eq!(
             doc["diagnostic_namespaces"],
             serde_json::json!(powerio::diagnostics::DiagnosticStage::NAMESPACES)
+        );
+        assert_eq!(
+            doc["json_classes"],
+            serde_json::json!(powerio::format::routing::JSON_CLASSES)
         );
         // The two handshake documents are built from one source for the facts
         // they share, so read both and hold them to each other.
@@ -4798,28 +4806,30 @@ mpc.branch = [
     }
 
     #[test]
-    fn snapshot_round_trip_preserves_structure() {
-        // to_format("powerio-json") -> parse_str("powerio-json") must reproduce
-        // the structured tables. case30 carries loads, shunts, and gen costs,
-        // so a dropped field shows up.
+    fn model_json_round_trip_preserves_structure() {
+        // pio_to_json -> pio_from_json must reproduce the structured tables.
+        // case30 carries loads, shunts, and gen costs, so a dropped field
+        // shows up.
         let path = data_path("case30.m");
         let mut err = [0 as c_char; 256];
         let c =
             unsafe { pio_parse_file(path.as_ptr(), std::ptr::null(), err.as_mut_ptr(), err.len()) };
         assert!(!c.is_null());
         unsafe {
-            let json = to_format(c, "powerio-json");
-            assert!(json.contains("\"buses\""));
+            let json = pio_to_json(c, err.as_mut_ptr(), err.len());
+            assert!(!json.is_null());
+            let text = CStr::from_ptr(json).to_str().unwrap().to_owned();
+            pio_string_free(json);
+            assert!(text.contains("\"buses\""));
 
-            let text = CString::new(json).unwrap();
-            let fmt = CString::new("powerio-json").unwrap();
-            let back = pio_parse_str(text.as_ptr(), fmt.as_ptr(), err.as_mut_ptr(), err.len());
+            let c_text = CString::new(text).unwrap();
+            let back = pio_from_json(c_text.as_ptr(), err.as_mut_ptr(), err.len());
             assert!(
                 !back.is_null(),
-                "snapshot parse failed: {}",
+                "model JSON parse failed: {}",
                 CStr::from_ptr(err.as_ptr()).to_str().unwrap()
             );
-            // The snapshot is lossless: no fidelity warnings on the way back.
+            // Model JSON is lossless: no fidelity warnings on the way back.
             assert_eq!(pio_warnings(back, std::ptr::null_mut(), 0), 0);
             // Counts and base survive the round trip.
             assert_eq!(pio_n_buses(back), pio_n_buses(c));
@@ -4828,24 +4838,16 @@ mpc.branch = [
             assert_eq!(pio_base_mva(back), pio_base_mva(c));
             assert_eq!(pio_ref_bus_index(back), pio_ref_bus_index(c));
 
-            // The bare "json" alias means the same snapshot format.
-            let alias = CString::new("json").unwrap();
-            let again = pio_parse_str(text.as_ptr(), alias.as_ptr(), err.as_mut_ptr(), err.len());
-            assert!(!again.is_null());
-            assert_eq!(pio_n_buses(again), pio_n_buses(c));
-
-            pio_network_free(again);
             pio_network_free(back);
             pio_network_free(c);
         }
     }
 
     #[test]
-    fn snapshot_rejects_garbage() {
+    fn model_json_rejects_garbage() {
         let bad = CString::new("{ not json").unwrap();
-        let fmt = CString::new("powerio-json").unwrap();
         let mut err = [0 as c_char; 256];
-        let h = unsafe { pio_parse_str(bad.as_ptr(), fmt.as_ptr(), err.as_mut_ptr(), err.len()) };
+        let h = unsafe { pio_from_json(bad.as_ptr(), err.as_mut_ptr(), err.len()) };
         assert!(h.is_null());
         let msg = unsafe { CStr::from_ptr(err.as_ptr()) }.to_str().unwrap();
         assert!(!msg.is_empty(), "expected a JSON parse error message");
@@ -6711,17 +6713,17 @@ New Line.l1 bus1=a bus2=b phases=3
         }
     }
 
-    /// The balanced model JSON pair: one call out, one call back, byte
-    /// identical to the `powerio-json` token writer.
+    /// The balanced model JSON pair: one call out, one call back, and the
+    /// text is the model's own serialization.
     #[test]
-    fn balanced_model_json_round_trip_matches_token_writer() {
+    fn balanced_model_json_round_trips() {
         let net = case9();
         let mut err = [0 as c_char; PIO_ERRBUF_MIN];
         let json = unsafe { pio_to_json(net, err.as_mut_ptr(), err.len()) };
         assert!(!json.is_null());
         let text = unsafe { CStr::from_ptr(json) }.to_str().unwrap().to_owned();
         unsafe { pio_string_free(json) };
-        assert_eq!(text, unsafe { to_format(net, "powerio-json") });
+        assert!(text.starts_with('{') && text.contains("\"buses\""));
 
         let c = CString::new(text).unwrap();
         let back = unsafe { pio_from_json(c.as_ptr(), err.as_mut_ptr(), err.len()) };
@@ -6761,12 +6763,35 @@ New Line.l1 bus1=a bus2=b phases=3
             classify(r#"{"model_kind": "balanced", "model": {}}"#),
             "package"
         );
+        assert_eq!(
+            classify(r#"{"base_mva": 100.0, "buses": [], "branches": []}"#),
+            "model-json"
+        );
         assert_eq!(classify("not json"), "unknown");
         assert_eq!(classify(r#"{"nothing": 1}"#), "unknown");
         assert_eq!(
             unsafe { pio_classify_str(std::ptr::null(), std::ptr::null_mut(), 0) },
             0
         );
+
+        // The family half of every label is inside the set the header
+        // documents and pio_build_info reports, so a binding that dispatches
+        // on it never meets a token it has no arm for.
+        for text in [
+            r#"{"baseMVA": 100.0, "bus": {}}"#,
+            r#"{"data_model": "ENGINEERING"}"#,
+            r#"{"model_kind": "balanced", "model": {}}"#,
+            r#"{"base_mva": 100.0, "buses": [], "branches": []}"#,
+            r#"{"baseMVA": 100.0, "voltage_source": {}}"#,
+            "not json",
+        ] {
+            let label = classify(text);
+            let family = label.split(':').next().unwrap();
+            assert!(
+                powerio::format::routing::JSON_CLASSES.contains(&family),
+                "{label} is outside the closed set"
+            );
+        }
     }
 
     /// The package inverse pair: wrap a handle, cross the JSON document, and

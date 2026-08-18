@@ -11,6 +11,7 @@ cargo-fuzz = true
 libfuzzer-sys = "0.4"
 powerio = { path = "../powerio" }
 powerio-dist = { path = "../powerio-dist" }
+powerio-capi = { path = "../powerio-capi", default-features = false }
 
 # Detached from the parent workspace (and excluded there): the fuzz crate
 # needs nightly + cargo-fuzz and must not ride along on workspace builds.
@@ -34,8 +35,15 @@ doc = false
 bench = false
 
 [[bin]]
-name = "powerio_json"
-path = "fuzz_targets/powerio_json.rs"
+name = "model_json"
+path = "fuzz_targets/model_json.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "json_classify"
+path = "fuzz_targets/json_classify.rs"
 test = false
 doc = false
 bench = false

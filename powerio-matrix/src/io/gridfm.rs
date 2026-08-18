@@ -1,4 +1,4 @@
-//! GridFM interchange: a parsed case as the gridfm-datakit Parquet schema.
+//! GridFM output: a parsed case as the gridfm-datakit Parquet schema.
 //!
 //! [`gridfm-datakit`](https://github.com/gridfm) writes per-scenario Parquet
 //! tables that [`gridfm-graphkit`](https://github.com/gridfm)'s

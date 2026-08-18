@@ -51,7 +51,7 @@ cases (their title lines say what each exercises), and the egret JSON files
 are renderings of the MATPOWER cases above (plus a small dcline case) in
 egret's ModelData schema.
 
-Everything else in this tree (`powerio-json/`, `capi_matrix/`,
+Everything else in this tree (`model-json/`, `capi_matrix/`,
 `angle_bounds_clamp.m`, and the other unlisted fixtures) is original to this
 repository under its code license.
 

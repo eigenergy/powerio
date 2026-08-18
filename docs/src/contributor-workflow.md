@@ -67,7 +67,7 @@ POWERIO_CAPI=$PWD/target/release/libpowerio_capi.dylib \
 cargo bench -p powerio-matrix --bench matrix -- 'matrix_bprime|matrix_ybus|dcopf_'
 (cd benchmarks/asv && ../../.venv/bin/asv check -E existing:../../.venv/bin/python)
 (cd benchmarks/asv && ../../.venv/bin/asv run --quick --show-stderr -E existing:../../.venv/bin/python --dry-run)
-for target in matpower psse pslf powerio_json powerworld_aux pwb pwd; do
+for target in matpower psse pslf model_json json_classify powerworld_aux pwb pwd; do
   cargo +nightly fuzz run "$target" -- -runs=1
 done
 bash benchmarks/run_validation.sh

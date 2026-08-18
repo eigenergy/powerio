@@ -162,14 +162,20 @@ int main(int argc, char **argv) {
     CHECK(raw != NULL, err);
     pio_string_free(raw);
 
-    /* The canonical snapshot: serialize to powerio-json, parse it back, and
-     * confirm the counts survive. Lossless, validated on read. */
-    char *json = pio_to_format(c, "powerio-json", NULL, NULL, err, sizeof err);
+    /* Model JSON: serialize it, parse it back, and confirm the counts survive.
+     * Lossless, validated on read. It is powerio's own document rather than a
+     * case format, so it has no format token. */
+    char *json = pio_to_json(c, err, sizeof err);
     CHECK(json != NULL, err);
-    PioNetwork *c2 = pio_parse_str(json, "powerio-json", err, sizeof err);
+    PioNetwork *c2 = pio_from_json(json, err, sizeof err);
     CHECK(c2 != NULL, err);
     CHECK(pio_n_buses(c2) == nb && pio_n_branches(c2) == m && pio_n_gens(c2) == ng,
-          "snapshot round-trip changed the table sizes");
+          "model JSON round-trip changed the table sizes");
+    {
+        char label[64];
+        pio_classify_str(json, label, sizeof label);
+        CHECK(strcmp(label, "model-json") == 0, "model JSON should classify as model-json");
+    }
     pio_string_free(json);
     pio_network_free(c2);
 
@@ -278,7 +284,7 @@ int main(int argc, char **argv) {
         CHECK(cn != NULL, err);
         CHECK(pio_n_buses(cn) <= nb && pio_n_buses(cn) > 0, "normalized bus count out of range");
         CHECK(pio_ref_bus_indices(cn, NULL, 0) >= 1, "normalized case lost its reference bus");
-        char *njson = pio_to_format(cn, "powerio-json", NULL, NULL, err, sizeof err);
+        char *njson = pio_to_json(cn, err, sizeof err);
         CHECK(njson != NULL, err);
         pio_string_free(njson);
 

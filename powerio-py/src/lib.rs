@@ -489,6 +489,11 @@ fn looks_like_distribution_input(input: &Path) -> PyResult<bool> {
             "{} is a .pio.json package; read it with powerio.Package.from_json",
             input.display()
         ))),
+        JsonClass::ModelJson => Err(PyValueError::new_err(format!(
+            "{} is bare powerio model JSON, which is not a case format; read it with \
+             powerio.from_json",
+            input.display()
+        ))),
         JsonClass::Case(Detection::Known(format)) => Ok(format.domain() == Domain::Distribution),
         JsonClass::Case(Detection::Unknown) => Ok(false),
         JsonClass::Case(Detection::Ambiguous) => Err(PyValueError::new_err(format!(
@@ -578,6 +583,12 @@ fn build_package_from_str(text: &str, from_: Option<&str>) -> PyResult<NetworkPa
                 return Err(PyValueError::new_err(
                     "text is a .pio.json package; read it with \
                      powerio.Package.from_json",
+                ));
+            }
+            JsonClass::ModelJson => {
+                return Err(PyValueError::new_err(
+                    "text is bare powerio model JSON, which is not a case format; \
+                     read it with powerio.from_json",
                 ));
             }
             JsonClass::Case(Detection::Known(format)) => Some(format.name().to_owned()),
@@ -1929,26 +1940,37 @@ impl PyPackage {
     }
 }
 
-/// Classify top level JSON markers. Returns `(status, domain, format)` where
-/// `status` is `known`, `package` (a `.pio.json` package), `unknown`, or
-/// `ambiguous`.
+/// Classify top level JSON markers. Returns `(status, domain, format)`.
+///
+/// `status` is `known` for a case document, or the classification family
+/// itself for the outcomes that are not one: `package` (a `.pio.json`
+/// package), `model-json` (bare balanced model JSON, read with
+/// `powerio.from_json`), `ambiguous`, or `unknown`. `domain` is
+/// `transmission` or `distribution`, and both it and `format` are set only
+/// when `status` is `known`. `json_classes()` returns the closed set of
+/// families.
 #[pyfunction]
 fn classify_json_text(text: &str) -> (String, Option<String>, Option<String>) {
-    use powerio_matrix::format::routing::{Detection, Domain, JsonClass};
-    match powerio_matrix::format::routing::classify_json_text(text) {
-        JsonClass::Package => ("package".into(), None, None),
+    use powerio_matrix::format::routing::{Detection, JsonClass};
+    let class = powerio_matrix::format::routing::classify_json_text(text);
+    match class {
         JsonClass::Case(Detection::Known(format)) => (
             "known".into(),
-            Some(match format.domain() {
-                Domain::Transmission => "transmission".into(),
-                Domain::Distribution => "distribution".into(),
-                _ => "unknown".into(),
-            }),
+            Some(class.family().into()),
             Some(format.name().into()),
         ),
-        JsonClass::Case(Detection::Unknown) => ("unknown".into(), None, None),
-        JsonClass::Case(Detection::Ambiguous) => ("ambiguous".into(), None, None),
+        _ => (class.family().into(), None, None),
     }
+}
+
+/// The closed set of JSON classification families, in the spelling every
+/// powerio surface uses. A new family appends to it; a spelling never changes.
+#[pyfunction]
+fn json_classes() -> Vec<String> {
+    powerio_matrix::format::routing::JSON_CLASSES
+        .iter()
+        .map(|s| (*s).to_owned())
+        .collect()
 }
 
 /// Tolerant read of a geographic sidecar (headerless buscoords CSV, aliased
@@ -2151,6 +2173,7 @@ fn _powerio(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(dist_convert_str, m)?)?;
     m.add_class::<PyPackage>()?;
     m.add_function(wrap_pyfunction!(classify_json_text, m)?)?;
+    m.add_function(wrap_pyfunction!(json_classes, m)?)?;
     m.add_function(wrap_pyfunction!(parse_scopf, m)?)?;
     m.add_function(wrap_pyfunction!(parse_geo, m)?)?;
     // Whether the gridfm Parquet surface (arrow/parquet) was compiled in, so the

@@ -198,8 +198,7 @@ fn parse_errors_use_the_scopf_error_type() {
 
 #[test]
 fn source_format_is_explicit() {
-    let error =
-        parse_scopf_str(SMALL, "powerio-json").expect_err("reject unsupported SCOPF format");
+    let error = parse_scopf_str(SMALL, "matpower").expect_err("reject unsupported SCOPF format");
     assert!(matches!(error, ScopfError::UnsupportedFormat(_)));
 }
 

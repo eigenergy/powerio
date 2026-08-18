@@ -121,8 +121,10 @@ buses, loads, shunts, branches, generators, storage, HVDC, and extras. The
 retained source text is excluded, so a reloaded handle converts from the model
 instead of echoing the original source.
 
-ABI v4 still accepts `powerio-json` in `pio_to_format` and `pio_parse_str`.
-Those names are compatibility aliases for the explicit model JSON functions.
+ABI 4 accepted a `powerio-json` token in `pio_to_format` and `pio_parse_str`.
+ABI 5 removed it: model JSON is powerio's own document rather than a case
+format, so the two functions above are the only route to it. A bare `.json`
+file holding one classifies as `model-json` through `pio_classify_str`.
 
 ## The `.pio.json` document surface
 

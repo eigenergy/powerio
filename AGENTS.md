@@ -49,9 +49,10 @@ and Surge JSON all read and write. GO Challenge 3 JSON and DeepMind OPFData
 JSON are read only inputs; PowerWorld `.pwb` is a read only binary input with
 no writer. PowerWorld `.pwd` display files use the display API. GridFM Parquet
 datasets read and write through directory helpers. Bare `BalancedNetwork` model JSON
-moves through `Network::to_json`/`from_json`; since 0.7 it is not an advertised
-case format (`powerio-json` stays only as a hidden, warned CLI token and a C
-ABI v4 alias until 1.0). Distribution formats (OpenDSS `.dss`, PMD JSON, BMOPF
+moves through `Network::to_json`/`from_json`; it is powerio's own document
+rather than a case format, so 0.9 removed the last `powerio-json` token from
+every surface and a bare `.json` holding it classifies as `model-json`.
+Distribution formats (OpenDSS `.dss`, PMD JSON, BMOPF
 JSON) meet at `powerio-dist`'s `MulticonductorNetwork` the same way.
 Every balanced case format meets at `BalancedNetwork`, so a new format is one
 reader/writer at the hub, not a pairwise converter.
@@ -267,10 +268,10 @@ fuzz/                        # libFuzzer targets (detached workspace; see fuzz/R
   `powerio/src/lib.rs`, add a CLI/`TargetFormat` arm. `BalancedNetwork` is the unifying
   hub.
 - **JSON transport.** `Network::to_json`/`from_json` (serde) is the structured
-  transport; over the C ABI it is `pio_to_json`/`pio_from_json`. The
-  `powerio-json` format token was demoted from the case-format surface in 0.7:
-  the CLI hides it behind a deprecation warning, and the C tokens stay only as
-  ABI v4 aliases until 1.0. The retained
+  transport; over the C ABI it is `pio_to_json`/`pio_from_json`. There is no
+  format token for it: the `powerio-json` token was demoted in 0.7 and removed
+  in 0.9, and the JSON classifier answers `model-json` for such a document. The
+  retained
   `source` text is `#[serde(skip)]`, so JSON carries the tables, not the
   byte exact echo, and a `from_json` round trip returns `source` as `None`.
 - **Distribution bindings stay lazy.** `pio_dist_parse_file` and

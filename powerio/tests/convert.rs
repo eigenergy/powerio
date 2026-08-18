@@ -236,7 +236,7 @@ fn rich_writer_warnings_cover_simple_formats() {
 }
 
 #[test]
-fn extra_branch_rating_sets_survive_powerio_json() {
+fn extra_branch_rating_sets_survive_model_json() {
     let net = rich_audit_network();
 
     let back = BalancedNetwork::from_json(&net.to_json().unwrap()).unwrap();
@@ -2204,34 +2204,31 @@ fn slackless_network_conversion_warns_for_power_flow_targets() {
 }
 
 #[test]
-fn snapshot_warns_on_non_finite_and_does_not_read_back() {
+fn model_json_warns_on_non_finite_and_does_not_read_back() {
     // JSON has no Inf/NaN: serde writes them as `null`, which the validating
     // reader rejects. Readers legitimately produce Inf limits and the bindings
-    // materialize every network through the snapshot, so the write stays total,
+    // materialize every network through model JSON, so the write stays total,
     // but it must SAY what degraded (naming the field), and the no-read-back
     // consequence is pinned here so a change to either side surfaces.
     let mut net = parse_matpower_file(data("case9.m")).unwrap();
     net.branches[2].angmax = f64::INFINITY;
-    let conv = write_as(&net, TargetFormat::PowerioJson).unwrap();
+    let (text, diagnostics) = net.to_json_with_diagnostics().unwrap();
+    let warnings = diagnostics.lines();
     assert!(
-        conv.warnings
-            .iter()
-            .any(|w| w.contains("branches[2].angmax")),
-        "the degradation warning should name the field: {:?}",
-        conv.warnings
+        warnings.iter().any(|w| w.contains("branches[2].angmax")),
+        "the degradation warning should name the field: {warnings:?}"
     );
-    let err = powerio::parse_str(&conv.text, "powerio-json")
-        .expect_err("a null-degraded snapshot must not validate");
+    let err =
+        BalancedNetwork::from_json(&text).expect_err("a null-degraded document must not validate");
     assert!(err.to_string().contains("null"), "got: {err}");
 
     // A NaN bus voltage warns the same way.
     let mut net = parse_matpower_file(data("case9.m")).unwrap();
     net.buses[0].vm = f64::NAN;
-    let conv = write_as(&net, TargetFormat::PowerioJson).unwrap();
+    let warnings = net.to_json_with_diagnostics().unwrap().1.lines();
     assert!(
-        conv.warnings.iter().any(|w| w.contains("buses[0].vm")),
-        "got: {:?}",
-        conv.warnings
+        warnings.iter().any(|w| w.contains("buses[0].vm")),
+        "got: {warnings:?}"
     );
 
     // EVERY non-finite field is named, not just the first: serde writes them all
@@ -2240,28 +2237,22 @@ fn snapshot_warns_on_non_finite_and_does_not_read_back() {
     let mut net = parse_matpower_file(data("case9.m")).unwrap();
     net.buses[0].vm = f64::NAN;
     net.branches[2].angmax = f64::INFINITY;
-    let conv = write_as(&net, TargetFormat::PowerioJson).unwrap();
+    let warnings = net.to_json_with_diagnostics().unwrap().1.lines();
     assert!(
-        conv.warnings.iter().any(|w| w.contains("buses[0].vm"))
-            && conv
-                .warnings
-                .iter()
-                .any(|w| w.contains("branches[2].angmax")),
-        "both non-finite fields must be named in one write: {:?}",
-        conv.warnings
+        warnings.iter().any(|w| w.contains("buses[0].vm"))
+            && warnings.iter().any(|w| w.contains("branches[2].angmax")),
+        "both non-finite fields must be named in one write: {warnings:?}"
     );
 }
 
 #[test]
-fn snapshot_round_trips_through_core_api() {
-    // write_as -> parse_str at the core level (the C ABI test covers the same
+fn model_json_round_trips_through_core_api() {
+    // to_json -> from_json at the core level (the C ABI test covers the same
     // path over FFI). case30 carries loads, shunts, and gen costs.
     let net = parse_matpower_file(data("case30.m")).unwrap();
-    let conv = write_as(&net, TargetFormat::PowerioJson).unwrap();
-    assert!(conv.warnings.is_empty(), "the snapshot writes no warnings");
-    let parsed = powerio::parse_str(&conv.text, "powerio-json").unwrap();
-    assert!(parsed.warnings.is_empty(), "the snapshot reads back total");
-    let back = parsed.network;
+    let (text, diagnostics) = net.to_json_with_diagnostics().unwrap();
+    assert!(diagnostics.is_empty(), "model JSON writes no records");
+    let back = BalancedNetwork::from_json(&text).unwrap();
     assert_eq!(back.buses.len(), net.buses.len());
     assert_eq!(back.branches.len(), net.branches.len());
     assert_eq!(back.generators.len(), net.generators.len());
@@ -2384,20 +2375,25 @@ fn generator_cost_csv_patches_validate_index_and_bus() {
 }
 
 #[test]
-fn snapshot_json_file_is_sniffed_without_a_format_hint() {
-    // A snapshot written to disk carries the generic .json extension; the
-    // sniffer must route it to the powerio-json reader (top level `buses`),
-    // not the PowerModels fallback, so parse_file works with from=None.
+fn model_json_file_is_refused_by_the_sniffer_and_named_as_such() {
+    // Model JSON written to disk carries the generic .json extension. It is
+    // not a case format, so the sniffer refuses it and the message names the
+    // entry point that does read it, rather than routing it to a reader.
     let net = parse_matpower_file(data("case14.m")).unwrap();
-    let text = write_as(&net, TargetFormat::PowerioJson).unwrap().text;
+    let text = net.to_json().unwrap();
     let path = std::env::temp_dir().join(format!(
-        "powerio_snapshot_sniff_{}.json",
+        "powerio_model_json_sniff_{}.json",
         std::process::id()
     ));
     std::fs::write(&path, &text).unwrap();
     let parsed = parse_file(&path, None);
     std::fs::remove_file(&path).ok();
-    let back = parsed.unwrap().network;
+    let err = parsed
+        .expect_err("model JSON is not a case format")
+        .to_string();
+    assert!(err.contains("from_json"), "got: {err}");
+
+    let back = BalancedNetwork::from_json(&text).unwrap();
     assert_eq!(back.buses.len(), 14);
     assert_eq!(back.source_format, SourceFormat::Matpower);
 }

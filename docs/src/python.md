@@ -23,8 +23,9 @@ pandas, or pyarrow.
 
 Transmission text and file format names accepted by `parse_*` and `convert_*` include
 `matpower`, `psse`, `powerworld`, `pslf`, `powermodels-json`, `egret-json`,
-`pandapower-json`, `goc3-json`, `surge-json`, `opfdata-json`, and `powerio-json`, plus their
-documented aliases. `opfdata-json` reads one extracted JSON document from a
+`pandapower-json`, `goc3-json`, `surge-json`, and `opfdata-json`, plus their
+documented aliases. Balanced model JSON is not a case format and has no name
+here: read and write it with `powerio.from_json` and `Network.to_json`. `opfdata-json` reads one extracted JSON document from a
 DeepMind OPFData FullTop or N-1 release without PyTorch. PyPSA CSV folders and
 GridFM Parquet datasets are directory formats; use `read_pypsa_csv_folder`, `Network.write_pypsa_csv_folder`,
 `read_gridfm`, `Network.write_gridfm`, or the conversion/package helpers that

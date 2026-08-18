@@ -37,8 +37,6 @@ pub enum TransmissionFormat {
     Psse35,
     PowerWorld,
     PandapowerJson,
-    #[doc(hidden)]
-    PowerioJson,
     PypsaCsv,
     Pslf,
     Pwb,
@@ -59,7 +57,6 @@ impl TransmissionFormat {
             Self::Psse35 => "psse35",
             Self::PowerWorld => "powerworld",
             Self::PandapowerJson => "pandapower-json",
-            Self::PowerioJson => "powerio-json",
             Self::PypsaCsv => "pypsa-csv",
             Self::Pslf => "pslf",
             Self::Pwb => "pwb",
@@ -136,7 +133,6 @@ pub fn transmission_format_from_name(name: &str) -> Option<TransmissionFormat> {
         "psse35" | "raw35" => Some(TransmissionFormat::Psse35),
         "powerworld" | "aux" => Some(TransmissionFormat::PowerWorld),
         "pandapowerjson" | "pandapower" | "pp" => Some(TransmissionFormat::PandapowerJson),
-        "poweriojson" | "powerio" | "json" => Some(TransmissionFormat::PowerioJson),
         "pypsacsv" | "pypsa" => Some(TransmissionFormat::PypsaCsv),
         "pslf" | "epc" | "pslfepc" => Some(TransmissionFormat::Pslf),
         "pwb" => Some(TransmissionFormat::Pwb),
@@ -163,26 +159,70 @@ pub fn distribution_format_from_name(name: &str) -> Option<DistributionFormat> {
     }
 }
 
-/// Top level classification of bare JSON text: a `.pio.json` package
-/// or a case document with its format detection. The package outcome lives in
-/// the classifier's result rather than a separate predicate, so every consumer
-/// handles it, and one parse answers both questions.
+/// Top level classification of bare JSON text: a `.pio.json` package, bare
+/// model JSON, or a case document with its format detection. The package and
+/// model JSON outcomes live in the classifier's result rather than in separate
+/// predicates, so every consumer handles them, and one parse answers every
+/// question.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum JsonClass {
     /// A `.pio.json` package. A package is not a converter boundary
     /// format, so it stays out of [`SourceFormat`]; callers route it to the
     /// package reader instead of a case parser.
     Package,
+    /// Bare [`BalancedNetwork`](crate::BalancedNetwork) model JSON: the object
+    /// a package carries under `model.balanced_network`, written by
+    /// `to_json` and read by `from_json`. powerio authors it, so it is not a
+    /// case format and stays out of [`SourceFormat`]; callers route it to
+    /// those two methods instead of a case parser.
+    ModelJson,
     /// A case document and its format detection.
     Case(Detection<JsonFormat>),
 }
 
-/// Classify a JSON document: a `.pio.json` package, or a case
+/// The closed set of classification families, in the one spelling every
+/// surface uses: the Rust [`JsonClass`], the C `pio_classify_str` label before
+/// its optional `:<format>` tail, the Python `classify_json_text` status, and
+/// the Julia family symbol.
+///
+/// Spellings are permanent and a family is never removed or redefined. A new
+/// family appends to this list and gets a changelog line, so a consumer that
+/// dispatches a file picker on it keeps working.
+pub const JSON_CLASSES: [&str; 6] = [
+    "transmission",
+    "distribution",
+    "package",
+    "model-json",
+    "ambiguous",
+    "unknown",
+];
+
+impl JsonClass {
+    /// This classification's family token, one of [`JSON_CLASSES`]. The
+    /// detected format, where there is one, is [`SourceFormat::name`].
+    #[must_use]
+    pub fn family(self) -> &'static str {
+        match self {
+            Self::Package => "package",
+            Self::ModelJson => "model-json",
+            Self::Case(Detection::Known(format)) => match format.domain() {
+                Domain::Transmission => "transmission",
+                Domain::Distribution => "distribution",
+            },
+            Self::Case(Detection::Ambiguous) => "ambiguous",
+            Self::Case(Detection::Unknown) => "unknown",
+        }
+    }
+}
+
+/// Classify a JSON document: a `.pio.json` package, bare model JSON, or a case
 /// document across the transmission and distribution domains.
 ///
 /// A package is recognized by a top level `model_kind` of `"balanced"` or
 /// `"multiconductor"` plus a `model` key; the value check keeps a case
 /// document that happens to carry those key names from being misrouted.
+/// Model JSON is recognized by `buses` beside another network key, which the
+/// case formats spell differently (PowerModels writes `bus`, not `buses`).
 /// For a case, Unknown means there is no recognized top level marker, and
 /// Ambiguous means the document contains strong markers from both domains, so
 /// the caller must ask the user for an explicit format.
@@ -199,7 +239,7 @@ pub fn classify_json_text(text: &str) -> JsonClass {
     {
         return JsonClass::Package;
     }
-    JsonClass::Case(shape.classify())
+    shape.classify()
 }
 
 fn canonical_key(name: &str) -> String {
@@ -234,7 +274,7 @@ impl JsonShape {
         self.object.get(key).and_then(serde_json::Value::as_str)
     }
 
-    fn classify(&self) -> Detection<JsonFormat> {
+    fn classify(&self) -> JsonClass {
         let is_pandapower = self.string("_class") == Some("pandapowerNet");
         let is_egret = self.has("elements") && self.has("system");
         let is_goc3 = self.has("network")
@@ -270,7 +310,7 @@ impl JsonShape {
                 .get("metadata")
                 .and_then(serde_json::Value::as_object)
                 .is_some_and(|metadata| metadata.contains_key("objective"));
-        let is_powerio = self.has("buses")
+        let is_model_json = self.has("buses")
             && (self.has("branches")
                 || self.has("base_mva")
                 || self.has("loads")
@@ -282,7 +322,7 @@ impl JsonShape {
             || is_goc3
             || is_surge
             || is_opfdata
-            || is_powerio
+            || is_model_json
             || is_power_models;
 
         let is_pmd = self.has("data_model");
@@ -298,28 +338,43 @@ impl JsonShape {
         let distribution = is_pmd || strong_bmopf || (weak_bmopf && !transmission);
 
         match (transmission, distribution) {
-            (true, true) => Detection::Ambiguous,
-            (true, false) => Detection::Known(SourceFormat::Transmission(if is_pandapower {
-                TransmissionFormat::PandapowerJson
-            } else if is_egret {
-                TransmissionFormat::EgretJson
-            } else if is_goc3 {
-                TransmissionFormat::Goc3Json
-            } else if is_surge {
-                TransmissionFormat::SurgeJson
-            } else if is_opfdata {
-                TransmissionFormat::DeepMindOpfDataJson
-            } else if is_powerio {
-                TransmissionFormat::PowerioJson
-            } else {
-                TransmissionFormat::PowerModelsJson
-            })),
-            (false, true) => Detection::Known(SourceFormat::Distribution(if is_pmd {
-                DistributionFormat::PmdJson
-            } else {
-                DistributionFormat::BmopfJson
-            })),
-            (false, false) => Detection::Unknown,
+            (true, true) => JsonClass::Case(Detection::Ambiguous),
+            // Model JSON is answered inside the transmission arm rather than
+            // ahead of it, so a document carrying distribution markers too is
+            // still reported as ambiguous instead of being claimed here.
+            (true, false)
+                if is_model_json
+                    && !is_pandapower
+                    && !is_egret
+                    && !is_goc3
+                    && !is_surge
+                    && !is_opfdata =>
+            {
+                JsonClass::ModelJson
+            }
+            (true, false) => JsonClass::Case(Detection::Known(SourceFormat::Transmission(
+                if is_pandapower {
+                    TransmissionFormat::PandapowerJson
+                } else if is_egret {
+                    TransmissionFormat::EgretJson
+                } else if is_goc3 {
+                    TransmissionFormat::Goc3Json
+                } else if is_surge {
+                    TransmissionFormat::SurgeJson
+                } else if is_opfdata {
+                    TransmissionFormat::DeepMindOpfDataJson
+                } else {
+                    TransmissionFormat::PowerModelsJson
+                },
+            ))),
+            (false, true) => {
+                JsonClass::Case(Detection::Known(SourceFormat::Distribution(if is_pmd {
+                    DistributionFormat::PmdJson
+                } else {
+                    DistributionFormat::BmopfJson
+                })))
+            }
+            (false, false) => JsonClass::Case(Detection::Unknown),
         }
     }
 }
@@ -404,13 +459,39 @@ mod tests {
     }
 
     #[test]
-    fn classifies_powerio_json() {
+    fn classifies_model_json() {
         assert_eq!(
             classify_json_text(r#"{"base_mva":100.0,"buses":[],"branches":[]}"#),
-            JsonClass::Case(Detection::Known(SourceFormat::Transmission(
-                TransmissionFormat::PowerioJson
-            )))
+            JsonClass::ModelJson
         );
+        assert_eq!(JsonClass::ModelJson.family(), "model-json");
+        // Distribution markers beside the model keys are still ambiguous:
+        // the model JSON arm must not claim a document it cannot read.
+        assert_eq!(
+            classify_json_text(r#"{"base_mva":100.0,"buses":[],"linecode":{}}"#),
+            JsonClass::Case(Detection::Ambiguous)
+        );
+    }
+
+    #[test]
+    fn every_family_is_in_the_closed_set() {
+        for class in [
+            JsonClass::Package,
+            JsonClass::ModelJson,
+            JsonClass::Case(Detection::Ambiguous),
+            JsonClass::Case(Detection::Unknown),
+            JsonClass::Case(Detection::Known(SourceFormat::Transmission(
+                TransmissionFormat::Matpower,
+            ))),
+            JsonClass::Case(Detection::Known(SourceFormat::Distribution(
+                DistributionFormat::Dss,
+            ))),
+        ] {
+            assert!(
+                super::JSON_CLASSES.contains(&class.family()),
+                "{class:?} answers with a family outside the closed set"
+            );
+        }
     }
 
     #[test]

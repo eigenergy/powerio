@@ -499,6 +499,10 @@ char *pio_schema_versions_json(void);
  * projection each fatal code is published under, for a consumer that wants
  * five buckets rather than the full code set. Both sets are stable; a member
  * may be added.
+ *
+ * `json_classes` lists the classification families [`pio_classify_str`]
+ * answers with, so a binding that routes a bare `.json` reads the closed set
+ * from the library rather than hardcoding it.
  */
 char *pio_build_info(void);
 
@@ -552,8 +556,8 @@ PioNetwork *pio_parse_file(const char *path,
  * directories, not text; parse them with [`pio_parse_file`] and
  * `from = "pypsa-csv"`. Read fidelity warnings attach to the handle
  * ([`pio_warnings`]). Returns `NULL` on error and writes the message into
- * `errbuf`. Free the handle with [`pio_network_free`]. Also accepts
- * `powerio-json`/`json` as aliases for [`pio_from_json`].
+ * `errbuf`. Free the handle with [`pio_network_free`]. Balanced model JSON is
+ * not a case format and has no token here: read it with [`pio_from_json`].
  */
 PioNetwork *pio_parse_str(const char *text, const char *format, char *errbuf, size_t errlen);
 
@@ -582,6 +586,7 @@ PioNetwork *pio_parse_bytes(const uint8_t *bytes,
  * - `transmission:<format>` (e.g. `transmission:powermodels-json`)
  * - `distribution:<format>` (e.g. `distribution:pmd-json`)
  * - `package` (a `.pio.json` package; read it with the package entry points)
+ * - `model-json` (bare balanced model JSON; read it with [`pio_from_json`])
  * - `ambiguous` (strong markers from both domains; pass an explicit format)
  * - `unknown` (no recognized marker, or not a JSON object)
  *
@@ -590,25 +595,30 @@ PioNetwork *pio_parse_bytes(const uint8_t *bytes,
  * size-then-fill idiom of [`pio_warnings`]). Returns 0 for NULL `text`. The
  * markers are the same ones the transmission parser's `.json` sniffing uses,
  * so a binding can route a bare `.json` before choosing a parser.
+ *
+ * That list is closed: the family (the label up to the first `:`) is always
+ * one of those six, the spellings are permanent, and a new family is an
+ * addition with a changelog line. `pio_build_info` reports the same set under
+ * `json_classes`, so a binding need not hardcode it.
  */
 size_t pio_classify_str(const char *text, char *outbuf, size_t outlen);
 
 /**
  * Serialize `net` to its model JSON: the same object a `.pio.json` package
- * carries under `model.balanced_network`, without the surrounding document,
- * and the same text the `powerio-json` format token writes. This is the
- * bindings' data transport; the token remains as a compatibility alias for
- * file based workflows. Returns an owned C string (free with
- * [`pio_string_free`]), `NULL` on error.
+ * carries under `model.balanced_network`, without the surrounding document.
+ * This is the bindings' data transport and the only route to it: model JSON
+ * is powerio's own document rather than a case format, so it has no format
+ * token. Returns an owned C string (free with [`pio_string_free`]), `NULL` on
+ * error.
  */
 char *pio_to_json(const PioNetwork *net, char *errbuf, size_t errlen);
 
 /**
  * Parse model JSON produced by [`pio_to_json`] (or lifted from a `.pio.json`
- * document's `model.balanced_network`) back into an owned handle, the
- * inverse of [`pio_to_json`] and the function form of parsing under the
- * `powerio-json` token. Returns `NULL` on error. Free with
- * [`pio_network_free`].
+ * document's `model.balanced_network`) back into an owned handle, the inverse
+ * of [`pio_to_json`]. A bare `.json` file holding this document classifies as
+ * `model-json` through [`pio_classify_str`]. Returns `NULL` on error. Free
+ * with [`pio_network_free`].
  */
 PioNetwork *pio_from_json(const char *text, char *errbuf, size_t errlen);
 
@@ -759,10 +769,8 @@ int32_t pio_is_radial(const PioNetwork *net);
  * Serialize `net` to the named format `to`: the one text serializer; every
  * format is named by a string. Accepts the [`pio_parse_str`] names:
  * `matpower` is a byte-exact echo when the handle was parsed from MATPOWER.
- * Also accepts `powerio-json` as an alias for
- * [`pio_to_json`]. Model JSON cannot represent a non-finite `f64` (`Inf`/`NaN`):
- * it writes `null`, records the field in `out_diagnostics_json`, and fails
- * validation when read back.
+ * Model JSON is not a case format and has no token here: write it with
+ * [`pio_to_json`].
  *
  * `opts` carries the write-time cost policies (NULL for every default); see
  * [`PioWriteOptions`]. A non-default policy works on a copy, so the handle is
