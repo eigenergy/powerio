@@ -195,6 +195,18 @@ fn canonical_warnings(net: &BalancedNetwork) -> Diagnostics {
     // one. This is the same helper the PSS/E, PSLF and PowerWorld writers use;
     // the hand-rolled version here reported a bare yes/no.
     crate::format::warn_dropped_extras(&F, "canonical MATPOWER .m", net, |_| false, &mut warnings);
+    // `mpc.areas` carries the area number and reference bus and nothing else.
+    let lossy_areas = net
+        .areas
+        .iter()
+        .filter(|a| a.name.is_some() || a.net_interchange != 0.0 || a.tolerance != 0.0)
+        .count();
+    if lossy_areas > 0 {
+        warnings.push(&F.field_dropped, format!(
+            "{lossy_areas} of {} area record(s) carry a name or interchange data: `mpc.areas` holds only the area number and reference bus",
+            net.areas.len()
+        ));
+    }
     warnings
 }
 
@@ -286,6 +298,16 @@ fn canonical(net: &BalancedNetwork) -> String {
         );
     }
     let _ = writeln!(s, "];");
+
+    if !net.areas.is_empty() {
+        // `mpc.areas` is `[area, refbus]` and the reader reads it back. An
+        // area with no reference bus writes 0, which reads back as none.
+        let _ = writeln!(s, "mpc.areas = [");
+        for a in &net.areas {
+            let _ = writeln!(s, "\t{}\t{};", a.number, a.slack_bus.map_or(0, |b| b.0));
+        }
+        let _ = writeln!(s, "];");
+    }
 
     if !net.generators.is_empty() {
         // The 21-column layout (Pc1..APF) is standard MATPOWER and the reader

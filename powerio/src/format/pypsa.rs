@@ -580,6 +580,7 @@ pub fn write_pypsa_csv_folder(
         ));
     }
     warn_extra_branch_rating_sets(&F, "PyPSA CSV", net, &mut warnings);
+    super::warn_dropped_areas(&F, "PyPSA CSV", net, &mut warnings);
     let branch_solutions = net.branches.iter().filter(|b| b.solution.is_some()).count();
     if branch_solutions > 0 {
         warnings.push(&F.field_dropped, format!(

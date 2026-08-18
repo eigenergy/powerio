@@ -467,3 +467,46 @@ fn an_out_of_service_load_does_not_become_live_demand() {
         conversion.warnings
     );
 }
+
+#[test]
+fn areas_survive_the_canonical_round_trip() {
+    let mut net = parse_mpc(CASE_TINY).unwrap();
+    net.source = None;
+    net.source_format = SourceFormat::InMemory;
+    net.areas.push(crate::network::Area {
+        slack_bus: Some(BusId(1)),
+        ..crate::network::Area::new(7)
+    });
+    net.areas.push(crate::network::Area::new(9));
+
+    let text = write_matpower(&net);
+    assert!(text.contains("mpc.areas"), "areas block missing:\n{text}");
+    let back = parse_mpc(&text).unwrap();
+    assert_eq!(back.areas.len(), 2);
+    assert_eq!(back.areas[0].number, 7);
+    assert_eq!(back.areas[0].slack_bus, Some(BusId(1)));
+    assert_eq!(back.areas[1].number, 9);
+    assert_eq!(back.areas[1].slack_bus, None, "refbus 0 reads as none");
+}
+
+#[test]
+fn an_area_name_or_interchange_is_a_declared_drop() {
+    let mut net = parse_mpc(CASE_TINY).unwrap();
+    net.source = None;
+    net.source_format = SourceFormat::InMemory;
+    net.areas.push(crate::network::Area {
+        name: Some("west".into()),
+        net_interchange: 12.5,
+        ..crate::network::Area::new(1)
+    });
+
+    let conversion = crate::format::write_as(&net, crate::format::TargetFormat::Matpower).unwrap();
+    assert!(
+        conversion
+            .warnings
+            .iter()
+            .any(|w| w.contains("area record(s) carry a name or interchange data")),
+        "the fields mpc.areas cannot hold must be declared: {:?}",
+        conversion.warnings
+    );
+}

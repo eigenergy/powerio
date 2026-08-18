@@ -750,3 +750,37 @@ fn regcontrol_warns_and_keeps_taps() {
         .unwrap();
     assert_eq!(reg1.phases, 1);
 }
+
+#[test]
+fn setbusxy_promotes_to_locations_like_buscoords() {
+    let text = "\
+New Circuit.geo basekv=12.47 pu=1 phases=3 bus1=a
+New Line.l1 bus1=a.1.2.3 bus2=b.1.2.3 phases=3 r1=0.1 x1=0.2 length=1 units=km
+New Load.ld bus1=b.1.2.3 phases=3 conn=wye kv=7.2 kw=10 kvar=1
+SetBusXY bus=a x=-80 y=35
+SetBusXY b -80.5 35.25
+";
+    let net = powerio_dist::parse_str(text, "dss").unwrap();
+    let a = net.buses.iter().find(|b| b.id == "a").unwrap();
+    assert_eq!(a.location.unwrap().x.to_bits(), (-80.0f64).to_bits());
+    assert_eq!(a.location.unwrap().y.to_bits(), 35.0f64.to_bits());
+    let b = net.buses.iter().find(|b| b.id == "b").unwrap();
+    assert_eq!(b.location.unwrap().x.to_bits(), (-80.5f64).to_bits());
+    assert_eq!(b.location.unwrap().y.to_bits(), 35.25f64.to_bits());
+}
+
+#[test]
+fn a_short_setbusxy_is_a_declared_malformation() {
+    let text = "\
+New Circuit.geo basekv=12.47 pu=1 phases=3 bus1=a
+SetBusXY bus=a x=-80
+";
+    let net = powerio_dist::parse_str(text, "dss").unwrap();
+    assert!(
+        net.warnings
+            .iter()
+            .any(|w| w.contains("setbusxy needs a bus and numeric x and y")),
+        "{:?}",
+        net.warnings
+    );
+}

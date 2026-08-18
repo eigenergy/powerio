@@ -625,10 +625,17 @@ const TRANSMISSION_FORMATS: [TransmissionFormat; 8] = [
 // PSLF; egret lands on zero). What remains on that row is genuine: costs the
 // targets cannot carry and the one-of-three cost set MATPOWER's
 // all-or-nothing gencost drops.
+// The MATPOWER reader reads `mpc.areas` and the writer emits it, so the one
+// case that states an area (PGLib 5) carries it into every payload built from
+// the .m file. MATPOWER and PSS/E hold the table (their cells do not move);
+// the six targets with no area table each declare the drop — +1 on the
+// MATPOWER and PSS/E source rows' PowerModels, PowerWorld, egret, pandapower,
+// Surge, and PSLF cells. The PowerModels row does not move: its reader reads
+// no areas, so its payloads carry none.
 const TRANSMISSION_WARNING_BASELINE: [[usize; 8]; 8] = [
+    [0, 1, 15, 15, 7, 15, 23, 14],
     [0, 0, 15, 14, 6, 14, 22, 13],
-    [0, 0, 15, 14, 6, 14, 22, 13],
-    [0, 0, 0, 1, 0, 2, 0, 1],
+    [0, 1, 0, 2, 1, 3, 1, 2],
     [0, 0, 0, 0, 0, 2, 0, 0],
     [0, 0, 9, 9, 0, 8, 1, 7],
     [1, 0, 7, 7, 0, 0, 0, 7],
