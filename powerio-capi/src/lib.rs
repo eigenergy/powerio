@@ -4649,11 +4649,20 @@ mpc.branch = [
             let plain = normalized_json(c, std::ptr::null()).unwrap();
 
             // Shorter than sizeof: the fields it does not cover read as zero,
-            // which is what an older caller's struct means.
+            // which is what an older caller's struct means. The clamp is inside
+            // the declared prefix and the out of range pad is past it, so
+            // reading the caller's tail instead of zeroing it would be refused,
+            // and a zero pad is the documented default.
+            let mut clamped = normalize_opts();
+            clamped.clamp_angle_bounds = 1;
+            let defaulted = normalized_json(c, &clamped).unwrap();
+            assert_ne!(defaulted, plain, "the clamp must change this case");
+
             let mut short = normalize_opts();
             short.struct_size = size_of::<usize>() + 2 * size_of::<i32>();
-            short.angle_bound_pad = 0.2;
-            assert_eq!(normalized_json(c, &short).unwrap(), plain);
+            short.clamp_angle_bounds = 1;
+            short.angle_bound_pad = -5.0;
+            assert_eq!(normalized_json(c, &short).unwrap(), defaulted);
 
             // Longer than sizeof with a zero tail: a newer caller this build can
             // still serve.
