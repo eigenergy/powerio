@@ -26,6 +26,9 @@ pub mod codes {
             category = Data;
         BIND_CAPI_PANIC = "BIND.CAPI.PANIC", Fatal,
             "a panic was caught at the boundary and did not cross it", category = Data;
+        BIND_CAPI_INVALID_OPTIONS = "BIND.CAPI.INVALID_OPTIONS", Fatal,
+            "an options struct declared a size or a field value this build cannot honor",
+            category = Data;
         PARSE_CAPI_JSON_MALFORMED = "PARSE.CAPI.JSON_MALFORMED", Fatal,
             "a JSON document handed to an entry point could not be decoded", category = Parse;
         READ_CAPI_IO_FAILED = "READ.CAPI.IO_FAILED", Fatal,

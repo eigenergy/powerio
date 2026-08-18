@@ -1882,7 +1882,7 @@ fn convert_to_pypsa_folder(
     if out_dir.as_os_str() == "-" {
         anyhow::bail!("`--to pypsa-csv` writes a directory and cannot write to stdout");
     }
-    let mut net = if from == Some(FormatArg::Gridfm) {
+    let net = if from == Some(FormatArg::Gridfm) {
         let read = powerio_matrix::read_gridfm_dataset(input, scenario)
             .with_context(|| format!("reading gridfm dataset {}", input.display()))?;
         for w in &read.warnings {
@@ -1892,26 +1892,15 @@ fn convert_to_pypsa_folder(
     } else {
         read_network(input, from)?
     };
+    // The same directory writer the C surface calls, so the cost policy and its
+    // findings are stated once for both.
     let options = gen_cost_options.write_options()?;
-    let report = net.apply_gen_cost_policy(&options.gen_cost_patches, options.missing_gen_cost)?;
-    if report.patched > 0 {
-        eprintln!(
-            "fidelity: generator cost patch applied to {} generator(s)",
-            report.patched
-        );
-    }
-    if report.synthesized > 0 {
-        eprintln!(
-            "fidelity: generator cost synthesized for {} generator(s)",
-            report.synthesized
-        );
-    }
-    let outputs = powerio_matrix::write_pypsa_csv_folder(&net, out_dir)
+    let diagnostics = powerio_matrix::write_dir_with_options(&net, "pypsa-csv", out_dir, &options)
         .with_context(|| format!("writing PyPSA CSV folder {}", out_dir.display()))?;
-    for w in &outputs.warnings {
+    for w in powerio_matrix::diagnostics::render_lines(&diagnostics) {
         eprintln!("fidelity: {w}");
     }
-    eprintln!("wrote {}", outputs.dir.display());
+    eprintln!("wrote {}", out_dir.display());
     Ok(())
 }
 

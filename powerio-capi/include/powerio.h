@@ -56,6 +56,17 @@
  *   the code, never on the prose: a message is not covered by any stability
  *   promise. pio_build_info reports diagnostic_namespaces, the first segments
  *   powerio emits, and error_categories, the coarse projection.
+ * - Options structs (PioWriteOptions) are extensible, in the Linux syscall
+ *   convention of openat2/clone3: size_t struct_size is the first field, the
+ *   caller zero fills the struct and sets struct_size to sizeof, and NULL for
+ *   the parameter means every default. The library reads only the first
+ *   min(struct_size, its own sizeof) bytes, so a caller built against an older
+ *   header is read correctly, and a newer caller is too as long as the fields
+ *   past the library's own size are zero. A nonzero field beyond that point
+ *   fails the call: the caller asked for something this build does not
+ *   implement, and honoring the rest would drop the request in silence. Fields
+ *   are appended, never reordered or removed; a field named reserved is
+ *   padding made explicit and must be zero.
  * - Read warnings attach to the network handle; query them with pio_warnings,
  *   which returns the byte length needed (call with NULL/0 to size).
  * - Conversion findings come back through a char **out_diagnostics_json
@@ -195,6 +206,23 @@ struct ArrowSchema;
  */
 #define PIO_ERRBUF_MIN 256
 
+/**
+ * `PioWriteOptions.missing_gen_cost_mode`: leave a missing cost row absent.
+ */
+#define PIO_MISSING_GEN_COST_PRESERVE 0
+
+/**
+ * `PioWriteOptions.missing_gen_cost_mode`: fail when an in-service generator
+ * has no cost row.
+ */
+#define PIO_MISSING_GEN_COST_REQUIRE 1
+
+/**
+ * `PioWriteOptions.missing_gen_cost_mode`: synthesize a MATPOWER polynomial
+ * row from the five `fill_*` fields.
+ */
+#define PIO_MISSING_GEN_COST_FILL 2
+
 #if defined(PIO_ARROW)
 /**
  * Table selectors for [`pio_to_arrow`](crate::pio_to_arrow); the C
@@ -316,6 +344,61 @@ typedef struct PioPackage PioPackage;
  */
 typedef struct PioScopfInstance PioScopfInstance;
 #endif
+
+/**
+ * Write-time policies for the four transmission write entry points, in the
+ * extensible options struct convention this header states once. Zero the
+ * struct, set `struct_size` to `sizeof(PioWriteOptions)`, fill what you need;
+ * NULL is every default and is what these entry points did before the
+ * parameter existed.
+ *
+ * The three `pio_dist_*` write entry points take no options struct: the
+ * multiconductor writers carry their own per format options and none of them
+ * is reachable from this policy set.
+ */
+typedef struct {
+    /**
+     * `sizeof(PioWriteOptions)` as the caller's build sees it.
+     */
+    size_t struct_size;
+    /**
+     * What to do with an in-service generator that has no active power cost
+     * row: `PIO_MISSING_GEN_COST_PRESERVE`, `_REQUIRE`, or `_FILL`.
+     */
+    int32_t missing_gen_cost_mode;
+    /**
+     * Named so the layout carries no implicit padding. Must be zero.
+     */
+    int32_t reserved;
+    /**
+     * The quadratic coefficient of the row `_FILL` synthesizes.
+     */
+    double fill_c2;
+    /**
+     * The linear coefficient of the row `_FILL` synthesizes.
+     */
+    double fill_c1;
+    /**
+     * The constant coefficient of the row `_FILL` synthesizes.
+     */
+    double fill_c0;
+    /**
+     * The startup cost `_FILL` synthesizes.
+     */
+    double fill_startup;
+    /**
+     * The shutdown cost `_FILL` synthesizes.
+     */
+    double fill_shutdown;
+    /**
+     * Generator cost patches as CSV text, never a path: a header row of
+     * `gen_index,bus,c2,c1,c0` and optional `startup,shutdown`, then one row
+     * per patched generator. A write entry point never opens a file the caller
+     * names, so read the CSV yourself and hand over its bytes. NULL applies no
+     * patches.
+     */
+    const char *gen_cost_csv;
+} PioWriteOptions;
 
 #ifdef __cplusplus
 extern "C" {
@@ -650,6 +733,10 @@ int32_t pio_is_radial(const PioNetwork *net);
  * it writes `null`, records the field in `out_diagnostics_json`, and fails
  * validation when read back.
  *
+ * `opts` carries the write-time cost policies (NULL for every default); see
+ * [`PioWriteOptions`]. A non-default policy works on a copy, so the handle is
+ * unchanged, and the policy's own findings lead `out_diagnostics_json`.
+ *
  * Returns the text as an owned C string (free with [`pio_string_free`]),
  * `NULL` on error (message into `errbuf`). The writer's findings, if any, are
  * published through `out_diagnostics_json` as one owned JSON array of
@@ -660,6 +747,7 @@ int32_t pio_is_radial(const PioNetwork *net);
  */
 char *pio_to_format(const PioNetwork *net,
                     const char *to,
+                    const PioWriteOptions *opts,
                     char **out_diagnostics_json,
                     char *errbuf,
                     size_t errlen);
@@ -667,6 +755,8 @@ char *pio_to_format(const PioNetwork *net,
 /**
  * Convert the case file at `path` from format `from` (NULL to infer from the
  * path, as [`pio_parse_file`]) to format `to`, without keeping a handle.
+ * `opts` carries the write-time cost policies (NULL for every default); see
+ * [`PioWriteOptions`].
  * Returns the converted text as an owned C string (free with
  * [`pio_string_free`]), `NULL` on error. The findings, read side first, are
  * published through `out_diagnostics_json` as one owned JSON array of
@@ -678,14 +768,16 @@ char *pio_to_format(const PioNetwork *net,
 char *pio_convert_file(const char *path,
                        const char *from,
                        const char *to,
+                       const PioWriteOptions *opts,
                        char **out_diagnostics_json,
                        char *errbuf,
                        size_t errlen);
 
 /**
  * Convert in-memory case `text` from format `from` (required; there is no
- * path to infer from) to format `to` without keeping a handle. Returns the
- * converted text as an owned C
+ * path to infer from) to format `to` without keeping a handle. `opts` carries
+ * the write-time cost policies (NULL for every default); see
+ * [`PioWriteOptions`]. Returns the converted text as an owned C
  * string (free with [`pio_string_free`]), `NULL` on error. The findings, read
  * side first, are published through `out_diagnostics_json` as one owned JSON
  * array of diagnostic records (free it with [`pio_string_free`]), NULL when
@@ -696,6 +788,7 @@ char *pio_convert_file(const char *path,
 char *pio_convert_str(const char *text,
                       const char *from,
                       const char *to,
+                      const PioWriteOptions *opts,
                       char **out_diagnostics_json,
                       char *errbuf,
                       size_t errlen);
@@ -703,7 +796,9 @@ char *pio_convert_str(const char *text,
 /**
  * Write `net` into `out_dir` as the named directory format `to`. PyPSA CSV
  * (`pypsa-csv`/`pypsa`) is the currently supported directory format; a text format name is
- * an error pointing back at [`pio_to_format`]. Returns `0` on success and
+ * an error pointing back at [`pio_to_format`]. `opts` carries the write-time
+ * cost policies (NULL for every default); see [`PioWriteOptions`].
+ * Returns `0` on success and
  * `-1` on error (message into `errbuf`). The writer's findings, if any, are
  * published through `out_diagnostics_json` as one owned JSON array of
  * diagnostic records (free it with [`pio_string_free`]), NULL when there are
@@ -714,6 +809,7 @@ char *pio_convert_str(const char *text,
 int32_t pio_write_dir(const PioNetwork *net,
                       const char *to,
                       const char *out_dir,
+                      const PioWriteOptions *opts,
                       char **out_diagnostics_json,
                       char *errbuf,
                       size_t errlen);

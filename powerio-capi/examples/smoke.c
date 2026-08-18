@@ -107,21 +107,62 @@ int main(int argc, char **argv) {
      * Findings come back as an owned JSON array through an out pointer, NULL
      * when the conversion lost nothing; the caller frees it like any other. */
     char *diags = NULL;
-    char *echo = pio_to_format(c, "matpower", &diags, err, sizeof err);
+    char *echo = pio_to_format(c, "matpower", NULL, &diags, err, sizeof err);
     CHECK(echo != NULL && strlen(echo) > 0, err);
     CHECK(diags == NULL || diags[0] == '[', "diagnostics are a JSON array");
     pio_string_free(diags);
+
+    /* The options struct: zero it, set struct_size, ask for a policy. A zeroed
+     * struct is every default, so it must agree byte for byte with NULL. */
+    {
+        PioWriteOptions opts;
+        memset(&opts, 0, sizeof opts);
+        opts.struct_size = sizeof opts;
+        char *same = pio_to_format(c, "matpower", &opts, NULL, err, sizeof err);
+        CHECK(same != NULL, err);
+        CHECK(strcmp(same, echo) == 0, "a zeroed PioWriteOptions differs from NULL");
+        pio_string_free(same);
+
+        /* A cost policy the CLI has shipped for releases, now reachable here. */
+        opts.missing_gen_cost_mode = PIO_MISSING_GEN_COST_FILL;
+        opts.fill_c2 = 0.011;
+        opts.fill_c1 = 5.0;
+        char *filled = pio_to_format(c, "matpower", &opts, NULL, err, sizeof err);
+        CHECK(filled != NULL, err);
+        pio_string_free(filled);
+
+        /* A struct_size past this build's, with a field set beyond it, is
+         * refused: the library will not drop an option it cannot honor. */
+        struct {
+            PioWriteOptions head;
+            double future;
+        } wide;
+        memset(&wide, 0, sizeof wide);
+        wide.head.struct_size = sizeof wide;
+        wide.future = 1.0;
+        char *refused = pio_to_format(c, "matpower", &wide.head, NULL, err, sizeof err);
+        CHECK(refused == NULL, "a nonzero tail past struct_size should fail the call");
+        CHECK(strncmp(err, "BIND.CAPI.INVALID_OPTIONS", 25) == 0,
+              "the refusal should lead with its code");
+
+        /* The same struct with a zero tail is a newer caller this build can
+         * still serve. */
+        wide.future = 0.0;
+        char *served = pio_to_format(c, "matpower", &wide.head, NULL, err, sizeof err);
+        CHECK(served != NULL, err);
+        pio_string_free(served);
+    }
     pio_string_free(echo);
 
     /* Cross-format convert reaches the converter and returns owned text.
      * A NULL out_diagnostics_json discards them. */
-    char *raw = pio_convert_file(argv[1], NULL, "psse", NULL, err, sizeof err);
+    char *raw = pio_convert_file(argv[1], NULL, "psse", NULL, NULL, err, sizeof err);
     CHECK(raw != NULL, err);
     pio_string_free(raw);
 
     /* The canonical snapshot: serialize to powerio-json, parse it back, and
      * confirm the counts survive. Lossless, validated on read. */
-    char *json = pio_to_format(c, "powerio-json", NULL, err, sizeof err);
+    char *json = pio_to_format(c, "powerio-json", NULL, NULL, err, sizeof err);
     CHECK(json != NULL, err);
     PioNetwork *c2 = pio_parse_str(json, "powerio-json", err, sizeof err);
     CHECK(c2 != NULL, err);
@@ -200,12 +241,12 @@ int main(int argc, char **argv) {
 
         /* In-memory convert: parse + serialize fused, no filesystem. */
         char *pm = pio_convert_str(buf, "matpower", "powermodels-json",
-                                   NULL, err, sizeof err);
+                                   NULL, NULL, err, sizeof err);
         CHECK(pm != NULL, err);
         pio_string_free(pm);
 
         char *old_order = pio_convert_str(buf, "powermodels-json", "matpower",
-                                          NULL, err, sizeof err);
+                                          NULL, NULL, err, sizeof err);
         if (old_order != NULL) {
             pio_string_free(old_order);
             CHECK(0, "pio_convert_str accepted target/source argument order");
@@ -222,7 +263,7 @@ int main(int argc, char **argv) {
         CHECK(cn != NULL, err);
         CHECK(pio_n_buses(cn) <= nb && pio_n_buses(cn) > 0, "normalized bus count out of range");
         CHECK(pio_ref_bus_indices(cn, NULL, 0) >= 1, "normalized case lost its reference bus");
-        char *njson = pio_to_format(cn, "powerio-json", NULL, err, sizeof err);
+        char *njson = pio_to_format(cn, "powerio-json", NULL, NULL, err, sizeof err);
         CHECK(njson != NULL, err);
         pio_string_free(njson);
         pio_network_free(cn);
@@ -236,7 +277,7 @@ int main(int argc, char **argv) {
         char outdir[512];
         snprintf(outdir, sizeof outdir, "%s-pypsa-smoke", argv[1]);
         char *dirdiags = (char *)0x1; /* a poison value the call must overwrite */
-        int rc = pio_write_dir(c, "pypsa-csv", outdir, &dirdiags, err, sizeof err);
+        int rc = pio_write_dir(c, "pypsa-csv", outdir, NULL, &dirdiags, err, sizeof err);
         CHECK(rc == 0, err);
         CHECK(dirdiags != (char *)0x1,
               "pio_write_dir left out_diagnostics_json untouched");
@@ -246,7 +287,7 @@ int main(int argc, char **argv) {
         FILE *bf = fopen(buses, "rb");
         CHECK(bf != NULL, "PyPSA folder missing buses.csv");
         fclose(bf);
-        rc = pio_write_dir(NULL, "pypsa-csv", outdir, NULL, err, sizeof err);
+        rc = pio_write_dir(NULL, "pypsa-csv", outdir, NULL, NULL, err, sizeof err);
         CHECK(rc == -1, "NULL network handle should fail the directory write");
         printf("pypsa csv directory write OK: %s\n", outdir);
     }

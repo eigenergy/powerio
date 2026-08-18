@@ -11,8 +11,9 @@ use powerio::{
     Bus, BusId, BusType, Error, Load, LoadVoltageModel, MissingGenCostPolicy, SourceFormat,
     TargetFormat, WriteOptions, convert_file, parse_file, parse_gen_cost_csv, parse_matpower,
     parse_matpower_file, parse_powermodels_json, parse_powerworld, parse_pslf, parse_psse,
-    parse_str, read_pypsa_csv_folder, write_as, write_as_with_options, write_egret_json,
-    write_powermodels_json, write_powerworld, write_pslf, write_psse, write_pypsa_csv_folder,
+    parse_str, read_pypsa_csv_folder, write_as, write_as_with_options, write_dir,
+    write_dir_with_options, write_egret_json, write_powermodels_json, write_powerworld, write_pslf,
+    write_psse, write_pypsa_csv_folder,
 };
 use serde_json::Value;
 
@@ -2711,4 +2712,57 @@ fn infers_surge_json_file() {
     assert!(conv.text.contains("mpc.branch"));
 
     let _ = std::fs::remove_file(path);
+}
+
+#[test]
+fn write_dir_with_options_runs_the_cost_policy_and_reports_it() {
+    let raw = std::fs::read_to_string(data("psse/case14.raw")).unwrap();
+    let net = parse_psse(&raw).unwrap();
+    let dir = tmp_dir("write-dir-options");
+
+    // Default options are the plain directory write.
+    let plain = write_dir(&net, "pypsa-csv", &dir).unwrap();
+    assert!(!plain.iter().any(|d| d.code.as_str().contains("GEN_COST")));
+
+    let filled = write_dir_with_options(
+        &net,
+        "pypsa-csv",
+        &dir,
+        &WriteOptions {
+            missing_gen_cost: MissingGenCostPolicy::zero(),
+            gen_cost_patches: Vec::new(),
+        },
+    )
+    .unwrap();
+    assert!(
+        filled.iter().any(|d| d.code.as_str().contains("GEN_COST")),
+        "{filled:#?}"
+    );
+
+    // Require refuses the same case, and a non-directory target is still
+    // rejected by name rather than by the policy it never reaches.
+    let err = write_dir_with_options(
+        &net,
+        "pypsa-csv",
+        &dir,
+        &WriteOptions {
+            missing_gen_cost: MissingGenCostPolicy::Require,
+            gen_cost_patches: Vec::new(),
+        },
+    )
+    .unwrap_err();
+    assert!(matches!(err, Error::MissingGenCost { .. }), "{err:?}");
+    let err = write_dir_with_options(
+        &net,
+        "matpower",
+        &dir,
+        &WriteOptions {
+            missing_gen_cost: MissingGenCostPolicy::Require,
+            gen_cost_patches: Vec::new(),
+        },
+    )
+    .unwrap_err();
+    assert!(matches!(err, Error::UnknownFormat(_)), "{err:?}");
+
+    let _ = std::fs::remove_dir_all(&dir);
 }
