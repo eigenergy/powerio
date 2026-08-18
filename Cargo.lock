@@ -2004,6 +2004,7 @@ dependencies = [
  "lexical-core",
  "num-complex",
  "petgraph",
+ "powerio-diag",
  "schemars",
  "serde",
  "serde_json",
@@ -2047,10 +2048,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "powerio-diag"
+version = "0.9.0"
+dependencies = [
+ "schemars",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "powerio-dist"
 version = "0.9.0"
 dependencies = [
  "jsonschema",
+ "powerio-diag",
  "schemars",
  "serde",
  "serde_json",
@@ -2089,6 +2100,7 @@ version = "0.9.0"
 dependencies = [
  "num-complex",
  "powerio",
+ "powerio-diag",
  "powerio-dist",
  "schemars",
  "serde",

@@ -12,7 +12,7 @@ use std::f64::consts::{FRAC_PI_2, PI, TAU};
 use serde_json::{Map, Value, json};
 
 use crate::convert::Conversion;
-use crate::diagnostics::{DiagnosticSeverity, DiagnosticStage, StructuredDiagnostic};
+use crate::diagnostics::{DiagnosticSeverity, StructuredDiagnostic};
 use crate::geo::CoordinateSpace;
 use crate::model::{
     ActivePowerReference, ActivePowerUnit, Configuration, ControlVoltageReference,
@@ -196,14 +196,9 @@ impl Writer {
         let message = message.into();
         self.warnings.push(format!("{message} [{code}]"));
         self.diagnostics.push(
-            StructuredDiagnostic::new(
-                code,
-                DiagnosticSeverity::Warning,
-                DiagnosticStage::Emit,
-                message,
-            )
-            .with_element_path(element_path)
-            .with_details(details),
+            StructuredDiagnostic::new(code, DiagnosticSeverity::Warning, message)
+                .with_element_path(element_path)
+                .with_details(details),
         );
     }
 

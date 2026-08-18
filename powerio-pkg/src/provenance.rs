@@ -96,64 +96,9 @@ pub struct SourceDescriptor {
     pub hash: Option<String>,
 }
 
-/// A pointer into one source artifact: where a canonical field came from.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-pub struct SourceRef {
-    pub source_id: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub line: Option<u32>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub column: Option<u32>,
-    /// Byte offset, for binary sources.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub byte_offset: Option<u64>,
-    /// Record / section / object type, e.g. `bus`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub record: Option<String>,
-    /// Canonical field / property name, e.g. `vm`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub field: Option<String>,
-    /// Raw token / value, when safe to embed.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub raw_token: Option<String>,
-}
-
-impl SourceRef {
-    /// Create a reference to a declared source artifact.
-    pub fn new(source_id: impl Into<String>) -> Self {
-        Self {
-            source_id: source_id.into(),
-            line: None,
-            column: None,
-            byte_offset: None,
-            record: None,
-            field: None,
-            raw_token: None,
-        }
-    }
-
-    /// Set the field or property name.
-    #[must_use]
-    pub fn with_field(mut self, field: impl Into<String>) -> Self {
-        self.field = Some(field.into());
-        self
-    }
-
-    /// Set the source record, section, or object type.
-    #[must_use]
-    pub fn with_record(mut self, record: impl Into<String>) -> Self {
-        self.record = Some(record.into());
-        self
-    }
-
-    /// Set the source line number.
-    #[must_use]
-    pub fn with_line(mut self, line: u32) -> Self {
-        self.line = Some(line);
-        self
-    }
-}
+/// A pointer into one source artifact: where a canonical field came from. It
+/// lives in `powerio-diag` because a diagnostic carries one.
+pub use powerio_diag::SourceRef;
 
 /// How a canonical field relates to its source value.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]

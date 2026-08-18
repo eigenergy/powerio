@@ -1,0 +1,27 @@
+[package]
+name = "powerio-diag"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description = "The PowerIO diagnostic vocabulary: dotted codes, severities, the stage family, the coarse error categories, and the text renderer."
+readme = "README.md"
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+documentation = "https://docs.rs/powerio-diag"
+keywords = ["powerio", "diagnostics", "codes"]
+categories = ["science", "data-structures"]
+
+[package.metadata.docs.rs]
+all-features = true
+
+[features]
+schema = ["dep:schemars"]
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+schemars = { workspace = true, optional = true }
+
+[lints]
+workspace = true

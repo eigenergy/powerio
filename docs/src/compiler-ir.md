@@ -108,12 +108,18 @@ model JSON.
 
 Every finding carries a stable dotted `code`, a `severity` (`debug`, `info`,
 `warning`, `error`, `fatal`; worst-last so a set's dominant severity is its max),
-the `stage` it came from, a human `message`, and where known an `element_path`, a
-`source_ref`, a `details` object, and a `suggested_action`. The structured
-record is primary; human-readable warnings are rendered from it. Codes are namespaced
-by leading segment (`PARSE`, `READ`, `IR`, `VALIDATE`, `FIDELITY`, `LOWER`,
-`EMIT`, `BINDING`, `PARTNER`, `PERF`), with the conventional shape
-`NAMESPACE.SOURCE_OR_TARGET.SPECIFIC`.
+a human `message`, and where known an `element_path`, a `source_ref`, a
+`details` object, and a `suggested_action`. The structured record is primary;
+human-readable warnings are rendered from it as `CODE: message` lines. The
+record, the code grammar, and the severity ladder live in `powerio-diag`, below
+both model crates and the package crate, so one finding type crosses all three.
+
+A code reads `NAMESPACE.SCOPE.SPECIFIC`. The leading segment names the stage the
+finding came from and is the only segment a consumer parses: `PARSE`, `READ`,
+`CANONICALIZE`, `VALIDATE`, `LOWER`, `BUILD`, `EMIT`, `BIND`, `PARTNER`,
+`REQUEST`. powerio emits nothing outside those ten, so a downstream verifier
+picks any other leading segment and the two streams merge into one report
+without coordination.
 
 ### Lowering
 

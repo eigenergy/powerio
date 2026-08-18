@@ -19,9 +19,10 @@ categories = ["science", "parsing"]
 all-features = true
 
 [features]
-schema = ["dep:schemars"]
+schema = ["dep:schemars", "powerio-diag/schema"]
 
 [dependencies]
+powerio-diag = { workspace = true }
 thiserror = "2"
 num-complex.workspace = true
 # Byte-slice float parsing for numeric matrix rows, avoiding UTF-8 allocation.

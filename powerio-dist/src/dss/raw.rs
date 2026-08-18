@@ -688,7 +688,6 @@ impl<L: Loader> Executor<'_, L> {
             crate::diagnostics::StructuredDiagnostic::new(
                 code,
                 crate::diagnostics::DiagnosticSeverity::Error,
-                crate::diagnostics::DiagnosticStage::Parse,
                 message,
             )
             .with_suggested_action(suggested_action),

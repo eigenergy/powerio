@@ -101,48 +101,10 @@ pub enum Error {
     WriteUnsupported { format: &'static str },
 }
 
-/// Coarse classification of an [`enum@Error`], for callers that map onto their own
-/// taxonomy (the Python layer's exception subclasses, C ABI status codes, a
-/// CLI exit code). Distinguishing "the input file is bad" from "the operation
-/// can't run on this otherwise-valid case" is the split callers actually branch
-/// on, and it's a property of the error, not of the binding that surfaces it.
-///
-/// Unlike [`enum@Error`], this enum is not `#[non_exhaustive]`. Adding a
-/// category makes exhaustive matches fail to compile, which requires each
-/// binding to map the new category.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ErrorCategory {
-    /// Underlying I/O failure reading or writing a file.
-    Io,
-    /// The requested format is unknown or can't be inferred from the path.
-    UnknownFormat,
-    /// The input is malformed or unparseable.
-    Parse,
-    /// A well-formed case can't satisfy the requested operation.
-    Data,
-    /// An output serialization step (matrix-market, Parquet) failed.
-    Output,
-}
-
-impl ErrorCategory {
-    /// The token for this category, as it appears in a C `errbuf` message and
-    /// in `pio_build_info`.
-    #[must_use]
-    pub fn token(self) -> &'static str {
-        match self {
-            ErrorCategory::Io => "io",
-            ErrorCategory::UnknownFormat => "unknown_format",
-            ErrorCategory::Parse => "parse",
-            ErrorCategory::Data => "data",
-            ErrorCategory::Output => "output",
-        }
-    }
-
-    /// Every category token, for a consumer that wants the closed set without
-    /// hardcoding it. The C ABI reports errors as text and defines no error
-    /// codes, so a binding that branches on the kind of failure matches these.
-    pub const TOKENS: [&'static str; 5] = ["io", "unknown_format", "parse", "data", "output"];
-}
+/// Coarse classification of an [`enum@Error`], for callers that map onto their
+/// own taxonomy. Defined in `powerio-diag` so every crate in the workspace
+/// projects onto the same five tokens.
+pub use powerio_diag::ErrorCategory;
 
 impl Error {
     /// Classify this error. The match is exhaustive over the variant set (no

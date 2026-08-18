@@ -175,7 +175,6 @@ fn report_non_numeric_fields(doc: &Map<String, Value>, net: &mut MulticonductorN
             crate::diagnostics::StructuredDiagnostic::new(
                 crate::diagnostics::READ_BMOPF_FIELD_NOT_A_NUMBER,
                 crate::diagnostics::DiagnosticSeverity::Error,
-                crate::diagnostics::DiagnosticStage::Read,
                 message,
             )
             .with_element_path(pointer)

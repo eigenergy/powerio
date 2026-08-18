@@ -21,7 +21,7 @@ use powerio_dist::{
     DistBus, DistLine, DistLineCode, DistLoadVoltageModel, Mat, MulticonductorNetwork,
 };
 
-use crate::diagnostics::{DiagnosticSeverity, DiagnosticStage, StructuredDiagnostic};
+use crate::diagnostics::{DiagnosticSeverity, StructuredDiagnostic};
 use crate::model::ModelKind;
 use crate::validation::ValidationStatus;
 
@@ -326,7 +326,6 @@ impl<'a> LoweringState<'a> {
             self.record.diagnostics.push(StructuredDiagnostic::new(
                 "LOWER.MULTI_TO_BALANCED.INVALID_BALANCED_OUTPUT",
                 DiagnosticSeverity::Error,
-                DiagnosticStage::Lower,
                 format!("lowered balanced network failed structural validation: {err}"),
             ));
             return Err(MulticonductorToBalancedError::new(
@@ -339,7 +338,6 @@ impl<'a> LoweringState<'a> {
                 StructuredDiagnostic::new(
                     "LOWER.MULTI_TO_BALANCED.BALANCED_VALUE_DOMAIN",
                     DiagnosticSeverity::Warning,
-                    DiagnosticStage::Lower,
                     format!(
                         "{} field `{}` is outside its value domain after lowering",
                         finding.element, finding.field
@@ -365,7 +363,6 @@ impl<'a> LoweringState<'a> {
                     StructuredDiagnostic::new(
                         "LOWER.MULTI_TO_BALANCED.UNKNOWN_SOURCE_BUS",
                         DiagnosticSeverity::Error,
-                        DiagnosticStage::Lower,
                         format!(
                             "voltage source {} references unknown bus {}",
                             source.name, source.bus
@@ -385,7 +382,6 @@ impl<'a> LoweringState<'a> {
                     StructuredDiagnostic::new(
                         "LOWER.MULTI_TO_BALANCED.INVALID_PHASE_REFERENCE",
                         DiagnosticSeverity::Error,
-                        DiagnosticStage::Lower,
                         format!(
                             "voltage source {} does not carry finite three phase voltage magnitudes and angles",
                             source.name
@@ -401,7 +397,6 @@ impl<'a> LoweringState<'a> {
                     StructuredDiagnostic::new(
                         "LOWER.MULTI_TO_BALANCED.INVALID_PHASE_REFERENCE",
                         DiagnosticSeverity::Error,
-                        DiagnosticStage::Lower,
                         format!(
                             "voltage source {} produced a non-positive positive-sequence voltage base",
                             source.name
@@ -433,7 +428,6 @@ impl<'a> LoweringState<'a> {
         self.record.diagnostics.push(StructuredDiagnostic::new(
             "LOWER.MULTI_TO_BALANCED.MISSING_PHASE_REFERENCE",
             DiagnosticSeverity::Error,
-            DiagnosticStage::Lower,
             "multiconductor to balanced lowering requires a finite three phase voltage source reference",
         ));
         Ok(None)
@@ -565,7 +559,6 @@ impl<'a> LoweringState<'a> {
                     StructuredDiagnostic::new(
                         "LOWER.MULTI_TO_BALANCED.UNKNOWN_LINECODE",
                         DiagnosticSeverity::Error,
-                        DiagnosticStage::Lower,
                         format!(
                             "line {} references unknown linecode `{}`",
                             line.name, line.linecode
@@ -588,7 +581,6 @@ impl<'a> LoweringState<'a> {
                     StructuredDiagnostic::new(
                         "LOWER.MULTI_TO_BALANCED.PHASE_MAP_MISMATCH",
                         DiagnosticSeverity::Error,
-                        DiagnosticStage::Lower,
                         format!(
                             "line {} connects different active terminal orders and cannot be lowered transparently",
                             line.name
@@ -709,7 +701,6 @@ impl<'a> LoweringState<'a> {
             let mut diagnostic = StructuredDiagnostic::new(
                 "LOWER.MULTI_TO_BALANCED.SEQUENCE_COUPLING_DROPPED",
                 DiagnosticSeverity::Info,
-                DiagnosticStage::Lower,
                 format!(
                     "linecode {code_name} {label} has nonzero sequence coupling; the balanced model keeps the positive-sequence diagonal"
                 ),
@@ -741,7 +732,6 @@ impl<'a> LoweringState<'a> {
             StructuredDiagnostic::new(
                 "LOWER.MULTI_TO_BALANCED.NONFINITE_LINE_LENGTH",
                 DiagnosticSeverity::Error,
-                DiagnosticStage::Lower,
                 format!("line {line_idx} has no finite length ({length}), so its impedance cannot be scaled"),
             )
             .with_element_path(format!("/model/multiconductor_network/lines/{line_idx}/length"))
@@ -765,7 +755,6 @@ impl<'a> LoweringState<'a> {
             StructuredDiagnostic::new(
                 "LOWER.MULTI_TO_BALANCED.INVALID_LINECODE_MATRIX",
                 DiagnosticSeverity::Error,
-                DiagnosticStage::Lower,
                 format!("linecode {code_name} {label} cannot be lowered: {message}"),
             )
             .with_element_path(format!(
@@ -797,7 +786,6 @@ impl<'a> LoweringState<'a> {
                         StructuredDiagnostic::new(
                             "LOWER.MULTI_TO_BALANCED.DROPPED_LOAD_VOLTAGE_MODEL",
                             DiagnosticSeverity::Warning,
-                            DiagnosticStage::Lower,
                             format!(
                                 "load {} voltage model cannot be represented by the conservative balanced lowering",
                                 load.name
@@ -864,7 +852,6 @@ impl<'a> LoweringState<'a> {
             StructuredDiagnostic::new(
                 "LOWER.MULTI_TO_BALANCED.INVALID_SHUNT_MATRIX",
                 DiagnosticSeverity::Error,
-                DiagnosticStage::Lower,
                 format!("shunt {name} cannot be lowered: {message}"),
             )
             .with_element_path(format!("/model/multiconductor_network/shunts/{shunt_idx}")),
@@ -951,7 +938,6 @@ impl<'a> LoweringState<'a> {
             StructuredDiagnostic::new(
                 "LOWER.MULTI_TO_BALANCED.UNKNOWN_BUS",
                 DiagnosticSeverity::Error,
-                DiagnosticStage::Lower,
                 format!("{element} {name} references unknown bus {bus}"),
             )
             .with_element_path(format!(
@@ -1375,7 +1361,6 @@ fn check_options(
         report.diagnostics.push(StructuredDiagnostic::new(
             "LOWER.MULTI_TO_BALANCED.INVALID_BASE_MVA",
             DiagnosticSeverity::Error,
-            DiagnosticStage::Lower,
             format!(
                 "base_mva must be positive and finite for multiconductor to balanced lowering; got {}",
                 options.base_mva
@@ -1402,7 +1387,6 @@ fn check_bus_conductor_sets(
                 StructuredDiagnostic::new(
                     "LOWER.MULTI_TO_BALANCED.AMBIGUOUS_TERMINAL_MAP",
                     DiagnosticSeverity::Error,
-                    DiagnosticStage::Lower,
                     format!(
                         "bus {} has two active terminals; no unique positive sequence projection is defined",
                         bus.id
@@ -1414,7 +1398,6 @@ fn check_bus_conductor_sets(
                 StructuredDiagnostic::new(
                     "LOWER.MULTI_TO_BALANCED.UNSUPPORTED_CONDUCTOR_SET",
                     DiagnosticSeverity::Error,
-                    DiagnosticStage::Lower,
                     format!(
                         "bus {} has {active_count} active terminal; multiconductor to balanced lowering starts with three phase input",
                         bus.id
@@ -1426,7 +1409,6 @@ fn check_bus_conductor_sets(
                 StructuredDiagnostic::new(
                     "LOWER.MULTI_TO_BALANCED.UNSUPPORTED_CONDUCTOR_SET",
                     DiagnosticSeverity::Error,
-                    DiagnosticStage::Lower,
                     format!(
                         "bus {} has {active_count} active terminals; multiconductor to balanced lowering starts with three phase input",
                         bus.id
@@ -1444,7 +1426,6 @@ fn check_bus_conductor_sets(
         report.diagnostics.push(StructuredDiagnostic::new(
             "LOWER.MULTI_TO_BALANCED.KRON_REDUCTION_REQUIRED",
             DiagnosticSeverity::Info,
-            DiagnosticStage::Lower,
             "neutral conductors require Kron reduction before the sequence transform",
         ));
     }
@@ -1475,7 +1456,6 @@ fn check_line_terminal_maps(
                     StructuredDiagnostic::new(
                         "LOWER.MULTI_TO_BALANCED.UNSUPPORTED_CONDUCTOR_SET",
                         DiagnosticSeverity::Error,
-                        DiagnosticStage::Lower,
                         format!(
                             "line {} {field} has {active_count} active terminal(s); balanced branch lowering requires three active phase conductors",
                             line.name
@@ -1495,7 +1475,6 @@ fn check_linecodes(net: &MulticonductorNetwork, report: &mut MulticonductorToBal
                 StructuredDiagnostic::new(
                     "LOWER.MULTI_TO_BALANCED.UNKNOWN_LINECODE",
                     DiagnosticSeverity::Error,
-                    DiagnosticStage::Lower,
                     format!(
                         "line {} references unknown linecode `{}`",
                         line.name, line.linecode
@@ -1512,7 +1491,6 @@ fn check_linecodes(net: &MulticonductorNetwork, report: &mut MulticonductorToBal
                 StructuredDiagnostic::new(
                     "LOWER.MULTI_TO_BALANCED.LINECODE_TERMINAL_MISMATCH",
                     DiagnosticSeverity::Error,
-                    DiagnosticStage::Lower,
                     format!(
                         "line {} uses linecode {} with {} conductor(s), but its terminal maps have {} and {} terminal(s)",
                         line.name,
@@ -1536,7 +1514,6 @@ fn check_linecodes(net: &MulticonductorNetwork, report: &mut MulticonductorToBal
                 StructuredDiagnostic::new(
                     "LOWER.MULTI_TO_BALANCED.INVALID_LINECODE_MATRIX",
                     DiagnosticSeverity::Error,
-                    DiagnosticStage::Lower,
                     format!(
                         "linecode {} does not carry square {} conductor matrices",
                         code.name, code.n_conductors
@@ -1562,7 +1539,6 @@ fn check_switches(net: &MulticonductorNetwork, report: &mut MulticonductorToBala
                 StructuredDiagnostic::new(
                     "LOWER.MULTI_TO_BALANCED.DROPPED_OPEN_SWITCH",
                     DiagnosticSeverity::Info,
-                    DiagnosticStage::Lower,
                     format!(
                         "open switch {} is dropped by multiconductor to balanced lowering",
                         sw.name
@@ -1575,7 +1551,6 @@ fn check_switches(net: &MulticonductorNetwork, report: &mut MulticonductorToBala
                 StructuredDiagnostic::new(
                     "LOWER.MULTI_TO_BALANCED.UNSUPPORTED_CLOSED_SWITCH",
                     DiagnosticSeverity::Error,
-                    DiagnosticStage::Lower,
                     format!(
                         "closed switch {} is not lowered into a zero impedance balanced branch",
                         sw.name
@@ -1630,7 +1605,6 @@ fn check_phase_reference(
         report.diagnostics.push(StructuredDiagnostic::new(
             "LOWER.MULTI_TO_BALANCED.MISSING_PHASE_REFERENCE",
             DiagnosticSeverity::Error,
-            DiagnosticStage::Lower,
             "multiconductor to balanced lowering requires a three phase voltage source reference",
         ));
     }
@@ -1642,7 +1616,6 @@ fn check_transformers(net: &MulticonductorNetwork, report: &mut MulticonductorTo
             StructuredDiagnostic::new(
                 "LOWER.MULTI_TO_BALANCED.UNSUPPORTED_TRANSFORMER",
                 DiagnosticSeverity::Error,
-                DiagnosticStage::Lower,
                 format!(
                     "transformer {} is not supported by the multiconductor to balanced preflight",
                     transformer.name
@@ -1662,7 +1635,6 @@ fn check_untyped_objects(
             StructuredDiagnostic::new(
                 "LOWER.MULTI_TO_BALANCED.UNSUPPORTED_OBJECT",
                 DiagnosticSeverity::Error,
-                DiagnosticStage::Lower,
                 format!(
                     "{} {} is preserved as an untyped object and cannot be lowered",
                     obj.class, obj.name

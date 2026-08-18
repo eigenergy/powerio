@@ -669,7 +669,7 @@
       "type": "object"
     },
     "DiagnosticCode": {
-      "description": "A stable, dotted diagnostic code, e.g. `EMIT.PSSE.DROP_ANGLE_LIMITS`.\n\nThe leading segment is the namespace and names the stage family:\n`PARSE`, `READ`, `IR`, `VALIDATE`, `FIDELITY`, `LOWER`, `EMIT`, `BINDING`,\n`PARTNER`, `PERF`. The conventional shape is `NAMESPACE.SOURCE_OR_TARGET.SPECIFIC`.",
+      "description": "A stable dotted diagnostic code, e.g. `EMIT.BMOPF.TRANSFORMER_UNSUPPORTED`.\n\nThe grammar is `NAMESPACE.SCOPE.SPECIFIC`: uppercase ASCII letters, digits\nand `_` inside a segment, `.` between segments, at least three segments. A\nlarge scope may use more (`EMIT.BMOPF.TRANSFORMER.TAP_COLLAPSED`), so a\nconsumer reads the first segment and treats the rest as opaque identity.\n\nThe first segment is the namespace and names the stage the finding came\nfrom; [`DiagnosticStage`] decodes it. A code carried by a document powerio\ndid not write may use a namespace outside the ten, which is data rather than\na failure.",
       "type": "string"
     },
     "DiagnosticSeverity": {
@@ -692,27 +692,29 @@
         },
         {
           "const": "error",
-          "description": "The package exists but the model is not valid for the intended use\nwithout repair.",
+          "description": "The model exists but is not valid for the intended use without repair.",
           "type": "string"
         },
         {
           "const": "fatal",
-          "description": "The package could not be produced.",
+          "description": "The operation could not complete. An error is a diagnostic that ended\nthe operation, and it is the one severity that also carries a\n[`crate::ErrorCategory`].",
           "type": "string"
         }
       ]
     },
     "DiagnosticStage": {
-      "description": "The compiler stage that emitted a diagnostic.",
+      "description": "The stage a finding came from, decoded from the first segment of its code.\n\n`PARSE` is source text or bytes that could not be decoded; `READ` is decoded\ninput that could not be represented in the model, plus read side I/O.\n`CANONICALIZE` is normalization, `VALIDATE` is the document's own internal\nconsistency, `LOWER` is a transformation between model families, `BUILD` is\nassembling a derived object (an index, a matrix, a solver table) from a\nnetwork that already parsed. `EMIT` is serialization and write side I/O.\n`BIND` is the language boundary itself, `PARTNER` is a partner tool, and\n`REQUEST` is a call naming something powerio does not provide.\n\nA failure detectable from an argument's representation alone is `BIND`; one\nthat needs powerio's own vocabulary to detect is `REQUEST`.",
       "enum": [
         "parse",
         "read",
         "canonicalize",
         "validate",
         "lower",
+        "build",
         "emit",
         "bind",
-        "partner"
+        "partner",
+        "request"
       ],
       "type": "string"
     },
@@ -4028,7 +4030,15 @@
           ]
         },
         "stage": {
-          "$ref": "#/$defs/DiagnosticStage"
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DiagnosticStage"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The stage family, decoded from the first segment of `code`. Advisory:\nomitted when the namespace is outside powerio's ten."
         },
         "suggested_action": {
           "type": [
@@ -4040,7 +4050,6 @@
       "required": [
         "code",
         "severity",
-        "stage",
         "message"
       ],
       "type": "object"
