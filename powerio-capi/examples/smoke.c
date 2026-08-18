@@ -40,7 +40,9 @@
     PIO_ARROW_TABLE_SHUNT != 4 || PIO_ARROW_TABLE_YBUS != 15 ||               \
     PIO_ARROW_TABLE_INCIDENCE != 16 || PIO_ARROW_TABLE_BPRIME != 17 ||         \
     PIO_ARROW_TABLE_BDOUBLEPRIME != 18 ||                                      \
-    PIO_ARROW_TABLE_MATRIX_BUS != 19 || PIO_ARROW_TABLE_MATRIX_BRANCH != 20
+    PIO_ARROW_TABLE_MATRIX_BUS != 19 || PIO_ARROW_TABLE_MATRIX_BRANCH != 20 || \
+    PIO_ARROW_TABLE_SOLVER_GEN_COST != 21 ||                                   \
+    PIO_ARROW_TABLE_SOLVER_GEN_COST_COEFF != 22
 #error "PIO_ARROW_TABLE_* ids changed without updating the C ABI smoke test"
 #endif
 #endif

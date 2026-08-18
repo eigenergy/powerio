@@ -47,9 +47,10 @@ pub use arrow_export::{
     PIO_ARROW_TABLE_BUS, PIO_ARROW_TABLE_GEN, PIO_ARROW_TABLE_INCIDENCE, PIO_ARROW_TABLE_LOAD,
     PIO_ARROW_TABLE_MATRIX_BRANCH, PIO_ARROW_TABLE_MATRIX_BUS, PIO_ARROW_TABLE_SHUNT,
     PIO_ARROW_TABLE_SOLVER_ARC, PIO_ARROW_TABLE_SOLVER_BRANCH, PIO_ARROW_TABLE_SOLVER_BUS,
-    PIO_ARROW_TABLE_SOLVER_GEN, PIO_ARROW_TABLE_SOLVER_HVDC, PIO_ARROW_TABLE_SOLVER_LOAD,
-    PIO_ARROW_TABLE_SOLVER_SHUNT, PIO_ARROW_TABLE_SOLVER_STORAGE, PIO_ARROW_TABLE_SOLVER_SWITCH,
-    PIO_ARROW_TABLE_SWITCH, PIO_ARROW_TABLE_YBUS,
+    PIO_ARROW_TABLE_SOLVER_GEN, PIO_ARROW_TABLE_SOLVER_GEN_COST,
+    PIO_ARROW_TABLE_SOLVER_GEN_COST_COEFF, PIO_ARROW_TABLE_SOLVER_HVDC,
+    PIO_ARROW_TABLE_SOLVER_LOAD, PIO_ARROW_TABLE_SOLVER_SHUNT, PIO_ARROW_TABLE_SOLVER_STORAGE,
+    PIO_ARROW_TABLE_SOLVER_SWITCH, PIO_ARROW_TABLE_SWITCH, PIO_ARROW_TABLE_YBUS,
 };
 
 /// Opaque parsed network handle. Carries the parsed [`BalancedNetwork`], the
@@ -1811,7 +1812,14 @@ pub unsafe extern "C" fn pio_bus_shunt(
 /// space with dimensions in schema metadata; tables 19 and 20 are the axis maps
 /// naming what each row and column of those triplets is (`matrix_bus` carries
 /// the bus id, source row, reference flag and island per index, `matrix_branch`
-/// the source row and endpoint ids). Every table entry in
+/// the source row and endpoint ids). Tables 21 and 22 carry normalized
+/// generator cost: one header row per solver generator, in `solver_gen` order,
+/// slicing `[coeff_offset, coeff_offset + coeff_count)` of the flattened
+/// coefficient table. `model` 2 reads position `i` of a `coeff_count` long
+/// slice as the coefficient of `p^(coeff_count - 1 - i)`; `model` 1 reads even
+/// positions as per unit active power at a breakpoint and odd positions as the
+/// curve value there; `model` 0 means the generator carries no cost row, and
+/// its `coeff_offset` is `-1`. Every table entry in
 /// [`pio_arrow_catalog_json`] states which of the three it is under `format`.
 /// New columns extend the Arrow schema without changing an existing C
 /// signature.
@@ -3787,6 +3795,8 @@ mod tests {
             "#define PIO_ARROW_TABLE_BDOUBLEPRIME 18",
             "#define PIO_ARROW_TABLE_MATRIX_BUS 19",
             "#define PIO_ARROW_TABLE_MATRIX_BRANCH 20",
+            "#define PIO_ARROW_TABLE_SOLVER_GEN_COST 21",
+            "#define PIO_ARROW_TABLE_SOLVER_GEN_COST_COEFF 22",
             "typedef struct PioDistNetwork PioDistNetwork;",
             "typedef struct PioNetwork PioNetwork;",
             "typedef struct PioPackage PioPackage;",

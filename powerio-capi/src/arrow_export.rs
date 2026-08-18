@@ -13,7 +13,9 @@
 //! space as `pio_bus_ids`), not the gridfm-datakit schema. Tables 6..14 are the
 //! normalized solver table rules: per unit/radian values and dense zero based
 //! row ids. Matrix table ids after that carry COO triplets in the same dense bus
-//! index space, with matrix dimensions stored in Arrow schema metadata.
+//! index space, with matrix dimensions stored in Arrow schema metadata. Tables
+//! 21 and 22 carry normalized generator cost: a dense header row per solver
+//! generator and the flattened coefficient vector it slices into.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -50,6 +52,8 @@ pub const PIO_ARROW_TABLE_BPRIME: i32 = 17;
 pub const PIO_ARROW_TABLE_BDOUBLEPRIME: i32 = 18;
 pub const PIO_ARROW_TABLE_MATRIX_BUS: i32 = 19;
 pub const PIO_ARROW_TABLE_MATRIX_BRANCH: i32 = 20;
+pub const PIO_ARROW_TABLE_SOLVER_GEN_COST: i32 = 21;
+pub const PIO_ARROW_TABLE_SOLVER_GEN_COST_COEFF: i32 = 22;
 
 // These values are the ABI: the `PIO_ARROW_TABLE_*` macros in include/powerio.h
 // are hand-synced to them. The set is append-only: these ids and each table's
@@ -81,6 +85,8 @@ const _: () = assert!(
         && PIO_ARROW_TABLE_BDOUBLEPRIME == 18
         && PIO_ARROW_TABLE_MATRIX_BUS == 19
         && PIO_ARROW_TABLE_MATRIX_BRANCH == 20
+        && PIO_ARROW_TABLE_SOLVER_GEN_COST == 21
+        && PIO_ARROW_TABLE_SOLVER_GEN_COST_COEFF == 22
 );
 
 /// One table build or export failure as its errbuf line. Arrow's own error
@@ -124,6 +130,12 @@ pub fn export(
         }
         PIO_ARROW_TABLE_SOLVER_HVDC => {
             solver_hvdc_batch(&solver_tables(net)?).map_err(export_err)?
+        }
+        PIO_ARROW_TABLE_SOLVER_GEN_COST => {
+            solver_gen_cost_batch(&solver_tables(net)?).map_err(|e| e.to_string())?
+        }
+        PIO_ARROW_TABLE_SOLVER_GEN_COST_COEFF => {
+            solver_gen_cost_coeff_batch(&solver_tables(net)?).map_err(|e| e.to_string())?
         }
         PIO_ARROW_TABLE_YBUS => matrix_ybus_batch(net, core)?,
         PIO_ARROW_TABLE_INCIDENCE => matrix_incidence_batch(net, core)?,
@@ -219,6 +231,7 @@ fn catalog_value() -> serde_json::Value {
                 ("base_kv", "float64"), ("vmax", "float64"), ("vmin", "float64"),
                 ("pd", "float64"), ("qd", "float64"), ("gs", "float64"),
                 ("bs", "float64"), ("component_label", "int64"), ("is_reference", "uint8"),
+                ("area", "int64"), ("zone", "int64"),
             ]),
             table_spec(PIO_ARROW_TABLE_SOLVER_LOAD, "solver_load", "record_batch", &["arrow"], true, Some("solver_load"), None, units_solver(), &[
                 ("index", "int64"), ("source_row", "int64"), ("bus_index", "int64"),
@@ -290,6 +303,14 @@ fn catalog_value() -> serde_json::Value {
                 ("index", "int64"), ("source_row", "int64"), ("from_bus_id", "int64"),
                 ("to_bus_id", "int64"),
             ]),
+            table_spec(PIO_ARROW_TABLE_SOLVER_GEN_COST, "solver_gen_cost", "record_batch", &["arrow"], true, Some("solver_gen"), None, units_cost(), &[
+                ("index", "int64"), ("model", "int64"), ("startup", "float64"),
+                ("shutdown", "float64"), ("ncost", "int64"), ("coeff_count", "int64"),
+                ("coeff_offset", "int64"),
+            ]),
+            table_spec(PIO_ARROW_TABLE_SOLVER_GEN_COST_COEFF, "solver_gen_cost_coeff", "coeff_list", &["arrow"], true, Some("solver_gen_cost_coeff"), None, units_cost(), &[
+                ("gen_index", "int64"), ("position", "int64"), ("value", "float64"),
+            ]),
         ]
     })
 }
@@ -311,6 +332,16 @@ fn units_solver() -> serde_json::Value {
         "impedance": "per_unit",
         "admittance": "per_unit",
         "index_base": "zero"
+    })
+}
+
+fn units_cost() -> serde_json::Value {
+    serde_json::json!({
+        "power": "per_unit",
+        "index_base": "zero",
+        "cost_rate": "currency_per_hour",
+        "cost_basis": "per_unit_power",
+        "startup_shutdown": "currency_per_event"
     })
 }
 
@@ -553,6 +584,8 @@ fn solver_bus_batch(t: &NormalizedSolverTables) -> Result<RecordBatch, ArrowErro
                 .map(|x| u8::from(t.index.reference_bus_indices.contains(&x.index)))
                 .collect()),
         ),
+        ("area", i64s(t.buses.iter().map(|x| usz(x.area)).collect())),
+        ("zone", i64s(t.buses.iter().map(|x| usz(x.zone)).collect())),
     ])
 }
 
@@ -773,6 +806,93 @@ fn solver_gen_batch(t: &NormalizedSolverTables) -> Result<RecordBatch, ArrowErro
             ),
         ),
     ])
+}
+
+/// The two generator cost tables lowered together: a dense header row per
+/// solver generator and the flattened coefficient rows it slices into. One walk
+/// builds both, so an offset can never name a slice that was not emitted.
+#[derive(Default)]
+struct GenCostRows {
+    index: Vec<i64>,
+    model: Vec<i64>,
+    startup: Vec<f64>,
+    shutdown: Vec<f64>,
+    ncost: Vec<i64>,
+    coeff_count: Vec<i64>,
+    coeff_offset: Vec<i64>,
+    coeff_gen_index: Vec<i64>,
+    coeff_position: Vec<i64>,
+    coeff_value: Vec<f64>,
+}
+
+fn gen_cost_rows(t: &NormalizedSolverTables) -> GenCostRows {
+    let mut rows = GenCostRows::default();
+    for generator in &t.generators {
+        let index = usz(generator.index);
+        rows.index.push(index);
+        let Some(cost) = generator.cost.as_ref() else {
+            // No cost row: model 0 is the absent sentinel, and -1 the empty slice.
+            rows.model.push(0);
+            rows.startup.push(0.0);
+            rows.shutdown.push(0.0);
+            rows.ncost.push(0);
+            rows.coeff_count.push(0);
+            rows.coeff_offset.push(-1);
+            continue;
+        };
+        rows.model.push(i64::from(cost.model));
+        rows.startup.push(cost.startup);
+        rows.shutdown.push(cost.shutdown);
+        rows.ncost.push(usz(cost.ncost));
+        rows.coeff_count.push(usz(cost.coeffs.len()));
+        rows.coeff_offset.push(if cost.coeffs.is_empty() {
+            -1
+        } else {
+            usz(rows.coeff_value.len())
+        });
+        for (position, &value) in cost.coeffs.iter().enumerate() {
+            rows.coeff_gen_index.push(index);
+            rows.coeff_position.push(usz(position));
+            rows.coeff_value.push(value);
+        }
+    }
+    rows
+}
+
+fn solver_gen_cost_batch(t: &NormalizedSolverTables) -> Result<RecordBatch, ArrowError> {
+    let rows = gen_cost_rows(t);
+    batch_with_metadata(
+        vec![
+            ("index", i64s(rows.index)),
+            ("model", i64s(rows.model)),
+            ("startup", f64s(rows.startup)),
+            ("shutdown", f64s(rows.shutdown)),
+            ("ncost", i64s(rows.ncost)),
+            ("coeff_count", i64s(rows.coeff_count)),
+            ("coeff_offset", i64s(rows.coeff_offset)),
+        ],
+        cost_metadata("solver_gen_cost", "record_batch", "solver_gen", t.base_mva),
+    )
+}
+
+fn solver_gen_cost_coeff_batch(t: &NormalizedSolverTables) -> Result<RecordBatch, ArrowError> {
+    let rows = gen_cost_rows(t);
+    let mut metadata = cost_metadata(
+        "solver_gen_cost_coeff",
+        "coeff_list",
+        "solver_gen_cost_coeff",
+        t.base_mva,
+    );
+    metadata.insert("powerio.group_axis".to_owned(), "solver_gen".to_owned());
+    metadata.insert("powerio.group_column".to_owned(), "gen_index".to_owned());
+    batch_with_metadata(
+        vec![
+            ("gen_index", i64s(rows.coeff_gen_index)),
+            ("position", i64s(rows.coeff_position)),
+            ("value", f64s(rows.coeff_value)),
+        ],
+        metadata,
+    )
 }
 
 fn solver_storage_batch(t: &NormalizedSolverTables) -> Result<RecordBatch, ArrowError> {
@@ -1207,6 +1327,24 @@ fn batch_with_metadata(
         Arc::new(Schema::new_with_metadata(fields, metadata)),
         arrays,
     )
+}
+
+/// Schema metadata for the generator cost tables. `base_mva` rides along so a
+/// consumer converts currency per hour per per unit power to currency per MWh
+/// without a second call.
+fn cost_metadata(
+    table: &str,
+    format: &str,
+    row_axis: &str,
+    base_mva: f64,
+) -> HashMap<String, String> {
+    HashMap::from([
+        ("powerio.table".to_owned(), table.to_owned()),
+        ("powerio.version".to_owned(), powerio::VERSION.to_owned()),
+        ("powerio.format".to_owned(), format.to_owned()),
+        ("powerio.row_axis".to_owned(), row_axis.to_owned()),
+        ("powerio.base_mva".to_owned(), base_mva.to_string()),
+    ])
 }
 
 #[cfg(feature = "matrix")]
@@ -1697,6 +1835,8 @@ mod tests {
         assert_eq!(PIO_ARROW_TABLE_BDOUBLEPRIME, 18);
         assert_eq!(PIO_ARROW_TABLE_MATRIX_BUS, 19);
         assert_eq!(PIO_ARROW_TABLE_MATRIX_BRANCH, 20);
+        assert_eq!(PIO_ARROW_TABLE_SOLVER_GEN_COST, 21);
+        assert_eq!(PIO_ARROW_TABLE_SOLVER_GEN_COST_COEFF, 22);
     }
 
     #[test]
@@ -1735,6 +1875,354 @@ mod tests {
         assert_eq!(axis["id"], PIO_ARROW_TABLE_MATRIX_BUS);
         assert_eq!(axis["format"], "axis_map");
         assert_eq!(axis["columns"][1]["name"], "bus_id");
+
+        let cost = find("solver_gen_cost");
+        assert_eq!(cost["id"], PIO_ARROW_TABLE_SOLVER_GEN_COST);
+        assert_eq!(cost["format"], "record_batch");
+        assert_eq!(cost["row_axis"], "solver_gen");
+        assert_eq!(cost["col_axis"], serde_json::Value::Null);
+        assert_eq!(cost["feature_requirements"], serde_json::json!(["arrow"]));
+        assert_eq!(cost["available"], true);
+        assert_eq!(cost["units"]["cost_rate"], "currency_per_hour");
+        assert_eq!(cost["units"]["cost_basis"], "per_unit_power");
+        let names: Vec<&str> = cost["columns"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|c| c["name"].as_str().unwrap())
+            .collect();
+        assert_eq!(
+            names,
+            [
+                "index",
+                "model",
+                "startup",
+                "shutdown",
+                "ncost",
+                "coeff_count",
+                "coeff_offset"
+            ]
+        );
+
+        let coeff = find("solver_gen_cost_coeff");
+        assert_eq!(coeff["id"], PIO_ARROW_TABLE_SOLVER_GEN_COST_COEFF);
+        assert_eq!(coeff["format"], "coeff_list");
+        assert_eq!(coeff["row_axis"], "solver_gen_cost_coeff");
+        assert_eq!(coeff["columns"][0]["name"], "gen_index");
+        assert_eq!(coeff["columns"][2]["name"], "value");
+        assert_eq!(coeff["columns"][2]["nullable"], false);
+
+        // solver_bus grew area and zone at the end; the frozen prefix stays put.
+        let solver_bus = find("solver_bus");
+        assert_eq!(solver_bus["columns"][0]["name"], "index");
+        assert_eq!(solver_bus["columns"][14]["name"], "is_reference");
+        assert_eq!(solver_bus["columns"][15]["name"], "area");
+        assert_eq!(solver_bus["columns"][16]["name"], "zone");
+    }
+
+    fn gen_cost_net() -> BalancedNetwork {
+        use powerio::{Branch, Bus, BusId, BusType, GenCost, Generator};
+
+        let mut net = BalancedNetwork::in_memory(
+            "gen-cost",
+            100.0,
+            vec![
+                Bus::new(BusId(1), BusType::Ref, 230.0),
+                Bus::new(BusId(2), BusType::Pv, 230.0),
+            ],
+            vec![Branch::new(BusId(1), BusId(2), 0.01, 0.1)],
+        );
+        // A generator with no cost row, one whose declared count outruns the
+        // coefficients it carries, and one with a model powerio does not read.
+        let mut plain = Generator::new(BusId(1));
+        plain.pmax = 100.0;
+        let mut short = Generator::new(BusId(2));
+        short.pmax = 100.0;
+        short.cost = Some(GenCost::with_ncost(2, 10.0, 20.0, 3, vec![1.0]));
+        let mut unknown = Generator::new(BusId(2));
+        unknown.pmax = 100.0;
+        unknown.cost = Some(GenCost::with_ncost(7, 0.0, 0.0, 2, vec![3.0, 4.0]));
+        net.generators = vec![plain, short, unknown];
+        net
+    }
+
+    fn gen_cost_tables(n: &BalancedNetwork) -> (StructArray, StructArray) {
+        (
+            round_trip(n, PIO_ARROW_TABLE_SOLVER_GEN_COST),
+            round_trip(n, PIO_ARROW_TABLE_SOLVER_GEN_COST_COEFF),
+        )
+    }
+
+    /// Every documented structural rule of the pair: one header row per solver
+    /// generator in `solver_gen` order, monotone offsets, and slices that
+    /// partition the coefficient table with no row left over.
+    fn assert_gen_cost_slices_partition(n: &BalancedNetwork) {
+        let gens = round_trip(n, PIO_ARROW_TABLE_SOLVER_GEN);
+        let (header, coeff) = gen_cost_tables(n);
+        assert_eq!(header.len(), gens.len());
+        assert_eq!(
+            i64_col(&header, "index").values(),
+            i64_col(&gens, "index").values()
+        );
+
+        let counts = i64_col(&header, "coeff_count");
+        let offsets = i64_col(&header, "coeff_offset");
+        let gen_index = i64_col(&coeff, "gen_index");
+        let position = i64_col(&coeff, "position");
+        let mut covered = 0usize;
+        let mut previous = -1i64;
+        for row in 0..header.len() {
+            let count = counts.value(row);
+            let offset = offsets.value(row);
+            assert!(count >= 0);
+            if count == 0 {
+                assert_eq!(offset, -1, "empty slice must carry the -1 sentinel");
+                continue;
+            }
+            assert!(offset >= previous, "offsets must be nondecreasing");
+            assert_eq!(offset, i64::try_from(covered).unwrap(), "slices are packed");
+            previous = offset;
+            let index = i64_col(&header, "index").value(row);
+            for k in 0..count {
+                let at = usize::try_from(offset + k).unwrap();
+                assert_eq!(gen_index.value(at), index);
+                assert_eq!(position.value(at), k);
+            }
+            covered += usize::try_from(count).unwrap();
+        }
+        assert_eq!(covered, coeff.len(), "slices cover the coefficient table");
+    }
+
+    #[test]
+    fn gen_cost_tables_round_trip_and_partition() {
+        for case_file in ["case9.m", "case30.m", "t_case9_dcline.m"] {
+            assert_gen_cost_slices_partition(&net(case_file));
+        }
+        assert_gen_cost_slices_partition(&gen_cost_net());
+    }
+
+    #[test]
+    fn gen_cost_polynomial_coefficients_are_per_unit() {
+        // case9 generator 0: model 2, startup 1500, coeffs [0.11, 5, 150] on a
+        // 100 MVA base, so position i scales by base^(2-i).
+        let n = net("case9.m");
+        let (header, coeff) = gen_cost_tables(&n);
+        assert_eq!(i64_col(&header, "model").value(0), 2);
+        assert_eq!(f64_col(&header, "startup").value(0), 1500.0);
+        assert_eq!(f64_col(&header, "shutdown").value(0), 0.0);
+        assert_eq!(i64_col(&header, "ncost").value(0), 3);
+        assert_eq!(i64_col(&header, "coeff_count").value(0), 3);
+        assert_eq!(i64_col(&header, "coeff_offset").value(0), 0);
+        let values = f64_col(&coeff, "value");
+        assert!((values.value(0) - 0.11 * 100.0 * 100.0).abs() < 1e-9);
+        assert!((values.value(1) - 5.0 * 100.0).abs() < 1e-9);
+        assert!((values.value(2) - 150.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn gen_cost_piecewise_breakpoints_are_per_unit() {
+        // t_case9_dcline mixes a four breakpoint curve, a three breakpoint curve
+        // whose row is padded to the matrix width, and a two term polynomial.
+        let n = net("t_case9_dcline.m");
+        let (header, coeff) = gen_cost_tables(&n);
+        assert_eq!(i64_col(&header, "model").value(0), 1);
+        assert_eq!(i64_col(&header, "ncost").value(0), 4);
+        assert_eq!(i64_col(&header, "coeff_count").value(0), 8);
+        assert_eq!(i64_col(&header, "model").value(1), 1);
+        assert_eq!(i64_col(&header, "ncost").value(1), 3);
+        // The MATPOWER padding is stripped before the curve is stored.
+        assert_eq!(i64_col(&header, "coeff_count").value(1), 6);
+        assert_eq!(i64_col(&header, "coeff_offset").value(1), 8);
+        assert_eq!(i64_col(&header, "model").value(2), 2);
+        assert_eq!(i64_col(&header, "coeff_count").value(2), 2);
+
+        let values = f64_col(&coeff, "value");
+        // Even positions are MW breakpoints divided by the base, odd positions
+        // are currency per hour and stay.
+        assert!((values.value(2) - 1.0).abs() < 1e-9);
+        assert!((values.value(3) - 2500.0).abs() < 1e-9);
+        assert!((values.value(6) - 2.5).abs() < 1e-9);
+        assert!((values.value(7) - 7250.0).abs() < 1e-9);
+        // The polynomial on the third generator still scales by base^(k-1-i).
+        let offset = usize::try_from(i64_col(&header, "coeff_offset").value(2)).unwrap();
+        assert!((values.value(offset) - 24.035 * 100.0).abs() < 1e-6);
+        assert!((values.value(offset + 1) + 403.5).abs() < 1e-9);
+    }
+
+    #[test]
+    fn gen_cost_reports_absent_divergent_and_unknown_rows() {
+        let n = gen_cost_net();
+        let (header, coeff) = gen_cost_tables(&n);
+        assert_eq!(header.len(), 3);
+
+        // No cost row at all.
+        assert_eq!(i64_col(&header, "model").value(0), 0);
+        assert_eq!(i64_col(&header, "ncost").value(0), 0);
+        assert_eq!(i64_col(&header, "coeff_count").value(0), 0);
+        assert_eq!(i64_col(&header, "coeff_offset").value(0), -1);
+        assert_eq!(f64_col(&header, "startup").value(0), 0.0);
+
+        // A declared count the stored slice cannot back stays visible as the
+        // disagreement it is, rather than being repaired or dropped.
+        assert_eq!(i64_col(&header, "ncost").value(1), 3);
+        assert_eq!(i64_col(&header, "coeff_count").value(1), 1);
+        assert_eq!(i64_col(&header, "coeff_offset").value(1), 0);
+        assert_eq!(f64_col(&header, "startup").value(1), 10.0);
+        assert_eq!(f64_col(&header, "shutdown").value(1), 20.0);
+
+        // An unrecognized model byte passes through, values unscaled.
+        assert_eq!(i64_col(&header, "model").value(2), 7);
+        assert_eq!(i64_col(&header, "coeff_count").value(2), 2);
+        let values = f64_col(&coeff, "value");
+        assert_eq!(values.value(1), 3.0);
+        assert_eq!(values.value(2), 4.0);
+        assert_eq!(coeff.len(), 3);
+    }
+
+    #[test]
+    fn gen_cost_tables_carry_schema_metadata() {
+        let n = net("case9.m");
+        let tables = n.to_normalized_solver_tables().unwrap();
+        let header = solver_gen_cost_batch(&tables).unwrap();
+        let schema = header.schema();
+        let metadata = schema.metadata();
+        assert_eq!(metadata.get("powerio.table").unwrap(), "solver_gen_cost");
+        assert_eq!(metadata.get("powerio.version").unwrap(), powerio::VERSION);
+        assert_eq!(metadata.get("powerio.format").unwrap(), "record_batch");
+        assert_eq!(metadata.get("powerio.row_axis").unwrap(), "solver_gen");
+        assert_eq!(metadata.get("powerio.base_mva").unwrap(), "100");
+
+        let coeff = solver_gen_cost_coeff_batch(&tables).unwrap();
+        let schema = coeff.schema();
+        let metadata = schema.metadata();
+        assert_eq!(metadata.get("powerio.format").unwrap(), "coeff_list");
+        assert_eq!(
+            metadata.get("powerio.row_axis").unwrap(),
+            "solver_gen_cost_coeff"
+        );
+        assert_eq!(metadata.get("powerio.group_axis").unwrap(), "solver_gen");
+        assert_eq!(metadata.get("powerio.group_column").unwrap(), "gen_index");
+
+        // The metadata survives the C Data Interface, as the matrix tables' does.
+        let core = IndexCore::build(&n);
+        let (_array, schema) = export(&n, &core, PIO_ARROW_TABLE_SOLVER_GEN_COST).unwrap();
+        let imported = Schema::try_from(&schema).unwrap();
+        assert_eq!(
+            imported.metadata().get("powerio.table").unwrap(),
+            "solver_gen_cost"
+        );
+    }
+
+    #[test]
+    fn solver_bus_exports_area_and_zone() {
+        let n = net("case30.m");
+        let tables = n.to_normalized_solver_tables().unwrap();
+        let sa = round_trip(&n, PIO_ARROW_TABLE_SOLVER_BUS);
+        let expected: Vec<i64> = tables.buses.iter().map(|b| usz(b.area)).collect();
+        assert_eq!(i64_col(&sa, "area").values(), expected.as_slice());
+        let expected: Vec<i64> = tables.buses.iter().map(|b| usz(b.zone)).collect();
+        assert_eq!(i64_col(&sa, "zone").values(), expected.as_slice());
+        // The appended columns sit after the frozen prefix.
+        let names: Vec<&str> = sa
+            .fields()
+            .iter()
+            .map(|f| f.name().as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(names[names.len() - 2..], ["area", "zone"]);
+        assert_eq!(names[0], "index");
+        assert_eq!(names[14], "is_reference");
+    }
+
+    fn gen_cost_golden_json(case_file: &str) -> serde_json::Value {
+        let n = net(case_file);
+        let tables = n.to_normalized_solver_tables().unwrap();
+        let header = solver_gen_cost_batch(&tables).unwrap();
+        let coeff = solver_gen_cost_coeff_batch(&tables).unwrap();
+        // The version stamp is the crate version; pinning it here would make a
+        // patch release rewrite a fixture whose cost values did not move.
+        let metadata = |rb: &RecordBatch| {
+            let schema = rb.schema();
+            let mut map = serde_json::Map::new();
+            for (key, value) in schema.metadata() {
+                let value = if key == "powerio.version" {
+                    "<version>".to_owned()
+                } else {
+                    value.clone()
+                };
+                map.insert(key.clone(), serde_json::Value::String(value));
+            }
+            serde_json::Value::Object(map)
+        };
+        let i64_json = |rb: &RecordBatch, name: &str| {
+            serde_json::json!(
+                rb.column_by_name(name)
+                    .unwrap()
+                    .as_any()
+                    .downcast_ref::<Int64Array>()
+                    .unwrap()
+                    .values()
+                    .to_vec()
+            )
+        };
+        let f64_json = |rb: &RecordBatch, name: &str| {
+            serde_json::json!(
+                rb.column_by_name(name)
+                    .unwrap()
+                    .as_any()
+                    .downcast_ref::<Float64Array>()
+                    .unwrap()
+                    .values()
+                    .to_vec()
+            )
+        };
+        serde_json::json!({
+            "case": case_file,
+            "solver_gen_cost": {
+                "metadata": metadata(&header),
+                "index": i64_json(&header, "index"),
+                "model": i64_json(&header, "model"),
+                "startup": f64_json(&header, "startup"),
+                "shutdown": f64_json(&header, "shutdown"),
+                "ncost": i64_json(&header, "ncost"),
+                "coeff_count": i64_json(&header, "coeff_count"),
+                "coeff_offset": i64_json(&header, "coeff_offset"),
+            },
+            "solver_gen_cost_coeff": {
+                "metadata": metadata(&coeff),
+                "gen_index": i64_json(&coeff, "gen_index"),
+                "position": i64_json(&coeff, "position"),
+                "value": f64_json(&coeff, "value"),
+            },
+        })
+    }
+
+    const GEN_COST_GOLDEN_CASES: [&str; 2] = ["case9.m", "t_case9_dcline.m"];
+
+    fn gen_cost_golden_dir() -> std::path::PathBuf {
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../tests/data/capi_arrow")
+    }
+
+    #[test]
+    fn gen_cost_arrow_golden_fixtures_match() {
+        let dir = gen_cost_golden_dir();
+        for case_file in GEN_COST_GOLDEN_CASES {
+            let fixture = dir.join(case_file.replace(".m", "_gen_cost.json"));
+            let expected: serde_json::Value =
+                serde_json::from_str(&std::fs::read_to_string(&fixture).unwrap()).unwrap();
+            assert_eq!(gen_cost_golden_json(case_file), expected, "{case_file}");
+        }
+    }
+
+    #[ignore = "rewrites committed generator cost Arrow fixtures"]
+    #[test]
+    fn rewrite_gen_cost_arrow_golden_fixtures() {
+        let dir = gen_cost_golden_dir();
+        std::fs::create_dir_all(&dir).unwrap();
+        for case_file in GEN_COST_GOLDEN_CASES {
+            let fixture = dir.join(case_file.replace(".m", "_gen_cost.json"));
+            let text = serde_json::to_string_pretty(&gen_cost_golden_json(case_file)).unwrap();
+            std::fs::write(fixture, format!("{text}\n")).unwrap();
+        }
     }
 
     #[cfg(not(feature = "matrix"))]
