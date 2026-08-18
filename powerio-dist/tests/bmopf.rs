@@ -3246,3 +3246,293 @@ fn consumer_extras_are_not_read_as_schema_fields() {
         net.parse_diagnostics
     );
 }
+
+// ----- regulator subtypes (BMOPFTools schema extension) -------------------
+
+#[test]
+fn dss_single_phase_regulator_emits_the_autotransformer_subtype() {
+    let v = schema_validator();
+    let net = parse_dss_str(
+        "Clear\n\
+         New Circuit.regcase basekv=2.4 bus1=650.1.2.3\n\
+         New Transformer.vreg phases=1 windings=2 buses=(650.1 rg60.1) \
+         kvs=(2.4 2.4) kvas=(1666 1666) xhl=0.01 %loadloss=0.01 taps=(1.0 1.05)\n\
+         New RegControl.cvreg transformer=vreg winding=2 vreg=122 band=2 ptratio=20",
+    );
+    let t = &net.transformers[0];
+    assert_eq!(
+        t.extras.get("bmopf_subtype"),
+        Some(&serde_json::json!("single_phase_autotransformer"))
+    );
+
+    let out = write_bmopf_json(&net);
+    assert_eq!(errors(&v, &out.text), Vec::<String>::new());
+    let doc: serde_json::Value = serde_json::from_str(&out.text).unwrap();
+    let reg = &doc["transformer"]["single_phase_autotransformer"]["vreg"];
+    assert_eq!(reg["bus_from"], "650");
+    assert_eq!(reg["bus_to"], "rg60");
+    assert_eq!(reg["s_rating"], serde_json::json!(1_666_000.0));
+    // %loadloss 0.01 splits into 0.005% per winding on zb = 2400^2/1666000.
+    let zb = 2400.0 * 2400.0 / 1_666_000.0;
+    assert!((reg["r_series_from"].as_f64().unwrap() - 0.005 / 100.0 * zb).abs() < 1e-15);
+    assert!((reg["x_series_from"].as_f64().unwrap() - 0.01 / 100.0 * zb).abs() < 1e-15);
+    assert_eq!(reg["x_series_to"], serde_json::json!(0.0));
+    assert_eq!(reg["tap_ratio"], serde_json::json!(1.05));
+    // The subtype has no voltage fields; the ratio is tap_ratio alone.
+    assert!(reg.get("v_nom_from").is_none(), "{reg}");
+    assert!(reg.get("v_nom_to").is_none(), "{reg}");
+
+    // The classification marker is converter bookkeeping; the dss echo
+    // neither prints it nor warns about it.
+    let dss_out = write_dss(&net);
+    assert!(!dss_out.text.contains("bmopf_subtype"), "{}", dss_out.text);
+    assert!(
+        dss_out
+            .warnings
+            .iter()
+            .all(|w| !w.contains("bmopf_subtype")),
+        "{:?}",
+        dss_out.warnings
+    );
+}
+
+#[test]
+fn dss_open_delta_regulator_pair_merges_into_one_object() {
+    let v = schema_validator();
+    let net = parse_dss_str(
+        "Clear\n\
+         New Circuit.odcase basekv=4.16 bus1=busa.1.2.3\n\
+         New Transformer.rega phases=1 windings=2 buses=(busa.1.2 busb.1.2) \
+         kvs=(4.16 4.16) kvas=(1000 1000) xhl=1 %loadloss=0.2 taps=(1.0 1.03)\n\
+         New RegControl.crega transformer=rega winding=2 vreg=120 band=2 ptratio=34.7\n\
+         New Transformer.regb phases=1 windings=2 buses=(busa.2.3 busb.2.3) \
+         kvs=(4.16 4.16) kvas=(1000 1000) xhl=1 %loadloss=0.2 taps=(1.0 1.06)\n\
+         New RegControl.cregb transformer=regb winding=2 vreg=120 band=2 ptratio=34.7",
+    );
+    for t in &net.transformers {
+        assert_eq!(
+            t.extras.get("bmopf_subtype"),
+            Some(&serde_json::json!("open_delta_regulator")),
+            "{}",
+            t.name
+        );
+    }
+
+    let out = write_bmopf_json(&net);
+    assert_eq!(errors(&v, &out.text), Vec::<String>::new());
+    let doc: serde_json::Value = serde_json::from_str(&out.text).unwrap();
+    let table = doc["transformer"]["open_delta_regulator"]
+        .as_object()
+        .unwrap();
+    assert_eq!(table.keys().collect::<Vec<_>>(), ["rega"]);
+    let reg = &table["rega"];
+    assert_eq!(reg["connection"], "ABBC");
+    assert_eq!(reg["bus_from"], "busa");
+    assert_eq!(reg["bus_to"], "busb");
+    assert_eq!(reg["terminal_map_from"], serde_json::json!(["1", "2", "3"]));
+    assert_eq!(reg["terminal_map_to"], serde_json::json!(["1", "2", "3"]));
+    assert_eq!(reg["tap_ratio"], serde_json::json!([1.03, 1.06]));
+    let zb = 4160.0 * 4160.0 / 1_000_000.0;
+    assert!((reg["r_series_from"].as_f64().unwrap() - 0.1 / 100.0 * zb).abs() < 1e-12);
+    assert!((reg["x_series_from"].as_f64().unwrap() - 1.0 / 100.0 * zb).abs() < 1e-12);
+    let merge = diagnostic(
+        &out,
+        "EMIT.BMOPF.TRANSFORMER_OPEN_DELTA_MERGED",
+        "transformer rega",
+    );
+    assert_eq!(merge.details["merged_leg"], serde_json::json!("regb"));
+
+    // The emitted document reads back untyped and re-emits byte identical.
+    let again = parse_bmopf_str(&out.text).unwrap();
+    let twice = write_bmopf_json(&again);
+    assert_eq!(out.text, twice.text);
+}
+
+#[test]
+fn unregulated_and_mismatched_transformers_keep_their_subtype() {
+    // No regcontrol: a plain two winding unit stays single_phase.
+    let plain = parse_dss_str(
+        "Clear\n\
+         New Circuit.plaincase basekv=2.4 bus1=650.1.2.3\n\
+         New Transformer.t1 phases=1 windings=2 buses=(650.1 651.1) \
+         kvs=(2.4 2.4) kvas=(100 100) xhl=2",
+    );
+    assert!(!plain.transformers[0].extras.contains_key("bmopf_subtype"));
+    let doc: serde_json::Value = serde_json::from_str(&write_bmopf_json(&plain).text).unwrap();
+    assert!(doc["transformer"]["single_phase"].get("t1").is_some());
+    assert!(
+        doc["transformer"]
+            .get("single_phase_autotransformer")
+            .is_none()
+    );
+
+    // A regcontrol on a voltage changing transformer is an LTC, and its
+    // winding voltages rule the series regulator reading out.
+    let ltc = parse_dss_str(
+        "Clear\n\
+         New Circuit.ltccase basekv=2.4 bus1=650.1.2.3\n\
+         New Transformer.t2 phases=1 windings=2 buses=(650.1 lv.1) \
+         kvs=(2.4 0.24) kvas=(100 100) xhl=2\n\
+         New RegControl.ct2 transformer=t2 winding=2 vreg=122 band=2 ptratio=20",
+    );
+    assert!(!ltc.transformers[0].extras.contains_key("bmopf_subtype"));
+    let doc: serde_json::Value = serde_json::from_str(&write_bmopf_json(&ltc).text).unwrap();
+    assert!(doc["transformer"]["single_phase"].get("t2").is_some());
+}
+
+#[test]
+fn open_delta_legs_with_different_impedance_stay_single_units() {
+    let net = parse_dss_str(
+        "Clear\n\
+         New Circuit.odcase basekv=4.16 bus1=busa.1.2.3\n\
+         New Transformer.rega phases=1 windings=2 buses=(busa.1.2 busb.1.2) \
+         kvs=(4.16 4.16) kvas=(1000 1000) xhl=1\n\
+         New RegControl.crega transformer=rega winding=2 vreg=120 band=2 ptratio=34.7\n\
+         New Transformer.regb phases=1 windings=2 buses=(busa.2.3 busb.2.3) \
+         kvs=(4.16 4.16) kvas=(1000 1000) xhl=2\n\
+         New RegControl.cregb transformer=regb winding=2 vreg=120 band=2 ptratio=34.7",
+    );
+    for t in &net.transformers {
+        assert_eq!(
+            t.extras.get("bmopf_subtype"),
+            Some(&serde_json::json!("single_phase_autotransformer")),
+            "{}",
+            t.name
+        );
+    }
+    let doc: serde_json::Value = serde_json::from_str(&write_bmopf_json(&net).text).unwrap();
+    let table = doc["transformer"]["single_phase_autotransformer"]
+        .as_object()
+        .unwrap();
+    assert_eq!(table.len(), 2);
+    assert!(doc["transformer"].get("open_delta_regulator").is_none());
+}
+
+#[test]
+fn open_delta_leg_without_its_partner_falls_back_to_a_single_unit() {
+    let mut net = parse_dss_str(
+        "Clear\n\
+         New Circuit.odcase basekv=4.16 bus1=busa.1.2.3\n\
+         New Transformer.rega phases=1 windings=2 buses=(busa.1.2 busb.1.2) \
+         kvs=(4.16 4.16) kvas=(1000 1000) xhl=1\n\
+         New RegControl.crega transformer=rega winding=2 vreg=120 band=2 ptratio=34.7\n\
+         New Transformer.regb phases=1 windings=2 buses=(busa.2.3 busb.2.3) \
+         kvs=(4.16 4.16) kvas=(1000 1000) xhl=1\n\
+         New RegControl.cregb transformer=regb winding=2 vreg=120 band=2 ptratio=34.7",
+    );
+    net.transformers.retain(|t| t.name == "rega");
+    let out = write_bmopf_json(&net);
+    let doc: serde_json::Value = serde_json::from_str(&out.text).unwrap();
+    assert!(
+        doc["transformer"]["single_phase_autotransformer"]
+            .get("rega")
+            .is_some()
+    );
+    assert!(doc["transformer"].get("open_delta_regulator").is_none());
+    assert!(
+        out.warnings
+            .iter()
+            .any(|w| w.contains("rega") && w.contains("no matching partner")),
+        "{:?}",
+        out.warnings
+    );
+}
+
+#[test]
+fn bmopf_regulator_subtypes_round_trip_verbatim() {
+    let v = schema_validator();
+    let text = r#"{
+        "bus": {
+            "b1": {"terminal_names": ["1", "2", "3", "n"], "perfectly_grounded_terminals": ["n"]},
+            "b2": {"terminal_names": ["1", "2", "3", "n"], "perfectly_grounded_terminals": ["n"]}
+        },
+        "voltage_source": {"src": {"bus": "b1", "terminal_map": ["1", "n"],
+            "v_magnitude": [2400.0], "v_angle": [0.0]}},
+        "transformer": {
+            "single_phase_autotransformer": {
+                "svr": {
+                    "bus_from": "b1", "bus_to": "b2",
+                    "terminal_map_from": ["1", "n"], "terminal_map_to": ["1", "n"],
+                    "s_rating": 1666000.0,
+                    "r_series_from": 0.001, "x_series_from": 0.002,
+                    "r_series_to": 0.001, "x_series_to": 0.0,
+                    "g_no_load": 0.0001, "b_no_load": -0.0002,
+                    "tap_ratio": 1.05, "tap_ratio_min": 0.9, "tap_ratio_max": 1.1,
+                    "regulator_type": "B",
+                    "i_max_from": [668.0], "i_max_to": [668.0]
+                }
+            },
+            "open_delta_regulator": {
+                "odr": {
+                    "bus_from": "b1", "bus_to": "b2",
+                    "terminal_map_from": ["1", "2", "3"], "terminal_map_to": ["1", "2", "3"],
+                    "s_rating": 1000000.0,
+                    "r_series_from": 0.01, "x_series_from": 0.02,
+                    "connection": "BCAC",
+                    "tap_ratio": [1.03, 1.06],
+                    "regulator_type": "A"
+                }
+            }
+        }
+    }"#;
+    let net = parse_bmopf_str(text).unwrap();
+    assert!(
+        net.untyped
+            .iter()
+            .any(|u| u.class == "transformer.single_phase_autotransformer" && u.name == "svr")
+    );
+    assert!(
+        net.untyped
+            .iter()
+            .any(|u| u.class == "transformer.open_delta_regulator" && u.name == "odr")
+    );
+
+    let out = write_bmopf_json(&net);
+    assert_eq!(errors(&v, &out.text), Vec::<String>::new());
+    let source: serde_json::Value = serde_json::from_str(text).unwrap();
+    let doc: serde_json::Value = serde_json::from_str(&out.text).unwrap();
+    assert_eq!(
+        doc["transformer"]["single_phase_autotransformer"]["svr"],
+        source["transformer"]["single_phase_autotransformer"]["svr"]
+    );
+    assert_eq!(
+        doc["transformer"]["open_delta_regulator"]["odr"],
+        source["transformer"]["open_delta_regulator"]["odr"]
+    );
+    let again = parse_bmopf_str(&out.text).unwrap();
+    let twice = write_bmopf_json(&again);
+    assert_eq!(out.text, twice.text);
+}
+
+#[test]
+fn a_fixed_tap_open_delta_bank_emits_two_single_phase_units() {
+    // Two 1 phase Delta/Delta legs across A-B and B-C between one bus pair: a
+    // fixed tap open delta bank with no RegControl. Each leg is a line to
+    // line unit the single_phase shape holds; through 0.9.0 the [Delta,
+    // Delta] pairing had no classify arm and both legs dropped silently.
+    let net = parse_dss_str(
+        "Clear\n\
+         New Circuit.odb basekv=12.47 bus1=sourcebus.1.2.3\n\
+         New Transformer.leg_ab phases=1 windings=2 buses=(sourcebus.1.2, loadbus.1.2) \
+         conns=(delta delta) kvs=(12.47 12.47) kvas=(100 100) xhl=1\n\
+         New Transformer.leg_bc phases=1 windings=2 buses=(sourcebus.2.3, loadbus.2.3) \
+         conns=(delta delta) kvs=(12.47 12.47) kvas=(100 100) xhl=1\n",
+    );
+    assert_eq!(net.transformers.len(), 2, "{:?}", net.transformers);
+
+    let out = write_bmopf_json(&net);
+    assert!(
+        !out.warnings
+            .iter()
+            .any(|w| w.contains("EMIT.BMOPF.TRANSFORMER_UNSUPPORTED")),
+        "the bank must not drop: {:?}",
+        out.warnings
+    );
+    let doc: serde_json::Value = serde_json::from_str(&out.text).unwrap();
+    let single_phase = &doc["transformer"]["single_phase"];
+    assert!(
+        single_phase.get("leg_ab").is_some() && single_phase.get("leg_bc").is_some(),
+        "both legs emit as single_phase: {}",
+        doc["transformer"]
+    );
+}

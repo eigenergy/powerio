@@ -19,7 +19,8 @@ use crate::model::{
     ActivePowerReference, ActivePowerUnit, Configuration, ControlVoltageReference,
     DistControlProfile, DistGenerator, DistIbr, DistLoadVoltageModel, DistTransformer, Extras, Mat,
     MulticonductorNetwork, ReactivePowerReference, ReactivePowerUnit, VoltVarControl,
-    VoltWattControl, VoltageSource, Winding, WindingConn, n_winding_impedance_base, pair_keys,
+    VoltWattControl, VoltageSource, Winding, WindingConn, n_winding_impedance_base,
+    open_delta_connection, open_delta_pairable, pair_keys, winding_phase_pair,
 };
 
 /// The `$id` of the BMOPF schema this writer targets, and the value it
@@ -1214,7 +1215,11 @@ impl Writer {
                 .expect("subtype maps are objects")
                 .insert(name, v);
         };
+        let merged = self.open_delta_pairs(net, &mut by_subtype);
         for t in &net.transformers {
+            if merged.contains(&t.name) {
+                continue;
+            }
             self.warn_nonuniform_per_phase_taps(t);
             match classify(t) {
                 Kind::SinglePhase => {
@@ -1252,6 +1257,21 @@ impl Writer {
                     let v = self.two_winding(t, &t.windings[0], &t.windings[1], 1.0, true, true);
                     insert(sub, t.name.clone(), v, &mut by_subtype);
                 }
+                kind @ (Kind::Autotransformer | Kind::OpenDeltaLeg) => {
+                    // A lone Kind::OpenDeltaLeg is a leg whose partner is
+                    // missing or no longer identical: still a single phase
+                    // autotransformer on its own.
+                    if matches!(kind, Kind::OpenDeltaLeg) {
+                        self.warn_unpaired_open_delta_leg(t);
+                    }
+                    let v = self.autotransformer(t);
+                    insert(
+                        "single_phase_autotransformer",
+                        t.name.clone(),
+                        v,
+                        &mut by_subtype,
+                    );
+                }
                 Kind::CenterTap => {
                     let v = self.center_tap(t);
                     insert("center_tap", t.name.clone(), v, &mut by_subtype);
@@ -1282,7 +1302,7 @@ impl Writer {
                         t,
                         &C::EMIT_BMOPF_TRANSFORMER_UNSUPPORTED,
                         format!(
-                            "transformer {}: {why}; not representable in the four BMOPF \
+                            "transformer {}: {why}; not representable in the BMOPF transformer \
                              subtypes, dropped from the output",
                             t.name
                         ),
@@ -1355,6 +1375,199 @@ impl Writer {
                     .insert(name.clone(), Value::Object(overflow));
             }
         }
+    }
+
+    fn warn_unpaired_open_delta_leg(&mut self, t: &DistTransformer) {
+        self.transformer_diagnostic(
+            t,
+            &C::EMIT_BMOPF_VALUE_SUBSTITUTED,
+            format!(
+                "transformer {}: open delta leg has no matching partner leg; \
+                 emitted as single_phase_autotransformer",
+                t.name
+            ),
+            Map::new(),
+        );
+    }
+
+    /// Merges classified open delta leg pairs into single
+    /// `open_delta_regulator` objects and returns the merged transformer
+    /// names. Legs are paired by shared bus pair; the pair must spell one of
+    /// the three connections and stay electrically identical, else each leg
+    /// falls back to `single_phase_autotransformer` in the main loop.
+    fn open_delta_pairs(
+        &mut self,
+        net: &MulticonductorNetwork,
+        by_subtype: &mut Map<String, Value>,
+    ) -> BTreeSet<String> {
+        let mut merged = BTreeSet::new();
+        let mut groups: BTreeMap<(String, String), Vec<&DistTransformer>> = BTreeMap::new();
+        for t in &net.transformers {
+            if !matches!(classify(t), Kind::OpenDeltaLeg) {
+                continue;
+            }
+            let key = (
+                t.windings[0].bus.to_ascii_lowercase(),
+                t.windings[1].bus.to_ascii_lowercase(),
+            );
+            groups.entry(key).or_default().push(t);
+        }
+        for legs in groups.into_values() {
+            let [a, b] = legs[..] else { continue };
+            let pair = |t: &DistTransformer| winding_phase_pair(&t.windings[0]);
+            let (Some(pa), Some(pb)) = (pair(a), pair(b)) else {
+                continue;
+            };
+            let Some((connection, swapped)) = open_delta_connection(pa, pb) else {
+                continue;
+            };
+            if !open_delta_pairable(a, b) {
+                continue;
+            }
+            let (first, second) = if swapped { (b, a) } else { (a, b) };
+            self.warn_nonuniform_per_phase_taps(first);
+            self.warn_nonuniform_per_phase_taps(second);
+            let mut details = Map::new();
+            details.insert("merged_leg".into(), json!(&second.name));
+            details.insert("connection".into(), json!(connection));
+            self.transformer_diagnostic(
+                first,
+                &C::EMIT_BMOPF_TRANSFORMER_OPEN_DELTA_MERGED,
+                format!(
+                    "transformer {}: legs {} and {} emitted as one open_delta_regulator \
+                     `{}` (connection {connection})",
+                    first.name, first.name, second.name, first.name
+                ),
+                details,
+            );
+            let v = self.open_delta_regulator(first, second, connection);
+            by_subtype
+                .entry("open_delta_regulator".to_string())
+                .or_insert_with(|| Value::Object(Map::new()))
+                .as_object_mut()
+                .expect("subtype maps are objects")
+                .insert(first.name.clone(), v);
+            merged.insert(first.name.clone());
+            merged.insert(second.name.clone());
+        }
+        merged
+    }
+
+    /// The `single_phase_autotransformer` shape of the BMOPFTools schema
+    /// extension: a step voltage regulator as series plus common winding.
+    /// No `v_nom` fields; the ratio is `tap_ratio` (regulated over source).
+    fn autotransformer(&mut self, t: &DistTransformer) -> Value {
+        let from = &t.windings[0];
+        let to = &t.windings[1];
+        let mut o = self.regulator_fields(t, from, to);
+        o.insert("terminal_map_from".into(), json!(from.terminal_map));
+        o.insert("terminal_map_to".into(), json!(to.terminal_map));
+        if let Some(ratio) = self.regulator_tap_ratio(t, from, to)
+            && (ratio - 1.0).abs() > 1e-12
+        {
+            o.insert("tap_ratio".into(), self.num(ratio, "transformer tap_ratio"));
+        }
+        self.warn_unrepresented_neutral_fields(t, "single_phase_autotransformer");
+        self.transformer_extras_dropped(t, &TRANSFORMER_TWO_WINDING_ALLOWED_EXTRAS);
+        o.into()
+    }
+
+    /// The `open_delta_regulator` shape of the BMOPFTools schema extension:
+    /// two identical line to line regulating legs stated once, with the
+    /// phase pairing carried by `connection` and per leg `tap_ratio` entries.
+    fn open_delta_regulator(
+        &mut self,
+        first: &DistTransformer,
+        second: &DistTransformer,
+        connection: &'static str,
+    ) -> Value {
+        let from = &first.windings[0];
+        let to = &first.windings[1];
+        let mut o = self.regulator_fields(first, from, to);
+        // The pairing check pins the legs to phases {1, 2, 3}; the object
+        // spans the whole phase set on both sides.
+        o.insert("terminal_map_from".into(), json!(["1", "2", "3"]));
+        o.insert("terminal_map_to".into(), json!(["1", "2", "3"]));
+        o.insert("connection".into(), json!(connection));
+        let a1 = self.regulator_tap_ratio(first, from, to);
+        let a2 = self.regulator_tap_ratio(second, &second.windings[0], &second.windings[1]);
+        if let (Some(a1), Some(a2)) = (a1, a2)
+            && ((a1 - 1.0).abs() > 1e-12 || (a2 - 1.0).abs() > 1e-12)
+        {
+            o.insert(
+                "tap_ratio".into(),
+                self.nums(&[a1, a2], "transformer tap_ratio"),
+            );
+        }
+        for t in [first, second] {
+            self.warn_unrepresented_neutral_fields(t, "open_delta_regulator");
+            self.transformer_extras_dropped(t, &TRANSFORMER_TWO_WINDING_ALLOWED_EXTRAS);
+        }
+        o.into()
+    }
+
+    /// The fields the two regulator subtypes share: buses, rating, and the
+    /// series impedance in referred ohms, leakage on the from side.
+    fn regulator_fields(
+        &mut self,
+        t: &DistTransformer,
+        from: &Winding,
+        to: &Winding,
+    ) -> Map<String, Value> {
+        let s = from.s_rating;
+        let zb_from = base_impedance(from.v_ref, s);
+        let zb_to = base_impedance(to.v_ref, s);
+        let mut o = Map::new();
+        o.insert("bus_from".into(), json!(from.bus));
+        o.insert("bus_to".into(), json!(to.bus));
+        o.insert("s_rating".into(), self.num(s, "transformer s_rating"));
+        self.referred_ohms(&mut o, "r_series_from", from.r_pct, zb_from, t, "from");
+        self.referred_ohms(&mut o, "r_series_to", to.r_pct, zb_to, t, "to");
+        if t.xsc_pct.is_empty() {
+            self.transformer_diagnostic(
+                t,
+                &C::EMIT_BMOPF_TRANSFORMER_MISSING_XSC,
+                format!(
+                    "transformer {}: xsc_pct is empty; emitted x_series_from=0",
+                    t.name
+                ),
+                Map::new(),
+            );
+        }
+        let xhl = t.xsc_pct.first().copied().unwrap_or(0.0);
+        self.referred_ohms(&mut o, "x_series_from", xhl, zb_from, t, "from");
+        o.insert("x_series_to".into(), json!(0.0));
+        self.transformer_no_load_fields(&mut o, t, from, s);
+        o
+    }
+
+    /// The regulation ratio (regulated over source): the to side tap over
+    /// the from side tap. `None` (with a warning) when the taps cannot form
+    /// a nonnegative finite ratio.
+    fn regulator_tap_ratio(
+        &mut self,
+        t: &DistTransformer,
+        from: &Winding,
+        to: &Winding,
+    ) -> Option<f64> {
+        let ratio = to.tap / from.tap;
+        if ratio.is_finite() && ratio >= 0.0 {
+            return Some(ratio);
+        }
+        let mut details = Map::new();
+        details.insert("from_tap".into(), json!(from.tap));
+        details.insert("to_tap".into(), json!(to.tap));
+        self.transformer_diagnostic(
+            t,
+            &C::EMIT_BMOPF_TRANSFORMER_TAP_DROPPED,
+            format!(
+                "transformer {}: taps ({}, {}) cannot form a nonnegative finite \
+                 BMOPF tap_ratio; dropped",
+                t.name, from.tap, to.tap
+            ),
+            details,
+        );
+        None
     }
 
     /// Shared single_phase / center_tap shape. `to_scale` rescales the to
@@ -2461,6 +2674,13 @@ enum Kind {
     /// Two windings already in the shared single_phase/center_tap shape,
     /// emitted under the named subtype.
     SinglePhaseShape(&'static str),
+    /// A dss classified step voltage regulator, emitted under the
+    /// `single_phase_autotransformer` subtype of the BMOPFTools schema
+    /// extension.
+    Autotransformer,
+    /// One line to line leg of a dss classified open delta regulator bank;
+    /// two legs merge into one `open_delta_regulator` object.
+    OpenDeltaLeg,
     CenterTap,
     WyeDelta,
     DeltaWye,
@@ -2481,6 +2701,8 @@ fn classify(t: &DistTransformer) -> Kind {
                 "center_tap" => return Kind::SinglePhaseShape("center_tap"),
                 "wye_delta" => return Kind::WyeDelta,
                 "delta_wye" => return Kind::DeltaWye,
+                "single_phase_autotransformer" => return Kind::Autotransformer,
+                "open_delta_regulator" => return Kind::OpenDeltaLeg,
                 _ => {}
             }
         }
@@ -2490,16 +2712,19 @@ fn classify(t: &DistTransformer) -> Kind {
     }
     let conns: Vec<WindingConn> = t.windings.iter().map(|w| w.conn).collect();
     match (t.phases, conns.as_slice()) {
-        // single_phase covers the plain 1-phase wye-wye unit and both open
-        // wye / open delta leg orientations (one delta winding wired line to
-        // line). The single_phase shape holds the delta side: it carries two
-        // phase terminals, no conn discriminator, and its line to line v_ref
-        // makes the per winding impedance base v^2/s already right. The
-        // pattern reads as the three pairs wye-wye, delta-wye, wye-delta.
+        // single_phase covers the plain 1-phase unit in every conn pairing:
+        // a delta winding here is one wired line to line (an open wye or
+        // open delta leg, or both legs of a fixed tap open delta bank). The
+        // single_phase shape holds it: two phase terminals, no conn
+        // discriminator, and the line to line v_ref makes the per winding
+        // impedance base v^2/s already right — which reads the same for one
+        // delta winding or two.
         (
             1,
-            [WindingConn::Wye | WindingConn::Delta, WindingConn::Wye]
-            | [WindingConn::Wye, WindingConn::Delta],
+            [
+                WindingConn::Wye | WindingConn::Delta,
+                WindingConn::Wye | WindingConn::Delta,
+            ],
         ) => Kind::SinglePhase,
         (1, [WindingConn::Wye, WindingConn::Wye, WindingConn::Wye]) => Kind::CenterTap,
         (3, [WindingConn::Wye, WindingConn::Delta]) => Kind::WyeDelta,

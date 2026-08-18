@@ -1205,6 +1205,55 @@ pub(crate) fn n_winding_impedance_base(phases: usize, v_nom: f64, s: f64) -> Opt
         .then_some(phases * v_nom * v_nom / s)
 }
 
+/// The two phase conductors of a line to line regulating winding: exactly
+/// two terminals, both named 1..=3, distinct, in terminal map order.
+pub(crate) fn winding_phase_pair(winding: &Winding) -> Option<(u8, u8)> {
+    let [first, second] = winding.terminal_map.as_slice() else {
+        return None;
+    };
+    let phase = |term: &String| term.parse::<u8>().ok().filter(|n| (1..=3).contains(n));
+    match (phase(first), phase(second)) {
+        (Some(lead), Some(lag)) if lead != lag => Some((lead, lag)),
+        _ => None,
+    }
+}
+
+/// The GridLAB-D open delta connection two ordered line to line phase pairs
+/// spell (the naming the BMOPFTools schema extension uses), and whether the
+/// legs arrived in the swapped order. Any other orientation is `None`.
+pub(crate) fn open_delta_connection(a: (u8, u8), b: (u8, u8)) -> Option<(&'static str, bool)> {
+    match (a, b) {
+        ((1, 2), (2, 3)) => Some(("ABBC", false)),
+        ((2, 3), (1, 2)) => Some(("ABBC", true)),
+        ((2, 3), (1, 3)) => Some(("BCAC", false)),
+        ((1, 3), (2, 3)) => Some(("BCAC", true)),
+        ((3, 1), (2, 1)) => Some(("CABA", false)),
+        ((2, 1), (3, 1)) => Some(("CABA", true)),
+        _ => None,
+    }
+}
+
+/// Whether two single phase regulator legs are electrically identical, so
+/// one BMOPF `open_delta_regulator` object (which states one per regulator
+/// impedance and rating) can carry both without collapsing anything.
+pub(crate) fn open_delta_pairable(a: &DistTransformer, b: &DistTransformer) -> bool {
+    let ([a0, a1], [b0, b1]) = (a.windings.as_slice(), b.windings.as_slice()) else {
+        return false;
+    };
+    let eq = |x: f64, y: f64| x.to_bits() == y.to_bits();
+    eq(a0.v_ref, b0.v_ref)
+        && eq(a1.v_ref, b1.v_ref)
+        && eq(a0.s_rating, b0.s_rating)
+        && eq(a1.s_rating, b1.s_rating)
+        && eq(a0.r_pct, b0.r_pct)
+        && eq(a1.r_pct, b1.r_pct)
+        && a.xsc_pct.len() == b.xsc_pct.len()
+        && a.xsc_pct.iter().zip(&b.xsc_pct).all(|(x, y)| eq(*x, *y))
+        && ["%noloadloss", "%imag", "g_no_load", "b_no_load"]
+            .iter()
+            .all(|k| a.extras.get(*k) == b.extras.get(*k))
+}
+
 /// Upper triangular `(i, j)` winding index pairs for `n` windings, the order
 /// short circuit test pairs (`x_sc`/`xsc_pct`) are keyed by.
 pub(crate) fn pair_keys(n: usize) -> Vec<(usize, usize)> {
