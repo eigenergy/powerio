@@ -2039,6 +2039,7 @@ dependencies = [
  "powerio-pkg",
  "powerio-prob",
  "ratatui",
+ "schemars",
  "serde",
  "serde_json",
  "sprs",

@@ -230,6 +230,27 @@ fn an_extras_key_is_learned_like_any_other_name() {
     assert_eq!(sanitizer.template(".loads[#].p"), ".loads[#].p");
 }
 
+/// A corpus string spelled like a powerio field name is vocabulary, so the
+/// field stays reportable. Before #340 the vocabulary held only what the
+/// reference network populated, and a finding about `charging.g_fr` read
+/// `charging.<name>` the day a corpus taught the same spelling.
+#[test]
+fn a_field_name_the_corpus_also_spells_stays_reportable() {
+    let mut sanitizer = anonymize::Sanitizer::new();
+    sanitizer.learn_network(&serde_json::json!({
+        "branches": [{ "extras": { "g_fr": 1.0, "band_min": 2.0 } }]
+    }));
+    assert_eq!(
+        sanitizer.template(".branches[#].charging.g_fr"),
+        ".branches[#].charging.g_fr"
+    );
+    assert!(
+        sanitizer
+            .audit(".transformers[#].bands[#].band_min")
+            .is_ok()
+    );
+}
+
 /// A corpus may hold a symlink whose name sits under the root and whose target
 /// does not. The walk does not descend symlinked directories, but it still
 /// hands over symlinked files, and reading one reads its target.
