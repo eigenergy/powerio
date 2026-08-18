@@ -133,8 +133,8 @@ struct Metadata {
     extra: ExtraFields,
 }
 
-// These transparent row types make the documented feature widths part of the
-// serde contract while keeping column meaning out of the mapping code's magic
+// These transparent row types make the documented feature widths part of what
+// serde enforces, while keeping column meaning out of the mapping code's magic
 // indices. A row with too few or too many values fails deserialization.
 #[derive(Debug, Deserialize)]
 #[serde(transparent)]

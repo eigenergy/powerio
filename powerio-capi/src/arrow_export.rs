@@ -3,7 +3,7 @@
 //! Builds the parsed [`BalancedNetwork`] element tables (bus/branch/gen/load/shunt) as
 //! Arrow record batches and lends them across the C ABI zero-copy via
 //! [`arrow::ffi::to_ffi`]. This is the in-memory, self-describing sibling of
-//! the `powerio-json` snapshot and the `pio_branches`-style numeric
+//! bare model JSON and the `pio_branches`-style numeric
 //! extractors: any Arrow consumer (pyarrow, Arrow.jl, Arrow C++, polars, DuckDB)
 //! can pull a whole table without a copy or a temp file. The schema is the
 //! ABI's evolution valve: richer columns arrive here, never as new C

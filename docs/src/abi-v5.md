@@ -1,6 +1,6 @@
 # Migrating to C ABI 5
 
-ABI 5 ships with powerio 0.9.0. It touches seventeen symbols and renames none, so a binding written against ABI 4 keeps compiling except at the seven signatures below. That is the danger: most of this migration is behavior and JSON shape, which the compiler cannot find for you.
+ABI 5 ships with powerio 0.9.0. It touches twenty-two symbols and renames none, so a binding written against ABI 4 keeps compiling except at the nine signatures below. That is the danger: most of this migration is behavior and JSON shape, which the compiler cannot find for you.
 
 `PIO_ABI_VERSION` is 5. Bindings gate on equality, so a binding built against 4 refuses a 0.9.0 library and a binding built against 5 refuses everything earlier. There is no partial compatibility to arrange.
 
@@ -23,6 +23,8 @@ ABI 5 ships with powerio 0.9.0. It touches seventeen symbols and renames none, s
 | `pio_n_branches` | behavior: same |
 | `pio_branches` | behavior: same |
 | `pio_branch_charging` | behavior: same |
+| `pio_classify_str` | behavior: answers `model-json` for a bare model JSON document |
+| `pio_parse_str` | behavior: the `powerio-json` token is gone |
 | `pio_acopf_from_network` | removed |
 | `pio_acopf_to_json` | removed |
 | `pio_acopf_instance_free` | removed |
@@ -128,6 +130,12 @@ Split at the first `": "`. The left side is `NAMESPACE.SCOPE.SPECIFIC` and conta
 
 A published code keeps its identity forever. It may be retired, which stops it being emitted and never reassigns it, and a family may be refined by adding narrower codes beside it. A default severity may move in a minor release, so a consumer that needs a fixed policy pins by code.
 
+## The `powerio-json` token, and what classification answers instead
+
+`pio_parse_str` and `pio_to_format` accepted `powerio-json`, `powerio` and `json` for bare balanced model JSON. ABI 5 removes all three. Model JSON is powerio's own document rather than a case format, and `pio_to_json` and `pio_from_json` have carried it since ABI 4, so the token routed one thing through two entry points and made powerio look like the author of a case format it never wrote. A call passing any of the three now fails with `REQUEST.FORMAT.UNKNOWN`; the bare `json` alias goes with them, so a caller that wrote `"json"` meaning "let it sniff" must name a format or use `pio_parse_file`.
+
+`pio_classify_str` answers `model-json` for such a document, where ABI 4 answered `transmission:powerio-json`. The label's family — everything up to the first `:` — is one of a closed six: `transmission`, `distribution`, `package`, `model-json`, `ambiguous`, `unknown`. Spellings are permanent, a family is never removed or redefined, and a new one is an addition with a changelog line, so a file picker that dispatches on the family keeps working. `pio_build_info` reports the same set under `json_classes`, which is where to read it rather than hardcoding it.
+
 ## The star-lowered space
 
 A case with an in-service 3-winding transformer lowers before the dense extractors run, adding one star bus and three branches per transformer. Through ABI 4 the bus and branch tables reported the unexpanded case file while `pio_bus_demand`, `pio_bus_shunt` and `pio_n_islands` reported the expansion. A per-bus buffer sized from `pio_n_buses` read short, its trailing entries had no id, and a matrix built from the pair left the star point isolated.
@@ -157,7 +165,7 @@ PioNetwork *pio_parse_bytes(const uint8_t *bytes, size_t len, const char *format
                             char *errbuf, size_t errlen);
 ```
 
-`pio_build_info` returns one owned JSON document, shaped after `curl_version_info`, holding `powerio_version`, `abi`, `features` (`arrow`, `matrix`, `gridfm`, `dist`, `pkg`, `prob`), `foreign_schemas` (`bmopf`), `diagnostic_namespaces` and `error_categories`. The last two are the ones worth binding early: a caller that wants to branch on the kind of failure reads the code every message leads with, and these two report the sets a code decodes into.
+`pio_build_info` returns one owned JSON document, shaped after `curl_version_info`, holding `powerio_version`, `abi`, `features` (`arrow`, `matrix`, `gridfm`, `dist`, `pkg`, `prob`), `foreign_schemas` (`bmopf`), `diagnostic_namespaces`, `error_categories` and `json_classes`. The last two are the ones worth binding early: a caller that wants to branch on the kind of failure reads the code every message leads with, and these two report the sets a code decodes into.
 
 `pio_parse_bytes` accepts every format name `pio_parse_str` takes plus `pwb`. PowerWorld binary has no text form and a NUL truncates it, so before this the only route to one was `pio_parse_file`, and a consumer holding an upload or an archive member had to stage a temporary file. It opens nothing, which is a security property rather than a convenience: it is the entry point for input you do not control, and it is why the 0.7.3 advisory fix works.
 
@@ -205,4 +213,4 @@ The star-lowered space required no binding edit at all, which is the point worth
 
 ## What did not change
 
-Arrow table ids and column order. The format tokens, which are strings and were never symbols. The opaque handle design. The panic guard on every entry point. `errbuf` and `errlen` last. `pio_abi_version`, `pio_version` and `pio_has_feature`.
+Arrow table ids and column order. Every case format token except the three retired above. The opaque handle design. The panic guard on every entry point. `errbuf` and `errlen` last. `pio_abi_version`, `pio_version` and `pio_has_feature`.

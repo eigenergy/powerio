@@ -7,7 +7,7 @@ The advertised MCP surface is semantic and format neutral:
 
 The tools route balanced transmission models, multiconductor distribution
 models, PyPSA CSV folders, and gridfm datasets through the lower level powerio
-APIs. Transmission parses serialize through the ``powerio-json`` transport.
+APIs. Transmission parses serialize through the ``model-json`` transport.
 Distribution parses serialize through canonical ``bmopf-json``. Package
 transport serializes either family through the ``.pio.json`` compiler package.
 """
@@ -43,7 +43,11 @@ _DIST_FORMATS = frozenset(
 )
 _GRIDFM_FORMATS = frozenset({"gridfm"})
 _PYPSA_FORMATS = frozenset({"pypsa", "pypsa-csv"})
-_POWERIO_JSON_FORMATS = frozenset({"powerio", "powerio-json", "json"})
+# The serial transport for a balanced model. ``powerio-json`` and its two
+# short spellings were the token this transport carried before 0.9 and stay
+# accepted here: the MCP schema is versioned with the Python package rather
+# than the C ABI, so an input alias costs nothing and spares a client.
+_MODEL_JSON_FORMATS = frozenset({"model-json", "powerio", "powerio-json", "json"})
 _BMOPF_JSON_FORMATS = frozenset({"bmopf", "bmopf-json", "bmopf_json"})
 _PACKAGE_JSON_FORMATS = frozenset(
     {"package", "pio", "pio-json", "pio_json", "pio-package", "pio_package"}
@@ -306,6 +310,8 @@ def _format_from_json_class(
             f"JSON{where} is a .pio.json package; pass it as "
             "`json_format=\"package\"` or read it with the package tools"
         )
+    if status == "model-json":
+        return "transmission", "model-json"
     if status == "ambiguous":
         raise ValueError(
             f"ambiguous JSON markers{where}; pass `from_format` or `json_format`"
@@ -321,22 +327,22 @@ def _transport_kind(text: str, json_format: Optional[str]) -> str:
     fmt = _fmt(json_format)
     if fmt in _PACKAGE_JSON_FORMATS:
         return "package"
-    if fmt in _POWERIO_JSON_FORMATS:
-        return "powerio-json"
+    if fmt in _MODEL_JSON_FORMATS:
+        return "model-json"
     if fmt in _BMOPF_JSON_FORMATS:
         return "bmopf-json"
     if fmt is not None:
         raise ValueError(
-            "`json_format` must be `package`, `powerio-json`, or `bmopf-json`, "
+            "`json_format` must be `package`, `model-json`, or `bmopf-json`, "
             f"got {json_format!r}"
         )
     domain, format = _format_from_json_class(*_json_class(text))
     if domain == "distribution":
         return format
-    if format == "powerio-json":
-        return "powerio-json"
+    if format == "model-json":
+        return "model-json"
     raise ValueError(
-        "`json` transport must be `powerio-json` or `bmopf-json`; "
+        "`json` transport must be `model-json` or `bmopf-json`; "
         "pass case JSON as `content` with `from_format`"
     )
 
@@ -446,7 +452,7 @@ def _load_package(package_json: str) -> _Loaded:
             "transmission",
             net,
             _package_diagnostic_messages(value),
-            "powerio-json",
+            "model-json",
             package_json=package_json,
         )
     except powerio.PowerIOError as exc:
@@ -514,7 +520,7 @@ def _parse_transmission(
                 "transmission",
                 result.network,
                 list(result.warnings),
-                "powerio-json",
+                "model-json",
                 int(result.scenario),
             )
         if path is not None:
@@ -531,7 +537,7 @@ def _parse_transmission(
         raise ValueError(str(exc)) from exc
     except OSError as exc:
         raise ValueError(f"cannot read input: {exc}") from exc
-    return _Loaded("transmission", net, list(net.read_warnings), "powerio-json")
+    return _Loaded("transmission", net, list(net.read_warnings), "model-json")
 
 
 def _parse_distribution(
@@ -625,7 +631,7 @@ def _load_transport(text: str, json_format: Optional[str]) -> _Loaded:
         raise ValueError(f"parse failed: {exc}") from exc
     except (ValueError, KeyError, TypeError) as exc:
         raise ValueError(f"parse failed: {exc}") from exc
-    return _Loaded("transmission", net, list(net.read_warnings), "powerio-json")
+    return _Loaded("transmission", net, list(net.read_warnings), "model-json")
 
 
 def _load_any(
@@ -653,7 +659,7 @@ def _transmission_summary(net: "powerio.BalancedNetwork") -> Dict[str, Any]:
         "model": "balanced",
         "name": net.name,
         "source_format": net.source_format,
-        "json_format": "powerio-json",
+        "json_format": "model-json",
         "base_mva": net.base_mva,
         "elements": {
             "buses": net.n_buses,
@@ -988,14 +994,14 @@ def _normalize_impl(
         norm = loaded.network.to_normalized()
     except powerio.PowerIOError as exc:
         raise ValueError(f"normalization failed: {exc}") from exc
-    normalized = _Loaded("transmission", norm, list(norm.read_warnings), "powerio-json")
+    normalized = _Loaded("transmission", norm, list(norm.read_warnings), "model-json")
     summary = _summary(normalized)
     return {
         **_header("powerio.normalize"),
         "domain": "transmission",
         "model": "balanced",
         "source_format": summary["source_format"],
-        "json_format": "powerio-json",
+        "json_format": "model-json",
         "json": norm.to_json(),
         "summary": summary,
         "warnings": list(norm.read_warnings),

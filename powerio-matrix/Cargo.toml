@@ -17,7 +17,7 @@ categories = ["science", "mathematics"]
 all-features = true
 
 [features]
-# GridFM interchange: write the gridfm-datakit Parquet schema (and the shared
+# GridFM output: write the gridfm-datakit Parquet schema (and the shared
 # Arrow record batches behind it). Pulls in arrow + parquet, off by default.
 gridfm = ["dep:arrow", "dep:parquet"]
 

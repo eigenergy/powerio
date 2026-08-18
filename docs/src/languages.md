@@ -33,7 +33,7 @@ Verb taxonomy:
 | Text conversion | `convert_str(text, to, format)` | `convert_str(text, to, format)` | `convert_str(text, to; from=format)` | `pio_convert_str` |
 | Parsed conversion | `net.to_format(to)` | `net.to_format(to)` | `to_format(net, to)` | `pio_to_format` |
 | MATPOWER text | `net.to_matpower()` | `net.to_matpower()` | `to_matpower(net)` | `pio_to_format` + `"matpower"` |
-| JSON text | `net.to_json()` | `net.to_json()` | `to_json(net)` | `pio_to_format` + `"powerio-json"` |
+| JSON text | `net.to_json()` | `net.to_json()` | `to_json(net)` | `pio_to_json` |
 | `.pio.json` document JSON | `NetworkPackage::to_json()` | `Package` class / package transport | `to_package` / `write_package` | `pio_package_*` |
 | `.pio.json` operating points | `pkg.operating_points()` | `pkg.operating_points()` | — | `pio_package_operating_points_json` |
 | Materialize operating point | `pkg.materialize_operating_point(i)` | `pkg.materialize_operating_point(i)` | — | `pio_package_materialize_operating_point` |
@@ -48,8 +48,8 @@ Verb taxonomy:
 | PYPOWER ppc dict | — | `net.to_ppc()` / `from_ppc(ppc)` | — | — |
 | Arrow handoff | internal/C ABI | — | `to_arrow` | `pio_to_arrow` |
 
-**Note:** the C ABI carries no per-format symbols: matpower, `powerio-json`,
-PyPSA CSV directories, and gridfm datasets are all format strings into
+**Note:** the C ABI carries no per-format symbols: matpower, PyPSA CSV
+directories, and gridfm datasets are all format strings into
 `pio_to_format` / `pio_parse_str` / `pio_write_dir` / `pio_read_dir`. Removing
 or changing a documented format token is a C behavior change even though the C
 signature stays the same. The language APIs keep their per-format conveniences
@@ -79,8 +79,8 @@ C ABI review points:
 
 Julia's `PowerIO.jl` uses the C ABI for handles, dense extractors, Arrow,
 GridFM, PyPSA CSV folders, distribution conversion, and `.pio.json` document
-construction. Programmatic whole-network JSON remains available through
-`powerio-json`; file handoffs should use `.pio.json`. The Julia binding checks
+construction. Programmatic whole-network JSON is `to_json` and `from_json` (`pio_to_json`
+and `pio_from_json` in C); file handoffs should use `.pio.json`. The Julia binding checks
 `pio_abi_version()` against `PIO_ABI_VERSION` on first use. Distribution calls
 also check `pio_dist_abi_version()`.
 

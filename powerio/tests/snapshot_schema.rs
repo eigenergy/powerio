@@ -1,7 +1,7 @@
-//! Schema lock for the `powerio-json` snapshot.
+//! Schema lock for the balanced model JSON document.
 //!
 //! The C ABI and the Julia bridge ride on this transport, and `PIO_ABI_VERSION`
-//! ties the snapshot schema to the ABI version (`powerio-capi/include/powerio.h`).
+//! ties the model JSON schema to the ABI version (`powerio-capi/include/powerio.h`).
 //! So an accidental serde rename, retype, or removed default is a forced C ABI
 //! break, not a quiet change. These tests pin three things:
 //!   1. a committed v4-vintage snapshot keeps parsing under the current `from_json`
@@ -19,11 +19,11 @@ use powerio::{
     GeoMeta, Location, SourceFormat,
 };
 
-/// A v4-vintage snapshot, written by `powerio convert case30.m --to powerio-json`.
+/// A v4-vintage document, written by `BalancedNetwork::to_json` on case30.
 /// Regenerate ONLY on a deliberate schema change, and then bump `PIO_ABI_VERSION`.
 fn golden_v4() -> String {
     let path =
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("../tests/data/powerio-json/case30_v4.json");
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../tests/data/model-json/case30_v4.json");
     std::fs::read_to_string(&path).expect("the committed v4 golden snapshot must exist")
 }
 

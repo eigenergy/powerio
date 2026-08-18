@@ -68,7 +68,7 @@ pub use psse::{parse_psse, write_psse, write_psse_rev};
 pub use pypsa::{PypsaCsvOutputs, read_pypsa_csv_folder, write_pypsa_csv_folder};
 pub use surge::{parse_surge_json, write_surge_json};
 
-/// A target interchange format. See [`write_as`].
+/// A target case format. See [`write_as`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum TargetFormat {
@@ -86,10 +86,6 @@ pub enum TargetFormat {
     PandapowerJson,
     /// MATPOWER `.m` (round-trip; byte-exact when the case kept its source).
     Matpower,
-    /// Compatibility alias for [`BalancedNetwork::to_json`] and [`BalancedNetwork::from_json`].
-    /// New code should call those methods directly.
-    #[doc(hidden)]
-    PowerioJson,
     /// GE PSLF `.epc` (round-trip; byte-exact when the case kept its source).
     Pslf,
     /// ARPA-E GO Challenge 3 JSON input data. This is read only except for
@@ -110,7 +106,6 @@ impl TargetFormat {
             TargetFormat::PowerModelsJson
             | TargetFormat::EgretJson
             | TargetFormat::PandapowerJson
-            | TargetFormat::PowerioJson
             | TargetFormat::Goc3Json
             | TargetFormat::SurgeJson
             | TargetFormat::DeepMindOpfDataJson => "json",
@@ -131,7 +126,6 @@ impl TargetFormat {
             TargetFormat::PowerWorld => "PowerWorld .aux",
             TargetFormat::PandapowerJson => "pandapower JSON",
             TargetFormat::Matpower => "MATPOWER .m",
-            TargetFormat::PowerioJson => "PowerIO JSON",
             TargetFormat::Pslf => "PSLF .epc",
             TargetFormat::Goc3Json => "GO Challenge 3 JSON",
             TargetFormat::SurgeJson => "Surge JSON",
@@ -151,7 +145,6 @@ impl TargetFormat {
             TargetFormat::PowerWorld => "powerworld",
             TargetFormat::PandapowerJson => "pandapower-json",
             TargetFormat::Matpower => "matpower",
-            TargetFormat::PowerioJson => "powerio-json",
             TargetFormat::Pslf => "pslf",
             TargetFormat::Goc3Json => "goc3-json",
             TargetFormat::SurgeJson => "surge-json",
@@ -246,9 +239,7 @@ pub fn display_format_from_name(name: &str) -> Option<DisplayFormat> {
 /// if unrecognized. Accepts `matpower`/`m`, `powermodels-json`/`powermodels`/`pm`,
 /// `egret-json`/`egret`, `pandapower-json`/`pandapower`/`pp`, `psse`/`raw`,
 /// `powerworld`/`aux`, `pslf`/`epc`, `goc3-json`/`goc3`, and
-/// `surge-json`/`surge`, and `opfdata-json`/`opfdata`/`gridopt`. The
-/// `powerio-json`/`powerio`/`json` names remain
-/// compatibility aliases for the model JSON methods.
+/// `surge-json`/`surge`, and `opfdata-json`/`opfdata`/`gridopt`.
 /// Case-insensitive. The one place the bindings (Python, C ABI) share, so a new
 /// text format means one new arm here, not three. PyPSA CSV folders, GridFM
 /// datasets, and PowerWorld `.pwb` are directory or read only inputs with no
@@ -269,7 +260,6 @@ pub fn target_format_from_name(name: &str) -> Option<TargetFormat> {
         TransmissionFormat::Psse35 => TargetFormat::Psse { rev: 35 },
         TransmissionFormat::PowerWorld => TargetFormat::PowerWorld,
         TransmissionFormat::PandapowerJson => TargetFormat::PandapowerJson,
-        TransmissionFormat::PowerioJson => TargetFormat::PowerioJson,
         TransmissionFormat::Pslf => TargetFormat::Pslf,
         TransmissionFormat::Goc3Json => TargetFormat::Goc3Json,
         TransmissionFormat::SurgeJson => TargetFormat::SurgeJson,
@@ -418,12 +408,11 @@ fn is_pslf_name(name: &str) -> bool {
 /// `.json` file is classified by top level shape markers: pandapower
 /// (`"_class": "pandapowerNet"`), egret (`elements` and `system`), GO Challenge
 /// 3 (`network` plus `time_series_input`/`reliability`), Surge JSON
-/// (`format: "surge-json"`), OPFData (`grid`, `solution`, and `metadata`),
-/// powerio-json (`buses` plus network keys), and PowerModels JSON (`baseMVA`,
-/// `branch`, `gen`, or `gencost`). JSON matching
-/// distribution markers, ambiguous markers, or no known markers returns
-/// [`Error::UnknownFormat`]. Pass `from` to force a
-/// transmission format. PowerWorld `.pwb` is a binary read only format with no
+/// (`format: "surge-json"`), OPFData (`grid`, `solution`, and `metadata`), and
+/// PowerModels JSON (`baseMVA`, `branch`, `gen`, or `gencost`). JSON matching
+/// model JSON markers (`buses` plus a network key), distribution markers,
+/// ambiguous markers, or no known markers returns [`Error::UnknownFormat`].
+/// Pass `from` to force a transmission format. PowerWorld `.pwb` is a binary read only format with no
 /// retained source; PSLF `.epc` is text and has a writer. Returns [`Parsed`]:
 /// the network plus the reader's fidelity warnings.
 ///
@@ -566,9 +555,6 @@ fn read_source(source: Arc<String>, fmt: TargetFormat, name_hint: Option<&str>) 
         TargetFormat::PandapowerJson => {
             pandapower::parse_pandapower_source(source, name_hint, &mut warnings)
         }
-        // The canonical snapshot: validated deserialization of the model itself.
-        // It carries its own name and source_format, so the hint doesn't apply.
-        TargetFormat::PowerioJson => BalancedNetwork::from_json(&source),
         // PSLF read normally enters through the `is_pslf_name`/`.epc` fast path in
         // parse_file / parse_str; this arm keeps the funnel total.
         TargetFormat::Pslf => pslf::parse_pslf_source(source, name_hint, &mut warnings),
@@ -649,6 +635,12 @@ fn sniff_json(text: &str) -> Result<TargetFormat> {
              read_package in Julia)"
                 .into(),
         )),
+        JsonClass::ModelJson => Err(Error::UnknownFormat(
+            "JSON is bare powerio model JSON, which is not a case format; read it with \
+             BalancedNetwork::from_json (pio_from_json in C, powerio.from_json in Python, \
+             from_json in Julia)"
+                .into(),
+        )),
         JsonClass::Case(Detection::Known(DetectedFormat::Transmission(format))) => {
             transmission_json_target(format)
         }
@@ -672,7 +664,6 @@ fn transmission_json_target(format: TransmissionFormat) -> Result<TargetFormat> 
         TransmissionFormat::PowerModelsJson => Ok(TargetFormat::PowerModelsJson),
         TransmissionFormat::EgretJson => Ok(TargetFormat::EgretJson),
         TransmissionFormat::PandapowerJson => Ok(TargetFormat::PandapowerJson),
-        TransmissionFormat::PowerioJson => Ok(TargetFormat::PowerioJson),
         TransmissionFormat::Goc3Json => Ok(TargetFormat::Goc3Json),
         TransmissionFormat::SurgeJson => Ok(TargetFormat::SurgeJson),
         TransmissionFormat::DeepMindOpfDataJson => Ok(TargetFormat::DeepMindOpfDataJson),
@@ -891,12 +882,8 @@ impl WriteOptions {
 /// the retained source text; otherwise the network is serialized into the target.
 ///
 /// # Errors
-/// Only a `PowerioJson` serialization failure. A non-finite value is not an
-/// error: readers can produce
-/// `Inf` limits and the bindings materialize every network through the
-/// snapshot, so it is written as `null` with a fidelity warning naming the
-/// field: that output serves the one-way transports but does not read back
-/// (the validating reader rejects the `null`).
+/// [`Error::WriteUnsupported`] for a read only target, and the writer's own
+/// [`Error`] on a case it cannot state.
 pub fn write_as(net: &BalancedNetwork, format: TargetFormat) -> Result<Conversion> {
     if is_echo(net, format) {
         if let Some(src) = &net.source {
@@ -913,27 +900,6 @@ pub fn write_as(net: &BalancedNetwork, format: TargetFormat) -> Result<Conversio
         // the folded model, which itemizes what it can't carry (HVDC, gen caps,
         // extras, a partial-cost case).
         TargetFormat::Matpower => matpower::write_matpower_conversion(net),
-        // The snapshot serializes the model itself, so the usual target
-        // passes don't apply (warn_normalized_tap would even be FALSE here:
-        // the snapshot preserves the line/transformer labels it warns about);
-        // return before them. The one fidelity loss the snapshot can suffer
-        // is JSON's missing Inf/NaN: serde writes them as `null`, which
-        // `from_json` rejects on the way back, so warn, naming every field.
-        TargetFormat::PowerioJson => {
-            return net.to_json().map(|text| {
-                let mut diagnostics = Diagnostics::new();
-                for path in net.non_finite_fields() {
-                    diagnostics.push(
-                        &codes::EMIT_PIO_JSON.not_a_number,
-                        format!(
-                            "{path} is not finite; JSON has no Inf/NaN, so it is written as \
-                             null and this snapshot will not read back as powerio-json"
-                        ),
-                    );
-                }
-                Conversion::new(text, diagnostics)
-            });
-        }
         TargetFormat::Pslf => write_pslf(net),
         TargetFormat::SurgeJson => write_surge_json(net),
         TargetFormat::Goc3Json => {

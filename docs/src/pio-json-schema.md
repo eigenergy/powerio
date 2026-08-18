@@ -34,13 +34,12 @@ receiving consumer is PowerIO or a binding that wants provenance, diagnostics,
 operating points, and the explicit model kind. Use BMOPF, OpenDSS, PMD JSON, or
 another supported case format when the next tool expects that format.
 
-`powerio-json` is bare balanced `BalancedNetwork` JSON, without package metadata or
-source maps. Version 0.7 removes it from advertised CLI file formats. Use
-`Network::to_json` and `Network::from_json` for model JSON. The C ABI exposes
-the same operations as `pio_to_json` and `pio_from_json`.
-
-ABI v4 continues to accept `powerio-json` in `pio_parse_str` and
-`pio_to_format`. Those format tokens are compatibility aliases. Removing them requires a future C ABI version change.
+Model JSON is bare balanced `BalancedNetwork` JSON, without package metadata or
+source maps. It is powerio's own document rather than a case format, so it has
+no format token: use `Network::to_json` and `Network::from_json`, which the C
+ABI exposes as `pio_to_json` and `pio_from_json`. ABI 4 accepted a
+`powerio-json` token in `pio_parse_str` and `pio_to_format`; ABI 5 removed it.
+A bare `.json` file holding this document classifies as `model-json`.
 
 ## Versioning {#pio-package}
 

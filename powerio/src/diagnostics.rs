@@ -361,9 +361,7 @@ impl TargetFormat {
             // Neither GOC3 nor OPFData has a writer: the request is refused
             // before any family is consulted, and
             // `REQUEST.FORMAT.WRITE_UNSUPPORTED` carries it.
-            TargetFormat::PowerioJson
-            | TargetFormat::Goc3Json
-            | TargetFormat::DeepMindOpfDataJson => &codes::EMIT_PIO_JSON,
+            TargetFormat::Goc3Json | TargetFormat::DeepMindOpfDataJson => &codes::EMIT_PIO_JSON,
         }
     }
 }
