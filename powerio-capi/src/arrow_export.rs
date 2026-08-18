@@ -274,6 +274,7 @@ fn catalog_value() -> serde_json::Value {
                 ("discharge_rating", "float64"), ("thermal_rating", "float64"),
                 ("qmin", "float64"), ("qmax", "float64"), ("r", "float64"),
                 ("x", "float64"), ("p_loss", "float64"), ("q_loss", "float64"),
+                ("charge_efficiency", "float64"), ("discharge_efficiency", "float64"),
             ]),
             table_spec(PIO_ARROW_TABLE_SOLVER_HVDC, "solver_hvdc", "record_batch", &["arrow"], true, Some("solver_hvdc"), None, units_solver(), &[
                 ("index", "int64"), ("source_row", "int64"), ("from_bus_index", "int64"),
@@ -934,6 +935,14 @@ fn solver_storage_batch(t: &NormalizedSolverTables) -> Result<RecordBatch, Arrow
         ("x", f64s(t.storage.iter().map(|x| x.x).collect())),
         ("p_loss", f64s(t.storage.iter().map(|x| x.p_loss).collect())),
         ("q_loss", f64s(t.storage.iter().map(|x| x.q_loss).collect())),
+        (
+            "charge_efficiency",
+            f64s(t.storage.iter().map(|x| x.charge_efficiency).collect()),
+        ),
+        (
+            "discharge_efficiency",
+            f64s(t.storage.iter().map(|x| x.discharge_efficiency).collect()),
+        ),
     ])
 }
 
@@ -1918,6 +1927,16 @@ mod tests {
         assert_eq!(solver_bus["columns"][14]["name"], "is_reference");
         assert_eq!(solver_bus["columns"][15]["name"], "area");
         assert_eq!(solver_bus["columns"][16]["name"], "zone");
+
+        // solver_storage grew the two efficiencies at the end; same rule.
+        let solver_storage = find("solver_storage");
+        assert_eq!(solver_storage["columns"][0]["name"], "index");
+        assert_eq!(solver_storage["columns"][15]["name"], "q_loss");
+        assert_eq!(solver_storage["columns"][16]["name"], "charge_efficiency");
+        assert_eq!(
+            solver_storage["columns"][17]["name"],
+            "discharge_efficiency"
+        );
     }
 
     fn gen_cost_net() -> BalancedNetwork {
@@ -2131,6 +2150,79 @@ mod tests {
         assert_eq!(names[names.len() - 2..], ["area", "zone"]);
         assert_eq!(names[0], "index");
         assert_eq!(names[14], "is_reference");
+    }
+
+    fn storage_net() -> BalancedNetwork {
+        use powerio::{Bus, BusId, BusType, Generator, Storage};
+
+        let mut net = BalancedNetwork::in_memory(
+            "storage",
+            100.0,
+            vec![
+                Bus::new(BusId(1), BusType::Ref, 230.0),
+                Bus::new(BusId(2), BusType::Pq, 230.0),
+            ],
+            Vec::new(),
+        );
+        let mut generator = Generator::new(BusId(1));
+        generator.pmax = 100.0;
+        net.generators = vec![generator];
+        // Every field distinct, so a column fed from the wrong field fails.
+        let mut storage = Storage::new(BusId(2));
+        storage.ps = 30.0;
+        storage.qs = -10.0;
+        storage.energy = 50.0;
+        storage.energy_rating = 90.0;
+        storage.charge_rating = 20.0;
+        storage.discharge_rating = 25.0;
+        storage.charge_efficiency = 0.9;
+        storage.discharge_efficiency = 0.85;
+        storage.thermal_rating = 40.0;
+        storage.qmin = -15.0;
+        storage.qmax = 15.0;
+        storage.r = 0.01;
+        storage.x = 0.02;
+        storage.p_loss = 2.0;
+        storage.q_loss = 1.0;
+        net.storage = vec![storage];
+        net
+    }
+
+    #[test]
+    fn solver_storage_exports_charge_and_discharge_efficiency() {
+        let n = storage_net();
+        let tables = n.to_normalized_solver_tables().unwrap();
+        let sa = round_trip(&n, PIO_ARROW_TABLE_SOLVER_STORAGE);
+        assert_eq!(sa.len(), tables.storage.len());
+        let expected: Vec<f64> = tables.storage.iter().map(|s| s.charge_efficiency).collect();
+        assert_eq!(
+            f64_col(&sa, "charge_efficiency").values(),
+            expected.as_slice()
+        );
+        let expected: Vec<f64> = tables
+            .storage
+            .iter()
+            .map(|s| s.discharge_efficiency)
+            .collect();
+        assert_eq!(
+            f64_col(&sa, "discharge_efficiency").values(),
+            expected.as_slice()
+        );
+        // Pin the source values so the two columns cannot trade places.
+        assert_eq!(f64_col(&sa, "charge_efficiency").value(0), 0.9);
+        assert_eq!(f64_col(&sa, "discharge_efficiency").value(0), 0.85);
+        // The appended columns sit after the frozen prefix.
+        let names: Vec<&str> = sa
+            .fields()
+            .iter()
+            .map(|f| f.name().as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            names[names.len() - 2..],
+            ["charge_efficiency", "discharge_efficiency"]
+        );
+        assert_eq!(names[0], "index");
+        assert_eq!(names[15], "q_loss");
     }
 
     fn gen_cost_golden_json(case_file: &str) -> serde_json::Value {

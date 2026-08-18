@@ -221,4 +221,4 @@ The star-lowered space required no binding edit at all, which is the point worth
 
 ## What did not change
 
-Every ABI 4 Arrow table id and its column order. Two cost tables append at 21 and 22 and `solver_bus` gains `area` and `zone` at the end of its columns, so a consumer addressing columns by name sees nothing shift. Every case format token except the three retired above. The opaque handle design. The panic guard on every entry point. `errbuf` and `errlen` last. `pio_abi_version`, `pio_version` and `pio_has_feature`.
+Every ABI 4 Arrow table id and its column order. Two cost tables append at 21 and 22, `solver_bus` gains `area` and `zone` at the end of its columns, and `solver_storage` gains `charge_efficiency` and `discharge_efficiency` the same way, so a consumer addressing columns by name sees nothing shift. Every case format token except the three retired above. The opaque handle design. The panic guard on every entry point. `errbuf` and `errlen` last. `pio_abi_version`, `pio_version` and `pio_has_feature`.
