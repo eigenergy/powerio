@@ -25,6 +25,8 @@ use super::{
     Conversion, branch_rating_set_drop_warning, jnum, sanitize_quoted,
     warn_extra_branch_rating_sets,
 };
+use crate::diagnostics::codes::EMIT_PSSE as F;
+use crate::diagnostics::{Diagnostics, codes};
 use crate::network::{
     Area, BalancedNetwork, Branch, BranchCharging, BranchRatingSet, Bus, BusId, BusType, Extras,
     Generator, Hvdc, Impedance, Load, LoadVoltageModel, Shunt, ShuntBlock, SolverParams,
@@ -72,7 +74,7 @@ fn read_extra_branch_ratings(
 fn psse_extra_rating_values(
     branch: &Branch,
     branch_index: usize,
-    warnings: &mut Vec<String>,
+    warnings: &mut Diagnostics,
 ) -> [f64; PSSE_EXTRA_BRANCH_RATINGS] {
     let mut values = [0.0; PSSE_EXTRA_BRANCH_RATINGS];
     let mut used = [false; PSSE_EXTRA_BRANCH_RATINGS];
@@ -93,19 +95,20 @@ fn psse_extra_rating_values(
         if let Some(slot) = used.iter().position(|is_used| !*is_used) {
             values[slot] = rating.rate_mva;
             used[slot] = true;
-            warnings.push(branch_rating_set_rename_warning(
-                branch_index,
-                branch,
-                rating,
-                &psse_extra_rating_name(slot),
-            ));
+            warnings.push(
+                &codes::EMIT_PSSE_RATING_SET_REMAPPED,
+                branch_rating_set_rename_warning(
+                    branch_index,
+                    branch,
+                    rating,
+                    &psse_extra_rating_name(slot),
+                ),
+            );
         } else {
-            warnings.push(branch_rating_set_drop_warning(
-                "PSS/E v34/v35",
-                branch_index,
-                branch,
-                rating,
-            ));
+            warnings.push(
+                &F.rating_set_dropped,
+                branch_rating_set_drop_warning("PSS/E v34/v35", branch_index, branch, rating),
+            );
         }
     }
 
@@ -129,8 +132,8 @@ fn branch_rating_set_rename_warning(
     )
 }
 
-fn warn_psse_extra_branch_ratings_dropped(net: &BalancedNetwork, warnings: &mut Vec<String>) {
-    warn_extra_branch_rating_sets("PSS/E v33", net, warnings);
+fn warn_psse_extra_branch_ratings_dropped(net: &BalancedNetwork, warnings: &mut Diagnostics) {
+    warn_extra_branch_rating_sets(&F, "PSS/E v33", net, warnings);
 }
 
 /// Characters that would corrupt a single-quoted PSS/E name field. The quote
@@ -165,7 +168,7 @@ pub fn write_psse_rev(net: &BalancedNetwork, rev: u32) -> Conversion {
     // v34+ wraps the global parameters in a system-wide data section, names
     // branches and carries 12 ratings, and adds load DG / load-type columns.
     let modern = rev >= 34;
-    let mut warnings = Vec::new();
+    let mut warnings = Diagnostics::new();
     let mut nonfinite = false;
     let mut sanitized_quoted = 0usize;
     let mut s = String::new();
@@ -291,10 +294,13 @@ pub fn write_psse_rev(net: &BalancedNetwork, rev: u32) -> Conversion {
         let intrpt = extra_i64(&l.extras, "psse_intrpt").unwrap_or(0);
         let typed_load_type = l.voltage_model.as_ref().and_then(typed_psse_load_type);
         if rev < 35 && typed_load_type.is_some() {
-            warnings.push(format!(
-                "PSS/E load at bus {} id {id:?}: load type requires revision 35; dropped",
-                l.bus
-            ));
+            warnings.push(
+                &F.record_dropped,
+                format!(
+                    "PSS/E load at bus {} id {id:?}: load type requires revision 35; dropped",
+                    l.bus
+                ),
+            );
         }
         let modern_tail = if rev >= 35 {
             let pdgen = extra_f64(&l.extras, "psse_pdgen").unwrap_or(0.0);
@@ -734,27 +740,37 @@ pub fn write_psse_rev(net: &BalancedNetwork, rev: u32) -> Conversion {
 
     if net.hvdc.iter().any(dc_states_beyond_record) {
         warnings.push(
+            &F.value_defaulted,
             "DC line converter detail (firing angles, converter transformer taps, reactive \
              output) defaulted: PSS/E two-terminal DC is written from the power setpoint and \
-             line resistance only"
-                .into(),
+             line resistance only",
         );
     }
     if !net.storage.is_empty() {
-        warnings.push(format!(
-            "{} storage unit(s) dropped: PSS/E has no storage record",
-            net.storage.len()
-        ));
+        warnings.push(
+            &F.record_dropped,
+            format!(
+                "{} storage unit(s) dropped: PSS/E has no storage record",
+                net.storage.len()
+            ),
+        );
     }
     if net.generators.iter().any(|g| g.cost.is_some()) {
-        warnings.push("generator cost curves dropped: PSS/E .raw has no cost data".into());
+        warnings.push(
+            &F.field_dropped,
+            "generator cost curves dropped: PSS/E .raw has no cost data",
+        );
     }
     if net.hvdc.iter().any(|d| d.cost.is_some()) {
-        warnings.push("DC line cost curves dropped: PSS/E .raw has no cost data".into());
+        warnings.push(
+            &F.field_dropped,
+            "DC line cost curves dropped: PSS/E .raw has no cost data",
+        );
     }
     if net.branches.iter().any(Branch::has_angle_limits) {
         warnings.push(
-            "branch angle limits (angmin/angmax) dropped: PSS/E branch records carry none".into(),
+            &F.field_dropped,
+            "branch angle limits (angmin/angmax) dropped: PSS/E branch records carry none",
         );
     }
     let current_ratings = net
@@ -763,7 +779,7 @@ pub fn write_psse_rev(net: &BalancedNetwork, rev: u32) -> Conversion {
         .filter(|b| b.current_ratings.is_some())
         .count();
     if current_ratings > 0 {
-        warnings.push(format!(
+        warnings.push(&F.field_dropped, format!(
             "{current_ratings} branch current rating record(s) dropped: PSS/E branch ratings are MVA ratings"
         ));
     }
@@ -774,6 +790,7 @@ pub fn write_psse_rev(net: &BalancedNetwork, rev: u32) -> Conversion {
     // retained; a foreign format's keys (LoadID, pslf_circuit, ...) have no
     // record column and drop, declared once (#330).
     super::warn_dropped_extras(
+        &F,
         "PSS/E .raw",
         net,
         |key| key == "id" || key.starts_with("psse_"),
@@ -781,7 +798,7 @@ pub fn write_psse_rev(net: &BalancedNetwork, rev: u32) -> Conversion {
     );
     let branch_solutions = net.branches.iter().filter(|b| b.solution.is_some()).count();
     if branch_solutions > 0 {
-        warnings.push(format!(
+        warnings.push(&F.field_dropped, format!(
             "{branch_solutions} branch solution value set(s) dropped: PSS/E RAW power flow result fields are not written"
         ));
     }
@@ -795,26 +812,33 @@ pub fn write_psse_rev(net: &BalancedNetwork, rev: u32) -> Conversion {
         })
         .count();
     if transformer_terminal_shunts > 0 {
-        warnings.push(format!(
+        warnings.push(&F.value_collapsed, format!(
             "{transformer_terminal_shunts} transformer terminal admittance record(s) collapsed to magnetizing admittance: PSS/E transformer records cannot preserve terminal side assignment"
         ));
     }
     if net.generators.iter().any(Generator::has_caps) {
         warnings.push(
-            "generator ramp/capability columns dropped: PSS/E .raw has no equivalent fields".into(),
+            &F.field_dropped,
+            "generator ramp/capability columns dropped: PSS/E .raw has no equivalent fields",
         );
     }
     if nonfinite {
-        warnings.push("non-finite values written as ±1e10 sentinels (PSS/E has no Inf/NaN)".into());
+        warnings.push(
+            &F.not_a_number,
+            "non-finite values written as ±1e10 sentinels (PSS/E has no Inf/NaN)",
+        );
     }
     if sanitized_quoted > 0 {
-        warnings.push(format!(
-            "{sanitized_quoted} quoted PSS/E field(s) contained a quote or '/' that would \
+        warnings.push(
+            &F.value_substituted,
+            format!(
+                "{sanitized_quoted} quoted PSS/E field(s) contained a quote or '/' that would \
              corrupt a record; replaced with spaces"
-        ));
+            ),
+        );
     }
 
-    Conversion { text: s, warnings }
+    Conversion::new(s, warnings)
 }
 
 /// MATPOWER/neutral bus kind → PSS/E bus type code (IDE).
@@ -958,7 +982,7 @@ const EMPTY_SECTIONS: [&str; 13] = [
 /// fixed-shunt/generator/branch/2- and 3-winding transformer; skips the advanced
 /// sections.
 pub fn parse_psse(content: &str) -> Result<BalancedNetwork> {
-    let mut warnings = Vec::new();
+    let mut warnings = Diagnostics::new();
     parse_psse_source(Arc::new(content.to_owned()), None, &mut warnings)
 }
 
@@ -990,7 +1014,7 @@ pub(crate) fn header_rev(source: &str) -> u32 {
 pub(crate) fn parse_psse_source(
     source: Arc<String>,
     name_hint: Option<&str>,
-    warnings: &mut Vec<String>,
+    warnings: &mut Diagnostics,
 ) -> Result<BalancedNetwork> {
     let content: &str = &source;
     let mut lines = content.lines();
@@ -1112,12 +1136,15 @@ pub(crate) fn parse_psse_source(
                     // record states magnetizing data in units this reader does not
                     // convert, so read_transformer drops it. Name the loss.
                     if int_at(&f, 6, 1)? != 1 && num_at(&f, 8, 0.0)? != 0.0 {
-                        warnings.push(format!(
-                            "transformer {}-{}: magnetizing data with CM != 1 dropped \
+                        warnings.push(
+                            &codes::READ_PSSE_FIELD_DROPPED,
+                            format!(
+                                "transformer {}-{}: magnetizing data with CM != 1 dropped \
                              (only CM = 1 p.u. susceptance is read as branch charging)",
-                            f.first().map_or("?", String::as_str),
-                            f.get(1).map_or("?", String::as_str),
-                        ));
+                                f.first().map_or("?", String::as_str),
+                                f.get(1).map_or("?", String::as_str),
+                            ),
+                        );
                     }
                     branches.push(read_transformer(
                         &f,
@@ -1295,7 +1322,7 @@ fn convert_transformer_impedance(
     cz: i64,
     label: &str,
     pair: &str,
-    warnings: &mut Vec<String>,
+    warnings: &mut Diagnostics,
 ) -> (f64, f64) {
     let base_ok = sbase.is_finite() && sbase > 0.0;
     match cz {
@@ -1305,7 +1332,7 @@ fn convert_transformer_impedance(
                 let scale = system_base / sbase;
                 (r * scale, x * scale)
             } else {
-                warnings.push(format!(
+                warnings.push(&codes::READ_PSSE_VALUE_SUBSTITUTED, format!(
                     "PSS/E transformer {label} pair {pair}: CZ=2 impedance has invalid SBASE {sbase}; read as system-base p.u."
                 ));
                 (r, x)
@@ -1313,7 +1340,7 @@ fn convert_transformer_impedance(
         }
         3 => {
             if !base_ok {
-                warnings.push(format!(
+                warnings.push(&codes::READ_PSSE_VALUE_SUBSTITUTED, format!(
                     "PSS/E transformer {label} pair {pair}: CZ=3 impedance has invalid SBASE {sbase}; read as system-base p.u."
                 ));
                 return (r, x);
@@ -1328,7 +1355,7 @@ fn convert_transformer_impedance(
             (r_pair * scale, x_pair * scale)
         }
         other => {
-            warnings.push(format!(
+            warnings.push(&codes::READ_PSSE_VALUE_UNSUPPORTED, format!(
                 "PSS/E transformer {label} pair {pair}: unsupported CZ={other}; read impedance as system-base p.u."
             ));
             (r, x)
@@ -1355,14 +1382,14 @@ fn winding_ratio(
     bus_base_kv: &BTreeMap<BusId, f64>,
     label: &str,
     winding: &str,
-    warnings: &mut Vec<String>,
+    warnings: &mut Diagnostics,
 ) -> Result<f64> {
     let windv = num_at(w, 0, default_windv(cw, bus, bus_base_kv))?;
     let nomv = num_at(w, 1, 0.0)?;
     let base_kv = bus_base_kv.get(&bus).copied().unwrap_or(0.0);
     let needs_base = matches!(cw, 2 | 3);
     if needs_base && !(base_kv.is_finite() && base_kv > 0.0) {
-        warnings.push(format!(
+        warnings.push(&codes::READ_PSSE_VALUE_SUBSTITUTED, format!(
             "PSS/E transformer {label} {winding}: CW={cw} needs a positive bus base kV for bus {bus}; read WINDV as a p.u. tap ratio"
         ));
         return Ok(windv);
@@ -1379,7 +1406,7 @@ fn winding_ratio(
             Ok(windv * nominal / base_kv)
         }
         other => {
-            warnings.push(format!(
+            warnings.push(&codes::READ_PSSE_VALUE_UNSUPPORTED, format!(
                 "PSS/E transformer {label} {winding}: unsupported CW={other}; read WINDV as a p.u. tap ratio"
             ));
             Ok(windv)
@@ -1396,13 +1423,13 @@ fn two_winding_tap(
     to: BusId,
     cw: i64,
     bus_base_kv: &BTreeMap<BusId, f64>,
-    warnings: &mut Vec<String>,
+    warnings: &mut Diagnostics,
 ) -> Result<f64> {
     let label = transformer_label(l1);
     let ratio1 = winding_ratio(l3, from, cw, bus_base_kv, &label, "winding 1", warnings)?;
     let ratio2 = winding_ratio(l4, to, cw, bus_base_kv, &label, "winding 2", warnings)?;
     if ratio2.abs() <= f64::EPSILON {
-        warnings.push(format!(
+        warnings.push(&codes::READ_PSSE_VALUE_SUBSTITUTED, format!(
             "PSS/E transformer {label}: winding 2 ratio is zero; used winding 1 ratio as the branch tap"
         ));
         Ok(ratio1)
@@ -1440,16 +1467,19 @@ fn introduced_section_name(line: &str) -> Option<String> {
 /// induction machine, FACTS, GNE, owner/zone, ...). Counts come from the parser
 /// pass itself, so bare `0` terminators and malformed continuation boundaries are
 /// classified the same way as the records that get skipped.
-fn warn_unmodeled_sections(totals: BTreeMap<String, usize>, warnings: &mut Vec<String>) {
+fn warn_unmodeled_sections(totals: BTreeMap<String, usize>, warnings: &mut Diagnostics) {
     for (name, rows) in totals {
-        warnings.push(format!(
-            "PSS/E {name} section ({rows} record line(s)) is not modeled: preserved only in a \
+        warnings.push(
+            &codes::READ_PSSE_SECTION_UNSUPPORTED,
+            format!(
+                "PSS/E {name} section ({rows} record line(s)) is not modeled: preserved only in a \
              same-format .raw echo, dropped on any other write"
-        ));
+            ),
+        );
     }
 }
 
-fn drop_stale_control_pointers(net: &mut BalancedNetwork, warnings: &mut Vec<String>) {
+fn drop_stale_control_pointers(net: &mut BalancedNetwork, warnings: &mut Diagnostics) {
     let bus_ids: BTreeSet<BusId> = net.buses.iter().map(|b| b.id).collect();
     let missing = |bus: BusId| !bus_ids.contains(&bus);
 
@@ -1457,7 +1487,7 @@ fn drop_stale_control_pointers(net: &mut BalancedNetwork, warnings: &mut Vec<Str
         let Some(bus) = g.regulated_bus.filter(|b| missing(*b)) else {
             continue;
         };
-        warnings.push(format!(
+        warnings.push(&codes::READ_PSSE_REFERENCE_DROPPED, format!(
             "PSS/E GENERATOR DATA record {} at bus {}: IREG references missing bus id {}; dropped remote voltage control",
             idx + 1,
             g.bus,
@@ -1473,7 +1503,7 @@ fn drop_stale_control_pointers(net: &mut BalancedNetwork, warnings: &mut Vec<Str
         let Some(bus) = control.controlled_bus.filter(|b| missing(*b)) else {
             continue;
         };
-        warnings.push(format!(
+        warnings.push(&codes::READ_PSSE_REFERENCE_DROPPED, format!(
             "PSS/E TRANSFORMER DATA record {} ({}-{}): CONT references missing bus id {}; dropped transformer control pointer",
             idx + 1,
             br.from,
@@ -1490,7 +1520,7 @@ fn drop_stale_control_pointers(net: &mut BalancedNetwork, warnings: &mut Vec<Str
         let Some(bus) = control.control_bus.filter(|b| missing(*b)) else {
             continue;
         };
-        warnings.push(format!(
+        warnings.push(&codes::READ_PSSE_REFERENCE_DROPPED, format!(
             "PSS/E SWITCHED SHUNT DATA record {} at bus {}: SWREM references missing bus id {}; dropped switched shunt control pointer",
             idx + 1,
             shunt.bus,
@@ -1503,7 +1533,7 @@ fn drop_stale_control_pointers(net: &mut BalancedNetwork, warnings: &mut Vec<Str
         let Some(bus) = area.slack_bus.filter(|b| missing(*b)) else {
             continue;
         };
-        warnings.push(format!(
+        warnings.push(&codes::READ_PSSE_REFERENCE_DROPPED, format!(
             "PSS/E AREA DATA record {} area {}: ISW references missing bus id {}; dropped area swing pointer",
             idx + 1,
             area.number,
@@ -1748,7 +1778,7 @@ fn device_extras(f: &[String], i: usize) -> Extras {
     extras
 }
 
-fn read_load(f: &[String], raw_rev: u32, warnings: &mut Vec<String>) -> Result<Load> {
+fn read_load(f: &[String], raw_rev: u32, warnings: &mut Diagnostics) -> Result<Load> {
     // I, ID, STATUS, AREA, ZONE, PL, QL, ...
     let bus = id_at(f, 0, 0)?;
     let id = f.get(1).map_or("", |s| s.trim());
@@ -1822,7 +1852,7 @@ fn read_load(f: &[String], raw_rev: u32, warnings: &mut Vec<String>) -> Result<L
         || extras.contains_key("psse_qdgen")
         || extras.contains_key("psse_flagstatus");
     if has_load_options {
-        warnings.push(format!(
+        warnings.push(&codes::READ_PSSE_RETAINED_SOURCE_ONLY, format!(
             "PSS/E load at bus {bus} id {id:?}: interruptible/DG/flag fields are retained in extras"
         ));
     }
@@ -2020,7 +2050,7 @@ fn read_transformer(
     raw_rev: u32,
     system_base: f64,
     bus_base_kv: &BTreeMap<BusId, f64>,
-    warnings: &mut Vec<String>,
+    warnings: &mut Diagnostics,
 ) -> Result<Branch> {
     // l1: I, J, K, CKT, CW, CZ, CM, MAG1, MAG2, NMETR, NAME, STAT(11)
     // l2: R1-2, X1-2, SBASE1-2
@@ -2141,7 +2171,7 @@ fn read_transformer_3w(
     l5: &[String],
     system_base: f64,
     bus_base_kv: &BTreeMap<BusId, f64>,
-    warnings: &mut Vec<String>,
+    warnings: &mut Diagnostics,
 ) -> Result<Transformer3W> {
     // l1: I, J, K, CKT, CW, CZ, CM, MAG1, MAG2, NMETR, NAME, STAT(11)
     // l2: R1-2,X1-2,SBASE1-2, R2-3,X2-3,SBASE2-3, R3-1,X3-1,SBASE3-1, VMSTAR, ANSTAR
@@ -2243,12 +2273,15 @@ fn read_transformer_3w(
 /// RDC/VSCHD, and the default converter tails — restates nothing and is not
 /// kept, so a record powerio itself wrote reads back with empty extras and
 /// rewrites identically.
+// One block per two-terminal DC field; splitting it would scatter a record
+// that reads end to end.
+#[expect(clippy::too_many_lines)]
 fn read_dc_line(
     l1: &[String],
     rect: &[String],
     inv: &[String],
     index: usize,
-    warnings: &mut Vec<String>,
+    warnings: &mut Diagnostics,
 ) -> Result<Hvdc> {
     let mdc = int_at(l1, 1, 1)?;
     let rdc = num_at(l1, 2, 0.0)?;
@@ -2298,25 +2331,29 @@ fn read_dc_line(
     // voltage schedule overflows the squared current, and either end can come
     // back non-finite. A non-finite setpoint is not a setpoint, and it would
     // travel into every matrix and every writer downstream.
-    let (pf, pt) = if pf.is_finite() && pt.is_finite() {
-        (pf, pt)
-    } else {
-        warnings.push(format!(
+    let (pf, pt) =
+        if pf.is_finite() && pt.is_finite() {
+            (pf, pt)
+        } else {
+            warnings.push(&codes::READ_PSSE_VALUE_SUBSTITUTED, format!(
             "two-terminal DC record {} states a drop model that does not evaluate to a finite \
              power; both ends read as zero",
             index + 1
         ));
-        // The end the demand was measured at is a claim about a drop model
-        // that was refused, and the writer would restate it as `-0.0`.
-        measured_at_inverter = false;
-        (0.0, 0.0)
-    };
+            // The end the demand was measured at is a claim about a drop model
+            // that was refused, and the writer would restate it as `-0.0`.
+            measured_at_inverter = false;
+            (0.0, 0.0)
+        };
     if unpriceable_current {
-        warnings.push(format!(
-            "two-terminal DC record {} schedules a current with no scheduled voltage; the \
+        warnings.push(
+            &codes::READ_PSSE_VALUE_SUBSTITUTED,
+            format!(
+                "two-terminal DC record {} schedules a current with no scheduled voltage; the \
              demand cannot be priced into power and both ends read as zero",
-            index + 1
-        ));
+                index + 1
+            ),
+        );
     }
     let mut extras = Extras::new();
     if let Some(name) = l1
@@ -2427,7 +2464,7 @@ fn same_load_total(a: f64, b: f64) -> bool {
     (a - b).abs() <= 1e-9 * a.abs().max(b.abs()).max(1.0)
 }
 
-fn typed_psse_scal(l: &Load, id: &str, warnings: &mut Vec<String>) -> Option<i64> {
+fn typed_psse_scal(l: &Load, id: &str, warnings: &mut Diagnostics) -> Option<i64> {
     let Some(LoadVoltageModel::Zip {
         scaling: Some(scaling),
         ..
@@ -2437,7 +2474,7 @@ fn typed_psse_scal(l: &Load, id: &str, warnings: &mut Vec<String>) -> Option<i64
     };
     let scaling = *scaling;
     if !scaling.is_finite() {
-        warnings.push(format!(
+        warnings.push(&codes::READ_PSSE_VALUE_SUBSTITUTED, format!(
             "PSS/E load at bus {} id {id:?}: non-finite typed scaling has no SCAL value; used source/default SCAL",
             l.bus
         ));
@@ -2445,7 +2482,7 @@ fn typed_psse_scal(l: &Load, id: &str, warnings: &mut Vec<String>) -> Option<i64
     }
     let rounded = scaling.round();
     if (scaling - rounded).abs() > 1e-9 || rounded < i64::MIN as f64 || rounded > i64::MAX as f64 {
-        warnings.push(format!(
+        warnings.push(&codes::READ_PSSE_VALUE_SUBSTITUTED, format!(
             "PSS/E load at bus {} id {id:?}: non-integer typed scaling {scaling} has no SCAL value; used source/default SCAL",
             l.bus
         ));
@@ -2467,7 +2504,7 @@ fn typed_psse_load_type(model: &LoadVoltageModel) -> Option<String> {
 fn load_components_for_write(
     l: &Load,
     id: &str,
-    warnings: &mut Vec<String>,
+    warnings: &mut Diagnostics,
 ) -> (f64, f64, f64, f64, f64, f64) {
     if let Some(LoadVoltageModel::Zip {
         p_constant_power,
@@ -2488,7 +2525,7 @@ fn load_components_for_write(
             l.q,
         ) {
             if v_nom.is_some() {
-                warnings.push(format!(
+                warnings.push(&F.field_dropped, format!(
                     "PSS/E load at bus {} id {id:?}: nominal voltage has no load record field; dropped",
                     l.bus
                 ));
@@ -2502,15 +2539,18 @@ fn load_components_for_write(
                 *q_constant_impedance,
             );
         }
-        warnings.push(format!(
-            "PSS/E load at bus {} id {id:?}: stale voltage model components did not match \
+        warnings.push(
+            &F.value_substituted,
+            format!(
+                "PSS/E load at bus {} id {id:?}: stale voltage model components did not match \
              typed p/q; wrote typed p/q as constant power",
-            l.bus
-        ));
+                l.bus
+            ),
+        );
         return (l.p, l.q, 0.0, 0.0, 0.0, 0.0);
     }
     if matches!(l.voltage_model, Some(LoadVoltageModel::Exponential { .. })) {
-        warnings.push(format!(
+        warnings.push(&F.field_dropped, format!(
             "PSS/E load at bus {} id {id:?}: exponential voltage model has no load record fields; wrote typed p/q as constant power",
             l.bus
         ));
@@ -2531,11 +2571,14 @@ fn load_components_for_write(
     if has_components
         && (!same_load_total(pl + ip + yp, l.p) || !same_load_total(ql + iq + yq, l.q))
     {
-        warnings.push(format!(
-            "PSS/E load at bus {} id {id:?}: stale PL/QL/IP/IQ/YP/YQ extras did not match \
+        warnings.push(
+            &F.value_substituted,
+            format!(
+                "PSS/E load at bus {} id {id:?}: stale PL/QL/IP/IQ/YP/YQ extras did not match \
              typed p/q; wrote typed p/q as constant power",
-            l.bus
-        ));
+                l.bus
+            ),
+        );
         (l.p, l.q, 0.0, 0.0, 0.0, 0.0)
     } else {
         (pl, ql, ip, iq, yp, yq)
@@ -2824,7 +2867,7 @@ COMMENT
 0 / END OF LOAD DATA, BEGIN FIXED SHUNT DATA
 Q
 ";
-        let mut warnings = Vec::new();
+        let mut warnings = Diagnostics::new();
         let net =
             parse_psse_source(std::sync::Arc::new(raw.to_string()), None, &mut warnings).unwrap();
 
@@ -2844,7 +2887,10 @@ Q
         close(*q_constant_current, 0.5);
         close(*p_constant_impedance, 2.0);
         assert!(
-            warnings.iter().any(|w| w.contains("interruptible/DG/flag")),
+            warnings
+                .lines()
+                .iter()
+                .any(|w| w.contains("interruptible/DG/flag")),
             "missing load option warning: {warnings:?}"
         );
 
@@ -3833,7 +3879,7 @@ COMMENT
 0 / END OF SWITCHED SHUNT DATA, BEGIN GNE DEVICE DATA
 Q
 ";
-        let mut warnings = Vec::new();
+        let mut warnings = Diagnostics::new();
         let net =
             parse_psse_source(std::sync::Arc::new(raw.to_string()), None, &mut warnings).unwrap();
 
@@ -3851,25 +3897,31 @@ Q
         );
         assert_eq!(net.areas[0].slack_bus, None);
         assert!(
-            warnings.iter().any(|w| w.contains("GENERATOR DATA")
+            warnings.lines().iter().any(|w| w.contains("GENERATOR DATA")
                 && w.contains("IREG")
                 && w.contains("missing bus id 99")),
             "missing IREG warning: {warnings:?}"
         );
         assert!(
-            warnings.iter().any(|w| w.contains("TRANSFORMER DATA")
-                && w.contains("CONT")
-                && w.contains("missing bus id 98")),
+            warnings
+                .lines()
+                .iter()
+                .any(|w| w.contains("TRANSFORMER DATA")
+                    && w.contains("CONT")
+                    && w.contains("missing bus id 98")),
             "missing CONT warning: {warnings:?}"
         );
         assert!(
-            warnings.iter().any(|w| w.contains("SWITCHED SHUNT DATA")
-                && w.contains("SWREM")
-                && w.contains("missing bus id 96")),
+            warnings
+                .lines()
+                .iter()
+                .any(|w| w.contains("SWITCHED SHUNT DATA")
+                    && w.contains("SWREM")
+                    && w.contains("missing bus id 96")),
             "missing SWREM warning: {warnings:?}"
         );
         assert!(
-            warnings.iter().any(|w| w.contains("AREA DATA")
+            warnings.lines().iter().any(|w| w.contains("AREA DATA")
                 && w.contains("ISW")
                 && w.contains("missing bus id 97")),
             "missing ISW warning: {warnings:?}"
@@ -3919,10 +3971,11 @@ COMMENT
 0 / END OF VSC DC LINE DATA, BEGIN IMPEDANCE CORRECTION DATA
 Q
 ";
-        let mut warnings = Vec::new();
+        let mut warnings = Diagnostics::new();
         parse_psse_source(std::sync::Arc::new(raw.to_string()), None, &mut warnings).unwrap();
         assert!(
             warnings
+                .lines()
                 .iter()
                 .any(|w| w.contains("VSC DC LINE section (2 record line(s))")),
             "bare terminator should not be counted as skipped data: {warnings:?}"

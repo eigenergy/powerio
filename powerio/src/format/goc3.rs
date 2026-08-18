@@ -11,6 +11,7 @@ use std::sync::Arc;
 
 use serde_json::{Map, Value};
 
+use crate::diagnostics::{Diagnostics, codes};
 use crate::network::{
     BalancedNetwork, Branch, BranchCharging, BranchRatingSet, Bus, BusId, BusType, Extras, GenCost,
     Generator, Hvdc, Load, Shunt, SourceFormat, TransformerControl, TransformerControlMode,
@@ -137,13 +138,13 @@ impl Goc3BusMap {
 
 /// Parse a GO Challenge 3 JSON input file.
 pub fn parse_goc3_json(content: &str) -> Result<super::Parsed> {
-    let mut warnings = Vec::new();
+    let mut warnings = Diagnostics::new();
     let (network, document) = parse_goc3_source(Arc::new(content.to_owned()), None, &mut warnings)?;
-    Ok(super::Parsed {
+    Ok(super::Parsed::new(
         network,
         warnings,
-        document: Some(super::SourceDocument::Goc3(document)),
-    })
+        Some(super::SourceDocument::Goc3(document)),
+    ))
 }
 
 /// Parse GOC3 source text into the balanced network plus the document the
@@ -153,7 +154,7 @@ pub fn parse_goc3_json(content: &str) -> Result<super::Parsed> {
 pub(crate) fn parse_goc3_source(
     source: Arc<String>,
     name_hint: Option<&str>,
-    warnings: &mut Vec<String>,
+    warnings: &mut Diagnostics,
 ) -> Result<(BalancedNetwork, Arc<Goc3Document>)> {
     let document = Arc::new(Goc3Document::parse(&source)?);
     let root = document.root();
@@ -587,7 +588,7 @@ fn assign_bus_types(
     bus_pos: &HashMap<BusId, usize>,
     generator_buses: &HashSet<BusId>,
     reference_candidate: Option<(BusId, f64)>,
-    warnings: &mut Vec<String>,
+    warnings: &mut Diagnostics,
 ) {
     for bus in generator_buses {
         super::set_bus_kind(buses, bus_pos, *bus, BusType::Pv);
@@ -596,7 +597,7 @@ fn assign_bus_types(
         && bus_pos.contains_key(&bus)
     {
         super::set_bus_kind(buses, bus_pos, bus, BusType::Ref);
-        warnings.push(format!(
+        warnings.push(&codes::READ_GOC3_VALUE_INFERRED, format!(
             "GO Challenge 3 has no explicit reference bus; selected bus {} from the largest producer pmax",
             bus.0
         ));
@@ -726,16 +727,19 @@ fn device_time_series(time_series: Option<&Map<String, Value>>) -> Result<HashMa
 fn warn_static_reduction(
     root: &Map<String, Value>,
     network: &Map<String, Value>,
-    warnings: &mut Vec<String>,
+    warnings: &mut Diagnostics,
 ) {
     if root.get("time_series_input").is_some() {
-        warnings.push(
+        warnings.push(&codes::READ_GOC3_RETAINED_SOURCE_ONLY,
             "time_series_input reduced to the first interval for static BalancedNetwork dispatch and limits"
-                .into(),
+                ,
         );
     }
     if root.get("reliability").is_some() {
-        warnings.push("reliability contingencies retained in source only".into());
+        warnings.push(
+            &codes::READ_GOC3_RETAINED_SOURCE_ONLY,
+            "reliability contingencies retained in source only",
+        );
     }
     for section in [
         "active_zonal_reserve",
@@ -743,16 +747,19 @@ fn warn_static_reduction(
         "violation_cost",
     ] {
         if network.get(section).is_some() {
-            warnings.push(format!("network.{section} retained in source only"));
+            warnings.push(
+                &codes::READ_GOC3_RETAINED_SOURCE_ONLY,
+                format!("network.{section} retained in source only"),
+            );
         }
     }
     if !section(network, "simple_dispatchable_device")
         .unwrap_or_default()
         .is_empty()
     {
-        warnings.push(
+        warnings.push(&codes::READ_GOC3_RETAINED_SOURCE_ONLY,
             "simple dispatchable device commitment, ramp, reserve, and multi-interval cost data retained in source only"
-                .into(),
+                ,
         );
     }
 }
@@ -910,9 +917,9 @@ fn extras(obj: &Map<String, Value>, known: &[&str]) -> Extras {
         .collect()
 }
 
-fn push_once(warnings: &mut Vec<String>, warning: &str) {
-    if !warnings.iter().any(|w| w == warning) {
-        warnings.push(warning.to_owned());
+fn push_once(warnings: &mut Diagnostics, warning: &str) {
+    if !warnings.records().iter().any(|d| d.message == warning) {
+        warnings.push(&codes::READ_GOC3_RETAINED_SOURCE_ONLY, warning);
     }
 }
 

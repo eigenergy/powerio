@@ -16,6 +16,8 @@ use std::sync::Arc;
 use serde_json::{Map, Value};
 
 use super::{Conversion, finish, jnum, warn_extra_branch_rating_sets};
+use crate::diagnostics::Diagnostics;
+use crate::diagnostics::codes::EMIT_EGRET as F;
 use crate::network::{
     BalancedNetwork, Branch, Bus, BusId, BusType, Extras, GenCost, Generator, Hvdc, Load,
     LoadVoltageModel, Shunt, SourceFormat,
@@ -26,7 +28,7 @@ const FMT: &str = "egret JSON";
 
 #[must_use]
 pub fn write_egret_json(net: &BalancedNetwork) -> Conversion {
-    let mut warnings = Vec::new();
+    let mut warnings = Diagnostics::new();
 
     let mut bus = Map::new();
     for b in &net.buses {
@@ -55,7 +57,7 @@ pub fn write_egret_json(net: &BalancedNetwork) -> Conversion {
     }
     let with_caps = net.generators.iter().filter(|g| g.has_caps()).count();
     if with_caps > 0 {
-        warnings.push(format!(
+        warnings.push(&F.field_dropped, format!(
             "generator capability/ramp columns dropped for {with_caps} generator(s): the egret generator records written here carry none"
         ));
     }
@@ -82,23 +84,28 @@ pub fn write_egret_json(net: &BalancedNetwork) -> Conversion {
             system.insert("reference_bus".into(), Value::String(r.id.to_string()));
             system.insert("reference_bus_angle".into(), jnum(r.va));
         }
-        None => warnings
-            .push("no single reference bus (BusType::Ref); system.reference_bus omitted".into()),
+        None => warnings.push(
+            &F.reference_missing,
+            "no single reference bus (BusType::Ref); system.reference_bus omitted",
+        ),
     }
 
     let mut root = Map::new();
     root.insert("elements".into(), Value::Object(elements));
     root.insert("system".into(), Value::Object(system));
 
-    finish(root, warnings)
+    finish(&F, root, warnings)
 }
 
-fn warn_egret_writer_losses(net: &BalancedNetwork, warnings: &mut Vec<String>) {
+fn warn_egret_writer_losses(net: &BalancedNetwork, warnings: &mut Diagnostics) {
     if !net.transformers_3w.is_empty() {
-        warnings.push(format!(
-            "{} 3-winding transformer(s) dropped: the egret writer emits no 3-winding record",
-            net.transformers_3w.len()
-        ));
+        warnings.push(
+            &F.record_dropped,
+            format!(
+                "{} 3-winding transformer(s) dropped: the egret writer emits no 3-winding record",
+                net.transformers_3w.len()
+            ),
+        );
     }
     if net
         .buses
@@ -106,15 +113,18 @@ fn warn_egret_writer_losses(net: &BalancedNetwork, warnings: &mut Vec<String>) {
         .any(|b| b.evhi.is_some() || b.evlo.is_some())
     {
         warnings.push(
-            "emergency voltage band(s) (EVHI/EVLO) dropped: this writer carries one voltage band"
-                .into(),
+            &F.field_dropped,
+            "emergency voltage band(s) (EVHI/EVLO) dropped: this writer carries one voltage band",
         );
     }
     if !net.storage.is_empty() {
-        warnings.push(format!(
-            "{} storage unit(s) dropped: egret storage mapping not implemented",
-            net.storage.len()
-        ));
+        warnings.push(
+            &F.record_dropped,
+            format!(
+                "{} storage unit(s) dropped: egret storage mapping not implemented",
+                net.storage.len()
+            ),
+        );
     }
     let voltage_loads = net
         .loads
@@ -126,7 +136,7 @@ fn warn_egret_writer_losses(net: &BalancedNetwork, warnings: &mut Vec<String>) {
         })
         .count();
     if voltage_loads > 0 {
-        warnings.push(format!(
+        warnings.push(&F.field_dropped, format!(
             "{voltage_loads} voltage dependent load model(s) dropped: egret load records carry static p_load/q_load only"
         ));
     }
@@ -136,7 +146,7 @@ fn warn_egret_writer_losses(net: &BalancedNetwork, warnings: &mut Vec<String>) {
         .filter(|b| b.has_non_matpower_charging())
         .count();
     if terminal_charging > 0 {
-        warnings.push(format!(
+        warnings.push(&F.value_collapsed, format!(
             "{terminal_charging} branch terminal admittance record(s) collapsed to total susceptance: egret branches cannot carry conductance or asymmetric terminal charging"
         ));
     }
@@ -146,14 +156,14 @@ fn warn_egret_writer_losses(net: &BalancedNetwork, warnings: &mut Vec<String>) {
         .filter(|b| b.current_ratings.is_some())
         .count();
     if current_ratings > 0 {
-        warnings.push(format!(
+        warnings.push(&F.field_dropped, format!(
             "{current_ratings} branch current rating record(s) dropped: egret branch records carry MVA ratings only"
         ));
     }
-    warn_extra_branch_rating_sets("egret JSON", net, warnings);
+    warn_extra_branch_rating_sets(&F, "egret JSON", net, warnings);
     let branch_solutions = net.branches.iter().filter(|b| b.solution.is_some()).count();
     if branch_solutions > 0 {
-        warnings.push(format!(
+        warnings.push(&F.field_dropped, format!(
             "{branch_solutions} branch solution value set(s) dropped: egret branch result fields are not written"
         ));
     }
@@ -245,7 +255,7 @@ fn branch_obj(br: &Branch) -> Value {
     Value::Object(m)
 }
 
-fn gen_obj(g: &Generator, warnings: &mut Vec<String>) -> Value {
+fn gen_obj(g: &Generator, warnings: &mut Diagnostics) -> Value {
     let mut m = Map::new();
     m.insert("bus".into(), Value::String(g.bus.to_string()));
     m.insert("generator_type".into(), Value::String("thermal".into()));
@@ -270,7 +280,7 @@ fn gen_obj(g: &Generator, warnings: &mut Vec<String>) -> Value {
                 m.insert("shutdown_cost".into(), jnum(cost.shutdown));
             }
         } else {
-            warnings.push(format!(
+            warnings.push(&F.field_dropped, format!(
                 "generator at bus {} has a cost model egret's writer can't express; cost dropped",
                 g.bus
             ));
@@ -283,12 +293,15 @@ fn gen_obj(g: &Generator, warnings: &mut Vec<String>) -> Value {
 /// `dc_branch` states the same power, voltage, and loss fields the MATPOWER
 /// `dcline` row does, so every one of them is named here; only the `dclinecost`
 /// curve has no egret counterpart.
-fn dc_branch_obj(dc: &Hvdc, warnings: &mut Vec<String>) -> Value {
+fn dc_branch_obj(dc: &Hvdc, warnings: &mut Diagnostics) -> Value {
     if dc.cost.is_some() {
-        warnings.push(format!(
-            "dcline {} -> {} cost curve dropped: egret dc_branch records carry no cost",
-            dc.from, dc.to
-        ));
+        warnings.push(
+            &F.field_dropped,
+            format!(
+                "dcline {} -> {} cost curve dropped: egret dc_branch records carry no cost",
+                dc.from, dc.to
+            ),
+        );
     }
     let mut m = Map::new();
     m.insert("from_bus".into(), Value::String(dc.from.to_string()));

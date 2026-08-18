@@ -29,10 +29,14 @@
 use std::ffi::{CStr, CString, c_char};
 use std::panic::{AssertUnwindSafe, catch_unwind};
 
-use powerio::{BalancedNetwork, IndexCore, IndexedNetwork, NormalizeOptions, TargetFormat};
+use powerio::{
+    BalancedNetwork, IndexCore, IndexedNetwork, NormalizeOptions, StructuredDiagnostic,
+    TargetFormat,
+};
 
 #[cfg(feature = "arrow")]
 mod arrow_export;
+pub mod diagnostics;
 #[cfg(feature = "arrow")]
 pub use arrow_export::{
     PIO_ARROW_TABLE_BDOUBLEPRIME, PIO_ARROW_TABLE_BPRIME, PIO_ARROW_TABLE_BRANCH,
@@ -51,6 +55,9 @@ pub use arrow_export::{
 pub struct PioNetwork {
     net: BalancedNetwork,
     core: IndexCore,
+    /// The reader's findings as structured records.
+    diagnostics: Vec<StructuredDiagnostic>,
+    /// The same findings as `CODE: message` lines.
     warnings: Vec<String>,
 }
 
@@ -151,17 +158,18 @@ unsafe fn guard<R>(fallback: R, f: impl FnOnce() -> R) -> R {
 
 /// Box a `BalancedNetwork` into an owned network handle, building its [`IndexCore`] once so
 /// every indexed query reuses it. The one constructor for `*mut PioNetwork`.
-fn make_network(net: BalancedNetwork, warnings: Vec<String>) -> *mut PioNetwork {
+fn make_network(net: BalancedNetwork, diagnostics: Vec<StructuredDiagnostic>) -> *mut PioNetwork {
     let core = IndexCore::build(&net);
     Box::into_raw(Box::new(PioNetwork {
-        net,
         core,
-        warnings,
+        warnings: powerio::diagnostics::render_lines(&diagnostics),
+        diagnostics,
+        net,
     }))
 }
 
 /// Finish a `*mut PioNetwork` entry point: run `f` (producing a `BalancedNetwork` with
-/// its read warnings, or an error message) under the panic guard, hand back an
+/// its read findings, or an error message) under the panic guard, hand back an
 /// owned handle, or write the error, `panic_msg` if `f` panicked, into `errbuf`
 /// and return NULL. The shared tail of every handle-returning function
 /// (`pio_parse_file`, `pio_parse_str`, `pio_read_dir`, `pio_normalize`).
@@ -169,14 +177,14 @@ unsafe fn finish_network(
     errbuf: *mut c_char,
     errlen: usize,
     panic_msg: &str,
-    f: impl FnOnce() -> Result<(BalancedNetwork, Vec<String>), String>,
+    f: impl FnOnce() -> Result<(BalancedNetwork, Vec<StructuredDiagnostic>), String>,
 ) -> *mut PioNetwork {
     unsafe {
         // make_network runs inside the guard: IndexCore::build is part of the
         // entry point's work and the header promises panics never cross the
         // boundary.
         match catch_unwind(AssertUnwindSafe(|| {
-            f().map(|(net, warnings)| make_network(net, warnings))
+            f().map(|(net, diagnostics)| make_network(net, diagnostics))
         })) {
             Ok(Ok(handle)) => handle,
             Ok(Err(msg)) => {
@@ -454,7 +462,7 @@ pub unsafe extern "C" fn pio_parse_file(
             let path = cstr(path).ok_or_else(|| "path is NULL or not UTF-8".to_string())?;
             let from = optional_cstr(from, "from")?;
             powerio::parse_file(std::path::Path::new(path), from)
-                .map(|p| (p.network, p.warnings))
+                .map(|p| (p.network, p.diagnostics))
                 .map_err(|e| e.to_string())
         })
     }
@@ -482,7 +490,7 @@ pub unsafe extern "C" fn pio_parse_str(
             let text = cstr(text).ok_or_else(|| "text is NULL or not UTF-8".to_string())?;
             let format = cstr(format).ok_or_else(|| "format is NULL or not UTF-8".to_string())?;
             powerio::parse_str(text, format)
-                .map(|p| (p.network, p.warnings))
+                .map(|p| (p.network, p.diagnostics))
                 .map_err(|e| e.to_string())
         })
     }
@@ -519,7 +527,7 @@ pub unsafe extern "C" fn pio_parse_bytes(
                 std::slice::from_raw_parts(bytes, len)
             };
             powerio::parse_bytes(slice, format)
-                .map(|p| (p.network, p.warnings))
+                .map(|p| (p.network, p.diagnostics))
                 .map_err(|e| e.to_string())
         })
     }
@@ -644,7 +652,7 @@ pub unsafe extern "C" fn pio_read_dir(
             let dir = cstr(dir).ok_or_else(|| "dir is NULL or not UTF-8".to_string())?;
             let from = cstr(from).ok_or_else(|| "from is NULL or not UTF-8".to_string())?;
             powerio_matrix::read_dataset_dir(std::path::Path::new(dir), from, scenario)
-                .map(|read| (read.network, read.warnings))
+                .map(|read| (read.network, read.diagnostics))
                 .map_err(|e| e.to_string())
         })
     }
@@ -764,7 +772,7 @@ pub unsafe extern "C" fn pio_normalize(
             let c = network_ref(net).ok_or_else(|| "network handle is NULL".to_string())?;
             c.net
                 .to_normalized()
-                .map(|n| (n, c.warnings.clone()))
+                .map(|n| (n, c.diagnostics.clone()))
                 .map_err(|e| e.to_string())
         })
     }
@@ -802,9 +810,9 @@ pub unsafe extern "C" fn pio_normalize_with_options(
                     .net
                     .to_normalized_with_options(&options)
                     .map_err(|e| e.to_string())?;
-                let mut warnings = c.warnings.clone();
-                warnings.extend(out.warnings);
-                Ok((out.network, warnings))
+                let mut diagnostics = c.diagnostics.clone();
+                diagnostics.extend(out.diagnostics);
+                Ok((out.network, diagnostics))
             },
         )
     }
@@ -1735,10 +1743,9 @@ pub unsafe extern "C" fn pio_package_from_balanced_network(
             "panic while packaging balanced network",
             || {
                 let net = network_ref(net).ok_or_else(|| "network handle is NULL".to_string())?;
-                let mut package = powerio_pkg::NetworkPackage::from_balanced_with_read_warnings(
+                let mut package = powerio_pkg::NetworkPackage::from_balanced_with_read_diagnostics(
                     net.net.clone(),
-                    powerio_pkg::READ_TRANSMISSION_PARSE_WARNING,
-                    net.warnings.clone(),
+                    net.diagnostics.clone(),
                 );
                 if include_solver_metadata != 0 {
                     package
@@ -2231,11 +2238,19 @@ pub unsafe extern "C" fn pio_geo_apply(
             let mut out = c.net.clone();
             let report = out.apply_geo_layer(&parsed.layer);
             out.source = None;
-            let mut warnings = c.warnings.clone();
-            warnings.extend(parsed.warnings);
-            warnings.push(geo_apply_summary(&report));
-            warnings.extend(report.notes);
-            Ok((out, warnings))
+            let mut diagnostics = c.diagnostics.clone();
+            diagnostics.extend(parsed.diagnostics);
+            diagnostics.push(StructuredDiagnostic::of(
+                &powerio::diagnostics::codes::BUILD_GEO_APPLY_SUMMARY,
+                geo_apply_summary(&report),
+            ));
+            for note in report.notes {
+                diagnostics.push(StructuredDiagnostic::of(
+                    &powerio::diagnostics::codes::BUILD_GEO_UNMATCHED_FEATURE,
+                    note,
+                ));
+            }
+            Ok((out, diagnostics))
         })
     }
 }

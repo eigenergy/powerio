@@ -61,8 +61,7 @@ pub use model::{ModelKind, ModelPayload};
 pub use operating::{ElementRef, ElementUpdate, OperatingPoint, OperatingPointSeries, TimeAxis};
 pub use package::{
     DerivedMetadata, NetworkPackage, NormalizedSolverTableMetadata, NormalizedSolverTableRowCounts,
-    NormalizedSolverTableSourceRows, READ_GRIDFM_FIDELITY_WARNING, READ_TRANSMISSION_PARSE_WARNING,
-    ensure_payload_uids,
+    NormalizedSolverTableSourceRows, ensure_payload_uids,
 };
 pub use provenance::{
     Confidence, MappingKind, Origin, Producer, SourceDescriptor, SourceMapEntry, SourceRef,

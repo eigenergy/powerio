@@ -34,6 +34,9 @@ use std::sync::Arc;
 
 use serde_json::{Map, Value};
 
+use crate::diagnostics::{
+    DiagnosticInfo, Diagnostics, EmitFamily, StructuredDiagnostic, codes, render_line,
+};
 use crate::gen_cost::{GenCostPatch, MissingGenCostPolicy};
 use crate::network::{BalancedNetwork, Branch, BranchRatingSet, Bus, BusId, BusType, SourceFormat};
 use crate::{Error, Result};
@@ -455,14 +458,14 @@ pub fn parse_file(path: impl AsRef<std::path::Path>, from: Option<&str>) -> Resu
         let stem = path.file_stem().and_then(|s| s.to_str());
         // The binary reader is total (no fidelity warnings); wrap its network
         // in the shared [`Parsed`] shape.
-        let mut warnings = Vec::new();
+        let mut warnings = Diagnostics::new();
         let network = powerworld::parse_pwb_with_warnings(&bytes, stem, &mut warnings)?;
         return Ok(Parsed::without_document(network, warnings));
     }
     if from.is_some_and(is_pslf_name) || (from.is_none() && ext.as_deref() == Some("epc")) {
         let text = std::fs::read_to_string(path)?;
         let stem = path.file_stem().and_then(|s| s.to_str());
-        let mut warnings = Vec::new();
+        let mut warnings = Diagnostics::new();
         let source = strip_bom(Arc::new(text), &mut warnings);
         let network = pslf::parse_pslf_source(source, stem, &mut warnings)?;
         reject_empty_case(&network, "PSLF .epc")?;
@@ -528,13 +531,13 @@ pub fn parse_file(path: impl AsRef<std::path::Path>, from: Option<&str>) -> Resu
 /// (serde_json first among them) treats it as garbage in the first token. The
 /// retained source loses the mark, so a same-format echo differs by exactly
 /// those three bytes; the warning itemizes that per the fidelity policy.
-fn strip_bom(source: Arc<String>, warnings: &mut Vec<String>) -> Arc<String> {
+fn strip_bom(source: Arc<String>, warnings: &mut Diagnostics) -> Arc<String> {
     let Some(stripped) = source.strip_prefix('\u{feff}') else {
         return source;
     };
     warnings.push(
-        "leading UTF-8 byte order mark removed; a same-format write returns the text without it"
-            .to_owned(),
+        &codes::PARSE_SOURCE_BOM_STRIPPED,
+        "leading UTF-8 byte order mark removed; a same-format write returns the text without it",
     );
     Arc::new(stripped.to_owned())
 }
@@ -547,7 +550,7 @@ fn strip_bom(source: Arc<String>, warnings: &mut Vec<String>) -> Arc<String> {
 /// to specialize its parse internally. Owns the [`Parsed`] warnings vector;
 /// readers that report fidelity loss append to it.
 fn read_source(source: Arc<String>, fmt: TargetFormat, name_hint: Option<&str>) -> Result<Parsed> {
-    let mut warnings = Vec::new();
+    let mut warnings = Diagnostics::new();
     let source = strip_bom(source, &mut warnings);
     let mut document = None;
     let net = match fmt {
@@ -581,11 +584,7 @@ fn read_source(source: Arc<String>, fmt: TargetFormat, name_hint: Option<&str>) 
         }
     }?;
     reject_empty_case(&net, fmt.label())?;
-    Ok(Parsed {
-        network: net,
-        warnings,
-        document,
-    })
+    Ok(Parsed::new(net, warnings, document))
 }
 
 /// Geographic metadata for a reader that harvested longitude/latitude
@@ -704,7 +703,7 @@ pub fn parse_str(text: &str, format: &str) -> Result<Parsed> {
 /// As [`parse_str`].
 pub fn parse_str_with_name(text: &str, format: &str, name_hint: Option<&str>) -> Result<Parsed> {
     if is_pslf_name(format) {
-        let mut warnings = Vec::new();
+        let mut warnings = Diagnostics::new();
         let source = strip_bom(Arc::new(text.to_owned()), &mut warnings);
         let network = pslf::parse_pslf_source(source, name_hint, &mut warnings)?;
         reject_empty_case(&network, "PSLF .epc")?;
@@ -744,7 +743,7 @@ pub fn parse_bytes_with_name(
     if format.eq_ignore_ascii_case("pwb") {
         // Same call parse_file makes; the reader reports only what the
         // decoded layout cannot state.
-        let mut warnings = Vec::new();
+        let mut warnings = Diagnostics::new();
         let network = powerworld::parse_pwb_with_warnings(bytes, name_hint, &mut warnings)?;
         return Ok(Parsed::without_document(network, warnings));
     }
@@ -775,6 +774,11 @@ pub fn parse_bytes_with_name(
 #[non_exhaustive]
 pub struct Parsed {
     pub network: BalancedNetwork,
+    /// The reader's findings as structured records: a stable code, a severity,
+    /// and a message.
+    pub diagnostics: Vec<StructuredDiagnostic>,
+    /// The same findings as `CODE: message` lines, rendered from `diagnostics`
+    /// so the text and the structure cannot disagree.
     pub warnings: Vec<String>,
     /// The source document for formats whose downstream adapters reuse the
     /// reader's parse (see [`SourceDocument`]); `None` for every other format.
@@ -782,13 +786,22 @@ pub struct Parsed {
 }
 
 impl Parsed {
-    /// Wrap a reader result for a format without a shared source document.
-    pub(crate) fn without_document(network: BalancedNetwork, warnings: Vec<String>) -> Self {
+    pub(crate) fn new(
+        network: BalancedNetwork,
+        diagnostics: Diagnostics,
+        document: Option<SourceDocument>,
+    ) -> Self {
         Self {
             network,
-            warnings,
-            document: None,
+            warnings: diagnostics.lines(),
+            diagnostics: diagnostics.into_records(),
+            document,
         }
+    }
+
+    /// Wrap a reader result for a format without a shared source document.
+    pub(crate) fn without_document(network: BalancedNetwork, diagnostics: Diagnostics) -> Self {
+        Self::new(network, diagnostics, None)
     }
 }
 
@@ -815,7 +828,45 @@ pub enum SourceDocument {
 #[non_exhaustive]
 pub struct Conversion {
     pub text: String,
+    /// The writer's findings as structured records: a stable code, a severity,
+    /// and a message.
+    pub diagnostics: Vec<StructuredDiagnostic>,
+    /// The same findings as `CODE: message` lines, rendered from `diagnostics`
+    /// so the text and the structure cannot disagree.
     pub warnings: Vec<String>,
+}
+
+impl Conversion {
+    pub(crate) fn new(text: String, diagnostics: Diagnostics) -> Self {
+        Self {
+            text,
+            warnings: diagnostics.lines(),
+            diagnostics: diagnostics.into_records(),
+        }
+    }
+
+    /// A conversion that dropped nothing, e.g. a same-format echo.
+    pub(crate) fn faithful(text: String) -> Self {
+        Self::new(text, Diagnostics::new())
+    }
+
+    /// Record one finding after the writer has run. Both channels move
+    /// together: the line is rendered from the record it is added with.
+    pub(crate) fn push(&mut self, info: &DiagnosticInfo, message: impl Into<String>) {
+        let diagnostic = StructuredDiagnostic::of(info, message);
+        self.warnings.push(render_line(&diagnostic));
+        self.diagnostics.push(diagnostic);
+    }
+
+    /// Put the read side's findings ahead of the write side's.
+    pub(crate) fn prepend(&mut self, read: Vec<StructuredDiagnostic>) {
+        let mut lines: Vec<String> = read.iter().map(render_line).collect();
+        lines.append(&mut self.warnings);
+        self.warnings = lines;
+        let mut records = read;
+        records.append(&mut self.diagnostics);
+        self.diagnostics = records;
+    }
 }
 
 /// Optional write-time policies layered on top of the neutral [`BalancedNetwork`].
@@ -849,10 +900,7 @@ impl WriteOptions {
 pub fn write_as(net: &BalancedNetwork, format: TargetFormat) -> Result<Conversion> {
     if is_echo(net, format) {
         if let Some(src) = &net.source {
-            return Ok(Conversion {
-                text: src.to_string(),
-                warnings: Vec::new(),
-            });
+            return Ok(Conversion::faithful(src.to_string()));
         }
     }
     let mut conv = match format {
@@ -872,18 +920,18 @@ pub fn write_as(net: &BalancedNetwork, format: TargetFormat) -> Result<Conversio
         // is JSON's missing Inf/NaN: serde writes them as `null`, which
         // `from_json` rejects on the way back, so warn, naming every field.
         TargetFormat::PowerioJson => {
-            return net.to_json().map(|text| Conversion {
-                text,
-                warnings: net
-                    .non_finite_fields()
-                    .into_iter()
-                    .map(|path| {
+            return net.to_json().map(|text| {
+                let mut diagnostics = Diagnostics::new();
+                for path in net.non_finite_fields() {
+                    diagnostics.push(
+                        &codes::EMIT_PIO_JSON.not_a_number,
                         format!(
                             "{path} is not finite; JSON has no Inf/NaN, so it is written as \
                              null and this snapshot will not read back as powerio-json"
-                        )
-                    })
-                    .collect(),
+                        ),
+                    );
+                }
+                Conversion::new(text, diagnostics)
             });
         }
         TargetFormat::Pslf => write_pslf(net),
@@ -922,36 +970,41 @@ pub fn write_as_with_options(
     let mut working = net.clone();
     let report =
         working.apply_gen_cost_policy(&options.gen_cost_patches, options.missing_gen_cost)?;
-    let mut policy_warnings = Vec::new();
+    let mut policy_warnings = Diagnostics::new();
     if report.patched > 0 {
-        policy_warnings.push(format!(
-            "generator cost patch applied to {} generator(s)",
-            report.patched
-        ));
+        policy_warnings.push(
+            &codes::LOWER_GEN_COST_POLICY_APPLIED,
+            format!(
+                "generator cost patch applied to {} generator(s)",
+                report.patched
+            ),
+        );
     }
     if report.synthesized > 0 {
-        policy_warnings.push(match options.missing_gen_cost {
-            MissingGenCostPolicy::Fill {
-                c2,
-                c1,
-                c0,
-                startup,
-                shutdown,
-            } => format!(
-                "generator cost synthesized for {} generator(s): model 2, ncost 3, \
+        policy_warnings.push(
+            &codes::LOWER_GEN_COST_POLICY_APPLIED,
+            match options.missing_gen_cost {
+                MissingGenCostPolicy::Fill {
+                    c2,
+                    c1,
+                    c0,
+                    startup,
+                    shutdown,
+                } => format!(
+                    "generator cost synthesized for {} generator(s): model 2, ncost 3, \
                  coeffs [{c2}, {c1}, {c0}], startup {startup}, shutdown {shutdown}",
-                report.synthesized
-            ),
-            _ => unreachable!("only Fill synthesizes costs"),
-        });
+                    report.synthesized
+                ),
+                _ => unreachable!("only Fill synthesizes costs"),
+            },
+        );
     }
     if report.patched > 0 || report.synthesized > 0 {
         working.source = None;
     }
 
     let mut conv = write_as(&working, format)?;
-    policy_warnings.append(&mut conv.warnings);
-    conv.warnings = policy_warnings;
+    conv.prepend(policy_warnings.into_records());
     Ok(conv)
 }
 
@@ -994,10 +1047,13 @@ fn warn_psse_downgrade(net: &BalancedNetwork, format: TargetFormat, conv: &mut C
     {
         let src_rev = psse::header_rev(src);
         if src_rev > rev {
-            conv.warnings.push(format!(
-                "PSS/E source is revision {src_rev} but the write target is revision {rev}; \
-                 the older layout drops fields the source carried (write to psse{src_rev} to keep them)"
-            ));
+            conv.push(
+                &codes::EMIT_PSSE_DOWNGRADED,
+                format!(
+                    "PSS/E source is revision {src_rev} but the write target is revision {rev}; \
+                     the older layout drops fields the source carried (write to psse{src_rev} to keep them)"
+                ),
+            );
         }
     }
 }
@@ -1015,12 +1071,15 @@ fn warn_dropped_frequency(net: &BalancedNetwork, format: TargetFormat, conv: &mu
         return;
     }
     if (net.base_frequency - crate::network::DEFAULT_BASE_FREQUENCY).abs() > 1e-9 {
-        conv.warnings.push(format!(
-            "system base frequency {} Hz dropped: {} has no frequency field (reads back as {} Hz)",
-            net.base_frequency,
-            format.label(),
-            crate::network::DEFAULT_BASE_FREQUENCY
-        ));
+        conv.push(
+            &format.emit_family().field_dropped,
+            format!(
+                "system base frequency {} Hz dropped: {} has no frequency field (reads back as {} Hz)",
+                net.base_frequency,
+                format.label(),
+                crate::network::DEFAULT_BASE_FREQUENCY
+            ),
+        );
     }
 }
 
@@ -1041,11 +1100,14 @@ fn warn_dropped_locations(net: &BalancedNetwork, format: TargetFormat, conv: &mu
     let n = net.buses.iter().filter(|b| b.location.is_some()).count();
     let routed = net.branches.iter().filter(|b| b.route.is_some()).count();
     if n > 0 || routed > 0 {
-        conv.warnings.push(format!(
-            "{n} bus location(s) and {routed} branch route(s) dropped: {} has no \
-             coordinate field (write a .geo.json sidecar to keep them)",
-            format.label()
-        ));
+        conv.push(
+            &format.emit_family().field_dropped,
+            format!(
+                "{n} bus location(s) and {routed} branch route(s) dropped: {} has no \
+                 coordinate field (write a .geo.json sidecar to keep them)",
+                format.label()
+            ),
+        );
     }
 }
 
@@ -1068,10 +1130,13 @@ fn warn_dropped_transformer_charging(
         .filter(|b| b.is_transformer() && b.total_charging_b() != 0.0)
         .count();
     if n > 0 {
-        conv.warnings.push(format!(
-            "{n} transformer(s) carry line charging that the PSLF .epc transformer \
-             record cannot represent; the charging was dropped"
-        ));
+        conv.push(
+            &codes::EMIT_PSLF.field_dropped,
+            format!(
+                "{n} transformer(s) carry line charging that the PSLF .epc transformer \
+                 record cannot represent; the charging was dropped"
+            ),
+        );
     }
 }
 
@@ -1099,10 +1164,11 @@ pub(super) fn branch_rating_set_drop_warning(
 /// an undeclared loss (#330). One line, a count and the reason, matching the
 /// granularity of the other writer warnings.
 pub(super) fn warn_dropped_extras(
+    family: &'static EmitFamily,
     target: &str,
     net: &BalancedNetwork,
     consumed: impl Fn(&str) -> bool,
-    warnings: &mut Vec<String>,
+    warnings: &mut Diagnostics,
 ) {
     let carries = |extras: &crate::network::Extras| extras.keys().any(|k| !consumed(k));
     let dropped = net.buses.iter().filter(|e| carries(&e.extras)).count()
@@ -1118,37 +1184,47 @@ pub(super) fn warn_dropped_extras(
             .filter(|e| carries(&e.extras))
             .count();
     if dropped > 0 {
-        warnings.push(format!(
-            "{dropped} element(s) carry source-format passthrough fields (extras) the {target} \
-             writer does not replay; dropped"
-        ));
+        warnings.push(
+            &family.extras_dropped,
+            format!(
+                "{dropped} element(s) carry source-format passthrough fields (extras) the {target} \
+                 writer does not replay; dropped"
+            ),
+        );
     }
 }
 
 /// Warn when a writer drops the area table. Its own line rather than the
 /// extras count: `areas` is a typed field, not a passthrough (#330).
-pub(super) fn warn_dropped_areas(target: &str, net: &BalancedNetwork, warnings: &mut Vec<String>) {
+pub(super) fn warn_dropped_areas(
+    family: &'static EmitFamily,
+    target: &str,
+    net: &BalancedNetwork,
+    warnings: &mut Diagnostics,
+) {
     if !net.areas.is_empty() {
-        warnings.push(format!(
-            "{} area record(s) dropped: the {target} writer emits no area table",
-            net.areas.len()
-        ));
+        warnings.push(
+            &family.areas_dropped,
+            format!(
+                "{} area record(s) dropped: the {target} writer emits no area table",
+                net.areas.len()
+            ),
+        );
     }
 }
 
 pub(super) fn warn_extra_branch_rating_sets(
+    family: &'static EmitFamily,
     target: &str,
     net: &BalancedNetwork,
-    warnings: &mut Vec<String>,
+    warnings: &mut Diagnostics,
 ) {
     for (branch_index, branch) in net.branches.iter().enumerate() {
         for rating in &branch.rating_sets {
-            warnings.push(branch_rating_set_drop_warning(
-                target,
-                branch_index,
-                branch,
-                rating,
-            ));
+            warnings.push(
+                &family.rating_set_dropped,
+                branch_rating_set_drop_warning(target, branch_index, branch, rating),
+            );
         }
     }
 }
@@ -1171,7 +1247,7 @@ pub fn convert_file(
     let parsed = parse_file(path, from)?;
     let mut conv = write_as(&parsed.network, to)?;
     if !is_echo(&parsed.network, to) {
-        conv.warnings.splice(0..0, parsed.warnings);
+        conv.prepend(parsed.diagnostics);
     }
     Ok(conv)
 }
@@ -1186,7 +1262,7 @@ pub fn convert_file_with_options(
     let parsed = parse_file(path, from)?;
     let mut conv = write_as_with_options(&parsed.network, to, options)?;
     if !is_echo(&parsed.network, to) || !options.is_default() {
-        conv.warnings.splice(0..0, parsed.warnings);
+        conv.prepend(parsed.diagnostics);
     }
     Ok(conv)
 }
@@ -1204,7 +1280,7 @@ pub fn convert_str(text: &str, to: TargetFormat, format: &str) -> Result<Convers
     let parsed = parse_str(text, format)?;
     let mut conv = write_as(&parsed.network, to)?;
     if !is_echo(&parsed.network, to) {
-        conv.warnings.splice(0..0, parsed.warnings);
+        conv.prepend(parsed.diagnostics);
     }
     Ok(conv)
 }
@@ -1219,7 +1295,7 @@ pub fn convert_str_with_options(
     let parsed = parse_str(text, format)?;
     let mut conv = write_as_with_options(&parsed.network, to, options)?;
     if !is_echo(&parsed.network, to) || !options.is_default() {
-        conv.warnings.splice(0..0, parsed.warnings);
+        conv.prepend(parsed.diagnostics);
     }
     Ok(conv)
 }
@@ -1263,7 +1339,9 @@ fn warn_missing_reference(net: &BalancedNetwork, format: TargetFormat, conv: &mu
             | TargetFormat::SurgeJson
     );
     if needs_ref {
-        conv.warnings.extend(missing_reference_warning(net));
+        if let Some(message) = missing_reference_warning(net) {
+            conv.push(&format.emit_family().reference_missing, message);
+        }
     }
 }
 
@@ -1295,7 +1373,9 @@ fn warn_normalized_tap(net: &BalancedNetwork, format: TargetFormat, conv: &mut C
     if matches!(format, TargetFormat::Matpower) {
         return;
     }
-    conv.warnings.extend(normalized_tap_warning(net));
+    if let Some(message) = normalized_tap_warning(net) {
+        conv.push(&format.emit_family().element_relabeled, message);
+    }
 }
 
 /// The normalized-label warning itself, shared with the PyPSA folder writer.
@@ -1442,18 +1522,25 @@ pub(crate) fn jnum(x: f64) -> Value {
 /// Serialize a built JSON tree into a [`Conversion`], appending one warning that
 /// names every field where a non-finite `f64` was written as `null` (JSON has no
 /// `±Inf`/`NaN`). Shared by the JSON writers.
-pub(crate) fn finish(root: Map<String, Value>, mut warnings: Vec<String>) -> Conversion {
+pub(crate) fn finish(
+    family: &'static EmitFamily,
+    root: Map<String, Value>,
+    mut warnings: Diagnostics,
+) -> Conversion {
     let value = Value::Object(root);
     let mut nulls = BTreeSet::new();
     collect_null_keys(&value, &mut nulls);
     if !nulls.is_empty() {
-        warnings.push(format!(
-            "non-finite numeric values written as JSON null in field(s): {}",
-            nulls.into_iter().collect::<Vec<_>>().join(", ")
-        ));
+        warnings.push(
+            &family.not_a_number,
+            format!(
+                "non-finite numeric values written as JSON null in field(s): {}",
+                nulls.into_iter().collect::<Vec<_>>().join(", ")
+            ),
+        );
     }
     let text = serde_json::to_string_pretty(&value).expect("a serde_json::Value always serializes");
-    Conversion { text, warnings }
+    Conversion::new(text, warnings)
 }
 
 /// Collect the names of object keys whose value is `null`, anywhere in the tree.

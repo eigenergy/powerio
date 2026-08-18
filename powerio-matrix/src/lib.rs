@@ -49,7 +49,9 @@ pub use powerio::{
     write_pypsa_csv_folder,
 };
 
+pub mod diagnostics;
 pub mod error;
+pub use diagnostics::Diagnostics;
 pub use error::{ElementCounts, Error, Result, ScenarioMismatch};
 
 /// The hub's error, so a binding can map both through one taxonomy.

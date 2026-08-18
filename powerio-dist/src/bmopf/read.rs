@@ -14,6 +14,7 @@ use std::sync::Arc;
 use serde::de::DeserializeOwned;
 use serde_json::{Map, Value};
 
+use crate::diagnostics::codes as C;
 use crate::error::{Error, Result};
 use crate::geo::{CoordinateSpace, CoordsKind, GeoMeta, Location};
 use crate::model::{
@@ -55,9 +56,14 @@ pub fn parse_bmopf_str(text: &str) -> Result<MulticonductorNetwork> {
     report_non_numeric_fields(&doc, &mut net);
     let mut rd = Reader {
         net: &mut net,
+        diagnostics: crate::diagnostics::Diagnostics::new(),
         frequency_stated: false,
     };
     rd.document(&doc);
+    let found = std::mem::take(&mut rd.diagnostics);
+    for diagnostic in found {
+        net.record(diagnostic);
+    }
     crate::model::warn_unresolved_references(&mut net);
     Ok(net)
 }
@@ -170,11 +176,9 @@ fn report_non_numeric_fields(doc: &Map<String, Value>, net: &mut MulticonductorN
             "{pointer}: the schema types this field as a number and it holds {what}; \
              it reads as NaN and anything derived from it is undefined"
         );
-        net.warnings.push(message.clone());
-        net.parse_diagnostics.push(
-            crate::diagnostics::StructuredDiagnostic::new(
-                crate::diagnostics::READ_BMOPF_FIELD_NOT_A_NUMBER,
-                crate::diagnostics::DiagnosticSeverity::Error,
+        net.record(
+            crate::diagnostics::StructuredDiagnostic::of(
+                &crate::diagnostics::codes::READ_BMOPF_FIELD_NOT_A_NUMBER,
                 message,
             )
             .with_element_path(pointer)
@@ -212,6 +216,9 @@ fn report_non_numeric_fields(doc: &Map<String, Value>, net: &mut MulticonductorN
 
 struct Reader<'a> {
     net: &'a mut MulticonductorNetwork,
+    /// The reader's findings, flushed into the network once the parse is
+    /// done so a helper never borrows the network the caller is writing into.
+    diagnostics: crate::diagnostics::Diagnostics,
     frequency_stated: bool,
 }
 
@@ -240,12 +247,16 @@ fn delta_roll_value(v: Option<&Value>) -> Option<i64> {
 /// Like [`first_float`], but the field is per-phase-terminal in the schema
 /// while powerio's model holds one value; warn when collapsing loses a
 /// genuine per-phase difference instead of dropping it silently.
-fn first_float_collapsed(v: Option<&Value>, what: &str, warnings: &mut Vec<String>) -> Option<f64> {
+fn first_float_collapsed(
+    v: Option<&Value>,
+    what: &str,
+    diagnostics: &mut crate::diagnostics::Diagnostics,
+) -> Option<f64> {
     match v? {
         Value::Array(a) => {
             let vals: Vec<f64> = a.iter().map(f).collect();
             if vals.windows(2).any(|w| w[0].to_bits() != w[1].to_bits()) {
-                warnings.push(format!(
+                diagnostics.push(&C::READ_BMOPF_VALUE_COLLAPSED, format!(
                     "{what}: per-phase-terminal bound is non-uniform; collapsed to the first entry"
                 ));
             }
@@ -305,13 +316,16 @@ fn string(v: Option<&Value>) -> String {
 fn enum_field<T: DeserializeOwned>(
     v: Option<&Value>,
     what: &str,
-    warnings: &mut Vec<String>,
+    diagnostics: &mut crate::diagnostics::Diagnostics,
 ) -> Option<T> {
     let value = v?;
     match serde_json::from_value(value.clone()) {
         Ok(parsed) => Some(parsed),
         Err(err) => {
-            warnings.push(format!("{what}: {err}; field ignored"));
+            diagnostics.push(
+                &C::READ_BMOPF_SOURCE_MALFORMED,
+                format!("{what}: {err}; field ignored"),
+            );
             None
         }
     }
@@ -319,7 +333,11 @@ fn enum_field<T: DeserializeOwned>(
 
 /// Case insensitive on the recognized values (the dss reader's tolerance);
 /// a present but unrecognized string warns and reads as WYE.
-fn config(v: Option<&Value>, what: &str, warnings: &mut Vec<String>) -> Configuration {
+fn config(
+    v: Option<&Value>,
+    what: &str,
+    diagnostics: &mut crate::diagnostics::Diagnostics,
+) -> Configuration {
     let Some(s) = v.and_then(Value::as_str) else {
         return Configuration::Wye;
     };
@@ -328,9 +346,12 @@ fn config(v: Option<&Value>, what: &str, warnings: &mut Vec<String>) -> Configur
         "DELTA" => Configuration::Delta,
         "SINGLE_PHASE" => Configuration::SinglePhase,
         _ => {
-            warnings.push(format!(
-                "{what}: configuration `{s}` is not WYE, DELTA, or SINGLE_PHASE; read as WYE"
-            ));
+            diagnostics.push(
+                &C::READ_BMOPF_VALUE_UNSUPPORTED,
+                format!(
+                    "{what}: configuration `{s}` is not WYE, DELTA, or SINGLE_PHASE; read as WYE"
+                ),
+            );
             Configuration::Wye
         }
     }
@@ -421,7 +442,7 @@ fn take_extras(
     o: &Map<String, Value>,
     known: &[&str],
     what: &str,
-    warnings: &mut Vec<String>,
+    diagnostics: &mut crate::diagnostics::Diagnostics,
     matrix_prefixes: &[&str],
 ) -> Extras {
     let mut extras = Extras::new();
@@ -435,9 +456,10 @@ fn take_extras(
         {
             continue;
         }
-        warnings.push(format!(
-            "{what}: `{k}` is outside the schema; kept in extras"
-        ));
+        diagnostics.push(
+            &C::READ_BMOPF_RETAINED_SOURCE_ONLY,
+            format!("{what}: `{k}` is outside the schema; kept in extras"),
+        );
         extras.insert(k.clone(), v.clone());
     }
     extras
@@ -543,9 +565,10 @@ impl Reader<'_> {
                         .insert("bmopf_meta".into(), Value::Object(items.clone()));
                 }
                 other => {
-                    self.net.warnings.push(format!(
-                        "top level `{other}` is outside the schema; kept untyped"
-                    ));
+                    self.diagnostics.push(
+                        &C::READ_BMOPF_RETAINED_SOURCE_ONLY,
+                        format!("top level `{other}` is outside the schema; kept untyped"),
+                    );
                     for (name, v) in items {
                         self.net.untyped.push(UntypedObject {
                             class: other.to_string(),
@@ -575,10 +598,10 @@ impl Reader<'_> {
             .and_then(Value::as_object)
             .filter(|o| !o.is_empty());
         if overlay.is_some() && self.net.transformers.is_empty() {
-            self.net.warnings.push(
+            self.diagnostics.push(
+                &C::READ_BMOPF_FIELD_DROPPED,
                 "`extras.transformer` carries fields for transformers the document does \
-                 not declare; the fields are dropped"
-                    .to_string(),
+                 not declare; the fields are dropped",
             );
         }
     }
@@ -624,7 +647,7 @@ impl Reader<'_> {
                 configuration: config(
                     o.get("configuration"),
                     &format!("capacitor {name}"),
-                    &mut self.net.warnings,
+                    &mut self.diagnostics,
                 ),
                 q_rated: o.get("q_rated").map_or(f64::NAN, f),
                 v_nom: o.get("v_nom").map_or(f64::NAN, f),
@@ -632,7 +655,7 @@ impl Reader<'_> {
                     o,
                     &known,
                     &format!("capacitor {name}"),
-                    &mut self.net.warnings,
+                    &mut self.diagnostics,
                     &[],
                 ),
             });
@@ -665,13 +688,13 @@ impl Reader<'_> {
             let topology = enum_field::<IbrTopology>(
                 o.get("topology"),
                 &format!("ibr {name} topology"),
-                &mut self.net.warnings,
+                &mut self.diagnostics,
             )
             .unwrap_or(IbrTopology::SinglePhase);
             let prime_mover = enum_field::<IbrPrimeMover>(
                 o.get("prime_mover"),
                 &format!("ibr {name} prime_mover"),
-                &mut self.net.warnings,
+                &mut self.diagnostics,
             )
             .unwrap_or(IbrPrimeMover::Generic);
             let mut extras = Extras::new();
@@ -700,7 +723,7 @@ impl Reader<'_> {
                 voltage_aggregation: enum_field::<IbrVoltageAggregation>(
                     o.get("voltage_aggregation"),
                     &format!("ibr {name} voltage_aggregation"),
-                    &mut self.net.warnings,
+                    &mut self.diagnostics,
                 ),
                 extras,
             });
@@ -722,10 +745,13 @@ impl Reader<'_> {
         if !seen(self.net) {
             return false;
         }
-        self.net.warnings.push(format!(
-            "{class} {name}: the document declares this name at the top level and under \
+        self.diagnostics.push(
+            &C::READ_BMOPF_RECORD_DROPPED,
+            format!(
+                "{class} {name}: the document declares this name at the top level and under \
              `extras`; the second copy is dropped"
-        ));
+            ),
+        );
         true
     }
 
@@ -749,19 +775,19 @@ impl Reader<'_> {
                     voltage_reference: enum_field::<ControlVoltageReference>(
                         vv.get("voltage_reference"),
                         &format!("control_profile {name} volt_var voltage_reference"),
-                        &mut self.net.warnings,
+                        &mut self.diagnostics,
                     ),
                     breakpoints: floats(vv.get("breakpoints")).unwrap_or_default(),
                     q_limits: floats(vv.get("q_limits")).unwrap_or_default(),
                     q_unit: enum_field::<ReactivePowerUnit>(
                         vv.get("q_unit"),
                         &format!("control_profile {name} volt_var q_unit"),
-                        &mut self.net.warnings,
+                        &mut self.diagnostics,
                     ),
                     q_ref: enum_field::<ReactivePowerReference>(
                         vv.get("q_ref"),
                         &format!("control_profile {name} volt_var q_ref"),
-                        &mut self.net.warnings,
+                        &mut self.diagnostics,
                     ),
                     p_min_for_q: first_float(vv.get("p_min_for_q")),
                     p_min_for_q_max: first_float(vv.get("p_min_for_q_max")),
@@ -772,19 +798,19 @@ impl Reader<'_> {
                     voltage_reference: enum_field::<ControlVoltageReference>(
                         vw.get("voltage_reference"),
                         &format!("control_profile {name} volt_watt voltage_reference"),
-                        &mut self.net.warnings,
+                        &mut self.diagnostics,
                     ),
                     breakpoints: floats(vw.get("breakpoints")).unwrap_or_default(),
                     p_limits: floats(vw.get("p_limits")).unwrap_or_default(),
                     p_unit: enum_field::<ActivePowerUnit>(
                         vw.get("p_unit"),
                         &format!("control_profile {name} volt_watt p_unit"),
-                        &mut self.net.warnings,
+                        &mut self.diagnostics,
                     ),
                     p_ref: enum_field::<ActivePowerReference>(
                         vw.get("p_ref"),
                         &format!("control_profile {name} volt_watt p_ref"),
-                        &mut self.net.warnings,
+                        &mut self.diagnostics,
                     ),
                 });
             }
@@ -797,6 +823,9 @@ impl Reader<'_> {
         }
     }
 
+    // One block per object field; splitting it would scatter a list that
+    // reads end to end.
+    #[expect(clippy::too_many_lines)]
     fn buses(&mut self, items: &Map<String, Value>) {
         for (id, v) in items {
             let Value::Object(o) = v else { continue };
@@ -832,7 +861,7 @@ impl Reader<'_> {
                     Some(Location { x, y, kind: None })
                 }
                 _ if has_lon || has_lat => {
-                    self.net.warnings.push(format!(
+                    self.diagnostics.push(&C::READ_BMOPF_RETAINED_SOURCE_ONLY, format!(
                         "bus {id}: longitude/latitude sideload is incomplete or nonfinite; kept in extras"
                     ));
                     None
@@ -840,7 +869,7 @@ impl Reader<'_> {
                 _ => None,
             };
             let mut extras =
-                take_extras(o, &known, &format!("bus {id}"), &mut self.net.warnings, &[]);
+                take_extras(o, &known, &format!("bus {id}"), &mut self.diagnostics, &[]);
             if location.is_none() {
                 if let Some(value) = o.get("longitude") {
                     extras.insert("longitude".into(), value.clone());
@@ -857,10 +886,13 @@ impl Reader<'_> {
             let legacy_min = floats(o.get("vsym_min"));
             let legacy_max = floats(o.get("vsym_max"));
             if legacy_min.is_some() || legacy_max.is_some() {
-                self.net.warnings.push(format!(
-                    "bus {id}: legacy vsym_min/vsym_max arrays mapped to the per-sequence \
+                self.diagnostics.push(
+                    &C::READ_BMOPF_VALUE_INFERRED,
+                    format!(
+                        "bus {id}: legacy vsym_min/vsym_max arrays mapped to the per-sequence \
                      scalars assuming zero/positive/negative order"
-                ));
+                    ),
+                );
             }
             let legacy_vpos_min = legacy_min.as_ref().and_then(|v| v.get(1).copied());
             let legacy_vpos_max = legacy_max.as_ref().and_then(|v| v.get(1).copied());
@@ -870,10 +902,13 @@ impl Reader<'_> {
                 .as_ref()
                 .is_some_and(|v| [v.first(), v.get(2)].iter().flatten().any(|&&m| m != 0.0))
             {
-                self.net.warnings.push(format!(
-                    "bus {id}: legacy vsym_min zero/negative sequence lower bounds have no \
+                self.diagnostics.push(
+                    &C::READ_BMOPF_FIELD_DROPPED,
+                    format!(
+                        "bus {id}: legacy vsym_min zero/negative sequence lower bounds have no \
                      slot in schema 0.1.0 (fixed at 0); dropped"
-                ));
+                    ),
+                );
             }
             self.net.buses.push(DistBus {
                 id: id.clone(),
@@ -882,12 +917,12 @@ impl Reader<'_> {
                 v_min: first_float_collapsed(
                     o.get("v_min"),
                     &format!("bus {id} v_min"),
-                    &mut self.net.warnings,
+                    &mut self.diagnostics,
                 ),
                 v_max: first_float_collapsed(
                     o.get("v_max"),
                     &format!("bus {id} v_max"),
-                    &mut self.net.warnings,
+                    &mut self.diagnostics,
                 ),
                 vpn_min: floats(o.get("vpn_min")),
                 vpn_max: floats(o.get("vpn_max")),
@@ -911,10 +946,13 @@ impl Reader<'_> {
             // read as zero, smaller ones pad without losing entries.
             let ([r, x, gf, bf, gt, bt], n, ragged) = linecode_matrices(o);
             if ragged {
-                self.net.warnings.push(format!(
-                    "linecode {name}: matrix sizes disagree; smaller ones padded \
+                self.diagnostics.push(
+                    &C::READ_BMOPF_VALUE_DEFAULTED,
+                    format!(
+                        "linecode {name}: matrix sizes disagree; smaller ones padded \
                      with zeros to {n}x{n}"
-                ));
+                    ),
+                );
             }
             let code = DistLineCode {
                 name: name.clone(),
@@ -932,7 +970,7 @@ impl Reader<'_> {
                     o,
                     &["i_max", "s_max", "source"],
                     &format!("linecode {name}"),
-                    &mut self.net.warnings,
+                    &mut self.diagnostics,
                     &["R_series", "X_series", "G_from", "G_to", "B_from", "B_to"],
                 ),
             };
@@ -976,11 +1014,14 @@ impl Reader<'_> {
                 // this branch, so it must not scale them. The synthesized
                 // linecode holds those ohms per meter at unit length.
                 if length.is_finite() && (length - 1.0).abs() > f64::EPSILON {
-                    self.net.warnings.push(format!(
-                        "line {name}: inline impedance matrices are absolute, so the \
+                    self.diagnostics.push(
+                        &C::READ_BMOPF_VALUE_DEFAULTED,
+                        format!(
+                            "line {name}: inline impedance matrices are absolute, so the \
                          descriptive `length` {length} does not scale them; the model \
                          keeps the line at unit length"
-                    ));
+                        ),
+                    );
                 }
                 length = 1.0;
             } else if !length.is_finite() {
@@ -989,10 +1030,13 @@ impl Reader<'_> {
                 // computation downstream inherits, so name the gap the way the
                 // transformer reader names a missing s_rating instead of
                 // letting the NaN travel silently.
-                self.net.warnings.push(format!(
-                    "line {name}: `length` missing or non-finite; impedances derived from \
+                self.diagnostics.push(
+                    &C::READ_BMOPF_VALUE_DEFAULTED,
+                    format!(
+                        "line {name}: `length` missing or non-finite; impedances derived from \
                      this line are undefined"
-                ));
+                    ),
+                );
             }
             self.net.lines.push(DistLine {
                 name: name.clone(),
@@ -1009,7 +1053,7 @@ impl Reader<'_> {
                     o,
                     &known,
                     &format!("line {name}"),
-                    &mut self.net.warnings,
+                    &mut self.diagnostics,
                     if inline {
                         &["R_series", "X_series", "G_from", "G_to", "B_from", "B_to"]
                     } else {
@@ -1035,19 +1079,25 @@ impl Reader<'_> {
             name.push('_');
         }
         taken.insert(name.to_ascii_lowercase());
-        self.net.warnings.push(format!(
-            "line {line}: inline impedance matrices read into synthesized linecode `{name}`"
-        ));
+        self.diagnostics.push(
+            &C::READ_BMOPF_VALUE_INFERRED,
+            format!(
+                "line {line}: inline impedance matrices read into synthesized linecode `{name}`"
+            ),
+        );
         let ([r, x, gf, bf, gt, bt], n, ragged) = linecode_matrices(o);
         if ragged {
             // The declared-linecode path reports this. An inline matrix set
             // that disagrees in size is padded the same way, and a conductor
             // that gains a zero where the document held nothing is a change
             // of physics, so it needs the same warning.
-            self.net.warnings.push(format!(
-                "line {line}: inline matrix sizes disagree; smaller ones padded \
+            self.diagnostics.push(
+                &C::READ_BMOPF_VALUE_DEFAULTED,
+                format!(
+                    "line {line}: inline matrix sizes disagree; smaller ones padded \
                  with zeros to {n}x{n}"
-            ));
+                ),
+            );
         }
         self.net.linecodes.push(DistLineCode {
             name: name.clone(),
@@ -1092,7 +1142,7 @@ impl Reader<'_> {
                     o,
                     &known,
                     &format!("switch {name}"),
-                    &mut self.net.warnings,
+                    &mut self.diagnostics,
                     &[],
                 ),
             });
@@ -1161,7 +1211,7 @@ impl Reader<'_> {
                 configuration: config(
                     o.get("configuration"),
                     &format!("load {name}"),
-                    &mut self.net.warnings,
+                    &mut self.diagnostics,
                 ),
                 p_nom: floats(o.get("p_nom")).unwrap_or_default(),
                 q_nom: floats(o.get("q_nom")).unwrap_or_default(),
@@ -1170,7 +1220,7 @@ impl Reader<'_> {
                     o,
                     &known,
                     &format!("load {name}"),
-                    &mut self.net.warnings,
+                    &mut self.diagnostics,
                     &[],
                 ),
             });
@@ -1211,10 +1261,13 @@ impl Reader<'_> {
                     // Bit comparison: detect any per-phase difference exactly
                     // (broadcast entries are bit-identical), without a float_cmp.
                     if vals.windows(2).any(|w| w[0].to_bits() != w[1].to_bits()) {
-                        self.net.warnings.push(format!(
-                            "generator {name}: per-phase cost is non-uniform; \
+                        self.diagnostics.push(
+                            &C::READ_BMOPF_VALUE_COLLAPSED,
+                            format!(
+                                "generator {name}: per-phase cost is non-uniform; \
                              collapsed to the first entry"
-                        ));
+                            ),
+                        );
                     }
                     vals.first().copied()
                 }
@@ -1228,7 +1281,7 @@ impl Reader<'_> {
                 configuration: config(
                     o.get("configuration"),
                     &format!("generator {name}"),
-                    &mut self.net.warnings,
+                    &mut self.diagnostics,
                 ),
                 p_nom: pinned(&p_min, &p_max),
                 q_nom: pinned(&q_min, &q_max),
@@ -1243,7 +1296,7 @@ impl Reader<'_> {
                     o,
                     &known,
                     &format!("generator {name}"),
-                    &mut self.net.warnings,
+                    &mut self.diagnostics,
                     &[],
                 ),
             });
@@ -1257,12 +1310,15 @@ impl Reader<'_> {
             let b = flat_matrix(o, "B").unwrap_or_default();
             let n = g.len().max(b.len());
             if g.len() != b.len() {
-                self.net.warnings.push(format!(
-                    "shunt {name}: G is {gx}x{gx} but B is {bx}x{bx}; the smaller \
+                self.diagnostics.push(
+                    &C::READ_BMOPF_VALUE_DEFAULTED,
+                    format!(
+                        "shunt {name}: G is {gx}x{gx} but B is {bx}x{bx}; the smaller \
                      padded with zeros to {n}x{n}",
-                    gx = g.len(),
-                    bx = b.len(),
-                ));
+                        gx = g.len(),
+                        bx = b.len(),
+                    ),
+                );
             }
             self.net.shunts.push(DistShunt {
                 name: name.clone(),
@@ -1274,7 +1330,7 @@ impl Reader<'_> {
                     o,
                     &["bus", "terminal_map"],
                     &format!("shunt {name}"),
-                    &mut self.net.warnings,
+                    &mut self.diagnostics,
                     &["G", "B"],
                 ),
             });
@@ -1295,7 +1351,7 @@ impl Reader<'_> {
                     o,
                     &known,
                     &format!("voltage source {name}"),
-                    &mut self.net.warnings,
+                    &mut self.diagnostics,
                     &[],
                 ),
             });
@@ -1315,7 +1371,7 @@ impl Reader<'_> {
                         self.net.transformers.push(t);
                     }
                     "single_phase_autotransformer" | "open_delta_regulator" => {
-                        self.net.warnings.push(format!(
+                        self.diagnostics.push(&C::READ_BMOPF_RETAINED_SOURCE_ONLY, format!(
                             "transformer {name}: subtype `{subtype}` is not typed yet; kept untyped"
                         ));
                         self.net.untyped.push(UntypedObject {
@@ -1370,20 +1426,26 @@ impl Reader<'_> {
             subtype,
             "single_phase" | "center_tap" | "wye_delta" | "delta_wye"
         ) {
-            self.net.warnings.push(format!(
-                "transformer {name}: subtype `{subtype}` is outside the schema; \
+            self.diagnostics.push(
+                &C::READ_BMOPF_VALUE_UNSUPPORTED,
+                format!(
+                    "transformer {name}: subtype `{subtype}` is outside the schema; \
                  read as a single phase pair"
-            ));
+                ),
+            );
         }
         let s = o.get("s_rating").map_or(f64::NAN, f);
         let v_from = value_alias(o, "v_nom_from", "v_ref_from").map_or(f64::NAN, f);
         let v_to = value_alias(o, "v_nom_to", "v_ref_to").map_or(f64::NAN, f);
         let positive = |v: f64| v.is_finite() && v > 0.0;
         if !positive(s) || !positive(v_from) || !positive(v_to) {
-            self.net.warnings.push(format!(
-                "transformer {name}: s_rating or v_nom missing or nonpositive; \
+            self.diagnostics.push(
+                &C::READ_BMOPF_VALUE_DEFAULTED,
+                format!(
+                    "transformer {name}: s_rating or v_nom missing or nonpositive; \
                  impedances read as zero"
-            ));
+                ),
+            );
         }
         let three_phase = matches!(subtype, "wye_delta" | "delta_wye");
         let phases = if three_phase { 3 } else { 1 };
@@ -1466,18 +1528,21 @@ impl Reader<'_> {
             && let Some(band) = phase_to_neutral_midpoint(w, &self.net.buses)
             && (w.v_ref - band).abs() > (w.v_ref / 2.0 - band).abs() * 4.0
         {
-            self.net.warnings.push(format!(
-                "transformer {name}: v_nom_to {} is about twice the {band} V the \
+            self.diagnostics.push(
+                &C::READ_BMOPF_VALUE_DEFAULTED,
+                format!(
+                    "transformer {name}: v_nom_to {} is about twice the {band} V the \
                  secondary bus states phase to neutral, the value a full span \
                  reading gives; the convention is the per leg voltage",
-                w.v_ref
-            ));
+                    w.v_ref
+                ),
+            );
         }
         let mut extras = take_extras(
             o,
             &known,
             &format!("transformer {name}"),
-            &mut self.net.warnings,
+            &mut self.diagnostics,
             &[],
         );
         for key in ["tap_min", "tap_max"] {
@@ -1509,15 +1574,21 @@ impl Reader<'_> {
     fn bounded_windings<'a>(&mut self, name: &str, items: &'a [Value]) -> &'a [Value] {
         const MAX_WINDINGS: usize = 64;
         if items.len() > MAX_WINDINGS {
-            self.net.warnings.push(format!(
-                "transformer {name}: {} windings exceed the supported maximum of \
+            self.diagnostics.push(
+                &C::READ_BMOPF_RECORD_DROPPED,
+                format!(
+                    "transformer {name}: {} windings exceed the supported maximum of \
                  {MAX_WINDINGS}; the rest are ignored",
-                items.len()
-            ));
+                    items.len()
+                ),
+            );
         }
         &items[..items.len().min(MAX_WINDINGS)]
     }
 
+    // One block per object field; splitting it would scatter a list that
+    // reads end to end.
+    #[expect(clippy::too_many_lines)]
     fn n_winding_transformer(&mut self, name: &str, o: &Map<String, Value>) -> DistTransformer {
         let known = ["windings", "x_sc", "s_rating", "g_no_load", "b_no_load"];
         let s = o.get("s_rating").map_or(f64::NAN, f);
@@ -1526,10 +1597,13 @@ impl Reader<'_> {
         if let Some(items) = o.get("windings").and_then(Value::as_array) {
             for (idx, item) in self.bounded_windings(name, items).iter().enumerate() {
                 let Some(w) = item.as_object() else {
-                    self.net.warnings.push(format!(
-                        "transformer {name}: winding {} is not an object; skipped",
-                        idx + 1
-                    ));
+                    self.diagnostics.push(
+                        &C::READ_BMOPF_SOURCE_MALFORMED,
+                        format!(
+                            "transformer {name}: winding {} is not an object; skipped",
+                            idx + 1
+                        ),
+                    );
                     continue;
                 };
                 let terminal_map = strings(w.get("terminal_map"));
@@ -1542,7 +1616,7 @@ impl Reader<'_> {
                     .unwrap_or("WYE")
                     .to_ascii_uppercase();
                 if !matches!(connection.as_str(), "WYE" | "DELTA") {
-                    self.net.warnings.push(format!(
+                    self.diagnostics.push(&C::READ_BMOPF_VALUE_UNSUPPORTED, format!(
                         "transformer {name}: winding {} connection `{connection}` is not WYE or DELTA; read as WYE",
                         idx + 1
                     ));
@@ -1594,7 +1668,7 @@ impl Reader<'_> {
             o,
             &known,
             &format!("transformer {name}"),
-            &mut self.net.warnings,
+            &mut self.diagnostics,
             &[],
         );
         extras.insert("bmopf_subtype".into(), "n_winding".into());

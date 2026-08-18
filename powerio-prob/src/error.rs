@@ -5,7 +5,10 @@
 //! caller that only wants the coarse split reads [`Error::category`], which is
 //! the same taxonomy every powerio surface uses.
 
+use powerio_diag::DiagnosticInfo;
 use thiserror::Error as ThisError;
+
+use crate::diagnostics::codes;
 
 /// A problem instance failure.
 #[derive(Debug, ThisError)]
@@ -38,6 +41,20 @@ pub enum Error {
 }
 
 impl Error {
+    /// The registry entry for this error. The match is exhaustive over the
+    /// variant set, so a new variant must be coded here before it compiles.
+    #[must_use]
+    pub fn code(&self) -> &'static DiagnosticInfo {
+        match self {
+            Error::Core(inner) => inner.code(),
+            #[cfg(feature = "matrix")]
+            Error::Matrix(inner) => inner.code(),
+            Error::Io(_) => &codes::READ_INSTANCE_IO_FAILED,
+            Error::NoGenerators => &codes::BUILD_INSTANCE_NO_GENERATORS,
+            Error::UnsupportedCostModel { .. } => &codes::BUILD_INSTANCE_UNSUPPORTED_COST_MODEL,
+        }
+    }
+
     /// Classify this error, using the hub's taxonomy.
     ///
     /// The match is exhaustive over the variant set, so a new variant must be
@@ -76,6 +93,30 @@ mod tests {
             .category(),
             Data
         );
+    }
+
+    // Every error is a diagnostic that ended the operation, so the code's
+    // published category and `category()` are one fact.
+    #[test]
+    fn every_error_code_publishes_the_category_the_variant_reports() {
+        let every: Vec<Error> = vec![
+            powerio::Error::MissingField("gen").into(),
+            std::io::Error::from(std::io::ErrorKind::NotFound).into(),
+            Error::NoGenerators,
+            Error::UnsupportedCostModel {
+                gen_index: 0,
+                model: 1,
+                ncost: 4,
+            },
+        ];
+        for error in &every {
+            assert_eq!(
+                error.code().category,
+                Some(error.category()),
+                "{}",
+                error.code().code
+            );
+        }
     }
 
     #[test]

@@ -256,7 +256,12 @@ fn lower_to_balanced(
     warnings.extend(
         (lowered.record.approximations.iter())
             .chain(&lowered.record.dropped_fields)
-            .map(|s| format!("lowering: {s}")),
+            .map(|s| {
+                powerio_pkg::diagnostics::render_line(&powerio_pkg::StructuredDiagnostic::of(
+                    &powerio_pkg::diagnostics::codes::LOWER_MULTI_TO_BALANCED_UNSUPPORTED_OBJECT,
+                    format!("lowering: {s}"),
+                ))
+            }),
     );
     Ok(LoadedCase {
         network: lowered.network,

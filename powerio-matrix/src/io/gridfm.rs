@@ -66,6 +66,8 @@ use arrow::array::{Array, ArrayRef, Float64Array, Int64Array};
 use arrow::datatypes::{Field, Schema};
 use arrow::record_batch::RecordBatch;
 use num_complex::Complex64;
+
+use crate::diagnostics::codes;
 use parquet::arrow::ArrowWriter;
 use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 use parquet::basic::Compression;
@@ -1070,7 +1072,10 @@ pub struct GridfmRead {
     /// The scenario id these rows came from.
     pub scenario: i64,
     /// What the gridfm schema couldn't round-trip — synthesized bus ids, folded
-    /// per-bus load/shunt, dropped HVDC/storage, etc.
+    /// per-bus load/shunt, dropped HVDC/storage, etc., as structured records.
+    pub diagnostics: Vec<powerio_diag::StructuredDiagnostic>,
+    /// The same findings as `CODE: message` lines, rendered from
+    /// `diagnostics`.
     pub warnings: Vec<String>,
 }
 
@@ -1091,7 +1096,15 @@ pub fn read_gridfm_network(
     let bus = bus_columns(std::slice::from_ref(&tables.bus))?;
     let gens = gen_columns(std::slice::from_ref(&tables.generator))?;
     let branch = branch_columns(std::slice::from_ref(&tables.branch))?;
-    build_network_from_columns(&bus, &gens, &branch, scenario, base_mva, name, Vec::new())
+    build_network_from_columns(
+        &bus,
+        &gens,
+        &branch,
+        scenario,
+        base_mva,
+        name,
+        crate::diagnostics::Diagnostics::new(),
+    )
 }
 
 /// Read one `scenario` from a gridfm dataset on disk and rebuild a [`BalancedNetwork`].
@@ -1288,7 +1301,7 @@ fn build_network_from_columns(
     scenario: i64,
     base_mva: f64,
     name: &str,
-    mut warnings: Vec<String>,
+    mut warnings: crate::diagnostics::Diagnostics,
 ) -> Result<GridfmRead> {
     // --- buses, loads, shunts (bus_data) ---
     let bus_rows = scenario_rows(&bus.scenario, scenario);
@@ -1454,27 +1467,36 @@ fn build_network_from_columns(
     net.validate()?;
 
     // --- fidelity warnings: what the gridfm schema couldn't carry back ---
-    warnings.push(format!(
-        "synthesized bus ids 1..={}; original bus ids are not stored in a gridfm dataset, \
+    warnings.push(
+        &codes::READ_GRIDFM_VALUE_INFERRED,
+        format!(
+            "synthesized bus ids 1..={}; original bus ids are not stored in a gridfm dataset, \
          so a written case is renumbered",
-        net.buses.len()
-    ));
+            net.buses.len()
+        ),
+    );
     if !net.loads.is_empty() {
-        warnings.push(format!(
-            "folded nodal load into {} synthetic per-bus Load(s); per-load granularity is \
+        warnings.push(
+            &codes::READ_GRIDFM_VALUE_COLLAPSED,
+            format!(
+                "folded nodal load into {} synthetic per-bus Load(s); per-load granularity is \
              not recoverable",
-            net.loads.len()
-        ));
+                net.loads.len()
+            ),
+        );
     }
     if !net.shunts.is_empty() {
-        warnings.push(format!(
-            "folded nodal shunts into {} synthetic per-bus Shunt(s); per-shunt granularity \
+        warnings.push(
+            &codes::READ_GRIDFM_VALUE_COLLAPSED,
+            format!(
+                "folded nodal shunts into {} synthetic per-bus Shunt(s); per-shunt granularity \
              is not recoverable",
-            net.shunts.len()
-        ));
+                net.shunts.len()
+            ),
+        );
     }
     if unit_tap_lines > 0 {
-        warnings.push(format!(
+        warnings.push(&codes::READ_GRIDFM_ELEMENT_RELABELED, format!(
             "{unit_tap_lines} branch(es) had unit effective tap and no phase shift and were read \
              as lines (raw tap 0); a unity-ratio, zero-shift transformer in the source is \
              indistinguishable from a line and is read as one (the power flow is identical)"
@@ -1482,22 +1504,23 @@ fn build_network_from_columns(
     }
     let no_cost_gens = net.generators.iter().filter(|g| g.cost.is_none()).count();
     if no_cost_gens > 0 {
-        warnings.push(format!(
+        warnings.push(&codes::READ_GRIDFM_FIELD_DROPPED, format!(
             "{no_cost_gens} generator(s) read with no cost: an all-zero cost triple in the dataset \
              is the writer's encoding for a generator with no cost, a genuine zero polynomial \
              cost, or a piecewise/cubic+ cost it couldn't represent — indistinguishable on read"
         ));
     }
     warnings.push(
+        &codes::READ_GRIDFM_FIELD_DROPPED,
         "HVDC, storage, areas/zones, bus names, rate_b/rate_c, generator mbase/ramp limits, \
-         and startup/shutdown costs are absent from the gridfm schema"
-            .to_string(),
+         and startup/shutdown costs are absent from the gridfm schema",
     );
 
     Ok(GridfmRead {
         network: net,
         scenario,
-        warnings,
+        warnings: warnings.lines(),
+        diagnostics: warnings.into_records(),
     })
 }
 
@@ -1555,10 +1578,18 @@ fn resolve_raw_dir(dir: &Path) -> Result<PathBuf> {
     }
 }
 
+/// One `READ.GRIDFM.VALUE_DEFAULTED` note, for a manifest the reader could not
+/// use.
+fn defaulted_meta(message: impl Into<String>) -> crate::diagnostics::Diagnostics {
+    let mut diagnostics = crate::diagnostics::Diagnostics::new();
+    diagnostics.push(&codes::READ_GRIDFM_VALUE_DEFAULTED, message);
+    diagnostics
+}
+
 /// Read `base_mva` and the case name from `raw/gridfm_meta.json`. A missing or
 /// unreadable manifest is not fatal — a bare prediction may lack one — so default
 /// `base_mva` to 100, derive the name from the `<case>/raw` parent, and warn.
-fn read_meta(raw: &Path) -> (f64, String, Vec<String>) {
+fn read_meta(raw: &Path) -> (f64, String, crate::diagnostics::Diagnostics) {
     let case_from_path = || {
         raw.parent()
             .and_then(Path::file_name)
@@ -1573,9 +1604,9 @@ fn read_meta(raw: &Path) -> (f64, String, Vec<String>) {
             return (
                 100.0,
                 case_from_path(),
-                vec![format!(
+                defaulted_meta(format!(
                     "gridfm_meta.json could not be read ({e}); base_mva defaulted to 100"
-                )],
+                )),
             );
         }
     };
@@ -1583,23 +1614,23 @@ fn read_meta(raw: &Path) -> (f64, String, Vec<String>) {
         return (
             100.0,
             case_from_path(),
-            vec!["gridfm_meta.json is not valid JSON; base_mva defaulted to 100".to_string()],
+            defaulted_meta("gridfm_meta.json is not valid JSON; base_mva defaulted to 100"),
         );
     };
     let name = meta
         .get("case_name")
         .and_then(serde_json::Value::as_str)
         .map_or_else(case_from_path, str::to_string);
-    let mut warnings = Vec::new();
+    let mut warnings = crate::diagnostics::Diagnostics::new();
     // base_mva must be a positive, finite number; anything else (absent, zero,
     // negative, NaN) defaults to 100 with a note — shunt recovery scales by it.
     let base = match meta.get("base_mva").and_then(serde_json::Value::as_f64) {
         Some(b) if b.is_finite() && b > 0.0 => b,
         _ => {
             warnings.push(
+                &codes::READ_GRIDFM_VALUE_DEFAULTED,
                 "gridfm_meta.json has no usable base_mva (absent or not a positive number); \
-                 defaulted to 100"
-                    .to_string(),
+                 defaulted to 100",
             );
             100.0
         }

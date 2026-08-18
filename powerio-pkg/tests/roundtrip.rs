@@ -5,11 +5,10 @@ use std::collections::BTreeMap;
 use powerio_pkg::{
     Confidence, DiagnosticCode, DiagnosticSeverity, DiagnosticStage, ElementRef, ElementUpdate,
     MappingKind, ModelKind, MulticonductorToBalancedOptions, MulticonductorToBalancedReadiness,
-    NetworkPackage, OperatingPoint, OperatingPointSeries, Origin, READ_TRANSMISSION_PARSE_WARNING,
-    SequenceTransformConvention, SourceDescriptor, SourceMapEntry, SourceRef, StructuredDiagnostic,
-    StudyBlock, StudyCommit, StudyEdit, TimeAxis, ValidationStatus,
-    check_multiconductor_to_balanced_lowering, ensure_payload_uids,
-    lower_multiconductor_to_balanced,
+    NetworkPackage, OperatingPoint, OperatingPointSeries, Origin, SequenceTransformConvention,
+    SourceDescriptor, SourceMapEntry, SourceRef, StructuredDiagnostic, StudyBlock, StudyCommit,
+    StudyEdit, TimeAxis, ValidationStatus, check_multiconductor_to_balanced_lowering,
+    ensure_payload_uids, lower_multiconductor_to_balanced,
 };
 
 const MATPOWER_SRC: &str = "\
@@ -2129,16 +2128,18 @@ fn goc3_updates_resolve_by_identity_not_row_order() {
 }
 
 #[test]
-fn package_balanced_reader_warnings_become_diagnostics() {
+fn package_balanced_reader_findings_keep_their_own_code() {
+    // The reader codes its own findings, so the package records them as they
+    // are rather than wrapping them under one code of its own.
     let parsed = powerio::parse_str(MATPOWER_SRC, "matpower").expect("parse matpower");
-    let mut pkg = NetworkPackage::from_balanced_with_read_warnings(
-        parsed.network,
-        READ_TRANSMISSION_PARSE_WARNING,
-        vec!["ignored source table".to_owned()],
+    let finding = powerio_pkg::StructuredDiagnostic::of(
+        &powerio::diagnostics::codes::READ_PSSE_SECTION_UNSUPPORTED,
+        "ignored source table",
     );
+    let mut pkg = NetworkPackage::from_balanced_with_read_diagnostics(parsed.network, [finding]);
 
     assert!(pkg.diagnostics.iter().any(|d| {
-        d.code.as_str() == READ_TRANSMISSION_PARSE_WARNING
+        d.code.as_str() == "READ.PSSE.SECTION_UNSUPPORTED"
             && d.severity == DiagnosticSeverity::Warning
             && d.stage() == Some(DiagnosticStage::Read)
             && d.message == "ignored source table"
@@ -2148,8 +2149,8 @@ fn package_balanced_reader_warnings_become_diagnostics() {
     assert!(
         pkg.diagnostics
             .iter()
-            .any(|d| d.code.as_str() == READ_TRANSMISSION_PARSE_WARNING),
-        "reader warning diagnostic was dropped by validation"
+            .any(|d| d.code.as_str() == "READ.PSSE.SECTION_UNSUPPORTED"),
+        "reader finding was dropped by validation"
     );
 }
 
@@ -2476,6 +2477,31 @@ fn a_dropped_capacitor_bank_is_recorded_and_counted() {
     );
 }
 
+/// A line naming a linecode the case never declares is a coded parse finding,
+/// so it reaches `package.diagnostics` and not only the text channel.
+#[test]
+fn a_dangling_linecode_reference_reaches_the_package_diagnostics() {
+    let src = "New Circuit.c1\n\
+               New Line.l1 bus1=sourcebus bus2=b2 linecode=absent length=1\n";
+    let net = powerio_dist::parse_str(src, "dss").expect("parse dss");
+    let pkg = NetworkPackage::from_multiconductor(net.clone());
+
+    assert!(
+        pkg.diagnostics.iter().any(|d| {
+            d.code == DiagnosticCode::new("READ.DSS.LINECODE_UNKNOWN")
+                && d.message.contains("unknown linecode `absent`")
+        }),
+        "expected a coded dangling linecode finding: {:?}",
+        pkg.diagnostics
+    );
+    assert!(
+        net.warnings.iter().any(|w| w
+            == "READ.DSS.LINECODE_UNKNOWN: line l1 references unknown linecode `absent`"),
+        "the rendered line must carry the code: {:?}",
+        net.warnings
+    );
+}
+
 #[test]
 fn multiconductor_nonfinite_floats_roundtrip() {
     // #268: serde_json writes a nonfinite f64 as `null`. The payload reader
@@ -2569,11 +2595,11 @@ fn refused_include_lifts_as_an_error_diagnostic() {
 
     let mut net = powerio_dist::parse_str("New Circuit.c1", "dss").expect("parse dss");
     let message = "redirect ../shared.dss: refused; include escapes the case directory";
-    net.warnings.push(message.to_owned());
+    net.warnings
+        .push(format!("READ.DSS.INCLUDE_REFUSED: {message}"));
     net.parse_diagnostics
-        .push(powerio_dist::StructuredDiagnostic::new(
-            powerio_dist::diagnostics::READ_DSS_INCLUDE_REFUSED,
-            powerio_dist::DiagnosticSeverity::Error,
+        .push(powerio_dist::StructuredDiagnostic::of(
+            &powerio_dist::diagnostics::codes::READ_DSS_INCLUDE_REFUSED,
             message,
         ));
 

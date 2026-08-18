@@ -61,6 +61,9 @@ impl Default for NormalizeOptions {
 #[derive(Clone, Debug)]
 pub struct NormalizedNetwork {
     pub network: BalancedNetwork,
+    /// The pass's findings as structured records.
+    pub diagnostics: Vec<crate::diagnostics::StructuredDiagnostic>,
+    /// The same findings as `CODE: message` lines.
     pub warnings: Vec<String>,
 }
 
@@ -362,7 +365,11 @@ fn validate_normalize_options(options: &NormalizeOptions) -> Result<()> {
     Ok(())
 }
 
-fn clamp_angle_bounds(branches: &mut [Branch], pad: f64, warnings: &mut Vec<String>) {
+fn clamp_angle_bounds(
+    branches: &mut [Branch],
+    pad: f64,
+    warnings: &mut crate::diagnostics::Diagnostics,
+) {
     for (idx, br) in branches.iter_mut().enumerate() {
         let old_min = br.angmin;
         let old_max = br.angmax;
@@ -393,10 +400,13 @@ fn clamp_angle_bounds(branches: &mut [Branch], pad: f64, warnings: &mut Vec<Stri
         }
 
         if !changes.is_empty() {
-            warnings.push(format!(
-                "branch {idx} angle difference bounds clamped: {}",
-                changes.join(", ")
-            ));
+            warnings.push(
+                &crate::diagnostics::codes::CANONICALIZE_NORMALIZE_BOUNDS_CLAMPED,
+                format!(
+                    "branch {idx} angle difference bounds clamped: {}",
+                    changes.join(", ")
+                ),
+            );
         }
     }
 }
@@ -686,7 +696,7 @@ impl BalancedNetwork {
         let (loads, load_rows) = norm_loads(&self.loads, base, &id_map);
         let (shunts, shunt_rows) = norm_shunts(&self.shunts, base, &id_map);
         let (mut branches, branch_rows) = norm_branches(&self.branches, base, &id_map);
-        let mut warnings = Vec::new();
+        let mut warnings = crate::diagnostics::Diagnostics::new();
         if options.clamp_angle_bounds {
             clamp_angle_bounds(&mut branches, options.angle_bound_pad, &mut warnings);
         }
@@ -733,7 +743,7 @@ impl BalancedNetwork {
                     key(a.pmax).total_cmp(&key(b.pmax))
                 })
                 .map(|g| g.bus)
-                .ok_or(Error::ReferenceBusCount { found: 0 })?;
+                .ok_or_else(|| Error::no_reference_bus(0))?;
             if let Some(b) = buses.iter_mut().find(|b| b.id == slack) {
                 b.kind = BusType::Ref;
             }
@@ -770,7 +780,8 @@ impl BalancedNetwork {
         Ok((
             NormalizedNetwork {
                 network: net,
-                warnings,
+                warnings: warnings.lines(),
+                diagnostics: warnings.into_records(),
             },
             source_rows,
         ))

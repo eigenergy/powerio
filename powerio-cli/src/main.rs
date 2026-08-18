@@ -15,7 +15,7 @@ use powerio_matrix::matrix::{BuildOptions, DcConvention, Scheme, sddm_check};
 use powerio_matrix::pipeline::{MatrixKind, Pipeline, RhsKind};
 use powerio_matrix::synth::{SynthSpec, Topology};
 use powerio_matrix::{MissingGenCostPolicy, SensitivityOptions, SensitivitySolver, WriteOptions};
-use powerio_pkg::{NetworkPackage, Origin, READ_GRIDFM_FIDELITY_WARNING, SourceDescriptor};
+use powerio_pkg::{NetworkPackage, Origin, SourceDescriptor};
 use powerio_prob::matrix::{DcOpfBundleMetadata, DcOpfBundleOptions, write_dcopf_bundle};
 use powerio_prob::{DcOpfOptions, Units, build_dc_opf_instance};
 use serde_json::json;
@@ -1308,11 +1308,8 @@ fn build_package(
     if from == Some(FormatArg::Gridfm) || (from.is_none() && looks_like_gridfm_dir(input)) {
         let read = powerio_matrix::read_gridfm_dataset(input, scenario)
             .with_context(|| format!("reading gridfm dataset {}", input.display()))?;
-        let mut pkg = NetworkPackage::from_balanced_with_read_warnings(
-            read.network,
-            READ_GRIDFM_FIDELITY_WARNING,
-            read.warnings,
-        );
+        let mut pkg =
+            NetworkPackage::from_balanced_with_read_diagnostics(read.network, read.diagnostics);
         set_package_source(&mut pkg, input, PackageSourceKind::Folder, "gridfm", false);
         pkg.run_sane_validation();
         return Ok(pkg);

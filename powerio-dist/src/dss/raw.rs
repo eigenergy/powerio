@@ -12,6 +12,7 @@ use std::path::{Path, PathBuf};
 
 use super::lex::{Scanner, Value, VarMap};
 use super::prop::{self, DssClass};
+use crate::diagnostics::codes as C;
 use crate::error::{Error, Result};
 
 /// The OpenDSS executive command list, in definition order
@@ -236,6 +237,8 @@ pub struct RawDss {
     pub commands: Vec<RawCommand>,
     pub buscoords: Vec<BusCoord>,
     pub vars: VarMap,
+    /// The reader's findings as `CODE: message` lines, rendered from
+    /// `diagnostics` so the text and the structure cannot disagree.
     pub warnings: Vec<String>,
     /// Structured findings beside `warnings`; an `Error` entry marks an
     /// incomplete parse the CLI must not exit 0 on.
@@ -255,8 +258,16 @@ impl RawDss {
         self.objects.iter().filter(move |o| o.class == class)
     }
 
-    fn warn(&mut self, msg: impl Into<String>) {
-        self.warnings.push(msg.into());
+    fn warn(&mut self, info: &crate::diagnostics::DiagnosticInfo, msg: impl Into<String>) {
+        self.record(crate::diagnostics::StructuredDiagnostic::of(info, msg));
+    }
+
+    /// Record one finding. Both channels move together: the line is rendered
+    /// from the record it is added with.
+    fn record(&mut self, diagnostic: crate::diagnostics::StructuredDiagnostic) {
+        self.warnings
+            .push(crate::diagnostics::render_line(&diagnostic));
+        self.diagnostics.push(diagnostic);
     }
 
     fn clear(&mut self) {
@@ -431,9 +442,10 @@ impl<L: Loader> Executor<'_, L> {
                 });
             }
             None => {
-                self.raw.warn(ctx(format!(
-                    "unknown command `{verb}`; line preserved verbatim"
-                )));
+                self.raw.warn(
+                    &C::PARSE_DSS_SOURCE_MALFORMED,
+                    ctx(format!("unknown command `{verb}`; line preserved verbatim")),
+                );
                 self.raw.commands.push(RawCommand {
                     verb,
                     args: scan.remainder().to_string(),
@@ -485,7 +497,10 @@ impl<L: Loader> Executor<'_, L> {
         let active_or = |raw: &mut RawDss| {
             let active = raw.active;
             if active.is_none() {
-                raw.warn(ctx(format!("`{spec}=` with no active object")));
+                raw.warn(
+                    &C::PARSE_DSS_SOURCE_MALFORMED,
+                    ctx(format!("`{spec}=` with no active object")),
+                );
             }
             active
         };
@@ -510,9 +525,12 @@ impl<L: Loader> Executor<'_, L> {
                 {
                     idx
                 } else {
-                    self.raw.warn(ctx(format!(
-                        "property reference to unknown object `{class}.{name}`"
-                    )));
+                    self.raw.warn(
+                        &C::READ_DSS_REFERENCE_DROPPED,
+                        ctx(format!(
+                            "property reference to unknown object `{class}.{name}`"
+                        )),
+                    );
                     return;
                 }
             }
@@ -524,10 +542,13 @@ impl<L: Loader> Executor<'_, L> {
                 if let Some(i) = c.prop_index(prop) {
                     c.props[i].to_string()
                 } else {
-                    self.raw.warn(ctx(format!(
-                        "unknown property `{prop}` on {}; kept as written",
-                        c.name
-                    )));
+                    self.raw.warn(
+                        &C::READ_DSS_PROPERTY_UNKNOWN,
+                        ctx(format!(
+                            "unknown property `{prop}` on {}; kept as written",
+                            c.name
+                        )),
+                    );
                     prop.to_ascii_lowercase()
                 }
             }
@@ -541,7 +562,7 @@ impl<L: Loader> Executor<'_, L> {
             table,
             scan,
             Some(prop),
-            &mut self.raw.warnings,
+            &mut self.raw,
             ctx,
         ));
         self.apply_props(idx, props, ctx);
@@ -564,9 +585,12 @@ impl<L: Loader> Executor<'_, L> {
         let key = (class.to_ascii_lowercase(), name.to_ascii_lowercase());
         let idx = match self.raw.index.get(&key) {
             Some(&existing) => {
-                self.raw.warn(ctx(format!(
-                    "duplicate `New {class}.{name}`; editing the existing object"
-                )));
+                self.raw.warn(
+                    &C::PARSE_DSS_SOURCE_MALFORMED,
+                    ctx(format!(
+                        "duplicate `New {class}.{name}`; editing the existing object"
+                    )),
+                );
                 existing
             }
             None => self.make_object(&class, name),
@@ -580,8 +604,10 @@ impl<L: Loader> Executor<'_, L> {
         };
         let key = (class.to_ascii_lowercase(), name.to_ascii_lowercase());
         let Some(&idx) = self.raw.index.get(&key) else {
-            self.raw
-                .warn(ctx(format!("`Edit {class}.{name}` on an unknown object")));
+            self.raw.warn(
+                &C::READ_DSS_REFERENCE_DROPPED,
+                ctx(format!("`Edit {class}.{name}` on an unknown object")),
+            );
             return;
         };
         self.consume_and_apply(idx, scan, ctx);
@@ -589,7 +615,10 @@ impl<L: Loader> Executor<'_, L> {
 
     fn do_more(&mut self, scan: &mut Scanner, ctx: &dyn Fn(String) -> String) {
         let Some(idx) = self.raw.active else {
-            self.raw.warn(ctx("`~` with no active object".into()));
+            self.raw.warn(
+                &C::PARSE_DSS_SOURCE_MALFORMED,
+                ctx("`~` with no active object".into()),
+            );
             return;
         };
         self.consume_and_apply(idx, scan, ctx);
@@ -602,9 +631,10 @@ impl<L: Loader> Executor<'_, L> {
         let key = (class.to_ascii_lowercase(), name.to_ascii_lowercase());
         match self.raw.index.get(&key) {
             Some(&idx) => self.raw.active = Some(idx),
-            None => self
-                .raw
-                .warn(ctx(format!("`Select {class}.{name}` on an unknown object"))),
+            None => self.raw.warn(
+                &C::READ_DSS_REFERENCE_DROPPED,
+                ctx(format!("`Select {class}.{name}` on an unknown object")),
+            ),
         }
     }
 
@@ -675,22 +705,22 @@ impl<L: Loader> Executor<'_, L> {
     fn refuse_escape(&mut self, message: String) {
         self.refuse(
             message,
-            crate::diagnostics::READ_DSS_INCLUDE_REFUSED,
+            &crate::diagnostics::codes::READ_DSS_INCLUDE_REFUSED,
             "place included files inside the case directory, or merge them into the case",
         );
     }
 
     /// Records a refused include: the warning line and the `Error` finding
     /// that keeps the run from exiting 0.
-    fn refuse(&mut self, message: String, code: &'static str, suggested_action: &'static str) {
-        self.raw.warn(message.clone());
-        self.raw.diagnostics.push(
-            crate::diagnostics::StructuredDiagnostic::new(
-                code,
-                crate::diagnostics::DiagnosticSeverity::Error,
-                message,
-            )
-            .with_suggested_action(suggested_action),
+    fn refuse(
+        &mut self,
+        message: String,
+        code: &'static crate::diagnostics::DiagnosticInfo,
+        suggested_action: &'static str,
+    ) {
+        self.raw.record(
+            crate::diagnostics::StructuredDiagnostic::of(code, message)
+                .with_suggested_action(suggested_action),
         );
     }
 
@@ -717,7 +747,7 @@ impl<L: Loader> Executor<'_, L> {
             ));
             self.refuse(
                 message,
-                crate::diagnostics::READ_DSS_INCLUDE_BUDGET,
+                &crate::diagnostics::codes::READ_DSS_INCLUDE_BUDGET,
                 "check the case for an include cycle; a file that redirects to itself expands \
                  without bound",
             );
@@ -742,13 +772,16 @@ impl<L: Loader> Executor<'_, L> {
         if Containment::refused_by_us(e) {
             self.refuse_escape(message);
         } else {
-            self.raw.warn(message);
+            self.raw.warn(&C::READ_DSS_INCLUDE_LOAD_FAILED, message);
         }
     }
 
     fn do_redirect(&mut self, scan: &mut Scanner, compile: bool, ctx: &dyn Fn(String) -> String) {
         let Some(p) = scan.next_param() else {
-            self.raw.warn(ctx("redirect with no file".into()));
+            self.raw.warn(
+                &C::PARSE_DSS_SOURCE_MALFORMED,
+                ctx("redirect with no file".into()),
+            );
             return;
         };
         let verb = if compile { "compile" } else { "redirect" };
@@ -756,8 +789,10 @@ impl<L: Loader> Executor<'_, L> {
             return;
         };
         if self.dirs.len() > MAX_REDIRECT_DEPTH {
-            self.raw
-                .warn(ctx(format!("redirect depth limit at {}", path.display())));
+            self.raw.warn(
+                &C::READ_DSS_INCLUDE_DEPTH_LIMIT,
+                ctx(format!("redirect depth limit at {}", path.display())),
+            );
             return;
         }
         if !self.charge_include(verb, &path, ctx) {
@@ -787,7 +822,10 @@ impl<L: Loader> Executor<'_, L> {
 
     fn do_buscoords(&mut self, scan: &mut Scanner, ctx: &dyn Fn(String) -> String) {
         let Some(p) = scan.next_param() else {
-            self.raw.warn(ctx("buscoords with no file".into()));
+            self.raw.warn(
+                &C::PARSE_DSS_SOURCE_MALFORMED,
+                ctx("buscoords with no file".into()),
+            );
             return;
         };
         let Some(path) = self.resolve_or_warn("buscoords", &p.value.text, ctx) else {
@@ -813,11 +851,14 @@ impl<L: Loader> Executor<'_, L> {
                             x,
                             y,
                         }),
-                        _ => self.raw.warn(ctx(format!(
-                            "buscoords {}:{}: unparseable coordinates",
-                            path.display(),
-                            line_no + 1
-                        ))),
+                        _ => self.raw.warn(
+                            &C::PARSE_DSS_SOURCE_MALFORMED,
+                            ctx(format!(
+                                "buscoords {}:{}: unparseable coordinates",
+                                path.display(),
+                                line_no + 1
+                            )),
+                        ),
                     }
                 }
             }
@@ -834,8 +875,10 @@ impl<L: Loader> Executor<'_, L> {
         let p = scan.next_param()?;
         if let Some(name) = &p.name {
             if !name.eq_ignore_ascii_case("object") {
-                self.raw
-                    .warn(ctx(format!("expected Class.Name, got `{name}=`")));
+                self.raw.warn(
+                    &C::PARSE_DSS_SOURCE_MALFORMED,
+                    ctx(format!("expected Class.Name, got `{name}=`")),
+                );
                 return None;
             }
         }
@@ -845,8 +888,10 @@ impl<L: Loader> Executor<'_, L> {
                 Some((class.to_string(), name.to_string()))
             }
             _ => {
-                self.raw
-                    .warn(ctx(format!("malformed object spec `{spec}`")));
+                self.raw.warn(
+                    &C::PARSE_DSS_SOURCE_MALFORMED,
+                    ctx(format!("malformed object spec `{spec}`")),
+                );
                 None
             }
         }
@@ -877,7 +922,7 @@ impl<L: Loader> Executor<'_, L> {
             prop_table(&self.raw.objects[idx].class),
             scan,
             None,
-            &mut self.raw.warnings,
+            &mut self.raw,
             ctx,
         );
         self.apply_props(idx, props, ctx);
@@ -904,11 +949,14 @@ impl<L: Loader> Executor<'_, L> {
                         // guard turns that into a warning instead of unbounded
                         // growth.
                         if base.saturating_add(src_len) > MAX_OBJECT_PROPS {
-                            self.raw.warn(ctx(format!(
-                                "like={}: {class} property count would exceed the supported \
+                            self.raw.warn(
+                                &C::READ_DSS_VALUE_CLAMPED,
+                                ctx(format!(
+                                    "like={}: {class} property count would exceed the supported \
                                  maximum of {MAX_OBJECT_PROPS}; splice refused",
-                                p.value.text
-                            )));
+                                    p.value.text
+                                )),
+                            );
                             continue;
                         }
                         let cloned = self.raw.objects[src].props.clone();
@@ -919,19 +967,22 @@ impl<L: Loader> Executor<'_, L> {
                         self.raw.objects[idx].props.extend(cloned);
                         self.raw.objects[idx].edits.extend(bounds);
                     }
-                    None => self.raw.warn(ctx(format!(
-                        "like={} names an unknown {class}",
-                        p.value.text
-                    ))),
+                    None => self.raw.warn(
+                        &C::READ_DSS_REFERENCE_DROPPED,
+                        ctx(format!("like={} names an unknown {class}", p.value.text)),
+                    ),
                 }
                 continue;
             }
             if self.raw.objects[idx].props.len() >= MAX_OBJECT_PROPS {
-                self.raw.warn(ctx(format!(
-                    "{}: property count exceeds the supported maximum of {MAX_OBJECT_PROPS}; \
+                self.raw.warn(
+                    &C::READ_DSS_VALUE_CLAMPED,
+                    ctx(format!(
+                        "{}: property count exceeds the supported maximum of {MAX_OBJECT_PROPS}; \
                      further assignments dropped",
-                    self.raw.objects[idx].class
-                )));
+                        self.raw.objects[idx].class
+                    )),
+                );
                 continue;
             }
             self.raw.objects[idx].props.push(p);
@@ -955,7 +1006,7 @@ fn collect_props_for(
     class: Option<&'static DssClass>,
     scan: &mut Scanner,
     after: Option<&str>,
-    warnings: &mut Vec<String>,
+    raw: &mut RawDss,
     ctx: &dyn Fn(String) -> String,
 ) -> Vec<RawProp> {
     let mut out = Vec::new();
@@ -974,10 +1025,13 @@ fn collect_props_for(
                     // positional lands on property 1 (the class Edit loops:
                     // `ParamPointer = CommandList.Getcommand(ParamName)`).
                     pointer = None;
-                    warnings.push(ctx(format!(
-                        "unknown property `{written}` on {}; kept as written",
-                        c.name
-                    )));
+                    raw.warn(
+                        &C::READ_DSS_PROPERTY_UNKNOWN,
+                        ctx(format!(
+                            "unknown property `{written}` on {}; kept as written",
+                            c.name
+                        )),
+                    );
                     Some(written.to_ascii_lowercase())
                 }
             }
@@ -988,10 +1042,13 @@ fn collect_props_for(
                 if let Some(canon) = c.props.get(next) {
                     Some((*canon).to_string())
                 } else {
-                    warnings.push(ctx(format!(
-                        "positional value `{}` beyond the last {} property",
-                        p.value.text, c.name
-                    )));
+                    raw.warn(
+                        &C::PARSE_DSS_SOURCE_MALFORMED,
+                        ctx(format!(
+                            "positional value `{}` beyond the last {} property",
+                            p.value.text, c.name
+                        )),
+                    );
                     None
                 }
             }
@@ -1405,7 +1462,7 @@ mod tests {
     fn budget_refusals(raw: &RawDss) -> usize {
         raw.diagnostics
             .iter()
-            .filter(|d| d.code.as_str() == crate::diagnostics::READ_DSS_INCLUDE_BUDGET)
+            .filter(|d| d.code.as_str() == crate::diagnostics::codes::READ_DSS_INCLUDE_BUDGET.code)
             .count()
     }
 
@@ -1649,7 +1706,7 @@ mod tests {
         let refused: Vec<_> = raw
             .diagnostics
             .iter()
-            .filter(|d| d.code.as_str() == crate::diagnostics::READ_DSS_INCLUDE_REFUSED)
+            .filter(|d| d.code.as_str() == crate::diagnostics::codes::READ_DSS_INCLUDE_REFUSED.code)
             .collect();
         assert_eq!(refused.len(), 3);
         assert!(

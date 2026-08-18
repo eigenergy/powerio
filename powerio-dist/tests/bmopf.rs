@@ -556,15 +556,17 @@ fn ieee13_conversion_warnings_name_every_loss() {
     assert_eq!(diag.severity, DiagnosticSeverity::Warning);
     assert_eq!(diag.stage(), Some(DiagnosticStage::Emit));
     assert_eq!(diag.details["class"], serde_json::json!("regcontrol"));
-    // No silent extras: every warning leads with a `class name:` element
-    // identifier ("load 671: ...", "voltage source source: ...").
-    for w in &out.warnings {
-        let Some((head, _)) = w.split_once(": ") else {
-            panic!("warning has no `class name:` prefix: {w}");
+    // No silent extras: every message leads with a `class name:` element
+    // identifier ("load 671: ...", "voltage source source: ..."). The line the
+    // text channel carries leads with the code, so the check reads the record.
+    for d in &out.diagnostics {
+        let Some((head, _)) = d.message.split_once(": ") else {
+            panic!("warning has no `class name:` prefix: {}", d.message);
         };
         assert!(
             head.split_whitespace().count() >= 2,
-            "warning does not name its element: {w}"
+            "warning does not name its element: {}",
+            d.message
         );
     }
 }
@@ -600,9 +602,9 @@ fn dss_fixed_generator_emits_as_bmopf_generator() {
         out.warnings
     );
     assert!(
-        out.warnings
+        out.diagnostics
             .iter()
-            .any(|w| w == "generator g1: no generation cost in the source; emitted cost 0"),
+            .any(|d| d.message == "generator g1: no generation cost in the source; emitted cost 0"),
         "missing zero cost warning: {:?}",
         out.warnings
     );

@@ -253,13 +253,13 @@ fn reference_bus_count_errors() {
     );
     assert!(matches!(
         IndexedNetwork::new(&two).reference_bus_index(),
-        Err(powerio::Error::ReferenceBusCount { found: 2 })
+        Err(powerio::Error::ReferenceBusCount { found: 2, .. })
     ));
     // Zero reference buses.
     let zero = net("no_ref", vec![bus(1, BusType::Pq)], vec![]);
     assert!(matches!(
         IndexedNetwork::new(&zero).reference_bus_index(),
-        Err(powerio::Error::ReferenceBusCount { found: 0 })
+        Err(powerio::Error::ReferenceBusCount { found: 0, .. })
     ));
 }
 

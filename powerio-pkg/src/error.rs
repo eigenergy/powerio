@@ -6,7 +6,10 @@
 //! only tell apart by matching on the message text. Each is its own variant
 //! here.
 
+use powerio_diag::DiagnosticInfo;
 use thiserror::Error as ThisError;
+
+use crate::diagnostics::codes;
 
 /// A `.pio.json` failure.
 #[derive(Debug, ThisError)]
@@ -56,6 +59,25 @@ impl From<serde_json::Error> for Error {
 }
 
 impl Error {
+    /// The registry entry for this error. The match is exhaustive over the
+    /// variant set, so a new variant must be coded here before it compiles.
+    ///
+    /// A wrapped hub failure keeps the hub's own code. A wrapped distribution
+    /// failure does too, through that crate's registry.
+    #[must_use]
+    pub fn code(&self) -> &'static DiagnosticInfo {
+        match self {
+            Error::Core(inner) => inner.code(),
+            Error::Multiconductor(inner) => inner.code(),
+            Error::Malformed(_) => &codes::PARSE_PACKAGE_MALFORMED,
+            Error::UnsupportedVersion(_) => &codes::PARSE_PACKAGE_UNSUPPORTED_VERSION,
+            Error::ModelKindMismatch => &codes::VALIDATE_PACKAGE_MODEL_KIND_MISMATCH,
+            Error::NoSuchIndex(_) => &codes::REQUEST_PACKAGE_NO_SUCH_INDEX,
+            Error::Payload(_) => &codes::BUILD_PACKAGE_PAYLOAD_FAILED,
+            Error::Serialize(_) => &codes::EMIT_PACKAGE_SERIALIZE_FAILED,
+        }
+    }
+
     /// Classify this error, using the hub's taxonomy.
     #[must_use]
     pub fn category(&self) -> powerio::ErrorCategory {
@@ -66,11 +88,7 @@ impl Error {
             // does not depend on the hub — so the mapping lives here. Reading it
             // rather than flattening the variant away keeps a missing `.dss`
             // an I/O failure on this path as it is on the direct one.
-            Error::Multiconductor(inner) => match inner {
-                powerio_dist::Error::Io { .. } => C::Io,
-                powerio_dist::Error::UnknownFormat(_) => C::UnknownFormat,
-                _ => C::Parse,
-            },
+            Error::Multiconductor(inner) => inner.category(),
             Error::Malformed(_) | Error::UnsupportedVersion(_) => C::Parse,
             Error::ModelKindMismatch | Error::NoSuchIndex(_) | Error::Payload(_) => C::Data,
             Error::Serialize(_) => C::Output,
@@ -95,6 +113,28 @@ mod tests {
         assert!(matches!(version, Error::UnsupportedVersion(_)));
         assert!(matches!(Error::ModelKindMismatch, Error::ModelKindMismatch));
         assert_eq!(Error::ModelKindMismatch.category(), Data);
+    }
+
+    // Every error is a diagnostic that ended the operation, so the code's
+    // published category and `category()` are one fact.
+    #[test]
+    fn every_error_code_publishes_the_category_the_variant_reports() {
+        let every: Vec<Error> = vec![
+            powerio::Error::MissingField("bus").into(),
+            powerio_dist::Error::UnknownFormat("xyz".into()).into(),
+            Error::UnsupportedVersion("stated 0.2.1".into()),
+            Error::ModelKindMismatch,
+            Error::NoSuchIndex("operating point 3".into()),
+            Error::Payload("empty".into()),
+        ];
+        for error in &every {
+            assert_eq!(
+                error.code().category,
+                Some(error.category()),
+                "{}",
+                error.code().code
+            );
+        }
     }
 
     #[test]

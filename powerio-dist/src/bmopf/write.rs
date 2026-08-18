@@ -12,7 +12,8 @@ use std::f64::consts::{FRAC_PI_2, PI, TAU};
 use serde_json::{Map, Value, json};
 
 use crate::convert::Conversion;
-use crate::diagnostics::{DiagnosticSeverity, StructuredDiagnostic};
+use crate::diagnostics::codes as C;
+use crate::diagnostics::{DiagnosticInfo, StructuredDiagnostic};
 use crate::geo::CoordinateSpace;
 use crate::model::{
     ActivePowerReference, ActivePowerUnit, Configuration, ControlVoltageReference,
@@ -152,8 +153,7 @@ pub fn write_bmopf_json_with_options(
 ) -> Conversion {
     let mut w = Writer {
         options: *options,
-        warnings: Vec::new(),
-        diagnostics: Vec::new(),
+        warnings: crate::diagnostics::Diagnostics::new(),
         grounded: net
             .buses
             .iter()
@@ -162,18 +162,16 @@ pub fn write_bmopf_json_with_options(
         transformer_overflow: Map::new(),
     };
     let doc = w.document(net);
-    Conversion {
-        text: serde_json::to_string_pretty(&doc).expect("maps and finite numbers") + "\n",
-        sidecars: Vec::new(),
-        warnings: w.warnings,
-        diagnostics: w.diagnostics,
-    }
+    Conversion::new(
+        serde_json::to_string_pretty(&doc).expect("maps and finite numbers") + "\n",
+        Vec::new(),
+        w.warnings,
+    )
 }
 
 struct Writer {
     options: BmopfWriteOptions,
-    warnings: Vec<String>,
-    diagnostics: Vec<StructuredDiagnostic>,
+    warnings: crate::diagnostics::Diagnostics,
     grounded: BTreeMap<String, Vec<String>>,
     /// Transformer fields with no slot in the schema 0.1.0 subtype defs
     /// (taps, neutral impedance, no load admittance), relocated to
@@ -182,21 +180,19 @@ struct Writer {
 }
 
 impl Writer {
-    fn warn(&mut self, msg: impl Into<String>) {
-        self.warnings.push(msg.into());
+    fn warn(&mut self, info: &'static DiagnosticInfo, msg: impl Into<String>) {
+        self.warnings.push(info, msg);
     }
 
     fn diagnostic(
         &mut self,
-        code: &'static str,
+        code: &'static DiagnosticInfo,
         element_path: impl Into<String>,
         message: impl Into<String>,
         details: Map<String, Value>,
     ) {
-        let message = message.into();
-        self.warnings.push(format!("{message} [{code}]"));
-        self.diagnostics.push(
-            StructuredDiagnostic::new(code, DiagnosticSeverity::Warning, message)
+        self.warnings.record(
+            StructuredDiagnostic::of(code, message)
                 .with_element_path(element_path)
                 .with_details(details),
         );
@@ -205,7 +201,7 @@ impl Writer {
     fn transformer_diagnostic(
         &mut self,
         t: &DistTransformer,
-        code: &'static str,
+        code: &'static DiagnosticInfo,
         message: impl Into<String>,
         mut details: Map<String, Value>,
     ) {
@@ -218,7 +214,10 @@ impl Writer {
         if v.is_finite() {
             json!(v)
         } else {
-            self.warn(format!("{what}: nonfinite value emitted as 0"));
+            self.warn(
+                &C::EMIT_BMOPF_VALUE_DEFAULTED,
+                format!("{what}: nonfinite value emitted as 0"),
+            );
             json!(0.0)
         }
     }
@@ -235,10 +234,13 @@ impl Writer {
         if vs.iter().all(|v| v.is_finite()) {
             Some(json!(vs))
         } else {
-            self.warn(format!(
-                "{what}: nonfinite entries (an unbounded phase) have no BMOPF spelling; \
+            self.warn(
+                &C::EMIT_BMOPF_FIELD_DROPPED,
+                format!(
+                    "{what}: nonfinite entries (an unbounded phase) have no BMOPF spelling; \
                  field dropped"
-            ));
+                ),
+            );
             None
         }
     }
@@ -251,9 +253,12 @@ impl Writer {
             if key == "bmopf_subtype" || key == "conn" {
                 continue;
             }
-            self.warn(format!(
-                "{what}: `{key}` has no place in the BMOPF schema; dropped from the output"
-            ));
+            self.warn(
+                &C::EMIT_BMOPF_FIELD_DROPPED,
+                format!(
+                    "{what}: `{key}` has no place in the BMOPF schema; dropped from the output"
+                ),
+            );
         }
     }
 
@@ -287,9 +292,10 @@ impl Writer {
                     | "created" | "modified" | "provenance" | "version" => {
                         m.insert(key.clone(), value.clone());
                     }
-                    other => self.warn(format!(
-                        "meta `{other}` has no slot in the BMOPF schema; dropped"
-                    )),
+                    other => self.warn(
+                        &C::EMIT_BMOPF_FIELD_DROPPED,
+                        format!("meta `{other}` has no slot in the BMOPF schema; dropped"),
+                    ),
                 }
             }
         }
@@ -393,17 +399,23 @@ impl Writer {
                 // empty matrix would drop them and invalidate the output.
                 let dim = c.r_series.len().max(c.x_series.len()).max(1);
                 if c.r_series.is_empty() && c.x_series.is_empty() {
-                    self.warn(format!(
-                        "linecode {}: no series matrix; emitted as 1 conductor \
+                    self.warn(
+                        &C::EMIT_BMOPF_VALUE_DEFAULTED,
+                        format!(
+                            "linecode {}: no series matrix; emitted as 1 conductor \
                          zero impedance",
-                        c.name
-                    ));
+                            c.name
+                        ),
+                    );
                 } else if c.r_series.is_empty() || c.x_series.is_empty() {
-                    self.warn(format!(
-                        "linecode {}: R_series and X_series sizes disagree; the \
+                    self.warn(
+                        &C::EMIT_BMOPF_VALUE_DEFAULTED,
+                        format!(
+                            "linecode {}: R_series and X_series sizes disagree; the \
                          empty one emitted as zeros",
-                        c.name
-                    ));
+                            c.name
+                        ),
+                    );
                 }
                 self.required_matrix(&mut o, "R_series", &c.r_series, dim, &c.name);
                 self.required_matrix(&mut o, "X_series", &c.x_series, dim, &c.name);
@@ -442,7 +454,7 @@ impl Writer {
         };
         if !self.options.sideload_coordinates {
             self.diagnostic(
-                "EMIT.BMOPF.BUS_LOCATION_DROPPED",
+                &C::EMIT_BMOPF_BUS_LOCATION_DROPPED,
                 format!("bus {}", b.id),
                 format!(
                     "bus {}: location has no place in the BMOPF schema; dropped from the output",
@@ -464,7 +476,7 @@ impl Writer {
             Some(CoordinateSpace::Geographic { .. })
         ) {
             self.diagnostic(
-                "EMIT.BMOPF.BUS_LOCATION_DROPPED",
+                &C::EMIT_BMOPF_BUS_LOCATION_DROPPED,
                 format!("bus {}", b.id),
                 format!(
                     "bus {}: non-geographic or undeclared location cannot be emitted as BMOPF longitude/latitude",
@@ -483,7 +495,7 @@ impl Writer {
         }
         if !location.x.is_finite() || !location.y.is_finite() {
             self.diagnostic(
-                "EMIT.BMOPF.BUS_LOCATION_DROPPED",
+                &C::EMIT_BMOPF_BUS_LOCATION_DROPPED,
                 format!("bus {}", b.id),
                 format!(
                     "bus {}: nonfinite location cannot be emitted as BMOPF longitude/latitude",
@@ -518,13 +530,13 @@ impl Writer {
                 details.insert("class".into(), json!(&u.class));
                 details.insert("name".into(), json!(&u.name));
                 let code = if u.class == "regcontrol" {
-                    "EMIT.BMOPF.REGCONTROL_DROPPED"
+                    &C::EMIT_BMOPF_REGCONTROL_DROPPED
                 } else {
-                    "EMIT.BMOPF.AUTOTRANSFORMER_DROPPED"
+                    &C::EMIT_BMOPF_AUTOTRANSFORMER_DROPPED
                 };
                 self.diagnostic(code, format!("{} {}", u.class, u.name), message, details);
             } else {
-                self.warn(message);
+                self.warn(&C::EMIT_BMOPF_RECORD_DROPPED, message);
             }
         }
     }
@@ -550,19 +562,25 @@ impl Writer {
             }
             let mut unplaced = Vec::new();
             let Some(value) = raw_bmopf_value(u, &mut unplaced) else {
-                self.warn(format!(
-                    "{} {}: the untyped BMOPF object carries no field this writer can \
+                self.warn(
+                    &C::EMIT_BMOPF_RECORD_DROPPED,
+                    format!(
+                        "{} {}: the untyped BMOPF object carries no field this writer can \
                      place; dropped from the output",
-                    u.class, u.name
-                ));
+                        u.class, u.name
+                    ),
+                );
                 continue;
             };
             for text in unplaced {
-                self.warn(format!(
-                    "{} {}: the value `{text}` has no field name; dropped from the \
+                self.warn(
+                    &C::EMIT_BMOPF_FIELD_DROPPED,
+                    format!(
+                        "{} {}: the value `{text}` has no field name; dropped from the \
                      output, the named fields beside it are kept",
-                    u.class, u.name
-                ));
+                        u.class, u.name
+                    ),
+                );
             }
             // An untyped transformer subtype lands in the top-level
             // `transformer` table, not under `extras`. Name the slot the
@@ -588,18 +606,24 @@ impl Writer {
             // the writer creates is a table. The path still runs on untrusted
             // input, so a surprise drops the object instead of the process.
             let Some(table) = slot.as_object_mut() else {
-                self.warn(format!(
-                    "{} {}: the `{slot_path}` slot is not a table; dropped from the output",
-                    u.class, u.name
-                ));
+                self.warn(
+                    &C::EMIT_BMOPF_RECORD_DROPPED,
+                    format!(
+                        "{} {}: the `{slot_path}` slot is not a table; dropped from the output",
+                        u.class, u.name
+                    ),
+                );
                 continue;
             };
             if table.insert(u.name.clone(), value).is_some() {
-                self.warn(format!(
-                    "{} {}: the source `{slot_path}` carried an entry of the same name; \
+                self.warn(
+                    &C::EMIT_BMOPF_VALUE_SUBSTITUTED,
+                    format!(
+                        "{} {}: the source `{slot_path}` carried an entry of the same name; \
                      the top-level object replaced it",
-                    u.class, u.name
-                ));
+                        u.class, u.name
+                    ),
+                );
             }
         }
     }
@@ -622,10 +646,13 @@ impl Writer {
             .collect();
         for class in classes {
             if extras.get(class).is_some_and(|v| !v.is_object()) {
-                self.warn(format!(
-                    "extras `{class}`: the source value is not a table; replaced by the \
+                self.warn(
+                    &C::EMIT_BMOPF_VALUE_SUBSTITUTED,
+                    format!(
+                        "extras `{class}`: the source value is not a table; replaced by the \
                      top-level `{class}` objects"
-                ));
+                    ),
+                );
                 extras.insert(class.to_string(), Value::Object(Map::new()));
             }
         }
@@ -645,7 +672,7 @@ impl Writer {
         for id in ids {
             let Some(used) = refs.get(&id) else {
                 buses.remove(&id);
-                self.warn(format!(
+                self.warn(&C::EMIT_BMOPF_RECORD_DROPPED, format!(
                     "bus {id}: no emitted BMOPF element references this bus; dropped from the output"
                 ));
                 continue;
@@ -793,17 +820,23 @@ impl Writer {
                 // The schema requires G_1_1 and B_1_1.
                 let dim = s.g.len().max(s.b.len()).max(1);
                 if s.g.is_empty() && s.b.is_empty() {
-                    self.warn(format!(
-                        "shunt {}: no admittance matrix; emitted as 1 conductor \
+                    self.warn(
+                        &C::EMIT_BMOPF_VALUE_DEFAULTED,
+                        format!(
+                            "shunt {}: no admittance matrix; emitted as 1 conductor \
                          zero admittance",
-                        s.name
-                    ));
+                            s.name
+                        ),
+                    );
                 } else if s.g.is_empty() || s.b.is_empty() {
-                    self.warn(format!(
-                        "shunt {}: G and B sizes disagree; the empty one emitted \
+                    self.warn(
+                        &C::EMIT_BMOPF_VALUE_DEFAULTED,
+                        format!(
+                            "shunt {}: G and B sizes disagree; the empty one emitted \
                          as zeros",
-                        s.name
-                    ));
+                            s.name
+                        ),
+                    );
                 }
                 self.required_matrix(&mut o, "G", &s.g, dim, &s.name);
                 self.required_matrix(&mut o, "B", &s.b, dim, &s.name);
@@ -815,16 +848,22 @@ impl Writer {
         let emitted_sources = bmopf_voltage_sources(net);
         let mut sources = Map::new();
         if emitted_sources.is_empty() {
-            self.warn("network has no voltage source; BMOPF requires exactly one");
+            self.warn(
+                &C::EMIT_BMOPF_SOURCE_COUNT,
+                "network has no voltage source; BMOPF requires exactly one",
+            );
         }
         for (i, vs) in emitted_sources.iter().enumerate() {
             if i > 0 {
-                self.warn(format!(
-                    "voltage source {}: the BMOPF formulation expects exactly one source; \
+                self.warn(
+                    &C::EMIT_BMOPF_SOURCE_COUNT,
+                    format!(
+                        "voltage source {}: the BMOPF formulation expects exactly one source; \
                      this network has {}",
-                    vs.name,
-                    emitted_sources.len()
-                ));
+                        vs.name,
+                        emitted_sources.len()
+                    ),
+                );
             }
             let mut o = Map::new();
             o.insert(
@@ -879,7 +918,7 @@ impl Writer {
             if value.is_object() {
                 o.insert(key.clone(), value.clone());
             } else {
-                self.warn(format!(
+                self.warn(&C::EMIT_BMOPF_RETAINED_SOURCE_ONLY, format!(
                     "control_profile {}: extra `{key}` is not an object; dropped from the output",
                     profile.name
                 ));
@@ -990,7 +1029,7 @@ impl Writer {
             if IBR_EXTRA_FIELDS.contains(&key.as_str()) {
                 o.insert(key.clone(), value.clone());
             } else {
-                self.warn(format!(
+                self.warn(&C::EMIT_BMOPF_RETAINED_SOURCE_ONLY, format!(
                     "ibr {}: extra `{key}` has no place in the BMOPF schema; dropped from the output",
                     ibr.name
                 ));
@@ -1090,10 +1129,13 @@ impl Writer {
                 // differs from the bounds has nowhere to go.
                 let pinned = lo.as_deref() == Some(nom) && hi.as_deref() == Some(nom);
                 if !nom.is_empty() && !nom.iter().all(|&v| v == 0.0) && !pinned {
-                    self.warn(format!(
-                        "{what}: explicit {key_lo}/{key_hi} bounds win over the setpoint, \
+                    self.warn(
+                        &C::EMIT_BMOPF_FIELD_DROPPED,
+                        format!(
+                            "{what}: explicit {key_lo}/{key_hi} bounds win over the setpoint, \
                          which has no BMOPF field"
-                    ));
+                        ),
+                    );
                 }
                 if let Some(v) = lo
                     && let Some(v) = self.bounds(v, &format!("{what} {key_lo}"))
@@ -1119,9 +1161,10 @@ impl Writer {
             g.p_nom.len()
         };
         let cost = g.cost.unwrap_or_else(|| {
-            self.warnings.push(format!(
-                "{what}: no generation cost in the source; emitted cost 0"
-            ));
+            self.warnings.push(
+                &C::EMIT_BMOPF_VALUE_DEFAULTED,
+                format!("{what}: no generation cost in the source; emitted cost 0"),
+            );
             0.0
         });
         o.insert(
@@ -1142,9 +1185,12 @@ impl Writer {
         o.insert("configuration".into(), json!(config_str(g.configuration)));
         o.insert("terminal_map".into(), json!(g.terminal_map));
         if g.configuration == Configuration::Delta {
-            self.warn(format!(
-                "{what}: the BMOPF formulation covers WYE generators; DELTA emitted as written"
-            ));
+            self.warn(
+                &C::EMIT_BMOPF_VALUE_SUBSTITUTED,
+                format!(
+                    "{what}: the BMOPF formulation covers WYE generators; DELTA emitted as written"
+                ),
+            );
         }
         self.extras_dropped(&g.extras, &what);
         Value::Object(o)
@@ -1183,7 +1229,7 @@ impl Writer {
                         details.insert("emitted_subtype".into(), json!("single_phase"));
                         self.transformer_diagnostic(
                             t,
-                            "EMIT.BMOPF.TRANSFORMER_CONNECTION_LOSSY",
+                            &C::EMIT_BMOPF_TRANSFORMER_CONNECTION_LOSSY,
                             format!(
                                 "transformer {}: single phase wye/delta emitted as single_phase; \
                                  the wye/delta connection is not encoded in the subtype, only the \
@@ -1228,7 +1274,7 @@ impl Writer {
                     details.insert("windings".into(), json!(t.windings.len()));
                     self.transformer_diagnostic(
                         t,
-                        "EMIT.BMOPF.TRANSFORMER_UNSUPPORTED",
+                        &C::EMIT_BMOPF_TRANSFORMER_UNSUPPORTED,
                         format!(
                             "transformer {}: {why}; not representable in the four BMOPF \
                              subtypes, dropped from the output",
@@ -1286,11 +1332,14 @@ impl Writer {
                         overflow.insert(key.clone(), v);
                     }
                 }
-                self.warnings.push(format!(
-                    "transformer {name}: {} have no {subtype} slot in BMOPF schema 0.1.0; \
+                self.warnings.push(
+                    &C::EMIT_BMOPF_RETAINED_SOURCE_ONLY,
+                    format!(
+                        "transformer {name}: {} have no {subtype} slot in BMOPF schema 0.1.0; \
                      kept under extras.transformer",
-                    moved.join(", ")
-                ));
+                        moved.join(", ")
+                    ),
+                );
                 self.transformer_overflow
                     .entry(subtype.to_string())
                     .or_insert_with(|| Value::Object(Map::new()))
@@ -1334,7 +1383,7 @@ impl Writer {
         if t.xsc_pct.is_empty() {
             self.transformer_diagnostic(
                 t,
-                "EMIT.BMOPF.TRANSFORMER_MISSING_XSC",
+                &C::EMIT_BMOPF_TRANSFORMER_MISSING_XSC,
                 format!(
                     "transformer {}: xsc_pct is empty; emitted x_series_from=0",
                     t.name
@@ -1371,7 +1420,7 @@ impl Writer {
             details.insert("emitted_secondary_tap".into(), json!(w2.tap));
             self.transformer_diagnostic(
                 t,
-                "EMIT.BMOPF.TRANSFORMER_CENTER_TAP_TAP_COLLAPSED",
+                &C::EMIT_BMOPF_TRANSFORMER_CENTER_TAP_TAP_COLLAPSED,
                 format!(
                     "transformer {}: center tap secondary half winding taps ({}, {}) differ; emitted the first half tap",
                     t.name, w2.tap, w3.tap
@@ -1388,7 +1437,7 @@ impl Writer {
             details.insert("half_s_ratings".into(), json!([w2.s_rating, w3.s_rating]));
             self.transformer_diagnostic(
                 t,
-                "EMIT.BMOPF.TRANSFORMER_CENTER_TAP_RATING_COLLAPSED",
+                &C::EMIT_BMOPF_TRANSFORMER_CENTER_TAP_RATING_COLLAPSED,
                 format!(
                     "transformer {}: center tap half winding s_ratings ({}, {}) differ \
                      from the primary's {}; BMOPF carries one transformer rating, and \
@@ -1404,7 +1453,7 @@ impl Writer {
         if t.xsc_pct.is_empty() {
             self.transformer_diagnostic(
                 t,
-                "EMIT.BMOPF.TRANSFORMER_MISSING_XSC",
+                &C::EMIT_BMOPF_TRANSFORMER_MISSING_XSC,
                 format!(
                     "transformer {}: xsc_pct is empty; emitted x_series_from=0",
                     t.name
@@ -1457,11 +1506,14 @@ impl Writer {
             if w.s_rating > 0.0 && w.s_rating.is_finite() {
                 total += w.r_pct / w.s_rating;
             } else if w.r_pct != 0.0 {
-                self.warn(format!(
-                    "transformer {}: the `{side}` winding rating is not positive, so its \
+                self.warn(
+                    &C::EMIT_BMOPF_FIELD_DROPPED,
+                    format!(
+                        "transformer {}: the `{side}` winding rating is not positive, so its \
                      resistance has no base to refer to; the term is dropped from r_series",
-                    t.name
-                ));
+                        t.name
+                    ),
+                );
             }
         }
         total / 100.0 * v_wye2
@@ -1483,12 +1535,15 @@ impl Writer {
                 let value = self.num(pct / 100.0 * zb, key);
                 o.insert(key.into(), value);
             }
-            None => self.warn(format!(
-                "transformer {}: the `{side}` winding rating is not positive, so its \
+            None => self.warn(
+                &C::EMIT_BMOPF_FIELD_DROPPED,
+                format!(
+                    "transformer {}: the `{side}` winding rating is not positive, so its \
                  percent impedance has no base to refer to; `{key}` is dropped from \
                  the output",
-                t.name
-            )),
+                    t.name
+                ),
+            ),
         }
     }
 
@@ -1509,7 +1564,7 @@ impl Writer {
         details.insert("emitted_percentages".into(), json!([emitted_from, 0.0]));
         self.transformer_diagnostic(
             t,
-            "EMIT.BMOPF.TRANSFORMER_CENTER_TAP_LEAKAGE_UNREPRESENTABLE",
+            &C::EMIT_BMOPF_TRANSFORMER_CENTER_TAP_LEAKAGE_UNREPRESENTABLE,
             format!(
                 "transformer {}: center tap leakage star arms ({x_from_pct}, {x_to_pct}) \
                  are not representable as nonnegative BMOPF fields; emitted xhl on the \
@@ -1543,7 +1598,7 @@ impl Writer {
         if t.xsc_pct.is_empty() {
             self.transformer_diagnostic(
                 t,
-                "EMIT.BMOPF.TRANSFORMER_MISSING_XSC",
+                &C::EMIT_BMOPF_TRANSFORMER_MISSING_XSC,
                 format!(
                     "transformer {}: xsc_pct is empty; emitted x_series=0",
                     t.name,
@@ -1589,7 +1644,7 @@ impl Writer {
             );
             self.transformer_diagnostic(
                 t,
-                "EMIT.BMOPF.TRANSFORMER_N_WINDING_RATING_COLLAPSED",
+                &C::EMIT_BMOPF_TRANSFORMER_N_WINDING_RATING_COLLAPSED,
                 format!(
                     "transformer {}: n_winding BMOPF carries one s_rating; emitted the first winding rating",
                     t.name
@@ -1657,7 +1712,7 @@ impl Writer {
             details.insert("windings".into(), json!(n_windings));
             self.transformer_diagnostic(
                 t,
-                "EMIT.BMOPF.TRANSFORMER_WINDINGS_CLAMPED",
+                &C::EMIT_BMOPF_TRANSFORMER_WINDINGS_CLAMPED,
                 format!(
                     "transformer {}: {n_windings} windings exceed the supported \
                      maximum of {MAX_DIM}; x_sc pairs beyond it are dropped",
@@ -1672,7 +1727,7 @@ impl Writer {
                 details.insert("winding_pair".into(), json!(format!("{}_{}", i + 1, j + 1)));
                 self.transformer_diagnostic(
                     t,
-                    "EMIT.BMOPF.TRANSFORMER_MISSING_XSC",
+                    &C::EMIT_BMOPF_TRANSFORMER_MISSING_XSC,
                     format!(
                         "transformer {}: missing x_sc for winding pair {}_{}; emitted 0",
                         t.name,
@@ -1729,7 +1784,7 @@ impl Writer {
         details.insert("units".into(), json!(t.phases));
         self.transformer_diagnostic(
             t,
-            "EMIT.BMOPF.TRANSFORMER_WYE_WYE_DECOMPOSED",
+            &C::EMIT_BMOPF_TRANSFORMER_WYE_WYE_DECOMPOSED,
             format!(
                 "transformer {}: three phase wye-wye decomposed into {} single_phase units",
                 t.name, t.phases
@@ -1747,7 +1802,7 @@ impl Writer {
                 details.insert("tap".into(), json!(w.tap));
                 self.transformer_diagnostic(
                     t,
-                    "EMIT.BMOPF.TRANSFORMER_TAP_DROPPED",
+                    &C::EMIT_BMOPF_TRANSFORMER_TAP_DROPPED,
                     format!(
                         "transformer {}: off nominal tap {} has no BMOPF field; dropped",
                         t.name, w.tap
@@ -1772,7 +1827,7 @@ impl Writer {
                 details.insert("to_tap".into(), json!(to.tap));
                 self.transformer_diagnostic(
                     t,
-                    "EMIT.BMOPF.TRANSFORMER_TAP_DROPPED",
+                    &C::EMIT_BMOPF_TRANSFORMER_TAP_DROPPED,
                     format!(
                         "transformer {}: to-side tap {} cannot form a finite BMOPF ratio; dropped",
                         t.name, to.tap
@@ -1811,7 +1866,7 @@ impl Writer {
                 details.insert("emitted_winding_tap".into(), json!(first));
                 self.transformer_diagnostic(
                     t,
-                    "EMIT.BMOPF.TRANSFORMER_PER_PHASE_TAP_COLLAPSED",
+                    &C::EMIT_BMOPF_TRANSFORMER_PER_PHASE_TAP_COLLAPSED,
                     format!(
                         "transformer {}: winding {} has non-uniform per phase taps; emitted the first phase tap",
                         t.name,
@@ -1854,7 +1909,7 @@ impl Writer {
             details.insert("value".into(), json!(v));
             self.transformer_diagnostic(
                 t,
-                "EMIT.BMOPF.TRANSFORMER_NEUTRAL_DROPPED",
+                &C::EMIT_BMOPF_TRANSFORMER_NEUTRAL_DROPPED,
                 format!(
                     "transformer {}: {key}={v} is not a nonnegative finite BMOPF neutral impedance; dropped",
                     t.name
@@ -1877,7 +1932,7 @@ impl Writer {
             details.insert("values".into(), json!([a, b]));
             self.transformer_diagnostic(
                 t,
-                "EMIT.BMOPF.TRANSFORMER_CENTER_TAP_NEUTRAL_COLLAPSED",
+                &C::EMIT_BMOPF_TRANSFORMER_CENTER_TAP_NEUTRAL_COLLAPSED,
                 format!(
                     "transformer {}: center tap secondary has two {field} values ({a}, {b}); emitted the first",
                     t.name
@@ -1896,7 +1951,7 @@ impl Writer {
                 details.insert("winding".into(), json!(idx + 1));
                 self.transformer_diagnostic(
                     t,
-                    "EMIT.BMOPF.TRANSFORMER_NEUTRAL_DROPPED",
+                    &C::EMIT_BMOPF_TRANSFORMER_NEUTRAL_DROPPED,
                     format!(
                         "transformer {} winding {}: neutral impedance has no {target} field; dropped",
                         t.name,
@@ -1924,7 +1979,7 @@ impl Writer {
                 details.insert("reason".into(), json!("phase_to_phase_single_phase"));
                 self.transformer_diagnostic(
                     t,
-                    "EMIT.BMOPF.TRANSFORMER_NO_LOAD_SHUNT_DROPPED",
+                    &C::EMIT_BMOPF_TRANSFORMER_NO_LOAD_SHUNT_DROPPED,
                     format!(
                         "transformer {}: phase-to-phase %noloadloss cannot be represented as a BMOPF no-load shunt; dropped",
                         t.name
@@ -1946,7 +2001,7 @@ impl Writer {
                     details.insert("v_nom_from".into(), json!(v_stamp));
                     self.transformer_diagnostic(
                         t,
-                        "EMIT.BMOPF.TRANSFORMER_NO_LOAD_SHUNT_UNCONVERTIBLE",
+                        &C::EMIT_BMOPF_TRANSFORMER_NO_LOAD_SHUNT_UNCONVERTIBLE,
                         format!(
                             "transformer {}: %noloadloss cannot be converted without a positive s_rating and v_nom_from",
                             t.name
@@ -1966,7 +2021,7 @@ impl Writer {
                 details.insert("reason".into(), json!("phase_to_phase_single_phase"));
                 self.transformer_diagnostic(
                     t,
-                    "EMIT.BMOPF.TRANSFORMER_NO_LOAD_SHUNT_DROPPED",
+                    &C::EMIT_BMOPF_TRANSFORMER_NO_LOAD_SHUNT_DROPPED,
                     format!(
                         "transformer {}: phase-to-phase %imag cannot be represented as a BMOPF no-load shunt; dropped",
                         t.name
@@ -1988,7 +2043,7 @@ impl Writer {
                     details.insert("v_nom_from".into(), json!(v_stamp));
                     self.transformer_diagnostic(
                         t,
-                        "EMIT.BMOPF.TRANSFORMER_NO_LOAD_SHUNT_UNCONVERTIBLE",
+                        &C::EMIT_BMOPF_TRANSFORMER_NO_LOAD_SHUNT_UNCONVERTIBLE,
                         format!(
                             "transformer {}: %imag cannot be converted without a positive s_rating and v_nom_from",
                             t.name
@@ -2021,7 +2076,7 @@ impl Writer {
             details.insert("field".into(), json!(key));
             self.transformer_diagnostic(
                 t,
-                "EMIT.BMOPF.TRANSFORMER_EXTRA_DROPPED",
+                &C::EMIT_BMOPF_TRANSFORMER_EXTRA_DROPPED,
                 format!(
                     "transformer {}: `{key}` has no place in the BMOPF schema; dropped from the output",
                     t.name
@@ -2045,10 +2100,13 @@ impl Writer {
     ) {
         if m.is_empty() {
             let dim = if dim > MAX_DIM {
-                self.warn(format!(
-                    "{name}: {prefix} dimension {dim} exceeds the supported \
+                self.warn(
+                    &C::EMIT_BMOPF_VALUE_CLAMPED,
+                    format!(
+                        "{name}: {prefix} dimension {dim} exceeds the supported \
                      maximum of {MAX_DIM}; zero matrix clamped"
-                ));
+                    ),
+                );
                 MAX_DIM
             } else {
                 dim
@@ -2113,7 +2171,7 @@ fn prune_string_array(
     key: &str,
     used: &BTreeSet<String>,
     also: &BTreeSet<String>,
-    warnings: &mut Vec<String>,
+    warnings: &mut crate::diagnostics::Diagnostics,
     what: &str,
 ) {
     let Some(Value::Array(values)) = o.get_mut(key) else {
@@ -2138,7 +2196,7 @@ fn prune_string_array(
             .filter_map(Value::as_str)
             .map(str::to_string)
             .collect();
-        warnings.push(format!(
+        warnings.push(&C::EMIT_BMOPF_RECORD_DROPPED, format!(
             "{what}: `{key}` entries {names:?} are not referenced by emitted BMOPF elements; dropped from the output"
         ));
     }

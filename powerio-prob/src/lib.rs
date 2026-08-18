@@ -25,6 +25,7 @@ pub use dc::{
 };
 pub use powerio::DcConvention;
 
+pub mod diagnostics;
 pub mod error;
 pub use error::{Error, Result};
 pub use reference::ReferenceBuses;

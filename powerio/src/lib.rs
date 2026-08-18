@@ -39,6 +39,7 @@
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 pub mod dc;
+pub mod diagnostics;
 pub mod error;
 pub mod format;
 pub mod gen_cost;
@@ -51,6 +52,7 @@ pub mod solver_tables;
 pub mod version;
 
 pub use dc::DcConvention;
+pub use diagnostics::{Diagnostics, EmitFamily, StructuredDiagnostic};
 pub use error::{Error, ErrorCategory, Result};
 pub use format::{
     Conversion, DisplayData, DisplayFormat, Parsed, PwdDisplay, PwdSubstation, PypsaCsvOutputs,

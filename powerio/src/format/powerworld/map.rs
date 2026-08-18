@@ -11,6 +11,8 @@ use std::fmt::Write as _;
 use std::sync::Arc;
 
 use super::auxiliary::{AuxFile, AuxObject, parse_aux};
+use crate::diagnostics::codes::EMIT_POWERWORLD as F;
+use crate::diagnostics::{Diagnostics, codes};
 use crate::format::{Conversion, sanitize_quoted, warn_extra_branch_rating_sets};
 use crate::network::{
     BalancedNetwork, Branch, Bus, BusId, BusType, Extras, Generator, Load, LoadVoltageModel, Shunt,
@@ -39,7 +41,7 @@ pub(super) const BRANCH_DEVICE_TYPE: &str = "BranchDeviceType";
 pub(crate) fn parse_powerworld_source(
     source: Arc<String>,
     name_hint: Option<&str>,
-    warnings: &mut Vec<String>,
+    warnings: &mut Diagnostics,
 ) -> Result<BalancedNetwork> {
     let content: &str = &source;
     // PowerWorld `.aux` does not carry the system base in the case data, so we
@@ -110,12 +112,15 @@ pub(crate) fn parse_powerworld_source(
             }
         }
     }
-    warnings.extend(unmodeled.into_iter().map(|(object, rows)| {
-        format!(
-            "PowerWorld .aux DATA {object} has {rows} row(s) not modeled in BalancedNetwork; \
-             retained only in source text for same-format writeback"
-        )
-    }));
+    for (object, rows) in unmodeled {
+        warnings.push(
+            &codes::READ_POWERWORLD_RETAINED_SOURCE_ONLY,
+            format!(
+                "PowerWorld .aux DATA {object} has {rows} row(s) not modeled in BalancedNetwork; \
+                 retained only in source text for same-format writeback"
+            ),
+        );
+    }
 
     let mut buses = Vec::new();
     let mut bus_labels = HashMap::new();
@@ -707,7 +712,7 @@ fn read_branch(
 // add indirection without clarity.
 #[expect(clippy::too_many_lines)]
 pub fn write_powerworld(net: &BalancedNetwork) -> Conversion {
-    let mut warnings = Vec::new();
+    let mut warnings = Diagnostics::new();
     let mut nonfinite = false;
     let mut sanitized_names = 0usize;
     let mut n = |x: f64| -> String {
@@ -888,16 +893,22 @@ pub fn write_powerworld(net: &BalancedNetwork) -> Conversion {
     );
 
     if net.generators.iter().any(|g| g.cost.is_some()) {
-        warnings.push("generator cost curves dropped: not written to PowerWorld .aux".into());
+        warnings.push(
+            &F.field_dropped,
+            "generator cost curves dropped: not written to PowerWorld .aux",
+        );
     }
     if !net.hvdc.is_empty() {
-        warnings.push(format!(
-            "{} dcline(s) dropped: PowerWorld HVDC not modeled",
-            net.hvdc.len()
-        ));
+        warnings.push(
+            &F.record_dropped,
+            format!(
+                "{} dcline(s) dropped: PowerWorld HVDC not modeled",
+                net.hvdc.len()
+            ),
+        );
     }
     if !net.transformers_3w.is_empty() {
-        warnings.push(format!(
+        warnings.push(&F.record_dropped, format!(
             "{} 3-winding transformer(s) dropped: the PowerWorld .aux writer emits no 3-winding record",
             net.transformers_3w.len()
         ));
@@ -908,15 +919,18 @@ pub fn write_powerworld(net: &BalancedNetwork) -> Conversion {
         .any(|b| b.evhi.is_some() || b.evlo.is_some())
     {
         warnings.push(
-            "emergency voltage band(s) (EVHI/EVLO) dropped: this writer carries one voltage band"
-                .into(),
+            &F.field_dropped,
+            "emergency voltage band(s) (EVHI/EVLO) dropped: this writer carries one voltage band",
         );
     }
     if !net.storage.is_empty() {
-        warnings.push(format!(
-            "{} storage unit(s) dropped: PowerWorld storage not modeled",
-            net.storage.len()
-        ));
+        warnings.push(
+            &F.record_dropped,
+            format!(
+                "{} storage unit(s) dropped: PowerWorld storage not modeled",
+                net.storage.len()
+            ),
+        );
     }
     let voltage_loads = net
         .loads
@@ -928,7 +942,7 @@ pub fn write_powerworld(net: &BalancedNetwork) -> Conversion {
         })
         .count();
     if voltage_loads > 0 {
-        warnings.push(format!(
+        warnings.push(&F.field_dropped, format!(
             "{voltage_loads} voltage dependent load model(s) dropped: PowerWorld Load records carry static MW/MVR only"
         ));
     }
@@ -938,7 +952,7 @@ pub fn write_powerworld(net: &BalancedNetwork) -> Conversion {
         .filter(|b| b.has_non_matpower_charging())
         .count();
     if terminal_charging > 0 {
-        warnings.push(format!(
+        warnings.push(&F.value_collapsed, format!(
             "{terminal_charging} branch terminal admittance record(s) collapsed to total susceptance: PowerWorld aux branch rows written here cannot carry conductance or asymmetric terminal charging"
         ));
     }
@@ -948,49 +962,58 @@ pub fn write_powerworld(net: &BalancedNetwork) -> Conversion {
         .filter(|b| b.current_ratings.is_some())
         .count();
     if current_ratings > 0 {
-        warnings.push(format!(
+        warnings.push(&F.field_dropped, format!(
             "{current_ratings} branch current rating record(s) dropped: PowerWorld aux branch rows written here carry MVA ratings only"
         ));
     }
-    warn_extra_branch_rating_sets("PowerWorld .aux", net, &mut warnings);
+    warn_extra_branch_rating_sets(&F, "PowerWorld .aux", net, &mut warnings);
     // The keys this writer replays: the two device ids, the branch circuit,
     // and the device type. Anything else a reader retained — a foreign
     // format's ids, ZIP components, LineLength — is dropped, and says so
     // (#330).
     super::super::warn_dropped_extras(
+        &F,
         "PowerWorld .aux",
         net,
         |key| matches!(key, "LoadID" | "ShuntID" | "BranchDeviceType") || key == LINE_CIRCUIT,
         &mut warnings,
     );
-    super::super::warn_dropped_areas("PowerWorld .aux", net, &mut warnings);
+    super::super::warn_dropped_areas(&F, "PowerWorld .aux", net, &mut warnings);
     let branch_solutions = net.branches.iter().filter(|b| b.solution.is_some()).count();
     if branch_solutions > 0 {
-        warnings.push(format!(
+        warnings.push(&F.field_dropped, format!(
             "{branch_solutions} branch solution value set(s) dropped: PowerWorld aux result fields are not written"
         ));
     }
     if net.branches.iter().any(Branch::has_angle_limits) {
         warnings.push(
-            "branch angle limits (angmin/angmax) dropped: not written to PowerWorld .aux".into(),
+            &F.field_dropped,
+            "branch angle limits (angmin/angmax) dropped: not written to PowerWorld .aux",
         );
     }
     if net.generators.iter().any(Generator::has_caps) {
         warnings.push(
-            "generator ramp/capability columns dropped: not written to PowerWorld .aux".into(),
+            &F.field_dropped,
+            "generator ramp/capability columns dropped: not written to PowerWorld .aux",
         );
     }
     if nonfinite {
-        warnings.push("non-finite values written as ±1e10 sentinels".into());
+        warnings.push(
+            &F.not_a_number,
+            "non-finite values written as ±1e10 sentinels",
+        );
     }
     if sanitized_names > 0 {
-        warnings.push(format!(
-            "{sanitized_names} bus name(s) contained a double quote that would corrupt a \
+        warnings.push(
+            &F.value_substituted,
+            format!(
+                "{sanitized_names} bus name(s) contained a double quote that would corrupt a \
              PowerWorld value; replaced with spaces"
-        ));
+            ),
+        );
     }
 
-    Conversion { text: s, warnings }
+    Conversion::new(s, warnings)
 }
 
 /// Device ID for the writer: the retained PowerWorld ID from `extras` when the

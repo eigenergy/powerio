@@ -15,6 +15,7 @@ use std::sync::Arc;
 
 use serde::Deserialize;
 
+use crate::diagnostics::{Diagnostics, codes};
 use crate::network::{
     BalancedNetwork, Branch, BranchCharging, BranchSolution, Bus, BusId, BusType, GenCost,
     Generator, Load, Shunt, SourceFormat,
@@ -503,7 +504,7 @@ fn bus_type(value: f64, row: usize) -> Result<BusType> {
     }
 }
 
-fn warn_extra_fields(path: &str, extra: &ExtraFields, warnings: &mut Vec<String>) {
+fn warn_extra_fields(path: &str, extra: &ExtraFields, warnings: &mut Diagnostics) {
     if extra.is_empty() {
         return;
     }
@@ -518,12 +519,12 @@ fn warn_extra_fields(path: &str, extra: &ExtraFields, warnings: &mut Vec<String>
         })
         .collect::<Vec<_>>()
         .join(", ");
-    warnings.push(format!(
+    warnings.push(&codes::READ_OPFDATA_FIELD_DROPPED, format!(
         "OPFData fields {fields} are not part of the published schema; they remain in the retained source but are not represented in the canonical snapshot"
     ));
 }
 
-fn warn_document_extras(document: &Document, warnings: &mut Vec<String>) {
+fn warn_document_extras(document: &Document, warnings: &mut Diagnostics) {
     warn_extra_fields("", &document.extra, warnings);
     warn_extra_fields("grid", &document.grid.extra, warnings);
     warn_extra_fields("grid.nodes", &document.grid.nodes.extra, warnings);
@@ -664,20 +665,16 @@ fn validate_document(document: &Document, bus_count: usize) -> Result<NodeLinks>
 /// Parse one raw FullTop or N-1 DeepMind OPFData JSON document as a solved
 /// snapshot. The reader does not assume a case name or fixed element counts.
 pub fn parse_deepmind_opfdata_json(content: &str) -> Result<Parsed> {
-    let mut warnings = Vec::new();
+    let mut warnings = Diagnostics::new();
     let network = parse_opfdata_source(Arc::new(content.to_owned()), None, &mut warnings)?;
-    Ok(Parsed {
-        network,
-        warnings,
-        document: None,
-    })
+    Ok(Parsed::without_document(network, warnings))
 }
 
 #[allow(clippy::too_many_lines)]
 pub(crate) fn parse_opfdata_source(
     source: Arc<String>,
     name_hint: Option<&str>,
-    warnings: &mut Vec<String>,
+    warnings: &mut Diagnostics,
 ) -> Result<BalancedNetwork> {
     let document: Document = serde_json::from_str(&source)
         .map_err(|error| bad(format!("invalid OPFData schema: {error}")))?;
@@ -801,17 +798,17 @@ pub(crate) fn parse_opfdata_source(
     }
 
     if !document.grid.nodes.generator.is_empty() {
-        warnings.push(
+        warnings.push(&codes::READ_OPFDATA_RETAINED_SOURCE_ONLY,
             "OPFData generator pg/qg/vg grid features are solver initial values; the canonical snapshot uses solved pg/qg and terminal-bus voltage, so initial values remain only in the retained source"
-                .to_string(),
+                ,
         );
     }
-    warnings.push(format!(
+    warnings.push(&codes::READ_OPFDATA_VALUE_INFERRED, format!(
         "OPFData does not carry original bus IDs/names, areas/zones, or base frequency; synthesized IDs 1..{bus_count}, area/zone 1, and {} Hz",
         crate::network::DEFAULT_BASE_FREQUENCY
     ));
     if let Some(warning) = objective_warning(&document) {
-        warnings.push(warning);
+        warnings.push(&codes::READ_OPFDATA_FIELD_DROPPED, warning);
     }
 
     let mut network = BalancedNetwork::new(name_hint.unwrap_or("opfdata"), base);
