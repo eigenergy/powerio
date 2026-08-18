@@ -259,7 +259,7 @@ def test_loads_and_shunts_are_first_class():
 
 def test_parse_str_roundtrip(case9):
     text = (DATA / "case9.m").read_text()
-    c = powerio.parse_str(text)
+    c = powerio.parse_str(text, "matpower")
     assert c.name == "case9"
     assert c.n_buses == case9.n_buses
     assert np.allclose(c.bprime().toarray(), case9.bprime().toarray())
@@ -419,7 +419,7 @@ mpc.branch = [
 \t4\t10\t0.01\t0.1\t0\t0\t0\t0\t0\t0\t1\t-360\t360;
 ];
 """
-    n = powerio.parse_str(src).to_normalized()
+    n = powerio.parse_str(src, "matpower").to_normalized()
     assert [bus["id"] for bus in n.buses] == [1, 2, 3, 4, 10]
     assert n.loads[0]["bus"] == 10
     assert n.branches[-1]["from_id"] == 4
@@ -482,7 +482,7 @@ def test_parse_bad_path_raises():
 
 def test_bad_parse_raises_powerio_error():
     with pytest.raises(powerio.PowerIOError):
-        powerio.parse_str("this is not a matpower case")
+        powerio.parse_str("this is not a matpower case", "matpower")
 
 
 def test_error_subclasses_are_powerio_errors():
@@ -498,14 +498,14 @@ def test_error_subclasses_are_powerio_errors():
 def test_malformed_case_raises_parse_error():
     # A malformed/unparseable case file is a parse-category error.
     with pytest.raises(powerio.PowerIOParseError):
-        powerio.parse_str("this is not a matpower case")
+        powerio.parse_str("this is not a matpower case", "matpower")
 
 
 def test_unmet_precondition_raises_data_error(tmp_path):
     # A well-formed case that can't satisfy an operation (here: DC-OPF with no
     # generators) is a data-category error, not a parse error.
     genless = TINY[: TINY.index("mpc.gen = [")]
-    case = powerio.parse_str(genless)
+    case = powerio.parse_str(genless, "matpower")
     with pytest.raises(powerio.PowerIODataError):
         case.write_dcopf_bundle(str(tmp_path))
 
@@ -513,7 +513,7 @@ def test_unmet_precondition_raises_data_error(tmp_path):
 def test_reference_bus_count_is_data_error():
     two_ref = TINY.replace("\t3\t2\t0", "\t3\t3\t0")  # bus 3: PV -> ref
     with pytest.raises(powerio.PowerIODataError):
-        powerio.parse_str(two_ref).reference_bus_index()
+        powerio.parse_str(two_ref, "matpower").reference_bus_index()
 
 
 def test_dcopf_bundle_paths_are_clean_unicode(case9, tmp_path):
@@ -1006,7 +1006,7 @@ def test_bad_enum_strings_raise(case9, tmp_path):
 
 
 def test_to_networkx_attrs_and_status_filter():
-    c = powerio.parse_str(TINY)
+    c = powerio.parse_str(TINY, "matpower")
     g = c.to_networkx()
     assert g.number_of_nodes() == 3 and g.number_of_edges() == 2
     # Edge attributes mirror the branch table.
@@ -1017,7 +1017,7 @@ def test_to_networkx_attrs_and_status_filter():
         "2\t3\t0.01\t0.1\t0\t250\t250\t250\t0\t0\t1\t-360\t360",
         "2\t3\t0.01\t0.1\t0\t250\t250\t250\t0\t0\t0\t-360\t360",
     )
-    assert powerio.parse_str(oos).to_networkx().number_of_edges() == 1
+    assert powerio.parse_str(oos, "matpower").to_networkx().number_of_edges() == 1
 
 
 # --- connectivity & reference bus --------------------------------------
@@ -1037,7 +1037,7 @@ def test_reference_bus_index(case9):
 
 def test_reference_bus_error_on_two_refs():
     two_ref = TINY.replace("\t3\t2\t0", "\t3\t3\t0")  # bus 3: PV -> ref
-    case = powerio.parse_str(two_ref)
+    case = powerio.parse_str(two_ref, "matpower")
     # The single-ref query raises; the reference-set query returns both, so a
     # multi-slack case stays legible from Python.
     with pytest.raises(powerio.PowerIOError):
@@ -1077,7 +1077,7 @@ def _bundle_file(case, out_dir, name, **kw):
 
 def test_dcopf_requires_generators(tmp_path):
     genless = TINY[: TINY.index("mpc.gen = [")]
-    case = powerio.parse_str(genless)
+    case = powerio.parse_str(genless, "matpower")
     assert case.n_gens == 0
     with pytest.raises(powerio.PowerIOError):
         case.write_dcopf_bundle(str(tmp_path))
@@ -1110,7 +1110,7 @@ def test_convert_round_trip_through_psse(tmp_path):
     p = tmp_path / "case30.raw"
     p.write_text(raw)
     back = powerio.convert_file(str(p), "matpower")  # PSS/E inferred from .raw extension
-    case = powerio.parse_str(back.text)
+    case = powerio.parse_str(back.text, "matpower")
     assert case.n_buses == 30
 
 
@@ -1170,8 +1170,8 @@ def test_convert_str_matpower_echo_is_byte_exact():
 
 def test_convert_str_named_input_format():
     raw = powerio.convert_file(str(DATA / "case30.m"), "psse").text
-    back = powerio.convert_str(raw, "matpower", format="psse")
-    assert powerio.parse_str(back.text).n_buses == 30
+    back = powerio.convert_str(raw, "matpower", from_="psse")
+    assert powerio.parse_str(back.text, "matpower").n_buses == 30
 
 
 def test_pypsa_csv_folder_wrapper(tmp_path):

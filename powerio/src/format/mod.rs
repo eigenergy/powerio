@@ -301,14 +301,14 @@ fn display_file_guidance() -> Error {
     )
 }
 
-/// Parse display bytes in the named display `format`.
+/// Parse display bytes in the named display format `from`.
 ///
 /// # Errors
-/// [`Error::UnknownFormat`] if `format` is not a display format; otherwise the
+/// [`Error::UnknownFormat`] if `from` is not a display format; otherwise the
 /// reader's own [`Error`] on malformed input.
-pub fn parse_display_bytes(bytes: &[u8], format: &str) -> Result<DisplayData> {
+pub fn parse_display_bytes(bytes: &[u8], from: &str) -> Result<DisplayData> {
     let fmt =
-        display_format_from_name(format).ok_or_else(|| Error::UnknownFormat(format.to_string()))?;
+        display_format_from_name(from).ok_or_else(|| Error::UnknownFormat(from.to_string()))?;
     match fmt {
         DisplayFormat::PowerWorld => Ok(DisplayData::PowerWorld(powerworld::parse_pwd_display(
             bytes,
@@ -739,15 +739,15 @@ fn transmission_json_target(format: TransmissionFormat) -> Result<TargetFormat> 
     }
 }
 
-/// Parse in-memory case `text` of the named `format` (see
+/// Parse in-memory case `text` of the named source format `from` (see
 /// [`target_format_from_name`]). Returns [`Parsed`]: the network plus the
 /// reader's fidelity warnings.
 ///
 /// # Errors
-/// [`Error::UnknownFormat`] if `format` is unrecognized; the reader's own
+/// [`Error::UnknownFormat`] if `from` is unrecognized; the reader's own
 /// [`Error`] on malformed input.
-pub fn parse_str(text: &str, format: &str) -> Result<Parsed> {
-    parse_str_with_name(text, format, None)
+pub fn parse_str(text: &str, from: &str) -> Result<Parsed> {
+    parse_str_with_name(text, from, None)
 }
 
 /// [`parse_str`] with a name hint for formats that carry no name of their own
@@ -757,33 +757,33 @@ pub fn parse_str(text: &str, format: &str) -> Result<Parsed> {
 ///
 /// # Errors
 /// As [`parse_str`].
-pub fn parse_str_with_name(text: &str, format: &str, name_hint: Option<&str>) -> Result<Parsed> {
-    if is_pslf_name(format) {
+pub fn parse_str_with_name(text: &str, from: &str, name_hint: Option<&str>) -> Result<Parsed> {
+    if is_pslf_name(from) {
         let mut warnings = Diagnostics::new();
         let source = strip_bom(Arc::new(text.to_owned()), &mut warnings);
         let network = pslf::parse_pslf_source(source, name_hint, &mut warnings)?;
         reject_empty_case(&network, "PSLF .epc")?;
         return Ok(Parsed::without_document(network, warnings));
     }
-    let fmt = target_format_from_name(format).ok_or_else(|| unknown_source_format(format))?;
+    let fmt = target_format_from_name(from).ok_or_else(|| unknown_source_format(from))?;
     read_source(Arc::new(text.to_owned()), fmt, name_hint)
 }
 
-/// Parse in-memory case `bytes` of the named `format`. Accepts every name
-/// [`parse_str`] does, plus `pwb`: PowerWorld binary has no text form, so this
-/// is the only in-memory entry point that reaches it. Text formats decode as
-/// UTF-8 and take the [`parse_str`] path from there.
+/// Parse in-memory case `bytes` of the named source format `from`. Accepts
+/// every name [`parse_str`] does, plus `pwb`: PowerWorld binary has no text
+/// form, so this is the only in-memory entry point that reaches it. Text
+/// formats decode as UTF-8 and take the [`parse_str`] path from there.
 ///
 /// A caller that already holds the file's bytes — an upload, an archive
 /// member, a database blob — parses them here rather than staging a temporary
 /// file for [`parse_file`].
 ///
 /// # Errors
-/// [`Error::UnknownFormat`] if `format` is unrecognized; [`Error::FormatRead`]
+/// [`Error::UnknownFormat`] if `from` is unrecognized; [`Error::FormatRead`]
 /// if a text format's bytes are not UTF-8; the reader's own [`Error`] on
 /// malformed input.
-pub fn parse_bytes(bytes: &[u8], format: &str) -> Result<Parsed> {
-    parse_bytes_with_name(bytes, format, None)
+pub fn parse_bytes(bytes: &[u8], from: &str) -> Result<Parsed> {
+    parse_bytes_with_name(bytes, from, None)
 }
 
 /// [`parse_bytes`] with a name hint, as [`parse_str_with_name`] is to
@@ -791,12 +791,8 @@ pub fn parse_bytes(bytes: &[u8], format: &str) -> Result<Parsed> {
 ///
 /// # Errors
 /// As [`parse_bytes`].
-pub fn parse_bytes_with_name(
-    bytes: &[u8],
-    format: &str,
-    name_hint: Option<&str>,
-) -> Result<Parsed> {
-    if format.eq_ignore_ascii_case("pwb") {
+pub fn parse_bytes_with_name(bytes: &[u8], from: &str, name_hint: Option<&str>) -> Result<Parsed> {
+    if from.eq_ignore_ascii_case("pwb") {
         // Same call parse_file makes; the reader reports only what the
         // decoded layout cannot state.
         let mut warnings = Diagnostics::new();
@@ -805,17 +801,17 @@ pub fn parse_bytes_with_name(
     }
     // A display format reaches a different return type, so name the entry
     // point that returns it instead of failing as an unknown case format.
-    if display_format_from_name(format).is_some() {
+    if display_format_from_name(from).is_some() {
         return Err(Error::UnknownFormat(format!(
-            "{format} is display data, not a BalancedNetwork case; \
-             use parse_display_bytes(bytes, \"{format}\")"
+            "{from} is display data, not a BalancedNetwork case; \
+             use parse_display_bytes(bytes, \"{from}\")"
         )));
     }
     let text = std::str::from_utf8(bytes).map_err(|e| Error::FormatRead {
         format: "case text",
         message: format!("not valid UTF-8: {e}"),
     })?;
-    parse_str_with_name(text, format, name_hint)
+    parse_str_with_name(text, from, name_hint)
 }
 
 /// Output of a parse: the network plus the reader's fidelity warnings,
@@ -1308,7 +1304,7 @@ pub fn convert_file_with_options(
     Ok(conv)
 }
 
-/// Convert in-memory case `text` of the named `format` (see
+/// Convert in-memory case `text` of the named source format `from` (see
 /// [`target_format_from_name`]) to `to`.
 ///
 /// Parses `text` once and writes the resulting [`BalancedNetwork`] to `to` without a
@@ -1317,8 +1313,8 @@ pub fn convert_file_with_options(
 ///
 /// # Errors
 /// As [`parse_str`].
-pub fn convert_str(text: &str, to: TargetFormat, format: &str) -> Result<Conversion> {
-    let parsed = parse_str(text, format)?;
+pub fn convert_str(text: &str, to: TargetFormat, from: &str) -> Result<Conversion> {
+    let parsed = parse_str(text, from)?;
     let mut conv = write_as(&parsed.network, to)?;
     if !is_echo(&parsed.network, to) {
         conv.prepend(parsed.diagnostics);
@@ -1330,10 +1326,10 @@ pub fn convert_str(text: &str, to: TargetFormat, format: &str) -> Result<Convers
 pub fn convert_str_with_options(
     text: &str,
     to: TargetFormat,
-    format: &str,
+    from: &str,
     options: &WriteOptions,
 ) -> Result<Conversion> {
-    let parsed = parse_str(text, format)?;
+    let parsed = parse_str(text, from)?;
     let mut conv = write_as_with_options(&parsed.network, to, options)?;
     if !is_echo(&parsed.network, to) || !options.is_default() {
         conv.prepend(parsed.diagnostics);

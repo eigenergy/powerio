@@ -675,24 +675,24 @@ def parse_display_file(path: Any, from_: Optional[str] = None) -> DisplayData:
     return _wrap_display(_powerio.parse_display_file(str(path), from_))
 
 
-def parse_display_bytes(data: bytes, format: str) -> DisplayData:
-    """Parse display bytes in the named display format."""
-    return _wrap_display(_powerio.parse_display_bytes(data, format))
+def parse_display_bytes(data: bytes, from_: str) -> DisplayData:
+    """Parse display bytes in the named display format ``from_``."""
+    return _wrap_display(_powerio.parse_display_bytes(data, from_))
 
 
-def parse_str(text: str, format: str = "matpower") -> BalancedNetwork:
-    """Parse a case from in-memory text in the named ``format``."""
-    return BalancedNetwork(_powerio.parse_str(text, format))
+def parse_str(text: str, from_: str) -> BalancedNetwork:
+    """Parse a case from in-memory text in the named source format ``from_``."""
+    return BalancedNetwork(_powerio.parse_str(text, from_))
 
 
-def parse_bytes(data: bytes, format: str) -> BalancedNetwork:
-    """Parse a case from in-memory bytes in the named ``format``.
+def parse_bytes(data: bytes, from_: str) -> BalancedNetwork:
+    """Parse a case from in-memory bytes in the named source format ``from_``.
 
     Accepts every :func:`parse_str` format name plus ``"pwb"``. PowerWorld
     binary has no text form, so this is the only way to read one without a
     file on disk. Text formats must be UTF-8.
     """
-    return BalancedNetwork(_powerio.parse_bytes(data, format))
+    return BalancedNetwork(_powerio.parse_bytes(data, from_))
 
 
 def parse_scopf(text: str, from_: str = "goc3-json") -> dict[str, Any]:
@@ -867,7 +867,7 @@ def convert_file(
 def convert_str(
     text: str,
     to: str,
-    format: str = "matpower",
+    from_: str = "matpower",
     missing_gen_cost: Optional[str] = None,
     default_gen_cost: Optional[str] = None,
     gen_cost_csv: Optional[Any] = None,
@@ -875,14 +875,14 @@ def convert_str(
     """Convert in-memory case ``text`` through the network model without a
     temporary file.
 
-    ``to`` and ``format`` are format names as in :func:`convert_file`;
-    ``format`` names the input (default ``matpower``). Returns a
+    ``to`` and ``from_`` are format names as in :func:`convert_file`;
+    ``from_`` names the input (default ``matpower``). Returns a
     :class:`Conversion` with the converted text and any fidelity warnings.
     """
     out, warnings = _powerio.convert_str(
         text,
         to,
-        format,
+        from_,
         missing_gen_cost=missing_gen_cost,
         default_gen_cost=default_gen_cost,
         gen_cost_csv=None if gen_cost_csv is None else str(gen_cost_csv),
