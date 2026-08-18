@@ -259,7 +259,12 @@ pub fn network_from_raw(raw: &RawDss, source: Arc<String>) -> MulticonductorNetw
             )
         })
         .collect();
-    rd.net.warnings.extend(missing);
+    for message in missing {
+        rd.net.note(
+            &crate::diagnostics::codes::READ_DSS_LINECODE_UNKNOWN,
+            message,
+        );
+    }
 
     finish_buses(rd, raw)
 }

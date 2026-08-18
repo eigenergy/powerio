@@ -2477,6 +2477,31 @@ fn a_dropped_capacitor_bank_is_recorded_and_counted() {
     );
 }
 
+/// A line naming a linecode the case never declares is a coded parse finding,
+/// so it reaches `package.diagnostics` and not only the text channel.
+#[test]
+fn a_dangling_linecode_reference_reaches_the_package_diagnostics() {
+    let src = "New Circuit.c1\n\
+               New Line.l1 bus1=sourcebus bus2=b2 linecode=absent length=1\n";
+    let net = powerio_dist::parse_str(src, "dss").expect("parse dss");
+    let pkg = NetworkPackage::from_multiconductor(net.clone());
+
+    assert!(
+        pkg.diagnostics.iter().any(|d| {
+            d.code == DiagnosticCode::new("READ.DSS.LINECODE_UNKNOWN")
+                && d.message.contains("unknown linecode `absent`")
+        }),
+        "expected a coded dangling linecode finding: {:?}",
+        pkg.diagnostics
+    );
+    assert!(
+        net.warnings.iter().any(|w| w
+            == "READ.DSS.LINECODE_UNKNOWN: line l1 references unknown linecode `absent`"),
+        "the rendered line must carry the code: {:?}",
+        net.warnings
+    );
+}
+
 #[test]
 fn multiconductor_nonfinite_floats_roundtrip() {
     // #268: serde_json writes a nonfinite f64 as `null`. The payload reader

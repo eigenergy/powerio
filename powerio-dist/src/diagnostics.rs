@@ -54,6 +54,8 @@ pub mod codes {
             "an include the case names could not be loaded";
         READ_DSS_INCLUDE_DEPTH_LIMIT = "READ.DSS.INCLUDE_DEPTH_LIMIT", Warning,
             "the reader stopped following includes at the nesting depth limit";
+        READ_DSS_LINECODE_UNKNOWN = "READ.DSS.LINECODE_UNKNOWN", Warning,
+            "a line names a linecode the case does not declare";
 
         // EMIT.DSS: what the canonical dss writer cannot state.
         EMIT_DSS_FIELD_DROPPED = "EMIT.DSS.FIELD_DROPPED", Warning,
