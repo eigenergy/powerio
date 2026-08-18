@@ -60,16 +60,18 @@ int main(void) {
     pio_branches(c, from, to, NULL, x, NULL, NULL, NULL, NULL, m);
     /* ... assemble L = A diag(1/x) A^T from (from, to, x) ... */
 
-    /* Every case format is a string. MATPOWER echoes byte exact;
-     * PowerModels JSON and PSS/E conversions can report warnings. */
-    char warn[256];
-    char *matpower = pio_to_format(c, "matpower", warn, sizeof warn, err, sizeof err);
+    /* Every case format is a string. MATPOWER echoes byte exact; PowerModels
+     * JSON and PSS/E conversions can report findings. NULL opts is every
+     * write-time default; NULL out_diagnostics_json discards the findings. */
+    char *matpower = pio_to_format(c, "matpower", NULL, NULL, err, sizeof err);
     if (matpower) { /* ... use MATPOWER text ... */ pio_string_free(matpower); }
 
-    char *json = pio_to_format(c, "powermodels-json", warn, sizeof warn, err, sizeof err);
+    char *diagnostics = NULL;
+    char *json = pio_to_format(c, "powermodels-json", NULL, &diagnostics, err, sizeof err);
     if (json) { /* ... use PowerModels JSON text ... */ pio_string_free(json); }
+    if (diagnostics) { /* a JSON array of records */ pio_string_free(diagnostics); }
 
-    char *raw = pio_convert_file("case9.m", NULL, "psse", NULL, 0, err, sizeof err);
+    char *raw = pio_convert_file("case9.m", NULL, "psse", NULL, NULL, err, sizeof err);
     if (raw) { /* ... use PSS/E text ... */ pio_string_free(raw); }
 
     free(from); free(to); free(x);

@@ -30,8 +30,8 @@ use std::ffi::{CStr, CString, c_char};
 use std::panic::{AssertUnwindSafe, catch_unwind};
 
 use powerio::{
-    BalancedNetwork, IndexCore, IndexedNetwork, NormalizeOptions, StructuredDiagnostic,
-    TargetFormat,
+    BalancedNetwork, IndexCore, IndexedNetwork, MissingGenCostPolicy, NormalizeOptions,
+    StructuredDiagnostic, TargetFormat, WriteOptions,
 };
 
 use crate::diagnostics::{coded, codes, err_line};
@@ -1066,6 +1066,176 @@ pub unsafe extern "C" fn pio_is_radial(net: *const PioNetwork) -> i32 {
     unsafe { guard(0, || view(net).map_or(0, |v| i32::from(v.is_radial()))) }
 }
 
+/// `PioWriteOptions.missing_gen_cost_mode`: leave a missing cost row absent.
+pub const PIO_MISSING_GEN_COST_PRESERVE: i32 = 0;
+/// `PioWriteOptions.missing_gen_cost_mode`: fail when an in-service generator
+/// has no cost row.
+pub const PIO_MISSING_GEN_COST_REQUIRE: i32 = 1;
+/// `PioWriteOptions.missing_gen_cost_mode`: synthesize a MATPOWER polynomial
+/// row from the five `fill_*` fields.
+pub const PIO_MISSING_GEN_COST_FILL: i32 = 2;
+
+/// Write-time policies for the four transmission write entry points, in the
+/// extensible options struct convention this header states once. Zero the
+/// struct, set `struct_size` to `sizeof(PioWriteOptions)`, fill what you need;
+/// NULL is every default and is what these entry points did before the
+/// parameter existed.
+///
+/// The three `pio_dist_*` write entry points take no options struct: the
+/// multiconductor writers carry their own per format options and none of them
+/// is reachable from this policy set.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct PioWriteOptions {
+    /// `sizeof(PioWriteOptions)` as the caller's build sees it.
+    pub struct_size: usize,
+    /// What to do with an in-service generator that has no active power cost
+    /// row: `PIO_MISSING_GEN_COST_PRESERVE`, `_REQUIRE`, or `_FILL`.
+    pub missing_gen_cost_mode: i32,
+    /// Named so the layout carries no implicit padding. Must be zero.
+    pub reserved: i32,
+    /// The quadratic coefficient of the row `_FILL` synthesizes.
+    pub fill_c2: f64,
+    /// The linear coefficient of the row `_FILL` synthesizes.
+    pub fill_c1: f64,
+    /// The constant coefficient of the row `_FILL` synthesizes.
+    pub fill_c0: f64,
+    /// The startup cost `_FILL` synthesizes.
+    pub fill_startup: f64,
+    /// The shutdown cost `_FILL` synthesizes.
+    pub fill_shutdown: f64,
+    /// Generator cost patches as CSV text, never a path: a header row of
+    /// `gen_index,bus,c2,c1,c0` and optional `startup,shutdown`, then one row
+    /// per patched generator. A write entry point never opens a file the caller
+    /// names, so read the CSV yourself and hand over its bytes. NULL applies no
+    /// patches.
+    pub gen_cost_csv: *const c_char,
+}
+
+/// Copy a caller's extensible options struct into a zero filled local of this
+/// build's layout, or `None` when `opts` is NULL and every default applies.
+///
+/// The read is bounded by `min(struct_size, size_of::<T>())`, so a shorter
+/// struct from an older caller reads as zeros past its end. A nonzero tail
+/// beyond this build's size fails: the caller set a field this library does not
+/// implement, and honoring the rest would drop that request silently.
+///
+/// # Safety
+/// `T` must be `#[repr(C)]`, valid when all zero, and carry `usize struct_size`
+/// as its first field; `opts` must be NULL or point at `struct_size` readable
+/// bytes.
+unsafe fn options_from_c<T: Copy>(opts: *const T, name: &str) -> Result<Option<T>, String> {
+    if opts.is_null() {
+        return Ok(None);
+    }
+    let own = size_of::<T>();
+    let declared = unsafe { opts.cast::<usize>().read_unaligned() };
+    if declared < size_of::<usize>() {
+        return Err(coded(
+            &codes::BIND_CAPI_INVALID_OPTIONS,
+            format!(
+                "{name}.struct_size is {declared}; set it to sizeof({name}), {own} in this build"
+            ),
+        ));
+    }
+    if declared > own {
+        let tail =
+            unsafe { std::slice::from_raw_parts(opts.cast::<u8>().add(own), declared - own) };
+        if tail.iter().any(|b| *b != 0) {
+            return Err(coded(
+                &codes::BIND_CAPI_INVALID_OPTIONS,
+                format!(
+                    "{name}.struct_size is {declared}, past this build's {own}, and a field is \
+                     set beyond it; this library cannot honor an option it does not implement"
+                ),
+            ));
+        }
+    }
+    let mut out = std::mem::MaybeUninit::<T>::zeroed();
+    unsafe {
+        std::ptr::copy_nonoverlapping(
+            opts.cast::<u8>(),
+            out.as_mut_ptr().cast::<u8>(),
+            declared.min(own),
+        );
+        Ok(Some(out.assume_init()))
+    }
+}
+
+/// Read a caller's [`PioWriteOptions`] into the Rust `WriteOptions`.
+///
+/// # Safety
+/// `opts` must be NULL or point at a `PioWriteOptions` whose `struct_size`
+/// bytes are readable, and `gen_cost_csv` at a NUL terminated string.
+unsafe fn write_options_from_c(opts: *const PioWriteOptions) -> Result<WriteOptions, String> {
+    let Some(raw) = (unsafe { options_from_c(opts, "PioWriteOptions") })? else {
+        return Ok(WriteOptions::default());
+    };
+    if raw.reserved != 0 {
+        return Err(coded(
+            &codes::BIND_CAPI_INVALID_OPTIONS,
+            "PioWriteOptions.reserved is not zero; it names the layout's padding and carries no value",
+        ));
+    }
+    let fill = [
+        raw.fill_c2,
+        raw.fill_c1,
+        raw.fill_c0,
+        raw.fill_startup,
+        raw.fill_shutdown,
+    ];
+    let missing_gen_cost = match raw.missing_gen_cost_mode {
+        PIO_MISSING_GEN_COST_PRESERVE => MissingGenCostPolicy::Preserve,
+        PIO_MISSING_GEN_COST_REQUIRE => MissingGenCostPolicy::Require,
+        PIO_MISSING_GEN_COST_FILL => {
+            if fill.iter().any(|v| !v.is_finite()) {
+                return Err(coded(
+                    &codes::BIND_CAPI_INVALID_OPTIONS,
+                    "PioWriteOptions fill_* values must be finite",
+                ));
+            }
+            MissingGenCostPolicy::Fill {
+                c2: raw.fill_c2,
+                c1: raw.fill_c1,
+                c0: raw.fill_c0,
+                startup: raw.fill_startup,
+                shutdown: raw.fill_shutdown,
+            }
+        }
+        other => {
+            return Err(coded(
+                &codes::BIND_CAPI_INVALID_OPTIONS,
+                format!(
+                    "PioWriteOptions.missing_gen_cost_mode is {other}; it is 0 preserve, \
+                     1 require, or 2 fill"
+                ),
+            ));
+        }
+    };
+    // The five fill values are read only in fill mode. Naming a stray one beats
+    // dropping a request the caller believes was honored.
+    if raw.missing_gen_cost_mode != PIO_MISSING_GEN_COST_FILL && fill.iter().any(|v| *v != 0.0) {
+        return Err(coded(
+            &codes::BIND_CAPI_INVALID_OPTIONS,
+            format!(
+                "PioWriteOptions carries a fill_* value with missing_gen_cost_mode {}; \
+                 those fields apply only to mode {PIO_MISSING_GEN_COST_FILL} (fill)",
+                raw.missing_gen_cost_mode
+            ),
+        ));
+    }
+    let gen_cost_patches = if raw.gen_cost_csv.is_null() {
+        Vec::new()
+    } else {
+        let text = required_cstr(raw.gen_cost_csv, "PioWriteOptions.gen_cost_csv")?;
+        powerio::parse_gen_cost_csv(text).map_err(err_line)?
+    };
+    Ok(WriteOptions {
+        missing_gen_cost,
+        gen_cost_patches,
+    })
+}
+
 /// Serialize `net` to the named format `to`: the one text serializer; every
 /// format is named by a string. Accepts the [`pio_parse_str`] names:
 /// `matpower` is a byte-exact echo when the handle was parsed from MATPOWER.
@@ -1073,6 +1243,10 @@ pub unsafe extern "C" fn pio_is_radial(net: *const PioNetwork) -> i32 {
 /// [`pio_to_json`]. Model JSON cannot represent a non-finite `f64` (`Inf`/`NaN`):
 /// it writes `null`, records the field in `out_diagnostics_json`, and fails
 /// validation when read back.
+///
+/// `opts` carries the write-time cost policies (NULL for every default); see
+/// [`PioWriteOptions`]. A non-default policy works on a copy, so the handle is
+/// unchanged, and the policy's own findings lead `out_diagnostics_json`.
 ///
 /// Returns the text as an owned C string (free with [`pio_string_free`]),
 /// `NULL` on error (message into `errbuf`). The writer's findings, if any, are
@@ -1085,6 +1259,7 @@ pub unsafe extern "C" fn pio_is_radial(net: *const PioNetwork) -> i32 {
 pub unsafe extern "C" fn pio_to_format(
     net: *const PioNetwork,
     to: *const c_char,
+    opts: *const PioWriteOptions,
     out_diagnostics_json: *mut *mut c_char,
     errbuf: *mut c_char,
     errlen: usize,
@@ -1093,7 +1268,11 @@ pub unsafe extern "C" fn pio_to_format(
         finish_conversion(out_diagnostics_json, errbuf, errlen, || {
             let c = network_ref(net).ok_or_else(|| null_handle("network handle"))?;
             let target = target_format_from_c(to)?;
-            let conv = c.net.to_format(target).map_err(err_line)?;
+            let options = write_options_from_c(opts)?;
+            let conv = c
+                .net
+                .to_format_with_options(target, &options)
+                .map_err(err_line)?;
             Ok((conv.text, conv.diagnostics))
         })
     }
@@ -1171,6 +1350,8 @@ unsafe fn finish_conversion(
 
 /// Convert the case file at `path` from format `from` (NULL to infer from the
 /// path, as [`pio_parse_file`]) to format `to`, without keeping a handle.
+/// `opts` carries the write-time cost policies (NULL for every default); see
+/// [`PioWriteOptions`].
 /// Returns the converted text as an owned C string (free with
 /// [`pio_string_free`]), `NULL` on error. The findings, read side first, are
 /// published through `out_diagnostics_json` as one owned JSON array of
@@ -1183,6 +1364,7 @@ pub unsafe extern "C" fn pio_convert_file(
     path: *const c_char,
     from: *const c_char,
     to: *const c_char,
+    opts: *const PioWriteOptions,
     out_diagnostics_json: *mut *mut c_char,
     errbuf: *mut c_char,
     errlen: usize,
@@ -1192,16 +1374,23 @@ pub unsafe extern "C" fn pio_convert_file(
             let path = required_cstr(path, "path")?;
             let from = optional_cstr(from, "from")?;
             let target = target_format_from_c(to)?;
-            let conv = powerio::convert_file(std::path::Path::new(path), target, from)
-                .map_err(err_line)?;
+            let options = write_options_from_c(opts)?;
+            let conv = powerio::convert_file_with_options(
+                std::path::Path::new(path),
+                target,
+                from,
+                &options,
+            )
+            .map_err(err_line)?;
             Ok((conv.text, conv.diagnostics))
         })
     }
 }
 
 /// Convert in-memory case `text` from format `from` (required; there is no
-/// path to infer from) to format `to` without keeping a handle. Returns the
-/// converted text as an owned C
+/// path to infer from) to format `to` without keeping a handle. `opts` carries
+/// the write-time cost policies (NULL for every default); see
+/// [`PioWriteOptions`]. Returns the converted text as an owned C
 /// string (free with [`pio_string_free`]), `NULL` on error. The findings, read
 /// side first, are published through `out_diagnostics_json` as one owned JSON
 /// array of diagnostic records (free it with [`pio_string_free`]), NULL when
@@ -1213,6 +1402,7 @@ pub unsafe extern "C" fn pio_convert_str(
     text: *const c_char,
     from: *const c_char,
     to: *const c_char,
+    opts: *const PioWriteOptions,
     out_diagnostics_json: *mut *mut c_char,
     errbuf: *mut c_char,
     errlen: usize,
@@ -1222,7 +1412,9 @@ pub unsafe extern "C" fn pio_convert_str(
             let text = required_cstr(text, "text")?;
             let from = required_cstr(from, "from")?;
             let target = target_format_from_c(to)?;
-            let conv = powerio::convert_str(text, target, from).map_err(err_line)?;
+            let options = write_options_from_c(opts)?;
+            let conv = powerio::convert_str_with_options(text, target, from, &options)
+                .map_err(err_line)?;
             Ok((conv.text, conv.diagnostics))
         })
     }
@@ -1230,7 +1422,9 @@ pub unsafe extern "C" fn pio_convert_str(
 
 /// Write `net` into `out_dir` as the named directory format `to`. PyPSA CSV
 /// (`pypsa-csv`/`pypsa`) is the currently supported directory format; a text format name is
-/// an error pointing back at [`pio_to_format`]. Returns `0` on success and
+/// an error pointing back at [`pio_to_format`]. `opts` carries the write-time
+/// cost policies (NULL for every default); see [`PioWriteOptions`].
+/// Returns `0` on success and
 /// `-1` on error (message into `errbuf`). The writer's findings, if any, are
 /// published through `out_diagnostics_json` as one owned JSON array of
 /// diagnostic records (free it with [`pio_string_free`]), NULL when there are
@@ -1242,6 +1436,7 @@ pub unsafe extern "C" fn pio_write_dir(
     net: *const PioNetwork,
     to: *const c_char,
     out_dir: *const c_char,
+    opts: *const PioWriteOptions,
     out_diagnostics_json: *mut *mut c_char,
     errbuf: *mut c_char,
     errlen: usize,
@@ -1252,7 +1447,9 @@ pub unsafe extern "C" fn pio_write_dir(
             let c = network_ref(net).ok_or_else(|| null_handle("network handle"))?;
             let to = required_cstr(to, "to")?;
             let out_dir = required_cstr(out_dir, "out_dir")?;
-            powerio::write_dir(&c.net, to, std::path::Path::new(out_dir)).map_err(err_line)
+            let options = write_options_from_c(opts)?;
+            powerio::write_dir_with_options(&c.net, to, std::path::Path::new(out_dir), &options)
+                .map_err(err_line)
         }));
         match r {
             Ok(Ok(warnings)) => {
@@ -3020,7 +3217,14 @@ mod tests {
         let mut diag_out: *mut c_char = std::ptr::null_mut();
         let mut err = [0 as c_char; 256];
         unsafe {
-            let s = pio_to_format(net, to.as_ptr(), &mut diag_out, err.as_mut_ptr(), err.len());
+            let s = pio_to_format(
+                net,
+                to.as_ptr(),
+                std::ptr::null(),
+                &mut diag_out,
+                err.as_mut_ptr(),
+                err.len(),
+            );
             assert!(
                 !s.is_null(),
                 "to_format failed: {}",
@@ -3381,7 +3585,24 @@ mod tests {
         let clean = strip_c_comments(header);
         let mut entries = Vec::new();
         let mut prototype = String::new();
+        // An options struct's field list is ABI, so the whole definition is
+        // pinned as one entry. cbindgen writes it tagless, closing on
+        // `} PioName;`, so the name arrives at the end.
+        let mut definition = String::new();
         for line in clean.lines().map(str::trim).filter(|line| !line.is_empty()) {
+            if !definition.is_empty() {
+                definition.push(' ');
+                definition.push_str(line);
+                if line.starts_with('}') && line.ends_with(';') {
+                    entries.push(collapse_ws(&definition));
+                    definition.clear();
+                }
+                continue;
+            }
+            if line == "typedef struct {" {
+                definition.push_str(line);
+                continue;
+            }
             if !prototype.is_empty() {
                 prototype.push(' ');
                 prototype.push_str(line);
@@ -3403,6 +3624,7 @@ mod tests {
             }
         }
         assert!(prototype.is_empty(), "unterminated prototype: {prototype}");
+        assert!(definition.is_empty(), "unterminated struct: {definition}");
         entries
     }
 
@@ -3466,6 +3688,9 @@ mod tests {
             "#define PIO_ABI_VERSION 5",
             "#define PIO_DIST_ABI_VERSION 1",
             "#define PIO_ERRBUF_MIN 256",
+            "#define PIO_MISSING_GEN_COST_PRESERVE 0",
+            "#define PIO_MISSING_GEN_COST_REQUIRE 1",
+            "#define PIO_MISSING_GEN_COST_FILL 2",
             "#define PIO_ARROW_TABLE_BUS 0",
             "#define PIO_ARROW_TABLE_BRANCH 1",
             "#define PIO_ARROW_TABLE_GEN 2",
@@ -3491,6 +3716,10 @@ mod tests {
             "typedef struct PioNetwork PioNetwork;",
             "typedef struct PioPackage PioPackage;",
             "typedef struct PioScopfInstance PioScopfInstance;",
+            "typedef struct { size_t struct_size; int32_t missing_gen_cost_mode; \
+             int32_t reserved; double fill_c2; double fill_c1; double fill_c0; \
+             double fill_startup; double fill_shutdown; const char *gen_cost_csv; \
+             } PioWriteOptions;",
             "uint32_t pio_abi_version(void);",
             "uint32_t pio_dist_abi_version(void);",
             "char *pio_dist_capabilities_json(void);",
@@ -3523,10 +3752,10 @@ mod tests {
             "size_t pio_ref_bus_indices(const PioNetwork *net, int64_t *out, size_t cap);",
             "size_t pio_n_islands(const PioNetwork *net);",
             "int32_t pio_is_radial(const PioNetwork *net);",
-            "char *pio_to_format(const PioNetwork *net, const char *to, char **out_diagnostics_json, char *errbuf, size_t errlen);",
-            "char *pio_convert_file(const char *path, const char *from, const char *to, char **out_diagnostics_json, char *errbuf, size_t errlen);",
-            "char *pio_convert_str(const char *text, const char *from, const char *to, char **out_diagnostics_json, char *errbuf, size_t errlen);",
-            "int32_t pio_write_dir(const PioNetwork *net, const char *to, const char *out_dir, char **out_diagnostics_json, char *errbuf, size_t errlen);",
+            "char *pio_to_format(const PioNetwork *net, const char *to, const PioWriteOptions *opts, char **out_diagnostics_json, char *errbuf, size_t errlen);",
+            "char *pio_convert_file(const char *path, const char *from, const char *to, const PioWriteOptions *opts, char **out_diagnostics_json, char *errbuf, size_t errlen);",
+            "char *pio_convert_str(const char *text, const char *from, const char *to, const PioWriteOptions *opts, char **out_diagnostics_json, char *errbuf, size_t errlen);",
+            "int32_t pio_write_dir(const PioNetwork *net, const char *to, const char *out_dir, const PioWriteOptions *opts, char **out_diagnostics_json, char *errbuf, size_t errlen);",
             "void pio_string_free(char *s);",
             "size_t pio_bus_ids(const PioNetwork *net, int64_t *out, size_t cap);",
             "size_t pio_branches(const PioNetwork *net, int64_t *from, int64_t *to, double *r, double *x, double *b, double *tap, double *shift, uint8_t *in_service, size_t cap);",
@@ -3685,6 +3914,7 @@ mod tests {
             let null = pio_to_format(
                 std::ptr::null(),
                 to.as_ptr(),
+                std::ptr::null(),
                 std::ptr::null_mut(),
                 err.as_mut_ptr(),
                 err.len(),
@@ -3824,6 +4054,7 @@ mod tests {
                 path.as_ptr(),
                 std::ptr::null(),
                 to.as_ptr(),
+                std::ptr::null(),
                 &mut diag_out,
                 err.as_mut_ptr(),
                 err.len(),
@@ -3852,6 +4083,7 @@ mod tests {
                 path.as_ptr(),
                 std::ptr::null(),
                 to.as_ptr(),
+                std::ptr::null(),
                 &mut diag_out,
                 err.as_mut_ptr(),
                 err.len(),
@@ -3879,6 +4111,7 @@ mod tests {
                 path.as_ptr(),
                 old_target.as_ptr(),
                 old_source.as_ptr(),
+                std::ptr::null(),
                 &mut diag_out,
                 err.as_mut_ptr(),
                 err.len(),
@@ -3910,6 +4143,7 @@ mod tests {
                 text.as_ptr(),
                 from.as_ptr(),
                 to.as_ptr(),
+                std::ptr::null(),
                 &mut diag_out,
                 err.as_mut_ptr(),
                 err.len(),
@@ -3941,6 +4175,7 @@ mod tests {
                 text.as_ptr(),
                 old_target.as_ptr(),
                 old_source.as_ptr(),
+                std::ptr::null(),
                 &mut diag_out,
                 err.as_mut_ptr(),
                 err.len(),
@@ -4002,6 +4237,7 @@ mod tests {
                 path.as_ptr(),
                 bad_from.as_ptr().cast::<c_char>(),
                 to.as_ptr(),
+                std::ptr::null(),
                 &mut diag_out,
                 err.as_mut_ptr(),
                 err.len(),
@@ -4324,6 +4560,7 @@ mpc.branch = [
                 path.as_ptr(),
                 std::ptr::null(),
                 to.as_ptr(),
+                std::ptr::null(),
                 &mut diag_out,
                 err.as_mut_ptr(),
                 err.len(),
@@ -5194,6 +5431,7 @@ mpc.branch = [
             let text = pio_to_format(
                 c,
                 unknown.as_ptr(),
+                std::ptr::null(),
                 std::ptr::null_mut(),
                 err.as_mut_ptr(),
                 err.len(),
@@ -5208,6 +5446,7 @@ mpc.branch = [
             let null = pio_to_format(
                 std::ptr::null(),
                 unknown.as_ptr(),
+                std::ptr::null(),
                 std::ptr::null_mut(),
                 err.as_mut_ptr(),
                 err.len(),
@@ -5262,6 +5501,7 @@ mpc.branch = [
                 c,
                 to.as_ptr(),
                 out.as_ptr(),
+                std::ptr::null(),
                 &mut diag_out,
                 err.as_mut_ptr(),
                 err.len(),
@@ -5288,6 +5528,7 @@ mpc.branch = [
                 c,
                 to.as_ptr(),
                 dir.as_ptr(),
+                std::ptr::null(),
                 std::ptr::null_mut(),
                 err.as_mut_ptr(),
                 err.len(),
@@ -5295,6 +5536,335 @@ mpc.branch = [
             assert_eq!(rc, -1);
             let msg = CStr::from_ptr(err.as_ptr()).to_str().unwrap();
             assert!(msg.contains("pypsa"), "got: {msg}");
+            pio_network_free(c);
+        }
+    }
+
+    /// A zero filled `PioWriteOptions` with `struct_size` set, which is what a
+    /// caller writes and is defined to equal a NULL `opts`.
+    fn write_opts() -> PioWriteOptions {
+        PioWriteOptions {
+            struct_size: size_of::<PioWriteOptions>(),
+            missing_gen_cost_mode: PIO_MISSING_GEN_COST_PRESERVE,
+            reserved: 0,
+            fill_c2: 0.0,
+            fill_c1: 0.0,
+            fill_c0: 0.0,
+            fill_startup: 0.0,
+            fill_shutdown: 0.0,
+            gen_cost_csv: std::ptr::null(),
+        }
+    }
+
+    /// `pio_to_format` with the given options, returning the text or the errbuf.
+    unsafe fn to_format_with(
+        net: *const PioNetwork,
+        to: &str,
+        opts: *const PioWriteOptions,
+    ) -> Result<String, String> {
+        let to = CString::new(to).unwrap();
+        let mut err = [0 as c_char; PIO_ERRBUF_MIN];
+        unsafe {
+            let s = pio_to_format(
+                net,
+                to.as_ptr(),
+                opts,
+                std::ptr::null_mut(),
+                err.as_mut_ptr(),
+                err.len(),
+            );
+            if s.is_null() {
+                return Err(CStr::from_ptr(err.as_ptr()).to_str().unwrap().to_owned());
+            }
+            let text = CStr::from_ptr(s).to_str().unwrap().to_owned();
+            pio_string_free(s);
+            Ok(text)
+        }
+    }
+
+    /// A PSS/E case whose generators carry no cost row, so every policy is
+    /// visible in the output.
+    fn costless_case() -> *mut PioNetwork {
+        let path = data_path("psse/case14.raw");
+        let mut err = [0 as c_char; PIO_ERRBUF_MIN];
+        let c =
+            unsafe { pio_parse_file(path.as_ptr(), std::ptr::null(), err.as_mut_ptr(), err.len()) };
+        assert!(!c.is_null());
+        c
+    }
+
+    #[test]
+    fn null_and_zeroed_write_options_are_the_same_call() {
+        let c = case9();
+        unsafe {
+            let by_null = to_format_with(c, "matpower", std::ptr::null()).unwrap();
+            let opts = write_opts();
+            let by_struct = to_format_with(c, "matpower", &opts).unwrap();
+            assert_eq!(by_null, by_struct);
+            pio_network_free(c);
+        }
+    }
+
+    #[test]
+    fn write_options_require_names_a_costless_generator() {
+        let c = costless_case();
+        unsafe {
+            let mut opts = write_opts();
+            opts.missing_gen_cost_mode = PIO_MISSING_GEN_COST_REQUIRE;
+            let err = to_format_with(c, "matpower", &opts).unwrap_err();
+            assert!(err.contains("cost"), "got: {err}");
+            // The same case writes without the policy.
+            assert!(to_format_with(c, "matpower", std::ptr::null()).is_ok());
+            pio_network_free(c);
+        }
+    }
+
+    #[test]
+    fn write_options_fill_matches_the_rust_policy() {
+        let c = costless_case();
+        unsafe {
+            let mut opts = write_opts();
+            opts.missing_gen_cost_mode = PIO_MISSING_GEN_COST_FILL;
+            opts.fill_c2 = 0.011;
+            opts.fill_c1 = 5.0;
+            opts.fill_c0 = 150.0;
+            opts.fill_startup = 100.0;
+            opts.fill_shutdown = 10.0;
+            let text = to_format_with(c, "matpower", &opts).unwrap();
+
+            let raw = std::fs::read_to_string(
+                std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                    .join("../tests/data/psse/case14.raw"),
+            )
+            .unwrap();
+            let net = powerio::parse_psse(&raw).unwrap();
+            let expected = powerio::write_as_with_options(
+                &net,
+                TargetFormat::Matpower,
+                &WriteOptions {
+                    missing_gen_cost: MissingGenCostPolicy::Fill {
+                        c2: 0.011,
+                        c1: 5.0,
+                        c0: 150.0,
+                        startup: 100.0,
+                        shutdown: 10.0,
+                    },
+                    gen_cost_patches: Vec::new(),
+                },
+            )
+            .unwrap();
+            assert_eq!(text, expected.text);
+            assert!(text.contains("mpc.gencost = ["));
+            pio_network_free(c);
+        }
+    }
+
+    #[test]
+    fn write_options_take_the_cost_csv_as_text() {
+        let c = costless_case();
+        let csv = CString::new("gen_index,bus,c2,c1,c0\n0,1,0.02,3.0,7.0\n").unwrap();
+        unsafe {
+            let mut opts = write_opts();
+            opts.gen_cost_csv = csv.as_ptr();
+            let text = to_format_with(c, "matpower", &opts).unwrap();
+
+            let raw = std::fs::read_to_string(
+                std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                    .join("../tests/data/psse/case14.raw"),
+            )
+            .unwrap();
+            let net = powerio::parse_psse(&raw).unwrap();
+            let expected = powerio::write_as_with_options(
+                &net,
+                TargetFormat::Matpower,
+                &WriteOptions {
+                    missing_gen_cost: MissingGenCostPolicy::Preserve,
+                    gen_cost_patches: powerio::parse_gen_cost_csv(csv.to_str().unwrap()).unwrap(),
+                },
+            )
+            .unwrap();
+            assert_eq!(text, expected.text);
+            pio_network_free(c);
+        }
+    }
+
+    #[test]
+    fn write_options_report_a_malformed_cost_csv() {
+        let c = case9();
+        let csv = CString::new("gen_index,bus,c2\n0,1,0.02\n").unwrap();
+        unsafe {
+            let mut opts = write_opts();
+            opts.gen_cost_csv = csv.as_ptr();
+            let err = to_format_with(c, "matpower", &opts).unwrap_err();
+            assert!(err.contains("c1"), "got: {err}");
+            pio_network_free(c);
+        }
+    }
+
+    #[test]
+    fn write_options_refuse_an_unknown_policy_mode() {
+        let c = case9();
+        unsafe {
+            let mut opts = write_opts();
+            opts.missing_gen_cost_mode = 7;
+            let err = to_format_with(c, "matpower", &opts).unwrap_err();
+            assert!(err.starts_with("BIND.CAPI.INVALID_OPTIONS: "), "got: {err}");
+            pio_network_free(c);
+        }
+    }
+
+    #[test]
+    fn write_options_refuse_a_fill_value_outside_fill_mode() {
+        let c = case9();
+        unsafe {
+            let mut opts = write_opts();
+            opts.fill_c1 = 5.0;
+            let err = to_format_with(c, "matpower", &opts).unwrap_err();
+            assert!(err.starts_with("BIND.CAPI.INVALID_OPTIONS: "), "got: {err}");
+            pio_network_free(c);
+        }
+    }
+
+    /// An options struct one field longer than this build's, as a caller
+    /// compiled against a later header would lay it out.
+    #[repr(C)]
+    struct WideWriteOptions {
+        head: PioWriteOptions,
+        future: f64,
+    }
+
+    #[test]
+    fn write_options_honor_the_struct_size_rules() {
+        let c = case9();
+        let plain = unsafe { to_format_with(c, "matpower", std::ptr::null()) }.unwrap();
+        unsafe {
+            // Shorter than sizeof: the fields it does not cover read as zero,
+            // which is what an older caller's struct means. The mode is inside
+            // the declared prefix and the NaN is past it, so reading the
+            // caller's tail instead of zeroing it would trip the finite guard.
+            let mut short = write_opts();
+            short.struct_size = size_of::<usize>() + 2 * size_of::<i32>();
+            short.missing_gen_cost_mode = PIO_MISSING_GEN_COST_FILL;
+            short.fill_c1 = f64::NAN;
+            assert_eq!(to_format_with(c, "matpower", &short).unwrap(), plain);
+
+            // Longer than sizeof with a zero tail: a newer caller this build
+            // can still serve.
+            let mut wide = WideWriteOptions {
+                head: write_opts(),
+                future: 0.0,
+            };
+            wide.head.struct_size = size_of::<WideWriteOptions>();
+            let opts: *const PioWriteOptions = std::ptr::from_ref(&wide).cast();
+            assert_eq!(to_format_with(c, "matpower", opts).unwrap(), plain);
+
+            // Longer with a nonzero tail: the caller asked for a field this
+            // build does not implement, so the call fails.
+            let mut set = WideWriteOptions {
+                head: write_opts(),
+                future: 1.0,
+            };
+            set.head.struct_size = size_of::<WideWriteOptions>();
+            let opts: *const PioWriteOptions = std::ptr::from_ref(&set).cast();
+            let err = to_format_with(c, "matpower", opts).unwrap_err();
+            assert!(err.starts_with("BIND.CAPI.INVALID_OPTIONS: "), "got: {err}");
+
+            // A struct_size that does not even cover its own field.
+            let mut tiny = write_opts();
+            tiny.struct_size = 4;
+            let err = to_format_with(c, "matpower", &tiny).unwrap_err();
+            assert!(err.starts_with("BIND.CAPI.INVALID_OPTIONS: "), "got: {err}");
+
+            // Reserved is padding made explicit and carries no value.
+            let mut reserved = write_opts();
+            reserved.reserved = 1;
+            let err = to_format_with(c, "matpower", &reserved).unwrap_err();
+            assert!(err.starts_with("BIND.CAPI.INVALID_OPTIONS: "), "got: {err}");
+            pio_network_free(c);
+        }
+    }
+
+    #[test]
+    fn convert_and_write_dir_take_the_same_options() {
+        let path = data_path("psse/case14.raw");
+        let to = CString::new("matpower").unwrap();
+        let mut err = [0 as c_char; PIO_ERRBUF_MIN];
+        unsafe {
+            let mut opts = write_opts();
+            opts.missing_gen_cost_mode = PIO_MISSING_GEN_COST_REQUIRE;
+            let s = pio_convert_file(
+                path.as_ptr(),
+                std::ptr::null(),
+                to.as_ptr(),
+                &opts,
+                std::ptr::null_mut(),
+                err.as_mut_ptr(),
+                err.len(),
+            );
+            assert!(s.is_null());
+            assert!(
+                CStr::from_ptr(err.as_ptr())
+                    .to_str()
+                    .unwrap()
+                    .contains("cost"),
+                "{}",
+                CStr::from_ptr(err.as_ptr()).to_str().unwrap()
+            );
+
+            let text = std::fs::read_to_string(
+                std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                    .join("../tests/data/psse/case14.raw"),
+            )
+            .unwrap();
+            let text = CString::new(text).unwrap();
+            let from = CString::new("psse").unwrap();
+            let s = pio_convert_str(
+                text.as_ptr(),
+                from.as_ptr(),
+                to.as_ptr(),
+                &opts,
+                std::ptr::null_mut(),
+                err.as_mut_ptr(),
+                err.len(),
+            );
+            assert!(s.is_null());
+
+            // The directory writer runs the same policy, and its findings lead
+            // the writer's own.
+            let c = costless_case();
+            let tmp = tempfile::tempdir().unwrap();
+            let out = CString::new(tmp.path().join("pypsa").to_str().unwrap()).unwrap();
+            let dir_to = CString::new("pypsa-csv").unwrap();
+            let rc = pio_write_dir(
+                c,
+                dir_to.as_ptr(),
+                out.as_ptr(),
+                &opts,
+                std::ptr::null_mut(),
+                err.as_mut_ptr(),
+                err.len(),
+            );
+            assert_eq!(rc, -1);
+
+            opts.missing_gen_cost_mode = PIO_MISSING_GEN_COST_FILL;
+            let mut diag_out = std::ptr::dangling_mut::<c_char>();
+            let rc = pio_write_dir(
+                c,
+                dir_to.as_ptr(),
+                out.as_ptr(),
+                &opts,
+                &mut diag_out,
+                err.as_mut_ptr(),
+                err.len(),
+            );
+            assert_eq!(rc, 0, "{}", CStr::from_ptr(err.as_ptr()).to_str().unwrap());
+            let json = CStr::from_ptr(diag_out).to_str().unwrap().to_owned();
+            let records: Vec<StructuredDiagnostic> = serde_json::from_str(&json).unwrap();
+            assert!(
+                records.iter().any(|d| d.code.as_str().contains("GEN_COST")),
+                "{json}"
+            );
+            pio_string_free(diag_out);
             pio_network_free(c);
         }
     }

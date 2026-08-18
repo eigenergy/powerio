@@ -8,7 +8,7 @@ ABI 5 ships with powerio 0.9.0. It touches seventeen symbols and renames none, s
 
 | symbol | change |
 |---|---|
-| `pio_to_format` | signature: findings return through `char **out_diagnostics_json` |
+| `pio_to_format` | signature: findings return through `char **out_diagnostics_json`, plus `const PioWriteOptions *opts` |
 | `pio_convert_file` | signature: same |
 | `pio_convert_str` | signature: same |
 | `pio_write_dir` | signature: same |
@@ -39,7 +39,7 @@ char *text = pio_to_format(net, "matpower", warnbuf, sizeof warnbuf, errbuf, siz
 
 /* ABI 5 */
 char *diagnostics = NULL;
-char *text = pio_to_format(net, "matpower", &diagnostics, errbuf, sizeof errbuf);
+char *text = pio_to_format(net, "matpower", NULL, &diagnostics, errbuf, sizeof errbuf);
 if (diagnostics) {
     /* a JSON array of records; the string is yours */
     pio_string_free(diagnostics);
@@ -53,6 +53,26 @@ A warning is a record with severity `warning`, which is why there is one channel
 **The trap.** You own the string whether or not you asked for it. A binding that passes a real pointer and then decides downstream it does not want the payload compiles, runs, and leaks on every conversion whose source format differs from its target — nothing about the call says the allocation happened. Decide at the call site: pass `NULL` to discard, or pass a pointer and free it unconditionally.
 
 `pio_warnings` and `pio_dist_warnings` keep their signatures and stay the plain text view for a caller with no JSON parser. They use the size-then-fill idiom and cannot truncate.
+
+## Write options
+
+The four transmission write entry points take `const PioWriteOptions *opts` ahead of the diagnostics out-pointer. `NULL` is every default and is exactly what these calls did in ABI 4, so a binding that has nothing to say passes `NULL` and is done.
+
+```c
+PioWriteOptions opts;
+memset(&opts, 0, sizeof opts);
+opts.struct_size = sizeof opts;
+opts.missing_gen_cost_mode = PIO_MISSING_GEN_COST_FILL;
+opts.fill_c2 = 0.011;
+opts.fill_c1 = 5.0;
+char *text = pio_to_format(net, "matpower", &opts, NULL, errbuf, sizeof errbuf);
+```
+
+The struct is extensible in the convention `openat2` and `clone3` use. Zero it, set `struct_size` to `sizeof`, fill what you need. The library reads only the first `min(struct_size, its own sizeof)` bytes, so an older caller's shorter struct is read correctly and a newer caller's longer one is too as long as the fields past the library's size are zero. A **nonzero** field beyond that point fails the call with `BIND.CAPI.INVALID_OPTIONS`: you asked for something this build does not implement, and honoring the rest would drop your request in silence. Fields are appended, never reordered or removed, so a later write option costs a field rather than a symbol.
+
+`gen_cost_csv` carries the patch table as CSV **text**, never a path. A write entry point does not open a file you name — that is the behavior 0.7.3 removed from the string entry points — so read the CSV yourself and hand over its bytes, which is what the CLI and the Python binding already do internally.
+
+The three `pio_dist_*` write entry points take no options struct. The multiconductor writers carry their own per format options and none of them is reachable from this policy set; giving them a parameter with nothing to feed it would be the speculative version.
 
 ## Diagnostic codes
 

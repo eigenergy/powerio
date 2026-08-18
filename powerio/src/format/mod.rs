@@ -966,7 +966,20 @@ pub fn write_as_with_options(
     if options.is_default() {
         return write_as(net, format);
     }
+    let (working, policy_warnings) = apply_write_cost_policy(net, options)?;
+    let mut conv = write_as(&working, format)?;
+    conv.prepend(policy_warnings);
+    Ok(conv)
+}
 
+/// Apply the write-time cost policy to a copy of `net` and report what it did.
+///
+/// Shared by the text and directory writers so both surfaces run one policy and
+/// describe it with the same findings. The caller's network is never mutated.
+fn apply_write_cost_policy(
+    net: &BalancedNetwork,
+    options: &WriteOptions,
+) -> Result<(BalancedNetwork, Vec<StructuredDiagnostic>)> {
     let mut working = net.clone();
     let report =
         working.apply_gen_cost_policy(&options.gen_cost_patches, options.missing_gen_cost)?;
@@ -1002,10 +1015,7 @@ pub fn write_as_with_options(
     if report.patched > 0 || report.synthesized > 0 {
         working.source = None;
     }
-
-    let mut conv = write_as(&working, format)?;
-    conv.prepend(policy_warnings.into_records());
-    Ok(conv)
+    Ok((working, policy_warnings.into_records()))
 }
 
 /// Allocate a circuit id for an element keyed by `key` — a bus for loads/shunts,
@@ -1318,10 +1328,39 @@ pub fn write_dir(
     if is_pypsa_csv_name(to) {
         return write_pypsa_csv_folder(net, out_dir.as_ref()).map(|o| o.diagnostics);
     }
-    Err(Error::UnknownFormat(format!(
+    Err(unknown_directory_format(to))
+}
+
+fn unknown_directory_format(to: &str) -> Error {
+    Error::UnknownFormat(format!(
         "{to} is not a directory format (directory targets: pypsa-csv/pypsa); \
          text formats serialize through write_as / to_format"
-    )))
+    ))
+}
+
+/// Write `net` into `out_dir` with write-time cost policies: the directory twin
+/// of [`write_as_with_options`]. Default options are [`write_dir`] exactly.
+/// The policy's own findings come back ahead of the writer's.
+///
+/// # Errors
+/// As [`write_dir`], plus the cost policy's own [`Error`].
+pub fn write_dir_with_options(
+    net: &BalancedNetwork,
+    to: &str,
+    out_dir: impl AsRef<std::path::Path>,
+    options: &WriteOptions,
+) -> Result<Vec<StructuredDiagnostic>> {
+    // Refuse an unknown target before the policy runs, so a bad format name is
+    // reported as one rather than as whatever the cost pass hits first.
+    if !is_pypsa_csv_name(to) {
+        return Err(unknown_directory_format(to));
+    }
+    if options.is_default() {
+        return write_dir(net, to, out_dir);
+    }
+    let (working, mut diagnostics) = apply_write_cost_policy(net, options)?;
+    diagnostics.extend(write_dir(&working, to, out_dir)?);
+    Ok(diagnostics)
 }
 
 /// Warn when a network with no reference (slack) bus converts to a format
