@@ -47,7 +47,64 @@ const COMPARE_FILE: &str = "comparisons.json";
 /// vocabulary so the leak audit never mistakes the report's own schema for
 /// case data; keep it in step with [`Finding`], [`findings_for`] and
 /// [`walk_findings`].
-const SCHEMA_KEYS: [&str; 35] = [
+const SCHEMA_KEYS: [&str; 83] = [
+    // The summary's own prose, title case included: the audit matches exact
+    // tokens.
+    "Corpus",
+    "run",
+    "files",
+    "seen",
+    "unreadable",
+    "Buckets",
+    "siblings",
+    "Findings",
+    "count",
+    // JSON's own literals: a corpus value spelled "false" must not make the
+    // report's booleans unwritable.
+    "true",
+    "false",
+    "null",
+    // Every finding code. `allow` licenses each dot- and dash-separated
+    // component, so a corpus value spelled "terminal" cannot make
+    // `electrical.dc-terminal` unwritable.
+    "parse.panic",
+    "parse.failure",
+    "leg.panic",
+    "leg.failure",
+    "leg.unresolved-include",
+    "sibling.variant",
+    "sibling.status",
+    "sibling.ybus",
+    "electrical.unavailable",
+    "electrical.ybus",
+    "electrical.injection",
+    "electrical.dc-terminal",
+    "core.power",
+    "core.regrouped",
+    "loss.declared",
+    "loss.undeclared",
+    "warning.observed",
+    "walk.panic",
+    "walk.failure",
+    "walk.drift",
+    "walk.path-dependent",
+    "walk.resurrection",
+    "walk.absorbed",
+    // The remaining severities ("declared" is below with the schema keys).
+    "crash",
+    "silent-drop",
+    "silent-value-change",
+    "undeclared-loss",
+    // The `core_delta` labels.
+    "buses",
+    "branches",
+    "generators",
+    "loads",
+    "shunts",
+    "load",
+    "gen",
+    "base",
+    "mva",
     "hop",
     "hops",
     "path",
