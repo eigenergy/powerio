@@ -19,24 +19,24 @@ fn dist_layer_extracts_and_applies_by_name() {
         .iter()
         .position(|bus| bus.id == "sourcebus")
         .expect("sourcebus");
-    net.buses[bus_row].location = Some(powerio_dist::Location {
+    net.buses[bus_row].location = Some(powerio_dist::DistLocation {
         x: -89.6,
         y: 40.6,
-        kind: Some(powerio_dist::CoordsKind::Manual),
+        kind: Some(powerio_dist::DistCoordsKind::Manual),
     });
     net.lines[0].route = Some(vec![
-        powerio_dist::Location {
+        powerio_dist::DistLocation {
             x: -89.6,
             y: 40.6,
             kind: None,
         },
-        powerio_dist::Location {
+        powerio_dist::DistLocation {
             x: -89.2,
             y: 39.9,
             kind: None,
         },
     ]);
-    net.geo = Some(powerio_dist::GeoMeta {
+    net.geo = Some(powerio_dist::DistGeoMeta {
         space: powerio_dist::CoordinateSpace::Geographic { crs: None },
         kind: None,
     });
@@ -70,7 +70,7 @@ fn dist_layer_extracts_and_applies_by_name() {
     assert_eq!(report.unmatched_features, 0);
     let applied = bare.buses[bus_row].location.expect("applied location");
     assert!((applied.x - -89.6).abs() < 1e-12);
-    assert_eq!(applied.kind, Some(powerio_dist::CoordsKind::Manual));
+    assert_eq!(applied.kind, Some(powerio_dist::DistCoordsKind::Manual));
     assert!(bare.lines[0].route.is_some());
     assert!(matches!(
         bare.geo.as_ref().expect("geo meta").space,

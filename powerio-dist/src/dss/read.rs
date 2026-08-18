@@ -24,14 +24,14 @@ use super::raw::{
     parse_raw_confined_under, parse_raw_with, parse_raw_with_confined,
 };
 use crate::error::{Error, Result};
-use crate::geo::{CoordinateSpace, CoordsKind, GeoMeta, Location};
+use crate::geo::{CoordinateSpace, DistCoordsKind, DistGeoMeta, DistLocation};
 use crate::model::{
     ActivePowerReference, ActivePowerUnit, Configuration, ControlVoltageReference, DistBus,
     DistControlProfile, DistGenerator, DistIbr, DistLine, DistLineCode, DistLoad,
-    DistLoadVoltageModel, DistShunt, DistSourceFormat, DistSwitch, DistTransformer, Extras,
-    IbrPrimeMover, IbrTopology, Mat, MulticonductorNetwork, PowerFactorControl,
-    ReactivePowerReference, ReactivePowerUnit, UntypedObject, VoltVarControl, VoltWattControl,
-    VoltageSource, Winding, WindingConn, open_delta_connection, open_delta_pairable, pair_keys,
+    DistLoadVoltageModel, DistShunt, DistSourceFormat, DistSwitch, DistTransformer, DistWinding,
+    DistWindingConn, Extras, IbrPrimeMover, IbrTopology, Mat, MulticonductorNetwork,
+    PowerFactorControl, ReactivePowerReference, ReactivePowerUnit, UntypedObject, VoltVarControl,
+    VoltWattControl, VoltageSource, open_delta_connection, open_delta_pairable, pair_keys,
     square_from_rows, winding_phase_pair,
 };
 
@@ -374,7 +374,7 @@ fn finish_buses(mut rd: Reader, raw: &RawDss) -> MulticonductorNetwork {
             neutral_names.insert(id.clone(), neutral.to_string());
         }
         if let Some((x, y)) = coords.get(&id) {
-            bus.location = Some(Location {
+            bus.location = Some(DistLocation {
                 x: *x,
                 y: *y,
                 kind: None,
@@ -383,9 +383,9 @@ fn finish_buses(mut rd: Reader, raw: &RawDss) -> MulticonductorNetwork {
         net.buses.push(bus);
     }
     if !coords.is_empty() {
-        net.geo = Some(GeoMeta {
+        net.geo = Some(DistGeoMeta {
             space: CoordinateSpace::Unknown,
-            kind: Some(CoordsKind::Source),
+            kind: Some(DistCoordsKind::Source),
         });
         if coords
             .values()
@@ -1499,7 +1499,7 @@ impl Reader<'_> {
         windings: &[WindingRaw],
         phases: usize,
         name: &str,
-    ) -> Vec<Winding> {
+    ) -> Vec<DistWinding> {
         let mut out = Vec::with_capacity(windings.len());
         for (i, w) in windings.iter().enumerate() {
             if !w.kv_specified {
@@ -1523,13 +1523,13 @@ impl Reader<'_> {
                 phases + 1
             };
             let map = self.terminals(&spec, phases, phases + 1, keep);
-            out.push(Winding {
+            out.push(DistWinding {
                 bus: spec.name,
                 terminal_map: map,
                 conn: if w.conn_delta {
-                    WindingConn::Delta
+                    DistWindingConn::Delta
                 } else {
-                    WindingConn::Wye
+                    DistWindingConn::Wye
                 },
                 v_ref: w.kv * 1e3,
                 s_rating: w.kva * 1e3,
@@ -2371,7 +2371,7 @@ fn is_series_regulator(t: &DistTransformer) -> bool {
         return false;
     };
     let positive = |v: f64| v.is_finite() && v > 0.0;
-    let phase_terms = |w: &Winding| -> Vec<String> {
+    let phase_terms = |w: &DistWinding| -> Vec<String> {
         w.terminal_map
             .iter()
             .filter(|t| *t != "0")

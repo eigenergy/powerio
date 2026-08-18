@@ -65,7 +65,7 @@ pub use dss::{
     parse_dss_file_with_options, parse_dss_str, write_dss, write_dss_with_options,
 };
 pub use error::{Error, Result};
-pub use geo::{Canvas, CoordinateSpace, CoordsKind, GeoMeta, Location};
+pub use geo::{CoordinateSpace, DistCanvas, DistCoordsKind, DistGeoMeta, DistLocation};
 pub use graph::{
     DistGraph, DistGraphAttachment, DistGraphAttachmentKind, DistGraphBus, DistGraphEdge,
     DistGraphEdgeKind,
@@ -75,9 +75,9 @@ pub use model::DistNetwork;
 pub use model::{
     ActivePowerReference, ActivePowerUnit, Configuration, ControlVoltageReference, DistBus,
     DistCapacitor, DistControlProfile, DistGenerator, DistIbr, DistLine, DistLineCode, DistLoad,
-    DistLoadVoltageModel, DistShunt, DistSourceFormat, DistSwitch, DistTransformer, Extras,
-    IbrPrimeMover, IbrTopology, IbrVoltageAggregation, Mat, MulticonductorNetwork,
-    PowerFactorControl, ReactivePowerReference, ReactivePowerUnit, UntypedObject, VoltVarControl,
-    VoltWattControl, VoltageSource, Winding, WindingConn,
+    DistLoadVoltageModel, DistShunt, DistSourceFormat, DistSwitch, DistTransformer, DistWinding,
+    DistWindingConn, Extras, IbrPrimeMover, IbrTopology, IbrVoltageAggregation, Mat,
+    MulticonductorNetwork, PowerFactorControl, ReactivePowerReference, ReactivePowerUnit,
+    UntypedObject, VoltVarControl, VoltWattControl, VoltageSource,
 };
 pub use pmd::{parse_pmd_file, parse_pmd_str, write_pmd_json};

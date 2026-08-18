@@ -19,8 +19,8 @@ use crate::convert::Conversion;
 use crate::diagnostics::codes as C;
 use crate::geo::CoordinateSpace;
 use crate::model::{
-    Configuration, DistBus, DistLine, DistLineCode, DistLoadVoltageModel, DistTransformer, Extras,
-    Mat, MulticonductorNetwork, VoltageSource, Winding, WindingConn,
+    Configuration, DistBus, DistLine, DistLineCode, DistLoadVoltageModel, DistTransformer,
+    DistWinding, DistWindingConn, Extras, Mat, MulticonductorNetwork, VoltageSource,
 };
 
 /// Writes the ENGINEERING document.
@@ -864,8 +864,8 @@ impl Writer {
             let mut c = self.conns(&w.terminal_map, &what);
             if !stashed
                 && w_idx > 0
-                && t.windings[0].conn == WindingConn::Delta
-                && w.conn == WindingConn::Wye
+                && t.windings[0].conn == DistWindingConn::Delta
+                && w.conn == DistWindingConn::Wye
                 && c.len() > 1
             {
                 let phases_part = c.len() - 1;
@@ -895,8 +895,8 @@ impl Writer {
                     .iter()
                     .map(|w| {
                         json!(match w.conn {
-                            WindingConn::Wye => "WYE",
-                            WindingConn::Delta => "DELTA",
+                            DistWindingConn::Wye => "WYE",
+                            DistWindingConn::Delta => "DELTA",
                         })
                     })
                     .collect(),
@@ -1028,12 +1028,12 @@ fn synthesized_settings(net: &MulticonductorNetwork) -> Value {
 /// the reversed second half of a center tap secondary, 1 elsewhere. The
 /// reader compares the source against this to decide whether the file's
 /// polarity needs an extras stash.
-pub(super) fn lag_polarity(windings: &[Winding]) -> Vec<i64> {
+pub(super) fn lag_polarity(windings: &[DistWinding]) -> Vec<i64> {
     let nw = windings.len();
     let mut polarity = vec![1i64; nw];
     for (w_idx, w) in windings.iter().enumerate().skip(1) {
-        if windings[0].conn == WindingConn::Delta
-            && w.conn == WindingConn::Wye
+        if windings[0].conn == DistWindingConn::Delta
+            && w.conn == DistWindingConn::Wye
             && w.terminal_map.len() > 1
         {
             polarity[w_idx] = -1;

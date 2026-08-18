@@ -17,8 +17,8 @@ use crate::diagnostics::codes as C;
 use crate::error::{Error, Result};
 use crate::model::{
     Configuration, DistBus, DistGenerator, DistLine, DistLineCode, DistLoad, DistLoadVoltageModel,
-    DistShunt, DistSourceFormat, DistSwitch, DistTransformer, Extras, Mat, MulticonductorNetwork,
-    UntypedObject, VoltageSource, Winding, WindingConn,
+    DistShunt, DistSourceFormat, DistSwitch, DistTransformer, DistWinding, DistWindingConn, Extras,
+    Mat, MulticonductorNetwork, UntypedObject, VoltageSource,
 };
 
 pub fn parse_pmd_file(path: impl AsRef<Path>) -> Result<MulticonductorNetwork> {
@@ -291,7 +291,7 @@ fn linecode_from(
     }
 }
 
-/// `Winding.tap` is a scalar; the first phase tap represents each winding
+/// `DistWinding.tap` is a scalar; the first phase tap represents each winding
 /// (the raw per phase arrays ride in extras). The flag reports whether any
 /// winding's phases disagree, which exact comparison detects: a copied
 /// default differs by zero bits.
@@ -329,11 +329,11 @@ struct WindingNums<'a> {
 /// whether any winding was unrolled.
 fn build_windings(
     buses: &[String],
-    configs: &[WindingConn],
+    configs: &[DistWindingConn],
     polarity: &[i64],
     o: &Map<String, Value>,
     nums: &WindingNums,
-) -> (Vec<Winding>, usize, bool) {
+) -> (Vec<DistWinding>, usize, bool) {
     let _ = nums.xsc;
     let mut windings = Vec::with_capacity(buses.len());
     let mut phases = 1;
@@ -344,22 +344,22 @@ fn build_windings(
                 .and_then(Value::as_array)
                 .and_then(|a| a.get(w)),
         );
-        let conn = configs.get(w).copied().unwrap_or(WindingConn::Wye);
+        let conn = configs.get(w).copied().unwrap_or(DistWindingConn::Wye);
         if polarity.get(w) == Some(&-1)
-            && conn == WindingConn::Wye
-            && configs.first() == Some(&WindingConn::Delta)
+            && conn == DistWindingConn::Wye
+            && configs.first() == Some(&DistWindingConn::Delta)
             && map.len() > 1
         {
             let phases_part = map.len() - 1;
             map[..phases_part].rotate_right(1);
             unrolled = true;
         }
-        if conn == WindingConn::Wye {
+        if conn == DistWindingConn::Wye {
             phases = phases.max(map.len().saturating_sub(1));
         } else {
             phases = phases.max(map.len());
         }
-        windings.push(Winding {
+        windings.push(DistWinding {
             bus: bus.clone(),
             terminal_map: map,
             conn,
@@ -866,7 +866,7 @@ impl Reader<'_> {
         &mut self,
         name: &str,
         o: &Map<String, Value>,
-        windings: &[Winding],
+        windings: &[DistWinding],
         polarity: &[i64],
         unrolled: bool,
         extras: &mut Extras,
@@ -910,16 +910,16 @@ impl Reader<'_> {
             );
             buses.truncate(MAX_MATRIX_DIM);
         }
-        let configs: Vec<WindingConn> = o
+        let configs: Vec<DistWindingConn> = o
             .get("configuration")
             .and_then(Value::as_array)
             .map(|a| {
                 a.iter()
                     .map(|c| {
                         if c.as_str() == Some("DELTA") {
-                            WindingConn::Delta
+                            DistWindingConn::Delta
                         } else {
-                            WindingConn::Wye
+                            DistWindingConn::Wye
                         }
                     })
                     .collect()

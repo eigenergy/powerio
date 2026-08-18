@@ -133,7 +133,7 @@ impl GeoApplyTarget for DistApply<'_> {
     }
 
     fn place_bus(&mut self, row: usize, point: [f64; 2], kind: Option<powerio::CoordsKind>) {
-        self.net.buses[row].location = Some(powerio_dist::Location {
+        self.net.buses[row].location = Some(powerio_dist::DistLocation {
             x: point[0],
             y: point[1],
             kind: kind.and_then(kind_to_dist),
@@ -144,7 +144,7 @@ impl GeoApplyTarget for DistApply<'_> {
         let kind = kind.and_then(kind_to_dist);
         self.net.lines[row].route = Some(
             path.iter()
-                .map(|[x, y]| powerio_dist::Location { x: *x, y: *y, kind })
+                .map(|[x, y]| powerio_dist::DistLocation { x: *x, y: *y, kind })
                 .collect(),
         );
     }
@@ -223,22 +223,22 @@ fn name_pair(a: &str, b: &str) -> (String, String) {
 /// Direct variant maps between the mirrored provenance enums; both are
 /// `#[non_exhaustive]`, so a variant added on one side first goes through the
 /// shared JSON shape instead of being dropped silently.
-fn kind_to_balanced(kind: powerio_dist::CoordsKind) -> Option<powerio::CoordsKind> {
+fn kind_to_balanced(kind: powerio_dist::DistCoordsKind) -> Option<powerio::CoordsKind> {
     match kind {
-        powerio_dist::CoordsKind::Source => Some(powerio::CoordsKind::Source),
-        powerio_dist::CoordsKind::Synthetic => Some(powerio::CoordsKind::Synthetic),
-        powerio_dist::CoordsKind::Manual => Some(powerio::CoordsKind::Manual),
-        powerio_dist::CoordsKind::Derived => Some(powerio::CoordsKind::Derived),
+        powerio_dist::DistCoordsKind::Source => Some(powerio::CoordsKind::Source),
+        powerio_dist::DistCoordsKind::Synthetic => Some(powerio::CoordsKind::Synthetic),
+        powerio_dist::DistCoordsKind::Manual => Some(powerio::CoordsKind::Manual),
+        powerio_dist::DistCoordsKind::Derived => Some(powerio::CoordsKind::Derived),
         _ => mirror(Some(&kind)),
     }
 }
 
-fn kind_to_dist(kind: powerio::CoordsKind) -> Option<powerio_dist::CoordsKind> {
+fn kind_to_dist(kind: powerio::CoordsKind) -> Option<powerio_dist::DistCoordsKind> {
     match kind {
-        powerio::CoordsKind::Source => Some(powerio_dist::CoordsKind::Source),
-        powerio::CoordsKind::Synthetic => Some(powerio_dist::CoordsKind::Synthetic),
-        powerio::CoordsKind::Manual => Some(powerio_dist::CoordsKind::Manual),
-        powerio::CoordsKind::Derived => Some(powerio_dist::CoordsKind::Derived),
+        powerio::CoordsKind::Source => Some(powerio_dist::DistCoordsKind::Source),
+        powerio::CoordsKind::Synthetic => Some(powerio_dist::DistCoordsKind::Synthetic),
+        powerio::CoordsKind::Manual => Some(powerio_dist::DistCoordsKind::Manual),
+        powerio::CoordsKind::Derived => Some(powerio_dist::DistCoordsKind::Derived),
         _ => mirror(Some(&kind)),
     }
 }

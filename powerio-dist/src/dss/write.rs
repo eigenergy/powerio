@@ -20,9 +20,9 @@ use crate::convert::{Conversion, ConversionSidecar};
 use crate::diagnostics::codes as C;
 use crate::model::{
     ActivePowerReference, Configuration, ControlVoltageReference, DistBus, DistControlProfile,
-    DistIbr, DistLoad, DistLoadVoltageModel, DistTransformer, Extras, IbrPrimeMover, IbrTopology,
-    IbrVoltageAggregation, Mat, MulticonductorNetwork, ReactivePowerReference, VoltVarControl,
-    VoltWattControl, Winding, WindingConn,
+    DistIbr, DistLoad, DistLoadVoltageModel, DistTransformer, DistWinding, DistWindingConn, Extras,
+    IbrPrimeMover, IbrTopology, IbrVoltageAggregation, Mat, MulticonductorNetwork,
+    ReactivePowerReference, VoltVarControl, VoltWattControl,
 };
 
 use super::read::delta_edges;
@@ -198,7 +198,7 @@ fn estimate_bus_kv(net: &MulticonductorNetwork) -> BTreeMap<String, f64> {
             // Matched windings (wye-wye, three phase wye-delta) cancel the
             // factor; only a mixed open delta leg (single phase wye to delta)
             // shifts, where the old raw ratio was a sqrt(3) off.
-            let pn = |w: &Winding| {
+            let pn = |w: &DistWinding| {
                 let v = (w.v_ref / 1e3) * 1e3;
                 if winding_is_line_to_neutral(t.phases, w, |b| {
                     grounded.get(b).map(|g| g.as_slice())
@@ -241,7 +241,7 @@ fn estimate_bus_kv(net: &MulticonductorNetwork) -> BTreeMap<String, f64> {
 /// between them emits a wrong `kv` with nothing to flag it.
 fn winding_is_line_to_neutral<'g>(
     phases: usize,
-    w: &Winding,
+    w: &DistWinding,
     grounded: impl Fn(&str) -> Option<&'g [String]>,
 ) -> bool {
     phases < 2
@@ -871,7 +871,7 @@ impl DssWriter {
     }
 
     fn buscoords(&mut self, net: &MulticonductorNetwork) {
-        let rows: Vec<(&DistBus, crate::geo::Location)> = net
+        let rows: Vec<(&DistBus, crate::geo::DistLocation)> = net
             .buses
             .iter()
             .filter_map(|b| b.location.map(|location| (b, location)))
@@ -1198,8 +1198,8 @@ impl DssWriter {
                 .windings
                 .iter()
                 .map(|w| match w.conn {
-                    WindingConn::Wye => "wye",
-                    WindingConn::Delta => "delta",
+                    DistWindingConn::Wye => "wye",
+                    DistWindingConn::Delta => "delta",
                 })
                 .collect();
             let kvs: Vec<Option<f64>> = t
@@ -1333,7 +1333,7 @@ impl DssWriter {
         &mut self,
         t: &crate::model::DistTransformer,
         idx: usize,
-        w: &Winding,
+        w: &DistWinding,
     ) -> Option<f64> {
         if is_positive_finite(w.v_ref) {
             return Some(w.v_ref / 1e3);
@@ -2630,8 +2630,8 @@ mod tests {
     use super::*;
     use crate::model::{
         ControlVoltageReference, DistControlProfile, DistGenerator, DistIbr, DistLine,
-        DistLineCode, DistLoad, DistShunt, DistSwitch, DistTransformer, IbrPrimeMover, IbrTopology,
-        ReactivePowerReference, ReactivePowerUnit, VoltVarControl, VoltageSource, Winding,
+        DistLineCode, DistLoad, DistShunt, DistSwitch, DistTransformer, DistWinding, IbrPrimeMover,
+        IbrTopology, ReactivePowerReference, ReactivePowerUnit, VoltVarControl, VoltageSource,
     };
 
     fn strings(v: &[&str]) -> Vec<String> {
@@ -3164,10 +3164,10 @@ mod tests {
         let t = DistTransformer {
             name: "t1".into(),
             windings: vec![
-                Winding {
+                DistWinding {
                     bus: "sb".into(),
                     terminal_map: strings(&["1", "2"]),
-                    conn: WindingConn::Wye,
+                    conn: DistWindingConn::Wye,
                     v_ref: 2400.0,
                     s_rating: 25e3,
                     r_pct: 0.5,
@@ -3175,10 +3175,10 @@ mod tests {
                     r_neutral: None,
                     x_neutral: None,
                 },
-                Winding {
+                DistWinding {
                     bus: "b2".into(),
                     terminal_map: strings(&["1", "2"]),
-                    conn: WindingConn::Wye,
+                    conn: DistWindingConn::Wye,
                     v_ref: 240.0,
                     s_rating: 25e3,
                     r_pct: 0.5,
@@ -3442,10 +3442,10 @@ mod tests {
         // arm, so the star back solves to xlt=0, which dss converges on with
         // the secondary legs collapsed to about half voltage.
         let (b, vs, lv) = center_tap_service(11000.0);
-        let winding = |bus: &str, map: &[&str], v: f64| Winding {
+        let winding = |bus: &str, map: &[&str], v: f64| DistWinding {
             bus: bus.into(),
             terminal_map: strings(map),
-            conn: WindingConn::Wye,
+            conn: DistWindingConn::Wye,
             v_ref: v,
             s_rating: 25e3,
             r_pct: 0.5,

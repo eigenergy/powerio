@@ -6,10 +6,10 @@ use std::sync::Arc;
 
 use powerio_dist::dss::{parse_dss_file, parse_dss_str};
 use powerio_dist::{
-    BmopfWriteOptions, Configuration, CoordinateSpace, CoordsKind, DiagnosticSeverity,
-    DiagnosticStage, DistBus, DistLineCode, DistTransformer, Extras, GeoMeta, Location,
-    MulticonductorNetwork, VoltageSource, Winding, WindingConn, parse_bmopf_file, parse_bmopf_str,
-    parse_pmd_str, write_bmopf_json, write_bmopf_json_with_options, write_dss,
+    BmopfWriteOptions, Configuration, CoordinateSpace, DiagnosticSeverity, DiagnosticStage,
+    DistBus, DistCoordsKind, DistGeoMeta, DistLineCode, DistLocation, DistTransformer, DistWinding,
+    DistWindingConn, Extras, MulticonductorNetwork, VoltageSource, parse_bmopf_file,
+    parse_bmopf_str, parse_pmd_str, write_bmopf_json, write_bmopf_json_with_options, write_dss,
 };
 
 fn fixture(rel: &str) -> PathBuf {
@@ -52,7 +52,7 @@ fn bmopf_sideloaded_coordinates_promote_to_locations() {
     assert!(net.warnings.is_empty(), "{:?}", net.warnings);
     let geo = net.geo.as_ref().expect("geo metadata");
     assert_eq!(geo.space, CoordinateSpace::Geographic { crs: None });
-    assert_eq!(geo.kind, Some(CoordsKind::Source));
+    assert_eq!(geo.kind, Some(DistCoordsKind::Source));
     let bus = &net.buses[0];
     assert_eq!(bus.location.unwrap().x.to_bits(), (-80.0f64).to_bits());
     assert_eq!(bus.location.unwrap().y.to_bits(), 35.0f64.to_bits());
@@ -387,7 +387,7 @@ fn single_phase_wye_delta_keeps_both_delta_terminals() {
     // Open wye / open delta: the delta is on the secondary, on .1.2 and .2.3.
     let net = parse_dss_file(fixture("micro/xfmr_open_wye_open_delta.dss")).unwrap();
     let t1 = net.transformers.iter().find(|t| t.name == "t1").unwrap();
-    assert_eq!(t1.windings[1].conn, WindingConn::Delta);
+    assert_eq!(t1.windings[1].conn, DistWindingConn::Delta);
     assert_eq!(t1.windings[1].terminal_map, vec!["1", "2"]);
     let t2 = net.transformers.iter().find(|t| t.name == "t2").unwrap();
     assert_eq!(t2.windings[1].terminal_map, vec!["2", "3"]);
@@ -434,7 +434,7 @@ fn single_phase_wye_delta_keeps_both_delta_terminals() {
     // grounded wye secondary keeps both primary terminals.
     let dw = parse_dss_file(fixture("micro/xfmr_1ph_delta_wye.dss")).unwrap();
     let t = &dw.transformers[0];
-    assert_eq!(t.windings[0].conn, WindingConn::Delta);
+    assert_eq!(t.windings[0].conn, DistWindingConn::Delta);
     assert_eq!(t.windings[0].terminal_map, vec!["1", "2"]);
     let out = write_bmopf_json(&dw);
     assert!(
@@ -480,8 +480,8 @@ fn delta_wye_leakage_uses_each_winding_base() {
         .iter()
         .find(|t| t.name == "t1")
         .unwrap();
-    assert_eq!(t.windings[0].conn, WindingConn::Delta);
-    assert_eq!(t.windings[1].conn, WindingConn::Wye);
+    assert_eq!(t.windings[0].conn, DistWindingConn::Delta);
+    assert_eq!(t.windings[1].conn, DistWindingConn::Wye);
     assert!((t.windings[0].r_pct - 0.5).abs() < 1e-12);
     assert!((t.windings[1].r_pct - 0.5).abs() < 1e-12);
     assert_eq!(t.xsc_pct.len(), 1);
@@ -921,11 +921,11 @@ fn split_source_network(sources: Vec<VoltageSource>) -> MulticonductorNetwork {
 fn bmopf_coordinates_are_strict_by_default_and_opt_in_as_sideloads() {
     let mut net =
         split_source_network(vec![single_phase_source("source", "1", 0.0, Extras::new())]);
-    net.geo = Some(GeoMeta {
+    net.geo = Some(DistGeoMeta {
         space: CoordinateSpace::Geographic { crs: None },
-        kind: Some(CoordsKind::Source),
+        kind: Some(DistCoordsKind::Source),
     });
-    net.buses[0].location = Some(Location {
+    net.buses[0].location = Some(DistLocation {
         x: -80.0,
         y: 35.0,
         kind: None,
@@ -965,9 +965,9 @@ fn bmopf_coordinates_are_strict_by_default_and_opt_in_as_sideloads() {
         sideloaded.warnings
     );
 
-    net.geo = Some(GeoMeta {
+    net.geo = Some(DistGeoMeta {
         space: CoordinateSpace::Unknown,
-        kind: Some(CoordsKind::Source),
+        kind: Some(DistCoordsKind::Source),
     });
     let unknown = write_bmopf_json_with_options(&net, &options);
     let doc: serde_json::Value = serde_json::from_str(&unknown.text).unwrap();
@@ -1454,7 +1454,7 @@ fn opendss_n_winding_delta_emits_delta_roll() {
     );
     let t = &net.transformers[0];
     assert_eq!(t.windings.len(), 3);
-    assert_eq!(t.windings[0].conn, WindingConn::Delta);
+    assert_eq!(t.windings[0].conn, DistWindingConn::Delta);
 
     let out = write_bmopf_json(&net);
     assert_eq!(errors(&schema_validator(), &out.text), Vec::<String>::new());
@@ -1675,17 +1675,17 @@ fn dss_phase_to_phase_noloadloss_does_not_emit_bmopf_ground_shunt() {
 
 #[test]
 fn wye_wye_3_extras_drop_warns_once_not_per_phase() {
-    let from = Winding::new(
+    let from = DistWinding::new(
         "a",
         vec!["1".into(), "2".into(), "3".into(), "n".into()],
-        WindingConn::Wye,
+        DistWindingConn::Wye,
         7200.0,
         25_000.0,
     );
-    let to = Winding::new(
+    let to = DistWinding::new(
         "b",
         vec!["1".into(), "2".into(), "3".into(), "n".into()],
-        WindingConn::Wye,
+        DistWindingConn::Wye,
         240.0,
         25_000.0,
     );
@@ -1747,17 +1747,17 @@ fn wye_wye_3_neutral_grounding_decomposes_once_not_per_phase() {
 
 #[test]
 fn wye_wye_3_raw_no_load_splits_across_decomposition() {
-    let from = Winding::new(
+    let from = DistWinding::new(
         "a",
         vec!["1".into(), "2".into(), "3".into(), "n".into()],
-        WindingConn::Wye,
+        DistWindingConn::Wye,
         7200.0,
         30_000.0,
     );
-    let to = Winding::new(
+    let to = DistWinding::new(
         "b",
         vec!["1".into(), "2".into(), "3".into(), "n".into()],
-        WindingConn::Wye,
+        DistWindingConn::Wye,
         240.0,
         30_000.0,
     );
@@ -2494,10 +2494,10 @@ fn three_wire_wye_wye_is_unsupported_not_a_panic() {
     // a map shorter than the phase count used to index out of bounds.
     let mut net = parse_bmopf_str(&doc_with("")).unwrap();
     let winding = |map: &[&str]| {
-        let mut winding = Winding::new(
+        let mut winding = DistWinding::new(
             "a",
             map.iter().map(ToString::to_string).collect(),
-            WindingConn::Wye,
+            DistWindingConn::Wye,
             4160.0,
             500_000.0,
         );
@@ -2782,9 +2782,9 @@ fn an_untyped_capacitor_re_emits_under_extras() {
 #[test]
 fn a_winding_rating_that_is_not_positive_drops_only_its_own_resistance_term() {
     let names = || vec!["1".to_string(), "2".to_string(), "3".to_string()];
-    let mut from = Winding::new("a", names(), WindingConn::Delta, 416.0, 1000.0);
+    let mut from = DistWinding::new("a", names(), DistWindingConn::Delta, 416.0, 1000.0);
     from.r_pct = 1.0;
-    let mut to = Winding::new("a", names(), WindingConn::Wye, 240.0, 0.0);
+    let mut to = DistWinding::new("a", names(), DistWindingConn::Wye, 240.0, 0.0);
     to.r_pct = 1.0;
     let mut net = MulticonductorNetwork::default();
     net.transformers
@@ -2815,8 +2815,8 @@ fn a_winding_rating_that_is_not_positive_drops_only_its_own_resistance_term() {
 #[test]
 fn a_from_rating_that_is_not_positive_drops_the_reactance_instead_of_zeroing_it() {
     let names = || vec!["1".to_string(), "2".to_string(), "3".to_string()];
-    let from = Winding::new("a", names(), WindingConn::Delta, 416.0, 0.0);
-    let to = Winding::new("a", names(), WindingConn::Wye, 240.0, 1000.0);
+    let from = DistWinding::new("a", names(), DistWindingConn::Delta, 416.0, 0.0);
+    let to = DistWinding::new("a", names(), DistWindingConn::Wye, 240.0, 1000.0);
     let mut net = MulticonductorNetwork::default();
     net.transformers
         .push(DistTransformer::new("t", vec![from, to], vec![4.0], 3));
