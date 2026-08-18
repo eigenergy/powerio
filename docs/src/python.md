@@ -206,5 +206,20 @@ The optional MCP server accepts local filesystem paths and `file://` URIs for
 `path` and `out_path` arguments. Remote URI schemes are rejected. Deployments
 that need filesystem containment can set `POWERIO_MCP_ALLOWED_ROOTS` to an
 `os.pathsep` separated list of directories; all MCP reads and writes must
-resolve under one of those roots. `POWERIO_MCP_ROOT` is accepted as a single
-root alias.
+resolve under one of those roots. Two legacy single root spellings are read when it is unset, in order: `POWERIO_MCP_ROOT`, then `POWERIO_MCP_ALLOWED_ROOT`, an alternate legacy spelling. The first variable that is set and non-empty wins.
+
+The policy itself is `powerio.mcp.sandbox`, which imports only the standard library, so a server built on another MCP SDK can apply the same rules:
+
+```python
+from powerio.mcp.sandbox import checked_path
+
+path = checked_path(arg, purpose="path")
+out = checked_path(arg, purpose="out_path", for_write=True)
+```
+
+`checked_path` decodes the argument (local path or `file://` URI), refuses
+remote schemes, resolves symlinks — including a dangling final component under
+`for_write`, so a link inside a root cannot redirect a write out of it — and
+raises `ValueError` when the result lands outside the roots. Its parts,
+`allowed_roots`, `decode_local_path`, and `check_allowed_path`, are public
+too.
