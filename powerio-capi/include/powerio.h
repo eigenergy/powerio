@@ -311,6 +311,14 @@ struct ArrowSchema;
 #define PIO_ARROW_TABLE_MATRIX_BRANCH 20
 #endif
 
+#if defined(PIO_ARROW)
+#define PIO_ARROW_TABLE_SOLVER_GEN_COST 21
+#endif
+
+#if defined(PIO_ARROW)
+#define PIO_ARROW_TABLE_SOLVER_GEN_COST_COEFF 22
+#endif
+
 #if defined(PIO_DIST)
 /**
  * Opaque parsed distribution network handle (the multiconductor wire coordinate
@@ -936,7 +944,14 @@ size_t pio_bus_shunt(const PioNetwork *net, double *gs, double *bs, size_t cap);
  * space with dimensions in schema metadata; tables 19 and 20 are the axis maps
  * naming what each row and column of those triplets is (`matrix_bus` carries
  * the bus id, source row, reference flag and island per index, `matrix_branch`
- * the source row and endpoint ids). Every table entry in
+ * the source row and endpoint ids). Tables 21 and 22 carry normalized
+ * generator cost: one header row per solver generator, in `solver_gen` order,
+ * slicing `[coeff_offset, coeff_offset + coeff_count)` of the flattened
+ * coefficient table. `model` 2 reads position `i` of a `coeff_count` long
+ * slice as the coefficient of `p^(coeff_count - 1 - i)`; `model` 1 reads even
+ * positions as per unit active power at a breakpoint and odd positions as the
+ * curve value there; `model` 0 means the generator carries no cost row, and
+ * its `coeff_offset` is `-1`. Every table entry in
  * [`pio_arrow_catalog_json`] states which of the three it is under `format`.
  * New columns extend the Arrow schema without changing an existing C
  * signature.
