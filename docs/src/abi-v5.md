@@ -15,6 +15,8 @@ ABI 5 ships with powerio 0.9.0. It touches seventeen symbols and renames none, s
 | `pio_dist_to_format` | signature: same |
 | `pio_dist_convert_file` | signature: same |
 | `pio_dist_convert_str` | signature: same |
+| `pio_normalize` | signature: `const PioNormalizeOptions *opts` |
+| `pio_normalize_with_options` | removed, folded into `pio_normalize` |
 | `pio_n_buses` | behavior: reports the star-lowered space |
 | `pio_bus_ids` | behavior: same |
 | `pio_n_branches` | behavior: same |
@@ -73,6 +75,26 @@ The struct is extensible in the convention `openat2` and `clone3` use. Zero it, 
 `gen_cost_csv` carries the patch table as CSV **text**, never a path. A write entry point does not open a file you name — that is the behavior 0.7.3 removed from the string entry points — so read the CSV yourself and hand over its bytes, which is what the CLI and the Python binding already do internally.
 
 The three `pio_dist_*` write entry points take no options struct. The multiconductor writers carry their own per format options and none of them is reachable from this policy set; giving them a parameter with nothing to feed it would be the speculative version.
+
+## Normalize options
+
+`pio_normalize` takes `const PioNormalizeOptions *opts` and `pio_normalize_with_options` is gone. `NULL` is every default and is exactly what ABI 4's `pio_normalize` did, so the two flat arguments become fields under the same struct rules as `PioWriteOptions`.
+
+```c
+/* ABI 4 */
+PioNetwork *n = pio_normalize_with_options(net, 1, 1.0472, errbuf, sizeof errbuf);
+
+/* ABI 5 */
+PioNormalizeOptions opts;
+memset(&opts, 0, sizeof opts);
+opts.struct_size = sizeof opts;
+opts.clamp_angle_bounds = 1;
+PioNetwork *n = pio_normalize(net, &opts, errbuf, sizeof errbuf);
+```
+
+`angle_bound_pad` must be in `(0, pi/2)` when the clamp is on, so `0` was never a value you could pass. It means the default 1.0472 radians, which is what makes a zero filled struct the default options with no sentinel to encode. Any other out of range pad still fails with the reader's own `InvalidNormalizeOption`.
+
+A caller that passed `pio_normalize_with_options` through a runtime symbol lookup has to re-key that lookup: the symbol resolves to nothing now, and a lookup that silently falls back to its own repair will do that repair instead of this one with no error to show for it.
 
 ## Diagnostic codes
 

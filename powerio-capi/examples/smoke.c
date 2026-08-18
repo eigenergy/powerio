@@ -259,13 +259,33 @@ int main(int argc, char **argv) {
          * (several if the file marked several), and still snapshots. Count the
          * references with the NULL-out query, not pio_ref_bus_index >= 0: the
          * latter returns -1 for a multi-slack case, which is valid here. */
-        PioNetwork *cn = pio_normalize(cs, err, sizeof err);
+        PioNetwork *cn = pio_normalize(cs, NULL, err, sizeof err);
         CHECK(cn != NULL, err);
         CHECK(pio_n_buses(cn) <= nb && pio_n_buses(cn) > 0, "normalized bus count out of range");
         CHECK(pio_ref_bus_indices(cn, NULL, 0) >= 1, "normalized case lost its reference bus");
         char *njson = pio_to_format(cn, "powerio-json", NULL, NULL, err, sizeof err);
         CHECK(njson != NULL, err);
         pio_string_free(njson);
+
+        /* The solver preparation repairs ride the same options struct as the
+         * write entry points: zero it, set struct_size, ask for the clamp. A
+         * zero angle_bound_pad is the default 1.0472 radians. */
+        {
+            PioNormalizeOptions nopts;
+            memset(&nopts, 0, sizeof nopts);
+            nopts.struct_size = sizeof nopts;
+            nopts.clamp_angle_bounds = 1;
+            PioNetwork *clamped = pio_normalize(cs, &nopts, err, sizeof err);
+            CHECK(clamped != NULL, err);
+            CHECK(pio_n_buses(clamped) == pio_n_buses(cn), "the clamp changed the bus count");
+            pio_network_free(clamped);
+
+            /* A pad outside (0, pi/2) is the reader's own refusal. */
+            nopts.angle_bound_pad = 2.0;
+            PioNetwork *refused = pio_normalize(cs, &nopts, err, sizeof err);
+            CHECK(refused == NULL, "an out of range angle_bound_pad should fail the call");
+            CHECK(strlen(err) > 0, "the refusal should name the field");
+        }
         pio_network_free(cn);
         pio_network_free(cs);
         printf("parse_str + convert_str + normalize OK\n");

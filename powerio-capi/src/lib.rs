@@ -31,7 +31,7 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 
 use powerio::{
     BalancedNetwork, IndexCore, IndexedNetwork, MissingGenCostPolicy, NormalizeOptions,
-    StructuredDiagnostic, TargetFormat, WriteOptions,
+    POWER_MODELS_ANGLE_BOUND_PAD, StructuredDiagnostic, TargetFormat, WriteOptions,
 };
 
 use crate::diagnostics::{coded, codes, err_line};
@@ -784,7 +784,7 @@ pub unsafe extern "C" fn pio_warnings(
 }
 
 /// Free a network handle from [`pio_parse_file`], [`pio_parse_str`],
-/// `pio_read_dir`, [`pio_normalize`], or [`pio_normalize_with_options`].
+/// `pio_read_dir`, or [`pio_normalize`].
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_network_free(net: *mut PioNetwork) {
     unsafe {
@@ -811,68 +811,93 @@ unsafe fn view<'a>(net: *const PioNetwork) -> Option<IndexedNetwork<'a>> {
     }
 }
 
+/// Solver preparation repairs for [`pio_normalize`], in the extensible options
+/// struct convention this header states once. Zero the struct, set
+/// `struct_size` to `sizeof(PioNormalizeOptions)`, fill what you need; NULL is
+/// every default, which is the plain per unit pass with no repair.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct PioNormalizeOptions {
+    /// `sizeof(PioNormalizeOptions)` as the caller's build sees it.
+    pub struct_size: usize,
+    /// Nonzero applies the same branch angle difference bound repair as
+    /// PowerModels: `angmin <= -pi/2`, `angmax >= pi/2`, and zero/zero bounds
+    /// are replaced by `[-angle_bound_pad, angle_bound_pad]`, and a repair that
+    /// would invert the interval widens to that same window.
+    pub clamp_angle_bounds: i32,
+    /// Named so the layout carries no implicit padding. Must be zero.
+    pub reserved: i32,
+    /// The half width of the replacement window, in radians, which must be in
+    /// `(0, pi/2)`. `0` means the default 1.0472, so a zero filled struct is
+    /// every default; any other out of range value fails the call.
+    pub angle_bound_pad: f64,
+}
+
+/// Read a caller's [`PioNormalizeOptions`] into the Rust `NormalizeOptions`.
+///
+/// # Safety
+/// `opts` must be NULL or point at a `PioNormalizeOptions` whose `struct_size`
+/// bytes are readable.
+unsafe fn normalize_options_from_c(
+    opts: *const PioNormalizeOptions,
+) -> Result<NormalizeOptions, String> {
+    let Some(raw) = (unsafe { options_from_c(opts, "PioNormalizeOptions") })? else {
+        return Ok(NormalizeOptions::default());
+    };
+    if raw.reserved != 0 {
+        return Err(coded(
+            &codes::BIND_CAPI_INVALID_OPTIONS,
+            "PioNormalizeOptions.reserved is not zero; it names the layout's padding and carries \
+             no value",
+        ));
+    }
+    // Zero is not a legal pad, so it is free to mean the default and a zero
+    // filled struct is exactly the default options.
+    let angle_bound_pad = if raw.angle_bound_pad == 0.0 {
+        POWER_MODELS_ANGLE_BOUND_PAD
+    } else {
+        raw.angle_bound_pad
+    };
+    Ok(NormalizeOptions {
+        clamp_angle_bounds: raw.clamp_angle_bounds != 0,
+        angle_bound_pad,
+    })
+}
+
 /// Normalize `net` into a NEW network handle: per unit, radians, out of service
 /// filtered, source bus ids preserved, bus types canonicalized (see
 /// `BalancedNetwork::to_normalized`). A value transform, not a serialization, hence
 /// the verb, while the `to_*` family re-encodes unchanged data. The result is
 /// independent of `net`; free both with [`pio_network_free`]. Every extractor
 /// and serializer works on it unchanged (the handle is per unit, not MW).
-/// Returns `NULL` on error (no reference bus can be chosen, or a non-positive
-/// base MVA) and writes the message into `errbuf`.
+///
+/// `opts` turns on the solver preparation repairs; see [`PioNormalizeOptions`].
+/// NULL is every default and is the plain pass. The read warnings already on
+/// `net` and any repair warnings are attached to the returned handle and can be
+/// read with [`pio_warnings`].
+///
+/// Returns `NULL` on error (no reference bus can be chosen, a non-positive base
+/// MVA, or an options struct this build cannot honor) and writes the message
+/// into `errbuf`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_normalize(
     net: *const PioNetwork,
+    opts: *const PioNormalizeOptions,
     errbuf: *mut c_char,
     errlen: usize,
 ) -> *mut PioNetwork {
     unsafe {
         finish_network(errbuf, errlen, "panic while normalizing", || {
             let c = network_ref(net).ok_or_else(|| null_handle("network handle"))?;
-            c.net
-                .to_normalized()
-                .map(|n| (n, c.diagnostics.clone()))
-                .map_err(err_line)
+            let options = normalize_options_from_c(opts)?;
+            let out = c
+                .net
+                .to_normalized_with_options(&options)
+                .map_err(err_line)?;
+            let mut diagnostics = c.diagnostics.clone();
+            diagnostics.extend(out.diagnostics);
+            Ok((out.network, diagnostics))
         })
-    }
-}
-
-/// Normalize `net` into a NEW network handle, with opt in solver preparation
-/// repairs.
-/// `clamp_angle_bounds != 0` applies the same branch angle difference bound
-/// repair as PowerModels (`angmin <= -pi/2`, `angmax >= pi/2`, and zero/zero
-/// bounds replaced by `[-angle_bound_pad, angle_bound_pad]`). A repair that
-/// would invert the interval widens to that same window. The default pad is
-/// 1.0472 radians.
-/// Existing read warnings and repair warnings are attached to the returned
-/// handle and can be read with [`pio_warnings`].
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn pio_normalize_with_options(
-    net: *const PioNetwork,
-    clamp_angle_bounds: i32,
-    angle_bound_pad: f64,
-    errbuf: *mut c_char,
-    errlen: usize,
-) -> *mut PioNetwork {
-    unsafe {
-        finish_network(
-            errbuf,
-            errlen,
-            "panic while normalizing with options",
-            || {
-                let c = network_ref(net).ok_or_else(|| null_handle("network handle"))?;
-                let options = NormalizeOptions {
-                    clamp_angle_bounds: clamp_angle_bounds != 0,
-                    angle_bound_pad,
-                };
-                let out = c
-                    .net
-                    .to_normalized_with_options(&options)
-                    .map_err(err_line)?;
-                let mut diagnostics = c.diagnostics.clone();
-                diagnostics.extend(out.diagnostics);
-                Ok((out.network, diagnostics))
-            },
-        )
     }
 }
 
@@ -3716,6 +3741,8 @@ mod tests {
             "typedef struct PioNetwork PioNetwork;",
             "typedef struct PioPackage PioPackage;",
             "typedef struct PioScopfInstance PioScopfInstance;",
+            "typedef struct { size_t struct_size; int32_t clamp_angle_bounds; \
+             int32_t reserved; double angle_bound_pad; } PioNormalizeOptions;",
             "typedef struct { size_t struct_size; int32_t missing_gen_cost_mode; \
              int32_t reserved; double fill_c2; double fill_c1; double fill_c0; \
              double fill_startup; double fill_shutdown; const char *gen_cost_csv; \
@@ -3738,8 +3765,7 @@ mod tests {
             "ptrdiff_t pio_scenario_ids(const char *dir, const char *from, int64_t *out, size_t cap, char *errbuf, size_t errlen);",
             "size_t pio_warnings(const PioNetwork *net, char *warnbuf, size_t warnlen);",
             "void pio_network_free(PioNetwork *net);",
-            "PioNetwork *pio_normalize(const PioNetwork *net, char *errbuf, size_t errlen);",
-            "PioNetwork *pio_normalize_with_options(const PioNetwork *net, int32_t clamp_angle_bounds, double angle_bound_pad, char *errbuf, size_t errlen);",
+            "PioNetwork *pio_normalize(const PioNetwork *net, const PioNormalizeOptions *opts, char *errbuf, size_t errlen);",
             "size_t pio_n_buses(const PioNetwork *net);",
             "size_t pio_n_branches(const PioNetwork *net);",
             "size_t pio_n_switches(const PioNetwork *net);",
@@ -4317,17 +4343,10 @@ mod tests {
 
             // The two FFI constructors reject a NULL input rather than crash.
             let mut err = [0 as c_char; 128];
-            assert!(pio_normalize(nil, err.as_mut_ptr(), err.len()).is_null());
-            assert!(
-                pio_normalize_with_options(
-                    nil,
-                    1,
-                    POWER_MODELS_ANGLE_BOUND_PAD,
-                    err.as_mut_ptr(),
-                    err.len()
-                )
-                .is_null()
-            );
+            assert!(pio_normalize(nil, std::ptr::null(), err.as_mut_ptr(), err.len()).is_null());
+            let mut opts = normalize_opts();
+            opts.clamp_angle_bounds = 1;
+            assert!(pio_normalize(nil, &opts, err.as_mut_ptr(), err.len()).is_null());
             let fmt = CString::new("matpower").unwrap();
             assert!(
                 pio_parse_str(std::ptr::null(), fmt.as_ptr(), err.as_mut_ptr(), err.len())
@@ -4381,7 +4400,7 @@ mpc.branch = [
         unsafe {
             let cs = pio_parse_str(text.as_ptr(), fmt.as_ptr(), err.as_mut_ptr(), err.len());
             assert!(!cs.is_null(), "parse_str returned null");
-            let cn = pio_normalize(cs, err.as_mut_ptr(), err.len());
+            let cn = pio_normalize(cs, std::ptr::null(), err.as_mut_ptr(), err.len());
             assert!(!cn.is_null(), "normalize returned null");
 
             // Count via NULL out, then fill.
@@ -4426,7 +4445,7 @@ mpc.branch = [
         unsafe {
             let cs = pio_parse_str(text.as_ptr(), fmt.as_ptr(), err.as_mut_ptr(), err.len());
             assert!(!cs.is_null(), "parse_str returned null");
-            let cn = pio_normalize(cs, err.as_mut_ptr(), err.len());
+            let cn = pio_normalize(cs, std::ptr::null(), err.as_mut_ptr(), err.len());
             assert!(!cn.is_null(), "normalize returned null");
 
             let mut ids = vec![0i64; pio_n_buses(cn)];
@@ -4454,18 +4473,55 @@ mpc.branch = [
         }
     }
 
+    /// A zero filled `PioNormalizeOptions` with `struct_size` set, which is what
+    /// a caller writes and is defined to equal a NULL `opts`.
+    fn normalize_opts() -> PioNormalizeOptions {
+        PioNormalizeOptions {
+            struct_size: size_of::<PioNormalizeOptions>(),
+            clamp_angle_bounds: 0,
+            reserved: 0,
+            angle_bound_pad: 0.0,
+        }
+    }
+
+    /// `pio_normalize` with the given options, returning the handle or the
+    /// errbuf.
+    unsafe fn normalize_with(
+        net: *const PioNetwork,
+        opts: *const PioNormalizeOptions,
+    ) -> Result<*mut PioNetwork, String> {
+        let mut err = [0 as c_char; PIO_ERRBUF_MIN];
+        unsafe {
+            let cn = pio_normalize(net, opts, err.as_mut_ptr(), err.len());
+            if cn.is_null() {
+                return Err(CStr::from_ptr(err.as_ptr()).to_str().unwrap().to_owned());
+            }
+            Ok(cn)
+        }
+    }
+
+    /// The normalized handle's model JSON, freeing the handle.
+    unsafe fn normalized_json(
+        net: *const PioNetwork,
+        opts: *const PioNormalizeOptions,
+    ) -> Result<serde_json::Value, String> {
+        unsafe {
+            let cn = normalize_with(net, opts)?;
+            let v = network_json(cn);
+            pio_network_free(cn);
+            Ok(v)
+        }
+    }
+
     #[test]
-    fn normalize_with_options_clamps_angle_bounds_and_warns() {
+    fn normalize_options_clamp_angle_bounds_and_warn() {
         let c = angle_bounds_case();
         let mut err = [0 as c_char; PIO_ERRBUF_MIN];
         unsafe {
-            let cn = pio_normalize_with_options(
-                c,
-                1,
-                POWER_MODELS_ANGLE_BOUND_PAD,
-                err.as_mut_ptr(),
-                err.len(),
-            );
+            let mut opts = normalize_opts();
+            opts.clamp_angle_bounds = 1;
+            opts.angle_bound_pad = POWER_MODELS_ANGLE_BOUND_PAD;
+            let cn = pio_normalize(c, &opts, err.as_mut_ptr(), err.len());
             assert!(
                 !cn.is_null(),
                 "normalize with options returned null: {}",
@@ -4528,20 +4584,118 @@ mpc.branch = [
     }
 
     #[test]
-    fn normalize_with_options_rejects_invalid_angle_pad() {
+    fn normalize_options_reject_an_invalid_angle_pad() {
         let c = angle_bounds_case();
-        let mut err = [0 as c_char; PIO_ERRBUF_MIN];
         unsafe {
-            let cn = pio_normalize_with_options(
-                c,
-                1,
-                std::f64::consts::FRAC_PI_2,
-                err.as_mut_ptr(),
-                err.len(),
-            );
-            assert!(cn.is_null());
-            let msg = CStr::from_ptr(err.as_ptr()).to_str().unwrap();
+            let mut opts = normalize_opts();
+            opts.clamp_angle_bounds = 1;
+            opts.angle_bound_pad = std::f64::consts::FRAC_PI_2;
+            let msg = normalize_with(c, &opts).unwrap_err();
             assert!(msg.contains("angle_bound_pad"), "{msg}");
+            pio_network_free(c);
+        }
+    }
+
+    #[test]
+    fn null_and_zeroed_normalize_options_are_the_same_call() {
+        let c = angle_bounds_case();
+        unsafe {
+            let by_null = normalize_with(c, std::ptr::null()).unwrap();
+            let opts = normalize_opts();
+            let by_struct = normalize_with(c, &opts).unwrap();
+            assert_eq!(network_json(by_null), network_json(by_struct));
+            // The default pass repairs nothing, so a zero pad never reaches the
+            // clamp.
+            assert!(!warning_text(by_struct).contains("angle difference bounds clamped"));
+            pio_network_free(by_null);
+            pio_network_free(by_struct);
+            pio_network_free(c);
+        }
+    }
+
+    #[test]
+    fn a_zero_angle_pad_is_the_default_pad() {
+        let c = angle_bounds_case();
+        unsafe {
+            let mut zero = normalize_opts();
+            zero.clamp_angle_bounds = 1;
+            let by_zero = normalize_with(c, &zero).unwrap();
+
+            let mut spelled = normalize_opts();
+            spelled.clamp_angle_bounds = 1;
+            spelled.angle_bound_pad = POWER_MODELS_ANGLE_BOUND_PAD;
+            let by_value = normalize_with(c, &spelled).unwrap();
+
+            assert_eq!(network_json(by_zero), network_json(by_value));
+            assert!(warning_text(by_zero).contains("angle difference bounds clamped"));
+            pio_network_free(by_zero);
+            pio_network_free(by_value);
+            pio_network_free(c);
+        }
+    }
+
+    /// An options struct one field longer than this build's, as a caller
+    /// compiled against a later header would lay it out.
+    #[repr(C)]
+    struct WideNormalizeOptions {
+        head: PioNormalizeOptions,
+        future: f64,
+    }
+
+    #[test]
+    fn normalize_options_honor_the_struct_size_rules() {
+        let c = angle_bounds_case();
+        unsafe {
+            let plain = normalized_json(c, std::ptr::null()).unwrap();
+
+            // Shorter than sizeof: the fields it does not cover read as zero,
+            // which is what an older caller's struct means. The clamp is inside
+            // the declared prefix and the out of range pad is past it, so
+            // reading the caller's tail instead of zeroing it would be refused,
+            // and a zero pad is the documented default.
+            let mut clamped = normalize_opts();
+            clamped.clamp_angle_bounds = 1;
+            let defaulted = normalized_json(c, &clamped).unwrap();
+            assert_ne!(defaulted, plain, "the clamp must change this case");
+
+            let mut short = normalize_opts();
+            short.struct_size = size_of::<usize>() + 2 * size_of::<i32>();
+            short.clamp_angle_bounds = 1;
+            short.angle_bound_pad = -5.0;
+            assert_eq!(normalized_json(c, &short).unwrap(), defaulted);
+
+            // Longer than sizeof with a zero tail: a newer caller this build can
+            // still serve.
+            let mut wide = WideNormalizeOptions {
+                head: normalize_opts(),
+                future: 0.0,
+            };
+            wide.head.struct_size = size_of::<WideNormalizeOptions>();
+            let opts: *const PioNormalizeOptions = std::ptr::from_ref(&wide).cast();
+            assert_eq!(normalized_json(c, opts).unwrap(), plain);
+
+            // Longer with a nonzero tail: the caller asked for a field this build
+            // does not implement, so the call fails.
+            let mut set = WideNormalizeOptions {
+                head: normalize_opts(),
+                future: 1.0,
+            };
+            set.head.struct_size = size_of::<WideNormalizeOptions>();
+            let opts: *const PioNormalizeOptions = std::ptr::from_ref(&set).cast();
+            let err = normalize_with(c, opts).unwrap_err();
+            assert!(err.starts_with("BIND.CAPI.INVALID_OPTIONS: "), "got: {err}");
+
+            // A struct_size that does not even cover its own field.
+            let mut tiny = normalize_opts();
+            tiny.struct_size = 4;
+            let err = normalize_with(c, &tiny).unwrap_err();
+            assert!(err.starts_with("BIND.CAPI.INVALID_OPTIONS: "), "got: {err}");
+
+            // Reserved is padding made explicit and carries no value.
+            let mut reserved = normalize_opts();
+            reserved.reserved = 1;
+            let err = normalize_with(c, &reserved).unwrap_err();
+            assert!(err.starts_with("BIND.CAPI.INVALID_OPTIONS: "), "got: {err}");
             pio_network_free(c);
         }
     }

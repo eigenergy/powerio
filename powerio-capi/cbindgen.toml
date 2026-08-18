@@ -69,17 +69,17 @@ header = """
  *   the code, never on the prose: a message is not covered by any stability
  *   promise. pio_build_info reports diagnostic_namespaces, the first segments
  *   powerio emits, and error_categories, the coarse projection.
- * - Options structs (PioWriteOptions) are extensible, in the Linux syscall
- *   convention of openat2/clone3: size_t struct_size is the first field, the
- *   caller zero fills the struct and sets struct_size to sizeof, and NULL for
- *   the parameter means every default. The library reads only the first
- *   min(struct_size, its own sizeof) bytes, so a caller built against an older
- *   header is read correctly, and a newer caller is too as long as the fields
- *   past the library's own size are zero. A nonzero field beyond that point
- *   fails the call: the caller asked for something this build does not
- *   implement, and honoring the rest would drop the request in silence. Fields
- *   are appended, never reordered or removed; a field named reserved is
- *   padding made explicit and must be zero.
+ * - Options structs (PioNormalizeOptions, PioWriteOptions) are extensible, in
+ *   the Linux syscall convention of openat2/clone3: size_t struct_size is the
+ *   first field, the caller zero fills the struct and sets struct_size to
+ *   sizeof, and NULL for the parameter means every default. The library reads
+ *   only the first min(struct_size, its own sizeof) bytes, so a caller built
+ *   against an older header is read correctly, and a newer caller is too as
+ *   long as the fields past the library's own size are zero. A nonzero field
+ *   beyond that point fails the call: the caller asked for something this build
+ *   does not implement, and honoring the rest would drop the request in
+ *   silence. Fields are appended, never reordered or removed; a field named
+ *   reserved is padding made explicit and must be zero.
  * - Read warnings attach to the network handle; query them with pio_warnings,
  *   which returns the byte length needed (call with NULL/0 to size).
  * - Conversion findings come back through a char **out_diagnostics_json
