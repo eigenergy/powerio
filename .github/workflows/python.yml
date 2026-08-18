@@ -210,8 +210,9 @@ jobs:
     # release-binaries.yml stages each release as a draft a human publishes, so
     # the release event fires with a user actor (events from a workflow's
     # GITHUB_TOKEN are swallowed by the recursion guard). Manual dispatch is the
-    # recovery path for a missed event.
-    if: github.event_name == 'release' || github.event_name == 'workflow_dispatch'
+    # recovery path for a missed event. A prerelease still builds wheels and an
+    # sdist as run artifacts, but never uploads them to PyPI.
+    if: (github.event_name == 'release' && github.event.release.prerelease == false) || github.event_name == 'workflow_dispatch'
     needs: [ lint, test, test-gridfm, wheels, sdist ]
     runs-on: ubuntu-latest
     # Deployment protection (required reviewers, tag rules) lives on the pypi

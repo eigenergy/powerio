@@ -12,6 +12,9 @@ on:
 jobs:
   publish:
     name: publish to crates.io
+    # crates.io has no unpublish, so a prerelease must never reach it through
+    # the release event. Dispatch stays open as the deliberate recovery path.
+    if: github.event_name != 'release' || github.event.release.prerelease == false
     runs-on: ubuntu-latest
     # Deployment protection (required reviewers, branch/tag rules) lives on the
     # crates-io environment in the repo settings, not in this file.
