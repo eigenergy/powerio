@@ -5739,10 +5739,13 @@ mpc.branch = [
         let plain = unsafe { to_format_with(c, "matpower", std::ptr::null()) }.unwrap();
         unsafe {
             // Shorter than sizeof: the fields it does not cover read as zero,
-            // which is what an older caller's struct means.
+            // which is what an older caller's struct means. The mode is inside
+            // the declared prefix and the NaN is past it, so reading the
+            // caller's tail instead of zeroing it would trip the finite guard.
             let mut short = write_opts();
             short.struct_size = size_of::<usize>() + 2 * size_of::<i32>();
-            short.fill_c1 = 5.0;
+            short.missing_gen_cost_mode = PIO_MISSING_GEN_COST_FILL;
+            short.fill_c1 = f64::NAN;
             assert_eq!(to_format_with(c, "matpower", &short).unwrap(), plain);
 
             // Longer than sizeof with a zero tail: a newer caller this build
