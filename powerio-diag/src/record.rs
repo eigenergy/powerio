@@ -92,7 +92,7 @@ impl SourceRef {
 /// a producer whose namespace is outside powerio's ten omits it, and a reader
 /// that wants the truth decodes the code.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(from = "DiagnosticWire", into = "DiagnosticWire")]
+#[serde(from = "SerializedDiagnostic", into = "SerializedDiagnostic")]
 pub struct StructuredDiagnostic {
     pub code: DiagnosticCode,
     pub severity: DiagnosticSeverity,
@@ -180,7 +180,7 @@ impl StructuredDiagnostic {
 // contradicts.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-struct DiagnosticWire {
+struct SerializedDiagnostic {
     code: DiagnosticCode,
     severity: DiagnosticSeverity,
     /// The stage family, decoded from the first segment of `code`. Advisory:
@@ -204,7 +204,7 @@ struct DiagnosticWire {
     safe_to_ignore: Vec<String>,
 }
 
-impl From<StructuredDiagnostic> for DiagnosticWire {
+impl From<StructuredDiagnostic> for SerializedDiagnostic {
     fn from(d: StructuredDiagnostic) -> Self {
         let stage = d.stage();
         Self {
@@ -221,18 +221,18 @@ impl From<StructuredDiagnostic> for DiagnosticWire {
     }
 }
 
-impl From<DiagnosticWire> for StructuredDiagnostic {
-    fn from(w: DiagnosticWire) -> Self {
+impl From<SerializedDiagnostic> for StructuredDiagnostic {
+    fn from(s: SerializedDiagnostic) -> Self {
         // The incoming `stage` is dropped: the code is the one source.
         Self {
-            code: w.code,
-            severity: w.severity,
-            message: w.message,
-            element_path: w.element_path,
-            source_ref: w.source_ref,
-            details: w.details,
-            suggested_action: w.suggested_action,
-            safe_to_ignore: w.safe_to_ignore,
+            code: s.code,
+            severity: s.severity,
+            message: s.message,
+            element_path: s.element_path,
+            source_ref: s.source_ref,
+            details: s.details,
+            suggested_action: s.suggested_action,
+            safe_to_ignore: s.safe_to_ignore,
         }
     }
 }
@@ -248,7 +248,7 @@ impl schemars::JsonSchema for StructuredDiagnostic {
     }
 
     fn json_schema(generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
-        <DiagnosticWire as schemars::JsonSchema>::json_schema(generator)
+        <SerializedDiagnostic as schemars::JsonSchema>::json_schema(generator)
     }
 }
 
@@ -265,14 +265,14 @@ mod tests {
     }
 
     #[test]
-    fn the_wire_stage_comes_from_the_code() {
+    fn the_serialized_stage_comes_from_the_code() {
         let value = serde_json::to_value(sample()).unwrap();
         assert_eq!(value["stage"], serde_json::json!("emit"));
         assert_eq!(sample().stage(), Some(DiagnosticStage::Emit));
     }
 
     #[test]
-    fn a_namespace_outside_the_ten_omits_the_wire_stage() {
+    fn a_namespace_outside_the_ten_omits_the_serialized_stage() {
         let d = StructuredDiagnostic::new(
             "W.FEEDER.VOLTAGE_LOW",
             DiagnosticSeverity::Warning,
@@ -311,7 +311,7 @@ mod tests {
     }
 
     #[test]
-    fn the_optional_fields_stay_off_the_wire_when_empty() {
+    fn the_empty_optional_fields_are_not_serialized() {
         let value = serde_json::to_value(sample()).unwrap();
         let object = value.as_object().unwrap();
         for absent in [

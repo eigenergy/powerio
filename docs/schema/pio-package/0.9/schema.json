@@ -3989,7 +3989,7 @@
       "type": "object"
     },
     "StructuredDiagnostic": {
-      "description": "One structured finding.\n\nThe serialized shape of [`StructuredDiagnostic`]. `stage` is written from\nthe code and dropped on read, so the two can never disagree.",
+      "description": "One structured finding.",
       "properties": {
         "code": {
           "$ref": "#/$defs/DiagnosticCode"
