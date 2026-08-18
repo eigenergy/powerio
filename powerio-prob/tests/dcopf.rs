@@ -39,6 +39,34 @@ fn small_network() -> BalancedNetwork {
     network
 }
 
+/// A two bus MATPOWER case text, one generator at bus 1 per `(c2, c1)` row,
+/// written to a tempdir and read back through the MATPOWER reader.
+fn case_from_text(cost_rows: &[(f64, f64)]) -> BalancedNetwork {
+    use std::fmt::Write as _;
+    let mut gens = String::new();
+    let mut costs = String::new();
+    for &(c2, c1) in cost_rows {
+        gens.push_str("1 0 0 30 -30 1 100 1 100 10 0 0 0 0 0 0 0 0 0 0 0;\n");
+        writeln!(costs, "2 0 0 3 {c2} {c1} 0;").expect("write cost row");
+    }
+    let text = format!(
+        "function mpc = concave\n\
+         mpc.version = '2';\n\
+         mpc.baseMVA = 100;\n\
+         mpc.bus = [\n\
+         1 3 0 0 0 0 1 1 0 230 1 1.1 0.9;\n\
+         2 1 10 0 0 0 1 1 0 230 1 1.1 0.9;\n\
+         ];\n\
+         mpc.gen = [\n{gens}];\n\
+         mpc.branch = [\n1 2 0 0.2 0 0 0 0 0 0 1 -360 360;\n];\n\
+         mpc.gencost = [\n{costs}];\n"
+    );
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("concave.m");
+    std::fs::write(&path, text).expect("write case");
+    parse_matpower_file(&path).expect("parse case text")
+}
+
 fn two_island_network() -> BalancedNetwork {
     let mut network = BalancedNetwork::in_memory(
         "islands",
@@ -519,6 +547,49 @@ fn a_cost_rounding_artifact_reaches_neither_space() {
         problem.nodal_generator_data().q[0].to_bits(),
         0.0_f64.to_bits()
     );
+}
+
+/// #342: `BusCost` read a negative quadratic coefficient two ways, quadratic
+/// for a lone generator and flat inside a shared bus merge. The build now
+/// refuses the row before bus count can decide.
+#[test]
+fn a_concave_cost_row_is_refused_however_many_generators_share_the_bus() {
+    let lone = case_from_text(&[(-0.5, 5.0)]);
+    let error = build_dc_opf_instance(&IndexedNetwork::new(&lone), &DcOpfOptions::default())
+        .expect_err("a lone concave row");
+    assert!(
+        matches!(error, Error::ConcaveCost { gen_index: 0, c2 } if c2.to_bits() == (-0.5f64).to_bits()),
+        "{error}"
+    );
+    assert_eq!(error.code().code, "BUILD.INSTANCE.CONCAVE_COST");
+
+    let shared = case_from_text(&[(0.04, 20.0), (-0.5, 5.0)]);
+    let error = build_dc_opf_instance(&IndexedNetwork::new(&shared), &DcOpfOptions::default())
+        .expect_err("a concave row in a merge");
+    assert!(
+        matches!(error, Error::ConcaveCost { gen_index: 1, c2 } if c2.to_bits() == (-0.5f64).to_bits()),
+        "{error}"
+    );
+    assert_eq!(error.code().code, "BUILD.INSTANCE.CONCAVE_COST");
+}
+
+#[test]
+fn a_flat_row_and_a_convex_row_still_build() {
+    // `c2 == 0` keeps the deliberate flat arm: the flat rate is the bus
+    // marginal. Coefficients are per unit scaled, `c` by base.
+    let flat = case_from_text(&[(2.0, 1.0), (0.0, 3.0)]);
+    let problem =
+        build_dc_opf_instance(&IndexedNetwork::new(&flat), &DcOpfOptions::default()).expect("flat");
+    let nodal = problem.nodal_generator_data();
+    let bus = problem.generators.bus_of_gen[0];
+    assert_eq!(nodal.q[bus].to_bits(), 0.0_f64.to_bits());
+    assert_close(nodal.c[bus], 3.0 * 100.0);
+
+    // A convex row keeps its curve, `q = 2 c2` scaled by base².
+    let convex = case_from_text(&[(0.11, 5.0)]);
+    let problem = build_dc_opf_instance(&IndexedNetwork::new(&convex), &DcOpfOptions::default())
+        .expect("convex");
+    assert_close(problem.generators.q[0], 2.0 * 0.11 * 100.0 * 100.0);
 }
 
 #[test]

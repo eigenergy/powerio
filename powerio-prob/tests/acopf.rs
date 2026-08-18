@@ -279,6 +279,33 @@ fn missing_and_unsupported_costs_are_distinct() {
     ));
 }
 
+/// #342: the AC builder shares `quadratic_terms`, so a concave cost row is
+/// refused with the same code whether the generator is alone at its bus or not.
+#[test]
+fn a_concave_cost_row_is_refused() {
+    let mut lone = small_network();
+    lone.generators[0].cost = Some(GenCost::new(2, 0.0, 0.0, vec![-0.5, 5.0, 0.0]));
+    let error = build_ac_opf_instance(&IndexedNetwork::new(&lone), &AcOpfOptions::default())
+        .expect_err("a lone concave row");
+    assert!(
+        matches!(error, Error::ConcaveCost { gen_index: 0, c2 } if c2.to_bits() == (-0.5f64).to_bits()),
+        "{error}"
+    );
+    assert_eq!(error.code().code, "BUILD.INSTANCE.CONCAVE_COST");
+
+    let mut shared = small_network();
+    let mut concave = generator(10, -0.5, 5.0, 0.0);
+    concave.uid = Some("concave".to_owned());
+    shared.generators.push(concave);
+    let error = build_ac_opf_instance(&IndexedNetwork::new(&shared), &AcOpfOptions::default())
+        .expect_err("a concave row in a merge");
+    assert!(
+        matches!(error, Error::ConcaveCost { gen_index: 1, c2 } if c2.to_bits() == (-0.5f64).to_bits()),
+        "{error}"
+    );
+    assert_eq!(error.code().code, "BUILD.INSTANCE.CONCAVE_COST");
+}
+
 #[test]
 fn zero_impedance_skip_or_reject() {
     let mut net = small_network();
