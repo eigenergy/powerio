@@ -207,7 +207,7 @@ The symbol stays because PowerIO.jl gates twelve distribution call sites on reso
 PowerIO.jl is the one binding powerio owns, and its ABI 5 change is the honest estimate. Ten categories of edit:
 
 1. The findings channel, at seven call sites across two files. The fixed 64 KiB buffer, the truncation marker and the machinery around them were deleted rather than adapted, and the lines the binding hands back are now rendered from the records.
-2. The two options structs declared once each with a `sizeof` assertion. `PioWriteOptions` is `C_NULL` at four call sites until a Julia surface wants a cost policy; `PioNormalizeOptions` is built per call, which replaced a fifteen line helper with a struct literal.
+2. One options struct declared, with a `sizeof` assertion: `PioNormalizeOptions`, built per call, which replaced a fifteen line helper with a struct literal. `PioWriteOptions` is never declared — the four write call sites pass `C_NULL` for it until a Julia surface wants a cost policy.
 3. Re-keying the runtime lookup that gated the normalize path on `pio_normalize_with_options`. This is the one edit that fails in silence if it is missed: the lookup resolves false forever and the binding runs its own angle repair with nothing to report.
 4. `pio_parse_bytes` bound as one new `ccall` plus two wrapper methods.
 5. `pio_build_info` bound as one call, guarded to return nothing on an older library.
