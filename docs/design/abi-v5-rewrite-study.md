@@ -1,6 +1,6 @@
 # ABI 5 design study: a full rewrite of the C surface
 
-Written as a v5 proposal in August 2026. It **did not ship**, and no part of it is implemented. ABI 5 as released touches fourteen symbols and renames none; [the guide in the book](../src/abi-v5.md) is what a caller actually has to do.
+Written as a v5 proposal in August 2026. It **did not ship**, and no part of it is implemented. ABI 5 as released touches twenty-four symbols and renames none; [the guide in the book](../src/abi-v5.md) is what a caller actually has to do.
 
 Kept rather than deleted because two of its pieces argue for something a later breaking version will want. Rule 5's options struct is the only mechanism proposed here that stops the surface growing a symbol per option. Rule 4's conversion handle carries a file list, and that argument names a live defect: OpenDSS sidecars are dropped today, so a written `.dss` can name a coordinates file the user does not have.
 

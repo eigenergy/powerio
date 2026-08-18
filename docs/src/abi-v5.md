@@ -1,6 +1,6 @@
 # Migrating to C ABI 5
 
-ABI 5 ships with powerio 0.9.0. It touches twenty-two symbols and renames none, so a binding written against ABI 4 keeps compiling except at the nine signatures below. That is the danger: most of this migration is behavior and JSON shape, which the compiler cannot find for you.
+ABI 5 ships with powerio 0.9.0. It touches twenty-four symbols and renames none, so a binding written against ABI 4 keeps compiling except at the nine signatures below. That is the danger: most of this migration is behavior and JSON shape, which the compiler cannot find for you.
 
 `PIO_ABI_VERSION` is 5. Bindings gate on equality, so a binding built against 4 refuses a 0.9.0 library and a binding built against 5 refuses everything earlier. There is no partial compatibility to arrange.
 
@@ -25,6 +25,8 @@ ABI 5 ships with powerio 0.9.0. It touches twenty-two symbols and renames none, 
 | `pio_branch_charging` | behavior: same |
 | `pio_classify_str` | behavior: answers `model-json` for a bare model JSON document |
 | `pio_parse_str` | behavior: the `powerio-json` token is gone |
+| `pio_warnings` | behavior: each line reads `CODE: message` |
+| `pio_dist_warnings` | behavior: same |
 | `pio_acopf_from_network` | removed |
 | `pio_acopf_to_json` | removed |
 | `pio_acopf_instance_free` | removed |
@@ -32,6 +34,8 @@ ABI 5 ships with powerio 0.9.0. It touches twenty-two symbols and renames none, 
 | `pio_parse_bytes` | new |
 
 The `PioAcopfInstance` typedef goes with its three symbols. Nothing else in the header moved.
+
+Two changes reach further than any row above and are described rather than enumerated. The `CODE: ` prefix lands on every `errbuf` message the boundary writes, so every fallible symbol carries it; see [Diagnostic codes](#diagnostic-codes). Seven JSON documents changed shape while their symbols kept their signatures; see [The JSON documents](#the-json-documents-which-is-why-the-integer-moved).
 
 ## Conversion findings
 
@@ -57,7 +61,7 @@ A warning is a record with severity `warning`, which is why there is one channel
 
 **The trap.** You own the string whether or not you asked for it. A binding that passes a real pointer and then decides downstream it does not want the payload compiles, runs, and leaks on every conversion whose source format differs from its target — nothing about the call says the allocation happened. Decide at the call site: pass `NULL` to discard, or pass a pointer and free it unconditionally.
 
-`pio_warnings` and `pio_dist_warnings` keep their signatures and stay the plain text view for a caller with no JSON parser. They use the size-then-fill idiom and cannot truncate.
+`pio_warnings` and `pio_dist_warnings` keep their signatures and stay the plain text view for a caller with no JSON parser. They use the size-then-fill idiom and cannot truncate. What changed is the line: every one reads `CODE: message`, so a consumer that matched a warning by its whole text has to move to the code.
 
 ## Write options
 
@@ -171,7 +175,7 @@ PioNetwork *pio_parse_bytes(const uint8_t *bytes, size_t len, const char *format
 
 ## The JSON documents, which is why the integer moved
 
-Six documents changed shape while their symbols kept their signatures. This is the part that a compiler cannot catch, and on its own it is the reason ABI 5 exists: a binding built against 4 would pass the handshake and then read `null` for keys it mirrors.
+Seven documents changed shape while their symbols kept their signatures, and the Arrow schema metadata key moved with them. This is the part that a compiler cannot catch, and on its own it is the reason ABI 5 exists: a binding built against 4 would pass the handshake and then read `null` for keys it mirrors.
 
 | document | change |
 |---|---|
@@ -200,17 +204,21 @@ The symbol stays because PowerIO.jl gates twelve distribution call sites on reso
 
 ## What a real migration cost
 
-PowerIO.jl is the one binding powerio owns, and its ABI 5 change is the honest estimate. Six categories of edit:
+PowerIO.jl is the one binding powerio owns, and its ABI 5 change is the honest estimate. Ten categories of edit:
 
-1. The warnings channel, at seven call sites across two files. The fixed 64 KiB buffer, the truncation marker and the machinery around them were deleted rather than adapted.
-2. `pio_parse_bytes` bound as one new `ccall` plus two wrapper methods.
-3. `pio_build_info` bound as one call, guarded to return nothing on an older library.
-4. The ABI constant, one line.
-5. A sentinel spelling: the dense view's `reference_bus` reports `nothing` rather than the C `-1`.
-6. The removed `pio_acopf_*` symbols cost nothing, because nothing called them.
+1. The findings channel, at seven call sites across two files. The fixed 64 KiB buffer, the truncation marker and the machinery around them were deleted rather than adapted, and the lines the binding hands back are now rendered from the records.
+2. One options struct declared, with a `sizeof` assertion: `PioNormalizeOptions`, built per call, which replaced a fifteen line helper with a struct literal. `PioWriteOptions` is never declared — the four write call sites pass `C_NULL` for it until a Julia surface wants a cost policy.
+3. Re-keying the runtime lookup that gated the normalize path on `pio_normalize_with_options`. This is the one edit that fails in silence if it is missed: the lookup resolves false forever and the binding runs its own angle repair with nothing to report.
+4. `pio_parse_bytes` bound as one new `ccall` plus two wrapper methods.
+5. `pio_build_info` bound as one call, guarded to return nothing on an older library.
+6. The ABI constant, one line.
+7. A sentinel spelling: the dense view's `reference_bus` reports `nothing` rather than the C `-1`.
+8. The two Arrow cost table ids named in the table id map, which is what a binding does for any appended table.
+9. The retired `powerio-json` token: a name for the model JSON family, an arm routing a bare `.json` holding one through `from_json` the way a package already routes to the package reader, and a test holding the binding's family list to the closed set `pio_build_info` reports.
+10. The removed `pio_acopf_*` symbols cost nothing, because nothing called them.
 
 The star-lowered space required no binding edit at all, which is the point worth carrying away: the numbers changed and the code did not. A binding that sizes buffers from one extractor and fills them from another was already correct or already broken; ABI 5 decides which. Assert the closure and find out.
 
 ## What did not change
 
-Arrow table ids and column order. Every case format token except the three retired above. The opaque handle design. The panic guard on every entry point. `errbuf` and `errlen` last. `pio_abi_version`, `pio_version` and `pio_has_feature`.
+Every ABI 4 Arrow table id and its column order. Two cost tables append at 21 and 22 and `solver_bus` gains `area` and `zone` at the end of its columns, so a consumer addressing columns by name sees nothing shift. Every case format token except the three retired above. The opaque handle design. The panic guard on every entry point. `errbuf` and `errlen` last. `pio_abi_version`, `pio_version` and `pio_has_feature`.
