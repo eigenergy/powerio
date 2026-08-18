@@ -56,17 +56,17 @@
  *   the code, never on the prose: a message is not covered by any stability
  *   promise. pio_build_info reports diagnostic_namespaces, the first segments
  *   powerio emits, and error_categories, the coarse projection.
- * - Options structs (PioWriteOptions) are extensible, in the Linux syscall
- *   convention of openat2/clone3: size_t struct_size is the first field, the
- *   caller zero fills the struct and sets struct_size to sizeof, and NULL for
- *   the parameter means every default. The library reads only the first
- *   min(struct_size, its own sizeof) bytes, so a caller built against an older
- *   header is read correctly, and a newer caller is too as long as the fields
- *   past the library's own size are zero. A nonzero field beyond that point
- *   fails the call: the caller asked for something this build does not
- *   implement, and honoring the rest would drop the request in silence. Fields
- *   are appended, never reordered or removed; a field named reserved is
- *   padding made explicit and must be zero.
+ * - Options structs (PioNormalizeOptions, PioWriteOptions) are extensible, in
+ *   the Linux syscall convention of openat2/clone3: size_t struct_size is the
+ *   first field, the caller zero fills the struct and sets struct_size to
+ *   sizeof, and NULL for the parameter means every default. The library reads
+ *   only the first min(struct_size, its own sizeof) bytes, so a caller built
+ *   against an older header is read correctly, and a newer caller is too as
+ *   long as the fields past the library's own size are zero. A nonzero field
+ *   beyond that point fails the call: the caller asked for something this build
+ *   does not implement, and honoring the rest would drop the request in
+ *   silence. Fields are appended, never reordered or removed; a field named
+ *   reserved is padding made explicit and must be zero.
  * - Read warnings attach to the network handle; query them with pio_warnings,
  *   which returns the byte length needed (call with NULL/0 to size).
  * - Conversion findings come back through a char **out_diagnostics_json
@@ -344,6 +344,36 @@ typedef struct PioPackage PioPackage;
  */
 typedef struct PioScopfInstance PioScopfInstance;
 #endif
+
+/**
+ * Solver preparation repairs for [`pio_normalize`], in the extensible options
+ * struct convention this header states once. Zero the struct, set
+ * `struct_size` to `sizeof(PioNormalizeOptions)`, fill what you need; NULL is
+ * every default, which is the plain per unit pass with no repair.
+ */
+typedef struct {
+    /**
+     * `sizeof(PioNormalizeOptions)` as the caller's build sees it.
+     */
+    size_t struct_size;
+    /**
+     * Nonzero applies the same branch angle difference bound repair as
+     * PowerModels: `angmin <= -pi/2`, `angmax >= pi/2`, and zero/zero bounds
+     * are replaced by `[-angle_bound_pad, angle_bound_pad]`, and a repair that
+     * would invert the interval widens to that same window.
+     */
+    int32_t clamp_angle_bounds;
+    /**
+     * Named so the layout carries no implicit padding. Must be zero.
+     */
+    int32_t reserved;
+    /**
+     * The half width of the replacement window, in radians, which must be in
+     * `(0, pi/2)`. `0` means the default 1.0472, so a zero filled struct is
+     * every default; any other out of range value fails the call.
+     */
+    double angle_bound_pad;
+} PioNormalizeOptions;
 
 /**
  * Write-time policies for the four transmission write entry points, in the
@@ -625,7 +655,7 @@ size_t pio_warnings(const PioNetwork *net, char *warnbuf, size_t warnlen);
 
 /**
  * Free a network handle from [`pio_parse_file`], [`pio_parse_str`],
- * `pio_read_dir`, [`pio_normalize`], or [`pio_normalize_with_options`].
+ * `pio_read_dir`, or [`pio_normalize`].
  */
 void pio_network_free(PioNetwork *net);
 
@@ -636,27 +666,20 @@ void pio_network_free(PioNetwork *net);
  * the verb, while the `to_*` family re-encodes unchanged data. The result is
  * independent of `net`; free both with [`pio_network_free`]. Every extractor
  * and serializer works on it unchanged (the handle is per unit, not MW).
- * Returns `NULL` on error (no reference bus can be chosen, or a non-positive
- * base MVA) and writes the message into `errbuf`.
+ *
+ * `opts` turns on the solver preparation repairs; see [`PioNormalizeOptions`].
+ * NULL is every default and is the plain pass. The read warnings already on
+ * `net` and any repair warnings are attached to the returned handle and can be
+ * read with [`pio_warnings`].
+ *
+ * Returns `NULL` on error (no reference bus can be chosen, a non-positive base
+ * MVA, or an options struct this build cannot honor) and writes the message
+ * into `errbuf`.
  */
-PioNetwork *pio_normalize(const PioNetwork *net, char *errbuf, size_t errlen);
-
-/**
- * Normalize `net` into a NEW network handle, with opt in solver preparation
- * repairs.
- * `clamp_angle_bounds != 0` applies the same branch angle difference bound
- * repair as PowerModels (`angmin <= -pi/2`, `angmax >= pi/2`, and zero/zero
- * bounds replaced by `[-angle_bound_pad, angle_bound_pad]`). A repair that
- * would invert the interval widens to that same window. The default pad is
- * 1.0472 radians.
- * Existing read warnings and repair warnings are attached to the returned
- * handle and can be read with [`pio_warnings`].
- */
-PioNetwork *pio_normalize_with_options(const PioNetwork *net,
-                                       int32_t clamp_angle_bounds,
-                                       double angle_bound_pad,
-                                       char *errbuf,
-                                       size_t errlen);
+PioNetwork *pio_normalize(const PioNetwork *net,
+                          const PioNormalizeOptions *opts,
+                          char *errbuf,
+                          size_t errlen);
 
 size_t pio_n_buses(const PioNetwork *net);
 
