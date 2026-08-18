@@ -157,3 +157,50 @@ def test_bmopf_containing_data_model_string_routes_to_bmopf(tmp_path):
     p = tmp_path / "nested_marker.json"
     p.write_text(json.dumps(doc))
     assert dist.parse_file(p).source_format == "bmopf-json"
+
+
+def _split_case(tmp_path):
+    """A case split across a feeder directory and a shared sibling."""
+    root = tmp_path / "root"
+    (root / "feeder").mkdir(parents=True)
+    (root / "shared").mkdir()
+    (root / "feeder" / "f.dss").write_text(
+        "New Circuit.split basekv=12.47 pu=1 phases=3 bus1=a\n"
+        "Redirect ../shared/linecodes.dss\n"
+        "New Line.l1 bus1=a.1.2.3 bus2=b.1.2.3 phases=3 linecode=lc1"
+        " length=1 units=km\n"
+    )
+    (root / "shared" / "linecodes.dss").write_text(
+        "New Linecode.lc1 nphases=3 r1=0.1 x1=0.2\n"
+    )
+    return root
+
+
+def test_include_root_admits_a_shared_sibling_include(tmp_path):
+    root = _split_case(tmp_path)
+    deck = root / "feeder" / "f.dss"
+    confined = dist.parse_file(deck)
+    assert any("escapes the case directory" in w for w in confined.warnings)
+    widened = dist.parse_file(deck, include_root=root)
+    assert widened.warnings == []
+    assert widened.n_lines == 1
+
+
+def test_include_root_still_refuses_escapes_past_it(tmp_path):
+    root = _split_case(tmp_path)
+    (tmp_path / "secret.dss").write_text("New Line.leaked bus1=x bus2=y\n")
+    deck = root / "feeder" / "f.dss"
+    deck.write_text(
+        deck.read_text().replace("../shared/linecodes.dss", "../../secret.dss")
+    )
+    net = dist.parse_file(deck, include_root=root)
+    assert any("escapes the include root" in w for w in net.warnings)
+
+
+def test_case_file_outside_the_include_root_is_refused(tmp_path):
+    root = _split_case(tmp_path)
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    (elsewhere / "f.dss").write_text("New Circuit.out\n")
+    with pytest.raises(powerio.PowerIOError, match="outside the include root"):
+        dist.parse_file(elsewhere / "f.dss", include_root=root)

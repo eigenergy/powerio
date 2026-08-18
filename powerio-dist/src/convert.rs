@@ -396,6 +396,17 @@ pub fn parse_file(
     path: impl AsRef<std::path::Path>,
     from: Option<&str>,
 ) -> crate::Result<MulticonductorNetwork> {
+    parse_file_with_options(path, from, &crate::dss::DssReadOptions::default())
+}
+
+/// Like [`parse_file`], with explicit [`DssReadOptions`](crate::dss::DssReadOptions)
+/// for the `.dss` branch. The JSON formats have no includes, so the options
+/// only affect a dss parse.
+pub fn parse_file_with_options(
+    path: impl AsRef<std::path::Path>,
+    from: Option<&str>,
+    dss: &crate::dss::DssReadOptions,
+) -> crate::Result<MulticonductorNetwork> {
     let path = path.as_ref();
     // Dss goes through the path-based parser (Redirect/Compile resolve
     // against the file's directory); the JSON readers take text.
@@ -417,7 +428,7 @@ pub fn parse_file(
         }
     };
     match format {
-        DistTargetFormat::Dss => crate::dss::parse_dss_file(path),
+        DistTargetFormat::Dss => crate::dss::parse_dss_file_with_options(path, dss),
         DistTargetFormat::BmopfJson | DistTargetFormat::PmdJson => parse_text(&read(path)?, format),
     }
 }

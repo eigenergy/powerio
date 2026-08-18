@@ -156,3 +156,22 @@ def test_refusals_raise_the_exported_type(monkeypatch, tmp_path):
         sandbox.checked_path(
             str(root / "nope" / "out.json"), purpose="out_path", for_write=True
         )
+
+
+def test_admitting_root_names_the_containing_root(monkeypatch, tmp_path):
+    a = tmp_path / "a"
+    b = tmp_path / "b"
+    a.mkdir()
+    b.mkdir()
+    case = b / "case.dss"
+    case.write_text("New Circuit.c\n")
+    monkeypatch.setenv(
+        sandbox.ALLOWED_ROOTS_ENV, os.pathsep.join([str(a), str(b)])
+    )
+    assert sandbox.admitting_root(case) == b.resolve()
+    with pytest.raises(sandbox.PathNotAllowed):
+        sandbox.admitting_root(tmp_path / "elsewhere.dss")
+
+
+def test_admitting_root_is_none_when_the_policy_is_off(tmp_path):
+    assert sandbox.admitting_root(tmp_path / "case.dss") is None

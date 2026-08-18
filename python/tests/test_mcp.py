@@ -559,3 +559,51 @@ def test_compatibility_aliases_are_not_tools(tmp_path):
     assert server.compute_matrix("b", path=str(DATA / "case9.m"))["kind"] == "bprime"
     out_dir = tmp_path / "pypsa"
     assert server.write_pypsa_csv_folder(str(out_dir), path=str(DATA / "case9.m"))["files"]
+
+
+def _split_dss_case(tmp_path):
+    """A dss case split across a feeder directory and a shared sibling."""
+    root = tmp_path / "root"
+    (root / "feeder").mkdir(parents=True)
+    (root / "shared").mkdir()
+    (root / "feeder" / "f.dss").write_text(
+        "New Circuit.split basekv=12.47 pu=1 phases=3 bus1=a\n"
+        "Redirect ../shared/linecodes.dss\n"
+        "New Line.l1 bus1=a.1.2.3 bus2=b.1.2.3 phases=3 linecode=lc1"
+        " length=1 units=km\n"
+    )
+    (root / "shared" / "linecodes.dss").write_text(
+        "New Linecode.lc1 nphases=3 r1=0.1 x1=0.2\n"
+    )
+    return root
+
+
+def test_mcp_parse_widens_dss_includes_to_the_allowed_root(monkeypatch, tmp_path):
+    root = _split_dss_case(tmp_path)
+    monkeypatch.setenv("POWERIO_MCP_ALLOWED_ROOTS", str(root))
+
+    parsed = server.parse(path=str(root / "feeder" / "f.dss"))
+    assert parsed["domain"] == "distribution"
+    assert not any("INCLUDE_REFUSED" in w for w in parsed["warnings"]), parsed[
+        "warnings"
+    ]
+    assert parsed["summary"]["elements"]["lines"] == 1
+
+
+def test_mcp_parse_still_refuses_includes_outside_the_allowed_root(
+    monkeypatch, tmp_path
+):
+    root = _split_dss_case(tmp_path)
+    (tmp_path / "secret.dss").write_text("New Line.leaked bus1=x bus2=y\n")
+    deck = root / "feeder" / "f.dss"
+    deck.write_text(
+        deck.read_text().replace("../shared/linecodes.dss", "../../secret.dss")
+    )
+    monkeypatch.setenv("POWERIO_MCP_ALLOWED_ROOTS", str(root))
+
+    parsed = server.parse(path=str(deck))
+    assert any("escapes the include root" in w for w in parsed["warnings"]), parsed[
+        "warnings"
+    ]
+    doc = json.loads(parsed["json"])
+    assert "leaked" not in json.dumps(doc)

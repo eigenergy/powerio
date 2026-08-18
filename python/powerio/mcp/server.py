@@ -13,7 +13,10 @@ transport serializes either family through the ``.pio.json`` compiler package.
 
 The filesystem containment policy for ``path`` and ``out_path`` lives in
 ``powerio.mcp.sandbox``, which imports no MCP SDK; the private helpers here
-are wrappers over it.
+are wrappers over it. A dss parse passes the allowed root that admitted the
+path as the reader's include root, so includes may span sibling directories
+under that root; with no roots configured the reader's case directory default
+applies.
 """
 
 from __future__ import annotations
@@ -513,7 +516,10 @@ def _parse_transmission(
 
 
 def _parse_distribution(
-    path: Optional[str], content: Optional[str], format: Optional[str]
+    path: Optional[str],
+    content: Optional[str],
+    format: Optional[str],
+    include_root: Optional[str] = None,
 ) -> _Loaded:
     if content is not None and not format:
         status, domain, inferred = _json_class(content)
@@ -525,7 +531,7 @@ def _parse_distribution(
             raise ValueError("`from_format` is required for inline distribution content")
     try:
         if path is not None:
-            net = dist.parse_file(path, format)
+            net = dist.parse_file(path, format, include_root=include_root)
         else:
             # The block above settles `format` whenever `content` is set.
             net = dist.parse_str(
@@ -547,8 +553,14 @@ def _parse_any(
     options: Optional[Dict[str, Any]] = None,
 ) -> _Loaded:
     _one_input(path, content)
+    include_root: Optional[str] = None
     if path is not None:
         path = _local_path(path, purpose="path")
+        # A dss parse widens include confinement to the root that admitted the
+        # path, so the operator's configured containment is the one policy in
+        # force. Unconfined, the case directory default stands.
+        root = sandbox.admitting_root(Path(path))
+        include_root = str(root) if root is not None else None
     if _fmt(format) in _PACKAGE_JSON_FORMATS:
         if path is not None:
             try:
@@ -560,14 +572,14 @@ def _parse_any(
     if _is_gridfm_format(format):
         return _parse_transmission(path, content, format, options)
     if _is_dist_format(format):
-        return _parse_distribution(path, content, format)
+        return _parse_distribution(path, content, format, include_root)
     if path is not None:
         p = Path(path)
         suffix = p.suffix.lower()
         if format is None and p.is_dir() and _looks_like_gridfm_dir(path):
             return _parse_transmission(path, content, "gridfm", options)
         if format is None and suffix == ".dss":
-            return _parse_distribution(path, content, format)
+            return _parse_distribution(path, content, format, include_root)
         if format is None and suffix == ".json":
             try:
                 text = Path(path).read_text(encoding="utf-8")
@@ -577,7 +589,7 @@ def _parse_any(
                 return _load_package(text)
             domain, inferred = _format_from_json_class(*_json_path_class(path), path=path)
             if domain == "distribution":
-                return _parse_distribution(path, content, inferred)
+                return _parse_distribution(path, content, inferred, include_root)
             return _parse_transmission(path, content, inferred, options)
     else:
         text = _required(content, "content")

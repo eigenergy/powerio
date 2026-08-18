@@ -329,6 +329,23 @@ const MAX_TOTAL_INCLUDE_BYTES: usize = 64 << 20;
 /// handful of times.
 const MAX_OBJECT_PROPS: usize = 1 << 16;
 
+/// Which directory the include containment confines to, for diagnostic
+/// wording: the refusal names the boundary actually in force.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) enum IncludeBoundary {
+    CaseDirectory,
+    IncludeRoot,
+}
+
+impl IncludeBoundary {
+    fn noun(self) -> &'static str {
+        match self {
+            Self::CaseDirectory => "the case directory",
+            Self::IncludeRoot => "the include root",
+        }
+    }
+}
+
 struct Executor<'l, L: Loader> {
     raw: RawDss,
     loader: &'l mut L,
@@ -341,6 +358,9 @@ struct Executor<'l, L: Loader> {
     /// the in-memory loaders used by tests and string parsing (which installs
     /// a loader that reads nothing).
     root: Option<PathBuf>,
+    /// Names the confinement boundary in refusal messages: the case directory
+    /// by default, the caller's include root when one was widened onto `root`.
+    boundary: IncludeBoundary,
     /// Includes followed and script bytes they pulled in, against
     /// [`MAX_TOTAL_INCLUDES`] and [`MAX_TOTAL_INCLUDE_BYTES`]. `budget_spent`
     /// keeps the refusal to one message however many includes follow it.
@@ -684,7 +704,7 @@ impl<L: Loader> Executor<'_, L> {
     }
 
     /// Resolves an include argument, warning when it is refused for escaping
-    /// the case directory. `None` tells the caller to skip the include.
+    /// the confinement boundary. `None` tells the caller to skip the include.
     fn resolve_or_warn(
         &mut self,
         verb: &str,
@@ -694,20 +714,29 @@ impl<L: Loader> Executor<'_, L> {
         let resolved = self.resolve(file_arg);
         if resolved.is_none() {
             let message = ctx(format!(
-                "{verb} {file_arg}: refused; include escapes the case directory"
+                "{verb} {file_arg}: refused; include escapes {}",
+                self.boundary.noun()
             ));
             self.refuse_escape(message);
         }
         resolved
     }
 
-    /// Records an include refused for leaving the case directory: the warning
-    /// line and the `Error` finding that keeps the run from exiting 0.
+    /// Records an include refused for leaving the confinement boundary: the
+    /// warning line and the `Error` finding that keeps the run from exiting 0.
     fn refuse_escape(&mut self, message: String) {
+        let suggested_action = match self.boundary {
+            IncludeBoundary::CaseDirectory => {
+                "place included files inside the case directory, or merge them into the case"
+            }
+            IncludeBoundary::IncludeRoot => {
+                "place included files inside the include root, or merge them into the case"
+            }
+        };
         self.refuse(
             message,
             &crate::diagnostics::codes::READ_DSS_INCLUDE_REFUSED,
-            "place included files inside the case directory, or merge them into the case",
+            suggested_action,
         );
     }
 
@@ -1112,7 +1141,7 @@ fn collect_props_for(
 /// (includes confined to the case directory), or enforce your own containment
 /// inside the loader.
 pub fn parse_raw_with(text: &str, path: &str, loader: &mut impl Loader) -> RawDss {
-    run_executor(text, path, None, loader)
+    run_executor(text, path, None, IncludeBoundary::CaseDirectory, loader)
 }
 
 /// The case directory of `path` in canonical (symlink resolved) form, for
@@ -1132,22 +1161,33 @@ pub(crate) fn canonical_case_root(path: &Path) -> Option<PathBuf> {
 /// Reads an include for confined file parsing. The executor's lexical check
 /// already ran; this closes the symlink hole it cannot see: the path is
 /// canonicalized (resolving symlinks) and refused unless the real file still
-/// sits under the case directory's canonical root. The refusal surfaces
+/// sits under the confinement boundary's canonical root. The refusal surfaces
 /// through the executor's ordinary load-error warning.
 pub(crate) fn confined_fs_read(
     canonical_root: Option<&Path>,
+    boundary: IncludeBoundary,
     path: &Path,
 ) -> std::io::Result<String> {
     let Some(root) = canonical_root else {
-        return Err(Containment::refused(
-            "case directory cannot be resolved; includes are disabled",
-        ));
+        return Err(Containment::refused(match boundary {
+            IncludeBoundary::CaseDirectory => {
+                "case directory cannot be resolved; includes are disabled"
+            }
+            IncludeBoundary::IncludeRoot => {
+                "include root cannot be resolved; includes are disabled"
+            }
+        }));
     };
     let real = path.canonicalize()?;
     if !real.starts_with(root) {
-        return Err(Containment::refused(
-            "resolves outside the case directory through a symbolic link",
-        ));
+        return Err(Containment::refused(match boundary {
+            IncludeBoundary::CaseDirectory => {
+                "resolves outside the case directory through a symbolic link"
+            }
+            IncludeBoundary::IncludeRoot => {
+                "resolves outside the include root through a symbolic link"
+            }
+        }));
     }
     std::fs::read_to_string(&real)
 }
@@ -1191,10 +1231,35 @@ pub(crate) fn parse_raw_with_confined(text: &str, path: &str, loader: &mut impl 
             .map(Path::to_path_buf)
             .unwrap_or_default(),
     );
-    run_executor(text, path, Some(root), loader)
+    run_executor(
+        text,
+        path,
+        Some(root),
+        IncludeBoundary::CaseDirectory,
+        loader,
+    )
 }
 
-fn run_executor(text: &str, path: &str, root: Option<PathBuf>, loader: &mut impl Loader) -> RawDss {
+/// Like [`parse_raw_with_confined`], but confines includes to `include_root`
+/// instead of the case directory. The caller vouches that the case file sits
+/// under `include_root`; refusals name the include root as the boundary.
+pub(crate) fn parse_raw_confined_under(
+    text: &str,
+    path: &str,
+    include_root: &Path,
+    loader: &mut impl Loader,
+) -> RawDss {
+    let root = lexical_normalize(include_root);
+    run_executor(text, path, Some(root), IncludeBoundary::IncludeRoot, loader)
+}
+
+fn run_executor(
+    text: &str,
+    path: &str,
+    root: Option<PathBuf>,
+    boundary: IncludeBoundary,
+    loader: &mut impl Loader,
+) -> RawDss {
     let mut exec = Executor {
         raw: RawDss::default(),
         loader,
@@ -1205,6 +1270,7 @@ fn run_executor(text: &str, path: &str, root: Option<PathBuf>, loader: &mut impl
                 .unwrap_or_default(),
         ],
         root,
+        boundary,
         includes: 0,
         include_bytes: 0,
         budget_spent: false,
@@ -1229,7 +1295,7 @@ pub fn parse_raw_file(path: impl AsRef<Path>) -> Result<RawDss> {
     Ok(parse_raw_with_confined(
         &text,
         &path.display().to_string(),
-        &mut |p: &Path| confined_fs_read(root.as_deref(), p),
+        &mut |p: &Path| confined_fs_read(root.as_deref(), IncludeBoundary::CaseDirectory, p),
     ))
 }
 
@@ -1884,6 +1950,37 @@ mod tests {
                 "/case/dir/sub/codes.dss".to_string(),
                 "/case/dir/abs.dss".to_string(),
             ]
+        );
+    }
+
+    #[test]
+    fn a_widened_include_root_admits_siblings_and_refuses_escapes_past_it() {
+        use std::cell::RefCell;
+        let requested: RefCell<Vec<String>> = RefCell::new(Vec::new());
+        let mut loader = |p: &Path| {
+            requested.borrow_mut().push(p.display().to_string());
+            Ok(String::new())
+        };
+        // The shared sibling directory is inside the include root; a climb
+        // past the root is refused with the root named as the boundary.
+        let raw = parse_raw_confined_under(
+            "Redirect ../shared/codes.dss\nRedirect ../../outside.dss",
+            "/root/feeder/master.dss",
+            Path::new("/root"),
+            &mut loader,
+        );
+        assert_eq!(
+            *requested.borrow(),
+            vec!["/root/shared/codes.dss".to_string()]
+        );
+        assert_eq!(
+            raw.warnings
+                .iter()
+                .filter(|w| w.contains("escapes the include root"))
+                .count(),
+            1,
+            "warnings: {:?}",
+            raw.warnings
         );
     }
 }
