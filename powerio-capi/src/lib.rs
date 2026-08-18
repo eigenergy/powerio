@@ -1290,16 +1290,22 @@ pub unsafe extern "C" fn pio_to_format(
     errlen: usize,
 ) -> *mut c_char {
     unsafe {
-        finish_conversion(out_diagnostics_json, errbuf, errlen, || {
-            let c = network_ref(net).ok_or_else(|| null_handle("network handle"))?;
-            let target = target_format_from_c(to)?;
-            let options = write_options_from_c(opts)?;
-            let conv = c
-                .net
-                .to_format_with_options(target, &options)
-                .map_err(err_line)?;
-            Ok((conv.text, conv.diagnostics))
-        })
+        finish_conversion(
+            out_diagnostics_json,
+            errbuf,
+            errlen,
+            "panic while converting",
+            || {
+                let c = network_ref(net).ok_or_else(|| null_handle("network handle"))?;
+                let target = target_format_from_c(to)?;
+                let options = write_options_from_c(opts)?;
+                let conv = c
+                    .net
+                    .to_format_with_options(target, &options)
+                    .map_err(err_line)?;
+                Ok((conv.text, conv.diagnostics))
+            },
+        )
     }
 }
 
@@ -1333,16 +1339,17 @@ unsafe fn set_out_diagnostics(
     }
 }
 
-/// Finish a text-conversion entry point: run `f` (producing the converted text
-/// with its findings, or an error message) under the panic guard, publish the
-/// findings through `out_diagnostics_json`, and hand back the owned C
-/// string, or write the error and return NULL. The shared tail of
-/// [`pio_to_format`], [`pio_convert_file`], and [`pio_convert_str`], mirroring
-/// [`finish_network`].
+/// Finish a text entry point that publishes findings: run `f` (producing the
+/// text with its findings, or an error message) under the panic guard, publish
+/// the findings through `out_diagnostics_json`, and hand back the owned C
+/// string, or write the error (`panic_msg` if `f` panicked) and return NULL.
+/// The shared tail of [`pio_to_format`], [`pio_convert_file`],
+/// [`pio_convert_str`] and [`pio_geo_parse`], mirroring [`finish_network`].
 unsafe fn finish_conversion(
     out_diagnostics_json: *mut *mut c_char,
     errbuf: *mut c_char,
     errlen: usize,
+    panic_msg: &str,
     f: impl FnOnce() -> Result<(String, Vec<StructuredDiagnostic>), String>,
 ) -> *mut c_char {
     unsafe {
@@ -1365,7 +1372,7 @@ unsafe fn finish_conversion(
                 std::ptr::null_mut()
             }
             Err(_) => {
-                let msg = coded(&codes::BIND_CAPI_PANIC, "panic while converting");
+                let msg = coded(&codes::BIND_CAPI_PANIC, panic_msg);
                 copy_to_buf(errbuf, errlen, &msg);
                 std::ptr::null_mut()
             }
@@ -1395,20 +1402,26 @@ pub unsafe extern "C" fn pio_convert_file(
     errlen: usize,
 ) -> *mut c_char {
     unsafe {
-        finish_conversion(out_diagnostics_json, errbuf, errlen, || {
-            let path = required_cstr(path, "path")?;
-            let from = optional_cstr(from, "from")?;
-            let target = target_format_from_c(to)?;
-            let options = write_options_from_c(opts)?;
-            let conv = powerio::convert_file_with_options(
-                std::path::Path::new(path),
-                target,
-                from,
-                &options,
-            )
-            .map_err(err_line)?;
-            Ok((conv.text, conv.diagnostics))
-        })
+        finish_conversion(
+            out_diagnostics_json,
+            errbuf,
+            errlen,
+            "panic while converting",
+            || {
+                let path = required_cstr(path, "path")?;
+                let from = optional_cstr(from, "from")?;
+                let target = target_format_from_c(to)?;
+                let options = write_options_from_c(opts)?;
+                let conv = powerio::convert_file_with_options(
+                    std::path::Path::new(path),
+                    target,
+                    from,
+                    &options,
+                )
+                .map_err(err_line)?;
+                Ok((conv.text, conv.diagnostics))
+            },
+        )
     }
 }
 
@@ -1433,15 +1446,21 @@ pub unsafe extern "C" fn pio_convert_str(
     errlen: usize,
 ) -> *mut c_char {
     unsafe {
-        finish_conversion(out_diagnostics_json, errbuf, errlen, || {
-            let text = required_cstr(text, "text")?;
-            let from = required_cstr(from, "from")?;
-            let target = target_format_from_c(to)?;
-            let options = write_options_from_c(opts)?;
-            let conv = powerio::convert_str_with_options(text, target, from, &options)
-                .map_err(err_line)?;
-            Ok((conv.text, conv.diagnostics))
-        })
+        finish_conversion(
+            out_diagnostics_json,
+            errbuf,
+            errlen,
+            "panic while converting",
+            || {
+                let text = required_cstr(text, "text")?;
+                let from = required_cstr(from, "from")?;
+                let target = target_format_from_c(to)?;
+                let options = write_options_from_c(opts)?;
+                let conv = powerio::convert_str_with_options(text, target, from, &options)
+                    .map_err(err_line)?;
+                Ok((conv.text, conv.diagnostics))
+            },
+        )
     }
 }
 
@@ -2471,25 +2490,38 @@ pub unsafe extern "C" fn pio_package_lower_multiconductor_to_balanced(
 /// Normalize a tolerant geographic sidecar (headerless buscoords CSV, aliased
 /// CSV/JSON records, GeoJSON Point/LineString) to the canonical GeoJSON form.
 /// `name_hint` (a file name, nullable) picks CSV against JSON when given;
-/// otherwise the content is sniffed. The tolerant reader's notes are not
-/// returned here; parse through the Rust or Python surface to see them. Free
-/// the returned string with `pio_string_free`. Returns `NULL` on input that
-/// carries no usable coordinates and writes the message into `errbuf`.
+/// otherwise the content is sniffed. Free the returned string with
+/// [`pio_string_free`]. Returns `NULL` on input that carries no usable
+/// coordinates and writes the message into `errbuf`.
+///
+/// The tolerant reader's notes, one per record it read past, are published
+/// through `out_diagnostics_json` as one owned JSON array of diagnostic
+/// records (free it with [`pio_string_free`]), or NULL when the reader used
+/// every record. Pass NULL to discard them. `out_diagnostics_json` is written
+/// on every return path and is NULL whenever this returns NULL, so an error
+/// return leaves nothing to free.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_geo_parse(
     text: *const c_char,
     name_hint: *const c_char,
+    out_diagnostics_json: *mut *mut c_char,
     errbuf: *mut c_char,
     errlen: usize,
 ) -> *mut c_char {
     unsafe {
-        finish_string(errbuf, errlen, "panic while parsing geo layer", || {
-            let text = required_cstr(text, "text")?;
-            let name_hint = optional_cstr(name_hint, "name_hint")?;
-            let parsed =
-                powerio::GeoLayer::parse_bytes(text.as_bytes(), name_hint).map_err(err_line)?;
-            Ok(parsed.layer.to_geojson())
-        })
+        finish_conversion(
+            out_diagnostics_json,
+            errbuf,
+            errlen,
+            "panic while parsing geo layer",
+            || {
+                let text = required_cstr(text, "text")?;
+                let name_hint = optional_cstr(name_hint, "name_hint")?;
+                let parsed =
+                    powerio::GeoLayer::parse_bytes(text.as_bytes(), name_hint).map_err(err_line)?;
+                Ok((parsed.layer.to_geojson(), parsed.diagnostics))
+            },
+        )
     }
 }
 
@@ -2940,15 +2972,21 @@ pub unsafe extern "C" fn pio_dist_to_format(
     errlen: usize,
 ) -> *mut c_char {
     unsafe {
-        finish_conversion(out_diagnostics_json, errbuf, errlen, || {
-            let c = net.as_ref().ok_or_else(|| null_handle("network handle"))?;
-            let target = dist_target_from_c(to)?;
-            let conv = c.net.to_format(target);
-            Ok((
-                conv.text,
-                warn_dropped_sidecars(conv.diagnostics, &conv.sidecars),
-            ))
-        })
+        finish_conversion(
+            out_diagnostics_json,
+            errbuf,
+            errlen,
+            "panic while converting",
+            || {
+                let c = net.as_ref().ok_or_else(|| null_handle("network handle"))?;
+                let target = dist_target_from_c(to)?;
+                let conv = c.net.to_format(target);
+                Ok((
+                    conv.text,
+                    warn_dropped_sidecars(conv.diagnostics, &conv.sidecars),
+                ))
+            },
+        )
     }
 }
 
@@ -2972,17 +3010,23 @@ pub unsafe extern "C" fn pio_dist_convert_file(
     errlen: usize,
 ) -> *mut c_char {
     unsafe {
-        finish_conversion(out_diagnostics_json, errbuf, errlen, || {
-            let path = required_cstr(path, "path")?;
-            let from = optional_cstr(from, "from")?;
-            let to = dist_target_from_c(to)?;
-            let conv = powerio_dist::convert_file(std::path::Path::new(path), to, from)
-                .map_err(err_line)?;
-            Ok((
-                conv.text,
-                warn_dropped_sidecars(conv.diagnostics, &conv.sidecars),
-            ))
-        })
+        finish_conversion(
+            out_diagnostics_json,
+            errbuf,
+            errlen,
+            "panic while converting",
+            || {
+                let path = required_cstr(path, "path")?;
+                let from = optional_cstr(from, "from")?;
+                let to = dist_target_from_c(to)?;
+                let conv = powerio_dist::convert_file(std::path::Path::new(path), to, from)
+                    .map_err(err_line)?;
+                Ok((
+                    conv.text,
+                    warn_dropped_sidecars(conv.diagnostics, &conv.sidecars),
+                ))
+            },
+        )
     }
 }
 
@@ -3007,16 +3051,22 @@ pub unsafe extern "C" fn pio_dist_convert_str(
     errlen: usize,
 ) -> *mut c_char {
     unsafe {
-        finish_conversion(out_diagnostics_json, errbuf, errlen, || {
-            let text = required_cstr(text, "text")?;
-            let to = dist_target_from_c(to)?;
-            let from = required_cstr(from, "from")?;
-            let conv = powerio_dist::convert_str(text, to, from).map_err(err_line)?;
-            Ok((
-                conv.text,
-                warn_dropped_sidecars(conv.diagnostics, &conv.sidecars),
-            ))
-        })
+        finish_conversion(
+            out_diagnostics_json,
+            errbuf,
+            errlen,
+            "panic while converting",
+            || {
+                let text = required_cstr(text, "text")?;
+                let to = dist_target_from_c(to)?;
+                let from = required_cstr(from, "from")?;
+                let conv = powerio_dist::convert_str(text, to, from).map_err(err_line)?;
+                Ok((
+                    conv.text,
+                    warn_dropped_sidecars(conv.diagnostics, &conv.sidecars),
+                ))
+            },
+        )
     }
 }
 
@@ -3810,7 +3860,7 @@ mod tests {
             "PioPackage *pio_package_materialize_study_commit(const PioPackage *pkg, int64_t index, char *errbuf, size_t errlen);",
             "char *pio_package_multiconductor_to_balanced_preflight_json(const PioPackage *pkg, double base_mva, char *errbuf, size_t errlen);",
             "PioPackage *pio_package_lower_multiconductor_to_balanced(const PioPackage *pkg, double base_mva, char *errbuf, size_t errlen);",
-            "char *pio_geo_parse(const char *text, const char *name_hint, char *errbuf, size_t errlen);",
+            "char *pio_geo_parse(const char *text, const char *name_hint, char **out_diagnostics_json, char *errbuf, size_t errlen);",
             "char *pio_geo_extract(const PioNetwork *net, char *errbuf, size_t errlen);",
             "PioNetwork *pio_geo_apply(const PioNetwork *net, const char *layer, const char *name_hint, char *errbuf, size_t errlen);",
             "PioScopfInstance *pio_scopf_parse_str(const char *text, const char *from, char *errbuf, size_t errlen);",
@@ -5221,9 +5271,11 @@ mpc.branch = [
             let empty = pio_geo_extract(net, err.as_mut_ptr(), err.len());
             assert!(empty.is_null());
 
+            let mut diagnostics: *mut c_char = std::ptr::null_mut();
             let canonical = pio_geo_parse(
                 coords.as_ptr(),
                 std::ptr::null(),
+                &mut diagnostics,
                 err.as_mut_ptr(),
                 err.len(),
             );
@@ -5232,6 +5284,8 @@ mpc.branch = [
                 "pio_geo_parse failed: {}",
                 CStr::from_ptr(err.as_ptr()).to_str().unwrap()
             );
+            // Every row was usable, so the reader has nothing to report.
+            assert!(diagnostics.is_null());
             let v: serde_json::Value =
                 serde_json::from_str(CStr::from_ptr(canonical).to_str().unwrap()).unwrap();
             assert_eq!(v["type"], "FeatureCollection");
@@ -5268,11 +5322,59 @@ mpc.branch = [
             let out = pio_geo_parse(
                 garbage.as_ptr(),
                 std::ptr::null(),
+                &mut diagnostics,
                 err.as_mut_ptr(),
                 err.len(),
             );
             assert!(out.is_null());
+            assert!(
+                diagnostics.is_null(),
+                "an error return leaves nothing to free"
+            );
             assert!(!CStr::from_ptr(err.as_ptr()).to_bytes().is_empty());
+        }
+    }
+
+    #[test]
+    fn geo_parse_publishes_the_readers_notes() {
+        // A headerless buscoords file whose second row has no usable
+        // coordinates: the layer still reads, and the skip is a finding.
+        let coords = CString::new("1, -89.6, 40.6\n2, west, north\n").unwrap();
+        let mut err = [0 as c_char; PIO_ERRBUF_MIN];
+        unsafe {
+            let mut diagnostics: *mut c_char = std::ptr::null_mut();
+            let canonical = pio_geo_parse(
+                coords.as_ptr(),
+                std::ptr::null(),
+                &mut diagnostics,
+                err.as_mut_ptr(),
+                err.len(),
+            );
+            assert!(
+                !canonical.is_null(),
+                "pio_geo_parse failed: {}",
+                CStr::from_ptr(err.as_ptr()).to_str().unwrap()
+            );
+            assert!(!diagnostics.is_null(), "the skipped row is a reader note");
+            let records: serde_json::Value =
+                serde_json::from_str(CStr::from_ptr(diagnostics).to_str().unwrap()).unwrap();
+            let records = records.as_array().unwrap();
+            assert_eq!(records.len(), 1);
+            assert_eq!(records[0]["code"], "READ.GEO.SOURCE_MALFORMED");
+            assert_eq!(records[0]["severity"], "warning");
+            pio_string_free(diagnostics);
+            pio_string_free(canonical);
+
+            // NULL for the parameter itself discards the findings.
+            let discarded = pio_geo_parse(
+                coords.as_ptr(),
+                std::ptr::null(),
+                std::ptr::null_mut(),
+                err.as_mut_ptr(),
+                err.len(),
+            );
+            assert!(!discarded.is_null());
+            pio_string_free(discarded);
         }
     }
 

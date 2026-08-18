@@ -1183,12 +1183,22 @@ PioPackage *pio_package_lower_multiconductor_to_balanced(const PioPackage *pkg,
  * Normalize a tolerant geographic sidecar (headerless buscoords CSV, aliased
  * CSV/JSON records, GeoJSON Point/LineString) to the canonical GeoJSON form.
  * `name_hint` (a file name, nullable) picks CSV against JSON when given;
- * otherwise the content is sniffed. The tolerant reader's notes are not
- * returned here; parse through the Rust or Python surface to see them. Free
- * the returned string with `pio_string_free`. Returns `NULL` on input that
- * carries no usable coordinates and writes the message into `errbuf`.
+ * otherwise the content is sniffed. Free the returned string with
+ * [`pio_string_free`]. Returns `NULL` on input that carries no usable
+ * coordinates and writes the message into `errbuf`.
+ *
+ * The tolerant reader's notes, one per record it read past, are published
+ * through `out_diagnostics_json` as one owned JSON array of diagnostic
+ * records (free it with [`pio_string_free`]), or NULL when the reader used
+ * every record. Pass NULL to discard them. `out_diagnostics_json` is written
+ * on every return path and is NULL whenever this returns NULL, so an error
+ * return leaves nothing to free.
  */
-char *pio_geo_parse(const char *text, const char *name_hint, char *errbuf, size_t errlen);
+char *pio_geo_parse(const char *text,
+                    const char *name_hint,
+                    char **out_diagnostics_json,
+                    char *errbuf,
+                    size_t errlen);
 
 /**
  * Extract a network's coordinates as the canonical GeoJSON layer: one point

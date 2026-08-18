@@ -17,6 +17,7 @@ ABI 5 ships with powerio 0.9.0. It touches seventeen symbols and renames none, s
 | `pio_dist_convert_str` | signature: same |
 | `pio_normalize` | signature: `const PioNormalizeOptions *opts` |
 | `pio_normalize_with_options` | removed, folded into `pio_normalize` |
+| `pio_geo_parse` | signature: the reader's notes return through `char **out_diagnostics_json` |
 | `pio_n_buses` | behavior: reports the star-lowered space |
 | `pio_bus_ids` | behavior: same |
 | `pio_n_branches` | behavior: same |
@@ -95,6 +96,21 @@ PioNetwork *n = pio_normalize(net, &opts, errbuf, sizeof errbuf);
 `angle_bound_pad` must be in `(0, pi/2)` when the clamp is on, so `0` was never a value you could pass. It means the default 1.0472 radians, which is what makes a zero filled struct the default options with no sentinel to encode. Any other out of range pad still fails with the reader's own `InvalidNormalizeOption`.
 
 A caller that passed `pio_normalize_with_options` through a runtime symbol lookup has to re-key that lookup: the symbol resolves to nothing now, and a lookup that silently falls back to its own repair will do that repair instead of this one with no error to show for it.
+
+## Geo layer notes
+
+`pio_geo_parse` reads a tolerant sidecar and skips what it cannot use: a buscoords row with too few columns, a Point feature with unusable coordinates, a route with no way to name its branch. Through ABI 4 those skips were dropped on the floor and the header said so, which left a C caller unable to tell a layer that read whole from one that read half.
+
+```c
+char *diagnostics = NULL;
+char *canonical = pio_geo_parse(text, "buscoords.csv", &diagnostics, errbuf, sizeof errbuf);
+if (diagnostics) {
+    /* the same record shape the conversion channel returns; the string is yours */
+    pio_string_free(diagnostics);
+}
+```
+
+Same discipline as the conversion channel: written before the call does any work, `NULL` when the reader used every record, `NULL` for the parameter itself discards, and an error return leaves it `NULL` so there is nothing to free. `pio_geo_apply` is unchanged; it already appends the reader's notes to the handle it returns, where `pio_warnings` reads them.
 
 ## Diagnostic codes
 
