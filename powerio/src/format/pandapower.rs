@@ -983,6 +983,7 @@ fn warn_pandapower_branch_losses(net: &BalancedNetwork, warnings: &mut Diagnosti
         ));
     }
     warn_extra_branch_rating_sets(&F, "pandapower JSON", net, warnings);
+    super::warn_dropped_areas(&F, "pandapower JSON", net, warnings);
     let branch_solutions = net.branches.iter().filter(|b| b.solution.is_some()).count();
     if branch_solutions > 0 {
         warnings.push(&F.field_dropped, format!(

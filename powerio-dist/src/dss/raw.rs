@@ -432,6 +432,7 @@ impl<L: Loader> Executor<'_, L> {
             Some("redirect") => self.do_redirect(scan, false, ctx),
             Some("compile") => self.do_redirect(scan, true, ctx),
             Some("buscoords") => self.do_buscoords(scan, ctx),
+            Some("setbusxy") => self.do_setbusxy(scan, ctx),
             Some("var") => self.do_var(scan),
             Some("clear" | "clearall") => self.raw.clear(),
             Some("//") => {}
@@ -863,6 +864,44 @@ impl<L: Loader> Executor<'_, L> {
                 }
             }
             Err(e) => self.warn_load_error("buscoords", &path, &e, ctx),
+        }
+    }
+
+    /// `SetBusXY bus=name x=.. y=..`, named or positional. The inline twin of
+    /// `Buscoords`: it states one bus's coordinates in the deck itself, so it
+    /// is the form that survives a single-document round trip.
+    fn do_setbusxy(&mut self, scan: &mut Scanner, ctx: &dyn Fn(String) -> String) {
+        let mut bus: Option<String> = None;
+        let mut x: Option<f64> = None;
+        let mut y: Option<f64> = None;
+        let mut position = 0usize;
+        while let Some(p) = scan.next_param() {
+            let slot = match p.name.as_deref().map(str::to_ascii_lowercase).as_deref() {
+                Some("bus") => 0,
+                Some("x") => 1,
+                Some("y") => 2,
+                Some(_) => continue,
+                None => {
+                    let slot = position;
+                    position += 1;
+                    slot
+                }
+            };
+            match slot {
+                0 => bus = Some(p.value.text),
+                1 => x = p.value.to_f64(None).ok(),
+                2 => y = p.value.to_f64(None).ok(),
+                _ => {}
+            }
+        }
+        match (bus, x, y) {
+            (Some(bus), Some(x), Some(y)) if !bus.is_empty() => {
+                self.raw.buscoords.push(BusCoord { bus, x, y });
+            }
+            _ => self.raw.warn(
+                &C::PARSE_DSS_SOURCE_MALFORMED,
+                ctx("setbusxy needs a bus and numeric x and y".into()),
+            ),
         }
     }
 

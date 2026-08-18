@@ -6,8 +6,8 @@
 //! demand and shunts onto the bus row; the hub keeps them first-class).
 
 use crate::network::{
-    Branch, Bus, BusId, BusType, Extras, GEN_EXTRA_KEYS, GenCaps, GenCost, Generator, Hvdc, Load,
-    Shunt, Storage,
+    Area, Branch, Bus, BusId, BusType, Extras, GEN_EXTRA_KEYS, GenCaps, GenCost, Generator, Hvdc,
+    Load, Shunt, Storage,
 };
 use crate::{Error, Result};
 
@@ -326,5 +326,18 @@ pub(super) fn hvdc_row(row: &[f64], i: usize) -> Result<Hvdc> {
         cost: None,
         uid: None,
         extras: Extras::new(),
+    })
+}
+
+/// `mpc.areas` row: `[area, refbus]`. The table is legacy in MATPOWER itself
+/// but documented, and it is the only place this format can state an area, so
+/// the two columns carry the area number and its reference bus. A `refbus` of
+/// 0 reads as no reference bus, mirroring what the writer emits for one.
+pub(super) fn area_row(row: &[f64], i: usize) -> Result<Area> {
+    require("areas", row, i, 2)?;
+    let refbus = row[1] as usize;
+    Ok(Area {
+        slack_bus: (refbus > 0).then_some(BusId(refbus)),
+        ..Area::new(row[0] as usize)
     })
 }

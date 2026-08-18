@@ -133,6 +133,7 @@ fn build_case<'a>(name: &str, get: impl Fn(&str) -> Option<&'a str>) -> Result<B
 
     let generators = parse_gens(&get)?;
     let storage = parse_optional(&get, "storage", rows::storage_row)?;
+    let areas = parse_optional(&get, "areas", rows::area_row)?;
     let mut hvdc = parse_optional(&get, "dcline", rows::hvdc_row)?;
     attach_dcline_costs(&get, &mut hvdc)?;
 
@@ -162,7 +163,7 @@ fn build_case<'a>(name: &str, get: impl Fn(&str) -> Option<&'a str>) -> Result<B
         storage,
         hvdc,
         transformers_3w: Vec::new(),
-        areas: Vec::new(),
+        areas,
         solver: None,
         source_format: SourceFormat::Matpower,
         source: None,

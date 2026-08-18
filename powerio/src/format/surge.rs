@@ -93,6 +93,7 @@ pub fn write_surge_json(net: &BalancedNetwork) -> Conversion {
     root.insert("network".into(), Value::Object(network));
 
     warn_extra_branch_rating_sets(&F, FMT, net, &mut warnings);
+    super::warn_dropped_areas(&F, FMT, net, &mut warnings);
     finish(&F, root, warnings)
 }
 

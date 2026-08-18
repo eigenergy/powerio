@@ -11,7 +11,7 @@ use powerio::network::BalancedNetwork;
 use powerio::parse_file;
 
 mod common;
-use common::{activsg2000_fetched as fetched, ckt, powerworld_vendored as vendored};
+use common::{activsg2000_fetched as fetched, branch_keys, powerworld_vendored as vendored};
 
 fn read_pwb(path: &Path) -> BalancedNetwork {
     let bytes = std::fs::read(path).unwrap();
@@ -152,12 +152,11 @@ fn activsg200_pwb_matches_its_aux_sibling() {
     // Branches: identity (including the default circuit on the one record
     // that omits it), impedances, ratings, taps, device kind.
     let mut aux_by_id: BTreeMap<(usize, usize, String), &powerio::Branch> = BTreeMap::default();
-    for b in &aux.branches {
-        aux_by_id.insert((b.from.0, b.to.0, ckt(b)), b);
+    for (key, b) in branch_keys(&aux.branches).into_iter().zip(&aux.branches) {
+        aux_by_id.insert(key, b);
     }
     let mut transformers = 0;
-    for p in &pwb.branches {
-        let key = (p.from.0, p.to.0, ckt(p));
+    for (key, p) in branch_keys(&pwb.branches).into_iter().zip(&pwb.branches) {
         let a = aux_by_id
             .remove(&key)
             .unwrap_or_else(|| panic!("{key:?} not in aux"));
@@ -359,12 +358,11 @@ fn texas2000_june2016_pwb_matches_its_aux_sibling() {
     }
 
     let mut aux_by_id: BTreeMap<(usize, usize, String), &powerio::Branch> = BTreeMap::default();
-    for b in &aux.branches {
-        aux_by_id.insert((b.from.0, b.to.0, ckt(b)), b);
+    for (key, b) in branch_keys(&aux.branches).into_iter().zip(&aux.branches) {
+        aux_by_id.insert(key, b);
     }
     let mut transformers = 0;
-    for p in &pwb.branches {
-        let key = (p.from.0, p.to.0, ckt(p));
+    for (key, p) in branch_keys(&pwb.branches).into_iter().zip(&pwb.branches) {
         let a = aux_by_id
             .remove(&key)
             .unwrap_or_else(|| panic!("{key:?} not in aux"));
@@ -886,11 +884,10 @@ fn activsg2000_current_era_pwb_matches_its_aux_sibling() {
         );
     }
     let mut aux_by_id: BTreeMap<(usize, usize, String), &powerio::Branch> = BTreeMap::default();
-    for b in &aux.branches {
-        aux_by_id.insert((b.from.0, b.to.0, ckt(b)), b);
+    for (key, b) in branch_keys(&aux.branches).into_iter().zip(&aux.branches) {
+        aux_by_id.insert(key, b);
     }
-    for p in &pwb.branches {
-        let key = (p.from.0, p.to.0, ckt(p));
+    for (key, p) in branch_keys(&pwb.branches).into_iter().zip(&pwb.branches) {
         let a = aux_by_id
             .remove(&key)
             .unwrap_or_else(|| panic!("{key:?} not in aux"));
@@ -1014,11 +1011,10 @@ fn activsg500_pwb_matches_its_aux_sibling() {
         );
     }
     let mut aux_by_id: BTreeMap<(usize, usize, String), &powerio::Branch> = BTreeMap::default();
-    for b in &aux.branches {
-        aux_by_id.insert((b.from.0, b.to.0, ckt(b)), b);
+    for (key, b) in branch_keys(&aux.branches).into_iter().zip(&aux.branches) {
+        aux_by_id.insert(key, b);
     }
-    for p in &pwb.branches {
-        let key = (p.from.0, p.to.0, ckt(p));
+    for (key, p) in branch_keys(&pwb.branches).into_iter().zip(&pwb.branches) {
         let a = aux_by_id
             .remove(&key)
             .unwrap_or_else(|| panic!("{key:?} not in aux"));
@@ -1139,11 +1135,10 @@ fn hawaii40_pwb_matches_its_aux_sibling() {
         );
     }
     let mut aux_by_id: BTreeMap<(usize, usize, String), &powerio::Branch> = BTreeMap::default();
-    for b in &aux.branches {
-        aux_by_id.insert((b.from.0, b.to.0, ckt(b)), b);
+    for (key, b) in branch_keys(&aux.branches).into_iter().zip(&aux.branches) {
+        aux_by_id.insert(key, b);
     }
-    for p in &pwb.branches {
-        let key = (p.from.0, p.to.0, ckt(p));
+    for (key, p) in branch_keys(&pwb.branches).into_iter().zip(&pwb.branches) {
         let a = aux_by_id
             .remove(&key)
             .unwrap_or_else(|| panic!("{key:?} not in aux"));
@@ -1382,11 +1377,10 @@ fn texas7k_pwb_matches_its_aux_and_matpower_siblings() {
 
     // Branches against the aux by full identity (endpoints + circuit).
     let mut aux_by_id: BTreeMap<(usize, usize, String), &powerio::Branch> = BTreeMap::default();
-    for b in &aux.branches {
-        aux_by_id.insert((b.from.0, b.to.0, ckt(b)), b);
+    for (key, b) in branch_keys(&aux.branches).into_iter().zip(&aux.branches) {
+        aux_by_id.insert(key, b);
     }
-    for p in &pwb.branches {
-        let key = (p.from.0, p.to.0, ckt(p));
+    for (key, p) in branch_keys(&pwb.branches).into_iter().zip(&pwb.branches) {
         let a = aux_by_id
             .remove(&key)
             .unwrap_or_else(|| panic!("{key:?} not in aux"));
@@ -1551,11 +1545,10 @@ fn texas7k_resaves_match_the_2022_aux() {
             "{label}"
         );
         let mut aux_by_id: BTreeMap<(usize, usize, String), &powerio::Branch> = BTreeMap::default();
-        for b in &aux.branches {
-            aux_by_id.insert((b.from.0, b.to.0, ckt(b)), b);
+        for (key, b) in branch_keys(&aux.branches).into_iter().zip(&aux.branches) {
+            aux_by_id.insert(key, b);
         }
-        for p in &pwb.branches {
-            let key = (p.from.0, p.to.0, ckt(p));
+        for (key, p) in branch_keys(&pwb.branches).into_iter().zip(&pwb.branches) {
             let a = aux_by_id
                 .remove(&key)
                 .unwrap_or_else(|| panic!("{label}: {key:?} not in aux"));
