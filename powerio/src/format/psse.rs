@@ -1675,15 +1675,20 @@ fn num_at(f: &[String], i: usize, default: f64) -> Result<f64> {
         Some(s) => s.parse().map_err(|_| bad_field(i, s)),
     }
 }
-/// Field `i` as a bus id (parsed as f64 then truncated, the PSS/E convention).
+/// Field `i` as a bus id (parsed as f64 then truncated, the PSS/E convention);
+/// the range policy is [`crate::format::id_from_f64`].
 fn id_at(f: &[String], i: usize, default: usize) -> Result<usize> {
     match f.get(i).map(String::as_str) {
         None | Some("") => Ok(default),
-        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-        Some(s) => s
-            .parse::<f64>()
-            .map(|v| v as usize)
-            .map_err(|_| bad_field(i, s)),
+        Some(s) => {
+            let v: f64 = s.parse().map_err(|_| bad_field(i, s))?;
+            crate::format::id_from_f64(v, format_args!("field {i}")).map_err(|message| {
+                Error::FormatRead {
+                    format: FMT,
+                    message,
+                }
+            })
+        }
     }
 }
 /// Field `i` as a status flag (nonzero = in service).
@@ -1730,7 +1735,12 @@ fn read_bus(f: &[String]) -> Result<Bus> {
         .ok_or_else(|| Error::FormatRead {
             format: FMT,
             message: "bus record missing numeric id (field I)".into(),
-        })? as usize;
+        })?;
+    let id =
+        crate::format::id_from_f64(id, "bus field I").map_err(|message| Error::FormatRead {
+            format: FMT,
+            message,
+        })?;
     let name = f
         .get(1)
         .filter(|n| !n.is_empty())
@@ -4650,10 +4660,10 @@ Q
 
     #[test]
     fn a_bus_id_past_the_int64_ceiling_is_refused() {
-        // The id column is read as f64 and cast, and the cast saturates: two
-        // distinct ids above the ceiling both land on usize::MAX-ish values
-        // that the C ABI reports as the same int64. Refuse them at the reader
-        // boundary instead of collapsing two buses onto one reported id.
+        // The id column is read as f64, and an unchecked cast would saturate:
+        // two distinct ids above the ceiling would collapse onto one reported
+        // int64 id at the C ABI. The shared range policy refuses them at the
+        // reader boundary.
         let raw = r"0, 100.00, 33, 0, 0, 60.00 / synthetic out-of-range export
 CASE
 COMMENT
@@ -4665,8 +4675,9 @@ Q
 
         let err = parse_psse(raw).unwrap_err();
 
+        let text = err.to_string();
         assert!(
-            err.to_string().contains("outside the int64 id space"),
+            text.contains("bus field I") && text.contains("outside the id range"),
             "an out-of-range bus id should be refused: {err}"
         );
     }

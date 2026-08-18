@@ -491,30 +491,32 @@ fn num_key(k: &str) -> i64 {
     k[start..].parse::<i64>().unwrap_or(i64::MAX)
 }
 
-/// A non-negative integer bus id from an f64 (egret writes some ids as numbers).
-/// Rejects negative, fractional, or out-of-range values rather than truncating or
-/// wrapping them onto the wrong bus.
-fn id_from_f64(x: f64) -> Option<usize> {
-    // Strict `<`: `usize::MAX as f64` rounds up to 2^64, so values in the gap just
-    // below it would pass `<=` and then saturate on the `as usize` cast.
-    (x >= 0.0 && x.fract() == 0.0 && x < usize::MAX as f64).then_some(x as usize)
+/// A non-negative integral id from an f64 (egret writes some ids as numbers).
+/// Fractional values are refused here; the range bound is the shared
+/// [`crate::format::id_from_f64`] policy.
+fn integral_id(x: f64) -> Option<usize> {
+    (x.fract() == 0.0)
+        .then(|| crate::format::id_from_f64(x, "id").ok())
+        .flatten()
 }
 
 /// A bus id from a JSON value: a numeric string (egret's convention) or a bare
-/// number. `None` for a non-integer, negative, or non-numeric value (named buses
-/// aren't representable in the integer `BusId` space).
+/// number. `None` for a non-integer, negative, out-of-range, or non-numeric
+/// value (named buses aren't representable in the integer `BusId` space).
 fn parse_id(v: &Value) -> Option<usize> {
     match v {
         Value::String(s) => {
             let s = s.trim();
             s.parse::<usize>()
                 .ok()
-                .or_else(|| s.parse::<f64>().ok().and_then(id_from_f64))
+                .filter(|&x| x <= BusId::MAX.0)
+                .or_else(|| s.parse::<f64>().ok().and_then(integral_id))
         }
         Value::Number(n) => n
             .as_u64()
+            .filter(|&x| x <= BusId::MAX.0 as u64)
             .map(|x| x as usize)
-            .or_else(|| n.as_f64().and_then(id_from_f64)),
+            .or_else(|| n.as_f64().and_then(integral_id)),
         _ => None,
     }
 }

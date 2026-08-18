@@ -1160,25 +1160,27 @@ fn id_at(tokens: &[String], i: usize, default: usize, field: &str, rec: &Record)
 
 /// Read a required nonnegative numeric identifier.
 fn req_id(tokens: &[String], i: usize, field: &str, rec: &Record) -> Result<usize> {
-    tokens
-        .get(i)
-        .and_then(|tok| parse_id(tok))
-        .ok_or_else(|| Error::FormatRead {
+    match tokens.get(i) {
+        Some(tok) => parse_id(tok).ok_or_else(|| bad_field(field, i, tok, rec)),
+        None => Err(Error::FormatRead {
             format: FMT,
-            message: format!("{field} missing or invalid at line {}", rec.line_no),
-        })
+            message: format!("{field} missing at line {}", rec.line_no),
+        }),
+    }
 }
 
 /// Parse PSLF numeric identifiers, including integer-valued floating text.
+/// Fractional values are refused here; the range bound is the shared
+/// [`crate::format::id_from_f64`] policy.
 fn parse_id(tok: &str) -> Option<usize> {
     if let Ok(value) = tok.parse::<usize>() {
-        return Some(value);
+        return (value <= BusId::MAX.0).then_some(value);
     }
     let value = tok.parse::<f64>().ok()?;
-    if !value.is_finite() || value < 0.0 || value.fract() != 0.0 || value > usize::MAX as f64 {
+    if value.fract() != 0.0 {
         return None;
     }
-    Some(value as usize)
+    crate::format::id_from_f64(value, "id").ok()
 }
 
 /// Read a numeric status field as an in service boolean.

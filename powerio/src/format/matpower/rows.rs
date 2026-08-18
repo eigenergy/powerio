@@ -137,13 +137,23 @@ fn require(field: &'static str, row: &[f64], i: usize, expected: usize) -> Resul
     Ok(())
 }
 
+/// An id column through [`crate::format::id_from_f64`]; a refusal carries the
+/// matrix name and row position into [`Error::BadId`].
+fn id_col(field: &'static str, row: &[f64], i: usize, col: usize, name: &str) -> Result<usize> {
+    crate::format::id_from_f64(row[col], name).map_err(|message| Error::BadId {
+        field,
+        row: i,
+        message,
+    })
+}
+
 /// Parse a bus row into a [`Bus`] plus an optional [`Load`] and [`Shunt`].
 /// A load/shunt is emitted only when its values are nonzero, matching MATPOWER:
 /// a bus with `Pd = Qd = 0` carries no load. `in_service` follows the bus type
 /// (an isolated bus is out of service).
 pub(super) fn bus_row(row: &[f64], i: usize) -> Result<(Bus, Option<Load>, Option<Shunt>)> {
     require("bus", row, i, bus_col::REQUIRED)?;
-    let id = BusId(row[bus_col::BUS_I] as usize);
+    let id = BusId(id_col("bus", row, i, bus_col::BUS_I, "BUS_I")?);
     let kind = BusType::from_f64(row[bus_col::BUS_TYPE]);
     let in_service = kind != BusType::Isolated;
     let bus = Bus {
@@ -156,8 +166,8 @@ pub(super) fn bus_row(row: &[f64], i: usize) -> Result<(Bus, Option<Load>, Optio
         vmin: row[bus_col::VMIN],
         evhi: None,
         evlo: None,
-        area: row[bus_col::BUS_AREA] as usize,
-        zone: row[bus_col::ZONE] as usize,
+        area: id_col("bus", row, i, bus_col::BUS_AREA, "BUS_AREA")?,
+        zone: id_col("bus", row, i, bus_col::ZONE, "ZONE")?,
         name: None,
         uid: None,
         location: None,
@@ -189,8 +199,8 @@ pub(super) fn bus_row(row: &[f64], i: usize) -> Result<(Bus, Option<Load>, Optio
 pub(super) fn branch_row(row: &[f64], i: usize) -> Result<Branch> {
     require("branch", row, i, branch_col::REQUIRED)?;
     Ok(Branch {
-        from: BusId(row[branch_col::F_BUS] as usize),
-        to: BusId(row[branch_col::T_BUS] as usize),
+        from: BusId(id_col("branch", row, i, branch_col::F_BUS, "F_BUS")?),
+        to: BusId(id_col("branch", row, i, branch_col::T_BUS, "T_BUS")?),
         r: row[branch_col::BR_R],
         x: row[branch_col::BR_X],
         b: row[branch_col::BR_B],
@@ -228,7 +238,7 @@ pub(super) fn gen_row(row: &[f64], i: usize) -> Result<Generator> {
         *slot = Some(v);
     }
     Ok(Generator {
-        bus: BusId(row[gen_col::GEN_BUS] as usize),
+        bus: BusId(id_col("gen", row, i, gen_col::GEN_BUS, "GEN_BUS")?),
         pg: row[gen_col::PG],
         qg: row[gen_col::QG],
         qmax: row[gen_col::QMAX],
@@ -280,7 +290,13 @@ pub(super) fn gencost_row(row: &[f64], i: usize) -> Result<GenCost> {
 pub(super) fn storage_row(row: &[f64], i: usize) -> Result<Storage> {
     require("storage", row, i, storage_col::REQUIRED)?;
     Ok(Storage {
-        bus: BusId(row[storage_col::STORAGE_BUS] as usize),
+        bus: BusId(id_col(
+            "storage",
+            row,
+            i,
+            storage_col::STORAGE_BUS,
+            "STORAGE_BUS",
+        )?),
         ps: row[storage_col::PS],
         qs: row[storage_col::QS],
         energy: row[storage_col::ENERGY],
@@ -306,8 +322,8 @@ pub(super) fn storage_row(row: &[f64], i: usize) -> Result<Storage> {
 pub(super) fn hvdc_row(row: &[f64], i: usize) -> Result<Hvdc> {
     require("dcline", row, i, dcline_col::REQUIRED)?;
     Ok(Hvdc {
-        from: BusId(row[dcline_col::F_BUS] as usize),
-        to: BusId(row[dcline_col::T_BUS] as usize),
+        from: BusId(id_col("dcline", row, i, dcline_col::F_BUS, "F_BUS")?),
+        to: BusId(id_col("dcline", row, i, dcline_col::T_BUS, "T_BUS")?),
         in_service: is_in_service(row[dcline_col::BR_STATUS]),
         pf: row[dcline_col::PF],
         pt: row[dcline_col::PT],
@@ -335,9 +351,9 @@ pub(super) fn hvdc_row(row: &[f64], i: usize) -> Result<Hvdc> {
 /// 0 reads as no reference bus, mirroring what the writer emits for one.
 pub(super) fn area_row(row: &[f64], i: usize) -> Result<Area> {
     require("areas", row, i, 2)?;
-    let refbus = row[1] as usize;
+    let refbus = id_col("areas", row, i, 1, "refbus")?;
     Ok(Area {
         slack_bus: (refbus > 0).then_some(BusId(refbus)),
-        ..Area::new(row[0] as usize)
+        ..Area::new(id_col("areas", row, i, 0, "area")?)
     })
 }
