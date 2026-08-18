@@ -698,6 +698,10 @@ fn dist_convert_leg(
             return out;
         }
     };
+    // The readback's own declarations count toward warning parity, exactly as
+    // the transmission leg counts them; without this a loss the reader states
+    // on re-parse was graded undeclared.
+    out.warnings.extend(parsed.warnings.iter().cloned());
     let before = invariants::distribution_core(source);
     let after = invariants::distribution_core(&parsed);
     if before != after {
@@ -724,7 +728,12 @@ fn dist_convert_leg(
 fn has_include(text: &str) -> bool {
     text.lines().any(|line| {
         let word = line.split_whitespace().next().unwrap_or("");
-        word.eq_ignore_ascii_case("redirect") || word.eq_ignore_ascii_case("compile")
+        word.eq_ignore_ascii_case("redirect")
+            || word.eq_ignore_ascii_case("compile")
+            // A `Buscoords` reference names a sidecar file the same way, so a
+            // string readback would lose every location and report it as a
+            // conversion loss that is really the harness's own limitation.
+            || word.eq_ignore_ascii_case("buscoords")
     })
 }
 
