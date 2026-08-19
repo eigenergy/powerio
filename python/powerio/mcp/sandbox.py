@@ -35,11 +35,20 @@ LEGACY_ROOT_ENVS = ("POWERIO_MCP_ROOT", "POWERIO_MCP_ALLOWED_ROOT")
 __all__ = [
     "ALLOWED_ROOTS_ENV",
     "LEGACY_ROOT_ENVS",
+    "PathNotAllowed",
     "allowed_roots",
     "check_allowed_path",
     "checked_path",
     "decode_local_path",
 ]
+
+
+class PathNotAllowed(ValueError):
+    """The containment policy refused a path.
+
+    Subclasses :class:`ValueError`, which is what
+    :func:`check_allowed_path` raised before this type existed.
+    """
 
 
 def allowed_roots() -> tuple[Path, ...]:
@@ -110,7 +119,7 @@ def _path_for_policy(path: Path, *, for_write: bool) -> Path:
 def check_allowed_path(
     path: Path, *, for_write: bool = False, purpose: str = "path"
 ) -> None:
-    """Raise :class:`ValueError` when ``path`` resolves outside the roots.
+    """Raise :class:`PathNotAllowed` when ``path`` resolves outside the roots.
 
     Symlinks are resolved first, including a dangling final component under
     ``for_write``, so a link inside a root cannot redirect a write out of it.
@@ -121,14 +130,14 @@ def check_allowed_path(
     try:
         resolved = _path_for_policy(path, for_write=for_write)
     except OSError as exc:
-        raise ValueError(
+        raise PathNotAllowed(
             f"cannot resolve `{purpose}` against allowed MCP roots: {exc}"
         ) from exc
     for root in roots:
         if resolved == root or root in resolved.parents:
             return
     root_list = ", ".join(str(root) for root in roots)
-    raise ValueError(f"`{purpose}` is outside allowed MCP roots: {root_list}")
+    raise PathNotAllowed(f"`{purpose}` is outside allowed MCP roots: {root_list}")
 
 
 def checked_path(

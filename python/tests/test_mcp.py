@@ -56,6 +56,25 @@ def test_tool_surface_is_semantic():
     # The SDK 2.0 model field is snake_case `input_schema`; the wire format is
     # still the protocol's camelCase `inputSchema`.
     assert "inputSchema" in tools["save"].model_dump(by_alias=True)
+    # Transport text arguments are bare `str` with "" meaning unset: under any
+    # other annotation the SDK re-parses JSON text before validation and the
+    # tool receives an object instead of the document.
+    for name in ("convert", "save", "summary", "normalize", "matrix"):
+        props = tools[name].input_schema["properties"]
+        for arg in ("content", "json", "package_json"):
+            assert props[arg]["type"] == "string"
+            assert props[arg]["default"] == ""
+    parse_content = tools["parse"].input_schema["properties"]["content"]
+    assert parse_content["type"] == "string" and parse_content["default"] == ""
+    # The closed sets are advertised as enums; the impls keep accepting aliases.
+    kind = tools["matrix"].input_schema["properties"]["kind"]
+    assert kind["enum"] == sorted(server._MATRIX_KIND_ALIASES)
+    json_format = tools["summary"].input_schema["properties"]["json_format"]
+    assert json_format["anyOf"][0]["enum"] == ["package", "model-json", "bmopf-json"]
+    # The open ended format name sets are prose in the descriptions.
+    assert "matpower" in tools["convert"].description
+    assert "bmopf-json" in tools["save"].description
+    assert "matpower" in tools["parse"].description
 
 
 def test_summary_transmission_schema():
@@ -311,10 +330,25 @@ def test_matrix_kinds_aliases_and_errors():
         server.matrix("b", path=str(DSS))
 
 
-def test_bad_json_transport_maps_cleanly():
+def test_bad_json_transport_leads_with_the_diagnostic_code():
     for bad in ("{}", "[]", "null", '{"buses": "nope"}'):
-        with pytest.raises(ValueError, match="parse failed"):
+        with pytest.raises(ValueError, match=r"^PARSE\.SOURCE\.MALFORMED: "):
             server.matrix("bprime", json=bad, json_format="model-json")
+
+
+def test_parse_failures_carry_the_code_and_the_tools_lead_with_it():
+    with pytest.raises(powerio.PowerIOError) as native:
+        powerio.parse_str("mpc.bus = [", "matpower")
+    assert native.value.code == "PARSE.MATPOWER.MALFORMED"
+    with pytest.raises(ValueError) as mapped:
+        server.summary(content="mpc.bus = [", from_format="matpower")
+    assert str(mapped.value).startswith("PARSE.MATPOWER.MALFORMED: ")
+
+
+def test_empty_transport_text_means_unset():
+    with pytest.raises(ValueError, match="provide exactly one"):
+        server._summary_tool()
+    assert server._summary_tool(path=str(DATA / "case9.m"))["elements"]["buses"] == 9
 
 
 def test_save_text_folder_and_overwrite(tmp_path):
@@ -436,6 +470,66 @@ def test_mcp_write_refuses_symlink_escape_from_allowed_root(monkeypatch, tmp_pat
         to_format="bmopf-json", out_path=str(root / "ok.json"), json=MINIMAL_BMOPF
     )
     assert (root / "ok.json").exists()
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX symlink semantics")
+def test_directory_save_refuses_symlink_escape_at_a_child_name(monkeypatch, tmp_path):
+    # The folder writers create children the single file containment check
+    # never saw; every installed file must pass the same `for_write` resolution.
+    root = tmp_path / "allowed"
+    out = root / "pypsa"
+    out.mkdir(parents=True)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    os.symlink(outside / "leaked.csv", out / "buses.csv")
+    case = root / "case9.m"
+    case.write_text((DATA / "case9.m").read_text())
+    monkeypatch.setenv("POWERIO_MCP_ALLOWED_ROOTS", str(root))
+
+    with pytest.raises(ValueError, match="outside allowed MCP roots"):
+        server.save(
+            to_format="pypsa-csv", out_path=str(out), path=str(case), overwrite=True
+        )
+    assert not (outside / "leaked.csv").exists()
+    # Refusal happens before anything is installed.
+    assert not (out / "network.csv").exists()
+
+
+def test_directory_save_honours_overwrite(tmp_path):
+    folder = tmp_path / "pypsa"
+    server.save(to_format="pypsa-csv", out_path=str(folder), path=str(DATA / "case9.m"))
+    assert (folder / "buses.csv").exists()
+    with pytest.raises(ValueError, match="refusing to overwrite"):
+        server.save(
+            to_format="pypsa-csv", out_path=str(folder), path=str(DATA / "case9.m")
+        )
+    r = server.save(
+        to_format="pypsa-csv",
+        out_path=str(folder),
+        path=str(DATA / "case9.m"),
+        overwrite=True,
+    )
+    # Writer-reported paths are the installed location, never the staging dir.
+    assert r["dir"] == str(folder)
+    assert all(f.startswith(str(folder)) for f in r["files"])
+    assert not [p for p in folder.parent.iterdir() if p.name.startswith("pypsa.")]
+
+
+@gridfm_only
+def test_gridfm_save_honours_overwrite(tmp_path):
+    out_dir = tmp_path / "gfm"
+    first = server.save(
+        to_format="gridfm", out_path=str(out_dir), path=str(DATA / "case9.m")
+    )
+    assert first["files"] and all(f.startswith(str(out_dir)) for f in first["files"])
+    with pytest.raises(ValueError, match="refusing to overwrite"):
+        server.save(to_format="gridfm", out_path=str(out_dir), path=str(DATA / "case9.m"))
+    server.save(
+        to_format="gridfm",
+        out_path=str(out_dir),
+        path=str(DATA / "case9.m"),
+        overwrite=True,
+    )
 
 
 def test_display_decodes_powerworld_pwd():

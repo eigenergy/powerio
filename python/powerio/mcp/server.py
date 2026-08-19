@@ -20,11 +20,14 @@ from __future__ import annotations
 
 import json as jsonlib
 import os
+import shutil
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Annotated, Any, Callable, Dict, Optional, TypeAlias
 
 from mcp.server.mcpserver import MCPServer
+from pydantic import Field
 
 import powerio
 from powerio import dist
@@ -84,6 +87,34 @@ _MATRIX_HELP = (
     "laplacian, lacpf"
 )
 
+# JSON schema `enum` entries the tool surface advertises. `json_schema_extra`
+# documents without validating, so the historical aliases stay accepted.
+_JsonFormatArg: TypeAlias = Optional[
+    Annotated[
+        str,
+        Field(json_schema_extra={"enum": ["package", "model-json", "bmopf-json"]}),
+    ]
+]
+# A FieldInfo constant rather than an `Annotated[str, ...]` alias: stubtest
+# probes a str-aliased Annotated differently across python versions. The
+# enum list is Any-typed for pydantic's invariant JsonValue list.
+_MATRIX_KIND_ENUM: "list[Any]" = sorted(_MATRIX_KIND_ALIASES)
+_MATRIX_KIND_FIELD = Field(json_schema_extra={"enum": _MATRIX_KIND_ENUM})
+
+# Tool description prose for the open ended format name sets.
+_SOURCE_FORMAT_HELP = (
+    "Accepted `from_format` names — transmission: matpower, powermodels-json, "
+    "egret-json, pandapower-json, psse, powerworld, pslf, goc3-json, "
+    "surge-json, opfdata-json, pypsa-csv, gridfm; distribution: dss, pmd-json, "
+    "bmopf-json. Omit it to infer from the file extension or JSON markers."
+)
+_TARGET_FORMAT_HELP = (
+    "Accepted `to_format` names — transmission: matpower, psse, "
+    "powermodels-json, egret-json, pandapower-json, powerworld, pslf; "
+    "distribution: dss, pmd-json, bmopf-json. The folder targets pypsa-csv "
+    "and gridfm go through `save`."
+)
+
 
 @dataclass
 class _Loaded:
@@ -106,6 +137,15 @@ def _opts(options: Optional[Dict[str, Any]]) -> Dict[str, Any]:
 def _one_input(path: Optional[str], content: Optional[str]) -> None:
     if (path is None) == (content is None):
         raise ValueError("provide exactly one of `path` or `content`")
+
+
+def _coded_error(prefix: str, exc: Exception) -> ValueError:
+    """Lead with the diagnostic code when the failure carries one, so a
+    consumer that splits on the first colon reads a code, never prose."""
+    code = getattr(exc, "code", None)
+    if code:
+        return ValueError(f"{code}: {exc}")
+    return ValueError(f"{prefix}: {exc}")
 
 
 def _required(value: Optional[str], name: str) -> str:
@@ -388,7 +428,7 @@ def _load_package(package_json: str) -> _Loaded:
             package_json=package_json,
         )
     except powerio.PowerIOError as exc:
-        raise ValueError(f"parse failed: {exc}") from exc
+        raise _coded_error("parse failed", exc) from exc
     except (ValueError, KeyError, TypeError) as exc:
         raise ValueError(f"parse failed: {exc}") from exc
 
@@ -427,7 +467,7 @@ def _package_json_from_input(
             raise ValueError("content is not a .pio.json package")
         return powerio.Package.from_str(text, from_format).to_json()
     except powerio.PowerIOError as exc:
-        raise ValueError(f"parse failed: {exc}") from exc
+        raise _coded_error("parse failed", exc) from exc
     except FileNotFoundError as exc:
         raise ValueError(f"file not found: {exc}") from exc
     except ImportError as exc:
@@ -462,7 +502,7 @@ def _parse_transmission(
                 _required(content, "content"), format or "matpower"
             )
     except powerio.PowerIOError as exc:
-        raise ValueError(f"parse failed: {exc}") from exc
+        raise _coded_error("parse failed", exc) from exc
     except FileNotFoundError as exc:
         raise ValueError(f"file not found: {exc}") from exc
     except ImportError as exc:
@@ -492,7 +532,7 @@ def _parse_distribution(
                 _required(content, "content"), _required(format, "from_format")
             )
     except powerio.PowerIOError as exc:
-        raise ValueError(f"parse failed: {exc}") from exc
+        raise _coded_error("parse failed", exc) from exc
     except FileNotFoundError as exc:
         raise ValueError(f"file not found: {exc}") from exc
     except OSError as exc:
@@ -560,7 +600,7 @@ def _load_transport(text: str, json_format: Optional[str]) -> _Loaded:
     try:
         net = powerio.from_json(text)
     except powerio.PowerIOError as exc:
-        raise ValueError(f"parse failed: {exc}") from exc
+        raise _coded_error("parse failed", exc) from exc
     except (ValueError, KeyError, TypeError) as exc:
         raise ValueError(f"parse failed: {exc}") from exc
     return _Loaded("transmission", net, list(net.read_warnings), "model-json")
@@ -575,6 +615,10 @@ def _load_any(
     json_format: Optional[str],
     options: Optional[Dict[str, Any]] = None,
 ) -> _Loaded:
+    # The tools spell an unset text argument as "" (a bare `str` annotation
+    # keeps the SDK from re-parsing JSON text before validation); empty
+    # transport text is invalid anyway, so "" means absent here.
+    content, transport, package_json = content or None, transport or None, package_json or None
     _one_network_input(path, content, transport, package_json)
     if package_json is not None:
         return _load_package(package_json)
@@ -676,6 +720,72 @@ def _write_text(
     }
 
 
+def _install_dir_tree(tmp_dir: str, out_path: str, overwrite: bool) -> None:
+    """Move a directory writer's staged output into place.
+
+    Every target runs through the same containment resolution as a single
+    file write, and `overwrite=False` refuses before anything has moved.
+    """
+    if not os.path.lexists(out_path):
+        os.rename(tmp_dir, out_path)
+        return
+    tmp = Path(tmp_dir)
+    files = [p for p in sorted(tmp.rglob("*")) if p.is_file()]
+    targets = [Path(out_path) / p.relative_to(tmp) for p in files]
+    if not overwrite:
+        for target in targets:
+            if os.path.lexists(target):
+                raise ValueError(
+                    f"refusing to overwrite existing file: {target}; pass overwrite=true"
+                )
+    for target in targets:
+        sandbox.check_allowed_path(target.parent, purpose="out_path")
+        os.makedirs(target.parent, exist_ok=True)
+        sandbox.check_allowed_path(target, for_write=True, purpose="out_path")
+    for source, target in zip(files, targets):
+        os.replace(source, target)
+
+
+def _rebase_result_paths(
+    result: Dict[str, Any], tmp_dir: str, out_path: str
+) -> Dict[str, Any]:
+    """Rewrite writer-reported paths from the staging directory to the
+    installed location."""
+
+    def rebase(value: Any) -> Any:
+        if isinstance(value, str) and value.startswith(tmp_dir):
+            return out_path + value[len(tmp_dir) :]
+        return value
+
+    rebased = dict(result)
+    if "dir" in rebased:
+        rebased["dir"] = rebase(rebased["dir"])
+    if "files" in rebased:
+        rebased["files"] = [rebase(item) for item in rebased["files"]]
+    return rebased
+
+
+def _staged_dir_write(
+    out_path: str, overwrite: bool, write: Callable[[str], Dict[str, Any]]
+) -> Dict[str, Any]:
+    """Run a directory writer against a fresh staging directory, then install.
+
+    The writers create children unchecked, so they never see `out_path`;
+    installation applies the containment policy and `overwrite` per file.
+    """
+    parent = os.path.dirname(os.path.abspath(out_path)) or os.curdir
+    os.makedirs(parent, exist_ok=True)
+    tmp_dir = tempfile.mkdtemp(prefix=Path(out_path).name + ".", dir=parent)
+    # mkdtemp creates 0o700; the installed directory is ordinary output.
+    os.chmod(tmp_dir, 0o755)
+    try:
+        result = write(tmp_dir)
+        _install_dir_tree(tmp_dir, out_path, overwrite)
+    finally:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+    return _rebase_result_paths(result, tmp_dir, out_path)
+
+
 def _choose_from_format(
     from_format: Optional[str] = None,
     *,
@@ -771,7 +881,7 @@ def _convert_impl(
             conv = loaded.network.to_format(to_format)
             warnings = loaded.warnings + list(conv.warnings)
     except powerio.PowerIOError as exc:
-        raise ValueError(f"conversion failed: {exc}") from exc
+        raise _coded_error("conversion failed", exc) from exc
     return {"text": conv.text, "warnings": warnings}
 
 
@@ -798,20 +908,24 @@ def _save_impl(
     if _is_gridfm_format(to_l):
         if loaded.domain != "transmission":
             raise ValueError("gridfm export needs a transmission network")
-        try:
+
+        def write_gridfm(staging: str) -> Dict[str, Any]:
             return dict(
                 loaded.network.write_gridfm(
-                    out_path,
+                    staging,
                     scenario=int(opts.get("scenario", 0)),
                     include_y_bus=bool(opts.get("include_y_bus", True)),
                     include_taps=bool(opts.get("include_taps", True)),
                     include_shifts=bool(opts.get("include_shifts", True)),
                 )
             )
+
+        try:
+            return _staged_dir_write(out_path, overwrite, write_gridfm)
         except ImportError as exc:
             raise ValueError(str(exc)) from exc
         except powerio.PowerIOError as exc:
-            raise ValueError(f"conversion failed: {exc}") from exc
+            raise _coded_error("conversion failed", exc) from exc
         except OSError as exc:
             raise ValueError(f"write failed: {exc}") from exc
 
@@ -819,9 +933,13 @@ def _save_impl(
         if loaded.domain != "transmission":
             raise ValueError("pypsa-csv export needs a transmission network")
         try:
-            result = loaded.network.write_pypsa_csv_folder(out_path)
+            result = _staged_dir_write(
+                out_path,
+                overwrite,
+                lambda staging: dict(loaded.network.write_pypsa_csv_folder(staging)),
+            )
         except powerio.PowerIOError as exc:
-            raise ValueError(f"conversion failed: {exc}") from exc
+            raise _coded_error("conversion failed", exc) from exc
         except OSError as exc:
             raise ValueError(f"write failed: {exc}") from exc
         return {
@@ -836,7 +954,7 @@ def _save_impl(
         try:
             conv = loaded.network.to_format(target)
         except powerio.PowerIOError as exc:
-            raise ValueError(f"conversion failed: {exc}") from exc
+            raise _coded_error("conversion failed", exc) from exc
         return _write_text(out_path, conv.text, loaded.warnings + list(conv.warnings), overwrite)
 
     if loaded.domain != "transmission":
@@ -844,7 +962,7 @@ def _save_impl(
     try:
         conv = loaded.network.to_format(target)
     except powerio.PowerIOError as exc:
-        raise ValueError(f"conversion failed: {exc}") from exc
+        raise _coded_error("conversion failed", exc) from exc
     return _write_text(out_path, conv.text, loaded.warnings + list(conv.warnings), overwrite)
 
 
@@ -869,6 +987,8 @@ def _parse_impl(
     options: Optional[Dict[str, Any]] = None,
     transport: str = "json",
 ) -> dict:
+    # "" means absent, as in `_load_any`.
+    content = content or None
     transport_l = _fmt(transport or "json")
     if transport_l in _PACKAGE_JSON_FORMATS:
         package_json = _package_json_from_input(path, content, from_format, options)
@@ -925,7 +1045,7 @@ def _normalize_impl(
     try:
         norm = loaded.network.to_normalized()
     except powerio.PowerIOError as exc:
-        raise ValueError(f"normalization failed: {exc}") from exc
+        raise _coded_error("normalization failed", exc) from exc
     normalized = _Loaded("transmission", norm, list(norm.read_warnings), "model-json")
     summary = _summary(normalized)
     return {
@@ -984,7 +1104,7 @@ def _matrix_impl(
     except ImportError as exc:
         raise ValueError(str(exc)) from exc
     except powerio.PowerIOError as exc:
-        raise ValueError(f"matrix build failed: {exc}") from exc
+        raise _coded_error("matrix build failed", exc) from exc
     coo = mat.tocoo()
     return {
         **_header("powerio.matrix"),
@@ -1008,7 +1128,7 @@ def _display_impl(path: str, from_format: Optional[str] = None) -> dict:
     try:
         data = powerio.parse_display_file(path, from_format)
     except powerio.PowerIOError as exc:
-        raise ValueError(f"parse failed: {exc}") from exc
+        raise _coded_error("parse failed", exc) from exc
     except FileNotFoundError as exc:
         raise ValueError(f"file not found: {exc}") from exc
     except OSError as exc:
@@ -1033,18 +1153,27 @@ def _display_impl(path: str, from_format: Optional[str] = None) -> dict:
     }
 
 
-@mcp.tool(name="convert")
+# The tool text arguments that can carry JSON (`content`, `json`,
+# `package_json`) are annotated bare `str`: under any other annotation the
+# SDK re-parses a string that reads as JSON, destroying the text. "" means
+# unset.
+@mcp.tool(
+    name="convert",
+    description="Convert a network to a single text format. "
+    + _TARGET_FORMAT_HELP
+    + " "
+    + _SOURCE_FORMAT_HELP,
+)
 def _convert_tool(
     to_format: str,
     path: Optional[str] = None,
-    content: Optional[str] = None,
-    json: Optional[str] = None,
-    package_json: Optional[str] = None,
+    content: str = "",
+    json: str = "",
+    package_json: str = "",
     from_format: Optional[str] = None,
-    json_format: Optional[str] = None,
+    json_format: _JsonFormatArg = None,
     options: Optional[Dict[str, Any]] = None,
 ) -> dict:
-    """Convert a network to a single text format."""
     return _convert_impl(
         to_format,
         path=path,
@@ -1057,20 +1186,25 @@ def _convert_tool(
     )
 
 
-@mcp.tool(name="save")
+@mcp.tool(
+    name="save",
+    description="Write a converted network to disk. "
+    + _TARGET_FORMAT_HELP
+    + " "
+    + _SOURCE_FORMAT_HELP,
+)
 def _save_tool(
     out_path: str,
     path: Optional[str] = None,
-    content: Optional[str] = None,
-    json: Optional[str] = None,
-    package_json: Optional[str] = None,
+    content: str = "",
+    json: str = "",
+    package_json: str = "",
     to_format: Optional[str] = None,
     from_format: Optional[str] = None,
-    json_format: Optional[str] = None,
+    json_format: _JsonFormatArg = None,
     options: Optional[Dict[str, Any]] = None,
     overwrite: bool = False,
 ) -> dict:
-    """Write a converted network to disk."""
     return _save_impl(
         out_path,
         path=path,
@@ -1085,64 +1219,76 @@ def _save_tool(
     )
 
 
-@mcp.tool(name="summary")
+@mcp.tool(
+    name="summary",
+    description="Return canonical summary JSON for a balanced or "
+    "multiconductor model. " + _SOURCE_FORMAT_HELP,
+)
 def _summary_tool(
     path: Optional[str] = None,
-    content: Optional[str] = None,
-    json: Optional[str] = None,
-    package_json: Optional[str] = None,
+    content: str = "",
+    json: str = "",
+    package_json: str = "",
     from_format: Optional[str] = None,
-    json_format: Optional[str] = None,
+    json_format: _JsonFormatArg = None,
     options: Optional[Dict[str, Any]] = None,
 ) -> dict:
-    """Return canonical summary JSON for a balanced or multiconductor model."""
     return _summary_impl(
         path, content, json, package_json, from_format, json_format, options
     )
 
 
-@mcp.tool(name="parse")
+@mcp.tool(
+    name="parse",
+    description="Parse a model and return legacy JSON or a `.pio.json` "
+    "package. " + _SOURCE_FORMAT_HELP,
+)
 def _parse_tool(
     path: Optional[str] = None,
-    content: Optional[str] = None,
+    content: str = "",
     from_format: Optional[str] = None,
     options: Optional[Dict[str, Any]] = None,
     transport: str = "json",
 ) -> dict:
-    """Parse a model and return legacy JSON or a `.pio.json` package."""
     return _parse_impl(path, content, from_format, options, transport)
 
 
-@mcp.tool(name="normalize")
+@mcp.tool(
+    name="normalize",
+    description="Normalize a transmission network and return the powerio "
+    "JSON transport. " + _SOURCE_FORMAT_HELP,
+)
 def _normalize_tool(
     path: Optional[str] = None,
-    content: Optional[str] = None,
-    json: Optional[str] = None,
-    package_json: Optional[str] = None,
+    content: str = "",
+    json: str = "",
+    package_json: str = "",
     from_format: Optional[str] = None,
-    json_format: Optional[str] = None,
+    json_format: _JsonFormatArg = None,
     options: Optional[Dict[str, Any]] = None,
 ) -> dict:
-    """Normalize a transmission network and return the powerio JSON transport."""
     return _normalize_impl(
         path, content, json, package_json, from_format, json_format, options
     )
 
 
-@mcp.tool(name="matrix")
+@mcp.tool(
+    name="matrix",
+    description="Build a transmission matrix output in COO form. "
+    + _SOURCE_FORMAT_HELP,
+)
 def _matrix_tool(
-    kind: str,
+    kind: Annotated[str, _MATRIX_KIND_FIELD],
     path: Optional[str] = None,
-    content: Optional[str] = None,
-    json: Optional[str] = None,
-    package_json: Optional[str] = None,
+    content: str = "",
+    json: str = "",
+    package_json: str = "",
     from_format: Optional[str] = None,
-    json_format: Optional[str] = None,
+    json_format: _JsonFormatArg = None,
     options: Optional[Dict[str, Any]] = None,
     scheme: str = "bx",
     convention: str = "series",
 ) -> dict:
-    """Build a transmission matrix output in COO form."""
     return _matrix_impl(
         kind,
         path=path,

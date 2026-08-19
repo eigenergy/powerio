@@ -9,7 +9,13 @@ Units = Literal["perunit", "native"]
 GridfmOutputs = Dict[str, Any]
 
 class PowerIOError(ValueError):
-    """Base error from the powerio parser, converter, or matrix builders."""
+    """Base error from the powerio parser, converter, or matrix builders.
+
+    Failures mapped from the Rust core carry the diagnostic code string as
+    ``code``; it is set at raise time, so it is instance-only.
+    """
+
+    code: str
 
 class PowerIOParseError(PowerIOError):
     """A case file is malformed or unparseable."""

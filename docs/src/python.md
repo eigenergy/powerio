@@ -202,6 +202,8 @@ diagnostics(pkg)
 document JSON passed through the legacy `json` argument. The document
 metadata's `model_kind` routes balanced and multiconductor model JSON.
 
+`python -m powerio.mcp` and the `powerio-mcp` console script are consumer entry points and do not move without a version bump.
+
 The optional MCP server accepts local filesystem paths and `file://` URIs for
 `path` and `out_path` arguments. Remote URI schemes are rejected. Deployments
 that need filesystem containment can set `POWERIO_MCP_ALLOWED_ROOTS` to an
@@ -220,6 +222,6 @@ out = checked_path(arg, purpose="out_path", for_write=True)
 `checked_path` decodes the argument (local path or `file://` URI), refuses
 remote schemes, resolves symlinks — including a dangling final component under
 `for_write`, so a link inside a root cannot redirect a write out of it — and
-raises `ValueError` when the result lands outside the roots. Its parts,
-`allowed_roots`, `decode_local_path`, and `check_allowed_path`, are public
-too.
+raises `PathNotAllowed` (a `ValueError` subclass) when the result lands
+outside the roots. Its parts, `allowed_roots`, `decode_local_path`, and
+`check_allowed_path`, are public too, as is `PathNotAllowed`.
