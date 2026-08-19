@@ -2255,7 +2255,8 @@ mod tests {
     }
 
     #[test]
-    fn package_rejects_non_finite_payload_before_writing() {
+    #[allow(clippy::float_cmp)]
+    fn package_carries_a_nonfinite_payload_as_string_spellings() {
         let stamp = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
@@ -2279,13 +2280,16 @@ mpc.branch = [
         )
         .unwrap();
 
-        let err = run_package(&input, Some(&output), None, 0).unwrap_err();
-        assert!(
-            err.to_string()
-                .contains("validating .pio.json package readback"),
-            "{err}"
-        );
-        assert!(!output.exists());
+        run_package(&input, Some(&output), None, 0).unwrap();
+        let text = std::fs::read_to_string(&output).unwrap();
+        assert!(text.contains("\"angmin\": \"NaN\""), "{text}");
+        assert!(text.contains("\"angmax\": \"Infinity\""), "{text}");
+        let pkg = powerio_pkg::NetworkPackage::from_json(&text).unwrap();
+        let powerio_pkg::ModelPayload::Balanced { balanced_network } = &pkg.model else {
+            panic!("balanced payload expected");
+        };
+        assert!(balanced_network.branches[0].angmin.is_nan());
+        assert_eq!(balanced_network.branches[0].angmax, f64::INFINITY);
 
         let _ = std::fs::remove_file(input);
         let _ = std::fs::remove_file(output);

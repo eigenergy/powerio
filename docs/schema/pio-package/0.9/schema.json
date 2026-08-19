@@ -25,9 +25,21 @@
           ]
         },
         "net_interchange": {
-          "description": "Scheduled net interchange (MW); positive is export out of the area.",
-          "format": "double",
-          "type": "number"
+          "anyOf": [
+            {
+              "format": "double",
+              "type": "number"
+            },
+            {
+              "enum": [
+                "Infinity",
+                "-Infinity",
+                "NaN"
+              ],
+              "type": "string"
+            }
+          ],
+          "description": "Scheduled net interchange (MW); positive is export out of the area."
         },
         "number": {
           "format": "uint",
@@ -46,9 +58,21 @@
           "description": "The area swing (slack) bus, or `None` when unset."
         },
         "tolerance": {
-          "description": "Interchange tolerance bandwidth (MW).",
-          "format": "double",
-          "type": "number"
+          "anyOf": [
+            {
+              "format": "double",
+              "type": "number"
+            },
+            {
+              "enum": [
+                "Infinity",
+                "-Infinity",
+                "NaN"
+              ],
+              "type": "string"
+            }
+          ],
+          "description": "Interchange tolerance bandwidth (MW)."
         }
       },
       "required": [
@@ -59,7 +83,7 @@
       "type": "object"
     },
     "BalancedNetwork": {
-      "description": "A balanced network with stable source bus IDs and separate element tables.",
+      "description": "A balanced network with stable source bus IDs and separate element tables.\n\n`remote = \"Self\"` turns the derived serde impls into inherent functions;\nthe trait impls beneath the struct route them through [`crate::nonfinite`],\nso a nonfinite float spells as a string on every JSON route.",
       "properties": {
         "areas": {
           "default": [],
@@ -70,14 +94,38 @@
           "type": "array"
         },
         "base_frequency": {
+          "anyOf": [
+            {
+              "format": "double",
+              "type": "number"
+            },
+            {
+              "enum": [
+                "Infinity",
+                "-Infinity",
+                "NaN"
+              ],
+              "type": "string"
+            }
+          ],
           "default": 60.0,
-          "description": "System base frequency in hertz (50 or 60). Threaded through the formats\nthat record it (PSS/E `BASFRQ`, pandapower `f_hz`) and defaulted to\n[`DEFAULT_BASE_FREQUENCY`] for the rest. Load-bearing for any\nreactance↔henry conversion (pandapower line charging) and reported as a\nfidelity loss when a non-default value writes to a format with no\nfrequency field.",
-          "format": "double",
-          "type": "number"
+          "description": "System base frequency in hertz (50 or 60). Threaded through the formats\nthat record it (PSS/E `BASFRQ`, pandapower `f_hz`) and defaulted to\n[`DEFAULT_BASE_FREQUENCY`] for the rest. Load-bearing for any\nreactance↔henry conversion (pandapower line charging) and reported as a\nfidelity loss when a non-default value writes to a format with no\nfrequency field."
         },
         "base_mva": {
-          "format": "double",
-          "type": "number"
+          "anyOf": [
+            {
+              "format": "double",
+              "type": "number"
+            },
+            {
+              "enum": [
+                "Infinity",
+                "-Infinity",
+                "NaN"
+              ],
+              "type": "string"
+            }
+          ]
         },
         "branches": {
           "items": {
@@ -182,17 +230,53 @@
     "Branch": {
       "properties": {
         "angmax": {
-          "format": "double",
-          "type": "number"
+          "anyOf": [
+            {
+              "format": "double",
+              "type": "number"
+            },
+            {
+              "enum": [
+                "Infinity",
+                "-Infinity",
+                "NaN"
+              ],
+              "type": "string"
+            }
+          ]
         },
         "angmin": {
-          "format": "double",
-          "type": "number"
+          "anyOf": [
+            {
+              "format": "double",
+              "type": "number"
+            },
+            {
+              "enum": [
+                "Infinity",
+                "-Infinity",
+                "NaN"
+              ],
+              "type": "string"
+            }
+          ]
         },
         "b": {
-          "description": "MATPOWER compatible total line charging susceptance (p.u.). This is the\nlegacy total projection; when [`charging`](Branch::charging) is present,\nper terminal admittance is canonical and this field is compatibility data.",
-          "format": "double",
-          "type": "number"
+          "anyOf": [
+            {
+              "format": "double",
+              "type": "number"
+            },
+            {
+              "enum": [
+                "Infinity",
+                "-Infinity",
+                "NaN"
+              ],
+              "type": "string"
+            }
+          ],
+          "description": "MATPOWER compatible total line charging susceptance (p.u.). This is the\nlegacy total projection; when [`charging`](Branch::charging) is present,\nper terminal admittance is canonical and this field is compatibility data."
         },
         "charging": {
           "anyOf": [
@@ -241,21 +325,69 @@
           "type": "boolean"
         },
         "r": {
-          "description": "Series resistance (p.u.).",
-          "format": "double",
-          "type": "number"
+          "anyOf": [
+            {
+              "format": "double",
+              "type": "number"
+            },
+            {
+              "enum": [
+                "Infinity",
+                "-Infinity",
+                "NaN"
+              ],
+              "type": "string"
+            }
+          ],
+          "description": "Series resistance (p.u.)."
         },
         "rate_a": {
-          "format": "double",
-          "type": "number"
+          "anyOf": [
+            {
+              "format": "double",
+              "type": "number"
+            },
+            {
+              "enum": [
+                "Infinity",
+                "-Infinity",
+                "NaN"
+              ],
+              "type": "string"
+            }
+          ]
         },
         "rate_b": {
-          "format": "double",
-          "type": "number"
+          "anyOf": [
+            {
+              "format": "double",
+              "type": "number"
+            },
+            {
+              "enum": [
+                "Infinity",
+                "-Infinity",
+                "NaN"
+              ],
+              "type": "string"
+            }
+          ]
         },
         "rate_c": {
-          "format": "double",
-          "type": "number"
+          "anyOf": [
+            {
+              "format": "double",
+              "type": "number"
+            },
+            {
+              "enum": [
+                "Infinity",
+                "-Infinity",
+                "NaN"
+              ],
+              "type": "string"
+            }
+          ]
         },
         "rating_sets": {
           "default": [],
@@ -276,9 +408,21 @@
           ]
         },
         "shift": {
-          "description": "Phase shift (degrees).",
-          "format": "double",
-          "type": "number"
+          "anyOf": [
+            {
+              "format": "double",
+              "type": "number"
+            },
+            {
+              "enum": [
+                "Infinity",
+                "-Infinity",
+                "NaN"
+              ],
+              "type": "string"
+            }
+          ],
+          "description": "Phase shift (degrees)."
         },
         "solution": {
           "anyOf": [
@@ -293,9 +437,21 @@
           "description": "Solved branch flow values, when present in a case snapshot."
         },
         "tap": {
-          "description": "Tap ratio, MATPOWER convention: 0 means \"no tap\" (a line), treated as 1.",
-          "format": "double",
-          "type": "number"
+          "anyOf": [
+            {
+              "format": "double",
+              "type": "number"
+            },
+            {
+              "enum": [
+                "Infinity",
+                "-Infinity",
+                "NaN"
+              ],
+              "type": "string"
+            }
+          ],
+          "description": "Tap ratio, MATPOWER convention: 0 means \"no tap\" (a line), treated as 1."
         },
         "to": {
           "$ref": "#/$defs/BusId"
@@ -308,9 +464,21 @@
           ]
         },
         "x": {
-          "description": "Series reactance (p.u.).",
-          "format": "double",
-          "type": "number"
+          "anyOf": [
+            {
+              "format": "double",
+              "type": "number"
+            },
+            {
+              "enum": [
+                "Infinity",
+                "-Infinity",
+                "NaN"
+              ],
+              "type": "string"
+            }
+          ],
+          "description": "Series reactance (p.u.)."
         }
       },
       "required": [
@@ -335,20 +503,68 @@
       "description": "Per terminal branch shunt admittance in p.u. This is the canonical\nphysical branch shunt model when present.",
       "properties": {
         "b_fr": {
-          "format": "double",
-          "type": "number"
+          "anyOf": [
+            {
+              "format": "double",
+              "type": "number"
+            },
+            {
+              "enum": [
+                "Infinity",
+                "-Infinity",
+                "NaN"
+              ],
+              "type": "string"
+            }
+          ]
         },
         "b_to": {
-          "format": "double",
-          "type": "number"
+          "anyOf": [
+            {
+              "format": "double",
+              "type": "number"
+            },
+            {
+              "enum": [
+                "Infinity",
+                "-Infinity",
+                "NaN"
+              ],
+              "type": "string"
+            }
+          ]
         },
         "g_fr": {
-          "format": "double",
-          "type": "number"
+          "anyOf": [
+            {
+              "format": "double",
+              "type": "number"
+            },
+            {
+              "enum": [
+                "Infinity",
+                "-Infinity",
+                "NaN"
+              ],
+              "type": "string"
+            }
+          ]
         },
         "g_to": {
-          "format": "double",
-          "type": "number"
+          "anyOf": [
+            {
+              "format": "double",
+              "type": "number"
+            },
+            {
+              "enum": [
+                "Infinity",
+                "-Infinity",
+                "NaN"
+              ],
+              "type": "string"
+            }
+          ]
         }
       },
       "required": [
@@ -363,16 +579,52 @@
       "description": "Current limits for a branch, in source units.",
       "properties": {
         "c_rating_a": {
-          "format": "double",
-          "type": "number"
+          "anyOf": [
+            {
+              "format": "double",
+              "type": "number"
+            },
+            {
+              "enum": [
+                "Infinity",
+                "-Infinity",
+                "NaN"
+              ],
+              "type": "string"
+            }
+          ]
         },
         "c_rating_b": {
-          "format": "double",
-          "type": "number"
+          "anyOf": [
+            {
+              "format": "double",
+              "type": "number"
+            },
+            {
+              "enum": [
+                "Infinity",
+                "-Infinity",
+                "NaN"
+              ],
+              "type": "string"
+            }
+          ]
         },
         "c_rating_c": {
-          "format": "double",
-          "type": "number"
+          "anyOf": [
+            {
+              "format": "double",
+              "type": "number"
+            },
+            {
+              "enum": [
+                "Infinity",
+                "-Infinity",
+                "NaN"
+              ],
+              "type": "string"
+            }
+          ]
         }
       },
       "required": [
@@ -389,8 +641,20 @@
           "type": "string"
         },
         "rate_mva": {
-          "format": "double",
-          "type": "number"
+          "anyOf": [
+            {
+              "format": "double",
+              "type": "number"
+            },
+            {
+              "enum": [
+                "Infinity",
+                "-Infinity",
+                "NaN"
+              ],
+              "type": "string"
+            }
+          ]
         }
       },
       "required": [
@@ -403,20 +667,68 @@
       "description": "Solved branch terminal flows in MW/MVAr.",
       "properties": {
         "pf": {
-          "format": "double",
-          "type": "number"
+          "anyOf": [
+            {
+              "format": "double",
+              "type": "number"
+            },
+            {
+              "enum": [
+                "Infinity",
+                "-Infinity",
+                "NaN"
+              ],
+              "type": "string"
+            }
+          ]
         },
         "pt": {
-          "format": "double",
-          "type": "number"
+          "anyOf": [
+            {
+              "format": "double",
+              "type": "number"
+            },
+            {
+              "enum": [
+                "Infinity",
+                "-Infinity",
+                "NaN"
+              ],
+              "type": "string"
+            }
+          ]
         },
         "qf": {
-          "format": "double",
-          "type": "number"
+          "anyOf": [
+            {
+              "format": "double",
+              "type": "number"
+            },
+            {
+              "enum": [
+                "Infinity",
+                "-Infinity",
+                "NaN"
+              ],
+              "type": "string"
+            }
+          ]
         },
         "qt": {
-          "format": "double",
-          "type": "number"
+          "anyOf": [
+            {
+              "format": "double",
+              "type": "number"
+            },
+            {
+              "enum": [
+                "Infinity",
+                "-Infinity",
+                "NaN"
+              ],
+              "type": "string"
+            }
+          ]
         }
       },
       "required": [
@@ -435,25 +747,61 @@
           "type": "integer"
         },
         "base_kv": {
-          "format": "double",
-          "type": "number"
+          "anyOf": [
+            {
+              "format": "double",
+              "type": "number"
+            },
+            {
+              "enum": [
+                "Infinity",
+                "-Infinity",
+                "NaN"
+              ],
+              "type": "string"
+            }
+          ]
         },
         "evhi": {
+          "anyOf": [
+            {
+              "format": "double",
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            {
+              "enum": [
+                "Infinity",
+                "-Infinity",
+                "NaN"
+              ],
+              "type": "string"
+            }
+          ],
           "default": null,
-          "description": "Emergency (short-term) voltage band, set only when the source states one\ndistinct from the normal [`vmax`](Bus::vmax)/[`vmin`](Bus::vmin) band (PSS/E\n`EVHI`/`EVLO`). `None` means the emergency band equals the normal band, so\nread `evhi.unwrap_or(vmax)` / `evlo.unwrap_or(vmin)`. `#[serde(default)]` so\nJSON written before the fields existed still deserializes.",
-          "format": "double",
-          "type": [
-            "number",
-            "null"
-          ]
+          "description": "Emergency (short-term) voltage band, set only when the source states one\ndistinct from the normal [`vmax`](Bus::vmax)/[`vmin`](Bus::vmin) band (PSS/E\n`EVHI`/`EVLO`). `None` means the emergency band equals the normal band, so\nread `evhi.unwrap_or(vmax)` / `evlo.unwrap_or(vmin)`. `#[serde(default)]` so\nJSON written before the fields existed still deserializes."
         },
         "evlo": {
-          "default": null,
-          "format": "double",
-          "type": [
-            "number",
-            "null"
-          ]
+          "anyOf": [
+            {
+              "format": "double",
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            {
+              "enum": [
+                "Infinity",
+                "-Infinity",
+                "NaN"
+              ],
+              "type": "string"
+            }
+          ],
+          "default": null
         },
         "extras": {
           "additionalProperties": true,
@@ -491,22 +839,70 @@
           ]
         },
         "va": {
-          "description": "Voltage angle (degrees).",
-          "format": "double",
-          "type": "number"
+          "anyOf": [
+            {
+              "format": "double",
+              "type": "number"
+            },
+            {
+              "enum": [
+                "Infinity",
+                "-Infinity",
+                "NaN"
+              ],
+              "type": "string"
+            }
+          ],
+          "description": "Voltage angle (degrees)."
         },
         "vm": {
-          "description": "Voltage magnitude (p.u.).",
-          "format": "double",
-          "type": "number"
+          "anyOf": [
+            {
+              "format": "double",
+              "type": "number"
+            },
+            {
+              "enum": [
+                "Infinity",
+                "-Infinity",
+                "NaN"
+              ],
+              "type": "string"
+            }
+          ],
+          "description": "Voltage magnitude (p.u.)."
         },
         "vmax": {
-          "format": "double",
-          "type": "number"
+          "anyOf": [
+            {
+              "format": "double",
+              "type": "number"
+            },
+            {
+              "enum": [
+                "Infinity",
+                "-Infinity",
+                "NaN"
+              ],
+              "type": "string"
+            }
+          ]
         },
         "vmin": {
-          "format": "double",
-          "type": "number"
+          "anyOf": [
+            {
+              "format": "double",
+              "type": "number"
+            },
+            {
+              "enum": [
+                "Infinity",
+                "-Infinity",
+                "NaN"
+              ],
+              "type": "string"
+            }
+          ]
         },
         "zone": {
           "format": "uint",
@@ -548,10 +944,22 @@
       "description": "Diagram canvas metadata.",
       "properties": {
         "height": {
-          "format": "double",
-          "type": [
-            "number",
-            "null"
+          "anyOf": [
+            {
+              "format": "double",
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            {
+              "enum": [
+                "Infinity",
+                "-Infinity",
+                "NaN"
+              ],
+              "type": "string"
+            }
           ]
         },
         "units": {
@@ -561,10 +969,22 @@
           ]
         },
         "width": {
-          "format": "double",
-          "type": [
-            "number",
-            "null"
+          "anyOf": [
+            {
+              "format": "double",
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            {
+              "enum": [
+                "Infinity",
+                "-Infinity",
+                "NaN"
+              ],
+              "type": "string"
+            }
           ]
         }
       },
@@ -574,10 +994,22 @@
       "description": "Diagram canvas metadata.",
       "properties": {
         "height": {
-          "format": "double",
-          "type": [
-            "number",
-            "null"
+          "anyOf": [
+            {
+              "format": "double",
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            {
+              "enum": [
+                "Infinity",
+                "-Infinity",
+                "NaN"
+              ],
+              "type": "string"
+            }
           ]
         },
         "units": {
@@ -587,10 +1019,22 @@
           ]
         },
         "width": {
-          "format": "double",
-          "type": [
-            "number",
-            "null"
+          "anyOf": [
+            {
+              "format": "double",
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            {
+              "enum": [
+                "Infinity",
+                "-Infinity",
+                "NaN"
+              ],
+              "type": "string"
+            }
           ]
         }
       },
@@ -753,38 +1197,98 @@
           "type": "array"
         },
         "v_max": {
-          "format": "double",
-          "type": [
-            "number",
-            "null"
+          "anyOf": [
+            {
+              "format": "double",
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            {
+              "enum": [
+                "Infinity",
+                "-Infinity",
+                "NaN"
+              ],
+              "type": "string"
+            }
           ]
         },
         "v_min": {
-          "description": "Voltage magnitude bounds, volts: the scalar pair plus the phase to\nneutral and phase to phase families, and the per-sequence scalars\n(BMOPF schema 0.1.0: positive sequence has both bounds, negative and\nzero sequence and neutral to ground are magnitude caps whose lower\nbound is always 0).",
-          "format": "double",
-          "type": [
-            "number",
-            "null"
-          ]
+          "anyOf": [
+            {
+              "format": "double",
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            {
+              "enum": [
+                "Infinity",
+                "-Infinity",
+                "NaN"
+              ],
+              "type": "string"
+            }
+          ],
+          "description": "Voltage magnitude bounds, volts: the scalar pair plus the phase to\nneutral and phase to phase families, and the per-sequence scalars\n(BMOPF schema 0.1.0: positive sequence has both bounds, negative and\nzero sequence and neutral to ground are magnitude caps whose lower\nbound is always 0)."
         },
         "vn_max": {
-          "format": "double",
-          "type": [
-            "number",
-            "null"
+          "anyOf": [
+            {
+              "format": "double",
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            {
+              "enum": [
+                "Infinity",
+                "-Infinity",
+                "NaN"
+              ],
+              "type": "string"
+            }
           ]
         },
         "vneg_max": {
-          "format": "double",
-          "type": [
-            "number",
-            "null"
+          "anyOf": [
+            {
+              "format": "double",
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            {
+              "enum": [
+                "Infinity",
+                "-Infinity",
+                "NaN"
+              ],
+              "type": "string"
+            }
           ]
         },
         "vpn_max": {
           "items": {
-            "format": "double",
-            "type": "number"
+            "anyOf": [
+              {
+                "format": "double",
+                "type": "number"
+              },
+              {
+                "enum": [
+                  "Infinity",
+                  "-Infinity",
+                  "NaN"
+                ],
+                "type": "string"
+              }
+            ]
           },
           "type": [
             "array",
@@ -793,8 +1297,20 @@
         },
         "vpn_min": {
           "items": {
-            "format": "double",
-            "type": "number"
+            "anyOf": [
+              {
+                "format": "double",
+                "type": "number"
+              },
+              {
+                "enum": [
+                  "Infinity",
+                  "-Infinity",
+                  "NaN"
+                ],
+                "type": "string"
+              }
+            ]
           },
           "type": [
             "array",
@@ -802,23 +1318,59 @@
           ]
         },
         "vpos_max": {
-          "format": "double",
-          "type": [
-            "number",
-            "null"
+          "anyOf": [
+            {
+              "format": "double",
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            {
+              "enum": [
+                "Infinity",
+                "-Infinity",
+                "NaN"
+              ],
+              "type": "string"
+            }
           ]
         },
         "vpos_min": {
-          "format": "double",
-          "type": [
-            "number",
-            "null"
+          "anyOf": [
+            {
+              "format": "double",
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            {
+              "enum": [
+                "Infinity",
+                "-Infinity",
+                "NaN"
+              ],
+              "type": "string"
+            }
           ]
         },
         "vpp_max": {
           "items": {
-            "format": "double",
-            "type": "number"
+            "anyOf": [
+              {
+                "format": "double",
+                "type": "number"
+              },
+              {
+                "enum": [
+                  "Infinity",
+                  "-Infinity",
+                  "NaN"
+                ],
+                "type": "string"
+              }
+            ]
           },
           "type": [
             "array",
@@ -827,8 +1379,20 @@
         },
         "vpp_min": {
           "items": {
-            "format": "double",
-            "type": "number"
+            "anyOf": [
+              {
+                "format": "double",
+                "type": "number"
+              },
+              {
+                "enum": [
+                  "Infinity",
+                  "-Infinity",
+                  "NaN"
+                ],
+                "type": "string"
+              }
+            ]
           },
           "type": [
             "array",
@@ -836,10 +1400,22 @@
           ]
         },
         "vzero_max": {
-          "format": "double",
-          "type": [
-            "number",
-            "null"
+          "anyOf": [
+            {
+              "format": "double",
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            {
+              "enum": [
+                "Infinity",
+                "-Infinity",
+                "NaN"
+              ],
+              "type": "string"
+            }
           ]
         }
       },
@@ -868,12 +1444,24 @@
           "type": "string"
         },
         "q_rated": {
-          "description": "Nameplate rated reactive power of the whole bank, vars.",
-          "format": "double",
-          "type": [
-            "number",
-            "null"
-          ]
+          "anyOf": [
+            {
+              "format": "double",
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            {
+              "enum": [
+                "Infinity",
+                "-Infinity",
+                "NaN"
+              ],
+              "type": "string"
+            }
+          ],
+          "description": "Nameplate rated reactive power of the whole bank, vars."
         },
         "terminal_map": {
           "items": {
@@ -882,12 +1470,24 @@
           "type": "array"
         },
         "v_nom": {
-          "description": "Nameplate nominal voltage, volts: line to line for the three phase\nconfigurations, across the terminals for SINGLE_PHASE.",
-          "format": "double",
-          "type": [
-            "number",
-            "null"
-          ]
+          "anyOf": [
+            {
+              "format": "double",
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            {
+              "enum": [
+                "Infinity",
+                "-Infinity",
+                "NaN"
+              ],
+              "type": "string"
+            }
+          ],
+          "description": "Nameplate nominal voltage, volts: line to line for the three phase\nconfigurations, across the terminals for SINGLE_PHASE."
         }
       },
       "required": [
@@ -956,12 +1556,24 @@
           "$ref": "#/$defs/Configuration"
         },
         "cost": {
-          "description": "$/kWh; no OpenDSS equivalent, so it is None until a format supplies it.",
-          "format": "double",
-          "type": [
-            "number",
-            "null"
-          ]
+          "anyOf": [
+            {
+              "format": "double",
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            {
+              "enum": [
+                "Infinity",
+                "-Infinity",
+                "NaN"
+              ],
+              "type": "string"
+            }
+          ],
+          "description": "$/kWh; no OpenDSS equivalent, so it is None until a format supplies it."
         },
         "extras": {
           "additionalProperties": true,
@@ -969,10 +1581,22 @@
         },
         "i_max": {
           "items": {
-            "format": "double",
-            "type": [
-              "number",
-              "null"
+            "anyOf": [
+              {
+                "format": "double",
+                "type": [
+                  "number",
+                  "null"
+                ]
+              },
+              {
+                "enum": [
+                  "Infinity",
+                  "-Infinity",
+                  "NaN"
+                ],
+                "type": "string"
+              }
             ]
           },
           "type": [
@@ -986,10 +1610,22 @@
         "p_max": {
           "default": null,
           "items": {
-            "format": "double",
-            "type": [
-              "number",
-              "null"
+            "anyOf": [
+              {
+                "format": "double",
+                "type": [
+                  "number",
+                  "null"
+                ]
+              },
+              {
+                "enum": [
+                  "Infinity",
+                  "-Infinity",
+                  "NaN"
+                ],
+                "type": "string"
+              }
             ]
           },
           "type": [
@@ -1001,10 +1637,22 @@
           "default": null,
           "description": "Bounds per phase. A `null` element reads as -Inf in a lower bound\nand +Inf in an upper bound: the PMD unbounded spelling (#268).",
           "items": {
-            "format": "double",
-            "type": [
-              "number",
-              "null"
+            "anyOf": [
+              {
+                "format": "double",
+                "type": [
+                  "number",
+                  "null"
+                ]
+              },
+              {
+                "enum": [
+                  "Infinity",
+                  "-Infinity",
+                  "NaN"
+                ],
+                "type": "string"
+              }
             ]
           },
           "type": [
@@ -1015,18 +1663,42 @@
         "p_nom": {
           "description": "Setpoint, watts per phase.",
           "items": {
-            "format": "double",
-            "type": "number"
+            "anyOf": [
+              {
+                "format": "double",
+                "type": "number"
+              },
+              {
+                "enum": [
+                  "Infinity",
+                  "-Infinity",
+                  "NaN"
+                ],
+                "type": "string"
+              }
+            ]
           },
           "type": "array"
         },
         "q_max": {
           "default": null,
           "items": {
-            "format": "double",
-            "type": [
-              "number",
-              "null"
+            "anyOf": [
+              {
+                "format": "double",
+                "type": [
+                  "number",
+                  "null"
+                ]
+              },
+              {
+                "enum": [
+                  "Infinity",
+                  "-Infinity",
+                  "NaN"
+                ],
+                "type": "string"
+              }
             ]
           },
           "type": [
@@ -1037,10 +1709,22 @@
         "q_min": {
           "default": null,
           "items": {
-            "format": "double",
-            "type": [
-              "number",
-              "null"
+            "anyOf": [
+              {
+                "format": "double",
+                "type": [
+                  "number",
+                  "null"
+                ]
+              },
+              {
+                "enum": [
+                  "Infinity",
+                  "-Infinity",
+                  "NaN"
+                ],
+                "type": "string"
+              }
             ]
           },
           "type": [
@@ -1050,18 +1734,42 @@
         },
         "q_nom": {
           "items": {
-            "format": "double",
-            "type": "number"
+            "anyOf": [
+              {
+                "format": "double",
+                "type": "number"
+              },
+              {
+                "enum": [
+                  "Infinity",
+                  "-Infinity",
+                  "NaN"
+                ],
+                "type": "string"
+              }
+            ]
           },
           "type": "array"
         },
         "s_max": {
           "description": "Per-conductor apparent power and current limits, VA and amps (BMOPF\ngenerator fields, alongside the p/q bounds).",
           "items": {
-            "format": "double",
-            "type": [
-              "number",
-              "null"
+            "anyOf": [
+              {
+                "format": "double",
+                "type": [
+                  "number",
+                  "null"
+                ]
+              },
+              {
+                "enum": [
+                  "Infinity",
+                  "-Infinity",
+                  "NaN"
+                ],
+                "type": "string"
+              }
             ]
           },
           "type": [
@@ -1106,10 +1814,22 @@
           "default": null,
           "description": "Per conductor current limits, amperes.",
           "items": {
-            "format": "double",
-            "type": [
-              "number",
-              "null"
+            "anyOf": [
+              {
+                "format": "double",
+                "type": [
+                  "number",
+                  "null"
+                ]
+              },
+              {
+                "enum": [
+                  "Infinity",
+                  "-Infinity",
+                  "NaN"
+                ],
+                "type": "string"
+              }
             ]
           },
           "type": [
@@ -1121,20 +1841,44 @@
           "type": "string"
         },
         "p_avail": {
-          "description": "Available active power, watts.",
-          "format": "double",
-          "type": [
-            "number",
-            "null"
-          ]
+          "anyOf": [
+            {
+              "format": "double",
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            {
+              "enum": [
+                "Infinity",
+                "-Infinity",
+                "NaN"
+              ],
+              "type": "string"
+            }
+          ],
+          "description": "Available active power, watts."
         },
         "p_max": {
           "default": null,
           "items": {
-            "format": "double",
-            "type": [
-              "number",
-              "null"
+            "anyOf": [
+              {
+                "format": "double",
+                "type": [
+                  "number",
+                  "null"
+                ]
+              },
+              {
+                "enum": [
+                  "Infinity",
+                  "-Infinity",
+                  "NaN"
+                ],
+                "type": "string"
+              }
             ]
           },
           "type": [
@@ -1145,10 +1889,22 @@
         "p_min": {
           "default": null,
           "items": {
-            "format": "double",
-            "type": [
-              "number",
-              "null"
+            "anyOf": [
+              {
+                "format": "double",
+                "type": [
+                  "number",
+                  "null"
+                ]
+              },
+              {
+                "enum": [
+                  "Infinity",
+                  "-Infinity",
+                  "NaN"
+                ],
+                "type": "string"
+              }
             ]
           },
           "type": [
@@ -1162,10 +1918,22 @@
         "q_max": {
           "default": null,
           "items": {
-            "format": "double",
-            "type": [
-              "number",
-              "null"
+            "anyOf": [
+              {
+                "format": "double",
+                "type": [
+                  "number",
+                  "null"
+                ]
+              },
+              {
+                "enum": [
+                  "Infinity",
+                  "-Infinity",
+                  "NaN"
+                ],
+                "type": "string"
+              }
             ]
           },
           "type": [
@@ -1176,10 +1944,22 @@
         "q_min": {
           "default": null,
           "items": {
-            "format": "double",
-            "type": [
-              "number",
-              "null"
+            "anyOf": [
+              {
+                "format": "double",
+                "type": [
+                  "number",
+                  "null"
+                ]
+              },
+              {
+                "enum": [
+                  "Infinity",
+                  "-Infinity",
+                  "NaN"
+                ],
+                "type": "string"
+              }
             ]
           },
           "type": [
@@ -1190,10 +1970,22 @@
         "s_max": {
           "description": "Per phase apparent power nameplate ratings, volt amperes.",
           "items": {
-            "format": "double",
-            "type": [
-              "number",
-              "null"
+            "anyOf": [
+              {
+                "format": "double",
+                "type": [
+                  "number",
+                  "null"
+                ]
+              },
+              {
+                "enum": [
+                  "Infinity",
+                  "-Infinity",
+                  "NaN"
+                ],
+                "type": "string"
+              }
             ]
           },
           "type": "array"
@@ -1244,10 +2036,22 @@
         "i_max": {
           "description": "Per-conductor ampacity and apparent power limits, amps and VA\n(BMOPF schema 0.1.0 line fields, alongside the linecode's own).\nA `null` element reads as +Inf (#268).",
           "items": {
-            "format": "double",
-            "type": [
-              "number",
-              "null"
+            "anyOf": [
+              {
+                "format": "double",
+                "type": [
+                  "number",
+                  "null"
+                ]
+              },
+              {
+                "enum": [
+                  "Infinity",
+                  "-Infinity",
+                  "NaN"
+                ],
+                "type": "string"
+              }
             ]
           },
           "type": [
@@ -1256,12 +2060,24 @@
           ]
         },
         "length": {
-          "description": "Meters. A `null` reads as NaN: a BMOPF line without a length (#268).",
-          "format": "double",
-          "type": [
-            "number",
-            "null"
-          ]
+          "anyOf": [
+            {
+              "format": "double",
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            {
+              "enum": [
+                "Infinity",
+                "-Infinity",
+                "NaN"
+              ],
+              "type": "string"
+            }
+          ],
+          "description": "Meters. A `null` reads as NaN: a BMOPF line without a length (#268)."
         },
         "linecode": {
           "type": "string"
@@ -1281,10 +2097,22 @@
         },
         "s_max": {
           "items": {
-            "format": "double",
-            "type": [
-              "number",
-              "null"
+            "anyOf": [
+              {
+                "format": "double",
+                "type": [
+                  "number",
+                  "null"
+                ]
+              },
+              {
+                "enum": [
+                  "Infinity",
+                  "-Infinity",
+                  "NaN"
+                ],
+                "type": "string"
+              }
             ]
           },
           "type": [
@@ -1322,8 +2150,20 @@
         "b_from": {
           "items": {
             "items": {
-              "format": "double",
-              "type": "number"
+              "anyOf": [
+                {
+                  "format": "double",
+                  "type": "number"
+                },
+                {
+                  "enum": [
+                    "Infinity",
+                    "-Infinity",
+                    "NaN"
+                  ],
+                  "type": "string"
+                }
+              ]
             },
             "type": "array"
           },
@@ -1332,8 +2172,20 @@
         "b_to": {
           "items": {
             "items": {
-              "format": "double",
-              "type": "number"
+              "anyOf": [
+                {
+                  "format": "double",
+                  "type": "number"
+                },
+                {
+                  "enum": [
+                    "Infinity",
+                    "-Infinity",
+                    "NaN"
+                  ],
+                  "type": "string"
+                }
+              ]
             },
             "type": "array"
           },
@@ -1347,8 +2199,20 @@
           "description": "Shunt admittance halves at each end, S per meter.",
           "items": {
             "items": {
-              "format": "double",
-              "type": "number"
+              "anyOf": [
+                {
+                  "format": "double",
+                  "type": "number"
+                },
+                {
+                  "enum": [
+                    "Infinity",
+                    "-Infinity",
+                    "NaN"
+                  ],
+                  "type": "string"
+                }
+              ]
             },
             "type": "array"
           },
@@ -1357,8 +2221,20 @@
         "g_to": {
           "items": {
             "items": {
-              "format": "double",
-              "type": "number"
+              "anyOf": [
+                {
+                  "format": "double",
+                  "type": "number"
+                },
+                {
+                  "enum": [
+                    "Infinity",
+                    "-Infinity",
+                    "NaN"
+                  ],
+                  "type": "string"
+                }
+              ]
             },
             "type": "array"
           },
@@ -1368,10 +2244,22 @@
           "default": null,
           "description": "Ampacity per conductor. A `null` element reads as +Inf (#268).",
           "items": {
-            "format": "double",
-            "type": [
-              "number",
-              "null"
+            "anyOf": [
+              {
+                "format": "double",
+                "type": [
+                  "number",
+                  "null"
+                ]
+              },
+              {
+                "enum": [
+                  "Infinity",
+                  "-Infinity",
+                  "NaN"
+                ],
+                "type": "string"
+              }
             ]
           },
           "type": [
@@ -1391,8 +2279,20 @@
           "description": "Series impedance, ohm per meter.",
           "items": {
             "items": {
-              "format": "double",
-              "type": "number"
+              "anyOf": [
+                {
+                  "format": "double",
+                  "type": "number"
+                },
+                {
+                  "enum": [
+                    "Infinity",
+                    "-Infinity",
+                    "NaN"
+                  ],
+                  "type": "string"
+                }
+              ]
             },
             "type": "array"
           },
@@ -1401,10 +2301,22 @@
         "s_max": {
           "default": null,
           "items": {
-            "format": "double",
-            "type": [
-              "number",
-              "null"
+            "anyOf": [
+              {
+                "format": "double",
+                "type": [
+                  "number",
+                  "null"
+                ]
+              },
+              {
+                "enum": [
+                  "Infinity",
+                  "-Infinity",
+                  "NaN"
+                ],
+                "type": "string"
+              }
             ]
           },
           "type": [
@@ -1422,8 +2334,20 @@
         "x_series": {
           "items": {
             "items": {
-              "format": "double",
-              "type": "number"
+              "anyOf": [
+                {
+                  "format": "double",
+                  "type": "number"
+                },
+                {
+                  "enum": [
+                    "Infinity",
+                    "-Infinity",
+                    "NaN"
+                  ],
+                  "type": "string"
+                }
+              ]
             },
             "type": "array"
           },
@@ -1461,16 +2385,40 @@
         "p_nom": {
           "description": "Watts per phase.",
           "items": {
-            "format": "double",
-            "type": "number"
+            "anyOf": [
+              {
+                "format": "double",
+                "type": "number"
+              },
+              {
+                "enum": [
+                  "Infinity",
+                  "-Infinity",
+                  "NaN"
+                ],
+                "type": "string"
+              }
+            ]
           },
           "type": "array"
         },
         "q_nom": {
           "description": "Vars per phase.",
           "items": {
-            "format": "double",
-            "type": "number"
+            "anyOf": [
+              {
+                "format": "double",
+                "type": "number"
+              },
+              {
+                "enum": [
+                  "Infinity",
+                  "-Infinity",
+                  "NaN"
+                ],
+                "type": "string"
+              }
+            ]
           },
           "type": "array"
         },
@@ -1507,8 +2455,20 @@
             },
             "v_nom": {
               "items": {
-                "format": "double",
-                "type": "number"
+                "anyOf": [
+                  {
+                    "format": "double",
+                    "type": "number"
+                  },
+                  {
+                    "enum": [
+                      "Infinity",
+                      "-Infinity",
+                      "NaN"
+                    ],
+                    "type": "string"
+                  }
+                ]
               },
               "type": "array"
             }
@@ -1528,8 +2488,20 @@
             },
             "v_nom": {
               "items": {
-                "format": "double",
-                "type": "number"
+                "anyOf": [
+                  {
+                    "format": "double",
+                    "type": "number"
+                  },
+                  {
+                    "enum": [
+                      "Infinity",
+                      "-Infinity",
+                      "NaN"
+                    ],
+                    "type": "string"
+                  }
+                ]
               },
               "type": "array"
             }
@@ -1549,8 +2521,20 @@
             },
             "v_nom": {
               "items": {
-                "format": "double",
-                "type": "number"
+                "anyOf": [
+                  {
+                    "format": "double",
+                    "type": "number"
+                  },
+                  {
+                    "enum": [
+                      "Infinity",
+                      "-Infinity",
+                      "NaN"
+                    ],
+                    "type": "string"
+                  }
+                ]
               },
               "type": "array"
             }
@@ -1566,43 +2550,115 @@
           "properties": {
             "alpha_i": {
               "items": {
-                "format": "double",
-                "type": "number"
+                "anyOf": [
+                  {
+                    "format": "double",
+                    "type": "number"
+                  },
+                  {
+                    "enum": [
+                      "Infinity",
+                      "-Infinity",
+                      "NaN"
+                    ],
+                    "type": "string"
+                  }
+                ]
               },
               "type": "array"
             },
             "alpha_p": {
               "items": {
-                "format": "double",
-                "type": "number"
+                "anyOf": [
+                  {
+                    "format": "double",
+                    "type": "number"
+                  },
+                  {
+                    "enum": [
+                      "Infinity",
+                      "-Infinity",
+                      "NaN"
+                    ],
+                    "type": "string"
+                  }
+                ]
               },
               "type": "array"
             },
             "alpha_z": {
               "items": {
-                "format": "double",
-                "type": "number"
+                "anyOf": [
+                  {
+                    "format": "double",
+                    "type": "number"
+                  },
+                  {
+                    "enum": [
+                      "Infinity",
+                      "-Infinity",
+                      "NaN"
+                    ],
+                    "type": "string"
+                  }
+                ]
               },
               "type": "array"
             },
             "beta_i": {
               "items": {
-                "format": "double",
-                "type": "number"
+                "anyOf": [
+                  {
+                    "format": "double",
+                    "type": "number"
+                  },
+                  {
+                    "enum": [
+                      "Infinity",
+                      "-Infinity",
+                      "NaN"
+                    ],
+                    "type": "string"
+                  }
+                ]
               },
               "type": "array"
             },
             "beta_p": {
               "items": {
-                "format": "double",
-                "type": "number"
+                "anyOf": [
+                  {
+                    "format": "double",
+                    "type": "number"
+                  },
+                  {
+                    "enum": [
+                      "Infinity",
+                      "-Infinity",
+                      "NaN"
+                    ],
+                    "type": "string"
+                  }
+                ]
               },
               "type": "array"
             },
             "beta_z": {
               "items": {
-                "format": "double",
-                "type": "number"
+                "anyOf": [
+                  {
+                    "format": "double",
+                    "type": "number"
+                  },
+                  {
+                    "enum": [
+                      "Infinity",
+                      "-Infinity",
+                      "NaN"
+                    ],
+                    "type": "string"
+                  }
+                ]
               },
               "type": "array"
             },
@@ -1612,8 +2668,20 @@
             },
             "v_nom": {
               "items": {
-                "format": "double",
-                "type": "number"
+                "anyOf": [
+                  {
+                    "format": "double",
+                    "type": "number"
+                  },
+                  {
+                    "enum": [
+                      "Infinity",
+                      "-Infinity",
+                      "NaN"
+                    ],
+                    "type": "string"
+                  }
+                ]
               },
               "type": "array"
             }
@@ -1635,15 +2703,39 @@
           "properties": {
             "gamma_p": {
               "items": {
-                "format": "double",
-                "type": "number"
+                "anyOf": [
+                  {
+                    "format": "double",
+                    "type": "number"
+                  },
+                  {
+                    "enum": [
+                      "Infinity",
+                      "-Infinity",
+                      "NaN"
+                    ],
+                    "type": "string"
+                  }
+                ]
               },
               "type": "array"
             },
             "gamma_q": {
               "items": {
-                "format": "double",
-                "type": "number"
+                "anyOf": [
+                  {
+                    "format": "double",
+                    "type": "number"
+                  },
+                  {
+                    "enum": [
+                      "Infinity",
+                      "-Infinity",
+                      "NaN"
+                    ],
+                    "type": "string"
+                  }
+                ]
               },
               "type": "array"
             },
@@ -1653,8 +2745,20 @@
             },
             "v_nom": {
               "items": {
-                "format": "double",
-                "type": "number"
+                "anyOf": [
+                  {
+                    "format": "double",
+                    "type": "number"
+                  },
+                  {
+                    "enum": [
+                      "Infinity",
+                      "-Infinity",
+                      "NaN"
+                    ],
+                    "type": "string"
+                  }
+                ]
               },
               "type": "array"
             }
@@ -1674,8 +2778,20 @@
         "b": {
           "items": {
             "items": {
-              "format": "double",
-              "type": "number"
+              "anyOf": [
+                {
+                  "format": "double",
+                  "type": "number"
+                },
+                {
+                  "enum": [
+                    "Infinity",
+                    "-Infinity",
+                    "NaN"
+                  ],
+                  "type": "string"
+                }
+              ]
             },
             "type": "array"
           },
@@ -1692,8 +2808,20 @@
           "description": "Total siemens in conductor order.",
           "items": {
             "items": {
-              "format": "double",
-              "type": "number"
+              "anyOf": [
+                {
+                  "format": "double",
+                  "type": "number"
+                },
+                {
+                  "enum": [
+                    "Infinity",
+                    "-Infinity",
+                    "NaN"
+                  ],
+                  "type": "string"
+                }
+              ]
             },
             "type": "array"
           },
@@ -1744,10 +2872,22 @@
           "default": null,
           "description": "Ampacity per conductor. A `null` element reads as +Inf (#268).",
           "items": {
-            "format": "double",
-            "type": [
-              "number",
-              "null"
+            "anyOf": [
+              {
+                "format": "double",
+                "type": [
+                  "number",
+                  "null"
+                ]
+              },
+              {
+                "enum": [
+                  "Infinity",
+                  "-Infinity",
+                  "NaN"
+                ],
+                "type": "string"
+              }
             ]
           },
           "type": [
@@ -1808,8 +2948,20 @@
         "xsc_pct": {
           "description": "Short circuit reactances between winding pairs, percent:\n`[xhl]` for two windings, `[xhl, xht, xlt]` for three.",
           "items": {
-            "format": "double",
-            "type": "number"
+            "anyOf": [
+              {
+                "format": "double",
+                "type": "number"
+              },
+              {
+                "enum": [
+                  "Infinity",
+                  "-Infinity",
+                  "NaN"
+                ],
+                "type": "string"
+              }
+            ]
           },
           "type": "array"
         }
@@ -1905,8 +3057,20 @@
         "coeffs": {
           "description": "Raw coefficients, highest order first for the polynomial model:\n`[c_{k-1}, …, c1, c0]`.",
           "items": {
-            "format": "double",
-            "type": "number"
+            "anyOf": [
+              {
+                "format": "double",
+                "type": "number"
+              },
+              {
+                "enum": [
+                  "Infinity",
+                  "-Infinity",
+                  "NaN"
+                ],
+                "type": "string"
+              }
+            ]
           },
           "type": "array"
         },
@@ -1924,12 +3088,36 @@
           "type": "integer"
         },
         "shutdown": {
-          "format": "double",
-          "type": "number"
+          "anyOf": [
+            {
+              "format": "double",
+              "type": "number"
+            },
+            {
+              "enum": [
+                "Infinity",
+                "-Infinity",
+                "NaN"
+              ],
+              "type": "string"
+            }
+          ]
         },
         "startup": {
-          "format": "double",
-          "type": "number"
+          "anyOf": [
+            {
+              "format": "double",
+              "type": "number"
+            },
+            {
+              "enum": [
+                "Infinity",
+                "-Infinity",
+                "NaN"
+              ],
+              "type": "string"
+            }
+          ]
         }
       },
       "required": [
@@ -1948,8 +3136,20 @@
         },
         "caps": {
           "additionalProperties": {
-            "format": "double",
-            "type": "number"
+            "anyOf": [
+              {
+                "format": "double",
+                "type": "number"
+              },
+              {
+                "enum": [
+                  "Infinity",
+                  "-Infinity",
+                  "NaN"
+                ],
+                "type": "string"
+              }
+            ]
           },
           "default": {},
           "description": "The MATPOWER gen capability / ramp columns past `PMIN`, aligned to\n`GEN_EXTRA_KEYS` by index (`None` for a column the source omitted).\nA fixed array, not an [`Extras`] map: a string-keyed map per generator\ncosts 11 heap allocations each, which dominates the parse of a large\ngenerator-heavy case. Surfaced into formats that name them (PowerModels).\nOn the JSON snapshot it is a name-keyed object (see `caps_serde`) so the\nschema stays additive when `GEN_EXTRA_KEYS` grows; `#[serde(default)]` so a\nsnapshot that omits it deserializes to the empty set.",
@@ -1969,34 +3169,118 @@
           "type": "boolean"
         },
         "mbase": {
-          "format": "double",
-          "type": "number"
+          "anyOf": [
+            {
+              "format": "double",
+              "type": "number"
+            },
+            {
+              "enum": [
+                "Infinity",
+                "-Infinity",
+                "NaN"
+              ],
+              "type": "string"
+            }
+          ]
         },
         "pg": {
-          "description": "Real power set point (MW).",
-          "format": "double",
-          "type": "number"
+          "anyOf": [
+            {
+              "format": "double",
+              "type": "number"
+            },
+            {
+              "enum": [
+                "Infinity",
+                "-Infinity",
+                "NaN"
+              ],
+              "type": "string"
+            }
+          ],
+          "description": "Real power set point (MW)."
         },
         "pmax": {
-          "format": "double",
-          "type": "number"
+          "anyOf": [
+            {
+              "format": "double",
+              "type": "number"
+            },
+            {
+              "enum": [
+                "Infinity",
+                "-Infinity",
+                "NaN"
+              ],
+              "type": "string"
+            }
+          ]
         },
         "pmin": {
-          "format": "double",
-          "type": "number"
+          "anyOf": [
+            {
+              "format": "double",
+              "type": "number"
+            },
+            {
+              "enum": [
+                "Infinity",
+                "-Infinity",
+                "NaN"
+              ],
+              "type": "string"
+            }
+          ]
         },
         "qg": {
-          "description": "Reactive power set point (MVAr).",
-          "format": "double",
-          "type": "number"
+          "anyOf": [
+            {
+              "format": "double",
+              "type": "number"
+            },
+            {
+              "enum": [
+                "Infinity",
+                "-Infinity",
+                "NaN"
+              ],
+              "type": "string"
+            }
+          ],
+          "description": "Reactive power set point (MVAr)."
         },
         "qmax": {
-          "format": "double",
-          "type": "number"
+          "anyOf": [
+            {
+              "format": "double",
+              "type": "number"
+            },
+            {
+              "enum": [
+                "Infinity",
+                "-Infinity",
+                "NaN"
+              ],
+              "type": "string"
+            }
+          ]
         },
         "qmin": {
-          "format": "double",
-          "type": "number"
+          "anyOf": [
+            {
+              "format": "double",
+              "type": "number"
+            },
+            {
+              "enum": [
+                "Infinity",
+                "-Infinity",
+                "NaN"
+              ],
+              "type": "string"
+            }
+          ]
         },
         "regulated_bus": {
           "anyOf": [
@@ -2018,9 +3302,21 @@
           ]
         },
         "vg": {
-          "description": "Voltage set point (p.u.).",
-          "format": "double",
-          "type": "number"
+          "anyOf": [
+            {
+              "format": "double",
+              "type": "number"
+            },
+            {
+              "enum": [
+                "Infinity",
+                "-Infinity",
+                "NaN"
+              ],
+              "type": "string"
+            }
+          ],
+          "description": "Voltage set point (p.u.)."
         }
       },
       "required": [
@@ -2248,52 +3544,196 @@
           "type": "boolean"
         },
         "loss0": {
-          "format": "double",
-          "type": "number"
+          "anyOf": [
+            {
+              "format": "double",
+              "type": "number"
+            },
+            {
+              "enum": [
+                "Infinity",
+                "-Infinity",
+                "NaN"
+              ],
+              "type": "string"
+            }
+          ]
         },
         "loss1": {
-          "format": "double",
-          "type": "number"
+          "anyOf": [
+            {
+              "format": "double",
+              "type": "number"
+            },
+            {
+              "enum": [
+                "Infinity",
+                "-Infinity",
+                "NaN"
+              ],
+              "type": "string"
+            }
+          ]
         },
         "pf": {
-          "format": "double",
-          "type": "number"
+          "anyOf": [
+            {
+              "format": "double",
+              "type": "number"
+            },
+            {
+              "enum": [
+                "Infinity",
+                "-Infinity",
+                "NaN"
+              ],
+              "type": "string"
+            }
+          ]
         },
         "pmax": {
-          "format": "double",
-          "type": "number"
+          "anyOf": [
+            {
+              "format": "double",
+              "type": "number"
+            },
+            {
+              "enum": [
+                "Infinity",
+                "-Infinity",
+                "NaN"
+              ],
+              "type": "string"
+            }
+          ]
         },
         "pmin": {
-          "format": "double",
-          "type": "number"
+          "anyOf": [
+            {
+              "format": "double",
+              "type": "number"
+            },
+            {
+              "enum": [
+                "Infinity",
+                "-Infinity",
+                "NaN"
+              ],
+              "type": "string"
+            }
+          ]
         },
         "pt": {
-          "format": "double",
-          "type": "number"
+          "anyOf": [
+            {
+              "format": "double",
+              "type": "number"
+            },
+            {
+              "enum": [
+                "Infinity",
+                "-Infinity",
+                "NaN"
+              ],
+              "type": "string"
+            }
+          ]
         },
         "qf": {
-          "format": "double",
-          "type": "number"
+          "anyOf": [
+            {
+              "format": "double",
+              "type": "number"
+            },
+            {
+              "enum": [
+                "Infinity",
+                "-Infinity",
+                "NaN"
+              ],
+              "type": "string"
+            }
+          ]
         },
         "qmaxf": {
-          "format": "double",
-          "type": "number"
+          "anyOf": [
+            {
+              "format": "double",
+              "type": "number"
+            },
+            {
+              "enum": [
+                "Infinity",
+                "-Infinity",
+                "NaN"
+              ],
+              "type": "string"
+            }
+          ]
         },
         "qmaxt": {
-          "format": "double",
-          "type": "number"
+          "anyOf": [
+            {
+              "format": "double",
+              "type": "number"
+            },
+            {
+              "enum": [
+                "Infinity",
+                "-Infinity",
+                "NaN"
+              ],
+              "type": "string"
+            }
+          ]
         },
         "qminf": {
-          "format": "double",
-          "type": "number"
+          "anyOf": [
+            {
+              "format": "double",
+              "type": "number"
+            },
+            {
+              "enum": [
+                "Infinity",
+                "-Infinity",
+                "NaN"
+              ],
+              "type": "string"
+            }
+          ]
         },
         "qmint": {
-          "format": "double",
-          "type": "number"
+          "anyOf": [
+            {
+              "format": "double",
+              "type": "number"
+            },
+            {
+              "enum": [
+                "Infinity",
+                "-Infinity",
+                "NaN"
+              ],
+              "type": "string"
+            }
+          ]
         },
         "qt": {
-          "format": "double",
-          "type": "number"
+          "anyOf": [
+            {
+              "format": "double",
+              "type": "number"
+            },
+            {
+              "enum": [
+                "Infinity",
+                "-Infinity",
+                "NaN"
+              ],
+              "type": "string"
+            }
+          ]
         },
         "to": {
           "$ref": "#/$defs/BusId"
@@ -2306,12 +3746,36 @@
           ]
         },
         "vf": {
-          "format": "double",
-          "type": "number"
+          "anyOf": [
+            {
+              "format": "double",
+              "type": "number"
+            },
+            {
+              "enum": [
+                "Infinity",
+                "-Infinity",
+                "NaN"
+              ],
+              "type": "string"
+            }
+          ]
         },
         "vt": {
-          "format": "double",
-          "type": "number"
+          "anyOf": [
+            {
+              "format": "double",
+              "type": "number"
+            },
+            {
+              "enum": [
+                "Infinity",
+                "-Infinity",
+                "NaN"
+              ],
+              "type": "string"
+            }
+          ]
         }
       },
       "required": [
@@ -2365,16 +3829,52 @@
       "description": "A series impedance with the MVA base it is expressed on. Used pairwise by\n[`Transformer3W`]; a self-contained unit so the base travels with the value\ninstead of being implied by position.\n\n`r`/`x` are per unit on the *system* base (the same `CZ = 1` convention as\n[`Branch::r`]/[`Branch::x`], so the matrix math needs no rebasing); `base_mva`\nrecords the winding-pair MVA base the source file declared (PSS/E `SBASE1-2`\nand friends), kept so a write-back reproduces it and so a future `CZ = 2`\nreader has somewhere to put the winding base it must rebase from. Room to grow\n(winding voltage base, turns-ratio units) as the transformer control work\nlands without reshaping the [`Transformer3W::z`] array.",
       "properties": {
         "base_mva": {
-          "format": "double",
-          "type": "number"
+          "anyOf": [
+            {
+              "format": "double",
+              "type": "number"
+            },
+            {
+              "enum": [
+                "Infinity",
+                "-Infinity",
+                "NaN"
+              ],
+              "type": "string"
+            }
+          ]
         },
         "r": {
-          "format": "double",
-          "type": "number"
+          "anyOf": [
+            {
+              "format": "double",
+              "type": "number"
+            },
+            {
+              "enum": [
+                "Infinity",
+                "-Infinity",
+                "NaN"
+              ],
+              "type": "string"
+            }
+          ]
         },
         "x": {
-          "format": "double",
-          "type": "number"
+          "anyOf": [
+            {
+              "format": "double",
+              "type": "number"
+            },
+            {
+              "enum": [
+                "Infinity",
+                "-Infinity",
+                "NaN"
+              ],
+              "type": "string"
+            }
+          ]
         }
       },
       "required": [
@@ -2397,14 +3897,38 @@
           "type": "boolean"
         },
         "p": {
-          "description": "Active demand (MW).",
-          "format": "double",
-          "type": "number"
+          "anyOf": [
+            {
+              "format": "double",
+              "type": "number"
+            },
+            {
+              "enum": [
+                "Infinity",
+                "-Infinity",
+                "NaN"
+              ],
+              "type": "string"
+            }
+          ],
+          "description": "Active demand (MW)."
         },
         "q": {
-          "description": "Reactive demand (MVAr).",
-          "format": "double",
-          "type": "number"
+          "anyOf": [
+            {
+              "format": "double",
+              "type": "number"
+            },
+            {
+              "enum": [
+                "Infinity",
+                "-Infinity",
+                "NaN"
+              ],
+              "type": "string"
+            }
+          ],
+          "description": "Reactive demand (MVAr)."
         },
         "uid": {
           "description": "Stable row identity; see [`Bus::uid`].",
@@ -2468,45 +3992,141 @@
               ]
             },
             "p_constant_current": {
-              "format": "double",
-              "type": "number"
+              "anyOf": [
+                {
+                  "format": "double",
+                  "type": "number"
+                },
+                {
+                  "enum": [
+                    "Infinity",
+                    "-Infinity",
+                    "NaN"
+                  ],
+                  "type": "string"
+                }
+              ]
             },
             "p_constant_impedance": {
-              "format": "double",
-              "type": "number"
+              "anyOf": [
+                {
+                  "format": "double",
+                  "type": "number"
+                },
+                {
+                  "enum": [
+                    "Infinity",
+                    "-Infinity",
+                    "NaN"
+                  ],
+                  "type": "string"
+                }
+              ]
             },
             "p_constant_power": {
-              "format": "double",
-              "type": "number"
+              "anyOf": [
+                {
+                  "format": "double",
+                  "type": "number"
+                },
+                {
+                  "enum": [
+                    "Infinity",
+                    "-Infinity",
+                    "NaN"
+                  ],
+                  "type": "string"
+                }
+              ]
             },
             "q_constant_current": {
-              "format": "double",
-              "type": "number"
+              "anyOf": [
+                {
+                  "format": "double",
+                  "type": "number"
+                },
+                {
+                  "enum": [
+                    "Infinity",
+                    "-Infinity",
+                    "NaN"
+                  ],
+                  "type": "string"
+                }
+              ]
             },
             "q_constant_impedance": {
-              "format": "double",
-              "type": "number"
+              "anyOf": [
+                {
+                  "format": "double",
+                  "type": "number"
+                },
+                {
+                  "enum": [
+                    "Infinity",
+                    "-Infinity",
+                    "NaN"
+                  ],
+                  "type": "string"
+                }
+              ]
             },
             "q_constant_power": {
-              "format": "double",
-              "type": "number"
+              "anyOf": [
+                {
+                  "format": "double",
+                  "type": "number"
+                },
+                {
+                  "enum": [
+                    "Infinity",
+                    "-Infinity",
+                    "NaN"
+                  ],
+                  "type": "string"
+                }
+              ]
             },
             "scaling": {
+              "anyOf": [
+                {
+                  "format": "double",
+                  "type": [
+                    "number",
+                    "null"
+                  ]
+                },
+                {
+                  "enum": [
+                    "Infinity",
+                    "-Infinity",
+                    "NaN"
+                  ],
+                  "type": "string"
+                }
+              ],
               "default": null,
-              "description": "Source scaling factor, when a format has one.",
-              "format": "double",
-              "type": [
-                "number",
-                "null"
-              ]
+              "description": "Source scaling factor, when a format has one."
             },
             "v_nom": {
-              "default": null,
-              "format": "double",
-              "type": [
-                "number",
-                "null"
-              ]
+              "anyOf": [
+                {
+                  "format": "double",
+                  "type": [
+                    "number",
+                    "null"
+                  ]
+                },
+                {
+                  "enum": [
+                    "Infinity",
+                    "-Infinity",
+                    "NaN"
+                  ],
+                  "type": "string"
+                }
+              ],
+              "default": null
             }
           },
           "required": [
@@ -2524,32 +4144,92 @@
           "description": "Exponential voltage model: `P = p * (V / v_nom)^gamma_p`,\n`Q = q * (V / v_nom)^gamma_q`.",
           "properties": {
             "gamma_p": {
-              "format": "double",
-              "type": "number"
+              "anyOf": [
+                {
+                  "format": "double",
+                  "type": "number"
+                },
+                {
+                  "enum": [
+                    "Infinity",
+                    "-Infinity",
+                    "NaN"
+                  ],
+                  "type": "string"
+                }
+              ]
             },
             "gamma_q": {
-              "format": "double",
-              "type": "number"
+              "anyOf": [
+                {
+                  "format": "double",
+                  "type": "number"
+                },
+                {
+                  "enum": [
+                    "Infinity",
+                    "-Infinity",
+                    "NaN"
+                  ],
+                  "type": "string"
+                }
+              ]
             },
             "kind": {
               "const": "exponential",
               "type": "string"
             },
             "p": {
-              "format": "double",
-              "type": "number"
+              "anyOf": [
+                {
+                  "format": "double",
+                  "type": "number"
+                },
+                {
+                  "enum": [
+                    "Infinity",
+                    "-Infinity",
+                    "NaN"
+                  ],
+                  "type": "string"
+                }
+              ]
             },
             "q": {
-              "format": "double",
-              "type": "number"
+              "anyOf": [
+                {
+                  "format": "double",
+                  "type": "number"
+                },
+                {
+                  "enum": [
+                    "Infinity",
+                    "-Infinity",
+                    "NaN"
+                  ],
+                  "type": "string"
+                }
+              ]
             },
             "v_nom": {
-              "default": null,
-              "format": "double",
-              "type": [
-                "number",
-                "null"
-              ]
+              "anyOf": [
+                {
+                  "format": "double",
+                  "type": [
+                    "number",
+                    "null"
+                  ]
+                },
+                {
+                  "enum": [
+                    "Infinity",
+                    "-Infinity",
+                    "NaN"
+                  ],
+                  "type": "string"
+                }
+              ],
+              "default": null
             }
           },
           "required": [
@@ -2578,14 +4258,38 @@
           "description": "Per point provenance when it differs from the network default."
         },
         "x": {
-          "description": "X coordinate. In geographic space this is longitude.",
-          "format": "double",
-          "type": "number"
+          "anyOf": [
+            {
+              "format": "double",
+              "type": "number"
+            },
+            {
+              "enum": [
+                "Infinity",
+                "-Infinity",
+                "NaN"
+              ],
+              "type": "string"
+            }
+          ],
+          "description": "X coordinate. In geographic space this is longitude."
         },
         "y": {
-          "description": "Y coordinate. In geographic space this is latitude.",
-          "format": "double",
-          "type": "number"
+          "anyOf": [
+            {
+              "format": "double",
+              "type": "number"
+            },
+            {
+              "enum": [
+                "Infinity",
+                "-Infinity",
+                "NaN"
+              ],
+              "type": "string"
+            }
+          ],
+          "description": "Y coordinate. In geographic space this is latitude."
         }
       },
       "required": [
@@ -2609,14 +4313,38 @@
           "description": "Per point provenance when it differs from the network default."
         },
         "x": {
-          "description": "X coordinate. In geographic space this is longitude.",
-          "format": "double",
-          "type": "number"
+          "anyOf": [
+            {
+              "format": "double",
+              "type": "number"
+            },
+            {
+              "enum": [
+                "Infinity",
+                "-Infinity",
+                "NaN"
+              ],
+              "type": "string"
+            }
+          ],
+          "description": "X coordinate. In geographic space this is longitude."
         },
         "y": {
-          "description": "Y coordinate. In geographic space this is latitude.",
-          "format": "double",
-          "type": "number"
+          "anyOf": [
+            {
+              "format": "double",
+              "type": "number"
+            },
+            {
+              "enum": [
+                "Infinity",
+                "-Infinity",
+                "NaN"
+              ],
+              "type": "string"
+            }
+          ],
+          "description": "Y coordinate. In geographic space this is latitude."
         }
       },
       "required": [
@@ -2787,9 +4515,21 @@
       "description": "A multiconductor distribution network.\n\n`source` retains the original text for the byte exact echo tier;\n`defaulted` records, per element (`\"class.name\"` key), the fields the\nreader materialized from format defaults rather than the source text.",
       "properties": {
         "base_frequency": {
-          "description": "Hz.",
-          "format": "double",
-          "type": "number"
+          "anyOf": [
+            {
+              "format": "double",
+              "type": "number"
+            },
+            {
+              "enum": [
+                "Infinity",
+                "-Infinity",
+                "NaN"
+              ],
+              "type": "string"
+            }
+          ],
+          "description": "Hz."
         },
         "buses": {
           "items": {
@@ -3257,10 +4997,22 @@
           ]
         },
         "base_mva": {
-          "format": "double",
-          "type": [
-            "number",
-            "null"
+          "anyOf": [
+            {
+              "format": "double",
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            {
+              "enum": [
+                "Infinity",
+                "-Infinity",
+                "NaN"
+              ],
+              "type": "string"
+            }
           ]
         },
         "power": {
@@ -3481,8 +5233,20 @@
     "PowerFactorControl": {
       "properties": {
         "pf": {
-          "format": "double",
-          "type": "number"
+          "anyOf": [
+            {
+              "format": "double",
+              "type": "number"
+            },
+            {
+              "enum": [
+                "Infinity",
+                "-Infinity",
+                "NaN"
+              ],
+              "type": "string"
+            }
+          ]
         }
       },
       "required": [
@@ -3535,9 +5299,21 @@
     "Shunt": {
       "properties": {
         "b": {
-          "description": "Shunt susceptance (MVAr at V = 1 p.u.). For a switched shunt this is the\ninitial (steady-state) value within the [`control`](Shunt::control) blocks.",
-          "format": "double",
-          "type": "number"
+          "anyOf": [
+            {
+              "format": "double",
+              "type": "number"
+            },
+            {
+              "enum": [
+                "Infinity",
+                "-Infinity",
+                "NaN"
+              ],
+              "type": "string"
+            }
+          ],
+          "description": "Shunt susceptance (MVAr at V = 1 p.u.). For a switched shunt this is the\ninitial (steady-state) value within the [`control`](Shunt::control) blocks."
         },
         "bus": {
           "$ref": "#/$defs/BusId"
@@ -3559,9 +5335,21 @@
           "type": "object"
         },
         "g": {
-          "description": "Shunt conductance (MW at V = 1 p.u.).",
-          "format": "double",
-          "type": "number"
+          "anyOf": [
+            {
+              "format": "double",
+              "type": "number"
+            },
+            {
+              "enum": [
+                "Infinity",
+                "-Infinity",
+                "NaN"
+              ],
+              "type": "string"
+            }
+          ],
+          "description": "Shunt conductance (MW at V = 1 p.u.)."
         },
         "in_service": {
           "type": "boolean"
@@ -3587,9 +5375,21 @@
       "description": "One block of a switched shunt: `steps` equal increments of susceptance `b`.",
       "properties": {
         "b": {
-          "description": "Susceptance increment per step (MVAr at V = 1 p.u.).",
-          "format": "double",
-          "type": "number"
+          "anyOf": [
+            {
+              "format": "double",
+              "type": "number"
+            },
+            {
+              "enum": [
+                "Infinity",
+                "-Infinity",
+                "NaN"
+              ],
+              "type": "string"
+            }
+          ],
+          "description": "Susceptance increment per step (MVAr at V = 1 p.u.)."
         },
         "steps": {
           "format": "uint32",
@@ -3651,20 +5451,44 @@
           ]
         },
         "newton_tolerance": {
-          "description": "Newton power flow mismatch tolerance (`NEWTON TOLN`).",
-          "format": "double",
-          "type": [
-            "number",
-            "null"
-          ]
+          "anyOf": [
+            {
+              "format": "double",
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            {
+              "enum": [
+                "Infinity",
+                "-Infinity",
+                "NaN"
+              ],
+              "type": "string"
+            }
+          ],
+          "description": "Newton power flow mismatch tolerance (`NEWTON TOLN`)."
         },
         "zero_impedance_threshold": {
-          "description": "Branches with `|x|` below this are treated as zero impedance (`GENERAL THRSHZ`).",
-          "format": "double",
-          "type": [
-            "number",
-            "null"
-          ]
+          "anyOf": [
+            {
+              "format": "double",
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            {
+              "enum": [
+                "Infinity",
+                "-Infinity",
+                "NaN"
+              ],
+              "type": "string"
+            }
+          ],
+          "description": "Branches with `|x|` below this are treated as zero impedance (`GENERAL THRSHZ`)."
         }
       },
       "type": "object"
@@ -3885,36 +5709,120 @@
           "$ref": "#/$defs/BusId"
         },
         "charge_efficiency": {
-          "format": "double",
-          "type": "number"
-        },
-        "charge_rating": {
-          "format": "double",
-          "type": "number"
-        },
-        "current_rating": {
-          "default": null,
-          "format": "double",
-          "type": [
-            "number",
-            "null"
+          "anyOf": [
+            {
+              "format": "double",
+              "type": "number"
+            },
+            {
+              "enum": [
+                "Infinity",
+                "-Infinity",
+                "NaN"
+              ],
+              "type": "string"
+            }
           ]
         },
+        "charge_rating": {
+          "anyOf": [
+            {
+              "format": "double",
+              "type": "number"
+            },
+            {
+              "enum": [
+                "Infinity",
+                "-Infinity",
+                "NaN"
+              ],
+              "type": "string"
+            }
+          ]
+        },
+        "current_rating": {
+          "anyOf": [
+            {
+              "format": "double",
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            {
+              "enum": [
+                "Infinity",
+                "-Infinity",
+                "NaN"
+              ],
+              "type": "string"
+            }
+          ],
+          "default": null
+        },
         "discharge_efficiency": {
-          "format": "double",
-          "type": "number"
+          "anyOf": [
+            {
+              "format": "double",
+              "type": "number"
+            },
+            {
+              "enum": [
+                "Infinity",
+                "-Infinity",
+                "NaN"
+              ],
+              "type": "string"
+            }
+          ]
         },
         "discharge_rating": {
-          "format": "double",
-          "type": "number"
+          "anyOf": [
+            {
+              "format": "double",
+              "type": "number"
+            },
+            {
+              "enum": [
+                "Infinity",
+                "-Infinity",
+                "NaN"
+              ],
+              "type": "string"
+            }
+          ]
         },
         "energy": {
-          "format": "double",
-          "type": "number"
+          "anyOf": [
+            {
+              "format": "double",
+              "type": "number"
+            },
+            {
+              "enum": [
+                "Infinity",
+                "-Infinity",
+                "NaN"
+              ],
+              "type": "string"
+            }
+          ]
         },
         "energy_rating": {
-          "format": "double",
-          "type": "number"
+          "anyOf": [
+            {
+              "format": "double",
+              "type": "number"
+            },
+            {
+              "enum": [
+                "Infinity",
+                "-Infinity",
+                "NaN"
+              ],
+              "type": "string"
+            }
+          ]
         },
         "extras": {
           "additionalProperties": true,
@@ -3924,36 +5832,132 @@
           "type": "boolean"
         },
         "p_loss": {
-          "format": "double",
-          "type": "number"
+          "anyOf": [
+            {
+              "format": "double",
+              "type": "number"
+            },
+            {
+              "enum": [
+                "Infinity",
+                "-Infinity",
+                "NaN"
+              ],
+              "type": "string"
+            }
+          ]
         },
         "ps": {
-          "format": "double",
-          "type": "number"
+          "anyOf": [
+            {
+              "format": "double",
+              "type": "number"
+            },
+            {
+              "enum": [
+                "Infinity",
+                "-Infinity",
+                "NaN"
+              ],
+              "type": "string"
+            }
+          ]
         },
         "q_loss": {
-          "format": "double",
-          "type": "number"
+          "anyOf": [
+            {
+              "format": "double",
+              "type": "number"
+            },
+            {
+              "enum": [
+                "Infinity",
+                "-Infinity",
+                "NaN"
+              ],
+              "type": "string"
+            }
+          ]
         },
         "qmax": {
-          "format": "double",
-          "type": "number"
+          "anyOf": [
+            {
+              "format": "double",
+              "type": "number"
+            },
+            {
+              "enum": [
+                "Infinity",
+                "-Infinity",
+                "NaN"
+              ],
+              "type": "string"
+            }
+          ]
         },
         "qmin": {
-          "format": "double",
-          "type": "number"
+          "anyOf": [
+            {
+              "format": "double",
+              "type": "number"
+            },
+            {
+              "enum": [
+                "Infinity",
+                "-Infinity",
+                "NaN"
+              ],
+              "type": "string"
+            }
+          ]
         },
         "qs": {
-          "format": "double",
-          "type": "number"
+          "anyOf": [
+            {
+              "format": "double",
+              "type": "number"
+            },
+            {
+              "enum": [
+                "Infinity",
+                "-Infinity",
+                "NaN"
+              ],
+              "type": "string"
+            }
+          ]
         },
         "r": {
-          "format": "double",
-          "type": "number"
+          "anyOf": [
+            {
+              "format": "double",
+              "type": "number"
+            },
+            {
+              "enum": [
+                "Infinity",
+                "-Infinity",
+                "NaN"
+              ],
+              "type": "string"
+            }
+          ]
         },
         "thermal_rating": {
-          "format": "double",
-          "type": "number"
+          "anyOf": [
+            {
+              "format": "double",
+              "type": "number"
+            },
+            {
+              "enum": [
+                "Infinity",
+                "-Infinity",
+                "NaN"
+              ],
+              "type": "string"
+            }
+          ]
         },
         "uid": {
           "description": "Stable row identity; see [`Bus::uid`].",
@@ -3963,8 +5967,20 @@
           ]
         },
         "x": {
-          "format": "double",
-          "type": "number"
+          "anyOf": [
+            {
+              "format": "double",
+              "type": "number"
+            },
+            {
+              "enum": [
+                "Infinity",
+                "-Infinity",
+                "NaN"
+              ],
+              "type": "string"
+            }
+          ]
         }
       },
       "required": [
@@ -4216,12 +6232,24 @@
           "type": "boolean"
         },
         "current_rating": {
-          "default": null,
-          "format": "double",
-          "type": [
-            "number",
-            "null"
-          ]
+          "anyOf": [
+            {
+              "format": "double",
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            {
+              "enum": [
+                "Infinity",
+                "-Infinity",
+                "NaN"
+              ],
+              "type": "string"
+            }
+          ],
+          "default": null
         },
         "extras": {
           "additionalProperties": true,
@@ -4231,44 +6259,104 @@
           "$ref": "#/$defs/BusId"
         },
         "pf": {
-          "default": null,
-          "format": "double",
-          "type": [
-            "number",
-            "null"
-          ]
+          "anyOf": [
+            {
+              "format": "double",
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            {
+              "enum": [
+                "Infinity",
+                "-Infinity",
+                "NaN"
+              ],
+              "type": "string"
+            }
+          ],
+          "default": null
         },
         "pt": {
-          "default": null,
-          "format": "double",
-          "type": [
-            "number",
-            "null"
-          ]
+          "anyOf": [
+            {
+              "format": "double",
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            {
+              "enum": [
+                "Infinity",
+                "-Infinity",
+                "NaN"
+              ],
+              "type": "string"
+            }
+          ],
+          "default": null
         },
         "qf": {
-          "default": null,
-          "format": "double",
-          "type": [
-            "number",
-            "null"
-          ]
+          "anyOf": [
+            {
+              "format": "double",
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            {
+              "enum": [
+                "Infinity",
+                "-Infinity",
+                "NaN"
+              ],
+              "type": "string"
+            }
+          ],
+          "default": null
         },
         "qt": {
-          "default": null,
-          "format": "double",
-          "type": [
-            "number",
-            "null"
-          ]
+          "anyOf": [
+            {
+              "format": "double",
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            {
+              "enum": [
+                "Infinity",
+                "-Infinity",
+                "NaN"
+              ],
+              "type": "string"
+            }
+          ],
+          "default": null
         },
         "thermal_rating": {
-          "default": null,
-          "format": "double",
-          "type": [
-            "number",
-            "null"
-          ]
+          "anyOf": [
+            {
+              "format": "double",
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            {
+              "enum": [
+                "Infinity",
+                "-Infinity",
+                "NaN"
+              ],
+              "type": "string"
+            }
+          ],
+          "default": null
         },
         "to": {
           "$ref": "#/$defs/BusId"
@@ -4313,18 +6401,54 @@
           "$ref": "#/$defs/SwitchedShuntMode"
         },
         "rmpct": {
-          "description": "Percent of the controlled device's reactive range to apply (PSS/E `RMPCT`).",
-          "format": "double",
-          "type": "number"
+          "anyOf": [
+            {
+              "format": "double",
+              "type": "number"
+            },
+            {
+              "enum": [
+                "Infinity",
+                "-Infinity",
+                "NaN"
+              ],
+              "type": "string"
+            }
+          ],
+          "description": "Percent of the controlled device's reactive range to apply (PSS/E `RMPCT`)."
         },
         "vhigh": {
-          "description": "Regulated voltage band (per unit).",
-          "format": "double",
-          "type": "number"
+          "anyOf": [
+            {
+              "format": "double",
+              "type": "number"
+            },
+            {
+              "enum": [
+                "Infinity",
+                "-Infinity",
+                "NaN"
+              ],
+              "type": "string"
+            }
+          ],
+          "description": "Regulated voltage band (per unit)."
         },
         "vlow": {
-          "format": "double",
-          "type": "number"
+          "anyOf": [
+            {
+              "format": "double",
+              "type": "number"
+            },
+            {
+              "enum": [
+                "Infinity",
+                "-Infinity",
+                "NaN"
+              ],
+              "type": "string"
+            }
+          ]
         }
       },
       "required": [
@@ -4362,8 +6486,20 @@
         "duration_hours": {
           "description": "Optional duration per period, in hours.",
           "items": {
-            "format": "double",
-            "type": "number"
+            "anyOf": [
+              {
+                "format": "double",
+                "type": "number"
+              },
+              {
+                "enum": [
+                  "Infinity",
+                  "-Infinity",
+                  "NaN"
+                ],
+                "type": "string"
+              }
+            ]
           },
           "type": "array"
         },
@@ -4397,13 +6533,37 @@
           "type": "boolean"
         },
         "mag_b": {
-          "format": "double",
-          "type": "number"
+          "anyOf": [
+            {
+              "format": "double",
+              "type": "number"
+            },
+            {
+              "enum": [
+                "Infinity",
+                "-Infinity",
+                "NaN"
+              ],
+              "type": "string"
+            }
+          ]
         },
         "mag_g": {
-          "description": "Magnetizing shunt referred to the star point (p.u. on the system base).",
-          "format": "double",
-          "type": "number"
+          "anyOf": [
+            {
+              "format": "double",
+              "type": "number"
+            },
+            {
+              "enum": [
+                "Infinity",
+                "-Infinity",
+                "NaN"
+              ],
+              "type": "string"
+            }
+          ],
+          "description": "Magnetizing shunt referred to the star point (p.u. on the system base)."
         },
         "name": {
           "type": [
@@ -4412,13 +6572,37 @@
           ]
         },
         "star_va": {
-          "format": "double",
-          "type": "number"
+          "anyOf": [
+            {
+              "format": "double",
+              "type": "number"
+            },
+            {
+              "enum": [
+                "Infinity",
+                "-Infinity",
+                "NaN"
+              ],
+              "type": "string"
+            }
+          ]
         },
         "star_vm": {
-          "description": "Star-point voltage magnitude (p.u.) and angle (degrees), as solved.",
-          "format": "double",
-          "type": "number"
+          "anyOf": [
+            {
+              "format": "double",
+              "type": "number"
+            },
+            {
+              "enum": [
+                "Infinity",
+                "-Infinity",
+                "NaN"
+              ],
+              "type": "string"
+            }
+          ],
+          "description": "Star-point voltage magnitude (p.u.) and angle (degrees), as solved."
         },
         "uid": {
           "description": "Stable row identity; see [`Bus::uid`].",
@@ -4462,12 +6646,36 @@
       "description": "Automatic-control data for a regulating transformer ([`Branch::control`]).\n\nThe limits carry whatever the [`mode`](TransformerControl::mode) regulates:\n`tap_min`/`tap_max` bound the tap ratio (or the phase angle, for\n[`ActiveFlow`](TransformerControlMode::ActiveFlow)), and `band_min`/`band_max`\nbound the controlled quantity (the regulated voltage band, or the\nscheduled MW/MVAr). `ntp` is the number of discrete tap positions and\n`controlled_bus` is the regulated bus (`None` = the transformer's own\nterminal). `mva_base` is the winding MVA base the impedance is referred to.",
       "properties": {
         "band_max": {
-          "format": "double",
-          "type": "number"
+          "anyOf": [
+            {
+              "format": "double",
+              "type": "number"
+            },
+            {
+              "enum": [
+                "Infinity",
+                "-Infinity",
+                "NaN"
+              ],
+              "type": "string"
+            }
+          ]
         },
         "band_min": {
-          "format": "double",
-          "type": "number"
+          "anyOf": [
+            {
+              "format": "double",
+              "type": "number"
+            },
+            {
+              "enum": [
+                "Infinity",
+                "-Infinity",
+                "NaN"
+              ],
+              "type": "string"
+            }
+          ]
         },
         "controlled_bus": {
           "anyOf": [
@@ -4483,8 +6691,20 @@
           "$ref": "#/$defs/TransformerControlMode"
         },
         "mva_base": {
-          "format": "double",
-          "type": "number"
+          "anyOf": [
+            {
+              "format": "double",
+              "type": "number"
+            },
+            {
+              "enum": [
+                "Infinity",
+                "-Infinity",
+                "NaN"
+              ],
+              "type": "string"
+            }
+          ]
         },
         "ntp": {
           "format": "uint32",
@@ -4492,12 +6712,36 @@
           "type": "integer"
         },
         "tap_max": {
-          "format": "double",
-          "type": "number"
+          "anyOf": [
+            {
+              "format": "double",
+              "type": "number"
+            },
+            {
+              "enum": [
+                "Infinity",
+                "-Infinity",
+                "NaN"
+              ],
+              "type": "string"
+            }
+          ]
         },
         "tap_min": {
-          "format": "double",
-          "type": "number"
+          "anyOf": [
+            {
+              "format": "double",
+              "type": "number"
+            },
+            {
+              "enum": [
+                "Infinity",
+                "-Infinity",
+                "NaN"
+              ],
+              "type": "string"
+            }
+          ]
         }
       },
       "required": [
@@ -4661,29 +6905,77 @@
       "properties": {
         "breakpoints": {
           "items": {
-            "format": "double",
-            "type": "number"
+            "anyOf": [
+              {
+                "format": "double",
+                "type": "number"
+              },
+              {
+                "enum": [
+                  "Infinity",
+                  "-Infinity",
+                  "NaN"
+                ],
+                "type": "string"
+              }
+            ]
           },
           "type": "array"
         },
         "p_min_for_q": {
-          "format": "double",
-          "type": [
-            "number",
-            "null"
+          "anyOf": [
+            {
+              "format": "double",
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            {
+              "enum": [
+                "Infinity",
+                "-Infinity",
+                "NaN"
+              ],
+              "type": "string"
+            }
           ]
         },
         "p_min_for_q_max": {
-          "format": "double",
-          "type": [
-            "number",
-            "null"
+          "anyOf": [
+            {
+              "format": "double",
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            {
+              "enum": [
+                "Infinity",
+                "-Infinity",
+                "NaN"
+              ],
+              "type": "string"
+            }
           ]
         },
         "q_limits": {
           "items": {
-            "format": "double",
-            "type": "number"
+            "anyOf": [
+              {
+                "format": "double",
+                "type": "number"
+              },
+              {
+                "enum": [
+                  "Infinity",
+                  "-Infinity",
+                  "NaN"
+                ],
+                "type": "string"
+              }
+            ]
           },
           "type": "array"
         },
@@ -4728,15 +7020,39 @@
       "properties": {
         "breakpoints": {
           "items": {
-            "format": "double",
-            "type": "number"
+            "anyOf": [
+              {
+                "format": "double",
+                "type": "number"
+              },
+              {
+                "enum": [
+                  "Infinity",
+                  "-Infinity",
+                  "NaN"
+                ],
+                "type": "string"
+              }
+            ]
           },
           "type": "array"
         },
         "p_limits": {
           "items": {
-            "format": "double",
-            "type": "number"
+            "anyOf": [
+              {
+                "format": "double",
+                "type": "number"
+              },
+              {
+                "enum": [
+                  "Infinity",
+                  "-Infinity",
+                  "NaN"
+                ],
+                "type": "string"
+              }
+            ]
           },
           "type": "array"
         },
@@ -4798,16 +7114,40 @@
         "v_angle": {
           "description": "Radians per terminal.",
           "items": {
-            "format": "double",
-            "type": "number"
+            "anyOf": [
+              {
+                "format": "double",
+                "type": "number"
+              },
+              {
+                "enum": [
+                  "Infinity",
+                  "-Infinity",
+                  "NaN"
+                ],
+                "type": "string"
+              }
+            ]
           },
           "type": "array"
         },
         "v_magnitude": {
           "description": "Volts per terminal (0.0 on grounded terminals).",
           "items": {
-            "format": "double",
-            "type": "number"
+            "anyOf": [
+              {
+                "format": "double",
+                "type": "number"
+              },
+              {
+                "enum": [
+                  "Infinity",
+                  "-Infinity",
+                  "NaN"
+                ],
+                "type": "string"
+              }
+            ]
           },
           "type": "array"
         }
@@ -4829,31 +7169,103 @@
           "$ref": "#/$defs/BusId"
         },
         "nominal_kv": {
-          "description": "Winding nominal voltage (kV); 0 defers to the terminal bus base kV.",
-          "format": "double",
-          "type": "number"
+          "anyOf": [
+            {
+              "format": "double",
+              "type": "number"
+            },
+            {
+              "enum": [
+                "Infinity",
+                "-Infinity",
+                "NaN"
+              ],
+              "type": "string"
+            }
+          ],
+          "description": "Winding nominal voltage (kV); 0 defers to the terminal bus base kV."
         },
         "rate_a": {
-          "format": "double",
-          "type": "number"
+          "anyOf": [
+            {
+              "format": "double",
+              "type": "number"
+            },
+            {
+              "enum": [
+                "Infinity",
+                "-Infinity",
+                "NaN"
+              ],
+              "type": "string"
+            }
+          ]
         },
         "rate_b": {
-          "format": "double",
-          "type": "number"
+          "anyOf": [
+            {
+              "format": "double",
+              "type": "number"
+            },
+            {
+              "enum": [
+                "Infinity",
+                "-Infinity",
+                "NaN"
+              ],
+              "type": "string"
+            }
+          ]
         },
         "rate_c": {
-          "format": "double",
-          "type": "number"
+          "anyOf": [
+            {
+              "format": "double",
+              "type": "number"
+            },
+            {
+              "enum": [
+                "Infinity",
+                "-Infinity",
+                "NaN"
+              ],
+              "type": "string"
+            }
+          ]
         },
         "shift": {
-          "description": "Phase shift (degrees).",
-          "format": "double",
-          "type": "number"
+          "anyOf": [
+            {
+              "format": "double",
+              "type": "number"
+            },
+            {
+              "enum": [
+                "Infinity",
+                "-Infinity",
+                "NaN"
+              ],
+              "type": "string"
+            }
+          ],
+          "description": "Phase shift (degrees)."
         },
         "tap": {
-          "description": "Off-nominal turns ratio (1.0 = nominal); the PSS/E `WINDV`, `CW = 1`.",
-          "format": "double",
-          "type": "number"
+          "anyOf": [
+            {
+              "format": "double",
+              "type": "number"
+            },
+            {
+              "enum": [
+                "Infinity",
+                "-Infinity",
+                "NaN"
+              ],
+              "type": "string"
+            }
+          ],
+          "description": "Off-nominal turns ratio (1.0 = nominal); the PSS/E `WINDV`, `CW = 1`."
         }
       },
       "required": [
@@ -4876,31 +7288,79 @@
           "$ref": "#/$defs/WindingConn"
         },
         "r_neutral": {
-          "format": "double",
-          "type": [
-            "number",
-            "null"
+          "anyOf": [
+            {
+              "format": "double",
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            {
+              "enum": [
+                "Infinity",
+                "-Infinity",
+                "NaN"
+              ],
+              "type": "string"
+            }
           ]
         },
         "r_pct": {
-          "description": "Winding resistance, percent of the winding base.",
-          "format": "double",
-          "type": [
-            "number",
-            "null"
-          ]
+          "anyOf": [
+            {
+              "format": "double",
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            {
+              "enum": [
+                "Infinity",
+                "-Infinity",
+                "NaN"
+              ],
+              "type": "string"
+            }
+          ],
+          "description": "Winding resistance, percent of the winding base."
         },
         "s_rating": {
-          "description": "Volt amperes.",
-          "format": "double",
-          "type": [
-            "number",
-            "null"
-          ]
+          "anyOf": [
+            {
+              "format": "double",
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            {
+              "enum": [
+                "Infinity",
+                "-Infinity",
+                "NaN"
+              ],
+              "type": "string"
+            }
+          ],
+          "description": "Volt amperes."
         },
         "tap": {
-          "format": "double",
-          "type": "number"
+          "anyOf": [
+            {
+              "format": "double",
+              "type": "number"
+            },
+            {
+              "enum": [
+                "Infinity",
+                "-Infinity",
+                "NaN"
+              ],
+              "type": "string"
+            }
+          ]
         },
         "terminal_map": {
           "items": {
@@ -4909,18 +7369,42 @@
           "type": "array"
         },
         "v_ref": {
-          "description": "Rated winding voltage, volts (line to line for 2 and 3 phase).",
-          "format": "double",
-          "type": [
-            "number",
-            "null"
-          ]
+          "anyOf": [
+            {
+              "format": "double",
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            {
+              "enum": [
+                "Infinity",
+                "-Infinity",
+                "NaN"
+              ],
+              "type": "string"
+            }
+          ],
+          "description": "Rated winding voltage, volts (line to line for 2 and 3 phase)."
         },
         "x_neutral": {
-          "format": "double",
-          "type": [
-            "number",
-            "null"
+          "anyOf": [
+            {
+              "format": "double",
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            {
+              "enum": [
+                "Infinity",
+                "-Infinity",
+                "NaN"
+              ],
+              "type": "string"
+            }
           ]
         }
       },

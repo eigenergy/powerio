@@ -2204,45 +2204,33 @@ fn slackless_network_conversion_warns_for_power_flow_targets() {
 }
 
 #[test]
-fn model_json_warns_on_non_finite_and_does_not_read_back() {
-    // JSON has no Inf/NaN: serde writes them as `null`, which the validating
-    // reader rejects. Readers legitimately produce Inf limits and the bindings
-    // materialize every network through model JSON, so the write stays total,
-    // but it must SAY what degraded (naming the field), and the no-read-back
-    // consequence is pinned here so a change to either side surfaces.
+#[allow(clippy::float_cmp)]
+fn model_json_carries_non_finite_values_as_string_spellings() {
+    // JSON has no Inf/NaN literal: powerio spells them "Infinity",
+    // "-Infinity", "NaN" and reads either a number or a spelling back, so a
+    // network with legitimate Inf limits round trips instead of degrading to
+    // null. Pinned on a real case so a change to either side surfaces.
     let mut net = parse_matpower_file(data("case9.m")).unwrap();
     net.branches[2].angmax = f64::INFINITY;
+    net.buses[0].vm = f64::NAN;
     let (text, diagnostics) = net.to_json_with_diagnostics().unwrap();
-    let warnings = diagnostics.lines();
     assert!(
-        warnings.iter().any(|w| w.contains("branches[2].angmax")),
-        "the degradation warning should name the field: {warnings:?}"
+        diagnostics.lines().is_empty(),
+        "a faithful write reports nothing: {:?}",
+        diagnostics.lines()
     );
-    let err =
-        BalancedNetwork::from_json(&text).expect_err("a null-degraded document must not validate");
-    assert!(err.to_string().contains("null"), "got: {err}");
+    assert!(text.contains(r#""angmax":"Infinity""#), "{text}");
+    assert!(text.contains(r#""vm":"NaN""#), "{text}");
 
-    // A NaN bus voltage warns the same way.
-    let mut net = parse_matpower_file(data("case9.m")).unwrap();
-    net.buses[0].vm = f64::NAN;
-    let warnings = net.to_json_with_diagnostics().unwrap().1.lines();
-    assert!(
-        warnings.iter().any(|w| w.contains("buses[0].vm")),
-        "got: {warnings:?}"
-    );
+    let back = BalancedNetwork::from_json(&text).expect("string spellings read back");
+    assert_eq!(back.branches[2].angmax, f64::INFINITY);
+    assert!(back.buses[0].vm.is_nan());
 
-    // EVERY non-finite field is named, not just the first: serde writes them all
-    // as null, so a caller fixing only the first-reported field would re-export
-    // and still fail to read back. Both offenders must appear in one write.
-    let mut net = parse_matpower_file(data("case9.m")).unwrap();
-    net.buses[0].vm = f64::NAN;
-    net.branches[2].angmax = f64::INFINITY;
-    let warnings = net.to_json_with_diagnostics().unwrap().1.lines();
-    assert!(
-        warnings.iter().any(|w| w.contains("buses[0].vm"))
-            && warnings.iter().any(|w| w.contains("branches[2].angmax")),
-        "both non-finite fields must be named in one write: {warnings:?}"
-    );
+    // A document from a pre-0.9 writer spelled these null; the refusal names
+    // the change rather than reporting a bare type error.
+    let legacy = text.replace(r#""angmax":"Infinity""#, r#""angmax":null"#);
+    let err = BalancedNetwork::from_json(&legacy).expect_err("null must still refuse");
+    assert!(err.to_string().contains("before 0.9.0"), "got: {err}");
 }
 
 #[test]

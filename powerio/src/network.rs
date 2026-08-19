@@ -309,8 +309,13 @@ impl SourceFormat {
 }
 
 /// A balanced network with stable source bus IDs and separate element tables.
+///
+/// `remote = "Self"` turns the derived serde impls into inherent functions;
+/// the trait impls beneath the struct route them through [`crate::nonfinite`],
+/// so a nonfinite float spells as a string on every JSON route.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(remote = "Self")]
 #[non_exhaustive]
 pub struct BalancedNetwork {
     pub name: String,
@@ -367,6 +372,23 @@ pub struct BalancedNetwork {
     /// `from_json` round-trip returns this as `None`.
     #[serde(skip)]
     pub source: Option<Arc<String>>,
+}
+
+impl Serialize for BalancedNetwork {
+    fn serialize<S: serde::Serializer>(
+        &self,
+        serializer: S,
+    ) -> std::result::Result<S::Ok, S::Error> {
+        BalancedNetwork::serialize(self, crate::nonfinite::NonFiniteSer(serializer))
+    }
+}
+
+impl<'de> Deserialize<'de> for BalancedNetwork {
+    fn deserialize<D: serde::Deserializer<'de>>(
+        deserializer: D,
+    ) -> std::result::Result<Self, D::Error> {
+        BalancedNetwork::deserialize(crate::nonfinite::NonFiniteDe(deserializer))
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1722,13 +1744,13 @@ impl BalancedNetwork {
     /// stays on the same-format write path; a [`from_json`](BalancedNetwork::from_json)
     /// round-trip reproduces every field except `source`, which returns `None`.
     ///
-    /// JSON has no `Inf`/`NaN`: `serde_json` writes a non-finite field as
-    /// `null`, which [`from_json`](BalancedNetwork::from_json) rejects on the way back
-    /// (`null` is not an `f64`). The write stays total, the bindings
-    /// materialize every parsed network through this transport, and readers
-    /// legitimately produce `Inf` limits, but such a document does not round
-    /// trip; [`to_json_with_diagnostics`](BalancedNetwork::to_json_with_diagnostics)
-    /// reports the degradation as a fidelity record naming the field.
+    /// JSON has no `Inf`/`NaN` literal: a nonfinite field is written as
+    /// `"Infinity"`, `"-Infinity"`, or `"NaN"` (see [`crate::nonfinite`]) and
+    /// [`from_json`](BalancedNetwork::from_json) reads either a number or one
+    /// of those spellings back, so every network round trips — readers
+    /// legitimately produce `Inf` limits, and a document written before
+    /// 0.9.0 spelled them `null`, which still refuses with a message naming
+    /// the change.
     ///
     /// # Errors
     /// A `serde_json` serialization failure (none arise from this model today).
@@ -1739,336 +1761,17 @@ impl BalancedNetwork {
         })
     }
 
-    /// [`to_json`](BalancedNetwork::to_json) plus the records the write
-    /// produced: one per non-finite field, since serde writes each as a `null`
-    /// that [`from_json`](BalancedNetwork::from_json) then refuses. A caller
-    /// that needs to know whether the document reads back takes this form; a
-    /// caller that only needs the text takes `to_json`.
+    /// [`to_json`](BalancedNetwork::to_json) plus the fidelity records the
+    /// write produced. The write is faithful today — a nonfinite value spells
+    /// itself as a string and reads back — so the record list is empty; the
+    /// channel stays because it is the shape a write-side finding arrives
+    /// through, and a caller wired to it needs no change when one appears.
     ///
     /// # Errors
     /// A `serde_json` serialization failure (none arise from this model today).
     pub fn to_json_with_diagnostics(&self) -> crate::Result<(String, Diagnostics)> {
         let text = self.to_json()?;
-        let mut diagnostics = Diagnostics::new();
-        for path in self.non_finite_fields() {
-            diagnostics.push(
-                &crate::diagnostics::codes::EMIT_PIO_JSON.not_a_number,
-                format!(
-                    "{path} is not finite; JSON has no Inf/NaN, so it is written as null \
-                     and this document will not read back through from_json"
-                ),
-            );
-        }
-        Ok((text, diagnostics))
-    }
-
-    /// The paths of every non-finite numeric field, empty when all values are
-    /// finite. Drives the snapshot writer's degradation warning (see
-    /// [`to_json`](BalancedNetwork::to_json)): serde writes EVERY non-finite `f64` as
-    /// `null`, so the warning must name them all, not just the first, or the
-    /// caller fixes one field and the snapshot still fails to read back.
-    /// `extras` maps hold `serde_json::Value`, which cannot carry a non-finite
-    /// number, so only the typed `f64` fields need scanning. Every struct is
-    /// destructured exhaustively: adding an `f64` field without classifying it
-    /// here is a compile error, not a silently unguarded value.
-    // The length IS the exhaustive field walk; splitting it would only scatter
-    // the per-struct lists the compile-time check exists to keep in one place.
-    #[allow(clippy::too_many_lines)]
-    pub(crate) fn non_finite_fields(&self) -> Vec<String> {
-        fn bad<'a>(
-            fields: impl IntoIterator<Item = (&'a str, f64)>,
-        ) -> impl Iterator<Item = &'a str> {
-            fields
-                .into_iter()
-                .filter_map(|(name, v)| (!v.is_finite()).then_some(name))
-        }
-        let mut out = Vec::new();
-        if !self.base_mva.is_finite() {
-            out.push("base_mva".into());
-        }
-        if !self.base_frequency.is_finite() {
-            out.push("base_frequency".into());
-        }
-        for (i, b) in self.buses.iter().enumerate() {
-            #[rustfmt::skip]
-            let Bus { id: _, kind: _, vm, va, base_kv, vmax, vmin, evhi: _, evlo: _, area: _, zone: _, name: _, uid: _, location, extras: _ } = b;
-            let fields = [
-                ("vm", *vm),
-                ("va", *va),
-                ("base_kv", *base_kv),
-                ("vmax", *vmax),
-                ("vmin", *vmin),
-            ];
-            out.extend(bad(fields).map(|f| format!("buses[{i}].{f}")));
-            if let Some(location) = location {
-                let fields = [("location.x", location.x), ("location.y", location.y)];
-                out.extend(bad(fields).map(|f| format!("buses[{i}].{f}")));
-            }
-        }
-        for (i, l) in self.loads.iter().enumerate() {
-            let Load {
-                bus: _,
-                p,
-                q,
-                voltage_model,
-                in_service: _,
-                uid: _,
-                extras: _,
-            } = l;
-            out.extend(bad([("p", *p), ("q", *q)]).map(|f| format!("loads[{i}].{f}")));
-            if let Some(model) = voltage_model {
-                match model {
-                    LoadVoltageModel::ConstantPower => {}
-                    LoadVoltageModel::Zip {
-                        p_constant_power,
-                        q_constant_power,
-                        p_constant_current,
-                        q_constant_current,
-                        p_constant_impedance,
-                        q_constant_impedance,
-                        v_nom,
-                        load_type: _,
-                        scaling,
-                    } => {
-                        let fields = [
-                            ("p_constant_power", *p_constant_power),
-                            ("q_constant_power", *q_constant_power),
-                            ("p_constant_current", *p_constant_current),
-                            ("q_constant_current", *q_constant_current),
-                            ("p_constant_impedance", *p_constant_impedance),
-                            ("q_constant_impedance", *q_constant_impedance),
-                        ];
-                        out.extend(bad(fields).map(|f| format!("loads[{i}].voltage_model.{f}")));
-                        if matches!(v_nom, Some(v) if !v.is_finite()) {
-                            out.push(format!("loads[{i}].voltage_model.v_nom"));
-                        }
-                        if matches!(scaling, Some(v) if !v.is_finite()) {
-                            out.push(format!("loads[{i}].voltage_model.scaling"));
-                        }
-                    }
-                    LoadVoltageModel::Exponential {
-                        p,
-                        q,
-                        v_nom,
-                        gamma_p,
-                        gamma_q,
-                    } => {
-                        out.extend(
-                            bad([
-                                ("p", *p),
-                                ("q", *q),
-                                ("gamma_p", *gamma_p),
-                                ("gamma_q", *gamma_q),
-                            ])
-                            .map(|f| format!("loads[{i}].voltage_model.{f}")),
-                        );
-                        if matches!(v_nom, Some(v) if !v.is_finite()) {
-                            out.push(format!("loads[{i}].voltage_model.v_nom"));
-                        }
-                    }
-                }
-            }
-        }
-        for (i, s) in self.shunts.iter().enumerate() {
-            let Shunt {
-                bus: _,
-                g,
-                b,
-                in_service: _,
-                control: _,
-                uid: _,
-                extras: _,
-            } = s;
-            out.extend(bad([("g", *g), ("b", *b)]).map(|f| format!("shunts[{i}].{f}")));
-        }
-        for (i, br) in self.branches.iter().enumerate() {
-            #[rustfmt::skip]
-            let Branch { from: _, to: _, r, x, b, charging, rate_a, rate_b, rate_c, rating_sets, current_ratings, tap, shift, in_service: _, angmin, angmax, control: _, solution, uid: _, route: _, extras: _ } = br;
-            let fields = [
-                ("r", *r),
-                ("x", *x),
-                ("b", *b),
-                ("rate_a", *rate_a),
-                ("rate_b", *rate_b),
-                ("rate_c", *rate_c),
-                ("tap", *tap),
-                ("shift", *shift),
-                ("angmin", *angmin),
-                ("angmax", *angmax),
-            ];
-            out.extend(bad(fields).map(|f| format!("branches[{i}].{f}")));
-            out.extend(
-                rating_sets
-                    .iter()
-                    .enumerate()
-                    .filter(|(_, r)| !r.rate_mva.is_finite())
-                    .map(|(j, _)| format!("branches[{i}].rating_sets[{j}].rate_mva")),
-            );
-            if let Some(charging) = charging {
-                let BranchCharging {
-                    g_fr,
-                    b_fr,
-                    g_to,
-                    b_to,
-                } = charging;
-                let fields = [
-                    ("g_fr", *g_fr),
-                    ("b_fr", *b_fr),
-                    ("g_to", *g_to),
-                    ("b_to", *b_to),
-                ];
-                out.extend(bad(fields).map(|f| format!("branches[{i}].charging.{f}")));
-            }
-            if let Some(current) = current_ratings {
-                let BranchCurrentRatings {
-                    c_rating_a,
-                    c_rating_b,
-                    c_rating_c,
-                } = current;
-                let fields = [
-                    ("c_rating_a", *c_rating_a),
-                    ("c_rating_b", *c_rating_b),
-                    ("c_rating_c", *c_rating_c),
-                ];
-                out.extend(bad(fields).map(|f| format!("branches[{i}].current_ratings.{f}")));
-            }
-            if let Some(solution) = solution {
-                let BranchSolution { pf, qf, pt, qt } = solution;
-                out.extend(
-                    bad([("pf", *pf), ("qf", *qf), ("pt", *pt), ("qt", *qt)])
-                        .map(|f| format!("branches[{i}].solution.{f}")),
-                );
-            }
-        }
-        for (i, sw) in self.switches.iter().enumerate() {
-            let Switch {
-                from: _,
-                to: _,
-                closed: _,
-                thermal_rating,
-                current_rating,
-                pf,
-                qf,
-                pt,
-                qt,
-                uid: _,
-                extras: _,
-            } = sw;
-            for (field, value) in [
-                ("thermal_rating", *thermal_rating),
-                ("current_rating", *current_rating),
-                ("pf", *pf),
-                ("qf", *qf),
-                ("pt", *pt),
-                ("qt", *qt),
-            ] {
-                if matches!(value, Some(v) if !v.is_finite()) {
-                    out.push(format!("switches[{i}].{field}"));
-                }
-            }
-        }
-        for (i, g) in self.generators.iter().enumerate() {
-            #[rustfmt::skip]
-            let Generator { bus: _, pg, qg, pmax, pmin, qmax, qmin, vg, mbase, in_service: _, cost, caps, regulated_bus: _, uid: _ } = g;
-            let fields = [
-                ("pg", *pg),
-                ("qg", *qg),
-                ("pmax", *pmax),
-                ("pmin", *pmin),
-                ("qmax", *qmax),
-                ("qmin", *qmin),
-                ("vg", *vg),
-                ("mbase", *mbase),
-            ];
-            out.extend(bad(fields).map(|f| format!("generators[{i}].{f}")));
-            if let Some(GenCost {
-                model: _,
-                startup,
-                shutdown,
-                ncost: _,
-                coeffs,
-            }) = cost
-            {
-                out.extend(
-                    bad([("startup", *startup), ("shutdown", *shutdown)])
-                        .map(|f| format!("generators[{i}].cost.{f}")),
-                );
-                if coeffs.iter().any(|c| !c.is_finite()) {
-                    out.push(format!("generators[{i}].cost.coeffs"));
-                }
-            }
-            // Name the exact cap key (caps serializes as a name-keyed object, so
-            // the null lands at generators[i].caps.<key>, e.g. ramp_30), matching
-            // the key-level precision of every other field.
-            for (key, slot) in GEN_EXTRA_KEYS.iter().zip(caps.iter()) {
-                if matches!(slot, Some(v) if !v.is_finite()) {
-                    out.push(format!("generators[{i}].caps.{key}"));
-                }
-            }
-        }
-        for (i, s) in self.storage.iter().enumerate() {
-            #[rustfmt::skip]
-            let Storage { bus: _, ps, qs, energy, energy_rating, charge_rating, discharge_rating, charge_efficiency, discharge_efficiency, thermal_rating, current_rating, qmin, qmax, r, x, p_loss, q_loss, in_service: _, uid: _, extras: _ } = s;
-            let fields = [
-                ("ps", *ps),
-                ("qs", *qs),
-                ("energy", *energy),
-                ("energy_rating", *energy_rating),
-                ("charge_rating", *charge_rating),
-                ("discharge_rating", *discharge_rating),
-                ("charge_efficiency", *charge_efficiency),
-                ("discharge_efficiency", *discharge_efficiency),
-                ("thermal_rating", *thermal_rating),
-                ("qmin", *qmin),
-                ("qmax", *qmax),
-                ("r", *r),
-                ("x", *x),
-                ("p_loss", *p_loss),
-                ("q_loss", *q_loss),
-            ];
-            out.extend(bad(fields).map(|f| format!("storage[{i}].{f}")));
-            if matches!(current_rating, Some(v) if !v.is_finite()) {
-                out.push(format!("storage[{i}].current_rating"));
-            }
-        }
-        for (i, h) in self.hvdc.iter().enumerate() {
-            #[rustfmt::skip]
-            let Hvdc { from: _, to: _, in_service: _, pf, pt, qf, qt, vf, vt, pmin, pmax, qminf, qmaxf, qmint, qmaxt, loss0, loss1, cost, uid: _, extras: _ } = h;
-            let fields = [
-                ("pf", *pf),
-                ("pt", *pt),
-                ("qf", *qf),
-                ("qt", *qt),
-                ("vf", *vf),
-                ("vt", *vt),
-                ("pmin", *pmin),
-                ("pmax", *pmax),
-                ("qminf", *qminf),
-                ("qmaxf", *qmaxf),
-                ("qmint", *qmint),
-                ("qmaxt", *qmaxt),
-                ("loss0", *loss0),
-                ("loss1", *loss1),
-            ];
-            out.extend(bad(fields).map(|f| format!("hvdc[{i}].{f}")));
-            if let Some(GenCost {
-                model: _,
-                startup,
-                shutdown,
-                ncost: _,
-                coeffs,
-            }) = cost
-            {
-                out.extend(
-                    bad([("startup", *startup), ("shutdown", *shutdown)])
-                        .map(|f| format!("hvdc[{i}].cost.{f}")),
-                );
-                if coeffs.iter().any(|c| !c.is_finite()) {
-                    out.push(format!("hvdc[{i}].cost.coeffs"));
-                }
-            }
-        }
-        out
+        Ok((text, Diagnostics::new()))
     }
 
     /// Serialize this network to `format`, preserving the retained source text
@@ -2102,6 +1805,9 @@ impl BalancedNetwork {
     }
 
     /// Rebuild a `BalancedNetwork` from JSON produced by [`to_json`](BalancedNetwork::to_json).
+    ///
+    /// A float position accepts a number or the nonfinite spellings
+    /// `"Infinity"`, `"-Infinity"`, `"NaN"` (see [`crate::nonfinite`]).
     ///
     /// Validates the result (no buses, unique bus ids, no dangling references)
     /// before returning, so the JSON transport (the C ABI and Julia bridge ride
@@ -2928,7 +2634,8 @@ mod tests {
     }
 
     #[test]
-    fn non_finite_fields_lists_every_offender_not_just_the_first() {
+    #[allow(clippy::float_cmp)]
+    fn nonfinite_values_round_trip_through_model_json() {
         let bus = |id, vm| Bus {
             id: BusId(id),
             kind: BusType::Pq,
@@ -2988,8 +2695,9 @@ mod tests {
             uid: None,
         };
         g.caps[8] = Some(f64::INFINITY); // ramp_30
-        // Three distinct non-finite fields: a bus vm (NaN), a branch x (Inf), and
-        // a generator ramp_30 cap (Inf).
+        // Three nonfinite values at three nesting depths: a bus vm (NaN, a
+        // struct field in a table), a branch x (Inf), and a generator ramp_30
+        // cap (Inf, inside the name-keyed caps object).
         let mut net = BalancedNetwork::in_memory(
             "nf",
             100.0,
@@ -2997,18 +2705,34 @@ mod tests {
             vec![branch],
         );
         net.generators.push(g);
-        let fields = net.non_finite_fields();
-        assert!(fields.contains(&"buses[0].vm".to_string()), "{fields:?}");
-        assert!(fields.contains(&"branches[0].x".to_string()), "{fields:?}");
-        assert!(
-            fields.contains(&"generators[0].caps.ramp_30".to_string()),
-            "caps reported at key precision: {fields:?}"
-        );
-        assert_eq!(
-            fields.len(),
-            3,
-            "exactly the three offenders, no more: {fields:?}"
-        );
+
+        let text = net.to_json().unwrap();
+        assert!(text.contains(r#""vm":"NaN""#), "{text}");
+        assert!(text.contains(r#""x":"Infinity""#), "{text}");
+        assert!(text.contains(r#""ramp_30":"Infinity""#), "{text}");
+
+        let back = BalancedNetwork::from_json(&text).unwrap();
+        assert!(back.buses[0].vm.is_nan());
+        assert_eq!(back.branches[0].x, f64::INFINITY);
+        assert_eq!(back.generators[0].caps[8], Some(f64::INFINITY));
+
+        // Second write is byte stable, and the empty diagnostics channel
+        // reflects that nothing was dropped.
+        assert_eq!(back.to_json().unwrap(), text);
+        let (_, diagnostics) = net.to_json_with_diagnostics().unwrap();
+        assert!(diagnostics.lines().is_empty());
+    }
+
+    #[test]
+    fn a_null_at_a_float_position_names_the_pre_090_spelling() {
+        let net = BalancedNetwork::in_memory("nf", 100.0, vec![bus(1), bus(2)], Vec::new());
+        let text = net
+            .to_json()
+            .unwrap()
+            .replacen("\"vm\":1.0", "\"vm\":null", 1);
+        assert!(text.contains("\"vm\":null"), "fixture edit failed: {text}");
+        let err = BalancedNetwork::from_json(&text).unwrap_err().to_string();
+        assert!(err.contains("before 0.9.0"), "{err}");
     }
 
     #[test]

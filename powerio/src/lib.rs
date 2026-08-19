@@ -85,6 +85,7 @@ pub use normalize::{
     NormalizeOptions, NormalizeSourceRows, NormalizedNetwork, POWER_MODELS_ANGLE_BOUND_PAD,
 };
 pub use operations::Selector;
+pub use powerio_diag::nonfinite;
 pub use solver_tables::{
     NORMALIZED_SOLVER_TABLES_PASS, NormalizedSolverTables, SolverArcRow, SolverArcTerminal,
     SolverBranchRow, SolverBusRow, SolverCostRow, SolverGeneratorRow, SolverHvdcRow, SolverLoadRow,

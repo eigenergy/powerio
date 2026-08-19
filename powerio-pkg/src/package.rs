@@ -146,6 +146,7 @@ impl From<&NormalizedSolverTables> for NormalizedSolverTableMetadata {
 /// newer producer.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(remote = "Self")]
 #[non_exhaustive]
 pub struct NetworkPackage {
     /// The powerio version that wrote this document; see
@@ -194,6 +195,21 @@ pub struct NetworkPackage {
     pub lowering_history: Vec<LoweringRecord>,
     #[serde(default, skip_serializing_if = "DerivedMetadata::is_empty")]
     pub derived: DerivedMetadata,
+}
+
+// Same mechanism as the two network models: the whole document — envelope
+// fields, operating point series, both payload kinds — spells a nonfinite
+// float as a string, so no `.pio.json` powerio writes refuses to read back.
+impl serde::Serialize for NetworkPackage {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        NetworkPackage::serialize(self, powerio_diag::nonfinite::NonFiniteSer(serializer))
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for NetworkPackage {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        NetworkPackage::deserialize(powerio_diag::nonfinite::NonFiniteDe(deserializer))
+    }
 }
 
 impl NetworkPackage {

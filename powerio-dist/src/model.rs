@@ -896,6 +896,7 @@ impl UntypedObject {
 /// reader materialized from format defaults rather than the source text.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(remote = "Self")]
 #[non_exhaustive]
 pub struct MulticonductorNetwork {
     pub name: Option<String>,
@@ -950,6 +951,23 @@ pub struct MulticonductorNetwork {
     pub source: Option<Arc<String>>,
     pub source_format: Option<DistSourceFormat>,
     pub extras: Extras,
+}
+
+// `remote = "Self"` turns the derived serde impls into inherent functions;
+// routing them through `powerio_diag::nonfinite` spells a nonfinite float as
+// `"Infinity"`/`"-Infinity"`/`"NaN"` on every JSON route, the same convention
+// as the balanced model. The bound fields' `with` modules keep accepting the
+// `null` a pre-0.9 writer emitted (read side only).
+impl serde::Serialize for MulticonductorNetwork {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        MulticonductorNetwork::serialize(self, powerio_diag::nonfinite::NonFiniteSer(serializer))
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for MulticonductorNetwork {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        MulticonductorNetwork::deserialize(powerio_diag::nonfinite::NonFiniteDe(deserializer))
+    }
 }
 
 impl MulticonductorNetwork {

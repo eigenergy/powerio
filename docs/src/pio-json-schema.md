@@ -110,6 +110,20 @@ Schema is derived from the serde models and checked in CI against the committed
 and the balanced payload's serialized form is additionally held to a committed
 golden file by `powerio/tests/snapshot_schema.rs`.
 
+### Nonfinite numbers {#nonfinite}
+
+JSON has no `Inf`/`NaN` literal, and readers legitimately produce nonfinite
+values: an absent reactive limit reads as `Inf` from MATPOWER, PowerModels,
+pandapower, and PyPSA. Every float position in a `.pio.json` document —
+envelope and both payloads — writes a nonfinite value as the string
+`"Infinity"`, `"-Infinity"`, or `"NaN"`, and reads back either a number or one
+of those spellings, so every document powerio writes reads back. The generated
+schema states this as the string arm on every float position. The
+multiconductor bound fields additionally accept the `null` a pre-0.9 writer
+emitted, restored by field role: unbounded above in an upper bound, unbounded
+below in a lower bound, not known in a length. At any other float position a
+`null` is refused with a message naming this change.
+
 ### The balanced model JSON {#pio-payload-balanced}
 
 `model.balanced_network` is the serde form of `powerio::BalancedNetwork`, stamped when

@@ -33,6 +33,7 @@
 pub mod category;
 pub mod code;
 pub mod collect;
+pub mod nonfinite;
 pub mod record;
 pub mod registry;
 pub mod render;
