@@ -119,7 +119,15 @@ def test_public_type_is_balanced_network(case9):
     assert isinstance(case9, powerio.BalancedNetwork)
     assert "BalancedNetwork" in powerio.__all__
     assert not hasattr(powerio, "Case")
-    assert not hasattr(powerio, "Network")
+    # Network is the 0.8 bridge alias: same object, DeprecationWarning, gone
+    # at 1.0.0; it stays out of __all__ so nothing advertises it.
+    import warnings as _warnings
+
+    with _warnings.catch_warnings(record=True) as caught:
+        _warnings.simplefilter("always")
+        assert powerio.Network is powerio.BalancedNetwork
+    assert any(issubclass(w.category, DeprecationWarning) for w in caught)
+    assert "Network" not in powerio.__all__
     assert repr(case9).startswith("BalancedNetwork(")
 
 

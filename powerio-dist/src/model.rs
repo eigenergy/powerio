@@ -1292,6 +1292,13 @@ pub(crate) fn square_from_rows(rows: &[Vec<f64>], n: usize) -> Option<Mat> {
     Some(m)
 }
 
+/// The 0.8 spelling of [`MulticonductorNetwork`]. The alias goes away at 1.0.0.
+#[deprecated(
+    since = "0.9.0",
+    note = "renamed to MulticonductorNetwork in 0.9.0; the alias goes away at 1.0.0"
+)]
+pub type DistNetwork = MulticonductorNetwork;
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1320,5 +1327,15 @@ mod tests {
     fn wrong_shape_is_rejected() {
         assert!(square_from_rows(&[vec![1.0], vec![2.0]], 2).is_none());
         assert!(square_from_rows(&[vec![1.0, 2.0]], 2).is_none());
+    }
+}
+
+#[cfg(test)]
+mod deprecation_shim_tests {
+    #[test]
+    #[allow(deprecated)]
+    fn the_08_type_name_still_compiles() {
+        let net: crate::DistNetwork = crate::MulticonductorNetwork::named("shim");
+        assert_eq!(net.name.as_deref(), Some("shim"));
     }
 }

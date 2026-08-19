@@ -219,6 +219,12 @@ PowerIO.jl is the one binding powerio owns, and its ABI 5 change is the honest e
 
 The star-lowered space required no binding edit at all, which is the point worth carrying away: the numbers changed and the code did not. A binding that sizes buffers from one extractor and fills them from another was already correct or already broken; ABI 5 decides which. Assert the closure and find out.
 
+## Coming from 0.8.x in Rust
+
+The C ABI cannot bridge — the binding gates on `pio_abi_version` by equality, so a library and a binding move together — but the Rust surface keeps the 0.8 names alive for exactly one release, each behind a deprecation warning that names its successor. `powerio::Network` is `BalancedNetwork`, `powerio_dist::DistNetwork` is `MulticonductorNetwork`, `build_scopf_instance_from_str` is `parse_scopf_str`, `Branch::legacy_total_charging_b` is `total_charging_b`, and `DcConvention::PaperPure` is an associated constant equal to `DcConvention::ReactanceOnly`, usable in expression and pattern position alike. Python carries the same bridge: `powerio.Network` and `powerio.dist.DistNetwork` resolve with a `DeprecationWarning` naming the successor. A 0.8 consumer compiles against 0.9 with warnings, fixes them by renaming, and is untouched by 1.0.0, which deletes the whole set; `scripts/deprecated-inventory.sh` lists it, and its `--assert-empty` run is the 1.0.0 gate. Passing the retired `powerio-json` format token fails as before, and the error now says where model JSON went instead of listing the accepted names.
+
+Two 0.8 behaviors have no alias because the successor is a different statement, and both fail loudly with a message naming the change: a nonfinite float in a powerio document is the string `"Infinity"`, `"-Infinity"`, or `"NaN"` where 0.8 wrote an unreadable `null`, and error variants that moved to the crates that construct them are a compile error whose fix is the new path. The changelog's 0.9.0 section is the complete rename table.
+
 ## What did not change
 
 Every ABI 4 Arrow table id and its column order. Two cost tables append at 21 and 22, `solver_bus` gains `area` and `zone` at the end of its columns, and `solver_storage` gains `charge_efficiency` and `discharge_efficiency` the same way, so a consumer addressing columns by name sees nothing shift. Every case format token except the three retired above. The opaque handle design. The panic guard on every entry point. `errbuf` and `errlen` last. `pio_abi_version`, `pio_version` and `pio_has_feature`.

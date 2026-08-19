@@ -183,3 +183,21 @@ def convert_str(text: str, to: str, format: str) -> Conversion:
     """
     text, warnings = _powerio.dist_convert_str(text, to, format)
     return Conversion(text, warnings)
+
+# 0.8 names, aliased for one release; same convention as the package root.
+_RENAMED_IN_0_9_0 = {"DistNetwork": "MulticonductorNetwork"}
+
+
+def __getattr__(name):
+    if name in _RENAMED_IN_0_9_0:
+        import warnings
+
+        successor = _RENAMED_IN_0_9_0[name]
+        warnings.warn(
+            f"powerio.dist.{name} was renamed powerio.dist.{successor} in 0.9.0; "
+            "the alias goes away at 1.0.0",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        return globals()[successor]
+    raise AttributeError(f"module 'powerio.dist' has no attribute {name!r}")

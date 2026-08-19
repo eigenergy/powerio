@@ -77,6 +77,8 @@ pub use geo::{
     geo_layer_from_aux_substations, geo_layer_from_pwd, pwd_mercator_to_lonlat,
 };
 pub use indexed::{ConnectivityReport, IndexCore, IndexedNetwork};
+#[allow(deprecated)]
+pub use network::Network;
 pub use network::{
     Area, BalancedNetwork, Branch, BranchCharging, BranchCurrentRatings, BranchRatingSet,
     BranchSolution, Bus, BusId, BusType, DEFAULT_BASE_FREQUENCY, Diagnostic, Extras, GenCaps,
