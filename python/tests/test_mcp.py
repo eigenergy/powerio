@@ -84,7 +84,7 @@ def test_summary_transmission_schema():
     assert s["domain"] == "transmission"
     assert s["model"] == "balanced"
     assert s["json_format"] == "model-json"
-    assert s["source_format"] == "Matpower"
+    assert s["source_format"] == "matpower"
     assert s["base_mva"] == 100.0
     assert s["elements"]["buses"] == 9
     assert s["elements"]["branches"] == 9
@@ -121,7 +121,7 @@ def test_parse_transmission_transport_round_trip(tmp_path):
     assert parsed["powerio_version"] == powerio.__version__
     assert parsed["domain"] == "transmission"
     assert parsed["model"] == "balanced"
-    assert parsed["source_format"] == "Matpower"
+    assert parsed["source_format"] == "matpower"
     assert parsed["json_format"] == "model-json"
     assert powerio.from_json(parsed["json"]).n_buses == 9
     assert server.summary(json=parsed["json"], json_format="model-json")[
@@ -306,7 +306,7 @@ def test_matrix_kinds_aliases_and_errors():
     assert m["powerio_version"] == powerio.__version__
     assert m["domain"] == "transmission"
     assert m["model"] == "balanced"
-    assert m["source_format"] == "Matpower"
+    assert m["source_format"] == "matpower"
     assert m["warnings"] == []
     assert m["kind"] == "bprime"
     assert m["shape"] == [9, 9]

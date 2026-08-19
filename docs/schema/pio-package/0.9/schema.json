@@ -5707,61 +5707,61 @@
       "type": "object"
     },
     "SourceFormat": {
-      "description": "Which format a [`BalancedNetwork`] was read from. Drives the same format byte exact\necho on write.",
+      "description": "Which format a [`BalancedNetwork`] was read from. Drives the same format byte exact\necho on write.\n\nSerializes as the same lowercase token [`name`](SourceFormat::name) reports\nand every string entry point accepts, so the value a document carries is\nvalid input to `from`. Documents written before 0.9.0 spelled the bare\nvariant name (\"Matpower\"); the read side still accepts those spellings.",
       "oneOf": [
         {
           "enum": [
-            "Matpower",
-            "PowerModelsJson",
-            "EgretJson",
-            "Psse",
-            "PowerWorld",
-            "PandapowerJson"
+            "matpower",
+            "powermodels-json",
+            "egret-json",
+            "psse",
+            "powerworld",
+            "pandapower-json"
           ],
           "type": "string"
         },
         {
-          "const": "Pslf",
+          "const": "pslf",
           "description": "Read from a GE PSLF `.epc` case. Same source text is retained, so a\nsame-format write echoes it byte-for-byte; a cross-format or\nsource-dropped write goes through the `.epc` serializer\n([`write_pslf`](crate::write_pslf)).",
           "type": "string"
         },
         {
-          "const": "PowerWorldBinary",
+          "const": "powerworld-pwb",
           "description": "Read from a PowerWorld `.pwb` binary case. Read only: there is no\n`.pwb` writer and no retained source text, so writing goes through\nanother format's writer.",
           "type": "string"
         },
         {
-          "const": "InMemory",
+          "const": "in-memory",
           "description": "Built in memory, for example from synth or an edited case; no source text.",
           "type": "string"
         },
         {
-          "const": "Normalized",
+          "const": "normalized",
           "description": "A normalized derived form ([`BalancedNetwork::to_normalized`]): per unit, radians,\nfiltered, source bus ids preserved. Distinct from\n[`InMemory`](SourceFormat::InMemory) so consumers can tell a per unit\nproduct from a raw in memory network; it has no source text and a different\nunit basis than a parsed network.",
           "type": "string"
         },
         {
-          "const": "Gridfm",
+          "const": "gridfm",
           "description": "Read back from a gridfm-datakit Parquet dataset (the ML→classical bridge,\n`powerio-matrix`'s `read_gridfm_dataset`). A lossy, power flow complete\nreconstruction with no retained source text: original bus ids are\nsynthesized `1..n`, per element load/shunt granularity is folded to one\nsynthetic element per bus, and HVDC/storage/piecewise costs are absent.",
           "type": "string"
         },
         {
-          "const": "PypsaCsv",
+          "const": "pypsa-csv",
           "description": "Read from a PyPSA CSV folder. This is a folder format rather than a\nsingle retained text document, so same-format writes are canonicalized.",
           "type": "string"
         },
         {
-          "const": "Goc3Json",
+          "const": "goc3-json",
           "description": "Read from an ARPA-E GO Challenge 3 JSON input document. The source is a\nunit commitment data set; the neutral transmission model keeps a static\nfirst interval network and retains the source text for the full data.",
           "type": "string"
         },
         {
-          "const": "SurgeJson",
+          "const": "surge-json",
           "description": "Read from a Surge native JSON document.",
           "type": "string"
         },
         {
-          "const": "DeepMindOpfDataJson",
+          "const": "opfdata-json",
           "description": "Read from one raw JSON document in a DeepMind OPFData release. The\nsource carries both solver initial values and a solution. The balanced\nmodel represents the solved snapshot and retains the source for an\nexact write back to the same format.",
           "type": "string"
         }

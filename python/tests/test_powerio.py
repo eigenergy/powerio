@@ -135,14 +135,14 @@ def test_parse_infers_format_from_extension():
     # parse_file dispatches on the extension; a .m file lands on MATPOWER.
     case = powerio.parse_file(DATA / "case9.m")
     assert case.n_buses == 9
-    assert case.source_format == "Matpower"
+    assert case.source_format == "matpower"
 
 
 def test_opfdata_uses_shared_python_parse_and_conversion_surface():
     path = DATA / "opfdataset" / "example_0.json"
     case = powerio.parse_file(path)
 
-    assert case.source_format == "DeepMindOpfDataJson"
+    assert case.source_format == "opfdata-json"
     assert case.n_buses == 14
     assert case.n_branches == 20
     assert case.n_gens == 5
@@ -344,12 +344,13 @@ def test_json_roundtrip_and_parsed_conversion():
 
 
 def test_source_format_round_trips_through_to_format(case9):
-    # `net.to_format(other.source_format)` must work for every format, including
-    # PowerModelsJson/EgretJson whose source_format strings are camel-case (#75).
+    # `net.to_format(other.source_format)` must work for every format: since
+    # 0.9 the property returns the same token every `from`/`to` accepts (the
+    # #75 camel-case spellings are retired).
     pm = powerio.parse_str(case9.to_format("powermodels-json").text, "powermodels-json")
-    assert pm.source_format == "PowerModelsJson"
+    assert pm.source_format == "powermodels-json"
     eg = powerio.parse_str(case9.to_format("egret-json").text, "egret-json")
-    assert eg.source_format == "EgretJson"
+    assert eg.source_format == "egret-json"
     for other in (case9, pm, eg):
         # The raw source_format string feeds straight back into to_format.
         assert case9.to_format(other.source_format).text
@@ -379,7 +380,7 @@ def test_to_normalized_is_per_unit_and_in_memory(case9):
     assert n.n_buses == case9.n_buses
     assert n.n_gens == case9.n_gens
     # A derived product with no retained source: it serializes from the model.
-    assert n.source_format == "Normalized"
+    assert n.source_format == "normalized"
     # Powers are per unit (divided by baseMVA).
     g, rg = n.generators[0], case9.generators[0]
     assert abs(g["pmax"] - rg["pmax"] / case9.base_mva) < 1e-9
@@ -395,7 +396,7 @@ def test_to_normalized_filters_out_of_service():
     assert n.n_gens == case.n_gens - 1
     assert n.n_branches == case.n_branches - 1
     assert n.n_buses == 9
-    assert n.source_format == "Normalized"
+    assert n.source_format == "normalized"
 
 
 def test_to_normalized_preserves_source_bus_ids():
@@ -1322,7 +1323,7 @@ def test_read_gridfm_round_trips(case9, tmp_path):
         case9.n_gens,
     )
     assert net.base_mva == case9.base_mva
-    assert net.source_format == "Gridfm"
+    assert net.source_format == "gridfm"
     text = net.to_matpower()
     assert text.startswith("function mpc")
     assert powerio.parse_str(text, "matpower").n_buses == case9.n_buses
@@ -1382,16 +1383,16 @@ def test_source_format_stubs_cover_every_variant():
     # The .pyi Literal must list every string the runtime can produce; a new
     # SourceFormat variant lands here and in both stubs together.
     variants = [
-        "Matpower",
-        "PowerModelsJson",
-        "DeepMindOpfDataJson",
-        "EgretJson",
-        "Psse",
-        "PowerWorld",
-        "PowerWorldBinary",
-        "Gridfm",
-        "InMemory",
-        "Normalized",
+        "matpower",
+        "powermodels-json",
+        "opfdata-json",
+        "egret-json",
+        "psse",
+        "powerworld",
+        "powerworld-pwb",
+        "gridfm",
+        "in-memory",
+        "normalized",
     ]
     root = Path(__file__).resolve().parents[1] / "powerio"
     for stub in ("__init__.pyi", "_powerio.pyi"):

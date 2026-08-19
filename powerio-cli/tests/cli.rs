@@ -112,7 +112,7 @@ fn summary_routes_json_inputs_through_the_classifier() {
     assert_success(&out);
     let value: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
     assert_eq!(value["domain"], "transmission");
-    assert_eq!(value["source_format"], "EgretJson");
+    assert_eq!(value["source_format"], "egret-json");
     assert_eq!(value["elements"]["buses"], 9);
 
     let stamp = SystemTime::now()

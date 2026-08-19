@@ -245,10 +245,11 @@ pub fn display_format_from_name(name: &str) -> Option<DisplayFormat> {
 /// datasets, and PowerWorld `.pwb` are directory or read only inputs with no
 /// text target; they are routed by [`crate::format::routing`].
 ///
-/// The `powermodelsjson`/`egretjson`/`pandapowerjson` aliases let a
-/// [`SourceFormat`]'s string form (`{:?}` lowercased, e.g. `"PowerModelsJson"`)
-/// round-trip back to a target, so `net.to_format(other.source_format)` works
-/// for every format.
+/// [`SourceFormat`]'s reported token is [`SourceFormat::name`], which resolves
+/// here directly, so `net.to_format(other.source_format)` works for every
+/// format. The `powermodelsjson`/`egretjson`/`pandapowerjson` aliases keep the
+/// pre-0.9 camel-case spellings (`"PowerModelsJson"` lowercased) resolving for
+/// callers that stored them.
 #[must_use]
 pub fn target_format_from_name(name: &str) -> Option<TargetFormat> {
     Some(match routing::transmission_format_from_name(name)? {
@@ -1848,11 +1849,11 @@ mpc.branch = [
 
     #[test]
     fn source_format_strings_round_trip_to_a_target() {
-        // The bindings expose `source_format` as its `{:?}` form, and
+        // The bindings expose `source_format` as its `name()` token, and
         // `to_format` routes that string back through `target_format_from_name`.
-        // Every writable source format must resolve, including PowerModelsJson /
-        // EgretJson, whose camel-case names need the `powermodelsjson` /
-        // `egretjson` aliases (issue #75).
+        // Every writable source format must resolve; the legacy `{:?}` spelling
+        // (the pre-0.9 property value, issue #75) must keep resolving for
+        // callers that stored it.
         for (sf, want) in [
             (SourceFormat::Matpower, TargetFormat::Matpower),
             (SourceFormat::PowerModelsJson, TargetFormat::PowerModelsJson),
@@ -1868,11 +1869,17 @@ mpc.branch = [
                 TargetFormat::DeepMindOpfDataJson,
             ),
         ] {
-            let token = format!("{sf:?}");
+            let token = sf.name();
             assert_eq!(
-                target_format_from_name(&token),
+                target_format_from_name(token),
                 Some(want),
                 "source_format {token:?} did not round-trip"
+            );
+            let legacy = format!("{sf:?}");
+            assert_eq!(
+                target_format_from_name(&legacy),
+                Some(want),
+                "legacy spelling {legacy:?} did not round-trip"
             );
         }
         // The derived/in-memory source formats have no writer target, and
