@@ -1739,11 +1739,19 @@ impl PyMulticonductorNetwork {
 
 /// Parse a distribution case file. The format comes from `from_` when given,
 /// else from the file itself (`.dss`, or `.json` sniffed for the PMD
-/// ENGINEERING `data_model` key against the BMOPF layout).
+/// ENGINEERING `data_model` key against the BMOPF layout). `include_root`
+/// widens dss include confinement from the case directory to the given
+/// directory; the case file must sit under it.
 #[pyfunction]
-#[pyo3(signature = (path, from_=None))]
-fn dist_parse_file(path: &str, from_: Option<&str>) -> PyResult<PyMulticonductorNetwork> {
-    powerio_dist::parse_file(std::path::Path::new(path), from_)
+#[pyo3(signature = (path, from_=None, include_root=None))]
+fn dist_parse_file(
+    path: &str,
+    from_: Option<&str>,
+    include_root: Option<&str>,
+) -> PyResult<PyMulticonductorNetwork> {
+    let mut options = powerio_dist::DssReadOptions::default();
+    options.include_root = include_root.map(std::path::PathBuf::from);
+    powerio_dist::parse_file_with_options(std::path::Path::new(path), from_, &options)
         .map(|net| PyMulticonductorNetwork { net })
         .map_err(dist_to_pyerr)
 }

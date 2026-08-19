@@ -7,7 +7,7 @@
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
-use powerio_dist::dss::{parse_dss_file, write_dss};
+use powerio_dist::dss::{DssReadOptions, parse_dss_file, parse_dss_file_with_options, write_dss};
 use powerio_dist::{
     Configuration, CoordinateSpace, CoordsKind, IbrPrimeMover, IbrTopology, MulticonductorNetwork,
     ReactivePowerReference, ReactivePowerUnit, WindingConn,
@@ -732,6 +732,123 @@ fn a_clear_after_the_include_budget_does_not_erase_the_refusal() {
             .count(),
         1,
         "restated once, not once per refused include"
+    );
+}
+
+const FEEDER_DECK: &str = "\
+New Circuit.split basekv=12.47 pu=1 phases=3 bus1=a
+Redirect ../shared/linecodes.dss
+New Line.l1 bus1=a.1.2.3 bus2=b.1.2.3 phases=3 linecode=lc1 length=1 units=km
+";
+
+const SHARED_LINECODES: &str = "New Linecode.lc1 nphases=3 r1=0.1 x1=0.2\n";
+
+fn widened(root: &std::path::Path) -> DssReadOptions {
+    let mut options = DssReadOptions::default();
+    options.include_root = Some(root.to_path_buf());
+    options
+}
+
+/// A case split across a feeder directory and a shared component directory
+/// parses under an include root at their shared parent, and reads the same as
+/// the merged deck.
+#[test]
+fn a_widened_include_root_admits_a_shared_sibling_include() {
+    let root = temp_case_dir("dss-include-root");
+    std::fs::create_dir_all(root.join("feeder")).unwrap();
+    std::fs::create_dir_all(root.join("shared")).unwrap();
+    std::fs::write(root.join("feeder/f.dss"), FEEDER_DECK).unwrap();
+    std::fs::write(root.join("shared/linecodes.dss"), SHARED_LINECODES).unwrap();
+
+    let net = parse_dss_file_with_options(root.join("feeder/f.dss"), &widened(&root)).unwrap();
+    assert!(net.warnings.is_empty(), "{:?}", net.warnings);
+
+    let merged = powerio_dist::dss::parse_dss_str(&FEEDER_DECK.replace(
+        "Redirect ../shared/linecodes.dss",
+        SHARED_LINECODES.trim_end(),
+    ));
+    assert_eq!(
+        net.to_canonical_format(powerio_dist::DistTargetFormat::Dss)
+            .text,
+        merged
+            .to_canonical_format(powerio_dist::DistTargetFormat::Dss)
+            .text
+    );
+}
+
+/// The widened root is still a boundary: an include that climbs past it is
+/// refused, and the refusal names the boundary in force.
+#[test]
+fn a_widened_include_root_still_refuses_escapes_past_it() {
+    let outer = temp_case_dir("dss-include-root-escape");
+    let root = outer.join("root");
+    std::fs::create_dir_all(root.join("feeder")).unwrap();
+    std::fs::write(outer.join("secret.dss"), "New Line.leaked bus1=x bus2=y\n").unwrap();
+    std::fs::write(
+        root.join("feeder/f.dss"),
+        "New Circuit.esc\nRedirect ../../secret.dss\n",
+    )
+    .unwrap();
+
+    let net = parse_dss_file_with_options(root.join("feeder/f.dss"), &widened(&root)).unwrap();
+    assert!(net.lines.iter().all(|l| l.name != "leaked"));
+    assert!(
+        net.warnings
+            .iter()
+            .any(|w| w.contains("escapes the include root")),
+        "{:?}",
+        net.warnings
+    );
+    assert_eq!(
+        net.parse_diagnostics
+            .iter()
+            .filter(|d| d.code.as_str() == "READ.DSS.INCLUDE_REFUSED")
+            .count(),
+        1
+    );
+}
+
+/// A symlink planted under the widened root pointing outside it is refused:
+/// canonicalization still runs against the root.
+#[cfg(unix)]
+#[test]
+fn a_widened_include_root_still_refuses_symlink_escapes() {
+    let outer = temp_case_dir("dss-include-root-symlink");
+    let root = outer.join("root");
+    std::fs::create_dir_all(root.join("feeder")).unwrap();
+    std::fs::write(outer.join("secret.dss"), "New Line.leaked bus1=x bus2=y\n").unwrap();
+    std::fs::write(
+        root.join("feeder/f.dss"),
+        "New Circuit.esc\nRedirect linked.dss\n",
+    )
+    .unwrap();
+    std::os::unix::fs::symlink(outer.join("secret.dss"), root.join("feeder/linked.dss")).unwrap();
+
+    let net = parse_dss_file_with_options(root.join("feeder/f.dss"), &widened(&root)).unwrap();
+    assert!(net.lines.iter().all(|l| l.name != "leaked"));
+    assert!(
+        net.warnings
+            .iter()
+            .any(|w| w.contains("outside the include root")),
+        "{:?}",
+        net.warnings
+    );
+}
+
+/// The case file itself must sit under the widened root.
+#[test]
+fn a_case_file_outside_the_widened_root_is_refused() {
+    let outer = temp_case_dir("dss-include-root-outside");
+    let root = outer.join("root");
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::create_dir_all(outer.join("elsewhere")).unwrap();
+    std::fs::write(outer.join("elsewhere/f.dss"), "New Circuit.out\n").unwrap();
+
+    let err = parse_dss_file_with_options(outer.join("elsewhere/f.dss"), &widened(&root))
+        .expect_err("the case file is outside the include root");
+    assert!(
+        err.to_string().contains("outside the include root"),
+        "{err}"
     );
 }
 

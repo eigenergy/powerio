@@ -135,14 +135,27 @@ class MulticonductorNetwork:
 
 
 
-def parse_file(path: Any, from_: Optional[str] = None) -> MulticonductorNetwork:
+def parse_file(
+    path: Any, from_: Optional[str] = None, include_root: Any = None
+) -> MulticonductorNetwork:
     """Parse a distribution network file.
 
     The format comes from ``from_`` when given, else from the file itself:
     ``.dss`` is OpenDSS, and ``.json`` holding the ENGINEERING ``data_model``
     key is PMD JSON, otherwise BMOPF JSON.
+
+    ``include_root`` widens dss include confinement from the case directory to
+    the given directory: the case file must sit under it, and
+    ``Redirect``/``Compile``/``Buscoords`` includes resolve anywhere beneath
+    it. Unset, includes stay confined to the case directory.
     """
-    return MulticonductorNetwork(_powerio.dist_parse_file(str(path), from_))
+    return MulticonductorNetwork(
+        _powerio.dist_parse_file(
+            str(path),
+            from_,
+            str(include_root) if include_root is not None else None,
+        )
+    )
 
 
 def parse_str(text: str, format: str) -> MulticonductorNetwork:

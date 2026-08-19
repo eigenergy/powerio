@@ -28,10 +28,11 @@ pub mod codes {
 
         // READ.DSS: decoded, but not representable in the multiconductor model.
         /// A `Redirect`/`Compile`/`Buscoords` include the reader refused
-        /// because it escapes the case directory. Severity `Error`: the parse
-        /// continued, but the network is incomplete.
+        /// because it escapes the case directory, or the include root when
+        /// the caller widened one. Severity `Error`: the parse continued,
+        /// but the network is incomplete.
         READ_DSS_INCLUDE_REFUSED = "READ.DSS.INCLUDE_REFUSED", Error,
-            "an include escaping the case directory was refused";
+            "an include escaping the case directory or the configured include root was refused";
         /// The reader stopped following includes because the case exceeded the
         /// include budget. Severity `Error` for the same reason.
         READ_DSS_INCLUDE_BUDGET = "READ.DSS.INCLUDE_BUDGET", Error,

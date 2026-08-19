@@ -36,6 +36,7 @@ __all__ = [
     "ALLOWED_ROOTS_ENV",
     "LEGACY_ROOT_ENVS",
     "PathNotAllowed",
+    "admitting_root",
     "allowed_roots",
     "check_allowed_path",
     "checked_path",
@@ -116,17 +117,19 @@ def _path_for_policy(path: Path, *, for_write: bool) -> Path:
         return path.resolve(strict=False)
 
 
-def check_allowed_path(
+def admitting_root(
     path: Path, *, for_write: bool = False, purpose: str = "path"
-) -> None:
-    """Raise :class:`PathNotAllowed` when ``path`` resolves outside the roots.
+) -> Path | None:
+    """The allowed root that contains ``path``, ``None`` when the policy is off.
 
-    Symlinks are resolved first, including a dangling final component under
-    ``for_write``, so a link inside a root cannot redirect a write out of it.
+    Raises :class:`PathNotAllowed` when roots are configured and ``path``
+    resolves outside all of them. Symlinks are resolved first, including a
+    dangling final component under ``for_write``, so a link inside a root
+    cannot redirect a write out of it.
     """
     roots = allowed_roots()
     if not roots:
-        return
+        return None
     try:
         resolved = _path_for_policy(path, for_write=for_write)
     except OSError as exc:
@@ -135,9 +138,19 @@ def check_allowed_path(
         ) from exc
     for root in roots:
         if resolved == root or root in resolved.parents:
-            return
+            return root
     root_list = ", ".join(str(root) for root in roots)
     raise PathNotAllowed(f"`{purpose}` is outside allowed MCP roots: {root_list}")
+
+
+def check_allowed_path(
+    path: Path, *, for_write: bool = False, purpose: str = "path"
+) -> None:
+    """Raise :class:`PathNotAllowed` when ``path`` resolves outside the roots.
+
+    :func:`admitting_root` with the result discarded.
+    """
+    admitting_root(path, for_write=for_write, purpose=purpose)
 
 
 def checked_path(

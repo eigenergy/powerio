@@ -20,8 +20,8 @@ use crate::diagnostics::codes as C;
 use super::defaults as dd;
 use super::lex::{BusSpec, Value, VarMap};
 use super::raw::{
-    RawDss, RawObject, canonical_case_root, confined_fs_read, parse_raw_with,
-    parse_raw_with_confined,
+    IncludeBoundary, RawDss, RawObject, canonical_case_root, confined_fs_read,
+    parse_raw_confined_under, parse_raw_with, parse_raw_with_confined,
 };
 use crate::error::{Error, Result};
 use crate::geo::{CoordinateSpace, CoordsKind, GeoMeta, Location};
@@ -70,15 +70,16 @@ fn strip_bom_owned(text: String) -> String {
 
 /// A redirect loader for confined file parsing: reads through
 /// [`confined_fs_read`], which refuses a path whose canonical (symlink
-/// resolved) form escapes the case directory, then strips a leading byte
-/// order mark and records which files carried one, so each strip can be
+/// resolved) form escapes the confinement boundary, then strips a leading
+/// byte order mark and records which files carried one, so each strip can be
 /// itemized as a warning instead of happening silently.
 fn confined_bom_stripping_loader(
     canonical_root: Option<PathBuf>,
+    boundary: IncludeBoundary,
     stripped_paths: &mut Vec<String>,
 ) -> impl FnMut(&Path) -> std::io::Result<String> + '_ {
     move |p: &Path| {
-        confined_fs_read(canonical_root.as_deref(), p).map(|text| {
+        confined_fs_read(canonical_root.as_deref(), boundary, p).map(|text| {
             if text.starts_with('\u{feff}') {
                 stripped_paths.push(p.display().to_string());
             }
@@ -106,6 +107,20 @@ fn warn_stripped_boms(
     }
 }
 
+/// Options for reading `.dss` files.
+#[derive(Clone, Debug, Default, PartialEq)]
+#[non_exhaustive]
+pub struct DssReadOptions {
+    /// Directory `Redirect`/`Compile`/`Buscoords` includes are confined to.
+    /// `None` confines them to the case directory, the default. When set, the
+    /// case file must itself sit under this directory, and includes resolve
+    /// anywhere beneath it — a case split across a feeder directory and a
+    /// shared component directory parses with the shared parent here. The
+    /// include budget, nesting limit, and symlink refusal all apply against
+    /// this directory unchanged.
+    pub include_root: Option<PathBuf>,
+}
+
 /// Parses a `.dss` file, following includes, into the canonical model.
 /// `Redirect`/`Compile`/`Buscoords` includes are confined to the directory of
 /// `path`: an include that resolves outside that directory is refused with a
@@ -118,7 +133,21 @@ fn warn_stripped_boms(
 /// an absolute include counts as inside the directory.) The includes a single
 /// parse follows are budgeted in files and in bytes; a case that exhausts the
 /// budget stops following includes and records an `Error` finding.
+/// [`parse_dss_file_with_options`] widens the confinement to an include root
+/// the caller chooses.
 pub fn parse_dss_file(path: impl AsRef<Path>) -> Result<MulticonductorNetwork> {
+    parse_dss_file_with_options(path, &DssReadOptions::default())
+}
+
+/// Like [`parse_dss_file`], with explicit [`DssReadOptions`]. With
+/// `include_root` unset the behavior is exactly [`parse_dss_file`]'s. With it
+/// set, the case file must sit under the given directory and includes are
+/// confined to that directory instead of the case directory; every other
+/// guard is unchanged.
+pub fn parse_dss_file_with_options(
+    path: impl AsRef<Path>,
+    options: &DssReadOptions,
+) -> Result<MulticonductorNetwork> {
     let path = path.as_ref();
     let text = std::fs::read_to_string(path).map_err(|source| Error::Io {
         path: path.display().to_string(),
@@ -127,11 +156,52 @@ pub fn parse_dss_file(path: impl AsRef<Path>) -> Result<MulticonductorNetwork> {
     let had_bom = text.starts_with('\u{feff}');
     let text = strip_bom_owned(text);
     let mut stripped_paths = Vec::new();
-    let raw = parse_raw_with_confined(
-        &text,
-        &path.display().to_string(),
-        &mut confined_bom_stripping_loader(canonical_case_root(path), &mut stripped_paths),
-    );
+    let raw = match &options.include_root {
+        None => parse_raw_with_confined(
+            &text,
+            &path.display().to_string(),
+            &mut confined_bom_stripping_loader(
+                canonical_case_root(path),
+                IncludeBoundary::CaseDirectory,
+                &mut stripped_paths,
+            ),
+        ),
+        Some(root) => {
+            let root = root.canonicalize().map_err(|source| Error::Io {
+                path: root.display().to_string(),
+                source,
+            })?;
+            // Canonical forms on both sides: the case file may reach the root
+            // through symlinks or `..`, and the executor's lexical check needs
+            // a base directory the root is a literal prefix of.
+            let file = path.canonicalize().map_err(|source| Error::Io {
+                path: path.display().to_string(),
+                source,
+            })?;
+            if !file.starts_with(&root) {
+                return Err(Error::Io {
+                    path: path.display().to_string(),
+                    source: std::io::Error::new(
+                        std::io::ErrorKind::PermissionDenied,
+                        format!(
+                            "the case file is outside the include root {}",
+                            root.display()
+                        ),
+                    ),
+                });
+            }
+            parse_raw_confined_under(
+                &text,
+                &file.display().to_string(),
+                &root,
+                &mut confined_bom_stripping_loader(
+                    Some(root.clone()),
+                    IncludeBoundary::IncludeRoot,
+                    &mut stripped_paths,
+                ),
+            )
+        }
+    };
     let mut net = network_from_raw(&raw, Arc::new(text));
     warn_stripped_boms(&mut net, had_bom, stripped_paths);
     Ok(net)
