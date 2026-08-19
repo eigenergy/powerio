@@ -38,6 +38,11 @@ pub enum Error {
         model: u8,
         ncost: usize,
     },
+
+    #[error(
+        "generator {gen_index} has a concave cost row (c2 = {c2}); need a nonnegative quadratic coefficient"
+    )]
+    ConcaveCost { gen_index: usize, c2: f64 },
 }
 
 impl Error {
@@ -52,6 +57,7 @@ impl Error {
             Error::Io(_) => &codes::READ_INSTANCE_IO_FAILED,
             Error::NoGenerators => &codes::BUILD_INSTANCE_NO_GENERATORS,
             Error::UnsupportedCostModel { .. } => &codes::BUILD_INSTANCE_UNSUPPORTED_COST_MODEL,
+            Error::ConcaveCost { .. } => &codes::BUILD_INSTANCE_CONCAVE_COST,
         }
     }
 
@@ -68,7 +74,9 @@ impl Error {
             Error::Matrix(inner) => inner.category(),
             Error::Io(_) => C::Io,
             // A well-formed case that cannot satisfy a requested operation.
-            Error::NoGenerators | Error::UnsupportedCostModel { .. } => C::Data,
+            Error::NoGenerators
+            | Error::UnsupportedCostModel { .. }
+            | Error::ConcaveCost { .. } => C::Data,
         }
     }
 }
@@ -93,6 +101,14 @@ mod tests {
             .category(),
             Data
         );
+        assert_eq!(
+            Error::ConcaveCost {
+                gen_index: 0,
+                c2: -0.5
+            }
+            .category(),
+            Data
+        );
     }
 
     // Every error is a diagnostic that ended the operation, so the code's
@@ -107,6 +123,10 @@ mod tests {
                 gen_index: 0,
                 model: 1,
                 ncost: 4,
+            },
+            Error::ConcaveCost {
+                gen_index: 0,
+                c2: -0.5,
             },
         ];
         for error in &every {

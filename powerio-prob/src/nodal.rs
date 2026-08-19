@@ -19,7 +19,9 @@ use crate::{Error, Result};
 /// quadratic gives `1/q` near 1e17 wherever the curvature is inverted.
 ///
 /// # Errors
-/// [`Error::UnsupportedCostModel`] for a row that states no quadratic curve.
+/// [`Error::UnsupportedCostModel`] for a row that states no quadratic curve;
+/// [`Error::ConcaveCost`] for a negative quadratic coefficient, which the
+/// least cost split in [`combine_costs`] cannot price.
 pub(crate) fn quadratic_terms(cost: &GenCost, gen_index: usize) -> Result<(f64, f64, f64)> {
     // One rule, stated once on the hub type. Rolling it again here diverged
     // twice: the threshold applied to `2*c2` rather than to the source
@@ -32,6 +34,15 @@ pub(crate) fn quadratic_terms(cost: &GenCost, gen_index: usize) -> Result<(f64, 
             model: cost.model,
             ncost: cost.ncost,
         })?;
+    // The readers keep a concave row; the convexity assumption is this
+    // crate's, so the instance builders refuse it here, before bus count
+    // decides whether the row passes through or joins a merge.
+    if q < 0.0 {
+        return Err(Error::ConcaveCost {
+            gen_index,
+            c2: q / 2.0,
+        });
+    }
     Ok((q, c, c0))
 }
 
@@ -134,6 +145,9 @@ impl Default for BusCost {
 
 impl BusCost {
     fn add(&mut self, q: f64, c: f64, c0: f64) {
+        // `quadratic_terms` refuses a negative `q`, so the flat arm below only
+        // ever takes `q == 0` rows.
+        debug_assert!(q >= 0.0, "concave cost row reached combine_costs: q = {q}");
         self.count += 1;
         if self.count == 1 {
             self.only = (q, c, c0);
@@ -201,6 +215,28 @@ mod tests {
         let costs = combine_costs(1, &[0, 0], &[q, 0.2], &[c, 5.0], &[c0, 0.0]);
         assert_eq!(costs.q, vec![0.0]);
         assert_eq!(costs.c, vec![3.0], "the cheaper linear term sets the bus");
+    }
+
+    #[test]
+    fn a_concave_row_is_refused_with_its_source_coefficient() {
+        let concave = GenCost::new(2, 0.0, 0.0, vec![-0.5, 5.0, 0.0]);
+        let error = quadratic_terms(&concave, 3).expect_err("a concave row");
+        match error {
+            Error::ConcaveCost { gen_index, c2 } => {
+                assert_eq!(gen_index, 3);
+                assert_eq!(c2.to_bits(), (-0.5_f64).to_bits());
+            }
+            other => panic!("wrong error: {other}"),
+        }
+    }
+
+    /// A negative coefficient within the artifact tolerance is the same
+    /// rounding artifact as a positive one: the row reads flat, no refusal.
+    #[test]
+    fn a_tiny_negative_artifact_still_reads_as_a_linear_curve() {
+        let artifact = GenCost::new(2, 0.0, 0.0, vec![-1e-17, 3.0, 0.0]);
+        let (q, c, c0) = quadratic_terms(&artifact, 0).expect("a model 2 row");
+        assert_eq!((q, c, c0), (0.0, 3.0, 0.0));
     }
 
     #[test]
