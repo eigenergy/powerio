@@ -45,10 +45,11 @@ __all__ = [
 
 
 class PathNotAllowed(ValueError):
-    """The containment policy refused a path.
+    """The path gate refused a value: outside the allowed roots, a remote
+    URI, or a non-local file URI.
 
-    Subclasses :class:`ValueError`, which is what
-    :func:`check_allowed_path` raised before this type existed.
+    Subclasses :class:`ValueError`, which is what every refusal site
+    raised before this type existed.
     """
 
 
@@ -79,13 +80,13 @@ def decode_local_path(value: str, *, purpose: str = "path") -> Path:
     windows_drive = os.name == "nt" and len(parsed.scheme) == 1
     if parsed.scheme and not windows_drive:
         if parsed.scheme != "file":
-            raise ValueError(f"`{purpose}` must be a local path or file:// URI")
+            raise PathNotAllowed(f"`{purpose}` must be a local path or file:// URI")
         netloc = unquote(parsed.netloc)
         path = unquote(parsed.path)
         if len(netloc) == 2 and netloc[0].isalpha() and netloc[1] == ":":
             return Path(f"{netloc}{path}").expanduser()
         if netloc.lower() not in ("", "localhost"):
-            raise ValueError(f"`{purpose}` file URI must be local")
+            raise PathNotAllowed(f"`{purpose}` file URI must be local")
         if (
             len(path) >= 3
             and path[0] == "/"
