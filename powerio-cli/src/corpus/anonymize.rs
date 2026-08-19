@@ -208,39 +208,113 @@ impl Sanitizer {
 }
 
 /// Every string powerio itself writes into a serialized network that is not
-/// case data: enum spellings, format tokens, unit names.
+/// case data: field names, enum spellings, format tokens, unit names.
 ///
-/// Derived by serializing a network built here, whose every name is chosen
-/// here, rather than from a hand-kept list — a new enum variant joins the
-/// vocabulary the day the model gains it. A real case whose element is named
-/// after one of these spellings is exempt from the audit; the tradeoff runs
-/// the safe way, since a spurious failure would stop a run cold while this
-/// costs one masked token.
+/// Derived from the model itself rather than from a hand-kept list, twice
+/// over. The JSON schemas of both network types name every field and every
+/// enum spelling, populated or not, so a new field joins the vocabulary the
+/// day the model gains it; a reference network built here adds the spellings
+/// custom serializers write past the schema, such as the generator capability
+/// map's column names. A real case whose element is named after one of these
+/// spellings is exempt from the audit; the tradeoff runs the safe way, since a
+/// spurious failure would stop a run cold while this costs one unmasked token.
 ///
-/// Built once. It depends on nothing but the model's own field names, and
-/// `identifying()` runs per emitted message and per audited line, so rebuilding
-/// a network and serializing it there dominated both.
-fn vocabulary() -> &'static BTreeSet<String> {
+/// The completeness gate lives in `super::tests`: the union of every
+/// fixture's serde keys must sit inside this set.
+///
+/// Built once. `identifying()` runs per emitted message and per audited line,
+/// so rebuilding the schemas and the network there would dominate both.
+pub(crate) fn vocabulary() -> &'static BTreeSet<String> {
     static VOCABULARY: std::sync::OnceLock<BTreeSet<String>> = std::sync::OnceLock::new();
     VOCABULARY.get_or_init(build_vocabulary)
 }
 
 fn build_vocabulary() -> BTreeSet<String> {
     use powerio_matrix::{BalancedNetwork, Branch, Bus, BusId, BusType, Generator, Load, Shunt};
+    let mut out = BTreeSet::new();
+    // Field names and enum spellings of both models, from the same derives
+    // that generate the published schema documents.
+    for value in [
+        serde_json::to_value(schemars::schema_for!(BalancedNetwork)),
+        serde_json::to_value(schemars::schema_for!(powerio_dist::MulticonductorNetwork)),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        collect_schema_words(&value, &mut out);
+    }
     let mut net = BalancedNetwork::new("", 100.0);
     net.buses.push(Bus::new(BusId(1), BusType::Ref, 1.0));
     net.buses.push(Bus::new(BusId(2), BusType::Pv, 1.0));
     net.buses.push(Bus::new(BusId(3), BusType::Pq, 1.0));
     net.buses.push(Bus::new(BusId(4), BusType::Isolated, 1.0));
     net.branches.push(Branch::new(BusId(1), BusId(2), 0.0, 1.0));
-    net.generators.push(Generator::new(BusId(1)));
+    // Filled so `caps_serde` writes its column names, which the schema
+    // states as a plain string map.
+    let mut generator = Generator::new(BusId(1));
+    for slot in &mut generator.caps {
+        *slot = Some(0.0);
+    }
+    net.generators.push(generator);
     net.loads.push(Load::new(BusId(1), 0.0, 0.0));
     net.shunts.push(Shunt::new(BusId(1), 0.0, 0.0));
-    let mut out = BTreeSet::new();
     if let Ok(value) = serde_json::to_value(&net) {
-        collect_strings(&value, &mut out);
+        collect_words(&value, &mut out);
     }
     out
+}
+
+/// Keys and string values of a document powerio built itself, where every
+/// spelling is powerio's own. Never run on anything a corpus touched.
+fn collect_words(value: &serde_json::Value, out: &mut BTreeSet<String>) {
+    match value {
+        serde_json::Value::String(s) if !s.is_empty() => {
+            out.insert(s.clone());
+        }
+        serde_json::Value::Array(xs) => {
+            for x in xs {
+                collect_words(x, out);
+            }
+        }
+        serde_json::Value::Object(xs) => {
+            for (key, x) in xs {
+                out.insert(key.clone());
+                collect_words(x, out);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Property names and enum spellings of a JSON schema. Nothing else: a
+/// schema's description sentences are not spellings the report writes.
+fn collect_schema_words(value: &serde_json::Value, out: &mut BTreeSet<String>) {
+    match value {
+        serde_json::Value::Array(xs) => {
+            for x in xs {
+                collect_schema_words(x, out);
+            }
+        }
+        serde_json::Value::Object(map) => {
+            if let Some(serde_json::Value::Object(props)) = map.get("properties") {
+                out.extend(props.keys().cloned());
+            }
+            if let Some(serde_json::Value::Array(spellings)) = map.get("enum") {
+                out.extend(
+                    spellings
+                        .iter()
+                        .filter_map(|s| s.as_str().map(str::to_string)),
+                );
+            }
+            if let Some(spelling) = map.get("const").and_then(serde_json::Value::as_str) {
+                out.insert(spelling.to_string());
+            }
+            for x in map.values() {
+                collect_schema_words(x, out);
+            }
+        }
+        _ => {}
+    }
 }
 
 /// `after / before`, to three significant digits, or `None` when `before` is

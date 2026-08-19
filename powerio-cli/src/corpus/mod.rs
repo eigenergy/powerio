@@ -1415,3 +1415,70 @@ fn render_summary(ingest: &Ingest, findings: &[Finding]) -> String {
     }
     out
 }
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeSet;
+    use std::path::Path;
+
+    use super::{Case, read_case};
+
+    /// Every serde key of `value` outside its `extras` subtrees, where keys
+    /// are powerio's own field names rather than case data.
+    fn model_keys(value: &serde_json::Value, in_extras: bool, out: &mut BTreeSet<String>) {
+        match value {
+            serde_json::Value::Array(xs) => {
+                for x in xs {
+                    model_keys(x, in_extras, out);
+                }
+            }
+            serde_json::Value::Object(xs) => {
+                for (key, x) in xs {
+                    if !in_extras {
+                        out.insert(key.clone());
+                    }
+                    model_keys(x, in_extras || key == "extras", out);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// The vocabulary's completeness gate: parse every fixture the readers
+    /// accept, union their serde keys, and require every one to be
+    /// vocabulary. A field name outside it masks as a corpus secret the day
+    /// a real corpus teaches the same spelling.
+    #[test]
+    fn every_fixture_field_name_is_vocabulary() {
+        let data = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .unwrap()
+            .join("tests/data");
+        let mut keys = BTreeSet::new();
+        let mut parsed = 0usize;
+        for entry in walkdir::WalkDir::new(&data)
+            .into_iter()
+            .filter_map(Result::ok)
+            .filter(|e| e.file_type().is_file())
+        {
+            let Ok(case) = read_case(entry.path()) else {
+                continue;
+            };
+            let value = match case {
+                Case::Balanced(net, _) => serde_json::to_value(&*net),
+                Case::Multiconductor(net) => serde_json::to_value(&*net),
+            }
+            .expect("a parsed fixture serializes");
+            model_keys(&value, false, &mut keys);
+            parsed += 1;
+        }
+        assert!(parsed >= 18, "only {parsed} fixtures parsed");
+        let vocabulary = super::anonymize::vocabulary();
+        let missing: Vec<&String> = keys.iter().filter(|k| !vocabulary.contains(*k)).collect();
+        assert!(
+            missing.is_empty(),
+            "{} fixture field name(s) outside the vocabulary would mask as corpus secrets: {missing:?}",
+            missing.len()
+        );
+    }
+}

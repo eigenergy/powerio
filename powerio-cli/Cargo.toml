@@ -28,12 +28,15 @@ doc = false
 [dependencies]
 # The hub crate directly, for `powerio::version`: the CLI authors a summary
 # document and must stamp it with the same key every other one carries.
-powerio.workspace = true
+# `schema`: the corpus anonymizer derives its field name vocabulary from the
+# model's own JSON schema, so it stays complete without a hand-kept list.
+powerio = { workspace = true, features = ["schema"] }
 powerio-matrix = { workspace = true, features = ["gridfm"] }
 powerio-prob = { workspace = true, features = ["matrix"] }
 # Unconditional: the CLI always ships the distribution surface (`convert
 # --to dss/pmd-json/bmopf-json`); only the C ABI gates it behind a feature.
-powerio-dist.workspace = true
+powerio-dist = { workspace = true, features = ["schema"] }
+schemars.workspace = true
 powerio-pkg.workspace = true
 sprs.workspace = true
 anyhow = "1"
