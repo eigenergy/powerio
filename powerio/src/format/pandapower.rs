@@ -1822,21 +1822,20 @@ struct Row<'a> {
 
 impl Row<'_> {
     /// The pandas index value as a non-negative integer; pandapower element
-    /// ids live in the index, so a bad value is an error, not a default.
-    /// Values at or above `usize::MAX` are rejected so the float cast is exact
-    /// and the bus loop's `+ 1` cannot overflow.
+    /// ids live in the index, so a bad value is an error, never a default.
+    /// The shared id ceiling keeps the float cast exact and lets the bus
+    /// loop's `+ 1` never overflow.
     fn index_usize(&self) -> Result<usize> {
         let v = &self.frame.index[self.i];
         value_usize(v)
             .or_else(|| {
                 v.as_f64()
-                    .filter(|f| f.fract() == 0.0 && *f >= 0.0 && *f < usize::MAX as f64)
-                    .map(|f| f as usize)
+                    .filter(|f| f.fract() == 0.0)
+                    .and_then(|f| crate::format::id_from_f64(f, "index").ok())
             })
-            .filter(|&i| i < usize::MAX)
             .ok_or_else(|| {
                 bad(format!(
-                    "`{}` row at position {}: index is not a non-negative integer (`{}`)",
+                    "`{}` row at position {}: index `{}` is not a non-negative integer in the id range 0..2^63",
                     self.frame.name,
                     self.i,
                     value_repr(v)
@@ -2060,13 +2059,13 @@ fn read_poly_costs(
             .and_then(|v| {
                 value_usize(v).or_else(|| {
                     v.as_f64()
-                        .filter(|f| f.fract() == 0.0 && *f >= 0.0 && *f < usize::MAX as f64)
-                        .map(|f| f as usize)
+                        .filter(|f| f.fract() == 0.0)
+                        .and_then(|f| crate::format::id_from_f64(f, "element").ok())
                 })
             })
             .ok_or_else(|| {
                 bad(format!(
-                    "`poly_cost` row {}: required column `element` is missing or not a non-negative integer",
+                    "`poly_cost` row {}: required column `element` is missing or not a non-negative integer in the id range 0..2^63",
                     row.label()
                 ))
             })?;
@@ -2141,6 +2140,10 @@ fn bus_ref(
             "`{table}` row {label}: bus reference `{key}` is not an integer (`{}`)",
             value_repr(cell)
         )),
+        BusRefError::OutOfRange => bad(format!(
+            "`{table}` row {label}: bus reference `{key}` is outside the id range 0..2^63 ({})",
+            value_repr(cell)
+        )),
     })?;
     bus_of_pp.get(&idx).copied().ok_or_else(|| {
         bad(format!(
@@ -2152,6 +2155,7 @@ fn bus_ref(
 enum BusRefError {
     Negative,
     NotInteger,
+    OutOfRange,
 }
 
 fn decode_bus_index(v: &Value) -> std::result::Result<usize, BusRefError> {
@@ -2161,13 +2165,20 @@ fn decode_bus_index(v: &Value) -> std::result::Result<usize, BusRefError> {
         } else if f < 0.0 {
             Err(BusRefError::Negative)
         } else {
-            Ok(f as usize)
+            crate::format::id_from_f64(f, "bus").map_err(|_| BusRefError::OutOfRange)
+        }
+    }
+    fn from_u64(u: u64) -> std::result::Result<usize, BusRefError> {
+        if u <= BusId::MAX.0 as u64 {
+            Ok(u as usize)
+        } else {
+            Err(BusRefError::OutOfRange)
         }
     }
     match v {
         Value::Number(n) => {
             if let Some(u) = n.as_u64() {
-                Ok(u as usize)
+                from_u64(u)
             } else if n.as_i64().is_some() {
                 // as_u64 failed, so the integer is negative.
                 Err(BusRefError::Negative)
@@ -2178,7 +2189,7 @@ fn decode_bus_index(v: &Value) -> std::result::Result<usize, BusRefError> {
         Value::String(s) => {
             let s = s.trim();
             if let Ok(u) = s.parse::<u64>() {
-                Ok(u as usize)
+                from_u64(u)
             } else if s.parse::<i64>().is_ok() {
                 Err(BusRefError::Negative)
             } else {
@@ -2218,10 +2229,16 @@ fn value_f64(v: &Value) -> Option<f64> {
     }
 }
 
+/// Every caller reads an id column (pandas index, `zone`, cost `element`), so
+/// integer input gets the same [`BusId::MAX`] ceiling the float paths get from
+/// [`crate::format::id_from_f64`].
 fn value_usize(v: &Value) -> Option<usize> {
     match v {
-        Value::Number(_) => v.as_u64().map(|x| x as usize),
-        Value::String(s) => s.parse().ok(),
+        Value::Number(_) => v
+            .as_u64()
+            .filter(|&x| x <= BusId::MAX.0 as u64)
+            .map(|x| x as usize),
+        Value::String(s) => s.parse().ok().filter(|&x: &usize| x <= BusId::MAX.0),
         _ => None,
     }
 }
@@ -2412,7 +2429,9 @@ mod tests {
     fn bus_index_must_be_non_negative_integer() {
         let msg = err(&pp_net(vec![bus_table(json!(["x"]))]));
         assert!(
-            msg.contains("`bus` row at position 0: index is not a non-negative integer (`x`)"),
+            msg.contains(
+                "`bus` row at position 0: index `x` is not a non-negative integer in the id range"
+            ),
             "{msg}"
         );
     }

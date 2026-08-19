@@ -2100,7 +2100,7 @@ fn parse_str_rejects_malformed_pandapower_frames() {
             .unwrap_err()
             .to_string();
         assert!(
-            err.contains("index is not a non-negative integer"),
+            err.contains("is not a non-negative integer in the id range"),
             "index {huge}: {err}"
         );
     }

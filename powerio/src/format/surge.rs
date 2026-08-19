@@ -1449,33 +1449,36 @@ fn value_to_usize(value: &Value, key: &str) -> Result<usize> {
     match value {
         Value::Number(number) => {
             if let Some(value) = number.as_u64() {
-                usize::try_from(value)
-                    .map_err(|_| format_error(format!("`{key}` integer is too large")))
-            } else if let Some(value) = number.as_i64() {
-                if value >= 0 {
-                    usize::try_from(value as u64)
-                        .map_err(|_| format_error(format!("`{key}` integer is too large")))
-                } else {
-                    Err(format_error(format!("`{key}` must be nonnegative")))
-                }
-            } else if let Some(value) = number.as_f64() {
-                // Mirror the integer branches' "too large" rejection: a float
-                // beyond usize would otherwise saturate to usize::MAX and read
-                // as a confusing unknown-bus reference later.
-                if value >= 0.0 && value.fract() == 0.0 && value < usize::MAX as f64 {
+                if value <= BusId::MAX.0 as u64 {
                     Ok(value as usize)
-                } else if value >= usize::MAX as f64 {
-                    Err(format_error(format!("`{key}` integer is too large")))
                 } else {
+                    Err(format_error(format!("`{key}` integer is too large")))
+                }
+            } else if number.as_i64().is_some() {
+                // as_u64 failed, so the integer is negative.
+                Err(format_error(format!("`{key}` must be nonnegative")))
+            } else if let Some(value) = number.as_f64() {
+                if value.is_finite() && value.fract() != 0.0 {
                     Err(format_error(format!("`{key}` must be an integer")))
+                } else {
+                    // The shared range policy: a float beyond the id ceiling
+                    // must not saturate into a confusing unknown-bus reference.
+                    crate::format::id_from_f64(value, key).map_err(format_error)
                 }
             } else {
                 Err(format_error(format!("`{key}` is not an integer")))
             }
         }
-        Value::String(value) => value
-            .parse::<usize>()
-            .map_err(|_| format_error(format!("`{key}` string is not an integer"))),
+        Value::String(value) => {
+            let parsed = value
+                .parse::<usize>()
+                .map_err(|_| format_error(format!("`{key}` string is not an integer")))?;
+            if parsed <= BusId::MAX.0 {
+                Ok(parsed)
+            } else {
+                Err(format_error(format!("`{key}` integer is too large")))
+            }
+        }
         _ => Err(format_error(format!("`{key}` is not an integer"))),
     }
 }
@@ -1522,12 +1525,16 @@ mod tests {
     use super::*;
 
     #[test]
-    fn float_index_beyond_usize_is_rejected() {
+    fn float_index_beyond_the_id_ceiling_is_rejected() {
         // 1e20 backs into the f64 branch (too large for as_u64) and would
-        // saturate to usize::MAX under `as usize`; it must get the same "too
-        // large" rejection the integer branches give.
+        // saturate under `as usize`; the shared range policy refuses it with
+        // the column name.
         let err = value_to_usize(&serde_json::json!(1e20), "from_bus").unwrap_err();
-        assert!(err.to_string().contains("too large"), "got: {err}");
+        let text = err.to_string();
+        assert!(
+            text.contains("`from_bus`") && text.contains("outside the id range"),
+            "got: {err}"
+        );
         assert_eq!(
             value_to_usize(&serde_json::json!(3.0), "from_bus").unwrap(),
             3

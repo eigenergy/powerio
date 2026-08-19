@@ -593,6 +593,28 @@ pub(crate) fn geographic_meta(buses: &[Bus]) -> Option<crate::geo::GeoMeta> {
     })
 }
 
+/// A source id from an f64: an in range value truncates the way the readers
+/// always have; a negative, non-finite, or over-ceiling value is refused with
+/// a message naming `column`, instead of letting the `as usize` cast saturate.
+/// The ceiling is [`crate::network::BusId::MAX`] (`i64::MAX`, the C ABI id
+/// bound), applied to every id column so a non-bus id gets the same policy.
+#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+pub(crate) fn id_from_f64(
+    value: f64,
+    column: impl std::fmt::Display,
+) -> std::result::Result<usize, String> {
+    // Strict `<`: `i64::MAX as f64` rounds up to 2^63, so `<=` would admit
+    // values the cast saturates past `BusId::MAX`.
+    if value >= 0.0 && value < i64::MAX as f64 {
+        Ok(value as usize)
+    } else {
+        // Debug keeps the shortest float form ("1e300", never 301 digits).
+        Err(format!(
+            "`{column}` value {value:?} is outside the id range 0..2^63"
+        ))
+    }
+}
+
 /// A case with no buses is content-free for every consumer. Most readers
 /// already reject it on a missing required table, but a JSON carrying only
 /// `baseMVA` would otherwise parse to a hollow network; reject it in the

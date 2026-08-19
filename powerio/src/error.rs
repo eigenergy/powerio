@@ -28,6 +28,13 @@ pub enum Error {
         value: String,
     },
 
+    #[error("malformed MATPOWER `{field}` row {row}: {message}")]
+    BadId {
+        field: &'static str,
+        row: usize,
+        message: String,
+    },
+
     #[error("unbalanced brackets in MATPOWER `{0}` matrix")]
     UnbalancedBrackets(&'static str),
 
@@ -147,6 +154,7 @@ impl Error {
             Error::MissingField(_)
             | Error::ShortRow { .. }
             | Error::BadFloat { .. }
+            | Error::BadId { .. }
             | Error::UnbalancedBrackets(_) => &codes::PARSE_MATPOWER_MALFORMED,
             Error::FormatRead { .. } => &codes::PARSE_SOURCE_MALFORMED,
             Error::Io(_) => &codes::READ_IO_FAILED,
@@ -185,6 +193,7 @@ impl Error {
             Error::MissingField(_)
             | Error::ShortRow { .. }
             | Error::BadFloat { .. }
+            | Error::BadId { .. }
             | Error::UnbalancedBrackets(_)
             | Error::FormatRead { .. } => C::Parse,
             // A well-formed case that can't satisfy a requested operation. These
@@ -230,6 +239,11 @@ mod tests {
                 field: "bus",
                 row: 1,
                 value: "x".into(),
+            },
+            Error::BadId {
+                field: "bus",
+                row: 1,
+                message: "`BUS_I` value 1e300 is outside the id range 0..2^63".into(),
             },
             Error::UnbalancedBrackets("bus"),
             Error::FormatRead {

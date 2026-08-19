@@ -378,10 +378,7 @@ fn malformed_pslf_input_returns_errors_without_panics() {
     for (text, expected) in [
         ("", "no buses"),
         ("title\nunterminated\n", "no buses"),
-        (
-            "bus data [1]\nnot-a-bus\nend\n",
-            "bus id missing or invalid",
-        ),
+        ("bus data [1]\nnot-a-bus\nend\n", "bus id field 0 value"),
         (
             "bus data [1]\n1 \"A\" 230 : bad 1 1 0 1 1 1.1 0.9\nend\n",
             "bus type field 0 value",
