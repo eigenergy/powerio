@@ -11,7 +11,7 @@
 //! `max(4, highest node + 1)` to match PowerModelsDistribution and the
 //! public BMOPF examples.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -31,7 +31,8 @@ use crate::model::{
     DistLoadVoltageModel, DistShunt, DistSourceFormat, DistSwitch, DistTransformer, Extras,
     IbrPrimeMover, IbrTopology, Mat, MulticonductorNetwork, PowerFactorControl,
     ReactivePowerReference, ReactivePowerUnit, UntypedObject, VoltVarControl, VoltWattControl,
-    VoltageSource, Winding, WindingConn, pair_keys, square_from_rows,
+    VoltageSource, Winding, WindingConn, open_delta_connection, open_delta_pairable, pair_keys,
+    square_from_rows, winding_phase_pair,
 };
 
 /// Upper bound on any count property (`phases`, conductors, `windings`, tap
@@ -172,6 +173,7 @@ pub fn network_from_raw(raw: &RawDss, source: Arc<String>) -> MulticonductorNetw
         linecode_units: BTreeMap::new(),
         linecode_nconds: BTreeMap::new(),
         xycurves: BTreeMap::new(),
+        regulated: BTreeSet::new(),
         vars: &raw.vars,
     };
 
@@ -230,6 +232,7 @@ pub fn network_from_raw(raw: &RawDss, source: Arc<String>) -> MulticonductorNetw
     for obj in raw.of_class("regcontrol") {
         rd.regcontrol(obj);
     }
+    rd.classify_regulators();
     for obj in &raw.objects {
         if !TYPED_DSS_CLASSES.contains(&obj.class.as_str()) {
             rd.net.untyped.push(UntypedObject::from(obj));
@@ -404,6 +407,9 @@ struct Reader<'a> {
     /// (Line.cpp FetchLineCode), exactly like `phases=`.
     linecode_nconds: BTreeMap<String, usize>,
     xycurves: BTreeMap<String, XyCurveRaw>,
+    /// Transformer names (lowercase) a regcontrol targets, for the BMOPF
+    /// regulator subtype classification pass.
+    regulated: BTreeSet<String>,
     vars: &'a VarMap,
 }
 
@@ -2229,8 +2235,90 @@ impl Reader<'_> {
             "regcontrol {}: voltage regulation is ignored; transformer `{target}` keeps its written taps",
             obj.name
         ));
+        if !target.is_empty() {
+            self.regulated.insert(target.to_ascii_lowercase());
+        }
         self.net.untyped.push(UntypedObject::from(obj));
     }
+
+    /// Marks regcontrol targeted transformers with the BMOPF regulator
+    /// subtype the writer emits (`bmopf_subtype` in extras), tracking the
+    /// BMOPFTools schema extension. Only the unambiguous shapes classify: a
+    /// series single phase unit with equal winding voltages and ratings, and
+    /// a pair of identical line to line legs spelling one of the three open
+    /// delta connections. Anything else keeps today's typing.
+    fn classify_regulators(&mut self) {
+        let regulated = std::mem::take(&mut self.regulated);
+        if regulated.is_empty() {
+            return;
+        }
+        let mut legs: Vec<usize> = Vec::new();
+        for (idx, t) in self.net.transformers.iter_mut().enumerate() {
+            if !regulated.contains(&t.name.to_ascii_lowercase()) || !is_series_regulator(t) {
+                continue;
+            }
+            t.extras.insert(
+                "bmopf_subtype".into(),
+                "single_phase_autotransformer".into(),
+            );
+            if winding_phase_pair(&t.windings[0]).is_some() {
+                legs.push(idx);
+            }
+        }
+        let mut groups: BTreeMap<(String, String), Vec<usize>> = BTreeMap::new();
+        for &idx in &legs {
+            let t = &self.net.transformers[idx];
+            let key = (
+                t.windings[0].bus.to_ascii_lowercase(),
+                t.windings[1].bus.to_ascii_lowercase(),
+            );
+            groups.entry(key).or_default().push(idx);
+        }
+        for idxs in groups.into_values() {
+            let [a, b] = idxs[..] else { continue };
+            let (ta, tb) = (&self.net.transformers[a], &self.net.transformers[b]);
+            let pair = |t: &DistTransformer| winding_phase_pair(&t.windings[0]);
+            let (Some(pa), Some(pb)) = (pair(ta), pair(tb)) else {
+                continue;
+            };
+            if open_delta_connection(pa, pb).is_none() || !open_delta_pairable(ta, tb) {
+                continue;
+            }
+            for idx in [a, b] {
+                self.net.transformers[idx]
+                    .extras
+                    .insert("bmopf_subtype".into(), "open_delta_regulator".into());
+            }
+        }
+    }
+}
+
+/// A regcontrol target that reads as a series regulator: one phase, two
+/// windings of the same connection, voltage, and rating, on distinct buses,
+/// spanning the same phase conductors on both sides.
+fn is_series_regulator(t: &DistTransformer) -> bool {
+    let [a, b] = t.windings.as_slice() else {
+        return false;
+    };
+    let positive = |v: f64| v.is_finite() && v > 0.0;
+    let phase_terms = |w: &Winding| -> Vec<String> {
+        w.terminal_map
+            .iter()
+            .filter(|t| *t != "0")
+            .cloned()
+            .collect()
+    };
+    let phases = phase_terms(a);
+    t.phases == 1
+        && a.conn == b.conn
+        && a.v_ref.to_bits() == b.v_ref.to_bits()
+        && positive(a.v_ref)
+        && a.s_rating.to_bits() == b.s_rating.to_bits()
+        && positive(a.s_rating)
+        && !a.bus.eq_ignore_ascii_case(&b.bus)
+        && phases == phase_terms(b)
+        && matches!(phases.len(), 1 | 2)
+        && (phases.len() < 2 || phases[0] != phases[1])
 }
 
 /// Every entry times `k`.

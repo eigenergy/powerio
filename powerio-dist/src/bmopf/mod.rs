@@ -47,6 +47,21 @@
 //! A source document's own `extras` object is stashed on read and re-emitted
 //! verbatim, so consumer keys beside these survive a round trip.
 //!
+//! # Regulator subtypes track the BMOPFTools schema extension
+//!
+//! Schema 0.1.0 defines no regulator subtype; the BMOPF authors' BMOPFTools
+//! toolchain extends the schema with `single_phase_autotransformer` and
+//! `open_delta_regulator`, and this writer emits both as deliberate interop
+//! with that toolchain, the same standing as the `voltage_source.cost`
+//! passthrough, pending an upstream schema proposal. An OpenDSS transformer
+//! a RegControl targets emits as `transformer.single_phase_autotransformer`
+//! when it reads as a series regulator (one phase, two windings of equal
+//! connection, voltage, and rating on distinct buses), and two identical
+//! line to line legs spelling one open delta connection (ABBC/BCAC/CABA)
+//! merge into one `transformer.open_delta_regulator` object named after the
+//! first leg. A BMOPF document that already carries either subtype
+//! re-emits it verbatim.
+//!
 //! # `terminal_conventions` goes stale on a rename
 //!
 //! The emitted `terminal_conventions` block is the source document's own

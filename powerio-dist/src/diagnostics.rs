@@ -144,8 +144,8 @@ pub mod codes {
             "the BMOPF formulation expects exactly one voltage source";
 
 
-        // EMIT.BMOPF: the nineteen codes the writer already publishes, now
-        // registered entries rather than loose string literals.
+        // EMIT.BMOPF: the writer's element specific codes, registered
+        // entries rather than loose string literals.
         EMIT_BMOPF_AUTOTRANSFORMER_DROPPED = "EMIT.BMOPF.AUTOTRANSFORMER_DROPPED", Warning,
             "an autotransformer the BMOPF schema cannot state was dropped";
         EMIT_BMOPF_BUS_LOCATION_DROPPED = "EMIT.BMOPF.BUS_LOCATION_DROPPED", Warning,
@@ -181,6 +181,8 @@ pub mod codes {
         EMIT_BMOPF_TRANSFORMER_NO_LOAD_SHUNT_UNCONVERTIBLE =
             "EMIT.BMOPF.TRANSFORMER_NO_LOAD_SHUNT_UNCONVERTIBLE", Warning,
             "a transformer no load shunt could not be converted to the BMOPF form";
+        EMIT_BMOPF_TRANSFORMER_OPEN_DELTA_MERGED = "EMIT.BMOPF.TRANSFORMER_OPEN_DELTA_MERGED",
+            Warning, "two regulator legs merged into one open_delta_regulator object";
         EMIT_BMOPF_TRANSFORMER_PER_PHASE_TAP_COLLAPSED =
             "EMIT.BMOPF.TRANSFORMER_PER_PHASE_TAP_COLLAPSED", Warning,
             "a transformer's per phase taps were collapsed to one BMOPF tap";
