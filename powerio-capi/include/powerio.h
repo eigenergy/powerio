@@ -718,9 +718,10 @@ double pio_base_mva(const PioNetwork *net);
 size_t pio_network_name(const PioNetwork *net, char *out, size_t cap);
 
 /**
- * Source format enum spelling used by the JSON snapshot, for example
- * `Matpower`, `PowerModelsJson`, or `Normalized`. Uses the same cap/count
- * string convention as [`pio_network_name`].
+ * Source format token used by the JSON snapshot and accepted by every
+ * `from` parameter, for example `matpower`, `powermodels-json`, or
+ * `normalized`. Uses the same cap/count string convention as
+ * [`pio_network_name`].
  */
 size_t pio_source_format(const PioNetwork *net, char *out, size_t cap);
 

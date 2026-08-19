@@ -755,7 +755,7 @@ impl PyBalancedNetwork {
 
     #[getter]
     fn source_format(&self) -> String {
-        format!("{:?}", self.inner.source_format)
+        self.inner.source_format.name().to_owned()
     }
 
     /// Read fidelity warnings attached at parse time: tables and columns the

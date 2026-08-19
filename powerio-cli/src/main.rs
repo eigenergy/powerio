@@ -1411,7 +1411,7 @@ fn transmission_summary_json(
         "domain": "transmission",
         "model": "balanced",
         "name": net.name,
-        "source_format": format!("{:?}", net.source_format),
+        "source_format": net.source_format.name(),
         "json_format": "model-json",
         "base_mva": net.base_mva,
         "elements": {

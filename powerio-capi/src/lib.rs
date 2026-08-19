@@ -963,9 +963,10 @@ pub unsafe extern "C" fn pio_network_name(
     }
 }
 
-/// Source format enum spelling used by the JSON snapshot, for example
-/// `Matpower`, `PowerModelsJson`, or `Normalized`. Uses the same cap/count
-/// string convention as [`pio_network_name`].
+/// Source format token used by the JSON snapshot and accepted by every
+/// `from` parameter, for example `matpower`, `powermodels-json`, or
+/// `normalized`. Uses the same cap/count string convention as
+/// [`pio_network_name`].
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_source_format(
     net: *const PioNetwork,
@@ -975,7 +976,7 @@ pub unsafe extern "C" fn pio_source_format(
     unsafe {
         guard(0, || {
             let Some(c) = network_ref(net) else { return 0 };
-            let name = format!("{:?}", c.net.source_format);
+            let name = c.net.source_format.name().to_owned();
             copy_to_buf(out, cap, &name);
             name.len()
         })
@@ -1013,7 +1014,7 @@ pub unsafe extern "C" fn pio_summary_json(
                 let summary = serde_json::json!({
                     powerio::version::VERSION_KEY: powerio::VERSION,
                     "name": c.net.name,
-                    "source_format": format!("{:?}", c.net.source_format),
+                    "source_format": c.net.source_format.name(),
                     "base_mva": c.net.base_mva,
                     "base_frequency": c.net.base_frequency,
                     "counts": {
@@ -3388,9 +3389,9 @@ mod tests {
             let len = pio_source_format(net, source_format.as_mut_ptr(), source_format.len());
             assert_eq!(
                 CStr::from_ptr(source_format.as_ptr()).to_str().unwrap(),
-                "DeepMindOpfDataJson"
+                "opfdata-json"
             );
-            assert_eq!(len, "DeepMindOpfDataJson".len());
+            assert_eq!(len, "opfdata-json".len());
             assert!(warning_text(net).contains("solver initial values"));
             assert!(to_format(net, "matpower").contains("mpc.bus"));
             pio_network_free(net);
@@ -3945,7 +3946,7 @@ mod tests {
             let fmt_len = pio_source_format(c, source_format.as_mut_ptr(), source_format.len());
             assert_eq!(
                 CStr::from_ptr(source_format.as_ptr()).to_str().unwrap(),
-                "Matpower"
+                "matpower"
             );
             assert_eq!(fmt_len, 8);
             let mut err = [0 as c_char; 256];
@@ -3958,7 +3959,7 @@ mod tests {
             let summary_value: serde_json::Value =
                 serde_json::from_str(CStr::from_ptr(summary).to_str().unwrap()).unwrap();
             assert_eq!(summary_value["name"], "case9");
-            assert_eq!(summary_value["source_format"], "Matpower");
+            assert_eq!(summary_value["source_format"], "matpower");
             assert_eq!(summary_value["base_mva"], 100.0);
             assert_eq!(summary_value["counts"]["buses"], 9);
             assert_eq!(summary_value["counts"]["branches"], 9);

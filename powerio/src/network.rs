@@ -232,52 +232,72 @@ impl GenCost {
 
 /// Which format a [`BalancedNetwork`] was read from. Drives the same format byte exact
 /// echo on write.
+///
+/// Serializes as the same lowercase token [`name`](SourceFormat::name) reports
+/// and every string entry point accepts, so the value a document carries is
+/// valid input to `from`. Documents written before 0.9.0 spelled the bare
+/// variant name ("Matpower"); the read side still accepts those spellings.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[non_exhaustive]
 pub enum SourceFormat {
+    #[serde(rename = "matpower", alias = "Matpower")]
     Matpower,
+    #[serde(rename = "powermodels-json", alias = "PowerModelsJson")]
     PowerModelsJson,
+    #[serde(rename = "egret-json", alias = "EgretJson")]
     EgretJson,
+    #[serde(rename = "psse", alias = "Psse")]
     Psse,
+    #[serde(rename = "powerworld", alias = "PowerWorld")]
     PowerWorld,
+    #[serde(rename = "pandapower-json", alias = "PandapowerJson")]
     PandapowerJson,
     /// Read from a GE PSLF `.epc` case. Same source text is retained, so a
     /// same-format write echoes it byte-for-byte; a cross-format or
     /// source-dropped write goes through the `.epc` serializer
     /// ([`write_pslf`](crate::write_pslf)).
+    #[serde(rename = "pslf", alias = "Pslf")]
     Pslf,
     /// Read from a PowerWorld `.pwb` binary case. Read only: there is no
     /// `.pwb` writer and no retained source text, so writing goes through
     /// another format's writer.
+    #[serde(rename = "powerworld-pwb", alias = "PowerWorldBinary")]
     PowerWorldBinary,
     /// Built in memory, for example from synth or an edited case; no source text.
+    #[serde(rename = "in-memory", alias = "InMemory")]
     InMemory,
     /// A normalized derived form ([`BalancedNetwork::to_normalized`]): per unit, radians,
     /// filtered, source bus ids preserved. Distinct from
     /// [`InMemory`](SourceFormat::InMemory) so consumers can tell a per unit
     /// product from a raw in memory network; it has no source text and a different
     /// unit basis than a parsed network.
+    #[serde(rename = "normalized", alias = "Normalized")]
     Normalized,
     /// Read back from a gridfm-datakit Parquet dataset (the ML→classical bridge,
     /// `powerio-matrix`'s `read_gridfm_dataset`). A lossy, power flow complete
     /// reconstruction with no retained source text: original bus ids are
     /// synthesized `1..n`, per element load/shunt granularity is folded to one
     /// synthetic element per bus, and HVDC/storage/piecewise costs are absent.
+    #[serde(rename = "gridfm", alias = "Gridfm")]
     Gridfm,
     /// Read from a PyPSA CSV folder. This is a folder format rather than a
     /// single retained text document, so same-format writes are canonicalized.
+    #[serde(rename = "pypsa-csv", alias = "PypsaCsv")]
     PypsaCsv,
     /// Read from an ARPA-E GO Challenge 3 JSON input document. The source is a
     /// unit commitment data set; the neutral transmission model keeps a static
     /// first interval network and retains the source text for the full data.
+    #[serde(rename = "goc3-json", alias = "Goc3Json")]
     Goc3Json,
     /// Read from a Surge native JSON document.
+    #[serde(rename = "surge-json", alias = "SurgeJson")]
     SurgeJson,
     /// Read from one raw JSON document in a DeepMind OPFData release. The
     /// source carries both solver initial values and a solution. The balanced
     /// model represents the solved snapshot and retains the source for an
     /// exact write back to the same format.
+    #[serde(rename = "opfdata-json", alias = "DeepMindOpfDataJson")]
     DeepMindOpfDataJson,
 }
 
@@ -2223,6 +2243,55 @@ mod tests {
 
     fn close(actual: f64, expected: f64) {
         assert!((actual - expected).abs() < 1e-12, "{actual} != {expected}");
+    }
+
+    #[test]
+    fn source_format_serializes_as_its_name_token_and_reads_the_legacy_spelling() {
+        // The exhaustive match keeps a new variant from shipping with a serde
+        // spelling that differs from name().
+        let all = [
+            SourceFormat::Matpower,
+            SourceFormat::PowerModelsJson,
+            SourceFormat::EgretJson,
+            SourceFormat::Psse,
+            SourceFormat::PowerWorld,
+            SourceFormat::PandapowerJson,
+            SourceFormat::Pslf,
+            SourceFormat::PowerWorldBinary,
+            SourceFormat::InMemory,
+            SourceFormat::Normalized,
+            SourceFormat::Gridfm,
+            SourceFormat::PypsaCsv,
+            SourceFormat::Goc3Json,
+            SourceFormat::SurgeJson,
+            SourceFormat::DeepMindOpfDataJson,
+        ];
+        for f in all {
+            match f {
+                SourceFormat::Matpower
+                | SourceFormat::PowerModelsJson
+                | SourceFormat::EgretJson
+                | SourceFormat::Psse
+                | SourceFormat::PowerWorld
+                | SourceFormat::PandapowerJson
+                | SourceFormat::Pslf
+                | SourceFormat::PowerWorldBinary
+                | SourceFormat::InMemory
+                | SourceFormat::Normalized
+                | SourceFormat::Gridfm
+                | SourceFormat::PypsaCsv
+                | SourceFormat::Goc3Json
+                | SourceFormat::SurgeJson
+                | SourceFormat::DeepMindOpfDataJson => {}
+            }
+            let token = serde_json::to_value(f).unwrap();
+            assert_eq!(token, serde_json::Value::String(f.name().to_owned()));
+            let back: SourceFormat = serde_json::from_value(token).unwrap();
+            assert_eq!(back, f);
+            let legacy = serde_json::Value::String(format!("{f:?}"));
+            let from_legacy: SourceFormat = serde_json::from_value(legacy).unwrap();
+            assert_eq!(from_legacy, f);
+        }
     }
 
     #[test]
