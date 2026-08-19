@@ -358,10 +358,63 @@ mpc.branch = [
 ];
 ";
     let raw = parse_str(src, "matpower").unwrap().network;
-    assert!(matches!(
-        raw.to_normalized(),
-        Err(Error::ReferenceBusCount { found: 0, .. })
-    ));
+    let err = raw.to_normalized().unwrap_err();
+    assert!(matches!(err, Error::NoReferenceBus));
+    // The refusal states the generating rule (a reference bus must host an
+    // in-service generator) instead of a bus count the file can contradict.
+    assert!(err.to_string().contains("in-service generator"), "{err}");
+}
+
+#[test]
+fn warns_when_normalize_designates_a_slack_the_case_did_not_state() {
+    // case14 with every type 3 bus demoted to type 2: the parsed network
+    // states no reference, so normalize promotes the largest pmax generator's
+    // bus (bus 1) and must say so through the coded channel.
+    let source = std::fs::read_to_string(data("case14.m")).unwrap();
+    let mut in_bus = false;
+    let demoted: String = source
+        .lines()
+        .map(|line| {
+            if line.starts_with("mpc.bus") {
+                in_bus = true;
+            } else if in_bus && line.contains("];") {
+                in_bus = false;
+            }
+            let mut line = line.to_string();
+            if in_bus {
+                let fields: Vec<&str> = line.split_whitespace().collect();
+                if fields.len() > 2 && fields[1] == "3" {
+                    line = line.replacen("\t3\t", "\t2\t", 1);
+                }
+            }
+            line + "\n"
+        })
+        .collect();
+    let raw = parse_str(&demoted, "matpower").unwrap().network;
+    assert!(!raw.buses.iter().any(|b| b.kind == BusType::Ref));
+
+    let out = raw
+        .to_normalized_with_options(&NormalizeOptions::default())
+        .unwrap();
+    let designated: Vec<_> = out
+        .diagnostics
+        .iter()
+        .filter(|d| d.code.as_str() == "CANONICALIZE.NORMALIZE.REFERENCE_DESIGNATED")
+        .collect();
+    assert_eq!(designated.len(), 1, "{:?}", out.warnings);
+    assert!(designated[0].message.contains("bus 1"), "{designated:?}");
+    assert!(
+        designated[0].message.contains("designated the slack"),
+        "{designated:?}"
+    );
+    assert_eq!(
+        out.network
+            .buses
+            .iter()
+            .filter(|b| b.kind == BusType::Ref)
+            .count(),
+        1
+    );
 }
 
 #[test]

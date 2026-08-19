@@ -65,7 +65,9 @@ pub struct DcOpfOptions {
     /// Give a branch with no thermal rating the bound
     /// [`Branch::synthesize_rate_a`](powerio::Branch::synthesize_rate_a)
     /// states. If false, `rate_a <= 0` reaches `f_max` as zero, which reads as
-    /// unlimited.
+    /// unlimited. `#[serde(default)]`: documents serialized before the field
+    /// existed deserialize to the default (off), the pre-field behavior.
+    #[serde(default)]
     pub synthesize_unrated_limits: bool,
 }
 

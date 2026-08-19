@@ -532,8 +532,9 @@ pub unsafe extern "C" fn pio_parse_file(
 /// Parse in-memory case `text` of the named `format` into a network handle.
 /// Unlike [`pio_parse_file`] there is no path to infer from, so `format` is
 /// required: one of `matpower`/`m`, `powermodels`/`pm`, `egret`,
-/// `pandapower-json`/`pandapower`/`pp`, `psse`/`raw`, `powerworld`/`aux`,
-/// `pslf`/`epc`, `goc3-json`/`goc3`, or `surge-json`/`surge`. PyPSA CSV folders are
+/// `pandapower-json`/`pandapower`/`pp`, `psse`/`raw`, `psse34`, `psse35`,
+/// `powerworld`/`aux`, `pslf`/`epc`, `goc3-json`/`goc3`, `surge-json`/`surge`,
+/// or `opfdata-json`/`opfdata`. PyPSA CSV folders are
 /// directories, not text; parse them with [`pio_parse_file`] and
 /// `from = "pypsa-csv"`. Read fidelity warnings attach to the handle
 /// ([`pio_warnings`]). Returns `NULL` on error and writes the message into
@@ -3172,6 +3173,22 @@ mod tests {
 
     fn close(actual: f64, expected: f64) {
         assert!((actual - expected).abs() < 1e-12, "{actual} != {expected}");
+    }
+
+    // The `pio_parse_*` docs (and through them powerio.h) enumerate the format
+    // names by hand; the core list is what the refusal message prints. A
+    // format added to core with no doc mention of any of its names fails here.
+    #[test]
+    fn parse_docs_mention_every_accepted_source_format() {
+        let source = include_str!("lib.rs");
+        for clause in powerio::SOURCE_FORMAT_NAMES.split(", ") {
+            assert!(
+                clause
+                    .split('/')
+                    .any(|alias| source.contains(&format!("`{alias}`"))),
+                "pio_parse_* docs never mention any name of `{clause}`"
+            );
+        }
     }
 
     #[test]

@@ -367,7 +367,7 @@ pub fn parse_display_file(
             }
         },
     };
-    let bytes = std::fs::read(path)?;
+    let bytes = read_file_bytes(path)?;
     match fmt {
         DisplayFormat::PowerWorld => Ok(DisplayData::PowerWorld(powerworld::parse_pwd_display(
             &bytes,
@@ -377,6 +377,24 @@ pub fn parse_display_file(
                 .layer,
         )),
     }
+}
+
+/// An I/O failure naming the path it happened on. The bare OS message ("No
+/// such file or directory") reaches callers who cannot see which path the
+/// library resolved, so every read here names the file.
+pub(crate) fn named_io_error(path: &std::path::Path, e: &std::io::Error) -> Error {
+    Error::Io(std::io::Error::new(
+        e.kind(),
+        format!("cannot read {}: {e}", path.display()),
+    ))
+}
+
+fn read_file_text(path: &std::path::Path) -> Result<String> {
+    std::fs::read_to_string(path).map_err(|e| named_io_error(path, &e))
+}
+
+fn read_file_bytes(path: &std::path::Path) -> Result<Vec<u8>> {
+    std::fs::read(path).map_err(|e| named_io_error(path, &e))
 }
 
 /// Whether a format name means a PyPSA CSV folder. PyPSA folders are directory
@@ -401,9 +419,9 @@ fn is_pslf_name(name: &str) -> bool {
 /// Parse the case file at `path`, choosing the reader from `from` (the
 /// [`target_format_from_name`] names plus `pypsa-csv`/`pypsa`, `pwb`, `pslf`,
 /// and `epc`) or, when `None`, from the path: a directory containing
-/// `network.csv` parses as a PyPSA CSV folder (any other directory fails:
-/// [`Error::UnknownFormat`] when its name maps to no extension, the I/O error
-/// otherwise), and a file maps by extension (`m`/`json`/`raw`/`aux`/`pwb`/`epc`),
+/// `network.csv` parses as a PyPSA CSV folder (any other directory is refused
+/// as a directory with [`Error::UnknownFormat`], before extension inference),
+/// and a file maps by extension (`m`/`json`/`raw`/`aux`/`pwb`/`epc`),
 /// case insensitively (issue #97: `.RAW` is as common as `.raw` in the wild). A
 /// `.json` file is classified by top level shape markers: pandapower
 /// (`"_class": "pandapowerNet"`), egret (`elements` and `system`), GO Challenge
@@ -434,6 +452,15 @@ pub fn parse_file(path: impl AsRef<std::path::Path>, from: Option<&str>) -> Resu
     {
         return pypsa::read_pypsa_csv_folder(path);
     }
+    // Any other directory has no reader; refuse it as a directory before the
+    // extension logic reads ".07" off a name like `pglib-opf-23.07`.
+    if path.is_dir() {
+        return Err(Error::UnknownFormat(format!(
+            "{} is a directory, and the only directory case format is a PyPSA CSV \
+             folder (one holding a network.csv); pass a case file",
+            path.display()
+        )));
+    }
     // PowerWorld `.pwb` is binary and read only; dispatch it before the text
     // read. `from` accepts "pwb" for files with a different extension.
     let ext = path
@@ -443,7 +470,7 @@ pub fn parse_file(path: impl AsRef<std::path::Path>, from: Option<&str>) -> Resu
     if from.is_some_and(|f| f.eq_ignore_ascii_case("pwb"))
         || (from.is_none() && ext.as_deref() == Some("pwb"))
     {
-        let bytes = std::fs::read(path)?;
+        let bytes = read_file_bytes(path)?;
         let stem = path.file_stem().and_then(|s| s.to_str());
         // The binary reader is total (no fidelity warnings); wrap its network
         // in the shared [`Parsed`] shape.
@@ -452,7 +479,7 @@ pub fn parse_file(path: impl AsRef<std::path::Path>, from: Option<&str>) -> Resu
         return Ok(Parsed::without_document(network, warnings));
     }
     if from.is_some_and(is_pslf_name) || (from.is_none() && ext.as_deref() == Some("epc")) {
-        let text = std::fs::read_to_string(path)?;
+        let text = read_file_text(path)?;
         let stem = path.file_stem().and_then(|s| s.to_str());
         let mut warnings = Diagnostics::new();
         let source = strip_bom(Arc::new(text), &mut warnings);
@@ -505,7 +532,7 @@ pub fn parse_file(path: impl AsRef<std::path::Path>, from: Option<&str>) -> Resu
     // Read the file once into an owned buffer; the reader moves it straight into
     // the retained source (byte-exact round-trip) with no copy. Sniffing a
     // `.json` borrows the text before the move.
-    let text = std::fs::read_to_string(path)?;
+    let text = read_file_text(path)?;
     let fmt = match fmt_hint {
         Some(fmt) => fmt,
         None => sniff_json(&text)?,
@@ -630,10 +657,20 @@ pub(crate) fn reject_empty_case(net: &BalancedNetwork, format: &'static str) -> 
     Ok(())
 }
 
+/// The source format names [`parse_file`] accepts, each with its aliases.
+/// The unknown format error prints this list, and a test walks every alias
+/// through [`routing::transmission_format_from_name`] so it cannot drift from
+/// the matcher. `pypsa-csv` (a directory) and `pwb` (bytes only) have no
+/// [`parse_str`] arm; every other name works on both entry points.
+pub const SOURCE_FORMAT_NAMES: &str = "matpower/m, powermodels-json/powermodels/pm, \
+     egret-json/egret, psse/raw, psse34, psse35, powerworld/aux, \
+     pandapower-json/pandapower/pp, pslf/epc, pypsa-csv/pypsa, pwb, goc3-json/goc3, \
+     surge-json/surge, opfdata-json/opfdata/gridopt";
+
 /// An unrecognized source format token. When the token names a distribution
 /// format (`dss`, `pmd`, `bmopf`), the error points at the distribution
 /// surface instead of echoing the token: this parser reads only balanced
-/// transmission formats.
+/// transmission formats. Otherwise the refusal enumerates the accepted names.
 fn unknown_source_format(name: &str) -> Error {
     if let Some(dist) = routing::distribution_format_from_name(name) {
         return Error::UnknownFormat(format!(
@@ -643,7 +680,7 @@ fn unknown_source_format(name: &str) -> Error {
             dist.name()
         ));
     }
-    Error::UnknownFormat(name.to_string())
+    Error::UnknownFormat(format!("{name}; accepted names: {SOURCE_FORMAT_NAMES}"))
 }
 
 /// The JSON formats share the `.json` extension, so an explicit source format
@@ -1616,6 +1653,137 @@ mod tests {
     fn dss_extension_error_names_the_distribution_surface() {
         let err = parse_file("feeder.dss", None).unwrap_err();
         assert!(err.to_string().contains("distribution"), "got: {err}");
+    }
+
+    #[test]
+    fn io_error_names_the_path() {
+        let path =
+            std::env::temp_dir().join(format!("powerio-no-such-case-{}.m", std::process::id()));
+        let err = parse_file(&path, None).unwrap_err();
+        assert_eq!(err.code().code, "READ.IO.FAILED");
+        let msg = err.to_string();
+        assert!(
+            msg.contains(&path.display().to_string()),
+            "the io failure must name the path: {msg}"
+        );
+    }
+
+    #[test]
+    fn a_directory_is_refused_as_a_directory() {
+        // A versioned dataset directory: extension inference would read ".07"
+        // off the name and misdiagnose the mistake as a format problem.
+        let dir = std::env::temp_dir().join(format!("pglib-opf-23.07-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let err = parse_file(&dir, None).unwrap_err();
+        std::fs::remove_dir_all(&dir).unwrap();
+        let msg = err.to_string();
+        assert!(msg.contains("is a directory"), "got: {msg}");
+        assert!(msg.contains(&dir.display().to_string()), "got: {msg}");
+        assert!(msg.contains("PyPSA CSV folder"), "got: {msg}");
+    }
+
+    #[test]
+    fn unknown_format_error_lists_the_accepted_names() {
+        let err = parse_str("anything", "not-a-format").unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("not-a-format"), "got: {msg}");
+        assert!(msg.contains("accepted names:"), "got: {msg}");
+        assert!(msg.contains(SOURCE_FORMAT_NAMES), "got: {msg}");
+    }
+
+    #[test]
+    fn the_accepted_name_list_matches_the_matcher() {
+        use routing::TransmissionFormat as TF;
+        // Every alias in the printed list resolves.
+        let mut canonical = Vec::new();
+        for clause in SOURCE_FORMAT_NAMES.split(", ") {
+            for (i, alias) in clause.split('/').enumerate() {
+                let resolved = routing::transmission_format_from_name(alias);
+                assert!(
+                    resolved.is_some(),
+                    "listed alias `{alias}` does not resolve"
+                );
+                if i == 0 {
+                    canonical.push(resolved.unwrap());
+                }
+            }
+        }
+        // Every parseable format is listed. Gridfm is the one matcher entry
+        // with no parse_file arm (datasets go through the read_dir surface).
+        for format in [
+            TF::Matpower,
+            TF::PowerModelsJson,
+            TF::EgretJson,
+            TF::Psse,
+            TF::Psse34,
+            TF::Psse35,
+            TF::PowerWorld,
+            TF::PandapowerJson,
+            TF::PypsaCsv,
+            TF::Pslf,
+            TF::Pwb,
+            TF::Goc3Json,
+            TF::SurgeJson,
+            TF::DeepMindOpfDataJson,
+        ] {
+            assert!(
+                canonical.contains(&format),
+                "{} is missing from SOURCE_FORMAT_NAMES",
+                format.name()
+            );
+        }
+    }
+
+    #[test]
+    fn a_case_with_generators_and_no_cost_data_warns() {
+        let costless = "\
+function mpc = nocost
+mpc.version = '2';
+mpc.baseMVA = 100;
+mpc.bus = [
+\t1\t3\t0\t0\t0\t0\t1\t1\t0\t230\t1\t1.1\t0.9;
+\t2\t1\t50\t10\t0\t0\t1\t1\t0\t230\t1\t1.1\t0.9;
+];
+mpc.gen = [
+\t1\t60\t0\t100\t-100\t1\t100\t1\t100\t0\t0\t0\t0\t0\t0\t0\t0\t0\t0\t0\t0;
+];
+mpc.branch = [
+\t1\t2\t0.01\t0.1\t0\t0\t0\t0\t0\t0\t1\t-360\t360;
+];
+";
+        // The parse itself stays silent: whether a case carries costs is the
+        // case's business, and a conversion leg must not count it. The
+        // solver-ready copy is where a zero objective becomes real.
+        let parsed = parse_str(costless, "matpower").unwrap();
+        assert!(parsed.warnings.is_empty(), "{:?}", parsed.warnings);
+        let normalized = parsed
+            .network
+            .to_normalized_with_options(&crate::NormalizeOptions::default())
+            .unwrap();
+        let absent: Vec<_> = normalized
+            .diagnostics
+            .iter()
+            .filter(|d| d.code.as_str() == "CANONICALIZE.NORMALIZE.GEN_COST_ABSENT")
+            .collect();
+        assert_eq!(absent.len(), 1, "{:?}", normalized.warnings);
+        assert!(absent[0].message.contains("no cost data"), "{absent:?}");
+        assert!(absent[0].message.contains("1 in-service"), "{absent:?}");
+
+        // The same case with a gencost table is silent.
+        let costed = format!("{costless}mpc.gencost = [\n\t2\t0\t0\t3\t0.01\t40\t0;\n];\n");
+        let parsed = parse_str(&costed, "matpower").unwrap();
+        let normalized = parsed
+            .network
+            .to_normalized_with_options(&crate::NormalizeOptions::default())
+            .unwrap();
+        assert!(
+            normalized
+                .diagnostics
+                .iter()
+                .all(|d| d.code.as_str() != "CANONICALIZE.NORMALIZE.GEN_COST_ABSENT"),
+            "{:?}",
+            normalized.warnings
+        );
     }
 
     #[test]

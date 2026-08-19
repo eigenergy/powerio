@@ -261,7 +261,14 @@ pub mod codes {
         CANONICALIZE_NORMALIZE_BOUNDS_CLAMPED = "CANONICALIZE.NORMALIZE.BOUNDS_CLAMPED", Info,
             "a branch angle difference bound was clamped into the modeled range";
         CANONICALIZE_NORMALIZE_NO_REFERENCE_BUS = "CANONICALIZE.NORMALIZE.NO_REFERENCE_BUS", Fatal,
-            "normalization needs exactly one reference bus", category = Data;
+            "no reference bus can be established: no bus hosts an in-service generator",
+            category = Data;
+        CANONICALIZE_NORMALIZE_REFERENCE_DESIGNATED =
+            "CANONICALIZE.NORMALIZE.REFERENCE_DESIGNATED", Warning,
+            "the case states no surviving reference bus, so normalization designated a slack";
+        CANONICALIZE_NORMALIZE_GEN_COST_ABSENT =
+            "CANONICALIZE.NORMALIZE.GEN_COST_ABSENT", Warning,
+            "the solver-ready copy has in-service generators and no cost data, so any cost objective built from it is zero";
         CANONICALIZE_NORMALIZE_INVALID_OPTION = "CANONICALIZE.NORMALIZE.INVALID_OPTION", Fatal,
             "a normalize option is outside the range it is defined on", category = Data;
         CANONICALIZE_NORMALIZE_INVALID_BASE_MVA = "CANONICALIZE.NORMALIZE.INVALID_BASE_MVA", Fatal,

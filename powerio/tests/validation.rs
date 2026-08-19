@@ -251,3 +251,54 @@ fn powerworld_survives_multibyte_keyword_boundaries() {
         let _ = parse_powerworld(text); // any Err is fine; a panic is the bug
     }
 }
+
+#[test]
+fn case9_with_gencost_removed_reports_the_zero_objective_at_normalize() {
+    // Dropping the gencost block leaves three generators with no cost data,
+    // so any objective built from the case is identically zero; the parse
+    // must say so instead of staying silent.
+    let source = std::fs::read_to_string(
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../tests/data/case9.m"),
+    )
+    .unwrap();
+    let start = source.find("mpc.gencost = [").unwrap();
+    let end = start + source[start..].find("];").unwrap() + 2;
+    let costless = format!("{}{}", &source[..start], &source[end..]);
+
+    let parsed = powerio::parse_str(&costless, "matpower").unwrap();
+    assert!(parsed.network.generators.iter().all(|g| g.cost.is_none()));
+    // The parse stays silent — a conversion leg must not count a property of
+    // the case — and the solver-ready copy announces the zero objective.
+    assert!(parsed.warnings.is_empty(), "{:?}", parsed.warnings);
+    let normalized = parsed
+        .network
+        .to_normalized_with_options(&powerio::NormalizeOptions::default())
+        .unwrap();
+    let absent: Vec<_> = normalized
+        .diagnostics
+        .iter()
+        .filter(|d| d.code.as_str() == "CANONICALIZE.NORMALIZE.GEN_COST_ABSENT")
+        .collect();
+    assert_eq!(absent.len(), 1, "{:?}", normalized.warnings);
+    assert!(
+        absent[0]
+            .message
+            .contains("3 in-service generator(s) and no cost data"),
+        "{absent:?}"
+    );
+
+    // The unmodified fixture carries costs and stays silent.
+    let normalized = powerio::parse_str(&source, "matpower")
+        .unwrap()
+        .network
+        .to_normalized_with_options(&powerio::NormalizeOptions::default())
+        .unwrap();
+    assert!(
+        normalized
+            .diagnostics
+            .iter()
+            .all(|d| d.code.as_str() != "CANONICALIZE.NORMALIZE.GEN_COST_ABSENT"),
+        "{:?}",
+        normalized.warnings
+    );
+}

@@ -567,6 +567,38 @@ fn norm_transformers_3w(
         .unzip()
 }
 
+/// No reference survived the bus type pass: anchor the slack at the largest
+/// pmax in-service generator's bus and record the designation on the coded
+/// channel, or refuse when there is no generator to anchor it.
+fn designate_reference(
+    buses: &mut [Bus],
+    generators: &[Generator],
+    warnings: &mut crate::diagnostics::Diagnostics,
+) -> Result<()> {
+    let slack = generators
+        .iter()
+        .max_by(|a, b| {
+            // A NaN pmax must never win the slack: map it below every real
+            // bound so the choice stays deterministic (an unbounded +Inf
+            // pmax still wins, as the largest capacity).
+            let key = |p: f64| if p.is_nan() { f64::NEG_INFINITY } else { p };
+            key(a.pmax).total_cmp(&key(b.pmax))
+        })
+        .map(|g| g.bus)
+        .ok_or(Error::NoReferenceBus)?;
+    if let Some(b) = buses.iter_mut().find(|b| b.id == slack) {
+        b.kind = BusType::Ref;
+        warnings.push(
+            &crate::diagnostics::codes::CANONICALIZE_NORMALIZE_REFERENCE_DESIGNATED,
+            format!(
+                "the case states no reference bus that survives normalization; bus {slack} \
+                 hosts the largest pmax in-service generator and was designated the slack"
+            ),
+        );
+    }
+    Ok(())
+}
+
 impl BalancedNetwork {
     /// A normalized, computation-ready copy of this network. The raw `BalancedNetwork` is
     /// kept lossless (MATPOWER units, 1-based sparse ids, out-of-service elements
@@ -613,7 +645,7 @@ impl BalancedNetwork {
     /// [`Error::InvalidBaseMva`] if `base_mva` is not a positive, finite number
     /// (every per-unit divisor), so a malformed base can't silently poison the
     /// whole network with `NaN`/`Inf` or sign-flipped values.
-    /// [`Error::ReferenceBusCount`] if no reference bus can be established — no `REF`
+    /// [`Error::NoReferenceBus`] if no reference bus can be established — no `REF`
     /// survives and there is no in-service generator to anchor one.
     pub fn to_normalized(&self) -> Result<BalancedNetwork> {
         Ok(self
@@ -731,22 +763,19 @@ impl BalancedNetwork {
             };
         }
         if !buses.iter().any(|b| b.kind == BusType::Ref) {
-            // No reference survived: anchor the slack at the largest-pmax in-service
-            // generator's bus, or error when there is no generator to anchor it.
-            let slack = generators
-                .iter()
-                .max_by(|a, b| {
-                    // A NaN pmax must never win the slack: map it below every real
-                    // bound so the choice stays deterministic (an unbounded +Inf
-                    // pmax still wins, as the largest capacity).
-                    let key = |p: f64| if p.is_nan() { f64::NEG_INFINITY } else { p };
-                    key(a.pmax).total_cmp(&key(b.pmax))
-                })
-                .map(|g| g.bus)
-                .ok_or_else(|| Error::no_reference_bus(0))?;
-            if let Some(b) = buses.iter_mut().find(|b| b.id == slack) {
-                b.kind = BusType::Ref;
-            }
+            designate_reference(&mut buses, &generators, &mut warnings)?;
+        }
+        // The other silent semantic decision this gateway announces: a
+        // solver-ready copy whose cost objective is identically zero.
+        if !generators.is_empty() && generators.iter().all(|g| g.cost.is_none()) {
+            warnings.push(
+                &crate::diagnostics::codes::CANONICALIZE_NORMALIZE_GEN_COST_ABSENT,
+                format!(
+                    "the case has {} in-service generator(s) and no cost data; any cost \
+                     objective built from it is identically zero",
+                    generators.len()
+                ),
+            );
         }
 
         let net = BalancedNetwork {
@@ -822,11 +851,18 @@ mod tests {
                 ..NormalizeOptions::default()
             })
             .unwrap();
-        assert_eq!(out.warnings.len(), 4);
-        assert!(out.warnings[0].contains("branch 0"));
-        assert!(out.warnings[1].contains("branch 1"));
-        assert!(out.warnings[2].contains("branch 3"));
-        assert!(out.warnings[3].contains("branch 4"));
+        // The fixture also carries no gencost, so the costless-case warning
+        // rides beside the clamp lines; hold the clamp set on its own code.
+        let clamps: Vec<&String> = out
+            .warnings
+            .iter()
+            .filter(|w| w.contains("BOUNDS_CLAMPED"))
+            .collect();
+        assert_eq!(clamps.len(), 4, "{:?}", out.warnings);
+        assert!(clamps[0].contains("branch 0"));
+        assert!(clamps[1].contains("branch 1"));
+        assert!(clamps[2].contains("branch 3"));
+        assert!(clamps[3].contains("branch 4"));
 
         let branches = &out.network.branches;
         assert!(approx(branches[0].angmin, -POWER_MODELS_ANGLE_BOUND_PAD));

@@ -549,6 +549,19 @@ fn serde_round_trip() {
     }
 }
 
+#[test]
+fn options_deserialize_without_synthesize_unrated_limits() {
+    // A document written before the field existed carries the other three
+    // fields only; it must deserialize to the field's default (off).
+    let json = r#"{
+        "convention": "Matpower",
+        "units": "PerUnit",
+        "skip_zero_impedance": true
+    }"#;
+    let options: DcOpfOptions = serde_json::from_str(json).expect("deserialize");
+    assert!(!options.synthesize_unrated_limits);
+}
+
 #[cfg(feature = "matrix")]
 mod matrix_tests {
     use powerio::{GenCostPolicyReport, MissingGenCostPolicy};

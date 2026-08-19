@@ -20,6 +20,9 @@ __pycache__/
 .cache/
 tests/data/large/
 
+# The capi smoke binary writes its PyPSA folder next to the case it is given.
+tests/data/*-pypsa-smoke/
+
 # Scratch Julia project for the PMD oracle; its Manifest pins local paths.
 powerio-dist/tools/pmd/Manifest.toml
 
