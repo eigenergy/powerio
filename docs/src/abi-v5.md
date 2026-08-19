@@ -177,6 +177,8 @@ PioNetwork *pio_parse_bytes(const uint8_t *bytes, size_t len, const char *format
 
 Seven documents changed shape while their symbols kept their signatures, and the Arrow schema metadata key moved with them. This is the part that a compiler cannot catch, and on its own it is the reason ABI 5 exists: a binding built against 4 would pass the handshake and then read `null` for keys it mirrors.
 
+One value spelling changes across the same documents: a nonfinite float is the string `"Infinity"`, `"-Infinity"`, or `"NaN"` at every float position, where the 0.8 writer emitted a `null` the reader then refused. A reader typing those positions accepts number or spelling; the multiconductor bound fields keep their `null` leniency on read.
+
 | document | change |
 |---|---|
 | `pio_schema_versions_json` | dropped four keys |
