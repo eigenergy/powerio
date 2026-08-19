@@ -103,9 +103,9 @@ def test_decode_local_path_reads_file_uris_and_refuses_remote_schemes():
     assert sandbox.decode_local_path("file://localhost/data/case.raw") == Path(
         "/data/case.raw"
     )
-    with pytest.raises(ValueError, match="local path or file:// URI"):
+    with pytest.raises(sandbox.PathNotAllowed, match="local path or file:// URI"):
         sandbox.decode_local_path("https://example.com/case9.m", purpose="path")
-    with pytest.raises(ValueError, match="must be local"):
+    with pytest.raises(sandbox.PathNotAllowed, match="must be local"):
         sandbox.decode_local_path("file://server/share/case.raw")
 
 
