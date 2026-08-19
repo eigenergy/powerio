@@ -59,7 +59,7 @@ needs regenerating.
   error), so a same lineage document from a newer producer still loads.
 
 The generated JSON Schema for the document is served at
-`https://powerio.dev/schema/pio-package/0.2/schema.json`; the `$id` names that
+`https://powerio.dev/schema/pio-package/0.9/schema.json`; the `$id` names that
 location. It embeds the model JSON types, so it validates complete `.pio.json`
 documents. It does not define a standalone case format.
 
@@ -291,7 +291,7 @@ bindings, or MCP operations.
 ```json
 {
   "powerio_version": "0.9.0",
-  "producer": { "tool": "powerio", "version": "0.8.0" },
+  "producer": { "tool": "powerio", "version": "0.9.0" },
   "model_kind": "multiconductor",
   "model": {
     "kind": "multiconductor",

@@ -34,7 +34,7 @@ axis or accumulation semantics.
           "bus": { "table": "buses", "source_uid": "buses:1" }, "p_mw": 50.0 },
         { "kind": "rating_delta",
           "branch": { "table": "branches", "source_uid": "branches:2" },
-          "delta_mw": -210.0 }
+          "delta_mva": -210.0 }
     ]}
   ],
   "app": { "tellegen": { "formulation": "dcopf", "options": { "shed": false } } }
@@ -56,7 +56,7 @@ existing behavior and metadata schema version.
 
 - `demand_delta { bus, p_mw, q_mvar? }` adds demand at a bus, including a bus
   with no load rows.
-- `rating_delta { branch, delta_mw }` adds to a branch thermal rating.
+- `rating_delta { branch, delta_mva }` adds to a branch thermal rating.
 - `set_fields { update }` wraps an `ElementUpdate` and overwrites fields on one
   payload row.
 - An unknown `kind` is retained during parsing. Materialization returns an

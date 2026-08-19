@@ -72,7 +72,7 @@ pub enum StudyEdit {
     },
     RatingDelta {
         branch: ElementRef,
-        delta_mw: f64,
+        delta_mva: f64,
     },
     SetFields {
         update: ElementUpdate,
@@ -119,11 +119,11 @@ impl schemars::JsonSchema for StudyEdit {
                 },
                 {
                     "type": "object",
-                    "required": ["kind", "branch", "delta_mw"],
+                    "required": ["kind", "branch", "delta_mva"],
                     "properties": {
                         "kind": { "const": "rating_delta" },
                         "branch": element_ref,
-                        "delta_mw": { "type": "number" }
+                        "delta_mva": { "type": "number" }
                     }
                 },
                 {
@@ -173,17 +173,17 @@ impl Serialize for StudyEdit {
                 }
                 .serialize(serializer)
             }
-            Self::RatingDelta { branch, delta_mw } => {
+            Self::RatingDelta { branch, delta_mva } => {
                 #[derive(Serialize)]
                 struct Stated<'a> {
                     kind: &'static str,
                     branch: &'a ElementRef,
-                    delta_mw: f64,
+                    delta_mva: f64,
                 }
                 Stated {
                     kind: "rating_delta",
                     branch,
-                    delta_mw: *delta_mw,
+                    delta_mva: *delta_mva,
                 }
                 .serialize(serializer)
             }
@@ -234,12 +234,12 @@ impl<'de> Deserialize<'de> for StudyEdit {
                 #[derive(Deserialize)]
                 struct Stated {
                     branch: ElementRef,
-                    delta_mw: f64,
+                    delta_mva: f64,
                 }
                 let stated = serde_json::from_value::<Stated>(value).map_err(D::Error::custom)?;
                 Ok(Self::RatingDelta {
                     branch: stated.branch,
-                    delta_mw: stated.delta_mw,
+                    delta_mva: stated.delta_mva,
                 })
             }
             "set_fields" => {
@@ -386,12 +386,12 @@ impl StudyApplyContext<'_> {
                 }
                 self.indexes.remove("loads");
             }
-            StudyEdit::RatingDelta { branch, delta_mw } => {
+            StudyEdit::RatingDelta { branch, delta_mva } => {
                 let branch_row = resolve_update_row(self.payload, self.indexes, branch)
                     .map_err(crate::Error::Payload)?;
                 let branch = row_object_mut(self.payload, "branches", branch_row)?;
                 let old = number_field(branch, "rate_a", "branch", branch_row)?;
-                branch.insert("rate_a".to_owned(), json!(old + delta_mw));
+                branch.insert("rate_a".to_owned(), json!(old + delta_mva));
                 self.updated_paths.insert(format!(
                     "/model/{}/branches/{branch_row}/rate_a",
                     self.payload_key
