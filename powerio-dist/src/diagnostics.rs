@@ -23,6 +23,8 @@ pub mod codes {
             "a dss command, object spec, or property assignment does not parse";
         PARSE_DIST_MALFORMED = "PARSE.DIST.MALFORMED", Fatal,
             "a distribution document is not valid JSON for its format", category = Parse;
+        PARSE_DIST_SOURCE_MALFORMED = "PARSE.DIST.SOURCE_MALFORMED", Fatal,
+            "a distribution reader refused the source it was given", category = Parse;
 
         // READ.DSS: decoded, but not representable in the multiconductor model.
         /// A `Redirect`/`Compile`/`Buscoords` include the reader refused

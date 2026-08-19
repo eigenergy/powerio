@@ -640,6 +640,16 @@ impl NetworkPackage {
         Ok(pkg)
     }
 
+    /// Deserialize from `.pio.json` held as bytes, for a caller that never
+    /// stages the text — an upload, an archive member. The bytes must decode
+    /// as UTF-8; a leading byte order mark is tolerated as in [`Self::from_json`].
+    pub fn from_json_bytes(bytes: &[u8]) -> crate::Result<Self> {
+        let text = std::str::from_utf8(bytes).map_err(|e| {
+            Error::Malformed(serde::de::Error::custom(format!("not valid UTF-8: {e}")))
+        })?;
+        Self::from_json(text)
+    }
+
     #[must_use]
     pub fn with_origin(mut self, origin: Origin) -> Self {
         self.origin = origin;
