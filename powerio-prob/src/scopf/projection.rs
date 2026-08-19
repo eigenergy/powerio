@@ -62,6 +62,23 @@ fn require_flag(obj: &Map<String, Value>, uid: &str, key: &str) -> Result<i64> {
     })
 }
 
+/// `initial_status.on_status` for a row of `kind`, validated to 0 or 1 the way
+/// [`require_flag`] validates the capability flags.
+fn initial_on_status(kind: &str, uid: &str, val: &Map<String, Value>) -> Result<i64> {
+    let raw = require_num(initial_status(val)?, "on_status")?;
+    // 0 and 1 are exact in binary floating point; see `require_flag`.
+    #[allow(clippy::float_cmp)]
+    if raw == 0.0 {
+        Ok(0)
+    } else if raw == 1.0 {
+        Ok(1)
+    } else {
+        Err(json_error(format!(
+            "{kind} `{uid}` `initial_status.on_status` is not 0 or 1"
+        )))
+    }
+}
+
 fn validate_period_len(
     kind: &str,
     uid: &str,
@@ -167,7 +184,7 @@ impl Goc3Adapter {
         Ok(rows)
     }
 
-    fn sdd_row(&self, uid: &str) -> Result<ScopfDeviceRow> {
+    fn sdd_row(&self, uid: &str, j_dev: usize, j_sdd: usize) -> Result<ScopfDeviceRow> {
         const SDD: &str = "simple_dispatchable_device";
         const SDD_TS: &str = "simple_dispatchable_device time series";
         let val = self.sdd.get(uid)?;
@@ -194,6 +211,8 @@ impl Goc3Adapter {
         let row = ScopfDeviceRow {
             bus: self.goc3_bus_id(require_str(val, "bus")?)?,
             uid: uid.to_owned(),
+            j_dev,
+            j_sdd,
             c_on: require_num(val, "on_cost")?,
             c_su: require_num(val, "startup_cost")?,
             c_sd: require_num(val, "shutdown_cost")?,
@@ -221,6 +240,7 @@ impl Goc3Adapter {
             p_rrd_off_max: require_num(val, "p_ramp_res_down_offline_ub")?,
             p_0: require_num(initial, "p")?,
             q_0: require_num(initial, "q")?,
+            u_0: initial_on_status(SDD, uid, val)?,
             p_max: float_vec(ts("p_ub")?)?,
             p_min: float_vec(ts("p_lb")?)?,
             q_max: float_vec(ts("q_ub")?)?,
@@ -256,11 +276,14 @@ impl Goc3Adapter {
         Ok(row)
     }
 
-    fn sdd_rows(&self, device_type: &str) -> Result<Vec<ScopfDeviceRow>> {
+    /// `class_offset` places this class's block in the canonical device
+    /// stacking (`j_sdd`): 0 for producers, the producer count for consumers.
+    fn sdd_rows(&self, device_type: &str, class_offset: usize) -> Result<Vec<ScopfDeviceRow>> {
         let mut rows = Vec::new();
         for uid in self.sdd_order() {
             if sdd_device_type(self.sdd.get(&uid)?) == device_type {
-                rows.push(self.sdd_row(&uid)?);
+                let j_dev = rows.len();
+                rows.push(self.sdd_row(&uid, j_dev, class_offset + j_dev)?);
             }
         }
         Ok(rows)
@@ -271,22 +294,21 @@ impl Goc3Adapter {
     /// `mkrow` matches the `n_p`/`n_q` the reserve rows assign from the same
     /// order. `uids_key` names the bus field listing its zone uids and
     /// `device_type` filters the zone's devices. The Rust equivalent of
-    /// `reserve_set` in `src/goc3.jl`, iterating buses in `bus_order` and
-    /// devices in `devices_by_bus` order (`src/goc3.jl` iterates both as
-    /// `Dict`s here). `devices_by_bus`/`bus_order` are precomputed once by
-    /// the caller; four membership sets share them.
+    /// `reserve_set` in `src/goc3.jl`, iterating buses in `members.bus_order`
+    /// and devices in `members.devices_by_bus` order (`src/goc3.jl` iterates
+    /// both as `Dict`s here). `members` is precomputed once by the caller;
+    /// four membership sets share it.
     fn reserve_set<R>(
         &self,
         ids: &[String],
         uids_key: &str,
         device_type: &str,
-        devices_by_bus: &BTreeMap<String, Vec<String>>,
-        bus_order: &[String],
-        mkrow: impl Fn(BusId, usize, String) -> R,
+        members: &ReserveMembers<'_>,
+        mkrow: impl Fn(BusId, usize, String, usize, usize) -> R,
     ) -> Result<Vec<R>> {
         let mut rows = Vec::new();
         for (zone_index, id) in ids.iter().enumerate() {
-            for bus_uid in bus_order {
+            for bus_uid in members.bus_order {
                 let bus_obj = self.bus.get(bus_uid)?;
                 let member = bus_obj
                     .get(uids_key)
@@ -295,16 +317,23 @@ impl Goc3Adapter {
                 if !member {
                     continue;
                 }
-                let Some(devices) = devices_by_bus.get(bus_uid) else {
+                let Some(devices) = members.devices_by_bus.get(bus_uid) else {
                     continue;
                 };
                 for dev_uid in devices {
                     let device = self.sdd.get(dev_uid)?;
                     if sdd_device_type(device) == device_type {
+                        // Total by construction: the ordinal map and this
+                        // filter classify with the same `sdd_device_type`.
+                        let &(j_dev, j_sdd) = members.ordinals.get(dev_uid).ok_or_else(|| {
+                            json_error(format!("reserve zone member `{dev_uid}` has no device row"))
+                        })?;
                         rows.push(mkrow(
                             self.goc3_bus_id(bus_uid)?,
                             zone_index,
                             dev_uid.clone(),
+                            j_dev,
+                            j_sdd,
                         ));
                     }
                 }
@@ -312,6 +341,14 @@ impl Goc3Adapter {
         }
         Ok(rows)
     }
+}
+
+/// The shared context of the four reserve membership builders: bus iteration
+/// order, each bus's devices, and every device's `(j_dev, j_sdd)` ordinals.
+struct ReserveMembers<'a> {
+    devices_by_bus: &'a BTreeMap<String, Vec<String>>,
+    bus_order: &'a [String],
+    ordinals: &'a BTreeMap<String, (usize, usize)>,
 }
 
 /// Build the static SCOPF index sets from parsed GOC3 tables
@@ -406,6 +443,7 @@ fn build_static_projection(tables: &Goc3Adapter) -> Result<ScopfStaticDataProjec
                 fr_bus: tables.goc3_bus_id(require_str(val, "fr_bus")?)?,
                 c_su: require_num(val, "connection_cost")?,
                 c_sd: require_num(val, "disconnection_cost")?,
+                u_0: initial_on_status("ac_line", uid, val)?,
                 s_max: require_num(val, "mva_ub_nom")?,
                 g_sr,
                 b_sr,
@@ -434,6 +472,7 @@ fn build_static_projection(tables: &Goc3Adapter) -> Result<ScopfStaticDataProjec
                 fr_bus: tables.goc3_bus_id(require_str(val, "fr_bus")?)?,
                 c_su: require_num(val, "connection_cost")?,
                 c_sd: require_num(val, "disconnection_cost")?,
+                u_0: initial_on_status("two_winding_transformer", uid, val)?,
                 s_max: require_num(val, "mva_ub_nom")?,
                 g_sr,
                 b_sr,
@@ -471,8 +510,13 @@ fn build_static_projection(tables: &Goc3Adapter) -> Result<ScopfStaticDataProjec
 
     let cost_vector_pr = tables.cost_vector("producer")?;
     let cost_vector_cs = tables.cost_vector("consumer")?;
-    let prod = tables.sdd_rows("producer")?;
-    let cons = tables.sdd_rows("consumer")?;
+    let prod = tables.sdd_rows("producer", 0)?;
+    let cons = tables.sdd_rows("consumer", prod.len())?;
+    let device_ordinals: BTreeMap<String, (usize, usize)> = prod
+        .iter()
+        .chain(cons.iter())
+        .map(|r| (r.uid.clone(), (r.j_dev, r.j_sdd)))
+        .collect();
 
     let mut active_reserve: Vec<ScopfActiveReserveRow> = tables
         .azr
@@ -570,37 +614,62 @@ fn build_static_projection(tables: &Goc3Adapter) -> Result<ScopfStaticDataProjec
 
     let devices_by_bus = tables.devices_by_bus()?;
     let bus_order = tables.bus_order();
+    let members = ReserveMembers {
+        devices_by_bus: &devices_by_bus,
+        bus_order: &bus_order,
+        ordinals: &device_ordinals,
+    };
     let active_reserve_set_pr = tables.reserve_set(
         tables.azr.uids(),
         "active_reserve_uids",
         "producer",
-        &devices_by_bus,
-        &bus_order,
-        |i, n_p, uid| ScopfActiveReserveSetRow { i, n_p, uid },
+        &members,
+        |i, n_p, uid, j_dev, j_sdd| ScopfActiveReserveSetRow {
+            i,
+            n_p,
+            uid,
+            j_dev,
+            j_sdd,
+        },
     )?;
     let active_reserve_set_cs = tables.reserve_set(
         tables.azr.uids(),
         "active_reserve_uids",
         "consumer",
-        &devices_by_bus,
-        &bus_order,
-        |i, n_p, uid| ScopfActiveReserveSetRow { i, n_p, uid },
+        &members,
+        |i, n_p, uid, j_dev, j_sdd| ScopfActiveReserveSetRow {
+            i,
+            n_p,
+            uid,
+            j_dev,
+            j_sdd,
+        },
     )?;
     let reactive_reserve_set_pr = tables.reserve_set(
         tables.rzr.uids(),
         "reactive_reserve_uids",
         "producer",
-        &devices_by_bus,
-        &bus_order,
-        |i, n_q, uid| ScopfReactiveReserveSetRow { i, n_q, uid },
+        &members,
+        |i, n_q, uid, j_dev, j_sdd| ScopfReactiveReserveSetRow {
+            i,
+            n_q,
+            uid,
+            j_dev,
+            j_sdd,
+        },
     )?;
     let reactive_reserve_set_cs = tables.reserve_set(
         tables.rzr.uids(),
         "reactive_reserve_uids",
         "consumer",
-        &devices_by_bus,
-        &bus_order,
-        |i, n_q, uid| ScopfReactiveReserveSetRow { i, n_q, uid },
+        &members,
+        |i, n_q, uid, j_dev, j_sdd| ScopfReactiveReserveSetRow {
+            i,
+            n_q,
+            uid,
+            j_dev,
+            j_sdd,
+        },
     )?;
 
     let static_data = ScopfStaticData {
@@ -1078,6 +1147,7 @@ fn project_scopf_instance(tables: &Goc3Adapter) -> Result<ScopfInstance> {
         dc_contingency_flows: build_dc_contingency_flows(tables)?,
         violation_cost: build_violation_cost(tables),
         device_class_layout,
+        dt: tables.dt.clone(),
     })
 }
 

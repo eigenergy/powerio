@@ -100,7 +100,7 @@ def test_parse_metadata(case9):
 
 def test_parse_scopf_uses_public_versioned_wire_document():
     instance = powerio.parse_scopf(SCOPF_SMALL.read_text())
-    assert instance["schema"] == "powerio.scopf.julia"
+    assert instance["schema"] == "powerio.scopf"
     assert instance["powerio_version"] == powerio.__version__
     assert instance["index_base"] == 1
     assert instance["instance"]["lengths"]["I"] == 2

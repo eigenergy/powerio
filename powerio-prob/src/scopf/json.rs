@@ -26,7 +26,7 @@ use super::types::{
 };
 use super::{ScopfInstance, ScopfResult};
 
-pub const SCOPF_SCHEMA: &str = "powerio.scopf.julia";
+pub const SCOPF_SCHEMA: &str = "powerio.scopf";
 
 #[derive(Serialize)]
 struct Envelope {
@@ -82,13 +82,13 @@ serialized_fields!(ScopfShuntRow {
 serialized_fields!(ScopfAcLineRow {
     index: [j_ln],
     values: [
-        uid, to_bus, fr_bus, c_su, c_sd, s_max, g_sr, b_sr, b_ch, g_fr, g_to, b_fr, b_to
+        uid, to_bus, fr_bus, c_su, c_sd, u_0, s_max, g_sr, b_sr, b_ch, g_fr, g_to, b_fr, b_to
     ],
 });
 serialized_fields!(ScopfTransformerRow {
     index: [j_xf],
     values: [
-        uid, to_bus, fr_bus, c_su, c_sd, s_max, g_sr, b_sr, b_ch, g_fr, g_to, b_fr, b_to
+        uid, to_bus, fr_bus, c_su, c_sd, u_0, s_max, g_sr, b_sr, b_ch, g_fr, g_to, b_fr, b_to
     ],
 });
 serialized_fields!(ScopfDcLineRow {
@@ -114,7 +114,7 @@ serialized_fields!(ScopfFixedRatioRow {
     values: [tau_o],
 });
 serialized_fields!(ScopfDeviceRow {
-    index: [],
+    index: [j_dev, j_sdd],
     values: [
         bus,
         uid,
@@ -145,6 +145,7 @@ serialized_fields!(ScopfDeviceRow {
         p_rrd_off_max,
         p_0,
         q_0,
+        u_0,
         p_max,
         p_min,
         q_max,
@@ -175,11 +176,11 @@ serialized_fields!(ScopfReactiveReserveRow {
     values: [uid, c_qru, c_qrd, q_qru_min, q_qrd_min],
 });
 serialized_fields!(ScopfActiveReserveSetRow {
-    index: [n_p],
+    index: [n_p, j_dev, j_sdd],
     values: [i, uid],
 });
 serialized_fields!(ScopfReactiveReserveSetRow {
-    index: [n_q],
+    index: [n_q, j_dev, j_sdd],
     values: [i, uid],
 });
 serialized_fields!(ScopfLengths {
@@ -266,6 +267,7 @@ pub fn to_json_value(instance: &ScopfInstance) -> ScopfResult<Value> {
         dc_contingency_flows,
         violation_cost,
         device_class_layout,
+        dt,
     } = instance;
     let mut fields = Map::new();
     fields.insert("static".to_owned(), serialize_static(static_data)?);
@@ -294,6 +296,7 @@ pub fn to_json_value(instance: &ScopfInstance) -> ScopfResult<Value> {
         "device_class_layout".to_owned(),
         serde_json::to_value(device_class_layout)?,
     );
+    fields.insert("dt".to_owned(), serde_json::to_value(dt)?);
     Ok(serde_json::to_value(Envelope {
         schema: SCOPF_SCHEMA,
         powerio_version: powerio::VERSION,

@@ -5240,7 +5240,7 @@ mpc.branch = [
             let text = CStr::from_ptr(json).to_str().unwrap().to_owned();
             let v: serde_json::Value = serde_json::from_str(&text).unwrap();
 
-            assert_eq!(v["schema"], "powerio.scopf.julia");
+            assert_eq!(v["schema"], "powerio.scopf");
             assert_eq!(v[powerio::version::VERSION_KEY], powerio::VERSION);
             assert_eq!(v["index_base"], 1);
             assert_eq!(v["instance"]["lengths"]["I"], 2);
