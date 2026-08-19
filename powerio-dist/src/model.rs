@@ -18,7 +18,7 @@ use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 
-use crate::geo::{GeoMeta, Location};
+use crate::geo::{DistGeoMeta, DistLocation};
 
 pub type Extras = BTreeMap<String, serde_json::Value>;
 
@@ -80,7 +80,7 @@ pub struct DistBus {
     pub vn_max: Option<f64>,
     /// Optional bus coordinates in the network coordinate space.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub location: Option<Location>,
+    pub location: Option<DistLocation>,
     pub extras: Extras,
 }
 
@@ -179,7 +179,7 @@ pub struct DistLine {
     /// `#[serde(default)]` so JSON written before the field existed still
     /// deserializes.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub route: Option<Vec<Location>>,
+    pub route: Option<Vec<DistLocation>>,
     /// Per-conductor ampacity and apparent power limits, amps and VA
     /// (BMOPF schema 0.1.0 line fields, alongside the linecode's own).
     /// A `null` element reads as +Inf (#268).
@@ -735,7 +735,7 @@ impl DistShunt {
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "snake_case")]
 #[non_exhaustive]
-pub enum WindingConn {
+pub enum DistWindingConn {
     Wye,
     Delta,
 }
@@ -743,10 +743,10 @@ pub enum WindingConn {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[non_exhaustive]
-pub struct Winding {
+pub struct DistWinding {
     pub bus: String,
     pub terminal_map: Vec<String>,
-    pub conn: WindingConn,
+    pub conn: DistWindingConn,
     /// Rated winding voltage, volts (line to line for 2 and 3 phase).
     #[serde(with = "crate::nonfinite::nan_scalar")]
     #[cfg_attr(
@@ -775,12 +775,12 @@ pub struct Winding {
     pub x_neutral: Option<f64>,
 }
 
-impl Winding {
+impl DistWinding {
     #[must_use]
     pub fn new(
         bus: impl Into<String>,
         terminal_map: Vec<String>,
-        conn: WindingConn,
+        conn: DistWindingConn,
         v_ref: f64,
         s_rating: f64,
     ) -> Self {
@@ -803,7 +803,7 @@ impl Winding {
 #[non_exhaustive]
 pub struct DistTransformer {
     pub name: String,
-    pub windings: Vec<Winding>,
+    pub windings: Vec<DistWinding>,
     /// Short circuit reactances between winding pairs, percent:
     /// `[xhl]` for two windings, `[xhl, xht, xlt]` for three.
     pub xsc_pct: Vec<f64>,
@@ -815,7 +815,7 @@ impl DistTransformer {
     #[must_use]
     pub fn new(
         name: impl Into<String>,
-        windings: Vec<Winding>,
+        windings: Vec<DistWinding>,
         xsc_pct: Vec<f64>,
         phases: usize,
     ) -> Self {
@@ -903,7 +903,7 @@ pub struct MulticonductorNetwork {
     /// Hz.
     pub base_frequency: f64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub geo: Option<GeoMeta>,
+    pub geo: Option<DistGeoMeta>,
     pub buses: Vec<DistBus>,
     pub linecodes: Vec<DistLineCode>,
     pub lines: Vec<DistLine>,
@@ -1184,10 +1184,10 @@ fn matrix_extent(m: &Mat) -> usize {
 /// Windings per phase for an n-winding transformer terminal map: WYE counts
 /// the hot terminals (excluding the shared neutral), DELTA counts terminals
 /// directly except the phase to phase two terminal case.
-pub(crate) fn n_winding_phase_count(conn: WindingConn, terminal_map: &[String]) -> usize {
+pub(crate) fn n_winding_phase_count(conn: DistWindingConn, terminal_map: &[String]) -> usize {
     match conn {
-        WindingConn::Wye => terminal_map.len().saturating_sub(1).max(1),
-        WindingConn::Delta => {
+        DistWindingConn::Wye => terminal_map.len().saturating_sub(1).max(1),
+        DistWindingConn::Delta => {
             if terminal_map.len() == 2 {
                 1
             } else {
@@ -1207,7 +1207,7 @@ pub(crate) fn n_winding_impedance_base(phases: usize, v_nom: f64, s: f64) -> Opt
 
 /// The two phase conductors of a line to line regulating winding: exactly
 /// two terminals, both named 1..=3, distinct, in terminal map order.
-pub(crate) fn winding_phase_pair(winding: &Winding) -> Option<(u8, u8)> {
+pub(crate) fn winding_phase_pair(winding: &DistWinding) -> Option<(u8, u8)> {
     let [first, second] = winding.terminal_map.as_slice() else {
         return None;
     };

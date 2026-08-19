@@ -9,8 +9,8 @@ use std::path::PathBuf;
 
 use powerio_dist::dss::{DssReadOptions, parse_dss_file, parse_dss_file_with_options, write_dss};
 use powerio_dist::{
-    Configuration, CoordinateSpace, CoordsKind, IbrPrimeMover, IbrTopology, MulticonductorNetwork,
-    ReactivePowerReference, ReactivePowerUnit, WindingConn,
+    Configuration, CoordinateSpace, DistCoordsKind, DistWindingConn, IbrPrimeMover, IbrTopology,
+    MulticonductorNetwork, ReactivePowerReference, ReactivePowerUnit,
 };
 
 fn fixture(rel: &str) -> PathBuf {
@@ -66,7 +66,7 @@ Buscoords coords.csv
     let net = parse_dss_file(dir.join("master.dss")).unwrap();
     let geo = net.geo.as_ref().expect("geo metadata");
     assert_eq!(geo.space, CoordinateSpace::Unknown);
-    assert_eq!(geo.kind, Some(CoordsKind::Source));
+    assert_eq!(geo.kind, Some(DistCoordsKind::Source));
     assert!(
         net.warnings
             .iter()
@@ -181,8 +181,8 @@ fn ieee13_matches_the_engine_bus_map() {
         .find(|t| t.name.eq_ignore_ascii_case("sub"))
         .unwrap();
     assert_eq!(sub.windings.len(), 2);
-    assert_eq!(sub.windings[0].conn, WindingConn::Delta);
-    assert_eq!(sub.windings[1].conn, WindingConn::Wye);
+    assert_eq!(sub.windings[0].conn, DistWindingConn::Delta);
+    assert_eq!(sub.windings[1].conn, DistWindingConn::Wye);
     assert!((sub.windings[0].v_ref - 115_000.0).abs() < 1e-9);
     assert!((sub.windings[1].v_ref - 4160.0).abs() < 1e-9);
 }
@@ -240,7 +240,7 @@ fn defaults_materialize_with_provenance() {
     assert_eq!(t.windings.len(), 2);
     assert!((t.windings[0].v_ref - 12_470.0).abs() < 1e-9);
     assert!((t.windings[0].s_rating - 1_000_000.0).abs() < 1e-9);
-    assert_eq!(t.windings[0].conn, WindingConn::Wye);
+    assert_eq!(t.windings[0].conn, DistWindingConn::Wye);
     assert!((t.xsc_pct[0] - 7.0).abs() < 1e-12);
     let d = &net.defaulted["transformer.t_default"];
     assert!(d.contains(&"kv") && d.contains(&"kva") && d.contains(&"xhl"));
@@ -266,8 +266,8 @@ fn micro_transformers_type_correctly() {
 
     let net = parse("micro/xfmr_wye_delta.dss");
     let t = net.transformers.iter().find(|t| t.name == "t1").unwrap();
-    assert_eq!(t.windings[0].conn, WindingConn::Wye);
-    assert_eq!(t.windings[1].conn, WindingConn::Delta);
+    assert_eq!(t.windings[0].conn, DistWindingConn::Wye);
+    assert_eq!(t.windings[1].conn, DistWindingConn::Delta);
     // Delta side lists only the phase conductors.
     assert_eq!(t.windings[1].terminal_map, vec!["1", "2", "3"]);
     // Wye side default neutral is grounded.

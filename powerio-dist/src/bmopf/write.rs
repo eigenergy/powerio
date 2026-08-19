@@ -17,9 +17,9 @@ use crate::diagnostics::{DiagnosticInfo, StructuredDiagnostic};
 use crate::geo::CoordinateSpace;
 use crate::model::{
     ActivePowerReference, ActivePowerUnit, Configuration, ControlVoltageReference,
-    DistControlProfile, DistGenerator, DistIbr, DistLoadVoltageModel, DistTransformer, Extras, Mat,
-    MulticonductorNetwork, ReactivePowerReference, ReactivePowerUnit, VoltVarControl,
-    VoltWattControl, VoltageSource, Winding, WindingConn, n_winding_impedance_base,
+    DistControlProfile, DistGenerator, DistIbr, DistLoadVoltageModel, DistTransformer, DistWinding,
+    DistWindingConn, Extras, Mat, MulticonductorNetwork, ReactivePowerReference, ReactivePowerUnit,
+    VoltVarControl, VoltWattControl, VoltageSource, n_winding_impedance_base,
     open_delta_connection, open_delta_pairable, pair_keys, winding_phase_pair,
 };
 
@@ -1223,7 +1223,7 @@ impl Writer {
             self.warn_nonuniform_per_phase_taps(t);
             match classify(t) {
                 Kind::SinglePhase => {
-                    if t.windings.iter().any(|w| w.conn == WindingConn::Delta) {
+                    if t.windings.iter().any(|w| w.conn == DistWindingConn::Delta) {
                         // An open wye / open delta leg. The single_phase shape
                         // carries the terminals and impedance faithfully, but
                         // has no field for the wye/delta connection, so a
@@ -1231,8 +1231,8 @@ impl Writer {
                         // as a wye-wye unit. Flag it; the line to line topology
                         // survives in the terminal map.
                         let connection = match (t.windings[0].conn, t.windings[1].conn) {
-                            (WindingConn::Wye, WindingConn::Delta) => "wye/delta",
-                            (WindingConn::Delta, WindingConn::Wye) => "delta/wye",
+                            (DistWindingConn::Wye, DistWindingConn::Delta) => "wye/delta",
+                            (DistWindingConn::Delta, DistWindingConn::Wye) => "delta/wye",
                             _ => "delta",
                         };
                         let mut details = Map::new();
@@ -1511,8 +1511,8 @@ impl Writer {
     fn regulator_fields(
         &mut self,
         t: &DistTransformer,
-        from: &Winding,
-        to: &Winding,
+        from: &DistWinding,
+        to: &DistWinding,
     ) -> Map<String, Value> {
         let s = from.s_rating;
         let zb_from = base_impedance(from.v_ref, s);
@@ -1547,8 +1547,8 @@ impl Writer {
     fn regulator_tap_ratio(
         &mut self,
         t: &DistTransformer,
-        from: &Winding,
-        to: &Winding,
+        from: &DistWinding,
+        to: &DistWinding,
     ) -> Option<f64> {
         let ratio = to.tap / from.tap;
         if ratio.is_finite() && ratio >= 0.0 {
@@ -1575,8 +1575,8 @@ impl Writer {
     fn two_winding(
         &mut self,
         t: &DistTransformer,
-        from: &Winding,
-        to: &Winding,
+        from: &DistWinding,
+        to: &DistWinding,
         s_scale: f64,
         emit_no_load: bool,
         warn_extras: bool,
@@ -1717,8 +1717,8 @@ impl Writer {
     fn referred_resistance(
         &mut self,
         t: &DistTransformer,
-        from: &Winding,
-        to: &Winding,
+        from: &DistWinding,
+        to: &DistWinding,
         v_wye2: f64,
     ) -> f64 {
         let mut total = 0.0;
@@ -1889,8 +1889,8 @@ impl Writer {
                 wj.insert(
                     "configuration".into(),
                     json!(match w.conn {
-                        WindingConn::Wye => "WYE",
-                        WindingConn::Delta => "DELTA",
+                        DistWindingConn::Wye => "WYE",
+                        DistWindingConn::Delta => "DELTA",
                     }),
                 );
                 let zbase = n_winding_base(w, s).unwrap_or(f64::NAN);
@@ -1977,12 +1977,12 @@ impl Writer {
         let (from, to) = (&t.windings[0], &t.windings[1]);
         let sqrt3 = 3f64.sqrt();
         for k in 0..t.phases {
-            let per = |w: &Winding| {
+            let per = |w: &DistWinding| {
                 let neutral = w.terminal_map.last().cloned().unwrap_or_default();
-                Winding {
+                DistWinding {
                     bus: w.bus.clone(),
                     terminal_map: vec![w.terminal_map[k].clone(), neutral],
-                    conn: WindingConn::Wye,
+                    conn: DistWindingConn::Wye,
                     v_ref: w.v_ref / sqrt3,
                     s_rating: w.s_rating / 3.0,
                     r_pct: w.r_pct,
@@ -2037,8 +2037,8 @@ impl Writer {
         &mut self,
         o: &mut Map<String, Value>,
         t: &DistTransformer,
-        from: &Winding,
-        to: &Winding,
+        from: &DistWinding,
+        to: &DistWinding,
     ) {
         if to.tap.abs() <= 1e-12 {
             if (from.tap - 1.0).abs() > 1e-12 || (to.tap - 1.0).abs() > 1e-12 {
@@ -2102,8 +2102,8 @@ impl Writer {
         &mut self,
         o: &mut Map<String, Value>,
         t: &DistTransformer,
-        from: &Winding,
-        to: &Winding,
+        from: &DistWinding,
+        to: &DistWinding,
     ) {
         self.transformer_neutral_field(o, t, "r_neutral_from", from.r_neutral);
         self.transformer_neutral_field(o, t, "x_neutral_from", from.x_neutral);
@@ -2187,7 +2187,7 @@ impl Writer {
         &mut self,
         o: &mut Map<String, Value>,
         t: &DistTransformer,
-        from: &Winding,
+        from: &DistWinding,
         s: f64,
     ) {
         if let Some(v) = t.extras.get("g_no_load") {
@@ -2279,7 +2279,7 @@ impl Writer {
         }
     }
 
-    fn is_phase_to_phase_single_phase(&self, winding: &Winding) -> bool {
+    fn is_phase_to_phase_single_phase(&self, winding: &DistWinding) -> bool {
         n_winding_phase_count(winding) == 1
             && !self
                 .grounded
@@ -2710,7 +2710,7 @@ fn classify(t: &DistTransformer) -> Kind {
             return Kind::NWinding;
         }
     }
-    let conns: Vec<WindingConn> = t.windings.iter().map(|w| w.conn).collect();
+    let conns: Vec<DistWindingConn> = t.windings.iter().map(|w| w.conn).collect();
     match (t.phases, conns.as_slice()) {
         // single_phase covers the plain 1-phase unit in every conn pairing:
         // a delta winding here is one wired line to line (an open wye or
@@ -2722,23 +2722,30 @@ fn classify(t: &DistTransformer) -> Kind {
         (
             1,
             [
-                WindingConn::Wye | WindingConn::Delta,
-                WindingConn::Wye | WindingConn::Delta,
+                DistWindingConn::Wye | DistWindingConn::Delta,
+                DistWindingConn::Wye | DistWindingConn::Delta,
             ],
         ) => Kind::SinglePhase,
-        (1, [WindingConn::Wye, WindingConn::Wye, WindingConn::Wye]) => Kind::CenterTap,
-        (3, [WindingConn::Wye, WindingConn::Delta]) => Kind::WyeDelta,
-        (3, [WindingConn::Delta, WindingConn::Wye]) => Kind::DeltaWye,
+        (
+            1,
+            [
+                DistWindingConn::Wye,
+                DistWindingConn::Wye,
+                DistWindingConn::Wye,
+            ],
+        ) => Kind::CenterTap,
+        (3, [DistWindingConn::Wye, DistWindingConn::Delta]) => Kind::WyeDelta,
+        (3, [DistWindingConn::Delta, DistWindingConn::Wye]) => Kind::DeltaWye,
         // The decomposition indexes terminal_map[phase] and takes the last
         // entry as the neutral; anything else is not safely decomposable.
-        (3, [WindingConn::Wye, WindingConn::Wye])
+        (3, [DistWindingConn::Wye, DistWindingConn::Wye])
             if t.windings
                 .iter()
                 .all(|w| w.terminal_map.len() == t.phases + 1) =>
         {
             Kind::WyeWye3
         }
-        (3, [WindingConn::Wye, WindingConn::Wye]) => Kind::Unsupported(
+        (3, [DistWindingConn::Wye, DistWindingConn::Wye]) => Kind::Unsupported(
             "three phase wye-wye whose terminal maps do not list each phase plus a neutral".into(),
         ),
         (_, _) if t.windings.len() >= 3 => Kind::NWinding,
@@ -2813,7 +2820,7 @@ fn split_no_load_extras(t: &mut DistTransformer, phases: usize) {
     }
 }
 
-fn center_tap_common_terminal(w2: &Winding, w3: &Winding) -> String {
+fn center_tap_common_terminal(w2: &DistWinding, w3: &DistWinding) -> String {
     w2.terminal_map
         .iter()
         .find(|term| w3.terminal_map.contains(term))
@@ -2822,18 +2829,18 @@ fn center_tap_common_terminal(w2: &Winding, w3: &Winding) -> String {
 }
 
 fn center_tap_to_winding(
-    w2: &Winding,
-    w3: &Winding,
+    w2: &DistWinding,
+    w3: &DistWinding,
     common: &str,
     s_rating: f64,
     r_neutral: Option<f64>,
     x_neutral: Option<f64>,
-) -> Winding {
+) -> DistWinding {
     let terminal_map = center_tap_terminal_map(w2, w3, common);
-    Winding {
+    DistWinding {
         bus: w2.bus.clone(),
         terminal_map,
-        conn: WindingConn::Wye,
+        conn: DistWindingConn::Wye,
         v_ref: w2.v_ref,
         s_rating,
         r_pct: w2.r_pct,
@@ -2843,7 +2850,7 @@ fn center_tap_to_winding(
     }
 }
 
-fn center_tap_terminal_map(w2: &Winding, w3: &Winding, common: &str) -> Vec<String> {
+fn center_tap_terminal_map(w2: &DistWinding, w3: &DistWinding, common: &str) -> Vec<String> {
     let mut hots: Vec<String> = Vec::new();
     for term in w2.terminal_map.iter().chain(&w3.terminal_map) {
         if term != common && !hots.contains(term) {
@@ -2862,7 +2869,7 @@ fn center_tap_star_percentages(xsc_pct: &[f64]) -> (f64, f64) {
     ((xhl + xht - xlt) / 2.0, (xhl + xlt - xht) / 2.0)
 }
 
-fn winding_base(w: &Winding) -> Option<f64> {
+fn winding_base(w: &DistWinding) -> Option<f64> {
     base_impedance(w.v_ref, w.s_rating)
 }
 
@@ -2876,24 +2883,24 @@ fn base_impedance(v_ref: f64, s: f64) -> Option<f64> {
     (s > 0.0 && s.is_finite()).then(|| v_ref * v_ref / s)
 }
 
-fn n_winding_phase_count(w: &Winding) -> usize {
+fn n_winding_phase_count(w: &DistWinding) -> usize {
     crate::model::n_winding_phase_count(w.conn, &w.terminal_map)
 }
 
-fn n_winding_bmopf_v_nom(w: &Winding) -> f64 {
-    if w.conn == WindingConn::Wye && n_winding_phase_count(w) >= 2 {
+fn n_winding_bmopf_v_nom(w: &DistWinding) -> f64 {
+    if w.conn == DistWindingConn::Wye && n_winding_phase_count(w) >= 2 {
         w.v_ref / 3f64.sqrt()
     } else {
         w.v_ref
     }
 }
 
-fn n_winding_base(w: &Winding, s: f64) -> Option<f64> {
+fn n_winding_base(w: &DistWinding, s: f64) -> Option<f64> {
     n_winding_impedance_base(n_winding_phase_count(w), n_winding_bmopf_v_nom(w), s)
 }
 
-fn bmopf_delta_roll(t: &DistTransformer, idx: usize, w: &Winding) -> Option<i64> {
-    if w.conn != WindingConn::Delta {
+fn bmopf_delta_roll(t: &DistTransformer, idx: usize, w: &DistWinding) -> Option<i64> {
+    if w.conn != DistWindingConn::Delta {
         return None;
     }
     t.extras
@@ -2930,10 +2937,10 @@ fn authored_terminal_conventions(net: &MulticonductorNetwork) -> Option<Value> {
     (!phase.is_empty() || !neutral.is_empty()).then(|| json!({"phase": phase, "neutral": neutral}))
 }
 
-fn no_load_voltage_base(from: &Winding) -> f64 {
+fn no_load_voltage_base(from: &DistWinding) -> f64 {
     let phases = match from.conn {
-        WindingConn::Wye => from.terminal_map.len().saturating_sub(1),
-        WindingConn::Delta => from.terminal_map.len(),
+        DistWindingConn::Wye => from.terminal_map.len().saturating_sub(1),
+        DistWindingConn::Delta => from.terminal_map.len(),
     };
     if phases >= 3 {
         from.v_ref / 3f64.sqrt()
@@ -3019,7 +3026,9 @@ mod tests {
     /// linear-size input.
     #[test]
     fn oversized_model_dimensions_are_clamped_not_expanded() {
-        use crate::model::{DistLineCode, DistShunt, DistTransformer, Winding, WindingConn};
+        use crate::model::{
+            DistLineCode, DistShunt, DistTransformer, DistWinding, DistWindingConn,
+        };
 
         let mut net = crate::model::MulticonductorNetwork::default();
         // A linecode whose R rows imply a huge dimension while X is empty
@@ -3036,7 +3045,7 @@ mod tests {
             Vec::new(),
         ));
         // A winding count beyond the cap would expand to ~n²/2 x_sc pairs.
-        let winding = Winding::new("b", Vec::new(), WindingConn::Wye, 1.0, 1.0);
+        let winding = DistWinding::new("b", Vec::new(), DistWindingConn::Wye, 1.0, 1.0);
         net.transformers.push(DistTransformer::new(
             "many",
             vec![winding; MAX_DIM + 6],

@@ -2368,15 +2368,15 @@ mpc.branch = [
 
         let mut bus = powerio_dist::DistBus::new("sourcebus", vec!["1".to_owned(), "4".to_owned()]);
         bus.grounded = vec!["4".to_owned()];
-        bus.location = Some(powerio_dist::Location {
+        bus.location = Some(powerio_dist::DistLocation {
             x: -80.0,
             y: 35.0,
             kind: None,
         });
         let mut net = powerio_dist::MulticonductorNetwork::default();
-        net.geo = Some(powerio_dist::GeoMeta {
+        net.geo = Some(powerio_dist::DistGeoMeta {
             space: powerio_dist::CoordinateSpace::Geographic { crs: None },
-            kind: Some(powerio_dist::CoordsKind::Source),
+            kind: Some(powerio_dist::DistCoordsKind::Source),
         });
         net.buses = vec![bus];
         net.sources.push(powerio_dist::VoltageSource::new(

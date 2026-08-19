@@ -5,14 +5,14 @@ use serde::{Deserialize, Serialize};
 /// A point attached to one model element.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-pub struct Location {
+pub struct DistLocation {
     /// X coordinate. In geographic space this is longitude.
     pub x: f64,
     /// Y coordinate. In geographic space this is latitude.
     pub y: f64,
     /// Per point provenance when it differs from the network default.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub kind: Option<CoordsKind>,
+    pub kind: Option<DistCoordsKind>,
 }
 
 /// Coordinate provenance.
@@ -20,7 +20,7 @@ pub struct Location {
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "snake_case")]
 #[non_exhaustive]
-pub enum CoordsKind {
+pub enum DistCoordsKind {
     Source,
     Synthetic,
     Manual,
@@ -30,13 +30,13 @@ pub enum CoordsKind {
 /// Network level coordinate metadata.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-pub struct GeoMeta {
+pub struct DistGeoMeta {
     /// Coordinate space shared by every location on the network.
     #[serde(flatten)]
     pub space: CoordinateSpace,
     /// Default provenance for points without their own `kind`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub kind: Option<CoordsKind>,
+    pub kind: Option<DistCoordsKind>,
 }
 
 /// Coordinate space for locations in a network.
@@ -58,7 +58,7 @@ pub enum CoordinateSpace {
     /// Drawing coordinates with no earth referent.
     Diagram {
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        canvas: Option<Canvas>,
+        canvas: Option<DistCanvas>,
     },
     /// The source did not declare a coordinate space.
     Unknown,
@@ -67,7 +67,7 @@ pub enum CoordinateSpace {
 /// Diagram canvas metadata.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-pub struct Canvas {
+pub struct DistCanvas {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub width: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

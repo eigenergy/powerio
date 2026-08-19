@@ -990,56 +990,6 @@
       },
       "type": "object"
     },
-    "Canvas2": {
-      "description": "Diagram canvas metadata.",
-      "properties": {
-        "height": {
-          "anyOf": [
-            {
-              "format": "double",
-              "type": [
-                "number",
-                "null"
-              ]
-            },
-            {
-              "enum": [
-                "Infinity",
-                "-Infinity",
-                "NaN"
-              ],
-              "type": "string"
-            }
-          ]
-        },
-        "units": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "width": {
-          "anyOf": [
-            {
-              "format": "double",
-              "type": [
-                "number",
-                "null"
-              ]
-            },
-            {
-              "enum": [
-                "Infinity",
-                "-Infinity",
-                "NaN"
-              ],
-              "type": "string"
-            }
-          ]
-        }
-      },
-      "type": "object"
-    },
     "Confidence": {
       "description": "How confident the source map entry is.",
       "enum": [
@@ -1070,16 +1020,6 @@
       "type": "string"
     },
     "CoordsKind": {
-      "description": "Coordinate provenance.",
-      "enum": [
-        "source",
-        "synthetic",
-        "manual",
-        "derived"
-      ],
-      "type": "string"
-    },
-    "CoordsKind2": {
       "description": "Coordinate provenance.",
       "enum": [
         "source",
@@ -1181,7 +1121,7 @@
         "location": {
           "anyOf": [
             {
-              "$ref": "#/$defs/Location2"
+              "$ref": "#/$defs/DistLocation"
             },
             {
               "type": "null"
@@ -1427,6 +1367,56 @@
       ],
       "type": "object"
     },
+    "DistCanvas": {
+      "description": "Diagram canvas metadata.",
+      "properties": {
+        "height": {
+          "anyOf": [
+            {
+              "format": "double",
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            {
+              "enum": [
+                "Infinity",
+                "-Infinity",
+                "NaN"
+              ],
+              "type": "string"
+            }
+          ]
+        },
+        "units": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "width": {
+          "anyOf": [
+            {
+              "format": "double",
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            {
+              "enum": [
+                "Infinity",
+                "-Infinity",
+                "NaN"
+              ],
+              "type": "string"
+            }
+          ]
+        }
+      },
+      "type": "object"
+    },
     "DistCapacitor": {
       "description": "A rated capacitor bank (BMOPF schema 0.1.0 `capacitor`): `q_rated` vars\ndelivered at `v_nom` volts across the element terminals, distinct from the\nraw admittance [`DistShunt`]. The DSS converter still lowers OpenDSS\ncapacitors to shunt B matrices; this element carries capacitors that arrive\nas BMOPF input.",
       "properties": {
@@ -1546,6 +1536,16 @@
         "extras"
       ],
       "type": "object"
+    },
+    "DistCoordsKind": {
+      "description": "Coordinate provenance.",
+      "enum": [
+        "source",
+        "synthetic",
+        "manual",
+        "derived"
+      ],
+      "type": "string"
     },
     "DistGenerator": {
       "properties": {
@@ -1793,6 +1793,99 @@
         "q_nom",
         "extras"
       ],
+      "type": "object"
+    },
+    "DistGeoMeta": {
+      "description": "Network level coordinate metadata.",
+      "oneOf": [
+        {
+          "description": "x = longitude and y = latitude in decimal degrees. `None` means EPSG:4326.",
+          "properties": {
+            "crs": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "space": {
+              "const": "geographic",
+              "type": "string"
+            }
+          },
+          "required": [
+            "space"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Planar coordinates, with the CRS named when known.",
+          "properties": {
+            "crs": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "space": {
+              "const": "projected",
+              "type": "string"
+            }
+          },
+          "required": [
+            "space"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Drawing coordinates with no earth referent.",
+          "properties": {
+            "canvas": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/DistCanvas"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "space": {
+              "const": "diagram",
+              "type": "string"
+            }
+          },
+          "required": [
+            "space"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "The source did not declare a coordinate space.",
+          "properties": {
+            "space": {
+              "const": "unknown",
+              "type": "string"
+            }
+          },
+          "required": [
+            "space"
+          ],
+          "type": "object"
+        }
+      ],
+      "properties": {
+        "kind": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DistCoordsKind"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Default provenance for points without their own `kind`."
+        }
+      },
       "type": "object"
     },
     "DistIbr": {
@@ -2088,7 +2181,7 @@
         "route": {
           "description": "Polyline route in the network's coordinate space (`MulticonductorNetwork.geo`),\npresent only when a source provides intermediate geometry.\n`#[serde(default)]` so JSON written before the field existed still\ndeserializes.",
           "items": {
-            "$ref": "#/$defs/Location2"
+            "$ref": "#/$defs/DistLocation"
           },
           "type": [
             "array",
@@ -2773,6 +2866,61 @@
         }
       ]
     },
+    "DistLocation": {
+      "description": "A point attached to one model element.",
+      "properties": {
+        "kind": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DistCoordsKind"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Per point provenance when it differs from the network default."
+        },
+        "x": {
+          "anyOf": [
+            {
+              "format": "double",
+              "type": "number"
+            },
+            {
+              "enum": [
+                "Infinity",
+                "-Infinity",
+                "NaN"
+              ],
+              "type": "string"
+            }
+          ],
+          "description": "X coordinate. In geographic space this is longitude."
+        },
+        "y": {
+          "anyOf": [
+            {
+              "format": "double",
+              "type": "number"
+            },
+            {
+              "enum": [
+                "Infinity",
+                "-Infinity",
+                "NaN"
+              ],
+              "type": "string"
+            }
+          ],
+          "description": "Y coordinate. In geographic space this is latitude."
+        }
+      },
+      "required": [
+        "x",
+        "y"
+      ],
+      "type": "object"
+    },
     "DistShunt": {
       "properties": {
         "b": {
@@ -2941,7 +3089,7 @@
         },
         "windings": {
           "items": {
-            "$ref": "#/$defs/Winding2"
+            "$ref": "#/$defs/DistWinding"
           },
           "type": "array"
         },
@@ -2974,6 +3122,153 @@
         "extras"
       ],
       "type": "object"
+    },
+    "DistWinding": {
+      "properties": {
+        "bus": {
+          "type": "string"
+        },
+        "conn": {
+          "$ref": "#/$defs/DistWindingConn"
+        },
+        "r_neutral": {
+          "anyOf": [
+            {
+              "format": "double",
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            {
+              "enum": [
+                "Infinity",
+                "-Infinity",
+                "NaN"
+              ],
+              "type": "string"
+            }
+          ]
+        },
+        "r_pct": {
+          "anyOf": [
+            {
+              "format": "double",
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            {
+              "enum": [
+                "Infinity",
+                "-Infinity",
+                "NaN"
+              ],
+              "type": "string"
+            }
+          ],
+          "description": "Winding resistance, percent of the winding base."
+        },
+        "s_rating": {
+          "anyOf": [
+            {
+              "format": "double",
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            {
+              "enum": [
+                "Infinity",
+                "-Infinity",
+                "NaN"
+              ],
+              "type": "string"
+            }
+          ],
+          "description": "Volt amperes."
+        },
+        "tap": {
+          "anyOf": [
+            {
+              "format": "double",
+              "type": "number"
+            },
+            {
+              "enum": [
+                "Infinity",
+                "-Infinity",
+                "NaN"
+              ],
+              "type": "string"
+            }
+          ]
+        },
+        "terminal_map": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "v_ref": {
+          "anyOf": [
+            {
+              "format": "double",
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            {
+              "enum": [
+                "Infinity",
+                "-Infinity",
+                "NaN"
+              ],
+              "type": "string"
+            }
+          ],
+          "description": "Rated winding voltage, volts (line to line for 2 and 3 phase)."
+        },
+        "x_neutral": {
+          "anyOf": [
+            {
+              "format": "double",
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            {
+              "enum": [
+                "Infinity",
+                "-Infinity",
+                "NaN"
+              ],
+              "type": "string"
+            }
+          ]
+        }
+      },
+      "required": [
+        "bus",
+        "terminal_map",
+        "conn",
+        "v_ref",
+        "s_rating",
+        "r_pct",
+        "tap"
+      ],
+      "type": "object"
+    },
+    "DistWindingConn": {
+      "enum": [
+        "wye",
+        "delta"
+      ],
+      "type": "string"
     },
     "ElementRef": {
       "anyOf": [
@@ -3416,99 +3711,6 @@
           "anyOf": [
             {
               "$ref": "#/$defs/CoordsKind"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "description": "Default provenance for points without their own `kind`."
-        }
-      },
-      "type": "object"
-    },
-    "GeoMeta2": {
-      "description": "Network level coordinate metadata.",
-      "oneOf": [
-        {
-          "description": "x = longitude and y = latitude in decimal degrees. `None` means EPSG:4326.",
-          "properties": {
-            "crs": {
-              "type": [
-                "string",
-                "null"
-              ]
-            },
-            "space": {
-              "const": "geographic",
-              "type": "string"
-            }
-          },
-          "required": [
-            "space"
-          ],
-          "type": "object"
-        },
-        {
-          "description": "Planar coordinates, with the CRS named when known.",
-          "properties": {
-            "crs": {
-              "type": [
-                "string",
-                "null"
-              ]
-            },
-            "space": {
-              "const": "projected",
-              "type": "string"
-            }
-          },
-          "required": [
-            "space"
-          ],
-          "type": "object"
-        },
-        {
-          "description": "Drawing coordinates with no earth referent.",
-          "properties": {
-            "canvas": {
-              "anyOf": [
-                {
-                  "$ref": "#/$defs/Canvas2"
-                },
-                {
-                  "type": "null"
-                }
-              ]
-            },
-            "space": {
-              "const": "diagram",
-              "type": "string"
-            }
-          },
-          "required": [
-            "space"
-          ],
-          "type": "object"
-        },
-        {
-          "description": "The source did not declare a coordinate space.",
-          "properties": {
-            "space": {
-              "const": "unknown",
-              "type": "string"
-            }
-          },
-          "required": [
-            "space"
-          ],
-          "type": "object"
-        }
-      ],
-      "properties": {
-        "kind": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/CoordsKind2"
             },
             {
               "type": "null"
@@ -4298,61 +4500,6 @@
       ],
       "type": "object"
     },
-    "Location2": {
-      "description": "A point attached to one model element.",
-      "properties": {
-        "kind": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/CoordsKind2"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "description": "Per point provenance when it differs from the network default."
-        },
-        "x": {
-          "anyOf": [
-            {
-              "format": "double",
-              "type": "number"
-            },
-            {
-              "enum": [
-                "Infinity",
-                "-Infinity",
-                "NaN"
-              ],
-              "type": "string"
-            }
-          ],
-          "description": "X coordinate. In geographic space this is longitude."
-        },
-        "y": {
-          "anyOf": [
-            {
-              "format": "double",
-              "type": "number"
-            },
-            {
-              "enum": [
-                "Infinity",
-                "-Infinity",
-                "NaN"
-              ],
-              "type": "string"
-            }
-          ],
-          "description": "Y coordinate. In geographic space this is latitude."
-        }
-      },
-      "required": [
-        "x",
-        "y"
-      ],
-      "type": "object"
-    },
     "LoweringRecord": {
       "description": "One lowering/normalization/emission pass and what it changed.",
       "properties": {
@@ -4579,7 +4726,7 @@
         "geo": {
           "anyOf": [
             {
-              "$ref": "#/$defs/GeoMeta2"
+              "$ref": "#/$defs/DistGeoMeta"
             },
             {
               "type": "null"
@@ -7278,153 +7425,6 @@
         "rate_c"
       ],
       "type": "object"
-    },
-    "Winding2": {
-      "properties": {
-        "bus": {
-          "type": "string"
-        },
-        "conn": {
-          "$ref": "#/$defs/WindingConn"
-        },
-        "r_neutral": {
-          "anyOf": [
-            {
-              "format": "double",
-              "type": [
-                "number",
-                "null"
-              ]
-            },
-            {
-              "enum": [
-                "Infinity",
-                "-Infinity",
-                "NaN"
-              ],
-              "type": "string"
-            }
-          ]
-        },
-        "r_pct": {
-          "anyOf": [
-            {
-              "format": "double",
-              "type": [
-                "number",
-                "null"
-              ]
-            },
-            {
-              "enum": [
-                "Infinity",
-                "-Infinity",
-                "NaN"
-              ],
-              "type": "string"
-            }
-          ],
-          "description": "Winding resistance, percent of the winding base."
-        },
-        "s_rating": {
-          "anyOf": [
-            {
-              "format": "double",
-              "type": [
-                "number",
-                "null"
-              ]
-            },
-            {
-              "enum": [
-                "Infinity",
-                "-Infinity",
-                "NaN"
-              ],
-              "type": "string"
-            }
-          ],
-          "description": "Volt amperes."
-        },
-        "tap": {
-          "anyOf": [
-            {
-              "format": "double",
-              "type": "number"
-            },
-            {
-              "enum": [
-                "Infinity",
-                "-Infinity",
-                "NaN"
-              ],
-              "type": "string"
-            }
-          ]
-        },
-        "terminal_map": {
-          "items": {
-            "type": "string"
-          },
-          "type": "array"
-        },
-        "v_ref": {
-          "anyOf": [
-            {
-              "format": "double",
-              "type": [
-                "number",
-                "null"
-              ]
-            },
-            {
-              "enum": [
-                "Infinity",
-                "-Infinity",
-                "NaN"
-              ],
-              "type": "string"
-            }
-          ],
-          "description": "Rated winding voltage, volts (line to line for 2 and 3 phase)."
-        },
-        "x_neutral": {
-          "anyOf": [
-            {
-              "format": "double",
-              "type": [
-                "number",
-                "null"
-              ]
-            },
-            {
-              "enum": [
-                "Infinity",
-                "-Infinity",
-                "NaN"
-              ],
-              "type": "string"
-            }
-          ]
-        }
-      },
-      "required": [
-        "bus",
-        "terminal_map",
-        "conn",
-        "v_ref",
-        "s_rating",
-        "r_pct",
-        "tap"
-      ],
-      "type": "object"
-    },
-    "WindingConn": {
-      "enum": [
-        "wye",
-        "delta"
-      ],
-      "type": "string"
     }
   },
   "$id": "https://powerio.dev/schema/pio-package/0.9/schema.json",

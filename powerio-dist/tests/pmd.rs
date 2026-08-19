@@ -8,8 +8,8 @@ use std::sync::Arc;
 
 use powerio_dist::dss::parse_dss_file;
 use powerio_dist::{
-    CoordinateSpace, CoordsKind, DistBus, GeoMeta, Location, MulticonductorNetwork, parse_pmd_file,
-    parse_pmd_str, write_bmopf_json, write_pmd_json,
+    CoordinateSpace, DistBus, DistCoordsKind, DistGeoMeta, DistLocation, MulticonductorNetwork,
+    parse_pmd_file, parse_pmd_str, write_bmopf_json, write_pmd_json,
 };
 
 fn fixture(rel: &str) -> PathBuf {
@@ -253,7 +253,7 @@ fn dss_to_pmd_reproduces_the_reference_essentials() {
 #[test]
 fn pmd_typed_locations_emit_only_when_geographic() {
     let mut bus = DistBus::new("b1", vec!["1".to_owned()]);
-    bus.location = Some(Location {
+    bus.location = Some(DistLocation {
         x: -80.0,
         y: 35.0,
         kind: None,
@@ -274,9 +274,9 @@ fn pmd_typed_locations_emit_only_when_geographic() {
         unknown.warnings
     );
 
-    net.geo = Some(GeoMeta {
+    net.geo = Some(DistGeoMeta {
         space: CoordinateSpace::Geographic { crs: None },
-        kind: Some(CoordsKind::Source),
+        kind: Some(DistCoordsKind::Source),
     });
     let geographic = write_pmd_json(&net);
     let doc: serde_json::Value = serde_json::from_str(&geographic.text).unwrap();

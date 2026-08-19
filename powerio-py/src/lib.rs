@@ -1037,6 +1037,16 @@ impl PyBalancedNetwork {
         Ok((conv.text, conv.warnings))
     }
 
+    /// Serialize this case to `to`, bypassing source echo for the same
+    /// format. Returns `(text, warnings)`.
+    fn to_canonical_format(&self, to: &str) -> PyResult<(String, Vec<String>)> {
+        let target = to
+            .parse::<powerio_matrix::TargetFormat>()
+            .map_err(core_pyerr)?;
+        let conv = self.inner.to_canonical_format(target).map_err(core_pyerr)?;
+        Ok((conv.text, conv.warnings))
+    }
+
     /// Serialize this case to `to` and write it to `path` exactly as
     /// produced. Returns the fidelity warnings. Prefer this over writing
     /// `to_format` text through `open(path, "w")`: Python's text mode
@@ -1398,24 +1408,26 @@ fn parse_file(path: &str, from_: Option<&str>) -> PyResult<PyBalancedNetwork> {
         .map_err(core_pyerr)
 }
 
-/// Parse a case from in-memory text in the named `format` (`matpower`,
-/// `powermodels-json`, `egret-json`, `pandapower-json`, `psse`, `powerworld`,
-/// `pslf`, `goc3-json`, `surge-json`; aliases `m`/`pm`/`egret`/`pp`/`raw`/`aux`/`epc`/`goc3`/`surge`).
+/// Parse a case from in-memory text in the named source format `from_`
+/// (`matpower`, `powermodels-json`, `egret-json`, `pandapower-json`, `psse`,
+/// `powerworld`, `pslf`, `goc3-json`, `surge-json`; aliases
+/// `m`/`pm`/`egret`/`pp`/`raw`/`aux`/`epc`/`goc3`/`surge`).
 #[pyfunction]
-#[pyo3(signature = (text, format=None))]
-fn parse_str(text: &str, format: Option<&str>) -> PyResult<PyBalancedNetwork> {
-    powerio_matrix::parse_str(text, format.unwrap_or("matpower"))
+#[pyo3(signature = (text, from_))]
+fn parse_str(text: &str, from_: &str) -> PyResult<PyBalancedNetwork> {
+    powerio_matrix::parse_str(text, from_)
         .map(case_from_parsed)
         .map_err(core_pyerr)
 }
 
-/// Parse a case from in-memory bytes in the named `format`. Accepts every
-/// `parse_str` name plus `pwb`: PowerWorld binary has no text form, so this is
-/// the only in-memory way to read one. Text formats must be UTF-8.
+/// Parse a case from in-memory bytes in the named source format `from_`.
+/// Accepts every `parse_str` name plus `pwb`: PowerWorld binary has no text
+/// form, so this is the only in-memory way to read one. Text formats must be
+/// UTF-8.
 #[pyfunction]
-#[pyo3(signature = (data, format))]
-fn parse_bytes(data: &[u8], format: &str) -> PyResult<PyBalancedNetwork> {
-    powerio_matrix::parse_bytes(data, format)
+#[pyo3(signature = (data, from_))]
+fn parse_bytes(data: &[u8], from_: &str) -> PyResult<PyBalancedNetwork> {
+    powerio_matrix::parse_bytes(data, from_)
         .map(case_from_parsed)
         .map_err(core_pyerr)
 }
@@ -1434,15 +1446,16 @@ fn parse_display_file<'py>(
     display_data_to_py(py, display)
 }
 
-/// Parse display bytes in the named display format. Returns `(kind, payload)`.
+/// Parse display bytes in the named display format `from_`. Returns
+/// `(kind, payload)`.
 #[pyfunction]
-#[pyo3(signature = (data, format))]
+#[pyo3(signature = (data, from_))]
 fn parse_display_bytes<'py>(
     py: Python<'py>,
     data: &[u8],
-    format: &str,
+    from_: &str,
 ) -> PyResult<Bound<'py, PyAny>> {
-    let display = powerio_matrix::parse_display_bytes(data, format).map_err(core_pyerr)?;
+    let display = powerio_matrix::parse_display_bytes(data, from_).map_err(core_pyerr)?;
     display_data_to_py(py, display)
 }
 
@@ -1506,13 +1519,13 @@ fn convert_file(
 
 /// Convert in-memory case `text` to another format through the network model,
 /// with no file staging. Returns `(text, warnings)` like `convert_file`.
-/// `format` names the input format (default `matpower`).
+/// `from_` names the input format (default `matpower`).
 #[pyfunction]
-#[pyo3(signature = (text, to, format=None, missing_gen_cost=None, default_gen_cost=None, gen_cost_csv=None))]
+#[pyo3(signature = (text, to, from_=None, missing_gen_cost=None, default_gen_cost=None, gen_cost_csv=None))]
 fn convert_str(
     text: &str,
     to: &str,
-    format: Option<&str>,
+    from_: Option<&str>,
     missing_gen_cost: Option<&str>,
     default_gen_cost: Option<&str>,
     gen_cost_csv: Option<&str>,
@@ -1527,7 +1540,7 @@ fn convert_str(
         MissingGenCostPolicy::Preserve,
     )?;
     let conv =
-        powerio_matrix::convert_str_with_options(text, target, format.unwrap_or("matpower"), &opts)
+        powerio_matrix::convert_str_with_options(text, target, from_.unwrap_or("matpower"), &opts)
             .map_err(core_pyerr)?;
     Ok((conv.text, conv.warnings))
 }
@@ -1756,11 +1769,12 @@ fn dist_parse_file(
         .map_err(dist_to_pyerr)
 }
 
-/// Parse an in-memory distribution case of the named `format` (`dss`,
-/// `pmd-json`, `bmopf-json`).
+/// Parse an in-memory distribution case of the named source format `from_`
+/// (`dss`, `pmd-json`, `bmopf-json`).
 #[pyfunction]
-fn dist_parse_str(text: &str, format: &str) -> PyResult<PyMulticonductorNetwork> {
-    powerio_dist::parse_str(text, format)
+#[pyo3(signature = (text, from_))]
+fn dist_parse_str(text: &str, from_: &str) -> PyResult<PyMulticonductorNetwork> {
+    powerio_dist::parse_str(text, from_)
         .map(|net| PyMulticonductorNetwork { net })
         .map_err(dist_to_pyerr)
 }
@@ -1778,15 +1792,16 @@ fn dist_convert_file(path: &str, to: &str, from_: Option<&str>) -> PyResult<(Str
     Ok((conv.text, conv.warnings))
 }
 
-/// Convert an in-memory distribution case of the named `format` to `to`.
-/// Returns `(text, warnings)`; the warnings carry both the parse warnings and
-/// the writer's fidelity losses.
+/// Convert an in-memory distribution case of the named source format `from_`
+/// to `to`. Returns `(text, warnings)`; the warnings carry both the parse
+/// warnings and the writer's fidelity losses.
 #[pyfunction]
-fn dist_convert_str(text: &str, to: &str, format: &str) -> PyResult<(String, Vec<String>)> {
+#[pyo3(signature = (text, to, from_))]
+fn dist_convert_str(text: &str, to: &str, from_: &str) -> PyResult<(String, Vec<String>)> {
     let to = to
         .parse::<powerio_dist::DistTargetFormat>()
         .map_err(dist_to_pyerr)?;
-    let conv = powerio_dist::convert_str(text, to, format).map_err(dist_to_pyerr)?;
+    let conv = powerio_dist::convert_str(text, to, from_).map_err(dist_to_pyerr)?;
     Ok((conv.text, conv.warnings))
 }
 

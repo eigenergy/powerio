@@ -1882,10 +1882,10 @@ fn geo_types_share_the_same_json_shape() {
         y: 35.0,
         kind: Some(powerio::CoordsKind::Manual),
     };
-    let dist_location = powerio_dist::Location {
+    let dist_location = powerio_dist::DistLocation {
         x: -80.0,
         y: 35.0,
-        kind: Some(powerio_dist::CoordsKind::Manual),
+        kind: Some(powerio_dist::DistCoordsKind::Manual),
     };
     assert_eq!(
         serde_json::to_value(balanced_location).unwrap(),
@@ -1896,9 +1896,9 @@ fn geo_types_share_the_same_json_shape() {
         space: powerio::CoordinateSpace::Geographic { crs: None },
         kind: Some(powerio::CoordsKind::Source),
     };
-    let dist_geo = powerio_dist::GeoMeta {
+    let dist_geo = powerio_dist::DistGeoMeta {
         space: powerio_dist::CoordinateSpace::Geographic { crs: None },
-        kind: Some(powerio_dist::CoordsKind::Source),
+        kind: Some(powerio_dist::DistCoordsKind::Source),
     };
     let expected = serde_json::json!({"space": "geographic", "kind": "source"});
     assert_eq!(serde_json::to_value(&balanced_geo).unwrap(), expected);

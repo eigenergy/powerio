@@ -5,7 +5,7 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 
 use crate::model::{
-    DistBus, DistIbr, DistTransformer, MulticonductorNetwork, VoltageSource, Winding, pair_keys,
+    DistBus, DistIbr, DistTransformer, DistWinding, MulticonductorNetwork, VoltageSource, pair_keys,
 };
 
 /// Upper bound on the winding count the transformer edge expansion is
@@ -335,8 +335,8 @@ fn transformer_edge(
     transformer: &DistTransformer,
     from: String,
     to: String,
-    from_winding: &Winding,
-    to_winding: &Winding,
+    from_winding: &DistWinding,
+    to_winding: &DistWinding,
 ) -> DistGraphEdge {
     DistGraphEdge {
         kind: DistGraphEdgeKind::Transformer,
@@ -568,12 +568,12 @@ mod tests {
         // but the model JSON C entry point deserializes a `MulticonductorNetwork`
         // unchecked, so a linear-size model must not force quadratic work.
         let n = 4000;
-        let windings: Vec<Winding> = (0..n)
+        let windings: Vec<DistWinding> = (0..n)
             .map(|i| {
-                Winding::new(
+                DistWinding::new(
                     format!("b{i}"),
                     strings(&["1", "2", "3", "n"]),
-                    crate::model::WindingConn::Wye,
+                    crate::model::DistWindingConn::Wye,
                     12470.0,
                     5e6,
                 )

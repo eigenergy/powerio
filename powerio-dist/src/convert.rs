@@ -366,13 +366,13 @@ fn parse_text(text: &str, format: DistTargetFormat) -> crate::Result<Multiconduc
     Ok(net)
 }
 
-/// Parses `text` in the named format (see [`dist_target_from_name`]).
-pub fn parse_str(text: &str, format: &str) -> crate::Result<MulticonductorNetwork> {
-    parse_text(text, format.parse::<DistTargetFormat>()?)
+/// Parses `text` in the named source format `from` (see [`dist_target_from_name`]).
+pub fn parse_str(text: &str, from: &str) -> crate::Result<MulticonductorNetwork> {
+    parse_text(text, from.parse::<DistTargetFormat>()?)
 }
 
-/// Parses in-memory case `bytes` of the named `format`. The bytes decode as
-/// UTF-8 and take the [`parse_str`] path from there.
+/// Parses in-memory case `bytes` of the named source format `from`. The bytes
+/// decode as UTF-8 and take the [`parse_str`] path from there.
 ///
 /// A caller that already holds the file's bytes — an upload, an archive
 /// member — parses them here rather than staging a temporary file for
@@ -382,12 +382,12 @@ pub fn parse_str(text: &str, format: &str) -> crate::Result<MulticonductorNetwor
 /// # Errors
 /// [`Error::FormatRead`](crate::Error::FormatRead) if the bytes are not
 /// UTF-8; otherwise as [`parse_str`].
-pub fn parse_bytes(bytes: &[u8], format: &str) -> crate::Result<MulticonductorNetwork> {
+pub fn parse_bytes(bytes: &[u8], from: &str) -> crate::Result<MulticonductorNetwork> {
     let text = std::str::from_utf8(bytes).map_err(|e| crate::Error::FormatRead {
         format: "case text",
         message: format!("not valid UTF-8: {e}"),
     })?;
-    parse_str(text, format)
+    parse_str(text, from)
 }
 
 /// Parses `path`, taking the format from `from` when given, the `.dss`
@@ -450,10 +450,11 @@ fn convert(net: &MulticonductorNetwork, target: DistTargetFormat) -> Conversion 
     }
 }
 
-/// Parses `text` as `format` and writes it as `to` in one call. The warnings
-/// carry both the parse warnings and the writer's fidelity losses.
-pub fn convert_str(text: &str, to: DistTargetFormat, format: &str) -> crate::Result<Conversion> {
-    Ok(convert(&parse_str(text, format)?, to))
+/// Parses `text` in the named source format `from` and writes it as `to` in
+/// one call. The warnings carry both the parse warnings and the writer's
+/// fidelity losses.
+pub fn convert_str(text: &str, to: DistTargetFormat, from: &str) -> crate::Result<Conversion> {
+    Ok(convert(&parse_str(text, from)?, to))
 }
 
 /// Parses `path` (format from `from` or the file itself) and writes it as

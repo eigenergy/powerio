@@ -42,7 +42,7 @@ json_text = net.to_json()
 pm = net.to_format("powermodels-json")
 pp = net.to_format("pandapower-json")
 raw = pio.convert_file("case9.m", "psse")
-aux = pio.convert_str(json_text, "powerworld", format="powermodels-json")
+aux = pio.convert_str(json_text, "powerworld", from_="powermodels-json")
 pypsa_out = net.write_pypsa_csv_folder("case9-pypsa")
 display = pio.parse_display_file("case.pwd")
 pkg = pio.Package.from_file("goc3_case.json", from_="goc3-json")
@@ -70,7 +70,7 @@ existing `powerio.dist.MulticonductorNetwork` handle name. The old
 the collapsed bus and terminal graph as Python data.
 
 `parse_file(path, from_=None)` reads network case files (inferred from the
-extension, or forced with `from_`); `parse_str(text, format)` reads in-memory
+extension, or forced with `from_`); `parse_str(text, from_)` reads in-memory
 case text. Display artifacts are not network cases, so they use the separate
 display API:
 

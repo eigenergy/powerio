@@ -158,9 +158,9 @@ def parse_file(
     )
 
 
-def parse_str(text: str, format: str) -> MulticonductorNetwork:
-    """Parse an in-memory distribution network of the named ``format``."""
-    return MulticonductorNetwork(_powerio.dist_parse_str(text, format))
+def parse_str(text: str, from_: str) -> MulticonductorNetwork:
+    """Parse an in-memory distribution network of the named source format ``from_``."""
+    return MulticonductorNetwork(_powerio.dist_parse_str(text, from_))
 
 
 def convert_file(path: Any, to: str, from_: Optional[str] = None) -> Conversion:
@@ -173,15 +173,15 @@ def convert_file(path: Any, to: str, from_: Optional[str] = None) -> Conversion:
     return Conversion(text, warnings)
 
 
-def convert_str(text: str, to: str, format: str) -> Conversion:
-    """Convert an in-memory distribution network of the named ``format`` to ``to``.
+def convert_str(text: str, to: str, from_: str) -> Conversion:
+    """Convert an in-memory distribution network of the named source format ``from_`` to ``to``.
 
     The signature matches :func:`powerio.convert_str`: input, target, source,
-    except ``format`` is required (there is no extension to infer from and no
+    except ``from_`` is required (there is no extension to infer from and no
     default). The warnings carry both the parse warnings and the writer's
     fidelity losses (there is no :class:`MulticonductorNetwork` to query them from).
     """
-    text, warnings = _powerio.dist_convert_str(text, to, format)
+    text, warnings = _powerio.dist_convert_str(text, to, from_)
     return Conversion(text, warnings)
 
 # 0.8 names, aliased for one release; same convention as the package root.

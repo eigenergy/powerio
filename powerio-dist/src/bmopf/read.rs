@@ -16,14 +16,14 @@ use serde_json::{Map, Value};
 
 use crate::diagnostics::codes as C;
 use crate::error::{Error, Result};
-use crate::geo::{CoordinateSpace, CoordsKind, GeoMeta, Location};
+use crate::geo::{CoordinateSpace, DistCoordsKind, DistGeoMeta, DistLocation};
 use crate::model::{
     ActivePowerReference, ActivePowerUnit, Configuration, ControlVoltageReference, DistBus,
     DistCapacitor, DistControlProfile, DistGenerator, DistIbr, DistLine, DistLineCode, DistLoad,
-    DistLoadVoltageModel, DistShunt, DistSourceFormat, DistSwitch, DistTransformer, Extras,
-    IbrPrimeMover, IbrTopology, IbrVoltageAggregation, Mat, MulticonductorNetwork,
-    PowerFactorControl, ReactivePowerReference, ReactivePowerUnit, UntypedObject, VoltVarControl,
-    VoltWattControl, VoltageSource, Winding, WindingConn, n_winding_impedance_base,
+    DistLoadVoltageModel, DistShunt, DistSourceFormat, DistSwitch, DistTransformer, DistWinding,
+    DistWindingConn, Extras, IbrPrimeMover, IbrTopology, IbrVoltageAggregation, Mat,
+    MulticonductorNetwork, PowerFactorControl, ReactivePowerReference, ReactivePowerUnit,
+    UntypedObject, VoltVarControl, VoltWattControl, VoltageSource, n_winding_impedance_base,
     n_winding_phase_count, pair_keys,
 };
 
@@ -854,11 +854,11 @@ impl Reader<'_> {
             let has_lat = o.contains_key("latitude");
             let location = match (lon, lat) {
                 (Some(x), Some(y)) => {
-                    self.net.geo = Some(GeoMeta {
+                    self.net.geo = Some(DistGeoMeta {
                         space: CoordinateSpace::Geographic { crs: None },
-                        kind: Some(CoordsKind::Source),
+                        kind: Some(DistCoordsKind::Source),
                     });
-                    Some(Location { x, y, kind: None })
+                    Some(DistLocation { x, y, kind: None })
                 }
                 _ if has_lon || has_lat => {
                     self.diagnostics.push(&C::READ_BMOPF_RETAINED_SOURCE_ONLY, format!(
@@ -1493,13 +1493,13 @@ impl Reader<'_> {
 
         let conn = |delta: bool| {
             if delta {
-                WindingConn::Delta
+                DistWindingConn::Delta
             } else {
-                WindingConn::Wye
+                DistWindingConn::Wye
             }
         };
         let mut windings = vec![
-            Winding {
+            DistWinding {
                 bus: string(o.get("bus_from")),
                 terminal_map: strings(o.get("terminal_map_from")),
                 conn: conn(subtype == "delta_wye"),
@@ -1510,7 +1510,7 @@ impl Reader<'_> {
                 r_neutral: first_float(o.get("r_neutral_from")),
                 x_neutral: first_float(o.get("x_neutral_from")),
             },
-            Winding {
+            DistWinding {
                 bus: string(o.get("bus_to")),
                 terminal_map: strings(o.get("terminal_map_to")),
                 conn: conn(subtype == "wye_delta"),
@@ -1622,9 +1622,9 @@ impl Reader<'_> {
                     ));
                 }
                 let conn = if connection == "DELTA" {
-                    WindingConn::Delta
+                    DistWindingConn::Delta
                 } else {
-                    WindingConn::Wye
+                    DistWindingConn::Wye
                 };
                 if let Some(delta_roll) = delta_roll_value(w.get("delta_roll")) {
                     delta_rolls.insert((idx + 1).to_string(), Value::from(delta_roll));
@@ -1636,7 +1636,7 @@ impl Reader<'_> {
                 } else {
                     0.0
                 };
-                windings.push(Winding {
+                windings.push(DistWinding {
                     bus: string(w.get("bus")),
                     terminal_map: terminal_map.clone(),
                     conn,
@@ -1699,7 +1699,7 @@ impl Reader<'_> {
 /// one. A center tapped winding's `v_nom_to` is the per leg voltage, so the
 /// two agree; a source that states the full span across both legs lands at
 /// twice this.
-fn phase_to_neutral_midpoint(w: &Winding, buses: &[DistBus]) -> Option<f64> {
+fn phase_to_neutral_midpoint(w: &DistWinding, buses: &[DistBus]) -> Option<f64> {
     let bus = buses.iter().find(|b| b.id == w.bus)?;
     let lo = bus.vpn_min.as_ref()?.first()?;
     let hi = bus.vpn_max.as_ref()?.first()?;
@@ -1707,7 +1707,7 @@ fn phase_to_neutral_midpoint(w: &Winding, buses: &[DistBus]) -> Option<f64> {
     (mid.is_finite() && mid > 0.0 && w.v_ref.is_finite()).then_some(mid)
 }
 
-fn expand_center_tap_windings(subtype: &str, windings: &mut Vec<Winding>, buses: &[DistBus]) {
+fn expand_center_tap_windings(subtype: &str, windings: &mut Vec<DistWinding>, buses: &[DistBus]) {
     if subtype != "center_tap" || windings[1].terminal_map.len() < 3 {
         return;
     }
@@ -1729,10 +1729,10 @@ fn expand_center_tap_windings(subtype: &str, windings: &mut Vec<Winding>, buses:
     let hot_b = hots.get(1).cloned().unwrap_or_default();
     let v_ref = if canonical { to.v_ref } else { to.v_ref / 2.0 };
     let r_pct = if canonical { to.r_pct } else { to.r_pct * 2.0 };
-    let half = Winding {
+    let half = DistWinding {
         bus: to.bus.clone(),
         terminal_map: vec![hot_a, common.clone()],
-        conn: WindingConn::Wye,
+        conn: DistWindingConn::Wye,
         v_ref,
         s_rating: to.s_rating,
         r_pct,
@@ -1740,10 +1740,10 @@ fn expand_center_tap_windings(subtype: &str, windings: &mut Vec<Winding>, buses:
         r_neutral: to.r_neutral,
         x_neutral: to.x_neutral,
     };
-    let other_half = Winding {
+    let other_half = DistWinding {
         bus: to.bus,
         terminal_map: vec![common, hot_b],
-        conn: WindingConn::Wye,
+        conn: DistWindingConn::Wye,
         v_ref,
         s_rating: to.s_rating,
         r_pct,
@@ -1755,7 +1755,7 @@ fn expand_center_tap_windings(subtype: &str, windings: &mut Vec<Winding>, buses:
     windings.push(other_half);
 }
 
-fn center_tap_neutral_index(to: &Winding, buses: &[DistBus]) -> usize {
+fn center_tap_neutral_index(to: &DistWinding, buses: &[DistBus]) -> usize {
     if let Some(bus) = buses.iter().find(|bus| bus.id == to.bus)
         && let Some((idx, _)) = to
             .terminal_map
@@ -1771,16 +1771,20 @@ fn center_tap_neutral_index(to: &Winding, buses: &[DistBus]) -> usize {
         .unwrap_or_else(|| to.terminal_map.len() - 1)
 }
 
-fn n_winding_internal_v_ref(conn: WindingConn, terminal_map: &[String], bmopf_v_nom: f64) -> f64 {
-    if conn == WindingConn::Wye && n_winding_phase_count(conn, terminal_map) >= 2 {
+fn n_winding_internal_v_ref(
+    conn: DistWindingConn,
+    terminal_map: &[String],
+    bmopf_v_nom: f64,
+) -> f64 {
+    if conn == DistWindingConn::Wye && n_winding_phase_count(conn, terminal_map) >= 2 {
         bmopf_v_nom * 3f64.sqrt()
     } else {
         bmopf_v_nom
     }
 }
 
-fn n_winding_bmopf_v_nom_from_internal(w: &Winding) -> f64 {
-    if w.conn == WindingConn::Wye && n_winding_phase_count(w.conn, &w.terminal_map) >= 2 {
+fn n_winding_bmopf_v_nom_from_internal(w: &DistWinding) -> f64 {
+    if w.conn == DistWindingConn::Wye && n_winding_phase_count(w.conn, &w.terminal_map) >= 2 {
         w.v_ref / 3f64.sqrt()
     } else {
         w.v_ref
@@ -1788,7 +1792,7 @@ fn n_winding_bmopf_v_nom_from_internal(w: &Winding) -> f64 {
 }
 
 fn n_winding_base_from_bmopf(
-    conn: WindingConn,
+    conn: DistWindingConn,
     terminal_map: &[String],
     bmopf_v_nom: f64,
     s: f64,
@@ -1796,7 +1800,7 @@ fn n_winding_base_from_bmopf(
     n_winding_impedance_base(n_winding_phase_count(conn, terminal_map), bmopf_v_nom, s)
 }
 
-fn n_winding_base_from_internal(w: &Winding, s: f64) -> Option<f64> {
+fn n_winding_base_from_internal(w: &DistWinding, s: f64) -> Option<f64> {
     n_winding_base_from_bmopf(
         w.conn,
         &w.terminal_map,
