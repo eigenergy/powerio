@@ -68,7 +68,7 @@ powerio.group_axis    # table 22 only, "solver_gen"
 powerio.group_column  # table 22 only, "gen_index"
 ```
 
-`solver_bus` (table 6) gained `area` and `zone` at the end of its column list in the same release, so an area or zone keyed consumer does not have to fall back to the JSON snapshot for two integers per bus.
+`solver_bus` (table 6) gained `area` and `zone` at the end of its column list in the same release, so an area or zone keyed consumer does not have to fall back to the JSON snapshot for two integers per bus. `solver_storage` (table 13) gained `charge_efficiency` and `discharge_efficiency` the same way, so a storage constraint that prices conversion losses reads them from the table it already decodes.
 
 ## Arrow catalog JSON
 
