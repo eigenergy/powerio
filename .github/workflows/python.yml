@@ -8,6 +8,11 @@ on:
   release:
     types: [ published ]
   workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing published stable release tag to retry
+        required: true
+        type: string
 
 # One run per workflow per branch. A force push to a stacked pull request
 # otherwise leaves the superseded run going: it finishes, it fails or it
@@ -28,18 +33,72 @@ concurrency:
 permissions:
   contents: read
 
+env:
+  RELEASE_TAG: ${{ github.event_name == 'release' && github.event.release.tag_name || github.event_name == 'workflow_dispatch' && inputs.tag || '' }}
+  SOURCE_REF: ${{ github.event_name == 'release' && format('refs/tags/{0}', github.event.release.tag_name) || github.event_name == 'workflow_dispatch' && format('refs/tags/{0}', inputs.tag) || github.sha }}
+
 jobs:
+  release-preflight:
+    if: github.event_name == 'release' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.release.outputs.tag }}
+      sha: ${{ steps.release.outputs.sha }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ env.SOURCE_REF }}
+          fetch-depth: 0
+      - name: Verify the immutable published release
+        id: release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          git check-ref-format "refs/tags/$RELEASE_TAG" >/dev/null \
+            || { echo "invalid release tag: $RELEASE_TAG" >&2; exit 1; }
+          git ls-remote --exit-code --tags origin "refs/tags/$RELEASE_TAG" >/dev/null \
+            || { echo "$RELEASE_TAG is not an origin tag" >&2; exit 1; }
+          tag_commit="$(git rev-list -n1 "refs/tags/$RELEASE_TAG")"
+          head_commit="$(git rev-parse HEAD)"
+          if [ "$head_commit" != "$tag_commit" ]; then
+            echo "checked out $head_commit, but $RELEASE_TAG names $tag_commit" >&2
+            exit 1
+          fi
+          version="$(cargo metadata --no-deps --format-version 1 \
+            | jq -er '.packages[] | select(.name == "powerio-py") | .version')"
+          if [ "v$version" != "$RELEASE_TAG" ]; then
+            echo "release tag $RELEASE_TAG does not match package version $version" >&2
+            exit 1
+          fi
+          release="$RUNNER_TEMP/release.json"
+          curl --fail --silent --show-error --retry 3 \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/releases/tags/$RELEASE_TAG" \
+            -o "$release"
+          jq -e '.draft == false' "$release" >/dev/null \
+            || { echo "$RELEASE_TAG is not a published GitHub release" >&2; exit 1; }
+          if [ "$GITHUB_EVENT_NAME" = workflow_dispatch ]; then
+            jq -e '.prerelease == false' "$release" >/dev/null \
+              || { echo "manual recovery refuses prerelease $RELEASE_TAG" >&2; exit 1; }
+          fi
+          echo "tag=$RELEASE_TAG" >> "$GITHUB_OUTPUT"
+          echo "sha=$head_commit" >> "$GITHUB_OUTPUT"
+
   lint:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
-      - uses: actions/setup-python@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ env.SOURCE_REF }}
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: "3.x"
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable
         with:
           components: clippy
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
       # `cargo clippy` at the root skips powerio-py (it's not in default-members),
       # so lint the extension explicitly with the same native features as wheels.
       - name: Clippy (powerio-py)
@@ -53,12 +112,14 @@ jobs:
   quality:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
-      - uses: actions/setup-python@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ env.SOURCE_REF }}
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: "3.x"
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
+      - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
       - name: Install gates
         run: pip install ruff mypy
       - name: ruff
@@ -88,12 +149,14 @@ jobs:
       matrix:
         python: [ "3.9", "3.12" ]
     steps:
-      - uses: actions/checkout@v6
-      - uses: actions/setup-python@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ env.SOURCE_REF }}
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: ${{ matrix.python }}
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
+      - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
       # This job is the gridfm-absent build: compile the extension without the
       # gridfm cargo feature so `test_gridfm_absent_raises_clean_importerror` and
       # the `_require_gridfm()` ImportError fallback actually run (every other
@@ -137,12 +200,14 @@ jobs:
     name: test (gridfm extra)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
-      - uses: actions/setup-python@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ env.SOURCE_REF }}
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: "3.12"
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
+      - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
       - name: Install maturin
         run: pip install maturin
       # Install a wheel (not `develop`): a regular site-packages install wins the
@@ -161,6 +226,7 @@ jobs:
   wheels:
     name: wheels (${{ matrix.platform.target }} on ${{ matrix.platform.runner }})
     if: github.event_name == 'release' || github.event_name == 'workflow_dispatch'
+    needs: release-preflight
     runs-on: ${{ matrix.platform.runner }}
     strategy:
       fail-fast: false
@@ -174,33 +240,40 @@ jobs:
           - { runner: macos-14,       target: aarch64 }
           - { runner: windows-latest, target: x64 }
     steps:
-      - uses: actions/checkout@v6
-      - uses: actions/setup-python@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ needs.release-preflight.outputs.sha }}
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: "3.x"
       # abi3-py39 → one wheel per platform covers Python 3.9+.
       - name: Build powerio wheels
-        uses: PyO3/maturin-action@v1
+        uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1
         with:
           target: ${{ matrix.platform.target }}
           args: --release --out dist
           manylinux: auto
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: wheels-${{ matrix.platform.runner }}-${{ matrix.platform.target }}
           path: dist
 
   sdist:
     if: github.event_name == 'release' || github.event_name == 'workflow_dispatch'
+    needs: release-preflight
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ needs.release-preflight.outputs.sha }}
       - name: Build powerio sdist
-        uses: PyO3/maturin-action@v1
+        uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1
         with:
           command: sdist
           args: --out dist
-      - uses: actions/upload-artifact@v7
+      - name: Audit licenses and excluded fixtures
+        run: python3 scripts/audit-release-archives.py dist/*.tar.gz
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: sdist
           path: dist
@@ -213,7 +286,7 @@ jobs:
     # recovery path for a missed event. A prerelease still builds wheels and an
     # sdist as run artifacts, but never uploads them to PyPI.
     if: (github.event_name == 'release' && github.event.release.prerelease == false) || github.event_name == 'workflow_dispatch'
-    needs: [ lint, test, test-gridfm, wheels, sdist ]
+    needs: [ release-preflight, lint, test, test-gridfm, wheels, sdist ]
     runs-on: ubuntu-latest
     # Deployment protection (required reviewers, tag rules) lives on the pypi
     # environment in the repo settings, not in this file.
@@ -221,18 +294,18 @@ jobs:
     permissions:
       id-token: write  # PyPI trusted publishing; no stored token
     steps:
-      - uses: actions/download-artifact@v8
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           path: dist
           merge-multiple: true
-      - uses: actions/setup-python@v6
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: "3.x"
       - name: Check distributions
         run: |
           python -m pip install twine
           python -m twine check dist/*
-      - uses: pypa/gh-action-pypi-publish@release/v1
+      - uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # release/v1
         with:
           packages-dir: dist
           # A partially failed upload (e.g. wheels in, sdist rejected) is
