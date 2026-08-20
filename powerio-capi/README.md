@@ -171,7 +171,7 @@ name. It currently accepts `goc3-json` and returns an owned
 `errbuf` receives the message.
 
 `pio_scopf_to_json` returns the versioned SCOPF wire document. The document
-records its schema version and 1-based index convention. Free the returned
+records its powerio version and 1-based index convention. Free the returned
 string with `pio_string_free` and the instance with
 `pio_scopf_instance_free`.
 

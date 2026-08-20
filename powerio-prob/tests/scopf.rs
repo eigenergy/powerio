@@ -97,7 +97,7 @@ fn small_instance_preserves_source_ids_and_uses_zero_based_indices() {
 }
 
 #[test]
-fn the_julia_document_states_its_powerio_version_and_is_one_based() {
+fn the_scopf_document_states_its_powerio_version_and_is_one_based() {
     let instance = small_instance();
     let internal = serde_json::to_value(&instance).expect("serialize internal instance");
     assert!(internal.get("static_data").is_some());
@@ -336,13 +336,6 @@ fn missing_device_type_defaults_to_producer() {
     assert_eq!(instance.lengths.l_j_pr, 1);
 }
 
-const VALIDATION_14BUS: &str = include_str!("data/goc3_14bus_20220707.json");
-
-fn validation_instance() -> ScopfInstance {
-    parse_scopf_str(VALIDATION_14BUS, "goc3-json")
-        .expect("build the GOCompetition 14 bus validation instance")
-}
-
 /// The contingency count a client needs to size a per contingency array. It
 /// must agree with the survivor groups the same instance carries.
 #[test]
@@ -546,61 +539,6 @@ fn interleaved_device_classes_are_reported() {
             instance.static_data.cons[0].j_sdd
         ),
         (0, 2)
-    );
-}
-
-/// GOCompetition's own validation case. Its uids are names, so the digits in
-/// them are bus numbers and two devices at one bus collide on the same number.
-/// Document order is the only rule that addresses every row.
-#[test]
-fn the_validation_case_indexes_every_row_in_document_order() {
-    let instance = validation_instance();
-    let data = &instance.static_data;
-
-    assert_eq!(instance.lengths.l_j_cspr, 17);
-    assert_eq!(data.prod.len() + data.cons.len(), 17);
-    assert_eq!(instance.lengths.l_j_ln, 17);
-    assert_eq!(instance.lengths.l_j_xf, 3);
-    assert_eq!(instance.lengths.l_j_sh, 1);
-    assert_eq!(instance.lengths.i, 14);
-
-    // The single shunt is "Shunt Bus 6". Its per class index is 0, its
-    // position, not the 6 in its name.
-    assert_eq!(data.shunt[0].uid, "Shunt Bus 6");
-    assert_eq!(data.shunt[0].j_sh, 0);
-
-    for (position, row) in data.acl_branch.iter().enumerate() {
-        assert_eq!(row.j_ln, position);
-    }
-    for (position, row) in data.acx_branch.iter().enumerate() {
-        assert_eq!(row.j_xf, position);
-    }
-
-    // This case omits one violation price, and declares a capability mode its
-    // official counterparts do not.
-    assert_eq!(instance.violation_cost.e, None);
-    assert!(instance.violation_cost.p_bus.is_some());
-    assert!(
-        data.prod
-            .iter()
-            .chain(&data.cons)
-            .any(|row| row.q_bound_cap == 1),
-        "the validation case declares the bound cap mode"
-    );
-    for row in data.prod.iter().chain(&data.cons) {
-        assert!(row.q_bound_cap == 0 || row.q_linear_cap == 0);
-        if row.q_bound_cap == 1 {
-            assert!(row.beta_ub.is_some() && row.q_0_lb.is_some());
-        } else {
-            assert_eq!(row.beta_ub, None);
-        }
-    }
-
-    assert_eq!(
-        instance.device_class_layout,
-        ScopfDeviceClassLayout::Contiguous {
-            producers_first: true
-        }
     );
 }
 

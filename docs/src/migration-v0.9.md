@@ -2,11 +2,14 @@
 
 0.9.0 is the API that 1.0.0 ships, so it takes the breaks that were being deferred. A C or Julia consumer also needs [the ABI 5 guide](abi-v5.md); the two sets barely overlap.
 
-Most of what follows is a compile error. Three items are not, and they are the ones to check by hand: the DC susceptance default, `.pio.json` documents written before 0.9, and the Python name lookups.
+Most of what follows is a compile error. Two items are not, and they are the ones to check by hand: the DC susceptance default and `.pio.json` documents written before 0.9.
 
-## The deprecated names are gone
+## The deprecated names remain for one release
 
-They were scheduled for deletion at 1.0 anyway, and `powerio/src/lib.rs` re-exported only `BalancedNetwork`, so the aliases were reachable at `powerio::network::Network` and nowhere else. Every existing `use powerio::Network;` got a compile error rather than the promised warning, so 0.9.0 takes the break instead of carrying it.
+The 0.8 compatibility names were scheduled for deletion at 1.0, but several
+were not reachable where the deprecation notes promised. 0.9.0 repairs that
+bridge. Each old name resolves with a warning that names its successor and its
+1.0.0 removal.
 
 ```rust,ignore
 // 0.8
@@ -15,16 +18,25 @@ use powerio_dist::DistNetwork;
 use powerio_prob::build_scopf_instance_from_str;
 branch.legacy_total_charging_b()
 
-// 0.9
+// 0.9, preferred names
 use powerio::BalancedNetwork;
 use powerio_dist::MulticonductorNetwork;
 use powerio_prob::parse_scopf_str;
 branch.total_charging_b()
 ```
 
-`Network` named one of two models by the word for both, and `DistNetwork` named a crate rather than a model. Nothing about `total_charging_b` is legacy; it is the projection every MATPOWER shaped writer needs.
+`DcConvention::PaperPure` also remains as a deprecated associated constant for
+`DcConvention::ReactanceOnly`. `scripts/deprecated-inventory.sh` lists the
+bridge and its `--assert-empty` mode is the 1.0.0 removal gate.
 
-**Python has no shim.** `powerio.Network` and `powerio.dist.DistNetwork` raise `AttributeError` from the module's ordinary attribute lookup. Use `powerio.BalancedNetwork` and `powerio.dist.MulticonductorNetwork`.
+Python follows the same rule: `powerio.Network` and
+`powerio.dist.DistNetwork` resolve with `DeprecationWarning`. Prefer
+`powerio.BalancedNetwork` and `powerio.dist.MulticonductorNetwork` now so the
+1.0.0 removal is a no-op for your code.
+
+The retired `powerio-json` case format token is not part of this bridge. Model
+JSON moves through `to_json` and `from_json`, and classification reports
+`model-json`.
 
 ## The DC susceptance default changed value
 

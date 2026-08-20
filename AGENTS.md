@@ -198,7 +198,7 @@ powerio-matrix/               # matrices + graph views on powerio
 powerio-prob/                 # problem instances on powerio
 ├── src/dc.rs                # DcOpfInstance, build_dc_opf_instance
 ├── src/ac.rs                # AcOpfInstance, build_ac_opf_instance
-├── src/scopf/               # ScopfInstance, GOC3 projection, Julia document
+├── src/scopf/               # ScopfInstance, GOC3 projection, SCOPF document
 └── src/matrix/bundle.rs     # DC OPF bundle directory + manifest (feature = "matrix")
 
 powerio-diag/                 # the shared diagnostic record (serde only leaf)

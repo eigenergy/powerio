@@ -1,8 +1,8 @@
-//! The Julia compatibility document.
+//! The language neutral SCOPF document.
 //!
 //! The conversion is structural: every struct that reaches the document classifies
 //! each of its fields as a 0-based internal index (renumbered to 1-based), a
-//! renamed field (Julia spells some names in Greek or uppercase), or a value
+//! renamed field (the wire format uses Greek or uppercase names), or a value
 //! passed through unchanged. The classification destructures the struct
 //! exhaustively, so a field added in `types.rs` fails to compile until it is
 //! classified here: a new index field cannot be silently missed, and a value
@@ -256,7 +256,7 @@ serialized_fields!(ScopfDcContingencyFlowRow {
     values: [to_bus, fr_bus, dt],
 });
 
-/// Convert an internal instance to the 1-based Julia document.
+/// Convert an internal instance to the 1-based SCOPF document.
 pub fn to_json_value(instance: &ScopfInstance) -> ScopfResult<Value> {
     let ScopfInstance {
         static_data,
@@ -305,7 +305,7 @@ pub fn to_json_value(instance: &ScopfInstance) -> ScopfResult<Value> {
     })?)
 }
 
-/// Serialize an internal instance as the 1-based Julia document.
+/// Serialize an internal instance as the 1-based SCOPF document.
 pub fn to_json(instance: &ScopfInstance) -> ScopfResult<String> {
     Ok(serde_json::to_string(&to_json_value(instance)?)?)
 }

@@ -91,9 +91,9 @@ print(first.number, first.name, first.x, first.y)
 ## Problem instances
 
 `parse_scopf(text, from_="goc3-json")` assembles a matrix free SCOPF problem
-instance and returns its Julia compatibility document as a Python dictionary. The
-document declares its schema version and uses 1-based indices for language
-compatibility. Source UIDs and source bus IDs remain separate from those
+instance and returns the language neutral `powerio.scopf` document as a Python
+dictionary. The document declares its powerio version and uses 1-based indices.
+Source UIDs and source bus IDs remain separate from those
 indices. Invalid JSON, duplicate identities, missing references, and period
 length mismatches raise `PowerIOError` subclasses.
 

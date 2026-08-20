@@ -103,8 +103,18 @@ def test_parse_scopf_uses_public_versioned_wire_document():
     assert instance["schema"] == "powerio.scopf"
     assert instance["powerio_version"] == powerio.__version__
     assert instance["index_base"] == 1
-    assert instance["instance"]["lengths"]["I"] == 2
-    assert instance["instance"]["static"]["acl_branch"][0]["j_ln"] == 1
+    body = instance["instance"]
+    static = body["static"]
+    assert body["lengths"]["I"] == 2
+    assert body["dt"] == [1.0, 1.0]
+    assert static["acl_branch"][0]["j_ln"] == 1
+    assert [row["u_0"] for row in static["acl_branch"]] == [1, 0]
+    assert static["acx_branch"][0]["u_0"] == 1
+    assert (static["prod"][0]["j_dev"], static["prod"][0]["j_sdd"]) == (1, 1)
+    assert (static["cons"][0]["j_dev"], static["cons"][0]["j_sdd"]) == (1, 2)
+    assert static["prod"][0]["u_0"] == 1
+    assert static["active_reserve_set_pr"][0]["j_dev"] == 1
+    assert static["active_reserve_set_pr"][0]["j_sdd"] == 1
     assert "parse_scopf" in powerio.__all__
 
 

@@ -1264,8 +1264,8 @@ PioScopfInstance *pio_scopf_parse_str(const char *text,
 
 #if defined(PIO_PROB)
 /**
- * Serialize a SCOPF instance as its Julia compatibility document. The JSON records
- * its schema version and index base. Free the returned string with
+ * Serialize a SCOPF instance as its language neutral document. The JSON records
+ * its powerio version and index base. Free the returned string with
  * `pio_string_free`. Returns `NULL` for a null handle or serialization error.
  */
 char *pio_scopf_to_json(const PioScopfInstance *instance, char *errbuf, size_t errlen);

@@ -192,7 +192,14 @@ One value spelling changes across the same documents: a nonfinite float is the s
 
 The rename is one edit everywhere. One release version now covers every document powerio authors, so a per-document `schema_version` frozen at `1.0.0` said nothing a caller could act on.
 
-`pio_scopf_to_json` gains `violation_cost`, `device_class_layout`, `lengths.K`, `j_sh` on shunt rows, and eight generator row fields. Its indices stay 1-based.
+`pio_scopf_to_json` changes its schema id from `powerio.scopf.julia` to
+`powerio.scopf` and gains `dt`, `violation_cost`, `device_class_layout`, and
+`lengths.K`. Device rows gain `j_dev`, `j_sdd`, and `u_0`; active and reactive
+reserve membership rows gain the member device's `j_dev` and `j_sdd`; shunt
+rows gain `j_sh`; and AC line and transformer rows gain `u_0`. The device rows
+also gain the eight reactive capability fields described in the changelog.
+Every ordinal is defined by source document order and every index in this JSON
+document is 1-based. No uid spelling participates in indexing.
 
 `pio_summary_json`'s `counts` block stays the case file's own inventory, so a 3-winding transformer counts once there rather than as the bus and three branches it lowers to. The two new `topology` fields are the lowered space, which is what the extractors report. Reading `counts` where you want `topology` is the same class of error the bus space change fixes.
 
