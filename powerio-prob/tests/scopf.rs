@@ -311,13 +311,6 @@ fn missing_device_type_defaults_to_producer() {
     assert_eq!(instance.lengths.l_j_pr, 1);
 }
 
-const VALIDATION_14BUS: &str = include_str!("data/goc3_14bus_20220707.json");
-
-fn validation_instance() -> ScopfInstance {
-    parse_scopf_str(VALIDATION_14BUS, "goc3-json")
-        .expect("build the GOCompetition 14 bus validation instance")
-}
-
 /// The contingency count a client needs to size a per contingency array. It
 /// must agree with the survivor groups the same instance carries.
 #[test]
@@ -503,58 +496,71 @@ fn interleaved_device_classes_are_reported() {
     );
 }
 
-/// GOCompetition's own validation case. Its uids are names, so the digits in
-/// them are bus numbers and two devices at one bus collide on the same number.
-/// Document order is the only rule that addresses every row.
+/// Names can contain bus and unit numbers that collide across device classes.
+/// They never define an ordinal; document order does. This synthetic mutation
+/// also keeps coverage for the optional fields the removed unlicensed
+/// validation fixture exercised.
 #[test]
-fn the_validation_case_indexes_every_row_in_document_order() {
-    let instance = validation_instance();
+fn named_uid_digits_do_not_define_document_ordinals() {
+    let mut doc: Value = serde_json::from_str(SMALL).expect("fixture json");
+    let devices = doc["network"]["simple_dispatchable_device"]
+        .as_array_mut()
+        .expect("device array");
+    let mut third = devices[0].clone();
+    third["uid"] = Value::from("Generator Bus 7 #2");
+    devices[0]["uid"] = Value::from("Generator Bus 7 #1");
+    devices[1]["uid"] = Value::from("Load Bus 7 #1");
+    devices[0]["q_bound_cap"] = Value::from(1);
+    devices[0]["beta_ub"] = Value::from(0.5);
+    devices[0]["beta_lb"] = Value::from(-0.5);
+    devices[0]["q_0_ub"] = Value::from(2.0);
+    devices[0]["q_0_lb"] = Value::from(-2.0);
+    devices.push(third);
+
+    let time_series = doc["time_series_input"]["simple_dispatchable_device"]
+        .as_array_mut()
+        .expect("device time series");
+    let mut third_series = time_series[0].clone();
+    third_series["uid"] = Value::from("Generator Bus 7 #2");
+    time_series[0]["uid"] = Value::from("Generator Bus 7 #1");
+    time_series[1]["uid"] = Value::from("Load Bus 7 #1");
+    time_series.push(third_series);
+
+    doc["network"]["shunt"][0]["uid"] = Value::from("Shunt Bus 6");
+    doc["network"]["violation_cost"]
+        .as_object_mut()
+        .expect("violation cost object")
+        .remove("e_vio_cost");
+
+    let text = serde_json::to_string(&doc).expect("serialize");
+    let instance = parse_scopf_str(&text, "goc3-json").expect("build named UID case");
     let data = &instance.static_data;
 
-    assert_eq!(instance.lengths.l_j_cspr, 17);
-    assert_eq!(data.prod.len() + data.cons.len(), 17);
-    assert_eq!(instance.lengths.l_j_ln, 17);
-    assert_eq!(instance.lengths.l_j_xf, 3);
-    assert_eq!(instance.lengths.l_j_sh, 1);
-    assert_eq!(instance.lengths.i, 14);
-
-    // The single shunt is "Shunt Bus 6". Its per class index is 0, its
-    // position, not the 6 in its name.
-    assert_eq!(data.shunt[0].uid, "Shunt Bus 6");
-    assert_eq!(data.shunt[0].j_sh, 0);
-
-    for (position, row) in data.acl_branch.iter().enumerate() {
-        assert_eq!(row.j_ln, position);
-    }
-    for (position, row) in data.acx_branch.iter().enumerate() {
-        assert_eq!(row.j_xf, position);
-    }
-
-    // This case omits one violation price, and declares a capability mode its
-    // official counterparts do not.
-    assert_eq!(instance.violation_cost.e, None);
-    assert!(instance.violation_cost.p_bus.is_some());
-    assert!(
+    assert_eq!(
         data.prod
             .iter()
-            .chain(&data.cons)
-            .any(|row| row.q_bound_cap == 1),
-        "the validation case declares the bound cap mode"
+            .map(|row| row.uid.as_str())
+            .collect::<Vec<_>>(),
+        ["Generator Bus 7 #1", "Generator Bus 7 #2"]
     );
-    for row in data.prod.iter().chain(&data.cons) {
-        assert!(row.q_bound_cap == 0 || row.q_linear_cap == 0);
-        if row.q_bound_cap == 1 {
-            assert!(row.beta_ub.is_some() && row.q_0_lb.is_some());
-        } else {
-            assert_eq!(row.beta_ub, None);
-        }
-    }
-
+    assert_eq!(data.cons[0].uid, "Load Bus 7 #1");
+    assert_eq!(
+        (data.shunt[0].uid.as_str(), data.shunt[0].j_sh),
+        ("Shunt Bus 6", 0)
+    );
+    assert_eq!(
+        data.acl_branch
+            .iter()
+            .map(|row| row.j_ln)
+            .collect::<Vec<_>>(),
+        [0, 1]
+    );
+    assert_eq!(instance.violation_cost.e, None);
+    assert_eq!(data.prod[0].q_bound_cap, 1);
+    assert_eq!(data.prod[0].beta_ub, Some(0.5));
     assert_eq!(
         instance.device_class_layout,
-        ScopfDeviceClassLayout::Contiguous {
-            producers_first: true
-        }
+        ScopfDeviceClassLayout::Interleaved
     );
 }
 
