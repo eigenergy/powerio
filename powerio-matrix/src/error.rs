@@ -44,13 +44,8 @@ pub enum Error {
     #[error("invalid DC sensitivity option: {reason}")]
     InvalidSensitivityOptions { reason: String },
 
-    #[error(
-        "DC sensitivity iterative solve did not converge after {iterations} iterations (relative residual {relative_residual:.3e})"
-    )]
-    SensitivitySolveDidNotConverge {
-        iterations: usize,
-        relative_residual: f64,
-    },
+    #[error("DC sensitivity sparse factorization failed: {reason}")]
+    SensitivityFactorizationFailed { reason: String },
 
     #[error("matrix-market I/O: {0}")]
     Mtx(String),
@@ -112,8 +107,8 @@ impl Error {
             }
             Error::SingularNetwork => &codes::BUILD_SENSITIVITY_SINGULAR,
             Error::InvalidSensitivityOptions { .. } => &codes::BUILD_SENSITIVITY_INVALID_OPTION,
-            Error::SensitivitySolveDidNotConverge { .. } => {
-                &codes::BUILD_SENSITIVITY_NO_CONVERGENCE
+            Error::SensitivityFactorizationFailed { .. } => {
+                &codes::BUILD_SENSITIVITY_FACTORIZATION_FAILED
             }
             Error::EmptyScenarioBatch => &codes::BUILD_GRIDFM_EMPTY_BATCH,
             Error::ScenarioIdOverflow { .. } => &codes::BUILD_GRIDFM_SCENARIO_ID_OVERFLOW,
@@ -140,7 +135,7 @@ impl Error {
             | Error::ShapeMismatch { .. }
             | Error::SingularNetwork
             | Error::InvalidSensitivityOptions { .. }
-            | Error::SensitivitySolveDidNotConverge { .. }
+            | Error::SensitivityFactorizationFailed { .. }
             | Error::EmptyScenarioBatch
             | Error::ScenarioIdOverflow { .. }
             | Error::NormalizedGridfmSnapshot { .. }
@@ -237,9 +232,8 @@ mod tests {
             Error::InvalidSensitivityOptions {
                 reason: "tol".into(),
             },
-            Error::SensitivitySolveDidNotConverge {
-                iterations: 10,
-                relative_residual: 1.0,
+            Error::SensitivityFactorizationFailed {
+                reason: "allocation".into(),
             },
             Error::EmptyScenarioBatch,
             Error::ScenarioIdOverflow { base: 1, index: 0 },

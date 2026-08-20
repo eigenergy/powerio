@@ -195,12 +195,18 @@ records. Upgrade if you write text formats from names you do not control.
   extract|apply` read and classify a `.json` once instead of twice. The
   distribution reader's own document rule still applies on that path, so
   a JSON that is not a distribution case is refused as before.
-- Python `Network.ptdf()` / `lodf()` route through the auto sensitivity
-  solver (dense below the reduced-dimension threshold, iterative
-  conjugate gradient above it), matching the CLI `sensitivities`
-  command. Both take `solver="auto"|"dense"|"iterative"`. On a case above
-  the threshold results move from exact-dense to iterative-CG at a 1e-10
-  relative residual (#273).
+- DC sensitivities factor the grounded Laplacian once on the sparse path and
+  reuse its AMD-ordered Cholesky factors for batched PTDF and non-bridge LODF
+  right hand sides (#291). `SensitivitySolver::Sparse`, CLI/Python `sparse`,
+  and metadata path `sparse_cholesky` replace the iterative/CG names and the CG
+  tolerance and iteration fields are removed. `SensitivitySolveDidNotConverge`
+  is removed and its diagnostic code retired; allocation or index failures use
+  `SensitivityFactorizationFailed`. `Auto` remains dense through a
+  reduced dimension of 8192 while the predicted dense footprint is at most
+  2 GiB, then selects sparse. The sparse path requires positive finite branch
+  susceptances; dense remains available for nonsingular indefinite cases.
+  Results can differ in the last bits, so an entry at `drop_tolerance` can move
+  across the pruning boundary.
 
 ## 0.8.0
 

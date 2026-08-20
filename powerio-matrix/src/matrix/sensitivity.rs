@@ -6,9 +6,9 @@
 //! `ABA = ground_with(L, refs)`: one row/column removed per reference bus. The
 //! default public builders keep the dense Cholesky path, with dense Gaussian
 //! elimination as the nonsingular indefinite fallback. Option based builders can
-//! choose an iterative path that solves one grounded right hand side at a time
-//! and writes directly into sparse output. Disconnected networks with one
-//! reference per island are supported.
+//! choose an AMD-ordered sparse Cholesky path that factors the grounded matrix
+//! once and solves reusable batches of right hand sides. Disconnected networks
+//! with one reference per island are supported.
 //! Several references in one island are fixed angle buses; this is not a
 //! participation factor based distributed slack model.
 
@@ -16,6 +16,14 @@
 // sparse traversal read clearer than the iterator rewrites clippy suggests.
 #![allow(clippy::needless_range_loop, clippy::explicit_iter_loop)]
 
+use faer::dyn_stack::{MemBuffer, MemStack};
+use faer::linalg::cholesky::llt::factor::LltRegularization;
+use faer::sparse::linalg::cholesky::{
+    CholeskySymbolicParams, LltRef, SymbolicCholesky, SymmetricOrdering,
+    factorize_symbolic_cholesky,
+};
+use faer::sparse::{FaerError, SparseColMatRef, SymbolicSparseColMatRef};
+use faer::{Conj, MatMut, Par, Side, Spec};
 use sprs::CsMat;
 
 use crate::indexed::IndexedNetwork;
@@ -27,15 +35,13 @@ use crate::{Error, Result};
 
 /// Entries below this magnitude are dropped from the emitted sparse matrices.
 const PRUNE: f64 = 1e-12;
-const DEFAULT_CG_TOLERANCE: f64 = 1e-10;
-const DEFAULT_CG_MAX_ITERATIONS: usize = 20_000;
-/// Reduced-dimension ceiling for the `Auto` dense path. The old value of 512
-/// was far below the real crossover: at nr = 600 the dense path is a ~7e7
-/// flop factorization while the iterative path runs ~1200 conjugate-gradient
-/// solves, so `Auto` picked the slower solver by one to three orders of
-/// magnitude across the whole range that holds the common published cases
-/// (1354, 2869, 3120, 6470 buses).
+/// Reduced-dimension ceiling for the `Auto` dense oracle path. Kept at the
+/// policy established in #295; the separate footprint guard prevents a wide
+/// problem from selecting dense output allocations through this dimension
+/// check alone.
 const DEFAULT_AUTO_DENSE_THRESHOLD: usize = 8192;
+const MAX_RHS_BATCH_COLUMNS: usize = 32;
+const RHS_BATCH_MEMORY_BUDGET: usize = 8 << 20;
 
 /// Memory ceiling for the `Auto` dense path. The dimension alone does not
 /// bound the cost: the dense path also materializes an m x n PTDF and an
@@ -61,13 +67,13 @@ const LODF_ISLAND_TOLERANCE: f64 = 1e-9;
 #[serde(rename_all = "snake_case")]
 #[non_exhaustive]
 pub enum SensitivitySolver {
-    /// Dense below [`SensitivityOptions::auto_dense_threshold`], iterative above it.
+    /// Dense below [`SensitivityOptions::auto_dense_threshold`], sparse above it.
     #[default]
     Auto,
     /// Dense grounded inverse. This is the historical builder path.
     Dense,
-    /// Preconditioned conjugate gradient, one right hand side at a time.
-    Iterative,
+    /// AMD-ordered sparse Cholesky with reusable batched solves.
+    Sparse,
 }
 
 /// Solver path actually used for a sensitivity build.
@@ -77,7 +83,7 @@ pub enum SensitivitySolver {
 pub enum SensitivitySolverPath {
     DenseCholesky,
     DenseInverse,
-    IterativeCg,
+    SparseCholesky,
 }
 
 impl SensitivitySolverPath {
@@ -86,7 +92,7 @@ impl SensitivitySolverPath {
         match self {
             Self::DenseCholesky => "dense_cholesky",
             Self::DenseInverse => "dense_inverse",
-            Self::IterativeCg => "iterative_cg",
+            Self::SparseCholesky => "sparse_cholesky",
         }
     }
 }
@@ -101,12 +107,8 @@ pub struct SensitivityOptions {
     /// Entries with absolute value at or below this value are omitted from the
     /// returned sparse matrices. LODF diagonal entries are structural and kept.
     pub drop_tolerance: f64,
-    /// Relative residual tolerance for the iterative solver.
-    pub cg_tolerance: f64,
-    /// Maximum conjugate gradient iterations per right hand side.
-    pub cg_max_iterations: usize,
     /// Reduced dimension above which [`SensitivitySolver::Auto`] selects the
-    /// iterative path.
+    /// sparse path.
     pub auto_dense_threshold: usize,
 }
 
@@ -116,8 +118,6 @@ impl Default for SensitivityOptions {
             convention: DcConvention::default(),
             solver: SensitivitySolver::Auto,
             drop_tolerance: PRUNE,
-            cg_tolerance: DEFAULT_CG_TOLERANCE,
-            cg_max_iterations: DEFAULT_CG_MAX_ITERATIONS,
             auto_dense_threshold: DEFAULT_AUTO_DENSE_THRESHOLD,
         }
     }
@@ -131,19 +131,6 @@ impl SensitivityOptions {
                     "drop_tolerance must be finite and nonnegative, got {}",
                     self.drop_tolerance
                 ),
-            });
-        }
-        if !self.cg_tolerance.is_finite() || self.cg_tolerance <= 0.0 {
-            return Err(Error::InvalidSensitivityOptions {
-                reason: format!(
-                    "cg_tolerance must be finite and positive, got {}",
-                    self.cg_tolerance
-                ),
-            });
-        }
-        if self.cg_max_iterations == 0 {
-            return Err(Error::InvalidSensitivityOptions {
-                reason: "cg_max_iterations must be positive".into(),
             });
         }
         Ok(())
@@ -178,7 +165,7 @@ impl SensitivityOptions {
                 if fits {
                     SensitivitySolver::Dense
                 } else {
-                    SensitivitySolver::Iterative
+                    SensitivitySolver::Sparse
                 }
             }
             other => other,
@@ -200,8 +187,6 @@ pub struct SensitivityMetadata {
     pub requested_solver: SensitivitySolver,
     pub solver_path: SensitivitySolverPath,
     pub drop_tolerance: f64,
-    pub cg_tolerance: Option<f64>,
-    pub cg_max_iterations: Option<usize>,
     pub auto_dense_threshold: usize,
     pub reduced_dimension: usize,
     pub ptdf: SensitivityMatrixMetadata,
@@ -280,14 +265,12 @@ pub fn build_ptdf_lodf_with_options(
                 lodf_from_dense_with_drop(&dense, &inc.a, m, n, options.drop_tolerance);
             (ptdf, lodf, solver_path, ptdf_dropped, lodf_dropped)
         }
-        SensitivitySolver::Iterative => {
-            ensure_iterative_solver_eligible(&inc)?;
-            let (ptdf, ptdf_dropped, lodf, lodf_dropped) =
-                iterative_ptdf_lodf(&inc, &refs, options)?;
+        SensitivitySolver::Sparse => {
+            let (ptdf, ptdf_dropped, lodf, lodf_dropped) = sparse_ptdf_lodf(&inc, &refs, options)?;
             (
                 ptdf,
                 lodf,
-                SensitivitySolverPath::IterativeCg,
+                SensitivitySolverPath::SparseCholesky,
                 ptdf_dropped,
                 lodf_dropped,
             )
@@ -340,11 +323,10 @@ pub(crate) fn for_each_ptdf_lodf_entry(
                 }
                 (solver_path, ptdf_meta, lodf_meta)
             }
-            SensitivitySolver::Iterative => {
-                ensure_iterative_solver_eligible(&inc)?;
+            SensitivitySolver::Sparse => {
                 let (ptdf, lodf) =
-                    iterative_ptdf_lodf_entries(&inc, &refs, options, ptdf_entry, lodf_entry)?;
-                (SensitivitySolverPath::IterativeCg, ptdf, lodf)
+                    sparse_ptdf_lodf_entries(&inc, &refs, options, ptdf_entry, lodf_entry)?;
+                (SensitivitySolverPath::SparseCholesky, ptdf, lodf)
             }
             SensitivitySolver::Auto => {
                 unreachable!("selected_solver_for_reduced_dimension resolves Auto")
@@ -371,10 +353,6 @@ fn sensitivity_metadata(
         requested_solver: options.solver,
         solver_path,
         drop_tolerance: options.drop_tolerance,
-        cg_tolerance: matches!(solver_path, SensitivitySolverPath::IterativeCg)
-            .then_some(options.cg_tolerance),
-        cg_max_iterations: matches!(solver_path, SensitivitySolverPath::IterativeCg)
-            .then_some(options.cg_max_iterations),
         auto_dense_threshold: options.auto_dense_threshold,
         reduced_dimension,
         ptdf,
@@ -490,15 +468,14 @@ fn ptdf_dense_with_path(
     Ok((ptdf, m, n, solver_path))
 }
 
-fn iterative_ptdf_lodf(
+fn sparse_ptdf_lodf(
     inc: &IncidenceParts,
     refs: &[usize],
     options: &SensitivityOptions,
 ) -> Result<(CsMat<f64>, usize, CsMat<f64>, usize)> {
-    ensure_iterative_solver_eligible(inc)?;
     let mut ptdf = CooBuilder::new_rect(inc.m(), inc.n());
     let mut lodf = CooBuilder::new(inc.m());
-    let (ptdf_meta, lodf_meta) = iterative_ptdf_lodf_entries(
+    let (ptdf_meta, lodf_meta) = sparse_ptdf_lodf_entries(
         inc,
         refs,
         options,
@@ -519,38 +496,51 @@ fn iterative_ptdf_lodf(
     ))
 }
 
-fn iterative_ptdf_lodf_entries(
+fn sparse_ptdf_lodf_entries(
     inc: &IncidenceParts,
     refs: &[usize],
     options: &SensitivityOptions,
     mut ptdf_entry: impl FnMut(usize, usize, f64) -> Result<()>,
     mut lodf_entry: impl FnMut(usize, usize, f64) -> Result<()>,
 ) -> Result<(SensitivityMatrixMetadata, SensitivityMatrixMetadata)> {
+    ensure_sparse_solver_eligible(inc)?;
     let n = inc.n();
     let m = inc.m();
     let g = Grounding::new(refs);
     let nr = n - g.len();
     let lr = ground_with(&build_weighted_laplacian(&inc.a, &inc.b), &g);
-    let solver = CgSolver::new(&lr, options.cg_tolerance, options.cg_max_iterations)?;
+    let batch_width = rhs_batch_width(nr);
+    let mut solver = SparseCholeskyFactor::factor(&lr, batch_width)?;
     let (from, to) = endpoints(&inc.a, m);
 
-    let mut rhs = vec![0.0; nr];
+    let rhs_len = nr
+        .checked_mul(batch_width)
+        .ok_or_else(|| sensitivity_factorization_failed("RHS batch dimensions overflow usize"))?;
+    let mut rhs = try_zeroed_rhs(rhs_len)?;
     let mut ptdf_nnz = 0usize;
     let mut ptdf_dropped = 0usize;
-    for bus in 0..n {
-        let Some(rb) = g.reduced(bus) else {
-            continue;
-        };
+    let full_of_reduced = g.full_of_reduced(n);
+    for buses in full_of_reduced.chunks(batch_width) {
+        let used = buses.len();
+        let rhs = &mut rhs[..nr * used];
         rhs.fill(0.0);
-        rhs[rb] = 1.0;
-        let theta = solver.solve(&rhs)?;
-        for branch in 0..m {
-            let v = branch_flow(branch, &from, &to, &inc.b, &g, &theta);
-            if v.abs() > options.drop_tolerance {
-                ptdf_entry(branch, bus, v)?;
-                ptdf_nnz += 1;
-            } else if v != 0.0 {
-                ptdf_dropped += 1;
+        for (column, &bus) in buses.iter().enumerate() {
+            let rb = g
+                .reduced(bus)
+                .expect("full_of_reduced contains only ungrounded buses");
+            rhs[column * nr + rb] = 1.0;
+        }
+        solver.solve_batch(rhs, used)?;
+        for (column, &bus) in buses.iter().enumerate() {
+            let theta = &rhs[column * nr..(column + 1) * nr];
+            for branch in 0..m {
+                let v = branch_flow(branch, &from, &to, &inc.b, &g, theta);
+                if v.abs() > options.drop_tolerance {
+                    ptdf_entry(branch, bus, v)?;
+                    ptdf_nnz += 1;
+                } else if v != 0.0 {
+                    ptdf_dropped += 1;
+                }
             }
         }
     }
@@ -561,72 +551,263 @@ fn iterative_ptdf_lodf_entries(
 
     let mut lodf_nnz = 0usize;
     let mut lodf_dropped = 0usize;
-    for outage in 0..m {
-        // Its column is the diagonal alone, so neither the solve that would
-        // have produced the rest nor the scan that would emit it runs: every
-        // other entry is an exact zero, which is neither above the drop
-        // tolerance nor counted as dropped. Every branch of a radial feeder is
-        // a bridge, which is every solve here.
-        if is_bridge[outage] {
-            lodf_entry(outage, outage, -1.0)?;
-            lodf_nnz += 1;
-            continue;
+    for first_outage in (0..m).step_by(batch_width) {
+        let last_outage = first_outage.saturating_add(batch_width).min(m);
+        let mut solved_columns = 0usize;
+        rhs[..nr * (last_outage - first_outage)].fill(0.0);
+        for outage in first_outage..last_outage {
+            if is_bridge[outage] {
+                continue;
+            }
+            let offset = solved_columns * nr;
+            if let Some(rf) = g.reduced(from[outage]) {
+                rhs[offset + rf] += 1.0;
+            }
+            if let Some(rt) = g.reduced(to[outage]) {
+                rhs[offset + rt] -= 1.0;
+            }
+            solved_columns += 1;
         }
-        rhs.fill(0.0);
-        if let Some(rf) = g.reduced(from[outage]) {
-            rhs[rf] += 1.0;
+        if solved_columns != 0 {
+            solver.solve_batch(&mut rhs[..nr * solved_columns], solved_columns)?;
         }
-        if let Some(rt) = g.reduced(to[outage]) {
-            rhs[rt] -= 1.0;
-        }
-        let theta = solver.solve(&rhs)?;
-        let denom = 1.0 - branch_flow(outage, &from, &to, &inc.b, &g, &theta);
-        let islands = denom.abs() < LODF_ISLAND_TOLERANCE;
-        for branch in 0..m {
-            let v = if branch == outage {
-                -1.0
-            } else if islands {
-                0.0
-            } else {
-                branch_flow(branch, &from, &to, &inc.b, &g, &theta) / denom
-            };
-            if branch == outage || v.abs() > options.drop_tolerance {
-                lodf_entry(branch, outage, v)?;
+
+        let mut solved_column = 0usize;
+        for outage in first_outage..last_outage {
+            // A bridge column is the diagonal alone, so it consumes neither a
+            // right hand side nor solve work. Emitting it here preserves the
+            // same outage-major callback order as every other column.
+            if is_bridge[outage] {
+                lodf_entry(outage, outage, -1.0)?;
                 lodf_nnz += 1;
-            } else if v != 0.0 {
-                lodf_dropped += 1;
+                continue;
+            }
+            let theta = &rhs[solved_column * nr..(solved_column + 1) * nr];
+            solved_column += 1;
+            let denom = 1.0 - branch_flow(outage, &from, &to, &inc.b, &g, theta);
+            let islands = denom.abs() < LODF_ISLAND_TOLERANCE;
+            for branch in 0..m {
+                let v = if branch == outage {
+                    -1.0
+                } else if islands {
+                    0.0
+                } else {
+                    branch_flow(branch, &from, &to, &inc.b, &g, theta) / denom
+                };
+                if branch == outage || v.abs() > options.drop_tolerance {
+                    lodf_entry(branch, outage, v)?;
+                    lodf_nnz += 1;
+                } else if v != 0.0 {
+                    lodf_dropped += 1;
+                }
             }
         }
     }
 
-    Ok((
+    Ok(metadata_from_counts(
+        m,
+        n,
+        ptdf_nnz,
+        ptdf_dropped,
+        lodf_nnz,
+        lodf_dropped,
+    ))
+}
+
+fn metadata_from_counts(
+    branches: usize,
+    buses: usize,
+    ptdf_nnz: usize,
+    ptdf_dropped: usize,
+    lodf_nnz: usize,
+    lodf_dropped: usize,
+) -> (SensitivityMatrixMetadata, SensitivityMatrixMetadata) {
+    (
         SensitivityMatrixMetadata {
-            rows: m,
-            cols: n,
+            rows: branches,
+            cols: buses,
             nnz: ptdf_nnz,
             dropped_entries: ptdf_dropped,
         },
         SensitivityMatrixMetadata {
-            rows: m,
-            cols: m,
+            rows: branches,
+            cols: branches,
             nnz: lodf_nnz,
             dropped_entries: lodf_dropped,
         },
-    ))
+    )
 }
 
-fn ensure_iterative_solver_eligible(inc: &IncidenceParts) -> Result<()> {
+fn ensure_sparse_solver_eligible(inc: &IncidenceParts) -> Result<()> {
     for (branch, &b) in inc.b.iter().enumerate() {
         if !b.is_finite() || b <= 0.0 {
             return Err(Error::InvalidSensitivityOptions {
                 reason: format!(
-                    "iterative sensitivity solver requires positive finite branch susceptances; \
+                    "sparse sensitivity solver requires positive finite branch susceptances; \
                      branch {branch} has {b}; use solver=dense for nonsingular indefinite cases"
                 ),
             });
         }
     }
     Ok(())
+}
+
+fn rhs_batch_width(reduced_dimension: usize) -> usize {
+    if reduced_dimension == 0 {
+        return MAX_RHS_BATCH_COLUMNS;
+    }
+    let bytes_per_column = reduced_dimension.saturating_mul(size_of::<f64>());
+    (RHS_BATCH_MEMORY_BUDGET / bytes_per_column).clamp(1, MAX_RHS_BATCH_COLUMNS)
+}
+
+fn try_zeroed_rhs(len: usize) -> Result<Vec<f64>> {
+    let mut rhs = Vec::new();
+    rhs.try_reserve_exact(len).map_err(|_| {
+        sensitivity_factorization_failed("allocating the reusable RHS batch failed")
+    })?;
+    rhs.resize(len, 0.0);
+    Ok(rhs)
+}
+
+fn sensitivity_factorization_failed(reason: impl Into<String>) -> Error {
+    Error::SensitivityFactorizationFailed {
+        reason: reason.into(),
+    }
+}
+
+fn map_faer_error(stage: &str, error: FaerError) -> Error {
+    sensitivity_factorization_failed(format!("{stage}: {error}"))
+}
+
+/// One AMD symbolic analysis and numeric sparse `LL^T`, plus the workspace
+/// reused for every solve batch. A zero-dimensional factor is represented
+/// without calling into the sparse factorization library.
+struct SparseCholeskyFactor {
+    dimension: usize,
+    max_rhs_columns: usize,
+    symbolic: Option<SymbolicCholesky<usize>>,
+    values: Vec<f64>,
+    solve_scratch: Option<MemBuffer>,
+}
+
+impl SparseCholeskyFactor {
+    fn factor(a: &CsMat<f64>, max_rhs_columns: usize) -> Result<Self> {
+        let dimension = a.rows();
+        if a.cols() != dimension {
+            return Err(Error::ShapeMismatch {
+                what: "grounded DC bus susceptance matrix columns",
+                expected: dimension,
+                got: a.cols(),
+            });
+        }
+        if dimension == 0 {
+            return Ok(Self {
+                dimension,
+                max_rhs_columns,
+                symbolic: None,
+                values: Vec::new(),
+                solve_scratch: None,
+            });
+        }
+
+        // `a` is CSR. Its transpose view is CSC over the same three slices,
+        // with no triplet rebuild or numeric copy. The grounded Laplacian is
+        // exactly symmetric, so the view describes the same operator.
+        let a_csc = a.transpose_view();
+        let indptr = a_csc.indptr();
+        let symbolic_a = SymbolicSparseColMatRef::new_checked(
+            dimension,
+            dimension,
+            indptr.raw_storage(),
+            None,
+            a_csc.indices(),
+        );
+        let numeric_a = SparseColMatRef::new(symbolic_a, a_csc.data());
+        let symbolic = factorize_symbolic_cholesky(
+            symbolic_a,
+            Side::Upper,
+            SymmetricOrdering::Amd,
+            CholeskySymbolicParams::default(),
+        )
+        .map_err(|error| map_faer_error("sparse symbolic analysis failed", error))?;
+
+        let mut values = Vec::new();
+        values.try_reserve_exact(symbolic.len_val()).map_err(|_| {
+            map_faer_error(
+                "allocating sparse numeric factors failed",
+                FaerError::OutOfMemory,
+            )
+        })?;
+        values.resize(symbolic.len_val(), 0.0);
+
+        let factor_req = symbolic.factorize_numeric_llt_scratch::<f64>(Par::Seq, Spec::default());
+        let mut factor_scratch = MemBuffer::try_new(factor_req).map_err(|_| {
+            map_faer_error(
+                "allocating sparse factorization workspace failed",
+                FaerError::OutOfMemory,
+            )
+        })?;
+        symbolic
+            .factorize_numeric_llt(
+                &mut values,
+                numeric_a,
+                Side::Upper,
+                LltRegularization::default(),
+                Par::Seq,
+                MemStack::new(&mut factor_scratch),
+                Spec::default(),
+            )
+            .map_err(|_| Error::SingularNetwork)?;
+
+        let solve_req = symbolic.solve_in_place_scratch::<f64>(max_rhs_columns, Par::Seq);
+        let solve_scratch = MemBuffer::try_new(solve_req).map_err(|_| {
+            map_faer_error(
+                "allocating sparse solve workspace failed",
+                FaerError::OutOfMemory,
+            )
+        })?;
+        Ok(Self {
+            dimension,
+            max_rhs_columns,
+            symbolic: Some(symbolic),
+            values,
+            solve_scratch: Some(solve_scratch),
+        })
+    }
+
+    fn solve_batch(&mut self, rhs: &mut [f64], columns: usize) -> Result<()> {
+        if columns > self.max_rhs_columns {
+            return Err(Error::ShapeMismatch {
+                what: "sparse sensitivity RHS batch columns",
+                expected: self.max_rhs_columns,
+                got: columns,
+            });
+        }
+        let expected = self.dimension.checked_mul(columns).ok_or_else(|| {
+            sensitivity_factorization_failed("RHS batch dimensions overflow usize")
+        })?;
+        if rhs.len() != expected {
+            return Err(Error::DimensionMismatch {
+                n: expected,
+                b_len: rhs.len(),
+            });
+        }
+        let Some(symbolic) = &self.symbolic else {
+            return Ok(());
+        };
+        let matrix = MatMut::from_column_major_slice_mut(rhs, self.dimension, columns);
+        LltRef::new(symbolic, &self.values).solve_in_place_with_conj(
+            Conj::No,
+            matrix,
+            Par::Seq,
+            MemStack::new(
+                self.solve_scratch
+                    .as_mut()
+                    .expect("nonempty sparse factor has solve workspace"),
+            ),
+        );
+        Ok(())
+    }
 }
 
 fn branch_flow(
@@ -851,125 +1032,6 @@ fn swap_dense_rows(a: &mut [f64], n: usize, r1: usize, r2: usize) {
     }
 }
 
-struct CgSolver<'a> {
-    a: &'a CsMat<f64>,
-    diag: Vec<f64>,
-    tolerance: f64,
-    max_iterations: usize,
-}
-
-impl<'a> CgSolver<'a> {
-    fn new(a: &'a CsMat<f64>, tolerance: f64, max_iterations: usize) -> Result<Self> {
-        let n = a.rows();
-        if a.cols() != n {
-            return Err(Error::ShapeMismatch {
-                what: "grounded DC bus susceptance matrix columns",
-                expected: n,
-                got: a.cols(),
-            });
-        }
-        let mut diag = vec![0.0; n];
-        for (i, slot) in diag.iter_mut().enumerate() {
-            *slot = a.get(i, i).copied().unwrap_or(0.0);
-            if !slot.is_finite() || *slot <= 0.0 {
-                return Err(Error::SingularNetwork);
-            }
-        }
-        Ok(Self {
-            a,
-            diag,
-            tolerance,
-            max_iterations,
-        })
-    }
-
-    fn solve(&self, rhs: &[f64]) -> Result<Vec<f64>> {
-        let n = self.a.rows();
-        if rhs.len() != n {
-            return Err(Error::DimensionMismatch {
-                n,
-                b_len: rhs.len(),
-            });
-        }
-        if n == 0 {
-            return Ok(Vec::new());
-        }
-
-        let rhs_norm = norm2(rhs);
-        if rhs_norm == 0.0 {
-            return Ok(vec![0.0; n]);
-        }
-        let target = self.tolerance * rhs_norm;
-        let mut solution = vec![0.0; n];
-        let mut residual_vec = rhs.to_vec();
-        let mut preconditioned = self.precondition(&residual_vec);
-        let mut direction = preconditioned.clone();
-        let mut residual_dot = dot(&residual_vec, &preconditioned);
-        if !residual_dot.is_finite() || residual_dot <= 0.0 {
-            return Err(Error::SingularNetwork);
-        }
-        let mut matvec_out = vec![0.0; n];
-
-        for iter in 1..=self.max_iterations {
-            matvec(self.a, &direction, &mut matvec_out);
-            let denom = dot(&direction, &matvec_out);
-            if !denom.is_finite() || denom <= 0.0 {
-                return Err(Error::SingularNetwork);
-            }
-            let alpha = residual_dot / denom;
-            for i in 0..n {
-                solution[i] += alpha * direction[i];
-                residual_vec[i] -= alpha * matvec_out[i];
-            }
-            let residual = norm2(&residual_vec);
-            if residual <= target {
-                return Ok(solution);
-            }
-            preconditioned = self.precondition(&residual_vec);
-            let next_residual_dot = dot(&residual_vec, &preconditioned);
-            if !next_residual_dot.is_finite() || next_residual_dot <= 0.0 {
-                return Err(Error::SingularNetwork);
-            }
-            let beta = next_residual_dot / residual_dot;
-            for i in 0..n {
-                direction[i] = preconditioned[i] + beta * direction[i];
-            }
-            residual_dot = next_residual_dot;
-
-            if iter == self.max_iterations {
-                return Err(Error::SensitivitySolveDidNotConverge {
-                    iterations: iter,
-                    relative_residual: residual / rhs_norm,
-                });
-            }
-        }
-        unreachable!("positive max_iterations loop returns")
-    }
-
-    fn precondition(&self, r: &[f64]) -> Vec<f64> {
-        r.iter().zip(&self.diag).map(|(&ri, &di)| ri / di).collect()
-    }
-}
-
-fn matvec(a: &CsMat<f64>, x: &[f64], out: &mut [f64]) {
-    out.fill(0.0);
-    for (i, row) in a.outer_iterator().enumerate() {
-        let mut sum = 0.0;
-        for (j, &v) in row.iter() {
-            sum += v * x[j];
-        }
-        out[i] = sum;
-    }
-}
-
-fn dot(a: &[f64], b: &[f64]) -> f64 {
-    a.iter().zip(b).map(|(&x, &y)| x * y).sum()
-}
-
-fn norm2(a: &[f64]) -> f64 {
-    dot(a, a).sqrt()
-}
-
 /// Dense lower-triangular Cholesky `A = L Lᵀ` for a small SPD matrix.
 struct DenseCholesky {
     n: usize,
@@ -1141,6 +1203,45 @@ mod pivot_tests {
 }
 
 #[cfg(test)]
+mod sparse_factor_tests {
+    use faer::sparse::FaerError;
+    use sprs::CsMat;
+
+    use super::{SparseCholeskyFactor, map_faer_error, rhs_batch_width};
+    use crate::Error;
+
+    #[test]
+    fn allocation_and_index_failures_keep_the_factorization_identity() {
+        for failure in [FaerError::OutOfMemory, FaerError::IndexOverflow] {
+            let error = map_faer_error("symbolic analysis", failure);
+            match error {
+                Error::SensitivityFactorizationFailed { reason } => {
+                    assert!(reason.contains("symbolic analysis"));
+                    assert!(reason.contains(&failure.to_string()));
+                }
+                other => panic!("unexpected error: {other}"),
+            }
+        }
+    }
+
+    #[test]
+    fn a_non_positive_sparse_pivot_is_singular() {
+        let matrix = CsMat::new((1, 1), vec![0, 1], vec![0], vec![-1.0]);
+        assert!(matches!(
+            SparseCholeskyFactor::factor(&matrix, 1),
+            Err(Error::SingularNetwork)
+        ));
+    }
+
+    #[test]
+    fn rhs_batches_respect_the_column_and_memory_caps() {
+        assert_eq!(rhs_batch_width(1), 32);
+        assert_eq!(rhs_batch_width(usize::MAX), 1);
+        assert_eq!(rhs_batch_width((8 << 20) / size_of::<f64>()), 1);
+    }
+}
+
+#[cfg(test)]
 mod auto_policy_tests {
     use super::{
         AUTO_DENSE_MEMORY_BUDGET, SensitivityOptions, SensitivitySolver, dense_footprint_bytes,
@@ -1148,9 +1249,8 @@ mod auto_policy_tests {
 
     #[test]
     fn auto_takes_the_dense_path_for_a_mid_size_case() {
-        // 2869 buses is a common published case, far inside the dense path's
-        // real crossover; the old 512 ceiling sent it to the iterative
-        // solver, one to three orders of magnitude slower in this range.
+        // 2869 buses is a common published case inside the compatibility
+        // policy's dense range.
         let o = SensitivityOptions::default();
         assert_eq!(
             o.selected_solver_for_shape(2868, 4582, 2869),
@@ -1169,13 +1269,13 @@ mod auto_policy_tests {
         assert!(dense_footprint_bytes(nr, m, n) > AUTO_DENSE_MEMORY_BUDGET);
         assert_eq!(
             o.selected_solver_for_shape(nr, m, n),
-            SensitivitySolver::Iterative
+            SensitivitySolver::Sparse
         );
     }
 
     #[test]
     fn an_explicit_solver_choice_ignores_both_ceilings() {
-        for solver in [SensitivitySolver::Dense, SensitivitySolver::Iterative] {
+        for solver in [SensitivitySolver::Dense, SensitivitySolver::Sparse] {
             let o = SensitivityOptions {
                 solver,
                 ..SensitivityOptions::default()
@@ -1193,7 +1293,7 @@ mod auto_policy_tests {
                 usize::MAX,
                 usize::MAX
             ),
-            SensitivitySolver::Iterative
+            SensitivitySolver::Sparse
         );
     }
 }

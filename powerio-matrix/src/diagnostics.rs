@@ -19,8 +19,12 @@ pub mod codes {
             "the reference grounded Laplacian is singular", category = Data;
         BUILD_SENSITIVITY_INVALID_OPTION = "BUILD.SENSITIVITY.INVALID_OPTION", Fatal,
             "a DC sensitivity option is outside the range it is defined on", category = Data;
+        BUILD_SENSITIVITY_FACTORIZATION_FAILED = "BUILD.SENSITIVITY.FACTORIZATION_FAILED", Fatal,
+            "the sparse DC sensitivity factorization could not be allocated or indexed", category = Data;
+        /// Retired in 0.9.0: the sparse direct solver has no convergence loop.
         BUILD_SENSITIVITY_NO_CONVERGENCE = "BUILD.SENSITIVITY.NO_CONVERGENCE", Fatal,
-            "the iterative DC sensitivity solve ran out of iterations", category = Data;
+            "the iterative DC sensitivity solve ran out of iterations", category = Data,
+            retired = "0.9.0";
         BUILD_GRIDFM_EMPTY_BATCH = "BUILD.GRIDFM.EMPTY_BATCH", Fatal,
             "a gridfm scenario batch holds no snapshot", category = Data;
         BUILD_GRIDFM_SCENARIO_ID_OVERFLOW = "BUILD.GRIDFM.SCENARIO_ID_OVERFLOW", Fatal,
