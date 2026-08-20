@@ -9,8 +9,9 @@
 
 use criterion::{Criterion, criterion_group, criterion_main};
 use powerio_matrix::matrix::{
-    BuildOptions, DcConvention, build_adjacency, build_bdoubleprime, build_bprime, build_flow_map,
-    build_incidence, build_lacpf, build_ptdf_lodf, build_weighted_laplacian, build_ybus,
+    BuildOptions, DcConvention, SensitivityOptions, SensitivitySolver, build_adjacency,
+    build_bdoubleprime, build_bprime, build_flow_map, build_incidence, build_lacpf,
+    build_ptdf_lodf, build_ptdf_lodf_with_options, build_weighted_laplacian, build_ybus,
     ground_at_each,
 };
 use powerio_matrix::pipeline::{MatrixKind, Pipeline, RhsKind};
@@ -91,12 +92,37 @@ fn bench_dcopf_parts(c: &mut Criterion) {
     });
 }
 
-fn bench_dense_sensitivities(c: &mut Criterion) {
+fn bench_sensitivities(c: &mut Criterion) {
     let net = network("case118");
     let view = IndexedNetwork::new(&net);
     c.bench_function("sensitivity_ptdf_lodf_case118", |b| {
         b.iter(|| {
             build_ptdf_lodf(black_box(&view), black_box(DcConvention::ReactanceOnly)).unwrap()
+        });
+    });
+    let sparse = SensitivityOptions {
+        convention: DcConvention::ReactanceOnly,
+        solver: SensitivitySolver::Sparse,
+        ..Default::default()
+    };
+    c.bench_function("sensitivity_ptdf_lodf_sparse_case118", |b| {
+        b.iter(|| build_ptdf_lodf_with_options(black_box(&view), black_box(&sparse)).unwrap());
+    });
+
+    let net = network("case2869pegase");
+    let view = IndexedNetwork::new(&net);
+    let sparse_solve = SensitivityOptions {
+        convention: DcConvention::ReactanceOnly,
+        solver: SensitivitySolver::Sparse,
+        // A normal PTDF/LODF is dense-like at this size. Dropping all
+        // non-structural entries keeps this benchmark focused on factorization,
+        // batched solves, and flow evaluation instead of output allocation.
+        drop_tolerance: f64::MAX,
+        ..Default::default()
+    };
+    c.bench_function("sensitivity_solve_sparse_case2869pegase", |b| {
+        b.iter(|| {
+            build_ptdf_lodf_with_options(black_box(&view), black_box(&sparse_solve)).unwrap()
         });
     });
 }
@@ -126,7 +152,7 @@ criterion_group!(
     benches,
     bench_matrix_builders,
     bench_dcopf_parts,
-    bench_dense_sensitivities,
+    bench_sensitivities,
     bench_pipeline_paths
 );
 criterion_main!(benches);

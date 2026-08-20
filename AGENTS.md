@@ -189,7 +189,7 @@ powerio-matrix/               # matrices + graph views on powerio
 │   ├── bprime.rs / bdoubleprime.rs / ybus.rs / lacpf.rs / adjacency.rs
 │   ├── incidence.rs         # A, b, B Aᵀ, P_shift
 │   ├── laplacian.rs         # L = A diag(w) Aᵀ, ground_at, GroundedIndexMap, e_r
-│   └── sensitivity.rs       # PTDF, LODF; SensitivityOptions (auto/dense/iterative)
+│   └── sensitivity.rs       # PTDF, LODF; SensitivityOptions (auto/dense/sparse)
 ├── src/io/                  # mtx (lower-triangle symmetric), meta, sensitivity,
 │                            #   gridfm (gridfm-datakit Parquet, feature = "gridfm")
 ├── src/pipeline.rs          # case → square MatrixKind family
@@ -319,7 +319,7 @@ fuzz/                        # libFuzzer targets (detached workspace; see fuzz/R
 - **`rate_a == 0` means unlimited.** `f_max`/`s_max` keep the zero. The opt-in `synthesize_unrated_limits` build option replaces it with `Branch::synthesize_rate_a`: the widest voltage phasor difference the terminal ceilings and the branch angle window allow, over `|Z|`, times the larger ceiling. The caller passes the window in radians and the method holds it at π; `angmin`/`angmax` are degrees in the neutral model and radians after `to_normalized`, so the builders convert them through `IndexedNetwork::angle_radians` and a raw case and its normalized form get the same bound.
 - **`gen`/`gencost` are optional.** A power flow case with no `mpc.gen` parses with `gens` empty; the OPF builders return `Error::NoGenerators`.
 - **Reference (slack) buses are a set, grounded one row/column each.** `IndexedNetwork::reference_bus_indices` returns every `BusType::Ref`; the matrix builders ground the whole set, so a network needs one reference *per connected component* (`IndexedNetwork::check_reference_coverage`). Several within one island is a distributed-slack solve. `reference_bus_index` is the exactly-one convenience query (errors otherwise) for the single-slack C/Python/gridfm paths. `DcOpfInstance`/`AcOpfInstance` carry the set as `ReferenceBuses`, which has no `first()`: a consumer picks `iter()` or the named `single()` (`Error::ReferenceBusCount`) rather than grounding one island of many by accident. Its serde form is the same array of dense indices.
-- **PTDF/LODF need a solve.** They factor the reference grounded Laplacian (SPD when every island has a reference) in `matrix::sensitivity`; no external solver dep. The option based builders select dense Cholesky below the reduced-dimension threshold and a preconditioned conjugate gradient above it (`SensitivityOptions`, default `auto`). PTDF is dense `m×n`; sparse work would compute selected columns or use sparse factors, not make PTDF itself sparse.
+- **PTDF/LODF need a solve.** They factor the reference grounded Laplacian (SPD when every island has a reference) in `matrix::sensitivity`. The option based builders select dense Cholesky below the reduced-dimension threshold and an AMD-ordered `faer` sparse Cholesky above it (`SensitivityOptions`, default `auto`); the sparse factor is reused for batched right hand sides. PTDF is dense `m×n`; the sparse path changes the solve, not the output shape.
 - **MTX output is lower triangle, 1 based, spec compliant.** `sprs::io::write_matrix_market_sym` writes the *upper* triangle, so `io::mtx::write_mtx` ships its own writer.
 - **`CooBuilder`.** HashMap COO with O(nnz) inserts; replaces the old O(nnz²) Vec search.
 - **TUI lives in the CLI crate.** `powerio-cli/src/tui/`, part of the `powerio` binary. Testable via `ratatui::backend::TestBackend`.

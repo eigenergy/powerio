@@ -229,7 +229,7 @@ fn sensitivities_write_solver_metadata() {
         "-o",
         out_dir.to_str().unwrap(),
         "--solver",
-        "iterative",
+        "sparse",
         "--drop-tolerance",
         "1e-10",
     ]);
@@ -248,15 +248,31 @@ fn sensitivities_write_solver_metadata() {
     )
     .unwrap();
     assert_eq!(meta["case"], "case9");
-    assert_eq!(meta["sensitivity"]["requested_solver"], "iterative");
-    assert_eq!(meta["sensitivity"]["solver_path"], "iterative_cg");
+    assert_eq!(meta["sensitivity"]["requested_solver"], "sparse");
+    assert_eq!(meta["sensitivity"]["solver_path"], "sparse_cholesky");
     assert_eq!(meta["sensitivity"]["drop_tolerance"], 1e-10);
+    assert!(meta["sensitivity"].get("cg_tolerance").is_none());
+    assert!(meta["sensitivity"].get("cg_max_iterations").is_none());
     assert_eq!(meta["sensitivity"]["ptdf"]["rows"], 9);
     assert_eq!(meta["sensitivity"]["ptdf"]["cols"], 9);
     assert_eq!(meta["sensitivity"]["lodf"]["rows"], 9);
     assert_eq!(meta["sensitivity"]["lodf"]["cols"], 9);
 
     let _ = std::fs::remove_dir_all(out_dir);
+}
+
+#[test]
+fn sensitivities_reject_removed_iterative_solver_name() {
+    let case = repo_file("tests/data/case9.m");
+    let out = run(&[
+        "sensitivities",
+        case.to_str().unwrap(),
+        "--solver",
+        "iterative",
+    ]);
+    assert_failure(&out);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("sparse"), "stderr:\n{stderr}");
 }
 
 #[test]

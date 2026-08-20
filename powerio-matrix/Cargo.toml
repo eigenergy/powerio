@@ -30,6 +30,7 @@ powerio-diag = { workspace = true }
 powerio.workspace = true
 thiserror = "2"
 sprs.workspace = true
+faer = { version = "0.24.4", default-features = false, features = ["sparse-linalg"] }
 num-complex.workspace = true
 serde.workspace = true
 serde_json.workspace = true
