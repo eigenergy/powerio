@@ -100,8 +100,8 @@ cubic costs, HVDC, or storage. These losses are returned as warnings.
 - **Reference coverage.** `IndexedNetwork::check_reference_coverage` verifies that
   every in-service island has a reference bus.
 - **Susceptance conventions for the DC approximation.** `DcConvention` selects
-  the branch susceptance vector \\(b\\) and, for the MATPOWER convention, the
-  phase shift injection. The signed incidence matrix \\(A\\) combines with
+  the branch susceptance vector \\(b\\) and, for conventions that carry shifts,
+  the phase shift injection. The signed incidence matrix \\(A\\) combines with
   \\(b\\) to form the DC bus susceptance matrix
   \\(L = A \operatorname{diag}(b) A^\mathsf{T}\\), which feeds PTDF/LODF and the
   DC OPF matrix projection. \\(b\\) is positive for an inductive branch, the DC

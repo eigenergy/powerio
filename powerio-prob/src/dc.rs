@@ -156,6 +156,13 @@ pub struct DcOpfInstance {
     pub units: Units,
     pub convention: DcConvention,
     pub skip_zero_impedance: bool,
+    /// Whether zero and negative source thermal ratings were replaced with
+    /// synthesized limits while assembling this instance.
+    ///
+    /// `#[serde(default)]` keeps documents written before this field readable;
+    /// their limits retain the old unsynthesized meaning.
+    #[serde(default)]
+    pub synthesize_unrated_limits: bool,
     /// Dense bus index to external bus ID.
     pub bus_ids: Vec<BusId>,
     pub reference_buses: ReferenceBuses,
@@ -169,7 +176,8 @@ pub struct DcOpfInstance {
     /// zero row sums and carries no shunt. A nodal balance subtracts it
     /// beside [`Self::p_d`], as MATPOWER `runpf` does.
     pub g_s: Vec<f64>,
-    /// Nodal phase shift injection in dense bus order.
+    /// Nodal phase shift injection in dense bus order. The complete fixed
+    /// withdrawal in `L theta = Cg pg - fixed` is `p_d + g_s + p_shift`.
     pub p_shift: Vec<f64>,
     pub generators: DcGeneratorData,
     pub branches: DcBranchData,
@@ -184,6 +192,30 @@ impl DcOpfInstance {
     #[must_use]
     pub fn n_branches(&self) -> usize {
         self.branches.b.len()
+    }
+
+    /// Fixed nodal withdrawal in dense bus order.
+    ///
+    /// With `A` oriented from bus to bus and
+    /// `L = A diag(b) A^T`, the DC balance is
+    /// `L theta = Cg pg - (p_d + g_s + p_shift)`.
+    #[must_use]
+    pub fn fixed_nodal_withdrawal(&self) -> Vec<f64> {
+        (0..self.n_buses)
+            .map(|bus| self.p_d[bus] + self.g_s[bus] + self.p_shift[bus])
+            .collect()
+    }
+
+    /// Fixed branch flow offset in active branch column order.
+    ///
+    /// The complete branch flow is
+    /// `f = diag(b) A^T theta + branch_flow_offset`, where the offset is
+    /// `-b * shift` elementwise.
+    #[must_use]
+    pub fn branch_flow_offset(&self) -> Vec<f64> {
+        (0..self.n_branches())
+            .map(|branch| -self.branches.b[branch] * self.branches.shift[branch])
+            .collect()
     }
 
     /// Project generator cost and bounds to bus space.
@@ -345,6 +377,7 @@ pub fn build_dc_opf_instance(
         units: options.units,
         convention: options.convention,
         skip_zero_impedance: options.skip_zero_impedance,
+        synthesize_unrated_limits: options.synthesize_unrated_limits,
         bus_ids: (0..n_buses).map(|index| case.bus_id(index)).collect(),
         reference_buses: ReferenceBuses::new(case.reference_bus_indices()),
         p_d: case.pd().iter().map(|value| value * p_scale).collect(),

@@ -242,6 +242,19 @@ pub fn classify_json_text(text: &str) -> JsonClass {
     shape.classify()
 }
 
+/// Classify JSON bytes without performing lossy text replacement.
+///
+/// Invalid UTF-8 has no trustworthy JSON markers and returns the same
+/// [`Detection::Unknown`] classification as malformed JSON. A leading UTF-8
+/// byte order mark is accepted through [`classify_json_text`].
+#[must_use]
+pub fn classify_json_bytes(bytes: &[u8]) -> JsonClass {
+    let Ok(text) = std::str::from_utf8(bytes) else {
+        return JsonClass::Case(Detection::Unknown);
+    };
+    classify_json_text(text)
+}
+
 fn canonical_key(name: &str) -> String {
     name.to_ascii_lowercase()
         .chars()
@@ -383,7 +396,7 @@ impl JsonShape {
 mod tests {
     use super::{
         Detection, DistributionFormat, JsonClass, SourceFormat, TransmissionFormat,
-        classify_json_text,
+        classify_json_bytes, classify_json_text,
     };
 
     #[test]
@@ -606,6 +619,24 @@ mod tests {
             JsonClass::Case(Detection::Known(SourceFormat::Transmission(
                 TransmissionFormat::PowerModelsJson
             )))
+        );
+    }
+
+    #[test]
+    fn classifies_json_bytes_without_lossy_utf8_replacement() {
+        assert_eq!(
+            classify_json_bytes(b"\xef\xbb\xbf{\"baseMVA\":100.0,\"bus\":{},\"branch\":{}}"),
+            JsonClass::Case(Detection::Known(SourceFormat::Transmission(
+                TransmissionFormat::PowerModelsJson
+            )))
+        );
+        assert_eq!(
+            classify_json_bytes(b"{\"base_mva\":100.0,\"buses\":[],\"branches\":[]}"),
+            JsonClass::ModelJson
+        );
+        assert_eq!(
+            classify_json_bytes(b"{\"baseMVA\":100.0,\"bus\":{}\xff}"),
+            JsonClass::Case(Detection::Unknown)
         );
     }
 
