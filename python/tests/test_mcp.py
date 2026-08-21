@@ -431,6 +431,40 @@ def test_mcp_allowed_roots_restrict_filesystem_paths(monkeypatch, tmp_path):
         server.summary(path=str(DATA / "case9.m"))
 
 
+@pytest.mark.skipif(os.name == "nt", reason="POSIX symlink semantics")
+def test_mcp_refuses_pypsa_child_symlink_escape(monkeypatch, tmp_path):
+    root = tmp_path / "allowed"
+    folder = root / "pypsa"
+    outside = tmp_path / "outside"
+    root.mkdir()
+    outside.mkdir()
+    powerio.parse_file(str(DATA / "case9.m")).write_pypsa_csv_folder(str(folder))
+    escaped = outside / "buses.csv"
+    escaped.write_text((folder / "buses.csv").read_text())
+    (folder / "buses.csv").unlink()
+    os.symlink(escaped, folder / "buses.csv")
+    monkeypatch.setenv("POWERIO_MCP_ALLOWED_ROOTS", str(root))
+
+    with pytest.raises(ValueError, match="outside its allowed MCP root"):
+        server.summary(path=str(folder), from_format="pypsa-csv")
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX symlink semantics")
+def test_mcp_preflights_a_directory_before_format_detection(monkeypatch, tmp_path):
+    root = tmp_path / "allowed"
+    folder = root / "dataset" / "raw"
+    outside = tmp_path / "outside"
+    folder.mkdir(parents=True)
+    outside.mkdir()
+    parquet = outside / "bus_data.parquet"
+    parquet.write_bytes(b"not parquet")
+    os.symlink(parquet, folder / "bus_data.parquet")
+    monkeypatch.setenv("POWERIO_MCP_ALLOWED_ROOTS", str(root))
+
+    with pytest.raises(ValueError, match="outside its allowed MCP root"):
+        server.summary(path=str(root / "dataset"))
+
+
 @pytest.mark.parametrize("name", ["POWERIO_MCP_ROOT", "POWERIO_MCP_ALLOWED_ROOT"])
 def test_mcp_tools_honour_the_legacy_single_root_variables(
     monkeypatch, tmp_path, name

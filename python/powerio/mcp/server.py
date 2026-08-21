@@ -23,11 +23,9 @@ from __future__ import annotations
 
 import json as jsonlib
 import os
-import shutil
-import tempfile
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Annotated, Any, Callable, Dict, Optional, TypeAlias
+from typing import Annotated, Any, Dict, Optional, TypeAlias
 
 from mcp.server.mcpserver import MCPServer
 from pydantic import Field
@@ -556,6 +554,8 @@ def _parse_any(
     include_root: Optional[str] = None
     if path is not None:
         path = _local_path(path, purpose="path")
+        if Path(path).is_dir():
+            sandbox.check_allowed_read_tree(Path(path), purpose="path")
         # A dss parse widens include confinement to the root that admitted the
         # path, so the operator's configured containment is the one policy in
         # force. Unconfined, the case directory default stands.
@@ -732,72 +732,6 @@ def _write_text(
     }
 
 
-def _install_dir_tree(tmp_dir: str, out_path: str, overwrite: bool) -> None:
-    """Move a directory writer's staged output into place.
-
-    Every target runs through the same containment resolution as a single
-    file write, and `overwrite=False` refuses before anything has moved.
-    """
-    if not os.path.lexists(out_path):
-        os.rename(tmp_dir, out_path)
-        return
-    tmp = Path(tmp_dir)
-    files = [p for p in sorted(tmp.rglob("*")) if p.is_file()]
-    targets = [Path(out_path) / p.relative_to(tmp) for p in files]
-    if not overwrite:
-        for target in targets:
-            if os.path.lexists(target):
-                raise ValueError(
-                    f"refusing to overwrite existing file: {target}; pass overwrite=true"
-                )
-    for target in targets:
-        sandbox.check_allowed_path(target.parent, purpose="out_path")
-        os.makedirs(target.parent, exist_ok=True)
-        sandbox.check_allowed_path(target, for_write=True, purpose="out_path")
-    for source, target in zip(files, targets):
-        os.replace(source, target)
-
-
-def _rebase_result_paths(
-    result: Dict[str, Any], tmp_dir: str, out_path: str
-) -> Dict[str, Any]:
-    """Rewrite writer-reported paths from the staging directory to the
-    installed location."""
-
-    def rebase(value: Any) -> Any:
-        if isinstance(value, str) and value.startswith(tmp_dir):
-            return out_path + value[len(tmp_dir) :]
-        return value
-
-    rebased = dict(result)
-    if "dir" in rebased:
-        rebased["dir"] = rebase(rebased["dir"])
-    if "files" in rebased:
-        rebased["files"] = [rebase(item) for item in rebased["files"]]
-    return rebased
-
-
-def _staged_dir_write(
-    out_path: str, overwrite: bool, write: Callable[[str], Dict[str, Any]]
-) -> Dict[str, Any]:
-    """Run a directory writer against a fresh staging directory, then install.
-
-    The writers create children unchecked, so they never see `out_path`;
-    installation applies the containment policy and `overwrite` per file.
-    """
-    parent = os.path.dirname(os.path.abspath(out_path)) or os.curdir
-    os.makedirs(parent, exist_ok=True)
-    tmp_dir = tempfile.mkdtemp(prefix=Path(out_path).name + ".", dir=parent)
-    # mkdtemp creates 0o700; the installed directory is ordinary output.
-    os.chmod(tmp_dir, 0o755)
-    try:
-        result = write(tmp_dir)
-        _install_dir_tree(tmp_dir, out_path, overwrite)
-    finally:
-        shutil.rmtree(tmp_dir, ignore_errors=True)
-    return _rebase_result_paths(result, tmp_dir, out_path)
-
-
 def _choose_from_format(
     from_format: Optional[str] = None,
     *,
@@ -933,7 +867,7 @@ def _save_impl(
             )
 
         try:
-            return _staged_dir_write(out_path, overwrite, write_gridfm)
+            return sandbox.staged_directory_write(out_path, overwrite, write_gridfm)
         except ImportError as exc:
             raise ValueError(str(exc)) from exc
         except powerio.PowerIOError as exc:
@@ -945,7 +879,7 @@ def _save_impl(
         if loaded.domain != "transmission":
             raise ValueError("pypsa-csv export needs a transmission network")
         try:
-            result = _staged_dir_write(
+            result = sandbox.staged_directory_write(
                 out_path,
                 overwrite,
                 lambda staging: dict(loaded.network.write_pypsa_csv_folder(staging)),

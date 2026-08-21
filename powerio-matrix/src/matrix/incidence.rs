@@ -24,8 +24,8 @@ pub struct IncidenceParts {
     pub a: CsMat<f64>,
     /// Branch susceptances `b_e`, length `m`.
     pub b: Vec<f64>,
-    /// Phase shift bus injection, length `n`. All zeros unless the MATPOWER
-    /// convention is used and shifters are present.
+    /// Phase shift bus injection, length `n`. All zeros unless the selected
+    /// convention carries shifts and the case has a phase shifter.
     pub p_shift: Vec<f64>,
     /// Column `k` → index into `case.branches`.
     pub branch_of_col: Vec<usize>,
@@ -159,7 +159,10 @@ pub fn susceptance_diag(b: &[f64]) -> CsMat<f64> {
     diagonal(b)
 }
 
-/// The flow map `B Aᵀ`, shape `m × n`: `f = (B Aᵀ) θ`.
+/// The angle dependent flow map `B Aᵀ`, shape `m × n`.
+///
+/// A complete affine branch flow also adds `-b * shift`; problem instances
+/// expose that term through `DcOpfInstance::branch_flow_offset`.
 pub fn build_flow_map(a: &CsMat<f64>, b: &[f64]) -> CsMat<f64> {
     let d = susceptance_diag(b);
     let at = a.transpose_view().to_csr();

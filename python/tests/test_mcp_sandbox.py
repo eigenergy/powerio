@@ -175,3 +175,149 @@ def test_admitting_root_names_the_containing_root(monkeypatch, tmp_path):
 
 def test_admitting_root_is_none_when_the_policy_is_off(tmp_path):
     assert sandbox.admitting_root(tmp_path / "case.dss") is None
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX symlink semantics")
+def test_read_tree_refuses_escaping_and_broken_child_links(monkeypatch, tmp_path):
+    root = tmp_path / "allowed"
+    case = root / "case"
+    outside = tmp_path / "outside"
+    case.mkdir(parents=True)
+    outside.mkdir()
+    (outside / "buses.csv").write_text("outside")
+    monkeypatch.setenv(sandbox.ALLOWED_ROOTS_ENV, str(root))
+
+    os.symlink(outside / "buses.csv", case / "buses.csv")
+    with pytest.raises(sandbox.PathNotAllowed, match="outside its allowed MCP root"):
+        sandbox.checked_read_tree(str(case))
+
+    (case / "buses.csv").unlink()
+    os.symlink(case / "missing.csv", case / "buses.csv")
+    with pytest.raises(sandbox.PathNotAllowed, match="broken link"):
+        sandbox.check_allowed_read_tree(case)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX symlink semantics")
+def test_read_tree_follows_contained_directory_links_without_looping(
+    monkeypatch, tmp_path
+):
+    root = tmp_path / "allowed"
+    case = root / "case"
+    shared = root / "shared"
+    case.mkdir(parents=True)
+    shared.mkdir()
+    (shared / "buses.csv").write_text("inside")
+    os.symlink(shared, case / "tables")
+    os.symlink(root, shared / "back-to-root")
+    monkeypatch.setenv(sandbox.ALLOWED_ROOTS_ENV, str(root))
+
+    assert sandbox.checked_read_tree(str(case)) == str(case)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX special-file semantics")
+def test_read_tree_refuses_special_files(monkeypatch, tmp_path):
+    root = tmp_path / "allowed"
+    root.mkdir()
+    os.mkfifo(root / "stream")
+    monkeypatch.setenv(sandbox.ALLOWED_ROOTS_ENV, str(root))
+
+    with pytest.raises(sandbox.PathNotAllowed, match="non-file, non-directory"):
+        sandbox.check_allowed_read_tree(root)
+
+
+def _write_tree(staging: str, files: dict[str, str]) -> dict:
+    root = Path(staging)
+    paths = []
+    for relative, text in files.items():
+        path = root / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text)
+        paths.append(str(path))
+    return {"dir": staging, "files": paths}
+
+
+def test_staged_directory_write_preserves_unrelated_files_and_rebases_paths(tmp_path):
+    out = tmp_path / "dataset"
+    out.mkdir()
+    (out / "keep.txt").write_text("keep")
+    (out / "replace.csv").write_text("old")
+
+    result = sandbox.staged_directory_write(
+        str(out),
+        True,
+        lambda staging: _write_tree(
+            staging, {"replace.csv": "new", "nested/new.csv": "new"}
+        ),
+    )
+
+    assert (out / "keep.txt").read_text() == "keep"
+    assert (out / "replace.csv").read_text() == "new"
+    assert (out / "nested/new.csv").read_text() == "new"
+    assert result["dir"] == str(out)
+    assert result["files"] == [str(out / "replace.csv"), str(out / "nested/new.csv")]
+
+
+def test_staged_directory_write_refuses_collisions_before_install(tmp_path):
+    out = tmp_path / "dataset"
+    out.mkdir()
+    (out / "same.csv").write_text("old")
+
+    with pytest.raises(ValueError, match="refusing to overwrite"):
+        sandbox.staged_directory_write(
+            str(out),
+            False,
+            lambda staging: _write_tree(
+                staging, {"same.csv": "new", "new.csv": "new"}
+            ),
+        )
+
+    assert (out / "same.csv").read_text() == "old"
+    assert not (out / "new.csv").exists()
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX symlink semantics")
+def test_staged_directory_write_refuses_generated_and_existing_links(tmp_path):
+    outside = tmp_path / "outside.txt"
+    outside.write_text("outside")
+    out = tmp_path / "dataset"
+
+    def linked_output(staging: str) -> dict:
+        os.symlink(outside, Path(staging) / "linked.csv")
+        return {"dir": staging, "files": [str(Path(staging) / "linked.csv")]}
+
+    with pytest.raises(sandbox.PathNotAllowed, match="contains a link"):
+        sandbox.staged_directory_write(str(out), False, linked_output)
+    assert not out.exists()
+
+    out.mkdir()
+    os.symlink(outside, out / "existing.csv")
+    with pytest.raises(sandbox.PathNotAllowed, match="contains a link"):
+        sandbox.staged_directory_write(
+            str(out), True, lambda staging: _write_tree(staging, {"new.csv": "new"})
+        )
+    assert outside.read_text() == "outside"
+    assert not (out / "new.csv").exists()
+
+
+def test_staged_directory_write_rolls_back_a_failed_swap(monkeypatch, tmp_path):
+    out = tmp_path / "dataset"
+    out.mkdir()
+    (out / "same.csv").write_text("old")
+    real_replace = sandbox.os.replace
+    failed = False
+
+    def fail_install(source, target):
+        nonlocal failed
+        if not failed and ".install-" in Path(source).name and Path(target) == out:
+            failed = True
+            raise OSError("simulated install failure")
+        return real_replace(source, target)
+
+    monkeypatch.setattr(sandbox.os, "replace", fail_install)
+    with pytest.raises(OSError, match="simulated install failure"):
+        sandbox.staged_directory_write(
+            str(out), True, lambda staging: _write_tree(staging, {"same.csv": "new"})
+        )
+
+    assert (out / "same.csv").read_text() == "old"
+    assert not [path for path in tmp_path.iterdir() if path.name.startswith(".dataset.")]

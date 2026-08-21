@@ -56,7 +56,9 @@ pub use diagnostics::{
     DiagnosticCode, DiagnosticSeverity, Diagnostics, EmitFamily, StructuredDiagnostic,
 };
 pub use error::{Error, ErrorCategory, Result};
-pub use format::routing::{Detection, JSON_CLASSES, JsonClass, classify_json_text};
+pub use format::routing::{
+    Detection, JSON_CLASSES, JsonClass, classify_json_bytes, classify_json_text,
+};
 pub use format::{
     Conversion, DisplayData, DisplayFormat, Parsed, PwdDisplay, PwdSubstation, PypsaCsvOutputs,
     SOURCE_FORMAT_NAMES, SourceDocument, TargetFormat, WriteOptions, convert_file,
