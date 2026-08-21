@@ -2653,8 +2653,8 @@ pub unsafe extern "C" fn pio_scopf_parse_str(
     }
 }
 
-/// Serialize a SCOPF instance as its Julia compatibility document. The JSON records
-/// its schema version and index base. Free the returned string with
+/// Serialize a SCOPF instance as its language neutral document. The JSON records
+/// its powerio version and index base. Free the returned string with
 /// `pio_string_free`. Returns `NULL` for a null handle or serialization error.
 #[cfg(feature = "prob")]
 #[unsafe(no_mangle)]
@@ -5221,7 +5221,7 @@ mpc.branch = [
 
     #[cfg(feature = "prob")]
     #[test]
-    fn scopf_handle_serializes_its_julia_document() {
+    fn scopf_handle_serializes_its_wire_document() {
         let text = CString::new(GOC3_SMALL_FIXTURE).unwrap();
         let from = CString::new("goc3-json").unwrap();
         let feature = CString::new("prob").unwrap();
@@ -5240,7 +5240,7 @@ mpc.branch = [
             let text = CStr::from_ptr(json).to_str().unwrap().to_owned();
             let v: serde_json::Value = serde_json::from_str(&text).unwrap();
 
-            assert_eq!(v["schema"], "powerio.scopf.julia");
+            assert_eq!(v["schema"], "powerio.scopf");
             assert_eq!(v[powerio::version::VERSION_KEY], powerio::VERSION);
             assert_eq!(v["index_base"], 1);
             assert_eq!(v["instance"]["lengths"]["I"], 2);

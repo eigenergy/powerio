@@ -53,6 +53,18 @@ fn small_instance_preserves_source_ids_and_uses_zero_based_indices() {
     assert_eq!(data.reactive_reserve[0].n_q, 0);
     assert_eq!(data.prod[0].uid, "sd_00");
     assert_eq!(data.cons[0].uid, "sd_01");
+    assert_eq!(instance.dt, vec![1.0, 1.0]);
+    assert_eq!((data.prod[0].j_dev, data.prod[0].j_sdd), (0, 0));
+    assert_eq!((data.cons[0].j_dev, data.cons[0].j_sdd), (0, 1));
+    // `initial_status.on_status`, straight off the document: the fixture
+    // starts acl_00 on and acl_01 off.
+    assert_eq!(
+        data.acl_branch.iter().map(|b| b.u_0).collect::<Vec<_>>(),
+        vec![1, 0]
+    );
+    assert_eq!(data.acx_branch[0].u_0, 1);
+    assert_eq!(data.prod[0].u_0, 1);
+    assert_eq!(data.cons[0].u_0, 1);
 
     assert_eq!(
         instance
@@ -85,7 +97,7 @@ fn small_instance_preserves_source_ids_and_uses_zero_based_indices() {
 }
 
 #[test]
-fn the_julia_document_states_its_powerio_version_and_is_one_based() {
+fn the_scopf_document_states_its_powerio_version_and_is_one_based() {
     let instance = small_instance();
     let internal = serde_json::to_value(&instance).expect("serialize internal instance");
     assert!(internal.get("static_data").is_some());
@@ -153,6 +165,19 @@ fn arbitrary_uids_preserve_document_order() {
     assert_eq!(first.static_data.acl_branch[1].uid, "line-alpha");
     assert_eq!(first.static_data.acl_branch[1].j_ln, 1);
     assert_eq!(first.static_data.prod[0].uid, "producer-main");
+    // The device ordinals come from enumeration, so a uid with no digits at
+    // all still addresses its rows.
+    assert_eq!(first.static_data.prod[0].j_dev, 0);
+    assert_eq!(first.static_data.prod[0].j_sdd, 0);
+    assert_eq!(first.static_data.cons[0].uid, "consumer-main");
+    assert_eq!(first.static_data.cons[0].j_dev, 0);
+    assert_eq!(first.static_data.cons[0].j_sdd, 1);
+    for row in &first.static_data.active_reserve_set_pr {
+        assert_eq!((row.j_dev, row.j_sdd), (0, 0), "producer-main's ordinals");
+    }
+    for row in &first.static_data.reactive_reserve_set_cs {
+        assert_eq!((row.j_dev, row.j_sdd), (0, 1), "consumer-main's ordinals");
+    }
 }
 
 #[test]
@@ -494,12 +519,32 @@ fn interleaved_device_classes_are_reported() {
         None,
         "no offset scheme holds, so there is no order to read"
     );
+    // The ordinals do not care that the classes interleave: producers pack
+    // first (document order within the class), consumers after them.
+    assert_eq!(instance.static_data.prod[0].uid, "sd_00");
+    assert_eq!(instance.static_data.prod[1].uid, "sd_02");
+    assert_eq!(
+        instance
+            .static_data
+            .prod
+            .iter()
+            .map(|r| (r.j_dev, r.j_sdd))
+            .collect::<Vec<_>>(),
+        vec![(0, 0), (1, 1)]
+    );
+    assert_eq!(instance.static_data.cons[0].uid, "sd_01");
+    assert_eq!(
+        (
+            instance.static_data.cons[0].j_dev,
+            instance.static_data.cons[0].j_sdd
+        ),
+        (0, 2)
+    );
 }
 
 /// Names can contain bus and unit numbers that collide across device classes.
 /// They never define an ordinal; document order does. This synthetic mutation
-/// also keeps coverage for the optional fields the removed unlicensed
-/// validation fixture exercised.
+/// also covers the optional price and reactive capability fields.
 #[test]
 fn named_uid_digits_do_not_define_document_ordinals() {
     let mut doc: Value = serde_json::from_str(SMALL).expect("fixture json");

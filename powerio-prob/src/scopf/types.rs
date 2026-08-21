@@ -32,6 +32,8 @@ pub struct ScopfAcLineRow {
     pub fr_bus: BusId,
     pub c_su: f64,
     pub c_sd: f64,
+    /// The document's `initial_status.on_status`.
+    pub u_0: i64,
     pub s_max: f64,
     pub g_sr: f64,
     pub b_sr: f64,
@@ -52,6 +54,8 @@ pub struct ScopfTransformerRow {
     pub fr_bus: BusId,
     pub c_su: f64,
     pub c_sd: f64,
+    /// The document's `initial_status.on_status`.
+    pub u_0: i64,
     pub s_max: f64,
     pub g_sr: f64,
     pub b_sr: f64,
@@ -125,6 +129,13 @@ pub struct ScopfFixedRatioRow {
 pub struct ScopfDeviceRow {
     pub bus: BusId,
     pub uid: String,
+    /// 0-based position within the row's own class list (`prod` or `cons`),
+    /// document order. The document renumbers it 1-based.
+    pub j_dev: usize,
+    /// 0-based position in the canonical device stacking: the producer block,
+    /// then the consumer block, document order within each. Sound for every
+    /// uid spelling, including interleaved classes.
+    pub j_sdd: usize,
     pub c_on: f64,
     pub c_su: f64,
     pub c_sd: f64,
@@ -152,6 +163,8 @@ pub struct ScopfDeviceRow {
     pub p_rrd_off_max: f64,
     pub p_0: f64,
     pub q_0: f64,
+    /// The document's `initial_status.on_status`.
+    pub u_0: i64,
     pub p_max: Vec<f64>,
     pub p_min: Vec<f64>,
     pub q_max: Vec<f64>,
@@ -208,6 +221,10 @@ pub struct ScopfActiveReserveSetRow {
     pub i: BusId,
     pub n_p: usize,
     pub uid: String,
+    /// The member device's ordinals ([`ScopfDeviceRow::j_dev`],
+    /// [`ScopfDeviceRow::j_sdd`]).
+    pub j_dev: usize,
+    pub j_sdd: usize,
 }
 
 /// One (bus, reactive reserve zone, device) membership row.
@@ -217,6 +234,10 @@ pub struct ScopfReactiveReserveSetRow {
     pub i: BusId,
     pub n_q: usize,
     pub uid: String,
+    /// The member device's ordinals ([`ScopfDeviceRow::j_dev`],
+    /// [`ScopfDeviceRow::j_sdd`]).
+    pub j_dev: usize,
+    pub j_sdd: usize,
 }
 
 /// Set sizes for each indexed device class.
@@ -456,6 +477,9 @@ pub struct ScopfInstance {
     pub dc_contingency_flows: Vec<ScopfDcContingencyFlowRow>,
     pub violation_cost: ScopfViolationCost,
     pub device_class_layout: ScopfDeviceClassLayout,
+    /// The interval durations, so a model needs no raw-document read for its
+    /// time axis. `lengths.l_t` is this vector's length.
+    pub dt: Vec<f64>,
 }
 
 /// How the two device classes sit in the `simple_dispatchable_device` section.
