@@ -392,14 +392,10 @@ per row. A binding that asserts `length(ids) == n` fails on v4 and passes on v5.
 the migration test. The handle rename forces every C declaration to be edited, so no caller
 reaches the new behavior without touching the line.
 
-**`pio_scopf_to_json`** keeps its name and changes 1-based indices to 0-based. The document
-carries `index_base`, but a field is only a mechanism if something reads it, and nothing does
-today. A 0-based index is still a valid 1-based index, so a missed conversion reads the wrong
-element rather than failing.
-
-So v5 requires the binding to normalize: **PowerIO.jl converts to 1-based at the boundary.**
-The wire value is 0. The value a Julia caller sees is 1. Julia arrays are 1-based, and a
-binding should speak its own language. Python, whose lists are 0-based, passes it through.
+**`pio_scopf_to_json`** keeps its name and changes 1-based indices to 0-based. The additive
+`pio_scopf_to_json_with_index_base` symbol selects base 0 or 1, and the document records that
+choice. Python uses the default base 0. PowerIO.jl requests base 1, so each binding receives
+indices in its own language without duplicating the ordinal-field registry.
 
 ## What does not change
 

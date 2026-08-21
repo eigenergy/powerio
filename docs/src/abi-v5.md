@@ -198,8 +198,12 @@ The rename is one edit everywhere. One release version now covers every document
 reserve membership rows gain the member device's `j_dev` and `j_sdd`; shunt
 rows gain `j_sh`; and AC line and transformer rows gain `u_0`. The device rows
 also gain the eight reactive capability fields described in the changelog.
-Every ordinal is defined by source document order and every index in this JSON
-document is 1-based. No uid spelling participates in indexing.
+Every ordinal is defined by source document order. `pio_scopf_to_json` emits
+0-based ordinals. `pio_scopf_to_json_with_index_base` accepts
+`PIO_SCOPF_INDEX_BASE_ZERO` or `PIO_SCOPF_INDEX_BASE_ONE`; any other value fails
+with `BIND.CAPI.INVALID_OPTIONS`. The JSON always records the selected
+`index_base`. No uid spelling, source bus id, count, or status value participates
+in renumbering.
 
 `pio_summary_json`'s `counts` block stays the case file's own inventory, so a 3-winding transformer counts once there rather than as the bus and three branches it lowers to. The two new `topology` fields are the lowered space, which is what the extractors report. Reading `counts` where you want `topology` is the same class of error the bus space change fixes.
 

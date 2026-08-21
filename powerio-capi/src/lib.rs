@@ -249,6 +249,14 @@ pub const PIO_DIST_ABI_VERSION: u32 = 1;
 /// `errbuf`/`warnbuf` parameter and a message always fits without truncation.
 pub const PIO_ERRBUF_MIN: usize = 256;
 
+/// Keep SCOPF document ordinals 0-based.
+#[cfg(feature = "prob")]
+pub const PIO_SCOPF_INDEX_BASE_ZERO: i32 = 0;
+
+/// Renumber SCOPF document ordinals to 1-based.
+#[cfg(feature = "prob")]
+pub const PIO_SCOPF_INDEX_BASE_ONE: i32 = 1;
+
 /// The ABI version the library was built with (see [`PIO_ABI_VERSION`]). Lets a
 /// consumer detect a stale or incompatible library at load time. Infallible.
 #[unsafe(no_mangle)]
@@ -2653,13 +2661,25 @@ pub unsafe extern "C" fn pio_scopf_parse_str(
     }
 }
 
-/// Serialize a SCOPF instance as its language neutral document. The JSON records
-/// its powerio version and index base. Free the returned string with
-/// `pio_string_free`. Returns `NULL` for a null handle or serialization error.
 #[cfg(feature = "prob")]
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn pio_scopf_to_json(
+fn scopf_index_base_from_c(index_base: i32) -> Result<powerio_prob::IndexBase, String> {
+    match index_base {
+        PIO_SCOPF_INDEX_BASE_ZERO => Ok(powerio_prob::IndexBase::Zero),
+        PIO_SCOPF_INDEX_BASE_ONE => Ok(powerio_prob::IndexBase::One),
+        other => Err(coded(
+            &codes::BIND_CAPI_INVALID_OPTIONS,
+            format!(
+                "SCOPF index_base is {other}; expected {PIO_SCOPF_INDEX_BASE_ZERO} (zero) or \
+                 {PIO_SCOPF_INDEX_BASE_ONE} (one)"
+            ),
+        )),
+    }
+}
+
+#[cfg(feature = "prob")]
+unsafe fn scopf_to_json_impl(
     instance: *const PioScopfInstance,
+    index_base: i32,
     errbuf: *mut c_char,
     errlen: usize,
 ) -> *mut c_char {
@@ -2669,13 +2689,44 @@ pub unsafe extern "C" fn pio_scopf_to_json(
             errlen,
             "panic while serializing SCOPF instance",
             || {
+                let index_base = scopf_index_base_from_c(index_base)?;
                 let instance = instance
                     .as_ref()
                     .ok_or_else(|| null_handle("SCOPF instance handle"))?;
-                powerio_prob::scopf::json::to_json(&instance.instance).map_err(err_line)
+                powerio_prob::scopf::json::to_json_with_index_base(&instance.instance, index_base)
+                    .map_err(err_line)
             },
         )
     }
+}
+
+/// Serialize a SCOPF instance as its language neutral 0-based document. The
+/// JSON records its powerio version and index base. Free the returned string
+/// with `pio_string_free`. Returns `NULL` for a null handle or serialization
+/// error.
+#[cfg(feature = "prob")]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pio_scopf_to_json(
+    instance: *const PioScopfInstance,
+    errbuf: *mut c_char,
+    errlen: usize,
+) -> *mut c_char {
+    unsafe { scopf_to_json_impl(instance, PIO_SCOPF_INDEX_BASE_ZERO, errbuf, errlen) }
+}
+
+/// Serialize a SCOPF instance with 0-based or 1-based ordinals. Pass
+/// `PIO_SCOPF_INDEX_BASE_ZERO` or `PIO_SCOPF_INDEX_BASE_ONE`. Any other value
+/// returns `NULL` and reports `BIND.CAPI.INVALID_OPTIONS`. The JSON records the
+/// selected base. Free the returned string with `pio_string_free`.
+#[cfg(feature = "prob")]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pio_scopf_to_json_with_index_base(
+    instance: *const PioScopfInstance,
+    index_base: i32,
+    errbuf: *mut c_char,
+    errlen: usize,
+) -> *mut c_char {
+    unsafe { scopf_to_json_impl(instance, index_base, errbuf, errlen) }
 }
 
 /// Free a SCOPF instance handle. `NULL` is a no-op; free each handle once.
@@ -3797,6 +3848,8 @@ mod tests {
             "#define PIO_ABI_VERSION 5",
             "#define PIO_DIST_ABI_VERSION 1",
             "#define PIO_ERRBUF_MIN 256",
+            "#define PIO_SCOPF_INDEX_BASE_ZERO 0",
+            "#define PIO_SCOPF_INDEX_BASE_ONE 1",
             "#define PIO_MISSING_GEN_COST_PRESERVE 0",
             "#define PIO_MISSING_GEN_COST_REQUIRE 1",
             "#define PIO_MISSING_GEN_COST_FILL 2",
@@ -3901,6 +3954,7 @@ mod tests {
             "PioNetwork *pio_geo_apply(const PioNetwork *net, const char *layer, const char *name_hint, char *errbuf, size_t errlen);",
             "PioScopfInstance *pio_scopf_parse_str(const char *text, const char *from, char *errbuf, size_t errlen);",
             "char *pio_scopf_to_json(const PioScopfInstance *instance, char *errbuf, size_t errlen);",
+            "char *pio_scopf_to_json_with_index_base(const PioScopfInstance *instance, int32_t index_base, char *errbuf, size_t errlen);",
             "void pio_scopf_instance_free(PioScopfInstance *instance);",
             "PioDistNetwork *pio_dist_parse_file(const char *path, const char *from, char *errbuf, size_t errlen);",
             "PioDistNetwork *pio_dist_parse_str(const char *text, const char *format, char *errbuf, size_t errlen);",
@@ -5221,7 +5275,7 @@ mpc.branch = [
 
     #[cfg(feature = "prob")]
     #[test]
-    fn scopf_handle_serializes_its_wire_document() {
+    fn scopf_handle_serializes_json_document() {
         let text = CString::new(GOC3_SMALL_FIXTURE).unwrap();
         let from = CString::new("goc3-json").unwrap();
         let feature = CString::new("prob").unwrap();
@@ -5242,11 +5296,37 @@ mpc.branch = [
 
             assert_eq!(v["schema"], "powerio.scopf");
             assert_eq!(v[powerio::version::VERSION_KEY], powerio::VERSION);
-            assert_eq!(v["index_base"], 1);
+            assert_eq!(v["index_base"], 0);
             assert_eq!(v["instance"]["lengths"]["I"], 2);
-            assert_eq!(v["instance"]["static"]["acl_branch"][0]["j_ln"], 1);
+            assert_eq!(v["instance"]["static"]["acl_branch"][0]["j_ln"], 0);
+
+            let explicit_zero_json = pio_scopf_to_json_with_index_base(
+                instance,
+                PIO_SCOPF_INDEX_BASE_ZERO,
+                err.as_mut_ptr(),
+                err.len(),
+            );
+            assert!(!explicit_zero_json.is_null());
+            assert_eq!(
+                CStr::from_ptr(explicit_zero_json).to_bytes(),
+                text.as_bytes()
+            );
+
+            let one_based_json = pio_scopf_to_json_with_index_base(
+                instance,
+                PIO_SCOPF_INDEX_BASE_ONE,
+                err.as_mut_ptr(),
+                err.len(),
+            );
+            assert!(!one_based_json.is_null());
+            let one_based: serde_json::Value =
+                serde_json::from_str(CStr::from_ptr(one_based_json).to_str().unwrap()).unwrap();
+            assert_eq!(one_based["index_base"], 1);
+            assert_eq!(one_based["instance"]["static"]["acl_branch"][0]["j_ln"], 1);
 
             pio_string_free(json);
+            pio_string_free(explicit_zero_json);
+            pio_string_free(one_based_json);
             pio_scopf_instance_free(instance);
             pio_scopf_instance_free(std::ptr::null_mut());
         }
@@ -5279,6 +5359,19 @@ mpc.branch = [
                     .unwrap()
                     .contains("unsupported SCOPF source format")
             );
+
+            let instance =
+                pio_scopf_parse_str(valid.as_ptr(), from.as_ptr(), err.as_mut_ptr(), err.len());
+            assert!(!instance.is_null());
+            let json = pio_scopf_to_json_with_index_base(instance, 2, err.as_mut_ptr(), err.len());
+            assert!(json.is_null());
+            assert!(
+                CStr::from_ptr(err.as_ptr())
+                    .to_str()
+                    .unwrap()
+                    .starts_with("BIND.CAPI.INVALID_OPTIONS: ")
+            );
+            pio_scopf_instance_free(instance);
 
             let json = pio_scopf_to_json(std::ptr::null(), err.as_mut_ptr(), err.len());
             assert!(json.is_null());

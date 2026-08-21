@@ -170,10 +170,11 @@ name. It currently accepts `goc3-json` and returns an owned
 `PioScopfInstance` handle. A null result indicates a parse or assembly error;
 `errbuf` receives the message.
 
-`pio_scopf_to_json` returns the versioned SCOPF wire document. The document
-records its powerio version and 1-based index convention. Free the returned
-string with `pio_string_free` and the instance with
-`pio_scopf_instance_free`.
+`pio_scopf_to_json` returns the versioned SCOPF JSON document with 0-based
+ordinals. `pio_scopf_to_json_with_index_base` accepts
+`PIO_SCOPF_INDEX_BASE_ZERO` or `PIO_SCOPF_INDEX_BASE_ONE`. The document records
+the selected `index_base`. Free the returned string with `pio_string_free` and
+the instance with `pio_scopf_instance_free`.
 
 ## API names
 

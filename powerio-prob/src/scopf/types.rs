@@ -130,7 +130,7 @@ pub struct ScopfDeviceRow {
     pub bus: BusId,
     pub uid: String,
     /// 0-based position within the row's own class list (`prod` or `cons`),
-    /// document order. The document renumbers it 1-based.
+    /// in document order. Serialization can retain base 0 or select base 1.
     pub j_dev: usize,
     /// 0-based position in the canonical device stacking: the producer block,
     /// then the consumer block, document order within each. Sound for every
