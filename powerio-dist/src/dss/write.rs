@@ -497,6 +497,54 @@ impl DssWriter {
         found.next().is_none().then_some(idx)
     }
 
+    /// Report a positional node list whose unique grounded return is not
+    /// last. The diagnostic is intentionally separate from [`Self::bus_ref`]:
+    /// lines and switches index their impedance matrices by these maps, so a
+    /// map-only repair would silently relabel their electrical data.
+    fn warn_terminal_order(
+        &mut self,
+        class: &str,
+        name: &str,
+        bus: &str,
+        endpoint: Option<&str>,
+        map: &[String],
+    ) {
+        let Some(index) = self.return_terminal_index(bus, map) else {
+            return;
+        };
+        if index + 1 == map.len() {
+            return;
+        }
+
+        let terminal = &map[index];
+        let position = index + 1;
+        let endpoint_text = endpoint.map_or(String::new(), |value| format!(" {value}"));
+        let mut details = serde_json::Map::new();
+        details.insert("class".into(), serde_json::json!(class));
+        details.insert("element_name".into(), serde_json::json!(name));
+        details.insert("bus".into(), serde_json::json!(bus));
+        if let Some(endpoint) = endpoint {
+            details.insert("endpoint".into(), serde_json::json!(endpoint));
+        }
+        details.insert("grounded_terminal".into(), serde_json::json!(terminal));
+        details.insert("position".into(), serde_json::json!(position));
+        details.insert("terminal_count".into(), serde_json::json!(map.len()));
+
+        self.warnings.record(
+            crate::diagnostics::StructuredDiagnostic::of(
+                &C::EMIT_DSS_TERMINAL_ORDER_UNREPRESENTABLE,
+                format!(
+                    "{class} {name}{endpoint_text} on bus {bus}: grounded terminal `{terminal}` \
+                     is at 1-based position {position} of {}; dss requires the grounded return \
+                     last",
+                    map.len()
+                ),
+            )
+            .with_element_path(format!("{class} {name}"))
+            .with_details(details),
+        );
+    }
+
     /// A numeric source extra. A present token that does not parse warns;
     /// the derived value substitutes and the extra is consumed either way.
     fn source_extra_f64(&mut self, vs: &crate::model::VoltageSource, key: &str) -> Option<f64> {
@@ -1069,6 +1117,14 @@ impl DssWriter {
     fn lines(&mut self, net: &MulticonductorNetwork) {
         for l in &net.lines {
             self.check_name("line", &l.name);
+            self.warn_terminal_order(
+                "line",
+                &l.name,
+                &l.bus_from,
+                Some("bus1"),
+                &l.terminal_map_from,
+            );
+            self.warn_terminal_order("line", &l.name, &l.bus_to, Some("bus2"), &l.terminal_map_to);
             let phases = l.terminal_map_from.len();
             let mut s = format!(
                 "New Line.{} bus1={} bus2={} phases={phases} linecode={} length={} units=m",
@@ -1130,6 +1186,20 @@ impl DssWriter {
     fn switches(&mut self, net: &MulticonductorNetwork) {
         for sw in &net.switches {
             self.check_name("line", &sw.name);
+            self.warn_terminal_order(
+                "switch",
+                &sw.name,
+                &sw.bus_from,
+                Some("bus1"),
+                &sw.terminal_map_from,
+            );
+            self.warn_terminal_order(
+                "switch",
+                &sw.name,
+                &sw.bus_to,
+                Some("bus2"),
+                &sw.terminal_map_to,
+            );
             let phases = sw.terminal_map_from.len();
             let mut s = format!(
                 "New Line.{} bus1={} bus2={} phases={phases} switch=y",
@@ -1902,6 +1972,7 @@ impl DssWriter {
                 continue;
             }
             self.check_name("capacitor", &c.name);
+            self.warn_terminal_order("capacitor", &c.name, &c.bus, None, &c.terminal_map);
             let phases = self.element_phases(
                 &c.extras,
                 &c.terminal_map,
@@ -1968,6 +2039,7 @@ impl DssWriter {
     fn generators(&mut self, net: &MulticonductorNetwork) {
         for g in &net.generators {
             self.check_name("generator", &g.name);
+            self.warn_terminal_order("generator", &g.name, &g.bus, None, &g.terminal_map);
             let phases = self.element_phases(
                 &g.extras,
                 &g.terminal_map,
@@ -2054,6 +2126,7 @@ impl DssWriter {
     }
 
     fn write_fixed_ibr_generator(&mut self, ibr: &DistIbr) {
+        self.warn_terminal_order("ibr", &ibr.name, &ibr.bus, None, &ibr.terminal_map);
         let phases = ibr_phases(ibr);
         let configuration = ibr_configuration(ibr);
         let conn = self.element_conn(&ibr.extras, configuration, &ibr.bus, &ibr.terminal_map);
@@ -2085,6 +2158,7 @@ impl DssWriter {
     }
 
     fn write_pvsystem(&mut self, ibr: &DistIbr, net: &MulticonductorNetwork) {
+        self.warn_terminal_order("ibr", &ibr.name, &ibr.bus, None, &ibr.terminal_map);
         let phases = ibr_phases(ibr);
         let configuration = ibr_configuration(ibr);
         let conn = self.element_conn(&ibr.extras, configuration, &ibr.bus, &ibr.terminal_map);
@@ -2682,6 +2756,95 @@ mod tests {
             voltage_model: DistLoadVoltageModel::ConstantPower { v_nom: Vec::new() },
             extras: Extras::from([("kv".to_string(), serde_json::json!("0.4"))]),
         }
+    }
+
+    fn terminal_order_network(map: &[&str]) -> MulticonductorNetwork {
+        let (source_bus, source) = three_phase_source(240.0);
+        let element_map = strings(map);
+
+        let capacitor = crate::model::DistCapacitor::new(
+            "cap",
+            "lv",
+            element_map.clone(),
+            Configuration::SinglePhase,
+            1_000.0,
+            240.0,
+        );
+        let mut generator = DistGenerator::new(
+            "gen",
+            "lv",
+            element_map.clone(),
+            Configuration::SinglePhase,
+            vec![1_000.0],
+            vec![0.0],
+        );
+        generator
+            .extras
+            .insert("kv".into(), serde_json::json!(0.24));
+
+        let mut fixed_ibr = DistIbr::new(
+            "fixed_ibr",
+            "lv",
+            element_map.clone(),
+            IbrTopology::SinglePhase,
+            IbrPrimeMover::Pv,
+            vec![1_000.0],
+        );
+        fixed_ibr.p_min = Some(vec![1_000.0]);
+        fixed_ibr.p_max = Some(vec![1_000.0]);
+        fixed_ibr.q_min = Some(vec![0.0]);
+        fixed_ibr.q_max = Some(vec![0.0]);
+        fixed_ibr
+            .extras
+            .insert("kv".into(), serde_json::json!(0.24));
+
+        let mut pv_ibr = DistIbr::new(
+            "pv_ibr",
+            "lv",
+            element_map.clone(),
+            IbrTopology::SinglePhase,
+            IbrPrimeMover::Pv,
+            vec![1_000.0],
+        );
+        pv_ibr.p_avail = Some(1_000.0);
+        pv_ibr.extras.insert("kv".into(), serde_json::json!(0.24));
+
+        MulticonductorNetwork {
+            name: Some("terminal_order".into()),
+            base_frequency: 60.0,
+            buses: vec![source_bus, bus("lv", map, &["n"])],
+            sources: vec![source],
+            lines: vec![DistLine::new(
+                "l1",
+                "lv",
+                "lv",
+                element_map.clone(),
+                element_map.clone(),
+                "lc",
+                1.0,
+            )],
+            switches: vec![DistSwitch::new(
+                "sw1",
+                "lv",
+                "lv",
+                element_map.clone(),
+                element_map,
+                false,
+            )],
+            generators: vec![generator],
+            ibrs: vec![fixed_ibr, pv_ibr],
+            capacitors: vec![capacitor],
+            ..MulticonductorNetwork::default()
+        }
+    }
+
+    fn terminal_order_diagnostics(
+        out: &crate::convert::Conversion,
+    ) -> Vec<&crate::diagnostics::StructuredDiagnostic> {
+        out.diagnostics
+            .iter()
+            .filter(|d| d.code.as_str() == C::EMIT_DSS_TERMINAL_ORDER_UNREPRESENTABLE.code)
+            .collect()
     }
 
     fn roundtrip(net: &MulticonductorNetwork) -> (String, String) {
@@ -3353,6 +3516,112 @@ mod tests {
             assert!(line.contains("kw=1.304"), "{line}");
             assert!(line.contains("kvar=0.978"), "{line}");
         }
+    }
+
+    #[test]
+    fn misordered_grounded_returns_are_error_diagnostics_only() {
+        let out = write_dss(&terminal_order_network(&["p1", "n", "p2"]));
+        let diagnostics = terminal_order_diagnostics(&out);
+
+        assert_eq!(diagnostics.len(), 8, "{:?}", out.diagnostics);
+        for diagnostic in &diagnostics {
+            assert_eq!(
+                diagnostic.severity,
+                crate::diagnostics::DiagnosticSeverity::Error
+            );
+            assert_eq!(diagnostic.details["grounded_terminal"], "n");
+            assert_eq!(diagnostic.details["position"], 2);
+            assert_eq!(diagnostic.details["terminal_count"], 3);
+            assert!(diagnostic.details.contains_key("class"));
+            assert!(diagnostic.details.contains_key("element_name"));
+            assert_eq!(diagnostic.details["bus"], "lv");
+        }
+        for (class, name) in [
+            ("capacitor", "cap"),
+            ("generator", "gen"),
+            ("ibr", "fixed_ibr"),
+            ("ibr", "pv_ibr"),
+        ] {
+            assert!(diagnostics.iter().any(|d| {
+                d.details["class"] == class
+                    && d.details["element_name"] == name
+                    && !d.details.contains_key("endpoint")
+                    && d.element_path.as_deref() == Some(&format!("{class} {name}"))
+            }));
+        }
+
+        // The mitigation adds records only. Pin every emitted byte so it
+        // cannot reorder, refuse, or otherwise repair an element by accident.
+        let expected = concat!(
+            "Clear\n",
+            "Set DefaultBaseFrequency=60\n",
+            "\n",
+            "New Circuit.terminal_order basekv=0.4156921938165305 pu=1 angle=0 phases=3 bus1=sb.1.2.3.0\n",
+            "\n",
+            "\n",
+            "New Line.l1 bus1=lv.1.0.3 bus2=lv.1.0.3 phases=3 linecode=lc length=1 units=m\n",
+            "\n",
+            "New Line.sw1 bus1=lv.1.0.3 bus2=lv.1.0.3 phases=3 switch=y\n",
+            "New SwtControl.sw1_state SwitchedObj=Line.sw1 Action=close\n",
+            "\n",
+            "\n",
+            "\n",
+            "\n",
+            "New Capacitor.cap bus1=lv.1.0.3 phases=1 conn=wye kv=0.24 kvar=1\n",
+            "New Generator.gen bus1=lv.1.0.3 phases=1 conn=wye kv=0.24 kw=1 kvar=0\n",
+            "New Generator.fixed_ibr bus1=lv.1.0.3 phases=1 conn=wye kv=0.24 kw=1 kvar=0 model=1 vminpu=0 vmaxpu=2 maxkvar=0 minkvar=0\n",
+            "New PVSystem.pv_ibr bus1=lv.1.0.3 phases=1 conn=wye kv=0.24 kVA=1 Pmpp=1 irradiance=1 %Pmpp=100 WattPriority=No VarFollowInverter=Yes\n",
+            "\n",
+            "\n",
+            "Set VoltageBases=[0.4156921938165305]\n",
+            "Calcvoltagebases\n",
+            "Solve\n",
+        );
+        assert_eq!(out.text, expected);
+    }
+
+    #[test]
+    fn line_and_switch_diagnostics_distinguish_both_bus_endpoints() {
+        let out = write_dss(&terminal_order_network(&["p1", "n", "p2"]));
+        let diagnostics = terminal_order_diagnostics(&out);
+
+        for (class, name) in [("line", "l1"), ("switch", "sw1")] {
+            for endpoint in ["bus1", "bus2"] {
+                assert!(
+                    diagnostics.iter().any(|d| {
+                        d.details["class"] == class
+                            && d.details["element_name"] == name
+                            && d.details["endpoint"] == endpoint
+                            && d.details["bus"] == "lv"
+                    }),
+                    "missing {class} {name} {endpoint}: {diagnostics:?}"
+                );
+            }
+        }
+
+        let line = out
+            .text
+            .lines()
+            .find(|line| line.starts_with("New Line.l1 "))
+            .unwrap();
+        assert!(line.contains("bus1=lv.1.0.3 bus2=lv.1.0.3 "), "{line}");
+        let switch = out
+            .text
+            .lines()
+            .find(|line| line.starts_with("New Line.sw1 "))
+            .unwrap();
+        assert!(switch.contains("bus1=lv.1.0.3 bus2=lv.1.0.3 "), "{switch}");
+    }
+
+    #[test]
+    fn grounded_return_last_needs_no_terminal_order_diagnostic() {
+        let out = write_dss(&terminal_order_network(&["p1", "p2", "n"]));
+        assert!(
+            terminal_order_diagnostics(&out).is_empty(),
+            "{:?}",
+            out.diagnostics
+        );
+        assert!(out.text.contains("bus1=lv.1.2.0"), "{}", out.text);
     }
 
     #[test]

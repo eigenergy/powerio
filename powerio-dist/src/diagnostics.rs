@@ -73,6 +73,11 @@ pub mod codes {
             "a stated value was replaced by one the dss engine reads back the same way";
         EMIT_DSS_EXTRAS_DROPPED = "EMIT.DSS.EXTRAS_DROPPED", Warning,
             "a passthrough extra the canonical dss writer does not regenerate was dropped";
+        /// OpenDSS reads a node list positionally, with a grounded return
+        /// conductor last. A uniquely grounded return in any other position
+        /// makes the emitted element address different conductors.
+        EMIT_DSS_TERMINAL_ORDER_UNREPRESENTABLE = "EMIT.DSS.TERMINAL_ORDER_UNREPRESENTABLE", Error,
+            "a grounded return conductor is not last in a positional dss node list";
 
         // READ.PMD.
         READ_PMD_FIELD_DROPPED = "READ.PMD.FIELD_DROPPED", Warning,
