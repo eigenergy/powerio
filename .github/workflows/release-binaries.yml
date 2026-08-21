@@ -233,6 +233,16 @@ jobs:
         if: matrix.triplet == 'x86_64-w64-mingw32'
         shell: pwsh
         run: |
+          # cargo reaches the MSVC toolset through the cc crate, but a bare
+          # cl.exe is not on PATH until the developer shell is entered.
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          $vsPath = & $vswhere -latest -products * `
+            -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 `
+            -property installationPath
+          if (-not $vsPath) { throw 'no Visual Studio C++ toolset on this runner' }
+          Import-Module "$vsPath\Common7\Tools\Microsoft.VisualStudio.DevShell.dll"
+          Enter-VsDevShell -VsInstallPath $vsPath -SkipAutomaticLocation `
+            -DevCmdArguments '-arch=x64 -host_arch=x64'
           $metadata = cargo metadata --no-deps --format-version 1 | ConvertFrom-Json
           $version = ($metadata.packages | Where-Object { $_.name -eq 'powerio-capi' }).version
           $defines = @('/DPIO_ARROW', '/DPIO_MATRIX', '/DPIO_GRIDFM', '/DPIO_DIST', '/DPIO_PKG', '/DPIO_PROB')
