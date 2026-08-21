@@ -19,7 +19,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
 
 env:
   CARGO_TERM_COLOR: always
@@ -63,23 +63,23 @@ jobs:
         Set a valid POWERIO_JL_REPO_TOKEN to release. A workflow_dispatch run builds \
         artifact-only tarballs without the gate."
         exit 1
-    - uses: actions/checkout@v6
-    - uses: dtolnay/rust-toolchain@stable
-    - uses: Swatinem/rust-cache@v2
+    - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+    - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable
+    - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
     - name: Build powerio-capi
       run: |
         cargo build -p powerio-capi --release \
           --features arrow,matrix,gridfm,dist,pkg,prob
     - name: Check out PowerIO.jl default branch
-      uses: actions/checkout@v6
+      uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
       with:
         repository: eigenergy/PowerIO.jl
         path: PowerIO.jl
         token: ${{ secrets.POWERIO_JL_REPO_TOKEN || github.token }}
-    - uses: julia-actions/setup-julia@v3
+    - uses: julia-actions/setup-julia@fa02766e078afaaf09b14210362cee14137e6a32 # v3
       with:
         version: '1'
-    - uses: julia-actions/cache@v3
+    - uses: julia-actions/cache@a45e8fa8be21c18a06b7177052533149e61e9b38 # v3
     - name: Test PowerIO.jl against this tag
       env:
         POWERIO_CAPI: ${{ github.workspace }}/target/release/libpowerio_capi.so
@@ -126,11 +126,11 @@ jobs:
             triplet: x86_64-w64-mingw32
             lib: powerio_capi.dll
     steps:
-      - uses: actions/checkout@v6
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable
         with:
           targets: ${{ matrix.rust_target }}
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
           key: ${{ matrix.rust_target }}
       # The tarballs and the draft release are named for the tag, and PowerIO.jl
@@ -140,7 +140,7 @@ jobs:
       # lineage. crates.yml catches the mismatch, but only after a human has
       # published the release.
       - name: Check the tag against the workspace version
-        if: github.ref_type == 'tag'
+        if: github.event_name == 'push'
         shell: bash
         env:
           TAG: ${{ github.ref_name }}
@@ -156,7 +156,7 @@ jobs:
         if: matrix.cross_gcc != ''
         run: |
           sudo apt-get update
-          sudo apt-get install -y ${{ matrix.cross_gcc }}
+          sudo apt-get install -y ${{ matrix.cross_gcc }} qemu-user
           echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc" >> "$GITHUB_ENV"
       - name: Build powerio-capi
         run: cargo build -p powerio-capi --release --features arrow,matrix,gridfm,dist,pkg,prob --target ${{ matrix.rust_target }}
@@ -182,19 +182,92 @@ jobs:
           cp powerio-capi/include/powerio.h "$stage/include/"
           cp LICENSE-MIT LICENSE-APACHE "$stage/"
           tar -czf "libpowerio_capi.${{ matrix.triplet }}.tar.gz" -C "$stage" .
+          python3 scripts/audit-release-archives.py \
+            "libpowerio_capi.${{ matrix.triplet }}.tar.gz"
           # informational; gen/update_artifacts.jl recomputes from the release assets
           shasum -a 256 "libpowerio_capi.${{ matrix.triplet }}.tar.gz" \
             || sha256sum "libpowerio_capi.${{ matrix.triplet }}.tar.gz"
-      - uses: actions/upload-artifact@v7
+      - name: Runtime smoke test packaged Unix library
+        if: matrix.triplet != 'x86_64-w64-mingw32'
+        shell: bash
+        run: |
+          version="$(cargo metadata --no-deps --format-version 1 \
+            | jq -er '.packages[] | select(.name == "powerio-capi") | .version')"
+          stage="stage/libpowerio_capi"
+          defs=(-DPIO_ARROW -DPIO_MATRIX -DPIO_GRIDFM -DPIO_DIST -DPIO_PKG -DPIO_PROB)
+          case "${{ matrix.triplet }}" in
+            x86_64-linux-gnu)
+              # shellcheck disable=SC2016
+              cc "${defs[@]}" -I "$stage/include" powerio-capi/examples/release_smoke.c \
+                -L "$stage/lib" -lpowerio_capi \
+                -Wl,-rpath,'$ORIGIN/stage/libpowerio_capi/lib' -o release-smoke
+              ./release-smoke "$version"
+              ;;
+            aarch64-linux-gnu)
+              # shellcheck disable=SC2016
+              aarch64-linux-gnu-gcc "${defs[@]}" -I "$stage/include" \
+                powerio-capi/examples/release_smoke.c \
+                -L "$stage/lib" -lpowerio_capi \
+                -Wl,-rpath,'$ORIGIN/stage/libpowerio_capi/lib' -o release-smoke
+              qemu-aarch64 -L /usr/aarch64-linux-gnu ./release-smoke "$version"
+              ;;
+            x86_64-apple-darwin)
+              /usr/sbin/softwareupdate --install-rosetta --agree-to-license
+              cc -arch x86_64 "${defs[@]}" -I "$stage/include" \
+                powerio-capi/examples/release_smoke.c \
+                -L "$stage/lib" -lpowerio_capi \
+                -Wl,-rpath,@executable_path/stage/libpowerio_capi/lib \
+                -o release-smoke
+              arch -x86_64 ./release-smoke "$version"
+              ;;
+            aarch64-apple-darwin)
+              cc -arch arm64 "${defs[@]}" -I "$stage/include" \
+                powerio-capi/examples/release_smoke.c \
+                -L "$stage/lib" -lpowerio_capi \
+                -Wl,-rpath,@executable_path/stage/libpowerio_capi/lib \
+                -o release-smoke
+              arch -arm64 ./release-smoke "$version"
+              ;;
+          esac
+      - name: Runtime smoke test packaged Windows library
+        if: matrix.triplet == 'x86_64-w64-mingw32'
+        shell: pwsh
+        run: |
+          $metadata = cargo metadata --no-deps --format-version 1 | ConvertFrom-Json
+          $version = ($metadata.packages | Where-Object { $_.name -eq 'powerio-capi' }).version
+          $defines = @('/DPIO_ARROW', '/DPIO_MATRIX', '/DPIO_GRIDFM', '/DPIO_DIST', '/DPIO_PKG', '/DPIO_PROB')
+          $importLib = Get-ChildItem target/${{ matrix.rust_target }}/release -Filter '*powerio_capi*.dll.lib' |
+            Select-Object -First 1 -ExpandProperty FullName
+          if (-not $importLib) { throw 'powerio-capi import library is missing' }
+          cl.exe /nologo /std:c11 $defines /Istage/libpowerio_capi/include `
+            powerio-capi/examples/release_smoke.c `
+            $importLib `
+            /Fe:release-smoke.exe
+          Copy-Item stage/libpowerio_capi/bin/libpowerio_capi.dll powerio_capi.dll
+          ./release-smoke.exe $version
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: libpowerio_capi.${{ matrix.triplet }}
           path: libpowerio_capi.${{ matrix.triplet }}.tar.gz
+
+  attach:
+    name: attach draft release assets
+    if: github.event_name == 'push'
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          pattern: libpowerio_capi.*
+          path: release-assets
+          merge-multiple: true
       # The draft release body is the CHANGELOG section for this version (the
       # v0.0.1 release shipped with a bare one-liner); auto-generated notes are
-      # appended below it. All five matrix jobs write the same body, which
-      # softprops applies idempotently.
+      # appended below it.
       - name: Release body from CHANGELOG
-        if: github.ref_type == 'tag'
         shell: bash
         env:
           TAG: ${{ github.ref_name }}
@@ -208,11 +281,15 @@ jobs:
             echo "CHANGELOG.md has no \"## ${TAG#v}\" section" >&2
             exit 1
           fi
+          asset_count="$(find release-assets -maxdepth 1 -type f -name '*.tar.gz' | wc -l | tr -d ' ')"
+          if [ "$asset_count" != 5 ]; then
+            echo "expected five release assets, found $asset_count" >&2
+            exit 1
+          fi
       - name: Attach to release
-        if: github.ref_type == 'tag'
-        uses: softprops/action-gh-release@v3
+        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3
         with:
-          files: libpowerio_capi.${{ matrix.triplet }}.tar.gz
+          files: release-assets/*.tar.gz
           body_path: release-body.md
           generate_release_notes: true
           # Stage the release as a draft a human publishes: the release event
