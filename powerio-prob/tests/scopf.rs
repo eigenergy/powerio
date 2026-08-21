@@ -542,6 +542,73 @@ fn interleaved_device_classes_are_reported() {
     );
 }
 
+/// Names can contain bus and unit numbers that collide across device classes.
+/// They never define an ordinal; document order does. This synthetic mutation
+/// also covers the optional price and reactive capability fields.
+#[test]
+fn named_uid_digits_do_not_define_document_ordinals() {
+    let mut doc: Value = serde_json::from_str(SMALL).expect("fixture json");
+    let devices = doc["network"]["simple_dispatchable_device"]
+        .as_array_mut()
+        .expect("device array");
+    let mut third = devices[0].clone();
+    third["uid"] = Value::from("Generator Bus 7 #2");
+    devices[0]["uid"] = Value::from("Generator Bus 7 #1");
+    devices[1]["uid"] = Value::from("Load Bus 7 #1");
+    devices[0]["q_bound_cap"] = Value::from(1);
+    devices[0]["beta_ub"] = Value::from(0.5);
+    devices[0]["beta_lb"] = Value::from(-0.5);
+    devices[0]["q_0_ub"] = Value::from(2.0);
+    devices[0]["q_0_lb"] = Value::from(-2.0);
+    devices.push(third);
+
+    let time_series = doc["time_series_input"]["simple_dispatchable_device"]
+        .as_array_mut()
+        .expect("device time series");
+    let mut third_series = time_series[0].clone();
+    third_series["uid"] = Value::from("Generator Bus 7 #2");
+    time_series[0]["uid"] = Value::from("Generator Bus 7 #1");
+    time_series[1]["uid"] = Value::from("Load Bus 7 #1");
+    time_series.push(third_series);
+
+    doc["network"]["shunt"][0]["uid"] = Value::from("Shunt Bus 6");
+    doc["network"]["violation_cost"]
+        .as_object_mut()
+        .expect("violation cost object")
+        .remove("e_vio_cost");
+
+    let text = serde_json::to_string(&doc).expect("serialize");
+    let instance = parse_scopf_str(&text, "goc3-json").expect("build named UID case");
+    let data = &instance.static_data;
+
+    assert_eq!(
+        data.prod
+            .iter()
+            .map(|row| row.uid.as_str())
+            .collect::<Vec<_>>(),
+        ["Generator Bus 7 #1", "Generator Bus 7 #2"]
+    );
+    assert_eq!(data.cons[0].uid, "Load Bus 7 #1");
+    assert_eq!(
+        (data.shunt[0].uid.as_str(), data.shunt[0].j_sh),
+        ("Shunt Bus 6", 0)
+    );
+    assert_eq!(
+        data.acl_branch
+            .iter()
+            .map(|row| row.j_ln)
+            .collect::<Vec<_>>(),
+        [0, 1]
+    );
+    assert_eq!(instance.violation_cost.e, None);
+    assert_eq!(data.prod[0].q_bound_cap, 1);
+    assert_eq!(data.prod[0].beta_ub, Some(0.5));
+    assert_eq!(
+        instance.device_class_layout,
+        ScopfDeviceClassLayout::Interleaved
+    );
+}
+
 #[test]
 #[allow(deprecated)]
 fn the_08_scopf_entry_point_still_answers() {

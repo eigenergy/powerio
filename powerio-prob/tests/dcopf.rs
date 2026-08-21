@@ -172,11 +172,13 @@ fn an_unrated_branch_takes_a_synthesized_limit_on_request() {
 
     let unlimited = build_dc_opf_instance(&view, &DcOpfOptions::default()).expect("default");
     assert_close(unlimited.branches.f_max[0], 0.0);
+    assert!(!unlimited.synthesize_unrated_limits);
 
     // The bus voltage ceilings are 1.1, the reactance is 0.2, and the window
     // is ±30°.
     let window = 30.0_f64.to_radians();
     let synthesized = build_dc_opf_instance(&view, &options).expect("synthesized");
+    assert!(synthesized.synthesize_unrated_limits);
     assert_close(
         synthesized.branches.f_max[0],
         1.1 * (2.42 - 2.42 * window.cos()).sqrt() / 0.2,
@@ -417,6 +419,45 @@ fn matpower_convention_applies_tap_and_phase_shift() {
 }
 
 #[test]
+fn phase_shift_and_shunt_complete_the_dc_balance_and_flow_equations() {
+    let mut net = small_network();
+    net.branches[0].shift = 10.0;
+    net.loads.push(powerio::Load::new(BusId(30), 20.0, 0.0));
+    net.shunts.push(powerio::Shunt::new(BusId(30), 5.0, 0.0));
+    let problem = build_dc_opf_instance(
+        &IndexedNetwork::new(&net),
+        &DcOpfOptions {
+            convention: DcConvention::Matpower,
+            ..DcOpfOptions::default()
+        },
+    )
+    .expect("build shifted instance");
+
+    assert_close(problem.p_shift.iter().sum::<f64>(), 0.0);
+    let fixed = problem.fixed_nodal_withdrawal();
+    let flow_offset = problem.branch_flow_offset();
+    let b = problem.branches.b[0];
+    let shift = 10.0_f64.to_radians();
+    assert_close(flow_offset[0], -b * shift);
+    assert_close(fixed[0], -b * shift);
+    assert_close(fixed[1], 0.25 + b * shift);
+
+    // Ground bus 0. Bus 1 fixes theta_1 through
+    // L theta = Cg pg - fixed; total generation is sum(fixed).
+    let theta = [0.0, -fixed[1] / b];
+    let l_theta = [b * (theta[0] - theta[1]), b * (theta[1] - theta[0])];
+    let generation = fixed.iter().sum::<f64>();
+    assert_close(l_theta[0], generation - fixed[0]);
+    assert_close(l_theta[1], -fixed[1]);
+
+    // The affine branch equation reaches the equivalent physical balance
+    // A f = Cg pg - p_d - g_s.
+    let flow = b * (theta[0] - theta[1]) + flow_offset[0];
+    assert_close(flow, generation - problem.p_d[0] - problem.g_s[0]);
+    assert_close(-flow, -problem.p_d[1] - problem.g_s[1]);
+}
+
+#[test]
 fn source_maps_exclude_out_of_service_elements() {
     let mut net = case9();
     net.generators[1].in_service = false;
@@ -615,9 +656,28 @@ fn serde_round_trip() {
     assert_eq!(back.bus_ids, problem.bus_ids);
     assert_eq!(back.generators.source_rows, problem.generators.source_rows);
     assert_eq!(back.branches.source_rows, problem.branches.source_rows);
+    assert_eq!(
+        back.synthesize_unrated_limits,
+        problem.synthesize_unrated_limits
+    );
     for (left, right) in back.branches.b.iter().zip(&problem.branches.b) {
         assert!((left - right).abs() < 1e-12);
     }
+}
+
+#[test]
+fn instance_deserializes_without_synthesize_unrated_limits() {
+    let net = case9();
+    let problem =
+        build_dc_opf_instance(&IndexedNetwork::new(&net), &DcOpfOptions::default()).expect("build");
+    let mut value = serde_json::to_value(problem).expect("serialize");
+    value
+        .as_object_mut()
+        .expect("instance object")
+        .remove("synthesize_unrated_limits");
+    let back: powerio_prob::DcOpfInstance =
+        serde_json::from_value(value).expect("read earlier instance");
+    assert!(!back.synthesize_unrated_limits);
 }
 
 #[test]
@@ -684,9 +744,20 @@ mod matrix_tests {
 
     #[test]
     fn bundle_uses_instance_data_and_records_metadata() {
-        let net = parse_matpower_file("../tests/data/case14.m").expect("parse case14");
-        let problem = build_dc_opf_instance(&IndexedNetwork::new(&net), &DcOpfOptions::default())
-            .expect("build");
+        use std::collections::BTreeSet;
+
+        let mut net = parse_matpower_file("../tests/data/case14.m").expect("parse case14");
+        net.branches[0].shift = 10.0;
+        net.shunts
+            .push(powerio::Shunt::new(net.buses[1].id, 5.0, 0.0));
+        let problem = build_dc_opf_instance(
+            &IndexedNetwork::new(&net),
+            &DcOpfOptions {
+                synthesize_unrated_limits: true,
+                ..DcOpfOptions::default()
+            },
+        )
+        .expect("build");
         let output = tempfile::tempdir().expect("tempdir");
         let options = DcOpfBundleOptions {
             metadata: DcOpfBundleMetadata {
@@ -712,6 +783,16 @@ mod matrix_tests {
         let c0_gen =
             powerio_matrix::io::read_vector_mtx(bundle.dir.join("c0_gen.mtx")).expect("c0_gen");
         assert_eq!(c0_gen, problem.generators.c0);
+        let shift =
+            powerio_matrix::io::read_vector_mtx(bundle.dir.join("shift.mtx")).expect("shift");
+        assert_eq!(shift, problem.branches.shift);
+        let flow_offset = powerio_matrix::io::read_vector_mtx(bundle.dir.join("flow_offset.mtx"))
+            .expect("flow_offset");
+        assert_eq!(flow_offset, problem.branch_flow_offset());
+        let fixed_withdrawal =
+            powerio_matrix::io::read_vector_mtx(bundle.dir.join("fixed_withdrawal.mtx"))
+                .expect("fixed_withdrawal");
+        assert_eq!(fixed_withdrawal, problem.fixed_nodal_withdrawal());
         // The shunt conductance a nodal balance subtracts beside `pd`.
         let g_s = powerio_matrix::io::read_vector_mtx(bundle.dir.join("gs.mtx")).expect("gs");
         assert_eq!(g_s, problem.g_s);
@@ -724,5 +805,33 @@ mod matrix_tests {
         );
         assert_eq!(manifest["patched_gen_costs"], 1);
         assert_eq!(manifest["cost_policy"]["mode"], "require");
+        assert_eq!(manifest["build_options"]["skip_zero_impedance"], true);
+        assert_eq!(manifest["build_options"]["synthesize_unrated_limits"], true);
+
+        let emitted_files: Vec<_> = manifest["files"]
+            .as_array()
+            .expect("files array")
+            .iter()
+            .map(|value| value.as_str().expect("file name"))
+            .collect();
+        let operator_files: Vec<_> = manifest["operators"]
+            .as_array()
+            .expect("operators array")
+            .iter()
+            .map(|value| value["file"].as_str().expect("operator file"))
+            .collect();
+        let emitted_set: BTreeSet<_> = emitted_files.iter().copied().collect();
+        let operator_set: BTreeSet<_> = operator_files.iter().copied().collect();
+        assert_eq!(
+            emitted_files.len(),
+            emitted_set.len(),
+            "duplicate output file"
+        );
+        assert_eq!(
+            operator_files.len(),
+            operator_set.len(),
+            "duplicate operator metadata"
+        );
+        assert_eq!(operator_set, emitted_set);
     }
 }

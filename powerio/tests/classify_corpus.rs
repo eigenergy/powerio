@@ -140,6 +140,10 @@ fn classifier_and_diagnostic_types_are_crate_root_exports() {
     let class = powerio::classify_json_text(r#"{"model_kind":"balanced","model":{}}"#);
     assert!(matches!(class, powerio::JsonClass::Package));
     assert!(matches!(
+        powerio::classify_json_bytes(b"{\"model_kind\":\"balanced\",\"model\":{}}"),
+        powerio::JsonClass::Package
+    ));
+    assert!(matches!(
         powerio::classify_json_text("not json"),
         powerio::JsonClass::Case(powerio::Detection::Unknown)
     ));

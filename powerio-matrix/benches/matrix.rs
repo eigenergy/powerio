@@ -16,17 +16,23 @@ use powerio_matrix::matrix::{
 use powerio_matrix::pipeline::{MatrixKind, Pipeline, RhsKind};
 use powerio_matrix::{IndexedNetwork, parse_matpower};
 use std::hint::black_box;
+use std::path::Path;
 
-fn fixture(name: &str) -> &'static str {
-    match name {
-        "case118" => include_str!("../../tests/data/case118.m"),
-        "case2869pegase" => include_str!("../../tests/data/case2869pegase.m"),
-        _ => unreachable!("unknown fixture"),
-    }
+fn fixture(name: &str) -> String {
+    assert!(matches!(name, "case118" | "case2869pegase"));
+    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../tests/data")
+        .join(format!("{name}.m"));
+    std::fs::read_to_string(&path).unwrap_or_else(|error| {
+        panic!(
+            "read checkout-only benchmark fixture {}: {error}",
+            path.display()
+        )
+    })
 }
 
 fn network(name: &str) -> powerio_matrix::BalancedNetwork {
-    parse_matpower(fixture(name)).unwrap_or_else(|e| panic!("parse {name}: {e}"))
+    parse_matpower(&fixture(name)).unwrap_or_else(|e| panic!("parse {name}: {e}"))
 }
 
 fn bench_matrix_builders(c: &mut Criterion) {

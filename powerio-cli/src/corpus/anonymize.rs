@@ -252,9 +252,7 @@ fn build_vocabulary() -> BTreeSet<String> {
     // Filled so `caps_serde` writes its column names, which the schema
     // states as a plain string map.
     let mut generator = Generator::new(BusId(1));
-    for slot in &mut generator.caps {
-        *slot = Some(0.0);
-    }
+    generator.caps.fill(Some(0.0));
     net.generators.push(generator);
     net.loads.push(Load::new(BusId(1), 0.0, 0.0));
     net.shunts.push(Shunt::new(BusId(1), 0.0, 0.0));
