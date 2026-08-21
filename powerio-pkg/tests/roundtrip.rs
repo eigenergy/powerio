@@ -11,7 +11,7 @@ use powerio_pkg::{
     ensure_payload_uids, lower_multiconductor_to_balanced,
 };
 
-const FOUR_WIRE_DSS: &str = r#"! Four wire line with an explicit neutral conductor (no Kron reduction).
+const FOUR_WIRE_DSS: &str = r"! Four wire line with an explicit neutral conductor (no Kron reduction).
 Clear
 Set DefaultBaseFrequency=60
 
@@ -28,7 +28,7 @@ New Line.l1 bus1=sourcebus.1.2.3.0 bus2=loadbus.1.2.3.4 phases=4 linecode=lc4 le
 New Load.la bus1=loadbus.1.4 phases=1 conn=wye kv=0.24 kw=8 pf=0.95 model=1 vminpu=0.8 vmaxpu=1.2
 New Load.lb bus1=loadbus.2.4 phases=1 conn=wye kv=0.24 kw=6 pf=0.95 model=1 vminpu=0.8 vmaxpu=1.2
 New Load.lc bus1=loadbus.3.4 phases=1 conn=wye kv=0.24 kw=10 pf=0.95 model=1 vminpu=0.8 vmaxpu=1.2
-"#;
+";
 
 const MATPOWER_SRC: &str = "\
 function mpc = example
