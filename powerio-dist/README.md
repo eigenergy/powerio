@@ -10,8 +10,8 @@ Writing back to the source format reproduces the retained bytes. Cross format
 conversion reports fields the target cannot represent. The DSS reader expands
 OpenDSS class defaults into explicit model values and records which values came
 from defaults. BMOPF output therefore contains explicit values for those
-fields. The generated conversion matrix records behavior for each fixture in
-`powerio-dist/docs/conversion-matrix.md`.
+fields. The generated [conversion matrix](docs/conversion-matrix.md) records
+behavior for each fixture.
 
 ```rust
 let net = powerio_dist::parse_file("feeder.dss", None)?;

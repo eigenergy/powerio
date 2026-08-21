@@ -30,8 +30,9 @@ resolves against them and is authoritative, with the wire `row` as a fallback
 and consistency check. GOC3 document construction extracts the time series into
 this block while the balanced model JSON holds the first interval.
 
-See `docs/src/compiler-ir.md` and `docs/src/pio-json-schema.md` in the
-repository root.
+See the [compiler model layers](https://eigenergy.github.io/powerio/compiler-ir.html)
+and [`.pio.json` format](https://eigenergy.github.io/powerio/pio-json-schema.html)
+documentation.
 
 ```rust
 use powerio_pkg::{NetworkPackage, ModelKind};

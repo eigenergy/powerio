@@ -101,6 +101,19 @@ jobs:
           echo "docs/schema is stale or missing this build's lineage; commit it" >&2
           exit 1
         fi
+    - name: Check generated BMOPF examples
+      run: cargo run -p powerio-dist --example regen_bmopf_examples -- --check
+
+  archives:
+    name: Published crate archives
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v6
+    - uses: dtolnay/rust-toolchain@stable
+    - name: Build publishable crate archives
+      run: cargo package --workspace --exclude powerio-capi --exclude powerio-py --locked --no-verify
+    - name: Audit licenses and excluded fixtures
+      run: python3 scripts/audit-release-archives.py target/package/*.crate
 
   build:
     runs-on: ubuntu-latest
