@@ -206,6 +206,20 @@ struct ArrowSchema;
  */
 #define PIO_ERRBUF_MIN 256
 
+#if defined(PIO_PROB)
+/**
+ * Keep SCOPF document ordinals 0-based.
+ */
+#define PIO_SCOPF_INDEX_BASE_ZERO 0
+#endif
+
+#if defined(PIO_PROB)
+/**
+ * Renumber SCOPF document ordinals to 1-based.
+ */
+#define PIO_SCOPF_INDEX_BASE_ONE 1
+#endif
+
 /**
  * `PioWriteOptions.missing_gen_cost_mode`: leave a missing cost row absent.
  */
@@ -1264,11 +1278,25 @@ PioScopfInstance *pio_scopf_parse_str(const char *text,
 
 #if defined(PIO_PROB)
 /**
- * Serialize a SCOPF instance as its language neutral document. The JSON records
- * its powerio version and index base. Free the returned string with
- * `pio_string_free`. Returns `NULL` for a null handle or serialization error.
+ * Serialize a SCOPF instance as its language neutral 0-based document. The
+ * JSON records its powerio version and index base. Free the returned string
+ * with `pio_string_free`. Returns `NULL` for a null handle or serialization
+ * error.
  */
 char *pio_scopf_to_json(const PioScopfInstance *instance, char *errbuf, size_t errlen);
+#endif
+
+#if defined(PIO_PROB)
+/**
+ * Serialize a SCOPF instance with 0-based or 1-based ordinals. Pass
+ * `PIO_SCOPF_INDEX_BASE_ZERO` or `PIO_SCOPF_INDEX_BASE_ONE`. Any other value
+ * returns `NULL` and reports `BIND.CAPI.INVALID_OPTIONS`. The JSON records the
+ * selected base. Free the returned string with `pio_string_free`.
+ */
+char *pio_scopf_to_json_with_index_base(const PioScopfInstance *instance,
+                                        int32_t index_base,
+                                        char *errbuf,
+                                        size_t errlen);
 #endif
 
 #if defined(PIO_PROB)

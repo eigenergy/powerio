@@ -55,6 +55,7 @@ bprime = net.bprime()        # needs powerio[matrix]
 graph = net.to_networkx()    # needs powerio[graph]
 dist_graph = pio.dist.parse_file("feeder.dss").graph()
 scopf = pio.parse_scopf(goc3_text, from_="goc3-json")
+scopf_for_julia = pio.parse_scopf(goc3_text, index_base=1)
 ```
 
 ## Model names
@@ -90,12 +91,13 @@ print(first.number, first.name, first.x, first.y)
 
 ## Problem instances
 
-`parse_scopf(text, from_="goc3-json")` assembles a matrix free SCOPF problem
-instance and returns the language neutral `powerio.scopf` document as a Python
-dictionary. The document declares its powerio version and uses 1-based indices.
-Source UIDs and source bus IDs remain separate from those
-indices. Invalid JSON, duplicate identities, missing references, and period
-length mismatches raise `PowerIOError` subclasses.
+`parse_scopf(text, from_="goc3-json", index_base=0)` assembles a matrix free
+SCOPF problem instance and returns the language neutral `powerio.scopf`
+document as a Python dictionary. Python defaults to 0-based ordinals;
+`index_base=1` requests 1-based ordinals. The document records the selected
+base. Source UIDs and source bus IDs never change. Invalid JSON, duplicate
+identities, missing references, period length mismatches, and an index base
+other than 0 or 1 raise `PowerIOError` subclasses or `ValueError`.
 
 ## PyPSA folders
 

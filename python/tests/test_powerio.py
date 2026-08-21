@@ -98,23 +98,29 @@ def test_parse_metadata(case9):
     assert case9.n_connected_components == 1
 
 
-def test_parse_scopf_uses_public_versioned_wire_document():
+def test_parse_scopf_uses_public_versioned_json_document():
     instance = powerio.parse_scopf(SCOPF_SMALL.read_text())
     assert instance["schema"] == "powerio.scopf"
     assert instance["powerio_version"] == powerio.__version__
-    assert instance["index_base"] == 1
+    assert instance["index_base"] == 0
     body = instance["instance"]
     static = body["static"]
     assert body["lengths"]["I"] == 2
     assert body["dt"] == [1.0, 1.0]
-    assert static["acl_branch"][0]["j_ln"] == 1
+    assert static["acl_branch"][0]["j_ln"] == 0
     assert [row["u_0"] for row in static["acl_branch"]] == [1, 0]
     assert static["acx_branch"][0]["u_0"] == 1
-    assert (static["prod"][0]["j_dev"], static["prod"][0]["j_sdd"]) == (1, 1)
-    assert (static["cons"][0]["j_dev"], static["cons"][0]["j_sdd"]) == (1, 2)
+    assert (static["prod"][0]["j_dev"], static["prod"][0]["j_sdd"]) == (0, 0)
+    assert (static["cons"][0]["j_dev"], static["cons"][0]["j_sdd"]) == (0, 1)
     assert static["prod"][0]["u_0"] == 1
-    assert static["active_reserve_set_pr"][0]["j_dev"] == 1
-    assert static["active_reserve_set_pr"][0]["j_sdd"] == 1
+    assert static["active_reserve_set_pr"][0]["j_dev"] == 0
+    assert static["active_reserve_set_pr"][0]["j_sdd"] == 0
+
+    one_based = powerio.parse_scopf(SCOPF_SMALL.read_text(), index_base=1)
+    assert one_based["index_base"] == 1
+    assert one_based["instance"]["static"]["acl_branch"][0]["j_ln"] == 1
+    assert one_based["instance"]["static"]["bus"][0]["i"] == static["bus"][0]["i"]
+    assert one_based["instance"]["static"]["acl_branch"][0]["u_0"] == 1
     assert "parse_scopf" in powerio.__all__
 
 
@@ -123,6 +129,8 @@ def test_parse_scopf_rejects_bad_input_and_unknown_format():
         powerio.parse_scopf("not json")
     with pytest.raises(ValueError, match="unsupported SCOPF source format"):
         powerio.parse_scopf(SCOPF_SMALL.read_text(), from_="matpower")
+    with pytest.raises(ValueError, match="index_base must be 0 or 1"):
+        powerio.parse_scopf(SCOPF_SMALL.read_text(), index_base=2)
 
 
 def test_public_type_is_balanced_network(case9):

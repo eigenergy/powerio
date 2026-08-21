@@ -2050,15 +2050,24 @@ fn geo_report_dict<'py>(
 }
 
 /// Parse SCOPF source text and return its language neutral document as JSON.
-#[pyfunction(signature = (text, from_ = "goc3-json"))]
-fn parse_scopf(text: &str, from_: &str) -> PyResult<String> {
+#[pyfunction(signature = (text, from_ = "goc3-json", *, index_base = 0))]
+fn parse_scopf(text: &str, from_: &str, index_base: i32) -> PyResult<String> {
+    let index_base = match index_base {
+        0 => powerio_prob::IndexBase::Zero,
+        1 => powerio_prob::IndexBase::One,
+        other => {
+            return Err(PyValueError::new_err(format!(
+                "index_base must be 0 or 1, got {other}"
+            )));
+        }
+    };
     let instance = powerio_prob::parse_scopf_str(text, from_).map_err(|error| match error {
         error @ powerio_prob::ScopfError::UnsupportedFormat(_) => {
             PyValueError::new_err(error.to_string())
         }
         error => PowerIOParseError::new_err(error.to_string()),
     })?;
-    powerio_prob::scopf::json::to_json(&instance)
+    powerio_prob::scopf::json::to_json_with_index_base(&instance, index_base)
         .map_err(|error| PowerIOParseError::new_err(error.to_string()))
 }
 
