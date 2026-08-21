@@ -30,8 +30,10 @@ Market files and `dcopf_meta.json`.
   If several references lie in one island, the bundle fixes all of those voltage
   angles to zero; it is not a participation factor slack model.
 - **DC convention.** `b.mtx` holds \\(b_e\\), positive for an inductive branch,
-  the coefficient in \\(f = b_e(\theta_f - \theta_t)\\). `SeriesImpedance` by
-  default: \\(b_e = x/(r^2 + x^2)\\) plus the phase shift injection `p_shift`,
+  the coefficient on \\(\theta_f - \theta_t\\). The complete flow is
+  \\(f_e = b_e(\theta_f - \theta_t) - b_e\delta_e\\), where \\(\delta_e\\) is
+  the phase shift in `shift.mtx`. `SeriesImpedance` by default:
+  \\(b_e = x/(r^2 + x^2)\\) plus the phase shift terms,
   with no tap scaling. `Matpower` uses \\(b_e = 1/(x \tau)\\) plus `p_shift`.
   `ReactanceOnly` (\\(b_e = 1/x\\), taps and shifts ignored) stays: it is the
   textbook DC linearization, and reproducing a published result needs it exactly
@@ -44,7 +46,7 @@ Market files and `dcopf_meta.json`.
 | `A.mtx` | \\(n \times m\\) | signed incidence matrix; column \\(e\\) has \\(+1\\) at from-bus, \\(-1\\) at to-bus |
 | `L.mtx` | \\(n \times n\\) | DC bus susceptance matrix \\(L = A \operatorname{diag}(b) A^\mathsf{T}\\); with positive branch weights, its rank is \\(n-c\\) for \\(c\\) connected components |
 | `L_grounded.mtx` | \\((n-k) \times (n-k)\\) | \\(L\\) with \\(k\\) reference rows and columns removed; SPD when every island is grounded |
-| `BAt.mtx` | \\(m \times n\\) | flow map \\(B A^\mathsf{T}\\), where \\(f = B A^\mathsf{T} \theta\\) |
+| `BAt.mtx` | \\(m \times n\\) | angle dependent flow map \\(B A^\mathsf{T}\\); complete flow adds `flow_offset` |
 | `Cg.mtx` | \\(n \times n_{\mathrm{gen}}\\) | generator-to-bus incidence, one \\(1\\) per column |
 
 ## Vectors
@@ -55,9 +57,12 @@ beside `pd`), `q`/`c`/`c0` (cost diag/linear/constant),
 `pmax`/`pmin`
 (generation bounds), `e_r` (reference indicator: \\(1\\) at every reference bus, else \\(0\\)),
 `p_shift` (phase shift injection; zero only under `ReactanceOnly`, which ignores
-shifts, or when the case has no phase shifter).
-Branch-indexed (length \\(m\\)): `b` (susceptances), `fmax` (thermal limits; \\(0\\) means
-unlimited per MATPOWER), and the radian limits `angle_min` and `angle_max`.
+shifts, or when the case has no phase shifter), and `fixed_withdrawal`, equal to
+`pd + gs + p_shift`.
+Branch-indexed (length \\(m\\)): `b` (susceptances), `shift` (radians),
+`flow_offset` (equal to `-b * shift` elementwise), `fmax` (thermal limits;
+\\(0\\) means unlimited per MATPOWER), and the radian limits `angle_min` and
+`angle_max`.
 Generator space data
 (length \\(n_{\mathrm{gen}}\\)): `q_gen`, `c_gen`, `c0_gen`, `pmax_gen`, and `pmin_gen`.
 
@@ -80,9 +85,10 @@ writes Matrix Market files plus structured metadata:
   `n_generators`, `n_reference_buses`, and `n_grounded_buses`.
 - `index_base`: `dense = 0` for manifest bus, branch, generator, and reference
   indices; `matrix_market = 1` for `.mtx` coordinates.
-- `dc_convention`, `units`, `build_options`, and `zero_impedance`. The zero
-  impedance block records the skip flag, denominator rule, skipped count, and
-  skipped source branch rows.
+- `dc_convention`, `units`, `build_options`, and `zero_impedance`.
+  `build_options` records both `skip_zero_impedance` and
+  `synthesize_unrated_limits`. The zero impedance block records the skip flag,
+  denominator rule, skipped count, and skipped source branch rows.
 - `grounding`: reference buses, removed rows and columns, the grounded operator
   (`L_grounded`), and the reference selector (`e_r`).
 - `operators[]`: one entry per emitted operator with `name`, `file`, `kind`,
@@ -94,13 +100,20 @@ for current readers. `cost_policy`, `synthesized_gen_costs`,
 
 ## Solving with it
 
+The complete affine equations are
+\\[
+f = B A^\mathsf{T}\theta + \texttt{flow\_offset}
+\\]
+and
+\\[
+L\theta = C_g p_g - \texttt{fixed\_withdrawal}.
+\\]
 The grounded system is the one to factor: `L_grounded` is SPD when every island
-has a reference. For DC power flow \\(L\theta = p\\) with net injection
-\\(p = g - d\\), drop all `reference_buses` entries from \\(p\\), solve
-\\(L_{\mathrm{grounded}}\theta_{\mathrm{red}} = p_{\mathrm{red}}\\), and set each
-reference angle to \\(0\\). `e_r` identifies the grounded buses without parsing the
-manifest. The full singular \\(L\\) can be used instead when the net injection
-sums to zero within each connected component.
+has a reference. Drop all `reference_buses` entries from the right hand side,
+solve the reduced system, and set each reference angle to \\(0\\). `e_r`
+identifies the grounded buses without parsing the manifest. The full singular
+\\(L\\) can be used instead when the right hand side sums to zero within each
+connected component.
 
 An interior point DC OPF solver builds reweighted bus Laplacians each Newton
 step from the same `A` and `b` (only the edge weights change), so `A` is the

@@ -87,6 +87,7 @@ struct IndexBaseMeta {
 #[derive(Serialize)]
 struct BuildOptionsMeta {
     skip_zero_impedance: bool,
+    synthesize_unrated_limits: bool,
 }
 
 #[derive(Serialize)]
@@ -133,6 +134,8 @@ pub fn write_dcopf_bundle(
 ) -> Result<DcOpfOutputs> {
     let matrices = build_dc_opf_matrices(instance);
     let nodal = instance.nodal_generator_data();
+    let fixed_withdrawal = instance.fixed_nodal_withdrawal();
+    let flow_offset = instance.branch_flow_offset();
     // The case name comes from source file content, so it must not steer the
     // output path. `sanitize_stem` reduces it to one safe component and
     // disambiguates names that would otherwise sanitize alike, so a batch
@@ -156,7 +159,10 @@ pub fn write_dcopf_bundle(
     put_mat(&dir, "Cg.mtx", &matrices.generator_bus, &mut files)?;
 
     put_vec(&dir, "b.mtx", &instance.branches.b, &mut files)?;
+    put_vec(&dir, "shift.mtx", &instance.branches.shift, &mut files)?;
+    put_vec(&dir, "flow_offset.mtx", &flow_offset, &mut files)?;
     put_vec(&dir, "p_shift.mtx", &instance.p_shift, &mut files)?;
+    put_vec(&dir, "fixed_withdrawal.mtx", &fixed_withdrawal, &mut files)?;
     put_vec(&dir, "e_r.mtx", &matrices.reference_selector, &mut files)?;
     put_vec(&dir, "q.mtx", &nodal.q, &mut files)?;
     put_vec(&dir, "c.mtx", &nodal.c, &mut files)?;
@@ -208,6 +214,7 @@ pub fn write_dcopf_bundle(
         dc_convention: instance.convention,
         build_options: BuildOptionsMeta {
             skip_zero_impedance: instance.skip_zero_impedance,
+            synthesize_unrated_limits: instance.synthesize_unrated_limits,
         },
         zero_impedance: ZeroImpedanceMeta {
             skip: instance.skip_zero_impedance,
@@ -283,6 +290,24 @@ fn operator_meta(
             power_units,
         ),
         op(
+            "branch_phase_shift",
+            "shift.mtx",
+            "vector",
+            m,
+            1,
+            "branch",
+            "radian",
+        ),
+        op(
+            "branch_flow_offset",
+            "flow_offset.mtx",
+            "vector",
+            m,
+            1,
+            "branch",
+            power_units,
+        ),
+        op(
             "weighted_laplacian",
             "L.mtx",
             "matrix",
@@ -328,6 +353,15 @@ fn operator_meta(
             power_units,
         ),
         op(
+            "fixed_nodal_withdrawal",
+            "fixed_withdrawal.mtx",
+            "vector",
+            n,
+            1,
+            "bus",
+            power_units,
+        ),
+        op(
             "reference_selector",
             "e_r.mtx",
             "vector",
@@ -348,6 +382,15 @@ fn operator_meta(
         op(
             "bus_cost_linear",
             "c.mtx",
+            "vector",
+            n,
+            1,
+            "bus",
+            "selected_cost_units",
+        ),
+        op(
+            "bus_cost_constant",
+            "c0.mtx",
             "vector",
             n,
             1,
@@ -383,6 +426,15 @@ fn operator_meta(
         ),
         op("bus_load", "pd.mtx", "vector", n, 1, "bus", power_units),
         op(
+            "bus_shunt_conductance",
+            "gs.mtx",
+            "vector",
+            n,
+            1,
+            "bus",
+            power_units,
+        ),
+        op(
             "branch_angle_minimum",
             "angle_min.mtx",
             "vector",
@@ -412,6 +464,15 @@ fn operator_meta(
         op(
             "generator_cost_linear",
             "c_gen.mtx",
+            "vector",
+            n_gen,
+            1,
+            "generator",
+            "selected_cost_units",
+        ),
+        op(
+            "generator_cost_constant",
+            "c0_gen.mtx",
             "vector",
             n_gen,
             1,
