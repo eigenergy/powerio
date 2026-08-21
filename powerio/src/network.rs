@@ -1881,6 +1881,22 @@ impl BalancedNetwork {
         Ok(net)
     }
 
+    /// Rebuild a `BalancedNetwork` from UTF-8 JSON bytes produced by
+    /// [`to_json`](BalancedNetwork::to_json).
+    ///
+    /// Decoding is strict: invalid UTF-8 returns a coded JSON read error and
+    /// is never replaced with Unicode replacement characters. A leading UTF-8
+    /// byte order mark is accepted. The decoded document goes through
+    /// [`from_json`](BalancedNetwork::from_json), including its reference and
+    /// nonempty-network validation.
+    pub fn from_json_bytes(bytes: &[u8]) -> crate::Result<BalancedNetwork> {
+        let text = std::str::from_utf8(bytes).map_err(|error| Error::FormatRead {
+            format: "JSON",
+            message: format!("input is not valid UTF-8: {error}"),
+        })?;
+        Self::from_json(text)
+    }
+
     /// Whether this is a normalized (per-unit, radian, filtered)
     /// derived product from [`to_normalized`](BalancedNetwork::to_normalized), rather
     /// than a raw network at the file's unit basis. Unit-sensitive code that
@@ -2457,6 +2473,33 @@ mod tests {
             location: None,
             extras: Extras::new(),
         }
+    }
+
+    #[test]
+    fn model_json_bytes_are_strict_utf8_and_keep_model_validation() {
+        let net = BalancedNetwork::in_memory("bytes", 100.0, vec![bus(1)], Vec::new());
+        let json = net.to_json().expect("serialize model JSON");
+        let mut with_bom = b"\xef\xbb\xbf".to_vec();
+        with_bom.extend_from_slice(json.as_bytes());
+        let back = BalancedNetwork::from_json_bytes(&with_bom).expect("read BOM prefixed JSON");
+        assert_eq!(back.name, "bytes");
+        assert_eq!(back.buses.len(), 1);
+
+        let error = BalancedNetwork::from_json_bytes(b"{\"buses\":[]\xff}")
+            .expect_err("invalid UTF-8 must not be replaced");
+        assert!(
+            matches!(&error, crate::Error::FormatRead { format: "JSON", message } if message.starts_with("input is not valid UTF-8:")),
+            "{error}"
+        );
+        assert_eq!(error.code().code, "PARSE.SOURCE.MALFORMED");
+
+        let empty = net
+            .to_json()
+            .expect("serialize model JSON")
+            .replace(&serde_json::to_string(&net.buses).unwrap(), "[]");
+        let error = BalancedNetwork::from_json_bytes(empty.as_bytes())
+            .expect_err("the byte API must keep no-bus validation");
+        assert!(error.to_string().contains("case has no buses"), "{error}");
     }
 
     fn winding(b: usize) -> Winding {
