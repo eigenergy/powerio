@@ -197,8 +197,8 @@ Known limits for every format are documented in the
 - Nodal admittance matrix
 - LACPF block matrix
 - Signed incidence matrix
-- PTDF and LODF sensitivity matrices, with dense and iterative solver paths
-- Streamed CLI PTDF/LODF writes for iterative sensitivity exports
+- PTDF and LODF sensitivity matrices, with dense and sparse Cholesky solver paths
+- Streamed CLI PTDF/LODF writes for sparse sensitivity exports
 - Adjacency matrix and `petgraph` graph output
 
 `powerio-prob` builds matrix free problem instances: DC OPF and AC OPF input

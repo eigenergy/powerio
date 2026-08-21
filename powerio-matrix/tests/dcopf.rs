@@ -341,7 +341,7 @@ fn lodf_diagonal_is_minus_one() {
 }
 
 #[test]
-fn iterative_sensitivities_match_dense_oracle() {
+fn sparse_sensitivities_match_dense_oracle() {
     for path in [
         "../tests/data/case9.m",
         "../tests/data/case14.m",
@@ -352,23 +352,120 @@ fn iterative_sensitivities_match_dense_oracle() {
         // Both paths take the same convention: this compares the two solvers,
         // not two weightings.
         let (dense_ptdf, dense_lodf) = build_ptdf_lodf(&view, DcConvention::default()).unwrap();
-        let iterative = build_ptdf_lodf_with_options(
+        let sparse = build_ptdf_lodf_with_options(
             &view,
             &SensitivityOptions {
-                solver: SensitivitySolver::Iterative,
+                solver: SensitivitySolver::Sparse,
                 drop_tolerance: 1e-12,
                 ..Default::default()
             },
         )
         .unwrap();
         assert_eq!(
-            iterative.metadata.solver_path,
-            SensitivitySolverPath::IterativeCg,
+            sparse.metadata.solver_path,
+            SensitivitySolverPath::SparseCholesky,
             "{path}: solver path"
         );
-        assert_matrix_close(&iterative.ptdf, &dense_ptdf, 1e-7, path);
-        assert_matrix_close(&iterative.lodf, &dense_lodf, 1e-7, path);
+        assert_matrix_close(&sparse.ptdf, &dense_ptdf, 1e-10, path);
+        assert_matrix_close(&sparse.lodf, &dense_lodf, 1e-10, path);
     }
+}
+
+#[test]
+fn sparse_handles_disconnected_and_multi_reference_networks() {
+    let cases = [
+        net(
+            "grounded-islands",
+            vec![
+                bus(1, BusType::Ref),
+                bus(2, BusType::Pq),
+                bus(3, BusType::Ref),
+                bus(4, BusType::Pq),
+            ],
+            vec![branch(1, 2, 0.1), branch(3, 4, 0.2)],
+        ),
+        net(
+            "multi-reference",
+            vec![
+                bus(1, BusType::Ref),
+                bus(2, BusType::Pq),
+                bus(3, BusType::Ref),
+            ],
+            vec![branch(1, 2, 0.1), branch(2, 3, 0.2)],
+        ),
+    ];
+    for case in &cases {
+        let view = IndexedNetwork::new(case);
+        let dense = build_ptdf_lodf_with_options(
+            &view,
+            &SensitivityOptions {
+                solver: SensitivitySolver::Dense,
+                drop_tolerance: 0.0,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let sparse = build_ptdf_lodf_with_options(
+            &view,
+            &SensitivityOptions {
+                solver: SensitivitySolver::Sparse,
+                drop_tolerance: 0.0,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_matrix_close(&sparse.ptdf, &dense.ptdf, 1e-12, &case.name);
+        assert_matrix_close(&sparse.lodf, &dense.lodf, 1e-12, &case.name);
+    }
+}
+
+#[test]
+fn sparse_handles_zero_reduced_dimension_and_parallel_branches() {
+    let case = net(
+        "all-reference-parallel",
+        vec![bus(1, BusType::Ref), bus(2, BusType::Ref)],
+        vec![branch(1, 2, 0.1), branch(1, 2, 0.2)],
+    );
+    let view = IndexedNetwork::new(&case);
+    let out = build_ptdf_lodf_with_options(
+        &view,
+        &SensitivityOptions {
+            solver: SensitivitySolver::Sparse,
+            drop_tolerance: 0.0,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    assert_eq!(out.metadata.reduced_dimension, 0);
+    assert_eq!((out.ptdf.rows(), out.ptdf.cols()), (2, 2));
+    assert_eq!(out.ptdf.nnz(), 0);
+    assert_eq!(dense(&out.lodf), vec![vec![-1.0, 0.0], vec![0.0, -1.0]]);
+
+    let one_ref = net(
+        "parallel",
+        vec![bus(1, BusType::Ref), bus(2, BusType::Pq)],
+        vec![branch(1, 2, 0.1), branch(1, 2, 0.1)],
+    );
+    let parallel = build_ptdf_lodf_with_options(
+        &IndexedNetwork::new(&one_ref),
+        &SensitivityOptions {
+            solver: SensitivitySolver::Sparse,
+            drop_tolerance: 0.0,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    assert_matrix_close(
+        &parallel.lodf,
+        &sprs::CsMat::new(
+            (2, 2),
+            vec![0, 2, 4],
+            vec![0, 1, 0, 1],
+            vec![-1.0, 1.0, 1.0, -1.0],
+        ),
+        1e-12,
+        "parallel LODF",
+    );
 }
 
 #[test]
@@ -405,11 +502,11 @@ fn sensitivity_drop_tolerance_records_dropped_entries() {
 }
 
 #[test]
-fn streamed_iterative_sensitivities_match_in_memory() {
+fn streamed_sparse_sensitivities_match_in_memory() {
     let case = load("../tests/data/case30.m");
     let view = IndexedNetwork::new(&case);
     let options = SensitivityOptions {
-        solver: SensitivitySolver::Iterative,
+        solver: SensitivitySolver::Sparse,
         drop_tolerance: 1e-9,
         ..Default::default()
     };
@@ -422,15 +519,19 @@ fn streamed_iterative_sensitivities_match_in_memory() {
     let ptdf = read_mtx(&ptdf_path).unwrap();
     let lodf = read_mtx(&lodf_path).unwrap();
 
-    assert_eq!(meta.solver_path, SensitivitySolverPath::IterativeCg);
+    assert_eq!(meta.solver_path, SensitivitySolverPath::SparseCholesky);
     assert_eq!(meta.ptdf.nnz, ptdf.nnz());
     assert_eq!(meta.lodf.nnz, lodf.nnz());
+    assert_eq!(
+        serde_json::to_value(&meta).unwrap(),
+        serde_json::to_value(&expected.metadata).unwrap()
+    );
     assert_matrix_close(&ptdf, &expected.ptdf, 0.0, "streamed PTDF");
     assert_matrix_close(&lodf, &expected.lodf, 0.0, "streamed LODF");
 }
 
 #[test]
-fn auto_sensitivity_solver_switches_to_iterative_above_threshold() {
+fn auto_sensitivity_solver_switches_to_sparse_above_threshold() {
     let case = load("../tests/data/case118.m");
     let view = IndexedNetwork::new(&case);
     let out = build_ptdf_lodf_with_options(
@@ -445,7 +546,10 @@ fn auto_sensitivity_solver_switches_to_iterative_above_threshold() {
     .unwrap();
 
     assert_eq!(out.metadata.requested_solver, SensitivitySolver::Auto);
-    assert_eq!(out.metadata.solver_path, SensitivitySolverPath::IterativeCg);
+    assert_eq!(
+        out.metadata.solver_path,
+        SensitivitySolverPath::SparseCholesky
+    );
     assert_eq!(out.metadata.ptdf.rows, out.ptdf.rows());
     assert_eq!(out.metadata.ptdf.cols, out.ptdf.cols());
     assert_eq!(out.metadata.lodf.rows, out.lodf.rows());
@@ -454,7 +558,7 @@ fn auto_sensitivity_solver_switches_to_iterative_above_threshold() {
 }
 
 #[test]
-fn auto_writes_iterative_outputs_above_the_dense_threshold() {
+fn auto_writes_sparse_outputs_above_the_dense_threshold() {
     let n = 600;
     let mut buses = Vec::with_capacity(n);
     buses.push(bus(1, BusType::Ref));
@@ -469,7 +573,7 @@ fn auto_writes_iterative_outputs_above_the_dense_threshold() {
     assert!(reduced_dimension > 512);
 
     // Drive the routing through the knob rather than the default ceiling:
-    // 599 unknowns is far below the real dense/iterative crossover, so the
+    // 599 unknowns is far below the real dense/sparse crossover, so the
     // default now (correctly) takes the dense path here.
     let options = SensitivityOptions {
         auto_dense_threshold: 512,
@@ -482,7 +586,7 @@ fn auto_writes_iterative_outputs_above_the_dense_threshold() {
     let ptdf = read_mtx(&ptdf_path).unwrap();
     let lodf = read_mtx(&lodf_path).unwrap();
 
-    assert_eq!(meta.solver_path, SensitivitySolverPath::IterativeCg);
+    assert_eq!(meta.solver_path, SensitivitySolverPath::SparseCholesky);
     assert_eq!(meta.reduced_dimension, reduced_dimension);
     assert_eq!(ptdf.rows(), branch_count);
     assert_eq!(ptdf.cols(), n);
@@ -495,7 +599,7 @@ fn auto_writes_iterative_outputs_above_the_dense_threshold() {
 }
 
 #[test]
-fn auto_iterative_rejects_non_positive_susceptance() {
+fn auto_sparse_rejects_non_positive_susceptance() {
     let case = net(
         "negative_x",
         vec![bus(1, BusType::Ref), bus(2, BusType::Pq)],
