@@ -5221,7 +5221,7 @@ mpc.branch = [
 
     #[cfg(feature = "prob")]
     #[test]
-    fn scopf_handle_serializes_its_julia_document() {
+    fn scopf_handle_serializes_its_wire_document() {
         let text = CString::new(GOC3_SMALL_FIXTURE).unwrap();
         let from = CString::new("goc3-json").unwrap();
         let feature = CString::new("prob").unwrap();

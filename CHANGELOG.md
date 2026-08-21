@@ -453,7 +453,7 @@ several gaps in that model.
 
 ## 0.7.1
 
-- The SCOPF Julia wire conversion is structural (#252): every struct reaching
+- The SCOPF wire conversion is structural (#252): every struct reaching
   the wire classifies its fields (index, renamed, value) through an exhaustive
   destructure, so a new field fails to compile until classified and a value
   field reusing an index name is never renumbered. Wire output is unchanged.

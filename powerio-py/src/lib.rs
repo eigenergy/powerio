@@ -2049,7 +2049,7 @@ fn geo_report_dict<'py>(
     Ok(out)
 }
 
-/// Parse SCOPF source text and return its Julia compatibility document as JSON.
+/// Parse SCOPF source text and return its language neutral document as JSON.
 #[pyfunction(signature = (text, from_ = "goc3-json"))]
 fn parse_scopf(text: &str, from_: &str) -> PyResult<String> {
     let instance = powerio_prob::parse_scopf_str(text, from_).map_err(|error| match error {
