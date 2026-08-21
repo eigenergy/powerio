@@ -33,12 +33,14 @@ names the writing tool and version, and `meta.$schema` pins the schema identity.
 The block is deterministic (no timestamp) so output stays byte stable. Per phase
 generator `cost` is an array, as schema 0.1.0 requires.
 
-## Provenance and licensing
+## Source provenance
 
 The IEEE node test feeders and the Kersting 4 bus transformer cases ship with the
-OpenDSS distribution under the BSD 3-Clause license (EPRI / DSS-Extensions). The
-vendored `.dss` sources retain that notice. These derived BMOPF JSON encodings
-carry the same terms in [`LICENSE-BSD-3-CLAUSE`](LICENSE-BSD-3-CLAUSE). The 4
-bus case is regenerable from the OpenDSS
+OpenDSS distribution under its BSD 3-Clause terms (EPRI / DSS-Extensions). This
+is the license of the source case data, not the BMOPF format. The vendored `.dss`
+sources retain the upstream notice, and these converted JSON representations
+carry it in
+[`NOTICE-OPENDSS-BSD-3-CLAUSE`](NOTICE-OPENDSS-BSD-3-CLAUSE). The 4 bus case is
+regenerable from the OpenDSS
 `Distrib/IEEETestCases/4Bus-DY-Bal` directory (also mirrored at
 `github.com/tshort/OpenDSS`).

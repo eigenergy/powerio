@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Reject release archives with missing notices or unlicensed fixtures."""
+"""Validate release archive notices and checkout-only source exclusions."""
 
 from __future__ import annotations
 
@@ -9,13 +9,13 @@ import tarfile
 from pathlib import PurePosixPath
 
 REQUIRED_LICENSES = ("LICENSE-MIT", "LICENSE-APACHE")
-BSD_EXAMPLES = (
+OPENDSS_DERIVED_EXAMPLES = (
     "examples/bmopf/4bus_dy.json",
     "examples/bmopf/ieee34.json",
     "examples/bmopf/ieee123.json",
 )
-BSD_NOTICE = "examples/bmopf/LICENSE-BSD-3-CLAUSE"
-FORBIDDEN = (
+OPENDSS_SOURCE_NOTICE = "examples/bmopf/NOTICE-OPENDSS-BSD-3-CLAUSE"
+CHECKOUT_ONLY = (
     "powerio-prob/tests/data/goc3_14bus_20220707.json",
     "tests/data/dist/bmopf/draft_bmopf_schema.json",
     "tests/data/dist/bmopf/example_enwl_n1_f2.json",
@@ -40,12 +40,17 @@ def audit(path: str) -> list[str]:
     for license_name in REQUIRED_LICENSES:
         if not any(PurePosixPath(name).name == license_name for name in names):
             errors.append(f"missing {license_name}")
-    for forbidden in FORBIDDEN:
-        if any(suffix_match(name, forbidden) for name in names):
-            errors.append(f"contains unlicensed source fixture {forbidden}")
-    if any(any(suffix_match(name, example) for example in BSD_EXAMPLES) for name in names):
-        if not any(suffix_match(name, BSD_NOTICE) for name in names):
-            errors.append(f"contains derived BMOPF examples without {BSD_NOTICE}")
+    for checkout_only in CHECKOUT_ONLY:
+        if any(suffix_match(name, checkout_only) for name in names):
+            errors.append(f"contains checkout-only source fixture {checkout_only}")
+    if any(
+        any(suffix_match(name, example) for example in OPENDSS_DERIVED_EXAMPLES)
+        for name in names
+    ):
+        if not any(suffix_match(name, OPENDSS_SOURCE_NOTICE) for name in names):
+            errors.append(
+                "contains OpenDSS-derived examples without " + OPENDSS_SOURCE_NOTICE
+            )
     return errors
 
 
