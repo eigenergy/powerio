@@ -204,6 +204,35 @@ diagnostics(pkg)
 document JSON passed through the legacy `json` argument. The document
 metadata's `model_kind` routes balanced and multiconductor model JSON.
 
+## MCP lowering
+
+Multiconductor to balanced lowering is lossy and carries assumptions, so no
+tool applies it on the way through: `parse`, `summary`, `matrix`, `convert`,
+`save` and package readback all keep a multiconductor payload multiconductor.
+A client asks for the pass by name.
+
+```python
+pre = lower(path="feeder.dss", mode="preflight")
+pre["readiness"]["ready"]           # False when a blocker stands
+pre["readiness"]["blockers"]        # the LOWER.MULTI_TO_BALANCED.* records
+pre["readiness"]["assumptions"]     # and what the pass would assume
+pre["options"]                      # the base_mva and sequence transform used
+
+out = lower(path="feeder.dss", mode="apply")
+if out["applied"]:
+    summary(package_json=out["package_json"])   # the derived balanced package
+    out["lowering_history"]                     # provenance to archive with it
+```
+
+`apply` runs the same preflight. On a blocker it returns `applied: false` with
+those blockers and **no** `package_json`, so a refusal cannot be read as an
+empty result; otherwise it returns the derived balanced package with its
+`validation`, `diagnostics`, `origin` and `lowering_history`, and every
+balanced verb takes that package unchanged. `options` accepts `base_mva`
+only — one sequence transform exists, and a name the pass cannot honor is
+refused rather than ignored. Native multiconductor analysis stays the
+preferred path for a consumer that supports it.
+
 `python -m powerio.mcp` and the `powerio-mcp` console script are consumer entry points and do not move without a version bump.
 
 The optional MCP server accepts local filesystem paths and `file://` URIs for

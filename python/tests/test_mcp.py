@@ -36,6 +36,7 @@ def test_tool_surface_is_semantic():
         "parse",
         "normalize",
         "matrix",
+        "lower",
         "diagnostics",
         "display",
     }
@@ -71,6 +72,15 @@ def test_tool_surface_is_semantic():
     assert kind["enum"] == sorted(server._MATRIX_KIND_ALIASES)
     json_format = tools["summary"].input_schema["properties"]["json_format"]
     assert json_format["anyOf"][0]["enum"] == ["package", "model-json", "bmopf-json"]
+    lower_props = tools["lower"].input_schema["properties"]
+    assert lower_props["mode"]["enum"] == ["preflight", "apply"]
+    assert lower_props["mode"]["default"] == "preflight"
+    assert lower_props["to_model_kind"]["enum"] == ["balanced"]
+    for arg in ("content", "package_json"):
+        assert lower_props[arg]["type"] == "string"
+        assert lower_props[arg]["default"] == ""
+    # The lossy pass says so where a client reads it.
+    assert "lossy" in tools["lower"].description
     # The open ended format name sets are prose in the descriptions.
     assert "matpower" in tools["convert"].description
     assert "bmopf-json" in tools["save"].description
@@ -641,3 +651,125 @@ def test_mcp_parse_still_refuses_includes_outside_the_allowed_root(
     ]
     doc = json.loads(parsed["json"])
     assert "leaked" not in json.dumps(doc)
+
+
+# `fourwire_linecode.dss` is three phase throughout and lowers clean;
+# `switch.dss` carries a closed switch the pass will not project.
+LOWERABLE = DATA / "dist" / "micro" / "fourwire_linecode.dss"
+BLOCKED = DATA / "dist" / "micro" / "switch.dss"
+
+
+def test_lower_preflight_reports_readiness_and_changes_nothing():
+    out = server._lower_impl(path=str(LOWERABLE), mode="preflight")
+    assert out["schema"] == "powerio.lower"
+    assert out["mode"] == "preflight"
+    assert out["from_model_kind"] == "multiconductor"
+    assert out["to_model_kind"] == "balanced"
+    # The two policy choices are visible whether or not the caller set them.
+    assert out["options"] == {
+        "base_mva": 100.0,
+        "convention": "fortescue_power_invariant",
+    }
+    assert out["readiness"]["ready"] is True
+    assert out["readiness"]["blockers"] == []
+    assert any("FortescuePowerInvariant" in a for a in out["readiness"]["assumptions"])
+    assert out["readiness"]["approximations"]
+    # preflight produces no model: neither key exists to be mistaken for one.
+    assert "package_json" not in out and "applied" not in out
+
+
+def test_lower_apply_returns_a_derived_balanced_package():
+    out = server._lower_impl(path=str(LOWERABLE), mode="apply")
+    assert out["applied"] is True
+    doc = json.loads(out["package_json"])
+    assert doc["model_kind"] == "balanced"
+    assert doc["origin"]["kind"] == "derived"
+    assert doc["origin"]["pass"] == "multiconductor-to-balanced"
+    # The provenance a client archives with the solver input.
+    assert [h["pass"] for h in out["lowering_history"]] == ["multiconductor-to-balanced"]
+    assert out["lowering_history"][-1]["input_kind"] == "multiconductor"
+    assert out["lowering_history"][-1]["output_kind"] == "balanced"
+    assert out["lowering_history"][-1]["options"]["base_mva"] == 100.0
+    assert out["validation"]["status"] in ("ok", "info", "warning")
+
+    # And the derived package is accepted by the balanced paths unchanged.
+    assert server.summary(package_json=out["package_json"])["domain"] == "transmission"
+    assert server.matrix("bprime", package_json=out["package_json"])["kind"] == "bprime"
+    assert server._diagnostics_payload(out["package_json"])["model_kind"] == "balanced"
+    text = server.convert("matpower", package_json=out["package_json"])["text"]
+    assert "mpc.bus" in text
+
+
+def test_lower_apply_refuses_a_blocker_as_data():
+    out = server._lower_impl(path=str(BLOCKED), mode="apply")
+    assert out["applied"] is False
+    # No half-lowered result to mistake for a model.
+    assert "package_json" not in out
+    codes = {b["code"] for b in out["readiness"]["blockers"]}
+    assert "LOWER.MULTI_TO_BALANCED.UNSUPPORTED_CLOSED_SWITCH" in codes
+    assert all(b["severity"] in ("error", "fatal") for b in out["readiness"]["blockers"])
+    assert out["readiness"]["ready"] is False
+    # apply runs the same preflight, so the report is the preflight's report.
+    pre = server._lower_impl(path=str(BLOCKED), mode="preflight")
+    assert out["readiness"] == pre["readiness"]
+
+
+def test_lower_base_mva_reaches_the_pass_and_is_reported():
+    out = server._lower_impl(path=str(LOWERABLE), mode="apply", options={"base_mva": 50.0})
+    assert out["options"]["base_mva"] == 50.0
+    assert out["lowering_history"][-1]["options"]["base_mva"] == 50.0
+
+
+def test_lower_refuses_what_it_cannot_honour():
+    # A policy option accepted and ignored is the failure this tool exists to
+    # avoid, so an unrecognized one is named rather than dropped.
+    with pytest.raises(ValueError, match="does not take a `convention`"):
+        server._lower_impl(path=str(LOWERABLE), options={"convention": "clarke"})
+    with pytest.raises(ValueError, match="unknown lower option"):
+        server._lower_impl(path=str(LOWERABLE), options={"basemva": 100.0})
+    with pytest.raises(ValueError, match="must be finite and positive"):
+        server._lower_impl(path=str(LOWERABLE), options={"base_mva": 0})
+    with pytest.raises(ValueError, match="must be a number"):
+        server._lower_impl(path=str(LOWERABLE), options={"base_mva": "100"})
+    with pytest.raises(ValueError, match="unknown lower mode"):
+        server._lower_impl(path=str(LOWERABLE), mode="force")
+    with pytest.raises(ValueError, match="unknown lower to_model_kind"):
+        server._lower_impl(path=str(LOWERABLE), to_model_kind="multiconductor")
+    with pytest.raises(ValueError, match="exactly one of"):
+        server._lower_impl()
+    with pytest.raises(ValueError, match="takes a multiconductor package"):
+        server._lower_impl(path=str(DATA / "case9.m"))
+    with pytest.raises(ValueError, match="not a .pio.json package"):
+        server._lower_impl(package_json='{"not": "a package"}')
+
+
+def test_lower_takes_a_package_transport_as_well_as_a_path():
+    package = server.parse(path=str(LOWERABLE), transport="package")["package_json"]
+    from_package = server._lower_impl(package_json=package, mode="apply")
+    from_path = server._lower_impl(path=str(LOWERABLE), mode="apply")
+    assert from_package["applied"] and from_path["applied"]
+    assert json.loads(from_package["package_json"])["model"] == (
+        json.loads(from_path["package_json"])["model"]
+    )
+
+
+def test_mcp_and_python_lowering_produce_the_same_derived_package():
+    native = powerio.Package.from_file(str(LOWERABLE)).lower_multiconductor_to_balanced(100.0)
+    through_mcp = server._lower_impl(path=str(LOWERABLE), mode="apply")["package_json"]
+    assert json.loads(through_mcp) == json.loads(native.to_json())
+
+
+def test_no_other_verb_lowers_implicitly():
+    # The pass is lossy, so a multiconductor package stays multiconductor
+    # everywhere else: the balanced-only verbs refuse it rather than
+    # transforming it on the way through.
+    package = server.parse(path=str(LOWERABLE), transport="package")["package_json"]
+    assert server.summary(package_json=package)["domain"] == "distribution"
+    assert server._diagnostics_payload(package)["model_kind"] == "multiconductor"
+    assert json.loads(package)["model_kind"] == "multiconductor"
+    with pytest.raises(ValueError):
+        server.normalize(package_json=package)
+    with pytest.raises(ValueError):
+        server.matrix("bprime", package_json=package)
+    with pytest.raises(ValueError):
+        server.convert("matpower", package_json=package)

@@ -102,3 +102,68 @@ def test_json_content_reaches_the_reader_byte_intact():
     assert parsed["domain"] == "distribution"
     doc = json.loads(parsed["json"])
     assert doc["bus"]["Malmö"]["v_max"] == [1e21]
+
+
+# Three phase throughout, so the lowering pass has no blocker; the switch
+# fixture carries a closed switch it will not project.
+LOWERABLE = DATA / "dist" / "micro" / "fourwire_linecode.dss"
+BLOCKED = DATA / "dist" / "micro" / "switch.dss"
+
+
+def test_lower_preflight_and_apply_over_stdio():
+    async def steps(session):
+        pre = _payload(
+            await session.call_tool(
+                "lower", {"path": str(LOWERABLE), "mode": "preflight"}
+            )
+        )
+        applied = _payload(
+            await session.call_tool("lower", {"path": str(LOWERABLE), "mode": "apply"})
+        )
+        # The derived package survives the transport and the balanced verbs
+        # take it as-is, which is the point of returning it rather than a
+        # summary of it.
+        summary = _payload(
+            await session.call_tool(
+                "summary", {"package_json": applied["package_json"]}
+            )
+        )
+        return pre, applied, summary
+
+    pre, applied, summary = _run(steps)
+    assert pre["schema"] == "powerio.lower"
+    assert pre["readiness"]["ready"] is True
+    assert "package_json" not in pre
+    assert applied["applied"] is True
+    assert json.loads(applied["package_json"])["model_kind"] == "balanced"
+    assert applied["lowering_history"][-1]["pass"] == "multiconductor-to-balanced"
+    assert summary["domain"] == "transmission"
+
+
+def test_lower_refuses_a_blocker_as_structured_data_over_stdio():
+    async def steps(session):
+        return _payload(
+            await session.call_tool("lower", {"path": str(BLOCKED), "mode": "apply"})
+        )
+
+    out = _run(steps)
+    assert out["applied"] is False
+    assert "package_json" not in out
+    codes = {b["code"] for b in out["readiness"]["blockers"]}
+    assert "LOWER.MULTI_TO_BALANCED.UNSUPPORTED_CLOSED_SWITCH" in codes
+
+
+def test_lower_takes_the_package_transport_over_stdio():
+    async def steps(session):
+        parsed = _payload(
+            await session.call_tool(
+                "parse", {"path": str(LOWERABLE), "transport": "package"}
+            )
+        )
+        return _payload(
+            await session.call_tool(
+                "lower", {"package_json": parsed["package_json"], "mode": "apply"}
+            )
+        )
+
+    assert json.loads(_run(steps)["package_json"])["model_kind"] == "balanced"

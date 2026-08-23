@@ -3,13 +3,19 @@
 The advertised MCP surface is semantic and format neutral:
 
 ``convert``, ``save``, ``summary``, ``parse``, ``normalize``, ``matrix``,
-``diagnostics``, ``display``.
+``lower``, ``diagnostics``, ``display``.
 
 The tools route balanced transmission models, multiconductor distribution
 models, PyPSA CSV folders, and gridfm datasets through the lower level powerio
 APIs. Transmission parses serialize through the ``model-json`` transport.
 Distribution parses serialize through canonical ``bmopf-json``. Package
 transport serializes either family through the ``.pio.json`` compiler package.
+
+``lower`` is the only tool that crosses model kinds. Multiconductor to
+balanced lowering is lossy and carries assumptions, so no other verb applies
+it implicitly: a client asks for it by name, in ``preflight`` or ``apply``
+mode, and gets the assumptions, approximations and blockers as data either
+way.
 
 The filesystem containment policy for ``path`` and ``out_path`` lives in
 ``powerio.mcp.sandbox``, which imports no MCP SDK; the private helpers here
@@ -61,6 +67,18 @@ _PACKAGE_JSON_FORMATS = frozenset(
     {"package", "pio", "pio-json", "pio_json", "pio-package", "pio_package"}
 )
 _VERSION_KEY = "powerio_version"
+
+# The explicit lowering surface. One transform and one target model kind exist
+# today; both are named arguments so a future typed pass is an added value
+# rather than a new tool.
+_LOWER_MODES = ("preflight", "apply")
+_LOWER_TARGET_KINDS = ("balanced",)
+_LOWER_CONVENTION = "fortescue_power_invariant"
+_LOWER_DEFAULT_BASE_MVA = 100.0
+_LOWER_MODE_ENUM: "list[Any]" = list(_LOWER_MODES)
+_LOWER_MODE_FIELD = Field(json_schema_extra={"enum": _LOWER_MODE_ENUM})
+_LOWER_TARGET_ENUM: "list[Any]" = list(_LOWER_TARGET_KINDS)
+_LOWER_TARGET_FIELD = Field(json_schema_extra={"enum": _LOWER_TARGET_ENUM})
 
 _MATRIX_KIND_ALIASES = {
     "b": "bprime",
@@ -1103,6 +1121,141 @@ def _display_impl(path: str, from_format: Optional[str] = None) -> dict:
 # `package_json`) are annotated bare `str`: under any other annotation the
 # SDK re-parses a string that reads as JSON, destroying the text. "" means
 # unset.
+def _lowering_options(options: Optional[Dict[str, Any]]) -> float:
+    """The one option the lowering pass takes today, and a refusal for the rest.
+
+    An unrecognized key is refused rather than ignored: this pass is lossy and
+    policy bearing, and a caller who spells an option wrong must not be told
+    silently that it applied. `convention` is reported in the result but not
+    accepted — one transform exists, and accepting a name the pass cannot honor
+    would be the same silence.
+    """
+    opts = _opts(options)
+    unknown = sorted(set(opts) - {"base_mva"})
+    if "convention" in unknown:
+        raise ValueError(
+            "lower does not take a `convention`: one sequence transform exists "
+            f"({_LOWER_CONVENTION}) and the result reports it"
+        )
+    if unknown:
+        raise ValueError(
+            "unknown lower option(s) "
+            + ", ".join(repr(k) for k in unknown)
+            + "; expected `base_mva`"
+        )
+    base_mva = opts.get("base_mva", _LOWER_DEFAULT_BASE_MVA)
+    if isinstance(base_mva, bool) or not isinstance(base_mva, (int, float)):
+        raise ValueError("lower option `base_mva` must be a number")
+    base_mva = float(base_mva)
+    if not base_mva > 0.0 or base_mva != base_mva or base_mva in (float("inf"),):
+        raise ValueError(f"lower option `base_mva` must be finite and positive, got {base_mva}")
+    return base_mva
+
+
+def _lower_blockers(diagnostics: list) -> list:
+    return [
+        item
+        for item in diagnostics
+        if isinstance(item, dict) and item.get("severity") in ("error", "fatal")
+    ]
+
+
+def _lower_impl(
+    package_json: str = "",
+    path: Optional[str] = None,
+    content: str = "",
+    from_format: Optional[str] = None,
+    to_model_kind: str = "balanced",
+    mode: str = "preflight",
+    options: Optional[Dict[str, Any]] = None,
+) -> dict:
+    mode_l = _fmt(mode) or "preflight"
+    if mode_l not in _LOWER_MODES:
+        raise ValueError(
+            f"unknown lower mode {mode!r}; expected " + " or ".join(repr(m) for m in _LOWER_MODES)
+        )
+    target = _fmt(to_model_kind) or "balanced"
+    if target not in _LOWER_TARGET_KINDS:
+        raise ValueError(
+            f"unknown lower to_model_kind {to_model_kind!r}; expected "
+            + " or ".join(repr(k) for k in _LOWER_TARGET_KINDS)
+        )
+    base_mva = _lowering_options(options)
+
+    # "" is how the tools spell an unset text argument (a bare `str`
+    # annotation keeps the SDK from re-parsing JSON text before validation).
+    content_or_none, package_or_none = content or None, package_json or None
+    if sum(v is not None for v in (path, content_or_none, package_or_none)) != 1:
+        raise ValueError("provide exactly one of `path`, `content`, or `package_json`")
+    if package_or_none is not None:
+        text = package_or_none
+        if _package_value(text) is None:
+            raise ValueError("package_json is not a .pio.json package")
+    else:
+        text = _package_json_from_input(path, content_or_none, from_format)
+
+    try:
+        pkg = powerio.Package.from_json(text)
+    except powerio.PowerIOError as exc:
+        raise _coded_error("parse failed", exc) from exc
+    source_kind = pkg.model_kind
+    if source_kind != "multiconductor":
+        raise ValueError(
+            f"lower to {target} takes a multiconductor package, got {source_kind}"
+        )
+
+    try:
+        readiness = pkg.multiconductor_to_balanced_preflight(base_mva)
+    except powerio.PowerIOError as exc:
+        raise _coded_error("lower preflight failed", exc) from exc
+    diagnostics = [d for d in readiness.get("diagnostics", []) if isinstance(d, dict)]
+    blockers = _lower_blockers(diagnostics)
+    ready = not blockers
+
+    payload = {
+        **_header("powerio.lower"),
+        "mode": mode_l,
+        "from_model_kind": source_kind,
+        "to_model_kind": target,
+        "options": {
+            "base_mva": readiness.get("base_mva", base_mva),
+            "convention": readiness.get("convention", _LOWER_CONVENTION),
+        },
+        "readiness": {
+            "status": readiness.get("status"),
+            "ready": ready,
+            "assumptions": list(readiness.get("assumptions", [])),
+            "approximations": list(readiness.get("approximations", [])),
+            "blockers": blockers,
+            "diagnostics": diagnostics,
+        },
+    }
+    if mode_l == "preflight":
+        return payload
+
+    if not ready:
+        # A structured refusal rather than a raised string: the blockers are
+        # the answer, and an exception message would carry one line of them.
+        # No `package_json` key at all, so "refused" cannot be read as
+        # "applied with an empty result".
+        payload["applied"] = False
+        return payload
+
+    try:
+        lowered = pkg.lower_multiconductor_to_balanced(base_mva)
+    except powerio.PowerIOError as exc:
+        raise _coded_error("lower failed", exc) from exc
+    lowered_json = lowered.to_json()
+    lowered_value = jsonlib.loads(lowered_json)
+    payload["applied"] = True
+    payload["package_json"] = lowered_json
+    payload["origin"] = lowered_value.get("origin")
+    payload["lowering_history"] = lowered_value.get("lowering_history", [])
+    payload["validation"] = lowered.validation()
+    payload["diagnostics"] = lowered.diagnostics()
+    return payload
+
+
 @mcp.tool(
     name="convert",
     description="Convert a network to a single text format. "
@@ -1253,6 +1406,44 @@ def _matrix_tool(
 def _diagnostics_tool(package_json: str, verbose: bool = False) -> dict:
     """Return package diagnostics as structured JSON plus a concise summary."""
     return _diagnostics_payload(package_json, verbose)
+
+
+@mcp.tool(
+    name="lower",
+    description=(
+        "Explicitly lower a multiconductor `.pio.json` package to a balanced "
+        "one. This pass is lossy and policy bearing, so nothing else lowers "
+        "implicitly: `parse`, `summary`, `matrix`, `convert`, `save` and "
+        "package readback all refuse a multiconductor payload where a balanced "
+        "one is wanted rather than transforming it here. `mode=\"preflight\" "
+        "reports readiness, assumptions, approximations and blockers and "
+        "changes nothing. `mode=\"apply\" runs the same preflight, and on a "
+        "blocker returns `applied: false` with those blockers and no "
+        "`package_json`; otherwise it returns the derived balanced "
+        "`package_json` with its validation, diagnostics, origin and lowering "
+        "history. The selected `base_mva` and sequence transform are reported "
+        "either way. Native multiconductor analysis stays the preferred path "
+        "for a consumer that supports it."
+    ),
+)
+def _lower_tool(
+    package_json: str = "",
+    path: Optional[str] = None,
+    content: str = "",
+    from_format: Optional[str] = None,
+    to_model_kind: Annotated[str, _LOWER_TARGET_FIELD] = "balanced",
+    mode: Annotated[str, _LOWER_MODE_FIELD] = "preflight",
+    options: Optional[Dict[str, Any]] = None,
+) -> dict:
+    return _lower_impl(
+        package_json=package_json,
+        path=path,
+        content=content,
+        from_format=from_format,
+        to_model_kind=to_model_kind,
+        mode=mode,
+        options=options,
+    )
 
 
 @mcp.tool(name="display")
