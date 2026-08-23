@@ -1054,6 +1054,62 @@ pub unsafe extern "C" fn pio_summary_json(
     }
 }
 
+/// The normalize pass's identity and provenance vectors for `net`, as owned
+/// JSON. Free the returned string with [`pio_string_free`]. On error this
+/// returns NULL and writes the message into `errbuf`.
+///
+/// The document is `{"schema", "powerio_version", "pass", "index"}`, where
+/// `index` is the pass's own `SolverTableIndex`:
+///
+/// * `bus_ids` — source bus id of each dense bus row, including the stable id
+///   a synthetic 3-winding star bus receives;
+/// * `reference_bus_indices`, `component_labels`, `branch_from_arc_indices`,
+///   `branch_to_arc_indices` — the index vectors the solver tables are built
+///   over;
+/// * `bus_source_rows`, `load_source_rows`, `shunt_source_rows`,
+///   `branch_source_rows`, `switch_source_rows`, `generator_source_rows`,
+///   `storage_source_rows`, `hvdc_source_rows` — the source row of each
+///   normalized row, or `null` where the row has no source (a star bus and the
+///   branches it lowers to).
+///
+/// This is the map the pass computes for itself, which is the point: a caller
+/// that wants normalized tables plus provenance no longer has to re-derive the
+/// drop rule from an unfiltered second extraction, and so cannot disagree with
+/// the pass wherever the guess does not model what it does — three-winding star
+/// lowering changing the branch count, most of all. Reaching the same vectors
+/// through the Arrow solver tables needs the `arrow` feature, which is off by
+/// default, and through a `.pio.json` package needs a package; this needs
+/// neither.
+///
+/// One normalize pass runs per call and nothing is cached on the handle, so a
+/// caller reading several vectors should read the document once.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pio_solver_index_json(
+    net: *const PioNetwork,
+    errbuf: *mut c_char,
+    errlen: usize,
+) -> *mut c_char {
+    unsafe {
+        finish_string(
+            errbuf,
+            errlen,
+            "panic while serializing solver table index JSON",
+            || {
+                let c = network_ref(net).ok_or_else(|| null_handle("network handle"))?;
+                let tables = c.net.to_normalized_solver_tables().map_err(err_line)?;
+                let doc = serde_json::json!({
+                    "schema": "powerio.solver_index",
+                    powerio::version::VERSION_KEY: powerio::VERSION,
+                    "pass": tables.pass,
+                    "index": tables.index,
+                });
+                serde_json::to_string(&doc)
+                    .map_err(|e| coded(&codes::EMIT_CAPI_SERIALIZE_FAILED, e))
+            },
+        )
+    }
+}
+
 /// Dense `[0, n)` index of the single reference (slack) bus, or `-1` if not
 /// exactly one. An INDEX into the [`pio_bus_ids`] ordering, not a bus id;
 /// `pio_branches` from/to carry ids, so the unit is in the name. A network may
@@ -3490,6 +3546,138 @@ mod tests {
     }
 
     #[test]
+    fn solver_index_json_reports_the_pass_provenance() {
+        // t_case9_oos carries one out-of-service generator (source row 1 of
+        // three). The pass drops it and keeps the rows the survivors came
+        // from, so the vector is shorter than the file's inventory and its
+        // entries are the file's row numbers rather than a renumbering.
+        let path = data_path("t_case9_oos.m");
+        let mut err = [0 as c_char; PIO_ERRBUF_MIN];
+        unsafe {
+            let net = pio_parse_file(path.as_ptr(), std::ptr::null(), err.as_mut_ptr(), err.len());
+            assert!(
+                !net.is_null(),
+                "parse failed: {}",
+                CStr::from_ptr(err.as_ptr()).to_str().unwrap()
+            );
+
+            let raw = pio_solver_index_json(net, err.as_mut_ptr(), err.len());
+            assert!(
+                !raw.is_null(),
+                "solver index json failed: {}",
+                CStr::from_ptr(err.as_ptr()).to_str().unwrap()
+            );
+            let doc: serde_json::Value =
+                serde_json::from_str(CStr::from_ptr(raw).to_str().unwrap()).unwrap();
+            pio_string_free(raw);
+
+            assert_eq!(doc["schema"], serde_json::json!("powerio.solver_index"));
+            assert_eq!(
+                doc[powerio::version::VERSION_KEY],
+                serde_json::json!(powerio::VERSION)
+            );
+            assert_eq!(
+                doc["pass"],
+                serde_json::json!(powerio::NORMALIZED_SOLVER_TABLES_PASS)
+            );
+
+            let index = &doc["index"];
+            assert_eq!(
+                index["generator_source_rows"],
+                serde_json::json!([0, 2]),
+                "the dropped generator is row 1, and the survivors keep 0 and 2"
+            );
+            assert_eq!(
+                index["bus_source_rows"],
+                serde_json::json!([0, 1, 2, 3, 4, 5, 6, 7, 8]),
+                "every bus survives, each from its own row"
+            );
+            // The other six vectors are present whether or not the case
+            // populates them, so a caller can read one shape for every table.
+            for key in [
+                "load_source_rows",
+                "shunt_source_rows",
+                "branch_source_rows",
+                "switch_source_rows",
+                "storage_source_rows",
+                "hvdc_source_rows",
+            ] {
+                assert!(index[key].is_array(), "{key} is not an array");
+            }
+            assert_eq!(
+                index["bus_ids"],
+                serde_json::json!([1, 2, 3, 4, 5, 6, 7, 8, 9])
+            );
+            assert_eq!(index["reference_bus_indices"], serde_json::json!([0]));
+
+            pio_network_free(net);
+        }
+    }
+
+    #[test]
+    fn solver_index_json_reports_no_source_row_for_a_star_bus() {
+        // The case the consumer's re-derived filter cannot model: star
+        // lowering adds a bus and three branches that no file row produced.
+        // "status == 0 or an endpoint that did not survive" reproduces neither,
+        // so a caller counting rows against the filtered table trips its own
+        // length check on a case the library handled. The pass says `null`.
+        let case = case9_json_with_a_3w_transformer();
+        let text = CString::new(case).unwrap();
+        let mut err = [0 as c_char; PIO_ERRBUF_MIN];
+        unsafe {
+            let net = pio_from_json(text.as_ptr(), err.as_mut_ptr(), err.len());
+            assert!(
+                !net.is_null(),
+                "from_json failed: {}",
+                CStr::from_ptr(err.as_ptr()).to_str().unwrap()
+            );
+
+            let raw = pio_solver_index_json(net, err.as_mut_ptr(), err.len());
+            assert!(
+                !raw.is_null(),
+                "solver index json failed: {}",
+                CStr::from_ptr(err.as_ptr()).to_str().unwrap()
+            );
+            let doc: serde_json::Value =
+                serde_json::from_str(CStr::from_ptr(raw).to_str().unwrap()).unwrap();
+            pio_string_free(raw);
+
+            let buses = doc["index"]["bus_source_rows"].as_array().unwrap();
+            assert_eq!(buses.len(), 10, "9 buses plus the star point");
+            assert_eq!(
+                buses.iter().filter(|v| v.is_null()).count(),
+                1,
+                "exactly the star bus has no source row"
+            );
+            assert_eq!(
+                doc["index"]["bus_ids"].as_array().unwrap().len(),
+                buses.len(),
+                "the star bus still receives a stable id"
+            );
+
+            let branches = doc["index"]["branch_source_rows"].as_array().unwrap();
+            assert_eq!(
+                branches.iter().filter(|v| v.is_null()).count(),
+                3,
+                "the three legs the transformer lowered to have no source row"
+            );
+
+            pio_network_free(net);
+        }
+    }
+
+    #[test]
+    fn solver_index_json_tolerates_a_null_handle() {
+        let mut err = [0 as c_char; PIO_ERRBUF_MIN];
+        unsafe {
+            let raw = pio_solver_index_json(std::ptr::null(), err.as_mut_ptr(), err.len());
+            assert!(raw.is_null());
+            let msg = CStr::from_ptr(err.as_ptr()).to_str().unwrap();
+            assert!(msg.contains("network handle"), "{msg:?}");
+        }
+    }
+
+    #[test]
     fn every_extractor_reports_the_star_lowered_space() {
         // A 3-winding transformer star-lowers into one bus plus three branches
         // before the dense extractors run. Through v4 the bus and branch
@@ -3913,6 +4101,7 @@ mod tests {
             "size_t pio_network_name(const PioNetwork *net, char *out, size_t cap);",
             "size_t pio_source_format(const PioNetwork *net, char *out, size_t cap);",
             "char *pio_summary_json(const PioNetwork *net, char *errbuf, size_t errlen);",
+            "char *pio_solver_index_json(const PioNetwork *net, char *errbuf, size_t errlen);",
             "int64_t pio_ref_bus_index(const PioNetwork *net);",
             "size_t pio_ref_bus_indices(const PioNetwork *net, int64_t *out, size_t cap);",
             "size_t pio_n_islands(const PioNetwork *net);",

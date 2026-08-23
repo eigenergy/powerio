@@ -753,6 +753,39 @@ size_t pio_source_format(const PioNetwork *net, char *out, size_t cap);
 char *pio_summary_json(const PioNetwork *net, char *errbuf, size_t errlen);
 
 /**
+ * The normalize pass's identity and provenance vectors for `net`, as owned
+ * JSON. Free the returned string with [`pio_string_free`]. On error this
+ * returns NULL and writes the message into `errbuf`.
+ *
+ * The document is `{"schema", "powerio_version", "pass", "index"}`, where
+ * `index` is the pass's own `SolverTableIndex`:
+ *
+ * * `bus_ids` — source bus id of each dense bus row, including the stable id
+ *   a synthetic 3-winding star bus receives;
+ * * `reference_bus_indices`, `component_labels`, `branch_from_arc_indices`,
+ *   `branch_to_arc_indices` — the index vectors the solver tables are built
+ *   over;
+ * * `bus_source_rows`, `load_source_rows`, `shunt_source_rows`,
+ *   `branch_source_rows`, `switch_source_rows`, `generator_source_rows`,
+ *   `storage_source_rows`, `hvdc_source_rows` — the source row of each
+ *   normalized row, or `null` where the row has no source (a star bus and the
+ *   branches it lowers to).
+ *
+ * This is the map the pass computes for itself, which is the point: a caller
+ * that wants normalized tables plus provenance no longer has to re-derive the
+ * drop rule from an unfiltered second extraction, and so cannot disagree with
+ * the pass wherever the guess does not model what it does — three-winding star
+ * lowering changing the branch count, most of all. Reaching the same vectors
+ * through the Arrow solver tables needs the `arrow` feature, which is off by
+ * default, and through a `.pio.json` package needs a package; this needs
+ * neither.
+ *
+ * One normalize pass runs per call and nothing is cached on the handle, so a
+ * caller reading several vectors should read the document once.
+ */
+char *pio_solver_index_json(const PioNetwork *net, char *errbuf, size_t errlen);
+
+/**
  * Dense `[0, n)` index of the single reference (slack) bus, or `-1` if not
  * exactly one. An INDEX into the [`pio_bus_ids`] ordering, not a bus id;
  * `pio_branches` from/to carry ids, so the unit is in the name. A network may
