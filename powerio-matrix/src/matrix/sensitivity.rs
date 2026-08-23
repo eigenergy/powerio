@@ -35,11 +35,10 @@ use crate::{Error, Result};
 
 /// Entries below this magnitude are dropped from the emitted sparse matrices.
 const PRUNE: f64 = 1e-12;
-/// Reduced-dimension ceiling for the `Auto` dense oracle path. Kept at the
-/// policy established in #295; the separate footprint guard prevents a wide
-/// problem from selecting dense output allocations through this dimension
-/// check alone.
-const DEFAULT_AUTO_DENSE_THRESHOLD: usize = 8192;
+/// Reduced-dimension ceiling for the `Auto` dense oracle path. Measured against
+/// the sparse Cholesky path, dense stops winning near 50 and is 9x slower by
+/// 1200. The separate footprint guard still vetoes a wide problem below it.
+const DEFAULT_AUTO_DENSE_THRESHOLD: usize = 64;
 const MAX_RHS_BATCH_COLUMNS: usize = 32;
 const RHS_BATCH_MEMORY_BUDGET: usize = 8 << 20;
 
@@ -67,7 +66,9 @@ const LODF_ISLAND_TOLERANCE: f64 = 1e-9;
 #[serde(rename_all = "snake_case")]
 #[non_exhaustive]
 pub enum SensitivitySolver {
-    /// Dense below [`SensitivityOptions::auto_dense_threshold`], sparse above it.
+    /// Dense at or below [`SensitivityOptions::auto_dense_threshold`], sparse
+    /// above it, and dense again when the case falls outside the sparse path's
+    /// positive finite susceptance requirement.
     #[default]
     Auto,
     /// Dense grounded inverse. This is the historical builder path.
@@ -151,6 +152,8 @@ impl SensitivityOptions {
     /// the dense path while both the reduced dimension and the predicted
     /// dense footprint stay within their ceilings, so a wide case (few buses,
     /// many branches) no longer picks a path that would ask for tens of GB.
+    /// This sees the shape only. The builders additionally send an `Auto` case
+    /// whose susceptances the sparse path refuses back to dense.
     pub fn selected_solver_for_shape(
         &self,
         reduced_dimension: usize,
@@ -255,28 +258,29 @@ pub fn build_ptdf_lodf_with_options(
     let inc = build_incidence(case, options.convention, &BuildOptions::default())?;
     let reduced_dimension = inc.n().saturating_sub(Grounding::new(&refs).len());
 
-    let (ptdf, lodf, solver_path, ptdf_dropped, lodf_dropped) = match options
-        .selected_solver_for_shape(reduced_dimension, inc.m(), inc.n())
-    {
-        SensitivitySolver::Dense => {
-            let (dense, m, n, solver_path) = ptdf_dense_with_path(&inc, &refs)?;
-            let (ptdf, ptdf_dropped) = dense_to_csr_with_drop(&dense, m, n, options.drop_tolerance);
-            let (lodf, lodf_dropped) =
-                lodf_from_dense_with_drop(&dense, &inc.a, m, n, options.drop_tolerance);
-            (ptdf, lodf, solver_path, ptdf_dropped, lodf_dropped)
-        }
-        SensitivitySolver::Sparse => {
-            let (ptdf, ptdf_dropped, lodf, lodf_dropped) = sparse_ptdf_lodf(&inc, &refs, options)?;
-            (
-                ptdf,
-                lodf,
-                SensitivitySolverPath::SparseCholesky,
-                ptdf_dropped,
-                lodf_dropped,
-            )
-        }
-        SensitivitySolver::Auto => unreachable!("selected_solver resolves Auto"),
-    };
+    let (ptdf, lodf, solver_path, ptdf_dropped, lodf_dropped) =
+        match resolve_solver(options, &inc, reduced_dimension) {
+            SensitivitySolver::Dense => {
+                let (dense, m, n, solver_path) = ptdf_dense_with_path(&inc, &refs)?;
+                let (ptdf, ptdf_dropped) =
+                    dense_to_csr_with_drop(&dense, m, n, options.drop_tolerance);
+                let (lodf, lodf_dropped) =
+                    lodf_from_dense_with_drop(&dense, &inc.a, m, n, options.drop_tolerance);
+                (ptdf, lodf, solver_path, ptdf_dropped, lodf_dropped)
+            }
+            SensitivitySolver::Sparse => {
+                let (ptdf, ptdf_dropped, lodf, lodf_dropped) =
+                    sparse_ptdf_lodf(&inc, &refs, options)?;
+                (
+                    ptdf,
+                    lodf,
+                    SensitivitySolverPath::SparseCholesky,
+                    ptdf_dropped,
+                    lodf_dropped,
+                )
+            }
+            SensitivitySolver::Auto => unreachable!("selected_solver resolves Auto"),
+        };
 
     let metadata = sensitivity_metadata(
         options,
@@ -305,33 +309,31 @@ pub(crate) fn for_each_ptdf_lodf_entry(
     let inc = build_incidence(case, options.convention, &BuildOptions::default())?;
     let reduced_dimension = inc.n().saturating_sub(Grounding::new(&refs).len());
 
-    let (solver_path, ptdf, lodf) =
-        match options.selected_solver_for_shape(reduced_dimension, inc.m(), inc.n()) {
-            SensitivitySolver::Dense => {
-                let (dense, m, n, solver_path) = ptdf_dense_with_path(&inc, &refs)?;
-                let (ptdf, ptdf_dropped) =
-                    dense_to_csr_with_drop(&dense, m, n, options.drop_tolerance);
-                let (lodf, lodf_dropped) =
-                    lodf_from_dense_with_drop(&dense, &inc.a, m, n, options.drop_tolerance);
-                let ptdf_meta = matrix_metadata(&ptdf, ptdf_dropped);
-                let lodf_meta = matrix_metadata(&lodf, lodf_dropped);
-                for (&v, (row, col)) in &ptdf {
-                    ptdf_entry(row, col, v)?;
-                }
-                for (&v, (row, col)) in &lodf {
-                    lodf_entry(row, col, v)?;
-                }
-                (solver_path, ptdf_meta, lodf_meta)
+    let (solver_path, ptdf, lodf) = match resolve_solver(options, &inc, reduced_dimension) {
+        SensitivitySolver::Dense => {
+            let (dense, m, n, solver_path) = ptdf_dense_with_path(&inc, &refs)?;
+            let (ptdf, ptdf_dropped) = dense_to_csr_with_drop(&dense, m, n, options.drop_tolerance);
+            let (lodf, lodf_dropped) =
+                lodf_from_dense_with_drop(&dense, &inc.a, m, n, options.drop_tolerance);
+            let ptdf_meta = matrix_metadata(&ptdf, ptdf_dropped);
+            let lodf_meta = matrix_metadata(&lodf, lodf_dropped);
+            for (&v, (row, col)) in &ptdf {
+                ptdf_entry(row, col, v)?;
             }
-            SensitivitySolver::Sparse => {
-                let (ptdf, lodf) =
-                    sparse_ptdf_lodf_entries(&inc, &refs, options, ptdf_entry, lodf_entry)?;
-                (SensitivitySolverPath::SparseCholesky, ptdf, lodf)
+            for (&v, (row, col)) in &lodf {
+                lodf_entry(row, col, v)?;
             }
-            SensitivitySolver::Auto => {
-                unreachable!("selected_solver_for_reduced_dimension resolves Auto")
-            }
-        };
+            (solver_path, ptdf_meta, lodf_meta)
+        }
+        SensitivitySolver::Sparse => {
+            let (ptdf, lodf) =
+                sparse_ptdf_lodf_entries(&inc, &refs, options, ptdf_entry, lodf_entry)?;
+            (SensitivitySolverPath::SparseCholesky, ptdf, lodf)
+        }
+        SensitivitySolver::Auto => {
+            unreachable!("selected_solver_for_reduced_dimension resolves Auto")
+        }
+    };
 
     Ok(sensitivity_metadata(
         options,
@@ -638,6 +640,25 @@ fn metadata_from_counts(
     )
 }
 
+/// Resolve the solver for a build, seeing the case and not only its shape.
+/// The sparse path refuses nonpositive or nonfinite susceptances, so `Auto`
+/// keeps the dense indefinite fallback for those. An explicit `Sparse` request
+/// still reports the refusal.
+fn resolve_solver(
+    options: &SensitivityOptions,
+    inc: &IncidenceParts,
+    reduced_dimension: usize,
+) -> SensitivitySolver {
+    let selected = options.selected_solver_for_shape(reduced_dimension, inc.m(), inc.n());
+    if options.solver == SensitivitySolver::Auto
+        && selected == SensitivitySolver::Sparse
+        && ensure_sparse_solver_eligible(inc).is_err()
+    {
+        return SensitivitySolver::Dense;
+    }
+    selected
+}
+
 fn ensure_sparse_solver_eligible(inc: &IncidenceParts) -> Result<()> {
     for (branch, &b) in inc.b.iter().enumerate() {
         if !b.is_finite() || b <= 0.0 {
@@ -714,11 +735,20 @@ impl SparseCholeskyFactor {
         // with no triplet rebuild or numeric copy. The grounded Laplacian is
         // exactly symmetric, so the view describes the same operator.
         let a_csc = a.transpose_view();
+        // `raw_storage` is sprs's unchecked accessor and faer never tests that
+        // the pointers start at 0, so a view sliced out of a larger matrix
+        // would factor the wrong operator. `as_slice` yields them only when
+        // they are proper, and the row indices then line up with them.
         let indptr = a_csc.indptr();
+        let col_ptr = indptr.as_slice().ok_or_else(|| {
+            sensitivity_factorization_failed(
+                "grounded DC bus susceptance matrix does not own its index pointers",
+            )
+        })?;
         let symbolic_a = SymbolicSparseColMatRef::new_checked(
             dimension,
             dimension,
-            indptr.raw_storage(),
+            col_ptr,
             None,
             a_csc.indices(),
         );
@@ -1248,13 +1278,18 @@ mod auto_policy_tests {
     };
 
     #[test]
-    fn auto_takes_the_dense_path_for_a_mid_size_case() {
-        // 2869 buses is a common published case inside the compatibility
-        // policy's dense range.
+    fn auto_takes_the_dense_path_only_below_the_measured_crossover() {
+        // Dense wins on a case too small for the factorization to pay for
+        // itself and loses everywhere above it: case2869pegase is 10x slower
+        // dense than sparse.
         let o = SensitivityOptions::default();
         assert_eq!(
-            o.selected_solver_for_shape(2868, 4582, 2869),
+            o.selected_solver_for_shape(30, 39, 31),
             SensitivitySolver::Dense
+        );
+        assert_eq!(
+            o.selected_solver_for_shape(2868, 4582, 2869),
+            SensitivitySolver::Sparse
         );
     }
 
@@ -1264,7 +1299,7 @@ mod auto_policy_tests {
         // small but the dense LODF alone is m x m, so the footprint veto has
         // to fire even though the dimension test passes.
         let o = SensitivityOptions::default();
-        let (nr, m, n) = (400usize, 40_000usize, 401usize);
+        let (nr, m, n) = (64usize, 40_000usize, 65usize);
         assert!(nr <= o.auto_dense_threshold);
         assert!(dense_footprint_bytes(nr, m, n) > AUTO_DENSE_MEMORY_BUDGET);
         assert_eq!(

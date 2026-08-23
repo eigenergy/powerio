@@ -32,9 +32,12 @@ grounded inverse path and remain the small case oracle. The option based
 `build_ptdf_lodf_with_options` path accepts `SensitivityOptions`: `Dense` forces
 the dense oracle path, `Sparse` performs one AMD-ordered sparse Cholesky
 factorization and reuses it for batches of PTDF and LODF right hand sides, and
-`Auto` selects dense through a reduced dimension of 8192 while the predicted
-dense footprint remains at or below 2 GiB, then selects sparse. The sparse path
-avoids forming the \\((n-r) \times (n-r)\\) dense inverse; the PTDF/LODF outputs
+`Auto` selects dense through a reduced dimension of 64 while the predicted
+dense footprint remains at or below 2 GiB, then selects sparse, and falls back
+to dense again for a case the sparse path refuses. The ceiling is the measured
+crossover: dense stops winning near a reduced dimension of 50, and
+case2869pegase takes 22.1 s dense against 2.2 s sparse. The sparse path avoids
+forming the \\((n-r) \times (n-r)\\) dense inverse; the PTDF/LODF outputs
 themselves can still be large. It requires positive finite branch
 susceptances, so the grounded DC bus susceptance matrix is positive definite
 after reference coverage is checked; the dense path remains the fallback for

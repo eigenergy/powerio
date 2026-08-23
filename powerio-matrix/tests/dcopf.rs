@@ -572,13 +572,7 @@ fn auto_writes_sparse_outputs_above_the_dense_threshold() {
     let reduced_dimension = view.n() - view.reference_bus_indices().len();
     assert!(reduced_dimension > 512);
 
-    // Drive the routing through the knob rather than the default ceiling:
-    // 599 unknowns is far below the real dense/sparse crossover, so the
-    // default now (correctly) takes the dense path here.
-    let options = SensitivityOptions {
-        auto_dense_threshold: 512,
-        ..SensitivityOptions::default()
-    };
+    let options = SensitivityOptions::default();
     let temp = tempfile::tempdir().unwrap();
     let ptdf_path = temp.path().join("ptdf.mtx");
     let lodf_path = temp.path().join("lodf.mtx");
@@ -599,7 +593,35 @@ fn auto_writes_sparse_outputs_above_the_dense_threshold() {
 }
 
 #[test]
-fn auto_sparse_rejects_non_positive_susceptance() {
+fn auto_falls_back_to_dense_for_non_positive_susceptance() {
+    // The dimension ceiling would send this to sparse, which refuses the sign.
+    // `Auto` promises an answer wherever one path can produce it, so it keeps
+    // the dense indefinite fallback.
+    let case = net(
+        "negative_x",
+        vec![bus(1, BusType::Ref), bus(2, BusType::Pq)],
+        vec![branch(1, 2, -0.1)],
+    );
+    let view = IndexedNetwork::new(&case);
+    let out = build_ptdf_lodf_with_options(
+        &view,
+        &SensitivityOptions {
+            solver: SensitivitySolver::Auto,
+            auto_dense_threshold: 0,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+
+    assert_eq!(out.metadata.requested_solver, SensitivitySolver::Auto);
+    assert!(matches!(
+        out.metadata.solver_path,
+        SensitivitySolverPath::DenseCholesky | SensitivitySolverPath::DenseInverse
+    ));
+}
+
+#[test]
+fn explicit_sparse_rejects_non_positive_susceptance() {
     let case = net(
         "negative_x",
         vec![bus(1, BusType::Ref), bus(2, BusType::Pq)],
@@ -609,8 +631,7 @@ fn auto_sparse_rejects_non_positive_susceptance() {
     let err = build_ptdf_lodf_with_options(
         &view,
         &SensitivityOptions {
-            solver: SensitivitySolver::Auto,
-            auto_dense_threshold: 0,
+            solver: SensitivitySolver::Sparse,
             ..Default::default()
         },
     )
