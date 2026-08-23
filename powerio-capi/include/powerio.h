@@ -118,7 +118,12 @@
  * fixed policy pins by code. An unknown code is data, never a failure.
  *
  * Optional: build with `--features arrow` for pio_to_arrow (guarded by
- * PIO_ARROW), add `--features matrix` for the balanced matrix Arrow tables,
+ * PIO_ARROW), add `--features matrix` for the balanced matrix Arrow tables and
+ * for the DC incidence part extractors pio_branch_susceptance,
+ * pio_phase_shift_injection, pio_incidence_branch_rows and
+ * pio_incidence_skipped_rows (guarded by PIO_MATRIX; these four need matrix
+ * alone, while the matrix Arrow tables need arrow with it, which is what
+ * pio_matrix_available reports),
  * `--features gridfm` for pio_read_dir / pio_scenario_ids
  * (guarded by PIO_GRIDFM), `--features dist` for the pio_dist_* entry
  * points (guarded by PIO_DIST): multiconductor distribution cases (OpenDSS,
@@ -990,6 +995,100 @@ size_t pio_bus_demand(const PioNetwork *net, double *pd, double *qd, size_t cap)
  * total bus count. Either pointer may be NULL.
  */
 size_t pio_bus_shunt(const PioNetwork *net, double *gs, double *bs, size_t cap);
+
+#if defined(PIO_MATRIX)
+/**
+ * Write the per-branch DC susceptance under `convention` into `out`, up to
+ * `cap` entries, and return `m`, the number of incidence columns. Call once
+ * with `(NULL, 0)` to size, allocate, then call again to fill.
+ *
+ * `convention` takes the tokens Python and the CLI accept — `"series"`
+ * (`b = x/(r² + x²)`, the default and what NULL selects), `"matpower"`
+ * (`b = 1/(x τ)`), `"reactance-only"` (`b = 1/x`) — case and separator
+ * insensitive. `b` is a **positive** Laplacian edge weight, as
+ * `DcConvention::branch_susceptance` states; PowerModels and tellegen write
+ * the negation, so a consumer negates once knowingly.
+ *
+ * Column order is [`pio_incidence_branch_rows`]'s, which is in-service branch
+ * order with the skipped and self-loop rows removed — not `pio_branches`
+ * order, and `m` is not `pio_n_branches`. Read both to line the vector up
+ * with the case.
+ *
+ * Returns `-1` and writes the message into `errbuf` on a refusal: a
+ * non-finite susceptance is `NonFiniteSusceptance` and a `Matpower` tap too
+ * small to divide by is `DegenerateTap`, which is the point of asking rather
+ * than recomputing `x/(r² + x²)` outside.
+ */
+ptrdiff_t pio_branch_susceptance(const PioNetwork *net,
+                                 const char *convention,
+                                 double *out,
+                                 size_t cap,
+                                 char *errbuf,
+                                 size_t errlen);
+#endif
+
+#if defined(PIO_MATRIX)
+/**
+ * Write the per-bus phase shift injection under `convention` into `out`, up
+ * to `cap` entries, and return `n`, the bus count. The dense order is
+ * [`pio_bus_ids`]'s, the one every per-bus array shares.
+ *
+ * This is MATPOWER `makeBdc`'s `Pbusinj`, the constant term of
+ * `L θ = C_g p_g − (p_d + g_s + p_shift)`. All zeros under
+ * `"reactance-only"`, which carries no shifts, and under any convention for a
+ * case with no phase shifter — a caller that skips it silently drops the
+ * shifter's contribution instead.
+ *
+ * `convention` and the `-1` refusal are [`pio_branch_susceptance`]'s.
+ */
+ptrdiff_t pio_phase_shift_injection(const PioNetwork *net,
+                                    const char *convention,
+                                    double *out,
+                                    size_t cap,
+                                    char *errbuf,
+                                    size_t errlen);
+#endif
+
+#if defined(PIO_MATRIX)
+/**
+ * Write the source branch row of each incidence column into `out`, up to
+ * `cap` entries, and return `m`. This is `branch_of_col`: the map from a
+ * position in [`pio_branch_susceptance`]'s vector back to a row of the case's
+ * branch table, and the only way to line either vector up with the case.
+ *
+ * Rows are the [`pio_branches`] index space. A self-loop and a branch the DC
+ * denominator guard skipped have no column, so this is not the identity and
+ * `m <= pio_n_branches`.
+ *
+ * `convention` and the `-1` refusal are [`pio_branch_susceptance`]'s.
+ */
+ptrdiff_t pio_incidence_branch_rows(const PioNetwork *net,
+                                    const char *convention,
+                                    int64_t *out,
+                                    size_t cap,
+                                    char *errbuf,
+                                    size_t errlen);
+#endif
+
+#if defined(PIO_MATRIX)
+/**
+ * Write the source rows of the in-service branches the DC denominator guard
+ * skipped into `out`, up to `cap` entries, and return the count.
+ *
+ * A consumer that rebuilds `B` from `A` and `b` needs these: the branches are
+ * in the case and in `pio_branches`, and they are in no incidence column, so
+ * without them its matrix and the library's disagree with nothing to say why.
+ * A case with none returns `0`, which is the ordinary answer.
+ *
+ * `convention` and the `-1` refusal are [`pio_branch_susceptance`]'s.
+ */
+ptrdiff_t pio_incidence_skipped_rows(const PioNetwork *net,
+                                     const char *convention,
+                                     int64_t *out,
+                                     size_t cap,
+                                     char *errbuf,
+                                     size_t errlen);
+#endif
 
 #if defined(PIO_ARROW)
 /**
