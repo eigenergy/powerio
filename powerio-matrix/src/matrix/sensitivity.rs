@@ -165,7 +165,7 @@ impl SensitivityOptions {
     /// many branches) no longer picks a path that would ask for tens of GB.
     /// This sees the shape only. The builders additionally send an `Auto` case
     /// whose susceptances the sparse path refuses back to dense, but only
-    /// while [`dense_footprint_fits`] still holds for it.
+    /// while the predicted dense footprint still fits the memory budget.
     pub fn selected_solver_for_shape(
         &self,
         reduced_dimension: usize,
