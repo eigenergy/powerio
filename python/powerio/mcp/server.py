@@ -28,6 +28,7 @@ applies.
 from __future__ import annotations
 
 import json as jsonlib
+import math
 import os
 from dataclasses import dataclass
 from pathlib import Path
@@ -1117,10 +1118,6 @@ def _display_impl(path: str, from_format: Optional[str] = None) -> dict:
     }
 
 
-# The tool text arguments that can carry JSON (`content`, `json`,
-# `package_json`) are annotated bare `str`: under any other annotation the
-# SDK re-parses a string that reads as JSON, destroying the text. "" means
-# unset.
 def _lowering_options(options: Optional[Dict[str, Any]]) -> float:
     """The one option the lowering pass takes today, and a refusal for the rest.
 
@@ -1147,17 +1144,36 @@ def _lowering_options(options: Optional[Dict[str, Any]]) -> float:
     if isinstance(base_mva, bool) or not isinstance(base_mva, (int, float)):
         raise ValueError("lower option `base_mva` must be a number")
     base_mva = float(base_mva)
-    if not base_mva > 0.0 or base_mva != base_mva or base_mva in (float("inf"),):
+    if not math.isfinite(base_mva) or base_mva <= 0.0:
         raise ValueError(f"lower option `base_mva` must be finite and positive, got {base_mva}")
     return base_mva
+
+
+# `MulticonductorToBalancedReadiness::is_ready` is `status <= info`, and the
+# lowering call refuses on exactly that test, so every record above info
+# blocks the pass -- a warning as surely as an error. Reading the pass's own
+# rule rather than inventing a second one is the whole point of this tool: a
+# `ready: true` the pass then refuses raises the one-line message that
+# `applied: false` with structured blockers exists to replace.
+_LOWER_BLOCKING_SEVERITIES = ("warning", "error", "fatal")
+_LOWER_READY_STATUSES = ("ok", "info")
 
 
 def _lower_blockers(diagnostics: list) -> list:
     return [
         item
         for item in diagnostics
-        if isinstance(item, dict) and item.get("severity") in ("error", "fatal")
+        if isinstance(item, dict)
+        and item.get("severity") in _LOWER_BLOCKING_SEVERITIES
     ]
+
+
+def _lower_ready(readiness: Dict[str, Any], blockers: list) -> bool:
+    """The pass's readiness verdict, taken from its own `status` where it has one."""
+    status = readiness.get("status")
+    if isinstance(status, str):
+        return status in _LOWER_READY_STATUSES
+    return not blockers
 
 
 def _lower_impl(
@@ -1210,7 +1226,7 @@ def _lower_impl(
         raise _coded_error("lower preflight failed", exc) from exc
     diagnostics = [d for d in readiness.get("diagnostics", []) if isinstance(d, dict)]
     blockers = _lower_blockers(diagnostics)
-    ready = not blockers
+    ready = _lower_ready(readiness, blockers)
 
     payload = {
         **_header("powerio.lower"),
@@ -1256,6 +1272,10 @@ def _lower_impl(
     return payload
 
 
+# The tool text arguments that can carry JSON (`content`, `json`,
+# `package_json`) are annotated bare `str`: under any other annotation the
+# SDK re-parses a string that reads as JSON, destroying the text. "" means
+# unset.
 @mcp.tool(
     name="convert",
     description="Convert a network to a single text format. "
@@ -1415,9 +1435,9 @@ def _diagnostics_tool(package_json: str, verbose: bool = False) -> dict:
         "one. This pass is lossy and policy bearing, so nothing else lowers "
         "implicitly: `parse`, `summary`, `matrix`, `convert`, `save` and "
         "package readback all refuse a multiconductor payload where a balanced "
-        "one is wanted rather than transforming it here. `mode=\"preflight\" "
+        "one is wanted rather than transforming it here. `mode=\"preflight\"` "
         "reports readiness, assumptions, approximations and blockers and "
-        "changes nothing. `mode=\"apply\" runs the same preflight, and on a "
+        "changes nothing. `mode=\"apply\"` runs the same preflight, and on a "
         "blocker returns `applied: false` with those blockers and no "
         "`package_json`; otherwise it returns the derived balanced "
         "`package_json` with its validation, diagnostics, origin and lowering "
@@ -1586,6 +1606,30 @@ def matrix(
         options=options,
         scheme=scheme,
         convention=convention,
+    )
+
+
+def lower(
+    package_json: Optional[str] = None,
+    path: Optional[str] = None,
+    content: Optional[str] = None,
+    from_format: Optional[str] = None,
+    to_model_kind: str = "balanced",
+    mode: str = "preflight",
+    options: Optional[Dict[str, Any]] = None,
+    *,
+    format: Optional[str] = None,
+    from_: Optional[str] = None,
+) -> dict:
+    source = _choose_from_format(from_format, format=format, from_=from_)
+    return _lower_impl(
+        package_json=package_json or "",
+        path=path,
+        content=content or "",
+        from_format=source,
+        to_model_kind=to_model_kind,
+        mode=mode,
+        options=options,
     )
 
 

@@ -174,23 +174,11 @@ fn parse_scheme(s: &str) -> PyResult<Scheme> {
 
 /// Accepts `series`/`series-impedance`, `matpower`/`mp`, and
 /// `reactance-only` (case- and separator-insensitive).
+///
+/// [`DcConvention::from_token`] owns the token set and the refusals, so this
+/// surface and the C ABI cannot drift into accepting different spellings.
 fn parse_convention(s: &str) -> PyResult<DcConvention> {
-    match normalize(s).as_str() {
-        "series" | "seriesimpedance" => Ok(DcConvention::SeriesImpedance),
-        "matpower" | "mp" => Ok(DcConvention::Matpower),
-        "reactanceonly" => Ok(DcConvention::ReactanceOnly),
-        // 0.8 spelled b = 1/x "paper"/"paper-pure" and made it the default.
-        // Name its successor: the nearest-looking option, "series", is a
-        // different formula, so a caller who guesses gets numbers instead of
-        // an error.
-        "paper" | "paperpure" | "pure" => Err(PyValueError::new_err(
-            "convention 'paper-pure' is now 'reactance-only'; it is no longer \
-             the default, and 'series' is a different formula (b = x/(r²+x²))",
-        )),
-        other => Err(PyValueError::new_err(format!(
-            "unknown convention {other:?}; expected 'series', 'matpower', or 'reactance-only'"
-        ))),
-    }
+    DcConvention::from_token(s).map_err(PyValueError::new_err)
 }
 
 /// PTDF/LODF options from the Python keywords. The solver defaults to `auto`,

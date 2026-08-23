@@ -1892,39 +1892,20 @@ pub unsafe extern "C" fn pio_bus_shunt(
 
 /// Resolve a C convention token. The tokens Python's `convention=` keyword and
 /// the CLI's `--convention` accept, case and separator insensitive.
+///
+/// [`powerio::DcConvention::from_token`] owns the token set and the refusals,
+/// so "the tokens Python accepts" is a shared parser rather than a second copy
+/// of the match arms that could drift from it. NULL is the only spelling of
+/// "unset" here: an empty string is a token the caller passed, and resolving
+/// it to the default would be this ABI silently choosing a convention.
 #[cfg(feature = "matrix")]
 fn dc_convention_from_c(convention: *const c_char) -> Result<powerio_matrix::DcConvention, String> {
-    let raw = match optional_cstr(convention, "convention")? {
-        Some(s) => s,
+    let Some(raw) = optional_cstr(convention, "convention")? else {
         // NULL is the default, as it is for every other optional C argument.
-        None => return Ok(powerio_matrix::DcConvention::default()),
+        return Ok(powerio_matrix::DcConvention::default());
     };
-    let normalized: String = raw
-        .chars()
-        .filter(|c| c.is_alphanumeric())
-        .map(|c| c.to_ascii_lowercase())
-        .collect();
-    match normalized.as_str() {
-        "" => Ok(powerio_matrix::DcConvention::default()),
-        "series" | "seriesimpedance" => Ok(powerio_matrix::DcConvention::SeriesImpedance),
-        "matpower" | "mp" => Ok(powerio_matrix::DcConvention::Matpower),
-        "reactanceonly" => Ok(powerio_matrix::DcConvention::ReactanceOnly),
-        // 0.8 spelled `b = 1/x` "paper"/"paper-pure" and made it the default.
-        // Name its successor rather than resolving it: the nearest-looking
-        // option, `series`, is a different formula, so a caller who guesses
-        // gets numbers instead of an error.
-        "paper" | "paperpure" | "pure" => Err(coded(
-            &codes::BIND_CAPI_INVALID_OPTIONS,
-            "convention 'paper-pure' is now 'reactance-only'; it is no longer the default, \
-             and 'series' is a different formula (b = x/(r^2 + x^2))",
-        )),
-        other => Err(coded(
-            &codes::BIND_CAPI_INVALID_OPTIONS,
-            format!(
-                "unknown convention {other:?}; expected 'series', 'matpower', or 'reactance-only'"
-            ),
-        )),
-    }
+    powerio_matrix::DcConvention::from_token(raw)
+        .map_err(|message| coded(&codes::BIND_CAPI_INVALID_OPTIONS, message))
 }
 
 /// Build the incidence parts of `net` under `convention`, or the guard's own
@@ -1938,6 +1919,20 @@ unsafe fn incidence_parts_of(
     let v = unsafe { view(net) }.ok_or_else(|| null_handle("network handle"))?;
     powerio_matrix::build_incidence(&v, conv, &powerio_matrix::BuildOptions::default())
         .map_err(err_line)
+}
+
+/// Narrow a branch table row to the `int64` the vectors carry. `-1` is this
+/// family's whole-call refusal, so a row that cannot be represented is
+/// reported as one rather than written into the array as a value a consumer
+/// would read back as a row number.
+#[cfg(feature = "matrix")]
+fn branch_row_as_i64(row: usize) -> Result<i64, String> {
+    i64::try_from(row).map_err(|_| {
+        coded(
+            &codes::BIND_CAPI_INDEX_OUT_OF_RANGE,
+            format!("branch row {row} does not fit in int64"),
+        )
+    })
 }
 
 /// Run `f`, write `vals` into `out` under the cap/count convention, and return
@@ -1996,6 +1991,11 @@ unsafe fn finish_fill<T: Copy>(
 /// non-finite susceptance is `NonFiniteSusceptance` and a `Matpower` tap too
 /// small to divide by is `DegenerateTap`, which is the point of asking rather
 /// than recomputing `x/(r² + x²)` outside.
+///
+/// One incidence build runs per call and nothing is cached on the handle, so
+/// the size query and the fill are two builds, and each of the four
+/// extractors pays its own. A consumer that wants several of these vectors
+/// should size once, keep the count, and hold what it reads.
 #[cfg(feature = "matrix")]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_branch_susceptance(
@@ -2028,7 +2028,8 @@ pub unsafe extern "C" fn pio_branch_susceptance(
 /// case with no phase shifter — a caller that skips it silently drops the
 /// shifter's contribution instead.
 ///
-/// `convention` and the `-1` refusal are [`pio_branch_susceptance`]'s.
+/// `convention`, the per-call incidence build, and the `-1` refusal are
+/// [`pio_branch_susceptance`]'s.
 #[cfg(feature = "matrix")]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_phase_shift_injection(
@@ -2060,7 +2061,8 @@ pub unsafe extern "C" fn pio_phase_shift_injection(
 /// denominator guard skipped have no column, so this is not the identity and
 /// `m <= pio_n_branches`.
 ///
-/// `convention` and the `-1` refusal are [`pio_branch_susceptance`]'s.
+/// `convention`, the per-call incidence build, and the `-1` refusal are
+/// [`pio_branch_susceptance`]'s.
 #[cfg(feature = "matrix")]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_incidence_branch_rows(
@@ -2080,10 +2082,7 @@ pub unsafe extern "C" fn pio_incidence_branch_rows(
             cap,
             || {
                 let rows = incidence_parts_of(net, convention)?.branch_of_col;
-                Ok(rows
-                    .into_iter()
-                    .map(|r| i64::try_from(r).unwrap_or(-1))
-                    .collect())
+                rows.into_iter().map(branch_row_as_i64).collect()
             },
         )
     }
@@ -2097,7 +2096,8 @@ pub unsafe extern "C" fn pio_incidence_branch_rows(
 /// without them its matrix and the library's disagree with nothing to say why.
 /// A case with none returns `0`, which is the ordinary answer.
 ///
-/// `convention` and the `-1` refusal are [`pio_branch_susceptance`]'s.
+/// `convention`, the per-call incidence build, and the `-1` refusal are
+/// [`pio_branch_susceptance`]'s.
 #[cfg(feature = "matrix")]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_incidence_skipped_rows(
@@ -2117,12 +2117,12 @@ pub unsafe extern "C" fn pio_incidence_skipped_rows(
             cap,
             || {
                 let parts = incidence_parts_of(net, convention)?;
-                Ok(parts
+                parts
                     .skipped_zero_impedance
                     .branch_indices
-                    .iter()
-                    .map(|&r| i64::try_from(r).unwrap_or(-1))
-                    .collect())
+                    .into_iter()
+                    .map(branch_row_as_i64)
+                    .collect()
             },
         )
     }

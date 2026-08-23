@@ -1018,6 +1018,11 @@ size_t pio_bus_shunt(const PioNetwork *net, double *gs, double *bs, size_t cap);
  * non-finite susceptance is `NonFiniteSusceptance` and a `Matpower` tap too
  * small to divide by is `DegenerateTap`, which is the point of asking rather
  * than recomputing `x/(r² + x²)` outside.
+ *
+ * One incidence build runs per call and nothing is cached on the handle, so
+ * the size query and the fill are two builds, and each of the four
+ * extractors pays its own. A consumer that wants several of these vectors
+ * should size once, keep the count, and hold what it reads.
  */
 ptrdiff_t pio_branch_susceptance(const PioNetwork *net,
                                  const char *convention,
@@ -1039,7 +1044,8 @@ ptrdiff_t pio_branch_susceptance(const PioNetwork *net,
  * case with no phase shifter — a caller that skips it silently drops the
  * shifter's contribution instead.
  *
- * `convention` and the `-1` refusal are [`pio_branch_susceptance`]'s.
+ * `convention`, the per-call incidence build, and the `-1` refusal are
+ * [`pio_branch_susceptance`]'s.
  */
 ptrdiff_t pio_phase_shift_injection(const PioNetwork *net,
                                     const char *convention,
@@ -1060,7 +1066,8 @@ ptrdiff_t pio_phase_shift_injection(const PioNetwork *net,
  * denominator guard skipped have no column, so this is not the identity and
  * `m <= pio_n_branches`.
  *
- * `convention` and the `-1` refusal are [`pio_branch_susceptance`]'s.
+ * `convention`, the per-call incidence build, and the `-1` refusal are
+ * [`pio_branch_susceptance`]'s.
  */
 ptrdiff_t pio_incidence_branch_rows(const PioNetwork *net,
                                     const char *convention,
@@ -1080,7 +1087,8 @@ ptrdiff_t pio_incidence_branch_rows(const PioNetwork *net,
  * without them its matrix and the library's disagree with nothing to say why.
  * A case with none returns `0`, which is the ordinary answer.
  *
- * `convention` and the `-1` refusal are [`pio_branch_susceptance`]'s.
+ * `convention`, the per-call incidence build, and the `-1` refusal are
+ * [`pio_branch_susceptance`]'s.
  */
 ptrdiff_t pio_incidence_skipped_rows(const PioNetwork *net,
                                      const char *convention,

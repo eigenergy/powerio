@@ -34,7 +34,10 @@ the dense oracle path, `Sparse` performs one AMD-ordered sparse Cholesky
 factorization and reuses it for batches of PTDF and LODF right hand sides, and
 `Auto` selects dense through a reduced dimension of 64 while the predicted
 dense footprint remains at or below 2 GiB, then selects sparse, and falls back
-to dense again for a case the sparse path refuses. The ceiling is the measured
+to dense again for a case the sparse path refuses whose dense footprint still
+fits that budget. A case that fails both tests keeps the sparse refusal rather
+than asking for the tens of GB the footprint veto exists to refuse; name
+`Dense` explicitly to spend it. The ceiling is the measured
 crossover: dense stops winning near a reduced dimension of 50, and
 case2869pegase takes 22.1 s dense against 2.2 s sparse. The sparse path avoids
 forming the \\((n-r) \times (n-r)\\) dense inverse; the PTDF/LODF outputs

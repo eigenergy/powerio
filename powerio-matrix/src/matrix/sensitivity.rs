@@ -59,6 +59,14 @@ fn dense_footprint_bytes(reduced_dimension: usize, branches: usize, buses: usize
         .saturating_add(sq(branches, buses))
         .saturating_add(sq(branches, branches))
 }
+/// Whether the dense path's predicted peak footprint for this shape stays
+/// inside the `Auto` memory budget. This is a veto rather than a preference:
+/// nothing may route an `Auto` build to dense against it, because the number
+/// it compares is an allocation the dense path would then attempt.
+fn dense_footprint_fits(reduced_dimension: usize, branches: usize, buses: usize) -> bool {
+    dense_footprint_bytes(reduced_dimension, branches, buses) <= AUTO_DENSE_MEMORY_BUDGET
+}
+
 const LODF_ISLAND_TOLERANCE: f64 = 1e-9;
 
 /// Solver selection for option based DC sensitivity builds.
@@ -67,8 +75,11 @@ const LODF_ISLAND_TOLERANCE: f64 = 1e-9;
 #[non_exhaustive]
 pub enum SensitivitySolver {
     /// Dense at or below [`SensitivityOptions::auto_dense_threshold`], sparse
-    /// above it, and dense again when the case falls outside the sparse path's
-    /// positive finite susceptance requirement.
+    /// above it or when the predicted dense footprint exceeds the memory
+    /// budget, and dense again when the case falls outside the sparse path's
+    /// positive finite susceptance requirement and the dense footprint fits.
+    /// A case that fails both tests keeps the sparse refusal: the footprint
+    /// veto exists to refuse an allocation the dense path could not serve.
     #[default]
     Auto,
     /// Dense grounded inverse. This is the historical builder path.
@@ -153,7 +164,8 @@ impl SensitivityOptions {
     /// dense footprint stay within their ceilings, so a wide case (few buses,
     /// many branches) no longer picks a path that would ask for tens of GB.
     /// This sees the shape only. The builders additionally send an `Auto` case
-    /// whose susceptances the sparse path refuses back to dense.
+    /// whose susceptances the sparse path refuses back to dense, but only
+    /// while [`dense_footprint_fits`] still holds for it.
     pub fn selected_solver_for_shape(
         &self,
         reduced_dimension: usize,
@@ -163,8 +175,7 @@ impl SensitivityOptions {
         match self.solver {
             SensitivitySolver::Auto => {
                 let fits = reduced_dimension <= self.auto_dense_threshold
-                    && dense_footprint_bytes(reduced_dimension, branches, buses)
-                        <= AUTO_DENSE_MEMORY_BUDGET;
+                    && dense_footprint_fits(reduced_dimension, branches, buses);
                 if fits {
                     SensitivitySolver::Dense
                 } else {
@@ -644,6 +655,13 @@ fn metadata_from_counts(
 /// The sparse path refuses nonpositive or nonfinite susceptances, so `Auto`
 /// keeps the dense indefinite fallback for those. An explicit `Sparse` request
 /// still reports the refusal.
+///
+/// The fallback answers a case one path can produce; it cannot answer one
+/// neither can. The footprint veto is the other reason `selected` comes back
+/// sparse, and it is a prediction that the dense path would ask for tens of
+/// GB — a wide indefinite case sent to dense in spite of it aborts on the
+/// allocation instead of returning. Such a case keeps the sparse refusal,
+/// which names `solver=dense` for a caller that can afford it.
 fn resolve_solver(
     options: &SensitivityOptions,
     inc: &IncidenceParts,
@@ -652,6 +670,7 @@ fn resolve_solver(
     let selected = options.selected_solver_for_shape(reduced_dimension, inc.m(), inc.n());
     if options.solver == SensitivitySolver::Auto
         && selected == SensitivitySolver::Sparse
+        && dense_footprint_fits(reduced_dimension, inc.m(), inc.n())
         && ensure_sparse_solver_eligible(inc).is_err()
     {
         return SensitivitySolver::Dense;

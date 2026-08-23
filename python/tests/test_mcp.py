@@ -753,6 +753,31 @@ def test_lower_takes_a_package_transport_as_well_as_a_path():
     )
 
 
+def test_lower_is_importable_under_its_advertised_name():
+    # Every other advertised tool has a module level callable of the same
+    # name, and the Python guide's lowering example calls `lower(...)` in that
+    # style. A documented entry point that does not resolve is the bug.
+    assert callable(server.lower)
+    assert server.lower(path=str(LOWERABLE), mode="preflight")["readiness"]["ready"] is True
+    assert server.lower(path=str(LOWERABLE), mode="apply")["applied"] is True
+
+
+def test_lower_readiness_follows_the_passs_own_status():
+    # `is_ready` is `status <= info`, and the lowering call refuses on exactly
+    # that test, so a record above info blocks whatever its severity is. A
+    # `ready` derived from "error or fatal" alone would report a warning-only
+    # case ready and then raise instead of returning structured blockers.
+    assert server._lower_ready({"status": "warning"}, []) is False
+    assert server._lower_ready({"status": "error"}, []) is False
+    for ok in ("ok", "info"):
+        assert server._lower_ready({"status": ok}, []) is True
+    warning = {"severity": "warning", "code": "LOWER.MULTI_TO_BALANCED.X"}
+    assert server._lower_blockers([warning]) == [warning]
+    # With no status to read, the blockers stand in for it.
+    assert server._lower_ready({}, [warning]) is False
+    assert server._lower_ready({}, []) is True
+
+
 def test_mcp_and_python_lowering_produce_the_same_derived_package():
     native = powerio.Package.from_file(str(LOWERABLE)).lower_multiconductor_to_balanced(100.0)
     through_mcp = server._lower_impl(path=str(LOWERABLE), mode="apply")["package_json"]

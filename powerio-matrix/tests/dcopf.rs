@@ -621,6 +621,40 @@ fn auto_falls_back_to_dense_for_non_positive_susceptance() {
 }
 
 #[test]
+fn auto_keeps_the_sparse_refusal_when_the_dense_footprint_is_vetoed() {
+    // The fallback answers a case one path can produce. Here neither can: the
+    // sparse path refuses the sign, and the dense path's own m x m LODF is
+    // over the 2 GiB budget the footprint veto exists to refuse, so routing
+    // to dense in spite of it would abort on the allocation rather than
+    // return. The refusal names `solver=dense` for a caller that can afford
+    // it; it does not spend the memory on that caller's behalf.
+    let branch_count = 17_000; // m * m * 8 bytes is ~2.15 GiB, past the budget.
+    let mut branches = vec![branch(1, 2, -0.1)];
+    branches.extend((1..branch_count).map(|_| branch(1, 2, 0.1)));
+    let case = net(
+        "wide_negative_x",
+        vec![bus(1, BusType::Ref), bus(2, BusType::Pq)],
+        branches,
+    );
+    let view = IndexedNetwork::new(&case);
+    let err = build_ptdf_lodf_with_options(
+        &view,
+        &SensitivityOptions {
+            solver: SensitivitySolver::Auto,
+            ..Default::default()
+        },
+    )
+    .unwrap_err();
+
+    match err {
+        Error::InvalidSensitivityOptions { reason } => {
+            assert!(reason.contains("positive finite branch susceptances"));
+        }
+        other => panic!("unexpected error: {other}"),
+    }
+}
+
+#[test]
 fn explicit_sparse_rejects_non_positive_susceptance() {
     let case = net(
         "negative_x",

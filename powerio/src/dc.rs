@@ -71,6 +71,36 @@ impl DcConvention {
     )]
     pub const PaperPure: DcConvention = DcConvention::ReactanceOnly;
 
+    /// Resolve a convention token: `series`/`series-impedance`,
+    /// `matpower`/`mp`, and `reactance-only`, case and separator insensitive.
+    ///
+    /// The one parser every string surface uses — Python's `convention=`
+    /// keyword and the C ABI's `convention` argument — so a token one accepts
+    /// is a token the others accept, and the refusal reads the same
+    /// everywhere. The CLI takes the same spellings through clap's own value
+    /// enum. `Err` carries the message the caller renders; the surfaces differ
+    /// only in the exception or diagnostic code they wrap it in.
+    pub fn from_token(token: &str) -> Result<Self, String> {
+        let normalized = token.to_ascii_lowercase().replace(['-', '_'], "");
+        match normalized.as_str() {
+            "series" | "seriesimpedance" => Ok(Self::SeriesImpedance),
+            "matpower" | "mp" => Ok(Self::Matpower),
+            "reactanceonly" => Ok(Self::ReactanceOnly),
+            // 0.8 spelled `b = 1/x` "paper"/"paper-pure" and made it the
+            // default. Name its successor rather than resolving it: the
+            // nearest-looking option, `series`, is a different formula, so a
+            // caller who guesses gets numbers instead of an error.
+            "paper" | "paperpure" | "pure" => Err(
+                "convention 'paper-pure' is now 'reactance-only'; it is no longer the default, \
+                 and 'series' is a different formula (b = x/(r^2 + x^2))"
+                    .to_owned(),
+            ),
+            other => Err(format!(
+                "unknown convention {other:?}; expected 'series', 'matpower', or 'reactance-only'"
+            )),
+        }
+    }
+
     /// The branch susceptance from resistance, reactance, and effective tap.
     /// Only [`Self::Matpower`] reads the tap, and only
     /// [`Self::SeriesImpedance`] reads the resistance.
@@ -111,6 +141,42 @@ impl DcConvention {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The token set every string surface shares. The separators are `-` and
+    /// `_` and nothing else: a space or a stray punctuation mark is a token
+    /// the caller did not mean, and one surface silently resolving it while
+    /// another refuses it is the drift this parser exists to prevent.
+    #[test]
+    fn from_token_reads_the_documented_spellings_and_refuses_the_rest() {
+        for token in ["series", "Series", "series-impedance", "SERIES_IMPEDANCE"] {
+            assert_eq!(
+                DcConvention::from_token(token),
+                Ok(DcConvention::SeriesImpedance),
+                "{token}"
+            );
+        }
+        for token in ["matpower", "MP"] {
+            assert_eq!(DcConvention::from_token(token), Ok(DcConvention::Matpower));
+        }
+        assert_eq!(
+            DcConvention::from_token("Reactance-Only"),
+            Ok(DcConvention::ReactanceOnly)
+        );
+
+        // 0.8's default names its successor rather than resolving to the
+        // nearest-looking option, which is a different formula.
+        for token in ["paper-pure", "paper", "PAPER_PURE"] {
+            let message = DcConvention::from_token(token).unwrap_err();
+            assert!(message.contains("reactance-only"), "{message:?}");
+        }
+        for token in ["", " ", "series impedance", "series.", "bogus"] {
+            let message = DcConvention::from_token(token).unwrap_err();
+            assert!(
+                message.contains("unknown convention"),
+                "{token:?}: {message:?}"
+            );
+        }
+    }
 
     /// A resistanceless branch reads the same under both live conventions, so
     /// the new default only moves a case that carries resistance.
