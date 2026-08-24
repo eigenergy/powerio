@@ -1907,18 +1907,75 @@ unsafe fn incidence_parts_of(
         .map_err(err_line)
 }
 
-/// Narrow a branch table row to the `int64` the vectors carry. `-1` is this
-/// family's whole-call refusal, so a row that cannot be represented is
-/// reported as one rather than written into the array as a value a consumer
-/// would read back as a row number.
 #[cfg(feature = "matrix")]
-fn branch_row_as_i64(row: usize) -> Result<i64, String> {
-    i64::try_from(row).map_err(|_| {
-        coded(
+fn check_branch_rows(rows: &[usize]) -> Result<(), String> {
+    if let Some(&row) = rows.iter().find(|&&row| i64::try_from(row).is_err()) {
+        return Err(coded(
             &codes::BIND_CAPI_INDEX_OUT_OF_RANGE,
             format!("branch row {row} does not fit in int64"),
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(any(feature = "matrix", feature = "gridfm"))]
+unsafe fn finish_mapped_fill<T: Copy, U>(
+    errbuf: *mut c_char,
+    errlen: usize,
+    panic_msg: &str,
+    out: *mut T,
+    cap: usize,
+    f: impl FnOnce() -> Result<Vec<U>, String>,
+    map: impl FnMut(&U) -> T,
+) -> isize {
+    unsafe {
+        match catch_unwind(AssertUnwindSafe(|| {
+            let values = f()?;
+            let total = isize::try_from(values.len())
+                .map_err(|_| coded(&codes::BIND_CAPI_INDEX_OUT_OF_RANGE, "count exceeds isize"))?;
+            fill(out, cap, values.iter().map(map));
+            Ok::<_, String>(total)
+        })) {
+            Ok(Ok(total)) => total,
+            Ok(Err(message)) => {
+                copy_to_buf(errbuf, errlen, &message);
+                -1
+            }
+            Err(_) => {
+                copy_to_buf(errbuf, errlen, &coded(&codes::BIND_CAPI_PANIC, panic_msg));
+                -1
+            }
+        }
+    }
+}
+
+/// The checked `usize` row counterpart to [`finish_fill`]. Conversion streams
+/// straight into the caller buffer after one validation pass, so reading an
+/// index vector does not allocate a second vector of the same length.
+#[cfg(feature = "matrix")]
+unsafe fn finish_index_fill(
+    errbuf: *mut c_char,
+    errlen: usize,
+    panic_msg: &str,
+    out: *mut i64,
+    cap: usize,
+    f: impl FnOnce() -> Result<Vec<usize>, String>,
+) -> isize {
+    unsafe {
+        finish_mapped_fill(
+            errbuf,
+            errlen,
+            panic_msg,
+            out,
+            cap,
+            || {
+                let rows = f()?;
+                check_branch_rows(&rows)?;
+                Ok(rows)
+            },
+            |&row| row as i64,
         )
-    })
+    }
 }
 
 /// Run `f`, write `vals` into `out` under the cap/count convention, and return
@@ -1938,23 +1995,83 @@ unsafe fn finish_fill<T: Copy>(
     cap: usize,
     f: impl FnOnce() -> Result<Vec<T>, String>,
 ) -> isize {
+    unsafe { finish_mapped_fill(errbuf, errlen, panic_msg, out, cap, f, |&value| value) }
+}
+
+/// Fill every DC incidence vector from one incidence build. Each pointer may
+/// be NULL to skip that vector. `branch_cap` applies to `b` and `branch_rows`;
+/// the other vectors have their own caps. The three count pointers are
+/// optional and are written only on success.
+///
+/// This is the bulk counterpart to the four extractors below. It avoids
+/// rebuilding `A`, `b`, and `p_shift` four times when a binding needs the
+/// complete decomposition. All four vector guards and the convention parser
+/// are identical because this calls the same incidence builder once.
+/// Returns `0` on success or `-1` with the message in `errbuf` on failure.
+#[cfg(feature = "matrix")]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pio_incidence_parts(
+    net: *const PioNetwork,
+    convention: *const c_char,
+    b: *mut f64,
+    branch_rows: *mut i64,
+    branch_cap: usize,
+    p_shift: *mut f64,
+    bus_cap: usize,
+    skipped_rows: *mut i64,
+    skipped_cap: usize,
+    out_branch_count: *mut usize,
+    out_bus_count: *mut usize,
+    out_skipped_count: *mut usize,
+    errbuf: *mut c_char,
+    errlen: usize,
+) -> i32 {
     unsafe {
-        match catch_unwind(AssertUnwindSafe(f)) {
-            Ok(Ok(vals)) => {
-                let Ok(total) = isize::try_from(vals.len()) else {
-                    let msg = coded(&codes::BIND_CAPI_INDEX_OUT_OF_RANGE, "count exceeds isize");
-                    copy_to_buf(errbuf, errlen, &msg);
-                    return -1;
-                };
-                fill(out, cap, vals.iter().copied());
-                total
+        let result = catch_unwind(AssertUnwindSafe(|| -> Result<(), String> {
+            let parts = incidence_parts_of(net, convention)?;
+            let skipped = &parts.skipped_zero_impedance.branch_indices;
+            check_branch_rows(&parts.branch_of_col)?;
+            check_branch_rows(skipped)?;
+
+            fill(b, branch_cap, parts.b.iter().copied());
+            fill(
+                branch_rows,
+                branch_cap,
+                parts.branch_of_col.iter().map(|&row| row as i64),
+            );
+            fill(p_shift, bus_cap, parts.p_shift.iter().copied());
+            fill(
+                skipped_rows,
+                skipped_cap,
+                skipped.iter().map(|&row| row as i64),
+            );
+
+            if !out_branch_count.is_null() {
+                *out_branch_count = parts.b.len();
             }
-            Ok(Err(msg)) => {
-                copy_to_buf(errbuf, errlen, &msg);
+            if !out_bus_count.is_null() {
+                *out_bus_count = parts.p_shift.len();
+            }
+            if !out_skipped_count.is_null() {
+                *out_skipped_count = skipped.len();
+            }
+            Ok(())
+        }));
+        match result {
+            Ok(Ok(())) => 0,
+            Ok(Err(message)) => {
+                copy_to_buf(errbuf, errlen, &message);
                 -1
             }
             Err(_) => {
-                copy_to_buf(errbuf, errlen, &coded(&codes::BIND_CAPI_PANIC, panic_msg));
+                copy_to_buf(
+                    errbuf,
+                    errlen,
+                    &coded(
+                        &codes::BIND_CAPI_PANIC,
+                        "panic while building incidence parts",
+                    ),
+                );
                 -1
             }
         }
@@ -1983,9 +2100,9 @@ unsafe fn finish_fill<T: Copy>(
 /// than recomputing `x/(r² + x²)` outside.
 ///
 /// One incidence build runs per call and nothing is cached on the handle, so
-/// the size query and the fill are two builds, and each of the four
-/// extractors pays its own. A consumer that wants several of these vectors
-/// should size once, keep the count, and hold what it reads.
+/// the size query and the fill are two builds. A consumer that wants several
+/// vectors should use [`pio_incidence_parts`], which fills all four from one
+/// build.
 ///
 /// The size query is skippable outright, which is the cheaper half of that
 /// advice: `m <= pio_n_branches` always, so a caller that allocates
@@ -2074,16 +2191,13 @@ pub unsafe extern "C" fn pio_incidence_branch_rows(
     errlen: usize,
 ) -> isize {
     unsafe {
-        finish_fill(
+        finish_index_fill(
             errbuf,
             errlen,
             "panic while building the incidence column map",
             out,
             cap,
-            || {
-                let rows = incidence_parts_of(net, convention)?.branch_of_col;
-                rows.into_iter().map(branch_row_as_i64).collect()
-            },
+            || Ok(incidence_parts_of(net, convention)?.branch_of_col),
         )
     }
 }
@@ -2112,20 +2226,16 @@ pub unsafe extern "C" fn pio_incidence_skipped_rows(
     errlen: usize,
 ) -> isize {
     unsafe {
-        finish_fill(
+        finish_index_fill(
             errbuf,
             errlen,
             "panic while building the skipped branch rows",
             out,
             cap,
             || {
-                let parts = incidence_parts_of(net, convention)?;
-                parts
+                Ok(incidence_parts_of(net, convention)?
                     .skipped_zero_impedance
-                    .branch_indices
-                    .into_iter()
-                    .map(branch_row_as_i64)
-                    .collect()
+                    .branch_indices)
             },
         )
     }
@@ -4150,6 +4260,71 @@ mod tests {
 
     #[test]
     #[cfg(feature = "matrix")]
+    fn bulk_incidence_parts_match_the_individual_extractors() {
+        let case = case9_json_with_branch(3, |br| {
+            br["x"] = serde_json::json!(0.0);
+            br["shift"] = serde_json::json!(30.0);
+        });
+        let mut err = [0 as c_char; PIO_ERRBUF_MIN];
+        let net = unsafe { pio_from_json(case.as_ptr(), err.as_mut_ptr(), err.len()) };
+        assert!(!net.is_null());
+        let branch_cap = unsafe { pio_n_branches(net) };
+        let bus_cap = unsafe { pio_n_buses(net) };
+        let mut b = vec![0.0; branch_cap];
+        let mut rows = vec![0i64; branch_cap];
+        let mut p_shift = vec![0.0; bus_cap];
+        let mut skipped = vec![0i64; branch_cap];
+        let (mut m, mut n, mut n_skipped) = (0usize, 0usize, 0usize);
+        let convention = CString::new("series").unwrap();
+
+        let status = unsafe {
+            pio_incidence_parts(
+                net,
+                convention.as_ptr(),
+                b.as_mut_ptr(),
+                rows.as_mut_ptr(),
+                branch_cap,
+                p_shift.as_mut_ptr(),
+                bus_cap,
+                skipped.as_mut_ptr(),
+                branch_cap,
+                &mut m,
+                &mut n,
+                &mut n_skipped,
+                err.as_mut_ptr(),
+                err.len(),
+            )
+        };
+        assert_eq!(status, 0, "{}", unsafe {
+            CStr::from_ptr(err.as_ptr()).to_str().unwrap()
+        });
+        b.truncate(m);
+        rows.truncate(m);
+        p_shift.truncate(n);
+        skipped.truncate(n_skipped);
+
+        assert_eq!(
+            b,
+            parts_of(net, Some("series"), pio_branch_susceptance).unwrap()
+        );
+        assert_eq!(
+            rows,
+            parts_of(net, Some("series"), pio_incidence_branch_rows).unwrap()
+        );
+        assert_eq!(
+            p_shift,
+            parts_of(net, Some("series"), pio_phase_shift_injection).unwrap()
+        );
+        assert_eq!(
+            skipped,
+            parts_of(net, Some("series"), pio_incidence_skipped_rows).unwrap()
+        );
+
+        unsafe { pio_network_free(net) };
+    }
+
+    #[test]
+    #[cfg(feature = "matrix")]
     fn a_nonfinite_susceptance_is_reported_rather_than_returned_as_a_zero_weight_edge() {
         // The guard #292 added, which a consumer recomputing the formula
         // outside cannot inherit: `1/inf` is a finite 0.0, so an infinite
@@ -4660,6 +4835,7 @@ mod tests {
             "size_t pio_gens(const PioNetwork *net, int64_t *bus, double *pg, double *pmax, double *pmin, uint8_t *in_service, size_t cap);",
             "size_t pio_bus_demand(const PioNetwork *net, double *pd, double *qd, size_t cap);",
             "size_t pio_bus_shunt(const PioNetwork *net, double *gs, double *bs, size_t cap);",
+            "int32_t pio_incidence_parts(const PioNetwork *net, const char *convention, double *b, int64_t *branch_rows, size_t branch_cap, double *p_shift, size_t bus_cap, int64_t *skipped_rows, size_t skipped_cap, size_t *out_branch_count, size_t *out_bus_count, size_t *out_skipped_count, char *errbuf, size_t errlen);",
             "ptrdiff_t pio_branch_susceptance(const PioNetwork *net, const char *convention, double *out, size_t cap, char *errbuf, size_t errlen);",
             "ptrdiff_t pio_phase_shift_injection(const PioNetwork *net, const char *convention, double *out, size_t cap, char *errbuf, size_t errlen);",
             "ptrdiff_t pio_incidence_branch_rows(const PioNetwork *net, const char *convention, int64_t *out, size_t cap, char *errbuf, size_t errlen);",

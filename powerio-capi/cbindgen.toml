@@ -132,11 +132,11 @@ header = """
  *
  * Optional: build with `--features arrow` for pio_to_arrow (guarded by
  * PIO_ARROW), add `--features matrix` for the balanced matrix Arrow tables and
- * for the DC incidence part extractors pio_branch_susceptance,
- * pio_phase_shift_injection, pio_incidence_branch_rows and
- * pio_incidence_skipped_rows (guarded by PIO_MATRIX; these four need matrix
- * alone, while the matrix Arrow tables need arrow with it, which is what
- * pio_matrix_available reports),
+ * for the bulk pio_incidence_parts extractor and its individual vector
+ * counterparts pio_branch_susceptance, pio_phase_shift_injection,
+ * pio_incidence_branch_rows and pio_incidence_skipped_rows (guarded by
+ * PIO_MATRIX; these need matrix alone, while the matrix Arrow tables need
+ * arrow with it, which is what pio_matrix_available reports),
  * `--features gridfm` for pio_read_dir / pio_scenario_ids
  * (guarded by PIO_GRIDFM), `--features dist` for the pio_dist_* entry
  * points (guarded by PIO_DIST): multiconductor distribution cases (OpenDSS,

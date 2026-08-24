@@ -122,23 +122,33 @@ impl std::str::FromStr for DcConvention {
     /// `Err` carries the message the caller renders; the surfaces differ only
     /// in the exception or diagnostic code they wrap it in.
     fn from_str(token: &str) -> Result<Self, Self::Err> {
-        let normalized = token.to_ascii_lowercase().replace(['-', '_'], "");
-        match normalized.as_str() {
-            "series" | "seriesimpedance" => Ok(Self::SeriesImpedance),
-            "matpower" | "mp" => Ok(Self::Matpower),
-            "reactanceonly" => Ok(Self::ReactanceOnly),
-            // 0.8 spelled `b = 1/x` "paper"/"paper-pure" and made it the
-            // default. Name its successor rather than resolving it: the
-            // nearest-looking option, `series`, is a different formula, so a
-            // caller who guesses gets numbers instead of an error.
-            "paper" | "paperpure" | "pure" => Err(
+        let is = |expected: &str| {
+            token
+                .bytes()
+                .filter(|byte| !matches!(byte, b'-' | b'_'))
+                .map(|byte| byte.to_ascii_lowercase())
+                .eq(expected.bytes())
+        };
+        if is("series") || is("seriesimpedance") {
+            Ok(Self::SeriesImpedance)
+        } else if is("matpower") || is("mp") {
+            Ok(Self::Matpower)
+        } else if is("reactanceonly") {
+            Ok(Self::ReactanceOnly)
+        // 0.8 spelled `b = 1/x` "paper"/"paper-pure" and made it the
+        // default. Name its successor rather than resolving it: the
+        // nearest-looking option, `series`, is a different formula, so a
+        // caller who guesses gets numbers instead of an error.
+        } else if is("paper") || is("paperpure") || is("pure") {
+            Err(
                 "convention 'paper-pure' is now 'reactance-only'; it is no longer the default, \
                  and 'series' is a different formula (b = x/(r^2 + x^2))"
                     .to_owned(),
-            ),
-            other => Err(format!(
-                "unknown convention {other:?}; expected 'series', 'matpower', or 'reactance-only'"
-            )),
+            )
+        } else {
+            Err(format!(
+                "unknown convention {token:?}; expected 'series', 'matpower', or 'reactance-only'"
+            ))
         }
     }
 }

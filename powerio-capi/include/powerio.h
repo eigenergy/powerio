@@ -119,11 +119,11 @@
  *
  * Optional: build with `--features arrow` for pio_to_arrow (guarded by
  * PIO_ARROW), add `--features matrix` for the balanced matrix Arrow tables and
- * for the DC incidence part extractors pio_branch_susceptance,
- * pio_phase_shift_injection, pio_incidence_branch_rows and
- * pio_incidence_skipped_rows (guarded by PIO_MATRIX; these four need matrix
- * alone, while the matrix Arrow tables need arrow with it, which is what
- * pio_matrix_available reports),
+ * for the bulk pio_incidence_parts extractor and its individual vector
+ * counterparts pio_branch_susceptance, pio_phase_shift_injection,
+ * pio_incidence_branch_rows and pio_incidence_skipped_rows (guarded by
+ * PIO_MATRIX; these need matrix alone, while the matrix Arrow tables need
+ * arrow with it, which is what pio_matrix_available reports),
  * `--features gridfm` for pio_read_dir / pio_scenario_ids
  * (guarded by PIO_GRIDFM), `--features dist` for the pio_dist_* entry
  * points (guarded by PIO_DIST): multiconductor distribution cases (OpenDSS,
@@ -998,6 +998,35 @@ size_t pio_bus_shunt(const PioNetwork *net, double *gs, double *bs, size_t cap);
 
 #if defined(PIO_MATRIX)
 /**
+ * Fill every DC incidence vector from one incidence build. Each pointer may
+ * be NULL to skip that vector. `branch_cap` applies to `b` and `branch_rows`;
+ * the other vectors have their own caps. The three count pointers are
+ * optional and are written only on success.
+ *
+ * This is the bulk counterpart to the four extractors below. It avoids
+ * rebuilding `A`, `b`, and `p_shift` four times when a binding needs the
+ * complete decomposition. All four vector guards and the convention parser
+ * are identical because this calls the same incidence builder once.
+ * Returns `0` on success or `-1` with the message in `errbuf` on failure.
+ */
+int32_t pio_incidence_parts(const PioNetwork *net,
+                            const char *convention,
+                            double *b,
+                            int64_t *branch_rows,
+                            size_t branch_cap,
+                            double *p_shift,
+                            size_t bus_cap,
+                            int64_t *skipped_rows,
+                            size_t skipped_cap,
+                            size_t *out_branch_count,
+                            size_t *out_bus_count,
+                            size_t *out_skipped_count,
+                            char *errbuf,
+                            size_t errlen);
+#endif
+
+#if defined(PIO_MATRIX)
+/**
  * Write the per-branch DC susceptance under `convention` into `out`, up to
  * `cap` entries, and return `m`, the number of incidence columns. Call once
  * with `(NULL, 0)` to size, allocate, then call again to fill.
@@ -1020,9 +1049,9 @@ size_t pio_bus_shunt(const PioNetwork *net, double *gs, double *bs, size_t cap);
  * than recomputing `x/(r² + x²)` outside.
  *
  * One incidence build runs per call and nothing is cached on the handle, so
- * the size query and the fill are two builds, and each of the four
- * extractors pays its own. A consumer that wants several of these vectors
- * should size once, keep the count, and hold what it reads.
+ * the size query and the fill are two builds. A consumer that wants several
+ * vectors should use [`pio_incidence_parts`], which fills all four from one
+ * build.
  *
  * The size query is skippable outright, which is the cheaper half of that
  * advice: `m <= pio_n_branches` always, so a caller that allocates

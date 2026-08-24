@@ -5,6 +5,8 @@
 //! provenance to map lowered data back to the source case. This module provides
 //! that table layout without changing the lossless `BalancedNetwork` representation.
 
+use std::borrow::Cow;
+
 use serde::{Deserialize, Serialize};
 
 use crate::network::{
@@ -398,16 +400,15 @@ fn branch_arc_positions(branch_index: usize) -> (usize, usize) {
 /// maps to its own row.
 fn normalized_for_solver(
     source: &BalancedNetwork,
-) -> Result<(BalancedNetwork, NormalizeSourceRows)> {
+) -> Result<(Cow<'_, BalancedNetwork>, NormalizeSourceRows)> {
     if source.is_normalized() {
-        let net = source.clone();
-        let mut rows = NormalizeSourceRows::identity(&net);
-        rows.pad_to_lowered(&net);
-        Ok((net, rows))
+        let mut rows = NormalizeSourceRows::identity(source);
+        rows.pad_to_lowered(source);
+        Ok((Cow::Borrowed(source), rows))
     } else {
         let (normalized, rows) =
             source.to_normalized_with_source_rows(&NormalizeOptions::default())?;
-        Ok((normalized.network, rows))
+        Ok((Cow::Owned(normalized.network), rows))
     }
 }
 

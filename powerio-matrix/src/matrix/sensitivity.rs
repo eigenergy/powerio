@@ -30,7 +30,6 @@ use crate::indexed::IndexedNetwork;
 use crate::matrix::BuildOptions;
 use crate::matrix::incidence::{DcConvention, IncidenceParts, build_flow_map, build_incidence};
 use crate::matrix::laplacian::{Grounding, build_weighted_laplacian, ground_with};
-use crate::matrix::triplet::CooBuilder;
 use crate::{Error, Result};
 
 /// Entries below this magnitude are dropped from the emitted sparse matrices.
@@ -48,16 +47,33 @@ const RHS_BATCH_MEMORY_BUDGET: usize = 8 << 20;
 /// for tens of GB while passing any nr test.
 const AUTO_DENSE_MEMORY_BUDGET: usize = 2 << 30;
 
-/// Peak bytes the dense path holds: the reduced Laplacian and its
-/// factorization and inverse (three nr x nr buffers alive together), plus the
-/// dense PTDF and the LODF built from it.
+/// Conservative upper bound for the large buffers the dense path holds. The
+/// reduced Laplacian, factor and inverse overlap. The dense PTDF overlaps its
+/// compressed result, and LODF conversion overlaps the ordered CSC source and
+/// CSR destination. Index pointer arrays and the linear endpoint vectors are
+/// included as bookkeeping rather than hidden below the quadratic terms.
 fn dense_footprint_bytes(reduced_dimension: usize, branches: usize, buses: usize) -> usize {
     let f = size_of::<f64>();
-    let sq = |a: usize, b: usize| a.saturating_mul(b).saturating_mul(f);
-    sq(reduced_dimension, reduced_dimension)
+    let i = size_of::<usize>();
+    let entries = |a: usize, b: usize, bytes: usize| a.saturating_mul(b).saturating_mul(bytes);
+    entries(reduced_dimension, reduced_dimension, f)
         .saturating_mul(3)
-        .saturating_add(sq(branches, buses))
-        .saturating_add(sq(branches, branches))
+        .saturating_add(entries(
+            branches,
+            buses,
+            f.saturating_mul(2).saturating_add(i),
+        ))
+        .saturating_add(entries(
+            branches,
+            branches,
+            f.saturating_add(i).saturating_mul(2),
+        ))
+        .saturating_add(
+            buses
+                .saturating_add(branches.saturating_mul(4))
+                .saturating_add(4)
+                .saturating_mul(i),
+        )
 }
 /// Whether the dense path's predicted peak footprint for this shape stays
 /// inside the `Auto` memory budget. This is a veto rather than a preference:
@@ -270,7 +286,7 @@ pub fn build_ptdf_lodf_with_options(
     let reduced_dimension = inc.n().saturating_sub(Grounding::new(&refs).len());
 
     let (ptdf, lodf, solver_path, ptdf_dropped, lodf_dropped) =
-        match resolve_solver(options, &inc, reduced_dimension) {
+        match resolve_solver(options, &inc, reduced_dimension)? {
             SensitivitySolver::Dense => {
                 let (dense, m, n, solver_path) = ptdf_dense_with_path(&inc, &refs)?;
                 let (ptdf, ptdf_dropped) =
@@ -320,7 +336,7 @@ pub(crate) fn for_each_ptdf_lodf_entry(
     let inc = build_incidence(case, options.convention, &BuildOptions::default())?;
     let reduced_dimension = inc.n().saturating_sub(Grounding::new(&refs).len());
 
-    let (solver_path, ptdf, lodf) = match resolve_solver(options, &inc, reduced_dimension) {
+    let (solver_path, ptdf, lodf) = match resolve_solver(options, &inc, reduced_dimension)? {
         SensitivitySolver::Dense => {
             let (dense, m, n, solver_path) = ptdf_dense_with_path(&inc, &refs)?;
             let (ptdf, ptdf_dropped) = dense_to_csr_with_drop(&dense, m, n, options.drop_tolerance);
@@ -408,7 +424,7 @@ fn lodf_from_dense_with_drop(
     // about seven digits gone.
     let is_bridge = bridges(&from, &to, n);
 
-    let mut lodf = CooBuilder::new(m); // m × m
+    let mut lodf = OrderedCscBuilder::new(m, m); // m × m
     let mut dropped = 0usize;
     for k in 0..m {
         let denom = 1.0 - delta(k, k);
@@ -486,8 +502,8 @@ fn sparse_ptdf_lodf(
     refs: &[usize],
     options: &SensitivityOptions,
 ) -> Result<(CsMat<f64>, usize, CsMat<f64>, usize)> {
-    let mut ptdf = CooBuilder::new_rect(inc.m(), inc.n());
-    let mut lodf = CooBuilder::new(inc.m());
+    let mut ptdf = OrderedCscBuilder::new(inc.m(), inc.n());
+    let mut lodf = OrderedCscBuilder::new(inc.m(), inc.m());
     let (ptdf_meta, lodf_meta) = sparse_ptdf_lodf_entries(
         inc,
         refs,
@@ -516,7 +532,6 @@ fn sparse_ptdf_lodf_entries(
     mut ptdf_entry: impl FnMut(usize, usize, f64) -> Result<()>,
     mut lodf_entry: impl FnMut(usize, usize, f64) -> Result<()>,
 ) -> Result<(SensitivityMatrixMetadata, SensitivityMatrixMetadata)> {
-    ensure_sparse_solver_eligible(inc)?;
     let n = inc.n();
     let m = inc.m();
     let g = Grounding::new(refs);
@@ -524,12 +539,7 @@ fn sparse_ptdf_lodf_entries(
     let lr = ground_with(&build_weighted_laplacian(&inc.a, &inc.b), &g);
     let batch_width = rhs_batch_width(nr);
     let mut solver = SparseCholeskyFactor::factor(&lr, batch_width)?;
-    let (from, to) = endpoints(&inc.a, m);
-    // Branch endpoints do not change between right hand sides. Ground them
-    // once instead of binary searching the reference set twice for every
-    // branch flow in every PTDF and LODF column.
-    let reduced_from: Vec<_> = from.iter().map(|&bus| g.reduced(bus)).collect();
-    let reduced_to: Vec<_> = to.iter().map(|&bus| g.reduced(bus)).collect();
+    let (from, to, is_bridge) = reduced_endpoints_and_bridges(inc, &g);
 
     let rhs_len = nr
         .checked_mul(batch_width)
@@ -550,7 +560,7 @@ fn sparse_ptdf_lodf_entries(
         for (column, &bus) in buses.iter().enumerate() {
             let theta = &rhs[column * nr..(column + 1) * nr];
             for branch in 0..m {
-                let v = branch_flow(branch, &reduced_from, &reduced_to, &inc.b, theta);
+                let v = branch_flow(branch, &from, &to, &inc.b, theta);
                 if v.abs() > options.drop_tolerance {
                     ptdf_entry(branch, bus, v)?;
                     ptdf_nnz += 1;
@@ -560,10 +570,6 @@ fn sparse_ptdf_lodf_entries(
             }
         }
     }
-
-    // Same rule as the dense path: a bridge redistributes nothing, decided on
-    // the topology rather than on how close the denominator came to zero.
-    let is_bridge = bridges(&from, &to, n);
 
     let mut lodf_nnz = 0usize;
     let mut lodf_dropped = 0usize;
@@ -577,10 +583,12 @@ fn sparse_ptdf_lodf_entries(
             let offset = solved_columns * nr;
             let column = &mut rhs[offset..offset + nr];
             column.fill(0.0);
-            if let Some(rf) = reduced_from[outage] {
+            let rf = from[outage];
+            if rf != usize::MAX {
                 column[rf] += 1.0;
             }
-            if let Some(rt) = reduced_to[outage] {
+            let rt = to[outage];
+            if rt != usize::MAX {
                 column[rt] -= 1.0;
             }
             solved_columns += 1;
@@ -601,7 +609,7 @@ fn sparse_ptdf_lodf_entries(
             }
             let theta = &rhs[solved_column * nr..(solved_column + 1) * nr];
             solved_column += 1;
-            let denom = 1.0 - branch_flow(outage, &reduced_from, &reduced_to, &inc.b, theta);
+            let denom = 1.0 - branch_flow(outage, &from, &to, &inc.b, theta);
             let islands = denom.abs() < LODF_ISLAND_TOLERANCE;
             for branch in 0..m {
                 let v = if branch == outage {
@@ -609,7 +617,7 @@ fn sparse_ptdf_lodf_entries(
                 } else if islands {
                     0.0
                 } else {
-                    branch_flow(branch, &reduced_from, &reduced_to, &inc.b, theta) / denom
+                    branch_flow(branch, &from, &to, &inc.b, theta) / denom
                 };
                 if branch == outage || v.abs() > options.drop_tolerance {
                     lodf_entry(branch, outage, v)?;
@@ -629,6 +637,22 @@ fn sparse_ptdf_lodf_entries(
         lodf_nnz,
         lodf_dropped,
     ))
+}
+
+fn reduced_endpoints_and_bridges(
+    inc: &IncidenceParts,
+    grounding: &Grounding,
+) -> (Vec<usize>, Vec<usize>, Vec<bool>) {
+    let (mut from, mut to) = endpoints(&inc.a, inc.m());
+    // Bridges need full bus indices. Reuse the endpoint vectors for reduced
+    // indices afterward; MAX represents a grounded endpoint. Separate
+    // `Vec<Option<usize>>` copies cost another 32 bytes per branch on 64 bit
+    // targets.
+    let is_bridge = bridges(&from, &to, inc.n());
+    for bus in from.iter_mut().chain(&mut to) {
+        *bus = grounding.reduced(*bus).unwrap_or(usize::MAX);
+    }
+    (from, to, is_bridge)
 }
 
 fn metadata_from_counts(
@@ -670,16 +694,21 @@ fn resolve_solver(
     options: &SensitivityOptions,
     inc: &IncidenceParts,
     reduced_dimension: usize,
-) -> SensitivitySolver {
+) -> Result<SensitivitySolver> {
     let selected = options.selected_solver_for_shape(reduced_dimension, inc.m(), inc.n());
-    if options.solver == SensitivitySolver::Auto
-        && selected == SensitivitySolver::Sparse
-        && dense_footprint_fits(reduced_dimension, inc.m(), inc.n())
-        && ensure_sparse_solver_eligible(inc).is_err()
-    {
-        return SensitivitySolver::Dense;
+    if selected != SensitivitySolver::Sparse {
+        return Ok(selected);
     }
-    selected
+    match ensure_sparse_solver_eligible(inc) {
+        Ok(()) => Ok(SensitivitySolver::Sparse),
+        Err(_)
+            if options.solver == SensitivitySolver::Auto
+                && dense_footprint_fits(reduced_dimension, inc.m(), inc.n()) =>
+        {
+            Ok(SensitivitySolver::Dense)
+        }
+        Err(error) => Err(error),
+    }
 }
 
 fn ensure_sparse_solver_eligible(inc: &IncidenceParts) -> Result<()> {
@@ -865,14 +894,65 @@ impl SparseCholeskyFactor {
 
 fn branch_flow(
     branch: usize,
-    reduced_from: &[Option<usize>],
-    reduced_to: &[Option<usize>],
+    reduced_from: &[usize],
+    reduced_to: &[usize],
     b: &[f64],
     theta: &[f64],
 ) -> f64 {
-    let theta_from = reduced_from[branch].map_or(0.0, |i| theta[i]);
-    let theta_to = reduced_to[branch].map_or(0.0, |i| theta[i]);
+    let from = reduced_from[branch];
+    let to = reduced_to[branch];
+    let theta_from = if from == usize::MAX { 0.0 } else { theta[from] };
+    let theta_to = if to == usize::MAX { 0.0 } else { theta[to] };
     b[branch] * (theta_from - theta_to)
+}
+
+/// A coordinate builder for entries already emitted in column then row order.
+/// Sensitivity columns are solved in that order, so hashing coordinates and
+/// sorting a triplet matrix only adds allocation and work. The finished CSC is
+/// converted once because the public matrix builders have always returned CSR.
+struct OrderedCscBuilder {
+    rows: usize,
+    cols: usize,
+    current_col: usize,
+    last_row: Option<usize>,
+    indptr: Vec<usize>,
+    indices: Vec<usize>,
+    data: Vec<f64>,
+}
+
+impl OrderedCscBuilder {
+    fn new(rows: usize, cols: usize) -> Self {
+        Self {
+            rows,
+            cols,
+            current_col: 0,
+            last_row: None,
+            indptr: vec![0],
+            indices: Vec::new(),
+            data: Vec::new(),
+        }
+    }
+
+    fn add(&mut self, row: usize, col: usize, value: f64) {
+        debug_assert!(row < self.rows && col < self.cols);
+        debug_assert!(col >= self.current_col);
+        while self.current_col < col {
+            self.indptr.push(self.data.len());
+            self.current_col += 1;
+            self.last_row = None;
+        }
+        debug_assert!(self.last_row.is_none_or(|last| last < row));
+        self.indices.push(row);
+        self.data.push(value);
+        self.last_row = Some(row);
+    }
+
+    fn finish_csr(mut self) -> CsMat<f64> {
+        while self.indptr.len() <= self.cols {
+            self.indptr.push(self.data.len());
+        }
+        CsMat::new_csc((self.rows, self.cols), self.indptr, self.indices, self.data).to_csr()
+    }
 }
 
 /// Branch endpoints from the signed incidence: `+1` row is from, `−1` is to.
@@ -1321,7 +1401,10 @@ mod auto_policy_tests {
         // small but the dense LODF alone is m x m, so the footprint veto has
         // to fire even though the dimension test passes.
         let o = SensitivityOptions::default();
-        let (nr, m, n) = (64usize, 40_000usize, 65usize);
+        // At 12k branches the old `8 * m²` estimate stayed below 2 GiB, but
+        // the ordered CSC and CSR arrays overlap during conversion and already
+        // exceed it. This shape pins the peak estimate, not just the veto.
+        let (nr, m, n) = (64usize, 12_000usize, 65usize);
         assert!(nr <= o.auto_dense_threshold);
         assert!(dense_footprint_bytes(nr, m, n) > AUTO_DENSE_MEMORY_BUDGET);
         assert_eq!(
