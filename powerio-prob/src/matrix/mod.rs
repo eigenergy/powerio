@@ -37,9 +37,9 @@ pub fn build_dc_opf_matrices(instance: &DcOpfInstance) -> DcOpfMatrices {
         incidence.add(instance.branches.to_bus[column], column, -1.0);
     }
     let incidence = incidence.finish_csr();
-    let laplacian = build_weighted_laplacian(&incidence, &instance.branches.b);
+    let laplacian = build_weighted_laplacian(&incidence, &instance.branches.branch_weight);
     let grounded_laplacian = ground_at_each(&laplacian, instance.reference_buses.as_ref());
-    let flow_map = build_flow_map(&incidence, &instance.branches.b);
+    let flow_map = build_flow_map(&incidence, &instance.branches.branch_weight);
 
     let n_gen = instance.n_generators();
     let mut generator_bus = CooBuilder::with_capacity_rect(n, n_gen, n_gen);

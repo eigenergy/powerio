@@ -19,8 +19,8 @@ instances into sparse operators. The DC OPF bundle schema is in
 | \\(\Re(Y_{\mathrm{bus}})\\), \\(-\Im(Y_{\mathrm{bus}})\\) | \\(n \times n\\) | `build_ybus` | full admittance, keeps taps and shifts |
 | LACPF (linear AC power flow) block | \\(2n \times 2n\\) | `build_lacpf` | \\(\begin{bmatrix}G & -B \\\\ -B & -G\end{bmatrix}\\), flat start, indefinite |
 | signed incidence matrix \\(A\\) | \\(n \times m\\) | `build_incidence` | column \\(e\\) has \\(+1\\) at from-bus, \\(-1\\) at to-bus |
-| weighted bus Laplacian \\(L\\) | \\(n \times n\\) | `build_weighted_laplacian` | \\(L = A \operatorname{diag}(w) A^\mathsf{T}\\); for DC OPF and PTDF/LODF, \\(w\\) is the branch susceptance vector \\(b\\) |
-| flow map \\(B A^\mathsf{T}\\) | \\(m \times n\\) | `build_flow_map` | \\(f = B A^\mathsf{T}\theta\\) |
+| weighted bus Laplacian \\(L\\) | \\(n \times n\\) | `build_weighted_laplacian` | \\(L = A \operatorname{diag}(w) A^\mathsf{T}\\), where \\(w\\) is the internal branch weight |
+| flow map \\(\operatorname{diag}(w) A^\mathsf{T}\\) | \\(m \times n\\) | `build_flow_map` | \\(f = \operatorname{diag}(w) A^\mathsf{T}\theta\\) before the shift offset |
 | PTDF | \\(m \times n\\) | `build_ptdf` | dense oracle builder; `build_ptdf_lodf_with_options` can use sparse Cholesky |
 | LODF | \\(m \times m\\) | `build_lodf` | dense oracle builder; option based builds can prune small output entries |
 | adjacency | \\(n \times n\\) | `build_adjacency` | sparse graph adjacency |
@@ -42,7 +42,7 @@ crossover: dense stops winning near a reduced dimension of 50, and
 case2869pegase takes 22.1 s dense against 2.2 s sparse. The sparse path avoids
 forming the \\((n-r) \times (n-r)\\) dense inverse; the PTDF/LODF outputs
 themselves can still be large. It requires positive finite branch
-susceptances, so the grounded DC bus susceptance matrix is positive definite
+weights, so the grounded solver matrix is positive definite
 after reference coverage is checked; the dense path remains the fallback for
 nonsingular indefinite cases.
 Every connected component must contain at least one reference bus. The DC OPF
@@ -106,24 +106,22 @@ cubic costs, HVDC, or storage. These losses are returned as warnings.
   and records `dropped_zero_impedance` in `gridfm_meta.json`.
 - **Reference coverage.** `IndexedNetwork::check_reference_coverage` verifies that
   every in-service island has a reference bus.
-- **Susceptance conventions for the DC approximation.** `DcConvention` selects
-  the branch susceptance vector \\(b\\) and, for conventions that carry shifts,
-  the phase shift injection. The signed incidence matrix \\(A\\) combines with
-  \\(b\\) to form the DC bus susceptance matrix
-  \\(L = A \operatorname{diag}(b) A^\mathsf{T}\\), which feeds PTDF/LODF and the
-  DC OPF matrix projection. \\(b\\) is positive for an inductive branch, the DC
-  model convention MATPOWER `makeBdc` uses; the AC series susceptance
-  \\(\operatorname{Im}\\left(1/(r + jx)\right)\\) is its negation.
+- **Branch weight conventions for the DC approximation.** `DcConvention`
+  selects the internal branch weight vector \\(w\\) and, for conventions that
+  carry shifts, the phase shift injection. The signed bus by branch incidence
+  matrix \\(A\\) combines with \\(w\\) to form
+  \\(L = A \operatorname{diag}(w) A^\mathsf{T}\\), which feeds PTDF/LODF and the
+  DC OPF matrix projection.
 
-  The default `SeriesImpedance` uses \\(b = x/(r^2 + x^2)\\), so it reads the
+  The default `SeriesImpedance` uses \\(w = x/(r^2 + x^2)\\), so it reads the
   whole series impedance, plus the phase shift
   injection vector `p_shift`. A tap does not scale it. It reduces to
-  \\(b = 1/x\\) when the branch has no resistance.
+  \\(w = 1/x\\) when the branch has no resistance.
 
   `Matpower` reproduces MATPOWER's `makeBdc`:
-  \\(b = 1/(x\tau)\\) for a transformer with tap ratio \\(\tau\\), plus `p_shift`.
+  \\(w = 1/(x\tau)\\) for a transformer with tap ratio \\(\tau\\), plus `p_shift`.
 
-  `ReactanceOnly` is the textbook \\(b = 1/x\\) with resistance, taps, and
+  `ReactanceOnly` is the textbook \\(w = 1/x\\) with resistance, taps, and
   shifts ignored. The resulting \\(L\\) matches MATPOWER `Bp` under
   `Scheme::Xb` when phase shifts are zero. Reproducing a published result needs
   it exactly as written, so it stays.

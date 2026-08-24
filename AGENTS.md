@@ -68,7 +68,7 @@ Matrix outputs (powerio-matrix):
 - LACPF block `[[G, -B], [-B, -G]]` (linear AC power flow, flat start, 2n×2n, indefinite).
 - Adjacency (`MatrixKind::Adjacency`); PTDF and LODF (`sensitivities` subcommand).
 - DC OPF instance bundle (`dcopf` subcommand; `powerio-prob`'s
-  `matrix::bundle::write_dcopf_bundle`, `--features matrix`): signed incidence `A` (n×m), branch susceptance `b`, DC OPF Laplacian `L = A diag(b) Aᵀ` and its reference-grounded form, flow map `B Aᵀ`, generator cost `Q`/`c`, bounds, thermal limits `f̄`, generator→bus `C_g`, nodal load `p_d`, `e_r`.
+  `matrix::bundle::write_dcopf_bundle`, `--features matrix`): signed incidence `A` (n×m), internal branch weight `w`, solver matrix `L = A diag(w) Aᵀ` and its reference-grounded form, flow map `diag(w) Aᵀ`, generator cost `Q`/`c`, bounds, thermal limits `f̄`, generator→bus `C_g`, nodal load `p_d`, `e_r`.
 - petgraph `UnGraph<bus_idx, branch_idx>` view + connectivity / radial diagnostics.
 - gridfm-datakit Parquet dataset (`gridfm` subcommand, `io::gridfm::write_gridfm_dataset`, `--features gridfm`): the `bus_data`/`gen_data`/`branch_data`/`y_bus_data` tables a single parsed case maps to, matching gridfm-datakit's column schema so gridfm-graphkit trains on it directly.
 - gridfm dataset → `BalancedNetwork` reader, the ML→classical return leg (`io::gridfm::read_gridfm_dataset` / `read_gridfm_scenarios` / `gridfm_base_case`, pure inverse `read_gridfm_network`; `--features gridfm`, issue #60). Lossy but complete for power flow: recovers bus types/voltages/limits, nodal load & shunt totals, generator dispatch & bounds (`vg` from bus `Vm`), branch `r/x/b/tap/shift/rate_a/angle-limits`, and `base_mva`; can't recover original bus ids (synthesized `1..n`), per element granularity (folded to one synthetic `Load`/`Shunt` per bus), piecewise/cubic costs, or HVDC/storage. Branches with unit effective tap and zero shift read back as lines (raw `tap 0`). Returns `GridfmRead { network, scenario, warnings }`; sets `SourceFormat::Gridfm`. One reader ⇒ gridfm → any classical writer for free. CLI: `convert <dataset-dir> --from gridfm [--scenario N] --to <fmt>` (kept out of the `parse_file` hub that has no parquet dependency). `y_bus_data` is ignored on read (branches carry raw `r/x/b`). Python: `read_gridfm(dir, scenario=0)` / `read_gridfm_scenarios(dir)` → `GridfmRead(network, scenario, warnings)`.
@@ -158,7 +158,7 @@ powerio/                      # parser + Network hub + converters
 ├── src/normalize.rs         # Network::to_normalized (per unit/radian/filtered/
 │                            #   reindexed derived view); shared per unit scaling
 │                            #   (cost_to_pu/cost_from_pu, DEG_TO_RAD, GEN_PU_KEYS)
-├── src/dc.rs                # DcConvention (shared DC susceptance convention)
+├── src/dc.rs                # DcConvention (shared internal DC branch weight rule)
 ├── src/gen_cost.rs          # GenCost model + quadratic projections
 ├── src/geo/                 # GeoLayer sidecar (layer.rs), .pwd harvest (pwd.rs)
 ├── src/operations.rs        # in place Network edit operations
@@ -187,7 +187,7 @@ powerio-matrix/               # matrices + graph views on powerio
 │   ├── mod.rs               # BuildOptions, Scheme, MatrixStats, sddm_check
 │   ├── triplet.rs           # CooBuilder (HashMap, O(nnz); new_rect for rectangular)
 │   ├── bprime.rs / bdoubleprime.rs / ybus.rs / lacpf.rs / adjacency.rs
-│   ├── incidence.rs         # A, b, B Aᵀ, P_shift
+│   ├── incidence.rs         # A, w, diag(w) Aᵀ, p_shift
 │   ├── laplacian.rs         # L = A diag(w) Aᵀ, ground_at, GroundedIndexMap, e_r
 │   └── sensitivity.rs       # PTDF, LODF; SensitivityOptions (auto/dense/sparse)
 ├── src/io/                  # mtx (lower-triangle symmetric), meta, sensitivity,
@@ -285,9 +285,9 @@ fuzz/                        # libFuzzer targets (detached workspace; see fuzz/R
   GOC3 package construction stores the static first interval in `model` and the
   source time series in replayable operating points. Materializing a point
   returns a derived static package with the series cleared.
-- **Sign convention.** Positive Laplacians use negative off diag entries,
-  positive diagonal entries, and `diag = sum |off-diag|`. This is the
-  M-matrix form SDDM solvers expect.
+- **Solver matrix sign.** For ordinary inductive branches, the internal matrix
+  has negative off diagonal entries, positive diagonal entries, and
+  `diag = sum |off-diagonal|`. This is the M-matrix form SDDM solvers expect.
 - **Bus IDs.** MATPOWER 1 based; `IndexedNetwork::bus_index(id)` is the only mapping into dense `[0, n)`. Don't clamp out of range; return `Error::UnknownBus`.
 - **`BR_B` is already per unit.** Never divide by `base_mva` again.
 - **`tap == 0` ⇒ `tap = 1`.** Use `Branch::effective_tap()`.
@@ -303,14 +303,16 @@ fuzz/                        # libFuzzer targets (detached workspace; see fuzz/R
   intervals wholly below `-pi/2` and wholly above `pi/2`; normalized branches
   must leave `angmin <= angmax`. Wide symmetric bounds and `0/0` already have
   coverage.
-- **DC OPF Laplacian.** `L = A diag(b) Aᵀ` is built from the same `A`, `b`
-  factors `build_incidence` returns. `b` is positive for an inductive branch,
-  the DC model convention MATPOWER `makeBdc` uses; the AC series susceptance
-  `Im(1/(r+jx))` is its negation. Default `SeriesImpedance`: `b = x/(r² + x²)`,
-  which reads the whole series impedance, plus a phase shift injection, with no
-  tap scaling. `Matpower` uses `1/(x·τ)` plus the injection. `ReactanceOnly`
-  (`b = 1/x`, taps and shifts ignored) is the textbook DC linearization and
+- **DC solver matrix.** `L = A diag(w) Aᵀ` is built from the same `A`, `w`
+  data `build_incidence` returns. Default `SeriesImpedance` uses
+  `w = x/(r² + x²)`, which reads the whole series impedance, plus a phase shift
+  injection, with no tap scaling. `Matpower` uses `w = 1/(x·τ)` plus the
+  injection. `ReactanceOnly` (`w = 1/x`, taps and shifts ignored) is the
+  textbook DC linearization and
   stays; with zero phase shifts it equals MATPOWER `Bp` in the XB scheme.
+  The C and Julia APIs expose physical branch susceptance `b = -w`. Julia uses
+  branch by bus incidence `A_pm = Aᵀ`, `B = A_pmᵀ diag(b) A_pm`,
+  `Bf = diag(b) A_pm`, `p_bus = -B va + p_shift`, and `p_branch = -Bf va`.
 - **DC OPF lives in `powerio-prob`.** `DcOpfInstance` keeps generator-space
   data (`generators: DcGeneratorData`); `nodal_generator_data()` scatters it to
   bus space through `C_g` for length-n `Q`, `c`, bounds, and `has_gen`. Cost map: MATPOWER `c2 p² + c1 p` → `q = 2c2`, `c = c1`, constant `c0` retained. Per-unit by default (`Units::PerUnit` scales `q` by `base²`, `c` by `base`).

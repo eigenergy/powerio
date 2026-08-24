@@ -171,7 +171,7 @@ fn bprime_cancels_tap_magnitude_and_keeps_phase_shift() {
 
     let inc =
         build_incidence(&view, DcConvention::ReactanceOnly, &BuildOptions::default()).unwrap();
-    let dc_l = build_weighted_laplacian(&inc.a, &inc.b).to_dense();
+    let dc_l = build_weighted_laplacian(&inc.a, &inc.branch_weight).to_dense();
     assert_relative_eq!(dc_l[[0, 1]], -5.0, max_relative = 1e-12);
     assert!(
         (b[[0, 1]] - dc_l[[0, 1]]).abs() > 1e-6,
@@ -564,7 +564,7 @@ fn incidence_rejects_a_non_finite_reactance_under_every_convention() {
                     }))
                 ),
                 "{conv:?} accepted x = {x}: {:?}",
-                got.map(|parts| parts.b)
+                got.map(|parts| parts.branch_weight)
             );
         }
     }
@@ -593,7 +593,7 @@ fn incidence_rejects_a_reactance_and_tap_whose_product_overflows() {
             }))
         ),
         "accepted an overflowing denominator: {:?}",
-        got.map(|parts| parts.b)
+        got.map(|parts| parts.branch_weight)
     );
 }
 
@@ -763,7 +763,7 @@ fn a_reactance_the_builders_can_divide_by_is_stamped_by_both() {
 
     let inc = build_incidence(&view, DcConvention::ReactanceOnly, &opts).unwrap();
     assert_eq!(inc.skipped_zero_impedance.count, 0);
-    assert_relative_eq!(inc.b[0], 1e100, max_relative = 1e-12);
+    assert_relative_eq!(inc.branch_weight[0], 1e100, max_relative = 1e-12);
 
     let ybus = build_ybus(&view, &opts).unwrap();
     let ybus_stats = matrix_stats_for_kind(&ybus.b, &view, MatrixKind::YbusB, &opts);

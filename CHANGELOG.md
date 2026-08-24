@@ -2,7 +2,7 @@
 
 ## 0.9.0
 
-The API and C ABI that 1.0.0 ships. Everything here exists so a later change can be additive, so this release takes the breaks: C ABI 5, one version number across every document powerio authors, a registered code on every finding powerio reports, a DC susceptance that reads the whole series impedance, and one release of working compatibility names before 1.0 removes them. Read the headings below before upgrading; each one changes what a working consumer sees.
+The API and C ABI that 1.0.0 ships. Everything here exists so a later change can be additive, so this release takes the breaks: C ABI 5, one version number across every document powerio authors, a registered code on every finding powerio reports, a DC branch weight that reads the whole series impedance, and one release of working compatibility names before 1.0 removes them. Read the headings below before upgrading; each one changes what a working consumer sees.
 
 **`powerio corpus` runs the conversion invariants over a directory of case files.** `powerio corpus ingest | compare | report` holds an arbitrary directory of case files to the same four properties the conversion matrix holds its vendored fixtures to, and the engine behind both moved into `powerio-cli`'s `invariants` module so the CI gate and the harness cannot drift apart. Files group into buckets by an electrical fingerprint — bus count, base MVA, degree sequence, quantized impedance and demand — rather than by name, so a case and its siblings in other formats land together whatever they are called. Service status and generator capability stay out of that key on purpose: a reader that drops them is what the sibling comparison exists to catch, and a key that included them would split exactly the pair whose disagreement is the finding. The corpus directory is only read, the work directory is disposable, and `report` audits its own output against every string the corpus taught it before writing a byte, so a finding states codes, class ordinals and orders of magnitude and never a filename, an element name, or a line of a source file. DC terminal power is now a property of its own: an HVDC line enters no admittance matrix, so without it the whole two-terminal DC surface sat outside every electrical check.
 
@@ -52,13 +52,13 @@ The API and C ABI that 1.0.0 ships. Everything here exists so a later change can
 
 **Deleted and added.** The three `pio_acopf_*` symbols are gone: no C consumer, and `acopf` appears nowhere in PowerIO.jl. Re-cut them additively when a consumer exists and can say what shape it needs. `pio_normalize_with_options` is the fourth removal, folded into `pio_normalize` above. `pio_build_info` returns one document — version, ABI integer, compiled features, foreign schema versions, `diagnostic_namespaces`, `error_categories` and `json_classes` — shaped after `curl_version_info`, and the last three are the sets a binding reads from it rather than hardcodes. `pio_parse_bytes` takes `(const uint8_t *, size_t)` and every `pio_parse_str` format name plus `pwb`.
 
-**The normalize pass's provenance crosses the C ABI without Arrow or a package.** `pio_solver_index_json` returns the pass's own `SolverTableIndex` as JSON: `bus_ids`, `reference_bus_indices`, `component_labels`, the two arc index vectors, and the eight `*_source_rows` vectors, with `null` where a normalized row has no source row. The vectors existed and were reachable two ways, neither of which suits a caller who just parsed a file: the Arrow solver tables carry a `source_row` column but `arrow` is off by default, and a `.pio.json` package's derived block needs a package. With no plain accessor a binding re-derives the drop rule from an unfiltered second extraction — PowerIO.jl's ExaModels bridge exposes no source rows for this reason, and PowerDiff.jl guesses "status is nonzero and the bus survived" on top of a full extra pass. That is the second map 0.9's own note says should not exist, and it is wrong wherever normalization does something the guess does not model, three-winding star lowering changing the branch count most of all. Additive: no existing symbol changes and `PIO_ABI_VERSION` stays 5 (#399).
+**The normalize pass's source rows cross the C ABI without Arrow or a package.** `pio_solver_index_json` returns the pass's own `SolverTableIndex` as JSON: `bus_ids`, `reference_bus_indices`, `component_labels`, the two arc index vectors, and the eight `*_source_rows` vectors, with `null` where a normalized row has no source row. The vectors existed and were reachable through Arrow solver tables or a `.pio.json` package, neither of which suits a caller who just parsed a file. With no plain accessor a binding re-derives the drop rule from an unfiltered second extraction, which costs a full pass and fails when normalization changes the row space. Additive: no existing symbol changes and `PIO_ABI_VERSION` stays 5 (#399).
 
-**The DC incidence parts cross the C ABI, with their guards.** `pio_incidence_parts` fills the complete decomposition from one incidence build; `pio_branch_susceptance`, `pio_phase_shift_injection`, `pio_incidence_branch_rows` and `pio_incidence_skipped_rows` remain the individual vector extractors. They carry `IncidenceParts`' per-branch and per-bus vectors under a selectable convention (`"series"`, `"matpower"`, `"reactance-only"` — the tokens Python and the CLI already accept, NULL for the default). Only the signed incidence `A` reached a caller before, through `PIO_ARROW_TABLE_INCIDENCE`; `b`, `p_shift` and the zero impedance skips had no representation at all, and `PIO_ARROW_TABLE_MATRIX_BRANCH` carries no susceptance column. A differentiable-modeling consumer treats `b` as a parameter vector — PowerDiff.jl differentiates DC OPF solutions with respect to `b` and per-branch switching `sw`, so its positive DC Laplacian is `L = A diag(b ⊙ sw) Aᵀ` — and an assembled `B'` has already summed away the thing being differentiated, so the matrix API cannot serve it at any granularity. Computing the formula outside inherits none of what #292 put on this path: the magnitude bound on the denominator, `NonFiniteSusceptance` instead of a silently zero weight edge, `DegenerateTap` under `Matpower`. These return `-1` and write the guard's own `CODE: message` instead. They need `--features matrix` alone, guarded by `PIO_MATRIX` in the header; the matrix Arrow tables still need `arrow` with it, which is what `pio_matrix_available` reports. Additive: no existing symbol changes and `PIO_ABI_VERSION` stays 5 (#400).
+**DC power flow data now crosses the C ABI.** `pio_dc_power_flow_data` fills the branch susceptance, phase shift injection, branch row map, and skipped rows from one incidence build. `pio_branch_susceptance` exposes `b = imag(1/(r + jx))` for `"series"`, `b = -1/(x tap)` for `"matpower"`, and `b = -1/x` for `"reactance-only"`. Rust keeps `w = -b` for sparse solves and negates each value while filling the C buffer, without allocating another vector. The individual vector extractors remain available. These functions need `--features matrix`; the Arrow matrix tables still need `arrow` as well. `PIO_ABI_VERSION` stays 5 (#400).
 
 **`parse_bytes` on all four surfaces, and byte entry points for every document owner.** Rust, C, Python and Julia. It is the only in-memory route to the PowerWorld `.pwb` binary reader, and it opens nothing, which is what makes it the right entry point for input you do not control. `BalancedNetwork::from_json_bytes`, `powerio_dist::parse_bytes`, and `NetworkPackage::from_json_bytes` complete the set: a browser or archive consumer that already holds bytes hands them over directly instead of decoding through `File.text()`, which replaces every invalid byte with U+FFFD and reports nothing — a CP1252 OpenDSS deck reached the reader silently mangled that way. `classify_json_bytes` applies the same rule before routing: a leading UTF-8 byte order mark is accepted and invalid UTF-8 is `unknown`; model JSON parsing returns the coded malformed source error instead of replacing a byte.
 
-**The DC susceptance reads the whole series impedance, and states its sign once.** `DcConvention` offered `b = 1/x` and MATPOWER's `b = 1/(x·τ)`; neither reads the branch resistance, so a case with a real r/x ratio had no convention describing it and every consumer computed one by hand. `SeriesImpedance` is `x/(r² + x²)` with phase shift injections and no tap scaling, and it is the new default — a caller that passed no convention gets different numbers, and the gap grows with r/x, so it is small on transmission cases and large on distribution ones. `branch_susceptance` returns a **positive** Laplacian edge weight. PowerModels and tellegen write the negative one; that is their convention. A test holds all three variants to one sign, so a caller that negates once cannot get a sign flipped matrix from the choice of variant. `PaperPure` is now `ReactanceOnly`, which names the formula rather than a paper, and it is not deprecated: `b = 1/x` is the textbook DC linearization, so reproducing a published result needs it exactly as written. The CLI takes `--convention series` and Python takes `"series"`. Every string surface resolves the token through one parser, `DcConvention`'s `FromStr`: the CLI runs `--convention` through it as a clap `value_parser` rather than keeping a value enum of its own, so `mp`, `SERIES` and `Reactance_Only` are accepted on the command line exactly as they are in Python and C, and `--convention paper-pure` reaches the terminal with the sentence naming its successor instead of clap's generic possible-values list. The cost is that clap no longer knows the values, so `--help` names them in prose.
+**The DC branch weight reads the whole series impedance.** `DcConvention` offered `w = 1/x` and MATPOWER's `w = 1/(x·τ)`; neither reads the branch resistance, so a case with a real r/x ratio had no convention describing it and every consumer computed one by hand. `SeriesImpedance` is `w = x/(r² + x²)` with phase shift injections and no tap scaling, and it is the new default — a caller that passed no convention gets different numbers, and the gap grows with r/x, so it is small on transmission cases and large on distribution ones. `PaperPure` is now `ReactanceOnly`, which names the formula rather than a paper, and it is not deprecated: `w = 1/x` is the textbook DC linearization, so reproducing a published result needs it exactly as written. The CLI takes `--convention series` and Python takes `"series"`. Every string surface resolves the token through one parser, `DcConvention`'s `FromStr`: the CLI runs `--convention` through it as a clap `value_parser` rather than keeping a value enum of its own, so `mp`, `SERIES` and `Reactance_Only` are accepted on the command line exactly as they are in Python and C, and `--convention paper-pure` reaches the terminal with the sentence naming its successor instead of clap's generic possible-values list. The cost is that clap no longer knows the values, so `--help` names them in prose.
 
 **The DC OPF instance and bundle state the complete affine model.** `fixed_nodal_withdrawal()` returns `p_d + g_s + p_shift` for `L theta = Cg pg - fixed`, and `branch_flow_offset()` returns `-b * shift` for `f = BAt theta + offset`. The instance retains `synthesize_unrated_limits` with a false serde default for older documents. Bundles add `shift.mtx`, `flow_offset.mtx`, and `fixed_withdrawal.mtx`, record the synthesize option, and give every emitted data file exactly one `operators[]` row, including `c0`, `c0_gen`, and `gs`.
 
@@ -68,7 +68,7 @@ The API and C ABI that 1.0.0 ships. Everything here exists so a later change can
 
 **0.9 is the bridge: the 0.8 names live for exactly one release behind warnings that work.** The 0.8.x deprecation aliases never actually deprecated anything — `powerio/src/lib.rs` re-exported only the new names, so `use powerio::Network;` got a compile error rather than the promised warning. 0.9.0 fixes the bridge instead of abandoning it: `Network` is `BalancedNetwork`, `DistNetwork` is `MulticonductorNetwork`, `build_scopf_instance_from_str` is `parse_scopf_str`, `Branch::legacy_total_charging_b` is `total_charging_b`, and `DcConvention::PaperPure` is an associated constant equal to `ReactanceOnly` that works in expression and pattern position — each reachable where 0.8 code looks for it, each warning naming its successor and the 1.0.0 removal. Python bridges the same way: `powerio.Network` and `powerio.dist.DistNetwork` resolve with a `DeprecationWarning`. `scripts/deprecated-inventory.sh` lists the whole set, and its `--assert-empty` run is the 1.0.0 gate that deletes it. The retired `powerio-json` token is the one name with no alias, since model JSON stopped being a conversion target; passing it now gets guidance naming `to_json`, the MCP `json_format` channel, and the `model-json` classification family. [Coming from 0.8.x](https://powerio.dev/guide/abi-v5.html).
 
-**Numerical guards across matrix assembly and sensitivities** ([#292](https://github.com/eigenergy/powerio/issues/292)). Each of these passed a value whose reciprocal is astronomical, or used a tolerance that could not separate the case it was written for from a nearby one, and the matrix came out wrong with nothing saying so. An impedance denominator is bounded on magnitude rather than tested against exact zero, so `x = 1e-300` no longer annihilates every real branch sharing a Laplacian diagonal. A tap the builder cannot divide by is `DegenerateTap`, a new `Error` variant, and the four admittances are checked after they are computed since each input can be in range while a product is not. `branch_susceptance` returns `NaN` for a denominator that is not finite, which `SeriesImpedance` already did: `1/±inf` is `0.0`, so `ReactanceOnly` and `Matpower` read an infinite reactance as a zero weight edge and dropped the branch from a Laplacian that Y_bus rejects outright on the same handle, and because `Matpower` divides by `x · τ` two finite factors whose product overflows read the same way. LODF islanding is decided by an iterative Tarjan bridge finder over the branch endpoints rather than by a tolerance that passed a *near* bridge and amplified its column to about 1e9. Both Cholesky pivot floors are `n * f64::EPSILON * max|a_ij|` instead of one absolute constant that was at once too strict for a legitimately small scaled matrix and far too loose for one whose entries run to 1e12. The `mtx` writer emits a `symmetric` header only on bit equality with a stored mirror, so a matrix that was merely close no longer goes out under a header that makes a reader rebuild it changed. Ordinary cases are unchanged; the degenerate inputs get an error or a recorded skip.
+**Numerical guards across matrix assembly and sensitivities** ([#292](https://github.com/eigenergy/powerio/issues/292)). Each of these passed a value whose reciprocal is astronomical, or used a tolerance that could not separate the case it was written for from a nearby one, and the matrix came out wrong with nothing saying so. An impedance denominator is bounded on magnitude rather than tested against exact zero, so `x = 1e-300` no longer annihilates every real branch sharing a Laplacian diagonal. A tap the builder cannot divide by is `DegenerateTap`, a new `Error` variant, and the four admittances are checked after they are computed since each input can be in range while a product is not. `branch_weight` returns `NaN` for a denominator that is not finite, which `SeriesImpedance` already did: `1/±inf` is `0.0`, so `ReactanceOnly` and `Matpower` read an infinite reactance as a zero weight edge and dropped the branch from a solver matrix that Y_bus rejects outright on the same handle, and because `Matpower` divides by `x · τ` two finite factors whose product overflows read the same way. LODF islanding is decided by an iterative Tarjan bridge finder over the branch endpoints rather than by a tolerance that passed a *near* bridge and amplified its column to about 1e9. Both Cholesky pivot floors are `n * f64::EPSILON * max|a_ij|` instead of one absolute constant that was at once too strict for a legitimately small scaled matrix and far too loose for one whose entries run to 1e12. The `mtx` writer emits a `symmetric` header only on bit equality with a stored mirror, so a matrix that was merely close no longer goes out under a header that makes a reader rebuild it changed. Ordinary cases are unchanged; the degenerate inputs get an error or a recorded skip.
 
 **Errors belong to the crate that raises them.** `powerio::Error` had 35 variants and 15 were never constructed in `powerio`. `powerio_matrix::Error` and `powerio_prob::Error` now carry what each crate raises — `powerio-matrix` had no error type at all and re-exported the hub's — and a variant several crates raise stays in the hub as shared vocabulary. Each new type wraps the layer below through `#[error(transparent)]`, so a hub failure crossing the boundary keeps its `Display` text byte for byte; the C ABI reports errors as text and nothing else, so a wrapper that restated the message would change what every binding prints. `powerio-pkg` gets a real error type: `from_json` returned one opaque `serde_json::Error` for malformed JSON, an unreadable lineage, and a `model_kind` contradicting its payload, which are now `Malformed`, `UnsupportedVersion` and `ModelKindMismatch`. **Fixed:** `package_pyerr` mapped every `.pio.json` failure to a bare `ValueError`, so `except powerio.PowerIOError` did not catch a package failure although it caught every other parse failure.
 
@@ -120,11 +120,11 @@ Three more silent paths from the same report: a three winding star whose third a
 
 ## 0.8.2
 
-Row provenance from the normalize pass, a PYPOWER bridge, `null` for a nonfinite float in the multiconductor payload, and distribution writer coverage for rated capacitor banks and unbalanced loads. No breaking API changes; two behaviors change in ways a consumer can observe, both below.
+Source rows from the normalize pass, a PYPOWER bridge, `null` for a nonfinite float in the multiconductor payload, and distribution writer coverage for rated capacitor banks and unbalanced loads. No breaking API changes; two behaviors change in ways a consumer can observe, both below.
 
 **`.pio.json` moves to schema 0.2.1.** `serde_json` writes a nonfinite `f64` as `null`, so a package holding an unbounded rating or an unstated line length wrote a file the payload reader refused — the library could not read its own output. The reader now restores `null` per field: an upper bound reads as +Inf, a lower bound as -Inf, and a length as NaN, the PMD convention. The writer is unchanged, so 0.2.0 and 0.2.1 documents load in each other's readers, which is what the patch bump says. The published schema documents the `null` spelling and keeps every required key required; the multiconductor to balanced pass refuses a line whose length is not a finite number rather than scaling an impedance by NaN.
 
-**Solver table `*_source_rows` values change on an already-normalized input.** `NormalizedSolverTables` used to rebuild provenance in `solver_tables` by re-simulating the normalize filter against the source network. The normalize pass now reports the rows itself through `Network::to_normalized_with_source_rows`, so there is one map instead of two that could drift, and it covers the star-lowered view the matrix builders read. For a raw case the values are unchanged. For a network already flagged `SourceFormat::Normalized` the old map was wrong — an out-of-service element and an isolated bus resolved to the wrong row or to none — and the new values are the identity. A consumer that stored provenance from 0.8.1 output for such a case resolves a dense row to a different source element after upgrading; regenerate it.
+**Solver table `*_source_rows` values change on an already-normalized input.** `NormalizedSolverTables` used to rebuild source rows in `solver_tables` by re-simulating the normalize filter against the source network. The normalize pass now reports the rows itself through `Network::to_normalized_with_source_rows`, so there is one map instead of two that could drift, and it covers the star-lowered view the matrix builders read. For a raw case the values are unchanged. For a network already flagged `SourceFormat::Normalized` the old map was wrong — an out-of-service element and an isolated bus resolved to the wrong row or to none — and the new values are the identity. A consumer that stored source rows from 0.8.1 output for such a case resolves a dense row to a different source element after upgrading; regenerate it.
 
 **Distribution.**
 
@@ -178,12 +178,12 @@ records. Upgrade if you write text formats from names you do not control.
   `null` when the owning feature is not compiled in. `PIO_ABI_VERSION`
   does not cover document formats, so a binding that mirrors one of these
   versions can now read it from the library and refuse a mismatch at load
-  or pin time instead of finding it downstream (#270, query half).
+  or build time instead of finding it downstream (#270, query half).
 - `release-binaries.yml` gates every tag on PowerIO.jl: the workflow
   builds the tag, runs the binding's suite against it, and produces no
   tarballs and no draft release on failure. A planned binding break
   merges the paired PowerIO.jl change first, then re-runs the workflow.
-- The retired schema documents under `docs/schema/` are pinned by a test.
+- The retired schema documents under `docs/schema/` are checked byte for byte.
   A `.pio.json` written before v0.8.0 declares those URLs, so they stay
   published even though the reader no longer accepts that lineage.
 - The egret and pandapower readers keep unrecognized element fields as
@@ -206,7 +206,7 @@ records. Upgrade if you write text formats from names you do not control.
   distribution reader's own document rule still applies on that path, so
   a JSON that is not a distribution case is refused as before.
 - DC sensitivities factor the grounded Laplacian once on the sparse path and reuse its AMD-ordered Cholesky factors for batched PTDF and non-bridge LODF right hand sides (#291). `SensitivitySolver::Sparse`, CLI/Python `sparse`, and metadata path `sparse_cholesky` replace the iterative/CG names, and the CG tolerance and iteration fields are removed. `SensitivitySolveDidNotConverge` is removed and its diagnostic code retired; allocation or index failures use `SensitivityFactorizationFailed`. Python `Network.ptdf()` / `lodf()` route through the auto solver and take `solver="auto"|"dense"|"sparse"`, matching the CLI `sensitivities` command (#273).
-- `SensitivityOptions::auto_dense_threshold` defaults to 64, down from the 8192 that #295 set against the conjugate gradient path. Dense stops beating the sparse Cholesky path near a reduced dimension of 50: case2869pegase is 22.1 s dense against 2.2 s sparse, and a 1200 bus case is 9x. `Auto` therefore takes sparse on every published case above a few dozen buses, and takes dense below that or when the case falls outside the sparse path's positive finite susceptance requirement. The 2 GiB dense footprint veto outranks both: a wide case (few buses, very many branches) takes sparse below the dimension ceiling, and an indefinite one that also trips the veto keeps the sparse refusal rather than asking for the tens of GB dense would need. An explicit `Sparse` still reports that refusal as an error, and an explicit `Dense` still spends whatever the case costs. Set `auto_dense_threshold` to restore the old routing. Because more cases now resolve to sparse by default, results can differ in the last bits and an entry at `drop_tolerance` can move across the pruning boundary.
+- `SensitivityOptions::auto_dense_threshold` defaults to 64, down from the 8192 that #295 set against the conjugate gradient path. Dense stops beating the sparse Cholesky path near a reduced dimension of 50: case2869pegase is 22.1 s dense against 2.2 s sparse, and a 1200 bus case is 9x. `Auto` therefore takes sparse on every published case above a few dozen buses, and takes dense below that or when the case falls outside the sparse path's positive finite branch weight requirement. The 2 GiB dense footprint veto outranks both: a wide case (few buses, very many branches) takes sparse below the dimension ceiling, and an indefinite one that also trips the veto keeps the sparse refusal rather than asking for the tens of GB dense would need. An explicit `Sparse` still reports that refusal as an error, and an explicit `Dense` still spends whatever the case costs. Set `auto_dense_threshold` to restore the old routing. Because more cases now resolve to sparse by default, results can differ in the last bits and an entry at `drop_tolerance` can move across the pruning boundary.
 
 ## 0.8.0
 
@@ -278,8 +278,7 @@ BMOPF schema 0.1.0 alignment, one version number for `.pio.json`, and distributi
     writers emit full matrices.
   - Generator `s_max`/`i_max` and linecode `source` are typed fields, read
     and written; the dss and PMD writers warn when they drop them.
-  - The `meta` provenance fields (title, description, license, authors,
-    data_sources, created, modified, provenance, version) survive a BMOPF
+  - The `meta` source fields survive a BMOPF
     round trip; the writer keeps owning `$schema`, `frequency`, and
     `case_study_generator`.
   - A grounded terminal counts as referenced, so the unused-terminal prune
@@ -353,7 +352,7 @@ several gaps in that model.
   bus allocation that could alias an existing bus. An oversized piecewise
   cost `ncost` clamps instead of overflowing during normalization and Surge
   export.
-- The Python `mcp` extra pins the SDK below 2.0, which removed the
+- The Python `mcp` extra requires an SDK below 2.0, which removed the
   `mcp.server.fastmcp` module the server imports.
 - OpenDSS `like=` splicing is capped per object. A self-referencing or
   mutually-referencing chain (`Edit Load.a like=a` repeated) otherwise doubled
@@ -541,7 +540,7 @@ several gaps in that model.
   `matrix_bus` axis, which stays correct when 3-winding transformer star-point
   lowering expands the bus set past the handle bus order.
 - FDPF matrices (#234): `bprime` / `bdoubleprime` follow MATPOWER `makeB`
-  semantics, with self-loop handling and asymmetric Matrix Market writes pinned
+  semantics, with self-loop handling and asymmetric Matrix Market writes checked
   by Rust, C ABI, and Python coverage.
 - Summary JSON (#234): the C ABI exposes balanced (`pio_summary_json`) and
   distribution summary JSON, so a binding can render network summaries without
@@ -554,7 +553,7 @@ several gaps in that model.
 - Normalization (#210): angle bound clamping now keeps every repaired branch
   interval ordered. One sided intervals wholly outside the supported window are
   widened to the configured pad instead of producing `angmin > angmax`; Rust,
-  C ABI, and Python normalize option coverage pin the behavior.
+  C ABI, and Python normalize option coverage check the behavior.
 - Binding coverage (#185): the already shipped study block and distribution
   graph projection now have C ABI and Python accessors. The remaining geo
   binding symbols stay in the v0.6.3 follow through.
@@ -685,7 +684,7 @@ several gaps in that model.
   (at materialization and by `pio_package_validate` via the
   `VALIDATE.PACKAGE.OPERATING_IDENTITY` pass), and `row` may be omitted on the
   wire (`ElementRef::by_source_uid`). Tables without uids keep the pre-0.5.1
-  row-only semantics, so existing packages materialize as before. Provenance
+  row-only semantics, so existing packages materialize as before. Source details
   cleanup paths now come from the resolved row, not the wire row.
 - Python: network table dicts expose `uid`; unknown identities raise
   `ValueError` from `Package.materialize_operating_point`. C ABI: no signature
@@ -734,7 +733,7 @@ several gaps in that model.
   (`extras["id"]` preferred, positional fallback); the reader captures load,
   shunt, and SVD ids into `extras["id"]` so they survive cross format writes.
 - PowerWorld `.pwb`: the table location search runs under a work budget, so a
-  crafted file fails with a read error instead of pinning a core for hours.
+  crafted file fails with a read error instead of occupying a core for hours.
 - Surge JSON writer warns when named branch rating sets are dropped, like every
   other lossy writer.
 - Writing a read only format (`goc3-json`) returns the new
@@ -761,7 +760,7 @@ several gaps in that model.
   formats, not only counts and totals. PSLF export now warns when transformer
   charging admittance is dropped.
 - `powerio-dist` BMOPF: OpenDSS fixed P/Q generators now emit as BMOPF
-  `generator.*` entries with pinned P/Q bounds instead of negative `load.*`
+  `generator.*` entries with fixed P/Q bounds instead of negative `load.*`
   entries. The old negative load warning is gone; generators without source
   costs keep the existing cost 0 warning.
 - Python API: removed the one release `powerio.Case` and
@@ -857,7 +856,7 @@ several gaps in that model.
 - C ABI tests now reject the old target-before-source conversion order for both
   `pio_convert_*` and `pio_dist_convert_*`, including the compiled C smoke test
   against `powerio.h`.
-- C ABI hardening: unit tests pin every public `PIO_*` macro, opaque typedef,
+- C ABI hardening: unit tests check every public `PIO_*` macro, opaque typedef,
   and `pio_*` prototype in `powerio.h`; Cargo now checks Rust source/header
   symbol parity; CI builds the no-default core ABI plus the release
   `arrow,gridfm,dist` feature smoke test and C++ header/link sanity checks.
@@ -926,7 +925,7 @@ Hardening fixes only; no API or ABI change (`PIO_ABI_VERSION` stays 3).
   invalid string. Truncation now lands on a character boundary.
 - PowerWorld `.pwd`: the reader's byte accessors return `Option` instead
   of indexing, so an out of range offset from a corrupt file rejects the
-  record instead of panicking. A corruption sweep test pins the
+  record instead of panicking. A corruption sweep test checks the
   invariant; the differential oracle tests pass unchanged.
 - `powerio.h`: a doc comment contained a literal `*/` that terminated
   the generated block comment, so compiling with `-DPIO_GRIDFM` against

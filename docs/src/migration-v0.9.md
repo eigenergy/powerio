@@ -2,7 +2,7 @@
 
 0.9.0 is the API that 1.0.0 ships, so it takes the breaks that were being deferred. A C or Julia consumer also needs [the ABI 5 guide](abi-v5.md); the two sets barely overlap.
 
-Most of what follows is a compile error. Two items are not, and they are the ones to check by hand: the DC susceptance default and `.pio.json` documents written before 0.9.
+Most of what follows is a compile error. Two items are not, and they are the ones to check by hand: the DC branch weight default and `.pio.json` documents written before 0.9.
 
 ## The deprecated names remain for one release
 
@@ -38,11 +38,11 @@ The retired `powerio-json` case format token is not part of this bridge. Model
 JSON moves through `to_json` and `from_json`, and classification reports
 `model-json`.
 
-## The DC susceptance default changed value
+## The DC branch weight default changed value
 
 This one is silent. A caller that passed no convention gets different numbers.
 
-`DcConvention` offered `b = 1/x` and MATPOWER's `b = 1/(x·τ)`, and neither reads the branch resistance, so a case with a real r/x ratio had no convention describing it and every consumer computed one by hand. The new default is `SeriesImpedance`, `b = x/(r² + x²)`, with phase shift injections and no tap scaling.
+`DcConvention` offered `w = 1/x` and MATPOWER's `w = 1/(x·τ)`, and neither reads the branch resistance, so a case with a real r/x ratio had no convention describing it and every consumer computed one by hand. The new default is `SeriesImpedance`, `w = x/(r² + x²)`, with phase shift injections and no tap scaling.
 
 | 0.8 | 0.9 | formula |
 |---|---|---|
@@ -52,16 +52,16 @@ This one is silent. A caller that passed no convention gets different numbers.
 
 The gap grows with r/x: small on transmission cases, large on distribution ones. At `r = x = 0.1` the old default returned 10 and the new one returns 5. A resistanceless branch is unaffected, because `x/(r² + x²)` reduces to `1/x` exactly.
 
-`ReactanceOnly` is not deprecated. `b = 1/x` is the textbook DC linearization, so reproducing a published result needs it exactly as written.
+`ReactanceOnly` is not deprecated. `w = 1/x` is the textbook DC linearization, so reproducing a published result needs it exactly as written.
 
 The method takes the resistance now:
 
 ```rust,ignore
-conv.branch_susceptance(x, tap)       // 0.8
-conv.branch_susceptance(r, x, tap)    // 0.9
+conv.branch_susceptance(x, tap)  // 0.8
+conv.branch_weight(r, x, tap)    // 0.9
 ```
 
-It returns a **positive** Laplacian edge weight, in every variant. PowerModels and tellegen write the negative one; that is their convention, and a caller that negates once cannot get a sign flipped matrix from the choice of variant.
+The return value is the internal branch weight `w` used in `L = A diag(w) Aᵀ`.
 
 It also returns `NaN` for a denominator that is not finite, which `SeriesImpedance` already did. `1/±inf` is `0.0`, so `ReactanceOnly` and `Matpower` used to read an infinite reactance as a zero weight edge and drop the branch from the Laplacian without saying so; `Matpower` divides by `x * tap`, so two finite factors whose product overflows read the same way. The matrix and instance builders check the result and raise `NonFiniteSusceptance`. Every finite denominator is unchanged.
 

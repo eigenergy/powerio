@@ -115,11 +115,11 @@
  * emitted but never reassigns it, and refinement adds narrower codes rather
  * than redefining a family. The namespace set grows only by addition, and a
  * default severity may move in a minor release, so a consumer that needs a
- * fixed policy pins by code. An unknown code is data, never a failure.
+ * fixed policy matches by code. An unknown code is data, never a failure.
  *
  * Optional: build with `--features arrow` for pio_to_arrow (guarded by
  * PIO_ARROW), add `--features matrix` for the balanced matrix Arrow tables and
- * for the bulk pio_incidence_parts extractor and its individual vector
+ * for the bulk pio_dc_power_flow_data extractor and its individual vector
  * counterparts pio_branch_susceptance, pio_phase_shift_injection,
  * pio_incidence_branch_rows and pio_incidence_skipped_rows (guarded by
  * PIO_MATRIX; these need matrix alone, while the matrix Arrow tables need
@@ -758,7 +758,7 @@ size_t pio_source_format(const PioNetwork *net, char *out, size_t cap);
 char *pio_summary_json(const PioNetwork *net, char *errbuf, size_t errlen);
 
 /**
- * The normalize pass's identity and provenance vectors for `net`, as owned
+ * The normalize pass's identity and source row vectors for `net`, as owned
  * JSON. Free the returned string with [`pio_string_free`]. On error this
  * returns NULL and writes the message into `errbuf`.
  *
@@ -777,7 +777,7 @@ char *pio_summary_json(const PioNetwork *net, char *errbuf, size_t errlen);
  *   branches it lowers to).
  *
  * This is the map the pass computes for itself, which is the point: a caller
- * that wants normalized tables plus provenance no longer has to re-derive the
+ * that wants normalized tables plus source rows no longer has to re-derive the
  * drop rule from an unfiltered second extraction, and so cannot disagree with
  * the pass wherever the guess does not model what it does — three-winding star
  * lowering changing the branch count, most of all. Reaching the same vectors
@@ -998,31 +998,31 @@ size_t pio_bus_shunt(const PioNetwork *net, double *gs, double *bs, size_t cap);
 
 #if defined(PIO_MATRIX)
 /**
- * Fill every DC incidence vector from one incidence build. Each pointer may
+ * Fill the DC power flow vectors from one incidence build. Each pointer may
  * be NULL to skip that vector. `branch_cap` applies to `b` and `branch_rows`;
  * the other vectors have their own caps. The three count pointers are
  * optional and are written only on success.
  *
  * This is the bulk counterpart to the four extractors below. It avoids
- * rebuilding `A`, `b`, and `p_shift` four times when a binding needs the
- * complete decomposition. All four vector guards and the convention parser
+ * rebuilding the incidence data four times when a binding needs all four
+ * vectors. All four vector guards and the convention parser
  * are identical because this calls the same incidence builder once.
  * Returns `0` on success or `-1` with the message in `errbuf` on failure.
  */
-int32_t pio_incidence_parts(const PioNetwork *net,
-                            const char *convention,
-                            double *b,
-                            int64_t *branch_rows,
-                            size_t branch_cap,
-                            double *p_shift,
-                            size_t bus_cap,
-                            int64_t *skipped_rows,
-                            size_t skipped_cap,
-                            size_t *out_branch_count,
-                            size_t *out_bus_count,
-                            size_t *out_skipped_count,
-                            char *errbuf,
-                            size_t errlen);
+int32_t pio_dc_power_flow_data(const PioNetwork *net,
+                               const char *convention,
+                               double *b,
+                               int64_t *branch_rows,
+                               size_t branch_cap,
+                               double *p_shift,
+                               size_t bus_cap,
+                               int64_t *skipped_rows,
+                               size_t skipped_cap,
+                               size_t *out_branch_count,
+                               size_t *out_bus_count,
+                               size_t *out_skipped_count,
+                               char *errbuf,
+                               size_t errlen);
 #endif
 
 #if defined(PIO_MATRIX)
@@ -1032,11 +1032,9 @@ int32_t pio_incidence_parts(const PioNetwork *net,
  * with `(NULL, 0)` to size, allocate, then call again to fill.
  *
  * `convention` takes the tokens Python and the CLI accept — `"series"`
- * (`b = x/(r² + x²)`, the default and what NULL selects), `"matpower"`
- * (`b = 1/(x τ)`), `"reactance-only"` (`b = 1/x`) — case and separator
- * insensitive. `b` is a **positive** Laplacian edge weight, as
- * `DcConvention::branch_susceptance` states; PowerModels and tellegen write
- * the negation, so a consumer negates once knowingly.
+ * (`b = imag(1/(r + jx))`, the default and what NULL selects), `"matpower"`
+ * (`b = -1/(x τ)`), and `"reactance-only"` (`b = -1/x`) — case and separator
+ * insensitive.
  *
  * Column order is [`pio_incidence_branch_rows`]'s, which is in-service branch
  * order with the skipped and self-loop rows removed — not `pio_branches`
@@ -1046,11 +1044,11 @@ int32_t pio_incidence_parts(const PioNetwork *net,
  * Returns `-1` and writes the message into `errbuf` on a refusal: a
  * non-finite susceptance is `NonFiniteSusceptance` and a `Matpower` tap too
  * small to divide by is `DegenerateTap`, which is the point of asking rather
- * than recomputing `x/(r² + x²)` outside.
+ * than recomputing `imag(1/(r + jx))` outside.
  *
  * One incidence build runs per call and nothing is cached on the handle, so
  * the size query and the fill are two builds. A consumer that wants several
- * vectors should use [`pio_incidence_parts`], which fills all four from one
+ * vectors should use [`pio_dc_power_flow_data`], which fills all four from one
  * build.
  *
  * The size query is skippable outright, which is the cheaper half of that
@@ -1074,8 +1072,8 @@ ptrdiff_t pio_branch_susceptance(const PioNetwork *net,
  * to `cap` entries, and return `n`, the bus count. The dense order is
  * [`pio_bus_ids`]'s, the one every per-bus array shares.
  *
- * This is MATPOWER `makeBdc`'s `Pbusinj`, the constant term of
- * `L θ = C_g p_g − (p_d + g_s + p_shift)`. All zeros under
+ * With branch by bus incidence `A`, branch susceptance `b`, and phase shift
+ * `shift`, this is `p_shift = Aᵀ (b .* shift)`. All zeros under
  * `"reactance-only"`, which carries no shifts, and under any convention for a
  * case with no phase shifter — a caller that skips it silently drops the
  * shifter's contribution instead.

@@ -18,14 +18,14 @@
 //!
 //! # Conventions
 //!
-//! The DC bus susceptance matrix and other weighted bus Laplacians use the
-//! positive M-matrix form: stored nonzero off-diagonal entries are negative,
-//! diagonals are nonnegative, and `diag = Σ|off-diag|`. Source bus IDs remain on
+//! Weighted bus Laplacians use the M-matrix form: stored nonzero off-diagonal
+//! entries are negative, diagonals are nonnegative, and
+//! `diag = Σ|off-diag|`. Source bus IDs remain on
 //! the model; [`IndexedNetwork`] maps them to dense indices in `[0, n)`. `tap == 0` means
 //! `tap = 1`. `build_bprime` and `build_bdoubleprime` follow MATPOWER `makeB`;
 //! Y_bus keeps tap magnitudes and phase shifts.
 //! Branch terminal admittance is stored per unit. DC incidence uses
-//! `b = x/(r² + x²)` by default. [`DcConvention::Matpower`] uses `1/(x·τ)`, and
+//! `w = x/(r² + x²)` by default. [`DcConvention::Matpower`] uses `w = 1/(x·τ)`, and
 //! both carry phase shift injection. The full reference across every matrix is in
 //! [the matrix guide](https://eigenergy.github.io/powerio/guide/matrices.html).
 
@@ -66,13 +66,13 @@ pub mod pipeline;
 pub mod synth;
 
 pub use matrix::{
-    BuildOptions, DcConvention, GroundedIndexMap, IncidenceParts, MatrixStats, Scheme,
+    BuildOptions, DcConvention, DcSolverData, GroundedIndexMap, MatrixStats, Scheme,
     SensitivityMatrices, SensitivityMatrixMetadata, SensitivityMetadata, SensitivityOptions,
     SensitivitySolver, SensitivitySolverPath, ZeroImpedanceRule, ZeroImpedanceSkips,
     build_adjacency, build_bdoubleprime, build_bprime, build_flow_map, build_incidence,
     build_lacpf, build_lodf, build_ptdf, build_ptdf_lodf, build_ptdf_lodf_with_options,
     build_weighted_laplacian, build_ybus, ground_at, ground_at_each, reference_indicator,
-    sddm_check, skipped_zero_impedance, susceptance_diag, unit_vector,
+    sddm_check, skipped_zero_impedance, unit_vector, weight_diagonal,
 };
 pub use pipeline::{
     MatrixKind, Pipeline, PipelineOutputs, RhsKind, build_kind, matrix_stats_for_kind,

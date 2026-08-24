@@ -123,7 +123,7 @@ fn laplacian_equals_bprime_xb() {
         let view = IndexedNetwork::new(&case);
         let inc =
             build_incidence(&view, DcConvention::ReactanceOnly, &BuildOptions::default()).unwrap();
-        let l = build_weighted_laplacian(&inc.a, &inc.b);
+        let l = build_weighted_laplacian(&inc.a, &inc.branch_weight);
         let bp = build_bprime(
             &view,
             &powerio_matrix::BuildOptions {
@@ -158,7 +158,7 @@ fn incidence_structure() {
         assert_eq!(inc.a.rows(), n);
         assert_eq!(inc.a.cols(), m);
         assert_eq!(inc.a.nnz(), 2 * m, "{path}: two nonzeros per column");
-        assert_eq!(inc.b.len(), m);
+        assert_eq!(inc.branch_weight.len(), m);
         assert_eq!(inc.branch_of_col.len(), m);
 
         // Each column sums to 0 with one +1 and one −1.
@@ -185,7 +185,7 @@ fn laplacian_is_psd_with_constant_kernel() {
         let view = IndexedNetwork::new(&case);
         let inc =
             build_incidence(&view, DcConvention::ReactanceOnly, &BuildOptions::default()).unwrap();
-        let l = build_weighted_laplacian(&inc.a, &inc.b);
+        let l = build_weighted_laplacian(&inc.a, &inc.branch_weight);
         let d = dense(&l);
         let n = d.len();
         // Symmetric, and every row sums to ~0 (L·1 = 0).
@@ -207,7 +207,7 @@ fn grounded_laplacian_is_spd() {
         let r = view.reference_bus_index().unwrap();
         let inc =
             build_incidence(&view, DcConvention::ReactanceOnly, &BuildOptions::default()).unwrap();
-        let l = build_weighted_laplacian(&inc.a, &inc.b);
+        let l = build_weighted_laplacian(&inc.a, &inc.branch_weight);
         let lg = ground_at(&l, r);
         assert_eq!(lg.rows(), view.n() - 1);
         assert_eq!(lg.cols(), view.n() - 1);
@@ -222,12 +222,12 @@ fn flow_map_reconstructs_laplacian() {
         let view = IndexedNetwork::new(&case);
         let inc =
             build_incidence(&view, DcConvention::ReactanceOnly, &BuildOptions::default()).unwrap();
-        let flow = build_flow_map(&inc.a, &inc.b); // B Aᵀ, m×n
+        let flow = build_flow_map(&inc.a, &inc.branch_weight); // diag(w) Aᵀ, m×n
         assert_eq!(flow.rows(), inc.m());
         assert_eq!(flow.cols(), inc.n());
         // A · (B Aᵀ) == L.
         let l_from_flow = &inc.a * &flow;
-        let l = build_weighted_laplacian(&inc.a, &inc.b);
+        let l = build_weighted_laplacian(&inc.a, &inc.branch_weight);
         let (df, dl) = (dense(&l_from_flow), dense(&l));
         for i in 0..dl.len() {
             for j in 0..dl.len() {
@@ -593,7 +593,7 @@ fn auto_writes_sparse_outputs_above_the_dense_threshold() {
 }
 
 #[test]
-fn auto_falls_back_to_dense_for_non_positive_susceptance() {
+fn auto_falls_back_to_dense_for_non_positive_branch_weight() {
     // The dimension ceiling would send this to sparse, which refuses the sign.
     // `Auto` promises an answer wherever one path can produce it, so it keeps
     // the dense indefinite fallback.
@@ -621,7 +621,7 @@ fn auto_falls_back_to_dense_for_non_positive_susceptance() {
 }
 
 #[test]
-fn auto_keeps_the_sparse_refusal_when_the_dense_footprint_is_vetoed() {
+fn auto_keeps_the_sparse_weight_refusal_when_the_dense_footprint_is_vetoed() {
     // The fallback answers a case one path can produce. Here neither can: the
     // sparse path refuses the sign, and the dense path's own m x m LODF is
     // over the 2 GiB budget the footprint veto exists to refuse, so routing
@@ -648,14 +648,14 @@ fn auto_keeps_the_sparse_refusal_when_the_dense_footprint_is_vetoed() {
 
     match err {
         Error::InvalidSensitivityOptions { reason } => {
-            assert!(reason.contains("positive finite branch susceptances"));
+            assert!(reason.contains("positive finite branch weights"));
         }
         other => panic!("unexpected error: {other}"),
     }
 }
 
 #[test]
-fn explicit_sparse_rejects_non_positive_susceptance() {
+fn explicit_sparse_rejects_non_positive_branch_weight() {
     let case = net(
         "negative_x",
         vec![bus(1, BusType::Ref), bus(2, BusType::Pq)],
@@ -673,7 +673,7 @@ fn explicit_sparse_rejects_non_positive_susceptance() {
 
     match err {
         Error::InvalidSensitivityOptions { reason } => {
-            assert!(reason.contains("positive finite branch susceptances"));
+            assert!(reason.contains("positive finite branch weights"));
         }
         other => panic!("unexpected error: {other}"),
     }
@@ -729,7 +729,7 @@ fn poly_gen(bus_id: usize, pmax: f64, c2: f64, c1: f64) -> Generator {
     generator
 }
 
-/// Symmetric 3-bus triangle, slack at bus 1, unit susceptance on every branch.
+/// Symmetric 3-bus triangle, slack at bus 1, unit branch weight on every branch.
 /// Branch order fixes the incidence columns: e0=1→2, e1=1→3, e2=2→3.
 fn triangle() -> BalancedNetwork {
     net(
@@ -805,14 +805,18 @@ fn matpower_convention_tap_and_shift() {
 
     // ReactanceOnly ignores tap and shift: b = 1/x, no phase injection.
     let pp = build_incidence(&view, DcConvention::ReactanceOnly, &BuildOptions::default()).unwrap();
-    assert!((pp.b[0] - 1.0 / x).abs() < 1e-12);
+    assert!((pp.branch_weight[0] - 1.0 / x).abs() < 1e-12);
     assert!(pp.p_shift.iter().all(|&v| v == 0.0));
 
     // Matpower: b = 1/(x·τ); makeBdc injection ±b·shift at from/to.
     let mp = build_incidence(&view, DcConvention::Matpower, &BuildOptions::default()).unwrap();
     let b_e = 1.0 / (x * tap);
     let shift_rad = shift_deg.to_radians();
-    assert!((mp.b[0] - b_e).abs() < 1e-12, "b_e {} != {b_e}", mp.b[0]);
+    assert!(
+        (mp.branch_weight[0] - b_e).abs() < 1e-12,
+        "weight {} != {b_e}",
+        mp.branch_weight[0]
+    );
     assert!((mp.p_shift[0] - (-b_e * shift_rad)).abs() < 1e-12);
     assert!((mp.p_shift[1] - (b_e * shift_rad)).abs() < 1e-12);
 }

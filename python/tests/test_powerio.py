@@ -642,7 +642,7 @@ def test_bprime_is_singular_laplacian(name):
     assert b.shape == (c.n_buses, c.n_buses)
     assert b.indices.dtype == np.int32  # COO indices emitted as i32
     assert is_symmetric(b)
-    # Shuntless Laplacian: rows sum to zero, positive diagonal, M-matrix sign.
+    # Shuntless Laplacian: rows sum to zero and follow the M-matrix sign pattern.
     row_sums = np.asarray(b.sum(axis=1)).ravel()
     assert np.allclose(row_sums, 0.0, atol=1e-8)
     diag = b.diagonal()
@@ -722,7 +722,11 @@ def test_incidence_column_structure(case9):
     inc = case9.incidence()
     n, m = inc.A.shape
     assert n == case9.n_buses
-    assert len(inc.b) == m and len(inc.p_shift) == n and len(inc.branch_of_col) == m
+    assert (
+        len(inc.branch_weight) == m
+        and len(inc.p_shift) == n
+        and len(inc.branch_of_col) == m
+    )
     assert list(inc.branch_of_col) == list(range(m))  # all in service, in order
     assert inc.branch_of_col.dtype == np.int64
     a = inc.A.tocsc()
@@ -737,7 +741,7 @@ def test_incidence_column_structure(case9):
 
 def test_weighted_laplacian_matches_incidence(case9):
     inc = case9.incidence()
-    rebuilt = inc.A @ sp.diags(inc.b) @ inc.A.T
+    rebuilt = inc.A @ sp.diags(inc.branch_weight) @ inc.A.T
     assert np.allclose(case9.weighted_laplacian().toarray(), rebuilt.toarray())
 
 

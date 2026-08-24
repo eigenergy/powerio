@@ -2,7 +2,7 @@
 //!
 //! PTDF maps nodal injections to branch flows (`f = PTDF · p`); LODF maps a
 //! branch outage to the flow it redistributes onto the others. Both come from
-//! the reference grounded DC bus susceptance matrix
+//! the reference grounded solver matrix `A diag(w) Aᵀ`
 //! `ABA = ground_with(L, refs)`: one row/column removed per reference bus. The
 //! default public builders keep the dense Cholesky path, with dense Gaussian
 //! elimination as the nonsingular indefinite fallback. Option based builders can
@@ -28,7 +28,7 @@ use sprs::CsMat;
 
 use crate::indexed::IndexedNetwork;
 use crate::matrix::BuildOptions;
-use crate::matrix::incidence::{DcConvention, IncidenceParts, build_flow_map, build_incidence};
+use crate::matrix::incidence::{DcConvention, DcSolverData, build_flow_map, build_incidence};
 use crate::matrix::laplacian::{Grounding, build_weighted_laplacian, ground_with};
 use crate::{Error, Result};
 
@@ -93,7 +93,7 @@ pub enum SensitivitySolver {
     /// Dense at or below [`SensitivityOptions::auto_dense_threshold`], sparse
     /// above it or when the predicted dense footprint exceeds the memory
     /// budget, and dense again when the case falls outside the sparse path's
-    /// positive finite susceptance requirement and the dense footprint fits.
+    /// positive finite branch weight requirement and the dense footprint fits.
     /// A case that fails both tests keeps the sparse refusal: the footprint
     /// veto exists to refuse an allocation the dense path could not serve.
     #[default]
@@ -128,7 +128,7 @@ impl SensitivitySolverPath {
 /// Options for PTDF/LODF builders that expose solver choice and output pruning.
 #[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
 pub struct SensitivityOptions {
-    /// DC branch susceptance convention.
+    /// DC branch weight rule.
     pub convention: DcConvention,
     /// Solver selection policy.
     pub solver: SensitivitySolver,
@@ -180,7 +180,7 @@ impl SensitivityOptions {
     /// dense footprint stay within their ceilings, so a wide case (few buses,
     /// many branches) no longer picks a path that would ask for tens of GB.
     /// This sees the shape only. The builders additionally send an `Auto` case
-    /// whose susceptances the sparse path refuses back to dense, but only
+    /// whose branch weights the sparse path refuses back to dense, but only
     /// while the predicted dense footprint still fits the memory budget.
     pub fn selected_solver_for_shape(
         &self,
@@ -233,7 +233,7 @@ pub struct SensitivityMatrixMetadata {
 }
 
 /// PTDF (`m × n`): branch flows from nodal injections, `f = PTDF · p`. Every
-/// reference bus column is zero. The DC bus susceptance matrix is grounded at
+/// reference bus column is zero. The solver matrix is grounded at
 /// the whole reference set (`reference_bus_indices`), one row/column per slack.
 /// One reference per island handles disconnected networks; several references
 /// within one island fixes all of those bus angles to zero.
@@ -256,10 +256,10 @@ pub fn build_lodf(case: &IndexedNetwork, conv: DcConvention) -> Result<CsMat<f64
     Ok(lodf_from_dense(&ptdf, &inc.a, m, n))
 }
 
-/// Both DC sensitivity matrices `(PTDF, LODF)` from one DC bus susceptance matrix
+/// Both DC sensitivity matrices `(PTDF, LODF)` from one solver matrix
 /// factorization. When a caller needs both for the same case (the
 /// `sensitivities` bundle), this factors and inverts the grounded DC bus
-/// susceptance matrix once instead of paying the O(n³) twice across separate
+/// solver matrix once instead of paying the O(n³) twice across separate
 /// [`build_ptdf`]/[`build_lodf`] calls.
 pub fn build_ptdf_lodf(
     case: &IndexedNetwork,
@@ -448,14 +448,14 @@ fn lodf_from_dense_with_drop(
 }
 
 /// Dense PTDF (`m × n`, row-major) plus its shape. `refs` is the reference set;
-/// the DC bus susceptance matrix is grounded at every entry (one row/column each).
-fn ptdf_dense(inc: &IncidenceParts, refs: &[usize]) -> Result<(Vec<f64>, usize, usize)> {
+/// the solver matrix is grounded at every entry (one row/column each).
+fn ptdf_dense(inc: &DcSolverData, refs: &[usize]) -> Result<(Vec<f64>, usize, usize)> {
     let (ptdf, m, n, _) = ptdf_dense_with_path(inc, refs)?;
     Ok((ptdf, m, n))
 }
 
 fn ptdf_dense_with_path(
-    inc: &IncidenceParts,
+    inc: &DcSolverData,
     refs: &[usize],
 ) -> Result<(Vec<f64>, usize, usize, SensitivitySolverPath)> {
     let n = inc.n();
@@ -463,8 +463,8 @@ fn ptdf_dense_with_path(
     let g = Grounding::new(refs);
     let nr = n - g.len();
 
-    // Reduced inverse of the grounded DC bus susceptance matrix: Rinv = (ABA_refs)^{-1}.
-    let lr = ground_with(&build_weighted_laplacian(&inc.a, &inc.b), &g);
+    // Reduced inverse of the grounded solver matrix: Rinv = (ABA_refs)^{-1}.
+    let lr = ground_with(&build_weighted_laplacian(&inc.a, &inc.branch_weight), &g);
     let dense_lr = densify(&lr, nr);
     let (rinv, solver_path) = DenseCholesky::factor(&dense_lr, nr).map_or_else(
         || {
@@ -479,7 +479,7 @@ fn ptdf_dense_with_path(
     // each reference's PTDF column comes out zero. PTDF = (B Aᵀ) · Minv, computed
     // sparse-times-dense: each nonzero of the flow map scatters a scaled Minv row
     // into a PTDF row.
-    let flow = build_flow_map(&inc.a, &inc.b); // m × n
+    let flow = build_flow_map(&inc.a, &inc.branch_weight); // m × n
     let mut ptdf = vec![0.0; m * n];
     // Reduced → full column map, built once. The inner loop then walks the
     // Rinv row contiguously and skips grounded columns instead of testing
@@ -498,7 +498,7 @@ fn ptdf_dense_with_path(
 }
 
 fn sparse_ptdf_lodf(
-    inc: &IncidenceParts,
+    inc: &DcSolverData,
     refs: &[usize],
     options: &SensitivityOptions,
 ) -> Result<(CsMat<f64>, usize, CsMat<f64>, usize)> {
@@ -526,7 +526,7 @@ fn sparse_ptdf_lodf(
 }
 
 fn sparse_ptdf_lodf_entries(
-    inc: &IncidenceParts,
+    inc: &DcSolverData,
     refs: &[usize],
     options: &SensitivityOptions,
     mut ptdf_entry: impl FnMut(usize, usize, f64) -> Result<()>,
@@ -536,7 +536,7 @@ fn sparse_ptdf_lodf_entries(
     let m = inc.m();
     let g = Grounding::new(refs);
     let nr = n - g.len();
-    let lr = ground_with(&build_weighted_laplacian(&inc.a, &inc.b), &g);
+    let lr = ground_with(&build_weighted_laplacian(&inc.a, &inc.branch_weight), &g);
     let batch_width = rhs_batch_width(nr);
     let mut solver = SparseCholeskyFactor::factor(&lr, batch_width)?;
     let (from, to, is_bridge) = reduced_endpoints_and_bridges(inc, &g);
@@ -560,7 +560,7 @@ fn sparse_ptdf_lodf_entries(
         for (column, &bus) in buses.iter().enumerate() {
             let theta = &rhs[column * nr..(column + 1) * nr];
             for branch in 0..m {
-                let v = branch_flow(branch, &from, &to, &inc.b, theta);
+                let v = branch_flow(branch, &from, &to, &inc.branch_weight, theta);
                 if v.abs() > options.drop_tolerance {
                     ptdf_entry(branch, bus, v)?;
                     ptdf_nnz += 1;
@@ -609,7 +609,7 @@ fn sparse_ptdf_lodf_entries(
             }
             let theta = &rhs[solved_column * nr..(solved_column + 1) * nr];
             solved_column += 1;
-            let denom = 1.0 - branch_flow(outage, &from, &to, &inc.b, theta);
+            let denom = 1.0 - branch_flow(outage, &from, &to, &inc.branch_weight, theta);
             let islands = denom.abs() < LODF_ISLAND_TOLERANCE;
             for branch in 0..m {
                 let v = if branch == outage {
@@ -617,7 +617,7 @@ fn sparse_ptdf_lodf_entries(
                 } else if islands {
                     0.0
                 } else {
-                    branch_flow(branch, &from, &to, &inc.b, theta) / denom
+                    branch_flow(branch, &from, &to, &inc.branch_weight, theta) / denom
                 };
                 if branch == outage || v.abs() > options.drop_tolerance {
                     lodf_entry(branch, outage, v)?;
@@ -640,7 +640,7 @@ fn sparse_ptdf_lodf_entries(
 }
 
 fn reduced_endpoints_and_bridges(
-    inc: &IncidenceParts,
+    inc: &DcSolverData,
     grounding: &Grounding,
 ) -> (Vec<usize>, Vec<usize>, Vec<bool>) {
     let (mut from, mut to) = endpoints(&inc.a, inc.m());
@@ -680,7 +680,7 @@ fn metadata_from_counts(
 }
 
 /// Resolve the solver for a build, seeing the case and not only its shape.
-/// The sparse path refuses nonpositive or nonfinite susceptances, so `Auto`
+/// The sparse path refuses nonpositive or nonfinite branch weights, so `Auto`
 /// keeps the dense indefinite fallback for those. An explicit `Sparse` request
 /// still reports the refusal.
 ///
@@ -692,7 +692,7 @@ fn metadata_from_counts(
 /// which names `solver=dense` for a caller that can afford it.
 fn resolve_solver(
     options: &SensitivityOptions,
-    inc: &IncidenceParts,
+    inc: &DcSolverData,
     reduced_dimension: usize,
 ) -> Result<SensitivitySolver> {
     let selected = options.selected_solver_for_shape(reduced_dimension, inc.m(), inc.n());
@@ -711,13 +711,13 @@ fn resolve_solver(
     }
 }
 
-fn ensure_sparse_solver_eligible(inc: &IncidenceParts) -> Result<()> {
-    for (branch, &b) in inc.b.iter().enumerate() {
-        if !b.is_finite() || b <= 0.0 {
+fn ensure_sparse_solver_eligible(inc: &DcSolverData) -> Result<()> {
+    for (branch, &weight) in inc.branch_weight.iter().enumerate() {
+        if !weight.is_finite() || weight <= 0.0 {
             return Err(Error::InvalidSensitivityOptions {
                 reason: format!(
-                    "sparse sensitivity solver requires positive finite branch susceptances; \
-                     branch {branch} has {b}; use solver=dense for nonsingular indefinite cases"
+                    "sparse sensitivity solver requires positive finite branch weights; \
+                     branch {branch} has {weight}; use solver=dense for nonsingular indefinite cases"
                 ),
             });
         }
@@ -768,7 +768,7 @@ impl SparseCholeskyFactor {
         let dimension = a.rows();
         if a.cols() != dimension {
             return Err(Error::ShapeMismatch {
-                what: "grounded DC bus susceptance matrix columns",
+                what: "grounded solver matrix columns",
                 expected: dimension,
                 got: a.cols(),
             });
@@ -794,7 +794,7 @@ impl SparseCholeskyFactor {
         let indptr = a_csc.indptr();
         let col_ptr = indptr.as_slice().ok_or_else(|| {
             sensitivity_factorization_failed(
-                "grounded DC bus susceptance matrix does not own its index pointers",
+                "grounded solver matrix does not own its index pointers",
             )
         })?;
         let symbolic_a = SymbolicSparseColMatRef::new_checked(

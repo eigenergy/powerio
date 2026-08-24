@@ -1195,8 +1195,8 @@ impl PyBalancedNetwork {
         coo_triplets(py, &m.lodf)
     }
 
-    /// `(A_coo, b, p_shift, branch_of_col)`: signed incidence as a COO tuple,
-    /// then the branch susceptances, phase-shift injection, and column→branch
+    /// `(A_coo, branch_weight, p_shift, branch_of_col)`: signed incidence as a COO tuple,
+    /// then the internal branch weights, phase-shift injection, and column→branch
     /// map as plain lists (the wrapper turns them into 1-D numpy arrays).
     #[pyo3(signature = (convention=None))]
     fn incidence<'py>(
@@ -1206,12 +1206,14 @@ impl PyBalancedNetwork {
     ) -> PyResult<Bound<'py, PyAny>> {
         let conv = parse_convention(convention.unwrap_or("series"))?;
         let view = IndexedNetwork::with_core(&self.inner, &self.core);
-        let parts = build_incidence(&view, conv, &BuildOptions::default()).map_err(to_pyerr)?;
-        let a = coo_triplets(py, &parts.a)?;
-        let b = parts.b;
-        let p_shift = parts.p_shift;
-        let branch_of_col: Vec<i64> = parts.branch_of_col.iter().map(|&x| x as i64).collect();
-        Ok((a, b, p_shift, branch_of_col).into_pyobject(py)?.into_any())
+        let data = build_incidence(&view, conv, &BuildOptions::default()).map_err(to_pyerr)?;
+        let a = coo_triplets(py, &data.a)?;
+        let branch_weight = data.branch_weight;
+        let p_shift = data.p_shift;
+        let branch_of_col: Vec<i64> = data.branch_of_col.iter().map(|&x| x as i64).collect();
+        Ok((a, branch_weight, p_shift, branch_of_col)
+            .into_pyobject(py)?
+            .into_any())
     }
 
     /// Weighted Laplacian `L = A diag(b) Aᵀ` for the chosen DC convention.
@@ -1223,8 +1225,8 @@ impl PyBalancedNetwork {
     ) -> PyResult<Bound<'py, PyAny>> {
         let conv = parse_convention(convention.unwrap_or("series"))?;
         let view = IndexedNetwork::with_core(&self.inner, &self.core);
-        let parts = build_incidence(&view, conv, &BuildOptions::default()).map_err(to_pyerr)?;
-        let l = build_weighted_laplacian(&parts.a, &parts.b);
+        let data = build_incidence(&view, conv, &BuildOptions::default()).map_err(to_pyerr)?;
+        let l = build_weighted_laplacian(&data.a, &data.branch_weight);
         coo_triplets(py, &l)
     }
 

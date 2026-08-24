@@ -1062,18 +1062,18 @@ fn matrix_bus_batch(_net: &BalancedNetwork, _core: &IndexCore) -> Result<RecordB
 #[cfg(feature = "matrix")]
 fn matrix_branch_batch(net: &BalancedNetwork, core: &IndexCore) -> Result<RecordBatch, String> {
     let view = IndexedNetwork::with_core(net, core);
-    let parts = powerio_matrix::build_incidence(
+    let data = powerio_matrix::build_incidence(
         &view,
         powerio_matrix::DcConvention::default(),
         &powerio_matrix::BuildOptions::default(),
     )
     .map_err(export_err)?;
 
-    let mut index = Vec::with_capacity(parts.branch_of_col.len());
-    let mut source_row = Vec::with_capacity(parts.branch_of_col.len());
-    let mut from_bus_id = Vec::with_capacity(parts.branch_of_col.len());
-    let mut to_bus_id = Vec::with_capacity(parts.branch_of_col.len());
-    for (col, &idx) in parts.branch_of_col.iter().enumerate() {
+    let mut index = Vec::with_capacity(data.branch_of_col.len());
+    let mut source_row = Vec::with_capacity(data.branch_of_col.len());
+    let mut from_bus_id = Vec::with_capacity(data.branch_of_col.len());
+    let mut to_bus_id = Vec::with_capacity(data.branch_of_col.len());
+    for (col, &idx) in data.branch_of_col.iter().enumerate() {
         let br = view.branches().get(idx).ok_or_else(|| {
             export_err(format_args!(
                 "incidence branch column {col} points to missing row {idx}"
@@ -1210,13 +1210,13 @@ fn push_ybus_row(
 #[cfg(feature = "matrix")]
 fn matrix_incidence_batch(net: &BalancedNetwork, core: &IndexCore) -> Result<RecordBatch, String> {
     let view = IndexedNetwork::with_core(net, core);
-    let parts = powerio_matrix::build_incidence(
+    let data = powerio_matrix::build_incidence(
         &view,
         powerio_matrix::DcConvention::default(),
         &powerio_matrix::BuildOptions::default(),
     )
     .map_err(export_err)?;
-    real_matrix_batch!("incidence", parts.a, "matrix_bus", "matrix_branch").map_err(export_err)
+    real_matrix_batch!("incidence", data.a, "matrix_bus", "matrix_branch").map_err(export_err)
 }
 
 #[cfg(not(feature = "matrix"))]

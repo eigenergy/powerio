@@ -1,8 +1,8 @@
 //! Sparse matrix builders for power system cases.
 //!
-//! DC OPF and sensitivity builders use the DC bus susceptance matrix
-//! `L = A diag(b) Aᵀ`, where `A` is the signed bus by branch incidence matrix
-//! (n×m) and `b` is the positive branch susceptance vector. Stored nonzero off
+//! DC OPF and sensitivity builders use `L = A diag(w) Aᵀ`, where `A` is the
+//! signed bus by branch incidence matrix (n×m) and `w` is the internal branch
+//! weight vector. Stored nonzero off
 //! diagonal entries are negative, diagonals are nonnegative, and
 //! `diag = sum of |off-diagonal|`; this is the M-matrix form SDDM solvers expect
 //! once the grounded matrix is positive definite.
@@ -23,9 +23,7 @@ mod tests;
 pub use adjacency::build_adjacency;
 pub use bdoubleprime::build_bdoubleprime;
 pub use bprime::build_bprime;
-pub use incidence::{
-    DcConvention, IncidenceParts, build_flow_map, build_incidence, susceptance_diag,
-};
+pub use incidence::{DcConvention, DcSolverData, build_flow_map, build_incidence, weight_diagonal};
 pub use lacpf::build_lacpf;
 pub use laplacian::{
     GroundedIndexMap, build_weighted_laplacian, ground_at, ground_at_each, reference_indicator,
@@ -85,7 +83,7 @@ impl Default for BuildOptions {
 }
 
 /// Which branch denominator a matrix builder uses when deciding whether a branch
-/// can contribute a finite admittance or susceptance.
+/// can contribute a finite admittance or DC branch weight.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[non_exhaustive]
 pub enum ZeroImpedanceRule {

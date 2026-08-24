@@ -68,7 +68,7 @@ pub struct PioNetwork {
 
 // The handle is immutable after construction and the C ABI documents concurrent
 // reads from any number of threads as safe (see the cbindgen header preamble).
-// That guarantee requires `PioNetwork: Send + Sync`; pin it at compile time so
+// That guarantee requires `PioNetwork: Send + Sync`; assert it at compile time so
 // a future field that is not `Sync` fails the build instead of weakening it.
 const _: fn() = || {
     fn assert_send_sync<T: Send + Sync>() {}
@@ -1039,7 +1039,7 @@ pub unsafe extern "C" fn pio_summary_json(
     }
 }
 
-/// The normalize pass's identity and provenance vectors for `net`, as owned
+/// The normalize pass's identity and source row vectors for `net`, as owned
 /// JSON. Free the returned string with [`pio_string_free`]. On error this
 /// returns NULL and writes the message into `errbuf`.
 ///
@@ -1058,7 +1058,7 @@ pub unsafe extern "C" fn pio_summary_json(
 ///   branches it lowers to).
 ///
 /// This is the map the pass computes for itself, which is the point: a caller
-/// that wants normalized tables plus provenance no longer has to re-derive the
+/// that wants normalized tables plus source rows no longer has to re-derive the
 /// drop rule from an unfiltered second extraction, and so cannot disagree with
 /// the pass wherever the guess does not model what it does — three-winding star
 /// lowering changing the branch count, most of all. Reaching the same vectors
@@ -1862,18 +1862,10 @@ pub unsafe extern "C" fn pio_bus_shunt(
 }
 
 // ---------------------------------------------------------------------------
-// DC incidence parts (`matrix` feature). The signed incidence `A` crosses the
-// boundary as `PIO_ARROW_TABLE_INCIDENCE`; the per-branch and per-bus vectors
-// it is assembled with did not cross at all. A differentiable-modeling
-// consumer treats the susceptance as a parameter vector — its positive DC
-// Laplacian is `L = A diag(b ⊙ sw) Aᵀ`, rebuilt as `b` and the switching
-// `sw` move — so an
-// assembled `B'` has already summed away the thing being differentiated and
-// cannot serve it at any granularity. Reimplementing `x/(r² + x²)` outside
-// inherits none of the guards 0.9 put on this path (#292): the magnitude bound
-// on the denominator, `NonFiniteSusceptance` instead of a silently zero weight
-// edge, `DegenerateTap` under `Matpower`. These carry the vectors and the
-// guards together.
+// DC power flow data (`matrix` feature). The signed incidence matrix crosses
+// as `PIO_ARROW_TABLE_INCIDENCE`; the branch and bus vectors use the extractors
+// below. Rust keeps `w = -b` for its sparse solver. The C functions negate each
+// weight while filling the caller's buffer, so no second vector is allocated.
 // ---------------------------------------------------------------------------
 
 /// Resolve a C convention token. The tokens Python's `convention=` keyword and
@@ -1894,13 +1886,12 @@ fn dc_convention_from_c(convention: *const c_char) -> Result<powerio_matrix::DcC
         .map_err(|message| coded(&codes::BIND_CAPI_INVALID_OPTIONS, message))
 }
 
-/// Build the incidence parts of `net` under `convention`, or the guard's own
-/// refusal.
+/// Build the internal DC power flow data under `convention`.
 #[cfg(feature = "matrix")]
-unsafe fn incidence_parts_of(
+unsafe fn dc_power_flow_data_of(
     net: *const PioNetwork,
     convention: *const c_char,
-) -> Result<powerio_matrix::IncidenceParts, String> {
+) -> Result<powerio_matrix::DcSolverData, String> {
     let conv = dc_convention_from_c(convention)?;
     let v = unsafe { view(net) }.ok_or_else(|| null_handle("network handle"))?;
     powerio_matrix::build_incidence(&v, conv, &powerio_matrix::BuildOptions::default())
@@ -1998,19 +1989,19 @@ unsafe fn finish_fill<T: Copy>(
     unsafe { finish_mapped_fill(errbuf, errlen, panic_msg, out, cap, f, |&value| value) }
 }
 
-/// Fill every DC incidence vector from one incidence build. Each pointer may
+/// Fill the DC power flow vectors from one incidence build. Each pointer may
 /// be NULL to skip that vector. `branch_cap` applies to `b` and `branch_rows`;
 /// the other vectors have their own caps. The three count pointers are
 /// optional and are written only on success.
 ///
 /// This is the bulk counterpart to the four extractors below. It avoids
-/// rebuilding `A`, `b`, and `p_shift` four times when a binding needs the
-/// complete decomposition. All four vector guards and the convention parser
+/// rebuilding the incidence data four times when a binding needs all four
+/// vectors. All four vector guards and the convention parser
 /// are identical because this calls the same incidence builder once.
 /// Returns `0` on success or `-1` with the message in `errbuf` on failure.
 #[cfg(feature = "matrix")]
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn pio_incidence_parts(
+pub unsafe extern "C" fn pio_dc_power_flow_data(
     net: *const PioNetwork,
     convention: *const c_char,
     b: *mut f64,
@@ -2028,18 +2019,22 @@ pub unsafe extern "C" fn pio_incidence_parts(
 ) -> i32 {
     unsafe {
         let result = catch_unwind(AssertUnwindSafe(|| -> Result<(), String> {
-            let parts = incidence_parts_of(net, convention)?;
-            let skipped = &parts.skipped_zero_impedance.branch_indices;
-            check_branch_rows(&parts.branch_of_col)?;
+            let data = dc_power_flow_data_of(net, convention)?;
+            let skipped = &data.skipped_zero_impedance.branch_indices;
+            check_branch_rows(&data.branch_of_col)?;
             check_branch_rows(skipped)?;
 
-            fill(b, branch_cap, parts.b.iter().copied());
+            fill(
+                b,
+                branch_cap,
+                data.branch_weight.iter().map(|&weight| -weight),
+            );
             fill(
                 branch_rows,
                 branch_cap,
-                parts.branch_of_col.iter().map(|&row| row as i64),
+                data.branch_of_col.iter().map(|&row| row as i64),
             );
-            fill(p_shift, bus_cap, parts.p_shift.iter().copied());
+            fill(p_shift, bus_cap, data.p_shift.iter().copied());
             fill(
                 skipped_rows,
                 skipped_cap,
@@ -2047,10 +2042,10 @@ pub unsafe extern "C" fn pio_incidence_parts(
             );
 
             if !out_branch_count.is_null() {
-                *out_branch_count = parts.b.len();
+                *out_branch_count = data.branch_weight.len();
             }
             if !out_bus_count.is_null() {
-                *out_bus_count = parts.p_shift.len();
+                *out_bus_count = data.p_shift.len();
             }
             if !out_skipped_count.is_null() {
                 *out_skipped_count = skipped.len();
@@ -2069,7 +2064,7 @@ pub unsafe extern "C" fn pio_incidence_parts(
                     errlen,
                     &coded(
                         &codes::BIND_CAPI_PANIC,
-                        "panic while building incidence parts",
+                        "panic while building DC power flow data",
                     ),
                 );
                 -1
@@ -2083,11 +2078,9 @@ pub unsafe extern "C" fn pio_incidence_parts(
 /// with `(NULL, 0)` to size, allocate, then call again to fill.
 ///
 /// `convention` takes the tokens Python and the CLI accept — `"series"`
-/// (`b = x/(r² + x²)`, the default and what NULL selects), `"matpower"`
-/// (`b = 1/(x τ)`), `"reactance-only"` (`b = 1/x`) — case and separator
-/// insensitive. `b` is a **positive** Laplacian edge weight, as
-/// `DcConvention::branch_susceptance` states; PowerModels and tellegen write
-/// the negation, so a consumer negates once knowingly.
+/// (`b = imag(1/(r + jx))`, the default and what NULL selects), `"matpower"`
+/// (`b = -1/(x τ)`), and `"reactance-only"` (`b = -1/x`) — case and separator
+/// insensitive.
 ///
 /// Column order is [`pio_incidence_branch_rows`]'s, which is in-service branch
 /// order with the skipped and self-loop rows removed — not `pio_branches`
@@ -2097,11 +2090,11 @@ pub unsafe extern "C" fn pio_incidence_parts(
 /// Returns `-1` and writes the message into `errbuf` on a refusal: a
 /// non-finite susceptance is `NonFiniteSusceptance` and a `Matpower` tap too
 /// small to divide by is `DegenerateTap`, which is the point of asking rather
-/// than recomputing `x/(r² + x²)` outside.
+/// than recomputing `imag(1/(r + jx))` outside.
 ///
 /// One incidence build runs per call and nothing is cached on the handle, so
 /// the size query and the fill are two builds. A consumer that wants several
-/// vectors should use [`pio_incidence_parts`], which fills all four from one
+/// vectors should use [`pio_dc_power_flow_data`], which fills all four from one
 /// build.
 ///
 /// The size query is skippable outright, which is the cheaper half of that
@@ -2121,13 +2114,14 @@ pub unsafe extern "C" fn pio_branch_susceptance(
     errlen: usize,
 ) -> isize {
     unsafe {
-        finish_fill(
+        finish_mapped_fill(
             errbuf,
             errlen,
             "panic while building branch susceptances",
             out,
             cap,
-            || Ok(incidence_parts_of(net, convention)?.b),
+            || Ok(dc_power_flow_data_of(net, convention)?.branch_weight),
+            |&weight| -weight,
         )
     }
 }
@@ -2136,8 +2130,8 @@ pub unsafe extern "C" fn pio_branch_susceptance(
 /// to `cap` entries, and return `n`, the bus count. The dense order is
 /// [`pio_bus_ids`]'s, the one every per-bus array shares.
 ///
-/// This is MATPOWER `makeBdc`'s `Pbusinj`, the constant term of
-/// `L θ = C_g p_g − (p_d + g_s + p_shift)`. All zeros under
+/// With branch by bus incidence `A`, branch susceptance `b`, and phase shift
+/// `shift`, this is `p_shift = Aᵀ (b .* shift)`. All zeros under
 /// `"reactance-only"`, which carries no shifts, and under any convention for a
 /// case with no phase shifter — a caller that skips it silently drops the
 /// shifter's contribution instead.
@@ -2163,7 +2157,7 @@ pub unsafe extern "C" fn pio_phase_shift_injection(
             "panic while building the phase shift injection",
             out,
             cap,
-            || Ok(incidence_parts_of(net, convention)?.p_shift),
+            || Ok(dc_power_flow_data_of(net, convention)?.p_shift),
         )
     }
 }
@@ -2197,7 +2191,7 @@ pub unsafe extern "C" fn pio_incidence_branch_rows(
             "panic while building the incidence column map",
             out,
             cap,
-            || Ok(incidence_parts_of(net, convention)?.branch_of_col),
+            || Ok(dc_power_flow_data_of(net, convention)?.branch_of_col),
         )
     }
 }
@@ -2233,7 +2227,7 @@ pub unsafe extern "C" fn pio_incidence_skipped_rows(
             out,
             cap,
             || {
-                Ok(incidence_parts_of(net, convention)?
+                Ok(dc_power_flow_data_of(net, convention)?
                     .skipped_zero_impedance
                     .branch_indices)
             },
@@ -2341,7 +2335,7 @@ pub unsafe extern "C" fn pio_arrow_catalog_json(errbuf: *mut c_char, errlen: usi
 // ---------------------------------------------------------------------------
 // Package API (`pkg` feature). `.pio.json` compiler packages sit above the
 // balanced and multiconductor handles: a package wraps exactly one payload and
-// carries provenance, validation, diagnostics, and lowering history.
+// carries source details, validation, diagnostics, and lowering history.
 // ---------------------------------------------------------------------------
 
 /// Opaque `.pio.json` compiler package handle. A package owns one
@@ -2615,7 +2609,7 @@ pub unsafe extern "C" fn pio_package_to_multiconductor_network(
                 })?;
                 let mut net = net.clone();
                 // Same in-memory strip as the balanced inverse: source and the
-                // defaulted provenance are #[serde(skip)], so dropping them
+                // defaulted source details are #[serde(skip)], so dropping them
                 // here matches what a JSON crossing produces.
                 net.source = None;
                 net.defaulted = Default::default();
@@ -3208,7 +3202,7 @@ pub struct PioDistNetwork {
     net: powerio_dist::MulticonductorNetwork,
 }
 
-// Same cross-thread read guarantee as `PioNetwork` (see that assertion): pin
+// Same cross-thread read guarantee as `PioNetwork` (see that assertion): assert
 // `Send + Sync` so a future non-`Sync` field fails the build.
 #[cfg(feature = "dist")]
 const _: fn() = || {
@@ -3911,7 +3905,7 @@ mod tests {
     }
 
     #[test]
-    fn solver_index_json_reports_the_pass_provenance() {
+    fn solver_index_json_reports_the_pass_source_rows() {
         // t_case9_oos carries one out-of-service generator (source row 1 of
         // three). The pass drops it and keeps the rows the survivors came
         // from, so the vector is shorter than the file's inventory and its
@@ -4064,7 +4058,7 @@ mod tests {
     /// The element type follows the extractor's own `out` pointer, so `f64`
     /// and `i64` extractors share this without a turbofish.
     #[cfg(feature = "matrix")]
-    fn parts_of<T: Copy + Default>(
+    fn vector_of<T: Copy + Default>(
         net: *const PioNetwork,
         convention: Option<&str>,
         call: unsafe extern "C" fn(
@@ -4107,11 +4101,10 @@ mod tests {
 
     #[test]
     #[cfg(feature = "matrix")]
-    fn branch_susceptance_reads_the_whole_series_impedance_and_names_its_convention() {
+    fn branch_susceptance_matches_the_documented_formulas() {
         // The formula a consumer reimplements today, held to the library's:
         // `series` reads r and x, `reactance-only` reads x alone, and the two
-        // separate exactly where the case has resistance. Both are positive
-        // Laplacian weights, which is the sign a consumer negates once.
+        // separate exactly where the case has resistance.
         let net = case9();
         let m = unsafe { pio_n_branches(net) };
 
@@ -4138,10 +4131,10 @@ mod tests {
             );
         }
 
-        let series = parts_of(net, Some("series"), pio_branch_susceptance).unwrap();
-        let reactance = parts_of(net, Some("reactance-only"), pio_branch_susceptance).unwrap();
-        let rows = parts_of(net, Some("series"), pio_incidence_branch_rows).unwrap();
-        let skipped = parts_of(net, Some("series"), pio_incidence_skipped_rows).unwrap();
+        let series = vector_of(net, Some("series"), pio_branch_susceptance).unwrap();
+        let reactance = vector_of(net, Some("reactance-only"), pio_branch_susceptance).unwrap();
+        let rows = vector_of(net, Some("series"), pio_incidence_branch_rows).unwrap();
+        let skipped = vector_of(net, Some("series"), pio_incidence_skipped_rows).unwrap();
 
         assert_eq!(series.len(), m, "case9 has no self-loop and no zero x");
         assert_eq!(reactance.len(), m);
@@ -4154,15 +4147,13 @@ mod tests {
 
         let mut saw_resistive = false;
         for k in 0..m {
-            assert!(series[k] > 0.0, "b is a positive Laplacian weight");
-            assert!(reactance[k] > 0.0);
-            let expect_series = x[k] / (r[k] * r[k] + x[k] * x[k]);
+            let expect_series = -x[k] / (r[k] * r[k] + x[k] * x[k]);
             assert!(
                 (series[k] - expect_series).abs() <= 1e-12 * expect_series.abs(),
-                "column {k}: {} against x/(r^2+x^2) = {expect_series}",
+                "column {k}: {} against imag(1/(r+jx)) = {expect_series}",
                 series[k]
             );
-            let expect_reactance = 1.0 / x[k];
+            let expect_reactance = -1.0 / x[k];
             assert!((reactance[k] - expect_reactance).abs() <= 1e-12 * expect_reactance.abs());
             if r[k] != 0.0 {
                 saw_resistive = true;
@@ -4175,7 +4166,27 @@ mod tests {
         assert!(saw_resistive, "the fixture no longer exercises the r/x gap");
 
         // NULL selects the default, which is `series`.
-        assert_eq!(parts_of(net, None, pio_branch_susceptance).unwrap(), series);
+        assert_eq!(
+            vector_of(net, None, pio_branch_susceptance).unwrap(),
+            series
+        );
+
+        unsafe { pio_network_free(net) };
+    }
+
+    #[test]
+    #[cfg(feature = "matrix")]
+    fn negative_reactance_reverses_the_branch_susceptance_sign() {
+        let x = -0.0576;
+        let case = case9_json_with_branch(0, |branch| branch["x"] = serde_json::json!(x));
+        let mut err = [0 as c_char; PIO_ERRBUF_MIN];
+        let net = unsafe { pio_from_json(case.as_ptr(), err.as_mut_ptr(), err.len()) };
+        assert!(!net.is_null());
+
+        let b = vector_of(net, Some("series"), pio_branch_susceptance).unwrap();
+        let expected = -x / (x * x);
+        assert!(b[0] > 0.0);
+        assert!((b[0] - expected).abs() < 1e-12);
 
         unsafe { pio_network_free(net) };
     }
@@ -4194,9 +4205,9 @@ mod tests {
             unsafe { CStr::from_ptr(err.as_ptr()) }.to_str().unwrap()
         );
 
-        let series = parts_of(net, Some("series"), pio_phase_shift_injection).unwrap();
-        let reactance = parts_of(net, Some("reactance-only"), pio_phase_shift_injection).unwrap();
-        let matpower = parts_of(net, Some("matpower"), pio_phase_shift_injection).unwrap();
+        let series = vector_of(net, Some("series"), pio_phase_shift_injection).unwrap();
+        let reactance = vector_of(net, Some("reactance-only"), pio_phase_shift_injection).unwrap();
+        let matpower = vector_of(net, Some("matpower"), pio_phase_shift_injection).unwrap();
 
         assert_eq!(series.len(), unsafe { pio_n_buses(net) });
         assert!(
@@ -4237,9 +4248,9 @@ mod tests {
         );
 
         let m = unsafe { pio_n_branches(net) };
-        let b = parts_of(net, Some("series"), pio_branch_susceptance).unwrap();
-        let rows = parts_of(net, Some("series"), pio_incidence_branch_rows).unwrap();
-        let skipped = parts_of(net, Some("series"), pio_incidence_skipped_rows).unwrap();
+        let b = vector_of(net, Some("series"), pio_branch_susceptance).unwrap();
+        let rows = vector_of(net, Some("series"), pio_incidence_branch_rows).unwrap();
+        let skipped = vector_of(net, Some("series"), pio_incidence_skipped_rows).unwrap();
 
         assert_eq!(
             skipped,
@@ -4260,7 +4271,7 @@ mod tests {
 
     #[test]
     #[cfg(feature = "matrix")]
-    fn bulk_incidence_parts_match_the_individual_extractors() {
+    fn bulk_dc_power_flow_data_match_the_individual_extractors() {
         let case = case9_json_with_branch(3, |br| {
             br["x"] = serde_json::json!(0.0);
             br["shift"] = serde_json::json!(30.0);
@@ -4278,7 +4289,7 @@ mod tests {
         let convention = CString::new("series").unwrap();
 
         let status = unsafe {
-            pio_incidence_parts(
+            pio_dc_power_flow_data(
                 net,
                 convention.as_ptr(),
                 b.as_mut_ptr(),
@@ -4305,19 +4316,19 @@ mod tests {
 
         assert_eq!(
             b,
-            parts_of(net, Some("series"), pio_branch_susceptance).unwrap()
+            vector_of(net, Some("series"), pio_branch_susceptance).unwrap()
         );
         assert_eq!(
             rows,
-            parts_of(net, Some("series"), pio_incidence_branch_rows).unwrap()
+            vector_of(net, Some("series"), pio_incidence_branch_rows).unwrap()
         );
         assert_eq!(
             p_shift,
-            parts_of(net, Some("series"), pio_phase_shift_injection).unwrap()
+            vector_of(net, Some("series"), pio_phase_shift_injection).unwrap()
         );
         assert_eq!(
             skipped,
-            parts_of(net, Some("series"), pio_incidence_skipped_rows).unwrap()
+            vector_of(net, Some("series"), pio_incidence_skipped_rows).unwrap()
         );
 
         unsafe { pio_network_free(net) };
@@ -4339,7 +4350,7 @@ mod tests {
             unsafe { CStr::from_ptr(err.as_ptr()) }.to_str().unwrap()
         );
 
-        let msg = parts_of(net, Some("reactance-only"), pio_branch_susceptance)
+        let msg = vector_of(net, Some("reactance-only"), pio_branch_susceptance)
             .expect_err("an infinite reactance must refuse, not read as an open branch");
         assert!(
             msg.contains("SUSCEPTANCE") || msg.to_lowercase().contains("susceptance"),
@@ -4355,23 +4366,23 @@ mod tests {
     fn the_convention_token_is_the_one_python_and_the_cli_accept() {
         let net = case9();
         // Case and separator insensitive, like every other name in this API.
-        let spaced = parts_of(net, Some("Series_Impedance"), pio_branch_susceptance).unwrap();
+        let spaced = vector_of(net, Some("Series_Impedance"), pio_branch_susceptance).unwrap();
         assert_eq!(
             spaced,
-            parts_of(net, Some("series"), pio_branch_susceptance).unwrap()
+            vector_of(net, Some("series"), pio_branch_susceptance).unwrap()
         );
         assert_eq!(
-            parts_of(net, Some("mp"), pio_branch_susceptance).unwrap(),
-            parts_of(net, Some("matpower"), pio_branch_susceptance).unwrap()
+            vector_of(net, Some("mp"), pio_branch_susceptance).unwrap(),
+            vector_of(net, Some("matpower"), pio_branch_susceptance).unwrap()
         );
 
-        let unknown = parts_of(net, Some("bogus"), pio_branch_susceptance).unwrap_err();
+        let unknown = vector_of(net, Some("bogus"), pio_branch_susceptance).unwrap_err();
         assert!(unknown.contains("unknown convention"), "{unknown:?}");
         assert!(unknown.contains("'series'"), "{unknown:?}");
 
         // 0.8's default is not silently resolved to the nearest-looking
         // option, which is a different formula.
-        let retired = parts_of(net, Some("paper-pure"), pio_branch_susceptance).unwrap_err();
+        let retired = vector_of(net, Some("paper-pure"), pio_branch_susceptance).unwrap_err();
         assert!(retired.contains("reactance-only"), "{retired:?}");
 
         unsafe { pio_network_free(net) };
@@ -4379,16 +4390,16 @@ mod tests {
 
     #[test]
     #[cfg(feature = "matrix")]
-    fn the_dc_part_extractors_tolerate_a_null_handle() {
+    fn the_dc_vector_extractors_tolerate_a_null_handle() {
         for r in [
-            parts_of(std::ptr::null(), Some("series"), pio_branch_susceptance),
-            parts_of(std::ptr::null(), Some("series"), pio_phase_shift_injection),
+            vector_of(std::ptr::null(), Some("series"), pio_branch_susceptance),
+            vector_of(std::ptr::null(), Some("series"), pio_phase_shift_injection),
         ] {
             assert!(r.unwrap_err().contains("network handle"));
         }
         for r in [
-            parts_of(std::ptr::null(), Some("series"), pio_incidence_branch_rows),
-            parts_of(std::ptr::null(), Some("series"), pio_incidence_skipped_rows),
+            vector_of(std::ptr::null(), Some("series"), pio_incidence_branch_rows),
+            vector_of(std::ptr::null(), Some("series"), pio_incidence_skipped_rows),
         ] {
             assert!(r.unwrap_err().contains("network handle"));
         }
@@ -4651,7 +4662,7 @@ mod tests {
         let mut entries = Vec::new();
         let mut prototype = String::new();
         // An options struct's field list is ABI, so the whole definition is
-        // pinned as one entry. cbindgen writes it tagless, closing on
+        // fixed as one entry. cbindgen writes it tagless, closing on
         // `} PioName;`, so the name arrives at the end.
         let mut definition = String::new();
         for line in clean.lines().map(str::trim).filter(|line| !line.is_empty()) {
@@ -4835,7 +4846,7 @@ mod tests {
             "size_t pio_gens(const PioNetwork *net, int64_t *bus, double *pg, double *pmax, double *pmin, uint8_t *in_service, size_t cap);",
             "size_t pio_bus_demand(const PioNetwork *net, double *pd, double *qd, size_t cap);",
             "size_t pio_bus_shunt(const PioNetwork *net, double *gs, double *bs, size_t cap);",
-            "int32_t pio_incidence_parts(const PioNetwork *net, const char *convention, double *b, int64_t *branch_rows, size_t branch_cap, double *p_shift, size_t bus_cap, int64_t *skipped_rows, size_t skipped_cap, size_t *out_branch_count, size_t *out_bus_count, size_t *out_skipped_count, char *errbuf, size_t errlen);",
+            "int32_t pio_dc_power_flow_data(const PioNetwork *net, const char *convention, double *b, int64_t *branch_rows, size_t branch_cap, double *p_shift, size_t bus_cap, int64_t *skipped_rows, size_t skipped_cap, size_t *out_branch_count, size_t *out_bus_count, size_t *out_skipped_count, char *errbuf, size_t errlen);",
             "ptrdiff_t pio_branch_susceptance(const PioNetwork *net, const char *convention, double *out, size_t cap, char *errbuf, size_t errlen);",
             "ptrdiff_t pio_phase_shift_injection(const PioNetwork *net, const char *convention, double *out, size_t cap, char *errbuf, size_t errlen);",
             "ptrdiff_t pio_incidence_branch_rows(const PioNetwork *net, const char *convention, int64_t *out, size_t cap, char *errbuf, size_t errlen);",
@@ -7939,7 +7950,7 @@ New Line.l1 bus1=a bus2=b phases=3
             assert!(!pkg.is_null());
 
             // Same in-memory strip check as the balanced side: source and the
-            // defaulted provenance never survive extraction.
+            // defaulted source details never survive extraction.
             unsafe {
                 let mem = pio_package_to_multiconductor_network(pkg, err.as_mut_ptr(), err.len());
                 assert!(!mem.is_null());

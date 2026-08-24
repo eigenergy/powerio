@@ -287,7 +287,10 @@ fn per_unit_and_native_units_scale_all_power_coefficients() {
     assert_close(per_unit.generators.c[0], native.generators.c[0] * base);
     // The constant term carries no power dimension, so it never rescales.
     assert_close(per_unit.generators.c0[0], native.generators.c0[0]);
-    assert_close(native.branches.b[0], per_unit.branches.b[0] * base);
+    assert_close(
+        native.branches.branch_weight[0],
+        per_unit.branches.branch_weight[0] * base,
+    );
     assert_close(native.branches.f_max[0], per_unit.branches.f_max[0] * base);
 }
 
@@ -302,7 +305,7 @@ fn cost_constant_term_is_kept() {
 }
 
 /// A bus shunt draws constant real power under the DC approximation. The
-/// instance must carry it: the bus susceptance matrix cannot, because its row
+/// instance must carry it: the solver matrix cannot, because its row
 /// sums are zero.
 #[test]
 fn bus_shunt_conductance_reaches_the_instance() {
@@ -339,7 +342,7 @@ fn a_shuntless_case_carries_zero_conductance() {
 }
 
 #[test]
-fn a_non_finite_susceptance_is_refused_under_every_convention() {
+fn a_non_finite_branch_weight_is_refused_under_every_convention() {
     // The DC conventions divide by the reactance, and `1/±inf` is `0.0`: the
     // branch would join the instance as a zero-weight edge with nothing to
     // report. The Matpower rule divides by `x * tap`, so two finite factors
@@ -383,7 +386,7 @@ fn a_non_finite_susceptance_is_refused_under_every_convention() {
                     ))
                 ),
                 "{convention:?} accepted x = {x}, tap = {tap}: {:?}",
-                got.map(|p| p.branches.b)
+                got.map(|p| p.branches.branch_weight)
             );
         }
     }
@@ -405,17 +408,17 @@ fn matpower_convention_applies_tap_and_phase_shift() {
     )
     .expect("matpower");
 
-    // Only Matpower scales the susceptance by the tap. This branch has no
+    // Only Matpower scales the branch weight by the tap. This branch has no
     // resistance, so the default reads the same `1/x` there.
-    assert_close(series.branches.b[0], 1.0 / 0.2);
+    assert_close(series.branches.branch_weight[0], 1.0 / 0.2);
     // Both live conventions carry the phase shift.
     assert_close(series.branches.shift[0], 10.0_f64.to_radians());
-    let expected_b = 1.0 / (0.2 * 1.25);
+    let expected_weight = 1.0 / (0.2 * 1.25);
     let expected_shift = 10.0_f64.to_radians();
-    assert!((matpower.branches.b[0] - expected_b).abs() < 1e-12);
+    assert!((matpower.branches.branch_weight[0] - expected_weight).abs() < 1e-12);
     assert!((matpower.branches.shift[0] - expected_shift).abs() < 1e-12);
-    assert!((matpower.p_shift[0] + expected_b * expected_shift).abs() < 1e-12);
-    assert!((matpower.p_shift[1] - expected_b * expected_shift).abs() < 1e-12);
+    assert!((matpower.p_shift[0] + expected_weight * expected_shift).abs() < 1e-12);
+    assert!((matpower.p_shift[1] - expected_weight * expected_shift).abs() < 1e-12);
 }
 
 #[test]
@@ -436,23 +439,26 @@ fn phase_shift_and_shunt_complete_the_dc_balance_and_flow_equations() {
     assert_close(problem.p_shift.iter().sum::<f64>(), 0.0);
     let fixed = problem.fixed_nodal_withdrawal();
     let flow_offset = problem.branch_flow_offset();
-    let b = problem.branches.b[0];
+    let branch_weight = problem.branches.branch_weight[0];
     let shift = 10.0_f64.to_radians();
-    assert_close(flow_offset[0], -b * shift);
-    assert_close(fixed[0], -b * shift);
-    assert_close(fixed[1], 0.25 + b * shift);
+    assert_close(flow_offset[0], -branch_weight * shift);
+    assert_close(fixed[0], -branch_weight * shift);
+    assert_close(fixed[1], 0.25 + branch_weight * shift);
 
     // Ground bus 0. Bus 1 fixes theta_1 through
     // L theta = Cg pg - fixed; total generation is sum(fixed).
-    let theta = [0.0, -fixed[1] / b];
-    let l_theta = [b * (theta[0] - theta[1]), b * (theta[1] - theta[0])];
+    let theta = [0.0, -fixed[1] / branch_weight];
+    let l_theta = [
+        branch_weight * (theta[0] - theta[1]),
+        branch_weight * (theta[1] - theta[0]),
+    ];
     let generation = fixed.iter().sum::<f64>();
     assert_close(l_theta[0], generation - fixed[0]);
     assert_close(l_theta[1], -fixed[1]);
 
     // The affine branch equation reaches the equivalent physical balance
     // A f = Cg pg - p_d - g_s.
-    let flow = b * (theta[0] - theta[1]) + flow_offset[0];
+    let flow = branch_weight * (theta[0] - theta[1]) + flow_offset[0];
     assert_close(flow, generation - problem.p_d[0] - problem.g_s[0]);
     assert_close(-flow, -problem.p_d[1] - problem.g_s[1]);
 }
@@ -563,7 +569,7 @@ fn a_tap_the_instance_cannot_divide_by_is_refused() {
                 ..DcOpfOptions::default()
             },
         )
-        .expect_err("a tap the susceptance divides by must be refused");
+        .expect_err("a tap the branch weight divides by must be refused");
         assert!(
             matches!(
                 error,
@@ -660,7 +666,12 @@ fn serde_round_trip() {
         back.synthesize_unrated_limits,
         problem.synthesize_unrated_limits
     );
-    for (left, right) in back.branches.b.iter().zip(&problem.branches.b) {
+    for (left, right) in back
+        .branches
+        .branch_weight
+        .iter()
+        .zip(&problem.branches.branch_weight)
+    {
         assert!((left - right).abs() < 1e-12);
     }
 }
@@ -720,7 +731,7 @@ mod matrix_tests {
         )
         .expect("matrix incidence");
         assert_eq!(matrices.incidence, incidence.a);
-        assert_eq!(problem.branches.b, incidence.b);
+        assert_eq!(problem.branches.branch_weight, incidence.branch_weight);
         assert_eq!(problem.p_shift, incidence.p_shift);
     }
 
@@ -771,9 +782,11 @@ mod matrix_tests {
         let bundle = write_dcopf_bundle(&problem, output.path(), &options).expect("bundle");
 
         let incidence = powerio_matrix::io::read_mtx(bundle.dir.join("A.mtx")).expect("A");
-        let branch_b = powerio_matrix::io::read_vector_mtx(bundle.dir.join("b.mtx")).expect("b");
+        let branch_weight =
+            powerio_matrix::io::read_vector_mtx(bundle.dir.join("branch_weight.mtx"))
+                .expect("branch_weight");
         assert_eq!(incidence, build_dc_opf_matrices(&problem).incidence);
-        assert_eq!(branch_b, problem.branches.b);
+        assert_eq!(branch_weight, problem.branches.branch_weight);
         let manifest: serde_json::Value = serde_json::from_str(
             &std::fs::read_to_string(bundle.dir.join("dcopf_meta.json")).expect("manifest"),
         )

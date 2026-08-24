@@ -108,9 +108,8 @@ pub struct DcGeneratorData {
 pub struct DcBranchData {
     pub from_bus: Vec<usize>,
     pub to_bus: Vec<usize>,
-    /// Branch susceptance in the selected power unit per radian, positive for
-    /// an inductive branch.
-    pub b: Vec<f64>,
+    /// Internal DC branch weight in the selected power unit per radian.
+    pub branch_weight: Vec<f64>,
     /// Phase shift in radians. Zero unless the convention carries phase shift
     /// injections.
     pub shift: Vec<f64>,
@@ -172,7 +171,7 @@ pub struct DcOpfInstance {
     ///
     /// The DC approximation holds the voltage magnitude at one per unit, so a
     /// shunt draws the constant real power `g_s` and does not depend on the
-    /// angle. It belongs in the injection: the bus susceptance matrix keeps
+    /// angle. It belongs in the injection: the solver matrix keeps
     /// zero row sums and carries no shunt. A nodal balance subtracts it
     /// beside [`Self::p_d`], as MATPOWER `runpf` does.
     pub g_s: Vec<f64>,
@@ -191,13 +190,13 @@ impl DcOpfInstance {
 
     #[must_use]
     pub fn n_branches(&self) -> usize {
-        self.branches.b.len()
+        self.branches.branch_weight.len()
     }
 
     /// Fixed nodal withdrawal in dense bus order.
     ///
-    /// With `A` oriented from bus to bus and
-    /// `L = A diag(b) A^T`, the DC balance is
+    /// With `A` shaped bus by branch and
+    /// `L = A diag(w) A^T`, the DC balance is
     /// `L theta = Cg pg - (p_d + g_s + p_shift)`.
     #[must_use]
     pub fn fixed_nodal_withdrawal(&self) -> Vec<f64> {
@@ -209,12 +208,12 @@ impl DcOpfInstance {
     /// Fixed branch flow offset in active branch column order.
     ///
     /// The complete branch flow is
-    /// `f = diag(b) A^T theta + branch_flow_offset`, where the offset is
-    /// `-b * shift` elementwise.
+    /// `f = diag(w) A^T theta + branch_flow_offset`, where the offset is
+    /// `-w * shift` elementwise.
     #[must_use]
     pub fn branch_flow_offset(&self) -> Vec<f64> {
         (0..self.n_branches())
-            .map(|branch| -self.branches.b[branch] * self.branches.shift[branch])
+            .map(|branch| -self.branches.branch_weight[branch] * self.branches.shift[branch])
             .collect()
     }
 
@@ -300,7 +299,7 @@ pub fn build_dc_opf_instance(
 
     let mut from_bus = Vec::new();
     let mut to_bus = Vec::new();
-    let mut b = Vec::new();
+    let mut branch_weights = Vec::new();
     let mut shift = Vec::new();
     let mut f_max = Vec::new();
     let mut angle_min = Vec::new();
@@ -330,7 +329,7 @@ pub fn build_dc_opf_instance(
             continue;
         }
         // The reactance the DC matrix builders bound, on the same rule: an
-        // `x = 1e-300` gives a finite `b = 1e300` that annihilates every real
+        // `x = 1e-300` gives a finite `w = 1e300` that annihilates every real
         // branch sharing a bus with it. Exact zero used to be the whole test.
         if branch.x.abs() < powerio::dc::MIN_DIVISIBLE_MAGNITUDE {
             if options.skip_zero_impedance {
@@ -339,12 +338,12 @@ pub fn build_dc_opf_instance(
             }
             return Err(powerio::Error::ZeroImpedance { row: source_row }.into());
         }
-        let branch_b = options.convention.branch_susceptance(
-            branch.r,
-            branch.x,
-            branch.divisible_tap(source_row)?,
-        ) * b_scale;
-        if !branch_b.is_finite() {
+        let branch_weight =
+            options
+                .convention
+                .branch_weight(branch.r, branch.x, branch.divisible_tap(source_row)?)
+                * b_scale;
+        if !branch_weight.is_finite() {
             return Err(powerio::Error::NonFiniteSusceptance { row: source_row }.into());
         }
         let shift_rad = if options.convention.includes_phase_shifts() {
@@ -353,14 +352,14 @@ pub fn build_dc_opf_instance(
             0.0
         };
         if shift_rad != 0.0 {
-            p_shift[from] -= branch_b * shift_rad;
-            p_shift[to] += branch_b * shift_rad;
+            p_shift[from] -= branch_weight * shift_rad;
+            p_shift[to] += branch_weight * shift_rad;
         }
         let amin = case.angle_radians(branch.angmin);
         let amax = case.angle_radians(branch.angmax);
         from_bus.push(from);
         to_bus.push(to);
-        b.push(branch_b);
+        branch_weights.push(branch_weight);
         shift.push(shift_rad);
         f_max.push(thermal.of(branch, amin, amax, &buses[from], &buses[to]));
         angle_min.push(amin);
@@ -395,7 +394,7 @@ pub fn build_dc_opf_instance(
         branches: DcBranchData {
             from_bus,
             to_bus,
-            b,
+            branch_weight: branch_weights,
             shift,
             f_max,
             angle_min,

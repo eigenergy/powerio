@@ -12,11 +12,11 @@ Market files and `dcopf_meta.json`.
   triangle only. Vectors are `array real general`, one value per line.
 - **Index base.** `.mtx` row/column indices are **1-based** (Matrix Market
   standard). `reference_buses` in the manifest are **0-based** dense bus indices.
-- **Sign convention.** The DC bus susceptance matrix \\(L\\) uses the positive
-  M-matrix form: stored nonzero off-diagonal entries are negative, diagonals are
-  nonnegative, and \\(L_{ii} = \sum_j \lvert L_{ij} \rvert\\). An off-diagonal
-  entry is \\(L_{ij} = -b_e\\) for the branch between \\(i\\) and \\(j\\), so a
-  consumer recovers the branch susceptance as \\(-L_{ij} > 0\\).
+- **Sign convention.** The solver matrix is
+  \\(L = A \operatorname{diag}(w) A^\mathsf{T}\\), where \\(A\\) is bus by branch
+  and \\(w\\) is the internal branch weight. Stored nonzero off-diagonal entries
+  are negative for nonnegative \\(w\\), diagonals are nonnegative, and
+  \\(L_{ii} = \sum_j \lvert L_{ij} \rvert\\).
 - **Units.** `PerUnit` by default: power divided by `base_mva`, cost scaled so
   it is a function of per unit power:
   \\(q \leftarrow 2c_2 \cdot \mathrm{base}^2\\) and
@@ -29,13 +29,13 @@ Market files and `dcopf_meta.json`.
   as a 0-based dense index. Each in-service island needs at least one reference.
   If several references lie in one island, the bundle fixes all of those voltage
   angles to zero; it is not a participation factor slack model.
-- **DC convention.** `b.mtx` holds \\(b_e\\), positive for an inductive branch,
-  the coefficient on \\(\theta_f - \theta_t\\). The complete flow is
-  \\(f_e = b_e(\theta_f - \theta_t) - b_e\delta_e\\), where \\(\delta_e\\) is
+- **DC convention.** `branch_weight.mtx` holds \\(w_e\\), the coefficient on
+  \\(\theta_f - \theta_t\\). The complete flow is
+  \\(f_e = w_e(\theta_f - \theta_t) - w_e\delta_e\\), where \\(\delta_e\\) is
   the phase shift in `shift.mtx`. `SeriesImpedance` by default:
-  \\(b_e = x/(r^2 + x^2)\\) plus the phase shift terms,
-  with no tap scaling. `Matpower` uses \\(b_e = 1/(x \tau)\\) plus `p_shift`.
-  `ReactanceOnly` (\\(b_e = 1/x\\), taps and shifts ignored) stays: it is the
+  \\(w_e = x/(r^2 + x^2)\\) plus the phase shift terms,
+  with no tap scaling. `Matpower` uses \\(w_e = 1/(x \tau)\\) plus `p_shift`.
+  `ReactanceOnly` (\\(w_e = 1/x\\), taps and shifts ignored) stays: it is the
   textbook DC linearization, and reproducing a published result needs it exactly
   as written. Recorded in the manifest.
 
@@ -44,9 +44,9 @@ Market files and `dcopf_meta.json`.
 | file | shape | what |
 |------|-------|------|
 | `A.mtx` | \\(n \times m\\) | signed incidence matrix; column \\(e\\) has \\(+1\\) at from-bus, \\(-1\\) at to-bus |
-| `L.mtx` | \\(n \times n\\) | DC bus susceptance matrix \\(L = A \operatorname{diag}(b) A^\mathsf{T}\\); with positive branch weights, its rank is \\(n-c\\) for \\(c\\) connected components |
+| `L.mtx` | \\(n \times n\\) | solver matrix \\(L = A \operatorname{diag}(w) A^\mathsf{T}\\); with positive branch weights, its rank is \\(n-c\\) for \\(c\\) connected components |
 | `L_grounded.mtx` | \\((n-k) \times (n-k)\\) | \\(L\\) with \\(k\\) reference rows and columns removed; SPD when every island is grounded |
-| `BAt.mtx` | \\(m \times n\\) | angle dependent flow map \\(B A^\mathsf{T}\\); complete flow adds `flow_offset` |
+| `flow_map.mtx` | \\(m \times n\\) | angle dependent flow map \\(\operatorname{diag}(w) A^\mathsf{T}\\); complete flow adds `flow_offset` |
 | `Cg.mtx` | \\(n \times n_{\mathrm{gen}}\\) | generator-to-bus incidence, one \\(1\\) per column |
 
 ## Vectors
@@ -59,8 +59,8 @@ beside `pd`), `q`/`c`/`c0` (cost diag/linear/constant),
 `p_shift` (phase shift injection; zero only under `ReactanceOnly`, which ignores
 shifts, or when the case has no phase shifter), and `fixed_withdrawal`, equal to
 `pd + gs + p_shift`.
-Branch-indexed (length \\(m\\)): `b` (susceptances), `shift` (radians),
-`flow_offset` (equal to `-b * shift` elementwise), `fmax` (thermal limits;
+Branch-indexed (length \\(m\\)): `branch_weight`, `shift` (radians),
+`flow_offset` (equal to `-branch_weight * shift` elementwise), `fmax` (thermal limits;
 \\(0\\) means unlimited per MATPOWER), and the radian limits `angle_min` and
 `angle_max`.
 Generator space data

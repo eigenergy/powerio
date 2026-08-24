@@ -119,7 +119,7 @@ class Gen(TypedDict):
 
 class Incidence(NamedTuple):
     A: Any  # scipy.sparse.csr_matrix, (n, m)
-    b: Any  # numpy.ndarray, (m,)
+    branch_weight: Any  # numpy.ndarray, (m,)
     p_shift: Any  # numpy.ndarray, (n,)
     branch_of_col: Any  # numpy.ndarray, (m,)
 

@@ -32,7 +32,7 @@ pub enum MatrixKind {
     BDoublePrime,
     /// `Re(Y_bus)` — full conductance matrix.
     YbusG,
-    /// `-Im(Y_bus)` — full bus susceptance matrix (positive convention).
+    /// `-Im(Y_bus)` — negative imaginary part of the full bus admittance matrix.
     YbusB,
     /// LACPF block: `[[G, -B], [-B, -G]]`, 2n × 2n indefinite.
     Lacpf,

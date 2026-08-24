@@ -34,29 +34,27 @@ pub(crate) fn series_admittance_parts(r: f64, x: f64) -> (f64, f64) {
     (r / denom, -x / denom)
 }
 
-/// Rule for the DC branch susceptance `b`.
+/// Rule for the branch weight used by the DC solvers.
 ///
-/// `b` is positive for an inductive branch, the DC model convention MATPOWER
-/// `makeBdc` uses. It is the edge weight of the bus susceptance matrix and the
-/// coefficient in `f = b (theta_from - theta_to)`. The AC series susceptance
-/// `Im(1/(r + jx))` is its negation.
+/// The internal weight `w` is the coefficient in
+/// `f = w (theta_from - theta_to - shift)`. The C and Julia APIs expose the
+/// physical branch susceptance `b = -w` instead.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[non_exhaustive]
 pub enum DcConvention {
-    /// `b = 1/x`, ignoring resistance, transformer taps, and phase shifts.
+    /// `w = 1/x`, ignoring resistance, transformer taps, and phase shifts.
     ///
     /// The textbook DC linearization, which a paper reproducing a published
     /// result needs exactly as written.
     ReactanceOnly,
-    /// `b = 1/(x tau)` with phase shift injections, matching MATPOWER
+    /// `w = 1/(x tau)` with phase shift injections, matching MATPOWER
     /// `makeBdc`.
     Matpower,
-    /// `b = x/(r² + x²)` with phase shift injections.
+    /// `w = x/(r² + x²)` with phase shift injections.
     ///
     /// Reads the whole series impedance, so it describes a branch with a real
     /// r/x ratio. A transformer tap does not
     /// scale it, and it reduces to `1/x` when the resistance is zero.
-    /// PowerModels' DC formulation uses the same quantity.
     #[default]
     SeriesImpedance,
 }
@@ -71,17 +69,17 @@ impl DcConvention {
     )]
     pub const PaperPure: DcConvention = DcConvention::ReactanceOnly;
 
-    /// The branch susceptance from resistance, reactance, and effective tap.
+    /// The internal branch weight from resistance, reactance, and effective tap.
     /// Only [`Self::Matpower`] reads the tap, and only
     /// [`Self::SeriesImpedance`] reads the resistance.
     ///
     /// Non-finite in, non-finite out, which is what
     /// [`Self::SeriesImpedance`] has always done and what the callers check.
     /// The reciprocal rules need the guard because `1/±inf` is a finite `0.0`:
-    /// a branch Y_bus rejects outright would otherwise join the DC Laplacian as
+    /// a branch Y_bus rejects outright would otherwise join the solver matrix as
     /// a zero-weight edge with nothing to report it.
     #[must_use]
-    pub fn branch_susceptance(self, resistance: f64, reactance: f64, effective_tap: f64) -> f64 {
+    pub fn branch_weight(self, resistance: f64, reactance: f64, effective_tap: f64) -> f64 {
         // Guard the denominator, not its factors: `x * tap` can overflow to
         // infinity from two finite factors and reach the same silent zero.
         let reciprocal = |denominator: f64| {
@@ -142,7 +140,7 @@ impl std::str::FromStr for DcConvention {
         } else if is("paper") || is("paperpure") || is("pure") {
             Err(
                 "convention 'paper-pure' is now 'reactance-only'; it is no longer the default, \
-                 and 'series' is a different formula (b = x/(r^2 + x^2))"
+                 and 'series' also reads resistance"
                     .to_owned(),
             )
         } else {
@@ -190,23 +188,23 @@ mod tests {
     /// the new default only moves a case that carries resistance.
     #[test]
     fn series_impedance_reduces_to_one_over_x() {
-        let b = DcConvention::SeriesImpedance.branch_susceptance(0.0, 0.25, 1.0);
-        assert!((b - 4.0).abs() < 1e-12);
+        let weight = DcConvention::SeriesImpedance.branch_weight(0.0, 0.25, 1.0);
+        assert!((weight - 4.0).abs() < 1e-12);
     }
 
-    /// Resistance lowers the susceptance, by more as `r` grows against `x`.
+    /// Resistance lowers the branch weight, by more as `r` grows against `x`.
     #[test]
-    fn resistance_lowers_the_susceptance() {
-        let lossless = DcConvention::SeriesImpedance.branch_susceptance(0.0, 0.1, 1.0);
-        let lossy = DcConvention::SeriesImpedance.branch_susceptance(0.1, 0.1, 1.0);
+    fn resistance_lowers_the_branch_weight() {
+        let lossless = DcConvention::SeriesImpedance.branch_weight(0.0, 0.1, 1.0);
+        let lossy = DcConvention::SeriesImpedance.branch_weight(0.1, 0.1, 1.0);
         assert!(lossy < lossless);
         assert!((lossy - 5.0).abs() < 1e-12);
     }
 
     #[test]
     fn matpower_scales_by_the_tap() {
-        let b = DcConvention::Matpower.branch_susceptance(0.01, 0.2, 2.0);
-        assert!((b - 2.5).abs() < 1e-12);
+        let weight = DcConvention::Matpower.branch_weight(0.01, 0.2, 2.0);
+        assert!((weight - 2.5).abs() < 1e-12);
     }
 
     /// `1/±inf` is `0.0`, which is finite, so a branch the Y_bus builder rejects
@@ -214,15 +212,18 @@ mod tests {
     /// tap divides the same denominator, so two finite factors whose product
     /// overflows collapse the same way.
     #[test]
-    fn a_non_finite_denominator_is_not_a_susceptance() {
+    fn a_non_finite_denominator_is_not_a_branch_weight() {
         for x in [f64::INFINITY, f64::NEG_INFINITY, f64::NAN] {
             for conv in [
                 DcConvention::ReactanceOnly,
                 DcConvention::Matpower,
                 DcConvention::SeriesImpedance,
             ] {
-                let b = conv.branch_susceptance(0.01, x, 1.0);
-                assert!(!b.is_finite(), "{conv:?} read x = {x} as b = {b}");
+                let weight = conv.branch_weight(0.01, x, 1.0);
+                assert!(
+                    !weight.is_finite(),
+                    "{conv:?} read x = {x} as weight = {weight}"
+                );
             }
         }
         for (x, tap) in [
@@ -231,8 +232,11 @@ mod tests {
             (1e300, 1e300),
             (1e300, -1e300),
         ] {
-            let b = DcConvention::Matpower.branch_susceptance(0.0, x, tap);
-            assert!(!b.is_finite(), "x = {x}, tap = {tap} read as b = {b}");
+            let weight = DcConvention::Matpower.branch_weight(0.0, x, tap);
+            assert!(
+                !weight.is_finite(),
+                "x = {x}, tap = {tap} read as weight = {weight}"
+            );
         }
     }
 
@@ -242,22 +246,22 @@ mod tests {
     /// say so. The bound is on the magnitude precisely so the square never
     /// decides.
     #[test]
-    fn an_impedance_whose_square_overflows_still_has_a_susceptance() {
+    fn an_impedance_whose_square_overflows_still_has_a_branch_weight() {
         let (r, x) = (1e160, 1e160);
         assert!(r * r + x * x == f64::INFINITY, "the direct form overflows");
 
-        let b = DcConvention::SeriesImpedance.branch_susceptance(r, x, 1.0);
-        // b = x/(r² + x²) = 1/(2 · 1e160).
+        let weight = DcConvention::SeriesImpedance.branch_weight(r, x, 1.0);
+        // w = x/(r² + x²) = 1/(2 · 1e160).
         assert!(
-            (b / 5e-161 - 1.0).abs() < 1e-12,
-            "the branch is not dropped, got {b}"
+            (weight / 5e-161 - 1.0).abs() < 1e-12,
+            "the branch is not dropped, got {weight}"
         );
 
         let (g, susceptance) = series_admittance_parts(r, x);
         assert!((g / 5e-161 - 1.0).abs() < 1e-12, "got {g}");
         assert!(
-            (susceptance + b).abs() < 1e-175,
-            "the DC rule is its negation"
+            (susceptance + weight).abs() < 1e-175,
+            "the two values have opposite signs"
         );
     }
 

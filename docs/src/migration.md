@@ -4,7 +4,7 @@ One guide per release that breaks something, named for the release you are movin
 
 | guide | covers |
 |---|---|
-| [To 0.9](migration-v0.9.md) | the Rust, Python and CLI surfaces: renamed types, the DC susceptance default, `ReferenceBuses`, the split error types, and `.pio.json` documents written before 0.9 |
+| [To 0.9](migration-v0.9.md) | the Rust, Python and CLI surfaces: renamed types, the DC branch weight default, `ReferenceBuses`, the split error types, and `.pio.json` documents written before 0.9 |
 | [To 0.7](migration-v0.7.md) | DC OPF problem data moving from `powerio-matrix` to `powerio-prob` |
 
 A C or Julia consumer wants [the ABI 5 guide](abi-v5.md) instead, and probably both: the ABI carries the C signatures, and 0.9.0 breaks things above it that the ABI integer says nothing about.

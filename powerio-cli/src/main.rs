@@ -583,7 +583,7 @@ impl From<SchemeArg> for Scheme {
 /// library accepts is one the CLI accepts and the 0.8 migration message
 /// reaches the terminal instead of clap's generic possible-values list. The
 /// price is that clap no longer knows the values, so the help names them.
-const CONVENTION_HELP: &str = "DC susceptance convention, case and separator insensitive: \
+const CONVENTION_HELP: &str = "DC branch weight convention, case and separator insensitive: \
     `series`/`series-impedance` (b = x/(r² + x²), with phase shift injections), \
     `matpower`/`mp` (b = 1/(x tau), with phase shift injections), `reactance-only` \
     (b = 1/x, ignoring resistance, taps, and shifts: the textbook DC linearization \

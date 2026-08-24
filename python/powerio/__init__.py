@@ -116,16 +116,19 @@ PwdDisplay.__doc__ = """Decoded PowerWorld ``.pwd`` display metadata."""
 PwdSubstation = namedtuple("PwdSubstation", ["number", "name", "x", "y"])
 PwdSubstation.__doc__ = """One decoded PowerWorld display substation."""
 
-Incidence = namedtuple("Incidence", ["A", "b", "p_shift", "branch_of_col"])
+Incidence = namedtuple(
+    "Incidence", ["A", "branch_weight", "p_shift", "branch_of_col"]
+)
 Incidence.__doc__ = """Output of :meth:`BalancedNetwork.incidence`.
 
 Shapes, with ``n`` buses and ``m`` in-service branches:
 - ``A``: signed incidence csr_matrix, ``(n, m)``.
-- ``b``: branch susceptances, ``(m,)``; ``b[k]`` is column ``k``.
-- ``p_shift``: phase-shift injection, ``(n,)`` (all zero unless
-  ``convention="matpower"``).
+- ``branch_weight``: internal DC branch weights, ``(m,)``; entry ``k`` is
+  incidence column ``k``.
+- ``p_shift``: phase-shift injection, ``(n,)`` (zero under
+  ``convention="reactance-only"``).
 - ``branch_of_col``: column→branch index map, ``(m,)``; ``branch_of_col[k]``
-  and ``b[k]`` are co-indexed by incidence column ``k``.
+  and ``branch_weight[k]`` are co-indexed by incidence column ``k``.
 """
 
 YbusParts = namedtuple("YbusParts", ["g", "b"])
@@ -464,16 +467,16 @@ class BalancedNetwork:
         return _to_csr(self._inner.lodf(convention, solver))
 
     def weighted_laplacian(self, convention: str = "series"):
-        """Weighted Laplacian ``L = A diag(b) Aᵀ``."""
+        """Weighted Laplacian ``L = A diag(w) Aᵀ``."""
         return _to_csr(self._inner.weighted_laplacian(convention))
 
     def incidence(self, convention: str = "series") -> "Incidence":
         """Signed incidence factorization as an :data:`Incidence` tuple."""
         np = _require("numpy", "matrix")
-        a, b, p_shift, branch_of_col = self._inner.incidence(convention)
+        a, branch_weight, p_shift, branch_of_col = self._inner.incidence(convention)
         return Incidence(
             A=_to_csr(a),
-            b=np.asarray(b, dtype=float),
+            branch_weight=np.asarray(branch_weight, dtype=float),
             p_shift=np.asarray(p_shift, dtype=float),
             branch_of_col=np.asarray(branch_of_col, dtype=np.int64),
         )

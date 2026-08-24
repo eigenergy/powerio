@@ -78,17 +78,19 @@ fn bench_dcopf_parts(c: &mut Criterion) {
     let incidence =
         build_incidence(&view, DcConvention::ReactanceOnly, &BuildOptions::default()).unwrap();
     c.bench_function("dcopf_laplacian_case118", |b| {
-        b.iter(|| build_weighted_laplacian(black_box(&incidence.a), black_box(&incidence.b)));
+        b.iter(|| {
+            build_weighted_laplacian(black_box(&incidence.a), black_box(&incidence.branch_weight))
+        });
     });
     let refs = view.reference_bus_indices();
     c.bench_function("dcopf_grounded_laplacian_case118", |b| {
         b.iter(|| {
-            let l = build_weighted_laplacian(&incidence.a, &incidence.b);
+            let l = build_weighted_laplacian(&incidence.a, &incidence.branch_weight);
             ground_at_each(black_box(&l), black_box(&refs))
         });
     });
     c.bench_function("dcopf_flow_map_case118", |b| {
-        b.iter(|| build_flow_map(black_box(&incidence.a), black_box(&incidence.b)));
+        b.iter(|| build_flow_map(black_box(&incidence.a), black_box(&incidence.branch_weight)));
     });
 }
 

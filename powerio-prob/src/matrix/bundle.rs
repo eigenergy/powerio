@@ -155,10 +155,15 @@ pub fn write_dcopf_bundle(
         &matrices.grounded_laplacian,
         &mut files,
     )?;
-    put_mat(&dir, "BAt.mtx", &matrices.flow_map, &mut files)?;
+    put_mat(&dir, "flow_map.mtx", &matrices.flow_map, &mut files)?;
     put_mat(&dir, "Cg.mtx", &matrices.generator_bus, &mut files)?;
 
-    put_vec(&dir, "b.mtx", &instance.branches.b, &mut files)?;
+    put_vec(
+        &dir,
+        "branch_weight.mtx",
+        &instance.branches.branch_weight,
+        &mut files,
+    )?;
     put_vec(&dir, "shift.mtx", &instance.branches.shift, &mut files)?;
     put_vec(&dir, "flow_offset.mtx", &flow_offset, &mut files)?;
     put_vec(&dir, "p_shift.mtx", &instance.p_shift, &mut files)?;
@@ -281,8 +286,8 @@ fn operator_meta(
             "unitless",
         ),
         op(
-            "branch_susceptance",
-            "b.mtx",
+            "branch_weight",
+            "branch_weight.mtx",
             "vector",
             m,
             1,
@@ -327,7 +332,7 @@ fn operator_meta(
         ),
         op(
             "flow_map",
-            "BAt.mtx",
+            "flow_map.mtx",
             "matrix",
             m,
             n,

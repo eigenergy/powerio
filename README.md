@@ -193,7 +193,7 @@ Known limits for every format are documented in the
 `powerio-matrix` derives an `IndexedNetwork` with dense bus indices and builds:
 
 - MATPOWER Bp/Bpp FDPF matrices
-- DC bus susceptance matrix `L = A diag(b) A^T` and flow map matrices
+- Weighted solver matrix `L = A diag(w) A^T` and its branch flow map
 - Nodal admittance matrix
 - LACPF block matrix
 - Signed incidence matrix
