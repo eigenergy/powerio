@@ -308,6 +308,21 @@ impl BalancedNetwork {
     pub fn to_normalized_solver_tables(&self) -> Result<NormalizedSolverTables> {
         NormalizedSolverTables::from_network(self)
     }
+
+    /// Build only the identity and provenance vectors for the normalized
+    /// solver table view.
+    ///
+    /// This runs the same normalize and star lowering pass as
+    /// [`Self::to_normalized_solver_tables`] without allocating row payloads
+    /// the caller will discard.
+    ///
+    /// # Errors
+    /// Propagates [`BalancedNetwork::to_normalized`] errors.
+    pub fn to_normalized_solver_table_index(&self) -> Result<SolverTableIndex> {
+        let (normalized, provenance) = normalized_for_solver(self)?;
+        let view = IndexedNetwork::new(&normalized);
+        Ok(solver_table_index(&view, provenance))
+    }
 }
 
 impl NormalizedSolverTables {
@@ -324,6 +339,7 @@ impl NormalizedSolverTables {
         let generators = generator_rows(&view, &provenance)?;
         let storage = storage_rows(&view, &provenance)?;
         let hvdc = hvdc_rows(&view, &provenance)?;
+        let index = solver_table_index(&view, provenance);
 
         Ok(Self {
             pass: NORMALIZED_SOLVER_TABLES_PASS.to_string(),
@@ -331,21 +347,7 @@ impl NormalizedSolverTables {
             base_mva: net.base_mva,
             base_frequency: net.base_frequency,
             units: SolverTableUnits::default(),
-            index: SolverTableIndex {
-                bus_ids: net.buses.iter().map(|b| b.id).collect(),
-                reference_bus_indices: view.reference_bus_indices(),
-                component_labels: view.connected_component_labels(),
-                branch_from_arc_indices: branch_arcs.branch_from_arc_indices,
-                branch_to_arc_indices: branch_arcs.branch_to_arc_indices,
-                bus_source_rows: provenance.buses,
-                load_source_rows: provenance.loads,
-                shunt_source_rows: provenance.shunts,
-                branch_source_rows: provenance.branches,
-                switch_source_rows: provenance.switches,
-                generator_source_rows: provenance.generators,
-                storage_source_rows: provenance.storage,
-                hvdc_source_rows: provenance.hvdc,
-            },
+            index,
             buses,
             loads,
             shunts,
@@ -357,6 +359,38 @@ impl NormalizedSolverTables {
             hvdc,
         })
     }
+}
+
+fn solver_table_index(
+    view: &IndexedNetwork<'_>,
+    provenance: NormalizeSourceRows,
+) -> SolverTableIndex {
+    let net = view.network();
+    let branch_count = net.branches.len();
+    let (branch_from_arc_indices, branch_to_arc_indices) =
+        (0..branch_count).map(branch_arc_positions).unzip();
+    SolverTableIndex {
+        bus_ids: net.buses.iter().map(|b| b.id).collect(),
+        reference_bus_indices: view.reference_bus_indices(),
+        component_labels: view.connected_component_labels(),
+        // `branch_and_arc_rows` emits the from and to arcs consecutively for
+        // every branch, so their positions are a direct function of the
+        // branch row and do not require constructing either row table.
+        branch_from_arc_indices,
+        branch_to_arc_indices,
+        bus_source_rows: provenance.buses,
+        load_source_rows: provenance.loads,
+        shunt_source_rows: provenance.shunts,
+        branch_source_rows: provenance.branches,
+        switch_source_rows: provenance.switches,
+        generator_source_rows: provenance.generators,
+        storage_source_rows: provenance.storage,
+        hvdc_source_rows: provenance.hvdc,
+    }
+}
+
+fn branch_arc_positions(branch_index: usize) -> (usize, usize) {
+    (2 * branch_index, 2 * branch_index + 1)
 }
 
 /// The normalized network and the row provenance for its star-lowered view.
@@ -448,8 +482,6 @@ fn shunt_rows(
 struct BranchArcRows {
     branches: Vec<SolverBranchRow>,
     arcs: Vec<SolverArcRow>,
-    branch_from_arc_indices: Vec<usize>,
-    branch_to_arc_indices: Vec<usize>,
 }
 
 fn branch_and_arc_rows(
@@ -457,8 +489,6 @@ fn branch_and_arc_rows(
     provenance: &NormalizeSourceRows,
 ) -> Result<BranchArcRows> {
     let net = view.network();
-    let mut branch_from_arc_indices = Vec::with_capacity(net.branches.len());
-    let mut branch_to_arc_indices = Vec::with_capacity(net.branches.len());
     let mut arcs = Vec::with_capacity(net.branches.len() * 2);
     let branches = net
         .branches
@@ -468,7 +498,8 @@ fn branch_and_arc_rows(
             let from_bus_index = dense_bus(view, branch.from, i)?;
             let to_bus_index = dense_bus(view, branch.to, i)?;
             let charging = branch.terminal_charging();
-            let from_arc = arcs.len();
+            let (from_arc, to_arc) = branch_arc_positions(i);
+            debug_assert_eq!(from_arc, arcs.len());
             arcs.push(SolverArcRow {
                 index: from_arc,
                 branch_index: i,
@@ -481,7 +512,7 @@ fn branch_and_arc_rows(
                 b_shunt: charging.b_fr,
                 rate_a: branch.rate_a,
             });
-            let to_arc = arcs.len();
+            debug_assert_eq!(to_arc, arcs.len());
             arcs.push(SolverArcRow {
                 index: to_arc,
                 branch_index: i,
@@ -494,8 +525,6 @@ fn branch_and_arc_rows(
                 b_shunt: charging.b_to,
                 rate_a: branch.rate_a,
             });
-            branch_from_arc_indices.push(from_arc);
-            branch_to_arc_indices.push(to_arc);
 
             Ok(SolverBranchRow {
                 index: i,
@@ -522,12 +551,7 @@ fn branch_and_arc_rows(
         })
         .collect::<Result<Vec<_>>>()?;
 
-    Ok(BranchArcRows {
-        branches,
-        arcs,
-        branch_from_arc_indices,
-        branch_to_arc_indices,
-    })
+    Ok(BranchArcRows { branches, arcs })
 }
 
 fn switch_rows(
@@ -772,6 +796,17 @@ mod tests {
         assert_eq!(bus_2.bus_id, BusId(2));
         assert!(approx(bus_2.pd, 21.7 / 100.0));
         assert!(approx(bus_2.qd, 12.7 / 100.0));
+    }
+
+    #[test]
+    fn index_only_path_matches_the_full_solver_tables() {
+        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../tests/data/case14.m");
+        let net = parse_file(path, None).unwrap().network;
+
+        let index = net.to_normalized_solver_table_index().unwrap();
+        let tables = net.to_normalized_solver_tables().unwrap();
+
+        assert_eq!(index, tables.index);
     }
 
     #[test]

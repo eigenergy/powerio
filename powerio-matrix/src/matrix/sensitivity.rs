@@ -525,6 +525,11 @@ fn sparse_ptdf_lodf_entries(
     let batch_width = rhs_batch_width(nr);
     let mut solver = SparseCholeskyFactor::factor(&lr, batch_width)?;
     let (from, to) = endpoints(&inc.a, m);
+    // Branch endpoints do not change between right hand sides. Ground them
+    // once instead of binary searching the reference set twice for every
+    // branch flow in every PTDF and LODF column.
+    let reduced_from: Vec<_> = from.iter().map(|&bus| g.reduced(bus)).collect();
+    let reduced_to: Vec<_> = to.iter().map(|&bus| g.reduced(bus)).collect();
 
     let rhs_len = nr
         .checked_mul(batch_width)
@@ -533,21 +538,19 @@ fn sparse_ptdf_lodf_entries(
     let mut ptdf_nnz = 0usize;
     let mut ptdf_dropped = 0usize;
     let full_of_reduced = g.full_of_reduced(n);
-    for buses in full_of_reduced.chunks(batch_width) {
+    for (batch, buses) in full_of_reduced.chunks(batch_width).enumerate() {
         let used = buses.len();
         let rhs = &mut rhs[..nr * used];
         rhs.fill(0.0);
-        for (column, &bus) in buses.iter().enumerate() {
-            let rb = g
-                .reduced(bus)
-                .expect("full_of_reduced contains only ungrounded buses");
+        for column in 0..used {
+            let rb = batch * batch_width + column;
             rhs[column * nr + rb] = 1.0;
         }
         solver.solve_batch(rhs, used)?;
         for (column, &bus) in buses.iter().enumerate() {
             let theta = &rhs[column * nr..(column + 1) * nr];
             for branch in 0..m {
-                let v = branch_flow(branch, &from, &to, &inc.b, &g, theta);
+                let v = branch_flow(branch, &reduced_from, &reduced_to, &inc.b, theta);
                 if v.abs() > options.drop_tolerance {
                     ptdf_entry(branch, bus, v)?;
                     ptdf_nnz += 1;
@@ -567,17 +570,18 @@ fn sparse_ptdf_lodf_entries(
     for first_outage in (0..m).step_by(batch_width) {
         let last_outage = first_outage.saturating_add(batch_width).min(m);
         let mut solved_columns = 0usize;
-        rhs[..nr * (last_outage - first_outage)].fill(0.0);
         for outage in first_outage..last_outage {
             if is_bridge[outage] {
                 continue;
             }
             let offset = solved_columns * nr;
-            if let Some(rf) = g.reduced(from[outage]) {
-                rhs[offset + rf] += 1.0;
+            let column = &mut rhs[offset..offset + nr];
+            column.fill(0.0);
+            if let Some(rf) = reduced_from[outage] {
+                column[rf] += 1.0;
             }
-            if let Some(rt) = g.reduced(to[outage]) {
-                rhs[offset + rt] -= 1.0;
+            if let Some(rt) = reduced_to[outage] {
+                column[rt] -= 1.0;
             }
             solved_columns += 1;
         }
@@ -597,7 +601,7 @@ fn sparse_ptdf_lodf_entries(
             }
             let theta = &rhs[solved_column * nr..(solved_column + 1) * nr];
             solved_column += 1;
-            let denom = 1.0 - branch_flow(outage, &from, &to, &inc.b, &g, theta);
+            let denom = 1.0 - branch_flow(outage, &reduced_from, &reduced_to, &inc.b, theta);
             let islands = denom.abs() < LODF_ISLAND_TOLERANCE;
             for branch in 0..m {
                 let v = if branch == outage {
@@ -605,7 +609,7 @@ fn sparse_ptdf_lodf_entries(
                 } else if islands {
                     0.0
                 } else {
-                    branch_flow(branch, &from, &to, &inc.b, &g, theta) / denom
+                    branch_flow(branch, &reduced_from, &reduced_to, &inc.b, theta) / denom
                 };
                 if branch == outage || v.abs() > options.drop_tolerance {
                     lodf_entry(branch, outage, v)?;
@@ -861,14 +865,13 @@ impl SparseCholeskyFactor {
 
 fn branch_flow(
     branch: usize,
-    from: &[usize],
-    to: &[usize],
+    reduced_from: &[Option<usize>],
+    reduced_to: &[Option<usize>],
     b: &[f64],
-    g: &Grounding,
     theta: &[f64],
 ) -> f64 {
-    let theta_from = g.reduced(from[branch]).map_or(0.0, |i| theta[i]);
-    let theta_to = g.reduced(to[branch]).map_or(0.0, |i| theta[i]);
+    let theta_from = reduced_from[branch].map_or(0.0, |i| theta[i]);
+    let theta_to = reduced_to[branch].map_or(0.0, |i| theta[i]);
     b[branch] * (theta_from - theta_to)
 }
 

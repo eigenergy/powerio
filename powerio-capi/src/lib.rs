@@ -1081,12 +1081,12 @@ pub unsafe extern "C" fn pio_solver_index_json(
             "panic while serializing solver table index JSON",
             || {
                 let c = network_ref(net).ok_or_else(|| null_handle("network handle"))?;
-                let tables = c.net.to_normalized_solver_tables().map_err(err_line)?;
+                let index = c.net.to_normalized_solver_table_index().map_err(err_line)?;
                 let doc = serde_json::json!({
                     "schema": "powerio.solver_index",
                     powerio::version::VERSION_KEY: powerio::VERSION,
-                    "pass": tables.pass,
-                    "index": tables.index,
+                    "pass": powerio::NORMALIZED_SOLVER_TABLES_PASS,
+                    "index": index,
                 });
                 serde_json::to_string(&doc)
                     .map_err(|e| coded(&codes::EMIT_CAPI_SERIALIZE_FAILED, e))
@@ -1865,8 +1865,9 @@ pub unsafe extern "C" fn pio_bus_shunt(
 // DC incidence parts (`matrix` feature). The signed incidence `A` crosses the
 // boundary as `PIO_ARROW_TABLE_INCIDENCE`; the per-branch and per-bus vectors
 // it is assembled with did not cross at all. A differentiable-modeling
-// consumer treats the susceptance as a parameter vector — its DC system is
-// `B = Aᵀ diag(-b ⊙ sw) A`, rebuilt as `b` and the switching `sw` move — so an
+// consumer treats the susceptance as a parameter vector — its positive DC
+// Laplacian is `L = A diag(b ⊙ sw) Aᵀ`, rebuilt as `b` and the switching
+// `sw` move — so an
 // assembled `B'` has already summed away the thing being differentiated and
 // cannot serve it at any granularity. Reimplementing `x/(r² + x²)` outside
 // inherits none of the guards 0.9 put on this path (#292): the magnitude bound
