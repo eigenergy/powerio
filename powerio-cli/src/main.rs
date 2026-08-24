@@ -97,11 +97,8 @@ enum Command {
         /// Output directory; the bundle lands in `<output>/<case>_dcopf/`.
         #[arg(short, long)]
         output: PathBuf,
-        /// DC susceptance convention. 0.8 defaulted to `paper-pure`, now
-        /// spelled `reactance-only`; the default is `series`, a different
-        /// formula, so an unqualified run changes numbers against 0.8.
-        #[arg(long, value_enum, default_value = "series")]
-        convention: DcConvArg,
+        #[arg(long, default_value = "series", help = CONVENTION_HELP)]
+        convention: DcConvention,
         /// Unit system for power/cost quantities.
         #[arg(long, value_enum, default_value = "per-unit")]
         units: UnitsArg,
@@ -122,11 +119,8 @@ enum Command {
         /// Output directory; writes `<case>_ptdf.mtx` and `<case>_lodf.mtx`.
         #[arg(short, long)]
         output: PathBuf,
-        /// DC susceptance convention. 0.8 defaulted to `paper-pure`, now
-        /// spelled `reactance-only`; the default is `series`, a different
-        /// formula, so an unqualified run changes numbers against 0.8.
-        #[arg(long, value_enum, default_value = "series")]
-        convention: DcConvArg,
+        #[arg(long, default_value = "series", help = CONVENTION_HELP)]
+        convention: DcConvention,
         /// Sensitivity solve path.
         #[arg(long, value_enum, default_value = "auto")]
         solver: SensitivitySolverArg,
@@ -584,28 +578,18 @@ impl From<SchemeArg> for Scheme {
     }
 }
 
-#[derive(Clone, Copy, Debug, ValueEnum)]
-enum DcConvArg {
-    /// `b = x/(r² + x²)`, with phase shift injections.
-    #[value(name = "series", alias = "series-impedance")]
-    SeriesImpedance,
-    /// `b = 1/(x tau)`, with phase shift injections.
-    Matpower,
-    /// `b = 1/x`, ignoring resistance, taps, and shifts: the textbook DC
-    /// linearization a published result reproduces.
-    #[value(name = "reactance-only")]
-    ReactanceOnly,
-}
-
-impl From<DcConvArg> for DcConvention {
-    fn from(value: DcConvArg) -> Self {
-        match value {
-            DcConvArg::SeriesImpedance => Self::SeriesImpedance,
-            DcConvArg::Matpower => Self::Matpower,
-            DcConvArg::ReactanceOnly => Self::ReactanceOnly,
-        }
-    }
-}
+/// `--convention` help for `dcopf` and `sensitivities`. The tokens are
+/// `DcConvention`'s `FromStr`, not a clap value enum, so a spelling the
+/// library accepts is one the CLI accepts and the 0.8 migration message
+/// reaches the terminal instead of clap's generic possible-values list. The
+/// price is that clap no longer knows the values, so the help names them.
+const CONVENTION_HELP: &str = "DC susceptance convention, case and separator insensitive: \
+    `series`/`series-impedance` (b = x/(r² + x²), with phase shift injections), \
+    `matpower`/`mp` (b = 1/(x tau), with phase shift injections), `reactance-only` \
+    (b = 1/x, ignoring resistance, taps, and shifts: the textbook DC linearization \
+    a published result reproduces). 0.8 defaulted to `paper-pure`, now spelled \
+    `reactance-only`; the default is `series`, a different formula, so an \
+    unqualified run changes numbers against 0.8.";
 
 #[derive(Clone, Copy, Debug, ValueEnum)]
 enum SensitivitySolverArg {
@@ -713,7 +697,7 @@ fn main() -> anyhow::Result<()> {
         } => run_dcopf(
             &input,
             &output,
-            convention.into(),
+            convention,
             units.into(),
             missing_gen_cost,
             default_gen_cost.as_deref(),
@@ -933,7 +917,7 @@ fn run_gen(
 fn run_sensitivities(
     input: &Path,
     output: &Path,
-    convention: DcConvArg,
+    convention: DcConvention,
     solver: SensitivitySolverArg,
     drop_tolerance: f64,
 ) -> anyhow::Result<()> {
@@ -942,7 +926,7 @@ fn run_sensitivities(
     std::fs::create_dir_all(output)?;
     let view = powerio_matrix::IndexedNetwork::new(&mpc);
     let options = SensitivityOptions {
-        convention: convention.into(),
+        convention,
         solver: solver.into(),
         drop_tolerance,
         ..Default::default()

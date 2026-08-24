@@ -67,6 +67,17 @@ _BMOPF_JSON_FORMATS = frozenset({"bmopf", "bmopf-json", "bmopf_json"})
 _PACKAGE_JSON_FORMATS = frozenset(
     {"package", "pio", "pio-json", "pio_json", "pio-package", "pio_package"}
 )
+# The diagnostic severities a caller has to act on, in the `.pio.json`
+# severity vocabulary: everything above `info`. It is what `package` reports
+# and what the explicit lowering surface blocks on, one rule rather than two
+# lists that could drift. It is also the lowering pass's own blocking rule -- `MulticonductorToBalancedReadiness::is_ready` is
+# `status <= info` and the lowering call refuses on exactly that test, so a
+# warning blocks it as surely as an error. Reading the pass's own rule rather
+# than inventing a second one is the whole point of that tool: a `ready: true`
+# the pass then refuses raises the one-line message that `applied: false` with
+# structured blockers exists to replace.
+_BLOCKING_SEVERITIES = ("warning", "error", "fatal")
+
 _VERSION_KEY = "powerio_version"
 
 # The explicit lowering surface. One transform and one target model kind exist
@@ -359,7 +370,7 @@ def _package_diagnostic_messages(value: Dict[str, Any]) -> list[str]:
     for item in value.get("diagnostics", []):
         if not isinstance(item, dict):
             continue
-        if item.get("severity") not in ("warning", "error", "fatal"):
+        if item.get("severity") not in _BLOCKING_SEVERITIES:
             continue
         code = item.get("code")
         message = item.get("message")
@@ -1149,23 +1160,28 @@ def _lowering_options(options: Optional[Dict[str, Any]]) -> float:
     return base_mva
 
 
-# `MulticonductorToBalancedReadiness::is_ready` is `status <= info`, and the
-# lowering call refuses on exactly that test, so every record above info
-# blocks the pass -- a warning as surely as an error. Reading the pass's own
-# rule rather than inventing a second one is the whole point of this tool: a
-# `ready: true` the pass then refuses raises the one-line message that
-# `applied: false` with structured blockers exists to replace.
-_LOWER_BLOCKING_SEVERITIES = ("warning", "error", "fatal")
 _LOWER_READY_STATUSES = ("ok", "info")
 
 
-def _lower_blockers(diagnostics: list) -> list:
-    return [
-        item
-        for item in diagnostics
-        if isinstance(item, dict)
-        and item.get("severity") in _LOWER_BLOCKING_SEVERITIES
-    ]
+def _lower_blockers(diagnostics: list[Dict[str, Any]]) -> list[Dict[str, Any]]:
+    """The readiness records that block the pass. `diagnostics` reaches this
+    already filtered to dicts, so there is no second isinstance test here."""
+    return [item for item in diagnostics if item.get("severity") in _BLOCKING_SEVERITIES]
+
+
+def _lower_choice(value: str, name: str, allowed: tuple[str, ...]) -> str:
+    """Normalize one `lower` enum argument against the values it accepts.
+
+    `allowed[0]` is the default, which is what an argument left unset (`""`,
+    the tools' spelling of "not given") resolves to.
+    """
+    chosen = _fmt(value) or allowed[0]
+    if chosen not in allowed:
+        raise ValueError(
+            f"unknown lower {name} {value!r}; expected "
+            + " or ".join(repr(a) for a in allowed)
+        )
+    return chosen
 
 
 def _lower_ready(readiness: Dict[str, Any], blockers: list) -> bool:
@@ -1185,17 +1201,8 @@ def _lower_impl(
     mode: str = "preflight",
     options: Optional[Dict[str, Any]] = None,
 ) -> dict:
-    mode_l = _fmt(mode) or "preflight"
-    if mode_l not in _LOWER_MODES:
-        raise ValueError(
-            f"unknown lower mode {mode!r}; expected " + " or ".join(repr(m) for m in _LOWER_MODES)
-        )
-    target = _fmt(to_model_kind) or "balanced"
-    if target not in _LOWER_TARGET_KINDS:
-        raise ValueError(
-            f"unknown lower to_model_kind {to_model_kind!r}; expected "
-            + " or ".join(repr(k) for k in _LOWER_TARGET_KINDS)
-        )
+    mode_l = _lower_choice(mode, "mode", _LOWER_MODES)
+    target = _lower_choice(to_model_kind, "to_model_kind", _LOWER_TARGET_KINDS)
     base_mva = _lowering_options(options)
 
     # "" is how the tools spell an unset text argument (a bare `str`
@@ -1254,22 +1261,29 @@ def _lower_impl(
         # the answer, and an exception message would carry one line of them.
         # No `package_json` key at all, so "refused" cannot be read as
         # "applied with an empty result".
-        payload["applied"] = False
-        return payload
+        return {**payload, "applied": False}
 
     try:
         lowered = pkg.lower_multiconductor_to_balanced(base_mva)
     except powerio.PowerIOError as exc:
         raise _coded_error("lower failed", exc) from exc
     lowered_json = lowered.to_json()
+    # The document already carries all four of these keys, so parse it once
+    # and read them out. `.validation()` and `.diagnostics()` would each
+    # re-serialize the same data on the Rust side and re-parse it here: three
+    # passes over a package that runs to megabytes where one does. The
+    # package omits `diagnostics` and `lowering_history` when they are empty,
+    # so both default to the empty list the accessors would have returned.
     lowered_value = jsonlib.loads(lowered_json)
-    payload["applied"] = True
-    payload["package_json"] = lowered_json
-    payload["origin"] = lowered_value.get("origin")
-    payload["lowering_history"] = lowered_value.get("lowering_history", [])
-    payload["validation"] = lowered.validation()
-    payload["diagnostics"] = lowered.diagnostics()
-    return payload
+    return {
+        **payload,
+        "applied": True,
+        "package_json": lowered_json,
+        "origin": lowered_value.get("origin"),
+        "lowering_history": lowered_value.get("lowering_history", []),
+        "validation": lowered_value.get("validation"),
+        "diagnostics": lowered_value.get("diagnostics", []),
+    }
 
 
 # The tool text arguments that can carry JSON (`content`, `json`,

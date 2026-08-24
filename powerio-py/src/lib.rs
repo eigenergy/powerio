@@ -175,10 +175,10 @@ fn parse_scheme(s: &str) -> PyResult<Scheme> {
 /// Accepts `series`/`series-impedance`, `matpower`/`mp`, and
 /// `reactance-only` (case- and separator-insensitive).
 ///
-/// [`DcConvention::from_token`] owns the token set and the refusals, so this
+/// [`DcConvention`]'s `FromStr` owns the token set and the refusals, so this
 /// surface and the C ABI cannot drift into accepting different spellings.
 fn parse_convention(s: &str) -> PyResult<DcConvention> {
-    DcConvention::from_token(s).map_err(PyValueError::new_err)
+    s.parse::<DcConvention>().map_err(PyValueError::new_err)
 }
 
 /// PTDF/LODF options from the Python keywords. The solver defaults to `auto`,

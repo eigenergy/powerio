@@ -1023,6 +1023,13 @@ size_t pio_bus_shunt(const PioNetwork *net, double *gs, double *bs, size_t cap);
  * the size query and the fill are two builds, and each of the four
  * extractors pays its own. A consumer that wants several of these vectors
  * should size once, keep the count, and hold what it reads.
+ *
+ * The size query is skippable outright, which is the cheaper half of that
+ * advice: `m <= pio_n_branches` always, so a caller that allocates
+ * [`pio_n_branches`] entries can fill in one call and take the return as the
+ * real count. Every extractor in this family has such a bound and states it,
+ * and paying a few unused entries per vector is what buys back the second
+ * build.
  */
 ptrdiff_t pio_branch_susceptance(const PioNetwork *net,
                                  const char *convention,
@@ -1045,7 +1052,9 @@ ptrdiff_t pio_branch_susceptance(const PioNetwork *net,
  * shifter's contribution instead.
  *
  * `convention`, the per-call incidence build, and the `-1` refusal are
- * [`pio_branch_susceptance`]'s.
+ * [`pio_branch_susceptance`]'s. The bound is exact here — `n` is
+ * [`pio_n_buses`], the same `n` every per-bus array carries — so a caller
+ * that allocates it never needs the `(NULL, 0)` query at all.
  */
 ptrdiff_t pio_phase_shift_injection(const PioNetwork *net,
                                     const char *convention,
@@ -1067,7 +1076,8 @@ ptrdiff_t pio_phase_shift_injection(const PioNetwork *net,
  * `m <= pio_n_branches`.
  *
  * `convention`, the per-call incidence build, and the `-1` refusal are
- * [`pio_branch_susceptance`]'s.
+ * [`pio_branch_susceptance`]'s, and so is the bound: a [`pio_n_branches`]
+ * buffer fills in one call.
  */
 ptrdiff_t pio_incidence_branch_rows(const PioNetwork *net,
                                     const char *convention,
@@ -1088,7 +1098,10 @@ ptrdiff_t pio_incidence_branch_rows(const PioNetwork *net,
  * A case with none returns `0`, which is the ordinary answer.
  *
  * `convention`, the per-call incidence build, and the `-1` refusal are
- * [`pio_branch_susceptance`]'s.
+ * [`pio_branch_susceptance`]'s. These rows are a subset of the branch table,
+ * so [`pio_n_branches`] bounds them too and the same one-call fill applies —
+ * on the ordinary case that skips nothing, the buffer goes entirely unused
+ * and the build is still saved.
  */
 ptrdiff_t pio_incidence_skipped_rows(const PioNetwork *net,
                                      const char *convention,

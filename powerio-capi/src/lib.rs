@@ -746,34 +746,19 @@ pub unsafe extern "C" fn pio_scenario_ids(
     errlen: usize,
 ) -> isize {
     unsafe {
-        let r = catch_unwind(AssertUnwindSafe(|| {
-            let dir = required_cstr(dir, "dir")?;
-            let from = required_cstr(from, "from")?;
-            powerio_matrix::dataset_scenario_ids(std::path::Path::new(dir), from).map_err(err_line)
-        }));
-        match r {
-            Ok(Ok(ids)) => {
-                let Ok(total) = isize::try_from(ids.len()) else {
-                    let msg = coded(
-                        &codes::BIND_CAPI_INDEX_OUT_OF_RANGE,
-                        "scenario count exceeds isize",
-                    );
-                    copy_to_buf(errbuf, errlen, &msg);
-                    return -1;
-                };
-                fill(out, cap, ids.iter().copied());
-                total
-            }
-            Ok(Err(msg)) => {
-                copy_to_buf(errbuf, errlen, &msg);
-                -1
-            }
-            Err(_) => {
-                let msg = coded(&codes::BIND_CAPI_PANIC, "panic while reading scenario ids");
-                copy_to_buf(errbuf, errlen, &msg);
-                -1
-            }
-        }
+        finish_fill(
+            errbuf,
+            errlen,
+            "panic while reading scenario ids",
+            out,
+            cap,
+            || {
+                let dir = required_cstr(dir, "dir")?;
+                let from = required_cstr(from, "from")?;
+                powerio_matrix::dataset_scenario_ids(std::path::Path::new(dir), from)
+                    .map_err(err_line)
+            },
+        )
     }
 }
 
@@ -1893,7 +1878,7 @@ pub unsafe extern "C" fn pio_bus_shunt(
 /// Resolve a C convention token. The tokens Python's `convention=` keyword and
 /// the CLI's `--convention` accept, case and separator insensitive.
 ///
-/// [`powerio::DcConvention::from_token`] owns the token set and the refusals,
+/// [`powerio::DcConvention`]'s `FromStr` owns the token set and the refusals,
 /// so "the tokens Python accepts" is a shared parser rather than a second copy
 /// of the match arms that could drift from it. NULL is the only spelling of
 /// "unset" here: an empty string is a token the caller passed, and resolving
@@ -1904,7 +1889,7 @@ fn dc_convention_from_c(convention: *const c_char) -> Result<powerio_matrix::DcC
         // NULL is the default, as it is for every other optional C argument.
         return Ok(powerio_matrix::DcConvention::default());
     };
-    powerio_matrix::DcConvention::from_token(raw)
+    raw.parse::<powerio_matrix::DcConvention>()
         .map_err(|message| coded(&codes::BIND_CAPI_INVALID_OPTIONS, message))
 }
 
@@ -1936,10 +1921,14 @@ fn branch_row_as_i64(row: usize) -> Result<i64, String> {
 }
 
 /// Run `f`, write `vals` into `out` under the cap/count convention, and return
-/// the total. `-1` on a refusal or a panic, with the message in `errbuf`: the
-/// `pio_scenario_ids` shape, because the guard's refusal is the value here and
-/// a plain `0` return would throw it away.
-#[cfg(feature = "matrix")]
+/// the total. `-1` on a refusal or a panic, with the message in `errbuf`,
+/// because the guard's refusal is the value here and a plain `0` return would
+/// throw it away.
+///
+/// [`finish_string`]'s counterpart for the array extractors, and like it, not
+/// any one feature's helper: the DC extractors and [`pio_scenario_ids`] share
+/// the shape, so it is built whenever either of their features is.
+#[cfg(any(feature = "matrix", feature = "gridfm"))]
 unsafe fn finish_fill<T: Copy>(
     errbuf: *mut c_char,
     errlen: usize,
@@ -1996,6 +1985,13 @@ unsafe fn finish_fill<T: Copy>(
 /// the size query and the fill are two builds, and each of the four
 /// extractors pays its own. A consumer that wants several of these vectors
 /// should size once, keep the count, and hold what it reads.
+///
+/// The size query is skippable outright, which is the cheaper half of that
+/// advice: `m <= pio_n_branches` always, so a caller that allocates
+/// [`pio_n_branches`] entries can fill in one call and take the return as the
+/// real count. Every extractor in this family has such a bound and states it,
+/// and paying a few unused entries per vector is what buys back the second
+/// build.
 #[cfg(feature = "matrix")]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_branch_susceptance(
@@ -2029,7 +2025,9 @@ pub unsafe extern "C" fn pio_branch_susceptance(
 /// shifter's contribution instead.
 ///
 /// `convention`, the per-call incidence build, and the `-1` refusal are
-/// [`pio_branch_susceptance`]'s.
+/// [`pio_branch_susceptance`]'s. The bound is exact here — `n` is
+/// [`pio_n_buses`], the same `n` every per-bus array carries — so a caller
+/// that allocates it never needs the `(NULL, 0)` query at all.
 #[cfg(feature = "matrix")]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_phase_shift_injection(
@@ -2062,7 +2060,8 @@ pub unsafe extern "C" fn pio_phase_shift_injection(
 /// `m <= pio_n_branches`.
 ///
 /// `convention`, the per-call incidence build, and the `-1` refusal are
-/// [`pio_branch_susceptance`]'s.
+/// [`pio_branch_susceptance`]'s, and so is the bound: a [`pio_n_branches`]
+/// buffer fills in one call.
 #[cfg(feature = "matrix")]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_incidence_branch_rows(
@@ -2097,7 +2096,10 @@ pub unsafe extern "C" fn pio_incidence_branch_rows(
 /// A case with none returns `0`, which is the ordinary answer.
 ///
 /// `convention`, the per-call incidence build, and the `-1` refusal are
-/// [`pio_branch_susceptance`]'s.
+/// [`pio_branch_susceptance`]'s. These rows are a subset of the branch table,
+/// so [`pio_n_branches`] bounds them too and the same one-call fill applies —
+/// on the ordinary case that skips nothing, the buffer goes entirely unused
+/// and the build is still saved.
 #[cfg(feature = "matrix")]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_incidence_skipped_rows(
@@ -3946,19 +3948,23 @@ mod tests {
         CString::new(serde_json::to_string(&doc).unwrap()).unwrap()
     }
 
+    /// Run one of the DC extractors end to end the way a C consumer must:
+    /// size with `(NULL, 0)`, allocate, fill, and check the two calls agree.
+    /// The element type follows the extractor's own `out` pointer, so `f64`
+    /// and `i64` extractors share this without a turbofish.
     #[cfg(feature = "matrix")]
-    fn parts_f64(
+    fn parts_of<T: Copy + Default>(
         net: *const PioNetwork,
         convention: Option<&str>,
         call: unsafe extern "C" fn(
             *const PioNetwork,
             *const c_char,
-            *mut f64,
+            *mut T,
             usize,
             *mut c_char,
             usize,
         ) -> isize,
-    ) -> Result<Vec<f64>, String> {
+    ) -> Result<Vec<T>, String> {
         let conv = convention.map(|s| CString::new(s).unwrap());
         let conv_ptr = conv.as_ref().map_or(std::ptr::null(), |c| c.as_ptr());
         let mut err = [0 as c_char; PIO_ERRBUF_MIN];
@@ -3974,49 +3980,7 @@ mod tests {
             if n < 0 {
                 return Err(CStr::from_ptr(err.as_ptr()).to_str().unwrap().to_owned());
             }
-            let mut out = vec![0.0; usize::try_from(n).unwrap()];
-            let again = call(
-                net,
-                conv_ptr,
-                out.as_mut_ptr(),
-                out.len(),
-                err.as_mut_ptr(),
-                err.len(),
-            );
-            assert_eq!(again, n, "the size query and the fill disagree");
-            Ok(out)
-        }
-    }
-
-    #[cfg(feature = "matrix")]
-    fn parts_i64(
-        net: *const PioNetwork,
-        convention: Option<&str>,
-        call: unsafe extern "C" fn(
-            *const PioNetwork,
-            *const c_char,
-            *mut i64,
-            usize,
-            *mut c_char,
-            usize,
-        ) -> isize,
-    ) -> Result<Vec<i64>, String> {
-        let conv = convention.map(|s| CString::new(s).unwrap());
-        let conv_ptr = conv.as_ref().map_or(std::ptr::null(), |c| c.as_ptr());
-        let mut err = [0 as c_char; PIO_ERRBUF_MIN];
-        unsafe {
-            let n = call(
-                net,
-                conv_ptr,
-                std::ptr::null_mut(),
-                0,
-                err.as_mut_ptr(),
-                err.len(),
-            );
-            if n < 0 {
-                return Err(CStr::from_ptr(err.as_ptr()).to_str().unwrap().to_owned());
-            }
-            let mut out = vec![0i64; usize::try_from(n).unwrap()];
+            let mut out = vec![T::default(); usize::try_from(n).unwrap()];
             let again = call(
                 net,
                 conv_ptr,
@@ -4063,10 +4027,10 @@ mod tests {
             );
         }
 
-        let series = parts_f64(net, Some("series"), pio_branch_susceptance).unwrap();
-        let reactance = parts_f64(net, Some("reactance-only"), pio_branch_susceptance).unwrap();
-        let rows = parts_i64(net, Some("series"), pio_incidence_branch_rows).unwrap();
-        let skipped = parts_i64(net, Some("series"), pio_incidence_skipped_rows).unwrap();
+        let series = parts_of(net, Some("series"), pio_branch_susceptance).unwrap();
+        let reactance = parts_of(net, Some("reactance-only"), pio_branch_susceptance).unwrap();
+        let rows = parts_of(net, Some("series"), pio_incidence_branch_rows).unwrap();
+        let skipped = parts_of(net, Some("series"), pio_incidence_skipped_rows).unwrap();
 
         assert_eq!(series.len(), m, "case9 has no self-loop and no zero x");
         assert_eq!(reactance.len(), m);
@@ -4100,10 +4064,7 @@ mod tests {
         assert!(saw_resistive, "the fixture no longer exercises the r/x gap");
 
         // NULL selects the default, which is `series`.
-        assert_eq!(
-            parts_f64(net, None, pio_branch_susceptance).unwrap(),
-            series
-        );
+        assert_eq!(parts_of(net, None, pio_branch_susceptance).unwrap(), series);
 
         unsafe { pio_network_free(net) };
     }
@@ -4122,9 +4083,9 @@ mod tests {
             unsafe { CStr::from_ptr(err.as_ptr()) }.to_str().unwrap()
         );
 
-        let series = parts_f64(net, Some("series"), pio_phase_shift_injection).unwrap();
-        let reactance = parts_f64(net, Some("reactance-only"), pio_phase_shift_injection).unwrap();
-        let matpower = parts_f64(net, Some("matpower"), pio_phase_shift_injection).unwrap();
+        let series = parts_of(net, Some("series"), pio_phase_shift_injection).unwrap();
+        let reactance = parts_of(net, Some("reactance-only"), pio_phase_shift_injection).unwrap();
+        let matpower = parts_of(net, Some("matpower"), pio_phase_shift_injection).unwrap();
 
         assert_eq!(series.len(), unsafe { pio_n_buses(net) });
         assert!(
@@ -4165,9 +4126,9 @@ mod tests {
         );
 
         let m = unsafe { pio_n_branches(net) };
-        let b = parts_f64(net, Some("series"), pio_branch_susceptance).unwrap();
-        let rows = parts_i64(net, Some("series"), pio_incidence_branch_rows).unwrap();
-        let skipped = parts_i64(net, Some("series"), pio_incidence_skipped_rows).unwrap();
+        let b = parts_of(net, Some("series"), pio_branch_susceptance).unwrap();
+        let rows = parts_of(net, Some("series"), pio_incidence_branch_rows).unwrap();
+        let skipped = parts_of(net, Some("series"), pio_incidence_skipped_rows).unwrap();
 
         assert_eq!(
             skipped,
@@ -4202,7 +4163,7 @@ mod tests {
             unsafe { CStr::from_ptr(err.as_ptr()) }.to_str().unwrap()
         );
 
-        let msg = parts_f64(net, Some("reactance-only"), pio_branch_susceptance)
+        let msg = parts_of(net, Some("reactance-only"), pio_branch_susceptance)
             .expect_err("an infinite reactance must refuse, not read as an open branch");
         assert!(
             msg.contains("SUSCEPTANCE") || msg.to_lowercase().contains("susceptance"),
@@ -4218,23 +4179,23 @@ mod tests {
     fn the_convention_token_is_the_one_python_and_the_cli_accept() {
         let net = case9();
         // Case and separator insensitive, like every other name in this API.
-        let spaced = parts_f64(net, Some("Series_Impedance"), pio_branch_susceptance).unwrap();
+        let spaced = parts_of(net, Some("Series_Impedance"), pio_branch_susceptance).unwrap();
         assert_eq!(
             spaced,
-            parts_f64(net, Some("series"), pio_branch_susceptance).unwrap()
+            parts_of(net, Some("series"), pio_branch_susceptance).unwrap()
         );
         assert_eq!(
-            parts_f64(net, Some("mp"), pio_branch_susceptance).unwrap(),
-            parts_f64(net, Some("matpower"), pio_branch_susceptance).unwrap()
+            parts_of(net, Some("mp"), pio_branch_susceptance).unwrap(),
+            parts_of(net, Some("matpower"), pio_branch_susceptance).unwrap()
         );
 
-        let unknown = parts_f64(net, Some("bogus"), pio_branch_susceptance).unwrap_err();
+        let unknown = parts_of(net, Some("bogus"), pio_branch_susceptance).unwrap_err();
         assert!(unknown.contains("unknown convention"), "{unknown:?}");
         assert!(unknown.contains("'series'"), "{unknown:?}");
 
         // 0.8's default is not silently resolved to the nearest-looking
         // option, which is a different formula.
-        let retired = parts_f64(net, Some("paper-pure"), pio_branch_susceptance).unwrap_err();
+        let retired = parts_of(net, Some("paper-pure"), pio_branch_susceptance).unwrap_err();
         assert!(retired.contains("reactance-only"), "{retired:?}");
 
         unsafe { pio_network_free(net) };
@@ -4244,14 +4205,14 @@ mod tests {
     #[cfg(feature = "matrix")]
     fn the_dc_part_extractors_tolerate_a_null_handle() {
         for r in [
-            parts_f64(std::ptr::null(), Some("series"), pio_branch_susceptance),
-            parts_f64(std::ptr::null(), Some("series"), pio_phase_shift_injection),
+            parts_of(std::ptr::null(), Some("series"), pio_branch_susceptance),
+            parts_of(std::ptr::null(), Some("series"), pio_phase_shift_injection),
         ] {
             assert!(r.unwrap_err().contains("network handle"));
         }
         for r in [
-            parts_i64(std::ptr::null(), Some("series"), pio_incidence_branch_rows),
-            parts_i64(std::ptr::null(), Some("series"), pio_incidence_skipped_rows),
+            parts_of(std::ptr::null(), Some("series"), pio_incidence_branch_rows),
+            parts_of(std::ptr::null(), Some("series"), pio_incidence_skipped_rows),
         ] {
             assert!(r.unwrap_err().contains("network handle"));
         }
