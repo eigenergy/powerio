@@ -33,7 +33,7 @@ Output is TSV: `case`, `op`, `input_bytes`, `allocs`, `alloc_bytes`, `peak_live_
 
 | | |
 |---|---|
-| Repository revision | `7131d72b815dfb82fa103817f5c11fd22ae2a562` (branch `agent/v1-module-diagnostics-source`) |
+| Measured revision | `b4a1ee6ac30c3179d169d49e0188d2af2563a1ce` (branch `agent/v1-module-diagnostics-source`) |
 | Toolchain | `rustc 1.95.0 (59807616e 2026-04-14)`, `cargo 1.95.0 (f2d3ce0bd 2026-03-21)` |
 | Build profile | `release` with `debug = true` (this manifest's `[profile.release]`) |
 | Host | aarch64-apple-darwin, macOS 25.5.0 |
