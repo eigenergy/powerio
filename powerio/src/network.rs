@@ -13,6 +13,15 @@
 //! Formats represent different data. Cross format writers report unsupported
 //! fields rather than claiming an exact conversion.
 
+// `crate::nonfinite` is text, not a link: the adapters moved into
+// powerio-core's hidden implementation module, and schemars copies these doc
+// comments verbatim into the frozen 0.9 document schema, so the wording cannot
+// change to match.
+#![expect(
+    rustdoc::broken_intra_doc_links,
+    reason = "the frozen 0.9 schema records these doc strings byte for byte"
+)]
+
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
