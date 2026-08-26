@@ -2050,6 +2050,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "powerio-core"
+version = "0.9.0"
+dependencies = [
+ "serde_json",
+]
+
+[[package]]
 name = "powerio-diag"
 version = "0.9.0"
 dependencies = [
