@@ -709,7 +709,8 @@ pub struct OpfDataSolution {
 /// them back off the network.
 ///
 /// # Errors
-/// An invalid document, per [`parse_opfdata_source`]'s rules.
+/// An invalid document: a schema mismatch, a bad base MVA, or inconsistent
+/// table links.
 pub fn parse_opfdata_json(
     content: &str,
 ) -> Result<(BalancedNetwork, OpfDataSolution, Vec<super::Diagnostic>)> {
