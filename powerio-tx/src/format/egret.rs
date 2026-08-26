@@ -13,6 +13,7 @@
 
 use serde_json::{Map, Value};
 
+use super::decode::lenient_table;
 use super::{Conversion, finish, jnum, warn_extra_branch_rating_sets};
 use crate::diagnostics::Diagnostics;
 use crate::diagnostics::codes::EMIT_EGRET as F;
@@ -364,74 +365,105 @@ fn cost_curve(cost: &GenCost) -> Option<Value> {
 /// `name_hint` (e.g. a file stem) names the network when the JSON has no
 /// `model_name`.
 pub(crate) fn parse_egret_source(source: &str, name_hint: Option<&str>) -> Result<BalancedNetwork> {
-    let content: &str = source;
-    let root: Value = serde_json::from_str(content).map_err(|e| bad(e.to_string()))?;
-    let root = root
-        .as_object()
-        .ok_or_else(|| bad("top level is not a JSON object"))?;
-
-    let system = obj(root, "system").ok_or_else(|| bad("missing `system` object"))?;
-    if system.contains_key("time_keys") {
+    // Typed decoding, no generic JSON tree: known fields land in struct
+    // slots and only each element's unknown remainder is retained as extras
+    // (#293). Present-but-mistyped scalar fields still error, now at decode.
+    let document: Document = serde_json::from_str(source).map_err(|e| bad(e.to_string()))?;
+    if document
+        .system
+        .as_ref()
+        .is_some_and(|system| system.time_keys.is_some())
+    {
         return Err(bad(
             "egret unit commitment cases (system.time_keys) are not supported here; \
              `parse_egret_time_series` reads the scalar network profile sequence",
         ));
     }
-    parse_egret_root(root, name_hint)
+    build_from_document(document, name_hint)
 }
 
-/// The shared element table reader both entries use: `root` is a scalar
-/// snapshot (any time series attributes already substituted).
-fn parse_egret_root(root: &Map<String, Value>, name_hint: Option<&str>) -> Result<BalancedNetwork> {
-    let system = obj(root, "system").ok_or_else(|| bad("missing `system` object"))?;
+/// The typed document. Unknown top-level and system keys are ignored, as the
+/// tree walk before it ignored them.
+#[derive(Default, serde::Deserialize)]
+struct Document {
+    #[serde(default)]
+    model_name: Option<Value>,
+    #[serde(default)]
+    system: Option<SystemSection>,
+    #[serde(default)]
+    elements: Option<Elements>,
+}
+
+#[derive(Default, serde::Deserialize)]
+struct SystemSection {
+    #[serde(rename = "baseMVA", default)]
+    base_mva: Option<Value>,
+    #[serde(default)]
+    time_keys: Option<Value>,
+}
+
+#[derive(Default, serde::Deserialize)]
+struct Elements {
+    #[serde(default, deserialize_with = "lenient_table")]
+    bus: Vec<(String, BusRow)>,
+    #[serde(default, deserialize_with = "lenient_table")]
+    load: Vec<(String, LoadRow)>,
+    #[serde(default, deserialize_with = "lenient_table")]
+    shunt: Vec<(String, ShuntRow)>,
+    #[serde(default, deserialize_with = "lenient_table")]
+    branch: Vec<(String, BranchRow)>,
+    #[serde(default, deserialize_with = "lenient_table")]
+    generator: Vec<(String, GenRow)>,
+    #[serde(default, deserialize_with = "lenient_table")]
+    dc_branch: Vec<(String, DcBranchRow)>,
+}
+
+/// The shared build both entries use: the typed document, decoded from text
+/// (scalar) or converted from the substituted tree (sequence).
+fn build_from_document(document: Document, name_hint: Option<&str>) -> Result<BalancedNetwork> {
+    let system = document
+        .system
+        .ok_or_else(|| bad("missing `system` object"))?;
     let base_mva = system
-        .get("baseMVA")
+        .base_mva
+        .as_ref()
         .and_then(Value::as_f64)
         .ok_or_else(|| bad("missing numeric system.baseMVA"))?;
-    let elements = obj(root, "elements").ok_or_else(|| bad("missing `elements` object"))?;
-    let name = root
-        .get("model_name")
+    let elements = document
+        .elements
+        .ok_or_else(|| bad("missing `elements` object"))?;
+    let name = document
+        .model_name
+        .as_ref()
         .and_then(Value::as_str)
         .or(name_hint)
         .unwrap_or("case")
         .to_string();
 
-    let mut buses = Vec::new();
-    if let Some(m) = obj(elements, "bus") {
-        for (k, v) in sorted_kv(m) {
-            buses.push(read_bus(k, v)?);
-        }
-    }
-    let mut loads = Vec::new();
-    if let Some(m) = obj(elements, "load") {
-        for v in sorted_vals(m) {
-            loads.push(read_load(v)?);
-        }
-    }
-    let mut shunts = Vec::new();
-    if let Some(m) = obj(elements, "shunt") {
-        for v in sorted_vals(m) {
-            shunts.push(read_shunt(v)?);
-        }
-    }
-    let mut branches = Vec::new();
-    if let Some(m) = obj(elements, "branch") {
-        for v in sorted_vals(m) {
-            branches.push(read_branch(v)?);
-        }
-    }
-    let mut generators = Vec::new();
-    if let Some(m) = obj(elements, "generator") {
-        for v in sorted_vals(m) {
-            generators.push(read_gen(v)?);
-        }
-    }
-    let mut hvdc = Vec::new();
-    if let Some(m) = obj(elements, "dc_branch") {
-        for v in sorted_vals(m) {
-            hvdc.push(read_dc_branch(v)?);
-        }
-    }
+    let buses = sorted_table(elements.bus)
+        .into_iter()
+        .map(|(key, row)| read_bus(&key, row))
+        .collect::<Result<Vec<_>>>()?;
+    let loads = sorted_table(elements.load)
+        .into_iter()
+        .map(|(_, row)| read_load(row))
+        .collect::<Result<Vec<_>>>()?;
+    let shunts = sorted_table(elements.shunt)
+        .into_iter()
+        .map(|(_, row)| read_shunt(row))
+        .collect::<Result<Vec<_>>>()?;
+    let branches = sorted_table(elements.branch)
+        .into_iter()
+        .map(|(_, row)| read_branch(row))
+        .collect::<Result<Vec<_>>>()?;
+    let generators = sorted_table(elements.generator)
+        .into_iter()
+        .map(|(_, row)| read_gen(&row))
+        .collect::<Result<Vec<_>>>()?;
+    let hvdc = sorted_table(elements.dc_branch)
+        .into_iter()
+        .map(|(_, row)| read_dc_branch(row))
+        .collect::<Result<Vec<_>>>()?;
 
     let net = BalancedNetwork::from_tables(BalancedNetworkTables {
         name,
@@ -453,6 +485,14 @@ fn parse_egret_root(root: &Map<String, Value>, name_hint: Option<&str>) -> Resul
     });
     net.check_references(FMT)?;
     Ok(net)
+}
+
+/// Elements sorted by the integer in the key: a bare id or a labeled key's
+/// trailing index, keeping `load_2` before `load_10` so a re-emit reproduces
+/// the writer's element order.
+fn sorted_table<T>(mut rows: Vec<(String, T)>) -> Vec<(String, T)> {
+    rows.sort_by(|(a, _), (b, _)| num_key(a).cmp(&num_key(b)).then_with(|| a.cmp(b)));
+    rows
 }
 
 /// One time varying attribute of an Egret sequence: which element row it
@@ -556,7 +596,9 @@ pub fn parse_egret_time_series(
         }
     }
 
-    let base = parse_egret_root(&root, name_hint)?;
+    let document: Document =
+        serde_json::from_value(Value::Object(root)).map_err(|e| bad(e.to_string()))?;
+    let base = build_from_document(document, name_hint)?;
     let mut networks = Vec::with_capacity(time_keys.len());
     networks.push(base.clone());
     for point in 1..time_keys.len() {
@@ -697,6 +739,15 @@ fn apply_varying(
     Ok(())
 }
 
+fn bustype_from_str(s: &str) -> BusType {
+    match s {
+        "PV" => BusType::Pv,
+        "ref" => BusType::Ref,
+        "isolated" => BusType::Isolated,
+        _ => BusType::Pq,
+    }
+}
+
 fn bad(message: impl Into<String>) -> Error {
     Error::FormatRead {
         format: FMT,
@@ -716,10 +767,6 @@ fn sorted_kv(map: &Map<String, Value>) -> Vec<(&String, &Value)> {
     let mut items: Vec<(&String, &Value)> = map.iter().collect();
     items.sort_by(|(a, _), (b, _)| num_key(a).cmp(&num_key(b)).then_with(|| a.cmp(b)));
     items
-}
-
-fn sorted_vals(map: &Map<String, Value>) -> Vec<&Value> {
-    sorted_kv(map).into_iter().map(|(_, v)| v).collect()
 }
 
 /// The trailing run of digits as an integer (`"5"` → 5, `"load_10"` → 10); a key
@@ -759,75 +806,71 @@ fn parse_id(v: &Value) -> Option<usize> {
     }
 }
 
-fn id_field(v: &Value, key: &str) -> Result<BusId> {
-    let raw = v
-        .get(key)
-        .ok_or_else(|| bad(format!("element missing `{key}`")))?;
+/// A bus reference cell: a numeric string (egret's convention) or a bare
+/// number, kept raw so the error can name the exact value.
+fn id_cell(slot: Option<&Value>, key: &str) -> Result<BusId> {
+    let raw = slot.ok_or_else(|| bad(format!("element missing `{key}`")))?;
     parse_id(raw)
         .map(BusId)
         .ok_or_else(|| bad(format!("`{key}` is not a numeric bus id: {raw}")))
 }
 
-/// Field `key` as f64, `0.0` when absent. A present-but-non-numeric value is a
-/// hard error, not a silent default. The PSS/E and PowerWorld
-/// readers also hold, so a garbled number can't quietly become a plausible `0.0`
-/// and corrupt the matrices downstream.
-fn f(v: &Value, key: &str) -> Result<f64> {
-    f_or(v, key, 0.0)
-}
-/// Field `key` as f64: absent or null ⇒ `default`, present but not a number ⇒ error.
-fn f_or(v: &Value, key: &str, default: f64) -> Result<f64> {
-    match v.get(key) {
-        None | Some(Value::Null) => Ok(default),
-        Some(x) => x
-            .as_f64()
-            .ok_or_else(|| bad(format!("`{key}` is not a number: {x}"))),
-    }
-}
-/// Field `key` as usize, accepting a number or a numeric string (egret writes
-/// `area`/`zone` as strings; its own parser writes them as numbers). Absent ⇒
-/// `default`; present but not a non-negative integer ⇒ error.
-fn usize_or(v: &Value, key: &str, default: usize) -> Result<usize> {
-    match v.get(key) {
-        None | Some(Value::Null) => Ok(default),
+/// A numeric-or-numeric-string id cell with a default when absent.
+fn usize_cell(slot: Option<&Value>, key: &str, default: usize) -> Result<usize> {
+    match slot {
+        None | Some(&Value::Null) => Ok(default),
         Some(x) => {
             parse_id(x).ok_or_else(|| bad(format!("`{key}` is not a non-negative integer: {x}")))
         }
     }
 }
-/// Field `key` as bool: absent or null ⇒ `default`, present but not a bool ⇒ error.
-fn flag(v: &Value, key: &str, default: bool) -> Result<bool> {
-    match v.get(key) {
-        None | Some(Value::Null) => Ok(default),
+
+/// A present-but-mistyped scalar is an error, not a silent default — the
+/// stance every scalar helper here has always taken, so a garbled number
+/// cannot quietly become a plausible `0.0` and corrupt the matrices
+/// downstream.
+fn num_cell(slot: Option<&Value>, key: &str, default: f64) -> Result<f64> {
+    match slot {
+        None | Some(&Value::Null) => Ok(default),
+        Some(x) => x
+            .as_f64()
+            .ok_or_else(|| bad(format!("`{key}` is not a number: {x}"))),
+    }
+}
+
+fn bool_cell(slot: Option<&Value>, key: &str, default: bool) -> Result<bool> {
+    match slot {
+        None | Some(&Value::Null) => Ok(default),
         Some(Value::Bool(b)) => Ok(*b),
         Some(x) => Err(bad(format!("`{key}` is not a boolean: {x}"))),
     }
 }
 
-fn bustype_from_str(s: &str) -> BusType {
-    match s {
-        "PV" => BusType::Pv,
-        "ref" => BusType::Ref,
-        "isolated" => BusType::Isolated,
-        _ => BusType::Pq,
-    }
+#[derive(Default, serde::Deserialize)]
+struct BusRow {
+    #[serde(default)]
+    matpower_bustype: Option<Value>,
+    #[serde(default)]
+    vm: Option<Value>,
+    #[serde(default)]
+    va: Option<Value>,
+    #[serde(default)]
+    base_kv: Option<Value>,
+    #[serde(default)]
+    v_max: Option<Value>,
+    #[serde(default)]
+    v_min: Option<Value>,
+    #[serde(default)]
+    area: Option<Value>,
+    #[serde(default)]
+    zone: Option<Value>,
+    #[serde(default)]
+    name: Option<Value>,
+    #[serde(flatten)]
+    extras: Extras,
 }
 
-/// Element keys the neutral model names directly are dropped here; whatever's
-/// left is preserved as extras for round trips and cross format conversion
-/// (the PowerModels reader's stance). `known` also carries the fixed stamps
-/// this module's writer emits with no model slot behind them (`shunt_type`),
-/// so a powerio-written file reads back extras-free.
-fn extras_excluding(v: &Value, known: &[&str]) -> Extras {
-    v.as_object().map_or_else(Default::default, |obj| {
-        obj.iter()
-            .filter(|(k, _)| !known.contains(&k.as_str()))
-            .map(|(k, val)| (k.clone(), val.clone()))
-            .collect()
-    })
-}
-
-fn read_bus(key: &str, v: &Value) -> Result<Bus> {
+fn read_bus(key: &str, row: BusRow) -> Result<Bus> {
     let id = key
         .trim()
         .parse::<usize>()
@@ -835,135 +878,216 @@ fn read_bus(key: &str, v: &Value) -> Result<Bus> {
     Ok(Bus {
         id: BusId(id),
         kind: bustype_from_str(
-            v.get("matpower_bustype")
+            row.matpower_bustype
+                .as_ref()
                 .and_then(Value::as_str)
                 .unwrap_or("PQ"),
         ),
-        vm: f_or(v, "vm", 1.0)?,
-        va: f(v, "va")?,
-        base_kv: f(v, "base_kv")?,
-        vmax: f_or(v, "v_max", 1.1)?,
-        vmin: f_or(v, "v_min", 0.9)?,
+        vm: num_cell(row.vm.as_ref(), "vm", 1.0)?,
+        va: num_cell(row.va.as_ref(), "va", 0.0)?,
+        base_kv: num_cell(row.base_kv.as_ref(), "base_kv", 0.0)?,
+        vmax: num_cell(row.v_max.as_ref(), "v_max", 1.1)?,
+        vmin: num_cell(row.v_min.as_ref(), "v_min", 0.9)?,
         evhi: None,
         evlo: None,
-        area: usize_or(v, "area", 0)?,
-        zone: usize_or(v, "zone", 0)?,
-        name: v.get("name").and_then(Value::as_str).map(str::to_string),
+        area: usize_cell(row.area.as_ref(), "area", 0)?,
+        zone: usize_cell(row.zone.as_ref(), "zone", 0)?,
+        name: row
+            .name
+            .as_ref()
+            .and_then(Value::as_str)
+            .map(str::to_string),
         uid: None,
         location: None,
-        extras: extras_excluding(
-            v,
-            &[
-                "matpower_bustype",
-                "vm",
-                "va",
-                "base_kv",
-                "v_max",
-                "v_min",
-                "area",
-                "zone",
-                "name",
-            ],
-        ),
+        extras: row.extras,
     })
 }
 
-fn read_load(v: &Value) -> Result<Load> {
+#[derive(Default, serde::Deserialize)]
+struct LoadRow {
+    #[serde(default)]
+    bus: Option<Value>,
+    #[serde(default)]
+    p_load: Option<Value>,
+    #[serde(default)]
+    q_load: Option<Value>,
+    #[serde(default)]
+    in_service: Option<Value>,
+    #[serde(flatten)]
+    extras: Extras,
+}
+
+fn read_load(row: LoadRow) -> Result<Load> {
     Ok(Load {
-        bus: id_field(v, "bus")?,
-        p: f(v, "p_load")?,
-        q: f(v, "q_load")?,
+        bus: id_cell(row.bus.as_ref(), "bus")?,
+        p: num_cell(row.p_load.as_ref(), "p_load", 0.0)?,
+        q: num_cell(row.q_load.as_ref(), "q_load", 0.0)?,
         voltage_model: None,
-        in_service: flag(v, "in_service", true)?,
+        in_service: bool_cell(row.in_service.as_ref(), "in_service", true)?,
         uid: None,
-        extras: extras_excluding(v, &["bus", "p_load", "q_load", "in_service"]),
+        extras: row.extras,
     })
 }
 
-fn read_shunt(v: &Value) -> Result<Shunt> {
+#[derive(Default, serde::Deserialize)]
+struct ShuntRow {
+    #[serde(default)]
+    bus: Option<Value>,
+    #[serde(default)]
+    gs: Option<Value>,
+    #[serde(default)]
+    bs: Option<Value>,
+    #[serde(default)]
+    in_service: Option<Value>,
+    /// Absorbed so it stays out of extras, as the exclude list always did.
+    #[serde(rename = "shunt_type", default)]
+    _shunt_type: Option<serde::de::IgnoredAny>,
+    #[serde(flatten)]
+    extras: Extras,
+}
+
+fn read_shunt(row: ShuntRow) -> Result<Shunt> {
     Ok(Shunt {
-        bus: id_field(v, "bus")?,
-        g: f(v, "gs")?,
-        b: f(v, "bs")?,
-        in_service: flag(v, "in_service", true)?,
+        bus: id_cell(row.bus.as_ref(), "bus")?,
+        g: num_cell(row.gs.as_ref(), "gs", 0.0)?,
+        b: num_cell(row.bs.as_ref(), "bs", 0.0)?,
+        in_service: bool_cell(row.in_service.as_ref(), "in_service", true)?,
         control: None,
         uid: None,
-        extras: extras_excluding(v, &["bus", "gs", "bs", "in_service", "shunt_type"]),
+        extras: row.extras,
     })
 }
 
-fn read_branch(v: &Value) -> Result<Branch> {
-    let is_xf = v.get("branch_type").and_then(Value::as_str) == Some("transformer");
+#[derive(Default, serde::Deserialize)]
+struct BranchRow {
+    #[serde(default)]
+    from_bus: Option<Value>,
+    #[serde(default)]
+    to_bus: Option<Value>,
+    #[serde(default)]
+    resistance: Option<Value>,
+    #[serde(default)]
+    reactance: Option<Value>,
+    #[serde(default)]
+    charging_susceptance: Option<Value>,
+    #[serde(default)]
+    rating_long_term: Option<Value>,
+    #[serde(default)]
+    rating_short_term: Option<Value>,
+    #[serde(default)]
+    rating_emergency: Option<Value>,
+    #[serde(default)]
+    branch_type: Option<Value>,
+    #[serde(default)]
+    transformer_tap_ratio: Option<Value>,
+    #[serde(default)]
+    transformer_phase_shift: Option<Value>,
+    #[serde(default)]
+    in_service: Option<Value>,
+    #[serde(default)]
+    angle_diff_min: Option<Value>,
+    #[serde(default)]
+    angle_diff_max: Option<Value>,
+    #[serde(flatten)]
+    extras: Extras,
+}
+
+fn read_branch(row: BranchRow) -> Result<Branch> {
+    let is_xf = row.branch_type.as_ref().and_then(Value::as_str) == Some("transformer");
     Ok(Branch {
-        from: id_field(v, "from_bus")?,
-        to: id_field(v, "to_bus")?,
-        r: f(v, "resistance")?,
-        x: f(v, "reactance")?,
-        b: f(v, "charging_susceptance")?,
+        from: id_cell(row.from_bus.as_ref(), "from_bus")?,
+        to: id_cell(row.to_bus.as_ref(), "to_bus")?,
+        r: num_cell(row.resistance.as_ref(), "resistance", 0.0)?,
+        x: num_cell(row.reactance.as_ref(), "reactance", 0.0)?,
+        b: num_cell(
+            row.charging_susceptance.as_ref(),
+            "charging_susceptance",
+            0.0,
+        )?,
         charging: None,
-        rate_a: f(v, "rating_long_term")?,
-        rate_b: f(v, "rating_short_term")?,
-        rate_c: f(v, "rating_emergency")?,
+        rate_a: num_cell(row.rating_long_term.as_ref(), "rating_long_term", 0.0)?,
+        rate_b: num_cell(row.rating_short_term.as_ref(), "rating_short_term", 0.0)?,
+        rate_c: num_cell(row.rating_emergency.as_ref(), "rating_emergency", 0.0)?,
         rating_sets: Vec::new(),
         current_ratings: None,
         tap: if is_xf {
-            f_or(v, "transformer_tap_ratio", 1.0)?
+            num_cell(
+                row.transformer_tap_ratio.as_ref(),
+                "transformer_tap_ratio",
+                1.0,
+            )?
         } else {
             0.0
         },
-        shift: f(v, "transformer_phase_shift")?,
-        in_service: flag(v, "in_service", true)?,
-        angmin: f_or(v, "angle_diff_min", -360.0)?,
-        angmax: f_or(v, "angle_diff_max", 360.0)?,
+        shift: num_cell(
+            row.transformer_phase_shift.as_ref(),
+            "transformer_phase_shift",
+            0.0,
+        )?,
+        in_service: bool_cell(row.in_service.as_ref(), "in_service", true)?,
+        angmin: num_cell(row.angle_diff_min.as_ref(), "angle_diff_min", -360.0)?,
+        angmax: num_cell(row.angle_diff_max.as_ref(), "angle_diff_max", 360.0)?,
         control: None,
         solution: None,
         uid: None,
         route: None,
-        extras: extras_excluding(
-            v,
-            &[
-                "from_bus",
-                "to_bus",
-                "resistance",
-                "reactance",
-                "charging_susceptance",
-                "rating_long_term",
-                "rating_short_term",
-                "rating_emergency",
-                "branch_type",
-                "transformer_tap_ratio",
-                "transformer_phase_shift",
-                "in_service",
-                "angle_diff_min",
-                "angle_diff_max",
-            ],
-        ),
+        extras: row.extras,
     })
 }
 
-fn read_gen(v: &Value) -> Result<Generator> {
-    let startup = f_or(v, "startup_cost", 0.0)?;
-    let shutdown = f_or(v, "shutdown_cost", 0.0)?;
+#[derive(Default, serde::Deserialize)]
+struct GenRow {
+    #[serde(default)]
+    bus: Option<Value>,
+    #[serde(default)]
+    pg: Option<Value>,
+    #[serde(default)]
+    qg: Option<Value>,
+    #[serde(default)]
+    p_max: Option<Value>,
+    #[serde(default)]
+    p_min: Option<Value>,
+    #[serde(default)]
+    q_max: Option<Value>,
+    #[serde(default)]
+    q_min: Option<Value>,
+    #[serde(default)]
+    vg: Option<Value>,
+    #[serde(default)]
+    mbase: Option<Value>,
+    #[serde(default)]
+    in_service: Option<Value>,
+    #[serde(default)]
+    startup_cost: Option<Value>,
+    #[serde(default)]
+    shutdown_cost: Option<Value>,
+    #[serde(default)]
+    p_cost: Option<Value>,
+}
+
+fn read_gen(row: &GenRow) -> Result<Generator> {
+    let startup = num_cell(row.startup_cost.as_ref(), "startup_cost", 0.0)?;
+    let shutdown = num_cell(row.shutdown_cost.as_ref(), "shutdown_cost", 0.0)?;
     // A present `p_cost` that doesn't parse is a hard error, not a silent drop:
     // the same stance the scalar field helpers take, so a malformed cost curve
     // can't quietly become a free generator.
-    let cost = match v.get("p_cost") {
-        None | Some(Value::Null) => None,
+    let cost = match row.p_cost.as_ref().filter(|pc| !pc.is_null()) {
+        None => None,
         Some(pc) => Some(read_cost(pc, startup, shutdown).ok_or_else(|| {
             bad("`p_cost` is present but has an unrecognized or malformed cost_curve")
         })?),
     };
     Ok(Generator {
-        bus: id_field(v, "bus")?,
-        pg: f(v, "pg")?,
-        qg: f(v, "qg")?,
-        pmax: f(v, "p_max")?,
-        pmin: f(v, "p_min")?,
-        qmax: f(v, "q_max")?,
-        qmin: f(v, "q_min")?,
-        vg: f_or(v, "vg", 1.0)?,
-        mbase: f_or(v, "mbase", 100.0)?,
-        in_service: flag(v, "in_service", true)?,
+        bus: id_cell(row.bus.as_ref(), "bus")?,
+        pg: num_cell(row.pg.as_ref(), "pg", 0.0)?,
+        qg: num_cell(row.qg.as_ref(), "qg", 0.0)?,
+        pmax: num_cell(row.p_max.as_ref(), "p_max", 0.0)?,
+        pmin: num_cell(row.p_min.as_ref(), "p_min", 0.0)?,
+        qmax: num_cell(row.q_max.as_ref(), "q_max", 0.0)?,
+        qmin: num_cell(row.q_min.as_ref(), "q_min", 0.0)?,
+        vg: num_cell(row.vg.as_ref(), "vg", 1.0)?,
+        mbase: num_cell(row.mbase.as_ref(), "mbase", 100.0)?,
+        in_service: bool_cell(row.in_service.as_ref(), "in_service", true)?,
         cost,
         caps: Default::default(),
         regulated_bus: None,
@@ -971,55 +1095,71 @@ fn read_gen(v: &Value) -> Result<Generator> {
     })
 }
 
-fn read_dc_branch(v: &Value) -> Result<Hvdc> {
+#[derive(Default, serde::Deserialize)]
+struct DcBranchRow {
+    #[serde(default)]
+    from_bus: Option<Value>,
+    #[serde(default)]
+    to_bus: Option<Value>,
+    #[serde(default)]
+    in_service: Option<Value>,
+    #[serde(default)]
+    pf: Option<Value>,
+    #[serde(default)]
+    pt: Option<Value>,
+    #[serde(default)]
+    qf: Option<Value>,
+    #[serde(default)]
+    qt: Option<Value>,
+    #[serde(default)]
+    vf: Option<Value>,
+    #[serde(default)]
+    vt: Option<Value>,
+    #[serde(default)]
+    pmin: Option<Value>,
+    #[serde(default)]
+    pmax: Option<Value>,
+    #[serde(default)]
+    qminf: Option<Value>,
+    #[serde(default)]
+    qmaxf: Option<Value>,
+    #[serde(default)]
+    qmint: Option<Value>,
+    #[serde(default)]
+    qmaxt: Option<Value>,
+    #[serde(default)]
+    loss0: Option<Value>,
+    #[serde(default)]
+    loss_factor: Option<Value>,
+    #[serde(flatten)]
+    extras: Extras,
+}
+
+fn read_dc_branch(row: DcBranchRow) -> Result<Hvdc> {
     Ok(Hvdc {
-        from: id_field(v, "from_bus")?,
-        to: id_field(v, "to_bus")?,
-        in_service: flag(v, "in_service", true)?,
-        pf: f(v, "pf")?,
-        pt: f(v, "pt")?,
-        qf: f(v, "qf")?,
-        qt: f(v, "qt")?,
-        vf: f_or(v, "vf", 1.0)?,
-        vt: f_or(v, "vt", 1.0)?,
-        pmin: f(v, "pmin")?,
-        pmax: f(v, "pmax")?,
-        qminf: f(v, "qminf")?,
-        qmaxf: f(v, "qmaxf")?,
-        qmint: f(v, "qmint")?,
-        qmaxt: f(v, "qmaxt")?,
-        loss0: f(v, "loss0")?,
-        loss1: f_or(v, "loss_factor", 0.0)?,
+        from: id_cell(row.from_bus.as_ref(), "from_bus")?,
+        to: id_cell(row.to_bus.as_ref(), "to_bus")?,
+        in_service: bool_cell(row.in_service.as_ref(), "in_service", true)?,
+        pf: num_cell(row.pf.as_ref(), "pf", 0.0)?,
+        pt: num_cell(row.pt.as_ref(), "pt", 0.0)?,
+        qf: num_cell(row.qf.as_ref(), "qf", 0.0)?,
+        qt: num_cell(row.qt.as_ref(), "qt", 0.0)?,
+        vf: num_cell(row.vf.as_ref(), "vf", 1.0)?,
+        vt: num_cell(row.vt.as_ref(), "vt", 1.0)?,
+        pmin: num_cell(row.pmin.as_ref(), "pmin", 0.0)?,
+        pmax: num_cell(row.pmax.as_ref(), "pmax", 0.0)?,
+        qminf: num_cell(row.qminf.as_ref(), "qminf", 0.0)?,
+        qmaxf: num_cell(row.qmaxf.as_ref(), "qmaxf", 0.0)?,
+        qmint: num_cell(row.qmint.as_ref(), "qmint", 0.0)?,
+        qmaxt: num_cell(row.qmaxt.as_ref(), "qmaxt", 0.0)?,
+        loss0: num_cell(row.loss0.as_ref(), "loss0", 0.0)?,
+        loss1: num_cell(row.loss_factor.as_ref(), "loss_factor", 0.0)?,
         cost: None,
         uid: None,
-        extras: extras_excluding(
-            v,
-            &[
-                "from_bus",
-                "to_bus",
-                "in_service",
-                "pf",
-                "pt",
-                "qf",
-                "qt",
-                "vf",
-                "vt",
-                "pmin",
-                "pmax",
-                "qminf",
-                "qmaxf",
-                "qmint",
-                "qmaxt",
-                "loss0",
-                "loss_factor",
-            ],
-        ),
+        extras: row.extras,
     })
 }
 
-/// egret `p_cost` → [`GenCost`]. Polynomial `{exp: coeff}` becomes the
-/// highest-order-first coefficient vector (gaps filled with zeros); piecewise
-/// `[[p, c], ...]` becomes the flat `(mw, cost)` breakpoints.
 fn read_cost(p_cost: &Value, startup: f64, shutdown: f64) -> Option<GenCost> {
     let m = p_cost.as_object()?;
     match m.get("cost_curve_type").and_then(Value::as_str)? {
@@ -1201,7 +1341,8 @@ mod tests {
             "qminf": -5.0, "qmaxf": 5.0, "qmint": -4.0, "qmaxt": 4.5,
             "loss0": 0.2, "loss_factor": 0.03
         });
-        let h = read_dc_branch(&v).unwrap();
+        let row: DcBranchRow = serde_json::from_value(v).unwrap();
+        let h = read_dc_branch(row).unwrap();
         assert_eq!((h.from, h.to), (BusId(1), BusId(2)));
         assert_eq!((h.pf, h.pt, h.qf, h.qt), (10.0, -9.5, 1.5, -1.0));
         assert_eq!((h.vf, h.vt), (1.02, 0.99));
@@ -1254,7 +1395,8 @@ mod tests {
             "p_max": 1.0, "p_min": 0.0, "q_max": 1.0, "q_min": -1.0,
             "p_cost": {"data_type": "cost_curve", "cost_curve_type": "bogus", "values": {}}
         });
-        assert!(matches!(read_gen(&v), Err(Error::FormatRead { .. })));
+        let row: GenRow = serde_json::from_value(v).unwrap();
+        assert!(matches!(read_gen(&row), Err(Error::FormatRead { .. })));
     }
 
     #[test]
