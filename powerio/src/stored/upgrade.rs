@@ -183,17 +183,7 @@ fn upgrade_series(
             ));
         }
         for update in &point.updates {
-            let identity = update
-                .element
-                .source_uid
-                .clone()
-                .or_else(|| {
-                    update
-                        .element
-                        .row
-                        .map(|row| format!("{}:{row}", update.element.table))
-                })
-                .unwrap_or_default();
+            let identity = legacy_identity(network, &update.element);
             for (field, value) in &update.fields {
                 let Some(quantity) = legacy_quantity(&update.element.table, field) else {
                     return Err(refused(
@@ -205,9 +195,18 @@ fn upgrade_series(
                         ),
                     ));
                 };
-                let Some(value) = value.as_f64().or_else(|| match value {
+                let value = value.as_f64().or_else(|| match value {
                     serde_json::Value::Bool(flag) => Some(f64::from(u8::from(*flag))),
                     _ => None,
+                });
+                let Some(value) = value.map(|value| {
+                    // The legacy payload states bus angles in degrees; the
+                    // state vocabulary stores radians.
+                    if quantity == "bus_voltage_angle" {
+                        value.to_radians()
+                    } else {
+                        value
+                    }
                 }) else {
                     return Err(refused(
                         &codes::READ_MODULE_INVALID,
@@ -237,6 +236,34 @@ fn upgrade_series(
             .build()
             .map_err(|error| refused(&codes::READ_MODULE_INVALID, error.to_string()))?,
     ))
+}
+
+/// The state identity of one legacy element reference. Bus columns key by
+/// the bus ID; element columns key by the stated uid, or the `{table}:{row}`
+/// spelling the payload mints for a row without one.
+fn legacy_identity(
+    network: &crate::BalancedNetwork,
+    element: &crate::package::ElementRef,
+) -> String {
+    if element.table == "buses" {
+        let by_row = element
+            .row
+            .and_then(|row| network.buses().get(row))
+            .map(|bus| bus.id.0.to_string());
+        let by_uid = element.source_uid.as_deref().and_then(|uid| {
+            network
+                .buses()
+                .iter()
+                .find(|bus| bus.uid.as_deref() == Some(uid))
+                .map(|bus| bus.id.0.to_string())
+        });
+        return by_row.or(by_uid).unwrap_or_default();
+    }
+    element
+        .source_uid
+        .clone()
+        .or_else(|| element.row.map(|row| format!("{}:{row}", element.table)))
+        .unwrap_or_default()
 }
 
 /// The 0.9 update vocabulary: payload table and serde field name to the state
@@ -272,7 +299,7 @@ fn base_row(network: &crate::BalancedNetwork, quantity: &str) -> Result<Vec<f64>
             .map(|g| f64::from(u8::from(g.in_service)))
             .collect(),
         "bus_voltage_magnitude" => network.buses().iter().map(|b| b.vm).collect(),
-        "bus_voltage_angle" => network.buses().iter().map(|b| b.va).collect(),
+        "bus_voltage_angle" => network.buses().iter().map(|b| b.va.to_radians()).collect(),
         "branch_in_service" => network
             .branches()
             .iter()

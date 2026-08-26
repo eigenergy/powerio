@@ -18,6 +18,7 @@ fn small_network() -> BalancedNetwork {
     let mut bus2 = Bus::new(BusId(2), BusType::Pq, 345.0);
     // A genuine open bound: the stored form must carry it as "Infinity".
     bus2.vmax = f64::INFINITY;
+    bus2.va = 12.0;
     let mut network = BalancedNetwork::in_memory(
         "stored-roundtrip",
         100.0,
@@ -170,11 +171,13 @@ fn legacy_package_text(with_series: bool, with_study: bool) -> String {
         let mut axis = TimeAxis::new(2);
         axis.duration_hours = vec![1.0, 1.0];
         axis.labels = vec!["h0".into(), "h1".into()];
+        let mut angle_fields = BTreeMap::new();
+        angle_fields.insert("va".to_string(), serde_json::json!(30.0));
         let mut second = OperatingPoint::new(1);
-        second.updates = vec![ElementUpdate::new(
-            ElementRef::new("loads", 0),
-            update_fields,
-        )];
+        second.updates = vec![
+            ElementUpdate::new(ElementRef::new("loads", 0), update_fields),
+            ElementUpdate::new(ElementRef::new("buses", 1), angle_fields),
+        ];
         package.operating_points = Some(OperatingPointSeries::new(
             axis,
             vec![OperatingPoint::new(0), second],
@@ -227,6 +230,12 @@ fn legacy_operating_points_become_the_primary_series_value() {
     // Point 0 keeps the static payload's load; point 1 carries the update.
     assert_eq!(series.values()[0].load_active_power("loads:0"), Some(40.0));
     assert_eq!(series.values()[1].load_active_power("loads:0"), Some(75.0));
+    // Legacy angles were degrees; the state vocabulary stores radians. The
+    // base row carries the static payload's angle, the update its own.
+    let base = series.values()[0].bus_voltage_angle(BusId(2)).unwrap();
+    assert!((base - 12.0_f64.to_radians()).abs() < 1e-12, "{base}");
+    let updated = series.values()[1].bus_voltage_angle(BusId(2)).unwrap();
+    assert!((updated - 30.0_f64.to_radians()).abs() < 1e-12, "{updated}");
 }
 
 #[test]
@@ -252,6 +261,8 @@ fn the_frozen_09_fixture_upgrades() {
     };
     assert_eq!(series.len(), 2);
     assert_eq!(series.values()[1].load_active_power("loads:0"), Some(75.0));
+    let updated = series.values()[1].bus_voltage_angle(BusId(2)).unwrap();
+    assert!((updated - 30.0_f64.to_radians()).abs() < 1e-12, "{updated}");
 }
 
 /// The other released 0.9 shapes, frozen as files: a static balanced package
