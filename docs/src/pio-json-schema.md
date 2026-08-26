@@ -41,6 +41,14 @@ ABI exposes as `pio_to_json` and `pio_from_json`. ABI 4 accepted a
 `powerio-json` token in `pio_parse_str` and `pio_to_format`; ABI 5 removed it.
 A bare `.json` file holding this document classifies as `model-json`.
 
+## The version 1 stored module {#pio-module}
+
+PowerIO 1.0 stores `PioModule<PioValue>` as one versioned document. The header is `"schema": "powerio.module"` with an integer `"version": 1`, and the reader dispatches on that header before decoding the exact typed shape: unknown semantic fields, unknown versions, and the pre 0.9 lineage are refused with their stated identity, and released 0.9.x packages upgrade one way on read.
+
+The document carries `producer`, the typed `value` (`kind` and `data`: `balanced_network`, `multiconductor_network`, `balanced_network_time_series`, `balanced_operating_point_time_series`, or `balanced_network_scenario_set`), and the optional common records `sources`, `source_map`, `diagnostics`, `history`, and namespaced `extensions`, omitted when empty. Typed float positions spell nonfinite values `"Infinity"`, `"-Infinity"`, and `"NaN"` and refuse `null`.
+
+The generated JSON Schema for the version 1 document is served at `https://powerio.dev/schema/pio-module/1/schema.json`; the `$id` names that location.
+
 ## Versioning {#pio-package}
 
 Every document powerio authors states one number, `powerio_version`: the
