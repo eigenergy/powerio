@@ -2,7 +2,7 @@
 
 [airspeed velocity](https://asv.readthedocs.io) tracks powerio's Python parse and
 matrix timings across git history and renders a dashboard. This answers "did we
-regress against our past?", while `benchmarks/RESULTS.md` compares several
+regress against our past?", while `evals/performance/RESULTS.md` compares several
 parsers at one commit. It runs locally, not in CI, because
 absolute timings need a quiet machine.
 
@@ -11,7 +11,7 @@ PATH.
 
 ```
 pip install asv
-cd benchmarks/asv
+cd evals/performance/asv
 asv check -E existing:../../.venv/bin/python
 asv run --quick --show-stderr -E existing:../../.venv/bin/python --dry-run
 asv run main^!          # benchmark the current commit

@@ -5,7 +5,7 @@
 # against its source's core across MATPOWER / PowerModels JSON / PSS-E outputs in
 # a single Julia process.
 #
-#   julia --project=benchmarks core_json.jl <file1> [file2 ...]
+#   julia --project=evals/validation core_json.jl <file1> [file2 ...]
 using PowerModels
 PowerModels.silence()
 

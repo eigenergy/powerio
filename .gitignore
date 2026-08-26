@@ -27,12 +27,12 @@ tests/data/*-pypsa-smoke/
 powerio-dist/tools/pmd/Manifest.toml
 
 # Machine-readable bench output (render_tables.py reads it; numbers are per-machine)
-benchmarks/results/
+evals/validation/results/
 
 # asv working dirs (built envs, raw results, generated dashboard)
-benchmarks/asv/env/
-benchmarks/asv/results/
-benchmarks/asv/html/
+evals/performance/asv/env/
+evals/performance/asv/results/
+evals/performance/asv/html/
 tests/data/local_pwb_corpus.tsv
 docs/book/
 docs/src/releasing*.md

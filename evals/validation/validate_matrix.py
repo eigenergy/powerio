@@ -24,7 +24,7 @@ vendored real PSS/E `.raw` and egret `.json` files for those readers.
 
   egret must be importable (pip install gridx-egret). Run from anywhere:
 
-  .venv/bin/python benchmarks/validate_matrix.py
+  .venv/bin/python evals/validation/validate_matrix.py
 
 Exits nonzero if any cell fails.
 """
@@ -112,7 +112,7 @@ def pm_cores(paths):
     if not paths:
         return {}
     out = subprocess.run(
-        ["julia", "--project=benchmarks", "benchmarks/core_json.jl", *paths],
+        ["julia", "--project=evals/validation", "evals/validation/core_json.jl", *paths],
         cwd=ROOT, capture_output=True, text=True,
     )
     cores = {}

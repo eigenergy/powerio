@@ -7,7 +7,7 @@
 # 0→1) — is shared with the batched driver (oracle_compare.jl); this is the
 # standalone one-case wrapper. Needs `cargo build --release -p powerio-capi`.
 #
-#   julia --project=benchmarks validate_exapowerio.jl tests/data/case14.m
+#   julia --project=evals/validation validate_exapowerio.jl tests/data/case14.m
 using ExaPowerIO
 include(joinpath(@__DIR__, "oracle_compare.jl"))
 include(joinpath(@__DIR__, "powerio_ffi.jl"))

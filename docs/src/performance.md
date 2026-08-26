@@ -6,8 +6,8 @@ PowerIO has five benchmark tiers. Keep them separate when publishing numbers.
 | --- | --- | --- |
 | Rust microbenchmarks | `cargo bench -p powerio --bench parse` | parser, writer, and PowerWorld reader timing inside one process |
 | Matrix microbenchmarks | `cargo bench -p powerio-matrix --bench matrix` | sparse matrix, DC OPF component, and dense sensitivity builder timing after parse/indexing |
-| Cross tool parser and matrix comparison | `julia --project=benchmarks benchmarks/bench_julia.jl --json` | powerio through the C ABI against ExaPowerIO.jl and PowerModels.jl, including parse plus Y bus construction |
-| Python parser comparison | `.venv/bin/python benchmarks/bench_parse.py --json <cases>` | Python package parse and matrix path against pandapower reader paths |
+| Cross tool parser and matrix comparison | `julia --project=evals/validation evals/performance/bench_julia.jl --json` | powerio through the C ABI against ExaPowerIO.jl and PowerModels.jl, including parse plus Y bus construction |
+| Python parser comparison | `.venv/bin/python evals/performance/bench_parse.py --json <cases>` | Python package parse and matrix path against pandapower reader paths |
 | C ABI release size | three `cargo build -p powerio-capi --release` feature sets plus `stat` | binary size for core, `arrow,matrix`, and all release features |
 
 The published table lives in the repository benchmark results, and this guide is
@@ -18,19 +18,19 @@ versions used by the comparison harnesses. Regenerate the JSON inputs first,
 then splice only the marked regions:
 
 ```sh
-bash benchmarks/fetch_cases.sh
+bash evals/validation/fetch_cases.sh
 cargo build --release -p powerio-capi --features arrow,matrix
 python3.12 -m venv .venv
-.venv/bin/python -m pip install --upgrade pip maturin -r benchmarks/requirements.txt
+.venv/bin/python -m pip install --upgrade pip maturin -r evals/validation/requirements.txt
 env VIRTUAL_ENV=$PWD/.venv .venv/bin/maturin develop --release
-julia --project=benchmarks benchmarks/bench_julia.jl --json
-.venv/bin/python benchmarks/bench_parse.py --json \
+julia --project=evals/validation evals/performance/bench_julia.jl --json
+.venv/bin/python evals/performance/bench_parse.py --json \
   tests/data/case2869pegase.m \
   tests/data/large/case9241pegase.m \
   tests/data/large/case13659pegase.m \
   tests/data/large/case193k.m
-python3 benchmarks/render_tables.py
-python3 benchmarks/render_tables.py --check
+python3 evals/performance/render_tables.py
+python3 evals/performance/render_tables.py --check
 ```
 
 The Julia benchmark writes `rows` for parse only and `matrix_rows` for parse
@@ -42,7 +42,7 @@ Y bus assembled from its parsed branch admittance rows.
 PowerWorld `.pwb` and `.aux` parse timings are measured by the Rust Criterion
 benchmarks. Fetch the public fixtures, run
 `cargo bench -p powerio --bench parse -- "parse_aux_|parse_pwb_"`, then run
-`python3 benchmarks/extract_powerworld_bench.py` before rendering the tables. If
+`python3 evals/performance/extract_powerworld_bench.py` before rendering the tables. If
 the Texas7k local row is published, pass its aux and pwb paths through
 `POWERIO_BENCH_AUX` and `POWERIO_BENCH_PWB` during the Criterion run.
 
@@ -53,8 +53,8 @@ matrix construction. Its pipeline row measures `Pipeline::run` for the paired
 
 ```sh
 cargo bench -p powerio-matrix --bench matrix
-python3 benchmarks/extract_matrix_bench.py
-python3 benchmarks/render_tables.py
+python3 evals/performance/extract_matrix_bench.py
+python3 evals/performance/render_tables.py
 ```
 
 Use filtered runs while developing a focused change, for example:

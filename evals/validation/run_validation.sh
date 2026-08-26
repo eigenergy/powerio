@@ -35,12 +35,12 @@
 #
 # Prereqs: `cargo build --release -p powerio-capi`, the powerio Python extension
 # built into the Python oracle venv (`.venv` by default), the Julia env
-# instantiated (`julia --project=benchmarks -e 'using Pkg; Pkg.instantiate()'`),
+# instantiated (`julia --project=evals/validation -e 'using Pkg; Pkg.instantiate()'`),
 # and the Python oracle tools (`.venv/bin/python -m pip install -r
-# benchmarks/requirements.txt`). All oracle tools are benchmark scoped, not
+# evals/validation/requirements.txt`). All oracle tools are benchmark scoped, not
 # powerio deps.
 #
-#   bash benchmarks/run_validation.sh
+#   bash evals/validation/run_validation.sh
 #
 # Exits nonzero if any check fails.
 
@@ -64,11 +64,11 @@ else
     done
     if [ -z "$PY" ]; then
         echo "error: Python 3.11+ is required for the validation oracle stack" >&2
-        echo "hint: python3.12 -m venv .venv && .venv/bin/python -m pip install -r benchmarks/requirements.txt" >&2
+        echo "hint: python3.12 -m venv .venv && .venv/bin/python -m pip install -r evals/validation/requirements.txt" >&2
         exit 1
     fi
 fi
-JL=(julia --project=benchmarks)
+JL=(julia --project=evals/validation)
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 export PIO_RESULTS_TSV="$TMP/results.tsv"
@@ -76,7 +76,7 @@ export PIO_RESULTS_TSV="$TMP/results.tsv"
 
 if ! "$PY" -c "import egret, jsonschema, opendssdirect, pandapower, pypsa" >/dev/null 2>&1; then
     echo "error: validation oracle imports failed for $PY" >&2
-    echo "hint: .venv/bin/python -m pip install -r benchmarks/requirements.txt" >&2
+    echo "hint: .venv/bin/python -m pip install -r evals/validation/requirements.txt" >&2
     "$PY" -c "import egret, jsonschema, opendssdirect, pandapower, pypsa"
     exit 1
 fi
@@ -106,42 +106,42 @@ run() { # <label> <command...>
 # 1. PowerModels exports each .m to a per_unit reference JSON (one Julia process).
 #    Must precede the conversions: the PMread leg re-emits these references.
 run "PowerModels reference export (PMread)" \
-    "${JL[@]}" benchmarks/validate_oracles.jl export "$TMP" "${MCASES[@]}"
+    "${JL[@]}" evals/validation/validate_oracles.jl export "$TMP" "${MCASES[@]}"
 
 # 2. powerio runs every conversion the comparisons read (one Python process).
 run "powerio conversions" \
-    "$PY" benchmarks/convert_cases.py "$TMP" --m "${MCASES[@]}" --raw "${RAWCASES[@]}" --egret "${EGCASES[@]}"
+    "$PY" evals/validation/convert_cases.py "$TMP" --m "${MCASES[@]}" --raw "${RAWCASES[@]}" --egret "${EGCASES[@]}"
 
 # 3. PowerModels + ExaPowerIO run every comparison leg (one Julia process). A
 #    nonzero exit here means a leg failed, which the results.tsv tally below counts;
 #    it is not a phase crash, so don't double-count it.
 echo "=== PowerModels + ExaPowerIO comparisons ==="
-"${JL[@]}" benchmarks/validate_oracles.jl compare "$TMP" \
+"${JL[@]}" evals/validation/validate_oracles.jl compare "$TMP" \
     --m "${MCASES[@]}" --raw "${RAWCASES[@]}" --egret "${EGCASES[@]}" || true
 
 # 4. pandapower parse + Y_bus over every case (one Python process; n/a where its
 #    reader can't parse the case). Nonzero exit == a real mismatch, counted below.
 # 4b. pandapower JSON converter output loaded by pandapower itself.
 echo "=== pandapower (parse + Y_bus) ==="
-"$PY" benchmarks/validate_pandapower.py "${MCASES[@]}" || true
+"$PY" evals/validation/validate_pandapower.py "${MCASES[@]}" || true
 echo "=== pandapower JSON converter ==="
-"$PY" benchmarks/validate_pandapower_converter.py "${MCASES[@]}" || true
+"$PY" evals/validation/validate_pandapower_converter.py "${MCASES[@]}" || true
 
 # 4c. PyPSA CSV converter output loaded by PyPSA itself.
 echo "=== PyPSA CSV converter ==="
-"$PY" benchmarks/validate_pypsa.py "${MCASES[@]}" || true
+"$PY" evals/validation/validate_pypsa.py "${MCASES[@]}" || true
 
 # 4d. OpenDSS solves over the distribution micro fixtures.
 echo "=== OpenDSS distribution solve oracle ==="
-"$PY" benchmarks/validate_opendss.py || true
+"$PY" evals/validation/validate_opendss.py || true
 
 # 4e. External schema validation of emitted BMOPF JSON.
 echo "=== BMOPF schema validation ==="
-"$PY" benchmarks/validate_bmopf_schema.py || true
+"$PY" evals/validation/validate_bmopf_schema.py || true
 
 # 5. Full reader x writer matrix (its own batched process).
 echo "=== full reader x writer matrix (PowerModels + egret oracles) ==="
-if "$PY" benchmarks/validate_matrix.py; then
+if "$PY" evals/validation/validate_matrix.py; then
     printf 'matrix(5x5)\tall-cells\tok\n' >>"$PIO_RESULTS_TSV"
 else
     printf 'matrix(5x5)\tall-cells\tFAIL\n' >>"$PIO_RESULTS_TSV"
@@ -162,8 +162,8 @@ mark_fails=$(awk -F'\t' '$3 == "FAIL" { c++ } END { print c + 0 }' "$PIO_RESULTS
 # 7 legs per .m case (PMjson, PMread, PSSE, Exa, pp, pp-json, pypsa)
 # + 1 per raw + 1 per egret + every OpenDSS micro fixture
 # + every emitted BMOPF schema fixture + 1 matrix.
-opendss_expected=$("$PY" benchmarks/validate_opendss.py --count)
-bmopf_schema_expected=$("$PY" benchmarks/validate_bmopf_schema.py --count)
+opendss_expected=$("$PY" evals/validation/validate_opendss.py --count)
+bmopf_schema_expected=$("$PY" evals/validation/validate_bmopf_schema.py --count)
 expected=$((${#MCASES[@]} * 7 + ${#RAWCASES[@]} + ${#EGCASES[@]} + opendss_expected + bmopf_schema_expected + 1))
 got=$(wc -l <"$PIO_RESULTS_TSV")
 short=0

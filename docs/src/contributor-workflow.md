@@ -18,7 +18,7 @@ cargo test -p powerio-cli --test cli
 cargo test -p powerio-capi
 cargo build -p powerio-py
 python3.12 -m venv .venv
-.venv/bin/python -m pip install --upgrade pip maturin -r benchmarks/requirements.txt
+.venv/bin/python -m pip install --upgrade pip maturin -r evals/validation/requirements.txt
 env VIRTUAL_ENV=$PWD/.venv .venv/bin/maturin develop --release
 .venv/bin/pytest python/tests
 mdbook build docs
@@ -32,8 +32,8 @@ Use the smallest gate set that covers the changed surface, then run the
 
 | changed surface | extra gates |
 | --- | --- |
-| parser or writer semantics | `bash benchmarks/run_validation.sh`; format round trip tests; affected `cargo +nightly fuzz run <target> -- -runs=1` harnesses |
-| rich model fields | `bash benchmarks/run_rich_validation.sh` |
+| parser or writer semantics | `bash evals/validation/run_validation.sh`; format round trip tests; affected `cargo +nightly fuzz run <target> -- -runs=1` harnesses |
+| rich model fields | `bash evals/validation/run_rich_validation.sh` |
 | matrix builders | `cargo test -p powerio-matrix`; `cargo bench -p powerio-matrix --bench matrix` |
 | problem instances or DC OPF bundles | `cargo test -p powerio-prob --no-default-features`; `cargo test -p powerio-prob --features matrix` |
 | PowerWorld binary reader | PowerWorld parser tests plus `cargo bench -p powerio --bench parse -- "parse_aux_|parse_pwb_"` |
@@ -44,9 +44,9 @@ Use the smallest gate set that covers the changed surface, then run the
 | CLI behavior | `cargo test -p powerio-cli --test cli` |
 | documentation or website | `mdbook build docs`; `mdbook test docs`; `RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps`; regenerate schemas and the C header when their source rustdoc changes; run `scripts/capi-header-parity.sh`; check links to retired guide outputs |
 
-`benchmarks/run_validation.sh` requires the Python oracle stack in the same
+`evals/validation/run_validation.sh` requires the Python oracle stack in the same
 Python 3.11+ venv as the local wheel. Missing PyPSA, pandapower, or egret is a
-setup failure. `benchmarks/run_rich_validation.sh` treats the committed
+setup failure. `evals/validation/run_rich_validation.sh` treats the committed
 PowerModels rich oracle as strict; missing Julia is a setup failure.
 
 ## Release gates
@@ -65,13 +65,13 @@ scripts/capi-smoke.sh
 POWERIO_CAPI=$PWD/target/release/libpowerio_capi.dylib \
   julia --project=../PowerIO.jl -e 'using Pkg; Pkg.test()'
 cargo bench -p powerio-matrix --bench matrix -- 'matrix_bprime|matrix_ybus|dcopf_'
-(cd benchmarks/asv && ../../.venv/bin/asv check -E existing:../../.venv/bin/python)
-(cd benchmarks/asv && ../../.venv/bin/asv run --quick --show-stderr -E existing:../../.venv/bin/python --dry-run)
+(cd evals/performance/asv && ../../.venv/bin/asv check -E existing:../../.venv/bin/python)
+(cd evals/performance/asv && ../../.venv/bin/asv run --quick --show-stderr -E existing:../../.venv/bin/python --dry-run)
 for target in matpower psse pslf model_json json_classify powerworld_aux pwb pwd; do
   cargo +nightly fuzz run "$target" -- -runs=1
 done
-bash benchmarks/run_validation.sh
-bash benchmarks/run_rich_validation.sh
+bash evals/validation/run_validation.sh
+bash evals/validation/run_rich_validation.sh
 ```
 
 `run_validation.sh` checks the classic transmission paths against
@@ -91,21 +91,21 @@ part of the public behavior and surface as warnings.
 Regenerate benchmark JSON before changing published tables:
 
 ```sh
-julia --project=benchmarks benchmarks/bench_julia.jl --json
-.venv/bin/python benchmarks/bench_parse.py --json <cases>
+julia --project=evals/validation evals/performance/bench_julia.jl --json
+.venv/bin/python evals/performance/bench_parse.py --json <cases>
 cargo bench -p powerio --bench parse -- "parse_aux_|parse_pwb_"
-python3 benchmarks/extract_powerworld_bench.py
+python3 evals/performance/extract_powerworld_bench.py
 cargo bench -p powerio-matrix --bench matrix
-python3 benchmarks/extract_matrix_bench.py
-python3 benchmarks/render_tables.py
-python3 benchmarks/render_tables.py --check
+python3 evals/performance/extract_matrix_bench.py
+python3 evals/performance/render_tables.py
+python3 evals/performance/render_tables.py --check
 ```
 
 The ASV suite tracks Python wheel parse and matrix timing across git history.
 For an uncommitted worktree, smoke test it against the local venv:
 
 ```sh
-cd benchmarks/asv
+cd evals/performance/asv
 ../../.venv/bin/asv check -E existing:../../.venv/bin/python
 ../../.venv/bin/asv run --quick --show-stderr -E existing:../../.venv/bin/python --dry-run
 ```
@@ -117,5 +117,5 @@ when publishing new numbers: commit, tree cleanliness, machine, OS, toolchain,
 Python stack, Julia stack, commands, fixtures, and optional local data.
 
 Broad local corpora stay local. Pass them through documented environment
-variables or `--root` flags, review the reports under `benchmarks/results/`, and
+variables or `--root` flags, review the reports under `evals/validation/results/`, and
 do not commit corpus paths or generated outputs.

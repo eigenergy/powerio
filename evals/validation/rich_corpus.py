@@ -199,7 +199,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--root", action="append", default=[], help="corpus root to scan; repeatable")
     p.add_argument(
         "--output-dir",
-        default="benchmarks/results",
+        default="evals/validation/results",
         help="directory for rich_corpus.tsv/json",
     )
     p.add_argument("--limit", type=int, default=0, help="maximum cases to scan, 0 means no limit")

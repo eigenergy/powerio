@@ -12,7 +12,7 @@ by the naming convention validate_oracles.jl expects:
 A failed or empty conversion is reported and the output left absent, so the
 matching comparison leg fails on a missing file rather than on stale data.
 
-    python benchmarks/convert_cases.py <tmp> --m <m>... --raw <r>... --egret <e>...
+    python evals/validation/convert_cases.py <tmp> --m <m>... --raw <r>... --egret <e>...
 """
 
 import sys

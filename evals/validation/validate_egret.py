@@ -12,7 +12,7 @@ generator cost coefficients summed by polynomial degree).
 
   python validate_egret.py <ref.m|ref.json> <test.json>
 
-Needs the egret package (`pip install -r benchmarks/requirements.txt`), a benchmark
+Needs the egret package (`pip install -r evals/validation/requirements.txt`), a benchmark
 dependency, not a powerio one. Importing ModelData is solver-free, so no pyomo or
 solver stack is pulled in.
 """

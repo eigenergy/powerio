@@ -2,11 +2,11 @@
 # Rich data model validation tier.
 #
 # Strict committed fixtures fail this script. The PowerModels rich oracle needs
-# Julia. Local corpora are opt in and reported under benchmarks/results without
+# Julia. Local corpora are opt in and reported under evals/validation/results without
 # turning external data quirks into a release gate.
 #
-#   bash benchmarks/run_rich_validation.sh
-#   bash benchmarks/run_rich_validation.sh --root /path/to/corpus --root /path/to/other/corpus
+#   bash evals/validation/run_rich_validation.sh
+#   bash evals/validation/run_rich_validation.sh --root /path/to/corpus --root /path/to/other/corpus
 
 set -uo pipefail
 cd "$(dirname "$0")/.."
@@ -28,12 +28,12 @@ else
     done
     if [ -z "$PY" ]; then
         echo "error: Python 3.11+ is required for the rich validation oracle stack" >&2
-        echo "hint: python3.12 -m venv .venv && .venv/bin/python -m pip install -r benchmarks/requirements.txt" >&2
+        echo "hint: python3.12 -m venv .venv && .venv/bin/python -m pip install -r evals/validation/requirements.txt" >&2
         exit 1
     fi
 fi
-JL=(julia --project=benchmarks)
-OUT="${POWERIO_RICH_RESULTS_DIR:-benchmarks/results}"
+JL=(julia --project=evals/validation)
+OUT="${POWERIO_RICH_RESULTS_DIR:-evals/validation/results}"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 mkdir -p "$OUT"
@@ -120,13 +120,13 @@ JSON
 
 if ! command -v julia >/dev/null 2>&1; then
     echo "error: julia is required for the PowerModels rich oracle" >&2
-    echo "hint: julia --project=benchmarks -e 'using Pkg; Pkg.instantiate()'" >&2
+    echo "hint: julia --project=evals/validation -e 'using Pkg; Pkg.instantiate()'" >&2
     strict_fail=$((strict_fail + 1))
     printf 'rich_powermodels_oracle\tPMrich\tFAIL\n' >"$OUT/rich_oracle.tsv"
 else
     echo "=== PowerModels rich oracle ==="
     : >"$TMP/results.tsv"
-    if "${JL[@]}" benchmarks/validate_oracles.jl rich "$TMP" "$TMP/rich_powermodels.json"; then
+    if "${JL[@]}" evals/validation/validate_oracles.jl rich "$TMP" "$TMP/rich_powermodels.json"; then
         cp "$TMP/results.tsv" "$OUT/rich_oracle.tsv"
     else
         strict_fail=$((strict_fail + 1))
@@ -135,7 +135,7 @@ else
 fi
 
 run_report "local rich corpus scan" \
-    "$PY" benchmarks/rich_corpus.py --output-dir "$OUT" "$@"
+    "$PY" evals/validation/rich_corpus.py --output-dir "$OUT" "$@"
 
 if [ -n "${POWERIO_DIST_LOCAL_DSS_CORPUS:-}" ]; then
     echo "=== local distribution DSS corpus report ==="

@@ -3,7 +3,7 @@
 # make_per_unit!. The comparison kernel is shared with the batched driver
 # (oracle_compare.jl); this is the standalone wrapper.
 #
-#   julia --project=benchmarks validate_core.jl <ref> <test1> [test2 ...]
+#   julia --project=evals/validation validate_core.jl <ref> <test1> [test2 ...]
 #
 # Prints "OK <test>" or "FAIL <test>: ..." per file; exits nonzero if any fail.
 using PowerModels

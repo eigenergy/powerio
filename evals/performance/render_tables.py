@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Regenerate the benchmark speed tables in benchmarks/RESULTS.md
+"""Regenerate the benchmark speed tables in evals/performance/RESULTS.md
 from the JSON the bench scripts emit, so the numbers stop being copied by hand.
 
-Reads benchmarks/results/{speed_julia,speed_python,speed_powerworld,speed_matrix}.json
+Reads evals/validation/results/{speed_julia,speed_python,speed_powerworld,speed_matrix}.json
 (written by `bench_julia.jl --json`, `bench_parse.py --json`, and the
 Criterion extractors documented in RESULTS.md) and rewrites only the regions
 fenced by `<!-- BENCH:<id> START -->` / `<!-- BENCH:<id> END -->`.
@@ -12,11 +12,11 @@ Scope: the speed tables only. The correctness matrix and the version block in
 RESULTS.md stay written by hand; correctness is a boolean gated in CI
 (run_validation.sh), separate from per run timing noise.
 
-    python benchmarks/render_tables.py            # rewrite the tables in place
-    python benchmarks/render_tables.py --check    # exit 1 if a table is out of date
+    python evals/performance/render_tables.py            # rewrite the tables in place
+    python evals/performance/render_tables.py --check    # exit 1 if a table is out of date
 
 A region whose JSON is missing any of its canonical cases is left UNCHANGED with a
-warning (run `bash benchmarks/fetch_cases.sh` and re-bench), so a partial run never
+warning (run `bash evals/validation/fetch_cases.sh` and re-bench), so a partial run never
 silently shrinks a published table. Stdlib only; does not import powerio.
 """
 
@@ -237,22 +237,22 @@ def main():
         ]
     )
     if metadata_body:
-        plan.append(("metadata", "benchmarks/RESULTS.md", METADATA_HEADER, metadata_body, metadata_missing))
+        plan.append(("metadata", "evals/performance/RESULTS.md", METADATA_HEADER, metadata_body, metadata_missing))
     if speed_julia is not None:
         body, missing = julia_rows(speed_julia["rows"], SPEED_JULIA_CASES)
-        plan.append(("speed-julia", "benchmarks/RESULTS.md", SPEED_HEADER, body, missing))
+        plan.append(("speed-julia", "evals/performance/RESULTS.md", SPEED_HEADER, body, missing))
         if "matrix_rows" in speed_julia:
             body, missing = julia_ybus_rows(speed_julia["matrix_rows"], SPEED_JULIA_CASES)
-            plan.append(("speed-julia-ybus", "benchmarks/RESULTS.md", SPEED_YBUS_HEADER, body, missing))
+            plan.append(("speed-julia-ybus", "evals/performance/RESULTS.md", SPEED_YBUS_HEADER, body, missing))
     if speed_python is not None:
         body, missing = panda_rows(speed_python["rows"], PANDA_CASES)
-        plan.append(("speed-pandapower", "benchmarks/RESULTS.md", PANDA_HEADER, body, missing))
+        plan.append(("speed-pandapower", "evals/performance/RESULTS.md", PANDA_HEADER, body, missing))
     if speed_powerworld is not None:
         body, missing = powerworld_rows(speed_powerworld["rows"], POWERWORLD_CASES)
-        plan.append(("powerworld", "benchmarks/RESULTS.md", POWERWORLD_HEADER, body, missing))
+        plan.append(("powerworld", "evals/performance/RESULTS.md", POWERWORLD_HEADER, body, missing))
     if speed_matrix is not None:
         body, missing = matrix_rows(speed_matrix["rows"], MATRIX_ROWS)
-        plan.append(("matrix", "benchmarks/RESULTS.md", MATRIX_HEADER, body, missing))
+        plan.append(("matrix", "evals/performance/RESULTS.md", MATRIX_HEADER, body, missing))
 
     if not plan:
         raise SystemExit(f"error: no JSON in {RESULTS_DIR} — run the bench scripts with --json first")

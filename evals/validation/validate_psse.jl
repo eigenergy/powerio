@@ -7,7 +7,7 @@
 #   write side:  ref = case.m         test = powerio's case.raw
 #   read side:   ref = real.raw       test = powerio's PowerModels JSON of real.raw
 #
-#   julia --project=benchmarks validate_psse.jl <ref> <test>
+#   julia --project=evals/validation validate_psse.jl <ref> <test>
 using PowerModels
 PowerModels.silence()
 include(joinpath(@__DIR__, "oracle_compare.jl"))

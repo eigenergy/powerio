@@ -1,10 +1,10 @@
 name: Validation
 
-# Cross-tool correctness gate: run benchmarks/run_validation.sh (the same pass/fail
+# Cross-tool correctness gate: run evals/validation/run_validation.sh (the same pass/fail
 # matrix the maintainer runs locally) and fail the PR on any regression. Only the
 # machine independent correctness checks run here. The speed benchmarks are
-# per-machine and stay a local on-demand task (benchmarks/render_tables.py
-# splices their results into benchmarks/RESULTS.md).
+# per-machine and stay a local on-demand task (evals/performance/render_tables.py
+# splices their results into evals/performance/RESULTS.md).
 #
 # This pulls a Julia + Python oracle stack (PowerModels.jl, ExaPowerIO.jl,
 # pandapower, egret), so it's heavier than the other jobs; the path filter keeps it
@@ -20,7 +20,7 @@ on:
       - "powerio-capi/**"
       - "powerio-prob/**"
       - "powerio-py/**"
-      - "benchmarks/**"
+      - "evals/validation/**"
       - "tests/data/dist/**"
       - "powerio-dist/examples/**"
       - ".github/workflows/validation.yml"
@@ -61,7 +61,7 @@ jobs:
         version: '1'
     - uses: julia-actions/cache@v3
     - name: Instantiate the Julia oracle env
-      run: julia --project=benchmarks -e 'using Pkg; Pkg.instantiate()'
+      run: julia --project=evals/validation -e 'using Pkg; Pkg.instantiate()'
     - uses: actions/setup-python@v6
       with:
         python-version: '3.12'
@@ -71,7 +71,7 @@ jobs:
     - uses: actions/cache@v5
       with:
         path: ~/.cache/pip
-        key: pip-validate-${{ runner.os }}-${{ hashFiles('benchmarks/requirements.txt') }}
+        key: pip-validate-${{ runner.os }}-${{ hashFiles('evals/validation/requirements.txt') }}
         restore-keys: pip-validate-${{ runner.os }}-
     # run_validation.sh defaults to .venv/bin/python when it is Python 3.11+.
     # Build the powerio wheel into that venv and add the Python oracles.
@@ -82,10 +82,10 @@ jobs:
         python -m venv .venv
         .venv/bin/pip install --upgrade pip maturin
         .venv/bin/maturin develop --release
-        .venv/bin/pip install -r benchmarks/requirements.txt
+        .venv/bin/pip install -r evals/validation/requirements.txt
     # The validation script also checks this, but keep the failure close to the
     # setup step.
     - name: Verify the oracle stack imports
       run: .venv/bin/python -c "import egret, jsonschema, opendssdirect, pandapower, pypsa"
     - name: Run the validation matrix
-      run: bash benchmarks/run_validation.sh
+      run: bash evals/validation/run_validation.sh

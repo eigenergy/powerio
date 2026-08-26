@@ -314,7 +314,7 @@ builders, and normalization; the C ABI crate carries its own tests, and
 `pytest` covers the Python bindings. The benchmark validation suite compares
 selected outputs against PowerModels.jl, egret, ExaPowerIO.jl, and pandapower,
 and imports PowerIO's PyPSA CSV folders with PyPSA. Install the oracle stack
-from `benchmarks/requirements.txt` into the same Python 3.11+ venv that holds
+from `evals/validation/requirements.txt` into the same Python 3.11+ venv that holds
 the local `powerio` wheel.
 
 ```
@@ -323,7 +323,7 @@ cargo test
 cargo test -p powerio-capi
 bash scripts/ci-clippy.sh
 pytest python/tests
-bash benchmarks/run_validation.sh
+bash evals/validation/run_validation.sh
 ```
 
 Benchmark method, environment, and current tables are documented in the

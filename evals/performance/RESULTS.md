@@ -15,7 +15,7 @@ The top level questions are:
    PowerModels.jl, ExaPowerIO.jl, egret, and pandapower.
 
 Numbers below come from one local snapshot, release build. Tables report median
-wall time +/- sample standard deviation; the JSON under `benchmarks/results/`
+wall time +/- sample standard deviation; the JSON under `evals/validation/results/`
 also records sample counts. Criterion backed rows use Criterion's median and
 standard deviation estimates. Re-run the scripts below before using the numbers
 in a paper, release note, or package page.
@@ -31,16 +31,16 @@ Benchmark run metadata:
 <!-- BENCH:metadata START -->
 | suite | performed at (UTC) | commit | command |
 | --- | --- | --- | --- |
-| PowerIO.jl parse and Ybus | 2026-07-06T19:35:05.007Z | 7010271a4c05 | `julia --project=benchmarks benchmarks/bench_julia.jl --json` |
-| Python parse | 2026-07-06T19:15:26Z | 72e35ad566d2 | `python benchmarks/bench_parse.py --json tests/data/case2869pegase.m tests/data/large/case9241pegase.m tests/data/large/case13659pegase.m tests/data/large/case193k.m` |
-| PowerWorld readers | 2026-07-06T19:06:18Z | 72e35ad566d2 | `POWERIO_BENCH_AUX=<Texas7k_20210804.AUX> POWERIO_BENCH_PWB=<Texas7k_20210804.PWB> cargo bench -p powerio --bench parse -- "parse_aux_\|parse_pwb_" && python3 benchmarks/extract_powerworld_bench.py` |
-| matrix builders | 2026-07-06T19:18:48Z | 72e35ad566d2 | `cargo bench -p powerio-matrix --bench matrix && python3 benchmarks/extract_matrix_bench.py` |
+| PowerIO.jl parse and Ybus | 2026-07-06T19:35:05.007Z | 7010271a4c05 | `julia --project=evals/validation evals/performance/bench_julia.jl --json` |
+| Python parse | 2026-07-06T19:15:26Z | 72e35ad566d2 | `python evals/performance/bench_parse.py --json tests/data/case2869pegase.m tests/data/large/case9241pegase.m tests/data/large/case13659pegase.m tests/data/large/case193k.m` |
+| PowerWorld readers | 2026-07-06T19:06:18Z | 72e35ad566d2 | `POWERIO_BENCH_AUX=<Texas7k_20210804.AUX> POWERIO_BENCH_PWB=<Texas7k_20210804.PWB> cargo bench -p powerio --bench parse -- "parse_aux_\|parse_pwb_" && python3 evals/performance/extract_powerworld_bench.py` |
+| matrix builders | 2026-07-06T19:18:48Z | 72e35ad566d2 | `cargo bench -p powerio-matrix --bench matrix && python3 evals/performance/extract_matrix_bench.py` |
 <!-- BENCH:metadata END -->
 
 ## Speed
 
 All parser timings run in one Julia process under the same
-`BenchmarkTools.@benchmark` harness (`benchmarks/bench_julia.jl`). The headline
+`BenchmarkTools.@benchmark` harness (`evals/performance/bench_julia.jl`). The headline
 PowerIO column calls the public `PowerIO.jl parse_file` API. The raw Rust C ABI
 handle timing stays in the table as a lower bound. `net.data` measures the
 explicit JSON shaped view materialization that `parse_file` now avoids.
@@ -90,7 +90,7 @@ the correctness gate.
 ## vs pandapower
 
 pandapower reads MATPOWER `.m` through `matpowercaseframes` (a pandas reader) and
-then `from_mpc` builds its `net`. `benchmarks/bench_parse.py`, same machine:
+then `from_mpc` builds its `net`. `evals/performance/bench_parse.py`, same machine:
 
 <!-- BENCH:speed-pandapower START -->
 | case | powerio parse | powerio parse + Y_bus + Bp | matpowercaseframes (pandapower's `.m` reader) |
@@ -113,7 +113,7 @@ Bp matrices.
 
 `cargo bench --bench parse -- "parse_aux_|parse_pwb_"` times both PowerWorld
 readers on the same cases: the vendored 200 bus pair, the fetched 2000 bus
-pair and RTS-GMLC (`benchmarks/fetch_powerworld.sh`), and any file passed
+pair and RTS-GMLC (`evals/validation/fetch_powerworld.sh`), and any file passed
 through `POWERIO_BENCH_AUX`/`POWERIO_BENCH_PWB` for cases that cannot be
 fetched. Criterion median wall time, same machine as above.
 
@@ -197,13 +197,13 @@ Refresh those rows with:
 
 ```
 cargo bench -p powerio-matrix --bench matrix
-python3 benchmarks/extract_matrix_bench.py
-python3 benchmarks/render_tables.py
+python3 evals/performance/extract_matrix_bench.py
+python3 evals/performance/render_tables.py
 ```
 
 ## Correctness: validation suite
 
-`bash benchmarks/run_validation.sh` runs every validator over every fixture and
+`bash evals/validation/run_validation.sh` runs every validator over every fixture and
 prints a pass/fail matrix. The latest local run passed:
 
 | fixture | PMjson | PMread | PSS/E | ExaPowerIO | pandapower Y_bus | pandapower JSON | PyPSA CSV |
@@ -264,7 +264,7 @@ What each column checks:
 
 ### Full reader × writer matrix
 
-`benchmarks/validate_matrix.py` converts each source to every legacy text target and checks the
+`evals/validation/validate_matrix.py` converts each source to every legacy text target and checks the
 output's electrical core against the source's own core, read by an independent
 oracle (PowerModels.jl for MATPOWER / PowerModels JSON / PSS/E, and PowerWorld via
 a powerio `.aux` → JSON bridge; the `egret` package for egret). The diagonal
@@ -288,15 +288,15 @@ for the conventions and limits.
 ## Reproduce
 
 ```
-bash benchmarks/fetch_cases.sh                 # large cases into gitignored tests/data/large
+bash evals/validation/fetch_cases.sh                 # large cases into gitignored tests/data/large
 cargo build --release -p powerio-capi           # the C ABI the Julia harness calls
 python3.12 -m venv .venv                        # Python oracle venv
-.venv/bin/python -m pip install --upgrade pip maturin -r benchmarks/requirements.txt
+.venv/bin/python -m pip install --upgrade pip maturin -r evals/validation/requirements.txt
 env VIRTUAL_ENV=$PWD/.venv .venv/bin/maturin develop --release
-julia --project=benchmarks -e 'using Pkg; Pkg.instantiate()'
+julia --project=evals/validation -e 'using Pkg; Pkg.instantiate()'
 
-julia --project=benchmarks benchmarks/bench_julia.jl --json # parser speed table
-.venv/bin/python benchmarks/bench_parse.py --json \
+julia --project=evals/validation evals/performance/bench_julia.jl --json # parser speed table
+.venv/bin/python evals/performance/bench_parse.py --json \
   tests/data/case2869pegase.m \
   tests/data/large/case9241pegase.m \
   tests/data/large/case13659pegase.m \
@@ -304,27 +304,27 @@ julia --project=benchmarks benchmarks/bench_julia.jl --json # parser speed table
 POWERIO_BENCH_AUX=<Texas7k_20210804.AUX> \
 POWERIO_BENCH_PWB=<Texas7k_20210804.PWB> \
   cargo bench -p powerio --bench parse                # parser, writer, PowerWorld, PWD
-python3 benchmarks/extract_powerworld_bench.py
+python3 evals/performance/extract_powerworld_bench.py
 cargo bench -p powerio-matrix --bench matrix           # sparse matrix and DC OPF builders
-python3 benchmarks/extract_matrix_bench.py
-python3 benchmarks/render_tables.py
-python3 benchmarks/render_tables.py --check
-bash benchmarks/run_validation.sh                          # correctness matrix
+python3 evals/performance/extract_matrix_bench.py
+python3 evals/performance/render_tables.py
+python3 evals/performance/render_tables.py --check
+bash evals/validation/run_validation.sh                          # correctness matrix
 ```
 
 The oracle tools are benchmark scoped: PowerModels.jl and ExaPowerIO.jl in
-`benchmarks/Project.toml`, pandapower, PyPSA, and egret in `benchmarks/requirements.txt`.
+`evals/validation/Project.toml`, pandapower, PyPSA, and egret in `evals/validation/requirements.txt`.
 None is a dependency of the powerio package or wheel.
 
 Versions for the run above: Julia 1.12.6 with PowerModels 0.21.6, ExaPowerIO
-0.3.0, BenchmarkTools 1.8.0 (`benchmarks/Project.toml` / `Manifest.toml`);
+0.3.0, BenchmarkTools 1.8.0 (`evals/validation/Project.toml` / `Manifest.toml`);
 Python package stack `powerio 0.3.3`, pandapower 3.2.2, matpowercaseframes
 1.1.6, gridx-egret 0.6.2, PyPSA 1.2.4, scipy 1.18.0, numpy 2.5.0, pandas
 2.3.3, networkx 3.6.1.
 
 ## Rich data model validation
 
-`bash benchmarks/run_rich_validation.sh` is the validation tier for fields that
+`bash evals/validation/run_rich_validation.sh` is the validation tier for fields that
 do not fit the MATPOWER row shape: branch terminal admittance, switches, branch
 current ratings and flow solution values, storage current ratings, HVDC costs,
 and load voltage models.
@@ -340,7 +340,7 @@ cargo test -p powerio-matrix ybus_uses_asymmetric_terminal_admittance
 It also runs a PowerModels JSON oracle leg when Julia is available:
 
 ```
-julia --project=benchmarks benchmarks/validate_oracles.jl rich <tmp> <rich-json>...
+julia --project=evals/validation evals/validation/validate_oracles.jl rich <tmp> <rich-json>...
 ```
 
 That leg asks PowerModels.jl to parse rich PowerModels JSON and compares the
@@ -352,14 +352,14 @@ The broad corpus part is opt in and report only. It never commits local paths or
 external data. Point it at any local case corpus with repeated `--root` flags:
 
 ```
-bash benchmarks/run_rich_validation.sh --root <local-corpus> --root <another-local-corpus>
+bash evals/validation/run_rich_validation.sh --root <local-corpus> --root <another-local-corpus>
 ```
 
 The scanner also accepts `POWERIO_RICH_ROOTS` as a path list separated by the
 platform path separator. It treats every root the same way; package test data,
 local archives, and generated cases are just corpus roots. Reports are written to
-`benchmarks/results/rich_corpus.tsv`, `benchmarks/results/rich_corpus.json`,
-`benchmarks/results/rich_oracle.tsv`, and `benchmarks/results/rich_dist_local.tsv`;
+`evals/validation/results/rich_corpus.tsv`, `evals/validation/results/rich_corpus.json`,
+`evals/validation/results/rich_oracle.tsv`, and `evals/validation/results/rich_dist_local.tsv`;
 that directory is gitignored.
 
 Distribution local DSS corpus checks stay opt in through

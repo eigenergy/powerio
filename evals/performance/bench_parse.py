@@ -12,11 +12,11 @@ Four rows, from leanest to fullest:
 - ``matpowercaseframes: parse`` — pandapower's ``.m`` reader (pandas DataFrames).
 - ``pandapower: from_mpc`` — the full convert-into-``net`` path.
 
-    python benchmarks/bench_parse.py [path/to/case.m ...]
+    python evals/performance/bench_parse.py [path/to/case.m ...]
 
 Run it with the venv that has the extension and benchmark baselines installed:
 
-    .venv/bin/python -m pip install --upgrade pip maturin -r benchmarks/requirements.txt
+    .venv/bin/python -m pip install --upgrade pip maturin -r evals/validation/requirements.txt
     env VIRTUAL_ENV=$PWD/.venv .venv/bin/maturin develop --release
 """
 
@@ -80,7 +80,7 @@ def benchmark_metadata(args):
         .isoformat(timespec="seconds")
         .replace("+00:00", "Z"),
         "git_commit": commit,
-        "command": " ".join(["python", "benchmarks/bench_parse.py"] + args),
+        "command": " ".join(["python", "evals/performance/bench_parse.py"] + args),
     }
 
 
@@ -122,7 +122,7 @@ def bench_case(path: Path):
             raise
         raise RuntimeError(
             "matpowercaseframes is required for the published Python benchmark; "
-            "install benchmarks/requirements.txt into the same venv"
+            "install evals/validation/requirements.txt into the same venv"
         ) from exc
     except Exception as exc:  # noqa: BLE001 - baseline readers raise on some cases
         print(
@@ -142,7 +142,7 @@ def bench_case(path: Path):
         except ImportError as exc:
             raise RuntimeError(
                 "pandapower is required for the published Python benchmark; "
-                "install benchmarks/requirements.txt into the same venv"
+                "install evals/validation/requirements.txt into the same venv"
             ) from exc
         except Exception as exc:  # noqa: BLE001 - from_mpc raises on some cases (pp 3.2.2)
             print(f"pandapower from_mpc failed on this case: {type(exc).__name__}: {exc}")

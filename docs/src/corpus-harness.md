@@ -112,8 +112,8 @@ every cell. (This wants stable warning codes; see the resourcing note
 below.)
 
 **Solve pass.** Each sibling solves through the oracles the repository
-already carries — `benchmarks/validate_opendss.py` (opendssdirect) for dss,
-`benchmarks/validate_psse.jl` (PowerModels) and pandapower `runpp` on the
+already carries — `evals/validation/validate_opendss.py` (opendssdirect) for dss,
+`evals/validation/validate_psse.jl` (PowerModels) and pandapower `runpp` on the
 transmission side — and the tool compares outcomes across siblings of
 one bucket: convergence disagreement, voltage-magnitude spread beyond
 tolerance, injection residuals. A case whose formats disagree about

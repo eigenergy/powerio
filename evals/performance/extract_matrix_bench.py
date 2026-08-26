@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Write benchmarks/results/speed_matrix.json from Criterion estimates.
+"""Write evals/validation/results/speed_matrix.json from Criterion estimates.
 
 Run after:
 
@@ -7,7 +7,7 @@ Run after:
 
 The benchmark parses and indexes fixtures outside the timed loop. These rows
 therefore measure derived matrix construction, not file parsing. The output
-feeds benchmarks/render_tables.py. Stdlib only; does not import powerio.
+feeds evals/performance/render_tables.py. Stdlib only; does not import powerio.
 """
 
 import json
@@ -110,7 +110,7 @@ def metadata():
         .isoformat(timespec="seconds")
         .replace("+00:00", "Z"),
         "git_commit": commit,
-        "command": "cargo bench -p powerio-matrix --bench matrix && python3 benchmarks/extract_matrix_bench.py",
+        "command": "cargo bench -p powerio-matrix --bench matrix && python3 evals/performance/extract_matrix_bench.py",
     }
 
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Write benchmarks/results/speed_powerworld.json from Criterion estimates.
+"""Write evals/validation/results/speed_powerworld.json from Criterion estimates.
 
 Run after:
 
@@ -7,7 +7,7 @@ Run after:
       POWERIO_BENCH_PWB=/path/to/Texas7k_20210804.PWB \
       cargo bench -p powerio --bench parse -- "parse_aux_|parse_pwb_"
 
-The output feeds benchmarks/render_tables.py. Stdlib only; does not import
+The output feeds evals/performance/render_tables.py. Stdlib only; does not import
 powerio.
 """
 
@@ -89,7 +89,7 @@ def metadata():
         .isoformat(timespec="seconds")
         .replace("+00:00", "Z"),
         "git_commit": commit,
-        "command": 'POWERIO_BENCH_AUX=<Texas7k_20210804.AUX> POWERIO_BENCH_PWB=<Texas7k_20210804.PWB> cargo bench -p powerio --bench parse -- "parse_aux_|parse_pwb_" && python3 benchmarks/extract_powerworld_bench.py',
+        "command": 'POWERIO_BENCH_AUX=<Texas7k_20210804.AUX> POWERIO_BENCH_PWB=<Texas7k_20210804.PWB> cargo bench -p powerio --bench parse -- "parse_aux_|parse_pwb_" && python3 evals/performance/extract_powerworld_bench.py',
     }
 
 

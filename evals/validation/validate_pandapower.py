@@ -16,7 +16,7 @@ auxiliary buses, and raises on dclines / parallel branches inside `from_ppc`.
 `_m2ppc` runs before any of that, so it works on every case (pegase included) and
 keeps the bus order aligned with powerio's file order.
 
-    python benchmarks/validate_pandapower.py tests/data/case14.m [case.m ...]
+    python evals/validation/validate_pandapower.py tests/data/case14.m [case.m ...]
 
 Imports pandapower once and loops every case (the validation matrix runs all
 fixtures in one process to amortize the import). Per case the mark is `ok`, `FAIL`,

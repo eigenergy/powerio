@@ -4,7 +4,7 @@
 # wrapper (validate_oracles.jl runs every case in one process to amortize the
 # PowerModels load).
 #
-#   julia --project=benchmarks validate_powermodels.jl case.m our.json
+#   julia --project=evals/validation validate_powermodels.jl case.m our.json
 using PowerModels
 PowerModels.silence()
 include(joinpath(@__DIR__, "oracle_compare.jl"))

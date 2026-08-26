@@ -3,7 +3,7 @@
 # *reader* against real PowerModels output: PowerModels writes the JSON, powerio
 # reads it and re-emits, and the two are compared.
 #
-#   julia --project=benchmarks pm_export.jl <case.m> <out.json>
+#   julia --project=evals/validation pm_export.jl <case.m> <out.json>
 using PowerModels
 PowerModels.silence()
 PowerModels.export_file(ARGS[2], PowerModels.parse_file(ARGS[1]))

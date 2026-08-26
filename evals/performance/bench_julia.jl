@@ -3,10 +3,10 @@
 # diagnostics for separating parser core time from Julia wrapper time.
 #
 #   cargo build --release -p powerio-capi --features arrow,matrix  # once
-#   julia --project=benchmarks -e 'using Pkg; Pkg.instantiate()'   # once
-#   julia --project=benchmarks benchmarks/bench_julia.jl
+#   julia --project=evals/validation -e 'using Pkg; Pkg.instantiate()'   # once
+#   julia --project=evals/validation evals/performance/bench_julia.jl
 #
-# Fetch the large cases first: `bash benchmarks/fetch_cases.sh`.
+# Fetch the large cases first: `bash evals/validation/fetch_cases.sh`.
 # Numbers are per machine; record them in RESULTS.md rather than hardcoding.
 #
 # Note on the bus count: ExaPowerIO defaults to `filtered=true`, which drops
@@ -63,11 +63,11 @@ function benchmark_metadata()
     return (
         benchmark_time_utc = Dates.format(Dates.now(Dates.UTC), dateformat"yyyy-mm-ddTHH:MM:SS.sss") * "Z",
         git_commit = git_commit(),
-        command = join(vcat(["julia", "--project=benchmarks", "benchmarks/bench_julia.jl"], ARGS), " "),
+        command = join(vcat(["julia", "--project=evals/validation", "evals/performance/bench_julia.jl"], ARGS), " "),
     )
 end
 
-# `--json`: also write benchmarks/results/speed_julia.json for render_tables.py.
+# `--json`: also write evals/validation/results/speed_julia.json for render_tables.py.
 const JSON_OUT = "--json" in ARGS
 jrows = NamedTuple[]
 matrix_jrows = NamedTuple[]
