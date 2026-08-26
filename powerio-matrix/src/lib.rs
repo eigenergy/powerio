@@ -62,6 +62,10 @@ pub mod matrix;
 pub mod pipeline;
 pub mod synth;
 
+pub use matrix::multiconductor::{
+    AugmentedSystem, DistNode, MulticonductorAdmittance, MulticonductorNodeIndex, NodeRef,
+    build_multiconductor_admittance,
+};
 pub use matrix::{
     BuildOptions, DcConvention, GroundedIndexMap, IncidenceParts, MatrixStats, Scheme,
     SensitivityMatrices, SensitivityMatrixMetadata, SensitivityMetadata, SensitivityOptions,

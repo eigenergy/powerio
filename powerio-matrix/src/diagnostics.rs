@@ -21,6 +21,8 @@ pub mod codes {
         // BUILD: assembling a derived object from a network that already parsed.
         BUILD_MATRIX_SHAPE_MISMATCH = "BUILD.MATRIX.SHAPE_MISMATCH", Error,
             "an operand's length does not match the matrix it is used with", category = Data;
+        BUILD_MULTI_UNSUPPORTED_STAMP = "BUILD.MULTI.UNSUPPORTED_STAMP", Warning,
+            "an element has no exact multiconductor admittance or ideal stamp and was omitted loudly";
         BUILD_SENSITIVITY_SINGULAR = "BUILD.SENSITIVITY.SINGULAR", Error,
             "the reference grounded Laplacian is singular", category = Data;
         BUILD_SENSITIVITY_INVALID_OPTION = "BUILD.SENSITIVITY.INVALID_OPTION", Error,
