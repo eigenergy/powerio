@@ -25,7 +25,7 @@
 //! `tap = 1`. `build_bprime` and `build_bdoubleprime` follow MATPOWER `makeB`;
 //! Y_bus keeps tap magnitudes and phase shifts.
 //! Branch terminal admittance is stored per unit. DC incidence uses
-//! `b = x/(r² + x²)` by default. [`DcConvention::Matpower`] uses `1/(x·τ)`, and
+//! `b = x/(r² + x²)` by default. [`DcConvention::TapAdjustedReactance`] uses `1/(x·τ)`, and
 //! both carry phase shift injection. The full reference across every matrix is in
 //! [the matrix guide](https://eigenergy.github.io/powerio/guide/matrices.html).
 

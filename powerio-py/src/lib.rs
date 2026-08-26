@@ -174,8 +174,8 @@ fn parse_scheme(s: &str) -> PyResult<Scheme> {
 /// `reactance-only` (case- and separator-insensitive).
 fn parse_convention(s: &str) -> PyResult<DcConvention> {
     match normalize(s).as_str() {
-        "series" | "seriesimpedance" => Ok(DcConvention::SeriesImpedance),
-        "matpower" | "mp" => Ok(DcConvention::Matpower),
+        "series" | "seriesimpedance" => Ok(DcConvention::SeriesSusceptance),
+        "matpower" | "mp" => Ok(DcConvention::TapAdjustedReactance),
         "reactanceonly" => Ok(DcConvention::ReactanceOnly),
         // 0.8 spelled b = 1/x "paper"/"paper-pure" and made it the default.
         // Name its successor: the nearest-looking option, "series", is a

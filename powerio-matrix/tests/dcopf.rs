@@ -724,7 +724,12 @@ fn matpower_convention_tap_and_shift() {
     assert!(pp.p_shift.iter().all(|&v| v == 0.0));
 
     // Matpower: b = 1/(x·τ); makeBdc injection ±b·shift at from/to.
-    let mp = build_incidence(&view, DcConvention::Matpower, &BuildOptions::default()).unwrap();
+    let mp = build_incidence(
+        &view,
+        DcConvention::TapAdjustedReactance,
+        &BuildOptions::default(),
+    )
+    .unwrap();
     let b_e = 1.0 / (x * tap);
     let shift_rad = shift_deg.to_radians();
     assert!((mp.b[0] - b_e).abs() < 1e-12, "b_e {} != {b_e}", mp.b[0]);
@@ -978,13 +983,13 @@ fn incidence_matpower_pshift_invariant_to_normalization() {
     let norm = raw.to_normalized().unwrap();
     let ir = build_incidence(
         &IndexedNetwork::new(&raw),
-        DcConvention::Matpower,
+        DcConvention::TapAdjustedReactance,
         &BuildOptions::default(),
     )
     .unwrap();
     let in_ = build_incidence(
         &IndexedNetwork::new(&norm),
-        DcConvention::Matpower,
+        DcConvention::TapAdjustedReactance,
         &BuildOptions::default(),
     )
     .unwrap();
