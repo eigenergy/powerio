@@ -2964,8 +2964,8 @@ fn json_enum<T: serde::Serialize>(value: T) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::bmopf::parse_bmopf_str;
     use crate::model::DistLoadVoltageModel;
+    use crate::testkit::parse_bmopf_str;
 
     #[test]
     fn load_voltage_models_round_trip_through_bmopf() {
@@ -3009,7 +3009,11 @@ mod tests {
         ));
 
         let out = write_bmopf_json(&net);
-        assert!(out.warnings.is_empty(), "{:?}", out.warnings);
+        assert!(
+            out.rendered_diagnostics().is_empty(),
+            "{:?}",
+            out.rendered_diagnostics()
+        );
         let v: Value = serde_json::from_str(&out.text).unwrap();
         assert_eq!(
             v["load"]["zip"]["alpha_i"],
@@ -3075,11 +3079,11 @@ mod tests {
             MAX_DIM * (MAX_DIM - 1) / 2
         );
         assert!(
-            out.warnings
+            out.rendered_diagnostics()
                 .iter()
                 .any(|w| w.contains("exceeds the supported maximum")),
             "{:?}",
-            out.warnings
+            out.rendered_diagnostics()
         );
     }
 }

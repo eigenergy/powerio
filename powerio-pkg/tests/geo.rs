@@ -11,7 +11,7 @@ const MASTER: &str = "New Circuit.c1 bus1=sourcebus basekv=12.47\n\
      New Line.l1 bus1=sourcebus bus2=loadbus length=1 units=km\n";
 
 fn dist_network() -> powerio_dist::MulticonductorNetwork {
-    powerio_dist::parse_str(MASTER, "dss").expect("parse dss")
+    helpers::dist_parse_str(MASTER, "dss")
 }
 
 #[test]

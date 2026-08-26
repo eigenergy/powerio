@@ -4,13 +4,13 @@
 
 use std::collections::BTreeSet;
 use std::path::PathBuf;
-use std::sync::Arc;
 
-use powerio_dist::dss::parse_dss_file;
 use powerio_dist::{
     CoordinateSpace, DistBus, DistCoordsKind, DistGeoMeta, DistLocation, MulticonductorNetwork,
-    parse_pmd_file, parse_pmd_str, write_bmopf_json, write_pmd_json,
 };
+
+mod helpers;
+use helpers::{parse_dss_file, parse_pmd_file, parse_pmd_str, write_bmopf_json, write_pmd_json};
 
 fn fixture(rel: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -142,9 +142,7 @@ fn pmd_round_trips_to_model_equality() {
     let again = parse_pmd_str(&out.text).unwrap();
     let strip = |n: &MulticonductorNetwork| {
         let mut n = n.clone();
-        n.source = Some(Arc::new(String::new()));
         n.extras.clear(); // pmd_settings/pmd_files bookkeeping differs in formatting only
-        n.warnings.clear();
         n
     };
     let (a, b) = (strip(&net), strip(&again));
@@ -160,7 +158,7 @@ fn pmd_round_trips_to_model_equality() {
 
 #[test]
 fn dss_delta_shunt_writes_pmd_delta_configuration() {
-    use powerio_dist::parse_dss_str;
+    use crate::helpers::parse_dss_str;
     let net = parse_dss_str(
         "New Circuit.c basekv=4.16\n\
          New Capacitor.capd bus1=b2.1.2.3 phases=3 conn=delta kvar=900 kv=4.16\n\
@@ -298,7 +296,8 @@ fn zero_winding_transformer_does_not_panic_on_write() {
 
     let bmopf = r#"{"transformer": {"n_winding": {"t1": {}}}}"#;
     let converted =
-        powerio_dist::convert_str(bmopf, powerio_dist::DistTargetFormat::PmdJson, "bmopf").unwrap();
+        crate::helpers::convert_str(bmopf, powerio_dist::DistTargetFormat::PmdJson, "bmopf")
+            .unwrap();
     let v: serde_json::Value = serde_json::from_str(&converted.text).unwrap();
     assert!(v["transformer"]["t1"].is_object());
 }
@@ -828,7 +827,7 @@ fn mathematical_data_model_is_rejected() {
     // The MATHEMATICAL model shares the `data_model` marker but is index
     // based; interpreting its sections as ENGINEERING would silently build a
     // wrong network.
-    let err = powerio_dist::parse_str(r#"{"data_model":"MATHEMATICAL","bus":{}}"#, "pmd-json")
+    let err = crate::helpers::parse_str(r#"{"data_model":"MATHEMATICAL","bus":{}}"#, "pmd-json")
         .unwrap_err();
     assert!(err.to_string().contains("ENGINEERING"), "got: {err}");
 }
@@ -993,7 +992,7 @@ fn a_huge_terminal_name_does_not_enumerate_conductor_ids() {
 #[test]
 fn a_renamed_terminal_takes_the_next_free_id_and_the_write_is_a_fixed_point() {
     let text = std::fs::read_to_string(fixture("bmopf/example_ieee13.json")).unwrap();
-    let net = powerio_dist::parse_bmopf_str(&text).unwrap();
+    let net = crate::helpers::parse_bmopf_str(&text).unwrap();
     assert!(
         net.buses
             .iter()
@@ -1054,7 +1053,7 @@ fn a_saturating_numeric_terminal_name_does_not_merge_renamed_conductors() {
 /// with a warning, the same rule the BMOPF reader applies to its arrays.
 #[test]
 fn bus_voltage_bounds_ride_vm_lb_and_vm_ub() {
-    let base = powerio_dist::parse_file(fixture("bmopf/example_ieee13.json"), None).unwrap();
+    let base = crate::helpers::parse_file(fixture("bmopf/example_ieee13.json"), None).unwrap();
     assert!(
         base.buses.iter().any(|b| b.v_min.is_some()),
         "the fixture states bounds"

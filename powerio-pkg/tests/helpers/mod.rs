@@ -157,3 +157,20 @@ pub fn read_pypsa_csv_folder(path: impl AsRef<Path>) -> Result<Parsed, powerio_c
 fn tx_error_to_core(error: powerio::Error) -> powerio_core::Error {
     powerio_core::Error::new(error.code(), error.to_string()).with_cause(error)
 }
+
+/// Parse `.dss`/distribution text through the module surface and hand back
+/// the bare network, for suites that build packages from typed values.
+pub fn dist_parse_str(text: &str, from: &str) -> powerio_dist::MulticonductorNetwork {
+    dist_parse_module(text, from).into_value()
+}
+
+/// Parse distribution text into the compiled module (network plus findings).
+pub fn dist_parse_module(
+    text: &str,
+    from: &str,
+) -> powerio_core::PioModule<powerio_dist::MulticonductorNetwork> {
+    let source = powerio_core::Source::from_bytes("<memory>", text.as_bytes().to_vec())
+        .expect("memory source")
+        .with_format(powerio_core::FormatId::new(from).expect("format id"));
+    powerio_dist::parse(source).expect("distribution text parses")
+}

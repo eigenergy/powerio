@@ -1136,60 +1136,121 @@ fn collect_props_for(
 /// Includes are resolved through `loader` without confinement: a caller that
 /// passes a filesystem-backed loader lets `Redirect`/`Compile`/`Buscoords`
 /// read any path the loader accepts. For untrusted input use
-/// [`parse_dss_str`](crate::dss::parse_dss_str) (no filesystem access) or
-/// [`parse_dss_file`](crate::dss::parse_dss_file) / [`parse_raw_file`]
-/// (includes confined to the case directory), or enforce your own containment
-/// inside the loader.
+/// [`crate::convert::parse`] on a [`powerio_core::Source`] (acquisition
+/// confined to the source's root) or [`parse_raw_file`] (includes confined
+/// to the case directory), or enforce your own containment inside the
+/// loader.
 pub fn parse_raw_with(text: &str, path: &str, loader: &mut impl Loader) -> RawDss {
     run_executor(text, path, None, IncludeBoundary::CaseDirectory, loader)
 }
 
-/// The case directory of `path` in canonical (symlink resolved) form, for
-/// checking filesystem reads against the lexical confinement root. `None`
-/// when canonicalization fails (directory missing or unreadable), which the
-/// confined filesystem reader treats as "refuse every include".
-pub(crate) fn canonical_case_root(path: &Path) -> Option<PathBuf> {
-    let dir = path.parent().unwrap_or_else(|| Path::new(""));
-    let dir = if dir.as_os_str().is_empty() {
-        Path::new(".")
+/// Projects a source acquisition failure onto the loader's `io::Error`,
+/// keeping the executor's split: a refusal the acquisition stack raised (a
+/// name escaping the root, a symbolic link) reports as a refused include,
+/// and an ordinary filesystem failure as a load failure.
+fn include_acquisition_error(error: &powerio_core::Error) -> std::io::Error {
+    // Matched by registered code spelling: the code register is the stable
+    // surface a consumer keys on.
+    let refusal = error.diagnostics().first().is_some_and(|d| {
+        d.code() == "REQUEST.SOURCE.ESCAPES_ROOT" || d.code() == "REQUEST.SOURCE.SYMLINK_REFUSED"
+    });
+    if refusal {
+        Containment::refused(error.to_string())
     } else {
-        dir
-    };
-    dir.canonicalize().ok()
+        std::io::Error::other(error.to_string())
+    }
 }
 
-/// Reads an include for confined file parsing. The executor's lexical check
-/// already ran; this closes the symlink hole it cannot see: the path is
-/// canonicalized (resolving symlinks) and refused unless the real file still
-/// sits under the confinement boundary's canonical root. The refusal surfaces
-/// through the executor's ordinary load-error warning.
-pub(crate) fn confined_fs_read(
-    canonical_root: Option<&Path>,
-    boundary: IncludeBoundary,
-    path: &Path,
-) -> std::io::Result<String> {
-    let Some(root) = canonical_root else {
-        return Err(Containment::refused(match boundary {
-            IncludeBoundary::CaseDirectory => {
-                "case directory cannot be resolved; includes are disabled"
+/// Reads an include the executor already resolved and confined lexically,
+/// through the source's own acquisition walk, so a path component replaced
+/// during the parse cannot redirect the read outside the root. The resolved
+/// path is rebased onto `lexical_root` — the executor's confinement root —
+/// and acquired by that root relative name; an in-memory source consults its
+/// named buffers under the same names. A leading byte order mark on an
+/// included file is not decoded (the retained bytes keep it).
+fn source_include_loader(
+    source: &powerio_core::Source,
+    lexical_root: PathBuf,
+) -> impl FnMut(&Path) -> std::io::Result<String> {
+    move |p: &Path| {
+        let relative = p.strip_prefix(&lexical_root).map_err(|_| {
+            Containment::refused(format!(
+                "{} does not sit under the confinement root",
+                p.display()
+            ))
+        })?;
+        let mut name = String::new();
+        for component in relative.components() {
+            if !name.is_empty() {
+                name.push('/');
             }
-            IncludeBoundary::IncludeRoot => {
-                "include root cannot be resolved; includes are disabled"
-            }
-        }));
-    };
-    let real = path.canonicalize()?;
-    if !real.starts_with(root) {
-        return Err(Containment::refused(match boundary {
-            IncludeBoundary::CaseDirectory => {
-                "resolves outside the case directory through a symbolic link"
-            }
-            IncludeBoundary::IncludeRoot => {
-                "resolves outside the include root through a symbolic link"
-            }
-        }));
+            name.push_str(&component.as_os_str().to_string_lossy());
+        }
+        let buffer = source
+            .root_buffer(&name)
+            .map_err(|error| include_acquisition_error(&error))?;
+        let text = std::str::from_utf8(buffer.content_bytes()).map_err(|e| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!("stream did not contain valid UTF-8: {e}"),
+            )
+        })?;
+        Ok(text.to_owned())
     }
-    std::fs::read_to_string(&real)
+}
+
+/// Executes one `.dss` source, following `Redirect`/`Compile`/`Buscoords`
+/// includes through the source's own acquisition policy: a file source
+/// admits includes beneath its acquisition root — the case directory, unless
+/// a wider root was selected with
+/// [`powerio_core::Source::with_acquisition_root`] — and an in-memory source
+/// admits only the named buffers supplied to it. An include that escapes is
+/// refused with an `Error` finding, whether it climbs out with `..`, is an
+/// absolute path outside the root, or escapes through a symbolic link; the
+/// acquisition walk refuses symbolic links at read time, so a component
+/// replaced during the parse cannot redirect a read outside the root. The
+/// include budget in files and bytes and the nesting limit are enforced by
+/// the executor unchanged.
+pub(crate) fn parse_raw_from_source(source: &powerio_core::Source) -> Result<RawDss> {
+    let primary = source.primary_buffer().map_err(|error| Error::FormatRead {
+        format: "dss",
+        message: error.to_string(),
+    })?;
+    let text = std::str::from_utf8(primary.content_bytes()).map_err(|e| Error::FormatRead {
+        format: "case text",
+        message: format!("not valid UTF-8: {e}"),
+    })?;
+    if let Some(root) = source.selected_acquisition_root() {
+        // A selected root is canonical, so resolution runs in the canonical
+        // root's space, the same space the acquisition walk confines to. The
+        // primary's own directory seeds relative includes.
+        let mut file = root.to_path_buf();
+        file.extend(primary.directory_segments());
+        match Path::new(source.name()).file_name() {
+            Some(base) => file.push(base),
+            None => file.push(source.name()),
+        }
+        let mut loader = source_include_loader(source, root.to_path_buf());
+        Ok(parse_raw_confined_under(
+            text,
+            &file.display().to_string(),
+            root,
+            &mut loader,
+        ))
+    } else {
+        // The default root of a file source is its containing directory, and
+        // an in-memory source resolves the same way against its (possibly
+        // empty) name prefix; either way the executor's lexical root is the
+        // parent of the source name, and the loader rebases resolved paths
+        // onto it.
+        let lexical_root = lexical_normalize(
+            Path::new(source.name())
+                .parent()
+                .unwrap_or_else(|| Path::new("")),
+        );
+        let mut loader = source_include_loader(source, lexical_root);
+        Ok(parse_raw_with_confined(text, source.name(), &mut loader))
+    }
 }
 
 /// The loader's own containment refusal, carried inside the `io::Error` so it
@@ -1197,11 +1258,14 @@ pub(crate) fn confined_fs_read(
 /// mode 000 file inside the case directory is an ordinary unreadable include,
 /// not an escape attempt, and must not be reported as one.
 #[derive(Debug)]
-pub(crate) struct Containment(&'static str);
+pub(crate) struct Containment(String);
 
 impl Containment {
-    fn refused(reason: &'static str) -> std::io::Error {
-        std::io::Error::new(std::io::ErrorKind::PermissionDenied, Containment(reason))
+    pub(crate) fn refused(reason: impl Into<String>) -> std::io::Error {
+        std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            Containment(reason.into()),
+        )
     }
 
     /// Whether `e` is a refusal this module raised.
@@ -1213,7 +1277,7 @@ impl Containment {
 
 impl std::fmt::Display for Containment {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(self.0)
+        f.write_str(&self.0)
     }
 }
 
@@ -1279,24 +1343,19 @@ fn run_executor(
     exec.raw
 }
 
-/// Parses a `.dss` file from disk, following its includes.
-/// `Redirect`/`Compile`/`Buscoords` includes are confined to the case
-/// directory, lexically and after symlink resolution, exactly like
-/// [`parse_dss_file`](crate::dss::parse_dss_file); an include that escapes is
-/// refused with a warning. Use [`parse_raw_with`] with your own loader for
-/// unconfined resolution.
+/// Parses a `.dss` file from disk, following its includes through the
+/// source's acquisition walk. `Redirect`/`Compile`/`Buscoords` includes are
+/// confined to the case directory, lexically and with symbolic links refused
+/// at read time, exactly like [`crate::convert::parse`] on a file source; an
+/// include that escapes is refused with a warning. Use [`parse_raw_with`]
+/// with your own loader for unconfined resolution.
 pub fn parse_raw_file(path: impl AsRef<Path>) -> Result<RawDss> {
     let path = path.as_ref();
-    let text = std::fs::read_to_string(path).map_err(|source| Error::Io {
+    let source = powerio_core::Source::open(path).map_err(|error| Error::Io {
         path: path.display().to_string(),
-        source,
+        source: std::io::Error::other(error.to_string()),
     })?;
-    let root = canonical_case_root(path);
-    Ok(parse_raw_with_confined(
-        &text,
-        &path.display().to_string(),
-        &mut |p: &Path| confined_fs_read(root.as_deref(), IncludeBoundary::CaseDirectory, p),
-    ))
+    parse_raw_from_source(&source)
 }
 
 #[cfg(test)]
@@ -1895,7 +1954,7 @@ mod tests {
         assert_eq!(
             raw.warnings
                 .iter()
-                .filter(|w| w.contains("outside the case directory"))
+                .filter(|w| w.contains("symbolic link"))
                 .count(),
             1,
             "warnings: {:?}",

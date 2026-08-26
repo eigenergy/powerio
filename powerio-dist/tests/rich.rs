@@ -1,6 +1,8 @@
-use powerio_dist::{
-    DistLoadVoltageModel, parse_bmopf_str, parse_dss_str, parse_pmd_str, write_bmopf_json,
-    write_dss, write_pmd_json,
+use powerio_dist::DistLoadVoltageModel;
+
+mod helpers;
+use helpers::{
+    parse_bmopf_str, parse_dss_str, parse_pmd_str, write_bmopf_json, write_dss, write_pmd_json,
 };
 
 fn load_model<'a>(

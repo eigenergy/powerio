@@ -140,7 +140,11 @@ impl SourceBuffer {
         }
     }
 
-    fn directory_segments(&self) -> impl Iterator<Item = &str> {
+    /// Directory of this buffer relative to the acquisition root, as path
+    /// segments. Empty for in-memory buffers and for files sitting directly
+    /// in the root. A parser that resolves referenced names itself joins
+    /// these onto the root to seed its resolution base.
+    pub fn directory_segments(&self) -> impl Iterator<Item = &str> {
         self.0.directory.iter().map(AsRef::as_ref)
     }
 }
@@ -158,6 +162,9 @@ impl SourceBuffer {
 struct FileAcquisition {
     root: platform::RootHandle,
     root_display: PathBuf,
+    /// True when the root was selected with [`Source::with_acquisition_root`]
+    /// rather than defaulted to the containing directory.
+    selected: bool,
     state: Mutex<AcquisitionState>,
 }
 
@@ -248,6 +255,7 @@ impl Source {
                 acquisition: FileAcquisition {
                     root,
                     root_display,
+                    selected: false,
                     state: Mutex::new(AcquisitionState::default()),
                 },
             }),
@@ -266,6 +274,7 @@ impl Source {
                 acquisition: FileAcquisition {
                     root,
                     root_display,
+                    selected: false,
                     state: Mutex::new(AcquisitionState::default()),
                 },
             }),
@@ -384,6 +393,7 @@ impl Source {
                 acquisition: FileAcquisition {
                     root,
                     root_display: canonical,
+                    selected: true,
                     state: Mutex::new(AcquisitionState::default()),
                 },
             }),
@@ -442,6 +452,50 @@ impl Source {
         acquisition
             .acquire(&segments)
             .map_err(|error| error.with_source(self.clone()))
+    }
+
+    /// Acquire and retain one file beneath the acquisition root by its root
+    /// relative name, for a parser that resolves referenced names itself and
+    /// hands over the resolved result. An in-memory source consults the
+    /// buffers the caller supplied.
+    pub fn root_buffer(&self, name: &str) -> Result<SourceBuffer, Error> {
+        match &*self.provider {
+            SourceProvider::Memory { named, .. } => {
+                let segments = resolve_segments(&[], name)?;
+                let key = segments.join("/");
+                named.get(&key).cloned().ok_or_else(|| {
+                    Error::new(
+                        &crate::codes::REQUEST_SOURCE_UNKNOWN_BUFFER,
+                        format!(
+                            "referenced buffer `{key}` was not supplied to this in-memory source"
+                        ),
+                    )
+                    .with_source(self.clone())
+                })
+            }
+            SourceProvider::File { acquisition, .. }
+            | SourceProvider::Directory { acquisition } => {
+                let segments = resolve_segments(&[], name)?;
+                acquisition
+                    .acquire(&segments)
+                    .map_err(|error| error.with_source(self.clone()))
+            }
+        }
+    }
+
+    /// The canonical root selected with [`Source::with_acquisition_root`],
+    /// `None` when the root defaulted to the containing directory or the
+    /// source is not file backed. Read-only context for a parser's own
+    /// resolution and refusal wording; acquisition itself always goes
+    /// through this source.
+    #[must_use]
+    pub fn selected_acquisition_root(&self) -> Option<&Path> {
+        match &*self.provider {
+            SourceProvider::Memory { .. } | SourceProvider::Directory { .. } => None,
+            SourceProvider::File { acquisition, .. } => acquisition
+                .selected
+                .then_some(acquisition.root_display.as_path()),
+        }
     }
 
     /// Acquire and retain one file referenced by `referrer`, resolved against

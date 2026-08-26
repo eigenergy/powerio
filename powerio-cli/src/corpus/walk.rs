@@ -119,9 +119,7 @@ impl HopDelta {
     }
 
     /// The distribution delta: element counts and the typed-model diff, the
-    /// same two properties [`super::compare`] grades for this domain. Model
-    /// JSON carries the parse warnings, which restate the hop's own warning
-    /// list, so they are cleared before the diff as the pairwise leg does.
+    /// same two properties [`super::compare`] grades for this domain.
     fn of_dist(before: &MulticonductorNetwork, after: &MulticonductorNetwork) -> Self {
         let mut out = Self::default();
         let (core_before, core_after) = (
@@ -131,13 +129,9 @@ impl HopDelta {
         if core_before != core_after {
             out.core_changed = Some(super::dist_core_delta(&core_before, &core_after));
         }
-        let mut clean_before = before.clone();
-        let mut clean_after = after.clone();
-        clean_before.warnings.clear();
-        clean_after.warnings.clear();
         out.finish_diffs(&invariants::model_diffs(
-            &invariants::distribution_value(&clean_before),
-            &invariants::distribution_value(&clean_after),
+            &invariants::distribution_value(before),
+            &invariants::distribution_value(after),
         ));
         out
     }
@@ -404,20 +398,20 @@ impl Net {
                 let Some(target) = powerio_dist::dist_target_from_name(to) else {
                     return Err(format!("no writer for {to}"));
                 };
-                let written = match catch_panic(|| net.to_format(target)) {
+                let written = match catch_panic(|| powerio_dist::write_network(net, target)) {
                     Ok(conversion) => conversion,
                     Err(message) => return Err(format!("write panicked: {message}")),
                 };
-                warnings.extend(written.warnings.iter().cloned());
+                warnings.extend(written.rendered_diagnostics());
                 // A deck that pulls in other files cannot be read back from a
                 // string; see the same test in the pairwise compare.
                 if super::has_include(&written.text) {
                     return Err("written deck redirects to include files".to_string());
                 }
-                match catch_panic(|| powerio_dist::parse_str(&written.text, to)) {
+                match catch_panic(|| crate::compat::dist_parse_str(&written.text, to)) {
                     Ok(Ok(parsed)) => {
                         warnings.extend(parsed.warnings.iter().cloned());
-                        Ok(Self::Dist(parsed))
+                        Ok(Self::Dist(parsed.network))
                     }
                     Ok(Err(err)) => Err(format!("readback: {err}")),
                     Err(message) => Err(format!("readback panicked: {message}")),
@@ -518,7 +512,6 @@ fn first_readable(bucket: &Bucket) -> Option<(String, Net)> {
             }
             Domain::Distribution => {
                 let mut net = multiconductor(&m.path)?;
-                net.source = None;
                 net.source_format = None;
                 Net::Dist(net)
             }

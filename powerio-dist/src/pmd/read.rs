@@ -8,9 +8,6 @@
 //! to volts, watts, and radians. Fields the model does not type ride in
 //! `extras` so the PMD writer can reproduce them.
 
-use std::path::Path;
-use std::sync::Arc;
-
 use serde_json::{Map, Value};
 
 use crate::diagnostics::codes as C;
@@ -21,16 +18,10 @@ use crate::model::{
     Mat, MulticonductorNetwork, UntypedObject, VoltageSource,
 };
 
-pub fn parse_pmd_file(path: impl AsRef<Path>) -> Result<MulticonductorNetwork> {
-    let path = path.as_ref();
-    let text = std::fs::read_to_string(path).map_err(|source| Error::Io {
-        path: path.display().to_string(),
-        source,
-    })?;
-    parse_pmd_str(&text)
-}
-
-pub fn parse_pmd_str(text: &str) -> Result<MulticonductorNetwork> {
+pub(crate) fn parse_pmd_collecting(
+    text: &str,
+    diags: &mut crate::collect::Diagnostics,
+) -> Result<MulticonductorNetwork> {
     let doc: Value = serde_json::from_str(text).map_err(|e| Error::Json {
         format: "PMD",
         message: e.to_string(),
@@ -59,7 +50,6 @@ pub fn parse_pmd_str(text: &str) -> Result<MulticonductorNetwork> {
         }
     }
     let mut net = MulticonductorNetwork {
-        source: Some(Arc::new(text.to_string())),
         source_format: Some(DistSourceFormat::PmdJson),
         base_frequency: 60.0,
         ..MulticonductorNetwork::default()
@@ -70,10 +60,8 @@ pub fn parse_pmd_str(text: &str) -> Result<MulticonductorNetwork> {
     };
     rd.document(&doc);
     let found = std::mem::take(&mut rd.diagnostics);
-    for diagnostic in found {
-        net.record(diagnostic);
-    }
-    crate::model::warn_unresolved_references(&mut net);
+    diags.absorb(found);
+    crate::model::warn_unresolved_references(&net, diags);
     Ok(net)
 }
 
@@ -452,7 +440,11 @@ impl Reader<'_> {
             }
         }
         if stated.is_none() {
-            crate::model::warn_defaulted_frequency(self.net, "settings.base_frequency");
+            crate::model::warn_defaulted_frequency(
+                self.net,
+                "settings.base_frequency",
+                &mut self.diagnostics,
+            );
         }
     }
 

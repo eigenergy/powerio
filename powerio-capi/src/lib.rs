@@ -2214,9 +2214,12 @@ pub unsafe extern "C" fn pio_package_from_multiconductor_network(
                 let net = net
                     .as_ref()
                     .ok_or_else(|| null_handle("distribution network handle"))?;
-                Ok(powerio_pkg::NetworkPackage::from_multiconductor(
-                    net.net.clone(),
-                ))
+                Ok(
+                    powerio_pkg::NetworkPackage::from_multiconductor_with_read_diagnostics(
+                        net.net().clone(),
+                        net.module.diagnostics().iter().cloned().map(Into::into),
+                    ),
+                )
             },
         )
     }
@@ -2268,8 +2271,8 @@ pub unsafe extern "C" fn pio_package_to_balanced_network(
 /// distribution network handle: the inverse of
 /// [`pio_package_from_multiconductor_network`]. Errors when the package holds
 /// a different model kind. The handle retains no source text, so a
-/// same format write is a fresh serialization. The handle retains the payload's
-/// parse warnings, readable through [`pio_dist_warnings`]. Free with
+/// same format write is a fresh serialization, and carries no warning lines:
+/// the package document owns the diagnostics. Free with
 /// [`pio_dist_network_free`].
 #[cfg(all(feature = "pkg", feature = "dist"))]
 #[unsafe(no_mangle)]
@@ -2293,11 +2296,12 @@ pub unsafe extern "C" fn pio_package_to_multiconductor_network(
                     )
                 })?;
                 let mut net = net.clone();
-                // Same in-memory strip as the balanced inverse: source and the
-                // defaulted provenance are #[serde(skip)], so dropping them
-                // here matches what a JSON crossing produces.
+                // Same in-memory strip as the balanced inverse: the defaulted
+                // provenance is #[serde(skip)], so dropping it here matches
+                // what a JSON crossing produces. The handle's warning lines
+                // are rendered from the package's diagnostics.
                 net.defaulted = Default::default();
-                Ok(PioDistNetwork { net })
+                Ok(PioDistNetwork::from_network(net, Vec::new()))
             },
         )
     }
@@ -2882,7 +2886,84 @@ unsafe fn finish_handle<H>(
 /// the `dist` cargo feature.
 #[cfg(feature = "dist")]
 pub struct PioDistNetwork {
-    net: powerio_dist::MulticonductorNetwork,
+    /// The parsed module: the typed network plus retained source and the
+    /// reader's findings. Same format writes echo the retained bytes exactly,
+    /// as ABI v5 promises; a handle built from a bare network carries no
+    /// source and writes canonically.
+    module: powerio_core::PioModule<powerio_dist::MulticonductorNetwork>,
+    /// The findings as `CODE: message` lines, rendered once at construction.
+    warnings: Vec<String>,
+}
+
+#[cfg(feature = "dist")]
+impl PioDistNetwork {
+    fn net(&self) -> &powerio_dist::MulticonductorNetwork {
+        self.module.value()
+    }
+
+    /// A parsed handle: warnings rendered from the module's findings.
+    fn from_module(module: powerio_core::PioModule<powerio_dist::MulticonductorNetwork>) -> Self {
+        Self {
+            warnings: powerio_dist::diagnostics::render_diagnostics(module.diagnostics()),
+            module,
+        }
+    }
+
+    /// A derived handle: no retained source, so writes are canonical; the
+    /// warning lines come from the deriving surface.
+    fn from_network(net: powerio_dist::MulticonductorNetwork, warnings: Vec<String>) -> Self {
+        Self {
+            module: powerio_core::PioModule::new(net),
+            warnings,
+        }
+    }
+}
+
+/// A distribution source selected by path, with `from` as the declared
+/// format when given.
+#[cfg(feature = "dist")]
+fn dist_source_from_path(
+    path: &std::path::Path,
+    from: Option<&str>,
+) -> Result<powerio_core::Source, String> {
+    let mut source = powerio_core::Source::open(path).map_err(|e| core_err_line(&e))?;
+    if let Some(token) = from {
+        source = source.with_format(
+            powerio_core::FormatId::new(token.to_ascii_lowercase().replace('_', "-"))
+                .map_err(|e| core_err_line(&e))?,
+        );
+    }
+    Ok(source)
+}
+
+/// An in-memory distribution source of the declared `from` format.
+#[cfg(feature = "dist")]
+fn dist_source_from_bytes(bytes: &[u8], from: &str) -> Result<powerio_core::Source, String> {
+    Ok(powerio_core::Source::from_bytes("<memory>", bytes.to_vec())
+        .map_err(|e| core_err_line(&e))?
+        .with_format(
+            powerio_core::FormatId::new(from.to_ascii_lowercase().replace('_', "-"))
+                .map_err(|e| core_err_line(&e))?,
+        ))
+}
+
+/// Parse a distribution source selected by path, with `from` as the declared
+/// format when given.
+#[cfg(feature = "dist")]
+fn parse_dist_module_from_path(
+    path: &std::path::Path,
+    from: Option<&str>,
+) -> Result<powerio_core::PioModule<powerio_dist::MulticonductorNetwork>, String> {
+    powerio_dist::parse(dist_source_from_path(path, from)?).map_err(|e| core_err_line(&e))
+}
+
+/// Parse an in-memory distribution source of the declared `from` format.
+#[cfg(feature = "dist")]
+fn parse_dist_module_from_bytes(
+    bytes: &[u8],
+    from: &str,
+) -> Result<powerio_core::PioModule<powerio_dist::MulticonductorNetwork>, String> {
+    powerio_dist::parse(dist_source_from_bytes(bytes, from)?).map_err(|e| core_err_line(&e))
 }
 
 // Same cross-thread read guarantee as `PioNetwork` (see that assertion): pin
@@ -2910,16 +2991,16 @@ pub unsafe extern "C" fn pio_dist_parse_file(
         finish_handle(errbuf, errlen, "panic while parsing", || {
             let path = required_cstr(path, "path")?;
             let from = optional_cstr(from, "from")?;
-            powerio_dist::parse_file(std::path::Path::new(path), from)
-                .map(|net| PioDistNetwork { net })
-                .map_err(err_line)
+            parse_dist_module_from_path(std::path::Path::new(path), from)
+                .map(PioDistNetwork::from_module)
         })
     }
 }
 
 /// Parse in-memory distribution case `text` of the named `format` (`dss`, `pmd`,
 /// or `bmopf`; required, since there is no path to infer from). An OpenDSS
-/// `Redirect`/`Compile` in `text` resolves against the current working directory.
+/// `Redirect`/`Compile`/`Buscoords` in `text` reads no files: an in-memory
+/// source grants no filesystem access, and each include is refused loudly.
 /// Returns `NULL` on error and writes the message into `errbuf`. Free the handle
 /// with [`pio_dist_network_free`].
 #[cfg(feature = "dist")]
@@ -2934,9 +3015,7 @@ pub unsafe extern "C" fn pio_dist_parse_str(
         finish_handle(errbuf, errlen, "panic while parsing", || {
             let text = required_cstr(text, "text")?;
             let format = required_cstr(format, "format")?;
-            powerio_dist::parse_str(text, format)
-                .map(|net| PioDistNetwork { net })
-                .map_err(err_line)
+            parse_dist_module_from_bytes(text.as_bytes(), format).map(PioDistNetwork::from_module)
         })
     }
 }
@@ -2973,7 +3052,7 @@ pub unsafe extern "C" fn pio_dist_warnings(
     unsafe {
         guard(0, || {
             let Some(c) = net.as_ref() else { return 0 };
-            let msg = c.net.warnings.join("\n");
+            let msg = c.warnings.join("\n");
             copy_to_buf(warnbuf, warnlen, &msg);
             msg.len()
         })
@@ -2999,26 +3078,27 @@ pub unsafe extern "C" fn pio_dist_summary_json(
                 let net = net
                     .as_ref()
                     .ok_or_else(|| null_handle("distribution network handle"))?;
+                let n = net.net();
                 let summary = serde_json::json!({
                     powerio::version::VERSION_KEY: powerio::VERSION,
-                    "name": net.net.name.as_deref(),
-                    "source_format": net.net.source_format.map(|f| f.name()),
-                    "base_frequency": net.net.base_frequency,
+                    "name": n.name.as_deref(),
+                    "source_format": n.source_format.map(|f| f.name()),
+                    "base_frequency": n.base_frequency,
                     "counts": {
-                        "buses": net.net.buses.len(),
-                        "linecodes": net.net.linecodes.len(),
-                        "lines": net.net.lines.len(),
-                        "switches": net.net.switches.len(),
-                        "transformers": net.net.transformers.len(),
-                        "loads": net.net.loads.len(),
-                        "generators": net.net.generators.len(),
-                        "ibrs": net.net.ibrs.len(),
-                        "control_profiles": net.net.control_profiles.len(),
-                        "shunts": net.net.shunts.len(),
-                        "capacitors": net.net.capacitors.len(),
-                        "sources": net.net.sources.len(),
-                        "untyped": net.net.untyped.len(),
-                        "warnings": net.net.warnings.len(),
+                        "buses": n.buses.len(),
+                        "linecodes": n.linecodes.len(),
+                        "lines": n.lines.len(),
+                        "switches": n.switches.len(),
+                        "transformers": n.transformers.len(),
+                        "loads": n.loads.len(),
+                        "generators": n.generators.len(),
+                        "ibrs": n.ibrs.len(),
+                        "control_profiles": n.control_profiles.len(),
+                        "shunts": n.shunts.len(),
+                        "capacitors": n.capacitors.len(),
+                        "sources": n.sources.len(),
+                        "untyped": n.untyped.len(),
+                        "warnings": net.warnings.len(),
                     },
                 });
                 serde_json::to_string(&summary)
@@ -3046,8 +3126,15 @@ pub unsafe extern "C" fn pio_dist_to_json(
             let net = net
                 .as_ref()
                 .ok_or_else(|| null_handle("distribution network handle"))?;
-            serde_json::to_string(&net.net)
-                .map_err(|e| coded(&codes::EMIT_CAPI_SERIALIZE_FAILED, e))
+            // ABI v5 model JSON carries the rendered warning lines beside the
+            // model fields; the typed model no longer stores them, so they
+            // are spliced in from the handle.
+            let mut value = serde_json::to_value(net.net())
+                .map_err(|e| coded(&codes::EMIT_CAPI_SERIALIZE_FAILED, e))?;
+            if let serde_json::Value::Object(map) = &mut value {
+                map.insert("warnings".into(), serde_json::json!(net.warnings));
+            }
+            serde_json::to_string(&value).map_err(|e| coded(&codes::EMIT_CAPI_SERIALIZE_FAILED, e))
         })
     }
 }
@@ -3067,7 +3154,7 @@ pub unsafe extern "C" fn pio_dist_graph_json(
             let net = net
                 .as_ref()
                 .ok_or_else(|| null_handle("distribution network handle"))?;
-            serde_json::to_string(&net.net.graph())
+            serde_json::to_string(&net.net().graph())
                 .map_err(|e| coded(&codes::EMIT_CAPI_SERIALIZE_FAILED, e))
         })
     }
@@ -3089,14 +3176,23 @@ pub unsafe extern "C" fn pio_dist_from_json(
     unsafe {
         finish_handle(errbuf, errlen, "panic while parsing model JSON", || {
             let text = required_cstr(text, "text")?;
-            serde_json::from_str::<powerio_dist::MulticonductorNetwork>(text)
-                .map(|net| PioDistNetwork { net })
-                .map_err(|e| {
+            let net =
+                serde_json::from_str::<powerio_dist::MulticonductorNetwork>(text).map_err(|e| {
                     coded(
                         &codes::PARSE_CAPI_JSON_MALFORMED,
                         format!("model JSON: {e}"),
                     )
+                })?;
+            // The model deserialize ignores the `warnings` array the v5 JSON
+            // carries; lift it back onto the handle so the round trip keeps
+            // it readable through `pio_dist_warnings`.
+            let warnings = serde_json::from_str::<serde_json::Value>(text)
+                .ok()
+                .and_then(|value| {
+                    serde_json::from_value::<Vec<String>>(value.get("warnings")?.clone()).ok()
                 })
+                .unwrap_or_default();
+            Ok(PioDistNetwork::from_network(net, warnings))
         })
     }
 }
@@ -3145,7 +3241,7 @@ pub unsafe extern "C" fn pio_dist_to_format(
             || {
                 let c = net.as_ref().ok_or_else(|| null_handle("network handle"))?;
                 let target = dist_target_from_c(to)?;
-                let conv = c.net.to_format(target);
+                let conv = powerio_dist::write_as(&c.module, target);
                 Ok((
                     conv.text,
                     warn_dropped_sidecars(conv.diagnostics, &conv.sidecars),
@@ -3184,8 +3280,9 @@ pub unsafe extern "C" fn pio_dist_convert_file(
                 let path = required_cstr(path, "path")?;
                 let from = optional_cstr(from, "from")?;
                 let to = dist_target_from_c(to)?;
-                let conv = powerio_dist::convert_file(std::path::Path::new(path), to, from)
-                    .map_err(err_line)?;
+                let source = dist_source_from_path(std::path::Path::new(path), from)?;
+                let conv =
+                    powerio_dist::convert_source(source, to).map_err(|e| core_err_line(&e))?;
                 Ok((
                     conv.text,
                     warn_dropped_sidecars(conv.diagnostics, &conv.sidecars),
@@ -3225,7 +3322,9 @@ pub unsafe extern "C" fn pio_dist_convert_str(
                 let text = required_cstr(text, "text")?;
                 let to = dist_target_from_c(to)?;
                 let from = required_cstr(from, "from")?;
-                let conv = powerio_dist::convert_str(text, to, from).map_err(err_line)?;
+                let source = dist_source_from_bytes(text.as_bytes(), from)?;
+                let conv =
+                    powerio_dist::convert_source(source, to).map_err(|e| core_err_line(&e))?;
                 Ok((
                     conv.text,
                     warn_dropped_sidecars(conv.diagnostics, &conv.sidecars),
@@ -3260,7 +3359,7 @@ pub unsafe extern "C" fn pio_dist_geo_extract(
             let c = net
                 .as_ref()
                 .ok_or_else(|| null_handle("distribution network handle"))?;
-            powerio_pkg::dist_geo_layer(&c.net)
+            powerio_pkg::dist_geo_layer(c.net())
                 .extracted_geojson()
                 .map_err(err_line)
         })
@@ -3292,13 +3391,14 @@ pub unsafe extern "C" fn pio_dist_geo_apply(
             let name_hint = optional_cstr(name_hint, "name_hint")?;
             let parsed =
                 powerio::GeoLayer::parse_bytes(layer.as_bytes(), name_hint).map_err(err_line)?;
-            let mut out = c.net.clone();
+            let mut out = c.net().clone();
             let report = powerio_pkg::apply_dist_geo_layer(&mut out, &parsed.layer);
             out.source_format = None;
-            out.warnings.extend(parsed.warnings);
-            out.warnings.push(geo_apply_summary(&report));
-            out.warnings.extend(report.notes);
-            Ok(PioDistNetwork { net: out })
+            let mut warnings = c.warnings.clone();
+            warnings.extend(parsed.warnings);
+            warnings.push(geo_apply_summary(&report));
+            warnings.extend(report.notes);
+            Ok(PioDistNetwork::from_network(out, warnings))
         })
     }
 }
@@ -5721,9 +5821,8 @@ mpc.branch = [
 
         #[test]
         fn multiconductor_package_preflight_and_lowering() {
-            let dist = PioDistNetwork {
-                net: preflight_network(&["1", "2", "3"], &[]),
-            };
+            let dist =
+                PioDistNetwork::from_network(preflight_network(&["1", "2", "3"], &[]), Vec::new());
             let mut err = [0 as c_char; PIO_ERRBUF_MIN];
             unsafe {
                 let pkg =
@@ -7138,7 +7237,9 @@ New Line.l1 bus1=a bus2=b phases=3
             unsafe { assert_eq!(bmopf(back), bmopf(net)) };
 
             // The model JSON is the same object the .pio.json document carries
-            // under model.multiconductor_network.
+            // under model.multiconductor_network, plus the ABI v5 `warnings`
+            // array the handle splices in (the payload carries none: package
+            // diagnostics own the findings).
             let pkg = unsafe {
                 pio_package_from_multiconductor_network(net, err.as_mut_ptr(), err.len())
             };
@@ -7148,7 +7249,9 @@ New Line.l1 bus1=a bus2=b phases=3
             let doc: serde_json::Value =
                 serde_json::from_str(unsafe { CStr::from_ptr(pkg_json) }.to_str().unwrap())
                     .unwrap();
-            let direct: serde_json::Value = serde_json::from_str(&text).unwrap();
+            let mut direct: serde_json::Value = serde_json::from_str(&text).unwrap();
+            let spliced = direct.as_object_mut().unwrap().remove("warnings");
+            assert_eq!(spliced, Some(serde_json::json!([])));
             assert_eq!(doc["model"]["multiconductor_network"], direct);
 
             unsafe {
@@ -7178,7 +7281,7 @@ New Line.l1 bus1=a bus2=b phases=3
             unsafe {
                 let mem = pio_package_to_multiconductor_network(pkg, err.as_mut_ptr(), err.len());
                 assert!(!mem.is_null());
-                assert!((*mem).net.defaulted.is_empty());
+                assert!((*mem).net().defaulted.is_empty());
                 pio_dist_network_free(mem);
             }
 

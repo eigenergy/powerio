@@ -9,9 +9,11 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use powerio_dist::{
-    Conversion, ConversionSidecar, DistLoadVoltageModel, DistTargetFormat, MulticonductorNetwork,
-    Result, parse_bmopf_str, parse_dss_file, parse_pmd_str,
+    ConversionSidecar, DistLoadVoltageModel, DistTargetFormat, MulticonductorNetwork, Result,
 };
+
+mod helpers;
+use helpers::{Conv as Conversion, parse_bmopf_str, parse_dss_file, parse_pmd_str};
 
 fn fixture(rel: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -35,7 +37,7 @@ impl Fmt {
         }
     }
 
-    fn parse_conversion(self, conv: &Conversion) -> Result<MulticonductorNetwork> {
+    fn parse_conversion(self, conv: &Conversion) -> Result<helpers::Parsed> {
         self.parse_text_and_sidecars(&conv.text, &conv.sidecars)
     }
 
@@ -43,7 +45,7 @@ impl Fmt {
         self,
         text: &str,
         sidecars: &[ConversionSidecar],
-    ) -> Result<MulticonductorNetwork> {
+    ) -> Result<helpers::Parsed> {
         match self {
             Fmt::Dss => {
                 // Unique path per call: the harness tests run in parallel
@@ -63,7 +65,7 @@ impl Fmt {
                     }
                     std::fs::write(sidecar_path, &sidecar.text).unwrap();
                 }
-                let parsed = powerio_dist::dss::parse_dss_file(&path);
+                let parsed = helpers::parse_dss_file(&path);
                 let _ = std::fs::remove_dir_all(&dir);
                 parsed
             }
@@ -225,12 +227,12 @@ const CASES: &[Case] = &[
     },
 ];
 
-fn parse_case(case: &Case) -> MulticonductorNetwork {
+fn parse_case(case: &Case) -> helpers::Parsed {
     let path = fixture(case.rel);
     match case.fmt {
         Fmt::Dss => parse_dss_file(&path).unwrap(),
-        Fmt::Bmopf => powerio_dist::parse_bmopf_file(&path).unwrap(),
-        Fmt::Pmd => powerio_dist::parse_pmd_file(&path).unwrap(),
+        Fmt::Bmopf => helpers::parse_bmopf_file(&path).unwrap(),
+        Fmt::Pmd => helpers::parse_pmd_file(&path).unwrap(),
     }
 }
 
@@ -745,18 +747,18 @@ fn canonical_writers_are_idempotent() {
         let net = parse_case(case);
         for target in [Fmt::Dss, Fmt::Bmopf, Fmt::Pmd] {
             let first = match target {
-                Fmt::Dss => powerio_dist::write_dss(&net),
-                Fmt::Bmopf => powerio_dist::write_bmopf_json(&net),
-                Fmt::Pmd => powerio_dist::write_pmd_json(&net),
+                Fmt::Dss => helpers::write_dss(&net),
+                Fmt::Bmopf => helpers::write_bmopf_json(&net),
+                Fmt::Pmd => helpers::write_pmd_json(&net),
             };
             let reparsed = match target.parse_conversion(&first) {
                 Ok(n) => n,
                 Err(e) => panic!("{} → {}: reparse failed: {e}", case.label, target.name()),
             };
             let second = match target {
-                Fmt::Dss => powerio_dist::write_dss(&reparsed),
-                Fmt::Bmopf => powerio_dist::write_bmopf_json(&reparsed),
-                Fmt::Pmd => powerio_dist::write_pmd_json(&reparsed),
+                Fmt::Dss => helpers::write_dss(&reparsed),
+                Fmt::Bmopf => helpers::write_bmopf_json(&reparsed),
+                Fmt::Pmd => helpers::write_pmd_json(&reparsed),
             };
             if first.text != second.text {
                 assert!(
@@ -776,9 +778,9 @@ fn canonical_writers_are_idempotent() {
                     panic!("{} → {}: reparse failed: {e}", case.label, target.name())
                 });
                 let third = match target {
-                    Fmt::Dss => powerio_dist::write_dss(&reparsed2),
-                    Fmt::Bmopf => powerio_dist::write_bmopf_json(&reparsed2),
-                    Fmt::Pmd => powerio_dist::write_pmd_json(&reparsed2),
+                    Fmt::Dss => helpers::write_dss(&reparsed2),
+                    Fmt::Bmopf => helpers::write_bmopf_json(&reparsed2),
+                    Fmt::Pmd => helpers::write_pmd_json(&reparsed2),
                 };
                 assert_eq!(
                     second.text,
@@ -813,8 +815,8 @@ fn off_diagonal_round_trips() {
                 ),
                 // A dss leg only materializes referenced or grounded
                 // terminals, so project the source the same way.
-                Fmt::Dss => (normalize_bmopf_bus_metadata(&net, &net), back),
-                Fmt::Pmd => (net.clone(), back),
+                Fmt::Dss => (normalize_bmopf_bus_metadata(&net, &net), (*back).clone()),
+                Fmt::Pmd => ((*net).clone(), (*back).clone()),
             };
             if target == Fmt::Dss && case.dss_renames_grounded {
                 // Grounded phase terminals fold into node 0 on the way
@@ -899,20 +901,20 @@ fn emit_for_physics_check() {
             .replace(".dss", "")
             .replace(".json", "");
         // The canonical dss regeneration (echo bypassed on purpose).
-        let dss = powerio_dist::write_dss(&net);
+        let dss = helpers::write_dss(&net);
         std::fs::write(dir.join(format!("{stem}.canonical.dss")), &dss.text).unwrap();
         if case.fmt == Fmt::Dss {
             // Through each JSON format and back to dss.
             for (suffix, text) in [
-                ("via_bmopf", powerio_dist::write_bmopf_json(&net).text),
-                ("via_pmd", powerio_dist::write_pmd_json(&net).text),
+                ("via_bmopf", helpers::write_bmopf_json(&net).text),
+                ("via_pmd", helpers::write_pmd_json(&net).text),
             ] {
-                let mid: MulticonductorNetwork = if suffix == "via_bmopf" {
+                let mid = if suffix == "via_bmopf" {
                     parse_bmopf_str(&text).unwrap()
                 } else {
                     parse_pmd_str(&text).unwrap()
                 };
-                let out = powerio_dist::write_dss(&mid);
+                let out = helpers::write_dss(&mid);
                 std::fs::write(dir.join(format!("{stem}.{suffix}.dss")), &out.text).unwrap();
             }
         }
@@ -1005,8 +1007,8 @@ fn renumbering_legs_are_position_stable_bijections() {
         let before = terminal_maps(&net);
         for target in [Fmt::Dss, Fmt::Pmd] {
             let conv = match target {
-                Fmt::Dss => powerio_dist::write_dss(&net),
-                Fmt::Pmd => powerio_dist::write_pmd_json(&net),
+                Fmt::Dss => helpers::write_dss(&net),
+                Fmt::Pmd => helpers::write_pmd_json(&net),
                 Fmt::Bmopf => unreachable!("BMOPF keeps terminal names"),
             };
             let round_tripped = target

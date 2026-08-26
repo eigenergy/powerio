@@ -477,9 +477,7 @@ pub fn transmission_value(net: &BalancedNetwork) -> serde_json::Value {
 pub fn distribution_value(net: &MulticonductorNetwork) -> serde_json::Value {
     let mut net = net.clone();
     net.name = None;
-    net.source = None;
     net.source_format = None;
-    net.warnings = Vec::new();
     serde_json::to_value(&net).unwrap()
 }
 

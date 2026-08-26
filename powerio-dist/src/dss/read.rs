@@ -12,18 +12,13 @@
 //! public BMOPF examples.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::path::{Path, PathBuf};
-use std::sync::Arc;
 
 use crate::diagnostics::codes as C;
 
 use super::defaults as dd;
 use super::lex::{BusSpec, Value, VarMap};
-use super::raw::{
-    IncludeBoundary, RawDss, RawObject, canonical_case_root, confined_fs_read,
-    parse_raw_confined_under, parse_raw_with, parse_raw_with_confined,
-};
-use crate::error::{Error, Result};
+use super::raw::{RawDss, RawObject};
+use crate::error::Result;
 use crate::geo::{CoordinateSpace, DistCoordsKind, DistGeoMeta, DistLocation};
 use crate::model::{
     ActivePowerReference, ActivePowerUnit, Configuration, ControlVoltageReference, DistBus,
@@ -59,185 +54,35 @@ const TYPED_DSS_CLASSES: &[&str] = &[
     "regcontrol",
 ];
 
-/// Drop a leading UTF-8 byte order mark: the tokenizer would read it as part
-/// of the first command word. Redirected files are stripped the same way.
-fn strip_bom_owned(text: String) -> String {
-    match text.strip_prefix('\u{feff}') {
-        Some(stripped) => stripped.to_owned(),
-        None => text,
-    }
-}
-
-/// A redirect loader for confined file parsing: reads through
-/// [`confined_fs_read`], which refuses a path whose canonical (symlink
-/// resolved) form escapes the confinement boundary, then strips a leading
-/// byte order mark and records which files carried one, so each strip can be
-/// itemized as a warning instead of happening silently.
-fn confined_bom_stripping_loader(
-    canonical_root: Option<PathBuf>,
-    boundary: IncludeBoundary,
-    stripped_paths: &mut Vec<String>,
-) -> impl FnMut(&Path) -> std::io::Result<String> + '_ {
-    move |p: &Path| {
-        confined_fs_read(canonical_root.as_deref(), boundary, p).map(|text| {
-            if text.starts_with('\u{feff}') {
-                stripped_paths.push(p.display().to_string());
-            }
-            strip_bom_owned(text)
-        })
-    }
-}
-
-fn warn_stripped_boms(
-    net: &mut MulticonductorNetwork,
-    root_had_bom: bool,
-    stripped_paths: Vec<String>,
-) {
-    if root_had_bom {
-        net.note(
-            &crate::diagnostics::codes::PARSE_DSS_BOM_STRIPPED,
-            crate::convert::BOM_WARNING,
-        );
-    }
-    for path in stripped_paths {
-        net.note(
-            &crate::diagnostics::codes::PARSE_DSS_BOM_STRIPPED,
-            format!("{path}: {}", crate::convert::BOM_WARNING),
-        );
-    }
-}
-
-/// Options for reading `.dss` files.
-#[derive(Clone, Debug, Default, PartialEq)]
-#[non_exhaustive]
-pub struct DssReadOptions {
-    /// Directory `Redirect`/`Compile`/`Buscoords` includes are confined to.
-    /// `None` confines them to the case directory, the default. When set, the
-    /// case file must itself sit under this directory, and includes resolve
-    /// anywhere beneath it — a case split across a feeder directory and a
-    /// shared component directory parses with the shared parent here. The
-    /// include budget, nesting limit, and symlink refusal all apply against
-    /// this directory unchanged.
-    pub include_root: Option<PathBuf>,
-}
-
-/// Parses a `.dss` file, following includes, into the canonical model.
-/// `Redirect`/`Compile`/`Buscoords` includes are confined to the directory of
-/// `path`: an include that resolves outside that directory is refused with a
-/// warning — whether it climbs out with `..`, is an absolute path outside the
-/// directory, or escapes through a symbolic link. Inside that directory nothing
-/// is restricted: a case file reads any file placed beneath it, and the leading
-/// token of each line the parser does not recognize comes back in the warnings,
-/// so an untrusted case belongs in a directory of its own.
-/// (`Executor::resolve` documents the exact lexical rule that decides whether
-/// an absolute include counts as inside the directory.) The includes a single
-/// parse follows are budgeted in files and in bytes; a case that exhausts the
-/// budget stops following includes and records an `Error` finding.
-/// [`parse_dss_file_with_options`] widens the confinement to an include root
-/// the caller chooses.
-pub fn parse_dss_file(path: impl AsRef<Path>) -> Result<MulticonductorNetwork> {
-    parse_dss_file_with_options(path, &DssReadOptions::default())
-}
-
-/// Like [`parse_dss_file`], with explicit [`DssReadOptions`]. With
-/// `include_root` unset the behavior is exactly [`parse_dss_file`]'s. With it
-/// set, the case file must sit under the given directory and includes are
-/// confined to that directory instead of the case directory; every other
-/// guard is unchanged.
-pub fn parse_dss_file_with_options(
-    path: impl AsRef<Path>,
-    options: &DssReadOptions,
+/// Parses one `.dss` source into the typed model, following includes through
+/// the source's acquisition policy; see
+/// [`parse_raw_from_source`](super::raw::parse_raw_from_source) for the
+/// confinement rules.
+pub(crate) fn parse_dss_collecting(
+    source: &powerio_core::Source,
+    diags: &mut crate::collect::Diagnostics,
 ) -> Result<MulticonductorNetwork> {
-    let path = path.as_ref();
-    let text = std::fs::read_to_string(path).map_err(|source| Error::Io {
-        path: path.display().to_string(),
-        source,
-    })?;
-    let had_bom = text.starts_with('\u{feff}');
-    let text = strip_bom_owned(text);
-    let mut stripped_paths = Vec::new();
-    let raw = match &options.include_root {
-        None => parse_raw_with_confined(
-            &text,
-            &path.display().to_string(),
-            &mut confined_bom_stripping_loader(
-                canonical_case_root(path),
-                IncludeBoundary::CaseDirectory,
-                &mut stripped_paths,
-            ),
-        ),
-        Some(root) => {
-            let root = root.canonicalize().map_err(|source| Error::Io {
-                path: root.display().to_string(),
-                source,
-            })?;
-            // Canonical forms on both sides: the case file may reach the root
-            // through symlinks or `..`, and the executor's lexical check needs
-            // a base directory the root is a literal prefix of.
-            let file = path.canonicalize().map_err(|source| Error::Io {
-                path: path.display().to_string(),
-                source,
-            })?;
-            if !file.starts_with(&root) {
-                return Err(Error::Io {
-                    path: path.display().to_string(),
-                    source: std::io::Error::new(
-                        std::io::ErrorKind::PermissionDenied,
-                        format!(
-                            "the case file is outside the include root {}",
-                            root.display()
-                        ),
-                    ),
-                });
-            }
-            parse_raw_confined_under(
-                &text,
-                &file.display().to_string(),
-                &root,
-                &mut confined_bom_stripping_loader(
-                    Some(root.clone()),
-                    IncludeBoundary::IncludeRoot,
-                    &mut stripped_paths,
-                ),
-            )
-        }
-    };
-    let mut net = network_from_raw(&raw, Arc::new(text));
-    warn_stripped_boms(&mut net, had_bom, stripped_paths);
+    let raw = super::raw::parse_raw_from_source(source)?;
+    let (net, found) = network_from_raw(&raw);
+    diags.absorb(found);
     Ok(net)
 }
 
-/// Parses `.dss` text. Filesystem includes are disabled: string input has no
-/// base directory, so `Redirect`/`Compile`/`Buscoords` read nothing and each
-/// is recorded as a warning. This keeps untrusted text (an uploaded case, say)
-/// from reading arbitrary local files. Use [`parse_dss_file`] to follow
-/// includes, which then stay confined to the case directory.
-pub fn parse_dss_str(text: &str) -> MulticonductorNetwork {
-    let stripped = text.trim_start_matches('\u{feff}');
-    let mut no_includes = |_path: &Path| -> std::io::Result<String> {
-        Err(std::io::Error::new(
-            std::io::ErrorKind::Unsupported,
-            "file includes are disabled when parsing from a string",
-        ))
-    };
-    let raw = parse_raw_with(stripped, "<string>", &mut no_includes);
-    let mut net = network_from_raw(&raw, Arc::new(stripped.to_string()));
-    warn_stripped_boms(&mut net, stripped.len() != text.len(), Vec::new());
-    net
-}
-
-/// Lowers an executed raw script into the typed model.
-pub fn network_from_raw(raw: &RawDss, source: Arc<String>) -> MulticonductorNetwork {
+/// Lowers an executed raw script into the typed model, returning the network
+/// beside the parse findings: the raw layer's own, then the lowering's.
+pub fn network_from_raw(
+    raw: &RawDss,
+) -> (MulticonductorNetwork, Vec<crate::diagnostics::Diagnostic>) {
+    let mut diags = crate::collect::Diagnostics::new();
+    diags.absorb(raw.diagnostics.iter().cloned());
     let mut rd = Reader {
         net: MulticonductorNetwork {
             name: raw.circuit_name.clone(),
             base_frequency: dd::BASE_FREQUENCY,
-            source: Some(source),
             source_format: Some(DistSourceFormat::Dss),
-            warnings: raw.warnings.clone(),
-            parse_diagnostics: raw.diagnostics.clone(),
             ..MulticonductorNetwork::default()
         },
+        diags,
         buses: BTreeMap::new(),
         bus_order: Vec::new(),
         linecode_units: BTreeMap::new(),
@@ -333,7 +178,7 @@ pub fn network_from_raw(raw: &RawDss, source: Arc<String>) -> MulticonductorNetw
         })
         .collect();
     for message in missing {
-        rd.net.note(
+        rd.diags.push(
             &crate::diagnostics::codes::READ_DSS_LINECODE_UNKNOWN,
             message,
         );
@@ -349,7 +194,10 @@ pub fn network_from_raw(raw: &RawDss, source: Arc<String>) -> MulticonductorNetw
 /// named `max(4, highest node + 1)`, the number PowerModelsDistribution
 /// and the public BMOPF examples give the materialized neutral, and every
 /// element terminal map is rewritten from "0" to it.
-fn finish_buses(mut rd: Reader, raw: &RawDss) -> MulticonductorNetwork {
+fn finish_buses(
+    mut rd: Reader,
+    raw: &RawDss,
+) -> (MulticonductorNetwork, Vec<crate::diagnostics::Diagnostic>) {
     let mut coords: BTreeMap<String, (f64, f64)> = BTreeMap::new();
     for c in &raw.buscoords {
         coords.insert(c.bus.to_ascii_lowercase(), (c.x, c.y));
@@ -357,6 +205,7 @@ fn finish_buses(mut rd: Reader, raw: &RawDss) -> MulticonductorNetwork {
     let buses = std::mem::take(&mut rd.bus_order);
     let states = std::mem::take(&mut rd.buses);
     let mut net = rd.net;
+    let mut diags = rd.diags;
     let mut neutral_names: BTreeMap<String, String> = BTreeMap::new();
     for id in buses {
         let st = &states[&id];
@@ -391,7 +240,7 @@ fn finish_buses(mut rd: Reader, raw: &RawDss) -> MulticonductorNetwork {
             .values()
             .all(|(x, y)| (-180.0..=180.0).contains(x) && (-90.0..=90.0).contains(y))
         {
-            net.note(
+            diags.push(
                 &crate::diagnostics::codes::READ_DSS_COORDINATE_SPACE_UNKNOWN,
                 "OpenDSS buscoords fit longitude/latitude ranges; coordinate space remains unknown because Buscoords does not declare a CRS",
             );
@@ -430,7 +279,7 @@ fn finish_buses(mut rd: Reader, raw: &RawDss) -> MulticonductorNetwork {
             rewrite(&w.bus, &mut w.terminal_map);
         }
     }
-    net
+    (net, diags.into_records())
 }
 
 fn read_ibr_objects(rd: &mut Reader<'_>, raw: &RawDss) {
@@ -466,6 +315,7 @@ struct BusState {
 
 struct Reader<'a> {
     net: MulticonductorNetwork,
+    diags: crate::collect::Diagnostics,
     buses: BTreeMap<String, BusState>,
     bus_order: Vec<String>,
     /// Linecode name (lowercase) → meters per its length unit, `None` when
@@ -566,7 +416,7 @@ struct XyCurveRaw {
 
 impl Reader<'_> {
     fn warn(&mut self, info: &'static crate::diagnostics::DiagnosticInfo, msg: impl Into<String>) {
-        self.net.note(info, msg);
+        self.diags.push(info, msg);
     }
 
     fn defaulted(&mut self, class: &str, name: &str, field: &'static str) {
@@ -588,7 +438,7 @@ impl Reader<'_> {
         p.and_then(|v| v.to_i64(Some(self.vars)).ok()).map(|i| {
             let n = usize::try_from(i).unwrap_or(0);
             if n > MAX_COUNT {
-                self.net.note(
+                self.diags.push(
                     &crate::diagnostics::codes::READ_DSS_VALUE_CLAMPED,
                     format!(
                         "count property {n} exceeds the supported maximum of {MAX_COUNT}; clamped"
@@ -611,7 +461,7 @@ impl Reader<'_> {
             return Some(f);
         }
         if !u.to_ascii_lowercase().starts_with("no") {
-            self.net.note(
+            self.diags.push(
                 &crate::diagnostics::codes::READ_DSS_VALUE_UNSUPPORTED,
                 format!("{class} {name}: unknown units `{u}`; treated as none"),
             );
@@ -1375,7 +1225,13 @@ impl Reader<'_> {
                 }
                 "wdg" => {
                     let k = self.usize_prop(Some(v)).unwrap_or(1).max(1);
-                    grow(&mut windings, k, &mut n_windings, &obj.name, &mut self.net);
+                    grow(
+                        &mut windings,
+                        k,
+                        &mut n_windings,
+                        &obj.name,
+                        &mut self.diags,
+                    );
                     active = k - 1;
                 }
                 "bus" => windings[active].bus = Some(v.to_bus_spec()),
@@ -1406,7 +1262,7 @@ impl Reader<'_> {
                         items.len(),
                         &mut n_windings,
                         &obj.name,
-                        &mut self.net,
+                        &mut self.diags,
                     );
                     apply_winding_strings(&mut windings, name, &items);
                 }
@@ -1417,7 +1273,7 @@ impl Reader<'_> {
                             items.len(),
                             &mut n_windings,
                             &obj.name,
-                            &mut self.net,
+                            &mut self.diags,
                         );
                         apply_winding_numbers(&mut windings, name, &items);
                     }
@@ -2606,14 +2462,14 @@ fn grow(
     requested: usize,
     count: &mut usize,
     name: &str,
-    net: &mut MulticonductorNetwork,
+    diags: &mut crate::collect::Diagnostics,
 ) {
     // The winding count also arrives as the length of a token list (`buses=`,
     // `conns=`, `kvs=`, ...), which never passes through the scalar `usize_prop`
     // cap. Clamp here, the single point every winding-growth path funnels
     // through, so a long list cannot drive the O(n^2) `pair_keys` fanout.
     let n = if requested > MAX_COUNT {
-        net.note(
+        diags.push(
             &C::READ_DSS_VALUE_CLAMPED,
             format!(
                 "transformer {name}: winding count {requested} exceeds the supported maximum \
@@ -2633,8 +2489,9 @@ fn grow(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::testkit::{Parsed, parse_dss_str};
 
-    fn has_warning(net: &MulticonductorNetwork, needle: &str) -> bool {
+    fn has_warning(net: &Parsed, needle: &str) -> bool {
         net.warnings.iter().any(|w| w.contains(needle))
     }
 
@@ -3026,18 +2883,31 @@ mod tests {
     }
 
     #[test]
-    fn string_input_disables_filesystem_includes() {
-        // Untrusted string input must not read local files: Redirect/Compile/
-        // Buscoords resolve to nothing and are recorded as warnings.
+    fn string_input_reads_no_filesystem_includes() {
+        // Untrusted string input must not read local files: an in-memory
+        // source has no filesystem, so an absolute include is refused as an
+        // escape and a relative one finds no named buffer. Both are loud.
         let net = parse_dss_str(
-            "New Circuit.c basekv=12.47\nRedirect /etc/passwd\nBuscoords /etc/hosts\n",
+            "New Circuit.c basekv=12.47\nRedirect /etc/passwd\nBuscoords /etc/hosts\n\
+             Redirect extra.dss\n",
         );
         assert_eq!(
             net.warnings
                 .iter()
-                .filter(|w| w.contains("includes are disabled when parsing from a string"))
+                .filter(|w| w.contains("READ.DSS.INCLUDE_REFUSED"))
                 .count(),
-            2
+            2,
+            "absolute includes are refused as escapes: {:?}",
+            net.warnings
+        );
+        assert_eq!(
+            net.warnings
+                .iter()
+                .filter(|w| w.contains("READ.DSS.INCLUDE_LOAD_FAILED"))
+                .count(),
+            1,
+            "a relative include finds no named buffer: {:?}",
+            net.warnings
         );
     }
 

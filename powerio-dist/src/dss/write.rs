@@ -2700,13 +2700,13 @@ fn shunt_kvar(
 
 #[cfg(test)]
 mod tests {
-    use super::super::read::parse_dss_str;
     use super::*;
     use crate::model::{
         ControlVoltageReference, DistControlProfile, DistGenerator, DistIbr, DistLine,
         DistLineCode, DistLoad, DistShunt, DistSwitch, DistTransformer, DistWinding, IbrPrimeMover,
         IbrTopology, ReactivePowerReference, ReactivePowerUnit, VoltVarControl, VoltageSource,
     };
+    use crate::testkit::parse_dss_str;
 
     fn strings(v: &[&str]) -> Vec<String> {
         v.iter().map(ToString::to_string).collect()
@@ -2951,7 +2951,11 @@ mod tests {
         assert!(line.contains("phases=2 conn=delta"), "{line}");
         // The stash must not double emit through the extras tail.
         assert_eq!(line.matches("phases=").count(), 1, "{line}");
-        assert!(!out.warnings.iter().any(|w| w.contains("2 or 3 phase")));
+        assert!(
+            !out.rendered_diagnostics()
+                .iter()
+                .any(|w| w.contains("2 or 3 phase"))
+        );
     }
 
     #[test]
@@ -2968,9 +2972,11 @@ mod tests {
         let line = out.text.lines().find(|l| l.contains("Load.ld")).unwrap();
         assert!(line.contains("phases=3 conn=delta"), "{line}");
         assert!(
-            out.warnings.iter().any(|w| w.contains("2 or 3 phase")),
+            out.rendered_diagnostics()
+                .iter()
+                .any(|w| w.contains("2 or 3 phase")),
             "{:?}",
-            out.warnings
+            out.rendered_diagnostics()
         );
     }
 
@@ -3016,12 +3022,12 @@ mod tests {
         };
         let out = write_dss(&net);
         let hits = |needle: &str| {
-            out.warnings
+            out.rendered_diagnostics()
                 .iter()
                 .any(|w| w.contains(needle) && w.contains("cannot represent"))
         };
-        assert!(hits("load 1"), "{:?}", out.warnings);
-        assert!(hits("my circuit"), "{:?}", out.warnings);
+        assert!(hits("load 1"), "{:?}", out.rendered_diagnostics());
+        assert!(hits("my circuit"), "{:?}", out.rendered_diagnostics());
         // The bad bus id warns at its bus_ref emission site.
         let mut net2 = net.clone();
         net2.lines.push(DistLine {
@@ -3039,11 +3045,11 @@ mod tests {
         });
         let out2 = write_dss(&net2);
         assert!(
-            out2.warnings
+            out2.rendered_diagnostics()
                 .iter()
                 .any(|w| w.contains("a=b") && w.contains("cannot represent")),
             "{:?}",
-            out2.warnings
+            out2.rendered_diagnostics()
         );
     }
 
@@ -3073,11 +3079,11 @@ mod tests {
         let line = out.text.lines().find(|l| l.contains("Line.l1 ")).unwrap();
         assert!(line.contains("emergamps=400"), "{line}");
         assert!(
-            out.warnings
+            out.rendered_diagnostics()
                 .iter()
                 .any(|w| w.contains("line l1") && w.contains("not equal on all phases")),
             "{:?}",
-            out.warnings
+            out.rendered_diagnostics()
         );
     }
 
@@ -3107,18 +3113,18 @@ mod tests {
         let line = out.text.lines().find(|l| l.contains("Line.l1 ")).unwrap();
         assert!(line.contains("emergamps=400"), "{line}");
         assert!(
-            !out.warnings
+            !out.rendered_diagnostics()
                 .iter()
                 .any(|w| w.contains("line l1") && w.contains("i_max")),
             "{:?}",
-            out.warnings
+            out.rendered_diagnostics()
         );
         assert!(
-            out.warnings
+            out.rendered_diagnostics()
                 .iter()
                 .any(|w| w.contains("line l1") && w.contains("s_max") && w.contains("dropped")),
             "{:?}",
-            out.warnings
+            out.rendered_diagnostics()
         );
     }
 
@@ -3182,11 +3188,11 @@ mod tests {
         };
         let out = write_dss(&net);
         assert!(
-            out.warnings
+            out.rendered_diagnostics()
                 .iter()
                 .any(|w| w.contains("@kv") && w.contains("does not parse")),
             "{:?}",
-            out.warnings
+            out.rendered_diagnostics()
         );
         // The estimate substitutes: 2400*sqrt(3)/1e3 line to line.
         let line = out.text.lines().find(|l| l.contains("Load.ld")).unwrap();
@@ -3215,14 +3221,18 @@ mod tests {
         assert_eq!(out.text.matches("DefaultBaseFrequency").count(), 1);
         assert!(!out.text.to_lowercase().contains("disable"));
         assert!(
-            out.warnings
+            out.rendered_diagnostics()
                 .iter()
                 .any(|w| w.contains("disable Line.l1") && w.contains("not regenerated")),
             "{:?}",
-            out.warnings
+            out.rendered_diagnostics()
         );
         // Solve and Calcvoltagebases re-derive; no warning claims they drop.
-        assert!(!out.warnings.iter().any(|w| w.contains("`solve`")));
+        assert!(
+            !out.rendered_diagnostics()
+                .iter()
+                .any(|w| w.contains("`solve`"))
+        );
         let again = write_dss(&parse_dss_str(&out.text));
         assert_eq!(out.text, again.text);
     }
@@ -3242,11 +3252,11 @@ mod tests {
         assert!(line.contains("bus1=b1.1.0"), "{line}");
         let out = write_dss(&net);
         assert!(
-            out.warnings
+            out.rendered_diagnostics()
                 .iter()
                 .any(|w| w.contains("`a`") && w.contains("position")),
             "{:?}",
-            out.warnings
+            out.rendered_diagnostics()
         );
         assert_eq!(first, second);
     }
@@ -3265,9 +3275,11 @@ mod tests {
         let out = write_dss(&net);
         assert!(!out.text.contains("z1="), "{}", out.text);
         assert!(
-            out.warnings.iter().any(|w| w.contains("`xs` is missing")),
+            out.rendered_diagnostics()
+                .iter()
+                .any(|w| w.contains("`xs` is missing")),
             "{:?}",
-            out.warnings
+            out.rendered_diagnostics()
         );
     }
 
@@ -3294,16 +3306,18 @@ mod tests {
         let out = write_dss(&net);
         assert!(!out.text.contains("r0="), "{}", out.text);
         assert!(
-            out.warnings
+            out.rendered_diagnostics()
                 .iter()
                 .any(|w| w.contains("pmd_rs") && w.contains("not a numeric matrix")),
             "{:?}",
-            out.warnings
+            out.rendered_diagnostics()
         );
         assert!(
-            out.warnings.iter().any(|w| w.contains("i_max is empty")),
+            out.rendered_diagnostics()
+                .iter()
+                .any(|w| w.contains("i_max is empty")),
             "{:?}",
-            out.warnings
+            out.rendered_diagnostics()
         );
     }
 
@@ -3365,10 +3379,18 @@ mod tests {
         let out = write_dss(&net); // must not panic
         assert!(out.text.contains("rmatrix=(1 | 0.5 0)"), "{}", out.text);
         assert!(out.text.contains("xhl=0"), "{}", out.text);
-        let has = |needle: &str| out.warnings.iter().any(|w| w.contains(needle));
-        assert!(has("shorter than the lower triangle"), "{:?}", out.warnings);
-        assert!(has("xsc_pct is empty"), "{:?}", out.warnings);
-        assert!(has("i_max is empty"), "{:?}", out.warnings);
+        let has = |needle: &str| {
+            out.rendered_diagnostics()
+                .iter()
+                .any(|w| w.contains(needle))
+        };
+        assert!(
+            has("shorter than the lower triangle"),
+            "{:?}",
+            out.rendered_diagnostics()
+        );
+        assert!(has("xsc_pct is empty"), "{:?}", out.rendered_diagnostics());
+        assert!(has("i_max is empty"), "{:?}", out.rendered_diagnostics());
     }
 
     #[test]
@@ -3402,9 +3424,11 @@ mod tests {
         assert!(line.contains("kv=4.16"), "{line}");
         assert!(line.contains("phases=3"), "{line}");
         assert!(
-            !out.warnings.iter().any(|w| w.contains("dropped")),
+            !out.rendered_diagnostics()
+                .iter()
+                .any(|w| w.contains("dropped")),
             "{:?}",
-            out.warnings
+            out.rendered_diagnostics()
         );
 
         // And it comes back: the reader lowers a dss Capacitor to a shunt B
@@ -3697,11 +3721,11 @@ mod tests {
             out.text
         );
         assert!(
-            out.warnings
+            out.rendered_diagnostics()
                 .iter()
                 .any(|w| w.contains("addresses 2") && w.contains("loses them")),
             "{:?}",
-            out.warnings
+            out.rendered_diagnostics()
         );
     }
 
@@ -3751,11 +3775,11 @@ mod tests {
         // node order fault: the two halves are series additive.
         assert!(line.contains("buses=(sb.1.0, lv.1.0, lv.0.3)"), "{line}");
         assert!(
-            out.warnings
+            out.rendered_diagnostics()
                 .iter()
                 .any(|w| w.contains("collapsed secondary")),
             "{:?}",
-            out.warnings
+            out.rendered_diagnostics()
         );
     }
 
@@ -3787,11 +3811,11 @@ mod tests {
             out.text
         );
         assert!(
-            out.warnings
+            out.rendered_diagnostics()
                 .iter()
                 .any(|w| w.contains("per phase power on a delta load")),
             "{:?}",
-            out.warnings
+            out.rendered_diagnostics()
         );
     }
 
@@ -3938,9 +3962,11 @@ mod tests {
             .unwrap_or_else(|| panic!("no capacitor emitted in:\n{}", out.text));
         assert!(line.contains("phases=3 conn=delta"), "{line}");
         assert!(
-            !out.warnings.iter().any(|w| w.contains("off diagonal")),
+            !out.rendered_diagnostics()
+                .iter()
+                .any(|w| w.contains("off diagonal")),
             "{:?}",
-            out.warnings
+            out.rendered_diagnostics()
         );
     }
 
@@ -3975,9 +4001,11 @@ mod tests {
             .unwrap_or_else(|| panic!("no capacitor emitted in:\n{}", out.text));
         assert!(line.contains("conn=wye"), "{line}");
         assert!(
-            out.warnings.iter().any(|w| w.contains("off diagonal")),
+            out.rendered_diagnostics()
+                .iter()
+                .any(|w| w.contains("off diagonal")),
             "{:?}",
-            out.warnings
+            out.rendered_diagnostics()
         );
     }
 
@@ -4015,11 +4043,11 @@ mod tests {
             .unwrap_or_else(|| panic!("no capacitor emitted in:\n{}", out.text));
         assert!(line.contains("conn=delta"), "{line}");
         assert!(
-            out.warnings
+            out.rendered_diagnostics()
                 .iter()
                 .any(|w| w.contains("no scalar capacitor expression")),
             "{:?}",
-            out.warnings
+            out.rendered_diagnostics()
         );
     }
 
@@ -4048,11 +4076,11 @@ mod tests {
         }
         assert!(
             !first
-                .warnings
+                .rendered_diagnostics()
                 .iter()
                 .any(|w| w.contains("emitted as written")),
             "{:?}",
-            first.warnings
+            first.rendered_diagnostics()
         );
         // The reader strips the wrapper back off...
         let reparsed = parse_dss_str(&first.text);
@@ -4120,12 +4148,12 @@ mod tests {
         assert!(out.text.contains(&format!("Set foo={bad}")), "{}", out.text);
         assert!(out.text.contains(&format!("daily={bad}")), "{}", out.text);
         let warned = |needle: &str| {
-            out.warnings
+            out.rendered_diagnostics()
                 .iter()
                 .any(|w| w.contains(needle) && w.contains("emitted as written"))
         };
-        assert!(warned("option `foo`"), "{:?}", out.warnings);
-        assert!(warned("`daily`"), "{:?}", out.warnings);
+        assert!(warned("option `foo`"), "{:?}", out.rendered_diagnostics());
+        assert!(warned("`daily`"), "{:?}", out.rendered_diagnostics());
     }
 
     #[test]
@@ -4214,11 +4242,11 @@ mod tests {
         let out = write_dss(&net);
         for key in ["basekv", "pu", "angle"] {
             assert!(
-                out.warnings
+                out.rendered_diagnostics()
                     .iter()
                     .any(|w| w.contains(&format!("{key} extra")) && w.contains("does not parse")),
                 "{key}: {:?}",
-                out.warnings
+                out.rendered_diagnostics()
             );
         }
         // The derived values substitute.
@@ -4245,11 +4273,11 @@ mod tests {
         assert_eq!(first, second);
         let out = write_dss(&net);
         assert!(
-            out.warnings
+            out.rendered_diagnostics()
                 .iter()
                 .any(|w| w.contains("phases=3") && w.contains("positive")),
             "{:?}",
-            out.warnings
+            out.rendered_diagnostics()
         );
     }
 
@@ -4353,15 +4381,27 @@ mod tests {
                 .any(|w| w.contains(name) && w.contains("materializes a grounded neutral"))
         };
         assert!(
-            hits(&first.warnings, "vsource source"),
+            hits(&first.rendered_diagnostics(), "vsource source"),
             "{:?}",
-            first.warnings
+            first.rendered_diagnostics()
         );
-        assert!(hits(&first.warnings, "load ld"), "{:?}", first.warnings);
+        assert!(
+            hits(&first.rendered_diagnostics(), "load ld"),
+            "{:?}",
+            first.rendered_diagnostics()
+        );
         let second = write_dss(&parse_dss_str(&first.text));
         assert_ne!(first.text, second.text);
-        assert!(!hits(&second.warnings, "vsource"), "{:?}", second.warnings);
-        assert!(!hits(&second.warnings, "load"), "{:?}", second.warnings);
+        assert!(
+            !hits(&second.rendered_diagnostics(), "vsource"),
+            "{:?}",
+            second.rendered_diagnostics()
+        );
+        assert!(
+            !hits(&second.rendered_diagnostics(), "load"),
+            "{:?}",
+            second.rendered_diagnostics()
+        );
         let third_write = write_dss(&parse_dss_str(&second.text));
         assert_eq!(second.text, third_write.text);
     }
@@ -4436,7 +4476,11 @@ mod tests {
 
         let out = write_dss(&net);
 
-        assert!(out.warnings.is_empty(), "{:?}", out.warnings);
+        assert!(
+            out.rendered_diagnostics().is_empty(),
+            "{:?}",
+            out.rendered_diagnostics()
+        );
         let line = out
             .text
             .lines()
@@ -4498,7 +4542,11 @@ mod tests {
 
         let out = write_dss(&net);
 
-        assert!(out.warnings.is_empty(), "{:?}", out.warnings);
+        assert!(
+            out.rendered_diagnostics().is_empty(),
+            "{:?}",
+            out.rendered_diagnostics()
+        );
         let pv = out
             .text
             .lines()

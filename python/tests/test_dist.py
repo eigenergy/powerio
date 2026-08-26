@@ -210,5 +210,5 @@ def test_case_file_outside_the_include_root_is_refused(tmp_path):
     elsewhere = tmp_path / "elsewhere"
     elsewhere.mkdir()
     (elsewhere / "f.dss").write_text("New Circuit.out\n")
-    with pytest.raises(powerio.PowerIOError, match="outside the include root"):
+    with pytest.raises(powerio.PowerIOError, match="outside the requested acquisition root"):
         dist.parse_file(elsewhere / "f.dss", include_root=root)

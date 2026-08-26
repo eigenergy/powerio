@@ -7,7 +7,8 @@
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
-use powerio_dist::dss::{DssReadOptions, parse_dss_file, parse_dss_file_with_options, write_dss};
+mod helpers;
+use helpers::{parse_dss_file, parse_dss_file_with_root, write_dss};
 use powerio_dist::{
     Configuration, CoordinateSpace, DistCoordsKind, DistWindingConn, IbrPrimeMover, IbrTopology,
     MulticonductorNetwork, ReactivePowerReference, ReactivePowerUnit,
@@ -19,7 +20,7 @@ fn fixture(rel: &str) -> PathBuf {
         .join(rel)
 }
 
-fn parse(rel: &str) -> MulticonductorNetwork {
+fn parse(rel: &str) -> helpers::Parsed {
     parse_dss_file(fixture(rel)).expect("fixture parses")
 }
 
@@ -285,7 +286,7 @@ fn switch_states_follow_swtcontrol() {
 
 #[test]
 fn swtcontrol_last_action_or_state_wins() {
-    use powerio_dist::parse_dss_str;
+    use crate::helpers::parse_dss_str;
     let base = "New Circuit.c basekv=12.47\nNew Line.sw bus1=sourcebus bus2=b2 switch=y\n";
     // The later `state` overrides the earlier `action`.
     let net = parse_dss_str(&format!(
@@ -330,7 +331,7 @@ fn four_wire_line_keeps_the_neutral() {
 /// list keeps the neutral and the map length matches the 4x4 matrices.
 #[test]
 fn line_conductor_count_follows_linecode() {
-    use powerio_dist::parse_dss_str;
+    use crate::helpers::parse_dss_str;
     let base = "Clear\n\
                 New Circuit.c basekv=0.4 pu=1.0 phases=3 bus1=src\n\
                 New Linecode.4w nphases=4 units=m\n\
@@ -372,7 +373,7 @@ fn line_conductor_count_follows_linecode() {
 
 #[test]
 fn pvsystem_and_invcontrol_type_to_ibr_profile() {
-    use powerio_dist::parse_dss_str;
+    use crate::helpers::parse_dss_str;
     let net = parse_dss_str(
         "New Circuit.c basekv=0.416 phases=3 bus1=sourcebus\n\
          New PVSystem.pv1 bus1=loadbus.1.2.3.4 phases=3 conn=wye kv=0.416 kva=30 pmpp=24 \
@@ -438,7 +439,7 @@ fn ten_conductor_linecode_types() {
 #[test]
 #[allow(clippy::float_cmp)]
 fn grounding_reactor_types_as_an_inductive_shunt() {
-    use powerio_dist::parse_dss_str;
+    use crate::helpers::parse_dss_str;
     let net = parse_dss_str(
         "New Circuit.c basekv=4.16\n\
          New Reactor.rx bus1=b2 phases=3 kvar=900 kv=4.16\n",
@@ -459,7 +460,7 @@ fn grounding_reactor_types_as_an_inductive_shunt() {
 
 #[test]
 fn reactor_defaults_are_materialized_and_recorded() {
-    use powerio_dist::parse_dss_str;
+    use crate::helpers::parse_dss_str;
     let net = parse_dss_str("New Circuit.c basekv=12.47\nNew Reactor.rd bus1=b2\n");
     assert!(net.shunts.iter().any(|s| s.name.eq_ignore_ascii_case("rd")));
     let recorded = net
@@ -475,7 +476,7 @@ fn reactor_defaults_are_materialized_and_recorded() {
 #[test]
 #[allow(clippy::float_cmp)]
 fn grounding_impedance_reactors_type_as_conductive_shunts() {
-    use powerio_dist::parse_dss_str;
+    use crate::helpers::parse_dss_str;
     let net = parse_dss_str(
         "New Circuit.c basekv=0.4\n\
          New Reactor.tx_busgrounding_B179 phases=1 bus1=B179.4 bus2=B179.0 r=0.3 x=0.0\n\
@@ -509,7 +510,7 @@ fn grounding_impedance_reactors_type_as_conductive_shunts() {
 
 #[test]
 fn grounding_reactor_with_rx_uses_admittance_inverse() {
-    use powerio_dist::parse_dss_str;
+    use crate::helpers::parse_dss_str;
     let net = parse_dss_str(
         "New Circuit.c basekv=4.16\nNew Reactor.rz bus1=b2.1 bus2=b2.0 phases=1 r=3 x=4\n",
     );
@@ -520,7 +521,7 @@ fn grounding_reactor_with_rx_uses_admittance_inverse() {
 
 #[test]
 fn grounding_reactor_bus2_uses_the_dss_fill_rule() {
-    use powerio_dist::parse_dss_str;
+    use crate::helpers::parse_dss_str;
     let net = parse_dss_str(
         "New Circuit.c basekv=4.16\n\
          New Reactor.rz bus1=b2.1.2.3 bus2=b2.0 phases=3 r=3 x=4\n",
@@ -589,7 +590,7 @@ fn default_phase_single_terminal_reactor_preserves_physical_neutral() {
 
 #[test]
 fn zero_impedance_grounding_reactor_stays_untyped() {
-    use powerio_dist::parse_dss_str;
+    use crate::helpers::parse_dss_str;
     let net = parse_dss_str(
         "New Circuit.c basekv=4.16\nNew Reactor.rz bus1=b2.1 bus2=b2.0 phases=1 r=0 x=0\n",
     );
@@ -600,7 +601,7 @@ fn zero_impedance_grounding_reactor_stays_untyped() {
 
 #[test]
 fn grounding_reactor_with_unparseable_rx_stays_untyped() {
-    use powerio_dist::parse_dss_str;
+    use crate::helpers::parse_dss_str;
     // A non-numeric `r` fails to evaluate; substituting 0 would emit a lossless
     // grounding reactor, so the object stays untyped with a warning instead.
     let net = parse_dss_str(
@@ -618,7 +619,7 @@ fn grounding_reactor_with_unparseable_rx_stays_untyped() {
 
 #[test]
 fn delta_capacitor_and_reactor_type_as_shunt_matrices() {
-    use powerio_dist::parse_dss_str;
+    use crate::helpers::parse_dss_str;
     let net = parse_dss_str(
         "New Circuit.c basekv=4.16\n\
          New Capacitor.capd bus1=b2.1.2.3 phases=3 conn=delta kvar=900 kv=4.16\n\
@@ -642,7 +643,7 @@ fn delta_capacitor_and_reactor_type_as_shunt_matrices() {
 
 #[test]
 fn series_and_non_ground_impedance_reactors_stay_untyped() {
-    use powerio_dist::parse_dss_str;
+    use crate::helpers::parse_dss_str;
     // Series reactor (bus2): deferred, like the series capacitor.
     let net = parse_dss_str(
         "New Circuit.c basekv=4.16\nNew Reactor.rs bus1=b2 bus2=b3 phases=3 kvar=900 kv=4.16\n",
@@ -690,7 +691,7 @@ fn a_self_redirecting_case_file_returns() {
         net.warnings
     );
     assert_eq!(
-        net.parse_diagnostics
+        net.diagnostics
             .iter()
             .filter(|d| d.code() == "READ.DSS.INCLUDE_BUDGET")
             .count(),
@@ -726,7 +727,7 @@ fn a_clear_after_the_include_budget_does_not_erase_the_refusal() {
         net.warnings
     );
     assert_eq!(
-        net.parse_diagnostics
+        net.diagnostics
             .iter()
             .filter(|d| d.code() == "READ.DSS.INCLUDE_BUDGET")
             .count(),
@@ -743,12 +744,6 @@ New Line.l1 bus1=a.1.2.3 bus2=b.1.2.3 phases=3 linecode=lc1 length=1 units=km
 
 const SHARED_LINECODES: &str = "New Linecode.lc1 nphases=3 r1=0.1 x1=0.2\n";
 
-fn widened(root: &std::path::Path) -> DssReadOptions {
-    let mut options = DssReadOptions::default();
-    options.include_root = Some(root.to_path_buf());
-    options
-}
-
 /// A case split across a feeder directory and a shared component directory
 /// parses under an include root at their shared parent, and reads the same as
 /// the merged deck.
@@ -760,10 +755,10 @@ fn a_widened_include_root_admits_a_shared_sibling_include() {
     std::fs::write(root.join("feeder/f.dss"), FEEDER_DECK).unwrap();
     std::fs::write(root.join("shared/linecodes.dss"), SHARED_LINECODES).unwrap();
 
-    let net = parse_dss_file_with_options(root.join("feeder/f.dss"), &widened(&root)).unwrap();
+    let net = parse_dss_file_with_root(root.join("feeder/f.dss"), &root).unwrap();
     assert!(net.warnings.is_empty(), "{:?}", net.warnings);
 
-    let merged = powerio_dist::dss::parse_dss_str(&FEEDER_DECK.replace(
+    let merged = crate::helpers::parse_dss_str(&FEEDER_DECK.replace(
         "Redirect ../shared/linecodes.dss",
         SHARED_LINECODES.trim_end(),
     ));
@@ -790,7 +785,7 @@ fn a_widened_include_root_still_refuses_escapes_past_it() {
     )
     .unwrap();
 
-    let net = parse_dss_file_with_options(root.join("feeder/f.dss"), &widened(&root)).unwrap();
+    let net = parse_dss_file_with_root(root.join("feeder/f.dss"), &root).unwrap();
     assert!(net.lines.iter().all(|l| l.name != "leaked"));
     assert!(
         net.warnings
@@ -800,7 +795,7 @@ fn a_widened_include_root_still_refuses_escapes_past_it() {
         net.warnings
     );
     assert_eq!(
-        net.parse_diagnostics
+        net.diagnostics
             .iter()
             .filter(|d| d.code() == "READ.DSS.INCLUDE_REFUSED")
             .count(),
@@ -824,12 +819,10 @@ fn a_widened_include_root_still_refuses_symlink_escapes() {
     .unwrap();
     std::os::unix::fs::symlink(outer.join("secret.dss"), root.join("feeder/linked.dss")).unwrap();
 
-    let net = parse_dss_file_with_options(root.join("feeder/f.dss"), &widened(&root)).unwrap();
+    let net = parse_dss_file_with_root(root.join("feeder/f.dss"), &root).unwrap();
     assert!(net.lines.iter().all(|l| l.name != "leaked"));
     assert!(
-        net.warnings
-            .iter()
-            .any(|w| w.contains("outside the include root")),
+        net.warnings.iter().any(|w| w.contains("symbolic link")),
         "{:?}",
         net.warnings
     );
@@ -844,10 +837,11 @@ fn a_case_file_outside_the_widened_root_is_refused() {
     std::fs::create_dir_all(outer.join("elsewhere")).unwrap();
     std::fs::write(outer.join("elsewhere/f.dss"), "New Circuit.out\n").unwrap();
 
-    let err = parse_dss_file_with_options(outer.join("elsewhere/f.dss"), &widened(&root))
+    let err = parse_dss_file_with_root(outer.join("elsewhere/f.dss"), &root)
         .expect_err("the case file is outside the include root");
     assert!(
-        err.to_string().contains("outside the include root"),
+        err.to_string()
+            .contains("outside the requested acquisition root"),
         "{err}"
     );
 }
@@ -877,7 +871,7 @@ New Load.ld bus1=b.1.2.3 phases=3 conn=wye kv=7.2 kw=10 kvar=1
 SetBusXY bus=a x=-80 y=35
 SetBusXY b -80.5 35.25
 ";
-    let net = powerio_dist::parse_str(text, "dss").unwrap();
+    let net = helpers::parse_str(text, "dss").unwrap();
     let a = net.buses.iter().find(|b| b.id == "a").unwrap();
     assert_eq!(a.location.unwrap().x.to_bits(), (-80.0f64).to_bits());
     assert_eq!(a.location.unwrap().y.to_bits(), 35.0f64.to_bits());
@@ -892,7 +886,7 @@ fn a_short_setbusxy_is_a_declared_malformation() {
 New Circuit.geo basekv=12.47 pu=1 phases=3 bus1=a
 SetBusXY bus=a x=-80
 ";
-    let net = powerio_dist::parse_str(text, "dss").unwrap();
+    let net = helpers::parse_str(text, "dss").unwrap();
     assert!(
         net.warnings
             .iter()

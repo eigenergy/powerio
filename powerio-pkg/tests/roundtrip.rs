@@ -96,7 +96,7 @@ fn balanced_package() -> NetworkPackage {
 fn multiconductor_package() -> NetworkPackage {
     // A bare circuit materializes a vsource with several defaulted fields, which
     // exercises the defaulted -> source-map lift.
-    let net = powerio_dist::parse_str("New Circuit.c1", "dss").expect("parse dss");
+    let net = helpers::dist_parse_str("New Circuit.c1", "dss");
     NetworkPackage::from_multiconductor(net)
 }
 
@@ -1376,7 +1376,7 @@ fn lowering_preflight_records_kron_reduction_for_neutral() {
 
 #[test]
 fn lowering_preflight_accepts_source_grounded_four_wire_fixture() {
-    let net = powerio_dist::parse_str(FOUR_WIRE_DSS, "dss").expect("parse four wire fixture");
+    let net = helpers::dist_parse_str(FOUR_WIRE_DSS, "dss");
     let report = check_multiconductor_to_balanced_lowering(
         &net,
         powerio_pkg::MulticonductorToBalancedOptions::default(),
@@ -1548,7 +1548,7 @@ fn lowering_produces_balanced_three_phase_with_neutral_kron() {
 
 #[test]
 fn lowering_produces_balanced_source_grounded_four_wire_fixture() {
-    let net = powerio_dist::parse_str(FOUR_WIRE_DSS, "dss").expect("parse four wire fixture");
+    let net = helpers::dist_parse_str(FOUR_WIRE_DSS, "dss");
     let lowered =
         lower_multiconductor_to_balanced(&net, MulticonductorToBalancedOptions::default())
             .expect("lower source grounded four wire fixture");
@@ -2454,7 +2454,7 @@ fn a_line_rating_overrides_the_linecode_rating_in_the_lowering() {
 New Circuit.c basekv=4.16 bus1=b1\n\
 New Linecode.lc nphases=3 rmatrix=[1|0 1|0 0 1] xmatrix=[1|0 1|0 0 1] normamps=600 emergamps=600\n\
 New Line.l1 bus1=b1.1.2.3 bus2=b2.1.2.3 linecode=lc length=1 units=m\n";
-    let net = powerio_dist::parse_str(source, "dss").expect("parse dss");
+    let net = helpers::dist_parse_str(source, "dss");
     let shared = lower_multiconductor_to_balanced(&net, MulticonductorToBalancedOptions::default())
         .expect("lower")
         .network;
@@ -2482,7 +2482,7 @@ New Line.l1 bus1=b1.1.2.3 bus2=b2.1.2.3 linecode=lc length=1 units=m\n";
 /// count the bank, or the package under-reports the case.
 #[test]
 fn a_dropped_capacitor_bank_is_recorded_and_counted() {
-    let mut net = powerio_dist::parse_str("New Circuit.c1", "dss").expect("parse dss");
+    let mut net = helpers::dist_parse_str("New Circuit.c1", "dss");
     net.capacitors.push(powerio_dist::DistCapacitor::new(
         "cap1",
         "sourcebus",
@@ -2515,8 +2515,9 @@ fn a_dropped_capacitor_bank_is_recorded_and_counted() {
 fn a_dangling_linecode_reference_reaches_the_package_diagnostics() {
     let src = "New Circuit.c1\n\
                New Line.l1 bus1=sourcebus bus2=b2 linecode=absent length=1\n";
-    let net = powerio_dist::parse_str(src, "dss").expect("parse dss");
-    let pkg = NetworkPackage::from_multiconductor(net.clone());
+    let module = helpers::dist_parse_module(src, "dss");
+    let rendered = powerio_dist::diagnostics::render_diagnostics(module.diagnostics());
+    let pkg = NetworkPackage::from_multiconductor_module(module);
 
     assert!(
         pkg.diagnostics.iter().any(|d| {
@@ -2527,10 +2528,9 @@ fn a_dangling_linecode_reference_reaches_the_package_diagnostics() {
         pkg.diagnostics
     );
     assert!(
-        net.warnings.iter().any(|w| w
+        rendered.iter().any(|w| w
             == "READ.DSS.LINECODE_UNKNOWN: line l1 references unknown linecode `absent`"),
-        "the rendered line must carry the code: {:?}",
-        net.warnings
+        "the rendered line must carry the code: {rendered:?}"
     );
 }
 
@@ -2541,7 +2541,7 @@ fn multiconductor_nonfinite_floats_roundtrip() {
     // library wrote always reads back.
     use powerio_dist::{Configuration, DistGenerator, DistSwitch};
 
-    let mut net = powerio_dist::parse_str("New Circuit.c1", "dss").expect("parse dss");
+    let mut net = helpers::dist_parse_str("New Circuit.c1", "dss");
     let mut generator = DistGenerator::new(
         "g1",
         "sourcebus",
@@ -2582,7 +2582,7 @@ fn multiconductor_nonfinite_ratings_and_scalars_roundtrip() {
     // winding rating take the same `null` spelling as the generator bounds.
     use powerio_dist::{Configuration, DistCapacitor, DistIbr, IbrPrimeMover, IbrTopology};
 
-    let mut net = powerio_dist::parse_str("New Circuit.c1", "dss").expect("parse dss");
+    let mut net = helpers::dist_parse_str("New Circuit.c1", "dss");
     let mut ibr = DistIbr::new(
         "i1",
         "sourcebus",
@@ -2625,16 +2625,14 @@ fn refused_include_lifts_as_an_error_diagnostic() {
     // its warning twin does not appear a second time.
     use powerio_pkg::{DiagnosticSeverity, ValidationStatus};
 
-    let mut net = powerio_dist::parse_str("New Circuit.c1", "dss").expect("parse dss");
+    let net = helpers::dist_parse_str("New Circuit.c1", "dss");
     let message = "redirect ../shared.dss: refused; include escapes the case directory";
-    net.warnings
-        .push(format!("READ.DSS.INCLUDE_REFUSED: {message}"));
-    net.parse_diagnostics.push(powerio_dist::Diagnostic::of(
+    let finding = powerio_dist::Diagnostic::of(
         &powerio_dist::diagnostics::codes::READ_DSS_INCLUDE_REFUSED,
         message,
-    ));
+    );
 
-    let pkg = NetworkPackage::from_multiconductor(net);
+    let pkg = NetworkPackage::from_multiconductor_with_read_diagnostics(net, [finding.into()]);
     let carrying: Vec<_> = pkg
         .diagnostics
         .iter()

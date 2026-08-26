@@ -391,7 +391,7 @@ fn package_to_dist_py(pkg: &NetworkPackage) -> PyResult<PyMulticonductorNetwork>
         .as_multiconductor()
         .ok_or_else(|| PyValueError::new_err("package model_kind is not multiconductor"))?
         .clone();
-    Ok(PyMulticonductorNetwork { net })
+    Ok(PyMulticonductorNetwork::from_network(net, Vec::new()))
 }
 
 #[derive(Clone, Copy)]
@@ -551,14 +551,16 @@ fn build_package_from_path(
     if from_.is_some_and(format_is_distribution)
         || (from_.is_none() && looks_like_distribution_input(input)?)
     {
-        let net = powerio_dist::parse_file(input, from_).map_err(dist_to_pyerr)?;
-        let format = net
+        let source = dist_source_from_path(input, from_, None)?;
+        let module = powerio_dist::parse(source).map_err(|error| core_error_pyerr(&error))?;
+        let format = module
+            .value()
             .source_format
             .map(powerio_dist::DistSourceFormat::name)
             .or(from_)
             .unwrap_or("unknown");
-        let retained_source = net.source.is_some();
-        let mut pkg = NetworkPackage::from_multiconductor(net);
+        let retained_source = module.source().is_some();
+        let mut pkg = NetworkPackage::from_multiconductor_module(module);
         set_package_source(
             &mut pkg,
             input,
@@ -619,8 +621,9 @@ fn build_package_from_str(text: &str, from_: Option<&str>) -> PyResult<NetworkPa
 
     if let Some(format) = source_format.as_deref() {
         if format_is_distribution(format) {
-            let net = powerio_dist::parse_str(text, format).map_err(dist_to_pyerr)?;
-            let mut pkg = NetworkPackage::from_multiconductor(net);
+            let source = dist_source_from_bytes(text.as_bytes(), format)?;
+            let module = powerio_dist::parse(source).map_err(|error| core_error_pyerr(&error))?;
+            let mut pkg = NetworkPackage::from_multiconductor_module(module);
             pkg.run_sane_validation();
             return Ok(pkg);
         }
@@ -1649,30 +1652,90 @@ fn dist_to_pyerr(e: powerio_dist::Error) -> PyErr {
 /// user-facing `powerio.dist.MulticonductorNetwork` wraps it.
 #[pyclass(name = "_MulticonductorNetwork", module = "powerio._powerio", frozen)]
 struct PyMulticonductorNetwork {
-    net: powerio_dist::MulticonductorNetwork,
+    /// The parsed module: the typed network plus retained source and the
+    /// reader's findings. Same format writes echo the retained bytes; a
+    /// handle built from a bare network writes canonically.
+    module: powerio_core::PioModule<powerio_dist::MulticonductorNetwork>,
+    /// The findings as `CODE: message` lines, rendered once at construction.
+    rendered_warnings: Vec<String>,
+}
+
+impl PyMulticonductorNetwork {
+    fn inner(&self) -> &powerio_dist::MulticonductorNetwork {
+        self.module.value()
+    }
+
+    /// A parsed handle: warnings rendered from the module's findings.
+    fn from_module(module: powerio_core::PioModule<powerio_dist::MulticonductorNetwork>) -> Self {
+        Self {
+            rendered_warnings: powerio_dist::diagnostics::render_diagnostics(module.diagnostics()),
+            module,
+        }
+    }
+
+    /// A derived handle: no retained source, so writes are canonical.
+    fn from_network(
+        net: powerio_dist::MulticonductorNetwork,
+        rendered_warnings: Vec<String>,
+    ) -> Self {
+        Self {
+            module: powerio_core::PioModule::new(net),
+            rendered_warnings,
+        }
+    }
+}
+
+/// A distribution source of the declared `from_` format (when given).
+fn dist_source_from_path(
+    path: &std::path::Path,
+    from: Option<&str>,
+    include_root: Option<&str>,
+) -> PyResult<powerio_core::Source> {
+    let mut source = powerio_core::Source::open(path).map_err(|error| core_error_pyerr(&error))?;
+    if let Some(root) = include_root {
+        source = source
+            .with_acquisition_root(root)
+            .map_err(|error| core_error_pyerr(&error))?;
+    }
+    if let Some(token) = from {
+        source = source.with_format(
+            powerio_core::FormatId::new(token.to_ascii_lowercase().replace('_', "-"))
+                .map_err(|error| core_error_pyerr(&error))?,
+        );
+    }
+    Ok(source)
+}
+
+fn dist_source_from_bytes(bytes: &[u8], from: &str) -> PyResult<powerio_core::Source> {
+    Ok(powerio_core::Source::from_bytes("<memory>", bytes.to_vec())
+        .map_err(|error| core_error_pyerr(&error))?
+        .with_format(
+            powerio_core::FormatId::new(from.to_ascii_lowercase().replace('_', "-"))
+                .map_err(|error| core_error_pyerr(&error))?,
+        ))
 }
 
 #[pymethods]
 impl PyMulticonductorNetwork {
     fn name(&self) -> Option<&str> {
-        self.net.name.as_deref()
+        self.inner().name.as_deref()
     }
 
     /// Format the case was parsed from (`dss`, `pmd-json`, `bmopf-json`).
     fn source_format(&self) -> Option<&'static str> {
-        self.net.source_format.map(|f| f.name())
+        self.inner().source_format.map(|f| f.name())
     }
 
     /// Parse warnings: everything the reader could not represent or had to
     /// assume.
     fn warnings(&self) -> Vec<String> {
-        self.net.warnings.clone()
+        self.rendered_warnings.clone()
     }
 
     /// This network's coordinates as the canonical GeoJSON layer. Raises when
     /// the network carries none.
     fn geo_layer_json(&self) -> PyResult<String> {
-        powerio_pkg::dist_geo_layer(&self.net)
+        powerio_pkg::dist_geo_layer(self.inner())
             .extracted_geojson()
             .map_err(|error| PyValueError::new_err(error.to_string()))
     }
@@ -1689,43 +1752,44 @@ impl PyMulticonductorNetwork {
     ) -> PyResult<(PyMulticonductorNetwork, Bound<'py, PyDict>)> {
         let parsed = powerio_matrix::geo::GeoLayer::parse_bytes(text.as_bytes(), name_hint)
             .map_err(|error| PowerIOParseError::new_err(error.to_string()))?;
-        let mut net = self.net.clone();
+        let mut net = self.inner().clone();
         let report = powerio_pkg::apply_dist_geo_layer(&mut net, &parsed.layer);
-        net.source = None;
         net.source_format = None;
-        for diagnostic in parsed.diagnostics {
-            net.warnings
-                .push(powerio_matrix::diagnostics::render_diagnostic(&diagnostic));
-            net.parse_diagnostics.push(diagnostic);
-        }
+        let mut rendered = self.rendered_warnings.clone();
+        rendered.extend(
+            parsed
+                .diagnostics
+                .iter()
+                .map(powerio_matrix::diagnostics::render_diagnostic),
+        );
         Ok((
-            PyMulticonductorNetwork { net },
+            PyMulticonductorNetwork::from_network(net, rendered),
             geo_report_dict(py, &report)?,
         ))
     }
 
     fn n_buses(&self) -> usize {
-        self.net.buses.len()
+        self.inner().buses.len()
     }
 
     fn n_lines(&self) -> usize {
-        self.net.lines.len()
+        self.inner().lines.len()
     }
 
     fn n_transformers(&self) -> usize {
-        self.net.transformers.len()
+        self.inner().transformers.len()
     }
 
     fn n_loads(&self) -> usize {
-        self.net.loads.len()
+        self.inner().loads.len()
     }
 
     fn n_generators(&self) -> usize {
-        self.net.generators.len()
+        self.inner().generators.len()
     }
 
     fn n_sources(&self) -> usize {
-        self.net.sources.len()
+        self.inner().sources.len()
     }
 
     /// Serialize to `to` (`dss`, `pmd-json`, `bmopf-json`). Returns
@@ -1735,8 +1799,11 @@ impl PyMulticonductorNetwork {
         let target = to
             .parse::<powerio_dist::DistTargetFormat>()
             .map_err(dist_to_pyerr)?;
-        let conv = self.net.to_format(target);
-        Ok((conv.text, conv.warnings))
+        let conv = powerio_dist::write_as(&self.module, target);
+        {
+            let rendered = conv.rendered_diagnostics();
+            Ok((conv.text, rendered))
+        }
     }
 
     /// Serialize to `to`, bypassing source echo for the same format.
@@ -1744,8 +1811,11 @@ impl PyMulticonductorNetwork {
         let target = to
             .parse::<powerio_dist::DistTargetFormat>()
             .map_err(dist_to_pyerr)?;
-        let conv = self.net.to_canonical_format(target);
-        Ok((conv.text, conv.warnings))
+        let conv = powerio_dist::write_network(self.inner(), target);
+        {
+            let rendered = conv.rendered_diagnostics();
+            Ok((conv.text, rendered))
+        }
     }
 
     /// Serialize to `to` and write it to `path` exactly as produced (no
@@ -1755,24 +1825,24 @@ impl PyMulticonductorNetwork {
         let target = to
             .parse::<powerio_dist::DistTargetFormat>()
             .map_err(dist_to_pyerr)?;
-        let conv = self.net.to_format(target);
+        let conv = powerio_dist::write_as(&self.module, target);
         write_with_sidecars(path, &conv.text, &conv.sidecars)?;
-        Ok(conv.warnings)
+        Ok(conv.rendered_diagnostics())
     }
 
     /// The collapsed bus and terminal graph projection as JSON.
     fn graph_json(&self) -> PyResult<String> {
-        serde_json::to_string(&self.net.graph())
+        serde_json::to_string(&self.inner().graph())
             .map_err(|e| PowerIOError::new_err(format!("serializing graph JSON: {e}")))
     }
 
     fn __repr__(&self) -> String {
         format!(
             "MulticonductorNetwork(n_buses={}, n_lines={}, n_transformers={}, n_loads={})",
-            self.net.buses.len(),
-            self.net.lines.len(),
-            self.net.transformers.len(),
-            self.net.loads.len()
+            self.inner().buses.len(),
+            self.inner().lines.len(),
+            self.inner().transformers.len(),
+            self.inner().loads.len()
         )
     }
 }
@@ -1789,11 +1859,10 @@ fn dist_parse_file(
     from_: Option<&str>,
     include_root: Option<&str>,
 ) -> PyResult<PyMulticonductorNetwork> {
-    let mut options = powerio_dist::DssReadOptions::default();
-    options.include_root = include_root.map(std::path::PathBuf::from);
-    powerio_dist::parse_file_with_options(std::path::Path::new(path), from_, &options)
-        .map(|net| PyMulticonductorNetwork { net })
-        .map_err(dist_to_pyerr)
+    let source = dist_source_from_path(std::path::Path::new(path), from_, include_root)?;
+    powerio_dist::parse(source)
+        .map(PyMulticonductorNetwork::from_module)
+        .map_err(|error| core_error_pyerr(&error))
 }
 
 /// Parse an in-memory distribution case of the named source format `from_`
@@ -1801,9 +1870,10 @@ fn dist_parse_file(
 #[pyfunction]
 #[pyo3(signature = (text, from_))]
 fn dist_parse_str(text: &str, from_: &str) -> PyResult<PyMulticonductorNetwork> {
-    powerio_dist::parse_str(text, from_)
-        .map(|net| PyMulticonductorNetwork { net })
-        .map_err(dist_to_pyerr)
+    let source = dist_source_from_bytes(text.as_bytes(), from_)?;
+    powerio_dist::parse(source)
+        .map(PyMulticonductorNetwork::from_module)
+        .map_err(|error| core_error_pyerr(&error))
 }
 
 /// Convert a distribution case file to `to`. Returns `(text, warnings)`; the
@@ -1814,9 +1884,13 @@ fn dist_convert_file(path: &str, to: &str, from_: Option<&str>) -> PyResult<(Str
     let to = to
         .parse::<powerio_dist::DistTargetFormat>()
         .map_err(dist_to_pyerr)?;
+    let source = dist_source_from_path(std::path::Path::new(path), from_, None)?;
     let conv =
-        powerio_dist::convert_file(std::path::Path::new(path), to, from_).map_err(dist_to_pyerr)?;
-    Ok((conv.text, conv.warnings))
+        powerio_dist::convert_source(source, to).map_err(|error| core_error_pyerr(&error))?;
+    {
+        let rendered = conv.rendered_diagnostics();
+        Ok((conv.text, rendered))
+    }
 }
 
 /// Convert an in-memory distribution case of the named source format `from_`
@@ -1828,8 +1902,13 @@ fn dist_convert_str(text: &str, to: &str, from_: &str) -> PyResult<(String, Vec<
     let to = to
         .parse::<powerio_dist::DistTargetFormat>()
         .map_err(dist_to_pyerr)?;
-    let conv = powerio_dist::convert_str(text, to, from_).map_err(dist_to_pyerr)?;
-    Ok((conv.text, conv.warnings))
+    let source = dist_source_from_bytes(text.as_bytes(), from_)?;
+    let conv =
+        powerio_dist::convert_source(source, to).map_err(|error| core_error_pyerr(&error))?;
+    {
+        let rendered = conv.rendered_diagnostics();
+        Ok((conv.text, rendered))
+    }
 }
 
 /// Low level handle around a parsed `.pio.json` package. Parses the document
@@ -1886,7 +1965,7 @@ impl PyPackage {
     #[staticmethod]
     fn from_multiconductor(network: PyRef<'_, PyMulticonductorNetwork>) -> Self {
         Self {
-            pkg: NetworkPackage::from_multiconductor(network.net.clone()),
+            pkg: NetworkPackage::from_multiconductor(network.inner().clone()),
         }
     }
 

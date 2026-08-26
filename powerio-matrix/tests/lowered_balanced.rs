@@ -25,7 +25,7 @@ New Load.lc bus1=loadbus.3.4 phases=1 conn=wye kv=0.24 kw=10 pf=0.95 model=1 vmi
 
 #[test]
 fn lowered_multiconductor_balanced_model_builds_matrices() {
-    let net = powerio_dist::parse_str(FOUR_WIRE_DSS, "dss").expect("parse distribution fixture");
+    let net = helpers::dist_parse_str(FOUR_WIRE_DSS, "dss");
     let lowered =
         lower_multiconductor_to_balanced(&net, MulticonductorToBalancedOptions::default())
             .expect("lower to balanced");

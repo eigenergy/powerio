@@ -8,9 +8,6 @@
 //! back reproduces the same grouping for shapes the windings alone do not
 //! pin down (center tap reads as two windings).
 
-use std::path::Path;
-use std::sync::Arc;
-
 use serde::de::DeserializeOwned;
 use serde_json::{Map, Value};
 
@@ -27,16 +24,10 @@ use crate::model::{
     n_winding_phase_count, pair_keys,
 };
 
-pub fn parse_bmopf_file(path: impl AsRef<Path>) -> Result<MulticonductorNetwork> {
-    let path = path.as_ref();
-    let text = std::fs::read_to_string(path).map_err(|source| Error::Io {
-        path: path.display().to_string(),
-        source,
-    })?;
-    parse_bmopf_str(&text)
-}
-
-pub fn parse_bmopf_str(text: &str) -> Result<MulticonductorNetwork> {
+pub(crate) fn parse_bmopf_collecting(
+    text: &str,
+    diags: &mut crate::collect::Diagnostics,
+) -> Result<MulticonductorNetwork> {
     let doc: Value = serde_json::from_str(text).map_err(|e| Error::Json {
         format: "BMOPF",
         message: e.to_string(),
@@ -48,12 +39,11 @@ pub fn parse_bmopf_str(text: &str) -> Result<MulticonductorNetwork> {
         });
     };
     let mut net = MulticonductorNetwork {
-        source: Some(Arc::new(text.to_string())),
         source_format: Some(DistSourceFormat::BmopfJson),
         base_frequency: 60.0,
         ..MulticonductorNetwork::default()
     };
-    report_non_numeric_fields(&doc, &mut net);
+    report_non_numeric_fields(&doc, diags);
     let mut rd = Reader {
         net: &mut net,
         diagnostics: crate::diagnostics::Diagnostics::new(),
@@ -61,10 +51,8 @@ pub fn parse_bmopf_str(text: &str) -> Result<MulticonductorNetwork> {
     };
     rd.document(&doc);
     let found = std::mem::take(&mut rd.diagnostics);
-    for diagnostic in found {
-        net.record(diagnostic);
-    }
-    crate::model::warn_unresolved_references(&mut net);
+    diags.absorb(found);
+    crate::model::warn_unresolved_references(&net, diags);
     Ok(net)
 }
 
@@ -158,7 +146,7 @@ fn is_numeric_field(key: &str) -> bool {
 ///
 /// `extras` is skipped, since it round trips arbitrary consumer JSON where
 /// these names carry no schema meaning.
-fn report_non_numeric_fields(doc: &Map<String, Value>, net: &mut MulticonductorNetwork) {
+fn report_non_numeric_fields(doc: &Map<String, Value>, diags: &mut crate::collect::Diagnostics) {
     /// What the value holds, or `None` when the schema allows it.
     fn not_numeric(v: &Value) -> Option<&'static str> {
         match v {
@@ -171,7 +159,7 @@ fn report_non_numeric_fields(doc: &Map<String, Value>, net: &mut MulticonductorN
             Value::Object(_) => Some("an object"),
         }
     }
-    fn report(net: &mut MulticonductorNetwork, pointer: String, what: &str) {
+    fn report(diags: &mut crate::collect::Diagnostics, pointer: String, what: &str) {
         let message = format!(
             "{pointer}: the schema types this field as a number and it holds {what}; \
              it reads as NaN and anything derived from it is undefined"
@@ -182,27 +170,27 @@ fn report_non_numeric_fields(doc: &Map<String, Value>, net: &mut MulticonductorN
         )
         .with_suggested_action("state a number, or omit the field");
         crate::diagnostics::attach_target(&mut diagnostic, pointer);
-        net.record(diagnostic);
+        diags.record(diagnostic);
     }
     // A pointer costs an allocation, so it is built for a container the walk
     // descends into and for a field it reports, never for a sound leaf.
-    fn walk(obj: &Map<String, Value>, path: &str, net: &mut MulticonductorNetwork) {
+    fn walk(obj: &Map<String, Value>, path: &str, diags: &mut crate::collect::Diagnostics) {
         for (key, value) in obj {
             if key == "extras" {
                 continue;
             }
             if is_numeric_field(key) {
                 if let Some(what) = not_numeric(value) {
-                    report(net, format!("{path}/{key}"), what);
+                    report(diags, format!("{path}/{key}"), what);
                 }
                 continue;
             }
             match value {
-                Value::Object(o) => walk(o, &format!("{path}/{key}"), net),
+                Value::Object(o) => walk(o, &format!("{path}/{key}"), diags),
                 Value::Array(a) => {
                     for (i, e) in a.iter().enumerate() {
                         if let Value::Object(o) = e {
-                            walk(o, &format!("{path}/{key}/{i}"), net);
+                            walk(o, &format!("{path}/{key}/{i}"), diags);
                         }
                     }
                 }
@@ -210,7 +198,7 @@ fn report_non_numeric_fields(doc: &Map<String, Value>, net: &mut MulticonductorN
             }
         }
     }
-    walk(doc, "", net);
+    walk(doc, "", diags);
 }
 
 struct Reader<'a> {
@@ -580,7 +568,7 @@ impl Reader<'_> {
         }
         self.warn_orphan_transformer_overlay(doc);
         if !self.frequency_stated {
-            crate::model::warn_defaulted_frequency(self.net, "frequency");
+            crate::model::warn_defaulted_frequency(self.net, "frequency", &mut self.diagnostics);
         }
     }
 
@@ -634,9 +622,10 @@ impl Reader<'_> {
             let known = ["bus", "terminal_map", "configuration", "q_rated", "v_nom"];
             for (field, value) in [("q_rated", o.get("q_rated")), ("v_nom", o.get("v_nom"))] {
                 if value.is_none() {
-                    self.net
-                        .warnings
-                        .push(format!("capacitor {name}: `{field}` missing; read as NaN"));
+                    self.diagnostics.push(
+                        &C::READ_BMOPF_VALUE_DEFAULTED,
+                        format!("capacitor {name}: `{field}` missing; read as NaN"),
+                    );
                 }
             }
             self.net.capacitors.push(DistCapacitor {

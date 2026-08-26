@@ -1,8 +1,11 @@
-//! Byte order mark handling across the DSS read paths: the strip must be
-//! itemized for the root file and for every redirected file.
+//! Byte order mark handling across the DSS read paths: the mark is retained
+//! on the primary buffer for the byte exact echo, the reader decodes a mark
+//! free slice, and a redirected file's mark never reaches the tokenizer.
+
+mod helpers;
 
 #[test]
-fn redirected_file_bom_strip_is_itemized() {
+fn byte_order_marks_are_retained_and_never_reach_the_reader() {
     let tmp = tempfile::tempdir().unwrap();
     let linecodes = tmp.path().join("linecodes.dss");
     std::fs::write(
@@ -10,29 +13,26 @@ fn redirected_file_bom_strip_is_itemized() {
         "\u{feff}new linecode.lc1 nphases=3 r1=0.1 x1=0.2\n",
     )
     .unwrap();
+    let master_text = format!(
+        "\u{feff}clear\nnew circuit.c basekv=12.47 bus1=src\nredirect {}\n",
+        linecodes.display()
+    );
     let master = tmp.path().join("master.dss");
-    std::fs::write(
-        &master,
-        format!(
-            "\u{feff}clear\nnew circuit.c basekv=12.47 bus1=src\nredirect {}\n",
-            linecodes.display()
-        ),
-    )
-    .unwrap();
+    std::fs::write(&master, &master_text).unwrap();
 
-    let net = powerio_dist::parse_dss_file(&master).unwrap();
-    let bom_warnings: Vec<_> = net
-        .warnings
-        .iter()
-        .filter(|w| w.contains("byte order mark"))
-        .collect();
-    // One warning for the root file, one naming the redirected file.
-    assert_eq!(bom_warnings.len(), 2, "warnings: {:?}", net.warnings);
+    let net = helpers::parse_dss_file(&master).unwrap();
+    // Retaining the mark is not a loss, so nothing warns about it.
     assert!(
-        bom_warnings.iter().any(|w| w.contains("linecodes.dss")),
+        !net.warnings.iter().any(|w| w.contains("byte order mark")),
         "warnings: {:?}",
         net.warnings
     );
-    // The linecode from the redirected file still parsed.
+    // The linecode from the redirected file parsed: its own mark was skipped
+    // by the decode slice, never tokenized into the first command word.
     assert!(net.linecodes.iter().any(|lc| lc.name == "lc1"));
+    // The echo returns the root file's exact bytes, mark included.
+    assert_eq!(
+        net.to_format(powerio_dist::DistTargetFormat::Dss).text,
+        master_text
+    );
 }

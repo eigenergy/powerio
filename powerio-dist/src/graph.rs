@@ -428,7 +428,8 @@ mod tests {
 
     #[test]
     fn graph_projects_open_switch_fixture() {
-        let net = crate::parse_file(fixture("micro/switch.dss"), None).expect("parse switch");
+        let net =
+            crate::testkit::parse_file(fixture("micro/switch.dss"), None).expect("parse switch");
         let graph = net.graph();
 
         let open = edge(&graph, DistGraphEdgeKind::Switch, "sw_open");
@@ -467,8 +468,8 @@ mod tests {
 
     #[test]
     fn graph_projects_one_edge_per_transformer_winding_pair() {
-        let net =
-            crate::parse_file(fixture("micro/xfmr_center_tap.dss"), None).expect("parse xfmr");
+        let net = crate::testkit::parse_file(fixture("micro/xfmr_center_tap.dss"), None)
+            .expect("parse xfmr");
         let graph = net.graph();
         let transformer_edges: Vec<_> = graph
             .edges
@@ -499,8 +500,8 @@ mod tests {
 
     #[test]
     fn graph_projects_bmopf_fixture() {
-        let net =
-            crate::parse_file(fixture("bmopf/example_ieee13.json"), None).expect("parse bmopf");
+        let net = crate::testkit::parse_file(fixture("bmopf/example_ieee13.json"), None)
+            .expect("parse bmopf");
         let graph = net.graph();
 
         assert!(graph.buses.len() >= net.buses.len());

@@ -21,8 +21,11 @@ pub use powerio_core::{
 pub mod codes {
     powerio_core::diagnostic_codes! {
         // PARSE: the source text could not be decoded as given.
+        /// Retired at 1.0: the mark is retained on the source buffer and the
+        /// reader decodes a mark free slice, so nothing is removed from the
+        /// bytes and a same format echo returns them exactly.
         PARSE_DSS_BOM_STRIPPED = "PARSE.DSS.BOM_STRIPPED", Remark,
-            "a leading UTF-8 byte order mark was removed before the reader ran";
+            "a leading UTF-8 byte order mark was removed before the reader ran", retired = "1.0.0";
         PARSE_DSS_SOURCE_MALFORMED = "PARSE.DSS.SOURCE_MALFORMED", Warning,
             "a dss command, object spec, or property assignment does not parse";
         PARSE_DIST_MALFORMED = "PARSE.DIST.MALFORMED", Error,

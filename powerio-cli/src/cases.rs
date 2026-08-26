@@ -191,9 +191,9 @@ pub fn load_network(path: &Path) -> anyhow::Result<LoadedCase> {
                 .with_context(|| format!("reading {}", path.display()))?;
             match classify_case_json(&text, path)? {
                 DetectedFormat::Distribution(format) => {
-                    let net = powerio_dist::parse_str(&text, format.name())
+                    let parsed = crate::compat::dist_parse_str(&text, format.name())
                         .with_context(|| format!("parse {}", path.display()))?;
-                    lower_to_balanced(net, stem, path)
+                    lower_to_balanced(parsed, stem, path)
                 }
                 DetectedFormat::Transmission(format) => {
                     let parsed = crate::compat::parse_str_with_name(&text, format.name(), stem)
@@ -211,9 +211,9 @@ pub fn load_network(path: &Path) -> anyhow::Result<LoadedCase> {
             }
         }
         Some(ext) if DISTRIBUTION_EXTENSIONS.contains(&ext) => {
-            let net = powerio_dist::parse_file(path, None)
+            let parsed = crate::compat::dist_parse_file(path, None)
                 .with_context(|| format!("parse {}", path.display()))?;
-            lower_to_balanced(net, stem, path)
+            lower_to_balanced(parsed, stem, path)
         }
         Some(ext) if TRANSMISSION_EXTENSIONS.contains(&ext) => {
             let parsed = crate::compat::parse_file(path, None)
@@ -233,10 +233,11 @@ pub fn load_network(path: &Path) -> anyhow::Result<LoadedCase> {
 /// lowers to the same `lowered-multiconductor` fallback and the exports
 /// overwrite each other.
 fn lower_to_balanced(
-    mut net: powerio_dist::MulticonductorNetwork,
+    parsed: crate::compat::ParsedDist,
     stem: Option<&str>,
     path: &Path,
 ) -> anyhow::Result<LoadedCase> {
+    let mut net = parsed.network;
     if net.name.is_none() {
         net.name = stem.map(str::to_owned);
     }
@@ -257,7 +258,7 @@ fn lower_to_balanced(
                     anyhow::anyhow!("lower {} to balanced: {diagnostics}", path.display())
                 }
             })?;
-    let mut warnings = net.warnings;
+    let mut warnings = parsed.warnings;
     warnings.extend(
         (lowered.record.approximations.iter())
             .chain(&lowered.record.dropped_fields)
@@ -349,7 +350,8 @@ mod tests {
             env!("CARGO_MANIFEST_DIR"),
             "/../tests/data/dist/micro/fourwire_linecode.dss"
         );
-        let conv = powerio_dist::convert_file(dss, powerio_dist::DistTargetFormat::BmopfJson, None)
+        let source = powerio_core::Source::open(dss).unwrap();
+        let conv = powerio_dist::convert_source(source, powerio_dist::DistTargetFormat::BmopfJson)
             .unwrap();
         let mut doc: serde_json::Value = serde_json::from_str(&conv.text).unwrap();
         doc.as_object_mut().unwrap().remove("name");

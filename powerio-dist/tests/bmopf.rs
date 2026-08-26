@@ -2,14 +2,17 @@
 //! public example networks from frederikgeth/bmopf-report.
 
 use std::path::PathBuf;
-use std::sync::Arc;
 
-use powerio_dist::dss::{parse_dss_file, parse_dss_str};
 use powerio_dist::{
     BmopfWriteOptions, Configuration, CoordinateSpace, DiagnosticSeverity, DiagnosticStage,
     DistBus, DistCoordsKind, DistGeoMeta, DistLineCode, DistLocation, DistTransformer, DistWinding,
-    DistWindingConn, Extras, MulticonductorNetwork, VoltageSource, parse_bmopf_file,
-    parse_bmopf_str, parse_pmd_str, write_bmopf_json, write_bmopf_json_with_options, write_dss,
+    DistWindingConn, Extras, MulticonductorNetwork, VoltageSource,
+};
+
+mod helpers;
+use helpers::{
+    parse_bmopf_file, parse_bmopf_str, parse_dss_file, parse_dss_str, parse_pmd_str,
+    write_bmopf_json, write_bmopf_json_with_options, write_dss,
 };
 
 fn fixture(rel: &str) -> PathBuf {
@@ -61,7 +64,7 @@ fn bmopf_sideloaded_coordinates_promote_to_locations() {
 }
 
 fn diagnostic<'a>(
-    conv: &'a powerio_dist::Conversion,
+    conv: &'a helpers::Conv,
     code: &str,
     element_path: &str,
 ) -> &'a powerio_dist::Diagnostic {
@@ -195,7 +198,6 @@ fn enwl_round_trips() {
 fn assert_model_eq(a: &MulticonductorNetwork, b: &MulticonductorNetwork) {
     let strip = |n: &MulticonductorNetwork| {
         let mut n = n.clone();
-        n.source = Some(Arc::new(String::new()));
         n.extras.remove("bmopf_meta");
         n
     };
@@ -243,7 +245,7 @@ fn every_dist_fixture_emits_valid_bmopf() {
         "bmopf/example_ieee13.json",
         "bmopf/example_enwl_n1_f2.json",
     ] {
-        let net = powerio_dist::parse_file(fixture(case), None).unwrap();
+        let net = helpers::parse_file(fixture(case), None).unwrap();
         let out = write_bmopf_json(&net);
         assert_eq!(errors(&v, &out.text), Vec::<String>::new(), "{case}");
         let again = parse_bmopf_str(&out.text).unwrap();
@@ -949,7 +951,7 @@ fn bmopf_coordinates_are_strict_by_default_and_opt_in_as_sideloads() {
 
     let mut options = BmopfWriteOptions::default();
     options.sideload_coordinates = true;
-    let sideloaded = write_bmopf_json_with_options(&net, &options);
+    let sideloaded = write_bmopf_json_with_options(&net, options);
     let doc: serde_json::Value = serde_json::from_str(&sideloaded.text).unwrap();
     assert_eq!(
         doc["bus"]["sourcebus"]["longitude"],
@@ -969,7 +971,7 @@ fn bmopf_coordinates_are_strict_by_default_and_opt_in_as_sideloads() {
         space: CoordinateSpace::Unknown,
         kind: Some(DistCoordsKind::Source),
     });
-    let unknown = write_bmopf_json_with_options(&net, &options);
+    let unknown = write_bmopf_json_with_options(&net, options);
     let doc: serde_json::Value = serde_json::from_str(&unknown.text).unwrap();
     assert!(doc["bus"]["sourcebus"].get("longitude").is_none());
     assert!(
@@ -2646,7 +2648,7 @@ fn oversized_matrix_key_is_bounded_and_warned() {
     // The largest matrix index seen sizes a dense allocation; an unbounded
     // key would demand gigabytes from a few bytes of JSON. Out-of-bounds
     // indices fall out of the matrix grammar and land in extras, warned.
-    let net = powerio_dist::parse_str(
+    let net = helpers::parse_str(
         r#"{"linecode":{"lc":{"R_series_100000_1":1.0}}}"#,
         "bmopf-json",
     )
@@ -2670,7 +2672,7 @@ fn winding_count_is_bounded() {
     let doc = serde_json::json!({
         "transformer": {"n_winding": {"t1": {"windings": windings, "s_rating": 1000.0}}}
     });
-    let net = powerio_dist::parse_str(&doc.to_string(), "bmopf-json").unwrap();
+    let net = helpers::parse_str(&doc.to_string(), "bmopf-json").unwrap();
     assert!(
         net.warnings.iter().any(|w| w.contains("supported maximum")),
         "warnings: {:?}",
@@ -2681,7 +2683,7 @@ fn winding_count_is_bounded() {
 
 #[test]
 fn meta_block_is_kept_in_extras() {
-    let net = powerio_dist::parse_str(
+    let net = helpers::parse_str(
         r#"{"bus":{"b1":{}},"meta":{"license":"CC-BY-4.0"}}"#,
         "bmopf-json",
     )
@@ -3119,7 +3121,7 @@ fn source_terminal_conventions_pass_through_verbatim() {
 fn an_inline_line_rating_is_not_repeated_on_its_synthetic_linecode() {
     let src = "New Circuit.c1\n\
                New Line.l1 bus1=a bus2=b phases=3 r1=0.1 x1=0.2 length=10 units=m emergamps=250\n";
-    let net = powerio_dist::parse_dss_str(src);
+    let net = parse_dss_str(src);
     let line = &net.lines[0];
     let code = net
         .linecodes
@@ -3162,11 +3164,11 @@ fn a_non_numeric_bmopf_field_is_refused_rather_than_read_as_nan() {
         );
         let net = parse_bmopf_str(&text).unwrap();
         let found: Vec<_> = net
-            .parse_diagnostics
+            .diagnostics
             .iter()
             .filter(|d| d.code() == "READ.BMOPF.FIELD_NOT_A_NUMBER")
             .collect();
-        assert_eq!(found.len(), 1, "{spelling}: {:?}", net.parse_diagnostics);
+        assert_eq!(found.len(), 1, "{spelling}: {:?}", net.diagnostics);
         assert_eq!(found[0].severity(), DiagnosticSeverity::Error, "{spelling}");
         assert_eq!(found[0].stage(), Some(DiagnosticStage::Read), "{spelling}");
         assert_eq!(found[0].target(), Some("/linecode/lc/i_max"), "{spelling}");
@@ -3201,13 +3203,13 @@ fn reporting_a_malformed_field_does_not_disturb_the_read() {
     }"#;
     let net = parse_bmopf_str(text).unwrap();
     assert_eq!(
-        net.parse_diagnostics
+        net.diagnostics
             .iter()
             .filter(|d| d.code() == "READ.BMOPF.FIELD_NOT_A_NUMBER")
             .count(),
         1,
         "{:?}",
-        net.parse_diagnostics
+        net.diagnostics
     );
     // The line keeps its inline matrices: one synthesized linecode, with the
     // sound entries intact and only the malformed cell undefined.
@@ -3239,11 +3241,7 @@ fn consumer_extras_are_not_read_as_schema_fields() {
         "extras": {"anything": {"cost": "free", "v_nom": null}}
     }"#;
     let net = parse_bmopf_str(text).unwrap();
-    assert!(
-        net.parse_diagnostics.is_empty(),
-        "{:?}",
-        net.parse_diagnostics
-    );
+    assert!(net.diagnostics.is_empty(), "{:?}", net.diagnostics);
 }
 
 // ----- regulator subtypes (BMOPFTools schema extension) -------------------

@@ -305,10 +305,48 @@ impl NetworkPackage {
         self.validation = ValidationSummary::from_diagnostics(&self.diagnostics);
     }
 
-    /// Wrap a multiconductor network. Parse `warnings` are lifted into structured
-    /// diagnostics, and `defaulted` fields are lifted into source maps with
-    /// `mapping_kind = defaulted`, so the package surfaces that provenance even
-    /// though those parser-side fields are not part of the IR payload.
+    /// Wrap a parsed multiconductor module: the typed network plus the
+    /// reader's findings.
+    pub fn from_multiconductor_module(
+        module: powerio_core::PioModule<MulticonductorNetwork>,
+    ) -> Self {
+        let diagnostics = module.diagnostics().to_vec();
+        let retained = module.source().is_some();
+        let mut package = Self::from_multiconductor(module.into_value());
+
+        // Every parse finding is coded and keeps its own severity (a refused
+        // include is an `Error`). The reader's text lines are rendered from
+        // these same records, so there is nothing to lift and nothing to
+        // dedupe.
+        package.record_read_diagnostics(diagnostics.into_iter().map(Into::into));
+        if retained
+            && let Origin::File {
+                retained_source, ..
+            } = &mut package.origin
+        {
+            *retained_source = true;
+        }
+        package
+    }
+
+    /// Wrap a multiconductor network, carrying the reader's own findings
+    /// forward, mirroring [`Self::from_balanced_with_read_diagnostics`].
+    pub fn from_multiconductor_with_read_diagnostics<I>(
+        net: MulticonductorNetwork,
+        diagnostics: I,
+    ) -> Self
+    where
+        I: IntoIterator<Item = StructuredDiagnostic>,
+    {
+        let mut package = Self::from_multiconductor(net);
+        package.record_read_diagnostics(diagnostics);
+        package
+    }
+
+    /// Wrap a multiconductor network. `defaulted` fields are lifted into
+    /// source maps with `mapping_kind = defaulted`, so the package surfaces
+    /// that provenance even though the parser-side field is not part of the
+    /// IR payload.
     pub fn from_multiconductor(net: MulticonductorNetwork) -> Self {
         let summary = multiconductor_summary(&net);
         let sources = multiconductor_sources(&net);
@@ -316,16 +354,7 @@ impl NetworkPackage {
         let source_maps = multiconductor_source_maps(&net, source_id.as_deref());
         let origin = multiconductor_origin(&net);
 
-        // Every parse finding is coded and keeps its own severity (a refused
-        // include is an `Error`). The reader's text lines are rendered from
-        // these same records, so there is nothing to lift and nothing to
-        // dedupe.
-        let diagnostics: Vec<StructuredDiagnostic> = net
-            .parse_diagnostics
-            .iter()
-            .cloned()
-            .map(Into::into)
-            .collect();
+        let diagnostics: Vec<StructuredDiagnostic> = Vec::new();
         let validation = ValidationSummary::from_diagnostics(&diagnostics);
 
         Self {

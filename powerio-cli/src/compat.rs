@@ -120,3 +120,57 @@ fn module_to_parsed(module: powerio_core::PioModule<BalancedNetwork>) -> ParsedC
         document: None,
     }
 }
+
+/// The old distribution parse output shape: the typed network beside the
+/// reader's findings, with the parsed module riding along so a same format
+/// write echoes the retained source.
+#[allow(dead_code)] // the binary uses every field; the corpus library reads two
+pub(crate) struct ParsedDist {
+    pub warnings: Vec<String>,
+    pub diagnostics: Vec<powerio_dist::Diagnostic>,
+    pub retained_source: bool,
+    pub module: powerio_core::PioModule<powerio_dist::MulticonductorNetwork>,
+    pub network: powerio_dist::MulticonductorNetwork,
+}
+
+impl ParsedDist {
+    /// Write through the module: a same format target echoes the retained
+    /// source bytes exactly.
+    #[allow(dead_code)] // the binary's convert path; the corpus library writes canonically
+    pub fn to_format(&self, target: powerio_dist::DistTargetFormat) -> powerio_dist::Conversion {
+        powerio_dist::write_as(&self.module, target)
+    }
+}
+
+pub(crate) fn dist_parse_file(
+    path: &std::path::Path,
+    from: Option<&str>,
+) -> Result<ParsedDist, powerio_core::Error> {
+    let mut source = powerio_core::Source::open(path)?;
+    if let Some(token) = from {
+        source = source.with_format(powerio_core::FormatId::new(
+            token.to_ascii_lowercase().replace('_', "-"),
+        )?);
+    }
+    powerio_dist::parse(source).map(dist_module_to_parsed)
+}
+
+pub(crate) fn dist_parse_str(text: &str, from: &str) -> Result<ParsedDist, powerio_core::Error> {
+    let source = powerio_core::Source::from_bytes("<memory>", text.as_bytes().to_vec())?
+        .with_format(powerio_core::FormatId::new(
+            from.to_ascii_lowercase().replace('_', "-"),
+        )?);
+    powerio_dist::parse(source).map(dist_module_to_parsed)
+}
+
+fn dist_module_to_parsed(
+    module: powerio_core::PioModule<powerio_dist::MulticonductorNetwork>,
+) -> ParsedDist {
+    ParsedDist {
+        warnings: powerio_dist::diagnostics::render_diagnostics(module.diagnostics()),
+        diagnostics: module.diagnostics().to_vec(),
+        retained_source: module.source().is_some(),
+        network: module.value().clone(),
+        module,
+    }
+}

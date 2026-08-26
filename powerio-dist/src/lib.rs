@@ -10,19 +10,20 @@
 //! separate type.
 //!
 //! ```no_run
-//! let net = powerio_dist::parse_file("feeder.dss", None)?;
-//! for w in &net.warnings {
-//!     eprintln!("parse: {w}");
+//! let source = powerio_core::Source::open("feeder.dss")?;
+//! let module = powerio_dist::parse(source)?;
+//! for line in powerio_dist::diagnostics::render_diagnostics(module.diagnostics()) {
+//!     eprintln!("parse: {line}");
 //! }
-//! let conv = net.to_format(powerio_dist::DistTargetFormat::PmdJson);
-//! # Ok::<(), powerio_dist::Error>(())
+//! let conv = powerio_dist::write_as(&module, powerio_dist::DistTargetFormat::PmdJson);
+//! # Ok::<(), powerio_core::Error>(())
 //! ```
 //!
 //! # Fidelity rules
 //!
 //! Writing to the retained source format returns the original bytes. Cross
 //! format conversion writes from the typed model and reports fields the target
-//! cannot represent in [`Conversion::warnings`]. The DSS reader expands OpenDSS
+//! cannot represent in [`Conversion::diagnostics`]. The DSS reader expands OpenDSS
 //! class defaults into explicit model values and records them in
 //! [`MulticonductorNetwork::defaulted`]. BMOPF output includes those values.
 //! The per fixture results live in `docs/conversion-matrix.md`.
@@ -50,21 +51,19 @@ pub mod graph;
 pub mod model;
 pub(crate) mod nonfinite;
 pub mod pmd;
+#[cfg(test)]
+pub(crate) mod testkit;
 
 pub use bmopf::{
-    BMOPF_SCHEMA_ID, BMOPF_SCHEMA_VERSION, BmopfWriteOptions, parse_bmopf_file, parse_bmopf_str,
-    write_bmopf_json, write_bmopf_json_with_options,
+    BMOPF_SCHEMA_ID, BMOPF_SCHEMA_VERSION, BmopfWriteOptions, write_bmopf_json,
+    write_bmopf_json_with_options,
 };
 pub use convert::{
-    Conversion, ConversionSidecar, DistTargetFormat, classify_distribution_json, convert_file,
-    convert_str, dist_target_from_name, parse_bytes, parse_file, parse_file_with_options,
-    parse_str,
+    Conversion, ConversionSidecar, DistTargetFormat, classify_distribution_json, convert_source,
+    dist_target_from_name, parse, write_as, write_network,
 };
 pub use diagnostics::{Diagnostic, DiagnosticCode, DiagnosticSeverity, DiagnosticStage};
-pub use dss::{
-    DssLoadVoltageBounds, DssReadOptions, DssWriteOptions, parse_dss_file,
-    parse_dss_file_with_options, parse_dss_str, write_dss, write_dss_with_options,
-};
+pub use dss::{DssLoadVoltageBounds, DssWriteOptions, write_dss, write_dss_with_options};
 pub use error::{Error, Result};
 pub use geo::{CoordinateSpace, DistCanvas, DistCoordsKind, DistGeoMeta, DistLocation};
 pub use graph::{
@@ -81,4 +80,4 @@ pub use model::{
     MulticonductorNetwork, PowerFactorControl, ReactivePowerReference, ReactivePowerUnit,
     UntypedObject, VoltVarControl, VoltWattControl, VoltageSource,
 };
-pub use pmd::{parse_pmd_file, parse_pmd_str, write_pmd_json};
+pub use pmd::write_pmd_json;

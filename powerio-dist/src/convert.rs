@@ -41,11 +41,8 @@ pub struct Conversion {
     pub text: String,
     /// Extra files referenced by `text`, such as OpenDSS `Buscoords` CSV.
     pub sidecars: Vec<ConversionSidecar>,
-    /// The writer's findings as `CODE: message` lines, rendered from
-    /// `diagnostics` so the text and the structure cannot disagree.
-    pub warnings: Vec<String>,
-    /// The same findings as structured records: a stable code, a severity, and
-    /// a message. A consumer that needs a stable assertion reads these.
+    /// The findings as structured records: a stable code, a severity, and a
+    /// message. A consumer that needs a stable assertion reads these.
     pub diagnostics: Vec<crate::diagnostics::Diagnostic>,
 }
 
@@ -58,22 +55,37 @@ impl Conversion {
         Self {
             text,
             sidecars,
-            warnings: diagnostics.lines(),
             diagnostics: diagnostics.into_records(),
         }
     }
 
-    /// Record one finding after the writer has run. Both channels move
-    /// together: the line is rendered from the record it is added with.
+    /// A conversion that dropped nothing, e.g. a same format echo.
+    pub(crate) fn faithful(text: String) -> Self {
+        Self::new(text, Vec::new(), crate::diagnostics::Diagnostics::new())
+    }
+
+    /// The findings as `CODE: message` lines, rendered on request. There is
+    /// no separately stored text channel.
+    #[must_use]
+    pub fn rendered_diagnostics(&self) -> Vec<String> {
+        crate::diagnostics::render_diagnostics(&self.diagnostics)
+    }
+
+    /// Record one finding after the writer has run.
     pub(crate) fn push(
         &mut self,
         info: &'static crate::diagnostics::DiagnosticInfo,
         message: impl Into<String>,
     ) {
-        let diagnostic = crate::diagnostics::Diagnostic::of(info, message);
-        self.warnings
-            .push(crate::diagnostics::render_diagnostic(&diagnostic));
-        self.diagnostics.push(diagnostic);
+        self.diagnostics
+            .push(crate::diagnostics::Diagnostic::of(info, message));
+    }
+
+    /// Put the read side's findings ahead of the write side's.
+    pub(crate) fn prepend(&mut self, read: Vec<crate::diagnostics::Diagnostic>) {
+        let mut records = read;
+        records.append(&mut self.diagnostics);
+        self.diagnostics = records;
     }
 }
 
@@ -117,13 +129,6 @@ impl DistTargetFormat {
             DistTargetFormat::BmopfJson => "bmopf-json",
         }
     }
-}
-
-fn read(path: &std::path::Path) -> crate::Result<String> {
-    std::fs::read_to_string(path).map_err(|source| crate::Error::Io {
-        path: path.display().to_string(),
-        source,
-    })
 }
 
 fn canonical_key(name: &str) -> String {
@@ -341,79 +346,81 @@ pub fn classify_distribution_json(text: &str) -> crate::Result<DistTargetFormat>
     })
 }
 
-/// The warning every parse path pushes when it removes a byte order mark.
-pub(crate) const BOM_WARNING: &str =
-    "leading UTF-8 byte order mark removed; a same-format write returns the text without it";
-
-/// Parse `text` as `format`, stripping a leading UTF-8 byte order mark first:
-/// Windows tooling saves case files with one, and both serde_json and the DSS
-/// tokenizer treat it as garbage in the first token. The retained source loses
-/// the mark, so a same-format echo differs by exactly those three bytes; the
-/// warning itemizes that.
-fn parse_text(text: &str, format: DistTargetFormat) -> crate::Result<MulticonductorNetwork> {
-    let stripped = text.trim_start_matches('\u{feff}');
-    let mut net = match format {
-        DistTargetFormat::Dss => crate::dss::parse_dss_str(stripped),
-        DistTargetFormat::BmopfJson => crate::bmopf::parse_bmopf_str(stripped)?,
-        DistTargetFormat::PmdJson => crate::pmd::parse_pmd_str(stripped)?,
-    };
-    if stripped.len() != text.len() {
-        net.note(
-            &crate::diagnostics::codes::PARSE_DSS_BOM_STRIPPED,
-            BOM_WARNING,
-        );
-    }
-    Ok(net)
-}
-
-/// Parses `text` in the named source format `from` (see [`dist_target_from_name`]).
-pub fn parse_str(text: &str, from: &str) -> crate::Result<MulticonductorNetwork> {
-    parse_text(text, from.parse::<DistTargetFormat>()?)
-}
-
-/// Parses in-memory case `bytes` of the named source format `from`. The bytes
-/// decode as UTF-8 and take the [`parse_str`] path from there.
+/// Parse one source into a compiled distribution module. The typed
+/// [`MulticonductorNetwork`] is the module's value; the reader's findings are
+/// the module's diagnostics; the source itself is retained on the module, so
+/// a same format write echoes the input bytes exactly.
 ///
-/// A caller that already holds the file's bytes — an upload, an archive
-/// member — parses them here rather than staging a temporary file for
-/// [`parse_file`]. Without this entry point a browser caller decodes through
-/// JS `File.text()`, which silently replaces every invalid byte with U+FFFD.
+/// The format comes from the source's declared format when one was selected,
+/// the `.dss` extension otherwise, and for `.json` from
+/// [`classify_distribution_json`].
 ///
 /// # Errors
-/// [`Error::FormatRead`](crate::Error::FormatRead) if the bytes are not
-/// UTF-8; otherwise as [`parse_str`].
-pub fn parse_bytes(bytes: &[u8], from: &str) -> crate::Result<MulticonductorNetwork> {
-    let text = std::str::from_utf8(bytes).map_err(|e| crate::Error::FormatRead {
-        format: "case text",
-        message: format!("not valid UTF-8: {e}"),
-    })?;
-    parse_str(text, from)
+/// The operation failure carries the reader's findings up to the failure and
+/// retains the source for span interpretation.
+///
+/// # Panics
+/// Never on external input: the internal expectations hold by construction
+/// (acquired buffer names are validated and reader findings carry no
+/// identities).
+pub fn parse(
+    source: powerio_core::Source,
+) -> std::result::Result<powerio_core::PioModule<MulticonductorNetwork>, powerio_core::Error> {
+    let mut warnings = crate::collect::Diagnostics::new();
+    match parse_to_network(&source, &mut warnings) {
+        Ok(network) => {
+            let mut module = powerio_core::PioModule::new(network);
+            for buffer in source.acquired_buffers() {
+                let descriptor = powerio_core::SourceDescriptor::new(
+                    buffer.id().clone(),
+                    buffer.name(),
+                    buffer.bytes().len() as u64,
+                )
+                .expect("acquired buffer names are validated");
+                module
+                    .add_source_descriptor(descriptor)
+                    .expect("acquired buffer identities are unique");
+            }
+            let mut module = module.with_source(source);
+            for record in warnings.into_records() {
+                module
+                    .add_diagnostic(record)
+                    .expect("reader findings carry no identities or spans to collide");
+            }
+            Ok(module)
+        }
+        Err(error) => {
+            let core = powerio_core::Error::new(error.code(), error.to_string());
+            Err(core
+                .with_diagnostics(warnings.into_records())
+                .with_cause(error)
+                .with_source(source))
+        }
+    }
 }
 
-/// Parses `path`, taking the format from `from` when given, the `.dss`
-/// extension otherwise, and for `.json` the shared distribution classifier.
-pub fn parse_file(
-    path: impl AsRef<std::path::Path>,
-    from: Option<&str>,
+/// The format dispatch behind [`parse`].
+fn parse_to_network(
+    source: &powerio_core::Source,
+    warnings: &mut crate::collect::Diagnostics,
 ) -> crate::Result<MulticonductorNetwork> {
-    parse_file_with_options(path, from, &crate::dss::DssReadOptions::default())
-}
-
-/// Like [`parse_file`], with explicit [`DssReadOptions`](crate::dss::DssReadOptions)
-/// for the `.dss` branch. The JSON formats have no includes, so the options
-/// only affect a dss parse.
-pub fn parse_file_with_options(
-    path: impl AsRef<std::path::Path>,
-    from: Option<&str>,
-    dss: &crate::dss::DssReadOptions,
-) -> crate::Result<MulticonductorNetwork> {
-    let path = path.as_ref();
-    // Dss goes through the path-based parser (Redirect/Compile resolve
-    // against the file's directory); the JSON readers take text.
-    let format = if let Some(from) = from {
-        from.parse::<DistTargetFormat>()?
+    if source.is_directory() {
+        return Err(crate::Error::UnknownFormat(format!(
+            "{} is a directory, and no distribution case format is a directory; pass a case file",
+            source.name()
+        )));
+    }
+    let declared = source
+        .format()
+        .map(powerio_core::FormatId::as_str)
+        .map(|name| {
+            dist_target_from_name(name).ok_or_else(|| crate::Error::UnknownFormat(name.to_string()))
+        })
+        .transpose()?;
+    let format = if let Some(format) = declared {
+        format
     } else {
-        let ext = path
+        let ext = std::path::Path::new(source.name())
             .extension()
             .and_then(|e| e.to_str())
             .unwrap_or_default()
@@ -421,114 +428,129 @@ pub fn parse_file_with_options(
         match ext.as_str() {
             "dss" => DistTargetFormat::Dss,
             "json" => {
-                let text = read(path)?;
-                return parse_text(&text, classify_distribution_json(&text)?);
+                let buffer = primary(source)?;
+                classify_distribution_json(source_text(&buffer)?)?
             }
             other => return Err(crate::Error::UnknownFormat(other.to_string())),
         }
     };
     match format {
-        DistTargetFormat::Dss => crate::dss::parse_dss_file_with_options(path, dss),
-        DistTargetFormat::BmopfJson | DistTargetFormat::PmdJson => parse_text(&read(path)?, format),
+        DistTargetFormat::Dss => crate::dss::read::parse_dss_collecting(source, warnings),
+        DistTargetFormat::BmopfJson => {
+            let buffer = primary(source)?;
+            crate::bmopf::read::parse_bmopf_collecting(source_text(&buffer)?, warnings)
+        }
+        DistTargetFormat::PmdJson => {
+            let buffer = primary(source)?;
+            crate::pmd::read::parse_pmd_collecting(source_text(&buffer)?, warnings)
+        }
     }
 }
 
-/// Prepend the reader's parse warnings and diagnostics to the writer's: the
-/// one-shot converters return no handle to query, so this is the only place
-/// the loud half of the parse can surface.
-fn convert(net: &MulticonductorNetwork, target: DistTargetFormat) -> Conversion {
-    let conv = net.to_format(target);
-    let mut warnings = net.warnings.clone();
-    warnings.extend(conv.warnings);
-    let mut diagnostics = net.parse_diagnostics.clone();
-    diagnostics.extend(conv.diagnostics);
-    Conversion {
-        text: conv.text,
-        sidecars: conv.sidecars,
-        warnings,
-        diagnostics,
-    }
+/// The retained primary buffer of a file or in-memory source.
+fn primary(source: &powerio_core::Source) -> crate::Result<powerio_core::SourceBuffer> {
+    source
+        .primary_buffer()
+        .map_err(|error| crate::Error::FormatRead {
+            format: "case text",
+            message: error.to_string(),
+        })
 }
 
-/// Parses `text` in the named source format `from` and writes it as `to` in
-/// one call. The warnings carry both the parse warnings and the writer's
-/// fidelity losses.
-pub fn convert_str(text: &str, to: DistTargetFormat, from: &str) -> crate::Result<Conversion> {
-    Ok(convert(&parse_str(text, from)?, to))
-}
-
-/// Parses `path` (format from `from` or the file itself) and writes it as
-/// `to` in one call. The warnings carry both the parse warnings and the
-/// writer's fidelity losses.
-pub fn convert_file(
-    path: impl AsRef<std::path::Path>,
-    to: DistTargetFormat,
-    from: Option<&str>,
-) -> crate::Result<Conversion> {
-    Ok(convert(&parse_file(path, from)?, to))
+/// The buffer's decode slice as UTF-8 text: the retained bytes with a leading
+/// byte order mark skipped, so the mark survives for the echo and never
+/// reaches a reader.
+fn source_text(buffer: &powerio_core::SourceBuffer) -> crate::Result<&str> {
+    std::str::from_utf8(buffer.content_bytes()).map_err(|e| crate::Error::FormatRead {
+        format: "case text",
+        message: format!("not valid UTF-8: {e}"),
+    })
 }
 
 impl DistTargetFormat {
-    fn matches(self, source: DistSourceFormat) -> bool {
+    fn matches(self, source: Option<DistSourceFormat>) -> bool {
         matches!(
             (self, source),
-            (DistTargetFormat::Dss, DistSourceFormat::Dss)
-                | (DistTargetFormat::BmopfJson, DistSourceFormat::BmopfJson)
-                | (DistTargetFormat::PmdJson, DistSourceFormat::PmdJson)
+            (DistTargetFormat::Dss, Some(DistSourceFormat::Dss))
+                | (
+                    DistTargetFormat::BmopfJson,
+                    Some(DistSourceFormat::BmopfJson)
+                )
+                | (DistTargetFormat::PmdJson, Some(DistSourceFormat::PmdJson))
         )
     }
 }
 
-impl MulticonductorNetwork {
-    /// Writes the network in `format`, bypassing byte exact source echo.
-    pub fn to_canonical_format(&self, format: DistTargetFormat) -> Conversion {
-        let mut conv = match format {
-            DistTargetFormat::Dss => crate::dss::write_dss(self),
-            DistTargetFormat::BmopfJson => crate::bmopf::write_bmopf_json(self),
-            DistTargetFormat::PmdJson => crate::pmd::write_pmd_json(self),
-        };
-        // No distribution format carries line routes; report the loss the
-        // way bus locations already do (`.pio.json` keeps them).
-        let routed = self
-            .lines
-            .iter()
-            .filter(|line| line.route.is_some())
-            .count();
-        if routed > 0 {
-            conv.push(
-                &crate::diagnostics::codes::EMIT_MULTICONDUCTOR_ROUTE_DROPPED,
-                format!(
-                    "{routed} line route(s) dropped: {} has no polyline field",
-                    format.name()
-                ),
-            );
-        }
-        conv
+/// Write a parsed module to `format`. Writing back to the source format of an
+/// unchanged parsed module returns the retained source bytes exactly,
+/// including a byte order mark; any other target serializes the typed value
+/// through [`write_network`].
+#[must_use]
+pub fn write_as(
+    module: &powerio_core::PioModule<MulticonductorNetwork>,
+    format: DistTargetFormat,
+) -> Conversion {
+    if let Some(text) = echo_text(module, format) {
+        return Conversion::faithful(text);
     }
+    write_network(module.value(), format)
+}
 
-    /// Writes the network in `format`.
-    ///
-    /// Writing back to the source format echoes the retained source text
-    /// byte for byte; every cross format write regenerates from the typed
-    /// model and reports each fidelity loss in the warnings. The returned
-    /// warnings hold only the writer's losses: parse warnings stay on
-    /// [`MulticonductorNetwork::warnings`] (the one-shot [`convert_str`]/[`convert_file`]
-    /// merge the two). After mutating a parsed model, set `source = None`
-    /// (and `source_format`), or the echo tier returns the original text
-    /// and silently discards the edits.
-    pub fn to_format(&self, format: DistTargetFormat) -> Conversion {
-        if let (Some(source), Some(source_format)) = (&self.source, self.source_format) {
-            if format.matches(source_format) {
-                return Conversion {
-                    text: source.as_ref().clone(),
-                    sidecars: Vec::new(),
-                    warnings: Vec::new(),
-                    diagnostics: Vec::new(),
-                };
-            }
-        }
-        self.to_canonical_format(format)
+/// The retained source text when writing `module` back to its source format:
+/// the echo that reproduces the input byte for byte. `None` sends the write
+/// down the semantic path.
+fn echo_text(
+    module: &powerio_core::PioModule<MulticonductorNetwork>,
+    target: DistTargetFormat,
+) -> Option<String> {
+    let source = module.source()?;
+    let buffer = source.primary_buffer().ok()?;
+    if !target.matches(module.value().source_format) {
+        return None;
     }
+    let text = std::str::from_utf8(buffer.bytes()).ok()?;
+    Some(text.to_owned())
+}
+
+/// Serialize a typed network to `format` with no source echo: the semantic
+/// write used for values constructed in memory or severed from their module.
+/// Every fidelity loss the writer took is a finding in the returned
+/// [`Conversion`]; nothing drops silently.
+#[must_use]
+pub fn write_network(net: &MulticonductorNetwork, format: DistTargetFormat) -> Conversion {
+    let mut conv = match format {
+        DistTargetFormat::Dss => crate::dss::write_dss(net),
+        DistTargetFormat::BmopfJson => crate::bmopf::write_bmopf_json(net),
+        DistTargetFormat::PmdJson => crate::pmd::write_pmd_json(net),
+    };
+    // No distribution format carries line routes; report the loss the
+    // way bus locations already do (`.pio.json` keeps them).
+    let routed = net.lines.iter().filter(|line| line.route.is_some()).count();
+    if routed > 0 {
+        conv.push(
+            &crate::diagnostics::codes::EMIT_MULTICONDUCTOR_ROUTE_DROPPED,
+            format!(
+                "{routed} line route(s) dropped: {} has no polyline field",
+                format.name()
+            ),
+        );
+    }
+    conv
+}
+
+/// Parse `source` and write it as `to` in one call. The findings carry both
+/// the reader's and the writer's, in that order.
+///
+/// # Errors
+/// As [`parse`].
+pub fn convert_source(
+    source: powerio_core::Source,
+    to: DistTargetFormat,
+) -> std::result::Result<Conversion, powerio_core::Error> {
+    let module = parse(source)?;
+    let mut conv = write_as(&module, to);
+    conv.prepend(module.diagnostics().to_vec());
+    Ok(conv)
 }
 
 #[cfg(test)]
@@ -738,7 +760,7 @@ mod tests {
             );
             let format = classify_distribution_json(&doc).expect("markers are present");
             assert_eq!(format, DistTargetFormat::BmopfJson);
-            let err = crate::parse_str(&doc, format.name())
+            let err = crate::testkit::parse_str(&doc, format.name())
                 .expect_err("the reader refuses past its recursion limit");
             assert!(
                 err.to_string().contains("recursion limit"),
@@ -762,14 +784,18 @@ mod tests {
     }
 
     #[test]
-    fn byte_order_mark_is_stripped_and_warned() {
+    fn byte_order_mark_is_retained_and_echoed() {
         let dss = "\u{feff}clear\nnew circuit.c basekv=12.47 bus1=src\n";
-        let net = parse_str(dss, "dss").unwrap();
+        let net = crate::testkit::parse_dss_str(dss);
+        assert_eq!(net.name.as_deref(), Some("c"));
         assert!(
-            net.warnings.iter().any(|w| w.contains("byte order mark")),
-            "warnings: {:?}",
+            !net.warnings.iter().any(|w| w.contains("byte order mark")),
+            "retaining the mark is not a loss: {:?}",
             net.warnings
         );
+        // The echo returns the input bytes exactly, mark included; the
+        // decode slice the reader saw was mark free.
+        assert_eq!(net.to_format(DistTargetFormat::Dss).text, dss);
         assert!(
             net.source
                 .as_ref()
@@ -778,30 +804,33 @@ mod tests {
     }
 
     #[test]
-    fn parse_bytes_matches_parse_str_on_a_dss_fixture() {
-        let bytes = std::fs::read(concat!(
+    fn memory_and_file_sources_parse_the_same_fixture_alike() {
+        let path = concat!(
             env!("CARGO_MANIFEST_DIR"),
             "/../tests/data/dist/micro/onephase_zip_load.dss"
-        ))
-        .unwrap();
-        let from_bytes = parse_bytes(&bytes, "dss").unwrap();
-        let from_str = parse_str(std::str::from_utf8(&bytes).unwrap(), "dss").unwrap();
-        assert_eq!(from_bytes.buses.len(), from_str.buses.len());
-        assert_eq!(from_bytes.loads.len(), from_str.loads.len());
-        assert_eq!(from_bytes.source, from_str.source);
+        );
+        let bytes = std::fs::read(path).unwrap();
+        let from_bytes =
+            crate::testkit::parse_str(std::str::from_utf8(&bytes).unwrap(), "dss").unwrap();
+        let from_file = crate::testkit::parse_file(path, None).unwrap();
+        assert_eq!(from_bytes.buses.len(), from_file.buses.len());
+        assert_eq!(from_bytes.loads.len(), from_file.loads.len());
+        assert_eq!(from_bytes.source, from_file.source);
     }
 
     #[test]
-    fn parse_bytes_refuses_non_utf8_and_names_the_encoding() {
+    fn non_utf8_bytes_are_refused_and_name_the_encoding() {
         // 0xE9 is CP1252 é, the classic single byte a Windows editor leaves.
-        let bytes = b"clear\nnew circuit.caf\xE9 basekv=12.47 bus1=src\n";
-        let err = parse_bytes(bytes, "dss").unwrap_err();
-        assert!(matches!(err, crate::Error::FormatRead { .. }), "{err}");
+        let bytes: &[u8] = b"clear\nnew circuit.caf\xE9 basekv=12.47 bus1=src\n";
+        let source = powerio_core::Source::from_bytes("<memory>", bytes.to_vec())
+            .unwrap()
+            .with_format(powerio_core::FormatId::new("dss").unwrap());
+        let err = parse(source).unwrap_err();
         assert!(err.to_string().contains("UTF-8"), "{err}");
     }
 
     #[test]
-    fn parse_file_rejects_unclassifiable_json() {
+    fn parse_rejects_unclassifiable_json() {
         // A PowerModels document used to fall through to the BMOPF reader
         // and parse into a bogus near-empty network.
         let dir = tempfile::tempdir().unwrap();
@@ -811,20 +840,20 @@ mod tests {
             r#"{"bus": {}, "branch": {}, "gen": {}, "baseMVA": 100.0}"#,
         )
         .unwrap();
-        let err = parse_file(&path, None).unwrap_err();
+        let err = crate::testkit::parse_file(&path, None).unwrap_err();
         assert!(
             err.to_string()
                 .contains("not a recognized distribution document"),
             "{err}"
         );
         // An explicit format still overrides the classifier.
-        assert!(parse_file(&path, Some("bmopf-json")).is_ok());
+        assert!(crate::testkit::parse_file(&path, Some("bmopf-json")).is_ok());
     }
 
     #[test]
     fn unknown_format_names_fail_before_any_work() {
         assert!(matches!(
-            parse_str("", "matpower"),
+            crate::testkit::parse_str("", "matpower"),
             Err(crate::Error::UnknownFormat(_))
         ));
         assert!(matches!(
@@ -832,7 +861,7 @@ mod tests {
             Err(crate::Error::UnknownFormat(_))
         ));
         assert!(matches!(
-            parse_file("missing.dss", Some("matpower")),
+            crate::testkit::parse_file("missing.dss", Some("matpower")),
             Err(crate::Error::UnknownFormat(_))
         ));
     }
@@ -841,11 +870,14 @@ mod tests {
     fn one_shot_convert_carries_parse_warnings() {
         let dss = "clear\nnew circuit.w basekv=12.47 bus1=src\n\
                    new line.l1 bus1=src bus2=b2 length=1 units=furlong\n";
-        let conv = convert_str(dss, DistTargetFormat::BmopfJson, "dss").unwrap();
+        let source = powerio_core::Source::from_bytes("<memory>", dss.as_bytes().to_vec())
+            .unwrap()
+            .with_format(powerio_core::FormatId::new("dss").unwrap());
+        let conv = convert_source(source, DistTargetFormat::BmopfJson).unwrap();
+        let lines = conv.rendered_diagnostics();
         assert!(
-            conv.warnings.iter().any(|w| w.contains("furlong")),
-            "parse warnings must surface through the one-shot converter: {:?}",
-            conv.warnings
+            lines.iter().any(|w| w.contains("furlong")),
+            "parse warnings must surface through the one-shot converter: {lines:?}"
         );
     }
 
@@ -854,7 +886,7 @@ mod tests {
         let src = "Clear\n\
                    New Circuit.c basekv=12.47 bus1=sourcebus\n\
                    New Load.l1 bus1=sourcebus.1 phases=1 conn=wye kv=7.2 kw=10 kvar=2\n";
-        let net = parse_str(src, "dss").unwrap();
+        let net = crate::testkit::parse_dss_str(src);
         assert_eq!(net.to_format(DistTargetFormat::Dss).text, src);
 
         let canonical = net.to_canonical_format(DistTargetFormat::Dss);
