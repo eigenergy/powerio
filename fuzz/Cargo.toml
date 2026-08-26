@@ -37,6 +37,10 @@ bench = false
 [[bin]]
 name = "model_json"
 path = "fuzz_targets/model_json.rs"
+
+[[bin]]
+name = "stored_module"
+path = "fuzz_targets/stored_module.rs"
 test = false
 bench = false
 
