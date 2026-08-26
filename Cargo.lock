@@ -2103,6 +2103,7 @@ version = "0.9.0"
 dependencies = [
  "num-complex",
  "powerio-core",
+ "powerio-dist",
  "powerio-matrix",
  "powerio-tx",
  "serde",
