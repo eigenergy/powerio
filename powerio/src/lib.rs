@@ -26,6 +26,7 @@
 pub use powerio_tx::*;
 
 pub mod package;
+pub mod select;
 pub mod stored;
 mod value;
 pub use value::{FromPioValue, PioValue, PioValueKind, ValueKindMismatch, try_into_typed};

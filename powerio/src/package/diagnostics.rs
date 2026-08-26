@@ -39,6 +39,18 @@ pub mod codes {
             "a 0.9 operating point update field has no state quantity", category = Data;
         READ_MODULE_UPGRADED = "READ.MODULE.UPGRADED", Note,
             "a released 0.9 package was upgraded one way to the stored module";
+        REQUEST_STATE_NOT_A_COLLECTION = "REQUEST.STATE.NOT_A_COLLECTION", Error,
+            "the value carries no time or scenario collection to select from",
+            category = Request;
+        REQUEST_STATE_WRONG_SELECTOR = "REQUEST.STATE.WRONG_SELECTOR", Error,
+            "the selector kind does not match what the collection keys by",
+            category = Request;
+        REQUEST_STATE_OUT_OF_RANGE = "REQUEST.STATE.OUT_OF_RANGE", Error,
+            "the requested time position is outside the collection's axis",
+            category = Request;
+        REQUEST_STATE_UNKNOWN_SCENARIO = "REQUEST.STATE.UNKNOWN_SCENARIO", Error,
+            "the requested scenario ID is not declared by the set",
+            category = Request;
         // READ: what a reader's own findings arrive as once the package lifts
         // them. A reader finding keeps the code its crate gave it; these are
         // the package's own.
@@ -113,9 +125,20 @@ pub mod codes {
         TRANSFORM_MULTI_TO_BALANCED_UNKNOWN_SOURCE_BUS =
             "TRANSFORM.MULTI_TO_BALANCED.UNKNOWN_SOURCE_BUS", Error,
             "a voltage source references a bus the payload does not declare";
+        /// Retired in 1.0.0: an unrated identity switch now merges its buses,
+        /// and the remaining closed switch shapes carry their own codes.
         TRANSFORM_MULTI_TO_BALANCED_UNSUPPORTED_CLOSED_SWITCH =
             "TRANSFORM.MULTI_TO_BALANCED.UNSUPPORTED_CLOSED_SWITCH", Error,
-            "a closed switch shape has no balanced spelling";
+            "a closed switch shape has no balanced spelling", retired = "1.0.0";
+        TRANSFORM_MULTI_TO_BALANCED_RATED_CLOSED_SWITCH =
+            "TRANSFORM.MULTI_TO_BALANCED.RATED_CLOSED_SWITCH", Error,
+            "merging a rated closed switch would erase its flow limit";
+        TRANSFORM_MULTI_TO_BALANCED_SWITCH_TERMINAL_MISMATCH =
+            "TRANSFORM.MULTI_TO_BALANCED.SWITCH_TERMINAL_MISMATCH", Error,
+            "the two ends of a closed switch do not map identical conductors";
+        TRANSFORM_MULTI_TO_BALANCED_SWITCH_MERGE_CONFLICT =
+            "TRANSFORM.MULTI_TO_BALANCED.SWITCH_MERGE_CONFLICT", Error,
+            "the buses a closed switch would merge state conflicting data";
         TRANSFORM_MULTI_TO_BALANCED_UNSUPPORTED_CONDUCTOR_SET =
             "TRANSFORM.MULTI_TO_BALANCED.UNSUPPORTED_CONDUCTOR_SET", Error,
             "a conductor set has no balanced spelling";
