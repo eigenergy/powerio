@@ -17,7 +17,8 @@ use powerio_matrix::pipeline::{MatrixKind, Pipeline, RhsKind};
 use powerio_matrix::synth::{SynthSpec, Topology};
 use powerio_matrix::{MissingGenCostPolicy, SensitivityOptions, SensitivitySolver, WriteOptions};
 use powerio_prob::matrix::{DcOpfBundleMetadata, DcOpfBundleOptions, write_dcopf_bundle};
-use powerio_prob::{DcOpfOptions, Units, build_dc_opf_instance};
+use powerio_prob::prep::build_dc_opf_preparation;
+use powerio_prob::{DcOpfOptions, Units};
 use serde_json::json;
 mod cases;
 mod compat;
@@ -1068,7 +1069,7 @@ fn run_dcopf(
     let cost_report = policy_network
         .apply_gen_cost_policy(&cost_opts.gen_cost_patches, cost_opts.missing_gen_cost)?;
     let view = powerio_matrix::IndexedNetwork::new(&policy_network);
-    let instance = build_dc_opf_instance(
+    let instance = build_dc_opf_preparation(
         &view,
         &DcOpfOptions {
             convention,

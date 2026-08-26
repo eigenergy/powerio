@@ -6,7 +6,7 @@ use crate::Result;
 use powerio_matrix::SparseMatrix;
 use serde::Serialize;
 
-use crate::{DcOpfInstance, Units};
+use crate::prep::{DcOpfPreparation, Units};
 
 use super::build_dc_opf_matrices;
 
@@ -127,7 +127,7 @@ struct OperatorMeta {
 /// `instance`. It does not retain or read a source network.
 #[allow(clippy::too_many_lines)]
 pub fn write_dcopf_bundle(
-    instance: &DcOpfInstance,
+    instance: &DcOpfPreparation,
     out_dir: impl AsRef<Path>,
     options: &DcOpfBundleOptions,
 ) -> Result<DcOpfOutputs> {

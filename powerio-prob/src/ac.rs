@@ -10,7 +10,7 @@ use crate::{ReferenceBuses, Units, limits, nodal};
 ///
 /// There is no convention enum: the branch pi model always carries taps,
 /// shifts, and charging.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AcOpfOptions {
     pub units: Units,
     /// Skip non-self-loop branches with `r² + x² = 0`. If false, assembly
@@ -21,16 +21,6 @@ pub struct AcOpfOptions {
     /// states. If false, `rate_a <= 0` reaches `s_max` as zero, which reads as
     /// unlimited.
     pub synthesize_unrated_limits: bool,
-}
-
-impl Default for AcOpfOptions {
-    fn default() -> Self {
-        Self {
-            units: Units::default(),
-            skip_zero_impedance: true,
-            synthesize_unrated_limits: false,
-        }
-    }
 }
 
 /// Bus data in dense bus order.
@@ -118,7 +108,7 @@ pub struct AcGeneratorData {
 }
 
 /// Generator data in dense bus order, aggregated over the generators at each
-/// bus. See [`AcOpfInstance::nodal_generator_data`].
+/// bus. See [`AcOpfPreparation::nodal_generator_data`].
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[non_exhaustive]
 pub struct NodalAcGeneratorData {
@@ -152,7 +142,7 @@ pub struct NodalAcGeneratorData {
 /// radians in both systems.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[non_exhaustive]
-pub struct AcOpfInstance {
+pub struct AcOpfPreparation {
     pub name: String,
     pub n_buses: usize,
     pub n_source_generators: usize,
@@ -168,7 +158,7 @@ pub struct AcOpfInstance {
     pub branches: AcBranchData,
 }
 
-impl AcOpfInstance {
+impl AcOpfPreparation {
     #[must_use]
     pub fn n_generators(&self) -> usize {
         self.generators.q.len()
@@ -233,10 +223,10 @@ impl AcOpfInstance {
 
 /// Build a matrix free AC OPF instance from an indexed network.
 #[allow(clippy::too_many_lines)]
-pub fn build_ac_opf_instance(
+pub fn build_ac_opf_preparation(
     case: &IndexedNetwork,
     options: &AcOpfOptions,
-) -> Result<AcOpfInstance> {
+) -> Result<AcOpfPreparation> {
     case.check_reference_coverage()?;
     case.network().check_base_mva()?;
 
@@ -386,7 +376,7 @@ pub fn build_ac_opf_instance(
         vm.push(bus.vm);
     }
 
-    Ok(AcOpfInstance {
+    Ok(AcOpfPreparation {
         name: case.name().to_owned(),
         n_buses,
         n_source_generators: case.generators().len(),

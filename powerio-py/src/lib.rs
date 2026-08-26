@@ -35,9 +35,7 @@ use powerio_matrix::{
 use powerio_prob::matrix::{
     DcOpfBundleMetadata, DcOpfBundleOptions, write_dcopf_bundle as write_bundle,
 };
-use powerio_prob::{
-    AcOpfOptions, DcOpfOptions, Units, build_ac_opf_instance, build_dc_opf_instance,
-};
+use powerio_prob::{AcOpfOptions, DcOpfOptions, Units};
 
 #[cfg(feature = "gridfm")]
 use powerio_matrix::io::gridfm::{
@@ -1363,12 +1361,12 @@ impl PyBalancedNetwork {
     }
 
     /// The matrix free AC OPF instance as its model JSON (dense 0-based
-    /// indices; the `AcOpfInstance` serde shape). `units` is "perunit" (the
+    /// indices; the `AcOpfPreparation` serde shape). `units` is "perunit" (the
     /// default) or "native".
     #[pyo3(signature = (units=None))]
     fn acopf_json(&self, units: Option<&str>) -> PyResult<String> {
         let view = IndexedNetwork::with_core(self.inner(), &self.core);
-        let instance = build_ac_opf_instance(
+        let instance = powerio_prob::prep::build_ac_opf_preparation(
             &view,
             &AcOpfOptions {
                 units: parse_units(units.unwrap_or("perunit"))?,
@@ -1439,7 +1437,7 @@ impl PyBalancedNetwork {
             .apply_gen_cost_policy(&cost_opts.gen_cost_patches, cost_opts.missing_gen_cost)
             .map_err(core_pyerr)?;
         let view = IndexedNetwork::new(&policy_network);
-        let instance = build_dc_opf_instance(
+        let instance = powerio_prob::prep::build_dc_opf_preparation(
             &view,
             &DcOpfOptions {
                 convention: parse_convention(convention.unwrap_or("series"))?,

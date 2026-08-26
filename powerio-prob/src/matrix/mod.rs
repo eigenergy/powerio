@@ -8,7 +8,7 @@ use powerio_matrix::{
     SparseMatrix, build_flow_map, build_weighted_laplacian, ground_at_each, reference_indicator,
 };
 
-use crate::DcOpfInstance;
+use crate::prep::DcOpfPreparation;
 
 pub use bundle::{DcOpfBundleMetadata, DcOpfBundleOptions, DcOpfOutputs, write_dcopf_bundle};
 
@@ -28,7 +28,7 @@ pub struct DcOpfMatrices {
 
 /// Build sparse matrices without reading the source network again.
 #[must_use]
-pub fn build_dc_opf_matrices(instance: &DcOpfInstance) -> DcOpfMatrices {
+pub fn build_dc_opf_matrices(instance: &DcOpfPreparation) -> DcOpfMatrices {
     let n = instance.n_buses;
     let m = instance.n_branches();
     let mut incidence = CooBuilder::with_capacity_rect(n, m, 2 * m);

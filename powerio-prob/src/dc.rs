@@ -55,12 +55,15 @@ impl Units {
 }
 
 /// Options for DC OPF instance assembly.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DcOpfOptions {
     pub convention: DcConvention,
     pub units: Units,
-    /// Skip non-self-loop branches with zero reactance. If false, assembly
-    /// returns [`powerio_tx::Error::ZeroImpedance`].
+    /// Skip non-self-loop branches with zero reactance. Off by default:
+    /// zero impedance branches are preserved in networks and instances, so
+    /// assembly refuses them with [`powerio_tx::Error::ZeroImpedance`] until
+    /// the caller resolves them explicitly
+    /// ([`crate::merge_zero_impedance_buses`]) or opts into skipping.
     pub skip_zero_impedance: bool,
     /// Give a branch with no thermal rating the bound
     /// [`Branch::synthesize_rate_a`](powerio_tx::Branch::synthesize_rate_a)
@@ -69,17 +72,6 @@ pub struct DcOpfOptions {
     /// existed deserialize to the default (off), the pre-field behavior.
     #[serde(default)]
     pub synthesize_unrated_limits: bool,
-}
-
-impl Default for DcOpfOptions {
-    fn default() -> Self {
-        Self {
-            convention: DcConvention::default(),
-            units: Units::default(),
-            skip_zero_impedance: true,
-            synthesize_unrated_limits: false,
-        }
-    }
 }
 
 /// Generator data in generator column order.
@@ -126,7 +118,7 @@ pub struct DcBranchData {
 }
 
 /// Generator data in dense bus order, aggregated over the generators at each
-/// bus. See [`DcOpfInstance::nodal_generator_data`].
+/// bus. See [`DcOpfPreparation::nodal_generator_data`].
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[non_exhaustive]
 pub struct NodalGeneratorData {
@@ -147,7 +139,7 @@ pub struct NodalGeneratorData {
 /// formulation, and a solution.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[non_exhaustive]
-pub struct DcOpfInstance {
+pub struct DcOpfPreparation {
     pub name: String,
     pub n_buses: usize,
     pub n_source_generators: usize,
@@ -183,7 +175,7 @@ pub struct DcOpfInstance {
     pub branches: DcBranchData,
 }
 
-impl DcOpfInstance {
+impl DcOpfPreparation {
     #[must_use]
     pub fn n_generators(&self) -> usize {
         self.generators.q.len()
@@ -247,10 +239,10 @@ impl DcOpfInstance {
 
 /// Build a matrix free DC OPF instance from an indexed network.
 #[allow(clippy::too_many_lines)]
-pub fn build_dc_opf_instance(
+pub fn build_dc_opf_preparation(
     case: &IndexedNetwork,
     options: &DcOpfOptions,
-) -> Result<DcOpfInstance> {
+) -> Result<DcOpfPreparation> {
     case.check_reference_coverage()?;
     case.network().check_base_mva()?;
 
@@ -368,7 +360,7 @@ pub fn build_dc_opf_instance(
         branch_rows.push(source_row);
     }
 
-    Ok(DcOpfInstance {
+    Ok(DcOpfPreparation {
         name: case.name().to_owned(),
         n_buses,
         n_source_generators: case.generators().len(),

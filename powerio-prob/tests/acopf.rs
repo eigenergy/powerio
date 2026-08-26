@@ -1,7 +1,8 @@
 mod helpers;
 #[allow(unused_imports)]
 use helpers::*;
-use powerio_prob::{AcOpfOptions, Error, Units, build_ac_opf_instance};
+use powerio_prob::prep::build_ac_opf_preparation;
+use powerio_prob::{AcOpfOptions, Error, Units};
 use powerio_tx::{
     BalancedNetwork, Branch, BranchCharging, Bus, BusId, BusType, GenCost, Generator,
     IndexedNetwork,
@@ -52,7 +53,7 @@ fn small_network() -> BalancedNetwork {
 fn instance_is_complete_and_indexed() {
     let net = case9();
     let view = IndexedNetwork::new(&net);
-    let problem = build_ac_opf_instance(&view, &AcOpfOptions::default()).expect("build");
+    let problem = build_ac_opf_preparation(&view, &AcOpfOptions::default()).expect("build");
 
     assert_eq!(problem.name, "case9");
     assert_eq!(problem.n_buses, 9);
@@ -122,7 +123,7 @@ fn instance_is_complete_and_indexed() {
 fn case14_taps_shunt_and_series_admittance() {
     let net = case14();
     let view = IndexedNetwork::new(&net);
-    let problem = build_ac_opf_instance(&view, &AcOpfOptions::default()).expect("build");
+    let problem = build_ac_opf_preparation(&view, &AcOpfOptions::default()).expect("build");
 
     let mut taps: Vec<f64> = problem
         .branches
@@ -166,7 +167,7 @@ fn tap_and_shift_are_carried_separately() {
     net.branches_mut()[0].tap = 1.25;
     net.branches_mut()[0].shift = 10.0;
     let view = IndexedNetwork::new(&net);
-    let problem = build_ac_opf_instance(&view, &AcOpfOptions::default()).expect("build");
+    let problem = build_ac_opf_preparation(&view, &AcOpfOptions::default()).expect("build");
 
     assert_close(problem.branches.tap[0], 1.25);
     assert_close(problem.branches.shift[0], 10.0_f64.to_radians());
@@ -179,8 +180,9 @@ fn tap_and_shift_are_carried_separately() {
 fn terminal_charging_split_and_asymmetric() {
     let mut symmetric = small_network();
     symmetric.branches_mut()[0].b = 0.10;
-    let problem = build_ac_opf_instance(&IndexedNetwork::new(&symmetric), &AcOpfOptions::default())
-        .expect("symmetric");
+    let problem =
+        build_ac_opf_preparation(&IndexedNetwork::new(&symmetric), &AcOpfOptions::default())
+            .expect("symmetric");
     assert_close(problem.branches.b_fr[0], 0.05);
     assert_close(problem.branches.b_to[0], 0.05);
     assert_close(problem.branches.g_fr[0], 0.0);
@@ -189,7 +191,7 @@ fn terminal_charging_split_and_asymmetric() {
     let mut asymmetric = small_network();
     asymmetric.branches_mut()[0].charging = Some(BranchCharging::new(0.001, 0.03, 0.002, 0.07));
     let problem =
-        build_ac_opf_instance(&IndexedNetwork::new(&asymmetric), &AcOpfOptions::default())
+        build_ac_opf_preparation(&IndexedNetwork::new(&asymmetric), &AcOpfOptions::default())
             .expect("asymmetric");
     assert_close(problem.branches.g_fr[0], 0.001);
     assert_close(problem.branches.b_fr[0], 0.03);
@@ -206,7 +208,7 @@ fn per_unit_and_native_units_scale_consistently() {
     net.shunts_mut()
         .push(powerio_tx::Shunt::new(BusId(30), 2.0, 19.0));
     let view = IndexedNetwork::new(&net);
-    let native = build_ac_opf_instance(
+    let native = build_ac_opf_preparation(
         &view,
         &AcOpfOptions {
             units: Units::Native,
@@ -214,7 +216,7 @@ fn per_unit_and_native_units_scale_consistently() {
         },
     )
     .expect("native");
-    let per_unit = build_ac_opf_instance(&view, &AcOpfOptions::default()).expect("per unit");
+    let per_unit = build_ac_opf_preparation(&view, &AcOpfOptions::default()).expect("per unit");
     let base = view.base_mva();
 
     assert_eq!(native.units, Units::Native);
@@ -248,8 +250,8 @@ fn per_unit_and_native_units_scale_consistently() {
 #[test]
 fn cost_constant_term_is_kept() {
     let net = small_network();
-    let problem =
-        build_ac_opf_instance(&IndexedNetwork::new(&net), &AcOpfOptions::default()).expect("build");
+    let problem = build_ac_opf_preparation(&IndexedNetwork::new(&net), &AcOpfOptions::default())
+        .expect("build");
     assert_close(problem.generators.c0[0], 5.0);
 }
 
@@ -257,7 +259,7 @@ fn cost_constant_term_is_kept() {
 fn missing_and_unsupported_costs_are_distinct() {
     let mut missing = small_network();
     missing.generators_mut()[0].cost = None;
-    let error = build_ac_opf_instance(&IndexedNetwork::new(&missing), &AcOpfOptions::default())
+    let error = build_ac_opf_preparation(&IndexedNetwork::new(&missing), &AcOpfOptions::default())
         .expect_err("missing cost");
     assert!(matches!(
         error,
@@ -272,8 +274,9 @@ fn missing_and_unsupported_costs_are_distinct() {
         2,
         vec![0.0, 0.0, 1.0, 1.0],
     ));
-    let error = build_ac_opf_instance(&IndexedNetwork::new(&piecewise), &AcOpfOptions::default())
-        .expect_err("unsupported cost");
+    let error =
+        build_ac_opf_preparation(&IndexedNetwork::new(&piecewise), &AcOpfOptions::default())
+            .expect_err("unsupported cost");
     assert!(matches!(
         error,
         Error::UnsupportedCostModel {
@@ -290,7 +293,7 @@ fn missing_and_unsupported_costs_are_distinct() {
 fn a_concave_cost_row_is_refused() {
     let mut lone = small_network();
     lone.generators_mut()[0].cost = Some(GenCost::new(2, 0.0, 0.0, vec![-0.5, 5.0, 0.0]));
-    let error = build_ac_opf_instance(&IndexedNetwork::new(&lone), &AcOpfOptions::default())
+    let error = build_ac_opf_preparation(&IndexedNetwork::new(&lone), &AcOpfOptions::default())
         .expect_err("a lone concave row");
     assert!(
         matches!(error, Error::ConcaveCost { gen_index: 0, c2 } if c2.to_bits() == (-0.5f64).to_bits()),
@@ -302,7 +305,7 @@ fn a_concave_cost_row_is_refused() {
     let mut concave = generator(10, -0.5, 5.0, 0.0);
     concave.uid = Some("concave".to_owned());
     shared.generators_mut().push(concave);
-    let error = build_ac_opf_instance(&IndexedNetwork::new(&shared), &AcOpfOptions::default())
+    let error = build_ac_opf_preparation(&IndexedNetwork::new(&shared), &AcOpfOptions::default())
         .expect_err("a concave row in a merge");
     assert!(
         matches!(error, Error::ConcaveCost { gen_index: 1, c2 } if c2.to_bits() == (-0.5f64).to_bits()),
@@ -316,18 +319,20 @@ fn zero_impedance_skip_or_reject() {
     let mut net = small_network();
     net.branches_mut().insert(0, branch(10, 30, 0.0, 0.0));
     let view = IndexedNetwork::new(&net);
-    let skipped = build_ac_opf_instance(&view, &AcOpfOptions::default()).expect("skip");
-    assert_eq!(skipped.branches.skipped_zero_impedance, vec![0]);
-    assert_eq!(skipped.branches.source_rows, vec![1]);
-
-    let error = build_ac_opf_instance(
+    // Skipping is an explicit opt-in now: the default preserves the branch
+    // and refuses assembly.
+    let skipped = build_ac_opf_preparation(
         &view,
         &AcOpfOptions {
-            skip_zero_impedance: false,
+            skip_zero_impedance: true,
             ..AcOpfOptions::default()
         },
     )
-    .expect_err("reject");
+    .expect("skip");
+    assert_eq!(skipped.branches.skipped_zero_impedance, vec![0]);
+    assert_eq!(skipped.branches.source_rows, vec![1]);
+
+    let error = build_ac_opf_preparation(&view, &AcOpfOptions::default()).expect_err("reject");
     assert!(matches!(
         error,
         Error::Core(powerio_tx::Error::ZeroImpedance { row: 0 })
@@ -336,8 +341,9 @@ fn zero_impedance_skip_or_reject() {
     // Zero resistance with nonzero reactance is a valid series element.
     let mut inductive = small_network();
     inductive.branches_mut()[0].r = 0.0;
-    let problem = build_ac_opf_instance(&IndexedNetwork::new(&inductive), &AcOpfOptions::default())
-        .expect("inductive");
+    let problem =
+        build_ac_opf_preparation(&IndexedNetwork::new(&inductive), &AcOpfOptions::default())
+            .expect("inductive");
     assert_eq!(problem.branches.skipped_zero_impedance, Vec::<usize>::new());
     assert_close(problem.branches.g[0], 0.0);
     assert_close(problem.branches.b[0], -1.0 / 0.2);
@@ -351,17 +357,17 @@ fn an_impedance_the_instance_cannot_divide_by_reads_as_zero_impedance() {
     let mut net = small_network();
     net.branches_mut().insert(0, branch(10, 30, 0.0, 1e-300));
     let view = IndexedNetwork::new(&net);
-    let skipped = build_ac_opf_instance(&view, &AcOpfOptions::default()).expect("skip");
-    assert_eq!(skipped.branches.skipped_zero_impedance, vec![0]);
-
-    let error = build_ac_opf_instance(
+    let skipped = build_ac_opf_preparation(
         &view,
         &AcOpfOptions {
-            skip_zero_impedance: false,
+            skip_zero_impedance: true,
             ..AcOpfOptions::default()
         },
     )
-    .expect_err("reject");
+    .expect("skip");
+    assert_eq!(skipped.branches.skipped_zero_impedance, vec![0]);
+
+    let error = build_ac_opf_preparation(&view, &AcOpfOptions::default()).expect_err("reject");
     assert!(matches!(
         error,
         Error::Core(powerio_tx::Error::ZeroImpedance { row: 0 })
@@ -371,7 +377,8 @@ fn an_impedance_the_instance_cannot_divide_by_reads_as_zero_impedance() {
     small_x.branches_mut()[0].r = 0.0;
     small_x.branches_mut()[0].x = 1e-100;
     let problem =
-        build_ac_opf_instance(&IndexedNetwork::new(&small_x), &AcOpfOptions::default()).expect("x");
+        build_ac_opf_preparation(&IndexedNetwork::new(&small_x), &AcOpfOptions::default())
+            .expect("x");
     assert_eq!(problem.branches.skipped_zero_impedance, Vec::<usize>::new());
     assert_close(problem.branches.b[0], -1e100);
 }
@@ -381,7 +388,7 @@ fn a_tap_the_instance_cannot_divide_by_is_refused() {
     for tap in [1e-200, f64::NAN, f64::INFINITY] {
         let mut net = small_network();
         net.branches_mut()[0].tap = tap;
-        let error = build_ac_opf_instance(&IndexedNetwork::new(&net), &AcOpfOptions::default())
+        let error = build_ac_opf_preparation(&IndexedNetwork::new(&net), &AcOpfOptions::default())
             .expect_err("a tap the pi model divides by must be refused");
         assert!(
             matches!(
@@ -399,7 +406,7 @@ fn out_of_service_exclusion() {
     net.generators_mut()[1].in_service = false;
     net.branches_mut()[2].in_service = false;
     let view = IndexedNetwork::new(&net);
-    let problem = build_ac_opf_instance(&view, &AcOpfOptions::default()).expect("build");
+    let problem = build_ac_opf_preparation(&view, &AcOpfOptions::default()).expect("build");
 
     assert_eq!(problem.n_generators(), 2);
     assert!(!problem.generators.source_rows.contains(&1));
@@ -414,8 +421,8 @@ fn nodal_data_sums_the_reactive_range_and_flags_the_generator_buses() {
     extra.qmax = 10.0;
     extra.qmin = -5.0;
     net.generators_mut().push(extra);
-    let problem =
-        build_ac_opf_instance(&IndexedNetwork::new(&net), &AcOpfOptions::default()).expect("build");
+    let problem = build_ac_opf_preparation(&IndexedNetwork::new(&net), &AcOpfOptions::default())
+        .expect("build");
 
     let gens = &problem.generators;
     let nodal = problem.nodal_generator_data();
@@ -435,8 +442,8 @@ fn vm_setpoints_follow_generator_voltage() {
     net.buses_mut()[0].vm = 0.0;
     net.buses_mut()[1].vm = 1.02;
     net.generators_mut()[0].vg = 1.05;
-    let problem =
-        build_ac_opf_instance(&IndexedNetwork::new(&net), &AcOpfOptions::default()).expect("build");
+    let problem = build_ac_opf_preparation(&IndexedNetwork::new(&net), &AcOpfOptions::default())
+        .expect("build");
     let setpoints = problem.vm_setpoints();
     assert_close(setpoints[0], 1.05);
     assert_close(setpoints[1], 1.02);
@@ -445,7 +452,7 @@ fn vm_setpoints_follow_generator_voltage() {
     // solver preparation.
     let mut wide = small_network();
     wide.generators_mut()[0].vg = 1.5;
-    let problem = build_ac_opf_instance(&IndexedNetwork::new(&wide), &AcOpfOptions::default())
+    let problem = build_ac_opf_preparation(&IndexedNetwork::new(&wide), &AcOpfOptions::default())
         .expect("build");
     assert_close(problem.vm_setpoints()[0], 1.5);
 
@@ -453,7 +460,7 @@ fn vm_setpoints_follow_generator_voltage() {
     let mut unset = small_network();
     unset.buses_mut()[0].vm = 1.01;
     unset.generators_mut()[0].vg = 0.0;
-    let problem = build_ac_opf_instance(&IndexedNetwork::new(&unset), &AcOpfOptions::default())
+    let problem = build_ac_opf_preparation(&IndexedNetwork::new(&unset), &AcOpfOptions::default())
         .expect("build");
     assert_close(problem.vm_setpoints()[0], 1.01);
 }
@@ -469,11 +476,11 @@ fn an_unrated_branch_takes_a_synthesized_limit_on_request() {
         ..AcOpfOptions::default()
     };
 
-    let unlimited = build_ac_opf_instance(&view, &AcOpfOptions::default()).expect("default");
+    let unlimited = build_ac_opf_preparation(&view, &AcOpfOptions::default()).expect("default");
     assert_close(unlimited.branches.s_max[0], 0.0);
 
     let window = 30.0_f64.to_radians();
-    let synthesized = build_ac_opf_instance(&view, &options).expect("synthesized");
+    let synthesized = build_ac_opf_preparation(&view, &options).expect("synthesized");
     assert_close(
         synthesized.branches.s_max[0],
         1.1 * (2.42 - 2.42 * window.cos()).sqrt() / 0.05_f64.hypot(0.2),
@@ -484,7 +491,7 @@ fn an_unrated_branch_takes_a_synthesized_limit_on_request() {
     // same one.
     let normalized = net.to_normalized().expect("normalize");
     let derived =
-        build_ac_opf_instance(&IndexedNetwork::new(&normalized), &options).expect("normalized");
+        build_ac_opf_preparation(&IndexedNetwork::new(&normalized), &options).expect("normalized");
     assert_close(derived.branches.s_max[0], synthesized.branches.s_max[0]);
 }
 
@@ -492,10 +499,10 @@ fn an_unrated_branch_takes_a_synthesized_limit_on_request() {
 fn normalized_network_builds_identical_instance() {
     let net = case14();
     let normalized = net.to_normalized().expect("normalize");
-    let raw =
-        build_ac_opf_instance(&IndexedNetwork::new(&net), &AcOpfOptions::default()).expect("raw");
+    let raw = build_ac_opf_preparation(&IndexedNetwork::new(&net), &AcOpfOptions::default())
+        .expect("raw");
     let derived =
-        build_ac_opf_instance(&IndexedNetwork::new(&normalized), &AcOpfOptions::default())
+        build_ac_opf_preparation(&IndexedNetwork::new(&normalized), &AcOpfOptions::default())
             .expect("normalized");
 
     assert_eq!(raw.n_buses, derived.n_buses);
@@ -525,9 +532,10 @@ fn normalized_network_builds_identical_instance() {
 fn serde_round_trip() {
     let net = case9();
     let view = IndexedNetwork::new(&net);
-    let problem = build_ac_opf_instance(&view, &AcOpfOptions::default()).expect("build");
+    let problem = build_ac_opf_preparation(&view, &AcOpfOptions::default()).expect("build");
     let json = serde_json::to_string(&problem).expect("serialize");
-    let back: powerio_prob::AcOpfInstance = serde_json::from_str(&json).expect("deserialize");
+    let back: powerio_prob::prep::AcOpfPreparation =
+        serde_json::from_str(&json).expect("deserialize");
     assert_eq!(back.name, problem.name);
     assert_eq!(back.bus_ids, problem.bus_ids);
     assert_eq!(back.generators.source_rows, problem.generators.source_rows);
@@ -559,7 +567,7 @@ mod matrix_tests {
         self_loop.b = 0.04;
         net.branches_mut().push(self_loop);
         let view = IndexedNetwork::new(&net);
-        let problem = build_ac_opf_instance(&view, &AcOpfOptions::default()).expect("build");
+        let problem = build_ac_opf_preparation(&view, &AcOpfOptions::default()).expect("build");
         let n = problem.n_buses;
 
         let mut dense = vec![vec![Complex64::new(0.0, 0.0); n]; n];
@@ -612,12 +620,12 @@ fn self_loop_folds_into_bus_shunt() {
     loop_branch.shift = 10.0;
     loop_branch.b = 0.10;
     net.branches_mut().push(loop_branch);
-    let plain = build_ac_opf_instance(
+    let plain = build_ac_opf_preparation(
         &IndexedNetwork::new(&small_network()),
         &AcOpfOptions::default(),
     )
     .expect("plain");
-    let folded = build_ac_opf_instance(&IndexedNetwork::new(&net), &AcOpfOptions::default())
+    let folded = build_ac_opf_preparation(&IndexedNetwork::new(&net), &AcOpfOptions::default())
         .expect("folded");
 
     // The self-loop is not a flow element and is not a skip.
@@ -638,7 +646,7 @@ fn self_loop_folds_into_bus_shunt() {
 fn zero_base_mva_is_rejected() {
     let mut net = small_network();
     *net.base_mva_mut() = 0.0;
-    let error = build_ac_opf_instance(&IndexedNetwork::new(&net), &AcOpfOptions::default())
+    let error = build_ac_opf_preparation(&IndexedNetwork::new(&net), &AcOpfOptions::default())
         .expect_err("zero base");
     assert!(matches!(
         error,

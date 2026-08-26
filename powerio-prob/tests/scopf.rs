@@ -1,13 +1,13 @@
 use powerio_prob::scopf::json::{
     SCOPF_SCHEMA, to_json, to_json_value, to_json_value_with_index_base, to_json_with_index_base,
 };
-use powerio_prob::{IndexBase, ScopfDeviceClassLayout, ScopfError, ScopfInstance, parse_scopf_str};
+use powerio_prob::{IndexBase, ScopfDeviceClassLayout, ScopfError, ScucInputs, parse_scopf_str};
 use powerio_tx::BusId;
 use serde_json::Value;
 
 const SMALL: &str = include_str!("data/goc3_small.json");
 
-fn small_instance() -> ScopfInstance {
+fn small_instance() -> ScucInputs {
     parse_scopf_str(SMALL, "goc3-json").expect("build small SCOPF instance")
 }
 
@@ -244,7 +244,7 @@ fn period_mismatch_is_rejected() {
 
 #[test]
 fn parse_errors_use_the_scopf_error_type() {
-    let result: Result<ScopfInstance, ScopfError> = parse_scopf_str("{", "goc3-json");
+    let result: Result<ScucInputs, ScopfError> = parse_scopf_str("{", "goc3-json");
     assert!(matches!(result, Err(ScopfError::Source(_))));
 }
 
@@ -254,7 +254,7 @@ fn source_format_is_explicit() {
     assert!(matches!(error, ScopfError::UnsupportedFormat(_)));
 }
 
-fn build_from_value(value: &Value) -> Result<ScopfInstance, ScopfError> {
+fn build_from_value(value: &Value) -> Result<ScucInputs, ScopfError> {
     let text = serde_json::to_string(value).expect("serialize test document");
     parse_scopf_str(&text, "goc3-json")
 }

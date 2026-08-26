@@ -16,10 +16,10 @@ use super::types::{
     ScopfEnergyWindowMinCsRow, ScopfEnergyWindowMinPrRow, ScopfEnergyWindowPeriodMaxCsRow,
     ScopfEnergyWindowPeriodMaxPrRow, ScopfEnergyWindowPeriodMinCsRow,
     ScopfEnergyWindowPeriodMinPrRow, ScopfEnergyWindows, ScopfFixedPhaseRow, ScopfFixedRatioRow,
-    ScopfInstance, ScopfLengths, ScopfPriceBlockRow, ScopfPriceBlocks, ScopfReactiveReserveRow,
+    ScopfLengths, ScopfPriceBlockRow, ScopfPriceBlocks, ScopfReactiveReserveRow,
     ScopfReactiveReserveSetRow, ScopfShuntRow, ScopfStaticData, ScopfStaticDataProjection,
     ScopfTransformerRow, ScopfTransformerSurvivorRow, ScopfVariablePhaseRow, ScopfVariableRatioRow,
-    ScopfViolationCost,
+    ScopfViolationCost, ScucInputs,
 };
 
 type Result<T> = ScopfResult<T>;
@@ -1130,7 +1130,7 @@ fn device_class_blocks(tables: &Goc3Adapter) -> Result<ScopfDeviceClassLayout> {
     })
 }
 
-fn project_scopf_instance(tables: &Goc3Adapter) -> Result<ScopfInstance> {
+fn project_scopf_instance(tables: &Goc3Adapter) -> Result<ScucInputs> {
     let ScopfStaticDataProjection {
         static_data,
         lengths,
@@ -1138,7 +1138,7 @@ fn project_scopf_instance(tables: &Goc3Adapter) -> Result<ScopfInstance> {
         cost_vector_cs,
     } = build_static_projection(tables)?;
     let device_class_layout = device_class_blocks(tables)?;
-    Ok(ScopfInstance {
+    Ok(ScucInputs {
         static_data,
         lengths,
         energy_windows: build_energy_windows(tables)?,
@@ -1151,7 +1151,7 @@ fn project_scopf_instance(tables: &Goc3Adapter) -> Result<ScopfInstance> {
     })
 }
 
-fn build_scopf_instance(document: &Goc3Document) -> Result<ScopfInstance> {
+fn build_scopf_instance(document: &Goc3Document) -> Result<ScucInputs> {
     let tables = Goc3Adapter::from_document(document)?;
     project_scopf_instance(&tables)
 }
@@ -1162,11 +1162,11 @@ fn build_scopf_instance(document: &Goc3Document) -> Result<ScopfInstance> {
     since = "0.9.0",
     note = "renamed to parse_scopf_str in 0.9.0; the alias goes away at 1.0.0"
 )]
-pub fn build_scopf_instance_from_str(text: &str, from: &str) -> Result<ScopfInstance> {
+pub fn build_scopf_instance_from_str(text: &str, from: &str) -> Result<ScucInputs> {
     parse_scopf_str(text, from)
 }
 
-pub fn parse_scopf_str(text: &str, from: &str) -> Result<ScopfInstance> {
+pub fn parse_scopf_str(text: &str, from: &str) -> Result<ScucInputs> {
     if from != "goc3-json" {
         return Err(ScopfError::UnsupportedFormat(from.to_owned()));
     }
