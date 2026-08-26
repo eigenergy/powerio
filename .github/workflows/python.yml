@@ -49,6 +49,8 @@ jobs:
         with:
           ref: ${{ env.SOURCE_REF }}
           fetch-depth: 0
+      - name: Release identity agreement
+        run: bash scripts/check-release-versions.sh
       - name: Verify the immutable published release
         id: release
         env:
@@ -268,6 +270,67 @@ jobs:
           name: wheels-${{ matrix.platform.runner }}-${{ matrix.platform.target }}
           path: dist
 
+  # Install and import every built wheel before anything can publish (#325):
+  # a clean environment per platform installs the wheel with the `all` extra,
+  # imports powerio, parses a case, verifies the reported version and schema
+  # identity, narrows a typed module, builds one matrix, and checks the
+  # stored document writes deterministically. Linux aarch64 runs under QEMU;
+  # macOS x86_64 runs the universal2 build's Intel slice under Rosetta.
+  wheel-smoke:
+    name: wheel smoke (${{ matrix.platform.target }} on ${{ matrix.platform.runner }})
+    if: github.event_name == 'release' || github.event_name == 'workflow_dispatch'
+    needs: [ release-preflight, wheels ]
+    runs-on: ${{ matrix.platform.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        platform:
+          - { runner: ubuntu-latest,  target: x86_64,  artifact: wheels-ubuntu-latest-x86_64 }
+          - { runner: ubuntu-latest,  target: aarch64, artifact: wheels-ubuntu-latest-aarch64 }
+          - { runner: macos-14,       target: x86_64,  artifact: wheels-macos-14-x86_64 }
+          - { runner: macos-14,       target: aarch64, artifact: wheels-macos-14-aarch64 }
+          - { runner: windows-latest, target: x64,     artifact: wheels-windows-latest-x64 }
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ env.SOURCE_REF }}
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: ${{ matrix.platform.artifact }}
+          path: dist
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        if: matrix.platform.target != 'aarch64'
+        with:
+          python-version: "3.12"
+      - name: Enable QEMU emulation
+        if: matrix.platform.runner == 'ubuntu-latest' && matrix.platform.target == 'aarch64'
+        uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3
+        with:
+          platforms: arm64
+      - name: Smoke the aarch64 wheel under QEMU
+        if: matrix.platform.runner == 'ubuntu-latest' && matrix.platform.target == 'aarch64'
+        run: |
+          docker run --rm --platform linux/arm64 \
+            -v "$PWD:/io" -w /io \
+            arm64v8/python:3.12-bookworm \
+            bash -ec 'pip install --quiet "$(ls dist/*.whl)[all]" && python scripts/wheel-smoke.py'
+      - name: Smoke the x86_64 wheel under Rosetta
+        if: matrix.platform.runner == 'macos-14' && matrix.platform.target == 'x86_64'
+        run: |
+          arch -x86_64 /usr/bin/python3 -m venv smoke-venv
+          arch -x86_64 smoke-venv/bin/python -m pip install --quiet "$(ls dist/*.whl)[all]"
+          arch -x86_64 smoke-venv/bin/python scripts/wheel-smoke.py
+      - name: Smoke the wheel natively
+        if: >-
+          !(matrix.platform.runner == 'ubuntu-latest' && matrix.platform.target == 'aarch64')
+          && !(matrix.platform.runner == 'macos-14' && matrix.platform.target == 'x86_64')
+        shell: bash
+        run: |
+          python -m venv smoke-venv
+          if [ -x smoke-venv/bin/python ]; then py=smoke-venv/bin/python; else py=smoke-venv/Scripts/python.exe; fi
+          "$py" -m pip install --quiet "$(ls dist/*.whl)[all]"
+          "$py" scripts/wheel-smoke.py
+
   sdist:
     if: github.event_name == 'release' || github.event_name == 'workflow_dispatch'
     needs: release-preflight
@@ -306,7 +369,7 @@ jobs:
     # recovery path for a missed event. A prerelease still builds wheels and an
     # sdist as run artifacts, but never uploads them to PyPI.
     if: (github.event_name == 'release' && github.event.release.prerelease == false) || github.event_name == 'workflow_dispatch'
-    needs: [ release-preflight, lint, test, test-gridfm, wheels, sdist ]
+    needs: [ release-preflight, lint, test, test-gridfm, wheels, wheel-smoke, sdist ]
     runs-on: ubuntu-latest
     # Deployment protection (required reviewers, tag rules) lives on the pypi
     # environment in the repo settings, not in this file.

@@ -110,6 +110,7 @@ fi
 rm -rf "$HOME"/.cargo/registry/src/-*/powerio-0.* "$HOME"/.cargo/registry/src/-*/powerio-[a-z]*-0.* target/package-verify
 run env CARGO_TARGET_DIR=target/package-verify cargo package --workspace --exclude powerio-capi --exclude powerio-py --allow-dirty
 run python3 scripts/audit-release-archives.py target/package-verify/package/*.crate
+run bash scripts/check-release-versions.sh
 
 # fuzz.yml builds the detached fuzz workspace with cargo-fuzz on nightly; a
 # plain check catches source breakage (a renamed entry point, a moved type)
