@@ -1460,3 +1460,35 @@ def test_source_format_stubs_cover_every_variant():
         text = (root / stub).read_text()
         for v in variants:
             assert f'"{v}"' in text, f"{stub} missing source_format {v!r}"
+
+
+def test_dc_data_names_match_the_c_surface():
+    """One assembly for every language: the Python keys are the C accessor
+    spellings, values follow PowerModels orientation and sign, and omissions
+    are mapped by stable element ID."""
+    net = powerio.parse_file(DATA / "case9.m")
+    data = net.dc_data()
+    assert sorted(data) == [
+        "bus_ids",
+        "formula",
+        "from_indices",
+        "omitted_ids",
+        "omitted_reasons",
+        "row_ids",
+        "shift_injection",
+        "susceptance",
+        "to_indices",
+    ]
+    assert data["formula"] == "series_susceptance"
+    assert len(data["from_indices"]) == 9
+    assert len(data["bus_ids"]) == 9
+    assert data["row_ids"][0] == "branches:0"
+    assert all(b > 0 for b in data["susceptance"])
+    assert data["omitted_ids"] == [] and data["omitted_reasons"] == []
+    # The tap adjusted formula divides by x*tap; case9 taps are nominal, so
+    # the reactance only and tap adjusted rows agree.
+    tap = net.dc_data(formula="tap_adjusted_reactance")
+    reactance = net.dc_data(formula="reactance_only")
+    assert tap["susceptance"] == reactance["susceptance"]
+    with pytest.raises(ValueError, match="susceptance formula"):
+        net.dc_data(formula="mystery")

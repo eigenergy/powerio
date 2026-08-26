@@ -6,7 +6,7 @@ matrix methods return COO triplets as plain Python lists; the pure-Python
 ``powerio.BalancedNetwork`` wrapper turns them into scipy/networkx objects.
 """
 
-from typing import Any, List, Literal, Optional, Tuple
+from typing import Any, Dict, List, Literal, Optional, Tuple
 
 __version__: str
 _has_gridfm: bool
@@ -117,6 +117,7 @@ class _BalancedNetwork:
     # Matrix builders return COO triplets `(data, row, col, (nrows, ncols))` as
     # plain Python lists, except `incidence`/`ybus_parts` which nest them.
     def bprime(self, scheme: Optional[str] = ...) -> Any: ...
+    def dc_data(self, formula: str = ...) -> Dict[str, Any]: ...
     def bdoubleprime(self, scheme: Optional[str] = ...) -> Any: ...
     def lacpf(self, *, include_taps: bool = ..., include_shifts: bool = ...) -> Any: ...
     def adjacency(self) -> Any: ...

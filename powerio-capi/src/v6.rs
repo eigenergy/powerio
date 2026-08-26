@@ -702,125 +702,56 @@ arc_handle!(
     DcDataInner
 );
 
-fn element_id(uid: Option<&str>, table: &str, row: usize) -> String {
-    match uid {
-        Some(uid) => uid.to_owned(),
-        None => format!("{table}:{row}"),
-    }
-}
-
 fn dc_formula(name: &str) -> Result<DcConvention, *mut PioError> {
-    match name {
-        "series_susceptance" | "series" => Ok(DcConvention::SeriesImpedance),
-        "tap_adjusted_reactance" | "matpower" => Ok(DcConvention::Matpower),
-        "reactance_only" => Ok(DcConvention::ReactanceOnly),
-        other => Err(error_from_parts(
+    DcConvention::from_formula_name(name).ok_or_else(|| {
+        error_from_parts(
             codes::BIND_CAPI_NULL_ARGUMENT.code,
             &format!(
-                "unknown branch susceptance formula `{other}`; expected series_susceptance, \
+                "unknown branch susceptance formula `{name}`; expected series_susceptance, \
                  tap_adjusted_reactance, or reactance_only"
             ),
             "[]",
-        )),
-    }
-}
-
-fn formula_name(convention: DcConvention) -> &'static str {
-    match convention {
-        DcConvention::SeriesImpedance => "series_susceptance",
-        DcConvention::Matpower => "tap_adjusted_reactance",
-        DcConvention::ReactanceOnly => "reactance_only",
-        _ => "unknown",
-    }
+        )
+    })
 }
 
 fn pointer_table(strings: &[CString]) -> Vec<*const c_char> {
     strings.iter().map(|string| string.as_ptr()).collect()
 }
 
-/// Assemble the DC rows the way `powerio-matrix::build_incidence` does:
-/// in-service branches in table order, self loops dropped silently, zero
-/// impedance and degenerate taps reported as omitted rows by stable ID.
+/// Project the shared [`powerio::dc_network_data`] assembly into the owned C
+/// spans: the same values Rust and Python read, with the strings pinned as
+/// NUL terminated copies the pointer tables alias.
 fn build_dc_data(
     network: &BalancedNetwork,
     convention: DcConvention,
 ) -> Result<DcDataInner, *mut PioError> {
     let view = IndexedNetwork::new(network);
-    let n = view.n();
-    let mut from_index = Vec::new();
-    let mut to_index = Vec::new();
-    let mut susceptance = Vec::new();
-    let mut shift_injection = vec![0.0; n];
-    let mut row_ids = Vec::new();
-    let mut omitted = Vec::new();
-
-    for (idx, branch) in network.branches().iter().enumerate() {
-        let id = element_id(branch.uid.as_deref(), "branches", idx);
-        if !branch.in_service {
-            omitted.push((id, "out of service".to_owned()));
-            continue;
-        }
-        let (Some(i), Some(j)) = (view.bus_index(branch.from), view.bus_index(branch.to)) else {
-            omitted.push((id, "references an undeclared bus".to_owned()));
-            continue;
-        };
-        if i == j {
-            omitted.push((id, "self loop".to_owned()));
-            continue;
-        }
-        if branch.x.abs() < powerio::dc::MIN_DIVISIBLE_MAGNITUDE {
-            omitted.push((
-                id,
-                "zero impedance: the selected formula has no finite susceptance".to_owned(),
-            ));
-            continue;
-        }
-        let tap = match branch.divisible_tap(idx) {
-            Ok(tap) => tap,
-            Err(error) => {
-                omitted.push((id, error.to_string()));
-                continue;
-            }
-        };
-        let b = convention.branch_susceptance(branch.r, branch.x, tap);
-        if !b.is_finite() {
-            omitted.push((id, "susceptance is not finite".to_owned()));
-            continue;
-        }
-        let shift = if convention.includes_phase_shifts() {
-            view.angle_radians(branch.shift)
-        } else {
-            0.0
-        };
-        if shift != 0.0 {
-            shift_injection[i] -= b * shift;
-            shift_injection[j] += b * shift;
-        }
-        from_index.push(i64::try_from(i).expect("bus count fits i64"));
-        to_index.push(i64::try_from(j).expect("bus count fits i64"));
-        susceptance.push(b);
-        row_ids.push(lossy_cstring(&id));
-    }
-
-    let bus_ids: Vec<CString> = network
-        .buses()
-        .iter()
-        .map(|bus| lossy_cstring(&bus.id.0.to_string()))
-        .collect();
-    let (omitted_ids, omitted_reasons): (Vec<CString>, Vec<CString>) = omitted
+    let data = powerio::dc_network_data(&view, convention);
+    let row_ids: Vec<CString> = data.row_ids.iter().map(|id| lossy_cstring(id)).collect();
+    let bus_ids: Vec<CString> = data.bus_ids.iter().map(|id| lossy_cstring(id)).collect();
+    let (omitted_ids, omitted_reasons): (Vec<CString>, Vec<CString>) = data
+        .omitted
         .iter()
         .map(|(id, reason)| (lossy_cstring(id), lossy_cstring(reason)))
         .unzip();
-
     let row_id_pointers = pointer_table(&row_ids);
     let bus_id_pointers = pointer_table(&bus_ids);
     let omitted_id_pointers = pointer_table(&omitted_ids);
     let omitted_reason_pointers = pointer_table(&omitted_reasons);
     Ok(DcDataInner {
-        from_index,
-        to_index,
-        susceptance,
-        shift_injection,
+        from_index: data
+            .from_index
+            .iter()
+            .map(|&index| i64::try_from(index).expect("bus count fits i64"))
+            .collect(),
+        to_index: data
+            .to_index
+            .iter()
+            .map(|&index| i64::try_from(index).expect("bus count fits i64"))
+            .collect(),
+        susceptance: data.susceptance,
+        shift_injection: data.shift_injection,
         row_ids,
         row_id_pointers,
         bus_ids,
@@ -829,7 +760,7 @@ fn build_dc_data(
         omitted_id_pointers,
         omitted_reasons,
         omitted_reason_pointers,
-        formula: lossy_cstring(formula_name(convention)),
+        formula: lossy_cstring(data.formula),
     })
 }
 

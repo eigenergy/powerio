@@ -422,6 +422,17 @@ class BalancedNetwork:
         """MATPOWER FDPF Bp matrix. ``scheme`` is ``"bx"`` or ``"xb"``."""
         return _to_csr(self._inner.bprime(scheme))
 
+    def dc_data(self, formula: str = "series_susceptance"):
+        """DC branch data under one named susceptance formula.
+
+        Incidence row endpoints, susceptance, the phase shift injection,
+        stable element mappings for included rows and omitted branches, and
+        the selected formula. Key spellings match the C ``pio_dc_data_*``
+        accessors, so every language reads the same names in the same
+        element order.
+        """
+        return self._inner.dc_data(formula)
+
     def bdoubleprime(self, scheme: str = "bx"):
         """MATPOWER FDPF Bpp matrix. ``scheme`` is ``"bx"`` or ``"xb"``."""
         return _to_csr(self._inner.bdoubleprime(scheme))

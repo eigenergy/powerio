@@ -1250,6 +1250,37 @@ impl PyBalancedNetwork {
         coo_triplets(py, &m)
     }
 
+    /// The DC branch data under one named susceptance formula: incidence
+    /// row endpoints, susceptance, phase shift injection, stable element
+    /// mappings for every included row and omitted branch, and the selected
+    /// formula. Key spellings match the C `pio_dc_data_*` accessors and the
+    /// Rust `DcNetworkData` fields, so every language reads the same names
+    /// in the same element order.
+    #[pyo3(signature = (formula="series_susceptance"))]
+    fn dc_data<'py>(&self, py: Python<'py>, formula: &str) -> PyResult<Bound<'py, PyDict>> {
+        let Some(convention) = powerio::DcConvention::from_formula_name(formula) else {
+            return Err(PyValueError::new_err(format!(
+                "unknown branch susceptance formula {formula:?}; expected \
+                 series_susceptance, tap_adjusted_reactance, or reactance_only"
+            )));
+        };
+        let view = IndexedNetwork::with_core(self.inner(), &self.core);
+        let data = powerio::dc_network_data(&view, convention);
+        let out = PyDict::new(py);
+        out.set_item("from_indices", data.from_index)?;
+        out.set_item("to_indices", data.to_index)?;
+        out.set_item("susceptance", data.susceptance)?;
+        out.set_item("shift_injection", data.shift_injection)?;
+        out.set_item("row_ids", data.row_ids)?;
+        out.set_item("bus_ids", data.bus_ids)?;
+        let (omitted_ids, omitted_reasons): (Vec<String>, Vec<String>) =
+            data.omitted.into_iter().unzip();
+        out.set_item("omitted_ids", omitted_ids)?;
+        out.set_item("omitted_reasons", omitted_reasons)?;
+        out.set_item("formula", data.formula)?;
+        Ok(out)
+    }
+
     /// MATPOWER FDPF Bpp matrix.
     #[pyo3(signature = (scheme=None))]
     fn bdoubleprime<'py>(

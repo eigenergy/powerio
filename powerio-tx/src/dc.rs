@@ -112,6 +112,66 @@ impl DcConvention {
 mod tests {
     use super::*;
 
+    fn three_bus_network() -> crate::BalancedNetwork {
+        use crate::{Branch, Bus, BusId, BusType};
+        let mut shifted = Branch::new(BusId(2), BusId(3), 0.0, 0.2);
+        shifted.shift = 30.0;
+        let mut out = Branch::new(BusId(1), BusId(3), 0.01, 0.1);
+        out.in_service = false;
+        crate::BalancedNetwork::in_memory(
+            "dc-data",
+            100.0,
+            vec![
+                Bus::new(BusId(1), BusType::Ref, 230.0),
+                Bus::new(BusId(2), BusType::Pq, 230.0),
+                Bus::new(BusId(3), BusType::Pq, 230.0),
+            ],
+            vec![Branch::new(BusId(1), BusId(2), 0.0, 0.1), shifted, out],
+        )
+    }
+
+    /// The shared assembly: PowerModels orientation, stable identity for
+    /// every included and omitted row, and the shift injection
+    /// `p_shift = A' (b .* shift)` with the shift read in radians.
+    #[test]
+    fn dc_network_data_maps_rows_and_omissions() {
+        let network = three_bus_network();
+        let view = crate::IndexedNetwork::new(&network);
+        let data = dc_network_data(&view, DcConvention::SeriesImpedance);
+        assert_eq!(data.formula, "series_susceptance");
+        assert_eq!(data.from_index, vec![0, 1]);
+        assert_eq!(data.to_index, vec![1, 2]);
+        assert_eq!(data.row_ids, vec!["branches:0", "branches:1"]);
+        assert_eq!(data.bus_ids, vec!["1", "2", "3"]);
+        assert_eq!(data.omitted.len(), 1);
+        assert_eq!(data.omitted[0].0, "branches:2");
+        assert!(data.omitted[0].1.contains("out of service"));
+
+        let b = data.susceptance[1];
+        assert!((b - 5.0).abs() < 1e-12);
+        let shift = 30.0_f64.to_radians();
+        assert!((data.shift_injection[1] - (-b * shift)).abs() < 1e-12);
+        assert!((data.shift_injection[2] - (b * shift)).abs() < 1e-12);
+        assert!(data.shift_injection[0].abs() < 1e-15);
+    }
+
+    /// The formula names are the cross language vocabulary; unknown names
+    /// resolve to nothing rather than a default.
+    #[test]
+    fn formula_names_round_trip() {
+        for convention in [
+            DcConvention::SeriesImpedance,
+            DcConvention::Matpower,
+            DcConvention::ReactanceOnly,
+        ] {
+            assert_eq!(
+                DcConvention::from_formula_name(convention.formula_name()),
+                Some(convention)
+            );
+        }
+        assert_eq!(DcConvention::from_formula_name("mystery"), None);
+    }
+
     /// A resistanceless branch reads the same under both live conventions, so
     /// the new default only moves a case that carries resistance.
     #[test]
@@ -202,4 +262,138 @@ mod tests {
             assert_eq!(series_admittance_parts(r, x), (r / denom, -x / denom));
         }
     }
+}
+
+/// The DC branch data of one balanced network under one susceptance formula,
+/// with the stable element mappings that interpret every row: the one
+/// assembly Rust, C, Python, and Julia all read, so names, element order,
+/// and omission reasons agree across languages by construction.
+///
+/// Rows follow `A[e, from] = +1`, `A[e, to] = -1` (PowerModels orientation);
+/// susceptance carries the PowerModels sign for the selected formula; the
+/// phase shift injection is `p_shift = A' * (b .* shift)` per bus.
+#[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
+pub struct DcNetworkData {
+    /// From bus column per included row.
+    pub from_index: Vec<usize>,
+    /// To bus column per included row.
+    pub to_index: Vec<usize>,
+    /// Branch susceptance per included row.
+    pub susceptance: Vec<f64>,
+    /// Phase shift bus injection, one entry per bus.
+    pub shift_injection: Vec<f64>,
+    /// Stable module element ID per included row.
+    pub row_ids: Vec<String>,
+    /// Stable bus element ID per incidence column.
+    pub bus_ids: Vec<String>,
+    /// Branches the selected formula cannot represent: stable element ID and
+    /// the diagnostic reason. Zero impedance branches land here by default;
+    /// nothing removes them silently.
+    pub omitted: Vec<(String, String)>,
+    /// The selected formula's stable cross language name.
+    pub formula: &'static str,
+}
+
+impl DcConvention {
+    /// The formula's stable cross language name.
+    #[must_use]
+    pub fn formula_name(self) -> &'static str {
+        match self {
+            Self::SeriesImpedance => "series_susceptance",
+            Self::Matpower => "tap_adjusted_reactance",
+            Self::ReactanceOnly => "reactance_only",
+        }
+    }
+
+    /// The convention for one stable formula name, `None` for an unknown
+    /// name. Accepts the storage aliases (`series`, `matpower`).
+    #[must_use]
+    pub fn from_formula_name(name: &str) -> Option<Self> {
+        match name {
+            "series_susceptance" | "series" => Some(Self::SeriesImpedance),
+            "tap_adjusted_reactance" | "matpower" => Some(Self::Matpower),
+            "reactance_only" => Some(Self::ReactanceOnly),
+            _ => None,
+        }
+    }
+}
+
+/// Assemble [`DcNetworkData`]: in-service branches in table order, self
+/// loops and formula degenerate branches reported as omitted rows by stable
+/// ID, never dropped silently and never replaced with an epsilon impedance.
+#[must_use]
+pub fn dc_network_data(
+    view: &crate::IndexedNetwork<'_>,
+    convention: DcConvention,
+) -> DcNetworkData {
+    let network = view.network();
+    let n = view.n();
+    let mut data = DcNetworkData {
+        from_index: Vec::new(),
+        to_index: Vec::new(),
+        susceptance: Vec::new(),
+        shift_injection: vec![0.0; n],
+        row_ids: Vec::new(),
+        bus_ids: network
+            .buses()
+            .iter()
+            .map(|bus| bus.id.0.to_string())
+            .collect(),
+        omitted: Vec::new(),
+        formula: convention.formula_name(),
+    };
+    for (idx, branch) in network.branches().iter().enumerate() {
+        let id = branch
+            .uid
+            .clone()
+            .unwrap_or_else(|| format!("branches:{idx}"));
+        if !branch.in_service {
+            data.omitted.push((id, "out of service".to_owned()));
+            continue;
+        }
+        let (Some(i), Some(j)) = (view.bus_index(branch.from), view.bus_index(branch.to)) else {
+            data.omitted
+                .push((id, "references an undeclared bus".to_owned()));
+            continue;
+        };
+        if i == j {
+            data.omitted.push((id, "self loop".to_owned()));
+            continue;
+        }
+        if branch.x.abs() < MIN_DIVISIBLE_MAGNITUDE {
+            data.omitted.push((
+                id,
+                "zero impedance: the selected formula has no finite susceptance".to_owned(),
+            ));
+            continue;
+        }
+        let tap = match branch.divisible_tap(idx) {
+            Ok(tap) => tap,
+            Err(error) => {
+                data.omitted.push((id, error.to_string()));
+                continue;
+            }
+        };
+        let b = convention.branch_susceptance(branch.r, branch.x, tap);
+        if !b.is_finite() {
+            data.omitted
+                .push((id, "susceptance is not finite".to_owned()));
+            continue;
+        }
+        let shift = if convention.includes_phase_shifts() {
+            view.angle_radians(branch.shift)
+        } else {
+            0.0
+        };
+        if shift != 0.0 {
+            data.shift_injection[i] -= b * shift;
+            data.shift_injection[j] += b * shift;
+        }
+        data.from_index.push(i);
+        data.to_index.push(j);
+        data.susceptance.push(b);
+        data.row_ids.push(id);
+    }
+    data
 }
