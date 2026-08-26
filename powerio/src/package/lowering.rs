@@ -333,12 +333,14 @@ impl<'a> LoweringState<'a> {
             ));
         }
         for finding in network.validate_values() {
+            let details = finding.details();
             self.record.diagnostics.push(
                 StructuredDiagnostic::of(
                     &codes::TRANSFORM_MULTI_TO_BALANCED_BALANCED_VALUE_DOMAIN,
                     format!(
                         "{} field `{}` is outside its value domain after lowering",
-                        finding.element, finding.field
+                        details["element"].as_str().unwrap_or_default(),
+                        details["field"].as_str().unwrap_or_default()
                     ),
                 )
                 .with_suggested_action(

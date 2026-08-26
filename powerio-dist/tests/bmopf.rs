@@ -559,9 +559,21 @@ fn ieee13_conversion_warnings_name_every_loss() {
     assert_eq!(diag.stage(), Some(DiagnosticStage::Emit));
     assert_eq!(diag.details()["class"], serde_json::json!("regcontrol"));
     // No silent extras: every message leads with a `class name:` element
-    // identifier ("load 671: ...", "voltage source source: ..."). The line the
-    // text channel carries leads with the code, so the check reads the record.
+    // identifier ("load 671: ...", "voltage source source: ..."), or is an
+    // aggregated per-field record naming its elements in details (#377). The
+    // line the text channel carries leads with the code, so the check reads
+    // the record.
     for d in &out.diagnostics {
+        if let Some(elements) = d.details().get("elements") {
+            let elements = elements.as_array().expect("elements is a list");
+            assert!(
+                !elements.is_empty()
+                    && elements
+                        .iter()
+                        .all(|e| e.as_str().is_some_and(|e| e.contains(' '))),
+            );
+            continue;
+        }
         let Some((head, _)) = d.message().split_once(": ") else {
             panic!("warning has no `class name:` prefix: {}", d.message());
         };
@@ -1004,19 +1016,35 @@ fn opendss_split_voltage_sources_merge_in_bmopf() {
         "{:?}",
         out.warnings
     );
-    assert!(
-        out.warnings
+    // The per-field aggregation (#377) carries the elements in details.
+    let by_field = |field: &str| {
+        out.diagnostics
             .iter()
-            .any(|w| w.contains("voltage source phb: `angle`")),
+            .find(|d| {
+                d.code() == "EMIT.BMOPF.FIELD_DROPPED"
+                    && d.details().get("field") == Some(&serde_json::json!(field))
+            })
+            .unwrap_or_else(|| panic!("missing aggregated drop for {field}: {out:?}"))
+    };
+    let angle = by_field("angle");
+    assert!(
+        angle.details()["elements"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|e| e == "voltage source phb"),
         "{:?}",
-        out.warnings
+        angle.details()
     );
+    let basekv = by_field("basekv");
     assert!(
-        out.warnings
+        basekv.details()["elements"]
+            .as_array()
+            .unwrap()
             .iter()
-            .any(|w| w.contains("voltage source phc: `basekv`")),
+            .any(|e| e == "voltage source phc"),
         "{:?}",
-        out.warnings
+        basekv.details()
     );
     let doc: serde_json::Value = serde_json::from_str(&out.text).unwrap();
     assert!(doc["bus"].get("SourceBus").is_some(), "{}", out.text);

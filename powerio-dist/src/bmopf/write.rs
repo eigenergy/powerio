@@ -167,8 +167,10 @@ pub fn write_bmopf_json_with_options(
             .map(|b| (b.id.to_ascii_lowercase(), b.grounded.clone()))
             .collect(),
         transformer_overflow: Map::new(),
+        dropped_extras: BTreeMap::new(),
     };
     let doc = w.document(net);
+    w.flush_dropped_extras();
     Conversion::new(
         serde_json::to_string_pretty(&doc).expect("maps and finite numbers") + "\n",
         Vec::new(),
@@ -184,6 +186,11 @@ struct Writer {
     /// (taps, neutral impedance, no load admittance), relocated to
     /// `extras.transformer.<subtype>.<name>` instead of dropped.
     transformer_overflow: Map<String, Value>,
+    /// Passthrough extras with no schema slot, keyed by field name with the
+    /// elements that carried them, flushed as one aggregated finding per
+    /// field: on a real feeder one warning per field per element buried
+    /// every finding a consumer would act on (#377).
+    dropped_extras: BTreeMap<String, Vec<String>>,
 }
 
 impl Writer {
@@ -260,12 +267,48 @@ impl Writer {
             if key == "bmopf_subtype" || key == "conn" {
                 continue;
             }
-            self.warn(
-                &C::EMIT_BMOPF_FIELD_DROPPED,
-                format!(
-                    "{what}: `{key}` has no place in the BMOPF schema; dropped from the output"
-                ),
+            self.dropped_extras
+                .entry(key.clone())
+                .or_default()
+                .push(what.to_owned());
+        }
+    }
+
+    /// The elements a details list names before it collapses to a count: the
+    /// record stays attributable without one details value growing with the
+    /// case.
+    const DROPPED_ELEMENT_LIST_CAP: usize = 100;
+
+    /// One aggregated finding per dropped field name, carrying the count and
+    /// the element list in details and, for a single element, the target.
+    fn flush_dropped_extras(&mut self) {
+        for (key, elements) in std::mem::take(&mut self.dropped_extras) {
+            let count = elements.len();
+            let mut details = Map::new();
+            details.insert("field".into(), json!(key));
+            details.insert("count".into(), json!(count));
+            details.insert(
+                "elements".into(),
+                json!(elements[..count.min(Self::DROPPED_ELEMENT_LIST_CAP)]),
             );
+            if count > Self::DROPPED_ELEMENT_LIST_CAP {
+                details.insert("elements_truncated".into(), json!(true));
+            }
+            let message = if count == 1 {
+                format!(
+                    "{}: `{key}` has no place in the BMOPF schema; dropped from the output",
+                    elements[0]
+                )
+            } else {
+                format!("`{key}` has no place in the BMOPF schema; dropped from {count} elements")
+            };
+            let mut diagnostic = Diagnostic::of(&C::EMIT_BMOPF_FIELD_DROPPED, message)
+                .with_details(details)
+                .expect("writer-built details stay within the record bounds");
+            if count == 1 {
+                crate::diagnostics::attach_target(&mut diagnostic, elements[0].clone());
+            }
+            self.warnings.record(diagnostic);
         }
     }
 
@@ -580,13 +623,15 @@ impl Writer {
                 continue;
             };
             for text in unplaced {
-                self.warn(
+                self.diagnostic(
                     &C::EMIT_BMOPF_FIELD_DROPPED,
+                    format!("{} {}", u.class, u.name),
                     format!(
                         "{} {}: the value `{text}` has no field name; dropped from the \
                      output, the named fields beside it are kept",
                         u.class, u.name
                     ),
+                    Map::new(),
                 );
             }
             // An untyped transformer subtype lands in the top-level
@@ -1136,12 +1181,14 @@ impl Writer {
                 // differs from the bounds has nowhere to go.
                 let pinned = lo.as_deref() == Some(nom) && hi.as_deref() == Some(nom);
                 if !nom.is_empty() && !nom.iter().all(|&v| v == 0.0) && !pinned {
-                    self.warn(
+                    self.diagnostic(
                         &C::EMIT_BMOPF_FIELD_DROPPED,
+                        what.clone(),
                         format!(
                             "{what}: explicit {key_lo}/{key_hi} bounds win over the setpoint, \
                          which has no BMOPF field"
                         ),
+                        Map::new(),
                     );
                 }
                 if let Some(v) = lo
@@ -1726,13 +1773,15 @@ impl Writer {
             if w.s_rating > 0.0 && w.s_rating.is_finite() {
                 total += w.r_pct / w.s_rating;
             } else if w.r_pct != 0.0 {
-                self.warn(
+                self.diagnostic(
                     &C::EMIT_BMOPF_FIELD_DROPPED,
+                    format!("transformer {}", t.name),
                     format!(
                         "transformer {}: the `{side}` winding rating is not positive, so its \
                      resistance has no base to refer to; the term is dropped from r_series",
                         t.name
                     ),
+                    Map::new(),
                 );
             }
         }
@@ -1755,14 +1804,16 @@ impl Writer {
                 let value = self.num(pct / 100.0 * zb, key);
                 o.insert(key.into(), value);
             }
-            None => self.warn(
+            None => self.diagnostic(
                 &C::EMIT_BMOPF_FIELD_DROPPED,
+                format!("transformer {}", t.name),
                 format!(
                     "transformer {}: the `{side}` winding rating is not positive, so its \
                  percent impedance has no base to refer to; `{key}` is dropped from \
                  the output",
                     t.name
                 ),
+                Map::new(),
             ),
         }
     }

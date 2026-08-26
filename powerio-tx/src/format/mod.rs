@@ -955,6 +955,75 @@ pub(crate) fn write_conversion(net: &BalancedNetwork, format: TargetFormat) -> R
     Ok(conv)
 }
 
+/// Write a parsed module to `format` through a destination: the one write
+/// operation over file, memory, and (for the directory formats) folder
+/// output. Every text target commits a single artifact — a path destination
+/// names the exact file, a memory destination names the artifact — staged
+/// and renamed into place so a failed write never exposes a partial target.
+/// The result carries the complete artifact inventory and the writer's
+/// findings. PyPSA CSV folders write through [`write_pypsa_csv`].
+///
+/// # Errors
+/// As [`write_as`], plus the destination's own collision and staging
+/// failures.
+pub fn write(
+    module: &PioModule<BalancedNetwork>,
+    format: TargetFormat,
+    destination: powerio_core::Destination,
+) -> std::result::Result<powerio_core::WriteResult, powerio_core::Error> {
+    write_with_options(module, format, &WriteOptions::default(), destination)
+}
+
+/// [`write()`] with write-time cost policies, as [`write_as_with_options`].
+///
+/// # Errors
+/// As [`write()`].
+///
+/// # Panics
+/// Never on external input: the fixed artifact name is valid by
+/// construction.
+pub fn write_with_options(
+    module: &PioModule<BalancedNetwork>,
+    format: TargetFormat,
+    options: &WriteOptions,
+    destination: powerio_core::Destination,
+) -> std::result::Result<powerio_core::WriteResult, powerio_core::Error> {
+    let conv = write_as_with_options(module, format, options)?;
+    let artifact = powerio_core::MemoryArtifact::new(
+        powerio_core::ArtifactPath::new("case").expect("static name is a valid artifact path"),
+        conv.text.into_bytes(),
+    );
+    destination.__commit_artifacts(false, vec![artifact], conv.diagnostics)
+}
+
+/// Write a parsed module as a PyPSA CSV folder through a destination: the
+/// directory form of [`write()`]. Either destination names the output root and
+/// every returned artifact sits below it; the whole inventory commits
+/// atomically.
+///
+/// # Errors
+/// The destination's collision and staging failures.
+///
+/// # Panics
+/// Never on external input: the writer's fixed artifact names are valid by
+/// construction.
+pub fn write_pypsa_csv(
+    module: &PioModule<BalancedNetwork>,
+    destination: powerio_core::Destination,
+) -> std::result::Result<powerio_core::WriteResult, powerio_core::Error> {
+    let (artifacts, diagnostics) = pypsa::pypsa_csv_artifacts(module.value());
+    let artifacts = artifacts
+        .into_iter()
+        .map(|(name, text)| {
+            powerio_core::MemoryArtifact::new(
+                powerio_core::ArtifactPath::new(name).expect("the writer emits fixed valid names"),
+                text.into_bytes(),
+            )
+        })
+        .collect();
+    destination.__commit_artifacts(true, artifacts, diagnostics)
+}
+
 /// Write a parsed module with write-time cost policies. The plain
 /// [`write_as`] behavior is preserved when `options` is default; a non-default
 /// policy edits a copy of the typed value, so its write never echoes source

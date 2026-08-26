@@ -995,33 +995,37 @@ fn sane_validate_balanced(
         .collect();
     let mut value_domain = Vec::new();
     for finding in net.validate_values() {
-        let element_path =
-            balanced_value_finding_path(net, &bus_index, &finding).unwrap_or_else(|| {
+        // The scan's records carry the machine readable pieces in details;
+        // this document layer re-keys them into its 0.9 shape.
+        let details = finding.details();
+        let element = details["element"].as_str().unwrap_or_default().to_owned();
+        let field = details["field"].as_str().unwrap_or_default().to_owned();
+        let old = details["value"].as_f64().unwrap_or(f64::NAN);
+        let new = details["repaired_value"].clone();
+        let element_path = balanced_value_finding_path(net, &bus_index, &element, &field, old)
+            .unwrap_or_else(|| {
                 format!(
                     "/model/balanced_network/{}#{}",
-                    finding.element.replace(' ', "_"),
-                    finding.field
+                    element.replace(' ', "_"),
+                    field
                 )
             });
         let mut d = StructuredDiagnostic::of(
             &powerio_tx::diagnostics::codes::VALIDATE_BALANCED_VALUE_DOMAIN,
             format!(
-                "{} field `{}` is outside its value domain; suggested value is {}",
-                finding.element, finding.field, finding.new
+                "{element} field `{field}` is outside its value domain; suggested value is {new}"
             ),
         )
         .with_element_path(element_path)
         .with_suggested_action("Run the explicit repair pass if these defaults are desired.");
         d.details
-            .insert("element".to_owned(), serde_json::json!(finding.element));
+            .insert("element".to_owned(), serde_json::json!(element));
         d.details
-            .insert("field".to_owned(), serde_json::json!(finding.field));
+            .insert("field".to_owned(), serde_json::json!(field));
+        d.details.insert("old".to_owned(), details["value"].clone());
+        d.details.insert("new".to_owned(), new);
         d.details
-            .insert("old".to_owned(), serde_json::json!(finding.old));
-        d.details
-            .insert("new".to_owned(), serde_json::json!(finding.new));
-        d.details
-            .insert("reason".to_owned(), serde_json::json!(finding.reason));
+            .insert("reason".to_owned(), details["reason"].clone());
         value_domain.push(d);
     }
 
@@ -1112,22 +1116,19 @@ fn attach_source_refs(diagnostics: &mut [StructuredDiagnostic], source_maps: &[S
 fn balanced_value_finding_path(
     net: &BalancedNetwork,
     bus_index: &HashMap<usize, usize>,
-    finding: &crate::ValueRepair,
+    element: &str,
+    field: &str,
+    old: f64,
 ) -> Option<String> {
-    if let Some(id) = finding
-        .element
+    if let Some(id) = element
         .strip_prefix("bus ")
         .and_then(|s| s.parse::<usize>().ok())
     {
         let idx = *bus_index.get(&id)?;
-        return Some(format!(
-            "/model/balanced_network/buses/{idx}/{}",
-            finding.field
-        ));
+        return Some(format!("/model/balanced_network/buses/{idx}/{field}"));
     }
 
-    if let Some(id) = finding
-        .element
+    if let Some(id) = element
         .strip_prefix("generator at bus ")
         .and_then(|s| s.parse::<usize>().ok())
     {
@@ -1140,18 +1141,14 @@ fn balanced_value_finding_path(
             .enumerate()
             .filter(|(_, g)| {
                 g.bus.0 == id
-                    && generator_field(g, finding.field)
-                        .is_some_and(|v| v.to_bits() == finding.old.to_bits())
+                    && generator_field(g, field).is_some_and(|v| v.to_bits() == old.to_bits())
             })
             .map(|(idx, _)| idx);
         let idx = matches.next()?;
         if matches.next().is_some() {
             return None;
         }
-        return Some(format!(
-            "/model/balanced_network/generators/{idx}/{}",
-            finding.field
-        ));
+        return Some(format!("/model/balanced_network/generators/{idx}/{field}"));
     }
 
     None
@@ -2229,7 +2226,9 @@ mod tests {
             .unwrap_err()
             .to_string();
         assert!(err.contains("before powerio 0.9.0"), "{err}");
-        assert!(err.contains("regenerate"), "{err}");
+        // Diagnosis only: the remedy is the consumer's to state (#375).
+        assert!(!err.contains("regenerate"), "{err}");
+        assert!(err.contains("this build reads"), "{err}");
     }
 
     #[test]
@@ -2242,8 +2241,9 @@ mod tests {
             .unwrap_err()
             .to_string();
         assert!(err.contains("9.9.9"), "{err}");
-        assert!(err.contains(crate::VERSION), "{err}");
-        assert!(err.contains("regenerate"), "{err}");
+        assert!(err.contains(&crate::version::lineage_label()), "{err}");
+        // Diagnosis only: the remedy is the consumer's to state (#375).
+        assert!(!err.contains("regenerate"), "{err}");
     }
 
     #[test]

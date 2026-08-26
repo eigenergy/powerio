@@ -298,7 +298,9 @@ fn powerio_version_is_present_and_required() {
     let err = NetworkPackage::from_json(&serde_json::to_string(&v).unwrap()).unwrap_err();
     let msg = err.to_string();
     assert!(msg.contains("before powerio 0.9.0"), "got: {msg}");
-    assert!(msg.contains("regenerate"), "got: {msg}");
+    // Diagnosis only: the remedy is the consumer's to state (#375).
+    assert!(!msg.contains("regenerate"), "got: {msg}");
+    assert!(msg.contains("this build reads"), "got: {msg}");
 }
 
 #[test]
@@ -318,21 +320,22 @@ fn from_json_bytes_tolerates_a_byte_order_mark_and_refuses_non_utf8() {
 }
 
 #[test]
-fn version_gate_rejects_other_lineages_and_says_regenerate() {
+fn version_gate_rejects_other_lineages_with_the_diagnosis() {
     let pkg = balanced_package();
     let mut v = serde_json::to_value(&pkg).unwrap();
     let (major, minor) = lineage(powerio::VERSION);
     assert_eq!(major, 0, "update this test at 1.0.0");
 
-    // A file from the previous minor is rejected with an error naming this
-    // build's lineage and the remedy. While the major is 0 a minor bump is
-    // incompatible, which is what cargo and Pkg already mean by 0.x.
+    // A file from the previous minor is rejected with an error naming the
+    // writer version and this build's lineage; the remedy is the consumer's
+    // to state (#375). While the major is 0 a minor bump is incompatible,
+    // which is what cargo and Pkg already mean by 0.x.
     v["powerio_version"] = serde_json::json!(format!("0.{}.1", minor - 1));
     let err = NetworkPackage::from_json(&serde_json::to_string(&v).unwrap()).unwrap_err();
     let msg = err.to_string();
     assert!(msg.contains(&format!("0.{}.1", minor - 1)), "got: {msg}");
     assert!(msg.contains(&format!("0.{minor}.x")), "got: {msg}");
-    assert!(msg.contains("regenerate"), "got: {msg}");
+    assert!(!msg.contains("regenerate"), "got: {msg}");
 
     // Same lineage, additive patch: loads.
     v["powerio_version"] = serde_json::json!(format!("0.{minor}.99"));
@@ -1179,7 +1182,7 @@ fn an_incompatible_major_is_rejected() {
     let err = NetworkPackage::from_json(&json).expect_err("major version mismatch must fail");
     let msg = err.to_string();
     assert!(msg.contains("`powerio_version` 1.0.0"), "{msg}");
-    assert!(msg.contains("regenerate"), "{msg}");
+    assert!(msg.contains("this build reads"), "{msg}");
 }
 
 #[test]

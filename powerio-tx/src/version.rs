@@ -48,7 +48,11 @@ fn reads(build: (u64, u64), document: (u64, u64)) -> bool {
     build_major == 1 && document == FROZEN_LINEAGE
 }
 
-/// The message for a document this build does not read.
+/// The diagnosis for a document this build does not read: the release that
+/// wrote it (or that it predates the version field) and the lineage this
+/// build reads. The remedy is the consumer's to state — a CLI user
+/// regenerates with powerio, a browser user re-saves from the source case —
+/// so no instruction rides in the message (#375).
 ///
 /// `document` names the artifact, spelled as a caller would recognize it
 /// (`.pio.json`, `the DC OPF bundle manifest`). An empty `version` is the
@@ -60,10 +64,7 @@ pub fn reject(document: &str, version: &str) -> String {
     } else {
         format!("{document} states `{VERSION_KEY}` {version}")
     };
-    format!(
-        "{states}; this build reads {}; regenerate it with powerio {VERSION}",
-        lineage_label()
-    )
+    format!("{states}; this build reads {}", lineage_label())
 }
 
 /// The lineage this build reads, spelled for a message: `0.9.x` while the major
@@ -220,10 +221,13 @@ mod tests {
     }
 
     #[test]
-    fn reject_names_the_document_and_both_versions() {
+    fn reject_states_the_diagnosis_and_no_remedy() {
         let message = reject(".pio.json", "0.2.1");
         assert!(message.contains(".pio.json"), "{message}");
         assert!(message.contains("0.2.1"), "{message}");
-        assert!(message.contains(VERSION), "{message}");
+        assert!(message.contains(&lineage_label()), "{message}");
+        // The remedy is the consumer's to state: a CLI user regenerates, a
+        // browser user re-saves from the source case (#375).
+        assert!(!message.contains("regenerate"), "{message}");
     }
 }

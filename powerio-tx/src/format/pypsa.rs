@@ -495,7 +495,37 @@ pub fn write_pypsa_csv_folder(
 ) -> Result<PypsaCsvOutputs> {
     let out_dir = out_dir.as_ref();
     std::fs::create_dir_all(out_dir)?;
+    let (artifacts, diagnostics) = pypsa_csv_artifacts(net);
     let mut files = Vec::new();
+    for (name, text) in artifacts {
+        let path = out_dir.join(name);
+        std::fs::write(&path, text)?;
+        files.push(path);
+    }
+    Ok(PypsaCsvOutputs {
+        dir: out_dir.to_path_buf(),
+        files,
+        diagnostics,
+    })
+}
+
+/// The complete PyPSA CSV folder as an in-memory artifact inventory:
+/// `(file name, content)` pairs in emission order, plus the writer's
+/// findings. [`write_pypsa_csv_folder`] streams these to disk; the
+/// `Destination` write commits them as one atomic inventory.
+// One emission body shared by the streaming and inventory writers; the
+// length is the format's table count, not branching depth.
+#[allow(clippy::too_many_lines)]
+pub(crate) fn pypsa_csv_artifacts(
+    net: &BalancedNetwork,
+) -> (
+    Vec<(&'static str, String)>,
+    Vec<crate::diagnostics::Diagnostic>,
+) {
+    let mut files: Vec<(&'static str, String)> = Vec::new();
+    let mut write_file = |name: &'static str, text: String| {
+        files.push((name, text));
+    };
     let mut warnings = Diagnostics::new();
     // Element tables must reference buses by the same key buses.csv is indexed
     // on, and PyPSA requires those keys to be unique for its joins. A bus is
@@ -675,49 +705,28 @@ pub fn write_pypsa_csv_folder(
         ));
     }
 
-    write_file(out_dir, "network.csv", &network_csv(net), &mut files)?;
-    write_file(out_dir, "snapshots.csv", ",snapshot\n0,now\n", &mut files)?;
-    write_file(out_dir, "buses.csv", &buses_csv(net, &key_of), &mut files)?;
+    write_file("network.csv", network_csv(net));
+    write_file("snapshots.csv", ",snapshot\n0,now\n".to_owned());
+    write_file("buses.csv", buses_csv(net, &key_of));
     write_file(
-        out_dir,
         "generators.csv",
-        &generators_csv(net, &key_of, &mut warnings),
-        &mut files,
-    )?;
+        generators_csv(net, &key_of, &mut warnings),
+    );
     // The v_nom per bus, shared by the writers that rebase impedances.
     let kv_of: HashMap<BusId, f64> = net.buses.iter().map(|b| (b.id, b.base_kv)).collect();
-    write_file(out_dir, "loads.csv", &loads_csv(net, &key_of), &mut files)?;
-    write_file(
-        out_dir,
-        "lines.csv",
-        &lines_csv(net, &key_of, &kv_of),
-        &mut files,
-    )?;
+    write_file("loads.csv", loads_csv(net, &key_of));
+    write_file("lines.csv", lines_csv(net, &key_of, &kv_of));
     let transformers = transformers_csv(net, &key_of);
     if transformers.lines().count() > 1 {
-        write_file(out_dir, "transformers.csv", &transformers, &mut files)?;
+        write_file("transformers.csv", transformers);
     }
     if !net.shunts.is_empty() {
-        write_file(
-            out_dir,
-            "shunt_impedances.csv",
-            &shunts_csv(net, &key_of, &kv_of),
-            &mut files,
-        )?;
+        write_file("shunt_impedances.csv", shunts_csv(net, &key_of, &kv_of));
     }
     if !net.storage.is_empty() {
-        write_file(
-            out_dir,
-            "storage_units.csv",
-            &storage_csv(net, &key_of),
-            &mut files,
-        )?;
+        write_file("storage_units.csv", storage_csv(net, &key_of));
     }
-    Ok(PypsaCsvOutputs {
-        dir: out_dir.to_path_buf(),
-        files,
-        diagnostics: warnings.into_records(),
-    })
+    (files, warnings.into_records())
 }
 
 fn network_csv(net: &BalancedNetwork) -> String {
@@ -1036,13 +1045,6 @@ fn storage_csv(net: &BalancedNetwork, key_of: &HashMap<BusId, String>) -> String
         );
     }
     s
-}
-
-fn write_file(dir: &Path, name: &str, text: &str, files: &mut Vec<PathBuf>) -> Result<()> {
-    let path = dir.join(name);
-    std::fs::write(&path, text)?;
-    files.push(path);
-    Ok(())
 }
 
 #[derive(Debug)]

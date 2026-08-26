@@ -109,6 +109,16 @@ impl<T> PioModule<T> {
         self
     }
 
+    /// Drop the retained source owner: the operation that calls this changed
+    /// the value, so a same format write must serialize the value rather than
+    /// echo bytes the value no longer matches. Descriptors, diagnostics, and
+    /// history stay.
+    #[must_use]
+    pub fn sever_source(mut self) -> Self {
+        self.records.retained_source = None;
+        self
+    }
+
     /// Append a finding, applying the same duplicate identity and span
     /// reference checks as [`PioModule::add_diagnostic`]. There is no unchecked
     /// path onto a module's records.

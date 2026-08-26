@@ -538,6 +538,56 @@ pub fn write_network(net: &MulticonductorNetwork, format: DistTargetFormat) -> C
     conv
 }
 
+/// Write a parsed module to `format` through a destination: the one write
+/// operation over file and memory output, staged and renamed into place so a
+/// failed write never exposes a partial target, returning the complete
+/// artifact inventory and the writer's findings.
+///
+/// The JSON targets commit a single artifact — a path destination names the
+/// exact file, a memory destination names the artifact. The dss target is a
+/// directory inventory: the destination names the output root, the case text
+/// commits as `case.dss`, and every companion file the writer produced
+/// (OpenDSS `Buscoords` CSV) commits beside it, so nothing the case text
+/// refers to is missing from the output.
+///
+/// # Errors
+/// The destination's own collision and staging failures.
+///
+/// # Panics
+/// Never on external input: the fixed artifact names are valid by
+/// construction.
+pub fn write(
+    module: &powerio_core::PioModule<MulticonductorNetwork>,
+    format: DistTargetFormat,
+    destination: powerio_core::Destination,
+) -> std::result::Result<powerio_core::WriteResult, powerio_core::Error> {
+    let conv = write_as(module, format);
+    match format {
+        DistTargetFormat::Dss => {
+            let mut artifacts = vec![powerio_core::MemoryArtifact::new(
+                powerio_core::ArtifactPath::new("case.dss")
+                    .expect("static name is a valid artifact path"),
+                conv.text.into_bytes(),
+            )];
+            for sidecar in conv.sidecars {
+                artifacts.push(powerio_core::MemoryArtifact::new(
+                    powerio_core::ArtifactPath::new(sidecar.path)?,
+                    sidecar.text.into_bytes(),
+                ));
+            }
+            destination.__commit_artifacts(true, artifacts, conv.diagnostics)
+        }
+        DistTargetFormat::BmopfJson | DistTargetFormat::PmdJson => {
+            let artifact = powerio_core::MemoryArtifact::new(
+                powerio_core::ArtifactPath::new("case")
+                    .expect("static name is a valid artifact path"),
+                conv.text.into_bytes(),
+            );
+            destination.__commit_artifacts(false, vec![artifact], conv.diagnostics)
+        }
+    }
+}
+
 /// Parse `source` and write it as `to` in one call. The findings carry both
 /// the reader's and the writer's, in that order.
 ///

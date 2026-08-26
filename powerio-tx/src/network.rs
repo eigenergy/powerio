@@ -1677,28 +1677,101 @@ pub(crate) const GEN_EXTRA_KEYS: [&str; 11] = [
     "ramp_q", "apf",
 ];
 
-/// A value-domain finding from [`BalancedNetwork::validate_values`]: an element field
-/// whose value falls outside its physical range, paired with the value
-/// [`repair`](BalancedNetwork::repair) would set in its place.
-///
-/// TRANSITIONAL. This is not a settled 1.0 record family. The 1.0 model records
-/// a repair as a structured `HistoryEntry` on the module plus a coded
-/// `Diagnostic`, which is why the name `Diagnostic` had to be freed here. This
-/// type survives only until the network migration moves retained source and the
-/// repair path onto the module, and it goes away in the same branch. Do not
-/// build a new API on it.
-///
-/// `#[non_exhaustive]`: a returns-only record, so downstream code reads it but
-/// never constructs it, leaving room to add locator fields without a break.
+/// One value-domain scan finding, internal to the diagnostic and repair
+/// passes: an element field whose value falls outside its physical range,
+/// paired with the value the repair sets in its place. The public shapes are
+/// the coded [`Diagnostic`](crate::Diagnostic) records
+/// [`BalancedNetwork::validate_values`] returns and the history entry
+/// [`repair_values`] appends.
 #[derive(Debug, Clone, PartialEq)]
-#[non_exhaustive]
-pub struct ValueRepair {
+pub(crate) struct ValueFinding {
     /// Human-readable element locator, e.g. `"bus 3"` or `"generator at bus 5"`.
     pub element: String,
     pub field: &'static str,
     pub old: f64,
     pub new: f64,
     pub reason: &'static str,
+}
+
+impl ValueFinding {
+    /// The finding as the coded record: target names the element, details
+    /// carry the machine readable pieces, the message stays prose.
+    pub(crate) fn into_diagnostic(self) -> crate::Diagnostic {
+        let mut details = serde_json::Map::new();
+        details.insert("element".to_owned(), serde_json::json!(self.element));
+        details.insert("field".to_owned(), serde_json::json!(self.field));
+        details.insert("value".to_owned(), serde_json::json!(self.old));
+        details.insert("repaired_value".to_owned(), serde_json::json!(self.new));
+        details.insert("reason".to_owned(), serde_json::json!(self.reason));
+        crate::Diagnostic::of(
+            &crate::diagnostics::codes::VALIDATE_BALANCED_VALUE_DOMAIN,
+            format!(
+                "{}: `{}` is {} ({}); the repair sets {}",
+                self.element, self.field, self.old, self.reason, self.new
+            ),
+        )
+        .with_target(format!("{}#{}", self.element.replace(' ', "_"), self.field))
+        .expect("scan-built targets are nonempty and bounded")
+        .with_details(details)
+        .expect("scan-built details stay within the record bounds")
+    }
+}
+
+/// Clamp every out-of-domain value of a parsed module to its repaired value
+/// and record the pass: one `Repair` history entry naming each change in its
+/// parameters, and one `VALIDATE.BALANCED.VALUE_DOMAIN` finding per repaired
+/// field. The retained source is severed — the value no longer matches the
+/// bytes, so a same format write serializes the repaired network rather than
+/// echoing the input. A module already in domain comes back unchanged.
+///
+/// # Errors
+/// Never on scan output: the record constructors refuse only unbounded
+/// caller data, and the scan is bounded by the model.
+pub fn repair_values(
+    module: powerio_core::PioModule<BalancedNetwork>,
+) -> std::result::Result<powerio_core::PioModule<BalancedNetwork>, powerio_core::Error> {
+    let repair_ordinal = module
+        .history()
+        .iter()
+        .filter(|entry| entry.kind() == powerio_core::HistoryKind::Repair)
+        .count();
+    let mut network_findings = Vec::new();
+    let mut module = module.map_value(|mut network| {
+        network_findings = network.repair_in_place();
+        network
+    });
+    if network_findings.is_empty() {
+        return Ok(module);
+    }
+    let mut parameters = std::collections::BTreeMap::new();
+    parameters.insert(
+        "repairs".to_owned(),
+        serde_json::json!(
+            network_findings
+                .iter()
+                .map(|finding| {
+                    serde_json::json!({
+                        "element": finding.element,
+                        "field": finding.field,
+                        "value": finding.old,
+                        "repaired_value": finding.new,
+                    })
+                })
+                .collect::<Vec<_>>()
+        ),
+    );
+    let entry = powerio_core::HistoryEntry::new(
+        powerio_core::HistoryId::new(format!("repair{repair_ordinal}"))?,
+        powerio_core::HistoryKind::Repair,
+        "value_domain_repair",
+    )?
+    .with_parameters(parameters)?;
+    module.add_history_entry(entry)?;
+    for finding in network_findings {
+        module.add_diagnostic(finding.into_diagnostic())?;
+    }
+    module = module.sever_source();
+    Ok(module)
 }
 
 /// Voltage magnitude (p.u.) repair: non-positive or above 2 (or non-finite) → 1.0.
@@ -1931,22 +2004,29 @@ impl BalancedNetwork {
     }
 
     /// Report element fields whose values fall outside their physical domain,
-    /// without changing anything. Each [`ValueRepair`] names the element, the
-    /// field, the current value, the value [`repair`](BalancedNetwork::repair) would set,
-    /// and why.
+    /// without changing anything, as coded `VALIDATE.BALANCED.VALUE_DOMAIN`
+    /// findings. Each record targets the element and carries the field, the
+    /// current value, the value a repair would set, and why in details.
     ///
     /// This generalizes the per-reader value clamps (a bus voltage magnitude
     /// outside `[0, 2]`, an angle past `±2000°`, a zero generator MVA base or
     /// voltage setpoint) into one pass any consumer can run, separate from the
-    /// structural [`validate`](BalancedNetwork::validate) (which only checks ids and
-    /// references). It is non-mutating; call [`repair`](BalancedNetwork::repair) to apply
-    /// the fixes.
+    /// structural [`validate`](BalancedNetwork::validate) (which only checks
+    /// ids and references). It is non-mutating; [`repair_values`] applies the
+    /// fixes to a parsed module and records them.
     #[must_use]
-    pub fn validate_values(&self) -> Vec<ValueRepair> {
+    pub fn validate_values(&self) -> Vec<crate::Diagnostic> {
+        self.value_findings()
+            .into_iter()
+            .map(ValueFinding::into_diagnostic)
+            .collect()
+    }
+
+    pub(crate) fn value_findings(&self) -> Vec<ValueFinding> {
         let mut out = Vec::new();
         for b in &self.buses {
             if let Some(new) = repair_vm(b.vm) {
-                out.push(ValueRepair {
+                out.push(ValueFinding {
                     element: format!("bus {}", b.id),
                     field: "vm",
                     old: b.vm,
@@ -1955,7 +2035,7 @@ impl BalancedNetwork {
                 });
             }
             if let Some(new) = repair_va(b.va) {
-                out.push(ValueRepair {
+                out.push(ValueFinding {
                     element: format!("bus {}", b.id),
                     field: "va",
                     old: b.va,
@@ -1966,7 +2046,7 @@ impl BalancedNetwork {
         }
         for g in &self.generators {
             if let Some(new) = repair_mbase(g.mbase, self.base_mva) {
-                out.push(ValueRepair {
+                out.push(ValueFinding {
                     element: format!("generator at bus {}", g.bus),
                     field: "mbase",
                     old: g.mbase,
@@ -1975,7 +2055,7 @@ impl BalancedNetwork {
                 });
             }
             if let Some(new) = repair_vg(g.vg) {
-                out.push(ValueRepair {
+                out.push(ValueFinding {
                     element: format!("generator at bus {}", g.bus),
                     field: "vg",
                     old: g.vg,
@@ -1990,9 +2070,11 @@ impl BalancedNetwork {
     /// Clamp every out-of-domain value to its repaired value (the same rules
     /// [`validate_values`](BalancedNetwork::validate_values) reports), returning the list
     /// of changes made. A second call returns an empty list (the values are now
-    /// in domain).
-    pub fn repair(&mut self) -> Vec<ValueRepair> {
-        let findings = self.validate_values();
+    /// in domain). Crate private: the recorded public path is
+    /// [`repair_values`], which appends the history entry and severs the
+    /// retained source echo the mutation invalidates.
+    pub(crate) fn repair_in_place(&mut self) -> Vec<ValueFinding> {
+        let findings = self.value_findings();
         let sbase = self.base_mva;
         for b in &mut self.buses {
             if let Some(new) = repair_vm(b.vm) {
@@ -2964,23 +3046,47 @@ mod tests {
         });
 
         let diags = net.validate_values();
-        let fields: std::collections::BTreeSet<_> = diags.iter().map(|d| d.field).collect();
+        let fields: std::collections::BTreeSet<_> = diags
+            .iter()
+            .map(|d| d.details()["field"].as_str().unwrap().to_owned())
+            .collect();
         assert_eq!(
             fields,
-            ["mbase", "va", "vg", "vm"].into_iter().collect(),
+            ["mbase", "va", "vg", "vm"]
+                .into_iter()
+                .map(str::to_owned)
+                .collect(),
             "all four out-of-domain fields reported"
+        );
+        assert!(
+            diags
+                .iter()
+                .all(|d| d.code() == "VALIDATE.BALANCED.VALUE_DOMAIN" && d.target().is_some())
         );
         // Non-mutating: the network still holds the bad values.
         close(net.buses[0].vm, 0.0);
 
-        let applied = net.repair();
-        assert_eq!(applied.len(), diags.len());
+        // The recorded path: repair the module, read the history entry.
+        let module = powerio_core::PioModule::new(net);
+        let module = repair_values(module).unwrap();
+        let net = module.value();
         close(net.buses[0].vm, 1.0);
         close(net.buses[1].va, 0.0);
         close(net.generators[0].mbase, 100.0); // → base_mva
         close(net.generators[0].vg, 1.0);
-        // Idempotent: nothing left to repair.
+        // Idempotent: nothing left to repair, and a second pass appends
+        // nothing.
         assert!(net.validate_values().is_empty());
+        let entries = module.history();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].kind(), powerio_core::HistoryKind::Repair);
+        assert_eq!(
+            entries[0].parameters()["repairs"].as_array().unwrap().len(),
+            diags.len()
+        );
+        assert_eq!(module.diagnostics().len(), diags.len());
+        let module = repair_values(module).unwrap();
+        assert_eq!(module.history().len(), 1);
     }
 
     #[test]

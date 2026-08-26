@@ -68,10 +68,11 @@ pub use format::{
     Conversion, DisplayData, DisplayFormat, PwdDisplay, PwdSubstation, PypsaCsvOutputs,
     SOURCE_FORMAT_NAMES, TargetFormat, WriteOptions, convert_file, convert_file_with_options,
     convert_str, convert_str_with_options, display_format_from_name, format_id_for, parse,
-    parse_display_bytes, parse_display_file, parse_goc3_json, target_format_from_name, write_as,
-    write_as_with_options, write_dir, write_dir_with_options, write_egret_json, write_matpower,
-    write_network, write_pandapower_json, write_powermodels_json, write_powerworld, write_pslf,
-    write_psse, write_psse_rev, write_pypsa_csv_folder, write_surge_json,
+    parse_display_bytes, parse_display_file, parse_goc3_json, target_format_from_name, write,
+    write_as, write_as_with_options, write_dir, write_dir_with_options, write_egret_json,
+    write_matpower, write_network, write_pandapower_json, write_powermodels_json, write_powerworld,
+    write_pslf, write_psse, write_psse_rev, write_pypsa_csv, write_pypsa_csv_folder,
+    write_surge_json, write_with_options,
 };
 pub use gen_cost::{GenCostPatch, GenCostPolicyReport, MissingGenCostPolicy, parse_gen_cost_csv};
 pub use geo::{
@@ -87,7 +88,7 @@ pub use network::{
     BranchSolution, Bus, BusId, BusType, DEFAULT_BASE_FREQUENCY, Extras, GenCaps, GenCost,
     Generator, Hvdc, Impedance, Load, LoadVoltageModel, Shunt, ShuntBlock, SolverParams,
     SourceFormat, Storage, Switch, SwitchedShuntControl, SwitchedShuntMode, Transformer3W,
-    TransformerControl, TransformerControlMode, ValueRepair, Winding, series_admittance_of,
+    TransformerControl, TransformerControlMode, Winding, repair_values, series_admittance_of,
 };
 pub use normalize::{
     NormalizeOptions, NormalizeSourceRows, NormalizedNetwork, POWER_MODELS_ANGLE_BOUND_PAD,

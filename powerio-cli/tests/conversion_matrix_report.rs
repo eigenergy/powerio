@@ -894,7 +894,9 @@ const DISTRIBUTION_FORMATS: [DistributionFormat; 3] = [
 // typed voltage model carries those volts entry for entry, so the copy only
 // fed a token dss could not parse and BMOPF could only drop — −1 on both
 // cells of the PMD source row.
-const DISTRIBUTION_WARNING_BASELINE: [[usize; 3]; 3] = [[0, 140, 88], [20, 0, 15], [26, 56, 0]];
+// The dss→bmopf and pmd→bmopf cells dropped when the BMOPF writer began
+// aggregating its per-field extras drops into one finding per field (#377).
+const DISTRIBUTION_WARNING_BASELINE: [[usize; 3]; 3] = [[0, 66, 88], [20, 0, 15], [26, 42, 0]];
 
 const DISTRIBUTION_CASES: [(&str, &str, DistributionFormat); 7] = [
     (

@@ -60,7 +60,7 @@ pub use bmopf::{
 };
 pub use convert::{
     Conversion, ConversionSidecar, DistTargetFormat, classify_distribution_json, convert_source,
-    dist_target_from_name, parse, write_as, write_network,
+    dist_target_from_name, parse, write, write_as, write_network,
 };
 pub use diagnostics::{Diagnostic, DiagnosticCode, DiagnosticSeverity, DiagnosticStage};
 pub use dss::{DssLoadVoltageBounds, DssWriteOptions, write_dss, write_dss_with_options};
