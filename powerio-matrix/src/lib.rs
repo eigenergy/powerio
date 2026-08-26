@@ -6,14 +6,14 @@
 //! [`powerio_tx`] types and functions.
 //!
 //! ```
-//! use powerio_matrix::{parse_file, IndexedNetwork, build_bprime, BuildOptions};
+//! use powerio_matrix::{BuildOptions, IndexedNetwork, build_bprime, parse};
 //!
 //! # let case = concat!(env!("CARGO_MANIFEST_DIR"), "/../tests/data/case14.m");
-//! let net = parse_file(case, None)?.network;   // re-exported from powerio
+//! let net = parse(powerio_core::Source::open(case)?)?.into_value();
 //! let g = IndexedNetwork::new(&net);           // dense [0, n) analysis view
 //! let bprime = build_bprime(&g, &BuildOptions::default())?;
 //! assert_eq!(bprime.rows(), g.n());            // Bp is n×n
-//! # Ok::<(), powerio_matrix::Error>(())
+//! # Ok::<(), Box<dyn std::error::Error>>(())
 //! ```
 //!
 //! # Conventions
@@ -37,16 +37,13 @@ pub use powerio_tx::{
     BalancedNetwork, Branch, Bus, BusId, BusType, ConnectivityReport, Conversion, DisplayData,
     DisplayFormat, ErrorCategory, Extras, GenCost, GenCostPatch, GenCostPolicyReport, Generator,
     Hvdc, IndexCore, IndexedNetwork, Load, MissingGenCostPolicy, NormalizeOptions,
-    NormalizedNetwork, POWER_MODELS_ANGLE_BOUND_PAD, Parsed, PwdDisplay, PwdSubstation,
-    PypsaCsvOutputs, Shunt, SourceFormat, Storage, TargetFormat, WriteOptions, convert_file,
+    NormalizedNetwork, POWER_MODELS_ANGLE_BOUND_PAD, PwdDisplay, PwdSubstation, PypsaCsvOutputs,
+    Shunt, SourceFormat, Storage, TargetFormat, WriteOptions, convert_file,
     convert_file_with_options, convert_str, convert_str_with_options, display_format_from_name,
-    format, gen_cost, geo, indexed, network, parse_bytes, parse_bytes_with_name,
-    parse_display_bytes, parse_display_file, parse_file, parse_gen_cost_csv, parse_matpower,
-    parse_matpower_file, parse_pandapower_json, parse_powermodels_json, parse_powerworld,
-    parse_pslf, parse_psse, parse_str, parse_str_with_name, read_pypsa_csv_folder,
-    target_format_from_name, write_as, write_as_with_options, write_dir, write_dir_with_options,
-    write_egret_json, write_matpower, write_pandapower_json, write_powermodels_json,
-    write_powerworld, write_psse, write_pypsa_csv_folder,
+    format, gen_cost, geo, indexed, network, parse, parse_display_bytes, parse_display_file,
+    parse_gen_cost_csv, target_format_from_name, write_as, write_as_with_options, write_dir,
+    write_dir_with_options, write_egret_json, write_matpower, write_network, write_pandapower_json,
+    write_powermodels_json, write_powerworld, write_psse, write_pypsa_csv_folder,
 };
 
 mod collect;

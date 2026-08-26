@@ -1420,7 +1420,10 @@ mod tests {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../tests/data")
             .join(name);
-        powerio::parse_file(&path, None).unwrap().network
+        {
+            let source = powerio_core::Source::open(&path).unwrap();
+            powerio::parse(source).unwrap().into_value()
+        }
     }
 
     fn terminal_projection_net() -> BalancedNetwork {
@@ -2436,7 +2439,12 @@ COMMENT\n\
 0.95, 13.8, 30.0, 50.0, 0, 0, 0, 0, 1.1, 0.9, 1.1, 0.9, 33, 0, 0, 0, 0\n\
 0 / END OF TRANSFORMER DATA, BEGIN AREA DATA\n\
 Q\n";
-        powerio::parse_str(raw, "psse").unwrap().network
+        {
+            let source = powerio_core::Source::from_bytes("case.raw", raw.as_bytes().to_vec())
+                .unwrap()
+                .with_format(powerio_core::FormatId::new("psse").unwrap());
+            powerio::parse(source).unwrap().into_value()
+        }
     }
 
     // A 3-winding transformer star-lowers into an extra synthetic bus, so the

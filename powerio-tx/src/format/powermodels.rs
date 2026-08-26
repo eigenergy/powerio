@@ -14,8 +14,6 @@
 //! for field; `storage` is mapped to the closest PowerModels block and emits a
 //! warning when present.
 
-use std::sync::Arc;
-
 use serde_json::{Map, Value};
 
 use super::{Conversion, finish, jnum, warn_extra_branch_rating_sets};
@@ -434,20 +432,15 @@ const FMT: &str = "PowerModels JSON";
 /// convention (powers ×baseMVA, angles to degrees, cost coefficients un-scaled),
 /// following PowerModels' own exceptions (storage `ps`/`qs` stay raw, dcline
 /// `pt`/`qf`/`qt` flip sign); `per_unit = false` is read as-is.
-pub fn parse_powermodels_json(content: &str) -> Result<BalancedNetwork> {
-    let mut warnings = Diagnostics::new();
-    parse_powermodels_json_source(Arc::new(content.to_owned()), None, &mut warnings)
-}
-
 /// Owned-source entry used by the format hub: parse by borrowing `source`, then
 /// move the buffer into the retained source (no copy). `name_hint` (e.g. a file
 /// stem) names the network when the JSON carries no `name`.
 pub(crate) fn parse_powermodels_json_source(
-    source: Arc<String>,
+    source: &str,
     name_hint: Option<&str>,
     warnings: &mut Diagnostics,
 ) -> Result<BalancedNetwork> {
-    let content: &str = &source;
+    let content: &str = source;
     let root: Value = serde_json::from_str(content).map_err(|e| Error::FormatRead {
         format: FMT,
         message: e.to_string(),
@@ -529,7 +522,6 @@ pub(crate) fn parse_powermodels_json_source(
         areas: Vec::new(),
         solver: None,
         source_format: SourceFormat::PowerModelsJson,
-        source: Some(source),
     };
     net.check_references(FMT)?;
     Ok(net)
@@ -1073,6 +1065,11 @@ fn read_storage(v: &Value, pscale: f64) -> Storage {
 
 #[cfg(test)]
 mod tests {
+    fn parse_powermodels_json(content: &str) -> Result<BalancedNetwork> {
+        let mut warnings = Diagnostics::new();
+        parse_powermodels_json_source(content, None, &mut warnings)
+    }
+
     use super::*;
 
     fn approx(a: f64, b: f64) -> bool {
@@ -1108,8 +1105,7 @@ mod tests {
                       "3":{"index":3,"f_bus":1,"t_bus":2,"br_r":0.01,"br_x":0.1,
                            "tap":1.05,"transformer":true}}}"#;
         let mut warnings = Diagnostics::new();
-        let net =
-            parse_powermodels_json_source(Arc::new(doc.to_owned()), None, &mut warnings).unwrap();
+        let net = parse_powermodels_json_source(doc, None, &mut warnings).unwrap();
         // The inference rule is unchanged: without the flag the tap is dropped
         // (raw 0 = line); only the drop of a non-unit value is reported.
         assert_eq!(net.branches[0].tap, 0.0);

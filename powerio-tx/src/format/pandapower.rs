@@ -5,13 +5,12 @@
 //! table codec directly so the Rust core stays Python-free.
 
 use std::collections::{BTreeMap, HashMap};
-use std::sync::Arc;
 
 use serde_json::{Map, Value};
 
 use super::{
-    Conversion, Parsed, bus_kv, finish, jnum, nonzero_differs, set_bus_kind,
-    warn_extra_branch_rating_sets, zbase,
+    Conversion, bus_kv, finish, jnum, nonzero_differs, set_bus_kind, warn_extra_branch_rating_sets,
+    zbase,
 };
 use crate::diagnostics::codes::EMIT_PANDAPOWER as F;
 use crate::diagnostics::{Diagnostics, codes};
@@ -25,21 +24,13 @@ const FMT: &str = "pandapower JSON";
 const F_HZ: f64 = 50.0;
 const MAX_I_KA: f64 = 99_999.0;
 
-/// Parse pandapower `pandapowerNet` JSON `content`. Returns [`Parsed`]: the
-/// network plus the reader's fidelity warnings.
-pub fn parse_pandapower_json(content: &str) -> Result<Parsed> {
-    let mut warnings = Diagnostics::new();
-    let network = parse_pandapower_source(Arc::new(content.to_owned()), None, &mut warnings)?;
-    Ok(Parsed::without_document(network, warnings))
-}
-
 #[allow(clippy::too_many_lines)] // direct table-to-BalancedNetwork mapper; split helpers obscure column mapping
 pub(crate) fn parse_pandapower_source(
-    source: Arc<String>,
+    source: &str,
     name_hint: Option<&str>,
     warnings: &mut Diagnostics,
 ) -> Result<BalancedNetwork> {
-    let content: &str = &source;
+    let content: &str = source;
     let root: Value = serde_json::from_str(content).map_err(|e| bad(e.to_string()))?;
     let root = root
         .as_object()
@@ -768,7 +759,6 @@ pub(crate) fn parse_pandapower_source(
         areas: Vec::new(),
         solver: None,
         source_format: SourceFormat::PandapowerJson,
-        source: Some(source),
     };
     net.check_references(FMT)?;
     Ok(net)
@@ -854,12 +844,6 @@ fn warn_nonempty_table(
 
 #[must_use]
 pub fn write_pandapower_json(net: &BalancedNetwork) -> Conversion {
-    if net.source_format == SourceFormat::PandapowerJson {
-        if let Some(source) = &net.source {
-            return Conversion::faithful(source.to_string());
-        }
-    }
-
     let mut warnings = Diagnostics::new();
     warn_pandapower_writer_losses(net, &mut warnings);
 
@@ -2269,6 +2253,27 @@ fn bad(message: impl Into<String>) -> Error {
 // value for `json!` call site ergonomics.
 #[allow(clippy::float_cmp, clippy::needless_pass_by_value)]
 mod tests {
+    #[derive(Debug)]
+    struct Parsed {
+        network: BalancedNetwork,
+        diagnostics: Vec<crate::diagnostics::Diagnostic>,
+    }
+
+    impl Parsed {
+        fn rendered_diagnostics(&self) -> Vec<String> {
+            crate::diagnostics::render_diagnostics(&self.diagnostics)
+        }
+    }
+
+    fn parse_pandapower_json(content: &str) -> Result<Parsed> {
+        let mut warnings = Diagnostics::new();
+        let network = parse_pandapower_source(content, None, &mut warnings)?;
+        Ok(Parsed {
+            network,
+            diagnostics: warnings.into_records(),
+        })
+    }
+
     use super::*;
     use serde_json::json;
 
@@ -2326,11 +2331,11 @@ mod tests {
 
         let conv = write_pandapower_json(&net);
         assert!(
-            conv.warnings
+            conv.rendered_diagnostics()
                 .iter()
                 .any(|w| w.contains("negative vk_percent")),
             "the nonstandard spelling must be declared: {:?}",
-            conv.warnings
+            conv.rendered_diagnostics()
         );
         let back = parse_pandapower_json(&conv.text).unwrap().network;
         let b = &back.branches[0];
@@ -2847,9 +2852,12 @@ mod tests {
         assert!((br.tap - 1.0 / 1.06).abs() < 1e-12);
         assert!((br.x - 0.1 * 1.06 * 1.06).abs() < 1e-12);
         assert!(
-            !parsed.warnings.iter().any(|w| w.contains("tap")),
+            !parsed
+                .rendered_diagnostics()
+                .iter()
+                .any(|w| w.contains("tap")),
             "{:?}",
-            parsed.warnings
+            parsed.rendered_diagnostics()
         );
     }
 
@@ -2873,9 +2881,12 @@ mod tests {
         .unwrap();
         assert_eq!(parsed.network.branches[0].tap, 1.0);
         assert!(
-            !parsed.warnings.iter().any(|w| w.contains("tap")),
+            !parsed
+                .rendered_diagnostics()
+                .iter()
+                .any(|w| w.contains("tap")),
             "{:?}",
-            parsed.warnings
+            parsed.rendered_diagnostics()
         );
     }
 
@@ -2956,7 +2967,7 @@ mod tests {
             parsed.diagnostics.iter().any(|d| d.message()
                 == "`trafo`: 1 row(s) have a tabular or unrecognized tap changer; those taps were ignored"),
             "{:?}",
-            parsed.warnings
+            parsed.rendered_diagnostics()
         );
     }
 
@@ -3037,7 +3048,7 @@ mod tests {
                 .iter()
                 .any(|d| d.message() == "`svc` table ignored (1 rows): not mapped"),
             "{:?}",
-            parsed.warnings
+            parsed.rendered_diagnostics()
         );
     }
 
@@ -3076,9 +3087,12 @@ mod tests {
         });
         let conv = write_pandapower_json(&net);
         assert!(
-            !conv.warnings.iter().any(|w| w.contains("non-finite")),
+            !conv
+                .rendered_diagnostics()
+                .iter()
+                .any(|w| w.contains("non-finite")),
             "{:?}",
-            conv.warnings
+            conv.rendered_diagnostics()
         );
     }
 
@@ -3094,7 +3108,7 @@ mod tests {
             conv.diagnostics.iter().any(|d| d.message()
                 == "`gen`: non-finite value(s) written as null in column(s) `min_q_mvar` (1), `max_q_mvar` (1); pandapower reads them as NaN"),
             "{:?}",
-            conv.warnings
+            conv.rendered_diagnostics()
         );
     }
 
@@ -3140,7 +3154,7 @@ mod tests {
             assert!(
                 parsed.diagnostics.iter().any(|d| d.message() == expected),
                 "missing {expected:?} in {:?}",
-                parsed.warnings
+                parsed.rendered_diagnostics()
             );
         }
     }
@@ -3169,7 +3183,7 @@ mod tests {
             parsed.diagnostics.iter().any(|d| d.message()
                 == "`poly_cost`: reactive cost coefficients (cq*) nonzero on 1 rows; only active power costs are read"),
             "{:?}",
-            parsed.warnings
+            parsed.rendered_diagnostics()
         );
     }
 
@@ -3180,7 +3194,11 @@ mod tests {
             ("switch", pp_frame(&["bus"], json!([]), json!([]))),
         ]))
         .unwrap();
-        assert!(parsed.warnings.is_empty(), "{:?}", parsed.warnings);
+        assert!(
+            parsed.rendered_diagnostics().is_empty(),
+            "{:?}",
+            parsed.rendered_diagnostics()
+        );
     }
 
     #[test]
@@ -3213,7 +3231,11 @@ mod tests {
             ),
         ]))
         .unwrap();
-        assert!(parsed.warnings.is_empty(), "{:?}", parsed.warnings);
+        assert!(
+            parsed.rendered_diagnostics().is_empty(),
+            "{:?}",
+            parsed.rendered_diagnostics()
+        );
         assert!(matches!(
             &parsed.network.loads[0].voltage_model,
             Some(LoadVoltageModel::Zip { p_constant_impedance, .. }) if *p_constant_impedance == 0.2
@@ -3246,7 +3268,11 @@ mod tests {
             ),
         ]))
         .unwrap();
-        assert!(parsed.warnings.is_empty(), "{:?}", parsed.warnings);
+        assert!(
+            parsed.rendered_diagnostics().is_empty(),
+            "{:?}",
+            parsed.rendered_diagnostics()
+        );
         assert!(matches!(
             &parsed.network.loads[0].voltage_model,
             Some(LoadVoltageModel::Zip { p_constant_impedance, .. }) if *p_constant_impedance == 0.1
@@ -3293,7 +3319,6 @@ mod tests {
             areas: Vec::new(),
             solver: None,
             source_format: SourceFormat::InMemory,
-            source: None,
         }
     }
 
@@ -3440,7 +3465,11 @@ mod tests {
         });
 
         let conv = write_pandapower_json(&net);
-        assert!(conv.warnings.is_empty(), "{:?}", conv.warnings);
+        assert!(
+            conv.rendered_diagnostics().is_empty(),
+            "{:?}",
+            conv.rendered_diagnostics()
+        );
         let load = written_frame(&conv.text, "load");
         assert_eq!(col(&load, "p_mw"), vec![json!(20.0)]);
         assert_eq!(col(&load, "q_mvar"), vec![json!(10.0)]);
@@ -3482,7 +3511,7 @@ mod tests {
                 || d.message()
                     .starts_with("2 transformer terminal charging shunt(s) written into `shunt`")),
             "{:?}",
-            conv.warnings
+            conv.rendered_diagnostics()
         );
         let shunt = written_frame(&conv.text, "shunt");
         assert_eq!(shunt.data.len(), 2);
@@ -3510,7 +3539,7 @@ mod tests {
                 .message()
                 .starts_with("2 bus(es) carry no base_kv; written with vn_kv = 1")),
             "{:?}",
-            conv.warnings
+            conv.rendered_diagnostics()
         );
         let rt = parse_pandapower_json(&conv.text).unwrap();
         let b = &rt.network.branches[0];
@@ -3586,7 +3615,7 @@ mod tests {
             conv.diagnostics.iter().any(|d| d.message()
                 == "1 generator costs truncated to quadratic: poly_cost carries cp0/cp1/cp2 only"),
             "{:?}",
-            conv.warnings
+            conv.rendered_diagnostics()
         );
     }
 
@@ -3618,7 +3647,7 @@ mod tests {
             assert!(
                 conv.diagnostics.iter().any(|d| d.message() == expected),
                 "missing {expected:?} in {:?}",
-                conv.warnings
+                conv.rendered_diagnostics()
             );
         }
     }

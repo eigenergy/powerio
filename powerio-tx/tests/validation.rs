@@ -1,10 +1,13 @@
 //! Input validation and reader behavior guarantees: malformed input must fail
 //! loudly, never silently default into a structurally valid but wrong network.
+mod helpers;
+#[allow(unused_imports)]
+use helpers::*;
 
 use std::path::Path;
 
 use powerio_tx::network::{BalancedNetwork, Branch, Bus, BusId, BusType};
-use powerio_tx::{Error, parse_powerworld, parse_psse, write_powerworld};
+use powerio_tx::{Error, write_powerworld};
 
 fn bus(id: usize, kind: BusType) -> Bus {
     Bus::new(BusId(id), kind, 1.0)
@@ -80,7 +83,10 @@ fn psse_rejects_malformed_numeric_field() {
 
     let bad = good.replacen("1.05999994", "1.0xx99994", 1);
     assert_ne!(good, bad, "corruption target not found in fixture");
-    assert!(matches!(parse_psse(&bad), Err(Error::FormatRead { .. })));
+    assert_eq!(
+        parse_psse(&bad).unwrap_err().category(),
+        powerio_core::ErrorCategory::Parse
+    );
 }
 
 #[test]
@@ -104,10 +110,10 @@ fn powerworld_rejects_malformed_numeric_field() {
 
     let bad = good.replacen("0.12345", "0.1x345", 1);
     assert_ne!(good, bad, "corruption target not found in .aux");
-    assert!(matches!(
-        parse_powerworld(&bad),
-        Err(Error::FormatRead { .. })
-    ));
+    assert_eq!(
+        parse_powerworld(&bad).unwrap_err().category(),
+        powerio_core::ErrorCategory::Parse
+    );
 }
 
 #[test]
@@ -201,10 +207,12 @@ fn powerworld_status_vocabulary_is_closed() {
     assert!(!parse_powerworld(&base("OPEN")).unwrap().loads[0].in_service);
     assert!(parse_powerworld(&base("closed")).unwrap().loads[0].in_service);
     // An unknown token must not silently mean energized.
-    assert!(matches!(
-        parse_powerworld(&base("Disconnected")),
-        Err(Error::FormatRead { .. })
-    ));
+    assert_eq!(
+        parse_powerworld(&base("Disconnected"))
+            .unwrap_err()
+            .category(),
+        powerio_core::ErrorCategory::Parse
+    );
 }
 
 #[test]
@@ -216,8 +224,9 @@ fn powerworld_rejects_non_integer_bus_numbers() {
             "DATA (Bus, [BusNum, BusName])\n{{\n1 \"A\"\n}}\n\
              DATA (Load, [BusNum, LoadID, LoadSMW])\n{{\n{bad} \"1\" 5.0\n}}\n"
         );
-        assert!(
-            matches!(parse_powerworld(&aux), Err(Error::FormatRead { .. })),
+        assert_eq!(
+            parse_powerworld(&aux).unwrap_err().category(),
+            powerio_core::ErrorCategory::Parse,
             "bus number {bad:?} must reject"
         );
     }
@@ -265,11 +274,15 @@ fn case9_with_gencost_removed_reports_the_zero_objective_at_normalize() {
     let end = start + source[start..].find("];").unwrap() + 2;
     let costless = format!("{}{}", &source[..start], &source[end..]);
 
-    let parsed = powerio_tx::parse_str(&costless, "matpower").unwrap();
+    let parsed = parse_str(&costless, "matpower").unwrap();
     assert!(parsed.network.generators.iter().all(|g| g.cost.is_none()));
     // The parse stays silent — a conversion leg must not count a property of
     // the case — and the solver-ready copy announces the zero objective.
-    assert!(parsed.warnings.is_empty(), "{:?}", parsed.warnings);
+    assert!(
+        parsed.rendered_diagnostics().is_empty(),
+        "{:?}",
+        parsed.rendered_diagnostics()
+    );
     let normalized = parsed
         .network
         .to_normalized_with_options(&powerio_tx::NormalizeOptions::default())
@@ -288,7 +301,7 @@ fn case9_with_gencost_removed_reports_the_zero_objective_at_normalize() {
     );
 
     // The unmodified fixture carries costs and stays silent.
-    let normalized = powerio_tx::parse_str(&source, "matpower")
+    let normalized = parse_str(&source, "matpower")
         .unwrap()
         .network
         .to_normalized_with_options(&powerio_tx::NormalizeOptions::default())

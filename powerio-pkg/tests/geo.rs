@@ -1,5 +1,8 @@
 //! GeoLayer glue for the multiconductor model: extract and apply through
 //! `powerio-pkg`, where both model crates are visible.
+mod helpers;
+#[allow(unused_imports)]
+use helpers::*;
 
 use powerio::{CoordinateSpace, CoordsKind, GeoLayer, GeoTarget};
 use powerio_pkg::{apply_dist_geo_layer, dist_geo_layer};

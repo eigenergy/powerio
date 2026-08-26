@@ -60,12 +60,24 @@ pub use arrow_export::{
 /// reuses the same bus-id map and per-bus aggregates instead of rebuilding
 /// them), and the reader's fidelity warnings ([`pio_warnings`]).
 pub struct PioNetwork {
-    net: BalancedNetwork,
+    /// The parsed module: the typed network plus retained source and the
+    /// reader's findings. Same format writes echo the retained bytes exactly,
+    /// as ABI v5 promises; a handle built from a bare network carries no
+    /// source and writes canonically.
+    module: powerio_core::PioModule<BalancedNetwork>,
     core: IndexCore,
-    /// The reader's findings as structured records.
-    diagnostics: Vec<Diagnostic>,
-    /// The same findings as `CODE: message` lines.
+    /// The findings as `CODE: message` lines, rendered once at construction.
     warnings: Vec<String>,
+}
+
+impl PioNetwork {
+    fn net(&self) -> &BalancedNetwork {
+        self.module.value()
+    }
+
+    fn diagnostics(&self) -> &[Diagnostic] {
+        self.module.diagnostics()
+    }
 }
 
 // The handle is immutable after construction and the C ABI documents concurrent
@@ -169,16 +181,60 @@ unsafe fn guard<R>(fallback: R, f: impl FnOnce() -> R) -> R {
     catch_unwind(AssertUnwindSafe(f)).unwrap_or(fallback)
 }
 
-/// Box a `BalancedNetwork` into an owned network handle, building its [`IndexCore`] once so
-/// every indexed query reuses it. The one constructor for `*mut PioNetwork`.
-fn make_network(net: BalancedNetwork, diagnostics: Vec<Diagnostic>) -> *mut PioNetwork {
-    let core = IndexCore::build(&net);
+fn core_err_line(error: &powerio_core::Error) -> String {
+    // The common failure renders as `CODE: message` already.
+    error.to_string()
+}
+
+fn parse_module_from_path(
+    path: &std::path::Path,
+    from: Option<&str>,
+) -> Result<powerio_core::PioModule<BalancedNetwork>, String> {
+    let mut source = powerio_core::Source::open(path).map_err(|e| core_err_line(&e))?;
+    if let Some(token) = from {
+        source = source.with_format(
+            powerio_core::FormatId::new(token.to_ascii_lowercase().replace('_', "-"))
+                .map_err(|e| core_err_line(&e))?,
+        );
+    }
+    powerio::parse(source).map_err(|e| core_err_line(&e))
+}
+
+fn parse_module_from_bytes(
+    bytes: &[u8],
+    from: &str,
+) -> Result<powerio_core::PioModule<BalancedNetwork>, String> {
+    let source = powerio_core::Source::from_bytes("<memory>", bytes.to_vec())
+        .map_err(|e| core_err_line(&e))?
+        .with_format(
+            powerio_core::FormatId::new(from.to_ascii_lowercase().replace('_', "-"))
+                .map_err(|e| core_err_line(&e))?,
+        );
+    powerio::parse(source).map_err(|e| core_err_line(&e))
+}
+
+/// Box a parsed module into an owned network handle, building its
+/// [`IndexCore`] once so every indexed query reuses it. The one constructor
+/// for `*mut PioNetwork`.
+fn make_network_module(module: powerio_core::PioModule<BalancedNetwork>) -> *mut PioNetwork {
+    let core = IndexCore::build(module.value());
     Box::into_raw(Box::new(PioNetwork {
         core,
-        warnings: powerio::diagnostics::render_diagnostics(&diagnostics),
-        diagnostics,
-        net,
+        warnings: powerio::diagnostics::render_diagnostics(module.diagnostics()),
+        module,
     }))
+}
+
+/// Box a bare network with findings: the constructor for derived handles,
+/// which carry no retained source and write canonically.
+fn make_network(net: BalancedNetwork, diagnostics: Vec<Diagnostic>) -> *mut PioNetwork {
+    let mut module = powerio_core::PioModule::new(net);
+    for diagnostic in diagnostics {
+        module
+            .add_diagnostic(diagnostic)
+            .expect("derived findings carry no identities or spans to collide");
+    }
+    make_network_module(module)
 }
 
 /// Finish a `*mut PioNetwork` entry point: run `f` (producing a `BalancedNetwork` with
@@ -186,6 +242,27 @@ fn make_network(net: BalancedNetwork, diagnostics: Vec<Diagnostic>) -> *mut PioN
 /// owned handle, or write the error, `panic_msg` if `f` panicked, into `errbuf`
 /// and return NULL. The shared tail of every handle-returning function
 /// (`pio_parse_file`, `pio_parse_str`, `pio_read_dir`, `pio_normalize`).
+unsafe fn finish_module(
+    errbuf: *mut c_char,
+    errlen: usize,
+    panic_msg: &str,
+    f: impl FnOnce() -> Result<powerio_core::PioModule<BalancedNetwork>, String>,
+) -> *mut PioNetwork {
+    unsafe {
+        match catch_unwind(AssertUnwindSafe(|| f().map(make_network_module))) {
+            Ok(Ok(handle)) => handle,
+            Ok(Err(msg)) => {
+                copy_to_buf(errbuf, errlen, &msg);
+                std::ptr::null_mut()
+            }
+            Err(_) => {
+                copy_to_buf(errbuf, errlen, panic_msg);
+                std::ptr::null_mut()
+            }
+        }
+    }
+}
+
 unsafe fn finish_network(
     errbuf: *mut c_char,
     errlen: usize,
@@ -554,12 +631,10 @@ pub unsafe extern "C" fn pio_parse_file(
     errlen: usize,
 ) -> *mut PioNetwork {
     unsafe {
-        finish_network(errbuf, errlen, "panic while parsing", || {
+        finish_module(errbuf, errlen, "panic while parsing", || {
             let path = required_cstr(path, "path")?;
             let from = optional_cstr(from, "from")?;
-            powerio::parse_file(std::path::Path::new(path), from)
-                .map(|p| (p.network, p.diagnostics))
-                .map_err(err_line)
+            parse_module_from_path(std::path::Path::new(path), from)
         })
     }
 }
@@ -583,12 +658,10 @@ pub unsafe extern "C" fn pio_parse_str(
     errlen: usize,
 ) -> *mut PioNetwork {
     unsafe {
-        finish_network(errbuf, errlen, "panic while parsing", || {
+        finish_module(errbuf, errlen, "panic while parsing", || {
             let text = required_cstr(text, "text")?;
             let format = required_cstr(format, "format")?;
-            powerio::parse_str(text, format)
-                .map(|p| (p.network, p.diagnostics))
-                .map_err(err_line)
+            parse_module_from_bytes(text.as_bytes(), format)
         })
     }
 }
@@ -612,7 +685,7 @@ pub unsafe extern "C" fn pio_parse_bytes(
     errlen: usize,
 ) -> *mut PioNetwork {
     unsafe {
-        finish_network(errbuf, errlen, "panic while parsing", || {
+        finish_module(errbuf, errlen, "panic while parsing", || {
             let format = required_cstr(format, "format")?;
             // A zero length read is an empty case, and every reader rejects
             // one with its own message; a NULL pointer is a caller bug.
@@ -623,9 +696,7 @@ pub unsafe extern "C" fn pio_parse_bytes(
             } else {
                 std::slice::from_raw_parts(bytes, len)
             };
-            powerio::parse_bytes(slice, format)
-                .map(|p| (p.network, p.diagnostics))
-                .map_err(err_line)
+            parse_module_from_bytes(slice, format)
         })
     }
 }
@@ -700,7 +771,7 @@ pub unsafe extern "C" fn pio_to_json(
     unsafe {
         finish_string(errbuf, errlen, "panic while serializing model JSON", || {
             let net = net.as_ref().ok_or_else(|| null_handle("network handle"))?;
-            net.net.to_json().map_err(err_line)
+            net.net().to_json().map_err(err_line)
         })
     }
 }
@@ -852,7 +923,7 @@ unsafe fn network_ref<'a>(net: *const PioNetwork) -> Option<&'a PioNetwork> {
 unsafe fn view<'a>(net: *const PioNetwork) -> Option<IndexedNetwork<'a>> {
     unsafe {
         net.as_ref()
-            .map(|c| IndexedNetwork::with_core(&c.net, &c.core))
+            .map(|c| IndexedNetwork::with_core(c.net(), &c.core))
     }
 }
 
@@ -936,10 +1007,11 @@ pub unsafe extern "C" fn pio_normalize(
             let c = network_ref(net).ok_or_else(|| null_handle("network handle"))?;
             let options = normalize_options_from_c(opts)?;
             let out = c
-                .net
+                .net()
                 .to_normalized_with_options(&options)
                 .map_err(err_line)?;
-            let mut diagnostics = c.diagnostics.clone();
+            let diagnostics = c.diagnostics().to_vec();
+            let mut diagnostics = diagnostics.to_vec();
             diagnostics.extend(out.diagnostics);
             Ok((out.network, diagnostics))
         })
@@ -967,17 +1039,21 @@ pub unsafe extern "C" fn pio_n_branches(net: *const PioNetwork) -> usize {
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_n_switches(net: *const PioNetwork) -> usize {
-    unsafe { guard(0, || network_ref(net).map_or(0, |c| c.net.switches.len())) }
+    unsafe { guard(0, || network_ref(net).map_or(0, |c| c.net().switches.len())) }
 }
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_n_gens(net: *const PioNetwork) -> usize {
-    unsafe { guard(0, || network_ref(net).map_or(0, |c| c.net.generators.len())) }
+    unsafe {
+        guard(0, || {
+            network_ref(net).map_or(0, |c| c.net().generators.len())
+        })
+    }
 }
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_base_mva(net: *const PioNetwork) -> f64 {
-    unsafe { guard(0.0, || network_ref(net).map_or(0.0, |c| c.net.base_mva)) }
+    unsafe { guard(0.0, || network_ref(net).map_or(0.0, |c| c.net().base_mva)) }
 }
 
 /// Case name. Writes UTF-8 bytes into `out`, up to `cap`, NUL-terminates when
@@ -992,8 +1068,8 @@ pub unsafe extern "C" fn pio_network_name(
     unsafe {
         guard(0, || {
             let Some(c) = network_ref(net) else { return 0 };
-            copy_to_buf(out, cap, &c.net.name);
-            c.net.name.len()
+            copy_to_buf(out, cap, &c.net().name);
+            c.net().name.len()
         })
     }
 }
@@ -1011,7 +1087,7 @@ pub unsafe extern "C" fn pio_source_format(
     unsafe {
         guard(0, || {
             let Some(c) = network_ref(net) else { return 0 };
-            let name = c.net.source_format.name().to_owned();
+            let name = c.net().source_format.name().to_owned();
             copy_to_buf(out, cap, &name);
             name.len()
         })
@@ -1040,7 +1116,7 @@ pub unsafe extern "C" fn pio_summary_json(
             "panic while serializing summary JSON",
             || {
                 let c = network_ref(net).ok_or_else(|| null_handle("network handle"))?;
-                let v = IndexedNetwork::with_core(&c.net, &c.core);
+                let v = IndexedNetwork::with_core(c.net(), &c.core);
                 let reference_bus_indices = v.reference_bus_indices();
                 let reference_bus_ids: Vec<usize> = reference_bus_indices
                     .iter()
@@ -1048,21 +1124,21 @@ pub unsafe extern "C" fn pio_summary_json(
                     .collect();
                 let summary = serde_json::json!({
                     powerio::version::VERSION_KEY: powerio::VERSION,
-                    "name": c.net.name,
-                    "source_format": c.net.source_format.name(),
-                    "base_mva": c.net.base_mva,
-                    "base_frequency": c.net.base_frequency,
+                    "name": c.net().name,
+                    "source_format": c.net().source_format.name(),
+                    "base_mva": c.net().base_mva,
+                    "base_frequency": c.net().base_frequency,
                     "counts": {
-                        "buses": c.net.buses.len(),
-                        "loads": c.net.loads.len(),
-                        "shunts": c.net.shunts.len(),
-                        "branches": c.net.branches.len(),
-                        "switches": c.net.switches.len(),
-                        "generators": c.net.generators.len(),
-                        "storage": c.net.storage.len(),
-                        "hvdc": c.net.hvdc.len(),
-                        "transformers_3w": c.net.transformers_3w.len(),
-                        "areas": c.net.areas.len(),
+                        "buses": c.net().buses.len(),
+                        "loads": c.net().loads.len(),
+                        "shunts": c.net().shunts.len(),
+                        "branches": c.net().branches.len(),
+                        "switches": c.net().switches.len(),
+                        "generators": c.net().generators.len(),
+                        "storage": c.net().storage.len(),
+                        "hvdc": c.net().hvdc.len(),
+                        "transformers_3w": c.net().transformers_3w.len(),
+                        "areas": c.net().areas.len(),
                         "warnings": c.warnings.len(),
                     },
                     "topology": {
@@ -1343,10 +1419,11 @@ pub unsafe extern "C" fn pio_to_format(
                 let c = network_ref(net).ok_or_else(|| null_handle("network handle"))?;
                 let target = target_format_from_c(to)?;
                 let options = write_options_from_c(opts)?;
-                let conv = c
-                    .net
-                    .to_format_with_options(target, &options)
-                    .map_err(err_line)?;
+                // The module write: a same format target of an unchanged
+                // parsed handle echoes the retained source bytes exactly, as
+                // ABI v5 promises.
+                let conv = powerio::write_as_with_options(&c.module, target, &options)
+                    .map_err(|e| core_err_line(&e))?;
                 Ok((conv.text, conv.diagnostics))
             },
         )
@@ -1459,7 +1536,7 @@ pub unsafe extern "C" fn pio_convert_file(
                     from,
                     &options,
                 )
-                .map_err(err_line)?;
+                .map_err(|e| core_err_line(&e))?;
                 Ok((conv.text, conv.diagnostics))
             },
         )
@@ -1498,7 +1575,7 @@ pub unsafe extern "C" fn pio_convert_str(
                 let target = target_format_from_c(to)?;
                 let options = write_options_from_c(opts)?;
                 let conv = powerio::convert_str_with_options(text, target, from, &options)
-                    .map_err(err_line)?;
+                    .map_err(|e| core_err_line(&e))?;
                 Ok((conv.text, conv.diagnostics))
             },
         )
@@ -1533,7 +1610,7 @@ pub unsafe extern "C" fn pio_write_dir(
             let to = required_cstr(to, "to")?;
             let out_dir = required_cstr(out_dir, "out_dir")?;
             let options = write_options_from_c(opts)?;
-            powerio::write_dir_with_options(&c.net, to, std::path::Path::new(out_dir), &options)
+            powerio::write_dir_with_options(c.net(), to, std::path::Path::new(out_dir), &options)
                 .map_err(err_line)
         }));
         match r {
@@ -1719,7 +1796,7 @@ pub unsafe extern "C" fn pio_switches(
     unsafe {
         guard(0, || {
             let Some(c) = network_ref(net) else { return 0 };
-            let net = &c.net;
+            let net = &c.net();
             fill(
                 from,
                 cap,
@@ -1778,7 +1855,7 @@ pub unsafe extern "C" fn pio_gens(
     unsafe {
         guard(0, || {
             let Some(c) = network_ref(net) else { return 0 };
-            let net = &c.net;
+            let net = &c.net();
             fill(
                 bus,
                 cap,
@@ -1892,7 +1969,7 @@ pub unsafe extern "C" fn pio_to_arrow(
                 ));
             }
             let c = network_ref(net).ok_or_else(|| null_handle("network handle"))?;
-            arrow_export::export(&c.net, &c.core, table)
+            arrow_export::export(c.net(), &c.core, table)
         }));
         match r {
             Ok(Ok((array, schema))) => {
@@ -2105,8 +2182,8 @@ pub unsafe extern "C" fn pio_package_from_balanced_network(
             || {
                 let net = network_ref(net).ok_or_else(|| null_handle("network handle"))?;
                 let mut package = powerio_pkg::NetworkPackage::from_balanced_with_read_diagnostics(
-                    net.net.clone(),
-                    net.diagnostics.iter().cloned().map(Into::into),
+                    net.net().clone(),
+                    net.diagnostics().iter().cloned().map(Into::into),
                 );
                 if include_solver_metadata != 0 {
                     package
@@ -2176,12 +2253,11 @@ pub unsafe extern "C" fn pio_package_to_balanced_network(
                     };
                     coded_str(pkg_codes::REQUEST_PACKAGE_WRONG_MODEL_KIND.code, message)
                 })?;
-                let mut net = net.clone();
+                let net = net.clone();
                 // An in-memory package still holds the payload's #[serde(skip)]
                 // source text; drop it so extraction behaves the same whether
                 // or not the package crossed JSON, and a same-format write is
                 // the promised fresh serialization.
-                net.source = None;
                 Ok((net, Vec::new()))
             },
         )
@@ -2220,7 +2296,6 @@ pub unsafe extern "C" fn pio_package_to_multiconductor_network(
                 // Same in-memory strip as the balanced inverse: source and the
                 // defaulted provenance are #[serde(skip)], so dropping them
                 // here matches what a JSON crossing produces.
-                net.source = None;
                 net.defaulted = Default::default();
                 Ok(PioDistNetwork { net })
             },
@@ -2586,7 +2661,7 @@ pub unsafe extern "C" fn pio_geo_extract(
     unsafe {
         finish_string(errbuf, errlen, "panic while extracting geo layer", || {
             let c = network_ref(net).ok_or_else(|| null_handle("network handle"))?;
-            c.net.geo_layer().extracted_geojson().map_err(err_line)
+            c.net().geo_layer().extracted_geojson().map_err(err_line)
         })
     }
 }
@@ -2615,10 +2690,9 @@ pub unsafe extern "C" fn pio_geo_apply(
             let name_hint = optional_cstr(name_hint, "name_hint")?;
             let parsed =
                 powerio::GeoLayer::parse_bytes(layer.as_bytes(), name_hint).map_err(err_line)?;
-            let mut out = c.net.clone();
+            let mut out = c.net().clone();
             let report = out.apply_geo_layer(&parsed.layer);
-            out.source = None;
-            let mut diagnostics = c.diagnostics.clone();
+            let mut diagnostics = c.diagnostics().to_vec();
             diagnostics.extend(parsed.diagnostics);
             diagnostics.push(Diagnostic::of(
                 &powerio::diagnostics::codes::BUILD_GEO_APPLY_SUMMARY,
@@ -3220,7 +3294,6 @@ pub unsafe extern "C" fn pio_dist_geo_apply(
                 powerio::GeoLayer::parse_bytes(layer.as_bytes(), name_hint).map_err(err_line)?;
             let mut out = c.net.clone();
             let report = powerio_pkg::apply_dist_geo_layer(&mut out, &parsed.layer);
-            out.source = None;
             out.source_format = None;
             out.warnings.extend(parsed.warnings);
             out.warnings.push(geo_apply_summary(&report));
@@ -3232,6 +3305,40 @@ pub unsafe extern "C" fn pio_dist_geo_apply(
 
 #[cfg(test)]
 mod tests {
+    struct TestParsed {
+        network: powerio::BalancedNetwork,
+    }
+
+    fn parse_str(text: &str, from: &str) -> Result<TestParsed, powerio_core::Error> {
+        let source = powerio_core::Source::from_bytes("<memory>", text.as_bytes().to_vec())?
+            .with_format(powerio_core::FormatId::new(
+                from.to_ascii_lowercase().replace('_', "-"),
+            )?);
+        powerio::parse(source).map(|module| TestParsed {
+            network: module.into_value(),
+        })
+    }
+
+    fn parse_psse(text: &str) -> Result<powerio::BalancedNetwork, powerio_core::Error> {
+        parse_str(text, "psse").map(|parsed| parsed.network)
+    }
+
+    #[allow(dead_code)]
+    fn parse_file(
+        path: impl AsRef<std::path::Path>,
+        from: Option<&str>,
+    ) -> Result<TestParsed, powerio_core::Error> {
+        let mut source = powerio_core::Source::open(path.as_ref())?;
+        if let Some(token) = from {
+            source = source.with_format(powerio_core::FormatId::new(
+                token.to_ascii_lowercase().replace('_', "-"),
+            )?);
+        }
+        powerio::parse(source).map(|module| TestParsed {
+            network: module.into_value(),
+        })
+    }
+
     use super::*;
     use powerio::POWER_MODELS_ANGLE_BOUND_PAD;
     use std::ffi::CString;
@@ -5008,7 +5115,7 @@ mpc.branch = [
         let case = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../tests/data")
             .join("case9.m");
-        let net = powerio::parse_str(&std::fs::read_to_string(case).unwrap(), "matpower")
+        let net = parse_str(&std::fs::read_to_string(case).unwrap(), "matpower")
             .unwrap()
             .network;
         let mut point = OperatingPoint::new(0);
@@ -5049,7 +5156,7 @@ mpc.branch = [
         let case = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../tests/data")
             .join("case9.m");
-        let net = powerio::parse_str(&std::fs::read_to_string(case).unwrap(), "matpower")
+        let net = parse_str(&std::fs::read_to_string(case).unwrap(), "matpower")
             .unwrap()
             .network;
         let json = CString::new(NetworkPackage::from_balanced(net).to_json().unwrap()).unwrap();
@@ -5146,7 +5253,7 @@ mpc.branch = [
         let case = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../tests/data")
             .join("case9.m");
-        let net = powerio::parse_str(&std::fs::read_to_string(case).unwrap(), "matpower")
+        let net = parse_str(&std::fs::read_to_string(case).unwrap(), "matpower")
             .unwrap()
             .network;
         let mut commit = StudyCommit::default();
@@ -5754,7 +5861,7 @@ mpc.branch = [
     fn read_dir_round_trips_and_enumerates_scenarios() {
         use powerio_matrix::{GridfmOptions, write_gridfm_dataset};
         // Write a one-scenario dataset, then read it back over the C ABI.
-        let net = powerio::parse_file(
+        let net = parse_file(
             std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../tests/data/case14.m"),
             None,
         )
@@ -6047,9 +6154,9 @@ mpc.branch = [
                     .join("../tests/data/psse/case14.raw"),
             )
             .unwrap();
-            let net = powerio::parse_psse(&raw).unwrap();
+            let net = parse_psse(&raw).unwrap();
             let expected = powerio::write_as_with_options(
-                &net,
+                &powerio_core::PioModule::new(net),
                 TargetFormat::Matpower,
                 &WriteOptions {
                     missing_gen_cost: MissingGenCostPolicy::Fill {
@@ -6083,9 +6190,9 @@ mpc.branch = [
                     .join("../tests/data/psse/case14.raw"),
             )
             .unwrap();
-            let net = powerio::parse_psse(&raw).unwrap();
+            let net = parse_psse(&raw).unwrap();
             let expected = powerio::write_as_with_options(
-                &net,
+                &powerio_core::PioModule::new(net),
                 TargetFormat::Matpower,
                 &WriteOptions {
                     missing_gen_cost: MissingGenCostPolicy::Preserve,
@@ -6152,11 +6259,20 @@ mpc.branch = [
             // which is what an older caller's struct means. The mode is inside
             // the declared prefix and the NaN is past it, so reading the
             // caller's tail instead of zeroing it would trip the finite guard.
+            // The baseline for the short struct is the same FILL policy at
+            // full size: a non-default policy writes canonically, while the
+            // optionless call above echoes the retained source.
+            let mut fill_full = write_opts();
+            fill_full.missing_gen_cost_mode = PIO_MISSING_GEN_COST_FILL;
+            let fill_baseline = to_format_with(c, "matpower", &fill_full).unwrap();
             let mut short = write_opts();
             short.struct_size = size_of::<usize>() + 2 * size_of::<i32>();
             short.missing_gen_cost_mode = PIO_MISSING_GEN_COST_FILL;
             short.fill_c1 = f64::NAN;
-            assert_eq!(to_format_with(c, "matpower", &short).unwrap(), plain);
+            assert_eq!(
+                to_format_with(c, "matpower", &short).unwrap(),
+                fill_baseline
+            );
 
             // Longer than sizeof with a zero tail: a newer caller this build
             // can still serve.
@@ -6970,7 +7086,6 @@ New Line.l1 bus1=a bus2=b phases=3
             unsafe {
                 let mem = pio_package_to_balanced_network(pkg, err.as_mut_ptr(), err.len());
                 assert!(!mem.is_null());
-                assert!((*mem).net.source.is_none());
                 pio_network_free(mem);
             }
 
@@ -7063,7 +7178,6 @@ New Line.l1 bus1=a bus2=b phases=3
             unsafe {
                 let mem = pio_package_to_multiconductor_network(pkg, err.as_mut_ptr(), err.len());
                 assert!(!mem.is_null());
-                assert!((*mem).net.source.is_none());
                 assert!((*mem).net.defaulted.is_empty());
                 pio_dist_network_free(mem);
             }

@@ -196,12 +196,11 @@ pub fn load_network(path: &Path) -> anyhow::Result<LoadedCase> {
                     lower_to_balanced(net, stem, path)
                 }
                 DetectedFormat::Transmission(format) => {
-                    let parsed =
-                        powerio_matrix::format::parse_str_with_name(&text, format.name(), stem)
-                            .with_context(|| format!("parse {}", path.display()))?;
+                    let parsed = crate::compat::parse_str_with_name(&text, format.name(), stem)
+                        .with_context(|| format!("parse {}", path.display()))?;
                     Ok(LoadedCase {
+                        warnings: parsed.rendered_diagnostics(),
                         network: parsed.network,
-                        warnings: parsed.warnings,
                     })
                 }
                 other => anyhow::bail!(
@@ -217,11 +216,11 @@ pub fn load_network(path: &Path) -> anyhow::Result<LoadedCase> {
             lower_to_balanced(net, stem, path)
         }
         Some(ext) if TRANSMISSION_EXTENSIONS.contains(&ext) => {
-            let parsed = powerio_matrix::parse_file(path, None)
+            let parsed = crate::compat::parse_file(path, None)
                 .with_context(|| format!("parse {}", path.display()))?;
             Ok(LoadedCase {
+                warnings: parsed.rendered_diagnostics(),
                 network: parsed.network,
-                warnings: parsed.warnings,
             })
         }
         _ => anyhow::bail!("cannot infer a case format for {}", path.display()),

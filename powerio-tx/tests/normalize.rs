@@ -1,11 +1,14 @@
 //! `BalancedNetwork::to_normalized`: per-unit / radians / tap / filter / source ids / bus
 //! types, plus the no-false-write-back invariant and `parse_str == parse`.
+mod helpers;
+#[allow(unused_imports)]
+use helpers::*;
 
 use std::path::{Path, PathBuf};
 
 use powerio_tx::{
     BusId, BusType, Error, Generator, IndexedNetwork, NormalizeOptions, Shunt, SourceFormat,
-    Storage, TargetFormat, parse_file, parse_matpower_file, parse_str, write_as,
+    Storage, TargetFormat,
 };
 
 const DEG_TO_RAD: f64 = std::f64::consts::PI / 180.0;
@@ -107,13 +110,11 @@ fn no_false_write_back() {
     let raw = parse_matpower_file(data("case9.m")).unwrap();
     let n = raw.to_normalized().unwrap();
 
-    // A derived product, not a source for write-back.
-    assert!(n.source.is_none());
     assert_eq!(n.source_format, SourceFormat::Normalized);
 
     // Writing it serializes the per-unit/radian model, so it must NOT echo the
     // raw MATPOWER bytes.
-    let out = write_as(&n, TargetFormat::Matpower).unwrap();
+    let out = write_network(&n, TargetFormat::Matpower).unwrap();
     assert_ne!(
         out.text.trim_end(),
         src.replace("\r\n", "\n").trim_end(),
@@ -135,20 +136,20 @@ fn warns_when_writing_normalized_lines_as_transformers() {
             .all(|b| approx(b.tap, 1.0) && approx(b.shift, 0.0))
     );
 
-    let out = write_as(&n, TargetFormat::Psse { rev: 33 }).unwrap();
+    let out = write_network(&n, TargetFormat::Psse { rev: 33 }).unwrap();
     assert!(
-        out.warnings
+        out.rendered_diagnostics()
             .iter()
             .any(|w| w.contains("line/transformer label is not preserved")),
         "expected a normalized line/transformer fidelity warning, got {:?}",
-        out.warnings
+        out.rendered_diagnostics()
     );
 
     // A raw network keeps lines at tap 0, so the warning must not fire for it.
-    let raw_out = write_as(&raw, TargetFormat::Psse { rev: 33 }).unwrap();
+    let raw_out = write_network(&raw, TargetFormat::Psse { rev: 33 }).unwrap();
     assert!(
         !raw_out
-            .warnings
+            .rendered_diagnostics()
             .iter()
             .any(|w| w.contains("line/transformer label is not preserved")),
         "raw network must not trigger the normalized-tap warning"
@@ -559,10 +560,7 @@ fn parse_str_rejects_contentless_input() {
     // baseMVA present but no `bus` table: the zero-bus guard, not a missing
     // required field, is what rejects this.
     let err = parse_str(r#"{"baseMVA": 100}"#, "powermodels").unwrap_err();
-    assert!(
-        matches!(&err, Error::FormatRead { message, .. } if message.contains("no buses")),
-        "expected a no-buses error, got {err:?}"
-    );
+    assert!(err.to_string().contains("no buses"), "{err}");
 }
 
 #[test]

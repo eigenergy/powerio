@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 
 use powerio::{
     BalancedNetwork, BusId, NORMALIZED_SOLVER_TABLES_PASS, NormalizedSolverTables,
-    SolverTableUnits, SourceDocument, SourceFormat,
+    SolverTableUnits, SourceFormat,
 };
 use powerio_dist::{DistSourceFormat, MulticonductorNetwork};
 
@@ -20,7 +20,6 @@ use crate::lowering::{
 use crate::model::{ModelKind, ModelPayload};
 use crate::operating::{
     OperatingPointSeries, apply_operating_point_to_model, check_series_identities,
-    operating_points_drop_code, operating_points_from_document,
 };
 use crate::provenance::{
     Confidence, MappingKind, Origin, Producer, SourceDescriptor, SourceMapEntry, SourceRef,
@@ -251,27 +250,25 @@ impl NetworkPackage {
         }
     }
 
-    /// Wrap the result of a balanced case reader. Reader adapters can attach
-    /// source data that is not part of the balanced network model; an
-    /// operating point series derives from the reader's own parse, handed
-    /// forward as [`powerio::Parsed::document`].
-    pub fn from_parsed_balanced(parsed: powerio::Parsed) -> Self {
-        let mut package = Self::from_balanced_with_read_diagnostics(
-            parsed.network,
-            parsed.diagnostics.into_iter().map(Into::into),
-        );
-        if let Some(document) = &parsed.document {
-            package.attach_operating_points(document);
-        }
-        package
+    /// Wrap a parsed balanced module: the typed network plus the reader's
+    /// findings.
+    pub fn from_balanced_module(module: powerio_core::PioModule<powerio::BalancedNetwork>) -> Self {
+        let diagnostics = module.diagnostics().to_vec();
+        Self::from_balanced_with_read_diagnostics(
+            module.into_value(),
+            diagnostics.into_iter().map(Into::into),
+        )
     }
 
-    fn attach_operating_points(&mut self, document: &SourceDocument) {
-        match operating_points_from_document(document) {
+    /// Attach the operating point series a DOE GO Challenge 3 document
+    /// carries. TEMPORARY: the calculation instance types replace this
+    /// extraction, and the package with it.
+    pub fn attach_goc3_operating_points(&mut self, document: &powerio::format::goc3::Goc3Document) {
+        match crate::operating::goc3_operating_points(document) {
             Ok(series) => self.operating_points = series,
             Err(error) => {
                 self.diagnostics.push(StructuredDiagnostic::of(
-                    operating_points_drop_code(document),
+                    &crate::diagnostics::codes::READ_PACKAGE_OPERATING_POINTS_DROPPED,
                     format!(
                         "time series could not be lifted into operating points; \
                          the package is static only: {error}"
@@ -1532,7 +1529,7 @@ fn balanced_origin(net: &BalancedNetwork) -> Origin {
             path: String::new(),
             format: other.name().to_owned(),
             hash: None,
-            retained_source: net.source.is_some(),
+            retained_source: false,
         },
     }
 }
@@ -1885,7 +1882,7 @@ fn multiconductor_origin(net: &MulticonductorNetwork) -> Origin {
             path: String::new(),
             format: dist_format_name(sf).to_owned(),
             hash: None,
-            retained_source: net.source.is_some(),
+            retained_source: false,
         },
         None => Origin::InMemory,
     }

@@ -136,15 +136,18 @@ impl Goc3BusMap {
     }
 }
 
-/// Parse a GO Challenge 3 JSON input file.
-pub fn parse_goc3_json(content: &str) -> Result<super::Parsed> {
+/// Parse a GO Challenge 3 JSON input file, returning the network, the
+/// reader's findings, and the typed document the parse went through.
+///
+/// TEMPORARY: the stored operating point extraction in `powerio-pkg` consumes
+/// the document; this helper leaves with that crate when DOE GO Challenge 3
+/// parsing moves to the calculation instance types.
+pub fn parse_goc3_json(
+    content: &str,
+) -> Result<(BalancedNetwork, Vec<super::Diagnostic>, Arc<Goc3Document>)> {
     let mut warnings = Diagnostics::new();
-    let (network, document) = parse_goc3_source(Arc::new(content.to_owned()), None, &mut warnings)?;
-    Ok(super::Parsed::new(
-        network,
-        warnings,
-        Some(super::SourceDocument::Goc3(document)),
-    ))
+    let (network, document) = parse_goc3_source(content, None, &mut warnings)?;
+    Ok((network, warnings.into_records(), document))
 }
 
 /// Parse GOC3 source text into the balanced network plus the document the
@@ -152,11 +155,11 @@ pub fn parse_goc3_json(content: &str) -> Result<super::Parsed> {
 /// letting downstream adapters reparse the retained text.
 #[allow(clippy::too_many_lines)]
 pub(crate) fn parse_goc3_source(
-    source: Arc<String>,
+    source: &str,
     name_hint: Option<&str>,
     warnings: &mut Diagnostics,
 ) -> Result<(BalancedNetwork, Arc<Goc3Document>)> {
-    let document = Arc::new(Goc3Document::parse(&source)?);
+    let document = Arc::new(Goc3Document::parse(source)?);
     let root = document.root();
     let network = document.network()?;
 
@@ -268,7 +271,6 @@ pub(crate) fn parse_goc3_source(
         areas: Vec::new(),
         solver: None,
         source_format: SourceFormat::Goc3Json,
-        source: Some(source),
     };
     net.check_references(FMT)?;
     Ok((net, document))
@@ -986,8 +988,8 @@ mod tests {
             r#"{{"network":{{"bus":[{{"uid":"bus_{}","base_nom_volt":100}}]}}}}"#,
             usize::MAX
         );
-        let parsed = parse_goc3_json(&content).unwrap();
-        assert_eq!(parsed.network.buses.len(), 1);
-        assert_eq!(parsed.network.buses[0].id, BusId(1));
+        let (network, _diagnostics, _document) = parse_goc3_json(&content).unwrap();
+        assert_eq!(network.buses.len(), 1);
+        assert_eq!(network.buses[0].id, BusId(1));
     }
 }

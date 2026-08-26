@@ -265,28 +265,11 @@ impl ElementUpdate {
     }
 }
 
-/// Derive the operating point series a retained source document carries, if
-/// any. The format dispatch lives here so package assembly stays format
-/// agnostic; GOC3 is the one document kind with a time series today.
-pub(crate) fn operating_points_from_document(
-    document: &powerio::SourceDocument,
+/// Derive the operating point series a DOE GO Challenge 3 document carries,
+/// if any. GOC3 is the one document kind with a time series today.
+pub(crate) fn goc3_operating_points(
+    document: &Goc3Document,
 ) -> crate::Result<Option<OperatingPointSeries>> {
-    match document {
-        powerio::SourceDocument::Goc3(document) => goc3_operating_points(document),
-        _ => Ok(None),
-    }
-}
-
-/// The code for a document whose series extraction failed. One code for every
-/// format: which format it was is the document's own, and the per format
-/// spellings are retired.
-pub(crate) fn operating_points_drop_code(
-    _document: &powerio::SourceDocument,
-) -> &'static crate::diagnostics::DiagnosticInfo {
-    &crate::diagnostics::codes::READ_PACKAGE_OPERATING_POINTS_DROPPED
-}
-
-fn goc3_operating_points(document: &Goc3Document) -> crate::Result<Option<OperatingPointSeries>> {
     let network = document.network()?;
     let time_series = document.time_series_input()?;
     let Some(general) = time_series.get("general").and_then(Value::as_object) else {

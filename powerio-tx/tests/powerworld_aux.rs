@@ -1,11 +1,14 @@
 //! Real export fidelity tests for the PowerWorld aux reader, against the
 //! vendored ACTIVSg200 complete case export (see
 //! `tests/data/powerworld/README.md`).
+mod helpers;
+#[allow(unused_imports)]
+use helpers::*;
 
 use std::path::{Path, PathBuf};
 
+use powerio_tx::TargetFormat;
 use powerio_tx::format::powerworld::{AuxSection, parse_aux, write_aux};
-use powerio_tx::{TargetFormat, parse_file};
 
 fn fixture(name: &str) -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -93,9 +96,9 @@ fn activsg200_values_survive_tokenizing() {
 /// Same format echo of the real export is byte exact (retained source).
 #[test]
 fn activsg200_echo_is_byte_exact() {
-    let net = parse_file(fixture("ACTIVSg200.aux"), None).unwrap().network;
-    let echo = net.to_format(TargetFormat::PowerWorld).unwrap();
-    assert!(echo.warnings.is_empty());
+    let parsed = parse_file(fixture("ACTIVSg200.aux"), None).unwrap();
+    let echo = parsed.to_format(TargetFormat::PowerWorld).unwrap();
+    assert!(echo.diagnostics.is_empty());
     assert_eq!(echo.text, activsg200());
 }
 

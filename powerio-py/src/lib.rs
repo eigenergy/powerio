@@ -379,13 +379,11 @@ fn package_to_balanced_py(pkg: &NetworkPackage) -> PyResult<PyBalancedNetwork> {
         .as_balanced()
         .ok_or_else(|| PyValueError::new_err("package model_kind is not balanced"))?
         .clone();
-    let core = IndexCore::build(&inner);
-    Ok(PyBalancedNetwork {
+    let _ = warnings;
+    Ok(case_from_parts(
         inner,
-        core,
-        diagnostics: pkg.diagnostics.iter().cloned().map(Into::into).collect(),
-        warnings,
-    })
+        pkg.diagnostics.iter().cloned().map(Into::into).collect(),
+    ))
 }
 
 fn package_to_dist_py(pkg: &NetworkPackage) -> PyResult<PyMulticonductorNetwork> {
@@ -572,10 +570,10 @@ fn build_package_from_path(
         return Ok(pkg);
     }
 
-    let parsed = powerio_matrix::parse_file(input, from_).map_err(core_pyerr)?;
-    let format = parsed.network.source_format.name();
-    let retained_source = parsed.network.source.is_some();
-    let mut pkg = NetworkPackage::from_parsed_balanced(parsed);
+    let module = py_parse_module_path(input, from_)?;
+    let format = module.value().source_format.name();
+    let retained_source = module.source().is_some();
+    let mut pkg = NetworkPackage::from_balanced_module(module);
     set_package_source(
         &mut pkg,
         input,
@@ -628,9 +626,11 @@ fn build_package_from_str(text: &str, from_: Option<&str>) -> PyResult<NetworkPa
         }
     }
 
-    let parsed = powerio_matrix::parse_str(text, source_format.as_deref().unwrap_or("matpower"))
-        .map_err(core_pyerr)?;
-    let mut pkg = NetworkPackage::from_parsed_balanced(parsed);
+    let module = py_parse_module_bytes(
+        text.as_bytes(),
+        source_format.as_deref().unwrap_or("matpower"),
+    )?;
+    let mut pkg = NetworkPackage::from_balanced_module(module);
     pkg.run_sane_validation();
     Ok(pkg)
 }
@@ -693,24 +693,83 @@ fn build_options(scheme: Scheme, include_taps: bool, include_shifts: bool) -> Bu
 /// bus-id map per call.
 #[pyclass(name = "_BalancedNetwork", module = "powerio._powerio")]
 pub struct PyBalancedNetwork {
-    inner: BalancedNetwork,
+    /// The parsed module: the typed network plus retained source and the
+    /// reader's findings. Same format writes echo the retained bytes exactly;
+    /// a handle built from a bare network writes canonically.
+    module: powerio_core::PioModule<BalancedNetwork>,
     core: IndexCore,
-    /// The reader's findings as structured records.
-    diagnostics: Vec<powerio_matrix::diagnostics::Diagnostic>,
-    /// The same findings as `CODE: message` lines.
+    /// The findings as `CODE: message` lines, rendered once at construction.
     warnings: Vec<String>,
 }
 
-/// Wrap a parse result as a `PyBalancedNetwork`, building the index core once and keeping
-/// the reader's fidelity warnings on the handle.
-fn case_from_parsed(parsed: powerio_matrix::Parsed) -> PyBalancedNetwork {
-    let core = IndexCore::build(&parsed.network);
-    PyBalancedNetwork {
-        inner: parsed.network,
-        core,
-        warnings: parsed.warnings,
-        diagnostics: parsed.diagnostics,
+impl PyBalancedNetwork {
+    fn inner(&self) -> &BalancedNetwork {
+        self.module.value()
     }
+
+    fn diagnostics(&self) -> &[powerio_matrix::diagnostics::Diagnostic] {
+        self.module.diagnostics()
+    }
+}
+
+fn core_error_pyerr(error: &powerio_core::Error) -> PyErr {
+    match error.category() {
+        powerio_core::ErrorCategory::Parse => PowerIOParseError::new_err(error.to_string()),
+        _ => PowerIOError::new_err(error.to_string()),
+    }
+}
+
+fn py_parse_module_path(
+    path: &std::path::Path,
+    from: Option<&str>,
+) -> PyResult<powerio_core::PioModule<powerio_matrix::BalancedNetwork>> {
+    let mut source = powerio_core::Source::open(path).map_err(|e| core_error_pyerr(&e))?;
+    if let Some(token) = from {
+        source = source.with_format(
+            powerio_core::FormatId::new(token.to_ascii_lowercase().replace('_', "-"))
+                .map_err(|e| core_error_pyerr(&e))?,
+        );
+    }
+    powerio_matrix::parse(source).map_err(|e| core_error_pyerr(&e))
+}
+
+fn py_parse_module_bytes(
+    bytes: &[u8],
+    from: &str,
+) -> PyResult<powerio_core::PioModule<powerio_matrix::BalancedNetwork>> {
+    let source = powerio_core::Source::from_bytes("<memory>", bytes.to_vec())
+        .map_err(|e| core_error_pyerr(&e))?
+        .with_format(
+            powerio_core::FormatId::new(from.to_ascii_lowercase().replace('_', "-"))
+                .map_err(|e| core_error_pyerr(&e))?,
+        );
+    powerio_matrix::parse(source).map_err(|e| core_error_pyerr(&e))
+}
+
+/// Wrap a parsed module as a `PyBalancedNetwork`, building the index core once
+/// and keeping the reader's findings on the handle.
+fn case_from_module(module: powerio_core::PioModule<BalancedNetwork>) -> PyBalancedNetwork {
+    let core = IndexCore::build(module.value());
+    PyBalancedNetwork {
+        core,
+        warnings: powerio_matrix::diagnostics::render_diagnostics(module.diagnostics()),
+        module,
+    }
+}
+
+/// Wrap a bare network with findings: derived handles carry no retained
+/// source and write canonically.
+fn case_from_parts(
+    network: BalancedNetwork,
+    diagnostics: Vec<powerio_matrix::diagnostics::Diagnostic>,
+) -> PyBalancedNetwork {
+    let mut module = powerio_core::PioModule::new(network);
+    for diagnostic in diagnostics {
+        module
+            .add_diagnostic(diagnostic)
+            .expect("derived findings carry no identities or spans to collide");
+    }
+    case_from_module(module)
 }
 
 fn pwd_display_to_dict<'py>(py: Python<'py>, display: &PwdDisplay) -> PyResult<Bound<'py, PyDict>> {
@@ -747,17 +806,17 @@ impl PyBalancedNetwork {
 
     #[getter]
     fn name(&self) -> String {
-        self.inner.name.clone()
+        self.inner().name.clone()
     }
 
     #[getter]
     fn base_mva(&self) -> f64 {
-        self.inner.base_mva
+        self.inner().base_mva
     }
 
     #[getter]
     fn source_format(&self) -> String {
-        self.inner.source_format.name().to_owned()
+        self.inner().source_format.name().to_owned()
     }
 
     /// Read fidelity warnings attached at parse time: tables and columns the
@@ -771,44 +830,44 @@ impl PyBalancedNetwork {
 
     #[getter]
     fn n_buses(&self) -> usize {
-        self.inner.buses.len()
+        self.inner().buses.len()
     }
 
     #[getter]
     fn n_branches(&self) -> usize {
-        self.inner.branches.len()
+        self.inner().branches.len()
     }
 
     #[getter]
     fn n_gens(&self) -> usize {
-        self.inner.generators.len()
+        self.inner().generators.len()
     }
 
     #[getter]
     fn n_loads(&self) -> usize {
-        self.inner.loads.len()
+        self.inner().loads.len()
     }
 
     #[getter]
     fn n_shunts(&self) -> usize {
-        self.inner.shunts.len()
+        self.inner().shunts.len()
     }
 
     #[getter]
     fn is_radial(&self) -> bool {
-        IndexedNetwork::with_core(&self.inner, &self.core).is_radial()
+        IndexedNetwork::with_core(self.inner(), &self.core).is_radial()
     }
 
     #[getter]
     fn n_connected_components(&self) -> usize {
-        IndexedNetwork::with_core(&self.inner, &self.core).n_connected_components()
+        IndexedNetwork::with_core(self.inner(), &self.core).n_connected_components()
     }
 
     /// Dense `[0, n)` index of the single reference bus. Raises if not exactly
     /// one reference bus is present; for the multi-reference case use
     /// :meth:`reference_bus_indices`.
     fn reference_bus_index(&self) -> PyResult<usize> {
-        IndexedNetwork::with_core(&self.inner, &self.core)
+        IndexedNetwork::with_core(self.inner(), &self.core)
             .reference_bus_index()
             .map_err(core_pyerr)
     }
@@ -817,7 +876,7 @@ impl PyBalancedNetwork {
     /// empty (no reference) or hold several (a slack per island, or a normalized
     /// case that kept the file's multiple references).
     fn reference_bus_indices(&self) -> Vec<usize> {
-        IndexedNetwork::with_core(&self.inner, &self.core).reference_bus_indices()
+        IndexedNetwork::with_core(self.inner(), &self.core).reference_bus_indices()
     }
 
     /// The star-lowered network: each in-service 3-winding transformer replaced
@@ -827,23 +886,19 @@ impl PyBalancedNetwork {
     /// two differ only for a case that carries such a transformer; otherwise
     /// this returns the same tables.
     fn lowered(&self) -> PyBalancedNetwork {
-        let view = IndexedNetwork::with_core(&self.inner, &self.core);
+        let view = IndexedNetwork::with_core(self.inner(), &self.core);
         let inner = view.network().clone();
         let core = IndexCore::build(&inner);
-        PyBalancedNetwork {
-            inner,
-            core,
-            warnings: self.warnings.clone(),
-            diagnostics: self.diagnostics.clone(),
-        }
+        let _ = core;
+        case_from_parts(inner, self.diagnostics().to_vec())
     }
 
     // --- tables (the format-neutral BalancedNetwork, as dict rows) --------------
 
     #[getter]
     fn buses<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyList>> {
-        let mut rows: Vec<Bound<'py, PyDict>> = Vec::with_capacity(self.inner.buses.len());
-        for b in &self.inner.buses {
+        let mut rows: Vec<Bound<'py, PyDict>> = Vec::with_capacity(self.inner().buses.len());
+        for b in &self.inner().buses {
             let d = PyDict::new(py);
             d.set_item("id", b.id.0)?;
             d.set_item("kind", b.kind.as_str())?;
@@ -862,8 +917,8 @@ impl PyBalancedNetwork {
 
     #[getter]
     fn loads<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyList>> {
-        let mut rows: Vec<Bound<'py, PyDict>> = Vec::with_capacity(self.inner.loads.len());
-        for l in &self.inner.loads {
+        let mut rows: Vec<Bound<'py, PyDict>> = Vec::with_capacity(self.inner().loads.len());
+        for l in &self.inner().loads {
             let d = PyDict::new(py);
             d.set_item("bus", l.bus.0)?;
             d.set_item("p", l.p)?;
@@ -877,8 +932,8 @@ impl PyBalancedNetwork {
 
     #[getter]
     fn shunts<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyList>> {
-        let mut rows: Vec<Bound<'py, PyDict>> = Vec::with_capacity(self.inner.shunts.len());
-        for s in &self.inner.shunts {
+        let mut rows: Vec<Bound<'py, PyDict>> = Vec::with_capacity(self.inner().shunts.len());
+        for s in &self.inner().shunts {
             let d = PyDict::new(py);
             d.set_item("bus", s.bus.0)?;
             d.set_item("g", s.g)?;
@@ -892,8 +947,8 @@ impl PyBalancedNetwork {
 
     #[getter]
     fn branches<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyList>> {
-        let mut rows: Vec<Bound<'py, PyDict>> = Vec::with_capacity(self.inner.branches.len());
-        for br in &self.inner.branches {
+        let mut rows: Vec<Bound<'py, PyDict>> = Vec::with_capacity(self.inner().branches.len());
+        for br in &self.inner().branches {
             let d = PyDict::new(py);
             d.set_item("from_id", br.from.0)?;
             d.set_item("to_id", br.to.0)?;
@@ -936,8 +991,8 @@ impl PyBalancedNetwork {
 
     #[getter]
     fn switches<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyList>> {
-        let mut rows: Vec<Bound<'py, PyDict>> = Vec::with_capacity(self.inner.switches.len());
-        for sw in &self.inner.switches {
+        let mut rows: Vec<Bound<'py, PyDict>> = Vec::with_capacity(self.inner().switches.len());
+        for sw in &self.inner().switches {
             let d = PyDict::new(py);
             d.set_item("from_id", sw.from.0)?;
             d.set_item("to_id", sw.to.0)?;
@@ -956,8 +1011,8 @@ impl PyBalancedNetwork {
 
     #[getter]
     fn generators<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyList>> {
-        let mut rows: Vec<Bound<'py, PyDict>> = Vec::with_capacity(self.inner.generators.len());
-        for g in &self.inner.generators {
+        let mut rows: Vec<Bound<'py, PyDict>> = Vec::with_capacity(self.inner().generators.len());
+        for g in &self.inner().generators {
             let d = PyDict::new(py);
             d.set_item("bus", g.bus.0)?;
             d.set_item("pg", g.pg)?;
@@ -994,7 +1049,7 @@ impl PyBalancedNetwork {
     }
 
     fn connectivity_report<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
-        let r = IndexedNetwork::with_core(&self.inner, &self.core).connectivity_report();
+        let r = IndexedNetwork::with_core(self.inner(), &self.core).connectivity_report();
         let d = PyDict::new(py);
         d.set_item("n_buses", r.n_buses)?;
         d.set_item("n_branches_in_service", r.n_branches_in_service)?;
@@ -1006,12 +1061,12 @@ impl PyBalancedNetwork {
     /// Serialize this case to MATPOWER `.m` text. For a MATPOWER-parsed case this
     /// is the byte-exact source echo.
     fn to_matpower(&self) -> String {
-        self.inner.to_matpower()
+        self.inner().to_matpower()
     }
 
     /// Serialize this case to the JSON transport.
     fn to_json(&self) -> PyResult<String> {
-        self.inner.to_json().map_err(core_pyerr)
+        self.inner().to_json().map_err(core_pyerr)
     }
 
     /// Serialize this case to another format. Returns `(text, warnings)`.
@@ -1032,11 +1087,10 @@ impl PyBalancedNetwork {
             gen_cost_csv,
             MissingGenCostPolicy::Preserve,
         )?;
-        let conv = self
-            .inner
-            .to_format_with_options(target, &opts)
-            .map_err(core_pyerr)?;
-        Ok((conv.text, conv.warnings))
+        let conv = powerio_matrix::write_as_with_options(&self.module, target, &opts)
+            .map_err(|e| core_error_pyerr(&e))?;
+        let rendered = conv.rendered_diagnostics();
+        Ok((conv.text, rendered))
     }
 
     /// Serialize this case to `to`, bypassing source echo for the same
@@ -1045,8 +1099,12 @@ impl PyBalancedNetwork {
         let target = to
             .parse::<powerio_matrix::TargetFormat>()
             .map_err(core_pyerr)?;
-        let conv = self.inner.to_canonical_format(target).map_err(core_pyerr)?;
-        Ok((conv.text, conv.warnings))
+        let conv = self
+            .inner()
+            .to_canonical_format(target)
+            .map_err(core_pyerr)?;
+        let rendered = conv.rendered_diagnostics();
+        Ok((conv.text, rendered))
     }
 
     /// Serialize this case to `to` and write it to `path` exactly as
@@ -1076,14 +1134,8 @@ impl PyBalancedNetwork {
     /// canonicalized. The raw case is unchanged; the result carries no retained
     /// source, so writing it serializes the per-unit model rather than echoing.
     fn to_normalized(&self) -> PyResult<PyBalancedNetwork> {
-        let inner = self.inner.to_normalized().map_err(core_pyerr)?;
-        let core = IndexCore::build(&inner);
-        Ok(PyBalancedNetwork {
-            inner,
-            core,
-            warnings: self.warnings.clone(),
-            diagnostics: self.diagnostics.clone(),
-        })
+        let normalized = self.inner().to_normalized().map_err(core_pyerr)?;
+        Ok(case_from_parts(normalized, self.diagnostics().to_vec()))
     }
 
     #[pyo3(signature = (*, clamp_angle_bounds=false, angle_bound_pad=None))]
@@ -1097,20 +1149,12 @@ impl PyBalancedNetwork {
             angle_bound_pad: angle_bound_pad.unwrap_or(POWER_MODELS_ANGLE_BOUND_PAD),
         };
         let normalized = self
-            .inner
+            .inner()
             .to_normalized_with_options(&options)
             .map_err(core_pyerr)?;
-        let core = IndexCore::build(&normalized.network);
-        let mut warnings = self.warnings.clone();
-        warnings.extend(normalized.warnings);
-        let mut diagnostics = self.diagnostics.clone();
+        let mut diagnostics = self.diagnostics().to_vec();
         diagnostics.extend(normalized.diagnostics);
-        Ok(PyBalancedNetwork {
-            inner: normalized.network,
-            core,
-            diagnostics,
-            warnings,
-        })
+        Ok(case_from_parts(normalized.network, diagnostics))
     }
 
     // --- matrix builders: each returns a COO tuple ----------------------
@@ -1122,7 +1166,7 @@ impl PyBalancedNetwork {
             scheme: parse_scheme(scheme.unwrap_or("bx"))?,
             ..BuildOptions::default()
         };
-        let view = IndexedNetwork::with_core(&self.inner, &self.core);
+        let view = IndexedNetwork::with_core(self.inner(), &self.core);
         let m = build_bprime(&view, &opts).map_err(to_pyerr)?;
         coo_triplets(py, &m)
     }
@@ -1138,7 +1182,7 @@ impl PyBalancedNetwork {
             scheme: parse_scheme(scheme.unwrap_or("bx"))?,
             ..BuildOptions::default()
         };
-        let view = IndexedNetwork::with_core(&self.inner, &self.core);
+        let view = IndexedNetwork::with_core(self.inner(), &self.core);
         let m = build_bdoubleprime(&view, &opts).map_err(to_pyerr)?;
         coo_triplets(py, &m)
     }
@@ -1151,13 +1195,13 @@ impl PyBalancedNetwork {
         include_shifts: bool,
     ) -> PyResult<Bound<'py, PyAny>> {
         let opts = build_options(Scheme::Bx, include_taps, include_shifts);
-        let view = IndexedNetwork::with_core(&self.inner, &self.core);
+        let view = IndexedNetwork::with_core(self.inner(), &self.core);
         let m = build_lacpf(&view, &opts).map_err(to_pyerr)?;
         coo_triplets(py, &m)
     }
 
     fn adjacency<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
-        let view = IndexedNetwork::with_core(&self.inner, &self.core);
+        let view = IndexedNetwork::with_core(self.inner(), &self.core);
         let m = build_adjacency(&view).map_err(to_pyerr)?;
         coo_triplets(py, &m)
     }
@@ -1171,7 +1215,7 @@ impl PyBalancedNetwork {
         include_shifts: bool,
     ) -> PyResult<Bound<'py, PyAny>> {
         let opts = build_options(Scheme::Bx, include_taps, include_shifts);
-        let view = IndexedNetwork::with_core(&self.inner, &self.core);
+        let view = IndexedNetwork::with_core(self.inner(), &self.core);
         let yb = build_ybus(&view, &opts).map_err(to_pyerr)?;
         let g = coo_triplets(py, &yb.g)?;
         let b = coo_triplets(py, &yb.b)?;
@@ -1186,7 +1230,7 @@ impl PyBalancedNetwork {
         solver: Option<&str>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let opts = sensitivity_options(convention, solver)?;
-        let view = IndexedNetwork::with_core(&self.inner, &self.core);
+        let view = IndexedNetwork::with_core(self.inner(), &self.core);
         let m = build_ptdf_lodf_with_options(&view, &opts).map_err(to_pyerr)?;
         coo_triplets(py, &m.ptdf)
     }
@@ -1199,7 +1243,7 @@ impl PyBalancedNetwork {
         solver: Option<&str>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let opts = sensitivity_options(convention, solver)?;
-        let view = IndexedNetwork::with_core(&self.inner, &self.core);
+        let view = IndexedNetwork::with_core(self.inner(), &self.core);
         let m = build_ptdf_lodf_with_options(&view, &opts).map_err(to_pyerr)?;
         coo_triplets(py, &m.lodf)
     }
@@ -1214,7 +1258,7 @@ impl PyBalancedNetwork {
         convention: Option<&str>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let conv = parse_convention(convention.unwrap_or("series"))?;
-        let view = IndexedNetwork::with_core(&self.inner, &self.core);
+        let view = IndexedNetwork::with_core(self.inner(), &self.core);
         let parts = build_incidence(&view, conv, &BuildOptions::default()).map_err(to_pyerr)?;
         let a = coo_triplets(py, &parts.a)?;
         let b = parts.b;
@@ -1231,7 +1275,7 @@ impl PyBalancedNetwork {
         convention: Option<&str>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let conv = parse_convention(convention.unwrap_or("series"))?;
-        let view = IndexedNetwork::with_core(&self.inner, &self.core);
+        let view = IndexedNetwork::with_core(self.inner(), &self.core);
         let parts = build_incidence(&view, conv, &BuildOptions::default()).map_err(to_pyerr)?;
         let l = build_weighted_laplacian(&parts.a, &parts.b);
         coo_triplets(py, &l)
@@ -1242,7 +1286,7 @@ impl PyBalancedNetwork {
     /// default) or "native".
     #[pyo3(signature = (units=None))]
     fn acopf_json(&self, units: Option<&str>) -> PyResult<String> {
-        let view = IndexedNetwork::with_core(&self.inner, &self.core);
+        let view = IndexedNetwork::with_core(self.inner(), &self.core);
         let instance = build_ac_opf_instance(
             &view,
             &AcOpfOptions {
@@ -1257,7 +1301,7 @@ impl PyBalancedNetwork {
     /// This network's coordinates as the canonical GeoJSON layer. Raises when
     /// the network carries none.
     fn geo_layer_json(&self) -> PyResult<String> {
-        self.inner
+        self.inner()
             .geo_layer()
             .extracted_geojson()
             .map_err(|error| PyValueError::new_err(error.to_string()))
@@ -1276,22 +1320,15 @@ impl PyBalancedNetwork {
     ) -> PyResult<(PyBalancedNetwork, Bound<'py, PyDict>)> {
         let parsed = powerio_matrix::geo::GeoLayer::parse_bytes(text.as_bytes(), name_hint)
             .map_err(|error| PowerIOParseError::new_err(error.to_string()))?;
-        let mut inner = self.inner.clone();
+        let mut inner = self.inner().clone();
         let report = inner.apply_geo_layer(&parsed.layer);
-        inner.source = None;
-        let mut warnings = self.warnings.clone();
-        warnings.extend(parsed.warnings);
-        let mut diagnostics = self.diagnostics.clone();
+        let mut diagnostics = self.diagnostics().to_vec();
         diagnostics.extend(parsed.diagnostics);
         // Locations never move buses, so the cached index stays valid.
         let core = self.core.clone();
+        let _ = core;
         Ok((
-            PyBalancedNetwork {
-                inner,
-                core,
-                diagnostics,
-                warnings,
-            },
+            case_from_parts(inner, diagnostics),
             geo_report_dict(py, &report)?,
         ))
     }
@@ -1316,7 +1353,7 @@ impl PyBalancedNetwork {
             gen_cost_csv,
             MissingGenCostPolicy::Require,
         )?;
-        let mut policy_network = self.inner.clone();
+        let mut policy_network = self.inner().clone();
         let cost_report = policy_network
             .apply_gen_cost_policy(&cost_opts.gen_cost_patches, cost_opts.missing_gen_cost)
             .map_err(core_pyerr)?;
@@ -1373,7 +1410,7 @@ impl PyBalancedNetwork {
             gen_cost_patches: cost_opts.gen_cost_patches,
         };
         let outputs =
-            gridfm_write_dataset(&self.inner, scenario, out_dir, &opts).map_err(to_pyerr)?;
+            gridfm_write_dataset(self.inner(), scenario, out_dir, &opts).map_err(to_pyerr)?;
         gridfm_outputs_to_dict(py, &outputs)
     }
 
@@ -1385,17 +1422,17 @@ impl PyBalancedNetwork {
         out_dir: &str,
     ) -> PyResult<Bound<'py, PyDict>> {
         let outputs =
-            powerio_matrix::write_pypsa_csv_folder(&self.inner, out_dir).map_err(core_pyerr)?;
+            powerio_matrix::write_pypsa_csv_folder(self.inner(), out_dir).map_err(core_pyerr)?;
         pypsa_outputs_to_dict(py, &outputs)
     }
 
     fn __repr__(&self) -> String {
         format!(
             "BalancedNetwork(name={:?}, n_buses={}, n_branches={}, n_gens={})",
-            self.inner.name,
-            self.inner.buses.len(),
-            self.inner.branches.len(),
-            self.inner.generators.len()
+            self.inner().name,
+            self.inner().buses.len(),
+            self.inner().branches.len(),
+            self.inner().generators.len()
         )
     }
 }
@@ -1405,9 +1442,7 @@ impl PyBalancedNetwork {
 #[pyfunction]
 #[pyo3(signature = (path, from_=None))]
 fn parse_file(path: &str, from_: Option<&str>) -> PyResult<PyBalancedNetwork> {
-    powerio_matrix::parse_file(std::path::Path::new(path), from_)
-        .map(case_from_parsed)
-        .map_err(core_pyerr)
+    py_parse_module_path(std::path::Path::new(path), from_).map(case_from_module)
 }
 
 /// Parse a case from in-memory text in the named source format `from_`
@@ -1417,9 +1452,7 @@ fn parse_file(path: &str, from_: Option<&str>) -> PyResult<PyBalancedNetwork> {
 #[pyfunction]
 #[pyo3(signature = (text, from_))]
 fn parse_str(text: &str, from_: &str) -> PyResult<PyBalancedNetwork> {
-    powerio_matrix::parse_str(text, from_)
-        .map(case_from_parsed)
-        .map_err(core_pyerr)
+    py_parse_module_bytes(text.as_bytes(), from_).map(case_from_module)
 }
 
 /// Parse a case from in-memory bytes in the named source format `from_`.
@@ -1429,9 +1462,7 @@ fn parse_str(text: &str, from_: &str) -> PyResult<PyBalancedNetwork> {
 #[pyfunction]
 #[pyo3(signature = (data, from_))]
 fn parse_bytes(data: &[u8], from_: &str) -> PyResult<PyBalancedNetwork> {
-    powerio_matrix::parse_bytes(data, from_)
-        .map(case_from_parsed)
-        .map_err(core_pyerr)
+    py_parse_module_bytes(data, from_).map(case_from_module)
 }
 
 /// Parse a display file from a path, inferring the format from the extension
@@ -1465,21 +1496,13 @@ fn parse_display_bytes<'py>(
 #[pyfunction]
 fn from_json(text: &str) -> PyResult<PyBalancedNetwork> {
     let inner = powerio_matrix::BalancedNetwork::from_json(text).map_err(core_pyerr)?;
-    let core = IndexCore::build(&inner);
-    Ok(PyBalancedNetwork {
-        inner,
-        core,
-        warnings: Vec::new(),
-        diagnostics: Vec::new(),
-    })
+    Ok(case_from_parts(inner, Vec::new()))
 }
 
 /// Read a PyPSA CSV folder into a case.
 #[pyfunction]
 fn read_pypsa_csv_folder(path: &str) -> PyResult<PyBalancedNetwork> {
-    powerio_matrix::read_pypsa_csv_folder(std::path::Path::new(path))
-        .map(case_from_parsed)
-        .map_err(core_pyerr)
+    py_parse_module_path(std::path::Path::new(path), Some("pypsa-csv")).map(case_from_module)
 }
 
 /// Convert a case file to another format through the network model. Returns
@@ -1511,12 +1534,13 @@ fn convert_file(
     )?;
     let conv =
         powerio_matrix::convert_file_with_options(std::path::Path::new(path), target, from_, &opts)
-            .map_err(core_pyerr)?;
+            .map_err(|e| core_error_pyerr(&e))?;
     if let Some(out) = out {
         std::fs::write(out, &conv.text)
             .map_err(|e| PowerIOError::new_err(format!("writing {out}: {e}")))?;
     }
-    Ok((conv.text, conv.warnings))
+    let rendered = conv.rendered_diagnostics();
+    Ok((conv.text, rendered))
 }
 
 /// Convert in-memory case `text` to another format through the network model,
@@ -1543,8 +1567,9 @@ fn convert_str(
     )?;
     let conv =
         powerio_matrix::convert_str_with_options(text, target, from_.unwrap_or("matpower"), &opts)
-            .map_err(core_pyerr)?;
-    Ok((conv.text, conv.warnings))
+            .map_err(|e| core_error_pyerr(&e))?;
+    let rendered = conv.rendered_diagnostics();
+    Ok((conv.text, rendered))
 }
 
 /// Writes `text` to `path` and every sidecar beside it.
@@ -1847,8 +1872,8 @@ impl PyPackage {
         include_solver_metadata: bool,
     ) -> PyResult<Self> {
         let mut pkg = NetworkPackage::from_balanced_with_read_diagnostics(
-            network.inner.clone(),
-            network.diagnostics.iter().cloned().map(Into::into),
+            network.inner().clone(),
+            network.diagnostics().iter().cloned().map(Into::into),
         );
         if include_solver_metadata {
             pkg.attach_normalized_solver_table_metadata()
@@ -2113,7 +2138,7 @@ fn pypsa_outputs_to_dict<'py>(
     outputs: &powerio_matrix::PypsaCsvOutputs,
 ) -> PyResult<Bound<'py, PyDict>> {
     let d = dir_files_dict(py, &outputs.dir, &outputs.files)?;
-    d.set_item("warnings", &outputs.warnings)?;
+    d.set_item("warnings", outputs.rendered_diagnostics())?;
     Ok(d)
 }
 
@@ -2152,7 +2177,7 @@ fn write_gridfm_batch<'py>(
     };
     // The shared numbering builder stamps the k-th case `base_scenario + k`, the
     // same rule (and checked arithmetic) the CLI uses.
-    let net_refs: Vec<_> = cases.iter().map(|c| &c.inner).collect();
+    let net_refs: Vec<_> = cases.iter().map(|c| c.inner()).collect();
     let snapshots = numbered_snapshots(&net_refs, base_scenario).map_err(to_pyerr)?;
     let outputs = gridfm_write_batch(&snapshots, out_dir, &opts).map_err(to_pyerr)?;
     gridfm_outputs_to_dict(py, &outputs)
@@ -2164,14 +2189,8 @@ fn write_gridfm_batch<'py>(
 /// and the fidelity warnings the lossy read surfaced.
 #[cfg(feature = "gridfm")]
 fn gridfm_read_to_py(read: GridfmRead) -> (PyBalancedNetwork, i64, Vec<String>) {
-    let core = IndexCore::build(&read.network);
     (
-        PyBalancedNetwork {
-            inner: read.network,
-            core,
-            warnings: read.warnings.clone(),
-            diagnostics: read.diagnostics.clone(),
-        },
+        case_from_parts(read.network, read.diagnostics.clone()),
         read.scenario,
         read.warnings,
     )

@@ -630,7 +630,6 @@ fn checked_network(
         areas: Vec::new(),
         solver: None,
         source_format: SourceFormat::PowerWorldBinary,
-        source: None,
     };
     net.check_references(FMT).map(|()| net)
 }
@@ -2013,7 +2012,6 @@ mod tests {
             areas: Vec::new(),
             solver: None,
             source_format: SourceFormat::PowerWorldBinary,
-            source: None,
         }
     }
 

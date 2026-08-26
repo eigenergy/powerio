@@ -9,8 +9,21 @@ use crate::matrix::{
     triplet::CooBuilder,
 };
 use crate::network::{BalancedNetwork, Branch, BranchCharging, Bus, BusId, BusType, Shunt};
-use crate::parse_psse;
 use crate::pipeline::{MatrixKind, matrix_stats_for_kind};
+
+#[allow(dead_code)]
+fn parse_named(text: &str, from: &str) -> BalancedNetwork {
+    let source = powerio_core::Source::from_bytes("<memory>", text.as_bytes().to_vec())
+        .unwrap()
+        .with_format(powerio_core::FormatId::new(from).unwrap());
+    crate::parse(source).unwrap().into_value()
+}
+
+fn parse_psse(text: &str) -> Result<BalancedNetwork, powerio_core::Error> {
+    let source = powerio_core::Source::from_bytes("case.raw", text.as_bytes().to_vec())?
+        .with_format(powerio_core::FormatId::new("psse")?);
+    crate::parse(source).map(powerio_core::PioModule::into_value)
+}
 
 fn bus(id: usize, kind: BusType) -> Bus {
     Bus::new(BusId(id), kind, 345.0)

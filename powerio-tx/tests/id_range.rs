@@ -1,10 +1,11 @@
 //! Readers refuse an id column value the id space cannot represent (issue
 //! #341): `1e300` or a negative id must produce a read error naming the
 //! column, never a saturated `usize` id.
+mod helpers;
+#[allow(unused_imports)]
+use helpers::*;
 
 use std::path::PathBuf;
-
-use powerio_tx::parse_file;
 
 fn temp_path(name: &str) -> PathBuf {
     let mut path = std::env::temp_dir();

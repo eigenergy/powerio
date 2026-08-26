@@ -9,7 +9,6 @@
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fmt::Write as _;
-use std::sync::Arc;
 
 use serde_json::{Number, Value};
 
@@ -33,18 +32,13 @@ const NAME_FORBIDDEN: &[char] = &['"'];
 /// Read warnings are available through the shared [`crate::parse_file`] /
 /// [`crate::parse_str`] entry points. This direct helper keeps the older
 /// format-module convention and returns only the typed network.
-pub fn parse_pslf(content: &str) -> Result<BalancedNetwork> {
-    let mut warnings = Diagnostics::new();
-    parse_pslf_source(Arc::new(content.to_owned()), None, &mut warnings)
-}
-
 /// Parse retained source from the format hub.
 pub(crate) fn parse_pslf_source(
-    source: Arc<String>,
+    source: &str,
     name_hint: Option<&str>,
     warnings: &mut Diagnostics,
 ) -> Result<BalancedNetwork> {
-    let doc = parse_document(&source, warnings);
+    let doc = parse_document(source, warnings);
     let base_mva = doc.base_mva(warnings);
     let name = doc.name(name_hint);
     let mut once = HashSet::new();
@@ -138,7 +132,6 @@ pub(crate) fn parse_pslf_source(
         areas: Vec::new(),
         solver: None,
         source_format: SourceFormat::Pslf,
-        source: Some(source),
     };
     net.check_references(FMT)?;
     Ok(net)
@@ -2032,7 +2025,7 @@ end
 
         // Firing angle limits stated on the rectifier: retained-only data.
         let mut warnings = Diagnostics::new();
-        let net = parse_pslf_source(Arc::new(epc(" 15 90")), None, &mut warnings).unwrap();
+        let net = parse_pslf_source(&epc(" 15 90"), None, &mut warnings).unwrap();
         assert_eq!(net.hvdc.len(), 1);
         assert!(
             warnings
@@ -2044,7 +2037,7 @@ end
 
         // The neutral shape the writer emits: nothing beyond status/p/q/rate.
         let mut warnings = Diagnostics::new();
-        let net = parse_pslf_source(Arc::new(epc("")), None, &mut warnings).unwrap();
+        let net = parse_pslf_source(&epc(""), None, &mut warnings).unwrap();
         assert_eq!(net.hvdc.len(), 1);
         assert!(
             !warnings
@@ -2083,7 +2076,7 @@ end
 "#;
 
         let mut warnings = Diagnostics::new();
-        let net = parse_pslf_source(Arc::new(epc.to_string()), None, &mut warnings).unwrap();
+        let net = parse_pslf_source(epc, None, &mut warnings).unwrap();
 
         assert_eq!(net.source_format, SourceFormat::Pslf);
         assert_eq!(net.buses.len(), 2);
@@ -2096,14 +2089,6 @@ end
         close(net.loads[0].q, 5.0);
         close(net.shunts[0].b, 10.0);
         assert!(warnings.lines().iter().any(|w| w.contains("ZIP load")));
-    }
-
-    #[test]
-    fn same_source_text_is_retained() {
-        let epc = "title\nx\n!\nsolution parameters\nsbase 100\n!\nbus data [1]\n1 \"A\" 1 : 0 1 1 0 1 1 1.1 0.9\nend\n";
-        let mut warnings = Diagnostics::new();
-        let net = parse_pslf_source(Arc::new(epc.to_string()), None, &mut warnings).unwrap();
-        assert_eq!(net.source.as_deref().map(String::as_str), Some(epc));
     }
 
     #[test]
@@ -2175,11 +2160,11 @@ end
 
         let conv = write_pslf(&net);
         assert!(
-            conv.warnings
+            conv.rendered_diagnostics()
                 .iter()
                 .any(|w| w.contains("transformer charging admittance")),
             "{:?}",
-            conv.warnings
+            conv.rendered_diagnostics()
         );
     }
 

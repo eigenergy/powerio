@@ -481,6 +481,78 @@ impl Source {
         }
     }
 
+    /// The root relative file names of a directory source, in sorted order,
+    /// so a directory format can report files outside its profile without
+    /// touching the filesystem itself. Symbolic links are listed by name and
+    /// refused if acquired. The listing is bounded by the referenced file
+    /// budget; a directory holding more entries is refused.
+    pub fn entry_names(&self) -> Result<Vec<crate::ArtifactPath>, Error> {
+        match &*self.provider {
+            SourceProvider::Memory { named, .. } => named
+                .keys()
+                .map(|name| crate::ArtifactPath::new(name.clone()))
+                .collect(),
+            SourceProvider::File { .. } => Err(Error::new(
+                &crate::codes::REQUEST_SOURCE_DIRECTORY_REQUIRED,
+                "entry listing requires a directory source",
+            )
+            .with_source(self.clone())),
+            SourceProvider::Directory { acquisition } => {
+                let mut names = Vec::new();
+                let mut pending = vec![Vec::<String>::new()];
+                while let Some(prefix) = pending.pop() {
+                    let mut path = acquisition.root_display.clone();
+                    for segment in &prefix {
+                        path.push(segment);
+                    }
+                    let entries = std::fs::read_dir(&path).map_err(|cause| {
+                        Error::new(
+                            &crate::codes::READ_IO_METADATA,
+                            format!("cannot list source directory `{}`", path.display()),
+                        )
+                        .with_cause(cause)
+                    })?;
+                    for entry in entries {
+                        let entry = entry.map_err(|cause| {
+                            Error::new(
+                                &crate::codes::READ_IO_METADATA,
+                                format!("cannot list source directory `{}`", path.display()),
+                            )
+                            .with_cause(cause)
+                        })?;
+                        let Ok(name) = entry.file_name().into_string() else {
+                            continue;
+                        };
+                        if names.len() + pending.len() >= MAX_REFERENCED_FILES {
+                            return Err(Error::new(
+                                &crate::codes::READ_IO_REFERENCE_BUDGET,
+                                format!(
+                                    "the source directory holds more than {MAX_REFERENCED_FILES} entries"
+                                ),
+                            ));
+                        }
+                        let file_type = entry.file_type().map_err(|cause| {
+                            Error::new(
+                                &crate::codes::READ_IO_METADATA,
+                                format!("cannot inspect source directory entry `{name}`"),
+                            )
+                            .with_cause(cause)
+                        })?;
+                        let mut child = prefix.clone();
+                        child.push(name);
+                        if file_type.is_dir() {
+                            pending.push(child);
+                        } else {
+                            names.push(crate::ArtifactPath::new(child.join("/"))?);
+                        }
+                    }
+                }
+                names.sort();
+                Ok(names)
+            }
+        }
+    }
+
     /// Buffers already retained by this source, in deterministic name order.
     #[must_use]
     pub fn acquired_buffers(&self) -> Vec<SourceBuffer> {

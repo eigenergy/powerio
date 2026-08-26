@@ -797,7 +797,6 @@ impl BalancedNetwork {
             areas: Vec::new(),
             solver: None,
             source_format: SourceFormat::Normalized,
-            source: None,
         };
         // The filter drops every reference to a dropped bus by
         // construction, so the result is reference-consistent. Assert it in

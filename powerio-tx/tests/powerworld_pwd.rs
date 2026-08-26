@@ -7,6 +7,9 @@
 //! keep the correlation just under exact). Hawaii40, never hand edited,
 //! reproduces the projection bit for bit and pins its constant.
 //! Evidence is in `powerio/src/format/powerworld/FORMAT.md`.
+mod helpers;
+#[allow(unused_imports)]
+use helpers::*;
 
 mod common;
 
@@ -15,9 +18,7 @@ use std::fs;
 use std::path::Path;
 
 use powerio_tx::format::powerworld::{parse_aux, parse_pwd, parse_pwd_display, parse_pwd_file};
-use powerio_tx::{
-    DisplayData, PwdDisplay, PwdSubstation, parse_display_bytes, parse_display_file, parse_file,
-};
+use powerio_tx::{DisplayData, PwdDisplay, PwdSubstation, parse_display_bytes, parse_display_file};
 
 /// (number, name, latitude, longitude) per aux Substation row. Handles both
 /// naming vocabularies (classic SubNum/SubName, 2022 Number/Name).

@@ -9,46 +9,22 @@ mod writer;
 #[cfg(test)]
 mod tests;
 
-use std::path::Path;
-use std::sync::Arc;
-
 pub use writer::write_matpower;
 pub(crate) use writer::write_matpower_conversion;
 
 use crate::network::{BalancedNetwork, Generator, Hvdc, SourceFormat};
 use crate::{Error, Result};
 
-/// Parse the MATPOWER case in `content` into a [`BalancedNetwork`].
-pub fn parse_matpower(content: &str) -> Result<BalancedNetwork> {
-    // The caller owns `content` as a borrow, so retention needs one copy.
-    parse_matpower_source(Arc::new(content.to_owned()), None)
-}
-
-/// Parse the MATPOWER case at `path`, using the file stem as the network name.
-pub fn parse_matpower_file(path: impl AsRef<Path>) -> Result<BalancedNetwork> {
-    let path = path.as_ref();
-    let content =
-        std::fs::read_to_string(path).map_err(|e| crate::format::named_io_error(path, &e))?;
-    let name = path
-        .file_stem()
-        .and_then(|s| s.to_str())
-        .unwrap_or("case")
-        .to_string();
-    // We own the file buffer; move it straight into the retained source — no
-    // second copy of the whole file.
-    parse_matpower_named(Arc::new(content), &name)
-}
-
 /// Owned-source entry used by the format hub: move the buffer straight into the
 /// retained source (no copy) and take `name_hint` (e.g. the file stem) as the
 /// network name.
 pub(crate) fn parse_matpower_source(
-    source: Arc<String>,
+    source: &str,
     name_hint: Option<&str>,
 ) -> Result<BalancedNetwork> {
     let name = name_hint
         .map(str::to_owned)
-        .or_else(|| matpower_function_name(&source).map(str::to_owned))
+        .or_else(|| matpower_function_name(source).map(str::to_owned))
         .unwrap_or_else(|| "case".to_string());
     parse_matpower_named(source, &name)
 }
@@ -77,12 +53,12 @@ fn matpower_function_name(source: &str) -> Option<&str> {
     None
 }
 
-fn parse_matpower_named(source: Arc<String>, name: &str) -> Result<BalancedNetwork> {
+fn parse_matpower_named(source: &str, name: &str) -> Result<BalancedNetwork> {
     // Locate each assignment's text directly in `source` and build the network
     // from those borrowed slices in one pass; the typed model owns its data, so
     // the borrows end with `located` and the source Arc moves into the network.
-    let mut net = {
-        let located = locate::locate_assignments(&source);
+    let net = {
+        let located = locate::locate_assignments(source);
         build_case(name, |field| {
             located
                 .iter()
@@ -90,7 +66,6 @@ fn parse_matpower_named(source: Arc<String>, name: &str) -> Result<BalancedNetwo
                 .map(|(_, full)| *full)
         })?
     };
-    net.source = Some(source);
     // The other format readers validate references; the MATPOWER path must too,
     // or a duplicate or dangling bus id reaches `IndexedNetwork` as silently
     // collapsed aggregates (the dense bus-id map only debug-asserts uniqueness).
@@ -167,7 +142,6 @@ fn build_case<'a>(name: &str, get: impl Fn(&str) -> Option<&'a str>) -> Result<B
         areas,
         solver: None,
         source_format: SourceFormat::Matpower,
-        source: None,
     })
 }
 

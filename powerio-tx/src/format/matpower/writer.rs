@@ -15,30 +15,21 @@ use crate::format::{Conversion, warn_extra_branch_rating_sets};
 
 /// The MATPOWER write side family, named once for the block below.
 use crate::diagnostics::codes::EMIT_MATPOWER as F;
-use crate::network::{BalancedNetwork, BusId, GenCost, Generator, SourceFormat};
+use crate::network::{BalancedNetwork, BusId, GenCost, Generator};
 
-/// Serialize `net` to MATPOWER `.m` text. Echoes the retained source verbatim
-/// when `net` came from MATPOWER; otherwise emits canonical `.m`.
+/// Serialize `net` to canonical MATPOWER `.m` text from the typed model. The
+/// byte exact echo of an unchanged parsed module lives on the module write
+/// path ([`crate::write_as`]); this is the semantic writer.
 #[must_use]
 pub fn write_matpower(net: &BalancedNetwork) -> String {
-    match &net.source {
-        Some(text) if net.source_format == SourceFormat::Matpower => text.to_string(),
-        _ => canonical(net),
-    }
+    canonical(net)
 }
 
-/// MATPOWER conversion with fidelity warnings. The byte-exact echo path (a
-/// network that kept its MATPOWER source) drops nothing; the canonical path
-/// can't carry everything the neutral model holds, so it itemizes what it leaves
-/// out — the cross-format leg of the fidelity behavior (see [`Conversion`]).
+/// MATPOWER conversion with fidelity warnings: the canonical path can't carry
+/// everything the neutral model holds, so it itemizes what it leaves out, the
+/// cross-format leg of the fidelity behavior (see [`Conversion`]).
 pub(crate) fn write_matpower_conversion(net: &BalancedNetwork) -> Conversion {
-    let text = write_matpower(net);
-    // Echoed retained MATPOWER source: byte-exact, nothing dropped.
-    if net.source.is_some() && net.source_format == SourceFormat::Matpower {
-        return Conversion::faithful(text);
-    }
-
-    Conversion::new(text, canonical_warnings(net))
+    Conversion::new(write_matpower(net), canonical_warnings(net))
 }
 
 /// One bus name as a MATLAB single-quoted string body.

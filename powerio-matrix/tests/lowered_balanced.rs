@@ -1,3 +1,6 @@
+mod helpers;
+#[allow(unused_imports)]
+use helpers::*;
 use powerio_matrix::{BuildOptions, IndexedNetwork, build_bprime, build_ybus};
 use powerio_pkg::{MulticonductorToBalancedOptions, lower_multiconductor_to_balanced};
 

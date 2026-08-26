@@ -1,11 +1,13 @@
 //! Regression fixture for solver facing matrix properties on standard cases.
+mod helpers;
+#[allow(unused_imports)]
+use helpers::*;
 
 use std::path::PathBuf;
 
 use powerio_matrix::matrix::{BuildOptions, MatrixStats, sddm_check};
 use powerio_matrix::{
     IndexedNetwork, MatrixKind, build_kind, ground_at_each, matrix_stats_for_kind,
-    parse_matpower_file,
 };
 use serde::{Deserialize, Serialize};
 use sprs::CsMat;

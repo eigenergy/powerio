@@ -10,13 +10,13 @@
 // The base frequency is an exact decimal (60.0) read from the header; bit
 // equality is the intended assertion.
 #![allow(clippy::float_cmp)]
+mod helpers;
+#[allow(unused_imports)]
+use helpers::*;
 
 use std::path::{Path, PathBuf};
 
-use powerio_tx::{
-    BalancedNetwork, TransformerControl, TransformerControlMode, parse_matpower_file, parse_psse,
-    write_psse_rev,
-};
+use powerio_tx::{BalancedNetwork, TransformerControl, TransformerControlMode, write_psse_rev};
 
 fn data(name: &str) -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))

@@ -8,7 +8,6 @@
 
 use std::collections::{BTreeMap, HashMap};
 use std::fmt::Write as _;
-use std::sync::Arc;
 
 use super::auxiliary::{AuxFile, AuxObject, parse_aux};
 use crate::diagnostics::codes::EMIT_POWERWORLD as F;
@@ -38,12 +37,12 @@ pub(super) const BRANCH_DEVICE_TYPE: &str = "BranchDeviceType";
 /// move the buffer into the retained source (no copy). `name_hint` (e.g. a file
 /// stem) names the network when the `.aux` carries no export marker.
 #[expect(clippy::too_many_lines)]
-pub(crate) fn parse_powerworld_source(
-    source: Arc<String>,
+pub(in crate::format) fn parse_powerworld_source(
+    source: &str,
     name_hint: Option<&str>,
     warnings: &mut Diagnostics,
 ) -> Result<BalancedNetwork> {
-    let content: &str = &source;
+    let content: &str = source;
     // PowerWorld `.aux` does not carry the system base in the case data, so we
     // default to 100 MVA (the de-facto standard, and what our own writer records
     // in the `// baseMVA` marker below). Reading a real base from PowerWorld's
@@ -167,7 +166,6 @@ pub(crate) fn parse_powerworld_source(
         areas: Vec::new(),
         solver: None,
         source_format: SourceFormat::PowerWorld,
-        source: Some(source),
     };
     net.check_references(FMT)?;
     Ok(net)
@@ -181,12 +179,9 @@ pub(crate) fn parse_powerworld_source(
 /// Returns `None` when the network was not read from a `.aux` source.
 ///
 /// # Errors
-/// As [`parse_aux`], on a retained source that no longer parses.
-pub fn aux_sections(net: &BalancedNetwork) -> Option<Result<AuxFile>> {
-    if net.source_format != SourceFormat::PowerWorld {
-        return None;
-    }
-    net.source.as_ref().map(|s| parse_aux(s))
+/// As [`parse_aux`], on retained source text that no longer parses.
+pub fn aux_sections(source_text: &str) -> Result<AuxFile> {
+    parse_aux(source_text)
 }
 
 type Row<'a> = HashMap<&'a str, &'a str>;

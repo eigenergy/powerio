@@ -1,4 +1,7 @@
 //! Serde round-trip and invariant tests for the `.pio.json` compiler package.
+mod helpers;
+#[allow(unused_imports)]
+use helpers::*;
 
 use std::collections::BTreeMap;
 
@@ -84,7 +87,7 @@ const GOC3_PACKAGE_SRC: &str = r#"{
 }"#;
 
 fn balanced_package() -> NetworkPackage {
-    let net = powerio::parse_str(MATPOWER_SRC, "matpower")
+    let net = parse_str(MATPOWER_SRC, "matpower")
         .expect("parse matpower")
         .network;
     NetworkPackage::from_balanced(net)
@@ -98,7 +101,7 @@ fn multiconductor_package() -> NetworkPackage {
 }
 
 fn balanced_package_with_gen() -> NetworkPackage {
-    let mut net = powerio::parse_str(MATPOWER_WITH_GEN_SRC, "matpower")
+    let mut net = parse_str(MATPOWER_WITH_GEN_SRC, "matpower")
         .expect("parse matpower with gen")
         .network;
     // Source uids the sample operating point updates resolve against; every
@@ -383,14 +386,14 @@ fn balanced_payload_roundtrips() {
 
 #[test]
 fn goc3_package_operating_points_materialize_static_snapshots() {
-    let parsed = powerio::parse_str(GOC3_PACKAGE_SRC, "goc3-json").expect("parse goc3");
+    let parsed = parse_str(GOC3_PACKAGE_SRC, "goc3-json").expect("parse goc3");
     let net = &parsed.network;
     assert_eq!(net.generators.len(), 1);
     assert_eq!(net.loads.len(), 1);
     assert_close(net.generators[0].pmax, 100.0);
     assert_close(net.loads[0].p, 40.0);
 
-    let pkg = NetworkPackage::from_parsed_balanced(parsed);
+    let pkg = pkg_from_parsed(&parsed);
     let series = pkg.operating_points().expect("operating points");
     assert_eq!(series.time_axis.periods, 2);
     assert_eq!(series.time_axis.duration_hours, vec![1.0, 2.0]);
@@ -420,7 +423,7 @@ fn goc3_package_operating_points_materialize_static_snapshots() {
 
 #[test]
 fn balanced_package_constructor_does_not_run_source_adapters() {
-    let parsed = powerio::parse_str(GOC3_PACKAGE_SRC, "goc3-json").expect("parse goc3");
+    let parsed = parse_str(GOC3_PACKAGE_SRC, "goc3-json").expect("parse goc3");
     let pkg = NetworkPackage::from_balanced(parsed.network);
     assert!(pkg.operating_points().is_none());
 }
@@ -430,13 +433,9 @@ fn balanced_package_constructor_does_not_run_source_adapters() {
 /// source text: stripping the text must not change the outcome.
 #[test]
 fn goc3_operating_points_derive_from_the_reader_parse() {
-    let mut parsed = powerio::parse_str(GOC3_PACKAGE_SRC, "goc3-json").expect("parse goc3");
-    assert!(matches!(
-        parsed.document,
-        Some(powerio::SourceDocument::Goc3(_))
-    ));
-    parsed.network.source = None;
-    let pkg = NetworkPackage::from_parsed_balanced(parsed);
+    let parsed = parse_str(GOC3_PACKAGE_SRC, "goc3-json").expect("parse goc3");
+    assert!(parsed.document.is_some());
+    let pkg = pkg_from_parsed(&parsed);
     assert!(pkg.operating_points().is_some());
 }
 
@@ -450,8 +449,8 @@ fn goc3_oversized_time_periods_is_refused_not_allocated() {
         r#""time_periods": 2, "interval_duration": [1.0, 2.0]"#,
         r#""time_periods": 999999999999999999, "interval_duration": [1.0, 2.0]"#,
     );
-    let parsed = powerio::parse_str(&src, "goc3-json").expect("parse goc3");
-    let pkg = NetworkPackage::from_parsed_balanced(parsed);
+    let parsed = parse_str(&src, "goc3-json").expect("parse goc3");
+    let pkg = pkg_from_parsed(&parsed);
     assert!(
         pkg.operating_points().is_none(),
         "an inconsistent time_periods must not yield a series"
@@ -469,10 +468,10 @@ fn goc3_operating_points_follow_parser_row_assignment() {
       {"uid": "prod", "bus": "bus_00""#,
         1,
     );
-    let parsed = powerio::parse_str(&src, "goc3-json").expect("parse goc3");
+    let parsed = parse_str(&src, "goc3-json").expect("parse goc3");
     assert_eq!(parsed.network.generators.len(), 2);
 
-    let pkg = NetworkPackage::from_parsed_balanced(parsed).with_package_id("parent");
+    let pkg = pkg_from_parsed(&parsed).with_package_id("parent");
     let series = pkg.operating_points().expect("operating points");
     let update = &series.points[1].updates[0];
     assert_eq!(update.element.table, "generators");
@@ -996,7 +995,7 @@ mpc.branch = [
 \t1\t2\t0.01\t0.1\t0\t0\t0\t0\t0\t0\t1\t-360\t360;
 ];
 ";
-    let net = powerio::parse_str(src, "matpower").unwrap().network;
+    let net = parse_str(src, "matpower").unwrap().network;
     let pkg = NetworkPackage::from_balanced(net);
 
     let has_split_bus_field = |path: &str, field: &str| {
@@ -1059,7 +1058,7 @@ fn origin_distinguishes_in_memory_from_file() {
 
 #[test]
 fn balanced_origin_matches_source_artifact_kind() {
-    let mut net = powerio::parse_str(MATPOWER_SRC, "matpower")
+    let mut net = parse_str(MATPOWER_SRC, "matpower")
         .expect("parse matpower")
         .network;
 
@@ -1137,7 +1136,7 @@ fn a_prerelease_or_build_tag_of_this_lineage_is_tolerated() {
 
 #[test]
 fn normalized_solver_table_metadata_records_dense_identities() {
-    let net = powerio::parse_str(MATPOWER_WITH_GEN_SRC, "matpower")
+    let net = parse_str(MATPOWER_WITH_GEN_SRC, "matpower")
         .expect("parse matpower")
         .network;
     let mut pkg = NetworkPackage::from_balanced(net);
@@ -1225,7 +1224,7 @@ mpc.branch = [
 \t1\t2\t0.01\t0.1\t0\t0\t0\t0\t0\t0\t1\t-360\t360;
 ];
 ";
-    let net = powerio::parse_str(src, "matpower").unwrap().network;
+    let net = parse_str(src, "matpower").unwrap().network;
     let mut pkg = NetworkPackage::from_balanced(net);
     pkg.run_sane_validation();
 
@@ -1269,7 +1268,7 @@ mpc.branch = [
 \t1\t2\t0.01\t0.1\t0\t0\t0\t0\t0\t0\t1\t-360\t360;
 ];
 ";
-    let net = powerio::parse_str(src, "matpower").unwrap().network;
+    let net = parse_str(src, "matpower").unwrap().network;
     let mut pkg = NetworkPackage::from_balanced(net);
     pkg.run_sane_validation();
 
@@ -1851,9 +1850,7 @@ fn duplicate_payload_uid_is_diagnosed_without_operating_points() {
     // ensure_payload_uids mints for a uid-less sibling collides at build;
     // validation must surface the ambiguity even when nothing (no operating
     // points, no study) references it yet.
-    let mut net = powerio::parse_str(MATPOWER_SRC, "matpower")
-        .unwrap()
-        .network;
+    let mut net = parse_str(MATPOWER_SRC, "matpower").unwrap().network;
     net.buses[1].uid = Some("buses:0".to_owned());
     let mut pkg = NetworkPackage::from_balanced(net);
     pkg.run_sane_validation();
@@ -1881,11 +1878,8 @@ fn duplicate_payload_uid_is_diagnosed_without_operating_points() {
 
     // Unique uids leave the pass green, so the check itself is visible in the
     // validation summary of every balanced package.
-    let mut clean = NetworkPackage::from_balanced(
-        powerio::parse_str(MATPOWER_SRC, "matpower")
-            .unwrap()
-            .network,
-    );
+    let mut clean =
+        NetworkPackage::from_balanced(parse_str(MATPOWER_SRC, "matpower").unwrap().network);
     clean.run_sane_validation();
     assert!(
         clean
@@ -2005,7 +1999,7 @@ fn unknown_identity_is_rejected_and_reported_by_validation() {
 
 #[test]
 fn duplicate_payload_identities_are_rejected() {
-    let mut net = powerio::parse_str(MATPOWER_SRC, "matpower")
+    let mut net = parse_str(MATPOWER_SRC, "matpower")
         .expect("parse matpower")
         .network;
     net.buses[0].uid = Some("dup".to_owned());
@@ -2115,9 +2109,7 @@ fn goc3_updates_resolve_by_identity_not_row_order() {
       {"uid": "prod", "bus": "bus_00""#,
         1,
     );
-    let net = powerio::parse_str(&src, "goc3-json")
-        .expect("parse goc3")
-        .network;
+    let net = parse_str(&src, "goc3-json").expect("parse goc3").network;
     assert_eq!(net.generators[1].uid.as_deref(), Some("prod"));
     let pkg = NetworkPackage::from_balanced(net);
     let balanced = pkg.as_balanced().unwrap();
@@ -2170,7 +2162,7 @@ fn goc3_updates_resolve_by_identity_not_row_order() {
 fn package_balanced_reader_findings_keep_their_own_code() {
     // The reader codes its own findings, so the package records them as they
     // are rather than wrapping them under one code of its own.
-    let parsed = powerio::parse_str(MATPOWER_SRC, "matpower").expect("parse matpower");
+    let parsed = parse_str(MATPOWER_SRC, "matpower").expect("parse matpower");
     let finding: powerio_pkg::StructuredDiagnostic = powerio::Diagnostic::of(
         &powerio::diagnostics::codes::READ_PSSE_SECTION_UNSUPPORTED,
         "ignored source table",
@@ -2196,7 +2188,7 @@ fn package_balanced_reader_findings_keep_their_own_code() {
 
 #[test]
 fn ensure_payload_uids_is_public_and_deterministic() {
-    let mut net = powerio::parse_str(MATPOWER_WITH_GEN_SRC, "matpower")
+    let mut net = parse_str(MATPOWER_WITH_GEN_SRC, "matpower")
         .expect("parse matpower")
         .network;
     net.buses[0].uid = Some("source-bus".to_owned());
@@ -2266,7 +2258,7 @@ fn study_commit_materialization_folds_commits_and_set_fields() {
 
 #[test]
 fn study_demand_delta_distributes_over_existing_loads() {
-    let mut net = powerio::parse_str(MATPOWER_WITH_GEN_SRC, "matpower")
+    let mut net = parse_str(MATPOWER_WITH_GEN_SRC, "matpower")
         .expect("parse matpower")
         .network;
     net.loads[0].uid = Some("load_1".to_owned());
@@ -2293,7 +2285,7 @@ fn study_demand_delta_distributes_over_existing_loads() {
 
 #[test]
 fn study_demand_delta_appends_synthetic_load_for_empty_bus() {
-    let mut net = powerio::parse_str(MATPOWER_SRC, "matpower")
+    let mut net = parse_str(MATPOWER_SRC, "matpower")
         .expect("parse matpower")
         .network;
     net.loads.clear();

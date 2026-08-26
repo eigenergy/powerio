@@ -14,7 +14,8 @@
 //! same format. Matrix and problem instance builders live in separate crates.
 //!
 //! ```
-//! use powerio_tx::{parse_str, TargetFormat};
+//! use powerio_core::Source;
+//! use powerio_tx::{TargetFormat, format_id_for, parse, write_as};
 //!
 //! let src = "\
 //! function mpc = example
@@ -28,10 +29,13 @@
 //! \t1\t2\t0.01\t0.1\t0\t0\t0\t0\t0\t0\t1\t-360\t360;
 //! ];
 //! ";
-//! let net = parse_str(src, "matpower")?.network;
-//! assert_eq!(net.buses.len(), 2);
-//! assert_eq!(net.to_format(TargetFormat::Matpower)?.text, src);
-//! # Ok::<(), powerio_tx::Error>(())
+//! let source = Source::from_bytes("example.m", src.as_bytes().to_vec())?
+//!     .with_format(format_id_for("matpower")?);
+//! let module = parse(source)?;
+//! assert_eq!(module.value().buses.len(), 2);
+//! // An unchanged parsed module echoes its source bytes exactly.
+//! assert_eq!(write_as(&module, TargetFormat::Matpower)?.text, src);
+//! # Ok::<(), powerio_core::Error>(())
 //! ```
 
 /// The powerio crate version, for provenance fields written by downstream
@@ -58,18 +62,16 @@ pub use error::{Error, ErrorCategory, Result};
 pub use format::routing::{
     Detection, JSON_CLASSES, JsonClass, classify_json_bytes, classify_json_text,
 };
+#[cfg(test)]
+pub(crate) use format::test_parse::{parse_file, parse_str};
 pub use format::{
-    Conversion, DisplayData, DisplayFormat, Parsed, PwdDisplay, PwdSubstation, PypsaCsvOutputs,
-    SOURCE_FORMAT_NAMES, SourceDocument, TargetFormat, WriteOptions, convert_file,
-    convert_file_with_options, convert_str, convert_str_with_options, display_format_from_name,
-    parse_bytes, parse_bytes_with_name, parse_deepmind_opfdata_json, parse_display_bytes,
-    parse_display_file, parse_egret_json, parse_file, parse_goc3_json, parse_matpower,
-    parse_matpower_file, parse_pandapower_json, parse_powermodels_json, parse_powerworld,
-    parse_pslf, parse_psse, parse_str, parse_str_with_name, parse_surge_json,
-    read_pypsa_csv_folder, target_format_from_name, write_as, write_as_with_options, write_dir,
-    write_dir_with_options, write_egret_json, write_matpower, write_pandapower_json,
-    write_powermodels_json, write_powerworld, write_pslf, write_psse, write_psse_rev,
-    write_pypsa_csv_folder, write_surge_json,
+    Conversion, DisplayData, DisplayFormat, PwdDisplay, PwdSubstation, PypsaCsvOutputs,
+    SOURCE_FORMAT_NAMES, TargetFormat, WriteOptions, convert_file, convert_file_with_options,
+    convert_str, convert_str_with_options, display_format_from_name, format_id_for, parse,
+    parse_display_bytes, parse_display_file, parse_goc3_json, target_format_from_name, write_as,
+    write_as_with_options, write_dir, write_dir_with_options, write_egret_json, write_matpower,
+    write_network, write_pandapower_json, write_powermodels_json, write_powerworld, write_pslf,
+    write_psse, write_psse_rev, write_pypsa_csv_folder, write_surge_json,
 };
 pub use gen_cost::{GenCostPatch, GenCostPolicyReport, MissingGenCostPolicy, parse_gen_cost_csv};
 pub use geo::{

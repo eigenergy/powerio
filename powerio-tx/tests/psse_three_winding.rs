@@ -5,13 +5,15 @@
 //! `case3_3w_v33.raw` is the only corpus fixture whose transformer records have
 //! a nonzero third bus. The same bytes are the PowerIO.jl fixture, so the two
 //! suites cannot drift.
+mod helpers;
+#[allow(unused_imports)]
+use helpers::*;
 
 use std::collections::HashSet;
 use std::path::Path;
 
 use powerio_tx::indexed::IndexedNetwork;
 use powerio_tx::network::BusId;
-use powerio_tx::parse_psse;
 
 const FIXTURE: &str = "../tests/data/psse/case3_3w_v33.raw";
 

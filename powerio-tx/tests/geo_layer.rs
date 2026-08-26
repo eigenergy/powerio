@@ -1,5 +1,8 @@
 //! GeoLayer: tolerant reads, canonical writes, extract/apply, and the
 //! PowerWorld substation promotion from `.pwd` and from `.aux`.
+mod helpers;
+#[allow(unused_imports)]
+use helpers::*;
 
 use powerio_tx::format::powerworld::parse_aux;
 use powerio_tx::{
@@ -379,7 +382,7 @@ fn pwd_promotes_to_a_diagram_layer_and_joins_on_subnum() {
 
     // The aux sibling carries SubNum per bus; the join places every bus whose
     // substation has a symbol.
-    let net = powerio_tx::parse_file("../tests/data/powerworld/ACTIVSg200.aux", None)
+    let net = parse_file("../tests/data/powerworld/ACTIVSg200.aux", None)
         .expect("parse aux")
         .network;
     let mut net = net;
@@ -424,7 +427,7 @@ fn aux_substations_lift_into_a_geographic_layer_that_joins_on_subnum() {
 
     // Every bus of the same export carries a SubNum, so the join places all
     // of them at the coordinates the aux reader promoted itself.
-    let mut net = powerio_tx::parse_file("../tests/data/powerworld/ACTIVSg200.aux", None)
+    let mut net = parse_file("../tests/data/powerworld/ACTIVSg200.aux", None)
         .expect("parse aux")
         .network;
     let placed: Vec<Option<Location>> = net.buses.iter().map(|bus| bus.location).collect();

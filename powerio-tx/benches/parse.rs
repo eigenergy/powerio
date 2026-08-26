@@ -17,7 +17,7 @@
 use std::hint::black_box;
 
 use criterion::{Criterion, criterion_group, criterion_main};
-use powerio_tx::{TargetFormat, parse_matpower, parse_str, write_as, write_matpower};
+use powerio_tx::{TargetFormat, write_matpower, write_network};
 
 const CASES: &[&str] = &["case57", "case118", "case2869pegase"];
 
@@ -25,11 +25,22 @@ fn src(case: &str) -> String {
     std::fs::read_to_string(format!("../tests/data/{case}.m")).unwrap()
 }
 
+fn parse_named(text: &str, from: &str) -> powerio_tx::network::BalancedNetwork {
+    let source = powerio_core::Source::from_bytes("case", text.as_bytes().to_vec())
+        .unwrap()
+        .with_format(powerio_core::FormatId::new(from).unwrap());
+    powerio_tx::parse(source).unwrap().into_value()
+}
+
+fn parse_case(text: &str) -> powerio_tx::network::BalancedNetwork {
+    parse_named(text, "matpower")
+}
+
 fn bench_parse(c: &mut Criterion) {
     for case in CASES {
         let s = src(case);
         c.bench_function(&format!("parse_{case}"), |b| {
-            b.iter(|| parse_matpower(black_box(&s)).unwrap());
+            b.iter(|| parse_case(black_box(&s)));
         });
     }
 }
@@ -37,12 +48,12 @@ fn bench_parse(c: &mut Criterion) {
 fn bench_roundtrip(c: &mut Criterion) {
     for case in CASES {
         let s = src(case);
-        let parsed = parse_matpower(&s).unwrap();
+        let parsed = parse_case(&s);
         c.bench_function(&format!("write_{case}"), |b| {
             b.iter(|| write_matpower(black_box(&parsed)));
         });
         c.bench_function(&format!("roundtrip_{case}"), |b| {
-            b.iter(|| write_matpower(&parse_matpower(black_box(&s)).unwrap()));
+            b.iter(|| write_matpower(&parse_case(black_box(&s))));
         });
     }
 }
@@ -58,17 +69,16 @@ const FORMATS: &[(&str, TargetFormat)] = &[
 
 fn bench_parse_formats(c: &mut Criterion) {
     let case = "case118";
-    let net = parse_matpower(&src(case)).unwrap();
+    let net = parse_case(&src(case));
     for (name, fmt) in FORMATS {
         // Convert once outside the timed loop; `parse_str` runs the same
         // owned-source reader the file path does.
-        let text = write_as(&net, *fmt).unwrap().text;
+        let text = write_network(&net, *fmt).unwrap().text;
         // A reader that can't re-read its own writer would make the timing
         // meaningless, so fail loudly here rather than benchmark an error path.
-        parse_str(&text, name)
-            .unwrap_or_else(|e| panic!("{name} writer output did not reparse: {e}"));
+        let _ = parse_named(&text, name);
         c.bench_function(&format!("parse_{name}_{case}"), |b| {
-            b.iter(|| parse_str(black_box(&text), name).unwrap());
+            b.iter(|| parse_named(black_box(&text), name));
         });
     }
 }
@@ -114,7 +124,7 @@ fn bench_powerworld_pwb(c: &mut Criterion) {
     }
     for (name, text) in &aux_jobs {
         c.bench_function(name, |b| {
-            b.iter(|| parse_str(black_box(text), "aux").unwrap());
+            b.iter(|| parse_named(black_box(text), "aux"));
         });
     }
     for (name, bytes) in &pwb_jobs {

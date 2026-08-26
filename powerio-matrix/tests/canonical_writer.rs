@@ -1,8 +1,11 @@
 //! The canonical (no-source-document) writer path, exercised through a synth
 //! case. Lives in powerio-matrix because it needs the `synth` generators.
+mod helpers;
+#[allow(unused_imports)]
+use helpers::*;
 
 use powerio_matrix::synth::{SynthSpec, Topology, generate};
-use powerio_matrix::{parse_matpower, write_matpower};
+use powerio_matrix::write_matpower;
 
 #[test]
 fn synth_case_round_trips_via_canonical_writer() {

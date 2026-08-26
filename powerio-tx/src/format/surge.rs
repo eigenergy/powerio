@@ -6,11 +6,10 @@
 //! retained document.
 
 use std::collections::BTreeMap;
-use std::sync::Arc;
 
 use serde_json::{Map, Value};
 
-use super::{Conversion, Parsed, finish, jnum, warn_extra_branch_rating_sets};
+use super::{Conversion, finish, jnum, warn_extra_branch_rating_sets};
 use crate::diagnostics::codes::EMIT_SURGE as F;
 use crate::diagnostics::{Diagnostics, codes};
 use crate::network::{
@@ -510,18 +509,12 @@ fn lcc_terminal_obj(
     Value::Object(obj)
 }
 
-pub fn parse_surge_json(content: &str) -> Result<Parsed> {
-    let mut warnings = Diagnostics::new();
-    let network = parse_surge_source(Arc::new(content.to_owned()), None, &mut warnings)?;
-    Ok(Parsed::without_document(network, warnings))
-}
-
 pub(crate) fn parse_surge_source(
-    source: Arc<String>,
+    source: &str,
     name_hint: Option<&str>,
     warnings: &mut Diagnostics,
 ) -> Result<BalancedNetwork> {
-    let root_value: Value = serde_json::from_str(&source).map_err(|e| Error::FormatRead {
+    let root_value: Value = serde_json::from_str(source).map_err(|e| Error::FormatRead {
         format: FMT,
         message: e.to_string(),
     })?;
@@ -589,7 +582,6 @@ pub(crate) fn parse_surge_source(
         areas: Vec::new(),
         solver: None,
         source_format: SourceFormat::SurgeJson,
-        source: Some(source),
     };
     net.check_references(FMT)?;
     Ok(net)
@@ -1522,6 +1514,11 @@ fn string_not_default(obj: &Map<String, Value>, key: &str, default: &str) -> boo
 
 #[cfg(test)]
 mod tests {
+    fn parse_surge_json(content: &str) -> Result<BalancedNetwork> {
+        let mut warnings = Diagnostics::new();
+        parse_surge_source(content, None, &mut warnings)
+    }
+
     use super::*;
 
     #[test]

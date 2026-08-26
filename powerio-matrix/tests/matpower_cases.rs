@@ -1,5 +1,8 @@
 //! Integration tests against real MATPOWER fixtures vendored from
 //! `https://github.com/MATPOWER/matpower/tree/master/data`.
+mod helpers;
+#[allow(unused_imports)]
+use helpers::*;
 
 use std::path::PathBuf;
 
@@ -7,7 +10,7 @@ use powerio_matrix::matrix::{
     BuildOptions, MatrixStats, build_bdoubleprime, build_bprime, build_lacpf, build_ybus,
     sddm_check,
 };
-use powerio_matrix::{BusId, IndexedNetwork, parse_matpower_file};
+use powerio_matrix::{BusId, IndexedNetwork};
 
 fn fixture(name: &str) -> PathBuf {
     let mut p = PathBuf::from(env!("CARGO_MANIFEST_DIR"));

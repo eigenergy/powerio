@@ -8,7 +8,7 @@ use std::collections::{HashMap, HashSet};
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 
-use super::{Parsed, bus_kv, set_bus_kind, warn_extra_branch_rating_sets, zbase};
+use super::{bus_kv, set_bus_kind, warn_extra_branch_rating_sets, zbase};
 use crate::diagnostics::codes::EMIT_PYPSA as F;
 use crate::diagnostics::{Diagnostics, codes};
 use crate::network::{
@@ -26,21 +26,67 @@ pub struct PypsaCsvOutputs {
     pub files: Vec<PathBuf>,
     /// The writer's findings as structured records.
     pub diagnostics: Vec<crate::diagnostics::Diagnostic>,
-    /// The same findings as `CODE: message` lines.
-    pub warnings: Vec<String>,
 }
 
-/// Read a PyPSA CSV folder at `path`. Returns [`Parsed`]: the network plus the
-/// reader's fidelity warnings.
-pub fn read_pypsa_csv_folder(path: impl AsRef<Path>) -> Result<Parsed> {
-    let mut warnings = Diagnostics::new();
-    let network = read_pypsa_csv_folder_inner(path.as_ref(), &mut warnings)?;
-    Ok(Parsed::without_document(network, warnings))
+impl PypsaCsvOutputs {
+    /// The findings as `CODE: message` lines, rendered on request.
+    #[must_use]
+    pub fn rendered_diagnostics(&self) -> Vec<String> {
+        crate::diagnostics::render_diagnostics(&self.diagnostics)
+    }
 }
 
+/// A directory source's file listing plus lazy acquisition, the reader's view
+/// of the folder: table names resolve against the listing, and bytes come
+/// through the source so the reader never touches the filesystem itself.
+struct PypsaFolder<'a> {
+    source: &'a powerio_core::Source,
+    entries: Vec<powerio_core::ArtifactPath>,
+}
+
+impl PypsaFolder<'_> {
+    fn optional(&self, name: &str) -> Result<Option<CsvTable>> {
+        if !self.entries.iter().any(|entry| entry.as_str() == name) {
+            return Ok(None);
+        }
+        let path =
+            powerio_core::ArtifactPath::new(name).map_err(|error| acquisition_error(&error))?;
+        let buffer = self
+            .source
+            .buffer(&path)
+            .map_err(|error| acquisition_error(&error))?;
+        let text = std::str::from_utf8(buffer.content_bytes()).map_err(|e| Error::FormatRead {
+            format: FMT,
+            message: format!("`{name}` is not valid UTF-8: {e}"),
+        })?;
+        parse_csv_table(text, name)
+    }
+
+    fn required(&self, name: &'static str) -> Result<CsvTable> {
+        self.optional(name)?
+            .ok_or_else(|| bad(format!("missing required `{name}`")))
+    }
+}
+
+fn acquisition_error(error: &powerio_core::Error) -> Error {
+    Error::FormatRead {
+        format: FMT,
+        message: error.to_string(),
+    }
+}
+
+/// Read a PyPSA CSV folder source into the typed network.
 #[allow(clippy::too_many_lines)] // direct static-component CSV mapper; each block is one PyPSA table
-fn read_pypsa_csv_folder_inner(path: &Path, warnings: &mut Diagnostics) -> Result<BalancedNetwork> {
-    let network = read_csv_optional(&path.join("network.csv"))?;
+pub(crate) fn read_pypsa_csv_source(
+    source: &powerio_core::Source,
+    warnings: &mut Diagnostics,
+) -> Result<BalancedNetwork> {
+    let entries = source
+        .entry_names()
+        .map_err(|error| acquisition_error(&error))?;
+    let folder = PypsaFolder { source, entries };
+    let path = Path::new(source.name());
+    let network = folder.optional("network.csv")?;
     let network_row = network.as_ref().and_then(|t| t.rows.first());
     let name = network_row
         .and_then(|r| r.get("name"))
@@ -56,7 +102,7 @@ fn read_pypsa_csv_folder_inner(path: &Path, warnings: &mut Diagnostics) -> Resul
         .and_then(|r| r.f("powerio_base_mva"))
         .unwrap_or(1.0);
 
-    let bus_table = read_csv_required(&path.join("buses.csv"), "buses.csv")?;
+    let bus_table = folder.required("buses.csv")?;
     let mut raw_names = Vec::with_capacity(bus_table.rows.len());
     let mut seen = HashSet::with_capacity(bus_table.rows.len());
     for (i, row) in bus_table.rows.iter().enumerate() {
@@ -126,7 +172,7 @@ fn read_pypsa_csv_folder_inner(path: &Path, warnings: &mut Diagnostics) -> Resul
     let bus_pos: HashMap<BusId, usize> = buses.iter().enumerate().map(|(i, b)| (b.id, i)).collect();
 
     let mut loads = Vec::new();
-    if let Some(table) = read_csv_optional(&path.join("loads.csv"))? {
+    if let Some(table) = folder.optional("loads.csv")? {
         for (i, row) in table.rows.iter().enumerate() {
             loads.push(Load {
                 bus: bus_ref("loads.csv", i + 1, row, "bus", &id_of_name)?,
@@ -141,7 +187,7 @@ fn read_pypsa_csv_folder_inner(path: &Path, warnings: &mut Diagnostics) -> Resul
     }
 
     let mut shunts = Vec::new();
-    if let Some(table) = read_csv_optional(&path.join("shunt_impedances.csv"))? {
+    if let Some(table) = folder.optional("shunt_impedances.csv")? {
         for (i, row) in table.rows.iter().enumerate() {
             let bus = bus_ref("shunt_impedances.csv", i + 1, row, "bus", &id_of_name)?;
             let zb = zbase(bus_kv(&buses, &bus_pos, bus), base_mva);
@@ -158,7 +204,7 @@ fn read_pypsa_csv_folder_inner(path: &Path, warnings: &mut Diagnostics) -> Resul
     }
 
     let mut generators = Vec::new();
-    if let Some(table) = read_csv_optional(&path.join("generators.csv"))? {
+    if let Some(table) = folder.optional("generators.csv")? {
         for (i, row) in table.rows.iter().enumerate() {
             let bus = bus_ref("generators.csv", i + 1, row, "bus", &id_of_name)?;
             let control = row.get("control").map_or("", String::as_str);
@@ -213,7 +259,7 @@ fn read_pypsa_csv_folder_inner(path: &Path, warnings: &mut Diagnostics) -> Resul
     }
 
     let mut branches = Vec::new();
-    if let Some(table) = read_csv_optional(&path.join("lines.csv"))? {
+    if let Some(table) = folder.optional("lines.csv")? {
         for (i, row) in table.rows.iter().enumerate() {
             let from = bus_ref("lines.csv", i + 1, row, "bus0", &id_of_name)?;
             let to = bus_ref("lines.csv", i + 1, row, "bus1", &id_of_name)?;
@@ -252,7 +298,7 @@ fn read_pypsa_csv_folder_inner(path: &Path, warnings: &mut Diagnostics) -> Resul
             });
         }
     }
-    if let Some(table) = read_csv_optional(&path.join("transformers.csv"))? {
+    if let Some(table) = folder.optional("transformers.csv")? {
         for (i, row) in table.rows.iter().enumerate() {
             let from = bus_ref("transformers.csv", i + 1, row, "bus0", &id_of_name)?;
             let to = bus_ref("transformers.csv", i + 1, row, "bus1", &id_of_name)?;
@@ -301,7 +347,7 @@ fn read_pypsa_csv_folder_inner(path: &Path, warnings: &mut Diagnostics) -> Resul
     }
 
     let mut storage = Vec::new();
-    if let Some(table) = read_csv_optional(&path.join("storage_units.csv"))? {
+    if let Some(table) = folder.optional("storage_units.csv")? {
         for (i, row) in table.rows.iter().enumerate() {
             let p_nom = row.f("p_nom").unwrap_or(0.0);
             let max_hours = row.f("max_hours").unwrap_or(0.0);
@@ -331,7 +377,7 @@ fn read_pypsa_csv_folder_inner(path: &Path, warnings: &mut Diagnostics) -> Resul
     }
 
     let mut hvdc = Vec::new();
-    if let Some(table) = read_csv_optional(&path.join("links.csv"))? {
+    if let Some(table) = folder.optional("links.csv")? {
         for (i, row) in table.rows.iter().enumerate() {
             let from = bus_ref("links.csv", i + 1, row, "bus0", &id_of_name)?;
             let to = bus_ref("links.csv", i + 1, row, "bus1", &id_of_name)?;
@@ -368,7 +414,7 @@ fn read_pypsa_csv_folder_inner(path: &Path, warnings: &mut Diagnostics) -> Resul
             ));
         }
     }
-    if let Some(table) = read_csv_optional(&path.join("stores.csv"))? {
+    if let Some(table) = folder.optional("stores.csv")? {
         if !table.rows.is_empty() {
             warnings.push(
                 &codes::READ_PYPSA_TABLE_UNSUPPORTED,
@@ -397,16 +443,18 @@ fn read_pypsa_csv_folder_inner(path: &Path, warnings: &mut Diagnostics) -> Resul
         "links.csv",
         "stores.csv",
     ];
-    let mut unread: Vec<String> = std::fs::read_dir(path)
-        .map_err(|e| crate::format::named_io_error(path, &e))?
-        .filter_map(std::result::Result::ok)
-        .filter_map(|e| e.file_name().into_string().ok())
-        .filter(|n| {
-            Path::new(n)
-                .extension()
-                .is_some_and(|e| e.eq_ignore_ascii_case("csv"))
-                && !consumed.contains(&n.as_str())
+    let mut unread: Vec<String> = folder
+        .entries
+        .iter()
+        .map(powerio_core::ArtifactPath::as_str)
+        .filter(|name| {
+            !name.contains('/')
+                && Path::new(name)
+                    .extension()
+                    .is_some_and(|e| e.eq_ignore_ascii_case("csv"))
+                && !consumed.contains(name)
         })
+        .map(str::to_owned)
         .collect();
     unread.sort();
     for file in unread {
@@ -432,7 +480,6 @@ fn read_pypsa_csv_folder_inner(path: &Path, warnings: &mut Diagnostics) -> Resul
         areas: Vec::new(),
         solver: None,
         source_format: SourceFormat::PypsaCsv,
-        source: None,
     };
     // This reader bypasses the read_source funnel (directory input), so it
     // guards against a hollow case itself.
@@ -669,7 +716,6 @@ pub fn write_pypsa_csv_folder(
     Ok(PypsaCsvOutputs {
         dir: out_dir.to_path_buf(),
         files,
-        warnings: warnings.lines(),
         diagnostics: warnings.into_records(),
     })
 }
@@ -1033,20 +1079,8 @@ fn bad(message: impl Into<String>) -> Error {
     }
 }
 
-fn read_csv_required(path: &Path, label: &'static str) -> Result<CsvTable> {
-    read_csv_optional(path)?.ok_or_else(|| bad(format!("missing required `{label}`")))
-}
-
-fn read_csv_optional(path: &Path) -> Result<Option<CsvTable>> {
-    // Only a missing file means an absent table; any other error (permissions,
-    // a directory in the file's place) must surface, not read as an empty net.
-    let text = match std::fs::read_to_string(path) {
-        Ok(text) => text,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(e) => return Err(crate::format::named_io_error(path, &e)),
-    };
-    let name = path.file_name().and_then(|s| s.to_str()).unwrap_or("csv");
-    let mut records = parse_csv(&text, name)?
+fn parse_csv_table(text: &str, name: &str) -> Result<Option<CsvTable>> {
+    let mut records = parse_csv(text, name)?
         .into_iter()
         .filter(|r| !(r.len() == 1 && r[0].trim().is_empty()));
     let Some(headers) = records.next() else {
@@ -1149,6 +1183,29 @@ fn bus_ref(
 // fixture arithmetic means a column was misread.
 #[allow(clippy::float_cmp)]
 mod tests {
+    #[derive(Debug)]
+    struct Parsed {
+        network: BalancedNetwork,
+        diagnostics: Vec<crate::diagnostics::Diagnostic>,
+    }
+
+    impl Parsed {
+        fn rendered_diagnostics(&self) -> Vec<String> {
+            crate::diagnostics::render_diagnostics(&self.diagnostics)
+        }
+    }
+
+    fn read_pypsa_csv_folder(path: impl AsRef<Path>) -> Result<Parsed> {
+        let source =
+            powerio_core::Source::open(path.as_ref()).map_err(|error| acquisition_error(&error))?;
+        let mut warnings = Diagnostics::new();
+        let network = read_pypsa_csv_source(&source, &mut warnings)?;
+        Ok(Parsed {
+            network,
+            diagnostics: warnings.into_records(),
+        })
+    }
+
     use super::*;
     use std::fs;
 
@@ -1413,7 +1470,11 @@ mod tests {
         close(br.terminal_charging().g_to, 0.0);
         assert_eq!(br.rate_a, 50.0);
         assert_eq!(br.tap, 1.05);
-        assert!(parsed.warnings.is_empty(), "{:?}", parsed.warnings);
+        assert!(
+            parsed.rendered_diagnostics().is_empty(),
+            "{:?}",
+            parsed.rendered_diagnostics()
+        );
     }
 
     #[test]
@@ -1453,7 +1514,11 @@ mod tests {
         let charging = parsed.network.branches[0].terminal_charging();
         close(charging.g_fr, 1815.0);
         close(charging.g_to, 1815.0);
-        assert!(parsed.warnings.is_empty(), "{:?}", parsed.warnings);
+        assert!(
+            parsed.rendered_diagnostics().is_empty(),
+            "{:?}",
+            parsed.rendered_diagnostics()
+        );
     }
 
     #[test]
@@ -1488,11 +1553,11 @@ mod tests {
         let out = write_pypsa_csv_folder(&net, tmp_dir("xf-legacy-b-warning")).unwrap();
 
         assert!(
-            out.warnings
+            out.rendered_diagnostics()
                 .iter()
                 .any(|w| w.contains("terminal admittance")),
             "{:?}",
-            out.warnings
+            out.rendered_diagnostics()
         );
     }
 
@@ -1510,11 +1575,11 @@ mod tests {
         let dir = tmp_dir("line-g-write");
         let out = write_pypsa_csv_folder(&net, &dir).unwrap();
         assert!(
-            !out.warnings
+            !out.rendered_diagnostics()
                 .iter()
                 .any(|w| w.contains("terminal admittance")),
             "{:?}",
-            out.warnings
+            out.rendered_diagnostics()
         );
         let text = fs::read_to_string(dir.join("lines.csv")).unwrap();
         assert_eq!(
@@ -1544,11 +1609,11 @@ mod tests {
         let dir = tmp_dir("xf-g-write");
         let out = write_pypsa_csv_folder(&net, &dir).unwrap();
         assert!(
-            !out.warnings
+            !out.rendered_diagnostics()
                 .iter()
                 .any(|w| w.contains("terminal admittance")),
             "{:?}",
-            out.warnings
+            out.rendered_diagnostics()
         );
 
         let back = read_pypsa_csv_folder(&dir).unwrap().network;
@@ -1566,9 +1631,11 @@ mod tests {
         let dir = tmp_dir("storage-rt");
         let out = write_pypsa_csv_folder(&net, &dir).unwrap();
         assert!(
-            !out.warnings.iter().any(|w| w.contains("storage units")),
+            !out.rendered_diagnostics()
+                .iter()
+                .any(|w| w.contains("storage units")),
             "{:?}",
-            out.warnings
+            out.rendered_diagnostics()
         );
         let text = fs::read_to_string(dir.join("storage_units.csv")).unwrap();
         assert_eq!(
@@ -1602,7 +1669,7 @@ mod tests {
             out.diagnostics.iter().any(|d| d.message()
                 == "1 storage units lose fields PyPSA storage_units cannot carry (asymmetric charge/discharge ratings collapse to p_nom = max; thermal_rating, qmin/qmax, r/x, p_loss/q_loss dropped)"),
             "{:?}",
-            out.warnings
+            out.rendered_diagnostics()
         );
     }
 
@@ -1648,7 +1715,7 @@ mod tests {
             out.diagnostics.iter().any(|d| d.message()
                 == "buses.csv: bus names `X` collide with another bus name or id; those buses are keyed by their numeric id instead"),
             "{:?}",
-            out.warnings
+            out.rendered_diagnostics()
         );
         let buses = fs::read_to_string(dir.join("buses.csv")).unwrap();
         let keys: Vec<&str> = buses
@@ -1701,9 +1768,9 @@ mod tests {
         let dir = tmp_dir("name-id-clash");
         let out = write_pypsa_csv_folder(&net, &dir).unwrap();
         assert!(
-            out.warnings.iter().any(|w| w.contains("`2`")),
+            out.rendered_diagnostics().iter().any(|w| w.contains("`2`")),
             "{:?}",
-            out.warnings
+            out.rendered_diagnostics()
         );
         let buses = fs::read_to_string(dir.join("buses.csv")).unwrap();
         let keys: Vec<&str> = buses
@@ -1743,7 +1810,7 @@ mod tests {
             parsed.diagnostics.iter().any(|d| d.message()
                 == "links.csv: 1 links read as HVDC lines; PyPSA links carry no reactive or voltage data (q limits 0, voltage setpoints 1.0)"),
             "{:?}",
-            parsed.warnings
+            parsed.rendered_diagnostics()
         );
     }
 
@@ -1756,7 +1823,12 @@ mod tests {
                 ("stores.csv", "name,bus,e_nom\n"),
             ],
         );
-        assert!(read_pypsa_csv_folder(&dir).unwrap().warnings.is_empty());
+        assert!(
+            read_pypsa_csv_folder(&dir)
+                .unwrap()
+                .rendered_diagnostics()
+                .is_empty()
+        );
         let dir = folder(
             "stores-nonempty",
             &[
@@ -1771,7 +1843,7 @@ mod tests {
                 .iter()
                 .any(|d| d.message() == "stores.csv ignored (1 rows): PyPSA stores are not mapped"),
             "{:?}",
-            parsed.warnings
+            parsed.rendered_diagnostics()
         );
     }
 

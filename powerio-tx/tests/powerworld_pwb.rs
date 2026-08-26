@@ -2,13 +2,15 @@
 //! accepted only if counts are exact and values match the aux within storage
 //! precision (the binary stores most quantities as f32, the aux prints the
 //! f64 widening of them).
+mod helpers;
+#[allow(unused_imports)]
+use helpers::*;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 use powerio_tx::format::powerworld::parse_pwb;
 use powerio_tx::network::BalancedNetwork;
-use powerio_tx::parse_file;
 
 mod common;
 use common::{activsg2000_fetched as fetched, branch_keys, powerworld_vendored as vendored};
@@ -26,23 +28,23 @@ fn parse_bytes_reaches_the_binary_reader() {
     let path = vendored("ACTIVSg200.pwb");
     let bytes = std::fs::read(&path).unwrap();
 
-    let parsed = powerio_tx::parse_bytes(&bytes, "pwb").unwrap();
+    let parsed = parse_bytes(&bytes, "pwb").unwrap();
     // The reader loses no record it can decode, but this vintage's generator
     // status byte is unlocated, so it reports what it could not tell rather
     // than presenting every machine as running without comment.
     assert!(
         parsed
-            .warnings
+            .rendered_diagnostics()
             .iter()
             .all(|w| w.contains("generator(s) read as in service")),
         "{:?}",
-        parsed.warnings
+        parsed.rendered_diagnostics()
     );
     assert_eq!(parsed.network.buses.len(), 200);
     assert_eq!(parsed.network.branches.len(), 246);
 
     // The name hint plays the role the file stem plays in parse_file.
-    let named = powerio_tx::parse_bytes_with_name(&bytes, "PWB", Some("from-memory")).unwrap();
+    let named = parse_bytes_with_name(&bytes, "PWB", Some("from-memory")).unwrap();
     assert_eq!(named.network.name, "from-memory");
 
     // Text formats go through the same door and agree with the path parse.
@@ -51,18 +53,18 @@ fn parse_bytes_reaches_the_binary_reader() {
         "/../tests/data/case9.m"
     ))
     .unwrap();
-    let from_bytes = powerio_tx::parse_bytes(&m, "matpower").unwrap().network;
+    let from_bytes = parse_bytes(&m, "matpower").unwrap().network;
     assert_eq!(from_bytes.buses.len(), 9);
 
     // A text format handed non-UTF-8 bytes reports that, rather than panicking
     // or blaming the case data.
-    let err = powerio_tx::parse_bytes(&[0xff, 0xfe, 0x00], "matpower").unwrap_err();
+    let err = parse_bytes(&[0xff, 0xfe, 0x00], "matpower").unwrap_err();
     assert!(err.to_string().contains("UTF-8"), "{err}");
 
-    // A display sibling is a different return type; the error names the entry
-    // point that returns it.
-    let err = powerio_tx::parse_bytes(&bytes, "pwd").unwrap_err();
-    assert!(err.to_string().contains("parse_display_bytes"), "{err}");
+    // A display sibling is a different return type; the error points at the
+    // display surface.
+    let err = parse_bytes(&bytes, "pwd").unwrap_err();
+    assert!(err.to_string().contains("display"), "{err}");
 }
 
 /// Every decoded quantity of the vendored 200 bus binary against the same
@@ -783,10 +785,8 @@ fn parse_file_dispatches_pwb_and_converts() {
         .network;
     assert_eq!(by_name.buses.len(), 200);
 
-    let conv = powerio_tx::write_as(&net, powerio_tx::TargetFormat::Matpower).unwrap();
-    let back = powerio_tx::parse_str(&conv.text, "matpower")
-        .unwrap()
-        .network;
+    let conv = powerio_tx::write_network(&net, powerio_tx::TargetFormat::Matpower).unwrap();
+    let back = parse_str(&conv.text, "matpower").unwrap().network;
     assert_eq!(back.buses.len(), 200);
     assert_eq!(back.branches.len(), 246);
 }

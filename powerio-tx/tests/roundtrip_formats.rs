@@ -12,14 +12,16 @@
 //! reader and a writer, so each runs the full set. PowerModels' and egret's
 //! value-for-value checks against the reference tools live in
 //! `benchmarks/validate_powermodels.jl` and `benchmarks/validate_egret.py`.
+mod helpers;
+#[allow(unused_imports)]
+use helpers::*;
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use powerio_tx::{
-    BalancedNetwork, BusType, TargetFormat, parse_egret_json, parse_matpower_file,
-    parse_powermodels_json, parse_powerworld, parse_pslf, parse_psse, write_as, write_egret_json,
-    write_powermodels_json, write_powerworld, write_pslf, write_psse, write_psse_rev,
+    BalancedNetwork, BusType, TargetFormat, write_egret_json, write_powermodels_json,
+    write_powerworld, write_pslf, write_psse, write_psse_rev,
 };
 
 mod common;
@@ -300,7 +302,15 @@ struct Roundtrippable {
     name: &'static str,
     format: TargetFormat,
     write: fn(&BalancedNetwork) -> String,
-    read: fn(&str) -> BalancedNetwork,
+    /// The declared format token the module read uses.
+    token: &'static str,
+}
+
+fn read_module(text: &str, token: &str) -> powerio_core::PioModule<BalancedNetwork> {
+    let source = powerio_core::Source::from_bytes("case", text.as_bytes().to_vec())
+        .unwrap()
+        .with_format(powerio_tx::format_id_for(token).unwrap());
+    powerio_tx::parse(source).unwrap()
 }
 
 fn roundtrippable() -> Vec<Roundtrippable> {
@@ -309,43 +319,43 @@ fn roundtrippable() -> Vec<Roundtrippable> {
             name: "PowerModels JSON",
             format: TargetFormat::PowerModelsJson,
             write: |n| write_powermodels_json(n).text,
-            read: |s| parse_powermodels_json(s).unwrap(),
+            token: "powermodels-json",
         },
         Roundtrippable {
             name: "PSS/E .raw",
             format: TargetFormat::Psse { rev: 33 },
             write: |n| write_psse(n).text,
-            read: |s| parse_psse(s).unwrap(),
+            token: "psse",
         },
         Roundtrippable {
             name: "PSS/E .raw v34",
             format: TargetFormat::Psse { rev: 34 },
             write: write_psse34,
-            read: |s| parse_psse(s).unwrap(),
+            token: "psse",
         },
         Roundtrippable {
             name: "PSS/E .raw v35",
             format: TargetFormat::Psse { rev: 35 },
             write: write_psse35,
-            read: |s| parse_psse(s).unwrap(),
+            token: "psse",
         },
         Roundtrippable {
             name: "PowerWorld .aux",
             format: TargetFormat::PowerWorld,
             write: |n| write_powerworld(n).text,
-            read: |s| parse_powerworld(s).unwrap(),
+            token: "powerworld",
         },
         Roundtrippable {
             name: "egret JSON",
             format: TargetFormat::EgretJson,
             write: |n| write_egret_json(n).text,
-            read: |s| parse_egret_json(s).unwrap(),
+            token: "egret-json",
         },
         Roundtrippable {
             name: "PSLF .epc",
             format: TargetFormat::Pslf,
             write: |n| write_pslf(n).text,
-            read: |s| parse_pslf(s).unwrap(),
+            token: "pslf",
         },
     ]
 }
@@ -356,7 +366,7 @@ fn core_preserved_through_each_format() {
         let net0 = parse_matpower_file(data(case)).unwrap();
         let fp0 = fingerprint(&net0);
         for fmt in roundtrippable() {
-            let net1 = (fmt.read)(&(fmt.write)(&net0));
+            let net1 = read_module(&(fmt.write)(&net0), fmt.token).into_value();
             assert_eq!(
                 fingerprint(&net1),
                 fp0,
@@ -373,7 +383,7 @@ fn stable_element_values_preserved_through_each_format() {
         let net0 = parse_matpower_file(data(case)).unwrap();
         for fmt in roundtrippable() {
             let fp0 = value_fingerprint(&net0, fmt.format);
-            let net1 = (fmt.read)(&(fmt.write)(&net0));
+            let net1 = read_module(&(fmt.write)(&net0), fmt.token).into_value();
             assert_value_fingerprint_eq(
                 &value_fingerprint(&net1, fmt.format),
                 &fp0,
@@ -389,7 +399,7 @@ fn reader_writer_is_idempotent() {
         let net0 = parse_matpower_file(data(case)).unwrap();
         for fmt in roundtrippable() {
             let t0 = (fmt.write)(&net0);
-            let t1 = (fmt.write)(&(fmt.read)(&t0));
+            let t1 = (fmt.write)(&read_module(&t0, fmt.token).into_value());
             if fmt.format == TargetFormat::PowerModelsJson {
                 // PowerModels JSON is per-unit; the ÷base / ×base round-trip is not
                 // bit-exact in f64, so compare structure and values with a tolerance.
@@ -417,9 +427,9 @@ fn same_format_round_trip_is_byte_exact() {
         let net0 = parse_matpower_file(data(case)).unwrap();
         for fmt in roundtrippable() {
             let text = (fmt.write)(&net0);
-            let net_from_text = (fmt.read)(&text); // carries source = text, format = fmt
+            let module = read_module(&text, fmt.token);
             assert_eq!(
-                write_as(&net_from_text, fmt.format).unwrap().text,
+                powerio_tx::write_as(&module, fmt.format).unwrap().text,
                 text,
                 "{case} {}: same-format write is not a byte-exact echo",
                 fmt.name
@@ -457,9 +467,9 @@ fn egret_fixtures_round_trip_byte_exact() {
         "egret/dcline3.json",
     ] {
         let text = std::fs::read_to_string(data(f)).unwrap();
-        let net = parse_egret_json(&text).unwrap();
+        let parsed = parse_str(&text, "egret-json").unwrap();
         assert_eq!(
-            write_as(&net, TargetFormat::EgretJson).unwrap().text,
+            parsed.to_format(TargetFormat::EgretJson).unwrap().text,
             text,
             "{f}: egret same-format write is not a byte-exact echo"
         );

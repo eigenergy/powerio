@@ -11,7 +11,6 @@
 //! outages therefore need no case-specific handling.
 
 use std::collections::BTreeMap;
-use std::sync::Arc;
 
 use serde::Deserialize;
 
@@ -22,8 +21,6 @@ use crate::network::{
 };
 use crate::normalize::{RAD_TO_DEG, cost_from_pu};
 use crate::{Error, Result};
-
-use super::Parsed;
 
 const FMT: &str = "DeepMind OPFData JSON";
 type ExtraFields = BTreeMap<String, serde_json::Value>;
@@ -662,21 +659,13 @@ fn validate_document(document: &Document, bus_count: usize) -> Result<NodeLinks>
     })
 }
 
-/// Parse one raw FullTop or N-1 DeepMind OPFData JSON document as a solved
-/// snapshot. The reader does not assume a case name or fixed element counts.
-pub fn parse_deepmind_opfdata_json(content: &str) -> Result<Parsed> {
-    let mut warnings = Diagnostics::new();
-    let network = parse_opfdata_source(Arc::new(content.to_owned()), None, &mut warnings)?;
-    Ok(Parsed::without_document(network, warnings))
-}
-
 #[allow(clippy::too_many_lines)]
 pub(crate) fn parse_opfdata_source(
-    source: Arc<String>,
+    source: &str,
     name_hint: Option<&str>,
     warnings: &mut Diagnostics,
 ) -> Result<BalancedNetwork> {
-    let document: Document = serde_json::from_str(&source)
+    let document: Document = serde_json::from_str(source)
         .map_err(|error| bad(format!("invalid OPFData schema: {error}")))?;
     let base = base_mva(&document.grid.context)?;
     let bus_count = document.grid.nodes.bus.len();
@@ -818,6 +807,5 @@ pub(crate) fn parse_opfdata_source(
     network.branches = branches;
     network.generators = generators;
     network.source_format = SourceFormat::DeepMindOpfDataJson;
-    network.source = Some(source);
     Ok(network)
 }

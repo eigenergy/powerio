@@ -16,11 +16,13 @@
 //!
 //! Tolerances are print precision of the lower precision side: the `.m`
 //! writes 6 decimals for impedances, 2 for MW.
+mod helpers;
+#[allow(unused_imports)]
+use helpers::*;
 
 use std::collections::{BTreeMap, BTreeSet};
 
 use powerio_tx::network::{BalancedNetwork, BusId};
-use powerio_tx::parse_file;
 
 mod common;
 use common::{activsg2000_fetched as fetched, branch_keys, powerworld_vendored as vendored};
@@ -286,10 +288,13 @@ fn activsg2000_june2016_aux_vs_matpower_values() {
 #[test]
 fn activsg200_contingencies_are_reachable() {
     use powerio_tx::format::powerworld::{aux_sections, contingencies};
-    let net = parse_file(vendored("ACTIVSg200.aux"), None)
-        .unwrap()
-        .network;
-    let aux = aux_sections(&net).expect("powerworld source").unwrap();
+    let module = parse_module(vendored("ACTIVSg200.aux"), None).unwrap();
+    let text = module
+        .source()
+        .and_then(|source| source.primary_buffer().ok())
+        .map(|buffer| String::from_utf8(buffer.content_bytes().to_vec()).unwrap())
+        .expect("powerworld source");
+    let aux = aux_sections(&text).unwrap();
     let ctgs = contingencies(&aux);
     assert_eq!(ctgs.len(), 245);
     assert_eq!(ctgs[0].label, "L_000002CREVECOEUR1-000001CREVECOEUR0C1");

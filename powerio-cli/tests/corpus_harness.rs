@@ -18,13 +18,13 @@ fn data(rel: &str) -> PathBuf {
 /// Write `case9.m` into several formats under deliberately misleading names,
 /// so the only thing that can group them is the electrical content.
 fn build_corpus(dir: &Path) {
-    let net = powerio_matrix::parse_matpower_file(data("case9.m")).unwrap();
+    let net = parse_matpower_file(data("case9.m")).unwrap();
     for (target, name) in [
         (TargetFormat::Matpower, "CONFIDENTIAL_FeederAlpha_2019.m"),
         (TargetFormat::Psse { rev: 33 }, "utility_export_q3.raw"),
         (TargetFormat::EgretJson, "NDA_internal_model.json"),
     ] {
-        let text = powerio_matrix::write_as(&net, target).unwrap().text;
+        let text = powerio_matrix::write_network(&net, target).unwrap().text;
         std::fs::write(dir.join(name), text).unwrap();
     }
     // A file no reader can make sense of. A corpus always has one.
@@ -160,8 +160,8 @@ fn a_format_token_is_vocabulary_even_when_the_corpus_uses_it_as_a_directory() {
 
 #[test]
 fn a_case_with_dc_lines_is_not_the_ac_network_underneath_it() {
-    let plain = powerio_matrix::parse_matpower_file(data("case9.m")).unwrap();
-    let with_dc = powerio_matrix::parse_matpower_file(data("t_case9_dcline.m")).unwrap();
+    let plain = parse_matpower_file(data("case9.m")).unwrap();
+    let with_dc = parse_matpower_file(data("t_case9_dcline.m")).unwrap();
     assert_ne!(
         Fingerprint::of(&plain).primary(),
         Fingerprint::of(&with_dc).primary(),
@@ -174,7 +174,7 @@ fn service_status_stays_out_of_the_bucketing_key() {
     // Two files that differ only in what is switched out must land together,
     // because a reader that drops status is exactly what the sibling
     // comparison exists to catch.
-    let base = powerio_matrix::parse_matpower_file(data("case9.m")).unwrap();
+    let base = parse_matpower_file(data("case9.m")).unwrap();
     let mut switched = base.clone();
     switched.branches[0].in_service = false;
     switched.generators[0].in_service = false;
@@ -279,4 +279,12 @@ fn a_symlink_out_of_the_corpus_is_not_read() {
     }
     #[cfg(not(unix))]
     assert_eq!(members, 1);
+}
+
+fn parse_matpower_file(
+    path: impl AsRef<std::path::Path>,
+) -> Result<powerio_matrix::BalancedNetwork, powerio_core::Error> {
+    let source = powerio_core::Source::open(path.as_ref())?
+        .with_format(powerio_core::FormatId::new("matpower")?);
+    powerio_matrix::parse(source).map(powerio_core::PioModule::into_value)
 }

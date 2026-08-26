@@ -1,7 +1,9 @@
+mod helpers;
+#[allow(unused_imports)]
+use helpers::*;
 use powerio_prob::{DcOpfOptions, Error, Units, build_dc_opf_instance};
 use powerio_tx::{
     BalancedNetwork, Branch, Bus, BusId, BusType, DcConvention, GenCost, Generator, IndexedNetwork,
-    parse_matpower_file,
 };
 
 fn case9() -> BalancedNetwork {

@@ -424,8 +424,11 @@ fn read_case(path: &Path) -> std::result::Result<Case, Unreadable> {
         error,
         panicked,
     };
-    let balanced_error = match catch_panic(|| powerio_matrix::parse_file(path, None)) {
-        Ok(Ok(parsed)) => return Ok(Case::Balanced(Box::new(parsed.network), parsed.warnings)),
+    let balanced_error = match catch_panic(|| crate::compat::parse_file(path, None)) {
+        Ok(Ok(parsed)) => {
+            let rendered = parsed.rendered_diagnostics();
+            return Ok(Case::Balanced(Box::new(parsed.network), rendered));
+        }
         Err(message) => return Err(unreadable(message, true)),
         Ok(Err(err)) => err.to_string(),
     };
@@ -798,7 +801,7 @@ fn convert_leg(
             to_ordinal: to.ordinal,
         },
     );
-    let written = match catch_panic(|| powerio_matrix::write_as(source, target)) {
+    let written = match catch_panic(|| powerio_matrix::write_network(source, target)) {
         Ok(Ok(conversion)) => conversion,
         Ok(Err(err)) => {
             out.failure = Some(format!("write: {err}"));
@@ -809,10 +812,10 @@ fn convert_leg(
             return out;
         }
     };
-    out.warnings.extend(written.warnings.iter().cloned());
+    out.warnings.extend(written.rendered_diagnostics());
     let token = to.format.clone();
     let text = written.text;
-    let parsed = match catch_panic(|| powerio_matrix::parse_str(&text, &token)) {
+    let parsed = match catch_panic(|| crate::compat::parse_str(&text, &token)) {
         Ok(Ok(parsed)) => parsed,
         Ok(Err(err)) => {
             out.failure = Some(format!("readback: {err}"));
@@ -823,7 +826,7 @@ fn convert_leg(
             return out;
         }
     };
-    out.warnings.extend(parsed.warnings.iter().cloned());
+    out.warnings.extend(parsed.rendered_diagnostics());
     fill_invariants(&mut out, source, &parsed.network);
     out
 }

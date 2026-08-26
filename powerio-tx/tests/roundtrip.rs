@@ -1,11 +1,14 @@
 //! Round-trip fidelity: `parse → write → parse` must reproduce every vendored
 //! case losslessly. This is the property that makes powerio a *lossless* parser,
 //! not just a fast one.
+mod helpers;
+#[allow(unused_imports)]
+use helpers::*;
 
 use std::path::{Path, PathBuf};
 
 use powerio_tx::network::BusId;
-use powerio_tx::{parse_matpower, parse_matpower_file, write_matpower};
+use powerio_tx::write_matpower;
 
 fn data_dir() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../tests/data")
@@ -33,17 +36,35 @@ fn cases() -> Vec<PathBuf> {
     out
 }
 
+fn echo_matpower_file(path: &std::path::Path) -> String {
+    let module = parse_module(path, Some("matpower")).unwrap();
+    powerio_tx::write_as(&module, powerio_tx::TargetFormat::Matpower)
+        .unwrap()
+        .text
+}
+
+fn echo_matpower_str(text: &str) -> String {
+    let source = powerio_core::Source::from_bytes("case.m", text.as_bytes().to_vec())
+        .unwrap()
+        .with_format(powerio_core::FormatId::new("matpower").unwrap());
+    let module = powerio_tx::parse(source).unwrap();
+    powerio_tx::write_as(&module, powerio_tx::TargetFormat::Matpower)
+        .unwrap()
+        .text
+}
+
 #[test]
-fn writer_reproduces_source_modulo_trailing_newline() {
+fn same_format_write_reproduces_the_source_exactly() {
+    // The echo lives on the module write path: an unchanged parsed module
+    // writes back its retained bytes, comments, column headers, and exact
+    // numeric tokens included.
     for path in cases() {
         let original = std::fs::read_to_string(&path).unwrap();
-        let written = write_matpower(&parse_matpower_file(&path).unwrap());
-        // Compare modulo the final newline and `\r\n`; everything else —
-        // comments, column headers, exact tokens — is byte-for-byte.
+        let written = echo_matpower_file(&path);
         assert_eq!(
-            written.replace("\r\n", "\n").trim_end_matches('\n'),
-            original.replace("\r\n", "\n").trim_end_matches('\n'),
-            "{}: writer did not reproduce the source",
+            written,
+            original,
+            "{}: the echo did not reproduce the source",
             path.display()
         );
     }
@@ -52,8 +73,8 @@ fn writer_reproduces_source_modulo_trailing_newline() {
 #[test]
 fn round_trip_is_idempotent() {
     for path in cases() {
-        let once = write_matpower(&parse_matpower_file(&path).unwrap());
-        let twice = write_matpower(&parse_matpower(&once).unwrap());
+        let once = echo_matpower_file(&path);
+        let twice = echo_matpower_str(&once);
         assert_eq!(once, twice, "{}: second write differs", path.display());
     }
 }
@@ -142,10 +163,9 @@ fn unescapes_doubled_quotes_in_bus_names() {
 #[test]
 fn preserves_scientific_notation_tokens() {
     // case2869pegase has 172 tokens like `7e-05`; an f64-based writer would
-    // re-emit `0.00007`. The document keeps the original token.
-    let case = parse_matpower_file(data_dir().join("case2869pegase.m")).unwrap();
+    // re-emit `0.00007`. The module echo keeps the original token.
     assert!(
-        write_matpower(&case).contains("7e-05"),
+        echo_matpower_file(&data_dir().join("case2869pegase.m")).contains("7e-05"),
         "scientific-notation token was reformatted"
     );
 }

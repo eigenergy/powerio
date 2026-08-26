@@ -2027,6 +2027,7 @@ dependencies = [
  "clap",
  "crossterm",
  "powerio",
+ "powerio-core",
  "powerio-dist",
  "powerio-matrix",
  "powerio-pkg",
@@ -2123,6 +2124,7 @@ dependencies = [
 name = "powerio-py"
 version = "0.9.0"
 dependencies = [
+ "powerio-core",
  "powerio-dist",
  "powerio-matrix",
  "powerio-pkg",

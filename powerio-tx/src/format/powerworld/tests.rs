@@ -155,7 +155,12 @@ fn canonical_write_is_idempotent() {
 
 // ---- BalancedNetwork mapping --------------------------------------------------------
 
-use super::{parse_powerworld, write_powerworld};
+use super::write_powerworld;
+
+fn parse_powerworld(content: &str) -> crate::Result<crate::network::BalancedNetwork> {
+    let mut warnings = crate::diagnostics::Diagnostics::new();
+    super::map::parse_powerworld_source(content, None, &mut warnings)
+}
 
 #[test]
 fn unmodeled_data_blocks_warn_on_parse() {
@@ -170,19 +175,19 @@ fn unmodeled_data_blocks_warn_on_parse() {
     assert_eq!(parsed.network.buses.len(), 1);
     assert!(
         parsed
-            .warnings
+            .rendered_diagnostics()
             .iter()
             .any(|w| w.contains("DATA Owner") && w.contains("not modeled")),
         "missing Owner warning: {:?}",
-        parsed.warnings
+        parsed.rendered_diagnostics()
     );
     assert!(
         parsed
-            .warnings
+            .rendered_diagnostics()
             .iter()
             .any(|w| w.contains("DATA Area") && w.contains("not modeled")),
         "missing Area warning: {:?}",
-        parsed.warnings
+        parsed.rendered_diagnostics()
     );
 }
 
@@ -260,9 +265,11 @@ fn writer_sanitizes_bus_names_that_would_corrupt_a_value() {
     assert_eq!(reparsed.buses[1].base_kv, 138.0);
     assert!(!reparsed.buses[0].name.as_deref().unwrap().contains('"'));
     assert!(
-        conv.warnings.iter().any(|w| w.contains("bus name")),
+        conv.rendered_diagnostics()
+            .iter()
+            .any(|w| w.contains("bus name")),
         "expected a sanitization warning, got {:?}",
-        conv.warnings
+        conv.rendered_diagnostics()
     );
 }
 
@@ -419,9 +426,6 @@ fn branch_identity_survives_aux_to_aux_through_the_typed_model() {
          DATA (Branch, [BusNum, BusNum:1, LineCircuit, BranchDeviceType, LineStatus, LineR, LineX])\n\
          {\n1 2 \" 2\" \"Breaker\" \"Open\" 0 0.0001\n}\n";
     let net = parse_powerworld(src).unwrap();
-    // Strip the retained source to force the canonical writer.
-    let mut net = net;
-    net.source = None;
     let out = super::write_powerworld(&net);
     let again = parse_powerworld(&out.text).unwrap();
     let br = &again.branches[0];
@@ -497,8 +501,7 @@ fn a_line_that_states_a_phase_shift_stays_a_line() {
     let src = "DATA (Bus, [BusNum])\n{\n1\n2\n}\n\
          DATA (Branch, [BusNum, BusNum:1, LineCircuit, BranchDeviceType, LineStatus, LineR, LineX, LinePhase])\n\
          {\n1 2 \" 1\" \"Line\" \"Closed\" 0.01 0.1 3.5\n}\n";
-    let mut net = parse_powerworld(src).unwrap();
-    net.source = None;
+    let net = parse_powerworld(src).unwrap();
     assert_eq!(
         net.branches[0]
             .extras
@@ -521,8 +524,7 @@ fn a_line_that_states_a_phase_shift_stays_a_line() {
     // A plain line states what the writer derives, so the extra is dropped and
     // the round trip still lands on `Line`.
     let plain = src.replace(" 3.5\n", " 0\n");
-    let mut net = parse_powerworld(&plain).unwrap();
-    net.source = None;
+    let net = parse_powerworld(&plain).unwrap();
     assert!(!net.branches[0].extras.contains_key("BranchDeviceType"));
     let out = super::write_powerworld(&net);
     let row = out

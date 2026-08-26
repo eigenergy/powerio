@@ -1,4 +1,6 @@
-use super::parse_matpower as parse_mpc;
+fn parse_mpc(content: &str) -> crate::Result<crate::network::BalancedNetwork> {
+    super::parse_matpower_source(content, None)
+}
 use super::write_matpower;
 use crate::indexed::IndexedNetwork;
 use crate::network::{
@@ -217,18 +219,10 @@ fn accepts_last_row_without_trailing_semicolon() {
 // base_mva is `100` verbatim in the source, so the exact compare is intended.
 #[allow(clippy::float_cmp)]
 fn parsed_case_keeps_source_in_memory_case_does_not() {
-    // A network parsed from text retains its source so the writer echoes it
-    // verbatim; one built in memory has no source and writes canonically.
+    // The byte exact echo belongs to the module write path; the typed writer
+    // always emits canonical text, whatever the network's origin.
     let parsed = parse_mpc(CASE_TINY).expect("parse tiny");
-    assert_eq!(
-        parsed.source.as_ref().map(|s| s.as_str()),
-        Some(CASE_TINY),
-        "parsed network should echo its source"
-    );
-    assert_eq!(write_matpower(&parsed), CASE_TINY);
-
     let mut built = parsed.clone();
-    built.source = None;
     built.source_format = SourceFormat::InMemory;
     // Canonical output is parseable and keeps the headline values.
     let reparsed = parse_mpc(&write_matpower(&built)).expect("canonical reparses");
@@ -288,7 +282,6 @@ mpc.gencost = [
 
     // Canonical write pads both gencost rows to the same width.
     let mut built = net.clone();
-    built.source = None;
     built.source_format = SourceFormat::InMemory;
     let text = write_matpower(&built);
     let rows: Vec<usize> = text
@@ -413,9 +406,9 @@ fn zero_padded_capability_columns_are_declared() {
     net.generators.push(stated);
     net.generators.push(Generator::new(BusId(2)));
 
-    let warnings = crate::format::write_as(&net, crate::format::TargetFormat::Matpower)
+    let warnings = crate::format::write_conversion(&net, crate::format::TargetFormat::Matpower)
         .unwrap()
-        .warnings;
+        .rendered_diagnostics();
     assert!(
         warnings.iter().any(|w| w.contains("columns 11-21")),
         "the zero padding must be declared: {warnings:?}"
@@ -425,9 +418,9 @@ fn zero_padded_capability_columns_are_declared() {
     // says nothing.
     let mut plain = net.clone();
     plain.generators[0].caps = [None; 11];
-    let warnings = crate::format::write_as(&plain, crate::format::TargetFormat::Matpower)
+    let warnings = crate::format::write_conversion(&plain, crate::format::TargetFormat::Matpower)
         .unwrap()
-        .warnings;
+        .rendered_diagnostics();
     assert!(
         !warnings.iter().any(|w| w.contains("columns 11-21")),
         "nothing to disclose when no generator states caps: {warnings:?}"
@@ -451,7 +444,8 @@ fn an_out_of_service_load_does_not_become_live_demand() {
     net.loads
         .push(crate::network::Load::new(BusId(2), 10.0, 5.0));
 
-    let conversion = crate::format::write_as(&net, crate::format::TargetFormat::Matpower).unwrap();
+    let conversion =
+        crate::format::write_conversion(&net, crate::format::TargetFormat::Matpower).unwrap();
     let back = parse_mpc(&conversion.text).unwrap();
     let demand: f64 = back.loads.iter().map(|l| l.p).sum();
     assert!(
@@ -460,18 +454,17 @@ fn an_out_of_service_load_does_not_become_live_demand() {
     );
     assert!(
         conversion
-            .warnings
+            .rendered_diagnostics()
             .iter()
             .any(|w| w.contains("out of service load(s) dropped")),
         "the dropped demand must be named: {:?}",
-        conversion.warnings
+        conversion.rendered_diagnostics()
     );
 }
 
 #[test]
 fn areas_survive_the_canonical_round_trip() {
     let mut net = parse_mpc(CASE_TINY).unwrap();
-    net.source = None;
     net.source_format = SourceFormat::InMemory;
     net.areas.push(crate::network::Area {
         slack_bus: Some(BusId(1)),
@@ -492,7 +485,6 @@ fn areas_survive_the_canonical_round_trip() {
 #[test]
 fn an_area_name_or_interchange_is_a_declared_drop() {
     let mut net = parse_mpc(CASE_TINY).unwrap();
-    net.source = None;
     net.source_format = SourceFormat::InMemory;
     net.areas.push(crate::network::Area {
         name: Some("west".into()),
@@ -500,13 +492,14 @@ fn an_area_name_or_interchange_is_a_declared_drop() {
         ..crate::network::Area::new(1)
     });
 
-    let conversion = crate::format::write_as(&net, crate::format::TargetFormat::Matpower).unwrap();
+    let conversion =
+        crate::format::write_conversion(&net, crate::format::TargetFormat::Matpower).unwrap();
     assert!(
         conversion
-            .warnings
+            .rendered_diagnostics()
             .iter()
             .any(|w| w.contains("area record(s) carry a name or interchange data")),
         "the fields mpc.areas cannot hold must be declared: {:?}",
-        conversion.warnings
+        conversion.rendered_diagnostics()
     );
 }

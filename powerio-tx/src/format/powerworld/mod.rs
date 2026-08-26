@@ -24,7 +24,7 @@
 //! [`BalancedNetwork`]: crate::network::BalancedNetwork
 
 mod auxiliary;
-mod map;
+pub(in crate::format) mod map;
 mod objects;
 mod pwb;
 mod pwd;
@@ -32,20 +32,17 @@ mod pwd;
 #[cfg(test)]
 mod tests;
 
-use std::sync::Arc;
-
 pub use auxiliary::{
     AuxFile, AuxObject, AuxRow, AuxScript, AuxSection, AuxSubData, parse_aux, write_aux,
 };
-pub(crate) use map::parse_powerworld_source;
+
 pub use map::{aux_sections, write_powerworld};
 pub use objects::{Contingency, contingencies, rating_set_names};
 pub(crate) use pwb::parse_pwb_collecting;
 pub use pwb::{parse_pwb, parse_pwb_with_warnings};
 pub use pwd::{PwdDisplay, PwdSubstation, parse_pwd, parse_pwd_display, parse_pwd_file};
 
-use crate::Result;
-use crate::network::{BalancedNetwork, Extras};
+use crate::network::Extras;
 
 /// Drop a retained device id that states exactly the positional default the
 /// aux writer's allocator would hand element `index` anyway.
@@ -69,16 +66,4 @@ pub(super) fn drop_positional_id(extras: &mut Extras, keys: &[&str], index: usiz
             extras.remove(*key);
         }
     }
-}
-
-/// Parse a PowerWorld `.aux` into a [`BalancedNetwork`], reading the Bus/Load/Shunt/
-/// Gen/Branch `DATA` blocks by their declared field lists.
-///
-/// # Errors
-/// [`crate::Error::FormatRead`] on malformed input or when the file has no
-/// `DATA` sections.
-pub fn parse_powerworld(content: &str) -> Result<BalancedNetwork> {
-    // The caller owns `content` as a borrow, so retention needs one copy.
-    let mut warnings = crate::diagnostics::Diagnostics::new();
-    parse_powerworld_source(Arc::new(content.to_owned()), None, &mut warnings)
 }

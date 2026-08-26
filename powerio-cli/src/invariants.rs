@@ -454,7 +454,6 @@ pub fn distribution_core(net: &MulticonductorNetwork) -> DistributionCore {
 pub fn transmission_value(net: &BalancedNetwork) -> serde_json::Value {
     let mut net = net.clone();
     net.name = String::new();
-    net.source = None;
     net.source_format = powerio_matrix::SourceFormat::Matpower;
     for br in &mut net.branches {
         br.charging = Some(br.terminal_charging());

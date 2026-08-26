@@ -385,15 +385,15 @@ impl Net {
                 let Some(target) = powerio_matrix::target_format_from_name(to) else {
                     return Err(format!("no writer for {to}"));
                 };
-                let written = match catch_panic(|| powerio_matrix::write_as(net, target)) {
+                let written = match catch_panic(|| powerio_matrix::write_network(net, target)) {
                     Ok(Ok(conversion)) => conversion,
                     Ok(Err(err)) => return Err(format!("write: {err}")),
                     Err(message) => return Err(format!("write panicked: {message}")),
                 };
-                warnings.extend(written.warnings.iter().cloned());
-                match catch_panic(|| powerio_matrix::parse_str(&written.text, to)) {
+                warnings.extend(written.rendered_diagnostics());
+                match catch_panic(|| crate::compat::parse_str(&written.text, to)) {
                     Ok(Ok(parsed)) => {
-                        warnings.extend(parsed.warnings.iter().cloned());
+                        warnings.extend(parsed.rendered_diagnostics());
                         Ok(Self::Balanced(parsed.network))
                     }
                     Ok(Err(err)) => Err(format!("readback: {err}")),
@@ -513,8 +513,7 @@ fn first_readable(bucket: &Bucket) -> Option<(String, Net)> {
     bucket.members.iter().find_map(|m| {
         let net = match bucket.domain {
             Domain::Transmission => {
-                let mut net = balanced(&m.path)?;
-                net.source = None;
+                let net = balanced(&m.path)?;
                 Net::Balanced(net)
             }
             Domain::Distribution => {

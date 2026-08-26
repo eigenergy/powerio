@@ -4,12 +4,14 @@
 //! published node and edge table. Count-changing tests below exercise the same
 //! schema rules used by every FullTop and N-1 grid size; the reader contains no
 //! case-name or fixed-element-count dispatch.
+mod helpers;
+#[allow(unused_imports)]
+use helpers::*;
 
 use std::path::{Path, PathBuf};
 
 use powerio_tx::{
-    BalancedNetwork, BranchCharging, BusId, BusType, Error, SourceFormat, TargetFormat,
-    convert_file, parse_file, parse_str, write_as,
+    BalancedNetwork, BranchCharging, BusId, BusType, SourceFormat, TargetFormat, convert_file,
 };
 use serde_json::Value;
 
@@ -96,9 +98,14 @@ fn parses_official_schema_complete_solved_snapshot() {
     assert_close(transformer.tap, 0.978);
     assert_close(transformer.rate_a, 141.0);
 
-    assert_eq!(parsed.warnings.len(), 2, "{:?}", parsed.warnings);
-    assert!(parsed.warnings[0].contains("solver initial values"));
-    assert!(parsed.warnings[1].contains("synthesized IDs"));
+    assert_eq!(
+        parsed.rendered_diagnostics().len(),
+        2,
+        "{:?}",
+        parsed.rendered_diagnostics()
+    );
+    assert!(parsed.rendered_diagnostics()[0].contains("solver initial values"));
+    assert!(parsed.rendered_diagnostics()[1].contains("synthesized IDs"));
 }
 
 #[test]
@@ -121,9 +128,9 @@ fn detects_aliases_and_echoes_the_official_source_exactly() {
     }
 
     let parsed = parse_file(fixture(), None).unwrap();
-    let echo = write_as(&parsed.network, TargetFormat::DeepMindOpfDataJson).unwrap();
+    let echo = parsed.to_format(TargetFormat::DeepMindOpfDataJson).unwrap();
     assert_eq!(echo.text, source);
-    assert!(echo.warnings.is_empty());
+    assert!(echo.rendered_diagnostics().is_empty());
 }
 
 #[test]
@@ -138,7 +145,7 @@ fn converts_to_classical_json_and_matpower_with_fidelity_warnings() {
     assert_close(back.generators[0].pg, 286.070_948_069_333_44);
     assert!(
         power_models
-            .warnings
+            .rendered_diagnostics()
             .iter()
             .any(|warning| warning.contains("solver initial values"))
     );
@@ -148,7 +155,7 @@ fn converts_to_classical_json_and_matpower_with_fidelity_warnings() {
     assert!(matpower.text.contains("mpc.gencost"));
     assert!(
         matpower
-            .warnings
+            .rendered_diagnostics()
             .iter()
             .any(|warning| warning.contains("branch solution value"))
     );
@@ -156,17 +163,13 @@ fn converts_to_classical_json_and_matpower_with_fidelity_warnings() {
 
 #[test]
 fn opfdata_target_without_retained_source_is_unsupported() {
-    let err = write_as(
+    let err = write_network(
         &BalancedNetwork::new("memory", 100.0),
         TargetFormat::DeepMindOpfDataJson,
     )
     .unwrap_err();
-    assert!(matches!(
-        err,
-        Error::WriteUnsupported {
-            format: "opfdata-json"
-        }
-    ));
+    assert_eq!(err.category(), powerio_core::ErrorCategory::Request);
+    assert!(err.to_string().contains("opfdata-json"), "{err}");
 }
 
 fn modified(mut edit: impl FnMut(&mut Value)) -> String {
@@ -214,7 +217,12 @@ fn accepts_variable_fulltop_and_n_minus_one_element_counts() {
     let parsed = parse_str(&line_outage, "opfdata").unwrap();
     assert_eq!(parsed.network.generators.len(), 5);
     assert_eq!(parsed.network.branches.len(), 19);
-    assert!(!parsed.warnings.iter().any(|w| w.contains("objective")));
+    assert!(
+        !parsed
+            .rendered_diagnostics()
+            .iter()
+            .any(|w| w.contains("objective"))
+    );
 
     let generator_outage = modified(|value| {
         let removed = value["grid"]["nodes"]["generator"]
@@ -248,7 +256,12 @@ fn accepts_variable_fulltop_and_n_minus_one_element_counts() {
     let parsed = parse_str(&generator_outage, "opfdata").unwrap();
     assert_eq!(parsed.network.generators.len(), 4);
     assert_eq!(parsed.network.branches.len(), 20);
-    assert!(!parsed.warnings.iter().any(|w| w.contains("objective")));
+    assert!(
+        !parsed
+            .rendered_diagnostics()
+            .iter()
+            .any(|w| w.contains("objective"))
+    );
 }
 
 #[test]
@@ -264,7 +277,12 @@ fn maps_general_quadratic_costs_from_per_unit_to_mw() {
     assert_close(cost.coeffs[0], 0.01);
     assert_close(cost.coeffs[1], 2.0);
     assert_close(cost.coeffs[2], 3.0);
-    assert!(!parsed.warnings.iter().any(|w| w.contains("objective")));
+    assert!(
+        !parsed
+            .rendered_diagnostics()
+            .iter()
+            .any(|w| w.contains("objective"))
+    );
 }
 
 #[test]
@@ -276,17 +294,17 @@ fn retains_published_schema_extensions_and_warns_on_projection() {
     let parsed = parse_str(&source, "opfdata").unwrap();
     assert!(
         parsed
-            .warnings
+            .rendered_diagnostics()
             .iter()
             .any(|warning| warning.contains("`dataset_revision`"))
     );
     assert!(
         parsed
-            .warnings
+            .rendered_diagnostics()
             .iter()
             .any(|warning| warning.contains("`metadata.solver`"))
     );
-    let echo = write_as(&parsed.network, TargetFormat::DeepMindOpfDataJson).unwrap();
+    let echo = parsed.to_format(TargetFormat::DeepMindOpfDataJson).unwrap();
     assert_eq!(echo.text, source);
 }
 
@@ -340,13 +358,17 @@ fn warns_when_objective_does_not_match_and_guides_unsupported_inputs() {
     let parsed = parse_str(&wrong_objective, "opfdata").unwrap();
     assert!(
         parsed
-            .warnings
+            .rendered_diagnostics()
             .iter()
             .any(|warning| warning.contains("metadata.objective"))
     );
 
-    for path in ["cache.pt", "group.tar.gz"] {
-        let err = parse_file(path, Some("opfdata")).unwrap_err();
-        assert!(err.to_string().contains("extract"), "{path}: {err}");
+    for name in ["cache.pt", "group.tar.gz"] {
+        let path =
+            std::env::temp_dir().join(format!("powerio-opfdata-{}-{name}", std::process::id()));
+        std::fs::write(&path, b"binary").unwrap();
+        let err = parse_file(&path, Some("opfdata")).unwrap_err();
+        let _ = std::fs::remove_file(&path);
+        assert!(err.to_string().contains("extract"), "{name}: {err}");
     }
 }

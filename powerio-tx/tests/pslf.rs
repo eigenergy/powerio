@@ -1,9 +1,11 @@
+mod helpers;
+#[allow(unused_imports)]
+use helpers::*;
 use std::path::PathBuf;
 
 use powerio_tx::{
     BalancedNetwork, Bus, BusId, BusType, Generator, Load, Shunt, ShuntBlock, SourceFormat,
-    SwitchedShuntControl, SwitchedShuntMode, TargetFormat, parse_file, parse_pslf, parse_psse,
-    parse_str, target_format_from_name, write_as, write_pslf,
+    SwitchedShuntControl, SwitchedShuntMode, TargetFormat, target_format_from_name, write_pslf,
 };
 
 const EPC: &str = r#"title
@@ -42,10 +44,6 @@ fn parse_file_infers_uppercase_epc_extension() {
     let parsed = parse_file(&path, None).unwrap();
 
     assert_eq!(parsed.network.source_format, SourceFormat::Pslf);
-    assert_eq!(
-        parsed.network.source.as_deref().map(String::as_str),
-        Some(EPC)
-    );
 }
 
 #[test]
@@ -104,10 +102,7 @@ fn pslf_write_read_round_trip_preserves_the_core() {
 fn pslf_same_format_write_echoes_source() {
     // A PSLF-sourced network writes back byte-for-byte through the retained source.
     let parsed = parse_str(EPC, "pslf").unwrap();
-    assert_eq!(
-        write_as(&parsed.network, TargetFormat::Pslf).unwrap().text,
-        EPC
-    );
+    assert_eq!(parsed.to_format(TargetFormat::Pslf).unwrap().text, EPC);
 }
 
 #[test]
@@ -133,11 +128,11 @@ fn pslf_write_reports_dropped_transformer_control() {
 
     let conv = write_pslf(&net);
     assert!(
-        conv.warnings
+        conv.rendered_diagnostics()
             .iter()
             .any(|w| w.contains("regulating control")),
         "expected a control-drop warning, got {:?}",
-        conv.warnings
+        conv.rendered_diagnostics()
     );
 }
 
@@ -161,11 +156,11 @@ fn pslf_write_reports_dropped_generator_regulated_bus() {
 
     let conv = write_pslf(&net);
     assert!(
-        conv.warnings
+        conv.rendered_diagnostics()
             .iter()
             .any(|w| w.contains("remote regulated bus")),
         "expected a regulated-bus-drop warning, got {:?}",
-        conv.warnings
+        conv.rendered_diagnostics()
     );
 }
 
@@ -235,11 +230,11 @@ fn pslf_write_reports_dropped_switched_shunt_control() {
     let conv = write_pslf(&net);
 
     assert!(
-        conv.warnings
+        conv.rendered_diagnostics()
             .iter()
             .any(|w| w.contains("switched shunt") && w.contains("fixed")),
         "expected switched-shunt warning, got {:?}",
-        conv.warnings
+        conv.rendered_diagnostics()
     );
 }
 
@@ -407,11 +402,11 @@ fn pslf_missing_end_marker_warns_without_panic() {
     let parsed = outcome.unwrap().expect("single bus PSLF case should parse");
     assert!(
         parsed
-            .warnings
+            .rendered_diagnostics()
             .iter()
             .any(|warning| warning.contains("no end marker")),
         "expected no end marker warning, got {:?}",
-        parsed.warnings
+        parsed.rendered_diagnostics()
     );
 }
 

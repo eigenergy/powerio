@@ -8,35 +8,35 @@
 //! only. Case input and
 //! output formats meet here, so adding a writable format is one module plus
 //! one hub registration.
-//! [`parse_file`] reads BalancedNetwork cases, detecting the format from its extension;
-//! [`parse_display_file`] reads display artifacts such as PowerWorld `.pwd`.
-//! [`write_as`] serializes a `BalancedNetwork` to text targets. Directory formats,
-//! such as PyPSA CSV folders, use explicit filesystem helpers. Non-finite
-//! numeric values, such as MATPOWER `Inf`/`NaN` angle limits, are written as
-//! JSON `null`.
+//! [`parse`] reads a retained source into a typed module, detecting the
+//! format from the source name and content; [`parse_display_file`] reads
+//! display artifacts such as PowerWorld `.pwd`. [`write_as`] writes a parsed
+//! module, echoing the retained source on a same format target, and
+//! [`write_network`] is the semantic write for bare typed networks.
+//! Non-finite numeric values, such as MATPOWER `Inf`/`NaN` angle limits, are
+//! written as JSON `null`.
 //!
 //! # Fidelity behavior
 //!
 //! Conversion is two-tier:
 //!
-//! - **Same format writes return the original text.** A reader keeps its source
-//!   text (see [`BalancedNetwork`]), so writing back to the same format returns every
-//!   field, comment, and numeric token.
+//! - **Same format writes of an unchanged parsed module return the original
+//!   bytes.** The module retains its source, so [`write_as`] back to the same
+//!   format returns every field, comment, and numeric token.
 //! - **Cross-format keeps maximal fidelity with itemized loss.** Whatever the
-//!   target format cannot represent is reported in the [`Conversion`] `warnings`,
-//!   never dropped silently. On the read side, readers itemize what they ignore
-//!   in [`Parsed`] `warnings`.
+//!   target format cannot represent is reported in the [`Conversion`]
+//!   findings, never dropped silently. On the read side, readers itemize what
+//!   they ignore on the module's diagnostics.
 
 use std::collections::{BTreeSet, HashMap};
 use std::fmt;
 use std::str::FromStr;
-use std::sync::Arc;
 
 use serde_json::{Map, Value};
 
-use crate::diagnostics::{
-    Diagnostic, DiagnosticInfo, Diagnostics, EmitFamily, codes, render_diagnostic,
-};
+use powerio_core::{PioModule, SourceDescriptor};
+
+use crate::diagnostics::{Diagnostic, DiagnosticInfo, Diagnostics, EmitFamily, codes};
 use crate::gen_cost::{GenCostPatch, MissingGenCostPolicy};
 use crate::network::{BalancedNetwork, Branch, BranchRatingSet, Bus, BusId, BusType, SourceFormat};
 use crate::{Error, Result};
@@ -56,17 +56,16 @@ mod pypsa;
 pub mod routing;
 mod surge;
 
-pub use egret::{parse_egret_json, write_egret_json};
+pub use egret::write_egret_json;
 pub use goc3::parse_goc3_json;
-pub use matpower::{parse_matpower, parse_matpower_file, write_matpower};
-pub use opfdata::parse_deepmind_opfdata_json;
-pub use pandapower::{parse_pandapower_json, write_pandapower_json};
-pub use powermodels::{parse_powermodels_json, write_powermodels_json};
-pub use powerworld::{PwdDisplay, PwdSubstation, parse_powerworld, write_powerworld};
-pub use pslf::{parse_pslf, write_pslf};
-pub use psse::{parse_psse, write_psse, write_psse_rev};
-pub use pypsa::{PypsaCsvOutputs, read_pypsa_csv_folder, write_pypsa_csv_folder};
-pub use surge::{parse_surge_json, write_surge_json};
+pub use matpower::write_matpower;
+pub use pandapower::write_pandapower_json;
+pub use powermodels::write_powermodels_json;
+pub use powerworld::{PwdDisplay, PwdSubstation, write_powerworld};
+pub use pslf::write_pslf;
+pub use psse::{write_psse, write_psse_rev};
+pub use pypsa::{PypsaCsvOutputs, write_pypsa_csv_folder};
+pub use surge::write_surge_json;
 
 /// A target case format. See [`write_as`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -390,10 +389,6 @@ pub(crate) fn named_io_error(path: &std::path::Path, e: &std::io::Error) -> Erro
     ))
 }
 
-fn read_file_text(path: &std::path::Path) -> Result<String> {
-    std::fs::read_to_string(path).map_err(|e| named_io_error(path, &e))
-}
-
 fn read_file_bytes(path: &std::path::Path) -> Result<Vec<u8>> {
     std::fs::read(path).map_err(|e| named_io_error(path, &e))
 }
@@ -431,36 +426,103 @@ fn is_pslf_name(name: &str) -> bool {
 /// PowerModels JSON (`baseMVA`, `branch`, `gen`, or `gencost`). JSON matching
 /// model JSON markers (`buses` plus a network key), distribution markers,
 /// ambiguous markers, or no known markers returns [`Error::UnknownFormat`].
-/// Pass `from` to force a transmission format. PowerWorld `.pwb` is a binary read only format with no
-/// retained source; PSLF `.epc` is text and has a writer. Returns [`Parsed`]:
-/// the network plus the reader's fidelity warnings.
+/// Declare a format on the source to force a parser. PowerWorld `.pwb` is a
+/// binary read only format; PSLF `.epc` is text and has a writer. Returns the
+/// typed module: the network value, the reader's findings, and the retained
+/// source.
 ///
-/// The one path-based parser the CLI and the Python/C/Julia bindings share (each
-/// exposes the same `parse_file(path, from)` shape), so adding a source format is
-/// one edit here, not one per binding. For in-memory text use [`parse_str`].
+/// The one parser the CLI and the Python/C/Julia bindings share, so adding a
+/// source format is one edit here, not one per binding.
 ///
 /// # Errors
-/// [`Error::UnknownFormat`] if `from` is unrecognized or the extension can't be
-/// mapped; [`Error::Io`] if the file can't be read; the reader's own [`Error`]
-/// on malformed input.
-pub fn parse_file(path: impl AsRef<std::path::Path>, from: Option<&str>) -> Result<Parsed> {
-    let path = path.as_ref();
+/// A `Request` failure when the format cannot be determined or is refused, an
+/// `Io` failure when acquisition fails, and the reader's own failure on
+/// malformed input. Findings collected before a failure ride the returned
+/// error.
+///
+/// # Panics
+/// Never on external input: the internal expectations hold by construction
+/// (acquired buffer names are validated and reader findings carry no
+/// identities).
+pub fn parse(
+    source: powerio_core::Source,
+) -> std::result::Result<PioModule<BalancedNetwork>, powerio_core::Error> {
+    let mut warnings = Diagnostics::new();
+    match parse_to_network(&source, &mut warnings) {
+        Ok(network) => {
+            let mut module = PioModule::new(network);
+            for buffer in source.acquired_buffers() {
+                let descriptor = SourceDescriptor::new(
+                    buffer.id().clone(),
+                    buffer.name(),
+                    buffer.bytes().len() as u64,
+                )
+                .expect("acquired buffer names are validated");
+                module
+                    .add_source_descriptor(descriptor)
+                    .expect("acquired buffer identities are unique");
+            }
+            let mut module = module.with_source(source);
+            for record in warnings.into_records() {
+                module
+                    .add_diagnostic(record)
+                    .expect("reader findings carry no identities or spans to collide");
+            }
+            Ok(module)
+        }
+        Err(error) => {
+            let core = powerio_core::Error::new(error.code(), error.to_string());
+            Err(core
+                .with_diagnostics(warnings.into_records())
+                .with_cause(error)
+                .with_source(source))
+        }
+    }
+}
+
+/// The format dispatch behind [`parse`]: name and content detection, then the
+/// one reader map.
+fn parse_to_network(
+    source: &powerio_core::Source,
+    warnings: &mut Diagnostics,
+) -> Result<BalancedNetwork> {
+    let from = source.format().map(powerio_core::FormatId::as_str);
+    let path = std::path::Path::new(source.name());
+    // The file stem is the name hint for formats that don't carry their own
+    // name. An angle bracketed source name is the conventional non-file
+    // spelling an anonymous in-memory caller uses and carries no hint; a name
+    // with an extension contributes its stem, and any other name is the hint
+    // itself.
+    let stem = if source.name().starts_with('<') {
+        None
+    } else if path.extension().is_some() {
+        path.file_stem().and_then(|stem| stem.to_str())
+    } else {
+        Some(source.name())
+    };
     // PyPSA CSV folders are directories, not files; dispatch them before any
     // extension logic. `from` accepts the pypsa aliases, and a bare directory
-    // with a `network.csv` auto-detects.
-    if from.is_some_and(is_pypsa_csv_name)
-        || (from.is_none() && path.is_dir() && path.join("network.csv").is_file())
-    {
-        return pypsa::read_pypsa_csv_folder(path);
-    }
-    // Any other directory has no reader; refuse it as a directory before the
-    // extension logic reads ".07" off a name like `pglib-opf-23.07`.
-    if path.is_dir() {
+    // source with a `network.csv` auto-detects.
+    if source.is_directory() {
+        let marker = powerio_core::ArtifactPath::new("network.csv")
+            .expect("static name is a valid artifact path");
+        if from.is_some_and(is_pypsa_csv_name) || (from.is_none() && source.buffer(&marker).is_ok())
+        {
+            return pypsa::read_pypsa_csv_source(source, warnings);
+        }
+        // Any other directory has no reader; refuse it as a directory before
+        // the extension logic reads ".07" off a name like `pglib-opf-23.07`.
         return Err(Error::UnknownFormat(format!(
             "{} is a directory, and the only directory case format is a PyPSA CSV \
              folder (one holding a network.csv); pass a case file",
             path.display()
         )));
+    }
+    if from.is_some_and(is_pypsa_csv_name) {
+        return Err(Error::UnknownFormat(
+            "a PyPSA CSV case is a directory holding a network.csv; open the folder as the source"
+                .into(),
+        ));
     }
     // PowerWorld `.pwb` is binary and read only; dispatch it before the text
     // read. `from` accepts "pwb" for files with a different extension.
@@ -471,22 +533,16 @@ pub fn parse_file(path: impl AsRef<std::path::Path>, from: Option<&str>) -> Resu
     if from.is_some_and(|f| f.eq_ignore_ascii_case("pwb"))
         || (from.is_none() && ext.as_deref() == Some("pwb"))
     {
-        let bytes = read_file_bytes(path)?;
-        let stem = path.file_stem().and_then(|s| s.to_str());
-        // The binary reader is total (no fidelity warnings); wrap its network
-        // in the shared [`Parsed`] shape.
-        let mut warnings = Diagnostics::new();
-        let network = powerworld::parse_pwb_collecting(&bytes, stem, &mut warnings)?;
-        return Ok(Parsed::without_document(network, warnings));
+        // Binary input: the exact bytes go to the reader, byte order mark
+        // handling included, since the mark is a text concept.
+        let buffer = primary(source)?;
+        return powerworld::parse_pwb_collecting(buffer.bytes(), stem, warnings);
     }
     if from.is_some_and(is_pslf_name) || (from.is_none() && ext.as_deref() == Some("epc")) {
-        let text = read_file_text(path)?;
-        let stem = path.file_stem().and_then(|s| s.to_str());
-        let mut warnings = Diagnostics::new();
-        let source = strip_bom(Arc::new(text), &mut warnings);
-        let network = pslf::parse_pslf_source(source, stem, &mut warnings)?;
+        let buffer = primary(source)?;
+        let network = pslf::parse_pslf_source(source_text(&buffer)?, stem, warnings)?;
         reject_empty_case(&network, "PSLF .epc")?;
-        return Ok(Parsed::without_document(network, warnings));
+        return Ok(network);
     }
     if from
         .and_then(target_format_from_name)
@@ -523,82 +579,81 @@ pub fn parse_file(path: impl AsRef<std::path::Path>, from: Option<&str>) -> Resu
                 Some("dss") => return Err(unknown_source_format("dss")),
                 other => {
                     return Err(Error::UnknownFormat(format!(
-                        "cannot infer from file extension {other:?}; \
-                         pass an explicit source format"
+                        "cannot infer from source name extension {other:?}; \
+                         declare a source format"
                     )));
                 }
             }
         }
     };
-    // Read the file once into an owned buffer; the reader moves it straight into
-    // the retained source (byte-exact round-trip) with no copy. Sniffing a
-    // `.json` borrows the text before the move.
-    let text = read_file_text(path)?;
+    // The parser decodes a byte order mark free slice of the one retained
+    // buffer; the module keeps the exact original bytes for same format
+    // writing. Sniffing a `.json` borrows the same slice.
+    let buffer = primary(source)?;
+    let text = source_text(&buffer)?;
     let fmt = match fmt_hint {
         Some(fmt) => fmt,
-        None => sniff_json(&text)?,
+        None => sniff_json(text)?,
     };
-    // The file stem is the name hint for formats that don't carry their own name.
-    let stem = path.file_stem().and_then(|s| s.to_str());
-    read_source(Arc::new(text), fmt, stem)
+    read_source(text, fmt, stem, warnings)
 }
 
-/// Strip a leading UTF-8 byte order mark before the reader sees the text.
-/// Windows tooling saves case files with one, and every text reader here
-/// (serde_json first among them) treats it as garbage in the first token. The
-/// retained source loses the mark, so a same-format echo differs by exactly
-/// those three bytes; the warning itemizes that per the fidelity policy.
-fn strip_bom(source: Arc<String>, warnings: &mut Diagnostics) -> Arc<String> {
-    let Some(stripped) = source.strip_prefix('\u{feff}') else {
-        return source;
-    };
-    warnings.push(
-        &codes::PARSE_SOURCE_BOM_STRIPPED,
-        "leading UTF-8 byte order mark removed; a same-format write returns the text without it",
-    );
-    Arc::new(stripped.to_owned())
+/// The primary buffer of a file or memory source.
+fn primary(source: &powerio_core::Source) -> Result<powerio_core::SourceBuffer> {
+    source.primary_buffer().map_err(|error| Error::FormatRead {
+        format: "source",
+        message: error.to_string(),
+    })
 }
 
-/// Read an owned `source` buffer as `fmt`, using `name_hint` (e.g. the file
-/// stem) when the format carries no name of its own. The single format→reader
-/// map: [`parse_file`] and [`parse_str`] both funnel through it, so every format
-/// is dispatched the same way. Each reader takes the owned `Arc` so
-/// it moves the buffer straight into the retained source (no copy) and is free
-/// to specialize its parse internally. Owns the [`Parsed`] warnings vector;
-/// readers that report fidelity loss append to it.
-fn read_source(source: Arc<String>, fmt: TargetFormat, name_hint: Option<&str>) -> Result<Parsed> {
-    let mut warnings = Diagnostics::new();
-    let source = strip_bom(source, &mut warnings);
-    let mut document = None;
+/// The text a reader decodes: the buffer's byte order mark free slice,
+/// validated as UTF-8.
+fn source_text(buffer: &powerio_core::SourceBuffer) -> Result<&str> {
+    std::str::from_utf8(buffer.content_bytes()).map_err(|e| Error::FormatRead {
+        format: "case text",
+        message: format!("not valid UTF-8: {e}"),
+    })
+}
+
+/// Read decoded `text` as `fmt`, using `name_hint` (e.g. the file stem) when
+/// the format carries no name of its own. The single format to reader map:
+/// every parse route funnels through it, so every format is dispatched the
+/// same way. Readers borrow the text; the module retains the source bytes.
+fn read_source(
+    text: &str,
+    fmt: TargetFormat,
+    name_hint: Option<&str>,
+    warnings: &mut Diagnostics,
+) -> Result<BalancedNetwork> {
     let net = match fmt {
-        TargetFormat::Matpower => matpower::parse_matpower_source(source, name_hint),
+        TargetFormat::Matpower => matpower::parse_matpower_source(text, name_hint),
         TargetFormat::PowerModelsJson => {
-            powermodels::parse_powermodels_json_source(source, name_hint, &mut warnings)
+            powermodels::parse_powermodels_json_source(text, name_hint, warnings)
         }
-        TargetFormat::Psse { .. } => psse::parse_psse_source(source, name_hint, &mut warnings),
+        TargetFormat::Psse { .. } => psse::parse_psse_source(text, name_hint, warnings),
         TargetFormat::PowerWorld => {
-            powerworld::parse_powerworld_source(source, name_hint, &mut warnings)
+            powerworld::map::parse_powerworld_source(text, name_hint, warnings)
         }
-        TargetFormat::EgretJson => egret::parse_egret_source(source, name_hint),
+        TargetFormat::EgretJson => egret::parse_egret_source(text, name_hint),
         TargetFormat::PandapowerJson => {
-            pandapower::parse_pandapower_source(source, name_hint, &mut warnings)
+            pandapower::parse_pandapower_source(text, name_hint, warnings)
         }
-        // PSLF read normally enters through the `is_pslf_name`/`.epc` fast path in
-        // parse_file / parse_str; this arm keeps the funnel total.
-        TargetFormat::Pslf => pslf::parse_pslf_source(source, name_hint, &mut warnings),
+        // PSLF read normally enters through the `is_pslf_name`/`.epc` fast
+        // path in the dispatch; this arm keeps the funnel total.
+        TargetFormat::Pslf => pslf::parse_pslf_source(text, name_hint, warnings),
+        // The general parse takes the network and drops the typed problem
+        // document; the calculation instance this source declares arrives
+        // with the instance types.
         TargetFormat::Goc3Json => {
-            goc3::parse_goc3_source(source, name_hint, &mut warnings).map(|(net, goc3)| {
-                document = Some(SourceDocument::Goc3(goc3));
-                net
-            })
+            goc3::parse_goc3_source(text, name_hint, warnings).map(|(net, _goc3)| net)
         }
-        TargetFormat::SurgeJson => surge::parse_surge_source(source, name_hint, &mut warnings),
+        TargetFormat::SurgeJson => surge::parse_surge_source(text, name_hint, warnings),
         TargetFormat::DeepMindOpfDataJson => {
-            opfdata::parse_opfdata_source(source, name_hint, &mut warnings)
+            opfdata::parse_opfdata_source(text, name_hint, warnings)
         }
     }?;
     reject_empty_case(&net, fmt.label())?;
-    Ok(Parsed::new(net, warnings, document))
+    Ok(net)
 }
 
 /// Geographic metadata for a reader that harvested longitude/latitude
@@ -658,11 +713,11 @@ pub(crate) fn reject_empty_case(net: &BalancedNetwork, format: &'static str) -> 
     Ok(())
 }
 
-/// The source format names [`parse_file`] accepts, each with its aliases.
-/// The unknown format error prints this list, and a test walks every alias
-/// through [`routing::transmission_format_from_name`] so it cannot drift from
-/// the matcher. `pypsa-csv` (a directory) and `pwb` (bytes only) have no
-/// [`parse_str`] arm; every other name works on both entry points.
+/// The source format names [`parse`] accepts as a declared format, each with
+/// its aliases. The unknown format error prints this list, and a test walks
+/// every alias through [`routing::transmission_format_from_name`] so it
+/// cannot drift from the matcher. `pypsa-csv` names a directory source and
+/// `pwb` a binary one; every other name reads file and memory sources alike.
 pub const SOURCE_FORMAT_NAMES: &str = "matpower/m, powermodels-json/powermodels/pm, \
      egret-json/egret, psse/raw, psse34, psse35, powerworld/aux, \
      pandapower-json/pandapower/pp, pslf/epc, pypsa-csv/pypsa, pwb, goc3-json/goc3, \
@@ -740,139 +795,12 @@ fn transmission_json_target(format: TransmissionFormat) -> Result<TargetFormat> 
     }
 }
 
-/// Parse in-memory case `text` of the named source format `from` (see
-/// [`target_format_from_name`]). Returns [`Parsed`]: the network plus the
-/// reader's fidelity warnings.
-///
-/// # Errors
-/// [`Error::UnknownFormat`] if `from` is unrecognized; the reader's own
-/// [`Error`] on malformed input.
-pub fn parse_str(text: &str, from: &str) -> Result<Parsed> {
-    parse_str_with_name(text, from, None)
-}
-
-/// [`parse_str`] with a name hint for formats that carry no name of their own
-/// (the role the file stem plays in [`parse_file`]). Lets a caller that already
-/// read a file's text keep the stem-derived case name without going back
-/// through the filesystem.
-///
-/// # Errors
-/// As [`parse_str`].
-pub fn parse_str_with_name(text: &str, from: &str, name_hint: Option<&str>) -> Result<Parsed> {
-    if is_pslf_name(from) {
-        let mut warnings = Diagnostics::new();
-        let source = strip_bom(Arc::new(text.to_owned()), &mut warnings);
-        let network = pslf::parse_pslf_source(source, name_hint, &mut warnings)?;
-        reject_empty_case(&network, "PSLF .epc")?;
-        return Ok(Parsed::without_document(network, warnings));
-    }
-    let fmt = target_format_from_name(from).ok_or_else(|| unknown_source_format(from))?;
-    read_source(Arc::new(text.to_owned()), fmt, name_hint)
-}
-
-/// Parse in-memory case `bytes` of the named source format `from`. Accepts
-/// every name [`parse_str`] does, plus `pwb`: PowerWorld binary has no text
-/// form, so this is the only in-memory entry point that reaches it. Text
-/// formats decode as UTF-8 and take the [`parse_str`] path from there.
-///
-/// A caller that already holds the file's bytes — an upload, an archive
-/// member, a database blob — parses them here rather than staging a temporary
-/// file for [`parse_file`].
-///
-/// # Errors
-/// [`Error::UnknownFormat`] if `from` is unrecognized; [`Error::FormatRead`]
-/// if a text format's bytes are not UTF-8; the reader's own [`Error`] on
-/// malformed input.
-pub fn parse_bytes(bytes: &[u8], from: &str) -> Result<Parsed> {
-    parse_bytes_with_name(bytes, from, None)
-}
-
-/// [`parse_bytes`] with a name hint, as [`parse_str_with_name`] is to
-/// [`parse_str`].
-///
-/// # Errors
-/// As [`parse_bytes`].
-pub fn parse_bytes_with_name(bytes: &[u8], from: &str, name_hint: Option<&str>) -> Result<Parsed> {
-    if from.eq_ignore_ascii_case("pwb") {
-        // Same call parse_file makes; the reader reports only what the
-        // decoded layout cannot state.
-        let mut warnings = Diagnostics::new();
-        let network = powerworld::parse_pwb_collecting(bytes, name_hint, &mut warnings)?;
-        return Ok(Parsed::without_document(network, warnings));
-    }
-    // A display format reaches a different return type, so name the entry
-    // point that returns it instead of failing as an unknown case format.
-    if display_format_from_name(from).is_some() {
-        return Err(Error::UnknownFormat(format!(
-            "{from} is display data, not a BalancedNetwork case; \
-             use parse_display_bytes(bytes, \"{from}\")"
-        )));
-    }
-    let text = std::str::from_utf8(bytes).map_err(|e| Error::FormatRead {
-        format: "case text",
-        message: format!("not valid UTF-8: {e}"),
-    })?;
-    parse_str_with_name(text, from, name_hint)
-}
-
-/// Output of a parse: the network plus the reader's fidelity warnings,
-/// tables and columns the model cannot carry, reported instead of dropped
-/// silently. Empty for readers that don't report read warnings (currently
-/// readers that do not need to reduce any source fields).
-///
-/// `#[non_exhaustive]`: a returns-only type, so downstream code reads it but
-/// never constructs it, leaving room to add parse metadata without a breaking
-/// change.
-#[derive(Debug, Clone)]
-#[non_exhaustive]
-pub struct Parsed {
-    pub network: BalancedNetwork,
-    /// The reader's findings as structured records: a stable code, a severity,
-    /// and a message.
-    pub diagnostics: Vec<Diagnostic>,
-    /// The same findings as `CODE: message` lines, rendered from `diagnostics`
-    /// so the text and the structure cannot disagree.
-    pub warnings: Vec<String>,
-    /// The source document for formats whose downstream adapters reuse the
-    /// reader's parse (see [`SourceDocument`]); `None` for every other format.
-    pub document: Option<SourceDocument>,
-}
-
-impl Parsed {
-    pub(crate) fn new(
-        network: BalancedNetwork,
-        diagnostics: Diagnostics,
-        document: Option<SourceDocument>,
-    ) -> Self {
-        Self {
-            network,
-            warnings: diagnostics.lines(),
-            diagnostics: diagnostics.into_records(),
-            document,
-        }
-    }
-
-    /// Wrap a reader result for a format without a shared source document.
-    pub(crate) fn without_document(network: BalancedNetwork, diagnostics: Diagnostics) -> Self {
-        Self::new(network, diagnostics, None)
-    }
-}
-
-/// A format's source document, parsed once by the reader and handed forward so
-/// downstream adapters derive their data from the same parse instead of
-/// reparsing the retained source text. Today that is the GOC3 document, which
-/// the operating point extractor in `powerio-pkg` consumes.
-#[derive(Debug, Clone)]
-#[non_exhaustive]
-pub enum SourceDocument {
-    Goc3(Arc<goc3::Goc3Document>),
-}
-
-/// Output of a conversion: the serialized text plus any fidelity warnings:
-/// data the target can't represent, defaults synthesized, or blocks mapped best
-/// effort. An empty `warnings` means a faithful conversion. For [`convert_file`]
-/// and [`convert_str`], `warnings` carries the read side ([`Parsed`] warnings)
-/// too, ahead of the write side.
+/// Output of a conversion: the serialized text plus the fidelity findings:
+/// data the target can't represent, defaults synthesized, or blocks mapped
+/// best effort. Empty `diagnostics` means a faithful conversion. For
+/// [`convert_file`] and [`convert_str`], `diagnostics` carries the read side
+/// findings ahead of the write side. Warning is one diagnostic severity;
+/// rendered text lines come from [`crate::diagnostics::render_diagnostics`].
 ///
 /// `#[non_exhaustive]`: a returns-only type, so downstream code reads it but
 /// never constructs it, leaving room to add fidelity metadata without a breaking
@@ -881,19 +809,15 @@ pub enum SourceDocument {
 #[non_exhaustive]
 pub struct Conversion {
     pub text: String,
-    /// The writer's findings as structured records: a stable code, a severity,
-    /// and a message.
+    /// The findings as structured records: a stable code, a severity, and a
+    /// message.
     pub diagnostics: Vec<Diagnostic>,
-    /// The same findings as `CODE: message` lines, rendered from `diagnostics`
-    /// so the text and the structure cannot disagree.
-    pub warnings: Vec<String>,
 }
 
 impl Conversion {
     pub(crate) fn new(text: String, diagnostics: Diagnostics) -> Self {
         Self {
             text,
-            warnings: diagnostics.lines(),
             diagnostics: diagnostics.into_records(),
         }
     }
@@ -903,19 +827,20 @@ impl Conversion {
         Self::new(text, Diagnostics::new())
     }
 
-    /// Record one finding after the writer has run. Both channels move
-    /// together: the line is rendered from the record it is added with.
+    /// The findings as `CODE: message` lines, rendered on request. Warning is
+    /// one diagnostic severity; there is no separately stored text channel.
+    #[must_use]
+    pub fn rendered_diagnostics(&self) -> Vec<String> {
+        crate::diagnostics::render_diagnostics(&self.diagnostics)
+    }
+
+    /// Record one finding after the writer has run.
     pub(crate) fn push(&mut self, info: &'static DiagnosticInfo, message: impl Into<String>) {
-        let diagnostic = Diagnostic::of(info, message);
-        self.warnings.push(render_diagnostic(&diagnostic));
-        self.diagnostics.push(diagnostic);
+        self.diagnostics.push(Diagnostic::of(info, message));
     }
 
     /// Put the read side's findings ahead of the write side's.
     pub(crate) fn prepend(&mut self, read: Vec<Diagnostic>) {
-        let mut lines: Vec<String> = read.iter().map(render_diagnostic).collect();
-        lines.append(&mut self.warnings);
-        self.warnings = lines;
         let mut records = read;
         records.append(&mut self.diagnostics);
         self.diagnostics = records;
@@ -940,18 +865,65 @@ impl WriteOptions {
     }
 }
 
-/// Convert a [`BalancedNetwork`] to `format`. Writing back to the source format returns
-/// the retained source text; otherwise the network is serialized into the target.
+/// Write a parsed module to `format`. Writing back to the source format of an
+/// unchanged parsed module returns the retained source bytes exactly,
+/// including a byte order mark; any other target serializes the typed value.
 ///
 /// # Errors
 /// [`Error::WriteUnsupported`] for a read only target, and the writer's own
 /// [`Error`] on a case it cannot state.
-pub fn write_as(net: &BalancedNetwork, format: TargetFormat) -> Result<Conversion> {
-    if is_echo(net, format) {
-        if let Some(src) = &net.source {
-            return Ok(Conversion::faithful(src.to_string()));
-        }
+pub fn write_as(
+    module: &PioModule<BalancedNetwork>,
+    format: TargetFormat,
+) -> std::result::Result<Conversion, powerio_core::Error> {
+    if let Some(text) = echo_text(module, format) {
+        return Ok(Conversion::faithful(text));
     }
+    let mut conv = write_conversion(module.value(), format).map_err(core_error)?;
+    warn_psse_downgrade(module, format, &mut conv);
+    Ok(conv)
+}
+
+/// Project a crate failure onto the common operation failure type.
+pub(crate) fn core_error(error: Error) -> powerio_core::Error {
+    let message = error.to_string();
+    powerio_core::Error::new(error.code(), message).with_cause(error)
+}
+
+/// The retained source text when writing `module` back to its source format:
+/// the echo that reproduces the input byte for byte. `None` sends the write
+/// down the semantic path.
+fn echo_text(module: &PioModule<BalancedNetwork>, target: TargetFormat) -> Option<String> {
+    let source = module.source()?;
+    let buffer = source.primary_buffer().ok()?;
+    if !same_format(target, module.value().source_format) {
+        return None;
+    }
+    let text = std::str::from_utf8(buffer.bytes()).ok()?;
+    // A PSS/E source echoes only when the requested revision equals the
+    // source's own; any other revision goes through write_psse_rev so the
+    // caller gets the layout it asked for instead of the original bytes.
+    if let TargetFormat::Psse { rev } = target
+        && psse::header_rev(text.trim_start_matches('\u{feff}')) != rev
+    {
+        return None;
+    }
+    Some(text.to_owned())
+}
+
+/// Serialize a typed network to `format` with no source echo: the semantic
+/// write used for values constructed in memory or severed from their module.
+///
+/// # Errors
+/// As [`write_as`].
+pub fn write_network(
+    net: &BalancedNetwork,
+    format: TargetFormat,
+) -> std::result::Result<Conversion, powerio_core::Error> {
+    write_conversion(net, format).map_err(core_error)
+}
+
+pub(crate) fn write_conversion(net: &BalancedNetwork, format: TargetFormat) -> Result<Conversion> {
     let mut conv = match format {
         TargetFormat::PowerModelsJson => write_powermodels_json(net),
         TargetFormat::EgretJson => write_egret_json(net),
@@ -979,23 +951,25 @@ pub fn write_as(net: &BalancedNetwork, format: TargetFormat) -> Result<Conversio
     warn_missing_reference(net, format, &mut conv);
     warn_dropped_frequency(net, format, &mut conv);
     warn_dropped_locations(net, format, &mut conv);
-    warn_psse_downgrade(net, format, &mut conv);
     warn_dropped_transformer_charging(net, format, &mut conv);
     Ok(conv)
 }
 
-/// Convert a [`BalancedNetwork`] with write-time cost policies. The old [`write_as`]
-/// behavior is preserved when `options` is default.
+/// Write a parsed module with write-time cost policies. The plain
+/// [`write_as`] behavior is preserved when `options` is default; a non-default
+/// policy edits a copy of the typed value, so its write never echoes source
+/// bytes the policy no longer matches.
 pub fn write_as_with_options(
-    net: &BalancedNetwork,
+    module: &PioModule<BalancedNetwork>,
     format: TargetFormat,
     options: &WriteOptions,
-) -> Result<Conversion> {
+) -> std::result::Result<Conversion, powerio_core::Error> {
     if options.is_default() {
-        return write_as(net, format);
+        return write_as(module, format);
     }
-    let (working, policy_warnings) = apply_write_cost_policy(net, options)?;
-    let mut conv = write_as(&working, format)?;
+    let (working, policy_warnings) =
+        apply_write_cost_policy(module.value(), options).map_err(core_error)?;
+    let mut conv = write_conversion(&working, format).map_err(core_error)?;
     conv.prepend(policy_warnings);
     Ok(conv)
 }
@@ -1004,7 +978,7 @@ pub fn write_as_with_options(
 ///
 /// Shared by the text and directory writers so both surfaces run one policy and
 /// describe it with the same findings. The caller's network is never mutated.
-fn apply_write_cost_policy(
+pub(crate) fn apply_write_cost_policy(
     net: &BalancedNetwork,
     options: &WriteOptions,
 ) -> Result<(BalancedNetwork, Vec<Diagnostic>)> {
@@ -1039,9 +1013,6 @@ fn apply_write_cost_policy(
                 _ => unreachable!("only Fill synthesizes costs"),
             },
         );
-    }
-    if report.patched > 0 || report.synthesized > 0 {
-        working.source = None;
     }
     Ok((working, policy_warnings.into_records()))
 }
@@ -1079,9 +1050,17 @@ pub(super) fn allocate_circuit_id<K: Ord + Clone>(
 /// modern records (12 named ratings, load DG/LOADTYPE columns, the system-wide
 /// block) and any unmodeled section the echo would have preserved. Name the
 /// downgrade instead of performing it silently.
-fn warn_psse_downgrade(net: &BalancedNetwork, format: TargetFormat, conv: &mut Conversion) {
+fn warn_psse_downgrade(
+    module: &PioModule<BalancedNetwork>,
+    format: TargetFormat,
+    conv: &mut Conversion,
+) {
+    let source_text = module
+        .source()
+        .and_then(|source| source.primary_buffer().ok())
+        .and_then(|buffer| String::from_utf8(buffer.content_bytes().to_vec()).ok());
     if let (TargetFormat::Psse { rev }, SourceFormat::Psse, Some(src)) =
-        (format, net.source_format, net.source.as_ref())
+        (format, module.value().source_format, source_text.as_deref())
     {
         let src_rev = psse::header_rev(src);
         if src_rev > rev {
@@ -1267,27 +1246,45 @@ pub(super) fn warn_extra_branch_rating_sets(
     }
 }
 
+/// The declared format ID for a caller-supplied token. Tokens are matched
+/// case insensitively and accept the historical underscore spelling of a
+/// hyphenated alias; the ID itself keeps the stable lower case hyphen
+/// grammar.
+pub fn format_id_for(
+    token: &str,
+) -> std::result::Result<powerio_core::FormatId, powerio_core::Error> {
+    powerio_core::FormatId::new(token.to_ascii_lowercase().replace('_', "-"))
+}
+
+/// Attach a caller-named source format to a source.
+fn with_declared_format(
+    source: powerio_core::Source,
+    from: Option<&str>,
+) -> std::result::Result<powerio_core::Source, powerio_core::Error> {
+    match from {
+        None => Ok(source),
+        Some(token) => Ok(source.with_format(format_id_for(token)?)),
+    }
+}
+
 /// Convert a case file to `to`, optionally forcing the source format with
 /// `from`.
 ///
 /// This is the canonical file-conversion helper shared by the bindings. It
-/// parses `path` once, writes the resulting [`BalancedNetwork`] to `to`, and returns the
-/// converted text plus any fidelity warnings, read side first. An echo (writing
-/// back to the source format) returns the retained text with no warnings.
+/// parses `path` once, writes the parsed module to `to`, and returns the
+/// converted text plus any fidelity findings, read side first. An echo
+/// (writing back to the source format) returns the retained text with no
+/// findings.
 ///
 /// # Errors
-/// As [`parse_file`].
+/// As [`parse`].
 pub fn convert_file(
     path: impl AsRef<std::path::Path>,
     to: TargetFormat,
     from: Option<&str>,
-) -> Result<Conversion> {
-    let parsed = parse_file(path, from)?;
-    let mut conv = write_as(&parsed.network, to)?;
-    if !is_echo(&parsed.network, to) {
-        conv.prepend(parsed.diagnostics);
-    }
-    Ok(conv)
+) -> std::result::Result<Conversion, powerio_core::Error> {
+    let source = with_declared_format(powerio_core::Source::open(path.as_ref())?, from)?;
+    convert_source(source, to, &WriteOptions::default())
 }
 
 /// Convert a case file with write-time cost policies.
@@ -1296,31 +1293,26 @@ pub fn convert_file_with_options(
     to: TargetFormat,
     from: Option<&str>,
     options: &WriteOptions,
-) -> Result<Conversion> {
-    let parsed = parse_file(path, from)?;
-    let mut conv = write_as_with_options(&parsed.network, to, options)?;
-    if !is_echo(&parsed.network, to) || !options.is_default() {
-        conv.prepend(parsed.diagnostics);
-    }
-    Ok(conv)
+) -> std::result::Result<Conversion, powerio_core::Error> {
+    let source = with_declared_format(powerio_core::Source::open(path.as_ref())?, from)?;
+    convert_source(source, to, options)
 }
 
 /// Convert in-memory case `text` of the named source format `from` (see
 /// [`target_format_from_name`]) to `to`.
 ///
-/// Parses `text` once and writes the resulting [`BalancedNetwork`] to `to` without a
-/// temporary file. Warnings are ordered read side first, as in
+/// Parses `text` once and writes the parsed module to `to` without a
+/// temporary file. Findings are ordered read side first, as in
 /// [`convert_file`].
 ///
 /// # Errors
-/// As [`parse_str`].
-pub fn convert_str(text: &str, to: TargetFormat, from: &str) -> Result<Conversion> {
-    let parsed = parse_str(text, from)?;
-    let mut conv = write_as(&parsed.network, to)?;
-    if !is_echo(&parsed.network, to) {
-        conv.prepend(parsed.diagnostics);
-    }
-    Ok(conv)
+/// As [`parse`].
+pub fn convert_str(
+    text: &str,
+    to: TargetFormat,
+    from: &str,
+) -> std::result::Result<Conversion, powerio_core::Error> {
+    convert_str_with_options(text, to, from, &WriteOptions::default())
 }
 
 /// Convert in-memory case text with write-time cost policies.
@@ -1329,11 +1321,24 @@ pub fn convert_str_with_options(
     to: TargetFormat,
     from: &str,
     options: &WriteOptions,
-) -> Result<Conversion> {
-    let parsed = parse_str(text, from)?;
-    let mut conv = write_as_with_options(&parsed.network, to, options)?;
-    if !is_echo(&parsed.network, to) || !options.is_default() {
-        conv.prepend(parsed.diagnostics);
+) -> std::result::Result<Conversion, powerio_core::Error> {
+    let source = with_declared_format(
+        powerio_core::Source::from_bytes("<memory>", text.as_bytes().to_vec())?,
+        Some(from),
+    )?;
+    convert_source(source, to, options)
+}
+
+fn convert_source(
+    source: powerio_core::Source,
+    to: TargetFormat,
+    options: &WriteOptions,
+) -> std::result::Result<Conversion, powerio_core::Error> {
+    let module = parse(source)?;
+    let echoed = options.is_default() && echo_text(&module, to).is_some();
+    let mut conv = write_as_with_options(&module, to, options)?;
+    if !echoed {
+        conv.prepend(module.diagnostics().to_vec());
     }
     Ok(conv)
 }
@@ -1545,23 +1550,6 @@ pub(crate) fn zbase(v_kv: f64, base_mva: f64) -> f64 {
     }
 }
 
-/// Whether writing `net` to `target` echoes the retained source text: the
-/// target is the source format and the source is still attached. An echo
-/// reproduces the input byte for byte, so read fidelity warnings don't apply.
-fn is_echo(net: &BalancedNetwork, target: TargetFormat) -> bool {
-    let Some(src) = &net.source else { return false };
-    if !same_format(target, net.source_format) {
-        return false;
-    }
-    // A PSS/E source echoes only when the requested revision equals the source's
-    // own; any other revision must go through write_psse_rev so the caller gets
-    // the layout it asked for instead of the original bytes.
-    if let TargetFormat::Psse { rev } = target {
-        return psse::header_rev(src) == rev;
-    }
-    true
-}
-
 /// Whether a write target is the same format the network was read from.
 fn same_format(target: TargetFormat, source: SourceFormat) -> bool {
     matches!(
@@ -1628,8 +1616,65 @@ fn collect_null_keys(value: &Value, out: &mut BTreeSet<String>) {
     }
 }
 
+/// Test-only compatibility parse shapes; production code goes through
+/// [`parse`] and the module type.
+#[cfg(test)]
+pub(crate) mod test_parse {
+    use super::*;
+
+    #[derive(Debug)]
+    pub(crate) struct TestParsed {
+        pub network: BalancedNetwork,
+        pub diagnostics: Vec<Diagnostic>,
+    }
+
+    impl TestParsed {
+        pub(crate) fn rendered_diagnostics(&self) -> Vec<String> {
+            crate::diagnostics::render_diagnostics(&self.diagnostics)
+        }
+    }
+
+    fn declared(
+        source: powerio_core::Source,
+        from: Option<&str>,
+    ) -> std::result::Result<powerio_core::Source, powerio_core::Error> {
+        match from {
+            None => Ok(source),
+            Some(token) => Ok(source.with_format(powerio_core::FormatId::new(
+                token.to_ascii_lowercase().replace('_', "-"),
+            )?)),
+        }
+    }
+
+    pub(crate) fn parse_file(
+        path: impl AsRef<std::path::Path>,
+        from: Option<&str>,
+    ) -> std::result::Result<TestParsed, powerio_core::Error> {
+        let source = declared(powerio_core::Source::open(path.as_ref())?, from)?;
+        parse(source).map(|module| TestParsed {
+            diagnostics: module.diagnostics().to_vec(),
+            network: module.into_value(),
+        })
+    }
+
+    pub(crate) fn parse_str(
+        text: &str,
+        from: &str,
+    ) -> std::result::Result<TestParsed, powerio_core::Error> {
+        let source = declared(
+            powerio_core::Source::from_bytes("<memory>", text.as_bytes().to_vec())?,
+            Some(from),
+        )?;
+        parse(source).map(|module| TestParsed {
+            diagnostics: module.diagnostics().to_vec(),
+            network: module.into_value(),
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    use super::test_parse::{parse_file, parse_str};
     use super::*;
     use crate::network::SourceFormat;
 
@@ -1654,7 +1699,13 @@ mod tests {
 
     #[test]
     fn dss_extension_error_names_the_distribution_surface() {
-        let err = parse_file("feeder.dss", None).unwrap_err();
+        let path = std::env::temp_dir().join(format!(
+            "powerio-dss-surface-{}-feeder.dss",
+            std::process::id()
+        ));
+        std::fs::write(&path, "New Circuit.feeder\n").unwrap();
+        let err = parse_file(&path, None).unwrap_err();
+        let _ = std::fs::remove_file(&path);
         assert!(err.to_string().contains("distribution"), "got: {err}");
     }
 
@@ -1663,7 +1714,7 @@ mod tests {
         let path =
             std::env::temp_dir().join(format!("powerio-no-such-case-{}.m", std::process::id()));
         let err = parse_file(&path, None).unwrap_err();
-        assert_eq!(err.code().code, "READ.IO.FAILED");
+        assert_eq!(err.category(), powerio_core::ErrorCategory::Io);
         let msg = err.to_string();
         assert!(
             msg.contains(&path.display().to_string()),
@@ -1758,7 +1809,11 @@ mpc.branch = [
         // case's business, and a conversion leg must not count it. The
         // solver-ready copy is where a zero objective becomes real.
         let parsed = parse_str(costless, "matpower").unwrap();
-        assert!(parsed.warnings.is_empty(), "{:?}", parsed.warnings);
+        assert!(
+            parsed.rendered_diagnostics().is_empty(),
+            "{:?}",
+            parsed.rendered_diagnostics()
+        );
         let normalized = parsed
             .network
             .to_normalized_with_options(&crate::NormalizeOptions::default())
@@ -1804,23 +1859,27 @@ mpc.branch = [
     }
 
     #[test]
-    fn byte_order_mark_is_stripped_and_warned() {
+    fn byte_order_mark_is_retained_and_echoed() {
+        // Windows tooling saves case files with a UTF-8 byte order mark. The
+        // parser decodes a mark free slice of the one retained buffer, and an
+        // unchanged same format write reproduces the original bytes, mark
+        // included.
         let case = "\u{feff}function mpc = t\n\
                     mpc.version = '2';\n\
                     mpc.baseMVA = 100;\n\
                     mpc.bus = [1 3 0 0 0 0 1 1.0 0 345 1 1.1 0.9;];\n\
                     mpc.gen = [];\n\
                     mpc.branch = [];\n";
-        let parsed = parse_str(case, "matpower").unwrap();
-        assert_eq!(parsed.network.buses.len(), 1);
+        let source = powerio_core::Source::from_bytes("case.m", case.as_bytes().to_vec()).unwrap();
+        let module = parse(source.with_format(format_id_for("matpower").unwrap())).unwrap();
+        assert_eq!(module.value().buses.len(), 1);
         assert!(
-            parsed
-                .warnings
-                .iter()
-                .any(|w| w.contains("byte order mark")),
-            "warnings: {:?}",
-            parsed.warnings
+            module.diagnostics().is_empty(),
+            "{:?}",
+            module.diagnostics()
         );
+        let echo = write_as(&module, TargetFormat::Matpower).unwrap();
+        assert_eq!(echo.text, case, "the echo reproduces the mark exactly");
     }
 
     #[test]
@@ -1832,9 +1891,15 @@ mpc.branch = [
                     mpc.bus = [1 3 0 0 0 0 1 1.0 0 345 1 1.1 0.9;];\n\
                     mpc.gen = [];\n\
                     mpc.branch = [];\n";
-        let net = parse_str(case, "matpower").unwrap().network;
-        assert_eq!(write_as(&net, TargetFormat::Matpower).unwrap().text, case);
+        let source = powerio_core::Source::from_bytes("case.m", case.as_bytes().to_vec()).unwrap();
+        let module =
+            parse(source.with_format(powerio_core::FormatId::new("matpower").unwrap())).unwrap();
+        assert_eq!(
+            write_as(&module, TargetFormat::Matpower).unwrap().text,
+            case
+        );
 
+        let net = module.into_value();
         let canonical = net.to_canonical_format(TargetFormat::Matpower).unwrap();
         assert_ne!(canonical.text, case);
         let reparsed = parse_str(&canonical.text, "matpower").unwrap();

@@ -1843,7 +1843,9 @@ mod tests {
 
     fn case14() -> BalancedNetwork {
         let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../tests/data/case14.m");
-        crate::parse_matpower_file(path).unwrap()
+        crate::parse(powerio_core::Source::open(path).unwrap())
+            .unwrap()
+            .into_value()
     }
 
     fn names(b: &RecordBatch) -> Vec<String> {
@@ -2832,7 +2834,6 @@ mod tests {
         assert_eq!(read.scenario, 0);
         assert_eq!(read.network.source_format, SourceFormat::Gridfm);
         assert_eq!(read.network.name, "case14");
-        assert!(read.network.source.is_none());
         assert_fingerprint_close(&read.network, &net);
         // The reconstruction is structurally valid (validate() already ran inside).
         read.network.validate().unwrap();

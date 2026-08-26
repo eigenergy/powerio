@@ -9,10 +9,12 @@
 // Frequencies are exact decimal values parsed from the fixtures (50.0, 60.0); bit
 // equality is the intended assertion.
 #![allow(clippy::float_cmp)]
+mod helpers;
+#[allow(unused_imports)]
+use helpers::*;
 
 use powerio_tx::{
-    BalancedNetwork, DEFAULT_BASE_FREQUENCY, TargetFormat, parse_pandapower_json, parse_psse,
-    parse_str, write_as, write_pandapower_json, write_psse,
+    BalancedNetwork, DEFAULT_BASE_FREQUENCY, TargetFormat, write_pandapower_json, write_psse,
 };
 
 /// A 50 Hz PSS/E header round-trips: the reader takes `BASFRQ`, the writer emits
@@ -89,20 +91,25 @@ fn dropped_frequency_warns_for_formats_without_a_field() {
         TargetFormat::EgretJson,
         TargetFormat::PowerWorld,
     ] {
-        let conv = write_as(&net, target).unwrap();
+        let conv = write_network(&net, target).unwrap();
         assert!(
-            conv.warnings.iter().any(|w| w.contains("frequency")),
+            conv.rendered_diagnostics()
+                .iter()
+                .any(|w| w.contains("frequency")),
             "{target:?} should warn that it drops the 50 Hz label, got {:?}",
-            conv.warnings
+            conv.rendered_diagnostics()
         );
     }
     // PSS/E and pandapower carry it, so no frequency warning there.
     for target in [TargetFormat::Psse { rev: 33 }, TargetFormat::PandapowerJson] {
-        let conv = write_as(&net, target).unwrap();
+        let conv = write_network(&net, target).unwrap();
         assert!(
-            !conv.warnings.iter().any(|w| w.contains("frequency")),
+            !conv
+                .rendered_diagnostics()
+                .iter()
+                .any(|w| w.contains("frequency")),
             "{target:?} carries the frequency and should not warn, got {:?}",
-            conv.warnings
+            conv.rendered_diagnostics()
         );
     }
 }

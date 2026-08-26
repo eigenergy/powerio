@@ -23,7 +23,6 @@
 )]
 
 use std::collections::BTreeMap;
-use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -388,18 +387,6 @@ pub struct BalancedNetwork {
     #[serde(default)]
     pub solver: Option<SolverParams>,
     pub source_format: SourceFormat,
-    /// Raw source text, when read from a textual format; enables a byte-exact
-    /// same-format round-trip. `Arc<String>` (not `Arc<str>`) is deliberate: a
-    /// reader that already owns the buffer (the MATPOWER file path) moves it in
-    /// with no second copy of the whole file. The trade is one extra indirection
-    /// per access; don't "simplify" it back to `Arc<str>`, which would reintroduce
-    /// the copy this avoids.
-    ///
-    /// Skipped in JSON: the structured tables are the transport, not the raw
-    /// echo, and skipping also keeps serde's `rc` feature out of the build. A
-    /// `from_json` round-trip returns this as `None`.
-    #[serde(skip)]
-    pub source: Option<Arc<String>>,
 }
 
 impl Serialize for BalancedNetwork {
@@ -1767,7 +1754,6 @@ impl BalancedNetwork {
             areas: Vec::new(),
             solver: None,
             source_format: SourceFormat::InMemory,
-            source: None,
         }
     }
 
@@ -1827,21 +1813,21 @@ impl BalancedNetwork {
         Ok((text, Vec::new()))
     }
 
-    /// Serialize this network to `format`, preserving the retained source text
-    /// on same-format writes and reporting any target-format fidelity warnings.
+    /// Serialize this typed network to `format`, the semantic write. The byte
+    /// exact echo of an unchanged parsed module lives on the module write
+    /// path, [`write_as`](crate::write_as).
     ///
     /// # Errors
-    /// As [`write_as`](crate::write_as): only a model JSON serialization failure.
+    /// [`Error::WriteUnsupported`](crate::Error) for a read
+    /// only target, and the writer's own error on a case it cannot state.
     pub fn to_format(&self, format: crate::TargetFormat) -> crate::Result<crate::Conversion> {
-        crate::write_as(self, format)
+        crate::format::write_conversion(self, format)
     }
 
-    /// Serialize this network to `format`, bypassing byte exact source echo.
-    ///
-    /// [`to_format`](Self::to_format) returns the retained source text on a
-    /// same-format write; this always regenerates from the typed model, the
-    /// balanced twin of `MulticonductorNetwork::to_canonical_format` on the
-    /// distribution side.
+    /// Serialize this network to `format` from the typed model, the balanced
+    /// twin of `MulticonductorNetwork::to_canonical_format` on the
+    /// distribution side. Identical to [`to_format`](Self::to_format) now that
+    /// source echo belongs to the module write path.
     ///
     /// # Errors
     /// As [`to_format`](Self::to_format).
@@ -1849,23 +1835,24 @@ impl BalancedNetwork {
         &self,
         format: crate::TargetFormat,
     ) -> crate::Result<crate::Conversion> {
-        // Writers echo off the retained source, so a sourceless clone is the
-        // one switch that turns every echo tier off at once.
-        let mut working = self.clone();
-        working.invalidate_source();
-        crate::write_as(&working, format)
+        crate::format::write_conversion(self, format)
     }
 
     /// Serialize this network with write-time cost policies.
     ///
-    /// The network itself is not mutated. Default options preserve
-    /// [`to_format`](Self::to_format) behavior.
+    /// The network itself is not mutated.
     pub fn to_format_with_options(
         &self,
         format: crate::TargetFormat,
         options: &crate::WriteOptions,
     ) -> crate::Result<crate::Conversion> {
-        crate::write_as_with_options(self, format, options)
+        if options.is_default() {
+            return self.to_format(format);
+        }
+        let (working, policy_warnings) = crate::format::apply_write_cost_policy(self, options)?;
+        let mut conv = crate::format::write_conversion(&working, format)?;
+        conv.prepend(policy_warnings);
+        Ok(conv)
     }
 
     /// Serialize this network to MATPOWER `.m` text.
@@ -2000,15 +1987,6 @@ impl BalancedNetwork {
         out
     }
 
-    /// Drop the retained source text after an in-place mutation, so a later
-    /// [`write_as`](crate::write_as) to the source format re-serializes the
-    /// modified model instead of echoing the now-stale original bytes. A no-op
-    /// operation leaves the source intact, keeping the byte-exact echo for an
-    /// unmodified round trip.
-    pub(crate) fn invalidate_source(&mut self) {
-        self.source = None;
-    }
-
     /// Clamp every out-of-domain value to its repaired value (the same rules
     /// [`validate_values`](BalancedNetwork::validate_values) reports), returning the list
     /// of changes made. A second call returns an empty list (the values are now
@@ -2031,10 +2009,6 @@ impl BalancedNetwork {
             if let Some(new) = repair_vg(g.vg) {
                 g.vg = new;
             }
-        }
-        // The repairs changed the model, so the retained source no longer matches.
-        if !findings.is_empty() {
-            self.invalidate_source();
         }
         findings
     }

@@ -2,12 +2,15 @@
 //! `Latitude:1`/`Longitude:1`, pandapower bus `geo` Point strings, PyPSA
 //! `buses.csv` x/y, and the dropped-location warning for formats with no
 //! geometry concept.
+mod helpers;
+#[allow(unused_imports)]
+use helpers::*;
 
 use std::path::PathBuf;
 
 use powerio_tx::{
-    CoordinateSpace, Location, TargetFormat, parse_file, parse_pandapower_json, parse_str,
-    read_pypsa_csv_folder, write_pandapower_json, write_powerworld, write_pypsa_csv_folder,
+    CoordinateSpace, Location, TargetFormat, write_pandapower_json, write_powerworld,
+    write_pypsa_csv_folder,
 };
 
 fn data(name: &str) -> PathBuf {
@@ -80,7 +83,6 @@ fn pandapower_geo_points_round_trip() {
     });
     // Same-format writes echo the retained source byte for byte; drop it to
     // exercise the canonical writer.
-    net.source = None;
     let out = write_pandapower_json(&net);
     let back = parse_pandapower_json(&out.text).unwrap().network;
     let location = back.buses[0].location.expect("harvested location");
@@ -105,7 +107,6 @@ fn out_of_bounds_coordinates_read_as_unknown_space() {
         y: 5_800_000.0,
         kind: None,
     });
-    net.source = None;
     let out = write_pandapower_json(&net);
     let back = parse_pandapower_json(&out.text).unwrap().network;
     assert!(back.buses[0].location.is_some());
@@ -153,20 +154,23 @@ fn formats_without_geometry_report_dropped_locations() {
     ] {
         let conv = net.to_format(format).unwrap();
         assert!(
-            conv.warnings
+            conv.rendered_diagnostics()
                 .iter()
                 .any(|w| w.contains("location") && w.contains("dropped")),
             "{format:?} did not warn: {:?}",
-            conv.warnings
+            conv.rendered_diagnostics()
         );
     }
     // Formats with a coordinate representation stay silent.
     for format in [TargetFormat::PowerWorld, TargetFormat::PandapowerJson] {
         let conv = net.to_format(format).unwrap();
         assert!(
-            !conv.warnings.iter().any(|w| w.contains("dropped: ")),
+            !conv
+                .rendered_diagnostics()
+                .iter()
+                .any(|w| w.contains("dropped: ")),
             "{format:?} warned: {:?}",
-            conv.warnings
+            conv.rendered_diagnostics()
         );
     }
 }

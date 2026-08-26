@@ -11,8 +11,6 @@
 //! commitment cases (`system.time_keys`, time-series values) are rejected. A
 //! same format writes return the retained source like every other format.
 
-use std::sync::Arc;
-
 use serde_json::{Map, Value};
 
 use super::{Conversion, finish, jnum, warn_extra_branch_rating_sets};
@@ -357,25 +355,12 @@ fn cost_curve(cost: &GenCost) -> Option<Value> {
     }
 }
 
-/// Parse egret `ModelData` JSON into a [`BalancedNetwork`].
-///
-/// Inverts [`write_egret_json`]: the `elements` blocks map back to the typed
-/// model and `system.baseMVA`/`reference_bus` to the base and bus types. Takes
-/// the power flow subset (numeric bus ids, scalar values); a unit commitment
-/// case (`system.time_keys`) is rejected with a clear error.
-pub fn parse_egret_json(content: &str) -> Result<BalancedNetwork> {
-    parse_egret_source(Arc::new(content.to_owned()), None)
-}
-
 /// Owned-source entry used by the format hub: parse by borrowing `source`, then
 /// move the buffer into the retained source (no copy, byte-exact round-trip).
 /// `name_hint` (e.g. a file stem) names the network when the JSON has no
 /// `model_name`.
-pub(crate) fn parse_egret_source(
-    source: Arc<String>,
-    name_hint: Option<&str>,
-) -> Result<BalancedNetwork> {
-    let content: &str = &source;
+pub(crate) fn parse_egret_source(source: &str, name_hint: Option<&str>) -> Result<BalancedNetwork> {
+    let content: &str = source;
     let root: Value = serde_json::from_str(content).map_err(|e| bad(e.to_string()))?;
     let root = root
         .as_object()
@@ -453,7 +438,6 @@ pub(crate) fn parse_egret_source(
         areas: Vec::new(),
         solver: None,
         source_format: SourceFormat::EgretJson,
-        source: Some(source),
     };
     net.check_references(FMT)?;
     Ok(net)
@@ -833,6 +817,10 @@ fn read_cost(p_cost: &Value, startup: f64, shutdown: f64) -> Option<GenCost> {
 
 #[cfg(test)]
 mod tests {
+    fn parse_egret_json(content: &str) -> Result<BalancedNetwork> {
+        parse_egret_source(content, None)
+    }
+
     use super::*;
     use crate::network::BusType;
 

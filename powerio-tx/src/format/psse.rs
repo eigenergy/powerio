@@ -17,7 +17,6 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
-use std::sync::Arc;
 
 use serde_json::Value;
 
@@ -978,14 +977,6 @@ const EMPTY_SECTIONS: [&str; 13] = [
 
 // ---- Reader -----------------------------------------------------------------
 
-/// Parse a PSS/E `.raw` (revisions 33-35) into a [`BalancedNetwork`]. Reads bus/load/
-/// fixed-shunt/generator/branch/2- and 3-winding transformer; skips the advanced
-/// sections.
-pub fn parse_psse(content: &str) -> Result<BalancedNetwork> {
-    let mut warnings = Diagnostics::new();
-    parse_psse_source(Arc::new(content.to_owned()), None, &mut warnings)
-}
-
 /// The PSS/E revision declared in a retained `.raw` header (field 3, `REV`), or
 /// 33 when it is absent or unparseable. The format hub uses it to decide whether
 /// a same-format write can echo the source bytes or must re-emit at a different
@@ -1012,11 +1003,11 @@ pub(crate) fn header_rev(source: &str) -> u32 {
 // add indirection without clarity.
 #[expect(clippy::too_many_lines)]
 pub(crate) fn parse_psse_source(
-    source: Arc<String>,
+    source: &str,
     name_hint: Option<&str>,
     warnings: &mut Diagnostics,
 ) -> Result<BalancedNetwork> {
-    let content: &str = &source;
+    let content: &str = source;
     let mut lines = content.lines();
 
     // Header line 1: IC, SBASE, REV, ...
@@ -1215,7 +1206,6 @@ pub(crate) fn parse_psse_source(
         areas,
         solver: (!solver.is_empty()).then_some(solver),
         source_format: SourceFormat::Psse,
-        source: Some(source),
     };
     drop_stale_control_pointers(&mut net, warnings);
     net.check_references(FMT)?;
@@ -2615,6 +2605,11 @@ fn dc_tail(extras: &Extras, key: &str, default: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+
+    fn parse_psse(content: &str) -> Result<BalancedNetwork> {
+        let mut warnings = Diagnostics::new();
+        parse_psse_source(content, None, &mut warnings)
+    }
     use super::*;
 
     fn close(actual: f64, expected: f64) {
@@ -2773,11 +2768,19 @@ Q
         net.branches.push(branch_with_terminal_charging());
 
         let rev33 = write_psse(&net);
-        assert!(rev33.warnings.is_empty(), "{:?}", rev33.warnings);
+        assert!(
+            rev33.rendered_diagnostics().is_empty(),
+            "{:?}",
+            rev33.rendered_diagnostics()
+        );
         assert_terminal_charging_round_trip(&rev33.text);
 
         let rev35 = write_psse_rev(&net, 35);
-        assert!(rev35.warnings.is_empty(), "{:?}", rev35.warnings);
+        assert!(
+            rev35.rendered_diagnostics().is_empty(),
+            "{:?}",
+            rev35.rendered_diagnostics()
+        );
         assert_terminal_charging_round_trip(&rev35.text);
     }
 
@@ -2800,11 +2803,11 @@ Q
         let conv = write_psse(&net);
         assert!(
             !conv
-                .warnings
+                .rendered_diagnostics()
                 .iter()
                 .any(|w| w.contains("magnetizing admittance")),
             "{:?}",
-            conv.warnings
+            conv.rendered_diagnostics()
         );
         let back = parse_psse(&conv.text).unwrap();
         let charging = back.branches[0].terminal_charging();
@@ -2833,11 +2836,11 @@ Q
 
         let conv = write_psse(&net);
         assert!(
-            conv.warnings
+            conv.rendered_diagnostics()
                 .iter()
                 .any(|w| w.contains("magnetizing admittance")),
             "{:?}",
-            conv.warnings
+            conv.rendered_diagnostics()
         );
         let back = parse_psse(&conv.text).unwrap();
         let charging = back.branches[0].terminal_charging();
@@ -2878,8 +2881,7 @@ COMMENT
 Q
 ";
         let mut warnings = Diagnostics::new();
-        let net =
-            parse_psse_source(std::sync::Arc::new(raw.to_string()), None, &mut warnings).unwrap();
+        let net = parse_psse_source(raw, None, &mut warnings).unwrap();
 
         assert_eq!(net.loads.len(), 1);
         close(net.loads[0].p, 13.0);
@@ -2943,11 +2945,11 @@ Q
         let matpower = crate::format::matpower::write_matpower_conversion(&net);
         assert!(
             matpower
-                .warnings
+                .rendered_diagnostics()
                 .iter()
                 .any(|w| w.contains("voltage dependent load model")),
             "missing MATPOWER voltage model warning: {:?}",
-            matpower.warnings
+            matpower.rendered_diagnostics()
         );
     }
 
@@ -2988,18 +2990,20 @@ Q
             conv.text
         );
         assert!(
-            conv.warnings.iter().any(|w| w.contains("nominal voltage")),
+            conv.rendered_diagnostics()
+                .iter()
+                .any(|w| w.contains("nominal voltage")),
             "missing nominal voltage warning: {:?}",
-            conv.warnings
+            conv.rendered_diagnostics()
         );
         let rev33 = write_psse(&net);
         assert!(
             rev33
-                .warnings
+                .rendered_diagnostics()
                 .iter()
                 .any(|w| w.contains("load type requires revision 35")),
             "missing rev33 load type warning: {:?}",
-            rev33.warnings
+            rev33.rendered_diagnostics()
         );
         let reparsed = parse_psse(&conv.text).unwrap();
         let Some(LoadVoltageModel::Zip {
@@ -3037,11 +3041,11 @@ Q
             conv.text
         );
         assert!(
-            conv.warnings
+            conv.rendered_diagnostics()
                 .iter()
                 .any(|w| w.contains("stale voltage model components")),
             "missing stale voltage model warning: {:?}",
-            conv.warnings
+            conv.rendered_diagnostics()
         );
         let reparsed = parse_psse(&conv.text).unwrap();
         close(reparsed.loads[0].p, 20.0);
@@ -3145,11 +3149,11 @@ Q
         let parsed = crate::parse_str(raw, "psse").unwrap();
         assert!(
             !parsed
-                .warnings
+                .rendered_diagnostics()
                 .iter()
                 .any(|w| w.contains("unsupported CZ") || w.contains("unsupported CW")),
             "unexpected transformer base warning: {:?}",
-            parsed.warnings
+            parsed.rendered_diagnostics()
         );
         let br = &parsed.network.branches[0];
         close(br.r, 0.02);
@@ -3179,11 +3183,11 @@ Q
         let parsed = crate::parse_str(raw, "psse").unwrap();
         assert!(
             !parsed
-                .warnings
+                .rendered_diagnostics()
                 .iter()
                 .any(|w| w.contains("unsupported CZ") || w.contains("unsupported CW")),
             "unexpected transformer base warning: {:?}",
-            parsed.warnings
+            parsed.rendered_diagnostics()
         );
         let br = &parsed.network.branches[0];
         close(br.r, 0.01);
@@ -3215,11 +3219,11 @@ Q
         let parsed = crate::parse_str(raw, "psse").unwrap();
         assert!(
             !parsed
-                .warnings
+                .rendered_diagnostics()
                 .iter()
                 .any(|w| w.contains("unsupported CZ") || w.contains("unsupported CW")),
             "unexpected transformer base warning: {:?}",
-            parsed.warnings
+            parsed.rendered_diagnostics()
         );
         let t = &parsed.network.transformers_3w[0];
         close(t.z[0].r, 0.02);
@@ -3277,7 +3281,7 @@ RATING, 1, "      ", "                                "
 Q
 "#;
 
-        let mut net = parse_psse(raw).unwrap();
+        let net = parse_psse(raw).unwrap();
 
         close(net.base_mva, 100.0);
         assert_eq!(net.buses.len(), 2);
@@ -3292,12 +3296,14 @@ Q
         close(net.branches[0].rating_sets[1].rate_mva, 60.0);
         assert!(net.branches[0].in_service);
 
-        net.source = None;
         let written = write_psse_rev(&net, 34);
         assert!(
-            !written.warnings.iter().any(|w| w.contains("rating set")),
+            !written
+                .rendered_diagnostics()
+                .iter()
+                .any(|w| w.contains("rating set")),
             "v34 should carry RATE4-RATE12, got {:?}",
-            written.warnings
+            written.rendered_diagnostics()
         );
         let back = parse_psse(&written.text).unwrap();
         assert_eq!(back.branches[0].rating_sets.len(), 2);
@@ -3378,13 +3384,13 @@ Q
         let written = write_psse_rev(&net, 34);
 
         assert!(
-            written.warnings.iter().any(|w| {
+            written.rendered_diagnostics().iter().any(|w| {
                 w.contains("rating set emergency=125")
                     && w.contains("emitted as RATE4")
                     && w.contains("names outside RATE4-RATE12 are not preserved")
             }),
             "missing rating rename warning: {:?}",
-            written.warnings
+            written.rendered_diagnostics()
         );
         let back = parse_psse(&written.text).unwrap();
         assert_eq!(back.branches[0].rating_sets.len(), 1);
@@ -3531,11 +3537,11 @@ Q
         // the reader has no reason to keep.
         assert_eq!(ids, vec!["A B"]);
         assert!(
-            conv.warnings
+            conv.rendered_diagnostics()
                 .iter()
                 .any(|w| w.contains("2 quoted PSS/E field")),
             "missing sanitation warning: {:?}",
-            conv.warnings
+            conv.rendered_diagnostics()
         );
     }
 
@@ -3890,8 +3896,7 @@ COMMENT
 Q
 ";
         let mut warnings = Diagnostics::new();
-        let net =
-            parse_psse_source(std::sync::Arc::new(raw.to_string()), None, &mut warnings).unwrap();
+        let net = parse_psse_source(raw, None, &mut warnings).unwrap();
 
         assert_eq!(net.generators[0].regulated_bus, None);
         assert_eq!(
@@ -3982,7 +3987,7 @@ COMMENT
 Q
 ";
         let mut warnings = Diagnostics::new();
-        parse_psse_source(std::sync::Arc::new(raw.to_string()), None, &mut warnings).unwrap();
+        parse_psse_source(raw, None, &mut warnings).unwrap();
         assert!(
             warnings
                 .lines()
@@ -4215,17 +4220,17 @@ COMMENT
                  0 / END OF TWO-TERMINAL DC DATA, BEGIN VSC DC LINE DATA
 Q
 ";
-        let parsed = crate::format::parse_str(text, "psse").unwrap();
+        let parsed = crate::parse_str(text, "psse").unwrap();
         let dc = &parsed.network.hvdc[0];
         close(dc.pf, 0.0);
         close(dc.pt, 0.0);
         assert!(
             parsed
-                .warnings
+                .rendered_diagnostics()
                 .iter()
                 .any(|w| w.contains("cannot be priced into power")),
             "{:?}",
-            parsed.warnings
+            parsed.rendered_diagnostics()
         );
         // The record still round trips: the amps are retained verbatim.
         let out = write_psse(&parsed.network).text;
@@ -4260,19 +4265,21 @@ COMMENT
                  0 / END OF TWO-TERMINAL DC DATA, BEGIN VSC DC LINE DATA
 Q
 ";
-        let mut net = parse_psse(text).unwrap();
+        let net = parse_psse(text).unwrap();
         let dc = net.hvdc[0].clone();
         assert!(!dc.in_service);
         close(dc.pf, 350.0);
         close(dc.pt, 350.0);
 
         // Clear the retained source so the write synthesizes rather than echoes.
-        net.source = None;
         let conv = write_psse(&net);
         assert!(
-            !conv.warnings.iter().any(|w| w.contains("converter detail")),
+            !conv
+                .rendered_diagnostics()
+                .iter()
+                .any(|w| w.contains("converter detail")),
             "a record the rewrite reproduces exactly earns no warning: {:?}",
-            conv.warnings
+            conv.rendered_diagnostics()
         );
         let back = &parse_psse(&conv.text).unwrap().hvdc[0];
         assert!(!back.in_service);
@@ -4405,9 +4412,11 @@ Q
         // it silently.
         let mpc = net.to_format(crate::TargetFormat::Matpower).unwrap();
         assert!(
-            mpc.warnings.iter().any(|w| w.contains("3-winding")),
+            mpc.rendered_diagnostics()
+                .iter()
+                .any(|w| w.contains("3-winding")),
             "MATPOWER write must warn on the dropped 3-winding transformer, got {:?}",
-            mpc.warnings
+            mpc.rendered_diagnostics()
         );
 
         // The normalized form keeps the 3-winding transformer.
@@ -4432,10 +4441,13 @@ COMMENT
 0 / END OF TRANSFORMER DATA, BEGIN AREA DATA
 Q
 ";
-        let parsed = crate::parse_str(raw, "psse").unwrap();
-        let same = crate::write_as(&parsed.network, crate::TargetFormat::Psse { rev: 33 }).unwrap();
+        let source = powerio_core::Source::from_bytes("case.raw", raw.as_bytes().to_vec()).unwrap();
+        let module =
+            crate::format::parse(source.with_format(powerio_core::FormatId::new("psse").unwrap()))
+                .unwrap();
+        let same = crate::write_as(&module, crate::TargetFormat::Psse { rev: 33 }).unwrap();
         assert_eq!(same.text, raw, "same revision echoes the retained source");
-        let v34 = crate::write_as(&parsed.network, crate::TargetFormat::Psse { rev: 34 }).unwrap();
+        let v34 = crate::write_as(&module, crate::TargetFormat::Psse { rev: 34 }).unwrap();
         assert_ne!(v34.text, raw, "a different revision must re-emit, not echo");
         assert!(
             v34.text.contains("END OF SYSTEM-WIDE DATA"),
@@ -4466,11 +4478,11 @@ Q
         let parsed = crate::parse_str(raw, "psse").unwrap();
         assert!(
             parsed
-                .warnings
+                .rendered_diagnostics()
                 .iter()
                 .any(|w| w.contains("SUBSTATION") && w.contains("not modeled")),
             "an unmodeled substation section must be reported, got {:?}",
-            parsed.warnings
+            parsed.rendered_diagnostics()
         );
     }
 
@@ -4515,11 +4527,11 @@ Q
         // A cross-format write to MATPOWER (single voltage band) reports the drop.
         let mpc = net.to_format(crate::TargetFormat::Matpower).unwrap();
         assert!(
-            mpc.warnings
+            mpc.rendered_diagnostics()
                 .iter()
                 .any(|w| w.contains("emergency voltage band")),
             "MATPOWER write must warn on the dropped emergency band, got {:?}",
-            mpc.warnings
+            mpc.rendered_diagnostics()
         );
     }
 
@@ -4544,7 +4556,6 @@ Q
         let mut net = parse_psse(raw).unwrap();
         net.name =
             "A\n42, 'INJECTED   ', 500.0, 2, 9, 9, 1, 1.0, 0.0, 1.1, 0.9, 1.1, 0.9".to_owned();
-        net.source = None; // force a real write, not the byte-exact echo
         let text = write_psse(&net).text;
         let back = parse_psse(&text).unwrap();
         assert_eq!(back.buses.len(), 1, "forged bus record in:\n{text}");
@@ -4632,11 +4643,11 @@ Q
         let name = reparsed.buses[0].name.as_deref().unwrap();
         assert!(!name.contains('\'') && !name.contains('/'), "got {name:?}");
         assert!(
-            conv.warnings
+            conv.rendered_diagnostics()
                 .iter()
                 .any(|w| w.contains("quoted PSS/E field")),
             "expected a sanitization warning, got {:?}",
-            conv.warnings
+            conv.rendered_diagnostics()
         );
     }
 

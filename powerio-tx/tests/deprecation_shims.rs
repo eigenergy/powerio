@@ -2,6 +2,9 @@
 //! the retired `powerio-json` token gets guidance instead of a bare unknown.
 //! Everything here goes away at 1.0.0 along with the aliases it pins.
 #![allow(deprecated)]
+mod helpers;
+#[allow(unused_imports)]
+use helpers::*;
 
 use powerio_tx::{DcConvention, Network};
 
@@ -24,7 +27,7 @@ fn paper_pure_works_in_expression_and_pattern_position() {
 
 #[test]
 fn the_retired_powerio_json_token_gets_guidance() {
-    let err = powerio_tx::parse_str("x", "powerio-json").unwrap_err();
+    let err = parse_str("x", "powerio-json").unwrap_err();
     let msg = err.to_string();
     assert!(msg.contains("retired in 0.9.0"), "{msg}");
     assert!(msg.contains("model-json"), "{msg}");
@@ -33,7 +36,7 @@ fn the_retired_powerio_json_token_gets_guidance() {
 #[test]
 #[allow(clippy::float_cmp)]
 fn the_08_branch_method_still_answers() {
-    let net = powerio_tx::parse_str(
+    let net = parse_str(
         "function mpc = s\nmpc.version = '2';\nmpc.baseMVA = 100;\nmpc.bus = [\n  1 3 0 0 0 0 1 1 0 230 1 1.1 0.9;\n  2 1 0 0 0 0 1 1 0 230 1 1.1 0.9;\n];\nmpc.branch = [\n  1 2 0.01 0.1 0.04 0 0 0 0 0 1 -360 360;\n];\n",
         "matpower",
     )
