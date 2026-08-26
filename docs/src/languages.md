@@ -48,6 +48,31 @@ Verb taxonomy:
 | PYPOWER ppc dict | — | `net.to_ppc()` / `from_ppc(ppc)` | — | — |
 | Arrow handoff | internal/C ABI | — | `to_arrow` | `pio_to_arrow` |
 
+### The 1.0 module and DC data vocabulary
+
+The stored module and DC branch data surfaces share one vocabulary in every
+language, down to the susceptance formula names (`series_susceptance`,
+`tap_adjusted_reactance`, `reactance_only`):
+
+| Concept | Rust | Python | Julia | C ABI |
+|---|---|---|---|---|
+| Read stored `.pio.json` | `stored::read_module` | `StoredModule.from_json` | `read_module` | `pio_module_read_json` |
+| Write the stored document | `stored::write_module` | `StoredModule.to_json` | `write_module` | `pio_module_write_json` |
+| Parse a case to a module | `powerio::parse` | `StoredModule.from_file` | `parse_module` | `pio_module_parse_file` |
+| Value kind | `value().kind()` | `.kind` | `module_kind` | `pio_module_kind` |
+| Inspect and discover operations | `select`/`stored` surfaces | `.inspect()` | `inspect_module` | `pio_module_inspect_json` |
+| Typed state inventory | `select::state_inventory` | `.state_inventory()` | `state_inventory` | `pio_module_state_inventory_json` |
+| Export selected state | `select::export_state` | `.export_state(...)` | `export_state` | `pio_module_export_state` |
+| Explicit balanced lowering | `package::lower_module_to_balanced` | `.to_balanced(...)` | `lower_module_to_balanced` | `pio_module_lower_to_balanced` |
+| DC branch data | `dc_network_data` | `net.dc_data(formula)` | `dc_data(module)` | `pio_dc_data_build` |
+| Susceptance span | `.susceptance` | `data["susceptance"]` | `PowerIO.susceptance` | `pio_dc_data_susceptance` |
+| Row and bus mappings | `.row_ids` / `.bus_ids` | `data["row_ids"]` / `data["bus_ids"]` | `PowerIO.row_ids` / `PowerIO.bus_ids` | `pio_dc_data_row_ids` / `pio_dc_data_bus_ids` |
+| Omitted rows with reasons | `.omitted` | `data["omitted_ids"]` + `data["omitted_reasons"]` | `PowerIO.omitted` | `pio_dc_data_omitted_ids` + `..._omitted_reasons` |
+
+The 0.9 `NetworkPackage` rows in the table above are the migration surface:
+the module document supersedes them at 1.0, and the upgrade reader accepts
+every released 0.9 package one way.
+
 **Note:** the C ABI carries no per-format symbols: matpower, PyPSA CSV
 directories, and gridfm datasets are all format strings into
 `pio_to_format` / `pio_parse_str` / `pio_write_dir` / `pio_read_dir`. Removing

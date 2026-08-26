@@ -1,14 +1,13 @@
 # `.pio.json` format
 
-A `.pio.json` file stores one typed network model payload and the record of how
-it was produced. The `model` field contains the JSON representation of either
-`powerio::BalancedNetwork` (balanced) or
-`powerio_dist::MulticonductorNetwork` (multiconductor). The document metadata records
-provenance, source maps, structured diagnostics, validation results, lowering
-history, optional operating points, and optional study commits.
-`powerio::package::NetworkPackage` is the
-implementation type; [Compiler model layers](compiler-ir.md) describes the
-payload types.
+A `.pio.json` file is the stored form of one `PioModule<PioValue>`: one
+typed value with the record of how it was produced. Version 1 is the 1.0
+document, described first below. The 0.9 `NetworkPackage` shape is the
+migration source: the same reader accepts every released 0.9 package and
+upgrades it one way, so the later sections describing the 0.9 layout are the
+specification of what upgrades, and `powerio::package::NetworkPackage`
+remains the implementation type of that migration surface.
+[Compiler model layers](compiler-ir.md) describes the payload types.
 
 ## Purpose
 
@@ -49,7 +48,11 @@ The document carries `producer`, the typed `value` (`kind` and `data`: `balanced
 
 The generated JSON Schema for the version 1 document is served at `https://powerio.dev/schema/pio-module/1/schema.json`; the `$id` names that location.
 
-## Versioning {#pio-package}
+## The 0.9 package and its versioning {#pio-package}
+
+Everything from here down describes the released 0.9 `NetworkPackage`
+document: the shape the one way upgrade reads. New documents are written as
+the version 1 stored module above.
 
 Every document powerio authors states one number, `powerio_version`: the
 powerio release that wrote it. There is no separate schema number for the

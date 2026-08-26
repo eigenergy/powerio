@@ -19,12 +19,12 @@ bytes whenever the reader kept them. Converting to a different format writes
 what the target format can hold and reports every dropped field in
 `Conversion::warnings`.
 
-`.pio.json` saves a parsed model together with the record of how it was
-parsed: [schema versions](https://powerio.dev/guide/pio-json-schema.html), the
-source file and row each element came from, parser warnings, validation
-results, and optional operating points. Files for other tools stay in the
-format the tool reads: MATPOWER, PSS/E, OpenDSS, or any other supported
-format.
+`.pio.json` stores one typed value together with the record of how it was
+produced: [the version 1 module document](https://powerio.dev/guide/pio-json-schema.html)
+carries the source each element came from, durable diagnostics, descriptive
+history, and typed time series and scenario values, and every released 0.9
+package upgrades one way on read. Files for other tools stay in the format
+the tool reads: MATPOWER, PSS/E, OpenDSS, or any other supported format.
 
 The Rust workspace also builds the command line interface, the Python package,
 and the [C ABI](https://github.com/eigenergy/powerio/tree/main/powerio-capi).
