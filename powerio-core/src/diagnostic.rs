@@ -718,6 +718,38 @@ mod tests {
         document["target"] = serde_json::Value::String(String::new());
         assert!(serde_json::from_value::<Diagnostic>(document).is_err());
     }
+
+    #[test]
+    fn stored_detail_keys_meet_the_key_predicate_the_constructors_enforce() {
+        let decode = |details: &str| {
+            serde_json::from_str::<Diagnostic>(&format!(
+                r#"{{"code":"PARTNER.TEST.FINDING","severity":"warning","message":"m","details":{details}}}"#
+            ))
+        };
+        // An empty key and a NUL key are refused at decode, exactly as
+        // `insert_detail` refuses them.
+        assert!(decode(r#"{"":1}"#).is_err());
+        assert!(decode("{\"bad\\u0000key\":1}").is_err());
+
+        // The key count limit holds at the boundary.
+        let full: Vec<String> = (0..crate::validation::MAX_DIAGNOSTIC_DETAIL_KEYS)
+            .map(|index| format!(r#""k{index}":{index}"#))
+            .collect();
+        let at_limit = decode(&format!("{{{}}}", full.join(","))).unwrap();
+        assert_eq!(
+            at_limit.details().len(),
+            crate::validation::MAX_DIAGNOSTIC_DETAIL_KEYS
+        );
+        let over: Vec<String> = (0..=crate::validation::MAX_DIAGNOSTIC_DETAIL_KEYS)
+            .map(|index| format!(r#""k{index}":{index}"#))
+            .collect();
+        assert!(decode(&format!("{{{}}}", over.join(","))).is_err());
+
+        // Anything that decodes can be rebuilt through the constructors.
+        let rebuilt = Diagnostic::of(&crate::codes::REQUEST_RECORD_TOO_LARGE, "m")
+            .with_details(at_limit.details().clone());
+        assert!(rebuilt.is_ok());
+    }
     use super::*;
 
     #[test]
@@ -885,6 +917,7 @@ mod wire {
             "detail keys",
             MAX_DIAGNOSTIC_DETAIL_KEYS,
             MAX_IDENTIFIER_BYTES,
+            crate::validation::valid_nonempty_text,
         )
     }
 
@@ -912,8 +945,8 @@ mod wire {
         // could not have built.
         fn try_from(wire: DiagnosticWire) -> Result<Self, Self::Error> {
             use crate::validation::{
-                MAX_DIAGNOSTIC_DETAIL_KEYS, MAX_DIAGNOSTIC_RELATED, MAX_DIAGNOSTIC_SPANS,
-                sanitize_message, valid_diagnostic_target,
+                MAX_DIAGNOSTIC_RELATED, MAX_DIAGNOSTIC_SPANS, sanitize_message,
+                valid_diagnostic_target,
             };
 
             let refuse = |what: &str, limit: usize| {
@@ -928,9 +961,9 @@ mod wire {
             if wire.related.len() > MAX_DIAGNOSTIC_RELATED {
                 return Err(refuse("related records", MAX_DIAGNOSTIC_RELATED));
             }
-            if wire.details.len() > MAX_DIAGNOSTIC_DETAIL_KEYS {
-                return Err(refuse("detail keys", MAX_DIAGNOSTIC_DETAIL_KEYS));
-            }
+            // The one details predicate the constructors apply, so the decode
+            // limit and the construction limit cannot drift apart.
+            super::check_details(&wire.details)?;
             let target = match wire.target {
                 Some(target) if !valid_diagnostic_target(&target) => {
                     return Err(crate::Error::new(

@@ -33,5 +33,9 @@ schemars = { workspace = true, optional = true }
 jsonschema = { version = "0.46", default-features = false }
 tempfile = "3"
 
+[target.'cfg(unix)'.dev-dependencies]
+# mkfifo for the non-regular-file refusal test.
+libc = "0.2"
+
 [lints]
 workspace = true

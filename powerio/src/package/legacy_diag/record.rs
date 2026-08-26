@@ -342,29 +342,54 @@ impl From<StructuredDiagnostic> for powerio_core::Diagnostic {
             powerio_core::DiagnosticCode::new("PARTNER.LEGACY.UNCODED").expect("static code")
         });
         let mut diagnostic = powerio_core::Diagnostic::new(code, severity, record.message);
+        // The stored details are applied before any loss marker, so a marker
+        // is never overwritten by the map replacement.
+        let mut dropped_detail_keys = None;
+        if !record.details.is_empty() {
+            let key_count = record.details.len();
+            if diagnostic.set_details(record.details).is_err() {
+                dropped_detail_keys = Some(key_count);
+            }
+        }
         if let Some(path) = record.element_path {
             // A stored locator past the runtime bounds is dropped visibly:
             // the finding survives and says a locator existed and how long
             // it was, rather than silently changing identity.
             let byte_length = path.len();
             if diagnostic.set_target(path).is_err() {
-                let _ = diagnostic
-                    .insert_detail("dropped_target_bytes", serde_json::Value::from(byte_length));
+                insert_loss_marker(&mut diagnostic, "dropped_target_bytes", byte_length);
             }
+        }
+        if let Some(key_count) = dropped_detail_keys {
+            insert_loss_marker(&mut diagnostic, "dropped_detail_keys", key_count);
         }
         if let Some(action) = record.suggested_action {
             diagnostic = diagnostic.with_suggested_action(action);
         }
-        if !record.details.is_empty() {
-            // Same rule for a stored detail map past the runtime bounds:
-            // keep the finding, mark the loss.
-            let key_count = record.details.len();
-            if diagnostic.set_details(record.details).is_err() {
-                let _ = diagnostic
-                    .insert_detail("dropped_detail_keys", serde_json::Value::from(key_count));
-            }
-        }
         diagnostic
+    }
+}
+
+/// Insert one loss marker, evicting the lexically last stored detail when the
+/// applied map is already at its key cap, so a converted record can never end
+/// up with neither the stored fact nor the marker recording its loss.
+fn insert_loss_marker(diagnostic: &mut powerio_core::Diagnostic, key: &str, count: usize) {
+    let value = serde_json::Value::from(count);
+    if diagnostic.insert_detail(key, value.clone()).is_ok() {
+        return;
+    }
+    let mut trimmed = diagnostic.details().clone();
+    while trimmed.keys().next_back().is_some_and(|last| last != key) {
+        let last = trimmed
+            .keys()
+            .next_back()
+            .expect("checked nonempty")
+            .clone();
+        trimmed.remove(&last);
+        trimmed.insert(key.to_owned(), value.clone());
+        if diagnostic.set_details(std::mem::take(&mut trimmed)).is_ok() {
+            return;
+        }
     }
 }
 
@@ -378,6 +403,56 @@ mod tests {
             DiagnosticSeverity::Warning,
             "generator cost curves have no PSS/E record and are dropped",
         )
+    }
+
+    #[test]
+    fn a_dropped_locator_always_leaves_its_marker() {
+        // Whatever the stored details carry, a record whose locator cannot be
+        // stored keeps a `dropped_target_bytes` marker: the conversion can
+        // never return a record with neither the target nor the marker.
+        let oversized_path = "p".repeat(1 << 16);
+        let cases: Vec<serde_json::Map<String, serde_json::Value>> = vec![
+            // No stored details.
+            serde_json::Map::new(),
+            // A small stored map.
+            [("kept".to_owned(), serde_json::Value::from(1))]
+                .into_iter()
+                .collect(),
+            // A stored map already at the runtime key cap, discovered by
+            // probing the runtime limit rather than naming the constant.
+            {
+                let mut probe = powerio_core::Diagnostic::new(
+                    powerio_core::DiagnosticCode::new("PARTNER.LEGACY.UNCODED").unwrap(),
+                    powerio_core::DiagnosticSeverity::Warning,
+                    "probe".to_owned(),
+                );
+                let mut index = 0usize;
+                while probe
+                    .insert_detail(format!("k{index}"), serde_json::Value::from(index))
+                    .is_ok()
+                {
+                    index += 1;
+                }
+                probe.details().clone()
+            },
+        ];
+        for details in cases {
+            let count = details.len();
+            let record = StructuredDiagnostic::new(
+                "EMIT.PSSE.FIELD_DROPPED",
+                DiagnosticSeverity::Warning,
+                "message",
+            )
+            .with_element_path(oversized_path.clone())
+            .with_details(details);
+            let converted: powerio_core::Diagnostic = record.into();
+            assert_eq!(converted.target(), None, "case with {count} stored keys");
+            assert_eq!(
+                converted.details().get("dropped_target_bytes"),
+                Some(&serde_json::Value::from(oversized_path.len())),
+                "case with {count} stored keys"
+            );
+        }
     }
 
     #[test]

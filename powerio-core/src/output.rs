@@ -211,6 +211,15 @@ fn validate_inventory(directory: bool, artifacts: &mut [MemoryArtifact]) -> Resu
     artifacts.sort_unstable_by(|left, right| left.name.cmp(&right.name));
     let mut names = BTreeSet::new();
     for artifact in artifacts.iter() {
+        if !portable_output_path(artifact.name.as_str()) {
+            return Err(Error::new(
+                &crate::codes::REQUEST_OUTPUT_INVALID_ARTIFACT_PATH,
+                format!(
+                    "output artifact '{}' is not portable across platforms",
+                    artifact.name
+                ),
+            ));
+        }
         if !names.insert(artifact.name.as_str()) {
             return Err(Error::new(
                 &crate::codes::REQUEST_OUTPUT_DUPLICATE_ARTIFACT,
@@ -218,20 +227,54 @@ fn validate_inventory(directory: bool, artifacts: &mut [MemoryArtifact]) -> Resu
             ));
         }
     }
-    for pair in artifacts.windows(2) {
-        let parent = pair[0].name.as_str();
-        let child = pair[1].name.as_str();
-        if child
-            .strip_prefix(parent)
-            .is_some_and(|suffix| suffix.starts_with('/'))
-        {
-            return Err(Error::new(
-                &crate::codes::REQUEST_OUTPUT_INVALID_LAYOUT,
-                format!("output artifact '{parent}' is also a directory prefix"),
-            ));
+    // Every proper `/`-delimited ancestor of every name is checked against the
+    // full name set, so an artifact can never also be a directory of another,
+    // whatever the names sort like.
+    for artifact in artifacts.iter() {
+        let name = artifact.name.as_str();
+        for (offset, _) in name.match_indices('/') {
+            let ancestor = &name[..offset];
+            if names.contains(ancestor) {
+                return Err(Error::new(
+                    &crate::codes::REQUEST_OUTPUT_INVALID_LAYOUT,
+                    format!("output artifact '{ancestor}' is also a directory prefix"),
+                ));
+            }
         }
     }
     Ok(())
+}
+
+/// True when every segment of a committed artifact name designates the same
+/// filesystem entry on every supported platform: no segment ends in a dot or a
+/// space, and no segment's stem is a Windows reserved device name. Source
+/// entry listing deliberately does not apply this predicate; it constrains
+/// only what a destination commits.
+fn portable_output_path(path: &str) -> bool {
+    path.split('/').all(|segment| {
+        if segment.ends_with('.') || segment.ends_with(' ') {
+            return false;
+        }
+        let stem = segment.split('.').next().unwrap_or(segment);
+        !reserved_windows_stem(stem)
+    })
+}
+
+fn reserved_windows_stem(stem: &str) -> bool {
+    if stem.eq_ignore_ascii_case("con")
+        || stem.eq_ignore_ascii_case("prn")
+        || stem.eq_ignore_ascii_case("aux")
+        || stem.eq_ignore_ascii_case("nul")
+    {
+        return true;
+    }
+    let mut characters = stem.chars();
+    let prefix: String = characters.by_ref().take(3).collect();
+    if !(prefix.eq_ignore_ascii_case("com") || prefix.eq_ignore_ascii_case("lpt")) {
+        return false;
+    }
+    matches!(characters.next(), Some(digit) if digit.is_ascii_digit())
+        && characters.next().is_none()
 }
 
 fn commit_path_output(
@@ -415,14 +458,22 @@ fn platform_rename_no_replace(from: &Path, to: &Path) -> std::io::Result<()> {
         fn MoveFileExW(existing: *const u16, new: *const u16, flags: u32) -> i32;
     }
 
-    let encode = |path: &Path| -> Vec<u16> {
-        path.as_os_str()
+    let encode = |path: &Path| -> std::io::Result<Vec<u16>> {
+        let wide: Vec<u16> = path
+            .as_os_str()
             .encode_wide()
             .chain(std::iter::once(0))
-            .collect()
+            .collect();
+        // An interior zero unit would truncate the name handed to the
+        // platform move; refuse it so the moved name is always the complete
+        // requested target name.
+        if wide[..wide.len() - 1].contains(&0) {
+            return Err(std::io::Error::from(std::io::ErrorKind::InvalidInput));
+        }
+        Ok(wide)
     };
-    let from = encode(from);
-    let to = encode(to);
+    let from = encode(from)?;
+    let to = encode(to)?;
     // No MOVEFILE_REPLACE_EXISTING: the move fails when the target exists.
     // SAFETY: both pointers reference NUL-terminated wide buffers owned by the
     // vectors above, which outlive the call.
@@ -861,5 +912,117 @@ mod tests {
             Vec::new(),
         );
         assert!(prefix.is_err());
+    }
+
+    #[test]
+    fn a_prefix_collision_is_refused_whatever_sorts_between() {
+        // Names whose first differing byte sorts below `/` separate the
+        // ancestor from its child in sorted order, so an adjacent-pair scan
+        // would miss the conflict; the ancestor check must not.
+        let separated = vec![
+            artifact("a", b"1"),
+            artifact("a b", b"2"), // space (0x20) < '/'
+            artifact("a-x", b"3"), // '-' (0x2D) < '/'
+            artifact("a.csv", b"4"),
+            artifact("a/b", b"5"),
+        ];
+        let memory = Destination::memory("case").unwrap().__commit_artifacts(
+            true,
+            separated
+                .iter()
+                .map(|a| artifact(a.name().as_str(), a.bytes()))
+                .collect(),
+            Vec::new(),
+        );
+        let error = memory.expect_err("the ancestor conflict is refused");
+        assert_eq!(error.category(), crate::ErrorCategory::Request);
+
+        let target = test_root("prefix-separated");
+        let path = Destination::path(&target).__commit_artifacts(true, separated, Vec::new());
+        let error = path.expect_err("the path destination refuses identically");
+        assert_eq!(error.category(), crate::ErrorCategory::Request);
+        // Nothing was created and no staging entry was left beside the target.
+        assert!(!target.exists());
+        let parent = target.parent().unwrap();
+        let residue: Vec<String> = std::fs::read_dir(parent)
+            .unwrap()
+            .filter_map(std::result::Result::ok)
+            .map(|entry| entry.file_name().to_string_lossy().into_owned())
+            .filter(|name| name.contains(target.file_name().unwrap().to_str().unwrap()))
+            .collect();
+        assert!(residue.is_empty(), "{residue:?}");
+    }
+
+    #[test]
+    fn reserved_and_nonportable_spellings_are_refused_at_commit() {
+        let refused = [
+            "con",
+            "CON",
+            "con.txt",
+            "PRN.csv",
+            "aux",
+            "AUX.dss",
+            "nul.m",
+            "com1",
+            "COM9.raw",
+            "lpt0",
+            "LPT5.csv",
+            "trailing.",
+            "trailing ",
+            "nested/aux.csv",
+            "aux/nested.csv",
+        ];
+        for name in refused {
+            let memory = Destination::memory("case").unwrap().__commit_artifacts(
+                true,
+                vec![artifact(name, b"x"), artifact("keep.csv", b"y")],
+                Vec::new(),
+            );
+            let error = memory.expect_err(name);
+            assert_eq!(error.category(), crate::ErrorCategory::Request, "{name}");
+
+            let target = test_root("reserved");
+            let path = Destination::path(&target).__commit_artifacts(
+                true,
+                vec![artifact(name, b"x")],
+                Vec::new(),
+            );
+            assert!(path.is_err(), "{name}");
+            assert!(!target.exists(), "{name}");
+        }
+        // Ordinary inventories still commit, reserved-looking stems included
+        // only when they are not reserved (`config`, `auxiliary`).
+        let accepted = Destination::memory("case").unwrap().__commit_artifacts(
+            true,
+            vec![
+                artifact("case.dss", b"a"),
+                artifact("buscoords.csv", b"b"),
+                artifact("network.csv", b"c"),
+                artifact("nested/lines.csv", b"d"),
+                artifact("config.json", b"e"),
+                artifact("auxiliary.csv", b"f"),
+                artifact("com10.csv", b"g"),
+            ],
+            Vec::new(),
+        );
+        assert!(accepted.is_ok());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn a_windows_commit_refuses_an_interior_nul_in_the_target_name() {
+        use std::os::windows::ffi::OsStringExt;
+
+        let base = test_root("wide-nul");
+        std::fs::create_dir_all(&base).unwrap();
+        let staged = base.join("staged.m");
+        std::fs::write(&staged, b"staged").unwrap();
+        let hostile: std::path::PathBuf =
+            std::ffi::OsString::from_wide(&[b'c' as u16, 0, b'x' as u16]).into();
+        let error = rename_no_replace(&staged, &base.join(hostile)).unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
+        // No file appeared at the truncated name.
+        assert!(!base.join("c").exists());
+        std::fs::remove_dir_all(&base).ok();
     }
 }

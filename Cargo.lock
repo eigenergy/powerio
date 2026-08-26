@@ -2062,6 +2062,7 @@ name = "powerio-dist"
 version = "0.9.0"
 dependencies = [
  "jsonschema",
+ "libc",
  "powerio-core",
  "schemars",
  "serde",

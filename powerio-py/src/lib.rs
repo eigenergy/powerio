@@ -1503,8 +1503,8 @@ impl PyBalancedNetwork {
         py: Python<'py>,
         out_dir: &str,
     ) -> PyResult<Bound<'py, PyDict>> {
-        let outputs =
-            powerio_matrix::write_pypsa_csv_folder(self.inner(), out_dir).map_err(core_pyerr)?;
+        let outputs = powerio_matrix::write_pypsa_csv_folder(self.inner(), out_dir)
+            .map_err(|error| core_error_pyerr(&error))?;
         pypsa_outputs_to_dict(py, &outputs)
     }
 

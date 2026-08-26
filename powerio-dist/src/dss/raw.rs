@@ -1152,7 +1152,9 @@ fn include_acquisition_error(error: &powerio_core::Error) -> std::io::Error {
     // Matched by registered code spelling: the code register is the stable
     // surface a consumer keys on.
     let refusal = error.diagnostics().first().is_some_and(|d| {
-        d.code() == "REQUEST.SOURCE.ESCAPES_ROOT" || d.code() == "REQUEST.SOURCE.SYMLINK_REFUSED"
+        d.code() == "REQUEST.SOURCE.ESCAPES_ROOT"
+            || d.code() == "REQUEST.SOURCE.SYMLINK_REFUSED"
+            || d.code() == "REQUEST.SOURCE.NOT_A_FILE"
     });
     if refusal {
         Containment::refused(error.to_string())

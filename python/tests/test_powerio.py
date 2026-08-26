@@ -1202,6 +1202,17 @@ def test_convert_str_named_input_format():
     assert powerio.parse_str(back.text, "matpower").n_buses == 30
 
 
+def test_pypsa_csv_folder_never_replaces_an_existing_target(tmp_path):
+    case = powerio.parse_file(DATA / "case9.m")
+    out = tmp_path / "pypsa"
+    out.mkdir()
+    (out / "buses.csv").write_text("precious")
+    with pytest.raises(powerio.PowerIOError) as refusal:
+        case.write_pypsa_csv_folder(out)
+    assert getattr(refusal.value, "code", "").startswith("REQUEST.OUTPUT")
+    assert (out / "buses.csv").read_text() == "precious"
+
+
 def test_pypsa_csv_folder_wrapper(tmp_path):
     case = powerio.parse_file(DATA / "case9.m")
     out = tmp_path / "pypsa"

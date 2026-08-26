@@ -1615,7 +1615,7 @@ pub unsafe extern "C" fn pio_write_dir(
             let out_dir = required_cstr(out_dir, "out_dir")?;
             let options = write_options_from_c(opts)?;
             powerio::write_dir_with_options(c.net(), to, std::path::Path::new(out_dir), &options)
-                .map_err(err_line)
+                .map_err(|error| core_err_line(&error))
         }));
         match r {
             Ok(Ok(warnings)) => {
@@ -6152,6 +6152,40 @@ mpc.branch = [
             pio_string_free(diag_out);
             pio_network_free(c);
         }
+    }
+
+    #[test]
+    fn write_dir_never_replaces_an_existing_target() {
+        let path = data_path("case9.m");
+        let mut err = [0 as c_char; PIO_ERRBUF_MIN];
+        let tmp = tempfile::tempdir().unwrap();
+        let out_path = tmp.path().join("pypsa");
+        std::fs::create_dir(&out_path).unwrap();
+        std::fs::write(out_path.join("buses.csv"), b"precious").unwrap();
+        let out = CString::new(out_path.to_str().unwrap()).unwrap();
+        let to = CString::new("pypsa-csv").unwrap();
+        unsafe {
+            let c = pio_parse_file(path.as_ptr(), std::ptr::null(), err.as_mut_ptr(), err.len());
+            assert!(!c.is_null());
+            let mut diag_out = std::ptr::dangling_mut::<c_char>();
+            let rc = pio_write_dir(
+                c,
+                to.as_ptr(),
+                out.as_ptr(),
+                std::ptr::null(),
+                &mut diag_out,
+                err.as_mut_ptr(),
+                err.len(),
+            );
+            assert_eq!(rc, -1);
+            let msg = CStr::from_ptr(err.as_ptr()).to_str().unwrap();
+            assert!(msg.contains("REQUEST.OUTPUT"), "got: {msg}");
+            pio_network_free(c);
+        }
+        assert_eq!(
+            std::fs::read(out_path.join("buses.csv")).unwrap(),
+            b"precious"
+        );
     }
 
     #[test]

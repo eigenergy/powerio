@@ -2197,6 +2197,24 @@ fn multiconductor_source_maps(
 #[cfg(test)]
 mod tests {
     #[test]
+    fn a_stored_version_never_bloats_the_rejection() {
+        // A hostile document can state a version as large as the document
+        // itself; the rejection stays one bounded line.
+        let net = crate::BalancedNetwork::in_memory("demo", 100.0, vec![], vec![]);
+        let mut pkg = super::NetworkPackage::from_balanced(net);
+        pkg.powerio_version = "9".repeat(1 << 20);
+        let text = pkg.to_json().unwrap();
+        let error = super::NetworkPackage::from_json(&text).unwrap_err();
+        let rendered = error.to_string();
+        assert!(
+            rendered.len() < crate::version::MAX_REJECTED_VERSION_BYTES + 200,
+            "{} bytes",
+            rendered.len()
+        );
+        assert!(!rendered.contains('\n'), "{rendered}");
+    }
+
+    #[test]
     fn a_package_states_the_powerio_version_that_wrote_it() {
         let net = crate::BalancedNetwork::in_memory("demo", 100.0, vec![], vec![]);
         let pkg = super::NetworkPackage::from_balanced(net);

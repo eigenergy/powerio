@@ -488,31 +488,48 @@ pub(crate) fn read_pypsa_csv_source(
     Ok(net)
 }
 
-#[allow(clippy::too_many_lines)] // one fidelity warning block per dropped field family, then the table writes
+/// Write the complete PyPSA CSV folder at `out_dir` through the no-replace
+/// destination commit: the inventory is staged completely and moved onto
+/// `out_dir` only when no entry exists there, so a refused write leaves the
+/// caller's filesystem byte for byte as it was.
+///
+/// # Errors
+/// A refused commit: `out_dir` already exists, cannot be staged, or the
+/// destination cannot commit without risking replacement.
+#[allow(clippy::missing_panics_doc)] // the destination kind is ours by construction
 pub fn write_pypsa_csv_folder(
     net: &BalancedNetwork,
     out_dir: impl AsRef<Path>,
-) -> Result<PypsaCsvOutputs> {
-    let out_dir = out_dir.as_ref();
-    std::fs::create_dir_all(out_dir)?;
+) -> std::result::Result<PypsaCsvOutputs, powerio_core::Error> {
     let (artifacts, diagnostics) = pypsa_csv_artifacts(net);
-    let mut files = Vec::new();
-    for (name, text) in artifacts {
-        let path = out_dir.join(name);
-        std::fs::write(&path, text)?;
-        files.push(path);
-    }
+    let inventory = artifacts
+        .into_iter()
+        .map(|(name, text)| {
+            powerio_core::MemoryArtifact::new(
+                powerio_core::ArtifactPath::new(name).expect("the writer emits fixed valid names"),
+                text.into_bytes(),
+            )
+        })
+        .collect();
+    let result = powerio_core::Destination::path(out_dir.as_ref()).__commit_artifacts(
+        true,
+        inventory,
+        Vec::new(),
+    )?;
+    let powerio_core::WrittenOutput::Path { root, artifacts } = result.into_output() else {
+        unreachable!("a path destination returns a path output")
+    };
     Ok(PypsaCsvOutputs {
-        dir: out_dir.to_path_buf(),
-        files,
+        dir: root,
+        files: artifacts,
         diagnostics,
     })
 }
 
 /// The complete PyPSA CSV folder as an in-memory artifact inventory:
 /// `(file name, content)` pairs in emission order, plus the writer's
-/// findings. [`write_pypsa_csv_folder`] streams these to disk; the
-/// `Destination` write commits them as one atomic inventory.
+/// findings. Both the folder writer and the `Destination` write commit these
+/// as one atomic inventory.
 // One emission body shared by the streaming and inventory writers; the
 // length is the format's table count, not branching depth.
 #[allow(clippy::too_many_lines)]
@@ -1215,16 +1232,18 @@ mod tests {
     use super::*;
     use std::fs;
 
+    /// A fresh, nonexistent target for the folder writer: the destination
+    /// commit refuses an existing entry, so the target must not exist yet.
     fn tmp_dir(label: &str) -> PathBuf {
         let p =
             std::env::temp_dir().join(format!("powerio-pypsa-unit-{label}-{}", std::process::id()));
         let _ = fs::remove_dir_all(&p);
-        fs::create_dir_all(&p).unwrap();
         p
     }
 
     fn folder(label: &str, files: &[(&str, &str)]) -> PathBuf {
         let dir = tmp_dir(label);
+        fs::create_dir_all(&dir).unwrap();
         for (name, text) in files {
             fs::write(dir.join(name), text).unwrap();
         }
@@ -1551,6 +1570,84 @@ mod tests {
             csv.lines().nth(1).unwrap(),
             "transformer_1,1,2,0.125,0.5,0.25,0,100,1.05,0,true"
         );
+    }
+
+    #[test]
+    fn a_folder_write_never_replaces_an_existing_entry() {
+        let net = net_with(vec![bus(1, None), bus(2, None)]);
+
+        // A regular file at a produced table name: the write is refused and
+        // the file keeps its bytes.
+        let blocked = tmp_dir("no-clobber-file");
+        fs::create_dir_all(&blocked).unwrap();
+        fs::write(blocked.join("buses.csv"), b"precious").unwrap();
+        let error = write_pypsa_csv_folder(&net, &blocked).unwrap_err();
+        assert_eq!(error.category(), powerio_core::ErrorCategory::Request);
+        assert_eq!(fs::read(blocked.join("buses.csv")).unwrap(), b"precious");
+
+        // A symbolic link at a produced table name: the link survives and the
+        // file it designates keeps its bytes and its length.
+        #[cfg(unix)]
+        {
+            let linked = tmp_dir("no-clobber-link");
+            fs::create_dir_all(&linked).unwrap();
+            let designated = tmp_dir("no-clobber-designated");
+            fs::create_dir_all(&designated).unwrap();
+            let real = designated.join("real.csv");
+            fs::write(&real, b"designated bytes").unwrap();
+            std::os::unix::fs::symlink(&real, linked.join("buses.csv")).unwrap();
+            let error = write_pypsa_csv_folder(&net, &linked).unwrap_err();
+            assert_eq!(error.category(), powerio_core::ErrorCategory::Request);
+            assert!(
+                fs::symlink_metadata(linked.join("buses.csv"))
+                    .unwrap()
+                    .file_type()
+                    .is_symlink()
+            );
+            assert_eq!(fs::read(&real).unwrap(), b"designated bytes");
+            assert_eq!(fs::metadata(&real).unwrap().len(), 16);
+            let _ = fs::remove_dir_all(&linked);
+            let _ = fs::remove_dir_all(&designated);
+        }
+
+        // The same write into a fresh directory produces the complete table
+        // inventory the `Destination` write commits.
+        let fresh = tmp_dir("no-clobber-fresh");
+        let out = write_pypsa_csv_folder(&net, &fresh).unwrap();
+        let mut folder_names: Vec<String> = out
+            .files
+            .iter()
+            .map(|path| {
+                path.strip_prefix(&out.dir)
+                    .unwrap()
+                    .to_string_lossy()
+                    .into_owned()
+            })
+            .collect();
+        folder_names.sort();
+        let module = powerio_core::PioModule::new(net.clone());
+        let committed = crate::format::write_pypsa_csv(
+            &module,
+            powerio_core::Destination::memory("case").unwrap(),
+        )
+        .unwrap();
+        let powerio_core::WrittenOutput::Memory { artifacts } = committed.into_output() else {
+            panic!("memory output")
+        };
+        let mut memory_names: Vec<String> = artifacts
+            .iter()
+            .map(|artifact| {
+                artifact
+                    .name()
+                    .as_str()
+                    .trim_start_matches("case/")
+                    .to_owned()
+            })
+            .collect();
+        memory_names.sort();
+        assert_eq!(folder_names, memory_names);
+        let _ = fs::remove_dir_all(&blocked);
+        let _ = fs::remove_dir_all(&fresh);
     }
 
     #[test]

@@ -59,12 +59,46 @@ fn reads(build: (u64, u64), document: (u64, u64)) -> bool {
 /// document that states none, which every release before 0.9.0 wrote.
 #[must_use]
 pub fn reject(document: &str, version: &str) -> String {
+    let version = bounded_version(version);
     let states = if version.is_empty() {
         format!("{document} states no `{VERSION_KEY}`, so it was written before powerio 0.9.0")
     } else {
         format!("{document} states `{VERSION_KEY}` {version}")
     };
     format!("{states}; this build reads {}", lineage_label())
+}
+
+/// The rejection message is one bounded line whatever the document states:
+/// the interpolated version keeps at most this many bytes.
+pub const MAX_REJECTED_VERSION_BYTES: usize = 64;
+
+/// A stored version reduced to one bounded line: control bytes (newlines and
+/// escapes included) become spaces, and the text is truncated at a character
+/// boundary with an ellipsis when shortened. A short ordinary version passes
+/// through verbatim.
+fn bounded_version(version: &str) -> std::borrow::Cow<'_, str> {
+    if !version.chars().any(char::is_control) && version.len() <= MAX_REJECTED_VERSION_BYTES {
+        return std::borrow::Cow::Borrowed(version);
+    }
+    let mut line: String = version
+        .chars()
+        .map(|character| {
+            if character.is_control() {
+                ' '
+            } else {
+                character
+            }
+        })
+        .collect();
+    if line.len() > MAX_REJECTED_VERSION_BYTES {
+        let mut end = MAX_REJECTED_VERSION_BYTES;
+        while !line.is_char_boundary(end) {
+            end -= 1;
+        }
+        line.truncate(end);
+        line.push('\u{2026}');
+    }
+    std::borrow::Cow::Owned(line)
 }
 
 /// The lineage this build reads, spelled for a message: `0.9.x` while the major
@@ -218,6 +252,28 @@ mod tests {
         assert!(!reads((2, 0), FROZEN_LINEAGE), "2.0 froze nothing");
         assert!(!reads((0, 9), (1, 0)), "0.9 cannot read the future");
         assert!(!reads((0, 9), (0, 8)), "a 0.x minor is its own lineage");
+    }
+
+    #[test]
+    fn reject_is_one_bounded_line_whatever_the_document_states() {
+        // A version as large as an admitted document must not be echoed.
+        let huge = "9".repeat(1 << 20);
+        let message = reject(".pio.json", &huge);
+        assert!(
+            message.len() < MAX_REJECTED_VERSION_BYTES + 160,
+            "{}",
+            message.len()
+        );
+        // Control bytes never reach the one-line message.
+        let hostile = "1.0\n\rfake diagnostic: \x1b[31mred";
+        let message = reject(".pio.json", hostile);
+        assert!(!message.contains('\n'), "{message}");
+        assert!(!message.contains('\r'), "{message}");
+        assert!(!message.contains('\x1b'), "{message}");
+        // A short ordinary version still appears verbatim with the lineage.
+        let message = reject(".pio.json", "0.2.1");
+        assert!(message.contains("0.2.1"), "{message}");
+        assert!(message.contains(&lineage_label()), "{message}");
     }
 
     #[test]

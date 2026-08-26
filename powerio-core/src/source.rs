@@ -151,16 +151,18 @@ impl SourceBuffer {
 
 /// Files acquired beneath one pinned root directory.
 ///
-/// The root is held as an open directory handle where the platform supports
-/// it, and referenced names are resolved lexically first and then walked one
-/// component at a time relative to that handle with symbolic links refused, so
-/// a path component replaced during acquisition cannot redirect the read
-/// outside the root. Acquisition is serialized by the one lock, which also
-/// makes the cache and the budget exact: a file is read and retained once, and
-/// concurrent requests for one name share the same buffer.
+/// The root is pinned as an open directory handle where the platform supports
+/// it, opened once on the first acquisition and reused for every later one, so
+/// the number of descriptors a process holds does not grow with the number of
+/// live sources that never acquire a referenced file. Referenced names are
+/// resolved lexically first and then walked one component at a time relative
+/// to that handle with symbolic links refused, so a path component replaced
+/// during acquisition cannot redirect the read outside the root. Acquisition
+/// is serialized by the one lock, which also makes the cache and the budget
+/// exact: a file is read and retained once, and concurrent requests for one
+/// name share the same buffer.
 #[derive(Debug)]
 struct FileAcquisition {
-    root: platform::RootHandle,
     root_display: PathBuf,
     /// True when the root was selected with [`Source::with_acquisition_root`]
     /// rather than defaulted to the containing directory.
@@ -170,9 +172,23 @@ struct FileAcquisition {
 
 #[derive(Debug, Default)]
 struct AcquisitionState {
+    root: Option<platform::RootHandle>,
     cache: BTreeMap<String, SourceBuffer>,
     files: usize,
     bytes: u64,
+}
+
+impl AcquisitionState {
+    /// The pinned root handle, opened on first use with symbolic links at the
+    /// root refused and the directory confirmed on the opened descriptor.
+    fn pinned_root(&mut self, root_display: &Path) -> Result<&platform::RootHandle, Error> {
+        if self.root.is_none() {
+            let root = platform::open_root(root_display)
+                .map_err(|cause| open_error(&crate::codes::READ_IO_OPEN, root_display, cause))?;
+            self.root = Some(root);
+        }
+        Ok(self.root.as_ref().expect("pinned above"))
+    }
 }
 
 #[derive(Debug)]
@@ -242,10 +258,8 @@ impl Source {
             drop(file);
             return Self::open_directory(name, &path);
         }
-        let bytes = read_open_file(file, &name)?;
+        let bytes = read_open_file(file, &name, u64::MAX)?;
         let root_display = canonical_parent(&path)?;
-        let root = platform::open_root(&root_display)
-            .map_err(|cause| open_error(&crate::codes::READ_IO_OPEN, &root_display, cause))?;
         let primary =
             SourceBuffer::new(SourceId::new("input")?, name.to_string(), bytes, Vec::new());
         Ok(Self {
@@ -253,7 +267,6 @@ impl Source {
             provider: Arc::new(SourceProvider::File {
                 primary,
                 acquisition: FileAcquisition {
-                    root,
                     root_display,
                     selected: false,
                     state: Mutex::new(AcquisitionState::default()),
@@ -266,13 +279,10 @@ impl Source {
     fn open_directory(name: Arc<str>, path: &Path) -> Result<Self, Error> {
         let root_display = std::fs::canonicalize(path)
             .map_err(|cause| open_error(&crate::codes::READ_IO_METADATA, path, cause))?;
-        let root = platform::open_root(&root_display)
-            .map_err(|cause| open_error(&crate::codes::READ_IO_OPEN, &root_display, cause))?;
         Ok(Self {
             name,
             provider: Arc::new(SourceProvider::Directory {
                 acquisition: FileAcquisition {
-                    root,
                     root_display,
                     selected: false,
                     state: Mutex::new(AcquisitionState::default()),
@@ -376,10 +386,14 @@ impl Source {
                     "the acquisition root does not resolve to a plain prefix of the case directory",
                 ));
             };
-            directory.push(segment.to_string_lossy().into_owned());
+            let Some(segment) = segment.to_str().filter(|text| plain_segment(text)) else {
+                return Err(Error::new(
+                    &crate::codes::REQUEST_SOURCE_INVALID_PATH,
+                    "the acquisition root does not resolve to a plain prefix of the case directory",
+                ));
+            };
+            directory.push(segment.to_owned());
         }
-        let root = platform::open_root(&canonical)
-            .map_err(|cause| open_error(&crate::codes::READ_IO_OPEN, &canonical, cause))?;
         let primary = SourceBuffer::new(
             primary.id().clone(),
             primary.name().to_owned(),
@@ -391,7 +405,6 @@ impl Source {
             provider: Arc::new(SourceProvider::File {
                 primary,
                 acquisition: FileAcquisition {
-                    root,
                     root_display: canonical,
                     selected: true,
                     state: Mutex::new(AcquisitionState::default()),
@@ -552,31 +565,31 @@ impl Source {
             )
             .with_source(self.clone())),
             SourceProvider::Directory { acquisition } => {
+                // The walk runs against the pinned root handle so a directory
+                // component swapped for a symbolic link mid-listing fails the
+                // descriptor walk rather than redirecting the listing outside
+                // the root. The lock is held across the walk, like acquisition.
+                let mut state = acquisition.lock();
+                let root = state.pinned_root(&acquisition.root_display)?;
                 let mut names = Vec::new();
                 let mut pending = vec![Vec::<String>::new()];
                 while let Some(prefix) = pending.pop() {
-                    let mut path = acquisition.root_display.clone();
-                    for segment in &prefix {
-                        path.push(segment);
-                    }
-                    let entries = std::fs::read_dir(&path).map_err(|cause| {
-                        Error::new(
-                            &crate::codes::READ_IO_METADATA,
-                            format!("cannot list source directory `{}`", path.display()),
-                        )
-                        .with_cause(cause)
-                    })?;
-                    for entry in entries {
-                        let entry = entry.map_err(|cause| {
+                    let display = prefix.join("/");
+                    let entries = root.list_beneath(&prefix).map_err(|cause| {
+                        if platform::is_symlink_refusal(&cause) {
+                            Error::new(
+                                &crate::codes::REQUEST_SOURCE_SYMLINK_REFUSED,
+                                format!("source directory `{display}` crosses a symbolic link"),
+                            )
+                        } else {
                             Error::new(
                                 &crate::codes::READ_IO_METADATA,
-                                format!("cannot list source directory `{}`", path.display()),
+                                format!("cannot list source directory `{display}`"),
                             )
                             .with_cause(cause)
-                        })?;
-                        let Ok(name) = entry.file_name().into_string() else {
-                            continue;
-                        };
+                        }
+                    })?;
+                    for (name, is_directory) in entries {
                         if names.len() + pending.len() >= MAX_REFERENCED_FILES {
                             return Err(Error::new(
                                 &crate::codes::READ_IO_REFERENCE_BUDGET,
@@ -585,16 +598,9 @@ impl Source {
                                 ),
                             ));
                         }
-                        let file_type = entry.file_type().map_err(|cause| {
-                            Error::new(
-                                &crate::codes::READ_IO_METADATA,
-                                format!("cannot inspect source directory entry `{name}`"),
-                            )
-                            .with_cause(cause)
-                        })?;
                         let mut child = prefix.clone();
                         child.push(name);
-                        if file_type.is_dir() {
+                        if is_directory {
                             pending.push(child);
                         } else {
                             names.push(crate::ArtifactPath::new(child.join("/"))?);
@@ -652,7 +658,10 @@ impl FileAcquisition {
 
     /// Read and retain one file beneath the root. The lock is held across the
     /// read so a file is read once, retained once, and charged once even under
-    /// concurrent requests.
+    /// concurrent requests. The remaining byte budget bounds the allocation
+    /// itself: it is computed before the read and handed to the reader, so a
+    /// file that would overrun the budget is refused before its bytes are
+    /// reserved.
     fn acquire(&self, segments: &[String]) -> Result<SourceBuffer, Error> {
         let key = segments.join("/");
         let mut state = self.lock();
@@ -665,7 +674,9 @@ impl FileAcquisition {
                 format!("this source already acquired {MAX_REFERENCED_FILES} referenced files"),
             ));
         }
-        let file = self.root.open_beneath(segments).map_err(|error| {
+        let remaining = MAX_REFERENCED_BYTES.saturating_sub(state.bytes);
+        let root = state.pinned_root(&self.root_display)?;
+        let file = root.open_beneath(segments).map_err(|error| {
             if platform::is_symlink_refusal(&error) {
                 Error::new(
                     &crate::codes::REQUEST_SOURCE_SYMLINK_REFUSED,
@@ -679,45 +690,56 @@ impl FileAcquisition {
                 .with_cause(error)
             }
         })?;
-        let bytes = read_open_file(file, &key)?;
-        let remaining = MAX_REFERENCED_BYTES.saturating_sub(state.bytes);
-        if bytes.len() as u64 > remaining {
-            return Err(Error::new(
-                &crate::codes::READ_IO_REFERENCE_BUDGET,
-                format!(
-                    "referenced file `{key}` would take this source past its {MAX_REFERENCED_BYTES} byte acquisition budget"
-                ),
-            ));
-        }
-        state.files += 1;
-        state.bytes += bytes.len() as u64;
+        let bytes = read_open_file(file, &key, remaining)?;
         let directory = segments[..segments.len() - 1].to_vec();
         let buffer = SourceBuffer::new(SourceId::new(&key)?, key.clone(), bytes, directory);
+        state.files += 1;
+        state.bytes += buffer.bytes().len() as u64;
         state.cache.insert(key, buffer.clone());
         Ok(buffer)
     }
 }
 
+/// True when `segment` is a single plain file name on every supported
+/// platform: it reduces to exactly one normal path component equal to itself,
+/// so it carries no separator of any platform, no drive or root prefix, no
+/// NUL, and is neither `.` nor `..` nor empty. Joining such segments one at a
+/// time onto a directory cannot reach outside that directory.
+fn plain_segment(segment: &str) -> bool {
+    if segment.is_empty()
+        || segment == "."
+        || segment == ".."
+        || segment.contains(['/', '\\', '\0', ':'])
+    {
+        return false;
+    }
+    let mut components = Path::new(segment).components();
+    matches!(components.next(), Some(Component::Normal(text)) if text == std::ffi::OsStr::new(segment))
+        && components.next().is_none()
+}
+
 /// Resolve a referenced name against the referring directory, lexically and
-/// before any filesystem access: `.` is dropped, `..` pops within the root and
-/// is refused past it, and both separators are rejected inside one segment by
-/// construction. The result is the exact component list the platform walk
-/// opens one at a time.
+/// before any filesystem access. The name is split on both separators, `.` is
+/// dropped, `..` pops within the root and is refused past it, a leading
+/// separator or drive spelling is refused, and every remaining segment must be
+/// a single plain file name on the platform under test. The result is the
+/// exact component list the platform walk opens one at a time.
 fn resolve_segments(referrer_directory: &[&str], name: &str) -> Result<Vec<String>, Error> {
     if name.is_empty()
         || name.len() > crate::validation::MAX_ARTIFACT_PATH_BYTES
         || name.contains('\0')
+        || name.starts_with(['/', '\\'])
     {
         return Err(Error::new(
             &crate::codes::REQUEST_SOURCE_INVALID_PATH,
-            "a referenced name must be a nonempty bounded path",
+            "a referenced name must be a nonempty bounded relative path",
         ));
     }
     let mut segments: Vec<String> = referrer_directory
         .iter()
         .map(|segment| (*segment).to_owned())
         .collect();
-    for raw in name.split('/') {
+    for raw in name.split(['/', '\\']) {
         match raw {
             "" | "." => {}
             ".." => {
@@ -729,10 +751,12 @@ fn resolve_segments(referrer_directory: &[&str], name: &str) -> Result<Vec<Strin
                 }
             }
             segment => {
-                if segment.len() > crate::validation::MAX_ARTIFACT_PATH_BYTES {
+                if segment.len() > crate::validation::MAX_ARTIFACT_PATH_BYTES
+                    || !plain_segment(segment)
+                {
                     return Err(Error::new(
                         &crate::codes::REQUEST_SOURCE_INVALID_PATH,
-                        "a referenced name component exceeds its bound",
+                        format!("referenced name `{name}` is not a portable relative path"),
                     ));
                 }
                 segments.push(segment.to_owned());
@@ -750,7 +774,9 @@ fn resolve_segments(referrer_directory: &[&str], name: &str) -> Result<Vec<Strin
 
 /// An absolute referenced name is accepted only when it sits lexically beneath
 /// the canonical root; the walk then reopens it component by component from
-/// the pinned root handle. Returns `None` for a relative name.
+/// the pinned root handle. Returns `None` for a relative name. The segment
+/// list is built from the platform's own path components, one segment per
+/// directory component, each required to be a plain file name.
 fn absolute_to_root_relative(root: &Path, name: &str) -> Option<Result<Vec<String>, Error>> {
     let path = Path::new(name);
     if !path.is_absolute() {
@@ -762,7 +788,27 @@ fn absolute_to_root_relative(root: &Path, name: &str) -> Option<Result<Vec<Strin
             format!("referenced name `{name}` resolves outside the acquisition root"),
         )));
     };
-    Some(resolve_segments(&[], &remainder.to_string_lossy()))
+    let mut segments = Vec::new();
+    for component in remainder.components() {
+        let text = match component {
+            Component::Normal(text) => text.to_str(),
+            _ => None,
+        };
+        let Some(text) = text.filter(|text| plain_segment(text)) else {
+            return Some(Err(Error::new(
+                &crate::codes::REQUEST_SOURCE_INVALID_PATH,
+                format!("referenced name `{name}` is not a portable path beneath the root"),
+            )));
+        };
+        segments.push(text.to_owned());
+    }
+    if segments.is_empty() {
+        return Some(Err(Error::new(
+            &crate::codes::REQUEST_SOURCE_INVALID_PATH,
+            format!("referenced name `{name}` does not name a file"),
+        )));
+    }
+    Some(Ok(segments))
 }
 
 fn canonical_parent(path: &Path) -> Result<PathBuf, Error> {
@@ -780,8 +826,11 @@ fn open_error(info: &'static crate::DiagnosticInfo, path: &Path, cause: std::io:
 
 /// Read an already opened regular file completely. The handle was opened with
 /// symbolic links refused, and the regular file check runs on the open
-/// descriptor, so no path is consulted twice.
-fn read_open_file(file: std::fs::File, name: &str) -> Result<Arc<[u8]>, Error> {
+/// descriptor, so no path is consulted twice. `max_bytes` bounds the
+/// allocation itself: a file whose declared length exceeds it is refused
+/// before any bytes are reserved, and the reader is capped so a file that
+/// grows past the bound during the read is refused rather than read.
+fn read_open_file(file: std::fs::File, name: &str, max_bytes: u64) -> Result<Arc<[u8]>, Error> {
     let metadata = file.metadata().map_err(|cause| {
         Error::new(
             &crate::codes::READ_IO_METADATA,
@@ -791,11 +840,19 @@ fn read_open_file(file: std::fs::File, name: &str) -> Result<Arc<[u8]>, Error> {
     })?;
     if !metadata.is_file() {
         return Err(Error::new(
-            &crate::codes::REQUEST_SOURCE_INVALID_PATH,
+            &crate::codes::REQUEST_SOURCE_NOT_A_FILE,
             format!("source buffer `{name}` is not a regular file"),
         ));
     }
     let declared_length = metadata.len();
+    if declared_length > max_bytes {
+        return Err(Error::new(
+            &crate::codes::READ_IO_REFERENCE_BUDGET,
+            format!(
+                "referenced file `{name}` would take this source past its {MAX_REFERENCED_BYTES} byte acquisition budget"
+            ),
+        ));
+    }
     let capacity = usize::try_from(declared_length).map_err(|cause| {
         Error::new(
             &crate::codes::READ_IO_ALLOCATION_REFUSED,
@@ -811,12 +868,15 @@ fn read_open_file(file: std::fs::File, name: &str) -> Result<Arc<[u8]>, Error> {
         )
         .with_cause(cause)
     })?;
-    let read_limit = declared_length.checked_add(1).ok_or_else(|| {
-        Error::new(
-            &crate::codes::READ_IO_ALLOCATION_REFUSED,
-            format!("source buffer `{name}` is too large to read safely"),
-        )
-    })?;
+    let read_limit = declared_length
+        .checked_add(1)
+        .ok_or_else(|| {
+            Error::new(
+                &crate::codes::READ_IO_ALLOCATION_REFUSED,
+                format!("source buffer `{name}` is too large to read safely"),
+            )
+        })?
+        .min(max_bytes.saturating_add(1));
     let mut file = file;
     file.by_ref()
         .take(read_limit)
@@ -840,10 +900,13 @@ fn read_open_file(file: std::fs::File, name: &str) -> Result<Arc<[u8]>, Error> {
 #[cfg(unix)]
 mod platform {
     //! Descriptor-relative acquisition: the root directory is pinned by an
-    //! open descriptor at construction, and every referenced component is
-    //! opened relative to it with `O_NOFOLLOW`, so replacing a component with
-    //! a symbolic link during acquisition fails instead of redirecting the
-    //! read outside the root.
+    //! open descriptor, and every referenced component is opened relative to
+    //! it with `O_NOFOLLOW`, so replacing a component with a symbolic link
+    //! during acquisition fails instead of redirecting the read outside the
+    //! root. Every open also carries `O_NONBLOCK`, so the open call itself
+    //! never waits on another process (a FIFO with no writer opens
+    //! immediately and is then refused by the regular file check on the
+    //! descriptor); the flag is cleared before any read.
 
     use std::ffi::CString;
     use std::fs::File;
@@ -854,8 +917,8 @@ mod platform {
     #[derive(Debug)]
     pub(super) struct RootHandle(OwnedFd);
 
-    /// Open the named path with symbolic links at the final component
-    /// refused by the kernel.
+    /// Open the named path with symbolic links at the final component refused
+    /// by the kernel and without the open itself blocking on another process.
     pub(super) fn open_no_follow(path: &Path) -> std::io::Result<File> {
         let path = c_string(path.as_os_str().as_bytes())?;
         // SAFETY: the pointer references a NUL-terminated buffer owned by
@@ -864,31 +927,41 @@ mod platform {
         let fd = unsafe {
             libc::open(
                 path.as_ptr(),
-                libc::O_RDONLY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+                libc::O_RDONLY | libc::O_NOFOLLOW | libc::O_CLOEXEC | libc::O_NONBLOCK,
             )
         };
         if fd < 0 {
             return Err(std::io::Error::last_os_error());
         }
         // SAFETY: `fd` is a freshly opened descriptor this function owns.
-        Ok(unsafe { File::from_raw_fd(fd) })
+        let file = unsafe { File::from_raw_fd(fd) };
+        clear_nonblock(&file)?;
+        Ok(file)
     }
 
+    /// Open a root directory with a symbolic link at the final component
+    /// refused, and the directory confirmed on the opened descriptor. Not
+    /// `O_DIRECTORY | O_NOFOLLOW`: Darwin reports that combination on a
+    /// symbolic link as `ENOTDIR`, hiding the refusal reason.
     pub(super) fn open_root(path: &Path) -> std::io::Result<RootHandle> {
         let path = c_string(path.as_os_str().as_bytes())?;
-        // SAFETY: as in `open_no_follow`; `O_DIRECTORY` refuses anything but
-        // a directory atomically.
+        // SAFETY: as in `open_no_follow`.
         let fd = unsafe {
             libc::open(
                 path.as_ptr(),
-                libc::O_RDONLY | libc::O_DIRECTORY | libc::O_CLOEXEC,
+                libc::O_RDONLY | libc::O_NOFOLLOW | libc::O_CLOEXEC | libc::O_NONBLOCK,
             )
         };
         if fd < 0 {
             return Err(std::io::Error::last_os_error());
         }
         // SAFETY: `fd` is a freshly opened descriptor this function owns.
-        Ok(RootHandle(unsafe { OwnedFd::from_raw_fd(fd) }))
+        let file = unsafe { File::from_raw_fd(fd) };
+        if !file.metadata()?.is_dir() {
+            return Err(std::io::Error::from(std::io::ErrorKind::NotADirectory));
+        }
+        clear_nonblock(&file)?;
+        Ok(RootHandle(file.into()))
     }
 
     impl RootHandle {
@@ -904,7 +977,7 @@ mod platform {
                 let next = self.open_at(
                     directory.as_ref(),
                     segment,
-                    libc::O_RDONLY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+                    libc::O_RDONLY | libc::O_NOFOLLOW | libc::O_CLOEXEC | libc::O_NONBLOCK,
                 )?;
                 let next = File::from(next);
                 if !next.metadata()?.is_dir() {
@@ -915,9 +988,40 @@ mod platform {
             let fd = self.open_at(
                 directory.as_ref(),
                 file_segment,
-                libc::O_RDONLY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+                libc::O_RDONLY | libc::O_NOFOLLOW | libc::O_CLOEXEC | libc::O_NONBLOCK,
             )?;
-            Ok(File::from(fd))
+            let file = File::from(fd);
+            clear_nonblock(&file)?;
+            Ok(file)
+        }
+
+        /// List one directory beneath the root, reached by the same no-follow
+        /// component walk acquisition uses, reading entries from the opened
+        /// descriptor. Returns each UTF-8 entry name with whether it is a
+        /// directory; symbolic links are listed by name and refused when
+        /// acquired.
+        pub(super) fn list_beneath(
+            &self,
+            segments: &[String],
+        ) -> std::io::Result<Vec<(String, bool)>> {
+            let mut directory: Option<OwnedFd> = None;
+            for segment in segments {
+                let next = self.open_at(
+                    directory.as_ref(),
+                    segment,
+                    libc::O_RDONLY | libc::O_NOFOLLOW | libc::O_CLOEXEC | libc::O_NONBLOCK,
+                )?;
+                let next = File::from(next);
+                if !next.metadata()?.is_dir() {
+                    return Err(std::io::Error::from(std::io::ErrorKind::NotADirectory));
+                }
+                directory = Some(next.into());
+            }
+            let listed: OwnedFd = match directory {
+                Some(fd) => fd,
+                None => self.0.try_clone()?,
+            };
+            read_directory_entries(listed)
         }
 
         fn open_at(
@@ -926,6 +1030,9 @@ mod platform {
             segment: &str,
             flags: libc::c_int,
         ) -> std::io::Result<OwnedFd> {
+            if !super::plain_segment(segment) {
+                return Err(std::io::Error::from(std::io::ErrorKind::InvalidInput));
+            }
             let at = directory.map_or_else(|| self.0.as_raw_fd(), AsRawFd::as_raw_fd);
             let segment = c_string(segment.as_bytes())?;
             // SAFETY: `at` is a live descriptor owned by `self` or by the
@@ -938,6 +1045,113 @@ mod platform {
             // SAFETY: `fd` is a freshly opened descriptor this function owns.
             Ok(unsafe { OwnedFd::from_raw_fd(fd) })
         }
+    }
+
+    /// Read every entry of an open directory descriptor. `fdopendir` takes
+    /// ownership of the descriptor and `closedir` releases it.
+    fn read_directory_entries(fd: OwnedFd) -> std::io::Result<Vec<(String, bool)>> {
+        use std::os::fd::IntoRawFd;
+
+        let raw = fd.into_raw_fd();
+        // SAFETY: `raw` is a live directory descriptor whose ownership
+        // transfers to the returned stream; on failure it is closed here.
+        let stream = unsafe { libc::fdopendir(raw) };
+        if stream.is_null() {
+            let error = std::io::Error::last_os_error();
+            // SAFETY: `raw` is still owned by this function when `fdopendir`
+            // fails.
+            unsafe { libc::close(raw) };
+            return Err(error);
+        }
+        let mut entries = Vec::new();
+        loop {
+            // SAFETY: `stream` is the live directory stream opened above.
+            errno_clear();
+            let entry = unsafe { libc::readdir(stream) };
+            if entry.is_null() {
+                let error = std::io::Error::last_os_error();
+                // SAFETY: `stream` is the live directory stream opened above;
+                // it is closed exactly once.
+                unsafe { libc::closedir(stream) };
+                if error.raw_os_error().is_some_and(|code| code != 0) {
+                    return Err(error);
+                }
+                break;
+            }
+            // SAFETY: `entry` points at the stream's current entry, valid
+            // until the next `readdir` call on this stream.
+            let name_bytes = unsafe { std::ffi::CStr::from_ptr((*entry).d_name.as_ptr()) };
+            let Ok(name) = name_bytes.to_str() else {
+                continue;
+            };
+            if name == "." || name == ".." {
+                continue;
+            }
+            // SAFETY: as above; `d_type` is a plain byte field.
+            let kind = unsafe { (*entry).d_type };
+            let is_directory = match kind {
+                libc::DT_DIR => true,
+                libc::DT_UNKNOWN => {
+                    // A filesystem without `d_type` support: ask the
+                    // descriptor, without following a symbolic link.
+                    let mut stat: libc::stat = unsafe { std::mem::zeroed() };
+                    let segment =
+                        c_string(name.as_bytes()).expect("directory entry names carry no NUL");
+                    // SAFETY: `stream` is live, so `dirfd` is a live
+                    // descriptor; the name pointer references the
+                    // NUL-terminated buffer owned by `segment`.
+                    let status = unsafe {
+                        libc::fstatat(
+                            libc::dirfd(stream),
+                            segment.as_ptr(),
+                            &raw mut stat,
+                            libc::AT_SYMLINK_NOFOLLOW,
+                        )
+                    };
+                    status == 0 && stat.st_mode & libc::S_IFMT == libc::S_IFDIR
+                }
+                _ => false,
+            };
+            entries.push((name.to_owned(), is_directory));
+        }
+        Ok(entries)
+    }
+
+    fn errno_clear() {
+        // SAFETY: writing 0 to the calling thread's errno location.
+        unsafe {
+            *errno_location() = 0;
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    fn errno_location() -> *mut libc::c_int {
+        // SAFETY: `__error` returns the calling thread's errno location.
+        unsafe { libc::__error() }
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    fn errno_location() -> *mut libc::c_int {
+        // SAFETY: `__errno_location` returns the calling thread's errno
+        // location.
+        unsafe { libc::__errno_location() }
+    }
+
+    /// Clear `O_NONBLOCK` on an opened descriptor before it is read.
+    fn clear_nonblock(file: &File) -> std::io::Result<()> {
+        let fd = file.as_raw_fd();
+        // SAFETY: `fd` is a live descriptor owned by `file` for the duration
+        // of both calls.
+        let flags = unsafe { libc::fcntl(fd, libc::F_GETFL) };
+        if flags < 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        // SAFETY: as above.
+        let status = unsafe { libc::fcntl(fd, libc::F_SETFL, flags & !libc::O_NONBLOCK) };
+        if status < 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        Ok(())
     }
 
     pub(super) fn is_symlink_refusal(error: &std::io::Error) -> bool {
@@ -954,6 +1168,33 @@ mod platform {
 
     fn c_string(bytes: &[u8]) -> std::io::Result<CString> {
         CString::new(bytes).map_err(|_| std::io::Error::from(std::io::ErrorKind::InvalidInput))
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn open_root_refuses_a_symbolic_link_to_a_directory() {
+            let base = std::env::temp_dir().join(format!(
+                "powerio-core-open-root-{}-{}",
+                std::process::id(),
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_nanos()
+            ));
+            std::fs::create_dir_all(&base).unwrap();
+            assert!(open_root(&base).is_ok());
+            let link = base.join("link");
+            std::os::unix::fs::symlink(&base, &link).unwrap();
+            let error = open_root(&link).unwrap_err();
+            assert!(
+                is_symlink_refusal(&error) || error.kind() == std::io::ErrorKind::NotADirectory,
+                "{error:?}"
+            );
+            std::fs::remove_dir_all(&base).unwrap();
+        }
     }
 }
 
@@ -996,7 +1237,7 @@ mod platform {
             let (file_segment, directories) =
                 segments.split_last().expect("resolution yields a file");
             for segment in directories {
-                path.push(segment);
+                push_plain_segment(&mut path, segment)?;
                 let metadata = std::fs::symlink_metadata(&path)?;
                 if metadata.file_type().is_symlink() {
                     return Err(symlink_error());
@@ -1005,9 +1246,50 @@ mod platform {
                     return Err(std::io::Error::from(std::io::ErrorKind::NotADirectory));
                 }
             }
-            path.push(file_segment);
+            push_plain_segment(&mut path, file_segment)?;
             open_reparse_refused(&path)
         }
+
+        /// List one directory beneath the root, re-verifying every component
+        /// against the recorded root immediately before listing it: each
+        /// accumulated component must be a real directory reached without a
+        /// symbolic link, checked in walk order right before the listing.
+        pub(super) fn list_beneath(
+            &self,
+            segments: &[String],
+        ) -> std::io::Result<Vec<(String, bool)>> {
+            let mut path = self.root.clone();
+            for segment in segments {
+                push_plain_segment(&mut path, segment)?;
+                let metadata = std::fs::symlink_metadata(&path)?;
+                if metadata.file_type().is_symlink() {
+                    return Err(symlink_error());
+                }
+                if !metadata.is_dir() {
+                    return Err(std::io::Error::from(std::io::ErrorKind::NotADirectory));
+                }
+            }
+            let mut entries = Vec::new();
+            for entry in std::fs::read_dir(&path)? {
+                let entry = entry?;
+                let Ok(name) = entry.file_name().into_string() else {
+                    continue;
+                };
+                let is_directory = entry.file_type()?.is_dir();
+                entries.push((name, is_directory));
+            }
+            Ok(entries)
+        }
+    }
+
+    /// Refuse a segment that is not a single plain file name before it is
+    /// joined onto the walked path.
+    fn push_plain_segment(path: &mut PathBuf, segment: &str) -> std::io::Result<()> {
+        if !super::plain_segment(segment) {
+            return Err(std::io::Error::from(std::io::ErrorKind::InvalidInput));
+        }
+        path.push(segment);
+        Ok(())
     }
 
     #[cfg(windows)]
@@ -1271,6 +1553,249 @@ mod tests {
         symlink(&root, &root_link).unwrap();
         assert!(Source::open(&root_link).is_err());
         std::fs::remove_file(root_link).unwrap();
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_named_pipe_is_refused_promptly_and_siblings_still_acquire() {
+        use std::os::unix::ffi::OsStrExt;
+
+        let root = test_root("fifo");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("real.csv"), b"real").unwrap();
+        let fifo = root.join("pipe.dat");
+        let c_path = std::ffi::CString::new(fifo.as_os_str().as_bytes()).unwrap();
+        // SAFETY: the pointer references the NUL-terminated buffer owned by
+        // `c_path`, which outlives the call.
+        assert_eq!(unsafe { libc::mkfifo(c_path.as_ptr(), 0o644) }, 0);
+
+        // No process is attached to the pipe, so a blocking open would hang;
+        // each operation is driven from a worker with a bounded wait so a
+        // regression fails the test rather than hanging it.
+        let (sender, receiver) = std::sync::mpsc::channel();
+        let opened_root = root.clone();
+        let worker = std::thread::spawn(move || {
+            let open_error = Source::open(opened_root.join("pipe.dat")).map(|_| ());
+            let directory = Source::open(&opened_root).unwrap();
+            let buffer_error = directory
+                .buffer(&ArtifactPath::new("pipe.dat").unwrap())
+                .map(|_| ());
+            let sibling = directory
+                .buffer(&ArtifactPath::new("real.csv").unwrap())
+                .map(|buffer| buffer.bytes().to_vec());
+            sender.send((open_error, buffer_error, sibling)).unwrap();
+        });
+        let (open_error, buffer_error, sibling) = receiver
+            .recv_timeout(std::time::Duration::from_secs(10))
+            .expect("acquisition on a writerless pipe completes promptly");
+        worker.join().unwrap();
+        assert_eq!(
+            open_error.unwrap_err().category(),
+            crate::ErrorCategory::Request
+        );
+        assert_eq!(
+            buffer_error.unwrap_err().category(),
+            crate::ErrorCategory::Request
+        );
+        assert_eq!(sibling.unwrap(), b"real");
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn an_over_budget_referenced_file_is_refused_before_allocation() {
+        let root = test_root("budget");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("master.dss"), b"master").unwrap();
+        // A sparse file whose declared length far exceeds the acquisition
+        // budget; no bytes are written, so the refusal must come from the
+        // declared length, before any reservation.
+        let big = std::fs::File::create(root.join("big.dat")).unwrap();
+        big.set_len(MAX_REFERENCED_BYTES * 4).unwrap();
+        drop(big);
+
+        #[cfg(unix)]
+        let peak_before = peak_resident_bytes();
+        let source = Source::open(root.join("master.dss")).unwrap();
+        let primary = source.primary_buffer().unwrap();
+        let error = source.referenced_buffer(&primary, "big.dat").unwrap_err();
+        assert!(error.to_string().contains("acquisition budget"), "{error}");
+        #[cfg(unix)]
+        {
+            // The refusal happened before the reserve, so the process peak
+            // resident set cannot have grown by the declared length.
+            let growth = peak_resident_bytes().saturating_sub(peak_before);
+            assert!(
+                growth < 3 * MAX_REFERENCED_BYTES,
+                "peak resident set grew by {growth} bytes"
+            );
+        }
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(unix)]
+    fn peak_resident_bytes() -> u64 {
+        // SAFETY: `getrusage` fills the zeroed out-parameter for this process.
+        let usage = unsafe {
+            let mut usage: libc::rusage = std::mem::zeroed();
+            libc::getrusage(libc::RUSAGE_SELF, &raw mut usage);
+            usage
+        };
+        let maxrss = u64::try_from(usage.ru_maxrss).unwrap_or(0);
+        // Linux reports kilobytes; macOS reports bytes.
+        if cfg!(target_os = "macos") {
+            maxrss
+        } else {
+            maxrss * 1024
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn racing_entry_listing_never_names_files_outside_the_root() {
+        use std::os::unix::fs::symlink;
+
+        let root = test_root("race-list");
+        std::fs::create_dir_all(root.join("sub")).unwrap();
+        std::fs::write(root.join("sub/inside.txt"), b"inside").unwrap();
+        let outside = test_root("race-list-outside");
+        std::fs::create_dir_all(&outside).unwrap();
+        std::fs::write(outside.join("outside-only.txt"), b"outside").unwrap();
+
+        let source = Source::open(&root).unwrap();
+        let stop = std::sync::atomic::AtomicBool::new(false);
+        std::thread::scope(|scope| {
+            let flipper = scope.spawn(|| {
+                while !stop.load(std::sync::atomic::Ordering::Relaxed) {
+                    let _ = std::fs::remove_dir_all(root.join("sub"));
+                    let _ = symlink(&outside, root.join("sub"));
+                    let _ = std::fs::remove_file(root.join("sub"));
+                    let _ = std::fs::create_dir(root.join("sub"));
+                    let _ = std::fs::write(root.join("sub/inside.txt"), b"inside");
+                }
+            });
+            for _ in 0..50 {
+                // Either the real subtree lists, or the walk fails; a name
+                // that exists only outside the root never appears.
+                if let Ok(names) = source.entry_names() {
+                    assert!(
+                        names
+                            .iter()
+                            .all(|name| !name.as_str().contains("outside-only")),
+                        "{names:?}"
+                    );
+                }
+            }
+            stop.store(true, std::sync::atomic::Ordering::Relaxed);
+            flipper.join().unwrap();
+        });
+        std::fs::remove_dir_all(&root).ok();
+        std::fs::remove_dir_all(&outside).ok();
+    }
+
+    #[test]
+    fn referenced_names_must_be_portable_relative_paths() {
+        let root = test_root("portable-names");
+        std::fs::create_dir_all(root.join("sub")).unwrap();
+        std::fs::write(root.join("master.dss"), b"master").unwrap();
+        std::fs::write(root.join("sub/feeder.dss"), b"feeder").unwrap();
+        let source = Source::open(root.join("master.dss")).unwrap();
+        let primary = source.primary_buffer().unwrap();
+
+        // A climb spelled with the platform's alternate separator is the same
+        // climb; a leading separator and a drive spelling are refused.
+        for name in ["..\\escape.dss", "\\escape.dss", "C:\\escape.dss", "C:x"] {
+            let error = source.referenced_buffer(&primary, name).unwrap_err();
+            assert_eq!(
+                error.category(),
+                crate::ErrorCategory::Request,
+                "{name}: {error}"
+            );
+        }
+        assert!(source.root_buffer("..\\master.dss").is_err());
+        assert!(source.root_buffer("\\master.dss").is_err());
+
+        // Ordinary relative names keep resolving.
+        let feeder = source
+            .referenced_buffer(&primary, "sub/feeder.dss")
+            .unwrap();
+        assert_eq!(feeder.bytes(), b"feeder");
+
+        // An absolute in-root name resolves to one segment per directory
+        // component: it lands on the same cached buffer the relative name
+        // produced, proving the per component walk ran on the same key. The
+        // acquisition root is the canonical containing directory, so the
+        // absolute spelling is canonical too.
+        let absolute = root.canonicalize().unwrap().join("sub").join("feeder.dss");
+        let again = source
+            .referenced_buffer(&primary, absolute.to_str().unwrap())
+            .unwrap();
+        assert_eq!(again.bytes().as_ptr(), feeder.bytes().as_ptr());
+        // No acquisition returned bytes from outside the root.
+        assert!(
+            source
+                .acquired_buffers()
+                .iter()
+                .all(|buffer| !buffer.name().contains("escape"))
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn live_sources_hold_no_directory_descriptors_before_acquisition() {
+        fn open_descriptor_count() -> usize {
+            let table = if cfg!(target_os = "macos") {
+                "/dev/fd"
+            } else {
+                "/proc/self/fd"
+            };
+            std::fs::read_dir(table).unwrap().count()
+        }
+
+        let root = test_root("fd-count");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("case.m"), b"case").unwrap();
+        std::fs::write(root.join("ref.csv"), b"ref").unwrap();
+
+        let before = open_descriptor_count();
+        let sources: Vec<Source> = (0..300)
+            .map(|_| Source::open(root.join("case.m")).unwrap())
+            .collect();
+        let held = open_descriptor_count();
+        assert!(
+            held <= before + 4,
+            "{} sources hold {} descriptors over the baseline {}",
+            sources.len(),
+            held - before,
+            before
+        );
+
+        // Sources still acquire afterwards, and one source's two acquisitions
+        // resolve through the same pinned root to one buffer. Acquisition
+        // pins one descriptor per source, so this runs on a subset that stays
+        // under the default descriptor limit.
+        for source in sources.iter().take(32) {
+            let primary = source.primary_buffer().unwrap();
+            let first = source.referenced_buffer(&primary, "ref.csv").unwrap();
+            let second = source.referenced_buffer(&primary, "ref.csv").unwrap();
+            assert_eq!(first.bytes().as_ptr(), second.bytes().as_ptr());
+        }
+        drop(sources);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn a_directory_listing_still_names_windows_reserved_spellings() {
+        // The output predicate refusing reserved device stems must not narrow
+        // what a source directory can list.
+        let root = test_root("reserved-listing");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("aux.dss"), b"content").unwrap();
+        let source = Source::open(&root).unwrap();
+        let names = source.entry_names().unwrap();
+        assert_eq!(names.len(), 1);
+        assert_eq!(names[0].as_str(), "aux.dss");
         std::fs::remove_dir_all(root).unwrap();
     }
 

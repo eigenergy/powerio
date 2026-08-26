@@ -146,13 +146,14 @@ pub(crate) fn bounded_vec<'de, T: Deserialize<'de>, D: Deserializer<'de>>(
     })
 }
 
-/// A JSON object field whose key count and key lengths are checked as each key
-/// arrives. The values remain `serde_json::Value` and are bounded by the input
-/// size the caller admitted.
+/// A JSON object field whose key count, key lengths, and key texts are
+/// checked as each key arrives, before its value is read. The values remain
+/// `serde_json::Value` and are bounded by the input size the caller admitted.
 struct BoundedJsonMap {
     what: &'static str,
     max_keys: usize,
     max_key_bytes: usize,
+    valid_key: fn(&str) -> bool,
 }
 
 impl<'de> Visitor<'de> for BoundedJsonMap {
@@ -175,6 +176,12 @@ impl<'de> Visitor<'de> for BoundedJsonMap {
             what: self.what,
             max_bytes: self.max_key_bytes,
         })? {
+            if !(self.valid_key)(&key) {
+                return Err(A::Error::custom(format!(
+                    "a stored record carries an invalid {} key",
+                    self.what
+                )));
+            }
             if map.len() == self.max_keys {
                 return Err(A::Error::custom(format!(
                     "a stored record carries more than {} {}",
@@ -192,11 +199,13 @@ pub(crate) fn bounded_json_map<'de, D: Deserializer<'de>>(
     what: &'static str,
     max_keys: usize,
     max_key_bytes: usize,
+    valid_key: fn(&str) -> bool,
 ) -> Result<Map<String, Value>, D::Error> {
     deserializer.deserialize_map(BoundedJsonMap {
         what,
         max_keys,
         max_key_bytes,
+        valid_key,
     })
 }
 
@@ -255,15 +264,24 @@ mod tests {
     }
 
     #[test]
-    fn a_map_checks_key_count_and_key_length_while_decoding() {
+    fn a_map_checks_key_count_length_and_text_while_decoding() {
+        let accept = |_: &str| true;
         let mut deserializer = json_de(r#"{"a":1,"b":2}"#);
-        let map = bounded_json_map(&mut deserializer, "detail keys", 2, 8).unwrap();
+        let map = bounded_json_map(&mut deserializer, "detail keys", 2, 8, accept).unwrap();
         assert_eq!(map.len(), 2);
 
         let mut deserializer = json_de(r#"{"a":1,"b":2,"c":3}"#);
-        assert!(bounded_json_map(&mut deserializer, "detail keys", 2, 8).is_err());
+        assert!(bounded_json_map(&mut deserializer, "detail keys", 2, 8, accept).is_err());
 
         let mut deserializer = json_de(r#"{"toolong":1}"#);
-        assert!(bounded_json_map(&mut deserializer, "detail keys", 8, 4).is_err());
+        assert!(bounded_json_map(&mut deserializer, "detail keys", 8, 4, accept).is_err());
+
+        // The key predicate runs as the key is decoded, before its value.
+        let mut deserializer = json_de(r#"{"":1}"#);
+        assert!(
+            bounded_json_map(&mut deserializer, "detail keys", 8, 8, |key| !key
+                .is_empty())
+            .is_err()
+        );
     }
 }

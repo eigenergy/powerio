@@ -1428,11 +1428,11 @@ pub fn write_dir(
     net: &BalancedNetwork,
     to: &str,
     out_dir: impl AsRef<std::path::Path>,
-) -> Result<Vec<Diagnostic>> {
+) -> std::result::Result<Vec<Diagnostic>, powerio_core::Error> {
     if is_pypsa_csv_name(to) {
         return write_pypsa_csv_folder(net, out_dir.as_ref()).map(|o| o.diagnostics);
     }
-    Err(unknown_directory_format(to))
+    Err(core_error(unknown_directory_format(to)))
 }
 
 fn unknown_directory_format(to: &str) -> Error {
@@ -1453,16 +1453,16 @@ pub fn write_dir_with_options(
     to: &str,
     out_dir: impl AsRef<std::path::Path>,
     options: &WriteOptions,
-) -> Result<Vec<Diagnostic>> {
+) -> std::result::Result<Vec<Diagnostic>, powerio_core::Error> {
     // Refuse an unknown target before the policy runs, so a bad format name is
     // reported as one rather than as whatever the cost pass hits first.
     if !is_pypsa_csv_name(to) {
-        return Err(unknown_directory_format(to));
+        return Err(core_error(unknown_directory_format(to)));
     }
     if options.is_default() {
         return write_dir(net, to, out_dir);
     }
-    let (working, mut diagnostics) = apply_write_cost_policy(net, options)?;
+    let (working, mut diagnostics) = apply_write_cost_policy(net, options).map_err(core_error)?;
     diagnostics.extend(write_dir(&working, to, out_dir)?);
     Ok(diagnostics)
 }

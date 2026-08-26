@@ -29,6 +29,8 @@ crate::diagnostic_codes! {
         "a source path is empty or does not name a regular file or directory", category = Request;
     REQUEST_SOURCE_SYMLINK_REFUSED = "REQUEST.SOURCE.SYMLINK_REFUSED", Error,
         "source acquisition refused a symbolic link", category = Request;
+    REQUEST_SOURCE_NOT_A_FILE = "REQUEST.SOURCE.NOT_A_FILE", Error,
+        "source acquisition refused an entry that is not a regular file", category = Request;
     REQUEST_SOURCE_DIRECTORY_REQUIRED = "REQUEST.SOURCE.DIRECTORY_REQUIRED", Error,
         "a named child buffer was requested from a single-buffer source", category = Request;
     REQUEST_SOURCE_ESCAPES_ROOT = "REQUEST.SOURCE.ESCAPES_ROOT", Error,
