@@ -83,6 +83,15 @@ impl Error {
         &self.diagnostics
     }
 
+    /// The registered entry of the diagnostic that ended the operation, when
+    /// the failure was built from one.
+    #[must_use]
+    pub fn info(&self) -> Option<&'static crate::DiagnosticInfo> {
+        self.diagnostics
+            .first()
+            .and_then(Diagnostic::registered_info)
+    }
+
     /// Coarse projection from the first registered error diagnostic.
     #[must_use]
     pub fn category(&self) -> ErrorCategory {

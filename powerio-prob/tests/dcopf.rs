@@ -729,6 +729,61 @@ mod matrix_tests {
     }
 
     #[test]
+    fn a_bundle_write_never_replaces_an_existing_bundle_directory() {
+        let net = case9();
+        let problem = build_dc_opf_instance(&IndexedNetwork::new(&net), &DcOpfOptions::default())
+            .expect("build");
+
+        // A regular file at a produced name inside the bundle directory: the
+        // write refuses and the file keeps its bytes.
+        let output = tempfile::tempdir().expect("tempdir");
+        let bundle_dir = output.path().join("case9_dcopf");
+        std::fs::create_dir_all(&bundle_dir).unwrap();
+        std::fs::write(bundle_dir.join("A.mtx"), b"precious").unwrap();
+        let error = write_dcopf_bundle(&problem, output.path(), &DcOpfBundleOptions::default())
+            .unwrap_err();
+        assert!(error.to_string().contains("already exists"), "{error}");
+        assert_eq!(
+            std::fs::read(bundle_dir.join("A.mtx")).unwrap(),
+            b"precious"
+        );
+
+        // A symbolic link at the bundle directory name: the link survives and
+        // the directory it designates keeps its contents.
+        #[cfg(unix)]
+        {
+            let linked = tempfile::tempdir().expect("tempdir");
+            let designated = tempfile::tempdir().expect("tempdir");
+            std::fs::write(designated.path().join("keep.txt"), b"kept").unwrap();
+            std::os::unix::fs::symlink(designated.path(), linked.path().join("case9_dcopf"))
+                .unwrap();
+            let error = write_dcopf_bundle(&problem, linked.path(), &DcOpfBundleOptions::default())
+                .unwrap_err();
+            assert!(error.to_string().contains("already exists"), "{error}");
+            assert!(
+                std::fs::symlink_metadata(linked.path().join("case9_dcopf"))
+                    .unwrap()
+                    .file_type()
+                    .is_symlink()
+            );
+            assert_eq!(
+                std::fs::read(designated.path().join("keep.txt")).unwrap(),
+                b"kept"
+            );
+        }
+
+        // The same write into a fresh output directory still produces the
+        // complete inventory the metadata names.
+        let fresh = tempfile::tempdir().expect("tempdir");
+        let bundle = write_dcopf_bundle(&problem, fresh.path(), &DcOpfBundleOptions::default())
+            .expect("bundle");
+        for file in &bundle.files {
+            assert!(file.is_file(), "{file:?}");
+        }
+        assert!(bundle.dir.join("dcopf_meta.json").is_file());
+    }
+
+    #[test]
     fn bundle_directory_name_is_confined_to_the_output_directory() {
         let net = case9();
         let mut problem =

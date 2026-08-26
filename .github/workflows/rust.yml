@@ -148,6 +148,53 @@ jobs:
         bash scripts/ci-clippy.sh matrix-gridfm
         cargo test -p powerio-matrix --features gridfm --verbose
 
+  # The no-replace output commit has one implementation per platform
+  # (renamex_np, renameat2, MoveFileExW); its refusal tests and the C smoke's
+  # directory-write collision assertion run on every platform that ships one.
+  output-commit-platforms:
+    name: output commit (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest]
+    steps:
+    - uses: actions/checkout@v6
+    - uses: dtolnay/rust-toolchain@stable
+    - uses: Swatinem/rust-cache@v2
+    - name: Test powerio-core
+      run: cargo test -p powerio-core --verbose
+    - name: Build powerio-capi (dist feature)
+      run: cargo build -p powerio-capi --release --features dist
+    - name: Compile and run the C smoke test (Unix)
+      if: runner.os == 'macOS'
+      run: |
+        cc -DPIO_DIST -I powerio-capi/include powerio-capi/examples/smoke.c            -L target/release -lpowerio_capi -o pio_smoke
+        DYLD_LIBRARY_PATH=target/release ./pio_smoke tests/data/case9.m
+    - name: Compile and run the C smoke test (Windows)
+      if: runner.os == 'Windows'
+      shell: pwsh
+      run: |
+        # cargo reaches the MSVC toolset through the cc crate, but a bare
+        # cl.exe is not on PATH until the developer shell is entered.
+        $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+        $vsPath = & $vswhere -latest -products * `
+          -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 `
+          -property installationPath
+        if (-not $vsPath) { throw 'no Visual Studio C++ toolset on this runner' }
+        Import-Module "$vsPath\Common7\Tools\Microsoft.VisualStudio.DevShell.dll"
+        Enter-VsDevShell -VsInstallPath $vsPath -SkipAutomaticLocation `
+          -DevCmdArguments '-arch=x64 -host_arch=x64'
+        $importLib = Get-ChildItem target/release -Filter '*powerio_capi*.dll.lib' |
+          Select-Object -First 1 -ExpandProperty FullName
+        if (-not $importLib) { throw 'powerio-capi import library is missing' }
+        cl.exe /nologo /std:c11 /DPIO_DIST /Ipowerio-capi/include `
+          powerio-capi/examples/smoke.c `
+          $importLib `
+          /Fe:pio_smoke.exe
+        Copy-Item target/release/powerio_capi.dll .
+        ./pio_smoke.exe tests/data/case9.m
+
   wasm32:
     name: wasm32 check
     runs-on: ubuntu-latest

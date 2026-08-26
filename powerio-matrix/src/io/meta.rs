@@ -31,7 +31,11 @@ pub struct MatrixMetadata {
 }
 
 pub fn write_meta_json(meta: &CaseMetadata, path: impl AsRef<Path>) -> Result<()> {
+    super::mtx::commit_one_file(path.as_ref(), meta_json_bytes(meta)?)
+}
+
+/// The complete metadata document as pretty JSON bytes.
+pub(crate) fn meta_json_bytes(meta: &CaseMetadata) -> Result<Vec<u8>> {
     let json = serde_json::to_string_pretty(meta).map_err(|e| crate::Error::Mtx(e.to_string()))?;
-    std::fs::write(path, json)?;
-    Ok(())
+    Ok(json.into_bytes())
 }

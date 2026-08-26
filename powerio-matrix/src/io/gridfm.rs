@@ -577,15 +577,17 @@ fn write_gridfm_batch_inner(
     // The network name comes from input content, so it must not steer the
     // output path: unsanitized, a name like `../../x` would write outside
     // `out_dir`. The manifest keeps the original name.
-    let dir = out_dir.join(crate::sanitize_stem(net.name())).join("raw");
-    std::fs::create_dir_all(&dir)?;
+    // The case's own subdirectory is the commit target, so a dataset root
+    // aggregating several cases stays writable while an existing case
+    // directory is refused rather than replaced.
+    let case_root = out_dir.join(crate::sanitize_stem(net.name()));
 
-    let mut files = Vec::new();
-    put_parquet(&dir, "bus_data.parquet", &tables.bus, &mut files)?;
-    put_parquet(&dir, "gen_data.parquet", &tables.generator, &mut files)?;
-    put_parquet(&dir, "branch_data.parquet", &tables.branch, &mut files)?;
+    let mut inventory: Vec<(&'static str, Vec<u8>)> = Vec::new();
+    inventory.push(("bus_data.parquet", parquet_bytes(&tables.bus)?));
+    inventory.push(("gen_data.parquet", parquet_bytes(&tables.generator)?));
+    inventory.push(("branch_data.parquet", parquet_bytes(&tables.branch)?));
     if let Some(y_bus) = &tables.y_bus {
-        put_parquet(&dir, "y_bus_data.parquet", y_bus, &mut files)?;
+        inventory.push(("y_bus_data.parquet", parquet_bytes(y_bus)?));
     }
 
     // Branch status and costs may differ per scenario, so count the zeroed rows
@@ -626,20 +628,38 @@ fn write_gridfm_batch_inner(
         cost_policy: opts.missing_gen_cost,
         synthesized_gen_costs: cost_report.synthesized,
         patched_gen_costs: cost_report.patched,
-        files: files
+        // The manifest lists the table files it describes; it does not list
+        // itself, matching the wire form consumers already read.
+        files: inventory
             .iter()
-            .filter_map(|p| p.file_name().and_then(|s| s.to_str()).map(str::to_string))
+            .map(|(name, _)| (*name).to_string())
             .collect(),
         powerio_version: env!("CARGO_PKG_VERSION").to_string(),
     };
-    let meta_path = dir.join("gridfm_meta.json");
     let json = serde_json::to_string_pretty(&meta).map_err(|e| Error::Parquet(e.to_string()))?;
-    std::fs::write(&meta_path, json)?;
-    files.push(meta_path);
+    inventory.push(("gridfm_meta.json", json.into_bytes()));
+
+    let artifacts = inventory
+        .into_iter()
+        .map(|(name, bytes)| {
+            Ok(powerio_core::MemoryArtifact::new(
+                powerio_core::ArtifactPath::new(format!("raw/{name}"))?,
+                bytes,
+            ))
+        })
+        .collect::<std::result::Result<Vec<_>, powerio_core::Error>>()?;
+    let committed = powerio_core::Destination::path(&case_root).__commit_artifacts(
+        true,
+        artifacts,
+        Vec::new(),
+    )?;
+    let powerio_core::WrittenOutput::Path { root, artifacts } = committed.into_output() else {
+        unreachable!("a path destination returns a path output")
+    };
 
     Ok(GridfmOutputs {
-        dir,
-        files,
+        dir: root.join("raw"),
+        files: artifacts,
         dropped_zero_impedance,
         degenerate_cost_gens,
         missing_cost_gens,
@@ -1000,25 +1020,19 @@ fn cost_representable(cost: Option<&GenCost>) -> bool {
     matches!(cost, Some(c) if c.model == 2 && c.coeffs.len() >= c.ncost && (1..=3).contains(&c.ncost))
 }
 
-fn put_parquet(
-    dir: &Path,
-    name: &str,
-    batch: &RecordBatch,
-    files: &mut Vec<PathBuf>,
-) -> Result<()> {
-    let path = dir.join(name);
-    let file = std::fs::File::create(&path)?;
+/// One table as complete Parquet bytes, for the atomic inventory commit.
+fn parquet_bytes(batch: &RecordBatch) -> Result<Vec<u8>> {
+    let mut bytes = Vec::new();
     let props = WriterProperties::builder()
         .set_compression(Compression::SNAPPY)
         .build();
-    let mut writer = ArrowWriter::try_new(file, batch.schema(), Some(props))
+    let mut writer = ArrowWriter::try_new(&mut bytes, batch.schema(), Some(props))
         .map_err(|e| Error::Parquet(e.to_string()))?;
     writer
         .write(batch)
         .map_err(|e| Error::Parquet(e.to_string()))?;
     writer.close().map_err(|e| Error::Parquet(e.to_string()))?;
-    files.push(path);
-    Ok(())
+    Ok(bytes)
 }
 
 /// Assemble a [`RecordBatch`] from named columns, in order; field types are read
@@ -1918,6 +1932,71 @@ mod tests {
         let y_series_i = -0.1 / (0.01 * 0.01 + 0.1 * 0.1);
         let recovered_b = yff_i + ytt_i - 2.0 * y_series_i;
         assert!((recovered_b - b).abs() < 1e-12);
+    }
+
+    #[test]
+    fn a_gridfm_write_never_replaces_an_existing_case_directory() {
+        let net = case14();
+
+        // A regular file at a produced name inside the case directory: the
+        // write refuses and the file keeps its bytes. The dataset root itself
+        // stays writable for other cases.
+        let dir = tempfile::tempdir().unwrap();
+        let case_dir = dir.path().join("case14");
+        std::fs::create_dir_all(case_dir.join("raw")).unwrap();
+        std::fs::write(case_dir.join("raw/bus_data.parquet"), b"precious").unwrap();
+        let error =
+            write_gridfm_dataset(&net, 0, dir.path(), &GridfmOptions::default()).unwrap_err();
+        assert!(matches!(error, crate::Error::Commit(_)), "{error:?}");
+        assert_eq!(
+            std::fs::read(case_dir.join("raw/bus_data.parquet")).unwrap(),
+            b"precious"
+        );
+
+        // A symbolic link at the case directory name: the link survives and
+        // the directory it designates keeps its contents.
+        #[cfg(unix)]
+        {
+            let linked = tempfile::tempdir().unwrap();
+            let designated = tempfile::tempdir().unwrap();
+            std::fs::write(designated.path().join("keep.txt"), b"kept").unwrap();
+            std::os::unix::fs::symlink(designated.path(), linked.path().join("case14")).unwrap();
+            let error = write_gridfm_dataset(&net, 0, linked.path(), &GridfmOptions::default())
+                .unwrap_err();
+            assert!(matches!(error, crate::Error::Commit(_)), "{error:?}");
+            assert!(
+                std::fs::symlink_metadata(linked.path().join("case14"))
+                    .unwrap()
+                    .file_type()
+                    .is_symlink()
+            );
+            assert_eq!(
+                std::fs::read(designated.path().join("keep.txt")).unwrap(),
+                b"kept"
+            );
+            assert_eq!(
+                std::fs::metadata(designated.path().join("keep.txt"))
+                    .unwrap()
+                    .len(),
+                4
+            );
+        }
+
+        // The same write into a fresh dataset root still produces the
+        // complete inventory.
+        let fresh = tempfile::tempdir().unwrap();
+        let out = write_gridfm_dataset(&net, 0, fresh.path(), &GridfmOptions::default()).unwrap();
+        let raw = fresh.path().join("case14").join("raw");
+        assert_eq!(out.dir, raw);
+        for name in [
+            "bus_data.parquet",
+            "gen_data.parquet",
+            "branch_data.parquet",
+            "y_bus_data.parquet",
+            "gridfm_meta.json",
+        ] {
+            assert!(raw.join(name).is_file(), "missing {name}");
+        }
     }
 
     #[test]

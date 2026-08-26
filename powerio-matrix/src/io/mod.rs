@@ -14,7 +14,9 @@ pub use gridfm::{
     read_gridfm_network, read_gridfm_scenarios, write_gridfm_batch, write_gridfm_dataset,
 };
 pub use meta::{CaseMetadata, MatrixMetadata, write_meta_json};
-pub use mtx::{read_mtx, read_vector_mtx, write_mtx, write_vector_mtx};
+pub use mtx::{
+    mtx_bytes, read_mtx, read_vector_mtx, vector_mtx_bytes, write_mtx, write_vector_mtx,
+};
 pub use sensitivity::write_sensitivity_mtx_with_options;
 
 /// Read one scenario from a dataset directory in the named `from` format.

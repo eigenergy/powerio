@@ -14,6 +14,9 @@ const MAX_REFERENCED_FILES: usize = 4_096;
 /// Total bytes of referenced files one source may acquire.
 const MAX_REFERENCED_BYTES: u64 = 64 << 20;
 
+/// Deepest resolved or walked path beneath one acquisition root, in segments.
+const MAX_REFERENCED_DEPTH: usize = 64;
+
 const UTF8_BOM: [u8; 3] = [0xEF, 0xBB, 0xBF];
 
 /// Open stable identifier used to select a parser or writer.
@@ -568,41 +571,68 @@ impl Source {
                 // The walk runs against the pinned root handle so a directory
                 // component swapped for a symbolic link mid-listing fails the
                 // descriptor walk rather than redirecting the listing outside
-                // the root. The lock is held across the walk, like acquisition.
+                // the root. Each child directory is listed from its parent's
+                // already opened handle, so the open count is proportional to
+                // the directories visited, and every budget bounds the work
+                // before it is incurred: entries stop being read the moment
+                // the remaining allowance is exhausted, and a prefix at the
+                // depth bound is refused before it is walked. The lock is
+                // held across the walk, like acquisition.
                 let mut state = acquisition.lock();
                 let root = state.pinned_root(&acquisition.root_display)?;
+                let budget_refusal = || {
+                    Error::new(
+                        &crate::codes::READ_IO_REFERENCE_BUDGET,
+                        format!(
+                            "the source directory holds more than {MAX_REFERENCED_FILES} entries"
+                        ),
+                    )
+                };
                 let mut names = Vec::new();
-                let mut pending = vec![Vec::<String>::new()];
-                while let Some(prefix) = pending.pop() {
-                    let display = prefix.join("/");
-                    let entries = root.list_beneath(&prefix).map_err(|cause| {
-                        if platform::is_symlink_refusal(&cause) {
-                            Error::new(
-                                &crate::codes::REQUEST_SOURCE_SYMLINK_REFUSED,
-                                format!("source directory `{display}` crosses a symbolic link"),
-                            )
-                        } else {
-                            Error::new(
-                                &crate::codes::READ_IO_METADATA,
-                                format!("cannot list source directory `{display}`"),
-                            )
-                            .with_cause(cause)
-                        }
-                    })?;
+                let root_handle = root.duplicate_handle().map_err(|cause| {
+                    Error::new(
+                        &crate::codes::READ_IO_METADATA,
+                        "cannot list the source directory root",
+                    )
+                    .with_cause(cause)
+                })?;
+                let mut pending = vec![(Vec::<String>::new(), root_handle)];
+                while let Some((prefix, directory)) = pending.pop() {
+                    let allowance = MAX_REFERENCED_FILES
+                        .checked_sub(names.len() + pending.len())
+                        .filter(|allowance| *allowance > 0)
+                        .ok_or_else(budget_refusal)?;
+                    let entries =
+                        platform::list_entries(&directory, allowance).map_err(|cause| {
+                            if platform::is_entry_budget(&cause) {
+                                budget_refusal()
+                            } else {
+                                listing_error(&prefix.join("/"), cause)
+                            }
+                        })?;
                     for (name, is_directory) in entries {
                         if names.len() + pending.len() >= MAX_REFERENCED_FILES {
-                            return Err(Error::new(
-                                &crate::codes::READ_IO_REFERENCE_BUDGET,
-                                format!(
-                                    "the source directory holds more than {MAX_REFERENCED_FILES} entries"
-                                ),
-                            ));
+                            return Err(budget_refusal());
                         }
                         let mut child = prefix.clone();
-                        child.push(name);
                         if is_directory {
-                            pending.push(child);
+                            if prefix.len() + 1 >= MAX_REFERENCED_DEPTH {
+                                return Err(Error::new(
+                                    &crate::codes::READ_IO_REFERENCE_BUDGET,
+                                    format!(
+                                        "the source directory nests more than {MAX_REFERENCED_DEPTH} levels deep"
+                                    ),
+                                ));
+                            }
+                            let handle = platform::open_child_directory(&directory, &name)
+                                .map_err(|cause| {
+                                    child.push(name.clone());
+                                    listing_error(&child.join("/"), cause)
+                                })?;
+                            child.push(name);
+                            pending.push((child, handle));
                         } else {
+                            child.push(name);
                             names.push(crate::ArtifactPath::new(child.join("/"))?);
                         }
                     }
@@ -769,6 +799,12 @@ fn resolve_segments(referrer_directory: &[&str], name: &str) -> Result<Vec<Strin
             format!("referenced name `{name}` does not name a file"),
         ));
     }
+    if segments.len() > MAX_REFERENCED_DEPTH {
+        return Err(Error::new(
+            &crate::codes::READ_IO_REFERENCE_BUDGET,
+            format!("referenced name `{name}` nests more than {MAX_REFERENCED_DEPTH} levels deep"),
+        ));
+    }
     Ok(segments)
 }
 
@@ -808,6 +844,12 @@ fn absolute_to_root_relative(root: &Path, name: &str) -> Option<Result<Vec<Strin
             format!("referenced name `{name}` does not name a file"),
         )));
     }
+    if segments.len() > MAX_REFERENCED_DEPTH {
+        return Some(Err(Error::new(
+            &crate::codes::READ_IO_REFERENCE_BUDGET,
+            format!("referenced name `{name}` nests more than {MAX_REFERENCED_DEPTH} levels deep"),
+        )));
+    }
     Some(Ok(segments))
 }
 
@@ -822,6 +864,23 @@ fn canonical_parent(path: &Path) -> Result<PathBuf, Error> {
 
 fn open_error(info: &'static crate::DiagnosticInfo, path: &Path, cause: std::io::Error) -> Error {
     Error::new(info, format!("cannot open source `{}`", path.display())).with_cause(cause)
+}
+
+/// A listing walk failure at one root relative directory: a symbolic link is
+/// the acquisition refusal; anything else is an I/O failure.
+fn listing_error(display: &str, cause: std::io::Error) -> Error {
+    if platform::is_symlink_refusal(&cause) {
+        Error::new(
+            &crate::codes::REQUEST_SOURCE_SYMLINK_REFUSED,
+            format!("source directory `{display}` crosses a symbolic link"),
+        )
+    } else {
+        Error::new(
+            &crate::codes::READ_IO_METADATA,
+            format!("cannot list source directory `{display}`"),
+        )
+        .with_cause(cause)
+    }
 }
 
 /// Read an already opened regular file completely. The handle was opened with
@@ -995,33 +1054,10 @@ mod platform {
             Ok(file)
         }
 
-        /// List one directory beneath the root, reached by the same no-follow
-        /// component walk acquisition uses, reading entries from the opened
-        /// descriptor. Returns each UTF-8 entry name with whether it is a
-        /// directory; symbolic links are listed by name and refused when
-        /// acquired.
-        pub(super) fn list_beneath(
-            &self,
-            segments: &[String],
-        ) -> std::io::Result<Vec<(String, bool)>> {
-            let mut directory: Option<OwnedFd> = None;
-            for segment in segments {
-                let next = self.open_at(
-                    directory.as_ref(),
-                    segment,
-                    libc::O_RDONLY | libc::O_NOFOLLOW | libc::O_CLOEXEC | libc::O_NONBLOCK,
-                )?;
-                let next = File::from(next);
-                if !next.metadata()?.is_dir() {
-                    return Err(std::io::Error::from(std::io::ErrorKind::NotADirectory));
-                }
-                directory = Some(next.into());
-            }
-            let listed: OwnedFd = match directory {
-                Some(fd) => fd,
-                None => self.0.try_clone()?,
-            };
-            read_directory_entries(listed)
+        /// A duplicate of the root descriptor, for a listing walk that opens
+        /// each child directory relative to its parent.
+        pub(super) fn duplicate_handle(&self) -> std::io::Result<DirectoryHandle> {
+            self.0.try_clone()
         }
 
         fn open_at(
@@ -1047,12 +1083,69 @@ mod platform {
         }
     }
 
-    /// Read every entry of an open directory descriptor. `fdopendir` takes
-    /// ownership of the descriptor and `closedir` releases it.
-    fn read_directory_entries(fd: OwnedFd) -> std::io::Result<Vec<(String, bool)>> {
+    /// An open directory the listing walk can read entries from and open
+    /// children relative to.
+    pub(super) type DirectoryHandle = OwnedFd;
+
+    /// Open one child directory of an already opened directory, with a
+    /// symbolic link at the child refused and the directory confirmed on the
+    /// opened descriptor.
+    pub(super) fn open_child_directory(
+        parent: &DirectoryHandle,
+        name: &str,
+    ) -> std::io::Result<DirectoryHandle> {
+        if !super::plain_segment(name) {
+            return Err(std::io::Error::from(std::io::ErrorKind::InvalidInput));
+        }
+        let segment = c_string(name.as_bytes())?;
+        // SAFETY: `parent` is a live descriptor for the duration of the call,
+        // and the pointer references the NUL-terminated buffer owned by
+        // `segment`.
+        let fd = unsafe {
+            libc::openat(
+                parent.as_raw_fd(),
+                segment.as_ptr(),
+                libc::O_RDONLY | libc::O_NOFOLLOW | libc::O_CLOEXEC | libc::O_NONBLOCK,
+            )
+        };
+        if fd < 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        // SAFETY: `fd` is a freshly opened descriptor this function owns.
+        let file = unsafe { File::from_raw_fd(fd) };
+        if !file.metadata()?.is_dir() {
+            return Err(std::io::Error::from(std::io::ErrorKind::NotADirectory));
+        }
+        Ok(file.into())
+    }
+
+    const ENTRY_BUDGET_MARKER: &str = "directory entry allowance exhausted";
+
+    fn entry_budget_error() -> std::io::Error {
+        std::io::Error::other(ENTRY_BUDGET_MARKER)
+    }
+
+    /// True when a listing failed because it reached the caller's entry
+    /// allowance rather than a real I/O failure.
+    pub(super) fn is_entry_budget(error: &std::io::Error) -> bool {
+        error.kind() == std::io::ErrorKind::Other && error.to_string().contains(ENTRY_BUDGET_MARKER)
+    }
+
+    /// Read the entries of an open directory, at most `max` of them: the
+    /// bound is enforced inside the read loop, before the entry that would
+    /// cross it is accepted, so the work and the memory of a listing are
+    /// bounded by the allowance rather than by the directory's true entry
+    /// count. Returns each UTF-8 entry name with whether it is a directory;
+    /// symbolic links are listed by name and refused when acquired.
+    pub(super) fn list_entries(
+        directory: &DirectoryHandle,
+        max: usize,
+    ) -> std::io::Result<Vec<(String, bool)>> {
         use std::os::fd::IntoRawFd;
 
-        let raw = fd.into_raw_fd();
+        // The stream takes ownership of a duplicate, so the caller's handle
+        // stays usable for opening children.
+        let raw = directory.try_clone()?.into_raw_fd();
         // SAFETY: `raw` is a live directory descriptor whose ownership
         // transfers to the returned stream; on failure it is closed here.
         let stream = unsafe { libc::fdopendir(raw) };
@@ -1078,16 +1171,25 @@ mod platform {
                 }
                 break;
             }
-            // SAFETY: `entry` points at the stream's current entry, valid
-            // until the next `readdir` call on this stream.
-            let name_bytes = unsafe { std::ffi::CStr::from_ptr((*entry).d_name.as_ptr()) };
+            // SAFETY: `entry` is valid until the next `readdir` on this
+            // stream, and only the NUL-terminated name within the entry is
+            // read: the raw pointer to the array's first element is followed
+            // to its terminator, never the whole declared array.
+            let name_bytes = unsafe {
+                std::ffi::CStr::from_ptr((&raw const (*entry).d_name).cast::<libc::c_char>())
+            };
             let Ok(name) = name_bytes.to_str() else {
                 continue;
             };
             if name == "." || name == ".." {
                 continue;
             }
-            // SAFETY: as above; `d_type` is a plain byte field.
+            if entries.len() == max {
+                // SAFETY: as above; the stream is closed exactly once.
+                unsafe { libc::closedir(stream) };
+                return Err(entry_budget_error());
+            }
+            // SAFETY: as above; `d_type` is a plain byte field read by copy.
             let kind = unsafe { (*entry).d_type };
             let is_directory = match kind {
                 libc::DT_DIR => true,
@@ -1250,36 +1352,75 @@ mod platform {
             open_reparse_refused(&path)
         }
 
-        /// List one directory beneath the root, re-verifying every component
-        /// against the recorded root immediately before listing it: each
-        /// accumulated component must be a real directory reached without a
-        /// symbolic link, checked in walk order right before the listing.
-        pub(super) fn list_beneath(
-            &self,
-            segments: &[String],
-        ) -> std::io::Result<Vec<(String, bool)>> {
-            let mut path = self.root.clone();
-            for segment in segments {
-                push_plain_segment(&mut path, segment)?;
-                let metadata = std::fs::symlink_metadata(&path)?;
-                if metadata.file_type().is_symlink() {
-                    return Err(symlink_error());
-                }
-                if !metadata.is_dir() {
-                    return Err(std::io::Error::from(std::io::ErrorKind::NotADirectory));
-                }
-            }
-            let mut entries = Vec::new();
-            for entry in std::fs::read_dir(&path)? {
-                let entry = entry?;
-                let Ok(name) = entry.file_name().into_string() else {
-                    continue;
-                };
-                let is_directory = entry.file_type()?.is_dir();
-                entries.push((name, is_directory));
-            }
-            Ok(entries)
+        /// The root as a listing handle: the verified accumulated path each
+        /// child extends, re-verified immediately before it is listed.
+        pub(super) fn duplicate_handle(&self) -> std::io::Result<DirectoryHandle> {
+            Ok(self.root.clone())
         }
+    }
+
+    /// A verified accumulated directory path the listing walk extends one
+    /// plain component at a time.
+    pub(super) type DirectoryHandle = PathBuf;
+
+    /// Extend the verified path by one child directory, with a symbolic link
+    /// at the child refused.
+    pub(super) fn open_child_directory(
+        parent: &DirectoryHandle,
+        name: &str,
+    ) -> std::io::Result<DirectoryHandle> {
+        let mut path = parent.clone();
+        push_plain_segment(&mut path, name)?;
+        let metadata = std::fs::symlink_metadata(&path)?;
+        if metadata.file_type().is_symlink() {
+            return Err(symlink_error());
+        }
+        if !metadata.is_dir() {
+            return Err(std::io::Error::from(std::io::ErrorKind::NotADirectory));
+        }
+        Ok(path)
+    }
+
+    const ENTRY_BUDGET_MARKER: &str = "directory entry allowance exhausted";
+
+    fn entry_budget_error() -> std::io::Error {
+        std::io::Error::other(ENTRY_BUDGET_MARKER)
+    }
+
+    /// True when a listing failed because it reached the caller's entry
+    /// allowance rather than a real I/O failure.
+    pub(super) fn is_entry_budget(error: &std::io::Error) -> bool {
+        error.kind() == std::io::ErrorKind::Other && error.to_string().contains(ENTRY_BUDGET_MARKER)
+    }
+
+    /// Read the entries of one verified directory, at most `max` of them: the
+    /// bound is enforced inside the read loop, before the entry that would
+    /// cross it is accepted. The path is re-verified immediately before the
+    /// listing.
+    pub(super) fn list_entries(
+        directory: &DirectoryHandle,
+        max: usize,
+    ) -> std::io::Result<Vec<(String, bool)>> {
+        let metadata = std::fs::symlink_metadata(directory)?;
+        if metadata.file_type().is_symlink() {
+            return Err(symlink_error());
+        }
+        if !metadata.is_dir() {
+            return Err(std::io::Error::from(std::io::ErrorKind::NotADirectory));
+        }
+        let mut entries = Vec::new();
+        for entry in std::fs::read_dir(directory)? {
+            let entry = entry?;
+            let Ok(name) = entry.file_name().into_string() else {
+                continue;
+            };
+            if entries.len() == max {
+                return Err(entry_budget_error());
+            }
+            let is_directory = entry.file_type()?.is_dir();
+            entries.push((name, is_directory));
+        }
+        Ok(entries)
     }
 
     /// Refuse a segment that is not a single plain file name before it is
@@ -1782,6 +1923,125 @@ mod tests {
             assert_eq!(first.bytes().as_ptr(), second.bytes().as_ptr());
         }
         drop(sources);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn entry_listing_returns_names_of_every_length_exactly() {
+        // Guard on the entry-name read: names are read to their terminator,
+        // whatever length the entry actually occupies.
+        let root = test_root("name-lengths");
+        std::fs::create_dir_all(&root).unwrap();
+        let long = "n".repeat(200);
+        for name in ["a", "medium-name.csv", long.as_str()] {
+            std::fs::write(root.join(name), b"x").unwrap();
+        }
+        let source = Source::open(&root).unwrap();
+        let mut names: Vec<String> = source
+            .entry_names()
+            .unwrap()
+            .iter()
+            .map(|name| name.as_str().to_owned())
+            .collect();
+        names.sort();
+        let mut expected = vec!["a".to_owned(), "medium-name.csv".to_owned(), long];
+        expected.sort();
+        assert_eq!(names, expected);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_directory_nested_past_the_depth_bound_is_refused_promptly() {
+        use std::os::fd::{AsRawFd, FromRawFd};
+
+        let root = test_root("deep-chain");
+        std::fs::create_dir_all(&root).unwrap();
+        // Build the chain by relative creation from inside each level, so the
+        // tree reaches past any absolute path length limit.
+        let name = std::ffi::CString::new("d").unwrap();
+        let mut level = std::fs::File::open(&root).unwrap();
+        for _ in 0..(MAX_REFERENCED_DEPTH + 40) {
+            // SAFETY: `level` owns a live directory descriptor for both
+            // calls, and the pointer references the NUL-terminated buffer
+            // owned by `name`.
+            unsafe {
+                assert_eq!(libc::mkdirat(level.as_raw_fd(), name.as_ptr(), 0o755), 0);
+                let fd = libc::openat(
+                    level.as_raw_fd(),
+                    name.as_ptr(),
+                    libc::O_RDONLY | libc::O_CLOEXEC,
+                );
+                assert!(fd >= 0);
+                level = std::fs::File::from_raw_fd(fd);
+            }
+        }
+        drop(level);
+
+        let (sender, receiver) = std::sync::mpsc::channel();
+        let listed_root = root.clone();
+        let worker = std::thread::spawn(move || {
+            let source = Source::open(&listed_root).unwrap();
+            sender.send(source.entry_names().map(|_| ())).unwrap();
+        });
+        let outcome = receiver
+            .recv_timeout(std::time::Duration::from_secs(10))
+            .expect("the depth refusal returns promptly");
+        worker.join().unwrap();
+        let error = outcome.expect_err("a chain past the depth bound refuses");
+        assert!(error.to_string().contains("levels deep"), "{error}");
+
+        // The chain is deeper than remove_dir_all's own recursion budget on
+        // some platforms; unwind it level by level with the same descriptors.
+        let mut fds = vec![std::fs::File::open(&root).unwrap()];
+        loop {
+            let last = fds.last().unwrap();
+            // SAFETY: as above.
+            let fd = unsafe {
+                libc::openat(
+                    last.as_raw_fd(),
+                    name.as_ptr(),
+                    libc::O_RDONLY | libc::O_CLOEXEC,
+                )
+            };
+            if fd < 0 {
+                break;
+            }
+            // SAFETY: `fd` is a freshly opened descriptor.
+            fds.push(unsafe { std::fs::File::from_raw_fd(fd) });
+        }
+        while fds.len() > 1 {
+            let parent = &fds[fds.len() - 2];
+            // SAFETY: as above; AT_REMOVEDIR removes the empty directory.
+            unsafe {
+                libc::unlinkat(parent.as_raw_fd(), name.as_ptr(), libc::AT_REMOVEDIR);
+            }
+            fds.pop();
+        }
+        drop(fds);
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_directory_past_the_entry_budget_is_refused_with_bounded_memory() {
+        let root = test_root("entry-budget");
+        std::fs::create_dir_all(&root).unwrap();
+        for index in 0..(MAX_REFERENCED_FILES + 500) {
+            std::fs::write(root.join(format!("f{index:05}.csv")), b"").unwrap();
+        }
+        let peak_before = peak_resident_bytes();
+        let source = Source::open(&root).unwrap();
+        let error = source.entry_names().unwrap_err();
+        assert!(error.to_string().contains("entries"), "{error}");
+        // The listing stopped reading at the allowance, so the peak resident
+        // set is bounded by a small multiple of the entry budget rather than
+        // the directory's true entry count.
+        let growth = peak_resident_bytes().saturating_sub(peak_before);
+        assert!(
+            growth < (MAX_REFERENCED_FILES as u64) * 4_096,
+            "peak resident set grew by {growth} bytes"
+        );
         std::fs::remove_dir_all(root).unwrap();
     }
 

@@ -14,8 +14,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::Result;
 use crate::indexed::IndexedNetwork;
-use crate::io::meta::{CaseMetadata, MatrixMetadata, write_meta_json};
-use crate::io::mtx::{write_mtx, write_vector_mtx};
+use crate::io::meta::{CaseMetadata, MatrixMetadata};
 use crate::matrix::{
     BuildOptions, MatrixStats, ZeroImpedanceRule, ZeroImpedanceSkips, build_adjacency,
     build_bdoubleprime, build_bprime, build_lacpf, build_ybus, negate_into, sddm_check,
@@ -199,10 +198,14 @@ fn ends_with_digest(stem: &str) -> bool {
 }
 
 impl Pipeline {
+    /// Build every requested projection and commit each produced file at
+    /// `out_dir` through the no-replace destination. Several cases share one
+    /// output directory in a batch export, so the directory is created when
+    /// absent and unrelated entries survive; no existing entry is ever
+    /// replaced, and a refused run removes the files it had created, leaving
+    /// the directory as it was.
     pub fn run(&self, net: &BalancedNetwork, out_dir: impl AsRef<Path>) -> Result<PipelineOutputs> {
         let out_dir = out_dir.as_ref();
-        std::fs::create_dir_all(out_dir)?;
-
         let view = IndexedNetwork::new(net);
         // The network name comes from input content, so it must not steer the
         // output path: a name like `../../x` or `/abs/x` would otherwise write
@@ -210,42 +213,39 @@ impl Pipeline {
         // keeps the original name.
         let stem = sanitize_stem(view.name());
 
-        let mut files = Vec::new();
+        let mut inventory: Vec<(String, Vec<u8>)> = Vec::new();
         let mut matrices_meta = Vec::new();
         let mut ybus_cache = None;
 
         for &kind in &self.matrices {
-            let matrix_path = out_dir.join(format!("{stem}_{}.mtx", kind.slug()));
+            let name = format!("{stem}_{}.mtx", kind.slug());
             let matrix = self.build_for_run(&view, kind, &mut ybus_cache)?;
-            write_mtx(&matrix, &matrix_path)?;
             let stats = matrix_stats_for_kind(&matrix, &view, kind, &self.options);
             let sddm = sddm_check(&matrix);
             matrices_meta.push(MatrixMetadata {
                 kind: kind.slug().to_string(),
-                file: matrix_path
-                    .file_name()
-                    .and_then(|s| s.to_str())
-                    .unwrap_or("")
-                    .to_string(),
+                file: name.clone(),
                 stats,
                 sddm,
             });
-            files.push(matrix_path);
+            inventory.push((name, crate::io::mtx::mtx_bytes(&matrix)?));
 
             // RHS for matrices that take a RHS of length n (skip LACPF which is 2n).
             if let Some(rhs) = self.build_rhs(&view, kind) {
-                let rhs_path = out_dir.join(format!("{stem}_{}_rhs.mtx", kind.slug()));
-                write_vector_mtx(&rhs, &rhs_path)?;
-                files.push(rhs_path);
+                inventory.push((
+                    format!("{stem}_{}_rhs.mtx", kind.slug()),
+                    crate::io::mtx::vector_mtx_bytes(&rhs)?,
+                ));
             }
         }
 
         // Shunt vector as a sidecar (not always meaningful, but cheap).
-        let shunt_path = out_dir.join(format!("{stem}_shunt.mtx"));
         let base = view.per_unit_base();
         let shunt: Vec<f64> = view.bs().iter().map(|&b| b / base).collect();
-        write_vector_mtx(&shunt, &shunt_path)?;
-        files.push(shunt_path);
+        inventory.push((
+            format!("{stem}_shunt.mtx"),
+            crate::io::mtx::vector_mtx_bytes(&shunt)?,
+        ));
 
         let metadata = CaseMetadata {
             case_name: view.name().to_string(),
@@ -266,9 +266,23 @@ impl Pipeline {
             matrices: matrices_meta,
             powerio_version: env!("CARGO_PKG_VERSION").to_string(),
         };
-        let meta_path = out_dir.join(format!("{stem}_meta.json"));
-        write_meta_json(&metadata, &meta_path)?;
-        files.push(meta_path);
+        inventory.push((
+            format!("{stem}_meta.json"),
+            crate::io::meta::meta_json_bytes(&metadata)?,
+        ));
+
+        std::fs::create_dir_all(out_dir)?;
+        let mut files = Vec::new();
+        for (name, bytes) in inventory {
+            let target = out_dir.join(&name);
+            if let Err(error) = crate::io::mtx::commit_one_file(&target, bytes) {
+                for created in &files {
+                    let _ = std::fs::remove_file(created);
+                }
+                return Err(error);
+            }
+            files.push(target);
+        }
 
         Ok(PipelineOutputs {
             case_name: view.name().to_string(),
@@ -453,8 +467,86 @@ fn sha256_hex(bytes: &[u8]) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::sanitize_stem;
+    use super::{Pipeline, sanitize_stem};
     use std::path::Path;
+
+    #[test]
+    fn a_pipeline_run_never_replaces_an_existing_entry() {
+        let spec = crate::synth::SynthSpec {
+            n: 8,
+            ..Default::default()
+        };
+        let net = crate::synth::generate(&spec);
+        let pipeline = Pipeline::default();
+
+        // A fresh target commits the complete inventory.
+        let base = tempfile::tempdir().unwrap();
+        let fresh = base.path().join("matrices");
+        let outputs = pipeline.run(&net, &fresh).unwrap();
+        assert!(!outputs.files.is_empty());
+        for file in &outputs.files {
+            assert!(file.is_file(), "{file:?}");
+        }
+
+        // A batch shares one output directory: an unrelated entry survives a
+        // later run beside it.
+        let shared = base.path().join("shared");
+        std::fs::create_dir_all(&shared).unwrap();
+        std::fs::write(shared.join("unrelated.m"), b"unrelated").unwrap();
+        pipeline.run(&net, &shared).unwrap();
+        assert_eq!(
+            std::fs::read(shared.join("unrelated.m")).unwrap(),
+            b"unrelated"
+        );
+
+        // An entry at a produced name refuses the run, keeps its bytes, and
+        // the refused run removes the files it had created.
+        let meta_name = outputs
+            .files
+            .iter()
+            .find_map(|file| {
+                let name = file.file_name()?.to_str()?;
+                name.ends_with("_meta.json").then(|| name.to_owned())
+            })
+            .expect("the run produces a metadata file");
+        let blocked = base.path().join("blocked");
+        std::fs::create_dir_all(&blocked).unwrap();
+        std::fs::write(blocked.join(&meta_name), b"precious").unwrap();
+        let error = pipeline.run(&net, &blocked).unwrap_err();
+        assert!(matches!(error, crate::Error::Commit(_)), "{error:?}");
+        assert_eq!(
+            std::fs::read(blocked.join(&meta_name)).unwrap(),
+            b"precious"
+        );
+        let residue: Vec<_> = std::fs::read_dir(&blocked)
+            .unwrap()
+            .filter_map(std::result::Result::ok)
+            .filter(|entry| entry.file_name().to_str() != Some(meta_name.as_str()))
+            .map(|entry| entry.file_name())
+            .collect();
+        assert!(residue.is_empty(), "{residue:?}");
+
+        // A symbolic link at a produced name is likewise never written
+        // through: the link survives and its designated file keeps its bytes.
+        #[cfg(unix)]
+        {
+            let designated = base.path().join("designated.json");
+            std::fs::write(&designated, b"designated").unwrap();
+            let linked = base.path().join("linked");
+            std::fs::create_dir_all(&linked).unwrap();
+            std::os::unix::fs::symlink(&designated, linked.join(&meta_name)).unwrap();
+            let error = pipeline.run(&net, &linked).unwrap_err();
+            assert!(matches!(error, crate::Error::Commit(_)), "{error:?}");
+            assert!(
+                std::fs::symlink_metadata(linked.join(&meta_name))
+                    .unwrap()
+                    .file_type()
+                    .is_symlink()
+            );
+            assert_eq!(std::fs::read(&designated).unwrap(), b"designated");
+            assert_eq!(std::fs::metadata(&designated).unwrap().len(), 10);
+        }
+    }
 
     #[test]
     fn sanitize_stem_confines_names_to_out_dir() {

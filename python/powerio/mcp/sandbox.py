@@ -335,9 +335,13 @@ def staged_directory_write(
         raise PathNotAllowed(f"cannot resolve `out_path`: parent does not exist: {parent}")
     check_allowed_path(output, for_write=True, purpose="out_path")
 
-    staging = Path(tempfile.mkdtemp(prefix=f".{output.name}.stage-", dir=parent))
+    workspace = Path(tempfile.mkdtemp(prefix=f".{output.name}.stage-", dir=parent))
     staging_installed = False
-    os.chmod(staging, 0o755)
+    os.chmod(workspace, 0o755)
+    # The writers stage and commit themselves and refuse an existing target,
+    # so the path handed to the writer must not exist yet: it is a child of
+    # the private workspace, never the workspace directory itself.
+    staging = workspace / "out"
     replacement: Path | None = None
     backup: Path | None = None
     try:
@@ -349,6 +353,7 @@ def staged_directory_write(
         if not os.path.lexists(output):
             os.replace(staging, output)
             staging_installed = True
+            shutil.rmtree(workspace, ignore_errors=True)
             return _rebase_writer_result(result, staging, output)
 
         existing_dirs, existing_files = _plain_tree(output, purpose="out_path")
@@ -393,7 +398,7 @@ def staged_directory_write(
         return _rebase_writer_result(result, staging, output)
     finally:
         if not staging_installed:
-            shutil.rmtree(staging, ignore_errors=True)
+            shutil.rmtree(workspace, ignore_errors=True)
         if replacement is not None:
             shutil.rmtree(replacement, ignore_errors=True)
         if backup is not None:

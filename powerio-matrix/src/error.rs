@@ -26,6 +26,12 @@ pub enum Error {
     #[error(transparent)]
     Io(#[from] std::io::Error),
 
+    /// A refused or failed destination commit (an output collision, an
+    /// invalid inventory, a staging failure), carrying the registered core
+    /// failure. Code and category delegate to it.
+    #[error(transparent)]
+    Commit(#[from] powerio_core::Error),
+
     #[error("output dimension mismatch: matrix is {n}x{n} but RHS has length {b_len}")]
     DimensionMismatch { n: usize, b_len: usize },
 
@@ -106,6 +112,7 @@ impl Error {
     pub fn code(&self) -> &'static DiagnosticInfo {
         match self {
             Error::Core(inner) => inner.code(),
+            Error::Commit(inner) => inner.info().unwrap_or(&codes::EMIT_MTX_FAILED),
             Error::Io(_) => &codes::READ_MATRIX_IO_FAILED,
             Error::DimensionMismatch { .. } | Error::ShapeMismatch { .. } => {
                 &codes::BUILD_MATRIX_SHAPE_MISMATCH
@@ -134,6 +141,7 @@ impl Error {
         use powerio_tx::ErrorCategory as C;
         match self {
             Error::Core(inner) => inner.category(),
+            Error::Commit(inner) => inner.category(),
             Error::Io(_) => C::Io,
             // A well-formed case that cannot satisfy a requested operation.
             Error::DimensionMismatch { .. }

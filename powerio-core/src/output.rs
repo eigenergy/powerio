@@ -86,10 +86,18 @@ impl Destination {
     }
 
     pub fn memory(root: impl Into<String>) -> Result<Self, Error> {
+        let root = ArtifactPath::new(root)?;
+        // The root prefixes every returned artifact name, so it meets the
+        // same portability rule validate_inventory applies to writer-supplied
+        // names.
+        if !portable_output_path(root.as_str()) {
+            return Err(Error::new(
+                &crate::codes::REQUEST_OUTPUT_INVALID_ARTIFACT_PATH,
+                format!("output root '{root}' is not portable across platforms"),
+            ));
+        }
         Ok(Self {
-            kind: DestinationKind::Memory {
-                root: ArtifactPath::new(root)?,
-            },
+            kind: DestinationKind::Memory { root },
         })
     }
 
@@ -1006,6 +1014,33 @@ mod tests {
             Vec::new(),
         );
         assert!(accepted.is_ok());
+    }
+
+    #[test]
+    fn a_memory_root_meets_the_same_portability_rule_as_artifact_names() {
+        for root in ["aux", "AUX.case", "trailing.", "trailing ", "nested/nul"] {
+            let refused = Destination::memory(root);
+            let error = refused.expect_err(root);
+            assert_eq!(error.category(), crate::ErrorCategory::Request, "{root}");
+        }
+        // An ordinary root still commits and still prefixes every name, in
+        // both the one file and the directory form.
+        let one = Destination::memory("case.m")
+            .unwrap()
+            .__commit_artifacts(false, vec![artifact("case.m", b"x")], Vec::new())
+            .unwrap();
+        let WrittenOutput::Memory { artifacts } = one.into_output() else {
+            panic!("memory output")
+        };
+        assert_eq!(artifacts[0].name().as_str(), "case.m");
+        let directory = Destination::memory("case")
+            .unwrap()
+            .__commit_artifacts(true, vec![artifact("buses.csv", b"x")], Vec::new())
+            .unwrap();
+        let WrittenOutput::Memory { artifacts } = directory.into_output() else {
+            panic!("memory output")
+        };
+        assert_eq!(artifacts[0].name().as_str(), "case/buses.csv");
     }
 
     #[cfg(windows)]
