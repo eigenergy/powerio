@@ -38,6 +38,21 @@ use crate::model::{
 /// value is clamped to it with a warning.
 const MAX_COUNT: usize = 64;
 
+/// Calculation constructs the static circuit profile deliberately leaves
+/// uninterpreted: time schedules, monitoring and metering output requests,
+/// and protection sequencing. Their presence is reported once per class.
+const CALCULATION_DSS_CLASSES: [&str; 9] = [
+    "loadshape",
+    "tshape",
+    "priceshape",
+    "growthshape",
+    "monitor",
+    "energymeter",
+    "sensor",
+    "relay",
+    "recloser",
+];
+
 const TYPED_DSS_CLASSES: &[&str] = &[
     "linecode",
     "vsource",
@@ -70,6 +85,9 @@ pub(crate) fn parse_dss_collecting(
 
 /// Lowers an executed raw script into the typed model, returning the network
 /// beside the parse findings: the raw layer's own, then the lowering's.
+// One pass per object class in script order; splitting the class dispatch
+// would scatter a list that reads end to end.
+#[allow(clippy::too_many_lines)]
 pub fn network_from_raw(
     raw: &RawDss,
 ) -> (MulticonductorNetwork, Vec<crate::diagnostics::Diagnostic>) {
@@ -152,10 +170,33 @@ pub fn network_from_raw(
         rd.regcontrol(obj);
     }
     rd.classify_regulators();
+    let mut outside_profile: std::collections::BTreeMap<&str, usize> =
+        std::collections::BTreeMap::new();
     for obj in &raw.objects {
         if !TYPED_DSS_CLASSES.contains(&obj.class.as_str()) {
+            if let Some(class) = CALCULATION_DSS_CLASSES
+                .iter()
+                .find(|class| **class == obj.class)
+            {
+                *outside_profile.entry(class).or_default() += 1;
+            }
             rd.net.untyped_mut().push(UntypedObject::from(obj));
         }
+    }
+    // The static circuit profile: equipment and topology. Schedules,
+    // calculation instructions, and output requests are distinct source
+    // concepts — retained for exact same format writing and named here, so a
+    // parse cannot present itself as having interpreted a time series or a
+    // solve. A `.dss` script parse never claims a solve occurred.
+    for (class, count) in outside_profile {
+        rd.diags.push(
+            &C::READ_DSS_RETAINED_SOURCE_ONLY,
+            format!(
+                "{count} `{class}` object(s) are outside the static circuit profile \
+                 (schedules, calculation instructions, and output requests are not \
+                 interpreted); retained for exact same format writing"
+            ),
+        );
     }
 
     // A dangling linecode reference otherwise surfaces only at write time,
