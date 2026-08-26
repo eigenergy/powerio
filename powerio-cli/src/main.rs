@@ -1642,8 +1642,6 @@ fn fail_on_parse_errors(parse_errors: &[String]) -> anyhow::Result<()> {
     )
 }
 
-/// Write conversion `text` to `output` (stdout on `-` or `None`), placing any
-/// `sidecars` next to it. Sidecars cannot follow text to stdout; they are
 /// Commit one complete output file through the no-replace destination:
 /// staged beside the target and moved into place only when no entry exists
 /// there, so an existing entry is refused rather than replaced.
@@ -1658,6 +1656,8 @@ fn commit_output_file(path: &std::path::Path, bytes: Vec<u8>) -> anyhow::Result<
         .map_err(|error| anyhow::anyhow!("{error}"))
 }
 
+/// Write conversion `text` to `output` (stdout on `-` or `None`), placing any
+/// `sidecars` next to it. Sidecars cannot follow text to stdout; they are
 /// reported instead.
 fn write_conversion_output(
     text: &str,
