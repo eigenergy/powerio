@@ -24,6 +24,8 @@ use super::{
     Conversion, branch_rating_set_drop_warning, jnum, sanitize_quoted,
     warn_extra_branch_rating_sets,
 };
+use std::borrow::Cow;
+
 use crate::diagnostics::codes::EMIT_PSSE as F;
 use crate::diagnostics::{Diagnostics, codes};
 use crate::network::{
@@ -53,7 +55,7 @@ fn psse_extra_rating_slot(name: &str) -> Option<usize> {
 }
 
 fn read_extra_branch_ratings(
-    fields: &[String],
+    fields: &[Cow<'_, str>],
     rating_start: usize,
     named_record: bool,
 ) -> Result<Vec<BranchRatingSet>> {
@@ -1136,8 +1138,8 @@ pub(crate) fn parse_psse_source(
                             format!(
                                 "transformer {}-{}: magnetizing data with CM != 1 dropped \
                              (only CM = 1 p.u. susceptance is read as branch charging)",
-                                f.first().map_or("?", String::as_str),
-                                f.get(1).map_or("?", String::as_str),
+                                f.first().map_or("?", Cow::as_ref),
+                                f.get(1).map_or("?", Cow::as_ref),
                             ),
                         );
                     }
@@ -1253,7 +1255,7 @@ fn section_after_marker(line: &str) -> Section {
 
 /// A record line's first field is `0` (the section terminator).
 fn is_terminator(line: &str) -> bool {
-    fields(line).first().map(String::as_str) == Some("0")
+    fields(line).first().map(Cow::as_ref) == Some("0")
 }
 
 fn next_continuation_line<'a>(
@@ -1283,27 +1285,27 @@ fn next_continuation_line<'a>(
 
 fn is_bare_terminator(line: &str) -> bool {
     let f = fields(line);
-    f.len() == 1 && f.first().map(String::as_str) == Some("0")
+    f.len() == 1 && f.first().map(Cow::as_ref) == Some("0")
 }
 
-fn transformer_basis_codes(f: &[String]) -> Result<(i64, i64)> {
+fn transformer_basis_codes(f: &[Cow<'_, str>]) -> Result<(i64, i64)> {
     let cw = num_at(f, 4, 1.0)?;
     if cw.fract() != 0.0 {
-        return Err(bad_field(4, f.get(4).map_or("", String::as_str)));
+        return Err(bad_field(4, f.get(4).map_or("", Cow::as_ref)));
     }
     let cz = num_at(f, 5, 1.0)?;
     if cz.fract() != 0.0 {
-        return Err(bad_field(5, f.get(5).map_or("", String::as_str)));
+        return Err(bad_field(5, f.get(5).map_or("", Cow::as_ref)));
     }
     #[allow(clippy::cast_possible_truncation)]
     Ok((cw as i64, cz as i64))
 }
 
-fn transformer_label(f: &[String]) -> String {
-    let i = f.first().map_or("?", String::as_str);
-    let j = f.get(1).map_or("?", String::as_str);
-    let k = f.get(2).map_or("?", String::as_str);
-    let id = f.get(3).map_or("", String::as_str);
+fn transformer_label(f: &[Cow<'_, str>]) -> String {
+    let i = f.first().map_or("?", Cow::as_ref);
+    let j = f.get(1).map_or("?", Cow::as_ref);
+    let k = f.get(2).map_or("?", Cow::as_ref);
+    let id = f.get(3).map_or("", Cow::as_ref);
     format!("{i}-{j}-{k} id {id:?}")
 }
 
@@ -1370,7 +1372,7 @@ fn default_windv(cw: i64, bus: BusId, bus_base_kv: &BTreeMap<BusId, f64>) -> f64
 }
 
 fn winding_ratio(
-    w: &[String],
+    w: &[Cow<'_, str>],
     bus: BusId,
     cw: i64,
     bus_base_kv: &BTreeMap<BusId, f64>,
@@ -1410,9 +1412,9 @@ fn winding_ratio(
 
 #[expect(clippy::too_many_arguments)]
 fn two_winding_tap(
-    l1: &[String],
-    l3: &[String],
-    l4: &[String],
+    l1: &[Cow<'_, str>],
+    l3: &[Cow<'_, str>],
+    l4: &[Cow<'_, str>],
     from: BusId,
     to: BusId,
     cw: i64,
@@ -1541,7 +1543,7 @@ fn is_comment(line: &str) -> bool {
     line.starts_with("@!") || line.starts_with('@')
 }
 
-fn is_system_wide_record(f: &[String]) -> bool {
+fn is_system_wide_record(f: &[Cow<'_, str>]) -> bool {
     matches!(
         f.first().map(|s| s.to_ascii_uppercase()),
         Some(first) if matches!(first.as_str(), "GENERAL" | "RATING" | "NEWTON" | "SOLVER")
@@ -1551,7 +1553,7 @@ fn is_system_wide_record(f: &[String]) -> bool {
 /// Parse a v34+ system-wide keyword line (`GENERAL`/`NEWTON`/`SOLVER`, each a
 /// keyword then `KEY=VALUE` tokens) into the solver record. Unrecognized
 /// keywords (e.g. `RATING`) and keys are ignored.
-fn parse_solver_line(f: &[String], solver: &mut SolverParams) {
+fn parse_solver_line(f: &[Cow<'_, str>], solver: &mut SolverParams) {
     let Some(keyword) = f.first().map(|s| s.to_ascii_uppercase()) else {
         return;
     };
@@ -1606,50 +1608,74 @@ fn strip_inline_comment(line: &str) -> &str {
 /// blank padded, so `' 1'` and `'1 '` name one device and `'BUS A       '` is
 /// the name `BUS A`. The two delimiter styles used to disagree here, and the
 /// same record body tokenized differently depending on which a producer chose.
-fn fields(line: &str) -> Vec<String> {
+fn fields(line: &str) -> Vec<Cow<'_, str>> {
     let code = strip_inline_comment(line);
     let comma_delimited = code.contains(',');
-    // Size both buffers up front and keep `cur`'s capacity across fields.
-    // Taking `cur` handed the buffer away, so every field regrew from empty
-    // and then paid a second allocation to trim: two allocations and a
-    // realloc chain per field, which dominated the cost of reading a `.raw`
-    // (~950 allocations per KB of input).
     let mut out = Vec::with_capacity(if comma_delimited {
         code.bytes().filter(|b| *b == b',').count() + 1
     } else {
         8
     });
-    let mut cur = String::with_capacity(32);
+    // A bare field borrows `code`; only a field that contained quote
+    // characters splices into an owned buffer, so the common numeric column
+    // costs no allocation at all (#293).
+    let mut owned: Option<String> = None;
+    let mut field_start = 0usize;
+    let mut segment_start = 0usize;
     let mut quoted = false;
     // A quoted span opened this field, so `''` holds its column instead of
     // vanishing and shifting every later one, as it does under commas.
     let mut was_quoted = false;
-    for c in code.chars() {
+    for (i, c) in code.char_indices() {
         match c {
             '\'' => {
+                owned
+                    .get_or_insert_with(String::new)
+                    .push_str(&code[segment_start..i]);
+                segment_start = i + 1;
                 quoted = !quoted;
                 was_quoted = true;
             }
             ',' if !quoted && comma_delimited => {
-                out.push(cur.trim().to_owned());
-                cur.clear();
+                push_field(&mut out, owned.take(), &code[segment_start..i]);
+                field_start = i + 1;
+                segment_start = field_start;
                 was_quoted = false;
             }
             c if c.is_whitespace() && !quoted && !comma_delimited => {
-                if !cur.is_empty() || was_quoted {
-                    out.push(cur.trim().to_owned());
-                    cur.clear();
-                    was_quoted = false;
+                let content = owned.is_some() || !code[field_start..i].trim().is_empty();
+                if content || was_quoted {
+                    push_field(&mut out, owned.take(), &code[segment_start..i]);
                 }
+                field_start = i + c.len_utf8();
+                segment_start = field_start;
+                was_quoted = false;
             }
-            c => cur.push(c),
+            _ => {}
         }
     }
-    let last = cur.trim().to_owned();
-    if comma_delimited || was_quoted || !last.is_empty() {
-        out.push(last);
+    let content = owned.is_some() || !code[field_start..].trim().is_empty();
+    if comma_delimited || was_quoted || content {
+        push_field(&mut out, owned.take(), &code[segment_start..]);
     }
     out
+}
+
+/// Finish one field: splice the trailing raw segment onto any owned prefix,
+/// trim, and push — borrowed when no quote character forced ownership.
+fn push_field<'a>(out: &mut Vec<Cow<'a, str>>, owned: Option<String>, raw: &'a str) {
+    match owned {
+        Some(mut joined) => {
+            joined.push_str(raw);
+            let trimmed = joined.trim();
+            if trimmed.len() == joined.len() {
+                out.push(Cow::Owned(joined));
+            } else {
+                out.push(Cow::Owned(trimmed.to_string()));
+            }
+        }
+        None => out.push(Cow::Borrowed(raw.trim())),
+    }
 }
 
 fn bad_field(i: usize, tok: &str) -> Error {
@@ -1663,16 +1689,16 @@ fn bad_field(i: usize, tok: &str) -> Error {
 /// Present but unparseable → a hard error: a malformed number must not silently
 /// become a plausible default (e.g. a garbled reactance collapsing to 0.0, which
 /// would drop the branch from every matrix) and corrupt the result.
-fn num_at(f: &[String], i: usize, default: f64) -> Result<f64> {
-    match f.get(i).map(String::as_str) {
+fn num_at(f: &[Cow<'_, str>], i: usize, default: f64) -> Result<f64> {
+    match f.get(i).map(Cow::as_ref) {
         None | Some("") => Ok(default),
         Some(s) => s.parse().map_err(|_| bad_field(i, s)),
     }
 }
 /// Field `i` as a bus id (parsed as f64 then truncated, the PSS/E convention);
 /// the range policy is [`crate::format::id_from_f64`].
-fn id_at(f: &[String], i: usize, default: usize) -> Result<usize> {
-    match f.get(i).map(String::as_str) {
+fn id_at(f: &[Cow<'_, str>], i: usize, default: usize) -> Result<usize> {
+    match f.get(i).map(Cow::as_ref) {
         None | Some("") => Ok(default),
         Some(s) => {
             let v: f64 = s.parse().map_err(|_| bad_field(i, s))?;
@@ -1686,8 +1712,8 @@ fn id_at(f: &[String], i: usize, default: usize) -> Result<usize> {
     }
 }
 /// Field `i` as a status flag (nonzero = in service).
-fn on_at(f: &[String], i: usize, default: bool) -> Result<bool> {
-    match f.get(i).map(String::as_str) {
+fn on_at(f: &[Cow<'_, str>], i: usize, default: bool) -> Result<bool> {
+    match f.get(i).map(Cow::as_ref) {
         None | Some("") => Ok(default),
         Some(s) => s
             .parse::<f64>()
@@ -1696,8 +1722,8 @@ fn on_at(f: &[String], i: usize, default: bool) -> Result<bool> {
     }
 }
 /// Field `i` as an integer code (bus type, etc.).
-fn int_at(f: &[String], i: usize, default: i64) -> Result<i64> {
-    match f.get(i).map(String::as_str) {
+fn int_at(f: &[Cow<'_, str>], i: usize, default: i64) -> Result<i64> {
+    match f.get(i).map(Cow::as_ref) {
         None | Some("") => Ok(default),
         // v34/35 exporters write integer fields in float form (`0.00` for `0`), so
         // parse through f64 and truncate, the way `id_at` already does.
@@ -1721,7 +1747,7 @@ fn bustype(code: i64) -> BusType {
 // The EVHI/EVLO equality below is an exact compare on purpose: the emergency
 // band is typed only when its token differs from the normal-band token.
 #[allow(clippy::float_cmp)]
-fn read_bus(f: &[String]) -> Result<Bus> {
+fn read_bus(f: &[Cow<'_, str>]) -> Result<Bus> {
     // I, NAME, BASKV, IDE, AREA, ZONE, OWNER, VM, VA, NVHI, NVLO, EVHI, EVLO
     let id = f
         .first()
@@ -1770,7 +1796,7 @@ fn read_bus(f: &[String]) -> Result<Bus> {
 /// allocates when no id is retained, so it restates nothing and is not kept —
 /// parallel devices still round-trip, because the allocator hands `1` to the
 /// device with no retained id and every explicit non-`1` id is replayed.
-fn device_extras(f: &[String], i: usize) -> Extras {
+fn device_extras(f: &[Cow<'_, str>], i: usize) -> Extras {
     let mut extras = Extras::new();
     if let Some(id) = f
         .get(i)
@@ -1782,7 +1808,7 @@ fn device_extras(f: &[String], i: usize) -> Extras {
     extras
 }
 
-fn read_load(f: &[String], raw_rev: u32, warnings: &mut Diagnostics) -> Result<Load> {
+fn read_load(f: &[Cow<'_, str>], raw_rev: u32, warnings: &mut Diagnostics) -> Result<Load> {
     // I, ID, STATUS, AREA, ZONE, PL, QL, ...
     let bus = id_at(f, 0, 0)?;
     let id = f.get(1).map_or("", |s| s.trim());
@@ -1871,7 +1897,7 @@ fn read_load(f: &[String], raw_rev: u32, warnings: &mut Diagnostics) -> Result<L
     })
 }
 
-fn read_shunt(f: &[String]) -> Result<Shunt> {
+fn read_shunt(f: &[Cow<'_, str>]) -> Result<Shunt> {
     // I, ID, STATUS, GL, BL
     Ok(Shunt {
         bus: BusId(id_at(f, 0, 0)?),
@@ -1884,7 +1910,7 @@ fn read_shunt(f: &[String]) -> Result<Shunt> {
     })
 }
 
-fn read_switched_shunt(f: &[String], rev: u32) -> Result<Shunt> {
+fn read_switched_shunt(f: &[Cow<'_, str>], rev: u32) -> Result<Shunt> {
     // v33/34: I, MODSW, ADJM, STAT, VSWHI, VSWLO, SWREM, RMPCT, RMIDNT, BINIT(9),
     // then (Ni, Bi) step pairs. v35: I, ID, MODSW, ADJM, ST, VSWHI, VSWLO,
     // SWREG, NREG, RMPCT, RMIDNT, BINIT(11), then (Si, Ni, Bi) triples — the ID
@@ -1956,7 +1982,7 @@ fn mode_to_modsw(mode: SwitchedShuntMode) -> i64 {
     }
 }
 
-fn read_area(f: &[String]) -> Result<Area> {
+fn read_area(f: &[Cow<'_, str>]) -> Result<Area> {
     // I, ISW, PDES, PTOL, 'ARNAME'
     let isw = id_at(f, 1, 0)?;
     Ok(Area {
@@ -1971,7 +1997,7 @@ fn read_area(f: &[String]) -> Result<Area> {
     })
 }
 
-fn read_gen(f: &[String], raw_rev: u32) -> Result<Generator> {
+fn read_gen(f: &[Cow<'_, str>], raw_rev: u32) -> Result<Generator> {
     // v33/34: I, ID, PG, QG, QT, QB, VS, IREG, MBASE(8), ..., STAT(14), ...,
     // PT(16), PB(17). v35 inserts NREG after IREG (and BASLOD after PB),
     // shifting MBASE through PB by one; v34 keeps the v33 layout.
@@ -1998,7 +2024,7 @@ fn read_gen(f: &[String], raw_rev: u32) -> Result<Generator> {
     })
 }
 
-fn read_branch(f: &[String], raw_rev: u32) -> Result<Branch> {
+fn read_branch(f: &[Cow<'_, str>], raw_rev: u32) -> Result<Branch> {
     // v33: I, J, CKT, R, X, B, RATEA, RATEB, RATEC, GI,BI,GJ,BJ, ST(13)
     // v34 exports insert NAME before twelve rating columns, putting STAT after
     // GI/BI/GJ/BJ. v33 can still have a long owner/fraction tail, so the RAW
@@ -2047,10 +2073,10 @@ fn read_branch(f: &[String], raw_rev: u32) -> Result<Branch> {
 
 #[expect(clippy::too_many_arguments)]
 fn read_transformer(
-    l1: &[String],
-    l2: &[String],
-    l3: &[String],
-    l4: &[String],
+    l1: &[Cow<'_, str>],
+    l2: &[Cow<'_, str>],
+    l3: &[Cow<'_, str>],
+    l4: &[Cow<'_, str>],
     raw_rev: u32,
     system_base: f64,
     bus_base_kv: &BTreeMap<BusId, f64>,
@@ -2168,11 +2194,11 @@ fn mode_to_cod(mode: TransformerControlMode) -> i64 {
 /// Read a 5-line 3-winding transformer record into a [`Transformer3W`].
 #[expect(clippy::too_many_arguments)]
 fn read_transformer_3w(
-    l1: &[String],
-    l2: &[String],
-    l3: &[String],
-    l4: &[String],
-    l5: &[String],
+    l1: &[Cow<'_, str>],
+    l2: &[Cow<'_, str>],
+    l3: &[Cow<'_, str>],
+    l4: &[Cow<'_, str>],
+    l5: &[Cow<'_, str>],
     system_base: f64,
     bus_base_kv: &BTreeMap<BusId, f64>,
     warnings: &mut Diagnostics,
@@ -2209,7 +2235,7 @@ fn read_transformer_3w(
         [imp(0, "1-2")?, imp(3, "2-3")?, imp(6, "3-1")?]
     };
     let windings = {
-        let mut winding = |idx: usize, w: &[String]| -> Result<Winding> {
+        let mut winding = |idx: usize, w: &[Cow<'_, str>]| -> Result<Winding> {
             let bus = buses[idx];
             let tap = winding_ratio(
                 w,
@@ -2281,9 +2307,9 @@ fn read_transformer_3w(
 // that reads end to end.
 #[expect(clippy::too_many_lines)]
 fn read_dc_line(
-    l1: &[String],
-    rect: &[String],
-    inv: &[String],
+    l1: &[Cow<'_, str>],
+    rect: &[Cow<'_, str>],
+    inv: &[Cow<'_, str>],
     index: usize,
     warnings: &mut Diagnostics,
 ) -> Result<Hvdc> {
@@ -2364,7 +2390,7 @@ fn read_dc_line(
         .first()
         .filter(|n| !n.is_empty() && **n != format!("DC{}", index + 1))
     {
-        extras.insert("psse_dc_name".into(), Value::String(name.clone()));
+        extras.insert("psse_dc_name".into(), Value::String(name.to_string()));
     }
     // MDC 0 and 1 restate the service status the writer derives on its own;
     // any other mode (2 = current demand in amps) is real control data.
@@ -2421,17 +2447,17 @@ fn read_dc_line(
 /// A matching tail restates the synthesized neutral shape and needs no
 /// retention; any textual difference — a real value, extra columns, even a
 /// different numeric spelling — keeps the tail, conservatively.
-fn tail_is_default(f: &[String], start: usize, default: &str) -> bool {
+fn tail_is_default(f: &[Cow<'_, str>], start: usize, default: &str) -> bool {
     let defaults = default.split(", ").map(|t| t.trim_matches('\''));
-    f.iter().skip(start).map(String::as_str).eq(defaults)
+    f.iter().skip(start).map(Cow::as_ref).eq(defaults)
 }
 
 /// The fields of `f` from index `start` as a JSON string array (for extras).
-fn tail_array(f: &[String], start: usize) -> Value {
+fn tail_array(f: &[Cow<'_, str>], start: usize) -> Value {
     Value::Array(
         f.iter()
             .skip(start)
-            .map(|s| Value::String(s.clone()))
+            .map(|s| Value::String(s.to_string()))
             .collect(),
     )
 }

@@ -44,7 +44,7 @@ pub fn contingencies(aux: &AuxFile) -> Vec<Contingency> {
                 .map(str::to_string)
                 .collect();
             out.push(Contingency {
-                label: label.clone(),
+                label: label.to_string(),
                 actions,
             });
         }
@@ -68,7 +68,7 @@ pub fn rating_set_names(aux: &AuxFile, object_type: &str) -> Vec<(usize, String)
         for row in &blk.rows {
             if let (Some(num), Some(name)) = (row.values.get(num_at), row.values.get(name_at)) {
                 if let Ok(n) = num.trim().parse() {
-                    out.push((n, name.clone()));
+                    out.push((n, name.to_string()));
                 }
             }
         }

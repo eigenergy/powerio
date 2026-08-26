@@ -25,7 +25,8 @@ fn activsg200() -> String {
 /// dropping or merging blocks fails loudly here.
 #[test]
 fn activsg200_inventory_is_complete() {
-    let aux = parse_aux(&activsg200()).unwrap();
+    let text = activsg200();
+    let aux = parse_aux(&text).unwrap();
 
     // (object type, row count, field count), in file order.
     let expected: &[(&str, usize, usize)] = &[
@@ -82,7 +83,8 @@ fn activsg200_inventory_is_complete() {
 /// tokenizer exactly.
 #[test]
 fn activsg200_values_survive_tokenizing() {
-    let aux = parse_aux(&activsg200()).unwrap();
+    let text = activsg200();
+    let aux = parse_aux(&text).unwrap();
     let sub = aux.data_of("Substation").next().unwrap();
     let lat = sub.field_index("Latitude").unwrap();
     let name = sub.field_index("SubName").unwrap();
