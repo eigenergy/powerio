@@ -405,6 +405,44 @@ def _diagnostics_payload(package_json: str, verbose: bool = False) -> Dict[str, 
     }
 
 
+def _module_header(text: str) -> bool:
+    """Whether the text is a stored version 1 module document."""
+    if not _jsonish(text):
+        return False
+    try:
+        value = jsonlib.loads(text)
+    except ValueError:
+        return False
+    return isinstance(value, dict) and value.get("schema") == "powerio.module"
+
+
+def _load_module(module_json: str) -> _Loaded:
+    """Load a stored module's static network value as a network handle."""
+    try:
+        module = powerio.StoredModule.from_json(module_json)
+    except ValueError as exc:
+        raise _coded_error("module input", exc) from exc
+    kind = module.kind
+    if kind == "balanced_network":
+        return _Loaded(
+            domain="transmission",
+            network=powerio.BalancedNetwork(module._inner.as_balanced_network()),
+            warnings=[],
+            json_format="module",
+        )
+    if kind == "multiconductor_network":
+        return _Loaded(
+            domain="distribution",
+            network=dist.MulticonductorNetwork(module._inner.as_multiconductor_network()),
+            warnings=[],
+            json_format="module",
+        )
+    raise ValueError(
+        f"the module carries a {kind} value; select and export one static item "
+        "with export_state first"
+    )
+
+
 def _load_package(package_json: str) -> _Loaded:
     value = _json_object(package_json, purpose="package_json")
     if _package_value(package_json) is None:
@@ -633,6 +671,8 @@ def _load_any(
     content, transport, package_json = content or None, transport or None, package_json or None
     _one_network_input(path, content, transport, package_json)
     if package_json is not None:
+        if _module_header(package_json):
+            return _load_module(package_json)
         return _load_package(package_json)
     if transport is not None:
         return _load_transport(transport, json_format)
@@ -1259,6 +1299,176 @@ def _diagnostics_tool(package_json: str, verbose: bool = False) -> dict:
 def _display_tool(path: str, from_format: Optional[str] = None) -> dict:
     """Parse a display artifact and return canonical display JSON."""
     return _display_impl(path, from_format)
+
+
+def _stored_module(
+    module_json: Optional[str] = None,
+    path: Optional[str] = None,
+    content: Optional[str] = None,
+    from_format: Optional[str] = None,
+) -> "powerio.StoredModule":
+    """One module input: stored `.pio.json` text, a case path, or case text."""
+    supplied = [value for value in (module_json, path, content) if value]
+    if len(supplied) != 1:
+        raise ValueError("pass exactly one of module_json, path, and content")
+    try:
+        if module_json:
+            return powerio.StoredModule.from_json(module_json)
+        if path is not None:
+            return powerio.StoredModule.from_file(
+                _local_path(path, purpose="module input"), _fmt(from_format)
+            )
+        return powerio.StoredModule.from_str(content or "", _fmt(from_format))
+    except ValueError as exc:
+        raise _coded_error("module input", exc) from exc
+
+
+def _selected_args(
+    time_position: Optional[int], scenario: Optional[str]
+) -> Dict[str, Any]:
+    if (time_position is None) == (scenario is None):
+        raise ValueError("pass exactly one of time_position and scenario")
+    return {"time_position": time_position, "scenario": scenario}
+
+
+_MODULE_INPUT_HELP = (
+    "Input is exactly one of `module_json` (stored `.pio.json` text; a "
+    "released 0.9 package upgrades one way on read), `path`, or `content` "
+    "(case data parsed into a module; `from_format` selects the reader)."
+)
+
+
+@mcp.tool(
+    name="inspect",
+    description="Inspect a module's typed value and discover the operations "
+    "that apply to it. " + _MODULE_INPUT_HELP,
+)
+def _inspect_tool(
+    module_json: Optional[str] = None,
+    path: Optional[str] = None,
+    content: Optional[str] = None,
+    from_format: Optional[str] = None,
+) -> dict:
+    module = _stored_module(module_json, path, content, from_format)
+    return {**_header("powerio.inspect"), **module.inspect()}
+
+
+@mcp.tool(
+    name="state_inventory",
+    description="List the exact typed time point labels or scenario IDs a "
+    "stored module's value can select. " + _MODULE_INPUT_HELP,
+)
+def _state_inventory_tool(
+    module_json: Optional[str] = None,
+    path: Optional[str] = None,
+    content: Optional[str] = None,
+    from_format: Optional[str] = None,
+) -> dict:
+    module = _stored_module(module_json, path, content, from_format)
+    try:
+        inventory = module.state_inventory()
+    except ValueError as exc:
+        raise _coded_error("state inventory", exc) from exc
+    return {**_header("powerio.state_inventory"), "kind": module.kind, **inventory}
+
+
+@mcp.tool(
+    name="select_state",
+    description="Select one existing typed item by time position or scenario "
+    "ID and describe it. Selection never clones the collection or "
+    "serializes it; `export_state` is the separate materialization. "
+    + _MODULE_INPUT_HELP,
+)
+def _select_state_tool(
+    module_json: Optional[str] = None,
+    path: Optional[str] = None,
+    content: Optional[str] = None,
+    from_format: Optional[str] = None,
+    time_position: Optional[int] = None,
+    scenario: Optional[str] = None,
+) -> dict:
+    module = _stored_module(module_json, path, content, from_format)
+    keys = _selected_args(time_position, scenario)
+    try:
+        selected = module.select_state(**keys)
+    except ValueError as exc:
+        raise _coded_error("state selection", exc) from exc
+    return {**_header("powerio.select_state"), **keys, "selected": selected}
+
+
+@mcp.tool(
+    name="export_state",
+    description="Export one selected time point or scenario as an "
+    "independent static module document, with the selection stated in its "
+    "history. " + _MODULE_INPUT_HELP,
+)
+def _export_state_tool(
+    module_json: Optional[str] = None,
+    path: Optional[str] = None,
+    content: Optional[str] = None,
+    from_format: Optional[str] = None,
+    time_position: Optional[int] = None,
+    scenario: Optional[str] = None,
+) -> dict:
+    module = _stored_module(module_json, path, content, from_format)
+    keys = _selected_args(time_position, scenario)
+    try:
+        exported = module.export_state(**keys)
+    except ValueError as exc:
+        raise _coded_error("state export", exc) from exc
+    return {
+        **_header("powerio.export_state"),
+        **keys,
+        "kind": exported.kind,
+        "module_json": exported.to_json(),
+    }
+
+
+@mcp.tool(
+    name="to_balanced_inspect",
+    description="Inspect whether a multiconductor module can lower to a "
+    "balanced network: blockers, assumptions, approximations, and "
+    "unrepresentable fields. " + _MODULE_INPUT_HELP,
+)
+def _to_balanced_inspect_tool(
+    module_json: Optional[str] = None,
+    path: Optional[str] = None,
+    content: Optional[str] = None,
+    from_format: Optional[str] = None,
+    base_mva: float = 100.0,
+) -> dict:
+    module = _stored_module(module_json, path, content, from_format)
+    try:
+        readiness = module.to_balanced_inspect(base_mva)
+    except ValueError as exc:
+        raise _coded_error("lowering inspection", exc) from exc
+    return {**_header("powerio.to_balanced_inspect"), **readiness}
+
+
+@mcp.tool(
+    name="to_balanced",
+    description="Explicitly lower a multiconductor module to a balanced "
+    "module document. Records and source ownership carry over; the pass "
+    "appends its findings and a Transform history entry. "
+    + _MODULE_INPUT_HELP,
+)
+def _to_balanced_tool(
+    module_json: Optional[str] = None,
+    path: Optional[str] = None,
+    content: Optional[str] = None,
+    from_format: Optional[str] = None,
+    base_mva: float = 100.0,
+) -> dict:
+    module = _stored_module(module_json, path, content, from_format)
+    try:
+        lowered = module.to_balanced(base_mva)
+    except ValueError as exc:
+        raise _coded_error("balanced lowering", exc) from exc
+    return {
+        **_header("powerio.to_balanced"),
+        "kind": lowered.kind,
+        "module_json": lowered.to_json(),
+    }
 
 
 # Non-advertised compatibility callables for direct Python imports.

@@ -56,8 +56,8 @@ pub use geo::{apply_dist_geo_layer, dist_geo_layer};
 pub use lowering::{
     LoweringRecord, MulticonductorToBalancedError, MulticonductorToBalancedLowering,
     MulticonductorToBalancedOptions, MulticonductorToBalancedReadiness,
-    SequenceTransformConvention, check_multiconductor_to_balanced_lowering,
-    lower_multiconductor_to_balanced,
+    SequenceTransformConvention, check_module_lowering, check_multiconductor_to_balanced_lowering,
+    lower_module_to_balanced, lower_multiconductor_to_balanced,
 };
 pub mod error;
 pub use error::{Error, Result};

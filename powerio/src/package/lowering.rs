@@ -235,6 +235,128 @@ pub fn lower_multiconductor_to_balanced(
     state.lower()
 }
 
+/// Readiness of one module's value for the balanced lowering: the #398
+/// inspect operation. The value must be a multiconductor network.
+///
+/// # Errors
+/// A value of any other kind, named.
+pub fn check_module_lowering(
+    module: &powerio_core::PioModule<crate::PioValue>,
+    options: MulticonductorToBalancedOptions,
+) -> Result<MulticonductorToBalancedReadiness, powerio_core::Error> {
+    let crate::PioValue::MulticonductorNetwork(net) = module.value() else {
+        return Err(wrong_kind_error(module.value()));
+    };
+    Ok(check_multiconductor_to_balanced_lowering(net, options))
+}
+
+/// Lower a multiconductor module to a balanced module: the #398 transform
+/// operation. The module's common records and runtime source ownership carry
+/// over unchanged; the pass appends its structured findings as module
+/// diagnostics and one Transform history entry stating the chosen base
+/// power, every assumption and approximation, the dropped fields, and the
+/// removed bus and switch identities.
+///
+/// # Errors
+/// A value of any other kind (the module comes back untouched), or the
+/// lowering's structured refusal.
+///
+/// # Panics
+/// Never: the static history identifiers are valid by construction.
+#[allow(clippy::result_large_err)]
+pub fn lower_module_to_balanced(
+    module: powerio_core::PioModule<crate::PioValue>,
+    options: MulticonductorToBalancedOptions,
+) -> Result<
+    powerio_core::PioModule<crate::PioValue>,
+    (
+        powerio_core::PioModule<crate::PioValue>,
+        Box<MulticonductorToBalancedError>,
+    ),
+> {
+    use powerio_core::{HistoryEntry, HistoryId, HistoryKind};
+
+    let crate::PioValue::MulticonductorNetwork(net) = module.value() else {
+        let error = MulticonductorToBalancedError::new(
+            options,
+            vec![StructuredDiagnostic::of(
+                &codes::TRANSFORM_MULTI_TO_BALANCED_WRONG_MODEL_KIND,
+                format!(
+                    "the module carries a {} value; the balanced lowering takes a \
+                     multiconductor network",
+                    module.value().kind().as_str()
+                ),
+            )],
+        );
+        return Err((module, Box::new(error)));
+    };
+    let lowering = match lower_multiconductor_to_balanced(net, options) {
+        Ok(lowering) => lowering,
+        Err(error) => return Err((module, Box::new(error))),
+    };
+    let MulticonductorToBalancedLowering {
+        network,
+        record,
+        merged_buses,
+        removed_switches,
+    } = lowering;
+    let mut module = module.map_value(|_| crate::PioValue::BalancedNetwork(network));
+    // The record's element paths name the consumed multiconductor value, so
+    // no target survives the transform; the messages keep the element names.
+    for diagnostic in &record.diagnostics {
+        if module
+            .add_diagnostic(super::diagnostics::to_module_diagnostic(diagnostic, None))
+            .is_err()
+        {
+            break;
+        }
+    }
+    let mut entry = HistoryEntry::new(
+        HistoryId::new("multiconductor-to-balanced").expect("static id is valid"),
+        HistoryKind::Transform,
+        "lower_multiconductor_to_balanced",
+    )
+    .expect("static name is valid");
+    let mut notes = vec![format!("balanced power base: {} MVA", options.base_mva)];
+    notes.extend(record.assumptions.iter().cloned());
+    notes.extend(record.approximations.iter().cloned());
+    notes.extend(
+        merged_buses
+            .iter()
+            .map(|(removed, kept)| format!("bus {removed} merged into bus {kept}")),
+    );
+    notes.extend(
+        removed_switches
+            .iter()
+            .map(|switch| format!("switch {switch} removed by its bus merge")),
+    );
+    for note in notes {
+        match entry.clone().with_assumption(note) {
+            Ok(with) => entry = with,
+            Err(_) => break,
+        }
+    }
+    for loss in &record.dropped_fields {
+        match entry.clone().with_loss(loss.clone()) {
+            Ok(with) => entry = with,
+            Err(_) => break,
+        }
+    }
+    let _ = module.add_history_entry(entry);
+    Ok(module)
+}
+
+fn wrong_kind_error(value: &crate::PioValue) -> powerio_core::Error {
+    powerio_core::Error::new(
+        &codes::TRANSFORM_MULTI_TO_BALANCED_WRONG_MODEL_KIND,
+        format!(
+            "the module carries a {} value; the balanced lowering takes a multiconductor \
+             network",
+            value.kind().as_str()
+        ),
+    )
+}
+
 struct LoweringState<'a> {
     net: &'a MulticonductorNetwork,
     options: MulticonductorToBalancedOptions,

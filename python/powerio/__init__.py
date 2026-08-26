@@ -60,6 +60,7 @@ __all__ = [
     "PowerIOParseError",
     "PwdDisplay",
     "PwdSubstation",
+    "StoredModule",
     "YbusParts",
     "__version__",
     "convert_file",
@@ -1012,6 +1013,81 @@ def read_pypsa_csv_folder(path: Any) -> BalancedNetwork:
 
 
 from . import dist  # noqa: E402  (needs Conversion defined above)
+
+
+class StoredModule:
+    """A runtime module handle: one typed value with its common records.
+
+    The stored form is ``.pio.json`` version 1; released 0.9 packages upgrade
+    one way on read. Selection returns the existing typed item; export is the
+    separate explicit materialization.
+    """
+
+    def __init__(self, inner: "_powerio._StoredModule"):
+        self._inner = inner
+
+    @classmethod
+    def from_json(cls, text: str) -> "StoredModule":
+        """Read stored ``.pio.json`` text."""
+        return cls(_powerio._StoredModule.from_json(text))
+
+    @classmethod
+    def from_file(cls, path: Any, from_: Optional[str] = None) -> "StoredModule":
+        """Parse a case file into a module of whichever family claims it."""
+        return cls(_powerio._StoredModule.from_file(str(path), from_))
+
+    @classmethod
+    def from_str(cls, text: str, from_: Optional[str] = None) -> "StoredModule":
+        """Parse in-memory case text into a module."""
+        return cls(_powerio._StoredModule.from_str(text, from_))
+
+    def to_json(self) -> str:
+        """Serialize to the stored version 1 document."""
+        return self._inner.to_json()
+
+    @property
+    def kind(self) -> str:
+        """The value's permanent kind identifier."""
+        return self._inner.kind()
+
+    def inspect(self) -> Any:
+        """Value inspection and supported operation discovery."""
+        return _json.loads(self._inner.inspect_json())
+
+    def diagnostics(self) -> Any:
+        """The module's diagnostics as a list of Python dicts."""
+        return _json.loads(self._inner.diagnostics_json())
+
+    def state_inventory(self) -> Any:
+        """The typed time or scenario inventory."""
+        return _json.loads(self._inner.state_inventory_json())
+
+    def select_state(
+        self,
+        time_position: Optional[int] = None,
+        scenario: Optional[str] = None,
+    ) -> Any:
+        """Describe the selected existing typed item without materializing."""
+        return _json.loads(self._inner.select_json(time_position, scenario))
+
+    def export_state(
+        self,
+        time_position: Optional[int] = None,
+        scenario: Optional[str] = None,
+    ) -> "StoredModule":
+        """Export the selected item as an independent static module."""
+        return StoredModule(self._inner.export_selected(time_position, scenario))
+
+    def to_balanced_inspect(self, base_mva: float = 100.0) -> Any:
+        """Readiness of the multiconductor value for the balanced lowering."""
+        return _json.loads(self._inner.lowering_readiness_json(base_mva))
+
+    def to_balanced(self, base_mva: float = 100.0) -> "StoredModule":
+        """Lower the multiconductor value to a balanced module."""
+        return StoredModule(self._inner.lower_to_balanced(base_mva))
+
+    def __repr__(self) -> str:
+        return repr(self._inner)
 
 
 class Package:

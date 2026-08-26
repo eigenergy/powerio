@@ -38,6 +38,12 @@ def test_tool_surface_is_semantic():
         "matrix",
         "diagnostics",
         "display",
+        "inspect",
+        "state_inventory",
+        "select_state",
+        "export_state",
+        "to_balanced_inspect",
+        "to_balanced",
     }
     for name in ("parse", "summary", "normalize", "matrix", "display"):
         props = tools[name].input_schema["properties"]
@@ -641,3 +647,137 @@ def test_mcp_parse_still_refuses_includes_outside_the_allowed_root(
     ]
     doc = json.loads(parsed["json"])
     assert "leaked" not in json.dumps(doc)
+
+
+# ---- typed state selection and the balanced lowering over MCP ----------------
+
+LOWERABLE_DSS = """! Three phase feeder the balanced lowering supports.
+Clear
+Set DefaultBaseFrequency=60
+New Circuit.feeder basekv=0.416 pu=1.0 phases=3 bus1=sourcebus MVAsc3=2000 MVAsc1=2100
+New Linecode.lc3 nphases=3 basefreq=60 units=km
+~ rmatrix = (0.211 | 0.049 0.211 | 0.049 0.049 0.211)
+~ xmatrix = (0.747 | 0.673 0.747 | 0.651 0.673 0.747)
+~ cmatrix = (10.0 | 0.0 10.0 | 0.0 0.0 10.0)
+~ normamps=185
+New Line.l1 bus1=sourcebus.1.2.3 bus2=loadbus.1.2.3 phases=3 linecode=lc3 length=0.4 units=km
+New Load.la bus1=loadbus.1.2.3 phases=3 conn=wye kv=0.416 kw=24 pf=0.95 model=1
+"""
+
+
+def _series_module_json() -> str:
+    pkg = powerio.Package.from_file(DATA / "case9.m")
+    pkg.set_operating_points(
+        {
+            "time_axis": {
+                "periods": 2,
+                "duration_hours": [1.0, 1.0],
+                "labels": ["h0", "h1"],
+            },
+            "points": [
+                {"index": 0, "updates": []},
+                {
+                    "index": 1,
+                    "updates": [
+                        {
+                            "element": {
+                                "table": "generators",
+                                "source_uid": "generators:0",
+                            },
+                            "fields": {"pg": 95.0},
+                        }
+                    ],
+                },
+            ],
+        }
+    )
+    return pkg.to_json()
+
+
+def test_state_inventory_selection_and_export():
+    module_json = _series_module_json()
+
+    inventory = server._state_inventory_tool(module_json=module_json)
+    assert inventory["kind"] == "balanced_operating_point_time_series"
+    assert inventory["keyed_by"] == "time_position"
+    assert [p["label"] for p in inventory["time_points"]] == ["h0", "h1"]
+
+    selected = server._select_state_tool(module_json=module_json, time_position=1)
+    assert selected["selected"]["item"] == "balanced_operating_point"
+    assert "generator_active_power" in selected["selected"]["stated_quantities"]
+
+    exported = server._export_state_tool(module_json=module_json, time_position=1)
+    assert exported["kind"] == "balanced_network"
+    doc = json.loads(exported["module_json"])
+    assert doc["schema"] == "powerio.module" and doc["version"] == 1
+    # The exported static module is accepted by summary, matrix, conversion,
+    # and diagnostics operations.
+    summary = server._summary_tool(package_json=exported["module_json"])
+    assert summary["domain"] == "transmission"
+    assert summary["elements"]["buses"] == 9
+    matrix = server._matrix_tool("ybus_real", package_json=exported["module_json"])
+    assert matrix["shape"] == [9, 9]
+    converted = server.convert(to="matpower", package_json=exported["module_json"])
+    assert "mpc.baseMVA" in converted["text"]
+    inspected = server._inspect_tool(module_json=exported["module_json"])
+    assert inspected["kind"] == "balanced_network"
+    assert "select_state" not in inspected["operations"]
+
+
+def test_selection_refusals_carry_codes():
+    module_json = _series_module_json()
+    with pytest.raises(ValueError, match="REQUEST.STATE.OUT_OF_RANGE"):
+        server._select_state_tool(module_json=module_json, time_position=9)
+    with pytest.raises(ValueError, match="REQUEST.STATE.WRONG_SELECTOR"):
+        server._select_state_tool(module_json=module_json, scenario="base")
+    static_pkg = powerio.Package.from_file(DATA / "case9.m").to_json()
+    with pytest.raises(ValueError, match="REQUEST.STATE.NOT_A_COLLECTION"):
+        server._state_inventory_tool(module_json=static_pkg)
+    with pytest.raises(ValueError, match="exactly one of time_position"):
+        server._select_state_tool(module_json=module_json)
+
+
+def test_inspect_discovers_operations():
+    inspected = server._inspect_tool(content=LOWERABLE_DSS, from_format="dss")
+    assert inspected["kind"] == "multiconductor_network"
+    assert "to_balanced" in inspected["operations"]
+    series = server._inspect_tool(module_json=_series_module_json())
+    assert "select_state" in series["operations"]
+    assert "export_state" in series["operations"]
+
+
+def test_to_balanced_inspect_and_transform():
+    readiness = server._to_balanced_inspect_tool(
+        content=LOWERABLE_DSS, from_format="dss"
+    )
+    assert readiness["status"] in ("ok", "info")
+
+    lowered = server._to_balanced_tool(content=LOWERABLE_DSS, from_format="dss")
+    assert lowered["kind"] == "balanced_network"
+    doc = json.loads(lowered["module_json"])
+    assert doc["schema"] == "powerio.module"
+    history = doc.get("history", [])
+    assert any(
+        entry["name"] == "lower_multiconductor_to_balanced"
+        and entry["kind"] == "transform"
+        for entry in history
+    )
+    # The returned module is accepted by summary and matrix operations.
+    summary = server._summary_tool(package_json=lowered["module_json"])
+    assert summary["domain"] == "transmission"
+    matrix = server._matrix_tool("ybus_real", package_json=lowered["module_json"])
+    assert matrix["shape"][0] == summary["elements"]["buses"]
+
+
+def test_to_balanced_refuses_unsupported_input_structured():
+    with pytest.raises(ValueError) as excinfo:
+        server._to_balanced_tool(path=str(DSS))
+    message = str(excinfo.value)
+    assert "TRANSFORM.MULTI_TO_BALANCED" in message
+    # The structured diagnostics ride along as JSON.
+    assert "[" in message and "code" in message
+
+
+def test_wrong_kind_lowering_is_refused_by_name():
+    with pytest.raises(ValueError, match="WRONG_MODEL_KIND"):
+        server._to_balanced_tool(path=str(DATA / "case9.m"))

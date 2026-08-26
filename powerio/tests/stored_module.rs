@@ -401,3 +401,26 @@ fn an_unnamespaced_extension_is_refused() {
     let error = read_module(&raw.to_string()).unwrap_err().to_string();
     assert!(error.contains("not namespaced"), "{error}");
 }
+
+/// Legacy element paths translate into the value's own pointer grammar so an
+/// upgraded module writes cleanly; a path outside the value drops its target.
+#[test]
+fn legacy_diagnostic_targets_translate_and_write() {
+    let mut raw: serde_json::Value =
+        serde_json::from_str(&legacy_package_text(true, false)).unwrap();
+    raw["diagnostics"] = serde_json::json!([{
+        "code": "VALIDATE.BALANCED.VALUE_DOMAIN",
+        "severity": "warning",
+        "message": "bus 2 voltage magnitude is outside its domain",
+        "element_path": "/model/balanced_network/buses/1/vm"
+    }]);
+    let module = read_module(&raw.to_string()).unwrap();
+    let upgraded = module
+        .diagnostics()
+        .iter()
+        .find(|d| d.code() == "VALIDATE.BALANCED.VALUE_DOMAIN")
+        .expect("the legacy finding survives");
+    assert_eq!(upgraded.target(), Some("/network/buses/1/vm"));
+    // The rewritten document passes its own reference validation.
+    write_module(&module).unwrap();
+}

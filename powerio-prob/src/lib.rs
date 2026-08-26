@@ -64,6 +64,6 @@ pub use solution::{
     Termination,
 };
 pub use state::{
-    BalancedOperatingPoints, BalancedStateBuilder, MulticonductorOperatingPoints,
-    MulticonductorStateBuilder, OperatingPoint,
+    BALANCED_STATE_QUANTITIES, BalancedOperatingPoints, BalancedStateBuilder,
+    MulticonductorOperatingPoints, MulticonductorStateBuilder, OperatingPoint,
 };

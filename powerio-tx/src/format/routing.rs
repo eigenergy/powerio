@@ -219,8 +219,10 @@ impl JsonClass {
 /// document across the transmission and distribution domains.
 ///
 /// A package is recognized by a top level `model_kind` of `"balanced"` or
-/// `"multiconductor"` plus a `model` key; the value check keeps a case
-/// document that happens to carry those key names from being misrouted.
+/// `"multiconductor"` plus a `model` key (the released 0.9 shape), or by the
+/// version 1 stored module's own `schema: "powerio.module"` header; the value
+/// check keeps a case document that happens to carry those key names from
+/// being misrouted.
 /// Model JSON is recognized by `buses` beside another network key, which the
 /// case formats spell differently (PowerModels writes `bus`, not `buses`).
 /// For a case, Unknown means there is no recognized top level marker, and
@@ -237,6 +239,10 @@ pub fn classify_json_text(text: &str) -> JsonClass {
         Some("balanced" | "multiconductor")
     ) && shape.has("model")
     {
+        return JsonClass::Package;
+    }
+    // The version 1 stored module names itself in its header.
+    if shape.string("schema") == Some("powerio.module") {
         return JsonClass::Package;
     }
     shape.classify()

@@ -2016,6 +2016,363 @@ fn dist_convert_str(text: &str, to: &str, from_: &str) -> PyResult<(String, Vec<
 /// Low level handle around a parsed `.pio.json` package. Parses the document
 /// once; the user facing `powerio.Package` wraps it. Not frozen: `validate`
 /// rewrites the handle's diagnostics in place, matching the Rust and C APIs.
+/// The runtime module handle: `PioModule<PioValue>` with its records. The
+/// stored form is `.pio.json` version 1 (released 0.9 packages upgrade one
+/// way on read). Methods that transform take the module out of the handle
+/// and put it back on failure, so a refused call leaves the handle usable.
+#[pyclass(name = "_StoredModule", module = "powerio._powerio")]
+struct PyStoredModule {
+    module: Option<powerio_core::PioModule<powerio::PioValue>>,
+}
+
+impl PyStoredModule {
+    fn module(&self) -> PyResult<&powerio_core::PioModule<powerio::PioValue>> {
+        self.module
+            .as_ref()
+            .ok_or_else(|| PyValueError::new_err("the module handle was consumed"))
+    }
+
+    fn selector<'a>(
+        time_position: Option<usize>,
+        scenario: Option<&'a str>,
+    ) -> PyResult<powerio::select::StateSelector<'a>> {
+        match (time_position, scenario) {
+            (Some(position), None) => Ok(powerio::select::StateSelector::TimePosition(position)),
+            (None, Some(id)) => Ok(powerio::select::StateSelector::Scenario(id)),
+            _ => Err(PyValueError::new_err(
+                "pass exactly one of time_position and scenario",
+            )),
+        }
+    }
+
+    fn value_summary(value: &powerio::PioValue) -> serde_json::Value {
+        use powerio::PioValue as V;
+        match value {
+            V::BalancedNetwork(network) => serde_json::json!({
+                "buses": network.buses().len(),
+                "branches": network.branches().len(),
+                "generators": network.generators().len(),
+                "loads": network.loads().len(),
+            }),
+            V::MulticonductorNetwork(network) => serde_json::json!({
+                "buses": network.buses().len(),
+                "lines": network.lines().len(),
+                "transformers": network.transformers().len(),
+                "switches": network.switches().len(),
+                "loads": network.loads().len(),
+            }),
+            V::BalancedNetworkTimeSeries(series) => serde_json::json!({
+                "points": series.len(),
+            }),
+            V::BalancedOperatingPointTimeSeries(series) => serde_json::json!({
+                "points": series.len(),
+            }),
+            V::BalancedNetworkScenarioSet(set) => serde_json::json!({
+                "scenarios": set.len(),
+            }),
+            _ => serde_json::json!({}),
+        }
+    }
+
+    fn operations(value: &powerio::PioValue) -> Vec<&'static str> {
+        use powerio::PioValue as V;
+        match value {
+            V::BalancedNetwork(_) => vec!["inspect", "diagnostics"],
+            V::MulticonductorNetwork(_) => {
+                vec![
+                    "inspect",
+                    "diagnostics",
+                    "to_balanced_inspect",
+                    "to_balanced",
+                ]
+            }
+            V::BalancedNetworkTimeSeries(_)
+            | V::BalancedOperatingPointTimeSeries(_)
+            | V::BalancedNetworkScenarioSet(_) => vec![
+                "inspect",
+                "diagnostics",
+                "state_inventory",
+                "select_state",
+                "export_state",
+            ],
+            _ => vec!["inspect", "diagnostics"],
+        }
+    }
+}
+
+#[pymethods]
+impl PyStoredModule {
+    /// Read stored `.pio.json` text: version 1, or a released 0.9 package
+    /// upgraded one way.
+    #[staticmethod]
+    fn from_json(text: &str) -> PyResult<Self> {
+        powerio::stored::read_module(text)
+            .map(|module| Self {
+                module: Some(module),
+            })
+            .map_err(|error| core_error_pyerr(&error))
+    }
+
+    /// Parse a case file into a module of whichever family claims it.
+    #[staticmethod]
+    #[pyo3(signature = (path, from_=None))]
+    fn from_file(path: &str, from_: Option<&str>) -> PyResult<Self> {
+        let mut source = powerio_core::Source::open(Path::new(path))
+            .map_err(|error| core_open_pyerr(Path::new(path), &error))?;
+        if let Some(name) = from_ {
+            let format =
+                powerio_core::FormatId::new(name).map_err(|error| core_error_pyerr(&error))?;
+            source = source.with_format(format);
+        }
+        powerio::parse(source)
+            .map(|module| Self {
+                module: Some(module),
+            })
+            .map_err(|error| core_error_pyerr(&error))
+    }
+
+    /// Parse in-memory case text into a module.
+    #[staticmethod]
+    #[pyo3(signature = (text, from_=None))]
+    fn from_str(text: &str, from_: Option<&str>) -> PyResult<Self> {
+        let mut source = powerio_core::Source::from_bytes("<memory>", text.as_bytes().to_vec())
+            .map_err(|error| core_error_pyerr(&error))?;
+        if let Some(name) = from_ {
+            let format =
+                powerio_core::FormatId::new(name).map_err(|error| core_error_pyerr(&error))?;
+            source = source.with_format(format);
+        }
+        powerio::parse(source)
+            .map(|module| Self {
+                module: Some(module),
+            })
+            .map_err(|error| core_error_pyerr(&error))
+    }
+
+    /// The stored version 1 document.
+    fn to_json(&self) -> PyResult<String> {
+        powerio::stored::write_module(self.module()?).map_err(|error| core_error_pyerr(&error))
+    }
+
+    /// The value's permanent kind identifier.
+    fn kind(&self) -> PyResult<String> {
+        Ok(self.module()?.value().kind().as_str().to_owned())
+    }
+
+    /// Value inspection and supported operation discovery, as JSON.
+    fn inspect_json(&self) -> PyResult<String> {
+        let module = self.module()?;
+        let value = module.value();
+        let payload = serde_json::json!({
+            "kind": value.kind().as_str(),
+            "value": Self::value_summary(value),
+            "records": {
+                "sources": module.sources().len(),
+                "source_map": module.source_map().len(),
+                "diagnostics": module.diagnostics().len(),
+                "history": module.history().len(),
+                "extensions": module.extensions().len(),
+            },
+            "operations": Self::operations(value),
+        });
+        serde_json::to_string(&payload).map_err(serialize_pyerr)
+    }
+
+    /// The module's diagnostics as a JSON array.
+    fn diagnostics_json(&self) -> PyResult<String> {
+        let diagnostics: Vec<serde_json::Value> = self
+            .module()?
+            .diagnostics()
+            .iter()
+            .map(|diagnostic| {
+                serde_json::json!({
+                    "code": diagnostic.code(),
+                    "severity": format!("{:?}", diagnostic.severity()).to_lowercase(),
+                    "message": diagnostic.message(),
+                    "target": diagnostic.target(),
+                })
+            })
+            .collect();
+        serde_json::to_string(&diagnostics).map_err(serialize_pyerr)
+    }
+
+    /// The typed time or scenario inventory, as JSON.
+    fn state_inventory_json(&self) -> PyResult<String> {
+        let inventory = powerio::select::state_inventory(self.module()?.value())
+            .map_err(|error| core_error_pyerr(&error))?;
+        let payload = match inventory {
+            powerio::select::StateInventory::TimePoints(points) => serde_json::json!({
+                "keyed_by": "time_position",
+                "time_points": points
+                    .iter()
+                    .map(|point| {
+                        serde_json::json!({
+                            "position": point.position,
+                            "label": point.label,
+                            "duration_seconds": point.duration.map(|d| d.as_secs_f64()),
+                        })
+                    })
+                    .collect::<Vec<_>>(),
+            }),
+            powerio::select::StateInventory::Scenarios(scenarios) => serde_json::json!({
+                "keyed_by": "scenario",
+                "scenarios": scenarios
+                    .iter()
+                    .map(|scenario| {
+                        serde_json::json!({
+                            "id": scenario.id,
+                            "probability": scenario.probability,
+                        })
+                    })
+                    .collect::<Vec<_>>(),
+            }),
+            _ => serde_json::json!({}),
+        };
+        serde_json::to_string(&payload).map_err(serialize_pyerr)
+    }
+
+    /// Select the existing typed item and describe it, as JSON. No clone, no
+    /// materialization: the export operation is separate.
+    #[pyo3(signature = (time_position=None, scenario=None))]
+    fn select_json(
+        &self,
+        time_position: Option<usize>,
+        scenario: Option<&str>,
+    ) -> PyResult<String> {
+        let selector = Self::selector(time_position, scenario)?;
+        let selected = powerio::select::select_state(self.module()?.value(), selector)
+            .map_err(|error| core_error_pyerr(&error))?;
+        let payload = match selected {
+            powerio::select::SelectedState::BalancedNetwork(network) => serde_json::json!({
+                "item": "balanced_network",
+                "buses": network.buses().len(),
+                "branches": network.branches().len(),
+                "generators": network.generators().len(),
+                "loads": network.loads().len(),
+            }),
+            powerio::select::SelectedState::BalancedOperatingPoint(point) => {
+                let stated: Vec<&str> = powerio_prob::BALANCED_STATE_QUANTITIES
+                    .iter()
+                    .copied()
+                    .filter(|quantity| point.states(quantity))
+                    .collect();
+                serde_json::json!({
+                    "item": "balanced_operating_point",
+                    "stated_quantities": stated,
+                    "network_buses": point.network().buses().len(),
+                })
+            }
+            _ => serde_json::json!({}),
+        };
+        serde_json::to_string(&payload).map_err(serialize_pyerr)
+    }
+
+    /// Export the selected item as an independent static module handle.
+    #[pyo3(signature = (time_position=None, scenario=None))]
+    fn export_selected(
+        &self,
+        time_position: Option<usize>,
+        scenario: Option<&str>,
+    ) -> PyResult<Self> {
+        let selector = Self::selector(time_position, scenario)?;
+        powerio::select::export_state(self.module()?.value(), selector)
+            .map(|module| Self {
+                module: Some(module),
+            })
+            .map_err(|error| core_error_pyerr(&error))
+    }
+
+    /// Readiness of the multiconductor value for the balanced lowering, as
+    /// JSON: the inspect half of the transformation.
+    #[pyo3(signature = (base_mva=100.0))]
+    fn lowering_readiness_json(&self, base_mva: f64) -> PyResult<String> {
+        let readiness = powerio::package::check_module_lowering(
+            self.module()?,
+            powerio::package::MulticonductorToBalancedOptions {
+                base_mva,
+                ..Default::default()
+            },
+        )
+        .map_err(|error| core_error_pyerr(&error))?;
+        serde_json::to_string(&readiness).map_err(serialize_pyerr)
+    }
+
+    /// Lower the multiconductor value to a balanced module. Common records
+    /// and source ownership carry over; the pass appends its findings and one
+    /// Transform history entry. On refusal the handle keeps its module and
+    /// the error carries the structured diagnostics as JSON.
+    #[pyo3(signature = (base_mva=100.0))]
+    fn lower_to_balanced(&mut self, base_mva: f64) -> PyResult<Self> {
+        let module = self
+            .module
+            .take()
+            .ok_or_else(|| PyValueError::new_err("the module handle was consumed"))?;
+        match powerio::package::lower_module_to_balanced(
+            module,
+            powerio::package::MulticonductorToBalancedOptions {
+                base_mva,
+                ..Default::default()
+            },
+        ) {
+            Ok(lowered) => Ok(Self {
+                module: Some(lowered),
+            }),
+            Err((module, error)) => {
+                self.module = Some(module);
+                let details =
+                    serde_json::to_string(&error.diagnostics).unwrap_or_else(|_| "[]".to_owned());
+                Err(PowerIODataError::new_err(format!("{error} | {details}")))
+            }
+        }
+    }
+
+    /// The balanced network value as a network handle (cheap table share).
+    fn as_balanced_network(&self) -> PyResult<PyBalancedNetwork> {
+        let module = self.module()?;
+        let powerio::PioValue::BalancedNetwork(network) = module.value() else {
+            return Err(PowerIODataError::new_err(format!(
+                "the module carries a {} value; as_balanced_network takes a balanced network",
+                module.value().kind().as_str()
+            )));
+        };
+        Ok(case_from_parts(
+            network.clone(),
+            module.diagnostics().to_vec(),
+        ))
+    }
+
+    /// The multiconductor network value as a network handle.
+    fn as_multiconductor_network(&self) -> PyResult<PyMulticonductorNetwork> {
+        let module = self.module()?;
+        let powerio::PioValue::MulticonductorNetwork(network) = module.value() else {
+            return Err(PowerIODataError::new_err(format!(
+                "the module carries a {} value; as_multiconductor_network takes a \
+                 multiconductor network",
+                module.value().kind().as_str()
+            )));
+        };
+        let mut inner = powerio_core::PioModule::new(network.clone());
+        for diagnostic in module.diagnostics() {
+            if inner.add_diagnostic(diagnostic.clone()).is_err() {
+                break;
+            }
+        }
+        Ok(PyMulticonductorNetwork::from_module(inner))
+    }
+
+    fn __repr__(&self) -> String {
+        match &self.module {
+            Some(module) => format!(
+                "StoredModule(kind={}, diagnostics={}, history={})",
+                module.value().kind().as_str(),
+                module.diagnostics().len(),
+                module.history().len()
+            ),
+            None => "StoredModule(<consumed>)".to_owned(),
+        }
+    }
+}
+
 #[pyclass(name = "_Package", module = "powerio._powerio")]
 struct PyPackage {
     pkg: NetworkPackage,
@@ -2425,6 +2782,7 @@ fn _powerio(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(dist_convert_file, m)?)?;
     m.add_function(wrap_pyfunction!(dist_convert_str, m)?)?;
     m.add_class::<PyPackage>()?;
+    m.add_class::<PyStoredModule>()?;
     m.add_function(wrap_pyfunction!(classify_json_text, m)?)?;
     m.add_function(wrap_pyfunction!(json_classes, m)?)?;
     m.add_function(wrap_pyfunction!(parse_scopf, m)?)?;

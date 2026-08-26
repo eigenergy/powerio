@@ -7,8 +7,7 @@
 use std::collections::BTreeMap;
 
 use powerio_core::{
-    Diagnostic, DiagnosticCode, DiagnosticSeverity, HistoryEntry, HistoryId, HistoryKind,
-    PioModule, Producer, TimePoint,
+    Diagnostic, HistoryEntry, HistoryId, HistoryKind, PioModule, Producer, TimePoint,
 };
 
 use crate::package::diagnostics::codes;
@@ -53,39 +52,7 @@ pub(super) fn upgrade_legacy(
         ));
     }
 
-    let series = legacy
-        .operating_points
-        .clone()
-        .filter(|series| !series.points.is_empty());
-    let value = match (&legacy.model, series) {
-        (ModelPayload::Balanced { balanced_network }, Some(series)) => {
-            upgrade_series(balanced_network, &series)?
-        }
-        (ModelPayload::Balanced { balanced_network }, None) => {
-            PioValue::BalancedNetwork((**balanced_network).clone())
-        }
-        (
-            ModelPayload::Multiconductor {
-                multiconductor_network,
-            },
-            Some(_),
-        ) => {
-            return Err(refused(
-                &codes::READ_MODULE_INVALID,
-                format!(
-                    "a 0.9 multiconductor package with operating points has no upgrade; the \
-                     0.9 shape never produced one ({} buses)",
-                    multiconductor_network.buses().len()
-                ),
-            ));
-        }
-        (
-            ModelPayload::Multiconductor {
-                multiconductor_network,
-            },
-            None,
-        ) => PioValue::MulticonductorNetwork((**multiconductor_network).clone()),
-    };
+    let value = upgrade_value(&legacy)?;
 
     let producer = Producer::new(
         legacy.producer.tool.clone(),
@@ -94,10 +61,19 @@ pub(super) fn upgrade_legacy(
     .unwrap_or_else(|_| {
         Producer::new("powerio", crate::VERSION).expect("static producer is valid")
     });
+    let legacy_kind = match &legacy.model {
+        ModelPayload::Balanced { .. } => "balanced_network",
+        ModelPayload::Multiconductor { .. } => "multiconductor_network",
+    };
+    // A series value nests the network under `network` in value.data.
+    let rebase = match &value {
+        PioValue::BalancedOperatingPointTimeSeries(_) => "/network",
+        _ => "",
+    };
     let mut module = PioModule::new(value).with_producer(producer);
     for diagnostic in &legacy.diagnostics {
         module
-            .add_diagnostic(upgrade_diagnostic(diagnostic))
+            .add_diagnostic(upgrade_diagnostic(diagnostic, legacy_kind, rebase))
             .map_err(|error| refused(&codes::READ_MODULE_INVALID, error.to_string()))?;
     }
     let upgrade_note = HistoryEntry::new(
@@ -125,6 +101,44 @@ pub(super) fn upgrade_legacy(
         ))
         .map_err(|error| refused(&codes::READ_MODULE_INVALID, error.to_string()))?;
     Ok(module)
+}
+
+/// The upgraded typed value: legacy operating points become the primary
+/// series value; a multiconductor package with them never shipped.
+fn upgrade_value(legacy: &NetworkPackage) -> Result<PioValue> {
+    let series = legacy
+        .operating_points
+        .clone()
+        .filter(|series| !series.points.is_empty());
+    match (&legacy.model, series) {
+        (ModelPayload::Balanced { balanced_network }, Some(series)) => {
+            upgrade_series(balanced_network, &series)
+        }
+        (ModelPayload::Balanced { balanced_network }, None) => {
+            Ok(PioValue::BalancedNetwork((**balanced_network).clone()))
+        }
+        (
+            ModelPayload::Multiconductor {
+                multiconductor_network,
+            },
+            Some(_),
+        ) => Err(refused(
+            &codes::READ_MODULE_INVALID,
+            format!(
+                "a 0.9 multiconductor package with operating points has no upgrade; the \
+                 0.9 shape never produced one ({} buses)",
+                multiconductor_network.buses().len()
+            ),
+        )),
+        (
+            ModelPayload::Multiconductor {
+                multiconductor_network,
+            },
+            None,
+        ) => Ok(PioValue::MulticonductorNetwork(
+            (**multiconductor_network).clone(),
+        )),
+    }
 }
 
 fn version_is_09(version: &str) -> bool {
@@ -317,19 +331,15 @@ fn base_row(network: &crate::BalancedNetwork, quantity: &str) -> Result<Vec<f64>
     Ok(row)
 }
 
-fn upgrade_diagnostic(legacy: &crate::package::StructuredDiagnostic) -> Diagnostic {
-    let code = DiagnosticCode::new(legacy.code.as_str())
-        .unwrap_or_else(|_| DiagnosticCode::new("LEGACY.UNKNOWN").expect("static code is valid"));
-    let severity = match legacy.severity {
-        crate::package::DiagnosticSeverity::Error => DiagnosticSeverity::Error,
-        crate::package::DiagnosticSeverity::Warning => DiagnosticSeverity::Warning,
-        _ => DiagnosticSeverity::Note,
-    };
-    let mut diagnostic = Diagnostic::new(code, severity, legacy.message.clone());
-    if let Some(target) = &legacy.element_path
-        && let Ok(with) = diagnostic.clone().with_target(target.clone())
-    {
-        diagnostic = with;
-    }
-    diagnostic
+/// A legacy diagnostic with its element path translated into the value's own
+/// pointer grammar; a path outside the current value drops its target.
+fn upgrade_diagnostic(
+    legacy: &crate::package::StructuredDiagnostic,
+    kind: &str,
+    rebase: &str,
+) -> Diagnostic {
+    let target =
+        crate::package::diagnostics::translate_legacy_target(legacy.element_path.as_deref(), kind)
+            .map(|rest| format!("{rebase}{rest}"));
+    crate::package::diagnostics::to_module_diagnostic(legacy, target)
 }
