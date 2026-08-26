@@ -492,34 +492,41 @@ pub(crate) fn parse_powermodels_json_source(
         buses: sorted(root, "bus", "index")
             .iter()
             .map(|v| read_bus(v, ascale))
-            .collect::<Result<Vec<_>>>()?,
+            .collect::<Result<Vec<_>>>()?
+            .into(),
         loads: sorted(root, "load", "index")
             .iter()
             .map(|v| read_load(v, pscale))
-            .collect(),
+            .collect::<Vec<_>>()
+            .into(),
         shunts: sorted(root, "shunt", "index")
             .iter()
             .map(|v| read_shunt(v, pscale))
-            .collect(),
-        branches: read_branches(root, pscale, ascale, warnings),
+            .collect::<Vec<_>>()
+            .into(),
+        branches: read_branches(root, pscale, ascale, warnings).into(),
         switches: sorted(root, "switch", "index")
             .iter()
             .map(|v| read_switch(v, pscale))
-            .collect(),
+            .collect::<Vec<_>>()
+            .into(),
         generators: sorted(root, "gen", "index")
             .iter()
             .map(|v| read_gen(v, pscale, base_mva, per_unit))
-            .collect(),
+            .collect::<Vec<_>>()
+            .into(),
         storage: sorted(root, "storage", "index")
             .iter()
             .map(|v| read_storage(v, pscale))
-            .collect(),
+            .collect::<Vec<_>>()
+            .into(),
         hvdc: sorted(root, "dcline", "index")
             .iter()
             .map(|v| read_hvdc(v, pscale, base_mva, per_unit))
-            .collect(),
-        transformers_3w: Vec::new(),
-        areas: Vec::new(),
+            .collect::<Vec<_>>()
+            .into(),
+        transformers_3w: Vec::new().into(),
+        areas: Vec::new().into(),
         solver: None,
         source_format: SourceFormat::PowerModelsJson,
     });

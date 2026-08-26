@@ -56,7 +56,7 @@ mod pypsa;
 pub mod routing;
 mod surge;
 
-pub use egret::write_egret_json;
+pub use egret::{parse_egret_time_series, write_egret_json};
 pub use goc3::parse_goc3_json;
 pub use matpower::write_matpower;
 pub use opfdata::{OpfDataSolution, parse_opfdata_json};
