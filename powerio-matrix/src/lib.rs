@@ -49,6 +49,7 @@ pub use powerio::{
     write_powerworld, write_psse, write_pypsa_csv_folder,
 };
 
+mod collect;
 pub mod diagnostics;
 pub mod error;
 pub use error::{ElementCounts, Error, Result, ScenarioMismatch};

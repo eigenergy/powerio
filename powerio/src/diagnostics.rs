@@ -10,9 +10,9 @@
 //! family is which field or record it was, which belongs in `details` where a
 //! consumer can read it, rather than in a code nobody can enumerate.
 
-// The collector is workspace implementation support, not API: it is used
-// inside this crate and never re-exported.
-pub(crate) use powerio_core::__implementation::Diagnostics;
+// The collector is crate-private implementation support, not API: each
+// emitting crate carries its own copy (src/collect.rs) and never exports it.
+pub(crate) use crate::collect::Diagnostics;
 
 pub use powerio_core::{
     Diagnostic, DiagnosticCode, DiagnosticInfo, DiagnosticSeverity, DiagnosticStage, ErrorCategory,

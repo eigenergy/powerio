@@ -1,10 +1,11 @@
-//! The collector an emitting pass threads through its call tree.
+//! The crate-private collector an emitting pass threads through its call tree.
 //!
-//! No public PowerIO operation accepts or returns this type. An operation
-//! builds one while it runs and hands back `Vec<Diagnostic>` on success or a
-//! [`crate::Error`] carrying the same records on failure.
+//! No public PowerIO operation accepts or returns this type, and the 1.0
+//! baseline keeps the mutable collector out of every public surface, so each
+//! emitting crate carries its own copy of this file. Keep the copies byte
+//! identical; the shared record types come from `powerio-core`.
 
-use crate::{Diagnostic, DiagnosticInfo, DiagnosticSeverity, render_diagnostics};
+use powerio_core::{Diagnostic, DiagnosticInfo, DiagnosticSeverity, render_diagnostics};
 
 /// An ordered set of findings, built up as a reader, a lowering pass, or a
 /// writer runs.
@@ -14,21 +15,25 @@ use crate::{Diagnostic, DiagnosticInfo, DiagnosticSeverity, render_diagnostics};
 /// carries are rendered from the records by [`Diagnostics::lines`], never
 /// collected alongside them.
 #[derive(Clone, Debug, Default, PartialEq)]
-pub struct Diagnostics(Vec<Diagnostic>);
+pub(crate) struct Diagnostics(Vec<Diagnostic>);
 
+#[allow(
+    dead_code,
+    reason = "the collector copies stay identical across crates"
+)]
 impl Diagnostics {
     #[must_use]
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self(Vec::new())
     }
 
     /// Record a finding at its registered default severity.
-    pub fn push(&mut self, info: &'static DiagnosticInfo, message: impl Into<String>) {
+    pub(crate) fn push(&mut self, info: &'static DiagnosticInfo, message: impl Into<String>) {
         self.0.push(Diagnostic::of(info, message));
     }
 
     /// Record a finding at a severity this site raises or lowers.
-    pub fn push_at(
+    pub(crate) fn push_at(
         &mut self,
         info: &'static DiagnosticInfo,
         severity: DiagnosticSeverity,
@@ -39,52 +44,52 @@ impl Diagnostics {
     }
 
     /// Record a finding built with the record's own builders.
-    pub fn record(&mut self, diagnostic: Diagnostic) {
+    pub(crate) fn record(&mut self, diagnostic: Diagnostic) {
         self.0.push(diagnostic);
     }
 
     /// Record every finding of another set, in order.
-    pub fn absorb(&mut self, other: impl IntoIterator<Item = Diagnostic>) {
+    pub(crate) fn absorb(&mut self, other: impl IntoIterator<Item = Diagnostic>) {
         self.0.extend(other);
     }
 
     /// Put `other`'s findings ahead of this set's, which is what a conversion
     /// does with the read side.
-    pub fn prepend(&mut self, other: impl IntoIterator<Item = Diagnostic>) {
+    pub(crate) fn prepend(&mut self, other: impl IntoIterator<Item = Diagnostic>) {
         let mut front: Vec<_> = other.into_iter().collect();
         front.append(&mut self.0);
         self.0 = front;
     }
 
     #[must_use]
-    pub fn is_empty(&self) -> bool {
+    pub(crate) fn is_empty(&self) -> bool {
         self.0.is_empty()
     }
 
     #[must_use]
-    pub fn len(&self) -> usize {
+    pub(crate) fn len(&self) -> usize {
         self.0.len()
     }
 
     #[must_use]
-    pub fn records(&self) -> &[Diagnostic] {
+    pub(crate) fn records(&self) -> &[Diagnostic] {
         &self.0
     }
 
     #[must_use]
-    pub fn into_records(self) -> Vec<Diagnostic> {
+    pub(crate) fn into_records(self) -> Vec<Diagnostic> {
         self.0
     }
 
     /// The `CODE: message` lines for the text channels.
     #[must_use]
-    pub fn lines(&self) -> Vec<String> {
+    pub(crate) fn lines(&self) -> Vec<String> {
         render_diagnostics(&self.0)
     }
 
     /// The worst severity recorded, or `None` when nothing was.
     #[must_use]
-    pub fn worst_severity(&self) -> Option<DiagnosticSeverity> {
+    pub(crate) fn worst_severity(&self) -> Option<DiagnosticSeverity> {
         self.0.iter().map(Diagnostic::severity).max()
     }
 }

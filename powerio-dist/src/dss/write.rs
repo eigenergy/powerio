@@ -530,19 +530,19 @@ impl DssWriter {
         details.insert("position".into(), serde_json::json!(position));
         details.insert("terminal_count".into(), serde_json::json!(map.len()));
 
-        self.warnings.record(
-            crate::diagnostics::Diagnostic::of(
-                &C::EMIT_DSS_TERMINAL_ORDER_UNREPRESENTABLE,
-                format!(
-                    "{class} {name}{endpoint_text} on bus {bus}: grounded terminal `{terminal}` \
-                     is at 1-based position {position} of {}; dss requires the grounded return \
-                     last",
-                    map.len()
-                ),
-            )
-            .with_target(format!("{class} {name}"))
-            .with_details(details),
-        );
+        let mut diagnostic = crate::diagnostics::Diagnostic::of(
+            &C::EMIT_DSS_TERMINAL_ORDER_UNREPRESENTABLE,
+            format!(
+                "{class} {name}{endpoint_text} on bus {bus}: grounded terminal `{terminal}` \
+                 is at 1-based position {position} of {}; dss requires the grounded return \
+                 last",
+                map.len()
+            ),
+        )
+        .with_details(details)
+        .expect("writer-built details stay within the record bounds");
+        crate::diagnostics::attach_target(&mut diagnostic, format!("{class} {name}"));
+        self.warnings.record(diagnostic);
     }
 
     /// A numeric source extra. A present token that does not parse warns;

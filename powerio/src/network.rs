@@ -28,7 +28,6 @@ use std::sync::Arc;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::diagnostics::Diagnostics;
 use crate::geo::{GeoMeta, Location};
 use crate::{Error, Result};
 
@@ -1821,9 +1820,11 @@ impl BalancedNetwork {
     ///
     /// # Errors
     /// A `serde_json` serialization failure (none arise from this model today).
-    pub fn to_json_with_diagnostics(&self) -> crate::Result<(String, Diagnostics)> {
+    pub fn to_json_with_diagnostics(
+        &self,
+    ) -> crate::Result<(String, Vec<crate::diagnostics::Diagnostic>)> {
         let text = self.to_json()?;
-        Ok((text, Diagnostics::new()))
+        Ok((text, Vec::new()))
     }
 
     /// Serialize this network to `format`, preserving the retained source text
@@ -2891,7 +2892,7 @@ mod tests {
         // reflects that nothing was dropped.
         assert_eq!(back.to_json().unwrap(), text);
         let (_, diagnostics) = net.to_json_with_diagnostics().unwrap();
-        assert!(diagnostics.lines().is_empty());
+        assert!(diagnostics.is_empty());
     }
 
     #[test]

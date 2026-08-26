@@ -3,8 +3,38 @@ use std::fmt;
 
 use serde_json::{Map, Value};
 
+use crate::Error;
 use crate::records::{DiagnosticId, SourceSpan};
 use crate::validation::{MAX_DIAGNOSTIC_CODE_BYTES, sanitize_message, valid_nonempty_text};
+
+fn record_too_large(what: &str, limit: usize) -> Error {
+    Error::new(
+        &crate::codes::REQUEST_RECORD_TOO_LARGE,
+        format!("a diagnostic carries more than {limit} {what}"),
+    )
+}
+
+fn check_details(details: &Map<String, Value>) -> Result<(), Error> {
+    if details.len() > crate::validation::MAX_DIAGNOSTIC_DETAIL_KEYS {
+        return Err(record_too_large(
+            "detail keys",
+            crate::validation::MAX_DIAGNOSTIC_DETAIL_KEYS,
+        ));
+    }
+    if let Some((key, _)) = details
+        .iter()
+        .find(|(key, _)| !crate::validation::valid_nonempty_text(key))
+    {
+        return Err(Error::new(
+            &crate::codes::REQUEST_RECORD_INVALID_IDENTIFIER,
+            format!(
+                "diagnostic detail key `{}` is empty, contains NUL, or exceeds its bound",
+                bounded_identifier(key)
+            ),
+        ));
+    }
+    Ok(())
+}
 
 /// Severity of one user facing finding.
 ///
@@ -360,15 +390,13 @@ impl Diagnostic {
 
     /// Name the element this finding is about.
     ///
-    /// A target is identity, so it is never shortened: a truncated RFC 6901
-    /// pointer names a different element, or none. An empty, oversized, or
-    /// NUL-bearing locator is dropped and the finding is kept, because losing
-    /// the finding is worse than losing its locator.
-    #[must_use]
-    pub fn with_target(mut self, target: impl Into<String>) -> Self {
-        let target = target.into();
-        self.target = crate::validation::valid_diagnostic_target(&target).then_some(target);
-        self
+    /// A locator is identity, so it is stored complete or refused: a truncated
+    /// RFC 6901 pointer names a different element, or none. An empty,
+    /// oversized, or NUL-bearing locator is a visible error, and the caller
+    /// decides whether to keep the finding without one.
+    pub fn with_target(mut self, target: impl Into<String>) -> Result<Self, Error> {
+        self.set_target(target)?;
+        Ok(self)
     }
 
     /// True when the target is a pointer the stored document can write as is.
@@ -379,34 +407,76 @@ impl Diagnostic {
             .is_some_and(crate::validation::valid_rfc6901_pointer)
     }
 
-    #[must_use]
-    pub fn with_span(mut self, span: SourceSpan) -> Self {
+    pub fn with_span(mut self, span: SourceSpan) -> Result<Self, Error> {
+        if self.spans.len() >= crate::validation::MAX_DIAGNOSTIC_SPANS {
+            return Err(record_too_large(
+                "source spans",
+                crate::validation::MAX_DIAGNOSTIC_SPANS,
+            ));
+        }
         self.spans.push(span);
-        self
+        Ok(self)
     }
 
-    #[must_use]
-    pub fn with_related(mut self, related: DiagnosticId) -> Self {
+    pub fn with_related(mut self, related: DiagnosticId) -> Result<Self, Error> {
+        if self.related.len() >= crate::validation::MAX_DIAGNOSTIC_RELATED {
+            return Err(record_too_large(
+                "related records",
+                crate::validation::MAX_DIAGNOSTIC_RELATED,
+            ));
+        }
         self.related.push(related);
-        self
+        Ok(self)
     }
 
-    /// Add detail keys to a finding already built.
-    pub fn details_mut(&mut self) -> &mut Map<String, Value> {
-        &mut self.details
+    /// Add one detail entry to a finding already built, under the same key and
+    /// count limits the decoder enforces.
+    pub fn insert_detail(&mut self, key: impl Into<String>, value: Value) -> Result<(), Error> {
+        let key = key.into();
+        if !crate::validation::valid_nonempty_text(&key) {
+            return Err(Error::new(
+                &crate::codes::REQUEST_RECORD_INVALID_IDENTIFIER,
+                "a diagnostic detail key must be nonempty and bounded",
+            ));
+        }
+        if !self.details.contains_key(&key)
+            && self.details.len() >= crate::validation::MAX_DIAGNOSTIC_DETAIL_KEYS
+        {
+            return Err(record_too_large(
+                "detail keys",
+                crate::validation::MAX_DIAGNOSTIC_DETAIL_KEYS,
+            ));
+        }
+        self.details.insert(key, value);
+        Ok(())
     }
 
     /// Replace the target of a finding already built. Same rule as
-    /// [`Diagnostic::with_target`]: bounded, never shortened.
-    pub fn set_target(&mut self, target: impl Into<String>) {
+    /// [`Diagnostic::with_target`]: the complete locator is stored, or the
+    /// call fails visibly.
+    pub fn set_target(&mut self, target: impl Into<String>) -> Result<(), Error> {
         let target = target.into();
-        self.target = crate::validation::valid_diagnostic_target(&target).then_some(target);
+        if !crate::validation::valid_diagnostic_target(&target) {
+            return Err(Error::new(
+                &crate::codes::REQUEST_RECORD_INVALID_IDENTIFIER,
+                "a diagnostic target must be a nonempty bounded locator",
+            ));
+        }
+        self.target = Some(target);
+        Ok(())
     }
 
-    #[must_use]
-    pub fn with_details(mut self, details: Map<String, Value>) -> Self {
+    pub fn with_details(mut self, details: Map<String, Value>) -> Result<Self, Error> {
+        self.set_details(details)?;
+        Ok(self)
+    }
+
+    /// Replace the details of a finding already built, under the same key and
+    /// count limits the decoder enforces.
+    pub fn set_details(&mut self, details: Map<String, Value>) -> Result<(), Error> {
+        check_details(&details)?;
         self.details = details;
-        self
+        Ok(())
     }
 
     /// What a user can do about this finding.
@@ -566,18 +636,65 @@ mod tests {
     }
 
     #[test]
-    fn a_target_is_never_shortened() {
+    fn a_target_is_stored_complete_or_refused() {
         let long = format!("/model/buses/{}", "a".repeat(4_000));
         let kept = Diagnostic::of(&crate::codes::VALIDATE_TIME_SERIES_SHAPE, "long target")
-            .with_target(long.clone());
+            .with_target(long.clone())
+            .unwrap();
         assert_eq!(kept.target(), Some(long.as_str()));
 
-        // Past the bound the locator is dropped, never truncated: a shortened
-        // pointer names a different element.
+        // Past the bound the call fails visibly, and the record is unchanged:
+        // a shortened pointer would name a different element, and a silent
+        // drop would change the finding's identity behind the caller's back.
         let oversize = "/".repeat(crate::validation::MAX_DIAGNOSTIC_TARGET_BYTES + 1);
-        let dropped = Diagnostic::of(&crate::codes::VALIDATE_TIME_SERIES_SHAPE, "oversize")
-            .with_target(oversize);
-        assert_eq!(dropped.target(), None);
+        let mut record = Diagnostic::of(&crate::codes::VALIDATE_TIME_SERIES_SHAPE, "oversize");
+        assert!(record.set_target(oversize).is_err());
+        assert!(record.set_target("").is_err());
+        assert!(record.set_target("with\0nul").is_err());
+        assert_eq!(record.target(), None);
+        assert!(
+            Diagnostic::of(&crate::codes::VALIDATE_TIME_SERIES_SHAPE, "oversize")
+                .with_target("/".repeat(crate::validation::MAX_DIAGNOSTIC_TARGET_BYTES + 1))
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn builder_paths_enforce_the_same_count_limits_as_the_decoder() {
+        let mut record = Diagnostic::of(&crate::codes::VALIDATE_TIME_SERIES_SHAPE, "caps");
+        for index in 0..crate::validation::MAX_DIAGNOSTIC_RELATED {
+            record = record
+                .with_related(DiagnosticId::new(format!("d{index}")).unwrap())
+                .unwrap();
+        }
+        assert!(
+            record
+                .clone()
+                .with_related(DiagnosticId::new("one-too-many").unwrap())
+                .is_err()
+        );
+
+        for index in 0..crate::validation::MAX_DIAGNOSTIC_DETAIL_KEYS {
+            record
+                .insert_detail(format!("k{index}"), serde_json::Value::Null)
+                .unwrap();
+        }
+        assert!(
+            record
+                .insert_detail("one-too-many", serde_json::Value::Null)
+                .is_err()
+        );
+        // Replacing an existing key is not growth.
+        assert!(
+            record
+                .insert_detail("k0", serde_json::Value::Bool(true))
+                .is_ok()
+        );
+        assert!(
+            record
+                .insert_detail("bad\0key", serde_json::Value::Null)
+                .is_err()
+        );
     }
 
     #[test]
@@ -662,29 +779,113 @@ mod tests {
 // the facade. A record read back carries an external code, because a registry
 // entry is a compile time item of whichever crate declared it.
 mod wire {
-    use serde::{Deserialize, Serialize};
+    use serde::de::DeserializeSeed;
+    use serde::{Deserialize, Deserializer, Serialize};
     use serde_json::{Map, Value};
 
     use super::{Diagnostic, DiagnosticCode, DiagnosticIdentity, DiagnosticSeverity};
+    use crate::bounded::{BoundedStr, TruncatedStr, bounded_json_map, bounded_vec};
+    use crate::validation::{
+        MAX_DIAGNOSTIC_CODE_BYTES, MAX_DIAGNOSTIC_DETAIL_KEYS, MAX_DIAGNOSTIC_MESSAGE_DECODE_BYTES,
+        MAX_DIAGNOSTIC_RELATED, MAX_DIAGNOSTIC_SPANS, MAX_DIAGNOSTIC_TARGET_BYTES,
+        MAX_IDENTIFIER_BYTES,
+    };
     use crate::{DiagnosticId, SourceSpan};
 
+    // Each field applies its limit while it decodes, so a hostile document
+    // fails at the first excess element or byte instead of after an unbounded
+    // `Vec`, map, or `String` has been built.
     #[derive(Serialize, Deserialize)]
     pub(super) struct DiagnosticWire {
+        #[serde(deserialize_with = "de_code")]
         code: String,
         severity: DiagnosticSeverity,
+        #[serde(deserialize_with = "de_message")]
         message: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         id: Option<DiagnosticId>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "de_target"
+        )]
         target: Option<String>,
-        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        #[serde(
+            default,
+            skip_serializing_if = "Vec::is_empty",
+            deserialize_with = "de_spans"
+        )]
         spans: Vec<SourceSpan>,
-        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        #[serde(
+            default,
+            skip_serializing_if = "Vec::is_empty",
+            deserialize_with = "de_related"
+        )]
         related: Vec<DiagnosticId>,
-        #[serde(default, skip_serializing_if = "Map::is_empty")]
+        #[serde(
+            default,
+            skip_serializing_if = "Map::is_empty",
+            deserialize_with = "de_details"
+        )]
         details: Map<String, Value>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "de_action"
+        )]
         suggested_action: Option<String>,
+    }
+
+    fn de_code<'de, D: Deserializer<'de>>(deserializer: D) -> Result<String, D::Error> {
+        BoundedStr {
+            what: "diagnostic code",
+            max_bytes: MAX_DIAGNOSTIC_CODE_BYTES,
+        }
+        .deserialize(deserializer)
+    }
+
+    fn de_message<'de, D: Deserializer<'de>>(deserializer: D) -> Result<String, D::Error> {
+        deserializer.deserialize_str(TruncatedStr {
+            max_bytes: MAX_DIAGNOSTIC_MESSAGE_DECODE_BYTES,
+        })
+    }
+
+    fn de_target<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Option<String>, D::Error> {
+        BoundedStr {
+            what: "diagnostic target",
+            max_bytes: MAX_DIAGNOSTIC_TARGET_BYTES,
+        }
+        .deserialize(deserializer)
+        .map(Some)
+    }
+
+    fn de_action<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Option<String>, D::Error> {
+        deserializer
+            .deserialize_str(TruncatedStr {
+                max_bytes: MAX_DIAGNOSTIC_MESSAGE_DECODE_BYTES,
+            })
+            .map(Some)
+    }
+
+    fn de_spans<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Vec<SourceSpan>, D::Error> {
+        bounded_vec(deserializer, "source spans", MAX_DIAGNOSTIC_SPANS)
+    }
+
+    fn de_related<'de, D: Deserializer<'de>>(
+        deserializer: D,
+    ) -> Result<Vec<DiagnosticId>, D::Error> {
+        bounded_vec(deserializer, "related records", MAX_DIAGNOSTIC_RELATED)
+    }
+
+    fn de_details<'de, D: Deserializer<'de>>(
+        deserializer: D,
+    ) -> Result<Map<String, Value>, D::Error> {
+        bounded_json_map(
+            deserializer,
+            "detail keys",
+            MAX_DIAGNOSTIC_DETAIL_KEYS,
+            MAX_IDENTIFIER_BYTES,
+        )
     }
 
     impl From<&Diagnostic> for DiagnosticWire {

@@ -42,11 +42,17 @@ macro_rules! record_id {
             }
         }
 
-        // A stored identifier is validated on the way in, so a malformed
-        // document fails at the field rather than reaching a record.
+        // A stored identifier is validated on the way in, with the byte bound
+        // applied before the text is retained, so a malformed document fails
+        // at the field rather than reaching a record.
         impl<'de> serde::Deserialize<'de> for $name {
             fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-                let value = String::deserialize(deserializer)?;
+                use serde::de::DeserializeSeed;
+                let value = crate::bounded::BoundedStr {
+                    what: $label,
+                    max_bytes: crate::validation::MAX_IDENTIFIER_BYTES,
+                }
+                .deserialize(deserializer)?;
                 Self::new(value).map_err(serde::de::Error::custom)
             }
         }
@@ -303,6 +309,15 @@ impl SourceMapEntry {
                 "this source relation requires at least one byte span",
             ));
         }
+        if spans.len() > crate::validation::MAX_SOURCE_MAP_SPANS {
+            return Err(Error::new(
+                &crate::codes::REQUEST_RECORD_TOO_LARGE,
+                format!(
+                    "a source map entry carries more than {} byte spans",
+                    crate::validation::MAX_SOURCE_MAP_SPANS
+                ),
+            ));
+        }
         Ok(Self {
             target: target.into_boxed_str(),
             relation,
@@ -420,23 +435,60 @@ impl HistoryEntry {
         Ok(self)
     }
 
-    #[must_use]
-    pub fn with_parameters(mut self, parameters: BTreeMap<String, Value>) -> Self {
+    pub fn with_parameters(mut self, parameters: BTreeMap<String, Value>) -> Result<Self, Error> {
+        if parameters.len() > crate::validation::MAX_HISTORY_PARAMETERS {
+            return Err(history_too_large(
+                "parameters",
+                crate::validation::MAX_HISTORY_PARAMETERS,
+            ));
+        }
+        if parameters.keys().any(|key| !valid_nonempty_text(key)) {
+            return Err(Error::new(
+                &crate::codes::REQUEST_RECORD_INVALID_IDENTIFIER,
+                "a history parameter key must be nonempty and bounded",
+            ));
+        }
         self.parameters = parameters;
-        self
+        Ok(self)
     }
 
-    #[must_use]
-    pub fn with_assumption(mut self, assumption: impl Into<String>) -> Self {
-        self.assumptions.push(assumption.into());
-        self
+    pub fn with_assumption(mut self, assumption: impl Into<String>) -> Result<Self, Error> {
+        self.assumptions = push_history_note(self.assumptions, assumption.into(), "assumptions")?;
+        Ok(self)
     }
 
-    #[must_use]
-    pub fn with_loss(mut self, loss: impl Into<String>) -> Self {
-        self.losses.push(loss.into());
-        self
+    pub fn with_loss(mut self, loss: impl Into<String>) -> Result<Self, Error> {
+        self.losses = push_history_note(self.losses, loss.into(), "losses")?;
+        Ok(self)
     }
+}
+
+fn history_too_large(what: &str, limit: usize) -> Error {
+    Error::new(
+        &crate::codes::REQUEST_RECORD_TOO_LARGE,
+        format!("a history entry carries more than {limit} {what}"),
+    )
+}
+
+fn push_history_note(
+    mut notes: Vec<String>,
+    note: String,
+    what: &'static str,
+) -> Result<Vec<String>, Error> {
+    if notes.len() >= crate::validation::MAX_HISTORY_NOTES {
+        return Err(history_too_large(
+            what,
+            crate::validation::MAX_HISTORY_NOTES,
+        ));
+    }
+    if !valid_nonempty_text(&note) {
+        return Err(Error::new(
+            &crate::codes::REQUEST_RECORD_INVALID_IDENTIFIER,
+            format!("a history {what} note must be nonempty and bounded"),
+        ));
+    }
+    notes.push(note);
+    Ok(notes)
 }
 
 fn validated_kind(kind: String) -> Result<Box<str>, Error> {

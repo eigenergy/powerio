@@ -257,10 +257,14 @@ fn commit_path_output(
         })?;
     }
 
-    // Claiming the name is the collision check. Inspecting the target and then
-    // renaming over it later is a race: a target created in between would be
-    // replaced by an output that refused to overwrite anything.
-    let reservation = Reservation::claim(target, directory)?;
+    // The commit itself is the collision check: the staged output is moved
+    // onto the target with a rename that refuses an existing entry, so a
+    // target created at any point before the commit is never replaced. This
+    // early inspection only refuses obvious collisions before staging work
+    // begins; correctness does not depend on it.
+    if std::fs::symlink_metadata(target).is_ok() {
+        return Err(collision(target));
+    }
 
     let mut staging = StagingGuard::create(target, directory)?;
     let result = if directory {
@@ -274,13 +278,9 @@ fn commit_path_output(
         )
     };
     if let Err(error) = result {
-        let error = staging.cleanup_after(error);
-        return Err(reservation.release_after(error));
+        return Err(staging.cleanup_after(error));
     }
-    if let Err(error) = staging.commit(target) {
-        return Err(reservation.release_after(error));
-    }
-    reservation.into_committed();
+    staging.commit(target)?;
 
     Ok(if directory {
         artifacts
@@ -337,88 +337,148 @@ fn write_directory_artifacts(staging: &Path, artifacts: &[MemoryArtifact]) -> Re
     Ok(())
 }
 
-/// The claimed output name.
+fn collision(target: &Path) -> Error {
+    Error::new(
+        &crate::codes::REQUEST_OUTPUT_COLLISION,
+        format!("output target '{}' already exists", target.display()),
+    )
+}
+
+/// Move a complete staged output onto the target without replacing an entry
+/// that exists at commit time.
 ///
-/// The claim is the atomic operation: `create_dir` and `create_new` both fail
-/// with `AlreadyExists` rather than replacing an existing entry, so a target
-/// that appears after the claim cannot be silently overwritten. The staged
-/// output is then renamed onto the reservation, which is an entry this process
-/// created: a POSIX rename onto an empty directory succeeds and onto a regular
-/// file replaces it, and both fail if another writer filled the directory in
-/// the meantime.
-struct Reservation {
-    path: PathBuf,
-    directory: bool,
-    committed: bool,
+/// An ordinary `rename` replaces a regular file at the target, so a target
+/// substituted between the collision inspection and the commit would be
+/// silently overwritten by an output that refused to overwrite anything. The
+/// platform no-replace rename closes that window: `renamex_np(RENAME_EXCL)` on
+/// macOS, `renameat2(RENAME_NOREPLACE)` on Linux, and `MoveFileExW` without
+/// `MOVEFILE_REPLACE_EXISTING` on Windows all fail atomically when the target
+/// entry exists, including when that entry is a dangling symbolic link. On a
+/// filesystem whose rename cannot refuse (old NFS and FAT report the flag as
+/// unsupported), a one file output falls back to `hard_link` plus staging
+/// removal, which is equally refuse-on-exist; a directory output has no such
+/// portable primitive and is refused with a clear error rather than committed
+/// through a race.
+fn rename_no_replace(from: &Path, to: &Path) -> std::io::Result<()> {
+    platform_rename_no_replace(from, to)
 }
 
-impl Reservation {
-    fn claim(target: &Path, directory: bool) -> Result<Self, Error> {
-        let claimed = if directory {
-            std::fs::create_dir(target)
-        } else {
-            OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .open(target)
-                .map(|_| ())
-        };
-        match claimed {
-            Ok(()) => Ok(Self {
-                path: target.to_path_buf(),
-                directory,
-                committed: false,
-            }),
-            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => Err(Error::new(
-                &crate::codes::REQUEST_OUTPUT_COLLISION,
-                format!("output target '{}' already exists", target.display()),
-            )),
-            Err(cause) => Err(Error::new(
-                &crate::codes::EMIT_IO_STAGING,
-                format!("cannot claim output target '{}'", target.display()),
-            )
-            .with_cause(cause)),
-        }
-    }
-
-    fn into_committed(mut self) {
-        self.committed = true;
-    }
-
-    fn release_after(mut self, original: Error) -> Error {
-        self.committed = true;
-        let released = if self.directory {
-            std::fs::remove_dir(&self.path)
-        } else {
-            std::fs::remove_file(&self.path)
-        };
-        match released {
-            Ok(()) => original,
-            Err(cause) => original.with_diagnostic(
-                Diagnostic::of(
-                    &crate::codes::EMIT_IO_STAGING,
-                    format!(
-                        "left the claimed output target '{}' in place: {cause}",
-                        self.path.display()
-                    ),
-                )
-                .with_severity(crate::DiagnosticSeverity::Warning),
-            ),
-        }
+#[cfg(target_os = "macos")]
+fn platform_rename_no_replace(from: &Path, to: &Path) -> std::io::Result<()> {
+    let from = path_to_c_string(from)?;
+    let to = path_to_c_string(to)?;
+    // SAFETY: both pointers reference NUL-terminated buffers owned by the
+    // `CString` values above, which outlive the call.
+    let status = unsafe { libc::renamex_np(from.as_ptr(), to.as_ptr(), libc::RENAME_EXCL) };
+    if status == 0 {
+        Ok(())
+    } else {
+        Err(std::io::Error::last_os_error())
     }
 }
 
-impl Drop for Reservation {
-    fn drop(&mut self) {
-        if self.committed {
-            return;
-        }
-        let _ = if self.directory {
-            std::fs::remove_dir(&self.path)
-        } else {
-            std::fs::remove_file(&self.path)
-        };
+#[cfg(target_os = "linux")]
+fn platform_rename_no_replace(from: &Path, to: &Path) -> std::io::Result<()> {
+    let from = path_to_c_string(from)?;
+    let to = path_to_c_string(to)?;
+    // SAFETY: both pointers reference NUL-terminated buffers owned by the
+    // `CString` values above, which outlive the call.
+    let status = unsafe {
+        libc::renameat2(
+            libc::AT_FDCWD,
+            from.as_ptr(),
+            libc::AT_FDCWD,
+            to.as_ptr(),
+            libc::RENAME_NOREPLACE,
+        )
+    };
+    if status == 0 {
+        Ok(())
+    } else {
+        Err(std::io::Error::last_os_error())
     }
+}
+
+#[cfg(unix)]
+fn path_to_c_string(path: &Path) -> std::io::Result<std::ffi::CString> {
+    use std::os::unix::ffi::OsStrExt;
+    std::ffi::CString::new(path.as_os_str().as_bytes())
+        .map_err(|_| std::io::Error::from(std::io::ErrorKind::InvalidInput))
+}
+
+#[cfg(windows)]
+fn platform_rename_no_replace(from: &Path, to: &Path) -> std::io::Result<()> {
+    use std::os::windows::ffi::OsStrExt;
+
+    #[link(name = "kernel32")]
+    unsafe extern "system" {
+        fn MoveFileExW(existing: *const u16, new: *const u16, flags: u32) -> i32;
+    }
+
+    let encode = |path: &Path| -> Vec<u16> {
+        path.as_os_str()
+            .encode_wide()
+            .chain(std::iter::once(0))
+            .collect()
+    };
+    let from = encode(from);
+    let to = encode(to);
+    // No MOVEFILE_REPLACE_EXISTING: the move fails when the target exists.
+    // SAFETY: both pointers reference NUL-terminated wide buffers owned by the
+    // vectors above, which outlive the call.
+    let status = unsafe { MoveFileExW(from.as_ptr(), to.as_ptr(), 0) };
+    if status != 0 {
+        Ok(())
+    } else {
+        Err(std::io::Error::last_os_error())
+    }
+}
+
+#[cfg(any(
+    all(unix, not(any(target_os = "macos", target_os = "linux"))),
+    not(any(unix, windows))
+))]
+fn platform_rename_no_replace(_from: &Path, _to: &Path) -> std::io::Result<()> {
+    Err(std::io::Error::from(std::io::ErrorKind::Unsupported))
+}
+
+/// True when the filesystem reported the no-replace rename flag itself as
+/// unsupported, rather than reporting a real collision or I/O failure.
+fn no_replace_unsupported(error: &std::io::Error) -> bool {
+    if error.kind() == std::io::ErrorKind::Unsupported {
+        return true;
+    }
+    #[cfg(unix)]
+    if matches!(
+        error.raw_os_error(),
+        Some(libc::EINVAL | libc::ENOSYS | libc::ENOTSUP)
+    ) {
+        return true;
+    }
+    false
+}
+
+/// True when the rename failed because the target entry already exists.
+fn commit_collision(error: &std::io::Error) -> bool {
+    if matches!(
+        error.kind(),
+        std::io::ErrorKind::AlreadyExists | std::io::ErrorKind::DirectoryNotEmpty
+    ) {
+        return true;
+    }
+    #[cfg(unix)]
+    if matches!(
+        error.raw_os_error(),
+        Some(libc::EEXIST | libc::ENOTEMPTY | libc::EISDIR)
+    ) {
+        return true;
+    }
+    #[cfg(windows)]
+    // ERROR_ALREADY_EXISTS and ERROR_FILE_EXISTS.
+    if matches!(error.raw_os_error(), Some(183 | 80)) {
+        return true;
+    }
+    false
 }
 
 struct StagingGuard {
@@ -485,20 +545,62 @@ impl StagingGuard {
 
     fn commit(mut self, target: &Path) -> Result<(), Error> {
         self.file.take();
-        if let Err(cause) = std::fs::rename(&self.path, target) {
-            let error = Error::new(
-                &crate::codes::EMIT_IO_COMMIT,
-                format!(
-                    "cannot move complete staging output '{}' into '{}'",
-                    self.path.display(),
-                    target.display()
-                ),
-            )
-            .with_cause(cause);
-            return Err(self.cleanup_after(error));
+        match rename_no_replace(&self.path, target) {
+            Ok(()) => {
+                self.committed = true;
+                Ok(())
+            }
+            Err(cause) if commit_collision(&cause) => Err(self.cleanup_after(collision(target))),
+            Err(cause) if no_replace_unsupported(&cause) && !self.directory => {
+                // Refuse-on-exist commit for filesystems without a no-replace
+                // rename: `hard_link` fails when the target entry exists, and
+                // the staging entry is removed only after the link succeeds.
+                match std::fs::hard_link(&self.path, target) {
+                    Ok(()) => {
+                        let _ = std::fs::remove_file(&self.path);
+                        self.committed = true;
+                        Ok(())
+                    }
+                    Err(cause) if commit_collision(&cause) => {
+                        Err(self.cleanup_after(collision(target)))
+                    }
+                    Err(cause) => {
+                        let error = Error::new(
+                            &crate::codes::EMIT_IO_COMMIT,
+                            format!(
+                                "this filesystem cannot commit '{}' without risking replacement of a concurrently created target",
+                                target.display()
+                            ),
+                        )
+                        .with_cause(cause);
+                        Err(self.cleanup_after(error))
+                    }
+                }
+            }
+            Err(cause) if no_replace_unsupported(&cause) => {
+                let error = Error::new(
+                    &crate::codes::EMIT_IO_COMMIT,
+                    format!(
+                        "this filesystem has no rename that refuses an existing entry; a directory output at '{}' cannot be committed without risking replacement of a concurrently created target",
+                        target.display()
+                    ),
+                )
+                .with_cause(cause);
+                Err(self.cleanup_after(error))
+            }
+            Err(cause) => {
+                let error = Error::new(
+                    &crate::codes::EMIT_IO_COMMIT,
+                    format!(
+                        "cannot move complete staging output '{}' into '{}'",
+                        self.path.display(),
+                        target.display()
+                    ),
+                )
+                .with_cause(cause);
+                Err(self.cleanup_after(error))
+            }
         }
-        self.committed = true;
-        Ok(())
     }
 
     fn cleanup_after(mut self, original: Error) -> Error {
@@ -608,10 +710,8 @@ mod tests {
     }
 
     #[test]
-    fn the_target_name_is_claimed_before_anything_is_staged() {
-        // The claim is what makes the refusal race free: a target that appears
-        // after an existence check but before the commit used to be replaced.
-        let path = test_root("claimed-first");
+    fn an_existing_target_is_refused_and_never_replaced() {
+        let path = test_root("refused");
         let target = path.join("case.m");
         commit_path_output(&target, false, &[artifact("case.m", b"one")]).unwrap();
 
@@ -622,7 +722,8 @@ mod tests {
         assert_eq!(error.category(), crate::ErrorCategory::Request);
         assert_eq!(std::fs::read(&target).unwrap(), b"one");
 
-        // A failed write releases the claim rather than leaving the name taken.
+        // A nonempty directory at the target is also a refusal, and its
+        // contents survive.
         let directory = path.join("as-a-directory");
         std::fs::create_dir_all(&directory).unwrap();
         let blocked = directory.join("out");
@@ -630,6 +731,44 @@ mod tests {
         std::fs::write(blocked.join("keep"), b"kept").unwrap();
         assert!(commit_path_output(&blocked, true, &[artifact("a.csv", b"a")]).is_err());
         assert_eq!(std::fs::read(blocked.join("keep")).unwrap(), b"kept");
+
+        std::fs::remove_dir_all(&path).ok();
+    }
+
+    #[test]
+    fn the_commit_refuses_a_target_created_after_staging_began() {
+        // A target that appears between the collision inspection and the
+        // commit must not be replaced. The commit primitive itself is the
+        // guarantee: it fails on an existing entry instead of renaming over
+        // it, for a file, a directory, and an empty directory target.
+        let path = test_root("late-target");
+        std::fs::create_dir_all(&path).unwrap();
+
+        let staged = path.join("staged.m");
+        std::fs::write(&staged, b"staged").unwrap();
+        let target = path.join("case.m");
+        std::fs::write(&target, b"foreign").unwrap();
+        let error = rename_no_replace(&staged, &target).expect_err("existing file target");
+        assert!(commit_collision(&error), "{error:?}");
+        assert_eq!(std::fs::read(&target).unwrap(), b"foreign");
+        assert_eq!(std::fs::read(&staged).unwrap(), b"staged");
+
+        // An empty directory created at the target after staging is likewise
+        // never replaced; a plain rename would have swapped a staged
+        // directory straight over it.
+        let staged_dir = path.join("staged-dir");
+        std::fs::create_dir(&staged_dir).unwrap();
+        let target_dir = path.join("out-dir");
+        std::fs::create_dir(&target_dir).unwrap();
+        let error = rename_no_replace(&staged_dir, &target_dir).expect_err("existing dir target");
+        assert!(commit_collision(&error), "{error:?}");
+        assert!(target_dir.is_dir());
+        assert!(staged_dir.is_dir());
+
+        // With no target entry the same primitive commits.
+        let fresh = path.join("fresh.m");
+        rename_no_replace(&staged, &fresh).unwrap();
+        assert_eq!(std::fs::read(&fresh).unwrap(), b"staged");
 
         std::fs::remove_dir_all(&path).ok();
     }

@@ -20,5 +20,10 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 schemars = { workspace = true, optional = true }
 
+# The no-replace output commit calls the platform rename that refuses an
+# existing entry; std does not expose one.
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
 [lints]
 workspace = true

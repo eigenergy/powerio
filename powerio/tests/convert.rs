@@ -2215,9 +2215,8 @@ fn model_json_carries_non_finite_values_as_string_spellings() {
     net.buses[0].vm = f64::NAN;
     let (text, diagnostics) = net.to_json_with_diagnostics().unwrap();
     assert!(
-        diagnostics.lines().is_empty(),
-        "a faithful write reports nothing: {:?}",
-        diagnostics.lines()
+        diagnostics.is_empty(),
+        "a faithful write reports nothing: {diagnostics:?}"
     );
     assert!(text.contains(r#""angmax":"Infinity""#), "{text}");
     assert!(text.contains(r#""vm":"NaN""#), "{text}");

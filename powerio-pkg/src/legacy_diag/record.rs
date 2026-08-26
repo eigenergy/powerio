@@ -343,13 +343,26 @@ impl From<StructuredDiagnostic> for powerio_core::Diagnostic {
         });
         let mut diagnostic = powerio_core::Diagnostic::new(code, severity, record.message);
         if let Some(path) = record.element_path {
-            diagnostic = diagnostic.with_target(path);
+            // A stored locator past the runtime bounds is dropped visibly:
+            // the finding survives and says a locator existed and how long
+            // it was, rather than silently changing identity.
+            let byte_length = path.len();
+            if diagnostic.set_target(path).is_err() {
+                let _ = diagnostic
+                    .insert_detail("dropped_target_bytes", serde_json::Value::from(byte_length));
+            }
         }
         if let Some(action) = record.suggested_action {
             diagnostic = diagnostic.with_suggested_action(action);
         }
         if !record.details.is_empty() {
-            diagnostic = diagnostic.with_details(record.details);
+            // Same rule for a stored detail map past the runtime bounds:
+            // keep the finding, mark the loss.
+            let key_count = record.details.len();
+            if diagnostic.set_details(record.details).is_err() {
+                let _ = diagnostic
+                    .insert_detail("dropped_detail_keys", serde_json::Value::from(key_count));
+            }
         }
         diagnostic
     }

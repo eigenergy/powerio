@@ -198,11 +198,11 @@ impl Writer {
         message: impl Into<String>,
         details: Map<String, Value>,
     ) {
-        self.warnings.record(
-            Diagnostic::of(code, message)
-                .with_target(element_path)
-                .with_details(details),
-        );
+        let mut diagnostic = Diagnostic::of(code, message)
+            .with_details(details)
+            .expect("writer-built details stay within the record bounds");
+        crate::diagnostics::attach_target(&mut diagnostic, element_path.into());
+        self.warnings.record(diagnostic);
     }
 
     fn transformer_diagnostic(

@@ -122,7 +122,7 @@ type Probe<T> = std::result::Result<T, &'static str>;
 /// [`Error::FormatRead`] when the header is not the known magic, a record
 /// does not match the validated layouts, or a table cannot be located.
 pub fn parse_pwb(bytes: &[u8], name_hint: Option<&str>) -> Result<BalancedNetwork> {
-    parse_pwb_with_warnings(
+    parse_pwb_collecting(
         bytes,
         name_hint,
         &mut crate::diagnostics::Diagnostics::new(),
@@ -140,6 +140,15 @@ pub fn parse_pwb(bytes: &[u8], name_hint: Option<&str>) -> Result<BalancedNetwor
 ///
 /// As [`parse_pwb`].
 pub fn parse_pwb_with_warnings(
+    bytes: &[u8],
+    name_hint: Option<&str>,
+) -> Result<(BalancedNetwork, Vec<crate::diagnostics::Diagnostic>)> {
+    let mut warnings = crate::diagnostics::Diagnostics::new();
+    let network = parse_pwb_collecting(bytes, name_hint, &mut warnings)?;
+    Ok((network, warnings.into_records()))
+}
+
+pub(crate) fn parse_pwb_collecting(
     bytes: &[u8],
     name_hint: Option<&str>,
     warnings: &mut crate::diagnostics::Diagnostics,

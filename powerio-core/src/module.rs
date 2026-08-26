@@ -418,7 +418,8 @@ mod tests {
                     "note",
                 )
                 .with_id(DiagnosticId::new("d1").unwrap())
-                .with_span(span),
+                .with_span(span)
+                .unwrap(),
             )
             .unwrap();
         module

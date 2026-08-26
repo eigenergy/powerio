@@ -9,9 +9,9 @@
 //! Codes are families, not one per site: what differs between two sites of a
 //! family is which object or property it was, which belongs in `details`.
 
-// The collector is workspace implementation support, not API: it is used
-// inside this crate and never re-exported.
-pub(crate) use powerio_core::__implementation::Diagnostics;
+// The collector is crate-private implementation support, not API: each
+// emitting crate carries its own copy (src/collect.rs) and never exports it.
+pub(crate) use crate::collect::Diagnostics;
 
 pub use powerio_core::{
     Diagnostic, DiagnosticCode, DiagnosticInfo, DiagnosticSeverity, DiagnosticStage,
@@ -233,6 +233,19 @@ pub mod codes {
 #[must_use]
 pub fn registry() -> Vec<&'static DiagnosticInfo> {
     codes::ALL.to_vec()
+}
+
+/// Attach an input-derived locator, or record its loss on the finding when it
+/// cannot be stored. A locator is identity, so it is never shortened; when the
+/// input supplies one past the record bounds, the finding says a locator
+/// existed and how long it was instead of silently changing identity.
+pub(crate) fn attach_target(diagnostic: &mut Diagnostic, target: String) {
+    let byte_length = target.len();
+    if diagnostic.set_target(target).is_err() {
+        let marker =
+            diagnostic.insert_detail("dropped_target_bytes", serde_json::Value::from(byte_length));
+        debug_assert!(marker.is_ok(), "the drop marker fits an emitted finding");
+    }
 }
 
 #[cfg(test)]

@@ -1,5 +1,10 @@
 pub(crate) const MAX_IDENTIFIER_BYTES: usize = 65_536;
 pub(crate) const MAX_DIAGNOSTIC_MESSAGE_BYTES: usize = 16_384;
+/// Raw bytes retained for one message while decoding, before sanitization.
+/// Every writer sanitizes at construction, so a stored message near this bound
+/// was not produced by PowerIO; past it the raw text is truncated, and the
+/// result still passes through [`sanitize_message`].
+pub(crate) const MAX_DIAGNOSTIC_MESSAGE_DECODE_BYTES: usize = 4 * MAX_DIAGNOSTIC_MESSAGE_BYTES;
 pub(crate) const MAX_ARTIFACT_PATH_BYTES: usize = 4_096;
 pub(crate) const MAX_ARTIFACT_SEGMENT_BYTES: usize = 255;
 pub(crate) const MAX_FORMAT_ID_BYTES: usize = 127;
@@ -8,6 +13,9 @@ pub(crate) const MAX_DIAGNOSTIC_TARGET_BYTES: usize = 8_192;
 pub(crate) const MAX_DIAGNOSTIC_SPANS: usize = 256;
 pub(crate) const MAX_DIAGNOSTIC_RELATED: usize = 256;
 pub(crate) const MAX_DIAGNOSTIC_DETAIL_KEYS: usize = 256;
+pub(crate) const MAX_SOURCE_MAP_SPANS: usize = 256;
+pub(crate) const MAX_HISTORY_PARAMETERS: usize = 256;
+pub(crate) const MAX_HISTORY_NOTES: usize = 256;
 
 /// A locator identifies an element, so it is bounded but never shortened: a
 /// truncated RFC 6901 pointer names a different element, or none.

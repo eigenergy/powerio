@@ -4,8 +4,8 @@
 //! [`PioModule`], repeated value containers, and output destinations. It does
 //! not own electrical network, calculation, matrix, or dynamic value types.
 
+mod bounded;
 mod codes;
-mod collect;
 mod diagnostic;
 mod error;
 mod module;
@@ -36,21 +36,21 @@ pub use time_series::{TimePoint, TimeSeries};
 
 /// Cross-crate implementation support.
 ///
-/// These items exist because sibling crates in this workspace need them, not
-/// because they are part of the PowerIO API. Nothing here is stable, and no
-/// public PowerIO operation accepts or returns any of it. The facade does not
-/// re-export this module.
+/// Audit outcome for every hidden item this crate exposes: the mutable
+/// diagnostic collector and the checked dimension helper are crate private;
+/// each emitting sibling crate carries its own byte identical crate-private
+/// collector copy instead of importing one through a hidden path. What remains
+/// here is the nonfinite serde adapter pair, which wraps a whole serializer or
+/// deserializer inside the network types' serde trait impls. Duplicating that
+/// machinery per crate would let the one shared float spelling diverge, so it
+/// stays a single hidden seam: unstable, never re-exported by the facade, and
+/// not accepted or returned by any public PowerIO operation.
 #[doc(hidden)]
 pub mod __implementation {
-    /// The mutable collector an emitting pass threads through its call tree.
-    /// An operation returns `Vec<Diagnostic>` or an `Error`, never this.
-    pub use crate::collect::Diagnostics;
     /// The serde adapters that spell nonfinite floats for JSON.
     pub mod nonfinite {
         pub use crate::nonfinite::*;
     }
-    /// Overflow-checked table sizing.
-    pub use crate::time_series::checked_dimension_product;
 }
 
 /// Declare one crate's diagnostic registry.

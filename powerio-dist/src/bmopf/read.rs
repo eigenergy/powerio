@@ -176,14 +176,13 @@ fn report_non_numeric_fields(doc: &Map<String, Value>, net: &mut MulticonductorN
             "{pointer}: the schema types this field as a number and it holds {what}; \
              it reads as NaN and anything derived from it is undefined"
         );
-        net.record(
-            crate::diagnostics::Diagnostic::of(
-                &crate::diagnostics::codes::READ_BMOPF_FIELD_NOT_A_NUMBER,
-                message,
-            )
-            .with_target(pointer)
-            .with_suggested_action("state a number, or omit the field"),
-        );
+        let mut diagnostic = crate::diagnostics::Diagnostic::of(
+            &crate::diagnostics::codes::READ_BMOPF_FIELD_NOT_A_NUMBER,
+            message,
+        )
+        .with_suggested_action("state a number, or omit the field");
+        crate::diagnostics::attach_target(&mut diagnostic, pointer);
+        net.record(diagnostic);
     }
     // A pointer costs an allocation, so it is built for a container the walk
     // descends into and for a field it reports, never for a sound leaf.

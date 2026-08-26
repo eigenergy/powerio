@@ -476,7 +476,7 @@ pub fn parse_file(path: impl AsRef<std::path::Path>, from: Option<&str>) -> Resu
         // The binary reader is total (no fidelity warnings); wrap its network
         // in the shared [`Parsed`] shape.
         let mut warnings = Diagnostics::new();
-        let network = powerworld::parse_pwb_with_warnings(&bytes, stem, &mut warnings)?;
+        let network = powerworld::parse_pwb_collecting(&bytes, stem, &mut warnings)?;
         return Ok(Parsed::without_document(network, warnings));
     }
     if from.is_some_and(is_pslf_name) || (from.is_none() && ext.as_deref() == Some("epc")) {
@@ -797,7 +797,7 @@ pub fn parse_bytes_with_name(bytes: &[u8], from: &str, name_hint: Option<&str>) 
         // Same call parse_file makes; the reader reports only what the
         // decoded layout cannot state.
         let mut warnings = Diagnostics::new();
-        let network = powerworld::parse_pwb_with_warnings(bytes, name_hint, &mut warnings)?;
+        let network = powerworld::parse_pwb_collecting(bytes, name_hint, &mut warnings)?;
         return Ok(Parsed::without_document(network, warnings));
     }
     // A display format reaches a different return type, so name the entry

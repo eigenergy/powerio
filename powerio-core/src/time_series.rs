@@ -138,8 +138,15 @@ impl<T: fmt::Debug> fmt::Debug for TimeSeries<T> {
 }
 
 /// Checked flattened dimension used by type specific column builders.
-#[doc(hidden)]
-pub fn checked_dimension_product(what: &str, rows: usize, columns: usize) -> Result<usize, Error> {
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "used by later series constructors")
+)]
+pub(crate) fn checked_dimension_product(
+    what: &str,
+    rows: usize,
+    columns: usize,
+) -> Result<usize, Error> {
     rows.checked_mul(columns).ok_or_else(|| {
         Error::new(
             &crate::codes::VALIDATE_TIME_SERIES_DIMENSION_OVERFLOW,
