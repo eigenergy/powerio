@@ -277,12 +277,12 @@ fn case9_with_gencost_removed_reports_the_zero_objective_at_normalize() {
     let absent: Vec<_> = normalized
         .diagnostics
         .iter()
-        .filter(|d| d.code.as_str() == "CANONICALIZE.NORMALIZE.GEN_COST_ABSENT")
+        .filter(|d| d.code() == "CANONICALIZE.NORMALIZE.GEN_COST_ABSENT")
         .collect();
     assert_eq!(absent.len(), 1, "{:?}", normalized.warnings);
     assert!(
         absent[0]
-            .message
+            .message()
             .contains("3 in-service generator(s) and no cost data"),
         "{absent:?}"
     );
@@ -297,7 +297,7 @@ fn case9_with_gencost_removed_reports_the_zero_objective_at_normalize() {
         normalized
             .diagnostics
             .iter()
-            .all(|d| d.code.as_str() != "CANONICALIZE.NORMALIZE.GEN_COST_ABSENT"),
+            .all(|d| d.code() != "CANONICALIZE.NORMALIZE.GEN_COST_ABSENT"),
         "{:?}",
         normalized.warnings
     );

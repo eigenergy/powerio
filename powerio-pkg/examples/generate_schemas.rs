@@ -90,7 +90,7 @@ mod generate {
     }
 
     /// Every document powerio authors spells a nonfinite float as
-    /// `"Infinity"`, `"-Infinity"`, or `"NaN"` (`powerio_diag::nonfinite`),
+    /// `"Infinity"`, `"-Infinity"`, or `"NaN"` (`crate::legacy_diag::nonfinite`),
     /// so every float position in the schema accepts a string spelling
     /// beside the number. Fields whose number arm already admits `null`
     /// (the multiconductor bounds) keep it: that is the read side leniency

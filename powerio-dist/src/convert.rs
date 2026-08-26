@@ -16,8 +16,8 @@ impl ConversionSidecar {
     /// The finding for a surface that could not write this sidecar. `reason`
     /// says why in that surface's terms.
     #[must_use]
-    pub fn dropped_diagnostic(&self, reason: &str) -> crate::diagnostics::StructuredDiagnostic {
-        crate::diagnostics::StructuredDiagnostic::of(
+    pub fn dropped_diagnostic(&self, reason: &str) -> crate::diagnostics::Diagnostic {
+        crate::diagnostics::Diagnostic::of(
             &crate::diagnostics::codes::EMIT_MULTICONDUCTOR_SIDECAR_DROPPED,
             format!("sidecar `{}` was not written: {reason}", self.path),
         )
@@ -28,7 +28,7 @@ impl ConversionSidecar {
     /// two cannot disagree.
     #[must_use]
     pub fn dropped_warning(&self, reason: &str) -> String {
-        crate::diagnostics::render_line(&self.dropped_diagnostic(reason))
+        crate::diagnostics::render_diagnostic(&self.dropped_diagnostic(reason))
     }
 }
 
@@ -46,7 +46,7 @@ pub struct Conversion {
     pub warnings: Vec<String>,
     /// The same findings as structured records: a stable code, a severity, and
     /// a message. A consumer that needs a stable assertion reads these.
-    pub diagnostics: Vec<crate::diagnostics::StructuredDiagnostic>,
+    pub diagnostics: Vec<crate::diagnostics::Diagnostic>,
 }
 
 impl Conversion {
@@ -67,12 +67,12 @@ impl Conversion {
     /// together: the line is rendered from the record it is added with.
     pub(crate) fn push(
         &mut self,
-        info: &crate::diagnostics::DiagnosticInfo,
+        info: &'static crate::diagnostics::DiagnosticInfo,
         message: impl Into<String>,
     ) {
-        let diagnostic = crate::diagnostics::StructuredDiagnostic::of(info, message);
+        let diagnostic = crate::diagnostics::Diagnostic::of(info, message);
         self.warnings
-            .push(crate::diagnostics::render_line(&diagnostic));
+            .push(crate::diagnostics::render_diagnostic(&diagnostic));
         self.diagnostics.push(diagnostic);
     }
 }

@@ -1685,7 +1685,7 @@ pub(crate) const GEN_EXTRA_KEYS: [&str; 11] = [
 /// never constructs it, leaving room to add locator fields without a break.
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
-pub struct Diagnostic {
+pub struct ValueRepair {
     /// Human-readable element locator, e.g. `"bus 3"` or `"generator at bus 5"`.
     pub element: String,
     pub field: &'static str,
@@ -1922,7 +1922,7 @@ impl BalancedNetwork {
     }
 
     /// Report element fields whose values fall outside their physical domain,
-    /// without changing anything. Each [`Diagnostic`] names the element, the
+    /// without changing anything. Each [`ValueRepair`] names the element, the
     /// field, the current value, the value [`repair`](BalancedNetwork::repair) would set,
     /// and why.
     ///
@@ -1933,11 +1933,11 @@ impl BalancedNetwork {
     /// references). It is non-mutating; call [`repair`](BalancedNetwork::repair) to apply
     /// the fixes.
     #[must_use]
-    pub fn validate_values(&self) -> Vec<Diagnostic> {
+    pub fn validate_values(&self) -> Vec<ValueRepair> {
         let mut out = Vec::new();
         for b in &self.buses {
             if let Some(new) = repair_vm(b.vm) {
-                out.push(Diagnostic {
+                out.push(ValueRepair {
                     element: format!("bus {}", b.id),
                     field: "vm",
                     old: b.vm,
@@ -1946,7 +1946,7 @@ impl BalancedNetwork {
                 });
             }
             if let Some(new) = repair_va(b.va) {
-                out.push(Diagnostic {
+                out.push(ValueRepair {
                     element: format!("bus {}", b.id),
                     field: "va",
                     old: b.va,
@@ -1957,7 +1957,7 @@ impl BalancedNetwork {
         }
         for g in &self.generators {
             if let Some(new) = repair_mbase(g.mbase, self.base_mva) {
-                out.push(Diagnostic {
+                out.push(ValueRepair {
                     element: format!("generator at bus {}", g.bus),
                     field: "mbase",
                     old: g.mbase,
@@ -1966,7 +1966,7 @@ impl BalancedNetwork {
                 });
             }
             if let Some(new) = repair_vg(g.vg) {
-                out.push(Diagnostic {
+                out.push(ValueRepair {
                     element: format!("generator at bus {}", g.bus),
                     field: "vg",
                     old: g.vg,
@@ -1991,7 +1991,7 @@ impl BalancedNetwork {
     /// [`validate_values`](BalancedNetwork::validate_values) reports), returning the list
     /// of changes made. A second call returns an empty list (the values are now
     /// in domain).
-    pub fn repair(&mut self) -> Vec<Diagnostic> {
+    pub fn repair(&mut self) -> Vec<ValueRepair> {
         let findings = self.validate_values();
         let sbase = self.base_mva;
         for b in &mut self.buses {

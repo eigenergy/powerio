@@ -52,9 +52,7 @@ pub mod solver_tables;
 pub mod version;
 
 pub use dc::DcConvention;
-pub use diagnostics::{
-    DiagnosticCode, DiagnosticSeverity, Diagnostics, EmitFamily, StructuredDiagnostic,
-};
+pub use diagnostics::{Diagnostic, DiagnosticCode, DiagnosticSeverity, Diagnostics, EmitFamily};
 pub use error::{Error, ErrorCategory, Result};
 pub use format::routing::{
     Detection, JSON_CLASSES, JsonClass, classify_json_bytes, classify_json_text,
@@ -83,16 +81,16 @@ pub use indexed::{ConnectivityReport, IndexCore, IndexedNetwork};
 pub use network::Network;
 pub use network::{
     Area, BalancedNetwork, Branch, BranchCharging, BranchCurrentRatings, BranchRatingSet,
-    BranchSolution, Bus, BusId, BusType, DEFAULT_BASE_FREQUENCY, Diagnostic, Extras, GenCaps,
-    GenCost, Generator, Hvdc, Impedance, Load, LoadVoltageModel, Shunt, ShuntBlock, SolverParams,
+    BranchSolution, Bus, BusId, BusType, DEFAULT_BASE_FREQUENCY, Extras, GenCaps, GenCost,
+    Generator, Hvdc, Impedance, Load, LoadVoltageModel, Shunt, ShuntBlock, SolverParams,
     SourceFormat, Storage, Switch, SwitchedShuntControl, SwitchedShuntMode, Transformer3W,
-    TransformerControl, TransformerControlMode, Winding, series_admittance_of,
+    TransformerControl, TransformerControlMode, ValueRepair, Winding, series_admittance_of,
 };
 pub use normalize::{
     NormalizeOptions, NormalizeSourceRows, NormalizedNetwork, POWER_MODELS_ANGLE_BOUND_PAD,
 };
 pub use operations::Selector;
-pub use powerio_diag::nonfinite;
+pub use powerio_core::nonfinite;
 pub use solver_tables::{
     NORMALIZED_SOLVER_TABLES_PASS, NormalizedSolverTables, SolverArcRow, SolverArcTerminal,
     SolverBranchRow, SolverBusRow, SolverCostRow, SolverGeneratorRow, SolverHvdcRow, SolverLoadRow,

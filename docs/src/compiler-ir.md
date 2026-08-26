@@ -111,7 +111,7 @@ Every finding carries a stable dotted `code`, a `severity` (`debug`, `info`,
 a human `message`, and where known an `element_path`, a `source_ref`, a
 `details` object, and a `suggested_action`. The structured record is primary;
 human-readable warnings are rendered from it as `CODE: message` lines. The
-record, the code grammar, and the severity ladder live in `powerio-diag`, below
+record, the code grammar, and the severity ladder live in `powerio-core`, below
 both model crates and the package crate, so one finding type crosses all three.
 
 A code reads `NAMESPACE.SCOPE.SPECIFIC`. The leading segment names the stage the

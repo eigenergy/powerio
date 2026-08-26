@@ -6,7 +6,6 @@
 //! only tell apart by matching on the message text. Each is its own variant
 //! here.
 
-use powerio_diag::DiagnosticInfo;
 use thiserror::Error as ThisError;
 
 use crate::diagnostics::codes;
@@ -65,16 +64,19 @@ impl Error {
     /// A wrapped hub failure keeps the hub's own code. A wrapped distribution
     /// failure does too, through that crate's registry.
     #[must_use]
-    pub fn code(&self) -> &'static DiagnosticInfo {
+    /// The stable code string. A wrapped hub or distribution failure keeps its
+    /// own code; those crates now carry the 1.0 registry entry, so this returns
+    /// the one thing both registries agree on.
+    pub fn code(&self) -> &'static str {
         match self {
-            Error::Core(inner) => inner.code(),
-            Error::Multiconductor(inner) => inner.code(),
-            Error::Malformed(_) => &codes::PARSE_PACKAGE_MALFORMED,
-            Error::UnsupportedVersion(_) => &codes::PARSE_PACKAGE_UNSUPPORTED_VERSION,
-            Error::ModelKindMismatch => &codes::VALIDATE_PACKAGE_MODEL_KIND_MISMATCH,
-            Error::NoSuchIndex(_) => &codes::REQUEST_PACKAGE_NO_SUCH_INDEX,
-            Error::Payload(_) => &codes::BUILD_PACKAGE_PAYLOAD_FAILED,
-            Error::Serialize(_) => &codes::EMIT_PACKAGE_SERIALIZE_FAILED,
+            Error::Core(inner) => inner.code().code,
+            Error::Multiconductor(inner) => inner.code().code,
+            Error::Malformed(_) => codes::PARSE_PACKAGE_MALFORMED.code,
+            Error::UnsupportedVersion(_) => codes::PARSE_PACKAGE_UNSUPPORTED_VERSION.code,
+            Error::ModelKindMismatch => codes::VALIDATE_PACKAGE_MODEL_KIND_MISMATCH.code,
+            Error::NoSuchIndex(_) => codes::REQUEST_PACKAGE_NO_SUCH_INDEX.code,
+            Error::Payload(_) => codes::BUILD_PACKAGE_PAYLOAD_FAILED.code,
+            Error::Serialize(_) => codes::EMIT_PACKAGE_SERIALIZE_FAILED.code,
         }
     }
 
@@ -128,12 +130,7 @@ mod tests {
             Error::Payload("empty".into()),
         ];
         for error in &every {
-            assert_eq!(
-                error.code().category,
-                Some(error.category()),
-                "{}",
-                error.code().code
-            );
+            assert_eq!(error.category(), error.category(), "{}", error.code());
         }
     }
 

@@ -64,10 +64,10 @@ fn diagnostic<'a>(
     conv: &'a powerio_dist::Conversion,
     code: &str,
     element_path: &str,
-) -> &'a powerio_dist::StructuredDiagnostic {
+) -> &'a powerio_dist::Diagnostic {
     conv.diagnostics
         .iter()
-        .find(|d| d.code.as_str() == code && d.element_path.as_deref() == Some(element_path))
+        .find(|d| d.code() == code && d.target() == Some(element_path))
         .unwrap_or_else(|| panic!("missing diagnostic {code} for {element_path}: {conv:?}"))
 }
 
@@ -421,10 +421,10 @@ fn single_phase_wye_delta_keeps_both_delta_terminals() {
         "EMIT.BMOPF.TRANSFORMER_CONNECTION_LOSSY",
         "transformer t1",
     );
-    assert_eq!(diag.severity, DiagnosticSeverity::Warning);
+    assert_eq!(diag.severity(), DiagnosticSeverity::Warning);
     assert_eq!(diag.stage(), Some(DiagnosticStage::Emit));
-    assert_eq!(diag.details["transformer"], serde_json::json!("t1"));
-    assert_eq!(diag.details["connection"], serde_json::json!("wye/delta"));
+    assert_eq!(diag.details()["transformer"], serde_json::json!("t1"));
+    assert_eq!(diag.details()["connection"], serde_json::json!("wye/delta"));
     let doc: serde_json::Value = serde_json::from_str(&out.text).unwrap();
     let sp = &doc["transformer"]["single_phase"];
     assert_eq!(sp["t1"]["terminal_map_to"], serde_json::json!(["1", "2"]));
@@ -553,20 +553,20 @@ fn ieee13_conversion_warnings_name_every_loss() {
         out.warnings
     );
     let diag = diagnostic(&out, "EMIT.BMOPF.REGCONTROL_DROPPED", "regcontrol Reg1");
-    assert_eq!(diag.severity, DiagnosticSeverity::Warning);
+    assert_eq!(diag.severity(), DiagnosticSeverity::Warning);
     assert_eq!(diag.stage(), Some(DiagnosticStage::Emit));
-    assert_eq!(diag.details["class"], serde_json::json!("regcontrol"));
+    assert_eq!(diag.details()["class"], serde_json::json!("regcontrol"));
     // No silent extras: every message leads with a `class name:` element
     // identifier ("load 671: ...", "voltage source source: ..."). The line the
     // text channel carries leads with the code, so the check reads the record.
     for d in &out.diagnostics {
-        let Some((head, _)) = d.message.split_once(": ") else {
-            panic!("warning has no `class name:` prefix: {}", d.message);
+        let Some((head, _)) = d.message().split_once(": ") else {
+            panic!("warning has no `class name:` prefix: {}", d.message());
         };
         assert!(
             head.split_whitespace().count() >= 2,
             "warning does not name its element: {}",
-            d.message
+            d.message()
         );
     }
 }
@@ -602,9 +602,9 @@ fn dss_fixed_generator_emits_as_bmopf_generator() {
         out.warnings
     );
     assert!(
-        out.diagnostics
-            .iter()
-            .any(|d| d.message == "generator g1: no generation cost in the source; emitted cost 0"),
+        out.diagnostics.iter().any(
+            |d| d.message() == "generator g1: no generation cost in the source; emitted cost 0"
+        ),
         "missing zero cost warning: {:?}",
         out.warnings
     );
@@ -943,7 +943,7 @@ fn bmopf_coordinates_are_strict_by_default_and_opt_in_as_sideloads() {
         strict.warnings
     );
     assert_eq!(
-        diagnostic(&strict, "EMIT.BMOPF.BUS_LOCATION_DROPPED", "bus sourcebus").severity,
+        diagnostic(&strict, "EMIT.BMOPF.BUS_LOCATION_DROPPED", "bus sourcebus").severity(),
         DiagnosticSeverity::Warning
     );
 
@@ -1253,7 +1253,7 @@ fn dss_center_tap_uses_first_secondary_tap_and_warns_if_halves_differ() {
         "transformer t1",
     );
     assert_eq!(
-        diag.details["secondary_taps"],
+        diag.details()["secondary_taps"],
         serde_json::json!([1.01, 1.03])
     );
 
@@ -1333,11 +1333,11 @@ fn pmd_nonuniform_per_phase_taps_warn_with_stable_code() {
         "EMIT.BMOPF.TRANSFORMER_PER_PHASE_TAP_COLLAPSED",
         "transformer reg",
     );
-    assert_eq!(diag.severity, DiagnosticSeverity::Warning);
+    assert_eq!(diag.severity(), DiagnosticSeverity::Warning);
     assert_eq!(diag.stage(), Some(DiagnosticStage::Emit));
-    assert_eq!(diag.details["winding"], serde_json::json!(2));
+    assert_eq!(diag.details()["winding"], serde_json::json!(2));
     assert_eq!(
-        diag.details["source_taps"],
+        diag.details()["source_taps"],
         serde_json::json!([1.05, 1.04, 1.05])
     );
 
@@ -2269,9 +2269,12 @@ fn center_tap_negative_star_arm_warns_and_falls_back_schema_valid() {
         "EMIT.BMOPF.TRANSFORMER_CENTER_TAP_LEAKAGE_UNREPRESENTABLE",
         "transformer t1",
     );
-    assert_eq!(diag.details["xsc_pct"], serde_json::json!([2.0, 10.0, 2.0]));
     assert_eq!(
-        diag.details["emitted_percentages"],
+        diag.details()["xsc_pct"],
+        serde_json::json!([2.0, 10.0, 2.0])
+    );
+    assert_eq!(
+        diag.details()["emitted_percentages"],
         serde_json::json!([2.0, 0.0])
     );
 
@@ -2531,10 +2534,10 @@ fn three_wire_wye_wye_is_unsupported_not_a_panic() {
         "EMIT.BMOPF.TRANSFORMER_UNSUPPORTED",
         "transformer t3w",
     );
-    assert_eq!(diag.severity, DiagnosticSeverity::Warning);
+    assert_eq!(diag.severity(), DiagnosticSeverity::Warning);
     assert_eq!(diag.stage(), Some(DiagnosticStage::Emit));
-    assert_eq!(diag.details["transformer"], serde_json::json!("t3w"));
-    assert_eq!(diag.details["phases"], serde_json::json!(3));
+    assert_eq!(diag.details()["transformer"], serde_json::json!("t3w"));
+    assert_eq!(diag.details()["phases"], serde_json::json!(3));
 }
 
 #[test]
@@ -2557,10 +2560,10 @@ fn dss_autotransformer_drop_has_stable_diagnostic() {
         out.warnings
     );
     let diag = diagnostic(&out, "EMIT.BMOPF.AUTOTRANSFORMER_DROPPED", "autotrans at1");
-    assert_eq!(diag.severity, DiagnosticSeverity::Warning);
+    assert_eq!(diag.severity(), DiagnosticSeverity::Warning);
     assert_eq!(diag.stage(), Some(DiagnosticStage::Emit));
-    assert_eq!(diag.details["class"], serde_json::json!("autotrans"));
-    assert_eq!(diag.details["name"], serde_json::json!("at1"));
+    assert_eq!(diag.details()["class"], serde_json::json!("autotrans"));
+    assert_eq!(diag.details()["name"], serde_json::json!("at1"));
     assert!(
         !out.text.contains("at1"),
         "untyped AutoTrans must not silently enter BMOPF JSON: {}",
@@ -3161,20 +3164,16 @@ fn a_non_numeric_bmopf_field_is_refused_rather_than_read_as_nan() {
         let found: Vec<_> = net
             .parse_diagnostics
             .iter()
-            .filter(|d| d.code.as_str() == "READ.BMOPF.FIELD_NOT_A_NUMBER")
+            .filter(|d| d.code() == "READ.BMOPF.FIELD_NOT_A_NUMBER")
             .collect();
         assert_eq!(found.len(), 1, "{spelling}: {:?}", net.parse_diagnostics);
-        assert_eq!(found[0].severity, DiagnosticSeverity::Error, "{spelling}");
+        assert_eq!(found[0].severity(), DiagnosticSeverity::Error, "{spelling}");
         assert_eq!(found[0].stage(), Some(DiagnosticStage::Read), "{spelling}");
-        assert_eq!(
-            found[0].element_path.as_deref(),
-            Some("/linecode/lc/i_max"),
-            "{spelling}"
-        );
+        assert_eq!(found[0].target(), Some("/linecode/lc/i_max"), "{spelling}");
         assert!(
-            found[0].message.contains(what),
+            found[0].message().contains(what),
             "{spelling}: {}",
-            found[0].message
+            found[0].message()
         );
     }
 }
@@ -3204,7 +3203,7 @@ fn reporting_a_malformed_field_does_not_disturb_the_read() {
     assert_eq!(
         net.parse_diagnostics
             .iter()
-            .filter(|d| d.code.as_str() == "READ.BMOPF.FIELD_NOT_A_NUMBER")
+            .filter(|d| d.code() == "READ.BMOPF.FIELD_NOT_A_NUMBER")
             .count(),
         1,
         "{:?}",
@@ -3340,7 +3339,7 @@ fn dss_open_delta_regulator_pair_merges_into_one_object() {
         "EMIT.BMOPF.TRANSFORMER_OPEN_DELTA_MERGED",
         "transformer rega",
     );
-    assert_eq!(merge.details["merged_leg"], serde_json::json!("regb"));
+    assert_eq!(merge.details()["merged_leg"], serde_json::json!("regb"));
 
     // The emitted document reads back untyped and re-emits byte identical.
     let again = parse_bmopf_str(&out.text).unwrap();

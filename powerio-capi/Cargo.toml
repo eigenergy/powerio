@@ -38,7 +38,7 @@ pkg = ["dep:powerio-pkg"]
 prob = ["dep:powerio-prob"]
 
 [dependencies]
-powerio-diag = { workspace = true }
+powerio-core = { workspace = true }
 powerio.workspace = true
 powerio-dist = { workspace = true, optional = true }
 powerio-pkg = { workspace = true, optional = true }

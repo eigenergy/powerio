@@ -1,4 +1,4 @@
-use powerio_diag::{DiagnosticInfo, ErrorCategory};
+use powerio_core::{DiagnosticInfo, ErrorCategory};
 use thiserror::Error;
 
 use crate::diagnostics::codes;
@@ -50,7 +50,7 @@ impl Error {
         match self {
             Error::Io { .. } => ErrorCategory::Io,
             Error::Json { .. } | Error::FormatRead { .. } => ErrorCategory::Parse,
-            Error::UnknownFormat(_) => ErrorCategory::UnknownFormat,
+            Error::UnknownFormat(_) => ErrorCategory::Request,
         }
     }
 }

@@ -2,7 +2,7 @@
 
 use std::collections::{BTreeMap, BTreeSet, btree_map::Entry};
 
-use crate::{DiagnosticSeverity, DiagnosticStage, ErrorCategory, code_is_well_formed};
+use crate::legacy_diag::{DiagnosticSeverity, DiagnosticStage, ErrorCategory, code_is_well_formed};
 
 /// Whether a code is still emitted.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -73,47 +73,6 @@ impl DiagnosticInfo {
     pub fn stage(&self) -> Option<DiagnosticStage> {
         DiagnosticStage::from_namespace(self.namespace())
     }
-}
-
-/// Declare a crate's registry: one `DiagnosticInfo` constant per code, plus the
-/// `ALL` slice the gates run over.
-///
-/// Writing the slice by hand is how a registry drifts from the codes a crate
-/// actually declares, so the macro builds it from the same list.
-///
-/// ```
-/// powerio_diag::diagnostic_codes! {
-///     /// A field the target format has no record for.
-///     EMIT_PSSE_FIELD_DROPPED = "EMIT.PSSE.FIELD_DROPPED", Warning,
-///         "a field with no PSS/E record was dropped";
-///     REQUEST_FORMAT_UNKNOWN = "REQUEST.FORMAT.UNKNOWN", Fatal,
-///         "the named format is not one powerio reads", category = UnknownFormat;
-/// }
-/// assert_eq!(ALL.len(), 2);
-/// ```
-#[macro_export]
-macro_rules! diagnostic_codes {
-    ($(
-        $(#[$attr:meta])*
-        $name:ident = $code:literal, $severity:ident, $summary:literal
-        $(, category = $category:ident)?
-        $(, retired = $since:literal)? ;
-    )*) => {
-        $(
-            $(#[$attr])*
-            pub const $name: $crate::DiagnosticInfo = $crate::DiagnosticInfo::new(
-                $code,
-                $crate::DiagnosticSeverity::$severity,
-                $summary,
-            )
-            $(.with_category($crate::ErrorCategory::$category))?
-            $(.retired($since))?;
-        )*
-
-        /// Every code this registry declares, for the grammar and uniqueness
-        /// gates and for the generated reference.
-        pub const ALL: &[&$crate::DiagnosticInfo] = &[$(&$name),*];
-    };
 }
 
 /// Check a registry: every code matches the grammar, every namespace is one of

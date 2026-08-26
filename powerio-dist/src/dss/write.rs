@@ -451,7 +451,7 @@ fn seq_parts(extras: &Extras, key: &str) -> Option<(f64, f64)> {
 }
 
 impl DssWriter {
-    fn warn(&mut self, info: &crate::diagnostics::DiagnosticInfo, msg: impl Into<String>) {
+    fn warn(&mut self, info: &'static crate::diagnostics::DiagnosticInfo, msg: impl Into<String>) {
         self.warnings.push(info, msg);
     }
 
@@ -531,7 +531,7 @@ impl DssWriter {
         details.insert("terminal_count".into(), serde_json::json!(map.len()));
 
         self.warnings.record(
-            crate::diagnostics::StructuredDiagnostic::of(
+            crate::diagnostics::Diagnostic::of(
                 &C::EMIT_DSS_TERMINAL_ORDER_UNREPRESENTABLE,
                 format!(
                     "{class} {name}{endpoint_text} on bus {bus}: grounded terminal `{terminal}` \
@@ -540,7 +540,7 @@ impl DssWriter {
                     map.len()
                 ),
             )
-            .with_element_path(format!("{class} {name}"))
+            .with_target(format!("{class} {name}"))
             .with_details(details),
         );
     }
@@ -2840,10 +2840,10 @@ mod tests {
 
     fn terminal_order_diagnostics(
         out: &crate::convert::Conversion,
-    ) -> Vec<&crate::diagnostics::StructuredDiagnostic> {
+    ) -> Vec<&crate::diagnostics::Diagnostic> {
         out.diagnostics
             .iter()
-            .filter(|d| d.code.as_str() == C::EMIT_DSS_TERMINAL_ORDER_UNREPRESENTABLE.code)
+            .filter(|d| d.code() == C::EMIT_DSS_TERMINAL_ORDER_UNREPRESENTABLE.code)
             .collect()
     }
 
@@ -3526,15 +3526,15 @@ mod tests {
         assert_eq!(diagnostics.len(), 8, "{:?}", out.diagnostics);
         for diagnostic in &diagnostics {
             assert_eq!(
-                diagnostic.severity,
+                diagnostic.severity(),
                 crate::diagnostics::DiagnosticSeverity::Error
             );
-            assert_eq!(diagnostic.details["grounded_terminal"], "n");
-            assert_eq!(diagnostic.details["position"], 2);
-            assert_eq!(diagnostic.details["terminal_count"], 3);
-            assert!(diagnostic.details.contains_key("class"));
-            assert!(diagnostic.details.contains_key("element_name"));
-            assert_eq!(diagnostic.details["bus"], "lv");
+            assert_eq!(diagnostic.details()["grounded_terminal"], "n");
+            assert_eq!(diagnostic.details()["position"], 2);
+            assert_eq!(diagnostic.details()["terminal_count"], 3);
+            assert!(diagnostic.details().contains_key("class"));
+            assert!(diagnostic.details().contains_key("element_name"));
+            assert_eq!(diagnostic.details()["bus"], "lv");
         }
         for (class, name) in [
             ("capacitor", "cap"),
@@ -3543,10 +3543,10 @@ mod tests {
             ("ibr", "pv_ibr"),
         ] {
             assert!(diagnostics.iter().any(|d| {
-                d.details["class"] == class
-                    && d.details["element_name"] == name
-                    && !d.details.contains_key("endpoint")
-                    && d.element_path.as_deref() == Some(&format!("{class} {name}"))
+                d.details()["class"] == class
+                    && d.details()["element_name"] == name
+                    && !d.details().contains_key("endpoint")
+                    && d.target() == Some(&format!("{class} {name}"))
             }));
         }
 
@@ -3589,10 +3589,10 @@ mod tests {
             for endpoint in ["bus1", "bus2"] {
                 assert!(
                     diagnostics.iter().any(|d| {
-                        d.details["class"] == class
-                            && d.details["element_name"] == name
-                            && d.details["endpoint"] == endpoint
-                            && d.details["bus"] == "lv"
+                        d.details()["class"] == class
+                            && d.details()["element_name"] == name
+                            && d.details()["endpoint"] == endpoint
+                            && d.details()["bus"] == "lv"
                     }),
                     "missing {class} {name} {endpoint}: {diagnostics:?}"
                 );

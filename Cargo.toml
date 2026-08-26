@@ -2,7 +2,6 @@
 members = [
     "powerio",
     "powerio-core",
-    "powerio-diag",
     "powerio-matrix",
     "powerio-prob",
     "powerio-cli",
@@ -17,7 +16,6 @@ members = [
 default-members = [
     "powerio",
     "powerio-core",
-    "powerio-diag",
     "powerio-matrix",
     "powerio-prob",
     "powerio-cli",
@@ -45,7 +43,6 @@ homepage = "https://eigenergy.github.io/powerio/"
 # them here means the pin moves with the [workspace.package] version.
 powerio = { path = "powerio", version = "0.9.0" }
 powerio-core = { path = "powerio-core", version = "0.9.0" }
-powerio-diag = { path = "powerio-diag", version = "0.9.0" }
 powerio-matrix = { path = "powerio-matrix", version = "0.9.0" }
 powerio-prob = { path = "powerio-prob", version = "0.9.0" }
 powerio-dist = { path = "powerio-dist", version = "0.9.0" }

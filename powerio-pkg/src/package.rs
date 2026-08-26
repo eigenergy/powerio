@@ -202,13 +202,16 @@ pub struct NetworkPackage {
 // float as a string, so no `.pio.json` powerio writes refuses to read back.
 impl serde::Serialize for NetworkPackage {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        NetworkPackage::serialize(self, powerio_diag::nonfinite::NonFiniteSer(serializer))
+        NetworkPackage::serialize(
+            self,
+            crate::legacy_diag::nonfinite::NonFiniteSer(serializer),
+        )
     }
 }
 
 impl<'de> serde::Deserialize<'de> for NetworkPackage {
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        NetworkPackage::deserialize(powerio_diag::nonfinite::NonFiniteDe(deserializer))
+        NetworkPackage::deserialize(crate::legacy_diag::nonfinite::NonFiniteDe(deserializer))
     }
 }
 
@@ -251,8 +254,10 @@ impl NetworkPackage {
     /// operating point series derives from the reader's own parse, handed
     /// forward as [`powerio::Parsed::document`].
     pub fn from_parsed_balanced(parsed: powerio::Parsed) -> Self {
-        let mut package =
-            Self::from_balanced_with_read_diagnostics(parsed.network, parsed.diagnostics);
+        let mut package = Self::from_balanced_with_read_diagnostics(
+            parsed.network,
+            parsed.diagnostics.into_iter().map(Into::into),
+        );
         if let Some(document) = &parsed.document {
             package.attach_operating_points(document);
         }
@@ -316,7 +321,12 @@ impl NetworkPackage {
         // include is an `Error`). The reader's text lines are rendered from
         // these same records, so there is nothing to lift and nothing to
         // dedupe.
-        let diagnostics: Vec<StructuredDiagnostic> = net.parse_diagnostics.clone();
+        let diagnostics: Vec<StructuredDiagnostic> = net
+            .parse_diagnostics
+            .iter()
+            .cloned()
+            .map(Into::into)
+            .collect();
         let validation = ValidationSummary::from_diagnostics(&diagnostics);
 
         Self {
@@ -1071,7 +1081,7 @@ fn attach_source_refs(diagnostics: &mut [StructuredDiagnostic], source_maps: &[S
 fn balanced_value_finding_path(
     net: &BalancedNetwork,
     bus_index: &HashMap<usize, usize>,
-    finding: &powerio::Diagnostic,
+    finding: &powerio::ValueRepair,
 ) -> Option<String> {
     if let Some(id) = finding
         .element

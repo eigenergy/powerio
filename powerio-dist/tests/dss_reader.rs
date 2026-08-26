@@ -692,7 +692,7 @@ fn a_self_redirecting_case_file_returns() {
     assert_eq!(
         net.parse_diagnostics
             .iter()
-            .filter(|d| d.code.as_str() == "READ.DSS.INCLUDE_BUDGET")
+            .filter(|d| d.code() == "READ.DSS.INCLUDE_BUDGET")
             .count(),
         1
     );
@@ -728,7 +728,7 @@ fn a_clear_after_the_include_budget_does_not_erase_the_refusal() {
     assert_eq!(
         net.parse_diagnostics
             .iter()
-            .filter(|d| d.code.as_str() == "READ.DSS.INCLUDE_BUDGET")
+            .filter(|d| d.code() == "READ.DSS.INCLUDE_BUDGET")
             .count(),
         1,
         "restated once, not once per refused include"
@@ -802,7 +802,7 @@ fn a_widened_include_root_still_refuses_escapes_past_it() {
     assert_eq!(
         net.parse_diagnostics
             .iter()
-            .filter(|d| d.code.as_str() == "READ.DSS.INCLUDE_REFUSED")
+            .filter(|d| d.code() == "READ.DSS.INCLUDE_REFUSED")
             .count(),
         1
     );

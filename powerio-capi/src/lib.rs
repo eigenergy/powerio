@@ -30,10 +30,12 @@ use std::ffi::{CStr, CString, c_char};
 use std::panic::{AssertUnwindSafe, catch_unwind};
 
 use powerio::{
-    BalancedNetwork, IndexCore, IndexedNetwork, MissingGenCostPolicy, NormalizeOptions,
-    POWER_MODELS_ANGLE_BOUND_PAD, StructuredDiagnostic, TargetFormat, WriteOptions,
+    BalancedNetwork, Diagnostic, IndexCore, IndexedNetwork, MissingGenCostPolicy, NormalizeOptions,
+    POWER_MODELS_ANGLE_BOUND_PAD, TargetFormat, WriteOptions,
 };
 
+#[cfg(feature = "pkg")]
+use crate::diagnostics::coded_str;
 use crate::diagnostics::{coded, codes, err_line};
 #[cfg(feature = "pkg")]
 use powerio_pkg::diagnostics::codes as pkg_codes;
@@ -61,7 +63,7 @@ pub struct PioNetwork {
     net: BalancedNetwork,
     core: IndexCore,
     /// The reader's findings as structured records.
-    diagnostics: Vec<StructuredDiagnostic>,
+    diagnostics: Vec<Diagnostic>,
     /// The same findings as `CODE: message` lines.
     warnings: Vec<String>,
 }
@@ -169,11 +171,11 @@ unsafe fn guard<R>(fallback: R, f: impl FnOnce() -> R) -> R {
 
 /// Box a `BalancedNetwork` into an owned network handle, building its [`IndexCore`] once so
 /// every indexed query reuses it. The one constructor for `*mut PioNetwork`.
-fn make_network(net: BalancedNetwork, diagnostics: Vec<StructuredDiagnostic>) -> *mut PioNetwork {
+fn make_network(net: BalancedNetwork, diagnostics: Vec<Diagnostic>) -> *mut PioNetwork {
     let core = IndexCore::build(&net);
     Box::into_raw(Box::new(PioNetwork {
         core,
-        warnings: powerio::diagnostics::render_lines(&diagnostics),
+        warnings: powerio::diagnostics::render_diagnostics(&diagnostics),
         diagnostics,
         net,
     }))
@@ -188,7 +190,7 @@ unsafe fn finish_network(
     errbuf: *mut c_char,
     errlen: usize,
     panic_msg: &str,
-    f: impl FnOnce() -> Result<(BalancedNetwork, Vec<StructuredDiagnostic>), String>,
+    f: impl FnOnce() -> Result<(BalancedNetwork, Vec<Diagnostic>), String>,
 ) -> *mut PioNetwork {
     unsafe {
         // make_network runs inside the guard: IndexCore::build is part of the
@@ -507,7 +509,7 @@ fn null_handle(what: &str) -> String {
 fn lowering_err_line(e: &powerio_pkg::MulticonductorToBalancedError) -> String {
     e.diagnostics.first().map_or_else(
         || coded(&codes::BIND_CAPI_UNCODED_FAILURE, e),
-        powerio::diagnostics::render_line,
+        powerio_pkg::diagnostics::render_line,
     )
 }
 
@@ -1333,10 +1335,7 @@ pub unsafe extern "C" fn pio_to_format(
 /// message is not: one per lossy element, so a large case produces more than
 /// any fixed size a caller can guess. The errbuf idiom stays for errors, which
 /// are one message.
-unsafe fn set_out_diagnostics(
-    out_diagnostics_json: *mut *mut c_char,
-    diagnostics: &[StructuredDiagnostic],
-) {
+unsafe fn set_out_diagnostics(out_diagnostics_json: *mut *mut c_char, diagnostics: &[Diagnostic]) {
     unsafe {
         if out_diagnostics_json.is_null() {
             return;
@@ -1367,7 +1366,7 @@ unsafe fn finish_conversion(
     errbuf: *mut c_char,
     errlen: usize,
     panic_msg: &str,
-    f: impl FnOnce() -> Result<(String, Vec<StructuredDiagnostic>), String>,
+    f: impl FnOnce() -> Result<(String, Vec<Diagnostic>), String>,
 ) -> *mut c_char {
     unsafe {
         // Set before running f: a caller reads it on every return path, and a
@@ -2082,7 +2081,7 @@ pub unsafe extern "C" fn pio_package_from_balanced_network(
                 let net = network_ref(net).ok_or_else(|| null_handle("network handle"))?;
                 let mut package = powerio_pkg::NetworkPackage::from_balanced_with_read_diagnostics(
                     net.net.clone(),
-                    net.diagnostics.clone(),
+                    net.diagnostics.iter().cloned().map(Into::into),
                 );
                 if include_solver_metadata != 0 {
                     package
@@ -2150,7 +2149,7 @@ pub unsafe extern "C" fn pio_package_to_balanced_network(
                          extracting it needs a build with the `dist` feature \
                          (pio_package_to_multiconductor_network)"
                     };
-                    coded(&pkg_codes::REQUEST_PACKAGE_WRONG_MODEL_KIND, message)
+                    coded_str(pkg_codes::REQUEST_PACKAGE_WRONG_MODEL_KIND.code, message)
                 })?;
                 let mut net = net.clone();
                 // An in-memory package still holds the payload's #[serde(skip)]
@@ -2186,8 +2185,8 @@ pub unsafe extern "C" fn pio_package_to_multiconductor_network(
             || {
                 let pkg = pkg.as_ref().ok_or_else(|| null_handle("package handle"))?;
                 let net = pkg.package.model.as_multiconductor().ok_or_else(|| {
-                    coded(
-                        &pkg_codes::REQUEST_PACKAGE_WRONG_MODEL_KIND,
+                    coded_str(
+                        pkg_codes::REQUEST_PACKAGE_WRONG_MODEL_KIND.code,
                         "package holds a balanced model where multiconductor was asked for; use \
                          pio_package_to_balanced_network",
                     )
@@ -2464,8 +2463,8 @@ pub unsafe extern "C" fn pio_package_multiconductor_to_balanced_preflight_json(
             || {
                 let pkg = pkg.as_ref().ok_or_else(|| null_handle("package handle"))?;
                 let net = pkg.package.as_multiconductor().ok_or_else(|| {
-                    coded(
-                        &pkg_codes::REQUEST_PACKAGE_WRONG_MODEL_KIND,
+                    coded_str(
+                        pkg_codes::REQUEST_PACKAGE_WRONG_MODEL_KIND.code,
                         format!(
                             "multiconductor preflight requires a multiconductor package, got {:?}",
                             pkg.package.model_kind()
@@ -2596,12 +2595,12 @@ pub unsafe extern "C" fn pio_geo_apply(
             out.source = None;
             let mut diagnostics = c.diagnostics.clone();
             diagnostics.extend(parsed.diagnostics);
-            diagnostics.push(StructuredDiagnostic::of(
+            diagnostics.push(Diagnostic::of(
                 &powerio::diagnostics::codes::BUILD_GEO_APPLY_SUMMARY,
                 geo_apply_summary(&report),
             ));
             for note in report.notes {
-                diagnostics.push(StructuredDiagnostic::of(
+                diagnostics.push(Diagnostic::of(
                     &powerio::diagnostics::codes::BUILD_GEO_UNMATCHED_FEATURE,
                     note,
                 ));
@@ -3008,9 +3007,9 @@ pub unsafe extern "C" fn pio_dist_from_json(
 /// file the caller does not have. The finding names it.
 #[cfg(feature = "dist")]
 fn warn_dropped_sidecars(
-    mut diagnostics: Vec<StructuredDiagnostic>,
+    mut diagnostics: Vec<Diagnostic>,
     sidecars: &[powerio_dist::ConversionSidecar],
-) -> Vec<StructuredDiagnostic> {
+) -> Vec<Diagnostic> {
     for sidecar in sidecars {
         diagnostics.push(sidecar.dropped_diagnostic(
             "this entry point returns the case text only, and that text refers to the file; \
@@ -4862,14 +4861,14 @@ mpc.branch = [
             assert!(!s.is_null());
             assert!(!diag_out.is_null(), "expected the writer's findings");
             let json = CStr::from_ptr(diag_out).to_str().unwrap().to_owned();
-            let records: Vec<StructuredDiagnostic> = serde_json::from_str(&json).unwrap();
+            let records: Vec<Diagnostic> = serde_json::from_str(&json).unwrap();
             let hit = records
                 .iter()
-                .find(|d| d.message.contains("converter detail"))
+                .find(|d| d.message().contains("converter detail"))
                 .unwrap_or_else(|| panic!("no HVDC converter-detail finding in {json}"));
-            assert_eq!(hit.code.as_str(), "EMIT.PSSE.VALUE_DEFAULTED");
+            assert_eq!(hit.code(), "EMIT.PSSE.VALUE_DEFAULTED");
             assert_eq!(
-                hit.severity,
+                hit.severity(),
                 powerio::diagnostics::DiagnosticSeverity::Warning
             );
             pio_string_free(diag_out);
@@ -5888,9 +5887,14 @@ mpc.branch = [
             assert_eq!(rc, 0, "{}", CStr::from_ptr(err.as_ptr()).to_str().unwrap());
             assert!(!diag_out.is_null(), "expected the writer's findings");
             let json = CStr::from_ptr(diag_out).to_str().unwrap().to_owned();
-            let records: Vec<StructuredDiagnostic> = serde_json::from_str(&json).unwrap();
+            let records: Vec<Diagnostic> = serde_json::from_str(&json).unwrap();
             assert!(!records.is_empty());
-            assert!(records.iter().all(|d| d.code.is_well_formed()), "{json}");
+            assert!(
+                records
+                    .iter()
+                    .all(|d| powerio::diagnostics::code_is_well_formed(d.code())),
+                "{json}"
+            );
             pio_string_free(diag_out);
             pio_network_free(c);
         }
@@ -6238,9 +6242,9 @@ mpc.branch = [
             );
             assert_eq!(rc, 0, "{}", CStr::from_ptr(err.as_ptr()).to_str().unwrap());
             let json = CStr::from_ptr(diag_out).to_str().unwrap().to_owned();
-            let records: Vec<StructuredDiagnostic> = serde_json::from_str(&json).unwrap();
+            let records: Vec<Diagnostic> = serde_json::from_str(&json).unwrap();
             assert!(
-                records.iter().any(|d| d.code.as_str().contains("GEN_COST")),
+                records.iter().any(|d| d.code().contains("GEN_COST")),
                 "{json}"
             );
             pio_string_free(diag_out);

@@ -94,7 +94,7 @@ fn categorized_pyerr(
 ) -> PyErr {
     use powerio_matrix::ErrorCategory as C;
     let err = match category {
-        C::UnknownFormat => PyValueError::new_err(msg),
+        C::Request => PyValueError::new_err(msg),
         C::Parse => PowerIOParseError::new_err(msg),
         C::Data => PowerIODataError::new_err(msg),
         // `Io` is unwrapped by the callers below when it still carries the
@@ -333,7 +333,7 @@ fn package_pyerr(e: powerio_pkg::Error) -> PyErr {
     match e {
         powerio_pkg::Error::Core(inner) => core_pyerr(inner),
         powerio_pkg::Error::Multiconductor(inner) => dist_to_pyerr(inner),
-        other => categorized_pyerr(other.category(), other.code().code, other.to_string()),
+        other => categorized_pyerr(other.category(), other.code(), other.to_string()),
     }
 }
 
@@ -383,7 +383,7 @@ fn package_to_balanced_py(pkg: &NetworkPackage) -> PyResult<PyBalancedNetwork> {
     Ok(PyBalancedNetwork {
         inner,
         core,
-        diagnostics: pkg.diagnostics.clone(),
+        diagnostics: pkg.diagnostics.iter().cloned().map(Into::into).collect(),
         warnings,
     })
 }
@@ -533,8 +533,10 @@ fn build_package_from_path(
         {
             let read = gridfm_read_dataset(input.to_string_lossy().as_ref(), scenario)
                 .map_err(to_pyerr)?;
-            let mut pkg =
-                NetworkPackage::from_balanced_with_read_diagnostics(read.network, read.diagnostics);
+            let mut pkg = NetworkPackage::from_balanced_with_read_diagnostics(
+                read.network,
+                read.diagnostics.into_iter().map(Into::into),
+            );
             set_package_source(&mut pkg, input, PackageSourceKind::Folder, "gridfm", false);
             pkg.run_sane_validation();
             return Ok(pkg);
@@ -694,7 +696,7 @@ pub struct PyBalancedNetwork {
     inner: BalancedNetwork,
     core: IndexCore,
     /// The reader's findings as structured records.
-    diagnostics: Vec<powerio_pkg::StructuredDiagnostic>,
+    diagnostics: Vec<powerio_matrix::diagnostics::Diagnostic>,
     /// The same findings as `CODE: message` lines.
     warnings: Vec<String>,
 }
@@ -1668,7 +1670,7 @@ impl PyMulticonductorNetwork {
         net.source_format = None;
         for diagnostic in parsed.diagnostics {
             net.warnings
-                .push(powerio_pkg::diagnostics::render_line(&diagnostic));
+                .push(powerio_matrix::diagnostics::render_diagnostic(&diagnostic));
             net.parse_diagnostics.push(diagnostic);
         }
         Ok((
@@ -1846,7 +1848,7 @@ impl PyPackage {
     ) -> PyResult<Self> {
         let mut pkg = NetworkPackage::from_balanced_with_read_diagnostics(
             network.inner.clone(),
-            network.diagnostics.clone(),
+            network.diagnostics.iter().cloned().map(Into::into),
         );
         if include_solver_metadata {
             pkg.attach_normalized_solver_table_metadata()

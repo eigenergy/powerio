@@ -21,7 +21,7 @@ impl ScopfError {
     /// variant set, so a new variant must be coded here before it compiles.
     /// A wrapped hub failure keeps the hub's own code.
     #[must_use]
-    pub fn code(&self) -> &'static powerio_diag::DiagnosticInfo {
+    pub fn code(&self) -> &'static powerio_core::DiagnosticInfo {
         use crate::diagnostics::codes;
         match self {
             Self::Json(_) => &codes::PARSE_SCOPF_MALFORMED,

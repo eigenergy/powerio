@@ -1185,8 +1185,8 @@ fn hvdc_converts_and_round_trips() {
         egret
             .diagnostics
             .iter()
-            .filter(|d| d.message.contains("dcline"))
-            .map(|d| d.message.as_str())
+            .filter(|d| d.message().contains("dcline"))
+            .map(powerio::Diagnostic::message)
             .collect::<Vec<_>>(),
         ["dcline 5 -> 9 cost curve dropped: egret dc_branch records carry no cost"],
         "egret dc_branch carries every dcline field but the cost: {:?}",
@@ -1759,7 +1759,7 @@ fn pandapower_genuine_fixture_reads() {
     // magnetizing admittance are typed.
     assert_eq!(parsed.warnings.len(), 1, "{:?}", parsed.warnings);
     assert!(
-        parsed.diagnostics.iter().any(|d| d.message
+        parsed.diagnostics.iter().any(|d| d.message()
             == "`switch` table ignored (8 rows): switches are not modeled; open switches are not applied"),
         "{:?}",
         parsed.warnings
@@ -1844,7 +1844,7 @@ fn pypsa_genuine_export_reads() {
         parsed
             .diagnostics
             .iter()
-            .map(|d| d.message.as_str())
+            .map(powerio::Diagnostic::message)
             .collect::<Vec<_>>(),
         vec![
             "links.csv: 1 links read as HVDC lines; PyPSA links carry no reactive or voltage data (q limits 0, voltage setpoints 1.0)"
@@ -2706,7 +2706,7 @@ fn write_dir_with_options_runs_the_cost_policy_and_reports_it() {
 
     // Default options are the plain directory write.
     let plain = write_dir(&net, "pypsa-csv", &dir).unwrap();
-    assert!(!plain.iter().any(|d| d.code.as_str().contains("GEN_COST")));
+    assert!(!plain.iter().any(|d| d.code().contains("GEN_COST")));
 
     let filled = write_dir_with_options(
         &net,
@@ -2719,7 +2719,7 @@ fn write_dir_with_options_runs_the_cost_policy_and_reports_it() {
     )
     .unwrap();
     assert!(
-        filled.iter().any(|d| d.code.as_str().contains("GEN_COST")),
+        filled.iter().any(|d| d.code().contains("GEN_COST")),
         "{filled:#?}"
     );
 

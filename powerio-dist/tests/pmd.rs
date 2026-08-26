@@ -905,7 +905,8 @@ fn wide_terminal_maps_do_not_expand_quadratically() {
     for what in ["switch s", "voltage source src"] {
         assert!(
             out.diagnostics.iter().any(|d| {
-                d.message.starts_with(what) && d.message.contains("exceed the supported maximum")
+                d.message().starts_with(what)
+                    && d.message().contains("exceed the supported maximum")
             }),
             "no clamp warning for {what}: {:?}",
             out.warnings

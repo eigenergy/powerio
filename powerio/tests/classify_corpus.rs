@@ -149,7 +149,7 @@ fn classifier_and_diagnostic_types_are_crate_root_exports() {
     ));
     assert_eq!(powerio::JSON_CLASSES.len(), 6);
     let severity = powerio::DiagnosticSeverity::Warning;
-    assert!(severity < powerio::DiagnosticSeverity::Fatal);
-    let code_of: fn(&powerio::StructuredDiagnostic) -> &powerio::DiagnosticCode = |d| &d.code;
+    assert!(severity < powerio::DiagnosticSeverity::Error);
+    let code_of: fn(&powerio::Diagnostic) -> &str = powerio::Diagnostic::code;
     let _ = code_of;
 }

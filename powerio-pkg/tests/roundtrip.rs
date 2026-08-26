@@ -2165,10 +2165,11 @@ fn package_balanced_reader_findings_keep_their_own_code() {
     // The reader codes its own findings, so the package records them as they
     // are rather than wrapping them under one code of its own.
     let parsed = powerio::parse_str(MATPOWER_SRC, "matpower").expect("parse matpower");
-    let finding = powerio_pkg::StructuredDiagnostic::of(
+    let finding: powerio_pkg::StructuredDiagnostic = powerio::Diagnostic::of(
         &powerio::diagnostics::codes::READ_PSSE_SECTION_UNSUPPORTED,
         "ignored source table",
-    );
+    )
+    .into();
     let mut pkg = NetworkPackage::from_balanced_with_read_diagnostics(parsed.network, [finding]);
 
     assert!(pkg.diagnostics.iter().any(|d| {
@@ -2630,11 +2631,10 @@ fn refused_include_lifts_as_an_error_diagnostic() {
     let message = "redirect ../shared.dss: refused; include escapes the case directory";
     net.warnings
         .push(format!("READ.DSS.INCLUDE_REFUSED: {message}"));
-    net.parse_diagnostics
-        .push(powerio_dist::StructuredDiagnostic::of(
-            &powerio_dist::diagnostics::codes::READ_DSS_INCLUDE_REFUSED,
-            message,
-        ));
+    net.parse_diagnostics.push(powerio_dist::Diagnostic::of(
+        &powerio_dist::diagnostics::codes::READ_DSS_INCLUDE_REFUSED,
+        message,
+    ));
 
     let pkg = NetworkPackage::from_multiconductor(net);
     let carrying: Vec<_> = pkg

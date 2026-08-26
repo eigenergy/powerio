@@ -2,7 +2,7 @@
 //!
 //! The multiconductor model writes a nonfinite `f64` as `"Infinity"`,
 //! `"-Infinity"`, or `"NaN"` like every powerio document
-//! (`powerio_diag::nonfinite`, threaded through the model's serde impls).
+//! (`powerio_core::nonfinite`, threaded through the model's serde impls).
 //! Before 0.9.0 serde_json wrote it as JSON `null`, and these modules keep
 //! reading that `null` back by field role, so a payload an earlier writer
 //! emitted still reads (#268): a `null` element in an upper bound means

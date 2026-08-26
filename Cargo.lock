@@ -2004,7 +2004,7 @@ dependencies = [
  "lexical-core",
  "num-complex",
  "petgraph",
- "powerio-diag",
+ "powerio-core",
  "schemars",
  "serde",
  "serde_json",
@@ -2017,7 +2017,7 @@ version = "0.9.0"
 dependencies = [
  "arrow",
  "powerio",
- "powerio-diag",
+ "powerio-core",
  "powerio-dist",
  "powerio-matrix",
  "powerio-pkg",
@@ -2053,13 +2053,6 @@ dependencies = [
 name = "powerio-core"
 version = "0.9.0"
 dependencies = [
- "serde_json",
-]
-
-[[package]]
-name = "powerio-diag"
-version = "0.9.0"
-dependencies = [
  "schemars",
  "serde",
  "serde_json",
@@ -2070,7 +2063,7 @@ name = "powerio-dist"
 version = "0.9.0"
 dependencies = [
  "jsonschema",
- "powerio-diag",
+ "powerio-core",
  "schemars",
  "serde",
  "serde_json",
@@ -2088,7 +2081,7 @@ dependencies = [
  "num-complex",
  "parquet",
  "powerio",
- "powerio-diag",
+ "powerio-core",
  "powerio-dist",
  "powerio-pkg",
  "rand 0.9.4",
@@ -2110,7 +2103,7 @@ version = "0.9.0"
 dependencies = [
  "num-complex",
  "powerio",
- "powerio-diag",
+ "powerio-core",
  "powerio-dist",
  "schemars",
  "serde",
@@ -2124,7 +2117,7 @@ version = "0.9.0"
 dependencies = [
  "num-complex",
  "powerio",
- "powerio-diag",
+ "powerio-core",
  "powerio-matrix",
  "serde",
  "serde_json",

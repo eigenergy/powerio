@@ -59,7 +59,7 @@ pub use convert::{
     convert_str, dist_target_from_name, parse_bytes, parse_file, parse_file_with_options,
     parse_str,
 };
-pub use diagnostics::{DiagnosticCode, DiagnosticSeverity, DiagnosticStage, StructuredDiagnostic};
+pub use diagnostics::{Diagnostic, DiagnosticCode, DiagnosticSeverity, DiagnosticStage};
 pub use dss::{
     DssLoadVoltageBounds, DssReadOptions, DssWriteOptions, parse_dss_file,
     parse_dss_file_with_options, parse_dss_str, write_dss, write_dss_with_options,

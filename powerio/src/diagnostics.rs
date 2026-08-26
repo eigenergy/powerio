@@ -1,7 +1,7 @@
 //! The codes this crate emits, and the registry gates over them.
 //!
 //! The record, the code grammar, the severity ladder, and the stage family live
-//! in `powerio-diag`. What lives here is the transmission side registry: one
+//! in `powerio-core`. What lives here is the transmission side registry: one
 //! [`DiagnosticInfo`] per code, declared once, so an emission site names an
 //! entry rather than a loose string and every emitted code is registered by
 //! construction.
@@ -10,9 +10,9 @@
 //! family is which field or record it was, which belongs in `details` where a
 //! consumer can read it, rather than in a code nobody can enumerate.
 
-pub use powerio_diag::{
-    DiagnosticCode, DiagnosticInfo, DiagnosticSeverity, DiagnosticStage, Diagnostics,
-    ErrorCategory, SourceRef, StructuredDiagnostic, check_registry, render_line, render_lines,
+pub use powerio_core::{
+    Diagnostic, DiagnosticCode, DiagnosticInfo, DiagnosticSeverity, DiagnosticStage, Diagnostics,
+    ErrorCategory, check_registry, code_is_well_formed, render_diagnostic, render_diagnostics,
 };
 
 use crate::format::TargetFormat;
@@ -176,15 +176,15 @@ pub mod codes {
     emit_family!(EMIT_SURGE, "SURGE", "Surge JSON");
     emit_family!(EMIT_PIO_JSON, "PIO_JSON", "the .pio.json snapshot");
 
-    powerio_diag::diagnostic_codes! {
+    powerio_core::diagnostic_codes! {
         // PARSE: the source text could not be decoded as given.
         /// A leading UTF-8 byte order mark was removed before the reader saw
         /// the text, so a same-format echo differs by exactly those bytes.
-        PARSE_SOURCE_BOM_STRIPPED = "PARSE.SOURCE.BOM_STRIPPED", Info,
+        PARSE_SOURCE_BOM_STRIPPED = "PARSE.SOURCE.BOM_STRIPPED", Remark,
             "a leading UTF-8 byte order mark was removed before the reader ran";
-        PARSE_MATPOWER_MALFORMED = "PARSE.MATPOWER.MALFORMED", Fatal,
+        PARSE_MATPOWER_MALFORMED = "PARSE.MATPOWER.MALFORMED", Error,
             "a MATPOWER matrix is missing, short, unparseable, or unbalanced", category = Parse;
-        PARSE_SOURCE_MALFORMED = "PARSE.SOURCE.MALFORMED", Fatal,
+        PARSE_SOURCE_MALFORMED = "PARSE.SOURCE.MALFORMED", Error,
             "a format reader refused the source it was given", category = Parse;
 
         // READ: decoded, but not representable in the canonical model.
@@ -198,7 +198,7 @@ pub mod codes {
             "a PSS/E control pointer names a bus the case does not declare";
         READ_PSSE_SECTION_UNSUPPORTED = "READ.PSSE.SECTION_UNSUPPORTED", Warning,
             "a PSS/E section is preserved in a same-format echo only";
-        READ_PSSE_RETAINED_SOURCE_ONLY = "READ.PSSE.RETAINED_SOURCE_ONLY", Info,
+        READ_PSSE_RETAINED_SOURCE_ONLY = "READ.PSSE.RETAINED_SOURCE_ONLY", Remark,
             "a PSS/E field survives in extras rather than in a typed field";
 
         READ_PSLF_VALUE_DEFAULTED = "READ.PSLF.VALUE_DEFAULTED", Warning,
@@ -209,7 +209,7 @@ pub mod codes {
             "a PSLF record could not be mapped and was dropped";
         READ_PSLF_SOURCE_MALFORMED = "READ.PSLF.SOURCE_MALFORMED", Warning,
             "a PSLF section header, count, or end marker disagrees with the records";
-        READ_PSLF_RETAINED_SOURCE_ONLY = "READ.PSLF.RETAINED_SOURCE_ONLY", Info,
+        READ_PSLF_RETAINED_SOURCE_ONLY = "READ.PSLF.RETAINED_SOURCE_ONLY", Remark,
             "a PSLF section survives in the retained source or in extras only";
 
         READ_PANDAPOWER_FIELD_DROPPED = "READ.PANDAPOWER.FIELD_DROPPED", Warning,
@@ -254,13 +254,13 @@ pub mod codes {
         READ_GEO_NOTES_TRUNCATED = "READ.GEO.NOTES_TRUNCATED", Warning,
             "the geo reader stopped recording notes at its budget";
 
-        READ_IO_FAILED = "READ.IO.FAILED", Fatal,
+        READ_IO_FAILED = "READ.IO.FAILED", Error,
             "the case file could not be read", category = Io;
 
         // CANONICALIZE: normalization of an already-read network.
-        CANONICALIZE_NORMALIZE_BOUNDS_CLAMPED = "CANONICALIZE.NORMALIZE.BOUNDS_CLAMPED", Info,
+        CANONICALIZE_NORMALIZE_BOUNDS_CLAMPED = "CANONICALIZE.NORMALIZE.BOUNDS_CLAMPED", Remark,
             "a branch angle difference bound was clamped into the modeled range";
-        CANONICALIZE_NORMALIZE_NO_REFERENCE_BUS = "CANONICALIZE.NORMALIZE.NO_REFERENCE_BUS", Fatal,
+        CANONICALIZE_NORMALIZE_NO_REFERENCE_BUS = "CANONICALIZE.NORMALIZE.NO_REFERENCE_BUS", Error,
             "no reference bus can be established: no bus hosts an in-service generator",
             category = Data;
         CANONICALIZE_NORMALIZE_REFERENCE_DESIGNATED =
@@ -269,60 +269,60 @@ pub mod codes {
         CANONICALIZE_NORMALIZE_GEN_COST_ABSENT =
             "CANONICALIZE.NORMALIZE.GEN_COST_ABSENT", Warning,
             "the solver-ready copy has in-service generators and no cost data, so any cost objective built from it is zero";
-        CANONICALIZE_NORMALIZE_INVALID_OPTION = "CANONICALIZE.NORMALIZE.INVALID_OPTION", Fatal,
+        CANONICALIZE_NORMALIZE_INVALID_OPTION = "CANONICALIZE.NORMALIZE.INVALID_OPTION", Error,
             "a normalize option is outside the range it is defined on", category = Data;
-        CANONICALIZE_NORMALIZE_INVALID_BASE_MVA = "CANONICALIZE.NORMALIZE.INVALID_BASE_MVA", Fatal,
+        CANONICALIZE_NORMALIZE_INVALID_BASE_MVA = "CANONICALIZE.NORMALIZE.INVALID_BASE_MVA", Error,
             "the case base MVA is not a positive finite number", category = Data;
 
         // BUILD: assembling a derived object from a network that already parsed.
-        BUILD_INDEX_UNKNOWN_BUS = "BUILD.INDEX.UNKNOWN_BUS", Fatal,
+        BUILD_INDEX_UNKNOWN_BUS = "BUILD.INDEX.UNKNOWN_BUS", Error,
             "an element references a bus id the case does not declare", category = Data;
-        BUILD_INDEX_REFERENCE_BUS_COUNT = "BUILD.INDEX.REFERENCE_BUS_COUNT", Fatal,
+        BUILD_INDEX_REFERENCE_BUS_COUNT = "BUILD.INDEX.REFERENCE_BUS_COUNT", Error,
             "the index needs exactly one reference bus", category = Data;
-        BUILD_INDEX_UNGROUNDED_COMPONENT = "BUILD.INDEX.UNGROUNDED_COMPONENT", Fatal,
+        BUILD_INDEX_UNGROUNDED_COMPONENT = "BUILD.INDEX.UNGROUNDED_COMPONENT", Error,
             "a connected component has no reference bus to ground", category = Data;
-        BUILD_BRANCH_ZERO_IMPEDANCE = "BUILD.BRANCH.ZERO_IMPEDANCE", Fatal,
+        BUILD_BRANCH_ZERO_IMPEDANCE = "BUILD.BRANCH.ZERO_IMPEDANCE", Error,
             "a branch has a zero matrix denominator under the selected build options",
             category = Data;
-        BUILD_BRANCH_NOT_A_NUMBER = "BUILD.BRANCH.NOT_A_NUMBER", Fatal,
+        BUILD_BRANCH_NOT_A_NUMBER = "BUILD.BRANCH.NOT_A_NUMBER", Error,
             "a branch susceptance is not finite", category = Data;
-        BUILD_BRANCH_DEGENERATE_TAP = "BUILD.BRANCH.DEGENERATE_TAP", Fatal,
+        BUILD_BRANCH_DEGENERATE_TAP = "BUILD.BRANCH.DEGENERATE_TAP", Error,
             "a branch tap ratio is too small to divide by", category = Data;
-        BUILD_GEO_UNLOCATED_ELEMENTS = "BUILD.GEO.UNLOCATED_ELEMENTS", Fatal,
+        BUILD_GEO_UNLOCATED_ELEMENTS = "BUILD.GEO.UNLOCATED_ELEMENTS", Error,
             "a geo apply left elements with no location or route", category = Data;
-        BUILD_GEO_APPLY_SUMMARY = "BUILD.GEO.APPLY_SUMMARY", Info,
+        BUILD_GEO_APPLY_SUMMARY = "BUILD.GEO.APPLY_SUMMARY", Remark,
             "how many elements a geo apply located";
         BUILD_GEO_UNMATCHED_FEATURE = "BUILD.GEO.UNMATCHED_FEATURE", Warning,
             "a geo feature matched no element in the network";
 
         // VALIDATE: the case's own internal consistency.
-        VALIDATE_GEN_COST_MISSING = "VALIDATE.GEN_COST.MISSING", Fatal,
+        VALIDATE_GEN_COST_MISSING = "VALIDATE.GEN_COST.MISSING", Error,
             "a generator carries no cost data under a policy that requires one", category = Data;
-        VALIDATE_GEN_COST_NOT_A_NUMBER = "VALIDATE.GEN_COST.NOT_A_NUMBER", Fatal,
+        VALIDATE_GEN_COST_NOT_A_NUMBER = "VALIDATE.GEN_COST.NOT_A_NUMBER", Error,
             "a default generator cost field is not finite", category = Data;
-        VALIDATE_GEN_COST_PATCH_INVALID = "VALIDATE.GEN_COST.PATCH_INVALID", Fatal,
+        VALIDATE_GEN_COST_PATCH_INVALID = "VALIDATE.GEN_COST.PATCH_INVALID", Error,
             "a generator cost patch row is not usable", category = Data;
-        VALIDATE_GEN_COST_COUNT_MISMATCH = "VALIDATE.GEN_COST.COUNT_MISMATCH", Fatal,
+        VALIDATE_GEN_COST_COUNT_MISMATCH = "VALIDATE.GEN_COST.COUNT_MISMATCH", Error,
             "the cost table has neither one row per generator nor two", category = Data;
-        VALIDATE_DC_LINE_COST_COUNT_MISMATCH = "VALIDATE.DC_LINE_COST.COUNT_MISMATCH", Fatal,
+        VALIDATE_DC_LINE_COST_COUNT_MISMATCH = "VALIDATE.DC_LINE_COST.COUNT_MISMATCH", Error,
             "the dcline cost table has other than one row per dcline", category = Data;
 
         // LOWER: a policy applied on the way into a target.
-        LOWER_GEN_COST_POLICY_APPLIED = "LOWER.GEN_COST.POLICY_APPLIED", Info,
+        TRANSFORM_GEN_COST_POLICY_APPLIED = "TRANSFORM.GEN_COST.POLICY_APPLIED", Remark,
             "a write time generator cost policy patched or synthesized costs";
 
         // REQUEST: the call named something powerio does not provide.
-        REQUEST_FORMAT_UNKNOWN = "REQUEST.FORMAT.UNKNOWN", Fatal,
-            "the named case format is not one powerio reads", category = UnknownFormat;
-        REQUEST_FORMAT_WRITE_UNSUPPORTED = "REQUEST.FORMAT.WRITE_UNSUPPORTED", Fatal,
-            "the named case format is read only and has no writer", category = UnknownFormat;
+        REQUEST_FORMAT_UNKNOWN = "REQUEST.FORMAT.UNKNOWN", Error,
+            "the named case format is not one powerio reads", category = Request;
+        REQUEST_FORMAT_WRITE_UNSUPPORTED = "REQUEST.FORMAT.WRITE_UNSUPPORTED", Error,
+            "the named case format is read only and has no writer", category = Request;
 
         // Write side codes a single target owns.
         /// The default `.raw` target is revision 33, so writing a newer source
         /// through it re-emits the older layout.
         EMIT_PSSE_DOWNGRADED = "EMIT.PSSE.DOWNGRADED", Warning,
             "a newer PSS/E revision was written into an older layout";
-        EMIT_PSSE_RATING_SET_REMAPPED = "EMIT.PSSE.RATING_SET_REMAPPED", Info,
+        EMIT_PSSE_RATING_SET_REMAPPED = "EMIT.PSSE.RATING_SET_REMAPPED", Remark,
             "a named branch rating set was written into a PSS/E numbered rating slot";
     }
 

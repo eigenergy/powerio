@@ -16,13 +16,13 @@
 //! [`codes`] is this crate's registry: one entry per code it emits, so an
 //! emission site names an entry rather than a loose string.
 
-pub use powerio_diag::{
+pub use crate::legacy_diag::{
     CodeStatus, DiagnosticCode, DiagnosticInfo, DiagnosticSeverity, DiagnosticStage, Diagnostics,
     StructuredDiagnostic, check_registry, code_is_well_formed, render_line, render_lines,
 };
 
 pub mod codes {
-    powerio_diag::diagnostic_codes! {
+    crate::legacy_diagnostic_codes! {
         // READ: what a reader's own findings arrive as once the package lifts
         // them. A reader finding keeps the code its crate gave it; these are
         // the package's own.

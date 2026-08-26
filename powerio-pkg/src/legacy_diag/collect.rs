@@ -1,6 +1,6 @@
 //! The collector an emitting pass threads through its call tree.
 
-use crate::{DiagnosticInfo, DiagnosticSeverity, StructuredDiagnostic, render_lines};
+use crate::legacy_diag::{DiagnosticInfo, DiagnosticSeverity, StructuredDiagnostic, render_lines};
 
 /// An ordered set of findings, built up as a reader, a lowering pass, or a
 /// writer runs.

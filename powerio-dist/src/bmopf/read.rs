@@ -177,11 +177,11 @@ fn report_non_numeric_fields(doc: &Map<String, Value>, net: &mut MulticonductorN
              it reads as NaN and anything derived from it is undefined"
         );
         net.record(
-            crate::diagnostics::StructuredDiagnostic::of(
+            crate::diagnostics::Diagnostic::of(
                 &crate::diagnostics::codes::READ_BMOPF_FIELD_NOT_A_NUMBER,
                 message,
             )
-            .with_element_path(pointer)
+            .with_target(pointer)
             .with_suggested_action("state a number, or omit the field"),
         );
     }

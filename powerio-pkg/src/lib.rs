@@ -37,6 +37,7 @@
 
 pub mod diagnostics;
 pub mod geo;
+pub mod legacy_diag;
 pub mod lowering;
 pub mod model;
 pub mod operating;

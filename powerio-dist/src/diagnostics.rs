@@ -1,6 +1,6 @@
 //! The codes this crate emits.
 //!
-//! The record itself lives in `powerio-diag`, below this crate and below the
+//! The record itself lives in `powerio-core`, below this crate and below the
 //! `.pio.json` document model, so a distribution finding reaches a package
 //! without a translation step. What lives here is the distribution side
 //! registry: one [`DiagnosticInfo`] per code, declared once, so an emission
@@ -9,21 +9,21 @@
 //! Codes are families, not one per site: what differs between two sites of a
 //! family is which object or property it was, which belongs in `details`.
 
-pub use powerio_diag::{
-    DiagnosticCode, DiagnosticInfo, DiagnosticSeverity, DiagnosticStage, Diagnostics, SourceRef,
-    StructuredDiagnostic, check_registry, render_line, render_lines,
+pub use powerio_core::{
+    Diagnostic, DiagnosticCode, DiagnosticInfo, DiagnosticSeverity, DiagnosticStage, Diagnostics,
+    check_registry, render_diagnostic, render_diagnostics,
 };
 
 pub mod codes {
-    powerio_diag::diagnostic_codes! {
+    powerio_core::diagnostic_codes! {
         // PARSE: the source text could not be decoded as given.
-        PARSE_DSS_BOM_STRIPPED = "PARSE.DSS.BOM_STRIPPED", Info,
+        PARSE_DSS_BOM_STRIPPED = "PARSE.DSS.BOM_STRIPPED", Remark,
             "a leading UTF-8 byte order mark was removed before the reader ran";
         PARSE_DSS_SOURCE_MALFORMED = "PARSE.DSS.SOURCE_MALFORMED", Warning,
             "a dss command, object spec, or property assignment does not parse";
-        PARSE_DIST_MALFORMED = "PARSE.DIST.MALFORMED", Fatal,
+        PARSE_DIST_MALFORMED = "PARSE.DIST.MALFORMED", Error,
             "a distribution document is not valid JSON for its format", category = Parse;
-        PARSE_DIST_SOURCE_MALFORMED = "PARSE.DIST.SOURCE_MALFORMED", Fatal,
+        PARSE_DIST_SOURCE_MALFORMED = "PARSE.DIST.SOURCE_MALFORMED", Error,
             "a distribution reader refused the source it was given", category = Parse;
 
         // READ.DSS: decoded, but not representable in the multiconductor model.
@@ -51,7 +51,7 @@ pub mod codes {
             "a control or element reference names an object the case does not declare";
         READ_DSS_RETAINED_SOURCE_ONLY = "READ.DSS.RETAINED_SOURCE_ONLY", Warning,
             "a field survives in extras or the retained source rather than in a typed field";
-        READ_DSS_COORDINATE_SPACE_UNKNOWN = "READ.DSS.COORDINATE_SPACE_UNKNOWN", Info,
+        READ_DSS_COORDINATE_SPACE_UNKNOWN = "READ.DSS.COORDINATE_SPACE_UNKNOWN", Remark,
             "buscoords declare no coordinate reference system";
         READ_DSS_INCLUDE_LOAD_FAILED = "READ.DSS.INCLUDE_LOAD_FAILED", Warning,
             "an include the case names could not be loaded";
@@ -94,7 +94,7 @@ pub mod codes {
             "a PMD value is not the shape its key declares";
         READ_PMD_RECORD_DROPPED = "READ.PMD.RECORD_DROPPED", Warning,
             "a PMD object beyond the modeled set was dropped";
-        READ_PMD_VALUE_INLINED = "READ.PMD.VALUE_INLINED", Info,
+        READ_PMD_VALUE_INLINED = "READ.PMD.VALUE_INLINED", Remark,
             "an inline PMD impedance was materialized as a named linecode";
 
         // EMIT.PMD.
@@ -213,15 +213,15 @@ pub mod codes {
             "a companion file the case text refers to was not written";
 
         // Failures.
-        READ_DIST_IO_FAILED = "READ.DIST.IO_FAILED", Fatal,
+        READ_DIST_IO_FAILED = "READ.DIST.IO_FAILED", Error,
             "a distribution case file could not be read", category = Io;
         /// Retired in 0.9.0: every distribution read finding now carries its
         /// own code, so the package no longer wraps them under one catch-all.
         READ_DIST_PARSE_WARNING = "READ.DIST.PARSE_WARNING", Warning,
             "a distribution parse finding with no identity of its own", retired = "0.9.0";
-        REQUEST_DIST_FORMAT_UNKNOWN = "REQUEST.DIST_FORMAT.UNKNOWN", Fatal,
+        REQUEST_DIST_FORMAT_UNKNOWN = "REQUEST.DIST_FORMAT.UNKNOWN", Error,
             "the named distribution format is not one powerio reads",
-            category = UnknownFormat;
+            category = Request;
     }
 }
 

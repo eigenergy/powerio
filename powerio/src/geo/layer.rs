@@ -93,7 +93,7 @@ pub struct ElementKey {
 pub struct GeoParsed {
     pub layer: GeoLayer,
     /// The reader's notes as structured records.
-    pub diagnostics: Vec<crate::diagnostics::StructuredDiagnostic>,
+    pub diagnostics: Vec<crate::diagnostics::Diagnostic>,
     /// The same notes as `CODE: message` lines.
     pub warnings: Vec<String>,
 }
@@ -101,10 +101,14 @@ pub struct GeoParsed {
 impl GeoParsed {
     /// Record one note. Both channels move together: the line is rendered from
     /// the record it is added with.
-    fn note(&mut self, info: &crate::diagnostics::DiagnosticInfo, message: impl Into<String>) {
-        let diagnostic = crate::diagnostics::StructuredDiagnostic::of(info, message);
+    fn note(
+        &mut self,
+        info: &'static crate::diagnostics::DiagnosticInfo,
+        message: impl Into<String>,
+    ) {
+        let diagnostic = crate::diagnostics::Diagnostic::of(info, message);
         self.warnings
-            .push(crate::diagnostics::render_line(&diagnostic));
+            .push(crate::diagnostics::render_diagnostic(&diagnostic));
         self.diagnostics.push(diagnostic);
     }
 }
@@ -797,7 +801,7 @@ fn push_once(parsed: &mut GeoParsed, warning: String) {
     if parsed.diagnostics.len() >= MAX_READER_NOTES {
         return;
     }
-    if !parsed.diagnostics.iter().any(|d| d.message == warning) {
+    if !parsed.diagnostics.iter().any(|d| d.message() == warning) {
         parsed.note(
             &crate::diagnostics::codes::READ_GEO_SOURCE_MALFORMED,
             warning,

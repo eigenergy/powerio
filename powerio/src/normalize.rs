@@ -62,7 +62,7 @@ impl Default for NormalizeOptions {
 pub struct NormalizedNetwork {
     pub network: BalancedNetwork,
     /// The pass's findings as structured records.
-    pub diagnostics: Vec<crate::diagnostics::StructuredDiagnostic>,
+    pub diagnostics: Vec<crate::diagnostics::Diagnostic>,
     /// The same findings as `CODE: message` lines.
     pub warnings: Vec<String>,
 }

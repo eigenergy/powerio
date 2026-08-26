@@ -12,8 +12,13 @@ documentation = "https://docs.rs/powerio-core"
 keywords = ["powerio", "power-systems", "diagnostics"]
 categories = ["science", "data-structures"]
 
+[features]
+schema = ["dep:schemars"]
+
 [dependencies]
+serde = { workspace = true }
 serde_json = { workspace = true }
+schemars = { workspace = true, optional = true }
 
 [lints]
 workspace = true

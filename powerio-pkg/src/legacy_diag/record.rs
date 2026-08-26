@@ -2,7 +2,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::{DiagnosticCode, DiagnosticInfo, DiagnosticStage};
+use crate::legacy_diag::{DiagnosticCode, DiagnosticInfo, DiagnosticStage};
 
 /// Severity, ordered worst-last so [`Ord`] gives the dominant severity of a set.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -20,7 +20,7 @@ pub enum DiagnosticSeverity {
     Error,
     /// The operation could not complete. An error is a diagnostic that ended
     /// the operation, and it is the one severity that also carries a
-    /// [`crate::ErrorCategory`].
+    /// [`crate::legacy_diag::ErrorCategory`].
     Fatal,
 }
 
@@ -244,11 +244,94 @@ impl schemars::JsonSchema for StructuredDiagnostic {
     }
 
     fn schema_id() -> std::borrow::Cow<'static, str> {
-        "powerio_diag::StructuredDiagnostic".into()
+        "crate::legacy_diag::StructuredDiagnostic".into()
     }
 
     fn json_schema(generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
         <SerializedDiagnostic as schemars::JsonSchema>::json_schema(generator)
+    }
+}
+
+// The 1.0 runtime record has four severities, a target, and byte spans; the
+// 0.9 document has five severities and a seven field source pointer. A crate
+// below this one now emits the runtime record, so writing a 0.9 document
+// projects it back. The projection is one way: it is only used to keep writing
+// documents the released reader accepts.
+impl From<powerio_core::Diagnostic> for StructuredDiagnostic {
+    fn from(diagnostic: powerio_core::Diagnostic) -> Self {
+        use powerio_core::DiagnosticSeverity as Runtime;
+
+        let severity = match diagnostic.severity() {
+            // A runtime error that ends an operation declares a category; the
+            // 0.9 document spelled that Fatal.
+            Runtime::Error
+                if diagnostic
+                    .registered_info()
+                    .is_some_and(|i| i.category.is_some()) =>
+            {
+                DiagnosticSeverity::Fatal
+            }
+            Runtime::Error => DiagnosticSeverity::Error,
+            Runtime::Warning => DiagnosticSeverity::Warning,
+            Runtime::Remark => DiagnosticSeverity::Info,
+            Runtime::Note => DiagnosticSeverity::Debug,
+        };
+
+        let mut record = Self::new(diagnostic.code(), severity, diagnostic.message());
+        if let Some(target) = diagnostic.target() {
+            record = record.with_element_path(target);
+        }
+        if let Some(span) = diagnostic.spans().first() {
+            record = record.with_source_ref(
+                SourceRef::new(span.source().as_str()).with_byte_offset(span.byte_start()),
+            );
+        }
+        if let Some(action) = diagnostic.suggested_action() {
+            record = record.with_suggested_action(action);
+        }
+        if !diagnostic.details().is_empty() {
+            record = record.with_details(diagnostic.details().clone());
+        }
+        record
+    }
+}
+
+impl SourceRef {
+    /// Byte offset of the finding inside its source.
+    #[must_use]
+    pub fn with_byte_offset(mut self, offset: u64) -> Self {
+        self.byte_offset = Some(offset);
+        self
+    }
+}
+
+// Reading a 0.9 document back into a 1.0 runtime record. The code becomes an
+// external one: a registry entry is a compile time item, and a document can
+// carry a code from a producer this build does not know.
+impl From<StructuredDiagnostic> for powerio_core::Diagnostic {
+    fn from(record: StructuredDiagnostic) -> Self {
+        use powerio_core::DiagnosticSeverity as Runtime;
+
+        let severity = match record.severity {
+            DiagnosticSeverity::Fatal | DiagnosticSeverity::Error => Runtime::Error,
+            DiagnosticSeverity::Warning => Runtime::Warning,
+            DiagnosticSeverity::Info => Runtime::Remark,
+            DiagnosticSeverity::Debug => Runtime::Note,
+        };
+        let code = powerio_core::DiagnosticCode::new(record.code.as_str()).unwrap_or_else(|_| {
+            powerio_core::DiagnosticCode::new("PARTNER.LEGACY.UNCODED").expect("static code")
+        });
+        let mut diagnostic = powerio_core::Diagnostic::new(code, severity, record.message);
+        if let Some(path) = record.element_path {
+            diagnostic = diagnostic.with_target(path);
+        }
+        if let Some(action) = record.suggested_action {
+            diagnostic = diagnostic.with_suggested_action(action);
+        }
+        if !record.details.is_empty() {
+            diagnostic = diagnostic.with_details(record.details);
+        }
+        diagnostic
     }
 }
 

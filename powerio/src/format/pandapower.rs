@@ -2953,7 +2953,7 @@ mod tests {
         .unwrap();
         assert_eq!(parsed.network.branches[0].tap, 1.0);
         assert!(
-            parsed.diagnostics.iter().any(|d| d.message
+            parsed.diagnostics.iter().any(|d| d.message()
                 == "`trafo`: 1 row(s) have a tabular or unrecognized tap changer; those taps were ignored"),
             "{:?}",
             parsed.warnings
@@ -3035,7 +3035,7 @@ mod tests {
             parsed
                 .diagnostics
                 .iter()
-                .any(|d| d.message == "`svc` table ignored (1 rows): not mapped"),
+                .any(|d| d.message() == "`svc` table ignored (1 rows): not mapped"),
             "{:?}",
             parsed.warnings
         );
@@ -3091,7 +3091,7 @@ mod tests {
         net.generators.push(g);
         let conv = write_pandapower_json(&net);
         assert!(
-            conv.diagnostics.iter().any(|d| d.message
+            conv.diagnostics.iter().any(|d| d.message()
                 == "`gen`: non-finite value(s) written as null in column(s) `min_q_mvar` (1), `max_q_mvar` (1); pandapower reads them as NaN"),
             "{:?}",
             conv.warnings
@@ -3138,7 +3138,7 @@ mod tests {
             "`pwl_cost` table ignored (1 rows): piecewise costs are not mapped",
         ] {
             assert!(
-                parsed.diagnostics.iter().any(|d| d.message == expected),
+                parsed.diagnostics.iter().any(|d| d.message() == expected),
                 "missing {expected:?} in {:?}",
                 parsed.warnings
             );
@@ -3166,7 +3166,7 @@ mod tests {
         let cost = parsed.network.generators[0].cost.as_ref().expect("cost");
         assert_eq!(cost.coeffs, vec![0.0, 2.5, 0.0]);
         assert!(
-            parsed.diagnostics.iter().any(|d| d.message
+            parsed.diagnostics.iter().any(|d| d.message()
                 == "`poly_cost`: reactive cost coefficients (cq*) nonzero on 1 rows; only active power costs are read"),
             "{:?}",
             parsed.warnings
@@ -3477,9 +3477,9 @@ mod tests {
         let conv = write_pandapower_json(&net);
         assert!(
             conv.diagnostics.iter().any(|d| d
-                .message
+                .message()
                 .starts_with("1 transformer terminal charging shunt(s) written into `shunt`")
-                || d.message
+                || d.message()
                     .starts_with("2 transformer terminal charging shunt(s) written into `shunt`")),
             "{:?}",
             conv.warnings
@@ -3507,7 +3507,7 @@ mod tests {
         assert_eq!(col(&bus, "vn_kv"), vec![json!(1.0), json!(1.0)]);
         assert!(
             conv.diagnostics.iter().any(|d| d
-                .message
+                .message()
                 .starts_with("2 bus(es) carry no base_kv; written with vn_kv = 1")),
             "{:?}",
             conv.warnings
@@ -3583,7 +3583,7 @@ mod tests {
         assert_eq!(col(&pc, "cp1_eur_per_mw"), vec![json!(2.0)]);
         assert_eq!(col(&pc, "cp2_eur_per_mw2"), vec![json!(3.0)]);
         assert!(
-            conv.diagnostics.iter().any(|d| d.message
+            conv.diagnostics.iter().any(|d| d.message()
                 == "1 generator costs truncated to quadratic: poly_cost carries cp0/cp1/cp2 only"),
             "{:?}",
             conv.warnings
@@ -3616,7 +3616,7 @@ mod tests {
             "1 generator costs had no coefficients and were written as zero",
         ] {
             assert!(
-                conv.diagnostics.iter().any(|d| d.message == expected),
+                conv.diagnostics.iter().any(|d| d.message() == expected),
                 "missing {expected:?} in {:?}",
                 conv.warnings
             );

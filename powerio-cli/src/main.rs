@@ -1295,8 +1295,10 @@ fn build_package(
     if from == Some(FormatArg::Gridfm) || (from.is_none() && looks_like_gridfm_dir(input)) {
         let read = powerio_matrix::read_gridfm_dataset(input, scenario)
             .with_context(|| format!("reading gridfm dataset {}", input.display()))?;
-        let mut pkg =
-            NetworkPackage::from_balanced_with_read_diagnostics(read.network, read.diagnostics);
+        let mut pkg = NetworkPackage::from_balanced_with_read_diagnostics(
+            read.network,
+            read.diagnostics.into_iter().map(Into::into),
+        );
         set_package_source(&mut pkg, input, PackageSourceKind::Folder, "gridfm", false);
         pkg.run_sane_validation();
         return Ok(pkg);
@@ -1601,11 +1603,11 @@ fn run_convert(
 }
 
 /// The `Error`-or-worse parse findings, formatted for stderr.
-fn parse_error_lines(diagnostics: &[powerio_dist::StructuredDiagnostic]) -> Vec<String> {
+fn parse_error_lines(diagnostics: &[powerio_dist::Diagnostic]) -> Vec<String> {
     diagnostics
         .iter()
-        .filter(|d| d.severity >= powerio_dist::DiagnosticSeverity::Error)
-        .map(|d| format!("{}: {}", d.code, d.message))
+        .filter(|d| d.severity() >= powerio_dist::DiagnosticSeverity::Error)
+        .map(|d| format!("{}: {}", d.code(), d.message()))
         .collect()
 }
 
@@ -1880,7 +1882,7 @@ fn convert_to_pypsa_folder(
     let options = gen_cost_options.write_options()?;
     let diagnostics = powerio_matrix::write_dir_with_options(&net, "pypsa-csv", out_dir, &options)
         .with_context(|| format!("writing PyPSA CSV folder {}", out_dir.display()))?;
-    for w in powerio_matrix::diagnostics::render_lines(&diagnostics) {
+    for w in powerio_matrix::diagnostics::render_diagnostics(&diagnostics) {
         eprintln!("fidelity: {w}");
     }
     eprintln!("wrote {}", out_dir.display());

@@ -5,9 +5,11 @@
 //! not own electrical network, calculation, matrix, or dynamic value types.
 
 mod codes;
+mod collect;
 mod diagnostic;
 mod error;
 mod module;
+pub mod nonfinite;
 mod output;
 mod records;
 mod scenario;
@@ -16,6 +18,7 @@ mod time_series;
 mod validation;
 
 pub use codes::CORE_DIAGNOSTIC_CODES;
+pub use collect::Diagnostics;
 pub use diagnostic::{
     CodeStatus, Diagnostic, DiagnosticCode, DiagnosticInfo, DiagnosticSeverity, DiagnosticStage,
     ErrorCategory, check_registry, check_scope_ownership, code_is_well_formed, render_diagnostic,

@@ -1074,7 +1074,7 @@ pub struct GridfmRead {
     pub scenario: i64,
     /// What the gridfm schema couldn't round-trip — synthesized bus ids, folded
     /// per-bus load/shunt, dropped HVDC/storage, etc., as structured records.
-    pub diagnostics: Vec<powerio_diag::StructuredDiagnostic>,
+    pub diagnostics: Vec<powerio_core::Diagnostic>,
     /// The same findings as `CODE: message` lines, rendered from
     /// `diagnostics`.
     pub warnings: Vec<String>,

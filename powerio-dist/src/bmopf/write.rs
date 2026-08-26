@@ -13,7 +13,7 @@ use serde_json::{Map, Value, json};
 
 use crate::convert::Conversion;
 use crate::diagnostics::codes as C;
-use crate::diagnostics::{DiagnosticInfo, StructuredDiagnostic};
+use crate::diagnostics::{Diagnostic, DiagnosticInfo};
 use crate::geo::CoordinateSpace;
 use crate::model::{
     ActivePowerReference, ActivePowerUnit, Configuration, ControlVoltageReference,
@@ -199,8 +199,8 @@ impl Writer {
         details: Map<String, Value>,
     ) {
         self.warnings.record(
-            StructuredDiagnostic::of(code, message)
-                .with_element_path(element_path)
+            Diagnostic::of(code, message)
+                .with_target(element_path)
                 .with_details(details),
         );
     }

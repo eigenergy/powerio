@@ -942,7 +942,7 @@ pub struct MulticonductorNetwork {
     /// in the `.pio.json` payload: the serialized spelling is a v0.9
     /// decision, and package diagnostics live in the package document.
     #[serde(skip)]
-    pub parse_diagnostics: Vec<crate::diagnostics::StructuredDiagnostic>,
+    pub parse_diagnostics: Vec<crate::diagnostics::Diagnostic>,
     /// Retained source text for the byte-exact echo tier. Skipped in the
     /// `.pio.json` payload (mirrors `powerio::BalancedNetwork::source`): keeping it out
     /// avoids serde's `rc` feature, and retained source is a package concern
@@ -954,19 +954,19 @@ pub struct MulticonductorNetwork {
 }
 
 // `remote = "Self"` turns the derived serde impls into inherent functions;
-// routing them through `powerio_diag::nonfinite` spells a nonfinite float as
+// routing them through `powerio_core::nonfinite` spells a nonfinite float as
 // `"Infinity"`/`"-Infinity"`/`"NaN"` on every JSON route, the same convention
 // as the balanced model. The bound fields' `with` modules keep accepting the
 // `null` a pre-0.9 writer emitted (read side only).
 impl serde::Serialize for MulticonductorNetwork {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        MulticonductorNetwork::serialize(self, powerio_diag::nonfinite::NonFiniteSer(serializer))
+        MulticonductorNetwork::serialize(self, powerio_core::nonfinite::NonFiniteSer(serializer))
     }
 }
 
 impl<'de> serde::Deserialize<'de> for MulticonductorNetwork {
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        MulticonductorNetwork::deserialize(powerio_diag::nonfinite::NonFiniteDe(deserializer))
+        MulticonductorNetwork::deserialize(powerio_core::nonfinite::NonFiniteDe(deserializer))
     }
 }
 
@@ -975,19 +975,19 @@ impl MulticonductorNetwork {
     /// rendered from the record it is added with.
     pub(crate) fn note(
         &mut self,
-        info: &crate::diagnostics::DiagnosticInfo,
+        info: &'static crate::diagnostics::DiagnosticInfo,
         message: impl Into<String>,
     ) {
-        let diagnostic = crate::diagnostics::StructuredDiagnostic::of(info, message);
+        let diagnostic = crate::diagnostics::Diagnostic::of(info, message);
         self.warnings
-            .push(crate::diagnostics::render_line(&diagnostic));
+            .push(crate::diagnostics::render_diagnostic(&diagnostic));
         self.parse_diagnostics.push(diagnostic);
     }
 
     /// Record one parse finding already built with the record's builders.
-    pub(crate) fn record(&mut self, diagnostic: crate::diagnostics::StructuredDiagnostic) {
+    pub(crate) fn record(&mut self, diagnostic: crate::diagnostics::Diagnostic) {
         self.warnings
-            .push(crate::diagnostics::render_line(&diagnostic));
+            .push(crate::diagnostics::render_diagnostic(&diagnostic));
         self.parse_diagnostics.push(diagnostic);
     }
 }

@@ -242,7 +242,7 @@ pub struct RawDss {
     pub warnings: Vec<String>,
     /// Structured findings beside `warnings`; an `Error` entry marks an
     /// incomplete parse the CLI must not exit 0 on.
-    pub diagnostics: Vec<crate::diagnostics::StructuredDiagnostic>,
+    pub diagnostics: Vec<crate::diagnostics::Diagnostic>,
     index: BTreeMap<(String, String), usize>,
     active: Option<usize>,
 }
@@ -258,15 +258,15 @@ impl RawDss {
         self.objects.iter().filter(move |o| o.class == class)
     }
 
-    fn warn(&mut self, info: &crate::diagnostics::DiagnosticInfo, msg: impl Into<String>) {
-        self.record(crate::diagnostics::StructuredDiagnostic::of(info, msg));
+    fn warn(&mut self, info: &'static crate::diagnostics::DiagnosticInfo, msg: impl Into<String>) {
+        self.record(crate::diagnostics::Diagnostic::of(info, msg));
     }
 
     /// Record one finding. Both channels move together: the line is rendered
     /// from the record it is added with.
-    fn record(&mut self, diagnostic: crate::diagnostics::StructuredDiagnostic) {
+    fn record(&mut self, diagnostic: crate::diagnostics::Diagnostic) {
         self.warnings
-            .push(crate::diagnostics::render_line(&diagnostic));
+            .push(crate::diagnostics::render_diagnostic(&diagnostic));
         self.diagnostics.push(diagnostic);
     }
 
@@ -749,7 +749,7 @@ impl<L: Loader> Executor<'_, L> {
         suggested_action: &'static str,
     ) {
         self.raw.record(
-            crate::diagnostics::StructuredDiagnostic::of(code, message)
+            crate::diagnostics::Diagnostic::of(code, message)
                 .with_suggested_action(suggested_action),
         );
     }
@@ -1567,7 +1567,7 @@ mod tests {
     fn budget_refusals(raw: &RawDss) -> usize {
         raw.diagnostics
             .iter()
-            .filter(|d| d.code.as_str() == crate::diagnostics::codes::READ_DSS_INCLUDE_BUDGET.code)
+            .filter(|d| d.code() == crate::diagnostics::codes::READ_DSS_INCLUDE_BUDGET.code)
             .count()
     }
 
@@ -1811,13 +1811,13 @@ mod tests {
         let refused: Vec<_> = raw
             .diagnostics
             .iter()
-            .filter(|d| d.code.as_str() == crate::diagnostics::codes::READ_DSS_INCLUDE_REFUSED.code)
+            .filter(|d| d.code() == crate::diagnostics::codes::READ_DSS_INCLUDE_REFUSED.code)
             .collect();
         assert_eq!(refused.len(), 3);
         assert!(
             refused
                 .iter()
-                .all(|d| d.severity == crate::diagnostics::DiagnosticSeverity::Error)
+                .all(|d| d.severity() == crate::diagnostics::DiagnosticSeverity::Error)
         );
     }
 

@@ -35,7 +35,7 @@ use std::sync::Arc;
 use serde_json::{Map, Value};
 
 use crate::diagnostics::{
-    DiagnosticInfo, Diagnostics, EmitFamily, StructuredDiagnostic, codes, render_line,
+    Diagnostic, DiagnosticInfo, Diagnostics, EmitFamily, codes, render_diagnostic,
 };
 use crate::gen_cost::{GenCostPatch, MissingGenCostPolicy};
 use crate::network::{BalancedNetwork, Branch, BranchRatingSet, Bus, BusId, BusType, SourceFormat};
@@ -829,7 +829,7 @@ pub struct Parsed {
     pub network: BalancedNetwork,
     /// The reader's findings as structured records: a stable code, a severity,
     /// and a message.
-    pub diagnostics: Vec<StructuredDiagnostic>,
+    pub diagnostics: Vec<Diagnostic>,
     /// The same findings as `CODE: message` lines, rendered from `diagnostics`
     /// so the text and the structure cannot disagree.
     pub warnings: Vec<String>,
@@ -883,7 +883,7 @@ pub struct Conversion {
     pub text: String,
     /// The writer's findings as structured records: a stable code, a severity,
     /// and a message.
-    pub diagnostics: Vec<StructuredDiagnostic>,
+    pub diagnostics: Vec<Diagnostic>,
     /// The same findings as `CODE: message` lines, rendered from `diagnostics`
     /// so the text and the structure cannot disagree.
     pub warnings: Vec<String>,
@@ -905,15 +905,15 @@ impl Conversion {
 
     /// Record one finding after the writer has run. Both channels move
     /// together: the line is rendered from the record it is added with.
-    pub(crate) fn push(&mut self, info: &DiagnosticInfo, message: impl Into<String>) {
-        let diagnostic = StructuredDiagnostic::of(info, message);
-        self.warnings.push(render_line(&diagnostic));
+    pub(crate) fn push(&mut self, info: &'static DiagnosticInfo, message: impl Into<String>) {
+        let diagnostic = Diagnostic::of(info, message);
+        self.warnings.push(render_diagnostic(&diagnostic));
         self.diagnostics.push(diagnostic);
     }
 
     /// Put the read side's findings ahead of the write side's.
-    pub(crate) fn prepend(&mut self, read: Vec<StructuredDiagnostic>) {
-        let mut lines: Vec<String> = read.iter().map(render_line).collect();
+    pub(crate) fn prepend(&mut self, read: Vec<Diagnostic>) {
+        let mut lines: Vec<String> = read.iter().map(render_diagnostic).collect();
         lines.append(&mut self.warnings);
         self.warnings = lines;
         let mut records = read;
@@ -1007,14 +1007,14 @@ pub fn write_as_with_options(
 fn apply_write_cost_policy(
     net: &BalancedNetwork,
     options: &WriteOptions,
-) -> Result<(BalancedNetwork, Vec<StructuredDiagnostic>)> {
+) -> Result<(BalancedNetwork, Vec<Diagnostic>)> {
     let mut working = net.clone();
     let report =
         working.apply_gen_cost_policy(&options.gen_cost_patches, options.missing_gen_cost)?;
     let mut policy_warnings = Diagnostics::new();
     if report.patched > 0 {
         policy_warnings.push(
-            &codes::LOWER_GEN_COST_POLICY_APPLIED,
+            &codes::TRANSFORM_GEN_COST_POLICY_APPLIED,
             format!(
                 "generator cost patch applied to {} generator(s)",
                 report.patched
@@ -1023,7 +1023,7 @@ fn apply_write_cost_policy(
     }
     if report.synthesized > 0 {
         policy_warnings.push(
-            &codes::LOWER_GEN_COST_POLICY_APPLIED,
+            &codes::TRANSFORM_GEN_COST_POLICY_APPLIED,
             match options.missing_gen_cost {
                 MissingGenCostPolicy::Fill {
                     c2,
@@ -1343,7 +1343,7 @@ pub fn convert_str_with_options(
 /// (`pypsa-csv`/`pypsa`) is the one such
 /// format today; a text format name is rejected by name, pointing at
 /// [`write_as`]. Returns the write's findings as structured records; render
-/// them with `diagnostics::render_lines` for a text channel.
+/// them with `diagnostics::render_diagnostics` for a text channel.
 ///
 /// # Errors
 /// [`Error::UnknownFormat`] for a non-directory format name; the writer's own
@@ -1352,7 +1352,7 @@ pub fn write_dir(
     net: &BalancedNetwork,
     to: &str,
     out_dir: impl AsRef<std::path::Path>,
-) -> Result<Vec<StructuredDiagnostic>> {
+) -> Result<Vec<Diagnostic>> {
     if is_pypsa_csv_name(to) {
         return write_pypsa_csv_folder(net, out_dir.as_ref()).map(|o| o.diagnostics);
     }
@@ -1377,7 +1377,7 @@ pub fn write_dir_with_options(
     to: &str,
     out_dir: impl AsRef<std::path::Path>,
     options: &WriteOptions,
-) -> Result<Vec<StructuredDiagnostic>> {
+) -> Result<Vec<Diagnostic>> {
     // Refuse an unknown target before the policy runs, so a bad format name is
     // reported as one rather than as whatever the cost pass hits first.
     if !is_pypsa_csv_name(to) {
@@ -1766,11 +1766,11 @@ mpc.branch = [
         let absent: Vec<_> = normalized
             .diagnostics
             .iter()
-            .filter(|d| d.code.as_str() == "CANONICALIZE.NORMALIZE.GEN_COST_ABSENT")
+            .filter(|d| d.code() == "CANONICALIZE.NORMALIZE.GEN_COST_ABSENT")
             .collect();
         assert_eq!(absent.len(), 1, "{:?}", normalized.warnings);
-        assert!(absent[0].message.contains("no cost data"), "{absent:?}");
-        assert!(absent[0].message.contains("1 in-service"), "{absent:?}");
+        assert!(absent[0].message().contains("no cost data"), "{absent:?}");
+        assert!(absent[0].message().contains("1 in-service"), "{absent:?}");
 
         // The same case with a gencost table is silent.
         let costed = format!("{costless}mpc.gencost = [\n\t2\t0\t0\t3\t0.01\t40\t0;\n];\n");
@@ -1783,7 +1783,7 @@ mpc.branch = [
             normalized
                 .diagnostics
                 .iter()
-                .all(|d| d.code.as_str() != "CANONICALIZE.NORMALIZE.GEN_COST_ABSENT"),
+                .all(|d| d.code() != "CANONICALIZE.NORMALIZE.GEN_COST_ABSENT"),
             "{:?}",
             normalized.warnings
         );

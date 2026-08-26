@@ -1,6 +1,7 @@
 use std::collections::BTreeMap;
 use std::fmt;
 
+use serde::Deserialize;
 use serde_json::Value;
 
 use crate::validation::{valid_nonempty_text, valid_rfc6901_pointer};
@@ -32,6 +33,21 @@ macro_rules! record_id {
         impl fmt::Display for $name {
             fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
                 formatter.write_str(&self.0)
+            }
+        }
+
+        impl serde::Serialize for $name {
+            fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+                serializer.serialize_str(&self.0)
+            }
+        }
+
+        // A stored identifier is validated on the way in, so a malformed
+        // document fails at the field rather than reaching a record.
+        impl<'de> serde::Deserialize<'de> for $name {
+            fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+                let value = String::deserialize(deserializer)?;
+                Self::new(value).map_err(serde::de::Error::custom)
             }
         }
     };
@@ -201,7 +217,7 @@ impl SourceDescriptor {
 }
 
 /// Half open byte range in one module source.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
 pub struct SourceSpan {
     source: SourceId,
     byte_start: u64,
@@ -431,6 +447,19 @@ fn validated_kind(kind: String) -> Result<Box<str>, Error> {
         ));
     }
     Ok(kind.into_boxed_str())
+}
+
+impl<'de> serde::Deserialize<'de> for SourceSpan {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        struct Wire {
+            source: SourceId,
+            byte_start: u64,
+            byte_end: u64,
+        }
+        let wire = Wire::deserialize(deserializer)?;
+        Self::new(wire.source, wire.byte_start, wire.byte_end).map_err(serde::de::Error::custom)
+    }
 }
 
 #[cfg(test)]

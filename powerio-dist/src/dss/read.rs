@@ -565,7 +565,7 @@ struct XyCurveRaw {
 }
 
 impl Reader<'_> {
-    fn warn(&mut self, info: &crate::diagnostics::DiagnosticInfo, msg: impl Into<String>) {
+    fn warn(&mut self, info: &'static crate::diagnostics::DiagnosticInfo, msg: impl Into<String>) {
         self.net.note(info, msg);
     }
 

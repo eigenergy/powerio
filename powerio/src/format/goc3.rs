@@ -918,7 +918,7 @@ fn extras(obj: &Map<String, Value>, known: &[&str]) -> Extras {
 }
 
 fn push_once(warnings: &mut Diagnostics, warning: &str) {
-    if !warnings.records().iter().any(|d| d.message == warning) {
+    if !warnings.records().iter().any(|d| d.message() == warning) {
         warnings.push(&codes::READ_GOC3_RETAINED_SOURCE_ONLY, warning);
     }
 }

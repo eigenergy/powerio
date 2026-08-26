@@ -7,7 +7,13 @@ use crate::records::{DiagnosticId, SourceSpan};
 use crate::validation::{MAX_DIAGNOSTIC_CODE_BYTES, sanitize_message, valid_nonempty_text};
 
 /// Severity of one user facing finding.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+///
+/// Declared least to most severe so the derived `Ord` gives the dominant
+/// severity of a set and a `>= Error` filter keeps meaning.
+#[derive(
+    Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize,
+)]
+#[serde(rename_all = "snake_case")]
 pub enum DiagnosticSeverity {
     /// Adds context to another diagnostic.
     Note,
@@ -17,6 +23,19 @@ pub enum DiagnosticSeverity {
     Warning,
     /// Reports invalid data or the finding that ended an operation.
     Error,
+}
+
+impl DiagnosticSeverity {
+    /// The stable stored and binding spelling.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Note => "note",
+            Self::Remark => "remark",
+            Self::Warning => "warning",
+            Self::Error => "error",
+        }
+    }
 }
 
 /// Coarse projection of an operation failure for bindings and exit statuses.
@@ -231,6 +250,7 @@ pub struct Diagnostic {
     spans: Vec<SourceSpan>,
     related: Vec<DiagnosticId>,
     details: Map<String, Value>,
+    suggested_action: Option<String>,
 }
 
 impl Diagnostic {
@@ -250,6 +270,7 @@ impl Diagnostic {
             spans: Vec::new(),
             related: Vec::new(),
             details: Map::new(),
+            suggested_action: None,
         }
     }
 
@@ -265,6 +286,7 @@ impl Diagnostic {
             spans: Vec::new(),
             related: Vec::new(),
             details: Map::new(),
+            suggested_action: None,
         }
     }
 
@@ -336,19 +358,24 @@ impl Diagnostic {
         self
     }
 
-    pub fn with_target(mut self, target: impl Into<String>) -> Result<Self, crate::Error> {
-        let target = target.into();
-        if !crate::validation::valid_rfc6901_pointer(&target) {
-            return Err(crate::Error::new(
-                &crate::codes::REQUEST_RECORD_INVALID_POINTER,
-                format!(
-                    "`{}` is not an RFC 6901 pointer",
-                    bounded_identifier(&target)
-                ),
-            ));
-        }
-        self.target = Some(target);
-        Ok(self)
+    /// Name the element this finding is about.
+    ///
+    /// Infallible on purpose: refusing to build a diagnostic because its
+    /// locator is malformed loses the finding, which is worse than carrying an
+    /// imprecise target. The stored document validates targets as RFC 6901
+    /// pointers when it writes them.
+    #[must_use]
+    pub fn with_target(mut self, target: impl Into<String>) -> Self {
+        self.target = Some(bounded_identifier(&target.into()));
+        self
+    }
+
+    /// True when the target is a pointer the stored document can write as is.
+    #[must_use]
+    pub fn target_is_pointer(&self) -> bool {
+        self.target
+            .as_deref()
+            .is_some_and(crate::validation::valid_rfc6901_pointer)
     }
 
     #[must_use]
@@ -363,9 +390,31 @@ impl Diagnostic {
         self
     }
 
+    /// Add detail keys to a finding already built.
+    pub fn details_mut(&mut self) -> &mut Map<String, Value> {
+        &mut self.details
+    }
+
+    /// Replace the target of a finding already built.
+    pub fn set_target(&mut self, target: impl Into<String>) {
+        self.target = Some(bounded_identifier(&target.into()));
+    }
+
     #[must_use]
     pub fn with_details(mut self, details: Map<String, Value>) -> Self {
         self.details = details;
+        self
+    }
+
+    /// What a user can do about this finding.
+    #[must_use]
+    pub fn suggested_action(&self) -> Option<&str> {
+        self.suggested_action.as_deref()
+    }
+
+    #[must_use]
+    pub fn with_suggested_action(mut self, action: impl Into<String>) -> Self {
+        self.suggested_action = Some(sanitize_message(action));
         self
     }
 }
@@ -406,8 +455,16 @@ where
         if !valid_nonempty_text(entry.summary) {
             problems.push(format!("{}: has no bounded summary", entry.code));
         }
-        if entry.severity == DiagnosticSeverity::Error && entry.category.is_none() {
-            problems.push(format!("{}: error severity has no category", entry.code));
+        // A category is the binding and exit status projection of a failure, so
+        // it belongs only to a code that can end an operation. An error
+        // severity diagnostic does not by itself mean the operation failed, so
+        // the reverse is not required.
+        if entry.category.is_some() && entry.severity != DiagnosticSeverity::Error {
+            problems.push(format!(
+                "{}: {} severity declares an error category",
+                entry.code,
+                entry.severity.as_str()
+            ));
         }
         if !seen.insert(entry.code) {
             problems.push(format!("{}: registered twice", entry.code));
@@ -542,5 +599,84 @@ mod tests {
         let line = render_diagnostic(&diagnostic);
         assert!(!line.contains(['\n', '\r']));
         assert!(line.len() < 17_000);
+    }
+}
+
+// Serialization of a `Diagnostic` is the binding and response form: MCP
+// replies, the C ABI's JSON channel, and Python all render the same record.
+// It is not the `.pio.json` stored form, which has its own versioned DTO in
+// the facade. A record read back carries an external code, because a registry
+// entry is a compile time item of whichever crate declared it.
+mod wire {
+    use serde::{Deserialize, Serialize};
+    use serde_json::{Map, Value};
+
+    use super::{Diagnostic, DiagnosticCode, DiagnosticIdentity, DiagnosticSeverity};
+    use crate::{DiagnosticId, SourceSpan};
+
+    #[derive(Serialize, Deserialize)]
+    pub(super) struct DiagnosticWire {
+        code: String,
+        severity: DiagnosticSeverity,
+        message: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        id: Option<DiagnosticId>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        target: Option<String>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        spans: Vec<SourceSpan>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        related: Vec<DiagnosticId>,
+        #[serde(default, skip_serializing_if = "Map::is_empty")]
+        details: Map<String, Value>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        suggested_action: Option<String>,
+    }
+
+    impl From<&Diagnostic> for DiagnosticWire {
+        fn from(diagnostic: &Diagnostic) -> Self {
+            Self {
+                code: diagnostic.code().to_owned(),
+                severity: diagnostic.severity,
+                message: diagnostic.message.clone(),
+                id: diagnostic.id.clone(),
+                target: diagnostic.target.clone(),
+                spans: diagnostic.spans.clone(),
+                related: diagnostic.related.clone(),
+                details: diagnostic.details.clone(),
+                suggested_action: diagnostic.suggested_action.clone(),
+            }
+        }
+    }
+
+    impl TryFrom<DiagnosticWire> for Diagnostic {
+        type Error = crate::Error;
+
+        fn try_from(wire: DiagnosticWire) -> Result<Self, Self::Error> {
+            Ok(Diagnostic {
+                identity: DiagnosticIdentity::External(DiagnosticCode::new(wire.code)?),
+                id: wire.id,
+                severity: wire.severity,
+                message: wire.message,
+                target: wire.target,
+                spans: wire.spans,
+                related: wire.related,
+                details: wire.details,
+                suggested_action: wire.suggested_action,
+            })
+        }
+    }
+}
+
+impl serde::Serialize for Diagnostic {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        wire::DiagnosticWire::from(self).serialize(serializer)
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for Diagnostic {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let wire = wire::DiagnosticWire::deserialize(deserializer)?;
+        Self::try_from(wire).map_err(serde::de::Error::custom)
     }
 }

@@ -399,12 +399,12 @@ fn warns_when_normalize_designates_a_slack_the_case_did_not_state() {
     let designated: Vec<_> = out
         .diagnostics
         .iter()
-        .filter(|d| d.code.as_str() == "CANONICALIZE.NORMALIZE.REFERENCE_DESIGNATED")
+        .filter(|d| d.code() == "CANONICALIZE.NORMALIZE.REFERENCE_DESIGNATED")
         .collect();
     assert_eq!(designated.len(), 1, "{:?}", out.warnings);
-    assert!(designated[0].message.contains("bus 1"), "{designated:?}");
+    assert!(designated[0].message().contains("bus 1"), "{designated:?}");
     assert!(
-        designated[0].message.contains("designated the slack"),
+        designated[0].message().contains("designated the slack"),
         "{designated:?}"
     );
     assert_eq!(

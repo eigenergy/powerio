@@ -49,7 +49,7 @@ else
   echo "=== skipped: wasm32-unknown-unknown target not installed ==="
 fi
 
-run cargo test -p powerio -p powerio-diag -p powerio-matrix -p powerio-prob -p powerio-cli \
+run cargo test -p powerio -p powerio-core -p powerio-matrix -p powerio-prob -p powerio-cli \
     -p powerio-capi -p powerio-dist -p powerio-pkg
 run cargo test -p powerio-prob --features matrix
 run cargo test -p powerio-matrix --features gridfm

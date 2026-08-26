@@ -5,7 +5,7 @@
 //! the boundary without restating it. A caller that only wants the coarse
 //! split reads [`Error::category`], which is the same taxonomy the hub uses.
 
-use powerio_diag::DiagnosticInfo;
+use powerio_core::DiagnosticInfo;
 use thiserror::Error as ThisError;
 
 use crate::diagnostics::codes;

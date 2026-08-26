@@ -26,7 +26,7 @@ name = "powerio_matrix"
 path = "src/lib.rs"
 
 [dependencies]
-powerio-diag = { workspace = true }
+powerio-core = { workspace = true }
 powerio.workspace = true
 thiserror = "2"
 sprs.workspace = true

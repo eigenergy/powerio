@@ -120,9 +120,9 @@ pub enum Error {
 }
 
 /// Coarse classification of an [`enum@Error`], for callers that map onto their
-/// own taxonomy. Defined in `powerio-diag` so every crate in the workspace
+/// own taxonomy. Defined in `powerio-core` so every crate in the workspace
 /// projects onto the same five tokens.
-pub use powerio_diag::ErrorCategory;
+pub use powerio_core::ErrorCategory;
 
 impl Error {
     /// An index or solver table build needs exactly one reference bus and the
@@ -171,10 +171,10 @@ impl Error {
         use ErrorCategory as C;
         match self {
             Error::Io(_) => C::Io,
-            // WriteUnsupported keeps the UnknownFormat category so bindings
+            // WriteUnsupported keeps the Request category so bindings
             // surface it the same way (a ValueError, not a data error): the
             // request named a format the writer can't produce.
-            Error::UnknownFormat(_) | Error::WriteUnsupported { .. } => C::UnknownFormat,
+            Error::UnknownFormat(_) | Error::WriteUnsupported { .. } => C::Request,
             // Malformed or unparseable input. Only the parser/format readers
             // raise these.
             Error::MissingField(_)
@@ -308,7 +308,7 @@ mod tests {
 
     #[test]
     fn category_pins_the_intended_buckets() {
-        use ErrorCategory::{Data, Io, Parse, UnknownFormat};
+        use ErrorCategory::{Data, Io, Parse, Request};
         // The parser/format readers raise these.
         assert_eq!(Error::MissingField("bus").category(), Parse);
         assert_eq!(
@@ -338,7 +338,7 @@ mod tests {
         // Format selection and underlying I/O. Output-side serialization
         // failures belong to the crate that writes, so `Output` has no hub
         // variant; `powerio_matrix::Error` carries it.
-        assert_eq!(Error::UnknownFormat("xyz".into()).category(), UnknownFormat);
+        assert_eq!(Error::UnknownFormat("xyz".into()).category(), Request);
         assert_eq!(
             Error::Io(std::io::Error::from(std::io::ErrorKind::NotFound)).category(),
             Io
@@ -356,12 +356,12 @@ mod category_token_tests {
     fn tokens_lists_every_category_exactly_once() {
         let every = [
             ErrorCategory::Io,
-            ErrorCategory::UnknownFormat,
+            ErrorCategory::Request,
             ErrorCategory::Parse,
             ErrorCategory::Data,
             ErrorCategory::Output,
         ];
-        let from_tokens: Vec<&str> = every.iter().map(|c| c.token()).collect();
+        let from_tokens: Vec<&str> = every.iter().map(|c| c.as_str()).collect();
         assert_eq!(from_tokens, ErrorCategory::TOKENS.to_vec());
     }
 }

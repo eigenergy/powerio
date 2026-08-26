@@ -183,7 +183,7 @@ fn scale(m: &Mat, k: f64) -> Mat {
 }
 
 impl Writer {
-    fn warn(&mut self, info: &crate::diagnostics::DiagnosticInfo, msg: impl Into<String>) {
+    fn warn(&mut self, info: &'static crate::diagnostics::DiagnosticInfo, msg: impl Into<String>) {
         self.warnings.push(info, msg);
     }
 

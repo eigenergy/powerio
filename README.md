@@ -61,7 +61,7 @@ specification or submit a reader or writer.
 Each workspace crate owns one layer:
 
 ```
-powerio-diag     # diagnostic codes, severities, stages, the text renderer
+powerio-core     # Source, PioModule, diagnostics, errors, time series, destinations
 powerio          # parser, Network model, source retaining writers, converters
 powerio-matrix   # generic sparse matrices, sensitivity factors, graph projections
 powerio-prob     # complete problem instances; optional matrix projections

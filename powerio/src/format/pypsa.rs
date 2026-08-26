@@ -25,7 +25,7 @@ pub struct PypsaCsvOutputs {
     pub dir: PathBuf,
     pub files: Vec<PathBuf>,
     /// The writer's findings as structured records.
-    pub diagnostics: Vec<crate::diagnostics::StructuredDiagnostic>,
+    pub diagnostics: Vec<crate::diagnostics::Diagnostic>,
     /// The same findings as `CODE: message` lines.
     pub warnings: Vec<String>,
 }
@@ -1599,7 +1599,7 @@ mod tests {
         net.storage = vec![st];
         let out = write_pypsa_csv_folder(&net, tmp_dir("storage-lossy")).unwrap();
         assert!(
-            out.diagnostics.iter().any(|d| d.message
+            out.diagnostics.iter().any(|d| d.message()
                 == "1 storage units lose fields PyPSA storage_units cannot carry (asymmetric charge/discharge ratings collapse to p_nom = max; thermal_rating, qmin/qmax, r/x, p_loss/q_loss dropped)"),
             "{:?}",
             out.warnings
@@ -1645,7 +1645,7 @@ mod tests {
         let dir = tmp_dir("dup-keys");
         let out = write_pypsa_csv_folder(&net, &dir).unwrap();
         assert!(
-            out.diagnostics.iter().any(|d| d.message
+            out.diagnostics.iter().any(|d| d.message()
                 == "buses.csv: bus names `X` collide with another bus name or id; those buses are keyed by their numeric id instead"),
             "{:?}",
             out.warnings
@@ -1740,7 +1740,7 @@ mod tests {
         assert_eq!(h.qf, 0.0);
         assert!(h.in_service);
         assert!(
-            parsed.diagnostics.iter().any(|d| d.message
+            parsed.diagnostics.iter().any(|d| d.message()
                 == "links.csv: 1 links read as HVDC lines; PyPSA links carry no reactive or voltage data (q limits 0, voltage setpoints 1.0)"),
             "{:?}",
             parsed.warnings
@@ -1769,7 +1769,7 @@ mod tests {
             parsed
                 .diagnostics
                 .iter()
-                .any(|d| d.message == "stores.csv ignored (1 rows): PyPSA stores are not mapped"),
+                .any(|d| d.message() == "stores.csv ignored (1 rows): PyPSA stores are not mapped"),
             "{:?}",
             parsed.warnings
         );
@@ -1838,7 +1838,7 @@ mod tests {
             "1 generator costs had no coefficients and were written as zero",
         ] {
             assert!(
-                warnings.records().iter().any(|d| d.message == expected),
+                warnings.records().iter().any(|d| d.message() == expected),
                 "missing {expected:?} in {warnings:?}"
             );
         }
