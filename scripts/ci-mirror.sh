@@ -100,12 +100,16 @@ if [ -n "$(git status --porcelain -- docs/schema)" ]; then
 fi
 
 # crates.yml packages every publishable crate and audits each archive for the
-# license files a published crate must carry. Clear stale archives first: an
-# audit over a leftover target/package can pass on files a fresh package no
-# longer contains.
-rm -rf target/package
-run cargo package --workspace --exclude powerio-capi --exclude powerio-py --allow-dirty
-run python3 scripts/audit-release-archives.py target/package/*.crate
+# license files a published crate must carry. The verify builds compile the freshly packaged siblings from cargo's overlay
+# registry, whose unpacks carry fixed tarball timestamps: a stale unpack or a
+# stale compiled artifact of the same name and version is fingerprint valid
+# forever and shadows new API with errors that do not exist in the tree. CI
+# runners start clean; a developer machine must drop the overlay unpacks and
+# give the packaging its own disposable build directory (which also keeps the
+# audit off leftover archives).
+rm -rf "$HOME"/.cargo/registry/src/-*/powerio-0.* "$HOME"/.cargo/registry/src/-*/powerio-[a-z]*-0.* target/package-verify
+run env CARGO_TARGET_DIR=target/package-verify cargo package --workspace --exclude powerio-capi --exclude powerio-py --allow-dirty
+run python3 scripts/audit-release-archives.py target/package-verify/package/*.crate
 
 # docs.yml runs both, and neither is reachable from cargo: an unannotated code
 # fence in the book is compiled as a Rust doctest, so a naming pattern or a
