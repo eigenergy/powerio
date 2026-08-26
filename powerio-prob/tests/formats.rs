@@ -2,7 +2,9 @@
 //! `AcOpfSolution`.
 
 use powerio_prob::solution::Termination;
-use powerio_prob::{parse_goc3_instance, parse_opfdata_solution};
+use powerio_prob::{
+    ObjectiveTerm, parse_bmopf_instance, parse_goc3_instance, parse_opfdata_solution,
+};
 
 fn fixture(path: &str) -> String {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
@@ -89,4 +91,45 @@ fn opfdata_parses_to_the_solved_ac_opf() {
 #[test]
 fn opfdata_rejects_a_malformed_document() {
     assert!(parse_opfdata_solution("{\"grid\": {}}").is_err());
+}
+
+#[test]
+fn bmopf_parses_to_the_multiconductor_opf_instance() {
+    let text = r#"{
+      "bus": {"a": {"terminal_names": ["1", "2", "3", "n"],
+        "perfectly_grounded_terminals": ["n"],
+        "vpn_min": [220.0, 220.0, 220.0], "vpn_max": [260.0, 260.0, 260.0]}},
+      "voltage_source": {"s": {"bus": "a", "terminal_map": ["1", "2", "3"],
+        "v_magnitude": [240.0, 240.0, 240.0], "v_angle": [0.0, -2.0944, 2.0944]}},
+      "generator": {"g": {"bus": "a", "terminal_map": ["1", "2", "3"],
+        "configuration": "WYE", "p_max": [1000.0, 1000.0, 1000.0],
+        "cost": [0.12, 0.15, 0.18]}}
+    }"#;
+    let (instance, _diagnostics) = parse_bmopf_instance(text, "bmopf_small").unwrap();
+
+    // The per phase objective reference, backed by the exact stated array.
+    assert_eq!(
+        instance.objective().terms(),
+        [ObjectiveTerm::NetworkPerPhaseCost]
+    );
+    assert_eq!(
+        instance.network().generators()[0].cost.as_deref(),
+        Some([0.12, 0.15, 0.18].as_slice())
+    );
+
+    // Every stated limit family starts active.
+    let constraints = instance.constraints();
+    assert!(constraints.terminal_voltage_bounds.selects("branches:0"));
+    assert!(constraints.conductor_limits.selects("branches:0"));
+    assert!(constraints.generator_capability.selects("generators:0"));
+}
+
+#[test]
+fn bmopf_without_a_source_is_refused_as_an_instance() {
+    let text = r#"{
+      "bus": {"a": {"terminal_names": ["1"]}},
+      "generator": {"g": {"bus": "a", "terminal_map": ["1"],
+        "configuration": "WYE", "cost": [0.1]}}
+    }"#;
+    assert!(parse_bmopf_instance(text, "no_source").is_err());
 }
