@@ -99,6 +99,26 @@ const TRANSFORMER_NO_LOAD_ALLOWED_EXTRAS: [&str; 5] = [
     "%imag",
     BMOPF_DELTA_ROLLS_EXTRA,
 ];
+/// The BMOPFTools schema extension fields the regulator subtypes carry
+/// beyond the shared transformer shape; read into extras verbatim and
+/// re-emitted verbatim.
+const REGULATOR_EXTENSION_EXTRAS: [&str; 5] = [
+    "tap_ratio_min",
+    "tap_ratio_max",
+    "regulator_type",
+    "i_max_from",
+    "i_max_to",
+];
+
+/// The stated regulator ohm fields a BMOPF read stashes verbatim so a round
+/// trip reproduces exactly the fields the source stated.
+const REGULATOR_STATED_OHMS: [&str; 4] = [
+    "r_series_from",
+    "r_series_to",
+    "x_series_from",
+    "x_series_to",
+];
+
 const TRANSFORMER_TWO_WINDING_ALLOWED_EXTRAS: [&str; 18] = [
     "tap_min",
     "tap_max",
@@ -119,6 +139,17 @@ const TRANSFORMER_TWO_WINDING_ALLOWED_EXTRAS: [&str; 18] = [
     "%noloadloss",
     "%imag",
 ];
+
+/// The regulator subtypes keep both the shared allowed extras and the
+/// extension fields.
+fn regulator_allowed_extras() -> Vec<&'static str> {
+    TRANSFORMER_TWO_WINDING_ALLOWED_EXTRAS
+        .iter()
+        .chain(REGULATOR_EXTENSION_EXTRAS.iter())
+        .chain(REGULATOR_STATED_OHMS.iter())
+        .copied()
+        .collect()
+}
 
 /// Options for BMOPF JSON output.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -1207,24 +1238,38 @@ impl Writer {
                 o.insert(key_hi.into(), self.nums(nom, key_hi));
             }
         }
-        // BMOPF generation cost is per phase conductor; powerio carries a single
-        // value, so broadcast the scalar to one entry per phase.
+        // BMOPF generation cost is per phase conductor. The model stores the
+        // stated array exactly; a one-entry statement broadcasts to the
+        // phase count, and an absent cost defaults to zero with a warning.
         let n_phase = if g.p_nom.is_empty() {
             g.terminal_map.len().max(1)
         } else {
             g.p_nom.len()
         };
-        let cost = g.cost.unwrap_or_else(|| {
-            self.warnings.push(
-                &C::EMIT_BMOPF_VALUE_DEFAULTED,
-                format!("{what}: no generation cost in the source; emitted cost 0"),
-            );
-            0.0
-        });
-        o.insert(
-            "cost".into(),
-            self.nums(&vec![cost; n_phase], "generator cost"),
-        );
+        let cost = match &g.cost {
+            Some(stated) if stated.len() == 1 => vec![stated[0]; n_phase],
+            Some(stated) => {
+                if stated.len() != n_phase {
+                    self.warnings.push(
+                        &C::EMIT_BMOPF_VALUE_SUBSTITUTED,
+                        format!(
+                            "{what}: cost states {} entries for {n_phase} phases; \
+                             emitted as stated",
+                            stated.len()
+                        ),
+                    );
+                }
+                stated.clone()
+            }
+            None => {
+                self.warnings.push(
+                    &C::EMIT_BMOPF_VALUE_DEFAULTED,
+                    format!("{what}: no generation cost in the source; emitted cost 0"),
+                );
+                vec![0.0; n_phase]
+            }
+        };
+        o.insert("cost".into(), self.nums(&cost, "generator cost"));
         if let Some(s_max) = &g.s_max
             && let Some(v) = self.bounds(s_max, &format!("{what} s_max"))
         {
@@ -1514,8 +1559,13 @@ impl Writer {
         {
             o.insert("tap_ratio".into(), self.num(ratio, "transformer tap_ratio"));
         }
+        for key in REGULATOR_EXTENSION_EXTRAS {
+            if let Some(v) = t.extras.get(key) {
+                o.insert(key.into(), v.clone());
+            }
+        }
         self.warn_unrepresented_neutral_fields(t, "single_phase_autotransformer");
-        self.transformer_extras_dropped(t, &TRANSFORMER_TWO_WINDING_ALLOWED_EXTRAS);
+        self.transformer_extras_dropped(t, &regulator_allowed_extras());
         o.into()
     }
 
@@ -1546,9 +1596,14 @@ impl Writer {
                 self.nums(&[a1, a2], "transformer tap_ratio"),
             );
         }
+        for key in REGULATOR_EXTENSION_EXTRAS {
+            if let Some(v) = first.extras.get(key) {
+                o.insert(key.into(), v.clone());
+            }
+        }
         for t in [first, second] {
             self.warn_unrepresented_neutral_fields(t, "open_delta_regulator");
-            self.transformer_extras_dropped(t, &TRANSFORMER_TWO_WINDING_ALLOWED_EXTRAS);
+            self.transformer_extras_dropped(t, &regulator_allowed_extras());
         }
         o.into()
     }
@@ -1568,22 +1623,46 @@ impl Writer {
         o.insert("bus_from".into(), json!(from.bus));
         o.insert("bus_to".into(), json!(to.bus));
         o.insert("s_rating".into(), self.num(s, "transformer s_rating"));
-        self.referred_ohms(&mut o, "r_series_from", from.r_pct, zb_from, t, "from");
-        self.referred_ohms(&mut o, "r_series_to", to.r_pct, zb_to, t, "to");
-        if t.xsc_pct.is_empty() {
-            self.transformer_diagnostic(
-                t,
-                &C::EMIT_BMOPF_TRANSFORMER_MISSING_XSC,
-                format!(
-                    "transformer {}: xsc_pct is empty; emitted x_series_from=0",
-                    t.name
-                ),
-                Map::new(),
-            );
+        // A network read from BMOPF stashed the stated ohm fields verbatim
+        // (the g_no_load pattern), including which of them the source stated
+        // at all; prefer those so a round trip reproduces the object exactly.
+        let stated = [
+            "r_series_from",
+            "r_series_to",
+            "x_series_from",
+            "x_series_to",
+        ]
+        .iter()
+        .any(|key| t.extras.contains_key(*key));
+        if stated {
+            for key in [
+                "r_series_from",
+                "r_series_to",
+                "x_series_from",
+                "x_series_to",
+            ] {
+                if let Some(v) = t.extras.get(key) {
+                    o.insert(key.into(), v.clone());
+                }
+            }
+        } else {
+            self.referred_ohms(&mut o, "r_series_from", from.r_pct, zb_from, t, "from");
+            self.referred_ohms(&mut o, "r_series_to", to.r_pct, zb_to, t, "to");
+            if t.xsc_pct.is_empty() {
+                self.transformer_diagnostic(
+                    t,
+                    &C::EMIT_BMOPF_TRANSFORMER_MISSING_XSC,
+                    format!(
+                        "transformer {}: xsc_pct is empty; emitted x_series_from=0",
+                        t.name
+                    ),
+                    Map::new(),
+                );
+            }
+            let xhl = t.xsc_pct.first().copied().unwrap_or(0.0);
+            self.referred_ohms(&mut o, "x_series_from", xhl, zb_from, t, "from");
+            o.insert("x_series_to".into(), json!(0.0));
         }
-        let xhl = t.xsc_pct.first().copied().unwrap_or(0.0);
-        self.referred_ohms(&mut o, "x_series_from", xhl, zb_from, t, "from");
-        o.insert("x_series_to".into(), json!(0.0));
         self.transformer_no_load_fields(&mut o, t, from, s);
         o
     }
