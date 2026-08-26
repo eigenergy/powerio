@@ -44,6 +44,8 @@ def test_tool_surface_is_semantic():
         "export_state",
         "to_balanced_inspect",
         "to_balanced",
+        "about",
+        "dc_data",
     }
     for name in ("parse", "summary", "normalize", "matrix", "display"):
         props = tools[name].input_schema["properties"]
@@ -781,3 +783,19 @@ def test_to_balanced_refuses_unsupported_input_structured():
 def test_wrong_kind_lowering_is_refused_by_name():
     with pytest.raises(ValueError, match="WRONG_MODEL_KIND"):
         server._to_balanced_tool(path=str(DATA / "case9.m"))
+
+
+def test_about_states_versions_and_tools():
+    about = server._about_tool()
+    assert about["powerio_version"] == powerio.versions()["powerio_version"]
+    assert about["module_schema"] == {"name": "powerio.module", "version": 1}
+    assert "dc_data" in about["tools"] and "convert" in about["tools"]
+
+
+def test_dc_data_over_mcp_carries_the_shared_names():
+    data = server._dc_data_tool(path=str(DATA / "case9.m"))
+    assert data["formula"] == "series_susceptance"
+    assert len(data["from_indices"]) == 9
+    assert data["row_ids"][0] == "branches:0"
+    with pytest.raises(ValueError, match="balanced network"):
+        server._dc_data_tool(content=LOWERABLE_DSS, from_format="dss")

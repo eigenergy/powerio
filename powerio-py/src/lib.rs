@@ -2051,6 +2051,27 @@ fn dist_convert_str(text: &str, to: &str, from_: &str) -> PyResult<(String, Vec<
 /// stored form is `.pio.json` version 1 (released 0.9 packages upgrade one
 /// way on read). Methods that transform take the module out of the handle
 /// and put it back on failure, so a refused call leaves the handle usable.
+/// Version and schema identity of this build: the release API discovery
+/// document. Keys agree with the C `pio_schema_versions_json` report where
+/// both apply; the wheel embeds the Rust core directly, so there is no C ABI
+/// integer here.
+#[pyfunction]
+fn versions_json() -> PyResult<String> {
+    let doc = serde_json::json!({
+        powerio::version::VERSION_KEY: powerio::VERSION,
+        "bmopf_schema": powerio_dist_bmopf_schema(),
+        "module_schema": {
+            "name": powerio::stored::SCHEMA_NAME,
+            "version": powerio::stored::SCHEMA_VERSION,
+        },
+    });
+    serde_json::to_string(&doc).map_err(serialize_pyerr)
+}
+
+fn powerio_dist_bmopf_schema() -> &'static str {
+    powerio_dist::BMOPF_SCHEMA_VERSION
+}
+
 #[pyclass(name = "_StoredModule", module = "powerio._powerio")]
 struct PyStoredModule {
     module: Option<powerio_core::PioModule<powerio::PioValue>>,
@@ -2814,6 +2835,7 @@ fn _powerio(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(dist_convert_str, m)?)?;
     m.add_class::<PyPackage>()?;
     m.add_class::<PyStoredModule>()?;
+    m.add_function(wrap_pyfunction!(versions_json, m)?)?;
     m.add_function(wrap_pyfunction!(classify_json_text, m)?)?;
     m.add_function(wrap_pyfunction!(json_classes, m)?)?;
     m.add_function(wrap_pyfunction!(parse_scopf, m)?)?;

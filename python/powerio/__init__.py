@@ -82,6 +82,7 @@ __all__ = [
     "to_format",
     "to_json",
     "to_matpower",
+    "versions",
     "write_gridfm_batch",
 ]
 
@@ -1024,6 +1025,17 @@ def read_pypsa_csv_folder(path: Any) -> BalancedNetwork:
 
 
 from . import dist  # noqa: E402  (needs Conversion defined above)
+
+
+def versions() -> Any:
+    """Version and schema identity of this build.
+
+    The release API discovery document: the powerio release, the stored
+    module schema name and version, and the BMOPF schema this build speaks.
+    Keys agree with the C ``pio_schema_versions_json`` report where both
+    apply.
+    """
+    return _json.loads(_powerio.versions_json())
 
 
 class StoredModule:

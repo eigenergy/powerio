@@ -467,6 +467,10 @@ fn schema_versions_json_ptr() -> *mut c_char {
         powerio::version::VERSION_KEY: powerio::VERSION,
         "abi": PIO_ABI_VERSION,
         "bmopf_schema": bmopf_schema_version(),
+        "module_schema": {
+            "name": powerio::stored::SCHEMA_NAME,
+            "version": powerio::stored::SCHEMA_VERSION,
+        },
     });
     into_cstring(doc.to_string()).unwrap_or(std::ptr::null_mut())
 }

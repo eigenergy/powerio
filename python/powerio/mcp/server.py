@@ -1446,6 +1446,51 @@ def _to_balanced_inspect_tool(
 
 
 @mcp.tool(
+    name="about",
+    description="Version and schema identity of this powerio build: the "
+    "release, the stored module schema, the BMOPF schema, and the tool "
+    "names this server exposes.",
+)
+def _about_tool() -> dict:
+    return {
+        **_header("powerio.about"),
+        **powerio.versions(),
+        "tools": sorted(
+            tool.name for tool in mcp._tool_manager.list_tools()
+        ),
+    }
+
+
+@mcp.tool(
+    name="dc_data",
+    description="DC branch data under one named susceptance formula: "
+    "incidence row endpoints, susceptance, the phase shift injection, and "
+    "stable element mappings for included rows and omitted branches. "
+    "Formulas: series_susceptance, tap_adjusted_reactance, reactance_only. "
+    + _MODULE_INPUT_HELP,
+)
+def _dc_data_tool(
+    module_json: Optional[str] = None,
+    path: Optional[str] = None,
+    content: Optional[str] = None,
+    from_format: Optional[str] = None,
+    formula: str = "series_susceptance",
+) -> dict:
+    module = _stored_module(module_json, path, content, from_format)
+    if module.kind != "balanced_network":
+        raise ValueError(
+            f"the module carries a {module.kind} value; DC data takes a "
+            "balanced network"
+        )
+    net = powerio.BalancedNetwork(module._inner.as_balanced_network())
+    try:
+        data = net.dc_data(formula)
+    except ValueError as exc:
+        raise _coded_error("dc data", exc) from exc
+    return {**_header("powerio.dc_data"), **data}
+
+
+@mcp.tool(
     name="to_balanced",
     description="Explicitly lower a multiconductor module to a balanced "
     "module document. Records and source ownership carry over; the pass "
