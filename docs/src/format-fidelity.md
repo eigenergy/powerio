@@ -176,7 +176,7 @@ code `READ.TRANSMISSION.PARSE_WARNING`. GridFM package reads use
   the original JSON for byte exact source echo, and warns about scheduling data
   left in the retained source. There is no canonical GOC3 writer from an
   arbitrary `BalancedNetwork`; `TargetFormat::Goc3Json` only succeeds as a same format
-  source echo. When a GOC3 `BalancedNetwork` is wrapped in `.pio.json`, the `powerio` facade's `package` module
+  source echo. When a GOC3 `BalancedNetwork` is wrapped in `.pio.json`, `powerio::package`
   extracts the full input time axis into `operating_points`. Materializing one
   point applies those updates to the static model JSON and clears the series.
 - **Surge JSON** reads and writes the versioned `surge-json` network document.

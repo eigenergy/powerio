@@ -57,11 +57,11 @@ Rendered API docs (rustdoc) for all crates: <https://powerio.dev>.
 
 | crate | responsibility |
 | --- | --- |
-| `powerio` | parsers, writers, `BalancedNetwork`, `IndexedNetwork`, normalization, format routing |
+| `powerio` | entry facade: `PioValue`, universal parse, `.pio.json` documents (`powerio::package`), re-exports |
+| `powerio-tx` | parsers, writers, `BalancedNetwork`, `IndexedNetwork`, normalization, format routing |
 | `powerio-matrix` | generic sparse matrices, graph views, and GridFM datasets |
 | `powerio-prob` | complete problem instances and optional matrix projections |
 | `powerio-dist` | multiconductor distribution model and converters |
-| the `powerio` facade's `package` module | `.pio.json` document metadata and model JSON |
 | `powerio-cli` | command line interface and TUI |
 | `powerio-py` | PyO3 extension for the Python package |
 | `powerio-capi` | C ABI for C, C++, Julia, and other foreign function interfaces |
