@@ -11,7 +11,8 @@ pub mod sensitivity;
 pub use gridfm::{
     GridfmOptions, GridfmOutputs, GridfmRead, GridfmSnapshot, GridfmTables, gridfm_base_case,
     gridfm_record_batches, gridfm_record_batches_single, numbered_snapshots, read_gridfm_dataset,
-    read_gridfm_network, read_gridfm_scenarios, write_gridfm_batch, write_gridfm_dataset,
+    read_gridfm_network, read_gridfm_scenario_set, read_gridfm_scenarios, write_gridfm_batch,
+    write_gridfm_dataset,
 };
 pub use meta::{CaseMetadata, MatrixMetadata, write_meta_json};
 pub use mtx::{

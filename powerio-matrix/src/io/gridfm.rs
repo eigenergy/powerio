@@ -1189,6 +1189,46 @@ fn distinct_sorted(scenario: &[i64]) -> Vec<i64> {
     ids
 }
 
+/// Every scenario of a gridfm dataset as one [`ScenarioSet`] over shared
+/// element identities: each scenario's network reuses the first scenario's
+/// table allocation wherever the rebuilt table is equal, so unchanged
+/// topology and parameters are stored once and only the tables a scenario
+/// actually changes are held per scenario. Scenario ids are the dataset's
+/// `scenario` values, ascending; the diagnostics are every scenario's read
+/// findings in that order.
+///
+/// The current gridfm profile is raw snapshot data that names no solved
+/// calculation, so the set is network data — never a solution set.
+///
+/// [`ScenarioSet`]: powerio_core::ScenarioSet
+///
+/// # Errors
+/// Propagates [`read_gridfm_scenarios`], plus a scenario identity the set
+/// rejects.
+pub fn read_gridfm_scenario_set(
+    dir: impl AsRef<Path>,
+) -> Result<(
+    powerio_core::ScenarioSet<BalancedNetwork>,
+    Vec<powerio_core::Diagnostic>,
+)> {
+    let reads = read_gridfm_scenarios(dir)?;
+    let mut diagnostics = Vec::new();
+    let mut scenarios = Vec::with_capacity(reads.len());
+    let mut donor: Option<BalancedNetwork> = None;
+    for read in reads {
+        let mut network = read.network;
+        match &donor {
+            Some(base) => network.share_equal_tables(base),
+            None => donor = Some(network.clone()),
+        }
+        diagnostics.extend(read.diagnostics);
+        let id = powerio_core::ScenarioId::new(read.scenario.to_string())?;
+        scenarios.push(powerio_core::Scenario::new(id, None, network));
+    }
+    let set = powerio_core::ScenarioSet::new(scenarios)?;
+    Ok((set, diagnostics))
+}
+
 /// The unperturbed base case: [`read_gridfm_dataset`] at `scenario = 0` (datakit's
 /// convention). There is no single "shared base" beyond a chosen scenario — bus
 /// types, branch status, and reference bus all vary per scenario — so the base
@@ -3233,5 +3273,44 @@ mod tests {
             ),
             "got {err:?}"
         );
+    }
+
+    #[test]
+    fn scenario_set_shares_unchanged_tables() {
+        let base = BalancedNetwork::in_memory(
+            "shared-set",
+            100.0,
+            vec![bus(1, BusType::Ref), bus(2, BusType::Pq)],
+            vec![branch(1, 2, 0.01, 0.1)],
+        );
+        let mut base = base;
+        base.generators_mut()
+            .push(gen_at(1, gencost(2, 3, vec![0.0, 5.0, 0.0])));
+        let mut varied = base.clone();
+        varied.generators_mut()[0].pg = 42.0;
+
+        let dir = tempfile::tempdir().unwrap();
+        let snapshots = [
+            GridfmSnapshot::new(&base, 0),
+            GridfmSnapshot::new(&varied, 1),
+        ];
+        write_gridfm_batch(&snapshots, dir.path(), &GridfmOptions::default()).unwrap();
+
+        let (set, _diagnostics) = read_gridfm_scenario_set(dir.path()).unwrap();
+        assert_eq!(set.len(), 2);
+        let first = set.get("0").unwrap().value();
+        let second = set.get("1").unwrap().value();
+        // The unchanged topology is one allocation across the set; only the
+        // varied generator table is held per scenario.
+        assert!(std::ptr::eq(
+            first.branches().as_ptr(),
+            second.branches().as_ptr()
+        ));
+        assert!(!std::ptr::eq(
+            first.generators().as_ptr(),
+            second.generators().as_ptr()
+        ));
+        assert!((second.generators()[0].pg - 42.0).abs() < 1e-9);
+        assert!((first.generators()[0].pg - second.generators()[0].pg).abs() > 1.0);
     }
 }
