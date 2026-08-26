@@ -408,6 +408,70 @@ fn sensitivity_drop_tolerance_records_dropped_entries() {
 }
 
 #[test]
+fn a_sensitivity_write_never_replaces_an_existing_entry() {
+    let case = load("../tests/data/case30.m");
+    let view = IndexedNetwork::new(&case);
+    let options = SensitivityOptions::default();
+
+    let residue_free = |dir: &std::path::Path| {
+        let tmp: Vec<String> = std::fs::read_dir(dir)
+            .unwrap()
+            .filter_map(std::result::Result::ok)
+            .map(|entry| entry.file_name().to_string_lossy().into_owned())
+            .filter(|name| name.contains("tmp") || name.contains("body") || name.contains("final"))
+            .collect();
+        assert!(tmp.is_empty(), "staging residue: {tmp:?}");
+    };
+
+    // Regular files at both targets: the write refuses and both keep their
+    // bytes, with no staging residue beside them.
+    let temp = tempfile::tempdir().unwrap();
+    let ptdf_path = temp.path().join("ptdf.mtx");
+    let lodf_path = temp.path().join("lodf.mtx");
+    std::fs::write(&ptdf_path, b"precious ptdf").unwrap();
+    std::fs::write(&lodf_path, b"precious lodf").unwrap();
+    let error =
+        write_sensitivity_mtx_with_options(&view, &options, &ptdf_path, &lodf_path).unwrap_err();
+    assert!(error.to_string().contains("already exists"), "{error}");
+    assert_eq!(std::fs::read(&ptdf_path).unwrap(), b"precious ptdf");
+    assert_eq!(std::fs::read(&lodf_path).unwrap(), b"precious lodf");
+    residue_free(temp.path());
+
+    // A symbolic link at one target: the link survives and the designated
+    // file keeps its bytes and its length.
+    #[cfg(unix)]
+    {
+        let temp = tempfile::tempdir().unwrap();
+        let designated = temp.path().join("designated.mtx");
+        std::fs::write(&designated, b"designated").unwrap();
+        let ptdf_path = temp.path().join("ptdf.mtx");
+        let lodf_path = temp.path().join("lodf.mtx");
+        std::os::unix::fs::symlink(&designated, &lodf_path).unwrap();
+        let error = write_sensitivity_mtx_with_options(&view, &options, &ptdf_path, &lodf_path)
+            .unwrap_err();
+        assert!(error.to_string().contains("already exists"), "{error}");
+        assert!(
+            std::fs::symlink_metadata(&lodf_path)
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+        assert_eq!(std::fs::read(&designated).unwrap(), b"designated");
+        assert_eq!(std::fs::metadata(&designated).unwrap().len(), 10);
+        residue_free(temp.path());
+    }
+
+    // Fresh paths still produce both matrices, and both read back.
+    let temp = tempfile::tempdir().unwrap();
+    let ptdf_path = temp.path().join("ptdf.mtx");
+    let lodf_path = temp.path().join("lodf.mtx");
+    write_sensitivity_mtx_with_options(&view, &options, &ptdf_path, &lodf_path).unwrap();
+    assert!(read_mtx(&ptdf_path).unwrap().nnz() > 0);
+    assert!(read_mtx(&lodf_path).unwrap().nnz() > 0);
+    residue_free(temp.path());
+}
+
+#[test]
 fn streamed_iterative_sensitivities_match_in_memory() {
     let case = load("../tests/data/case30.m");
     let view = IndexedNetwork::new(&case);

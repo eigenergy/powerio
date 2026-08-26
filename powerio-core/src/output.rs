@@ -388,6 +388,59 @@ fn write_directory_artifacts(staging: &Path, artifacts: &[MemoryArtifact]) -> Re
     Ok(())
 }
 
+/// Commit one already staged file onto `target` without replacing an entry
+/// that exists there: the same no-replace rename (and refuse-on-exist
+/// `hard_link` fallback) the destination commit uses. On refusal or failure
+/// the staged file is removed, so a refused write leaves nothing beside the
+/// target. For a streaming writer whose artifact must never be materialized
+/// in memory; everything else commits through [`Destination`].
+#[doc(hidden)]
+pub fn __commit_staged_file(staged: &Path, target: &Path) -> Result<(), Error> {
+    let remove_staged = || {
+        let _ = std::fs::remove_file(staged);
+    };
+    match rename_no_replace(staged, target) {
+        Ok(()) => Ok(()),
+        Err(cause) if commit_collision(&cause) => {
+            remove_staged();
+            Err(collision(target))
+        }
+        Err(cause) if no_replace_unsupported(&cause) => match std::fs::hard_link(staged, target) {
+            Ok(()) => {
+                remove_staged();
+                Ok(())
+            }
+            Err(cause) if commit_collision(&cause) => {
+                remove_staged();
+                Err(collision(target))
+            }
+            Err(cause) => {
+                remove_staged();
+                Err(Error::new(
+                        &crate::codes::EMIT_IO_COMMIT,
+                        format!(
+                            "this filesystem cannot commit '{}' without risking replacement of a concurrently created target",
+                            target.display()
+                        ),
+                    )
+                    .with_cause(cause))
+            }
+        },
+        Err(cause) => {
+            remove_staged();
+            Err(Error::new(
+                &crate::codes::EMIT_IO_COMMIT,
+                format!(
+                    "cannot move complete staging output '{}' into '{}'",
+                    staged.display(),
+                    target.display()
+                ),
+            )
+            .with_cause(cause))
+        }
+    }
+}
+
 fn collision(target: &Path) -> Error {
     Error::new(
         &crate::codes::REQUEST_OUTPUT_COLLISION,

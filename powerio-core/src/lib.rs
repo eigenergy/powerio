@@ -25,7 +25,9 @@ pub use diagnostic::{
 };
 pub use error::Error;
 pub use module::PioModule;
-pub use output::{ArtifactPath, Destination, MemoryArtifact, WriteResult, WrittenOutput};
+pub use output::{
+    __commit_staged_file, ArtifactPath, Destination, MemoryArtifact, WriteResult, WrittenOutput,
+};
 pub use records::{
     DiagnosticId, Digest, DigestAlgorithm, HistoryEntry, HistoryId, HistoryKind, Producer,
     SourceDescriptor, SourceId, SourceMapEntry, SourceRelation, SourceSpan,

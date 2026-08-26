@@ -37,7 +37,12 @@ pub fn write_sensitivity_mtx_with_options(
         }
     };
 
-    ptdf.finish(metadata.ptdf.rows, metadata.ptdf.cols)?;
+    if let Err(error) = ptdf.finish(metadata.ptdf.rows, metadata.ptdf.cols) {
+        // The refused first target must not strand the second writer's
+        // staging files.
+        lodf.cleanup();
+        return Err(error);
+    }
     lodf.finish(metadata.lodf.rows, metadata.lodf.cols)?;
     Ok(metadata)
 }
@@ -78,6 +83,16 @@ impl CoordinateMtxWriter {
     }
 
     fn finish(mut self, rows: usize, cols: usize) -> Result<()> {
+        let result = self.finish_inner(rows, cols);
+        if result.is_err() {
+            // A refused or failed commit leaves no staging file beside the
+            // target; the commit itself already removed the staged output.
+            self.cleanup();
+        }
+        result
+    }
+
+    fn finish_inner(&mut self, rows: usize, cols: usize) -> Result<()> {
         if let Some(mut body) = self.body.take() {
             body.flush()?;
         }
@@ -89,8 +104,12 @@ impl CoordinateMtxWriter {
         let mut body = BufReader::new(File::open(&self.body_path)?);
         std::io::copy(&mut body, &mut out)?;
         out.flush()?;
+        drop(out);
 
-        std::fs::rename(&self.final_tmp_path, &self.target_path)?;
+        // The complete staged matrix moves onto the target through the
+        // no-replace commit: an entry at the target refuses the write and the
+        // staged file is removed, leaving the caller's filesystem as it was.
+        powerio_core::__commit_staged_file(&self.final_tmp_path, &self.target_path)?;
         let _ = std::fs::remove_file(&self.body_path);
         Ok(())
     }

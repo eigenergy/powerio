@@ -31,11 +31,14 @@ pub fn mtx_bytes(matrix: &CsMat<f64>) -> Result<Vec<u8>> {
 /// staged and moved onto `path` only when no entry exists there, so a refused
 /// write leaves the caller's filesystem as it was.
 pub(crate) fn commit_one_file(path: &Path, bytes: Vec<u8>) -> Result<()> {
-    let name = path
-        .file_name()
-        .and_then(|name| name.to_str())
-        .ok_or_else(|| Error::Mtx(format!("output path `{}` has no file name", path.display())))?;
-    let artifact = powerio_core::MemoryArtifact::new(powerio_core::ArtifactPath::new(name)?, bytes);
+    // A one file destination takes its target from the caller's path; the
+    // artifact name is a fixed placeholder, so the portability rule governs
+    // inventory names and never which operating system path a caller may
+    // choose.
+    let artifact = powerio_core::MemoryArtifact::new(
+        powerio_core::ArtifactPath::new("case").expect("static placeholder name"),
+        bytes,
+    );
     powerio_core::Destination::path(path).__commit_artifacts(false, vec![artifact], Vec::new())?;
     Ok(())
 }
@@ -155,6 +158,50 @@ mod tests {
     use sprs::TriMat;
 
     use super::write_mtx;
+
+    #[test]
+    fn single_file_writers_take_any_platform_legal_target_name() {
+        // The portability rule governs inventory names, never which
+        // operating system path a caller may choose: a name that is legal on
+        // the running platform commits.
+        let base = std::env::temp_dir().join(format!(
+            "powerio-mtx-target-names-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&base).unwrap();
+        #[cfg(unix)]
+        let nonportable = ["aux.mtx", "trailing.", "with space "];
+        #[cfg(not(unix))]
+        let nonportable = ["with space.mtx"];
+        for name in nonportable {
+            let target = base.join(name);
+            super::write_vector_mtx(&[3.0], &target).unwrap_or_else(|error| {
+                panic!("{name}: {error}");
+            });
+            assert_eq!(super::read_vector_mtx(&target).unwrap(), vec![3.0]);
+            // An existing entry at the same platform-legal name still refuses.
+            let error = super::write_vector_mtx(&[4.0], &target).unwrap_err();
+            assert!(matches!(error, crate::Error::Commit(_)), "{error:?}");
+            assert_eq!(super::read_vector_mtx(&target).unwrap(), vec![3.0]);
+        }
+        // A file name that is not valid UTF-8 is a legal path on Linux
+        // filesystems; APFS refuses the byte sequence itself, so the case is
+        // platform-legal only there.
+        #[cfg(target_os = "linux")]
+        {
+            use std::os::unix::ffi::OsStrExt;
+            let raw =
+                std::ffi::OsStr::from_bytes(&[b'r', b'a', b'w', 0xFF, b'.', b'm', b't', b'x']);
+            let target = base.join(raw);
+            super::write_vector_mtx(&[5.0], &target).unwrap();
+            assert_eq!(super::read_vector_mtx(&target).unwrap(), vec![5.0]);
+        }
+        let _ = std::fs::remove_dir_all(&base);
+    }
 
     #[test]
     fn single_file_writers_never_replace_an_existing_entry() {

@@ -129,8 +129,7 @@ jobs:
                 <a href="https://docs.rs/powerio-core">powerio-core</a>
                 <a href="https://docs.rs/powerio-matrix">powerio-matrix</a>
                 <a href="https://docs.rs/powerio-prob">powerio-prob</a>
-                <a href="https://docs.rs/powerio-dist">powerio-dist</a>
-</dd>
+                <a href="https://docs.rs/powerio-dist">powerio-dist</a></dd>
           </div>
           <div>
             <dt>development / main</dt>

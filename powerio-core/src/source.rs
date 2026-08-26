@@ -571,13 +571,23 @@ impl Source {
                 // The walk runs against the pinned root handle so a directory
                 // component swapped for a symbolic link mid-listing fails the
                 // descriptor walk rather than redirecting the listing outside
-                // the root. Each child directory is listed from its parent's
-                // already opened handle, so the open count is proportional to
-                // the directories visited, and every budget bounds the work
-                // before it is incurred: entries stop being read the moment
-                // the remaining allowance is exhausted, and a prefix at the
-                // depth bound is refused before it is walked. The lock is
-                // held across the walk, like acquisition.
+                // the root. The walk is depth first over frames, one open
+                // handle per level: a child is opened from its parent's live
+                // handle, and a frame's handle closes when its subdirectories
+                // are exhausted, so the descriptors held at any moment are
+                // bounded by the depth bound, never by the entry budget or a
+                // directory's fan-out. Every budget bounds the work before it
+                // is incurred: entries stop being read the moment the
+                // remaining allowance is exhausted, and a prefix at the depth
+                // bound is refused before it is walked. The lock is held
+                // across the walk, like acquisition.
+                struct Frame<Handle> {
+                    prefix: Vec<String>,
+                    directory: Handle,
+                    /// Subdirectory names discovered and not yet descended.
+                    subdirectories: Vec<String>,
+                }
+
                 let mut state = acquisition.lock();
                 let root = state.pinned_root(&acquisition.root_display)?;
                 let budget_refusal = || {
@@ -588,7 +598,6 @@ impl Source {
                         ),
                     )
                 };
-                let mut names = Vec::new();
                 let root_handle = root.duplicate_handle().map_err(|cause| {
                     Error::new(
                         &crate::codes::READ_IO_METADATA,
@@ -596,10 +605,15 @@ impl Source {
                     )
                     .with_cause(cause)
                 })?;
-                let mut pending = vec![(Vec::<String>::new(), root_handle)];
-                while let Some((prefix, directory)) = pending.pop() {
+                let mut names = Vec::new();
+                // Subdirectory names discovered across every frame and not
+                // yet listed; each still charges the entry budget.
+                let mut undescended = 0usize;
+                let mut frames = Vec::new();
+                let mut arriving = Some((Vec::<String>::new(), root_handle));
+                while let Some((prefix, directory)) = arriving.take() {
                     let allowance = MAX_REFERENCED_FILES
-                        .checked_sub(names.len() + pending.len())
+                        .checked_sub(names.len() + undescended)
                         .filter(|allowance| *allowance > 0)
                         .ok_or_else(budget_refusal)?;
                     let entries =
@@ -610,11 +624,12 @@ impl Source {
                                 listing_error(&prefix.join("/"), cause)
                             }
                         })?;
+                    let mut subdirectories = Vec::new();
                     for (name, is_directory) in entries {
-                        if names.len() + pending.len() >= MAX_REFERENCED_FILES {
+                        if names.len() + undescended + subdirectories.len() >= MAX_REFERENCED_FILES
+                        {
                             return Err(budget_refusal());
                         }
-                        let mut child = prefix.clone();
                         if is_directory {
                             if prefix.len() + 1 >= MAX_REFERENCED_DEPTH {
                                 return Err(Error::new(
@@ -624,17 +639,39 @@ impl Source {
                                     ),
                                 ));
                             }
-                            let handle = platform::open_child_directory(&directory, &name)
-                                .map_err(|cause| {
-                                    child.push(name.clone());
-                                    listing_error(&child.join("/"), cause)
-                                })?;
-                            child.push(name);
-                            pending.push((child, handle));
+                            subdirectories.push(name);
                         } else {
+                            let mut child = prefix.clone();
                             child.push(name);
                             names.push(crate::ArtifactPath::new(child.join("/"))?);
                         }
+                    }
+                    undescended += subdirectories.len();
+                    frames.push(Frame {
+                        prefix,
+                        directory,
+                        subdirectories,
+                    });
+
+                    // Descend into the deepest frame's next subdirectory;
+                    // pop and drop a frame — closing its handle — as soon as
+                    // its subdirectories are exhausted, before any sibling
+                    // opens.
+                    while let Some(frame) = frames.last_mut() {
+                        let Some(name) = frame.subdirectories.pop() else {
+                            frames.pop();
+                            continue;
+                        };
+                        undescended -= 1;
+                        let mut child = frame.prefix.clone();
+                        let handle = platform::open_child_directory(&frame.directory, &name)
+                            .map_err(|cause| {
+                                child.push(name.clone());
+                                listing_error(&child.join("/"), cause)
+                            })?;
+                        child.push(name);
+                        arriving = Some((child, handle));
+                        break;
                     }
                 }
                 names.sort();
@@ -1482,6 +1519,67 @@ mod tests {
     use super::*;
     use crate::ArtifactPath;
 
+    /// Serializes the tests that measure process wide resources (open
+    /// descriptor counts, descriptor limits), so a measurement compares
+    /// against a baseline taken under the same guard rather than a free
+    /// running count other tests move.
+    static PROCESS_RESOURCE_TESTS: Mutex<()> = Mutex::new(());
+
+    fn process_resource_guard() -> MutexGuard<'static, ()> {
+        PROCESS_RESOURCE_TESTS
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    /// Byte counting global allocator, scoped to the one measuring thread so
+    /// parallel tests never pollute a measurement.
+    struct CountingAllocator;
+
+    static ALLOCATED_BYTES: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+    thread_local! {
+        static MEASURING: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    }
+
+    fn measured_bytes<T>(work: impl FnOnce() -> T) -> (T, usize) {
+        let _ = MEASURING.try_with(|flag| flag.set(true));
+        let before = ALLOCATED_BYTES.load(std::sync::atomic::Ordering::Relaxed);
+        let value = work();
+        let after = ALLOCATED_BYTES.load(std::sync::atomic::Ordering::Relaxed);
+        let _ = MEASURING.try_with(|flag| flag.set(false));
+        (value, after.saturating_sub(before))
+    }
+
+    // SAFETY: delegates every operation to the system allocator; the counter
+    // is a side effect on the measuring thread only.
+    unsafe impl std::alloc::GlobalAlloc for CountingAllocator {
+        unsafe fn alloc(&self, layout: std::alloc::Layout) -> *mut u8 {
+            if MEASURING.try_with(std::cell::Cell::get).unwrap_or(false) {
+                ALLOCATED_BYTES.fetch_add(layout.size(), std::sync::atomic::Ordering::Relaxed);
+            }
+            unsafe { std::alloc::System.alloc(layout) }
+        }
+
+        unsafe fn dealloc(&self, ptr: *mut u8, layout: std::alloc::Layout) {
+            unsafe { std::alloc::System.dealloc(ptr, layout) }
+        }
+
+        unsafe fn realloc(
+            &self,
+            ptr: *mut u8,
+            layout: std::alloc::Layout,
+            new_size: usize,
+        ) -> *mut u8 {
+            if MEASURING.try_with(std::cell::Cell::get).unwrap_or(false) {
+                ALLOCATED_BYTES.fetch_add(new_size, std::sync::atomic::Ordering::Relaxed);
+            }
+            unsafe { std::alloc::System.realloc(ptr, layout, new_size) }
+        }
+    }
+
+    #[global_allocator]
+    static COUNTING: CountingAllocator = CountingAllocator;
+
     fn test_root(name: &str) -> PathBuf {
         let nonce = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -1755,40 +1853,20 @@ mod tests {
         big.set_len(MAX_REFERENCED_BYTES * 4).unwrap();
         drop(big);
 
-        #[cfg(unix)]
-        let peak_before = peak_resident_bytes();
         let source = Source::open(root.join("master.dss")).unwrap();
         let primary = source.primary_buffer().unwrap();
-        let error = source.referenced_buffer(&primary, "big.dat").unwrap_err();
+        // The refusal happens before the reserve: the bytes allocated on this
+        // thread during the refused acquisition are a tiny fraction of the
+        // declared length. The measurement is thread scoped, so it fails when
+        // the pre-reserve refusal is removed and never passes by accident.
+        let (error, allocated) =
+            measured_bytes(|| source.referenced_buffer(&primary, "big.dat").unwrap_err());
         assert!(error.to_string().contains("acquisition budget"), "{error}");
-        #[cfg(unix)]
-        {
-            // The refusal happened before the reserve, so the process peak
-            // resident set cannot have grown by the declared length.
-            let growth = peak_resident_bytes().saturating_sub(peak_before);
-            assert!(
-                growth < 3 * MAX_REFERENCED_BYTES,
-                "peak resident set grew by {growth} bytes"
-            );
-        }
+        assert!(
+            (allocated as u64) < MAX_REFERENCED_BYTES / 16,
+            "the refused acquisition allocated {allocated} bytes"
+        );
         std::fs::remove_dir_all(root).unwrap();
-    }
-
-    #[cfg(unix)]
-    fn peak_resident_bytes() -> u64 {
-        // SAFETY: `getrusage` fills the zeroed out-parameter for this process.
-        let usage = unsafe {
-            let mut usage: libc::rusage = std::mem::zeroed();
-            libc::getrusage(libc::RUSAGE_SELF, &raw mut usage);
-            usage
-        };
-        let maxrss = u64::try_from(usage.ru_maxrss).unwrap_or(0);
-        // Linux reports kilobytes; macOS reports bytes.
-        if cfg!(target_os = "macos") {
-            maxrss
-        } else {
-            maxrss * 1024
-        }
     }
 
     #[cfg(unix)]
@@ -1894,6 +1972,7 @@ mod tests {
             std::fs::read_dir(table).unwrap().count()
         }
 
+        let _guard = process_resource_guard();
         let root = test_root("fd-count");
         std::fs::create_dir_all(&root).unwrap();
         std::fs::write(root.join("case.m"), b"case").unwrap();
@@ -1954,6 +2033,10 @@ mod tests {
     #[test]
     fn a_directory_nested_past_the_depth_bound_is_refused_promptly() {
         use std::os::fd::{AsRawFd, FromRawFd};
+
+        // The unwind below holds one descriptor per level; serialize with the
+        // other descriptor sensitive tests so their measurements stay exact.
+        let _guard = process_resource_guard();
 
         let root = test_root("deep-chain");
         std::fs::create_dir_all(&root).unwrap();
@@ -2022,25 +2105,106 @@ mod tests {
         std::fs::remove_dir_all(&root).unwrap();
     }
 
-    #[cfg(unix)]
     #[test]
     fn a_directory_past_the_entry_budget_is_refused_with_bounded_memory() {
         let root = test_root("entry-budget");
         std::fs::create_dir_all(&root).unwrap();
-        for index in 0..(MAX_REFERENCED_FILES + 500) {
+        // Four times the budget: an unbounded read would materialize four
+        // times the names the allowance admits, which the thread scoped
+        // allocation measurement separates decisively from the bounded read.
+        let excess = MAX_REFERENCED_FILES * 4;
+        for index in 0..excess {
             std::fs::write(root.join(format!("f{index:05}.csv")), b"").unwrap();
         }
-        let peak_before = peak_resident_bytes();
         let source = Source::open(&root).unwrap();
-        let error = source.entry_names().unwrap_err();
+        let (error, allocated) = measured_bytes(|| source.entry_names().unwrap_err());
         assert!(error.to_string().contains("entries"), "{error}");
-        // The listing stopped reading at the allowance, so the peak resident
-        // set is bounded by a small multiple of the entry budget rather than
-        // the directory's true entry count.
-        let growth = peak_resident_bytes().saturating_sub(peak_before);
+        // The listing stopped reading at the allowance: the bytes allocated
+        // on this thread are bounded by the entry budget, never by the
+        // directory's true entry count. Removing the in-loop bound reads all
+        // `excess` names and fails this assertion.
         assert!(
-            growth < (MAX_REFERENCED_FILES as u64) * 4_096,
-            "peak resident set grew by {growth} bytes"
+            allocated < MAX_REFERENCED_FILES * 192,
+            "the refused listing allocated {allocated} bytes"
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn listing_breadth_never_scales_open_descriptors() {
+        fn open_descriptor_count() -> usize {
+            let table = if cfg!(target_os = "macos") {
+                "/dev/fd"
+            } else {
+                "/proc/self/fd"
+            };
+            std::fs::read_dir(table).unwrap().count()
+        }
+
+        let _guard = process_resource_guard();
+        let root = test_root("breadth");
+        // Far more immediate subdirectories than the lowered descriptor
+        // limit, each holding one file, plus one nested chain, so the walk
+        // proves its held descriptors follow depth rather than breadth.
+        let breadth = 400usize;
+        for index in 0..breadth {
+            let sub = root.join(format!("s{index:03}"));
+            std::fs::create_dir_all(&sub).unwrap();
+            std::fs::write(sub.join("data.csv"), b"x").unwrap();
+        }
+        std::fs::create_dir_all(root.join("nested/a/b/c")).unwrap();
+        std::fs::write(root.join("nested/a/b/c/deep.csv"), b"x").unwrap();
+
+        // Lower the descriptor soft limit for the duration, so a walk whose
+        // descriptor use scales with breadth fails here rather than passing
+        // on a machine with a raised limit.
+        // SAFETY: `getrlimit` fills the zeroed out-parameter; the lowered
+        // limit is restored below.
+        let mut original: libc::rlimit = unsafe { std::mem::zeroed() };
+        assert_eq!(
+            // SAFETY: as above.
+            unsafe { libc::getrlimit(libc::RLIMIT_NOFILE, &raw mut original) },
+            0
+        );
+        let lowered = libc::rlimit {
+            rlim_cur: 256,
+            rlim_max: original.rlim_max,
+        };
+        // SAFETY: lowering the soft limit for this process; restored below.
+        assert_eq!(
+            unsafe { libc::setrlimit(libc::RLIMIT_NOFILE, &raw const lowered) },
+            0
+        );
+
+        let baseline = open_descriptor_count();
+        let peak = std::sync::atomic::AtomicUsize::new(0);
+        let stop = std::sync::atomic::AtomicBool::new(false);
+        let names = std::thread::scope(|scope| {
+            let sampler = scope.spawn(|| {
+                while !stop.load(std::sync::atomic::Ordering::Relaxed) {
+                    let count = open_descriptor_count();
+                    peak.fetch_max(count, std::sync::atomic::Ordering::Relaxed);
+                }
+            });
+            let source = Source::open(&root).unwrap();
+            let names = source.entry_names().unwrap();
+            stop.store(true, std::sync::atomic::Ordering::Relaxed);
+            sampler.join().unwrap();
+            drop(source);
+            names
+        });
+        // SAFETY: restoring the limit read above.
+        assert_eq!(
+            unsafe { libc::setrlimit(libc::RLIMIT_NOFILE, &raw const original) },
+            0
+        );
+
+        assert_eq!(names.len(), breadth + 1, "every file listed");
+        let sampled_peak = peak.load(std::sync::atomic::Ordering::Relaxed);
+        assert!(
+            sampled_peak <= baseline + MAX_REFERENCED_DEPTH + 16,
+            "the walk held {sampled_peak} descriptors over a baseline of {baseline}"
         );
         std::fs::remove_dir_all(root).unwrap();
     }
