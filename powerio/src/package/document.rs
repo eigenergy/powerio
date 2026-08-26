@@ -4,32 +4,34 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use serde::{Deserialize, Serialize};
 
-use powerio::{
+use crate::{
     BalancedNetwork, BusId, NORMALIZED_SOLVER_TABLES_PASS, NormalizedSolverTables,
     SolverTableUnits, SourceFormat,
 };
 use powerio_dist::{DistSourceFormat, MulticonductorNetwork};
 
-use crate::diagnostics::{DiagnosticInfo, DiagnosticSeverity, StructuredDiagnostic, codes};
-use crate::error::Error;
-use crate::lowering::{
+use crate::package::diagnostics::{
+    DiagnosticInfo, DiagnosticSeverity, StructuredDiagnostic, codes,
+};
+use crate::package::error::Error;
+use crate::package::lowering::{
     LoweringRecord, MulticonductorToBalancedError, MulticonductorToBalancedOptions,
     MulticonductorToBalancedReadiness, check_multiconductor_to_balanced_lowering,
     lower_multiconductor_to_balanced,
 };
-use crate::model::{ModelKind, ModelPayload};
-use crate::operating::{
+use crate::package::model::{ModelKind, ModelPayload};
+use crate::package::operating::{
     OperatingPointSeries, apply_operating_point_to_model, check_series_identities,
 };
-use crate::provenance::{
+use crate::package::provenance::{
     Confidence, MappingKind, Origin, Producer, SourceDescriptor, SourceMapEntry, SourceRef,
 };
-use crate::study::{StudyBlock, apply_study_to_model, check_study_identities};
-use crate::summary::{ObjectSummary, ObjectTopology, ObjectUnits};
-use crate::validation::{ValidationPass, ValidationStatus, ValidationSummary};
+use crate::package::study::{StudyBlock, apply_study_to_model, check_study_identities};
+use crate::package::summary::{ObjectSummary, ObjectTopology, ObjectUnits};
+use crate::package::validation::{ValidationPass, ValidationStatus, ValidationSummary};
 
 fn default_powerio_version() -> String {
-    powerio::VERSION.to_owned()
+    crate::VERSION.to_owned()
 }
 
 /// Optional derived metadata: matrix statistics, solver table metadata, and
@@ -150,6 +152,8 @@ impl From<&NormalizedSolverTables> for NormalizedSolverTableMetadata {
 pub struct NetworkPackage {
     /// The powerio version that wrote this document; see
     /// [`powerio::version`].
+    // The `powerio::` spelling is frozen into the generated 0.9 schema text;
+    // inside the facade itself that self-name does not resolve as a link.
     ///
     /// A document that states none deserializes to the empty string, which no
     /// lineage accepts, so the gate stays closed and the reader can name the
@@ -161,6 +165,7 @@ pub struct NetworkPackage {
     /// The published schema lists it as `required`, so a document that omits it
     /// validates against `serde` alone and not against the `$id`.
     #[serde(default)]
+    #[allow(rustdoc::broken_intra_doc_links)]
     pub powerio_version: String,
     pub producer: Producer,
     /// Stable content id, e.g. `"sha256:..."`. The scaffold leaves it `None`.
@@ -252,7 +257,7 @@ impl NetworkPackage {
 
     /// Wrap a parsed balanced module: the typed network plus the reader's
     /// findings.
-    pub fn from_balanced_module(module: powerio_core::PioModule<powerio::BalancedNetwork>) -> Self {
+    pub fn from_balanced_module(module: powerio_core::PioModule<crate::BalancedNetwork>) -> Self {
         let diagnostics = module.diagnostics().to_vec();
         Self::from_balanced_with_read_diagnostics(
             module.into_value(),
@@ -263,12 +268,12 @@ impl NetworkPackage {
     /// Attach the operating point series a DOE GO Challenge 3 document
     /// carries. TEMPORARY: the calculation instance types replace this
     /// extraction, and the package with it.
-    pub fn attach_goc3_operating_points(&mut self, document: &powerio::format::goc3::Goc3Document) {
-        match crate::operating::goc3_operating_points(document) {
+    pub fn attach_goc3_operating_points(&mut self, document: &crate::format::goc3::Goc3Document) {
+        match crate::package::operating::goc3_operating_points(document) {
             Ok(series) => self.operating_points = series,
             Err(error) => {
                 self.diagnostics.push(StructuredDiagnostic::of(
-                    &crate::diagnostics::codes::READ_PACKAGE_OPERATING_POINTS_DROPPED,
+                    &crate::package::diagnostics::codes::READ_PACKAGE_OPERATING_POINTS_DROPPED,
                     format!(
                         "time series could not be lifted into operating points; \
                          the package is static only: {error}"
@@ -449,11 +454,10 @@ impl NetworkPackage {
     /// The returned package has the same metadata and model kind, with its
     /// payload updated for `index`, `operating_points` cleared, and sane
     /// validation recomputed for the updated payload.
-    pub fn materialize_operating_point(&self, index: usize) -> crate::Result<Self> {
-        let series = self
-            .operating_points
-            .as_ref()
-            .ok_or_else(|| crate::Error::Payload("package has no operating points".to_owned()))?;
+    pub fn materialize_operating_point(&self, index: usize) -> crate::package::Result<Self> {
+        let series = self.operating_points.as_ref().ok_or_else(|| {
+            crate::package::Error::Payload("package has no operating points".to_owned())
+        })?;
         let point = series
             .unique_point(index)?
             .ok_or_else(|| Error::NoSuchIndex(format!("package has no operating point {index}")))?;
@@ -536,7 +540,7 @@ impl NetworkPackage {
     pub fn materialize_balanced_operating_point(
         &self,
         index: usize,
-    ) -> crate::Result<Option<BalancedNetwork>> {
+    ) -> crate::package::Result<Option<BalancedNetwork>> {
         Ok(self
             .materialize_operating_point(index)?
             .model
@@ -549,7 +553,7 @@ impl NetworkPackage {
     pub fn materialize_multiconductor_operating_point(
         &self,
         index: usize,
-    ) -> crate::Result<Option<MulticonductorNetwork>> {
+    ) -> crate::package::Result<Option<MulticonductorNetwork>> {
         Ok(self
             .materialize_operating_point(index)?
             .model
@@ -562,11 +566,10 @@ impl NetworkPackage {
     /// The returned package folds commits `0..=commit_index`, clears
     /// `operating_points` and `study`, and records the replay pass in
     /// `lowering_history`.
-    pub fn materialize_study_commit(&self, commit_index: usize) -> crate::Result<Self> {
-        let study = self
-            .study
-            .as_ref()
-            .ok_or_else(|| crate::Error::Payload("package has no study block".to_owned()))?;
+    pub fn materialize_study_commit(&self, commit_index: usize) -> crate::package::Result<Self> {
+        let study = self.study.as_ref().ok_or_else(|| {
+            crate::package::Error::Payload("package has no study block".to_owned())
+        })?;
         let base = if let Some(index) = study.base_operating_point {
             self.materialize_operating_point(index)?
         } else {
@@ -639,7 +642,7 @@ impl NetworkPackage {
     pub fn materialize_balanced_study_commit(
         &self,
         commit_index: usize,
-    ) -> crate::Result<Option<BalancedNetwork>> {
+    ) -> crate::package::Result<Option<BalancedNetwork>> {
         Ok(self
             .materialize_study_commit(commit_index)?
             .model
@@ -648,17 +651,17 @@ impl NetworkPackage {
     }
 
     /// Serialize to compact `.pio.json`.
-    pub fn to_json(&self) -> crate::Result<String> {
+    pub fn to_json(&self) -> crate::package::Result<String> {
         serde_json::to_string(self).map_err(Error::Serialize)
     }
 
     /// Serialize to pretty `.pio.json`.
-    pub fn to_json_pretty(&self) -> crate::Result<String> {
+    pub fn to_json_pretty(&self) -> crate::package::Result<String> {
         serde_json::to_string_pretty(self).map_err(Error::Serialize)
     }
 
     /// Deserialize from `.pio.json`.
-    pub fn from_json(text: &str) -> crate::Result<Self> {
+    pub fn from_json(text: &str) -> crate::package::Result<Self> {
         // Tolerate a leading UTF-8 byte order mark, as the format readers do.
         // Name the format in the error: a document the JSON classifier calls a
         // package (right `model_kind` and `model` markers) can still
@@ -666,8 +669,8 @@ impl NetworkPackage {
         // ("missing field `producer`") does not say what it failed to be.
         let pkg: Self =
             serde_json::from_str(text.trim_start_matches('\u{feff}')).map_err(Error::Malformed)?;
-        if !powerio::version::supports(&pkg.powerio_version) {
-            return Err(Error::UnsupportedVersion(powerio::version::reject(
+        if !crate::version::supports(&pkg.powerio_version) {
+            return Err(Error::UnsupportedVersion(crate::version::reject(
                 ".pio.json",
                 &pkg.powerio_version,
             )));
@@ -681,7 +684,7 @@ impl NetworkPackage {
     /// Deserialize from `.pio.json` held as bytes, for a caller that never
     /// stages the text — an upload, an archive member. The bytes must decode
     /// as UTF-8; a leading byte order mark is tolerated as in [`Self::from_json`].
-    pub fn from_json_bytes(bytes: &[u8]) -> crate::Result<Self> {
+    pub fn from_json_bytes(bytes: &[u8]) -> crate::package::Result<Self> {
         let text = std::str::from_utf8(bytes).map_err(|e| {
             Error::Malformed(serde::de::Error::custom(format!("not valid UTF-8: {e}")))
         })?;
@@ -731,7 +734,7 @@ impl NetworkPackage {
     /// to validate external table artifacts.
     pub fn attach_normalized_solver_table_metadata(
         &mut self,
-    ) -> std::result::Result<bool, powerio::Error> {
+    ) -> std::result::Result<bool, crate::Error> {
         let Some(net) = self.as_balanced() else {
             return Ok(false);
         };
@@ -743,7 +746,7 @@ impl NetworkPackage {
     /// Return a package with normalized solver table metadata attached.
     pub fn with_normalized_solver_table_metadata(
         mut self,
-    ) -> std::result::Result<Self, powerio::Error> {
+    ) -> std::result::Result<Self, crate::Error> {
         self.attach_normalized_solver_table_metadata()?;
         Ok(self)
     }
@@ -886,13 +889,13 @@ pub fn ensure_payload_uids(net: &mut BalancedNetwork) {
 }
 
 const SANE_VALIDATION_CODES: [&DiagnosticInfo; 10] = [
-    &codes::VALIDATE_BALANCED_STRUCTURE,
-    &codes::VALIDATE_BALANCED_VALUE_DOMAIN,
-    &codes::VALIDATE_BALANCED_PAYLOAD_IDENTITY,
-    &codes::VALIDATE_MULTI_STRUCTURE,
-    &codes::VALIDATE_MULTI_TERMINAL_MAP,
-    &codes::VALIDATE_MULTI_UNTYPED_OBJECT,
-    &codes::VALIDATE_MULTI_NO_VOLTAGE_SOURCE,
+    &powerio_tx::diagnostics::codes::VALIDATE_BALANCED_STRUCTURE,
+    &powerio_tx::diagnostics::codes::VALIDATE_BALANCED_VALUE_DOMAIN,
+    &powerio_tx::diagnostics::codes::VALIDATE_BALANCED_PAYLOAD_IDENTITY,
+    &powerio_dist::diagnostics::codes::VALIDATE_MULTI_STRUCTURE,
+    &powerio_dist::diagnostics::codes::VALIDATE_MULTI_TERMINAL_MAP,
+    &powerio_dist::diagnostics::codes::VALIDATE_MULTI_UNTYPED_OBJECT,
+    &powerio_dist::diagnostics::codes::VALIDATE_MULTI_NO_VOLTAGE_SOURCE,
     &codes::VALIDATE_PACKAGE_OPERATING_IDENTITY,
     &codes::VALIDATE_PACKAGE_STUDY_MODEL_KIND,
     &codes::VALIDATE_PACKAGE_STUDY_IDENTITY,
@@ -979,7 +982,7 @@ fn sane_validate_balanced(
     let mut structure = Vec::new();
     if let Err(err) = net.validate() {
         structure.push(StructuredDiagnostic::of(
-            &codes::VALIDATE_BALANCED_STRUCTURE,
+            &powerio_tx::diagnostics::codes::VALIDATE_BALANCED_STRUCTURE,
             err.to_string(),
         ));
     }
@@ -1001,7 +1004,7 @@ fn sane_validate_balanced(
                 )
             });
         let mut d = StructuredDiagnostic::of(
-            &codes::VALIDATE_BALANCED_VALUE_DOMAIN,
+            &powerio_tx::diagnostics::codes::VALIDATE_BALANCED_VALUE_DOMAIN,
             format!(
                 "{} field `{}` is outside its value domain; suggested value is {}",
                 finding.element, finding.field, finding.new
@@ -1069,7 +1072,7 @@ fn table_uid_duplicates<'a>(
         if let Some(&first) = first_row.get(uid) {
             diagnostics.push(
                 StructuredDiagnostic::of(
-                    &codes::VALIDATE_BALANCED_PAYLOAD_IDENTITY,
+                    &powerio_tx::diagnostics::codes::VALIDATE_BALANCED_PAYLOAD_IDENTITY,
                     format!(
                         "payload table `{table}` carries uid `{uid}` on rows {first} and {row}; \
                          identity resolution is ambiguous"
@@ -1109,7 +1112,7 @@ fn attach_source_refs(diagnostics: &mut [StructuredDiagnostic], source_maps: &[S
 fn balanced_value_finding_path(
     net: &BalancedNetwork,
     bus_index: &HashMap<usize, usize>,
-    finding: &powerio::ValueRepair,
+    finding: &crate::ValueRepair,
 ) -> Option<String> {
     if let Some(id) = finding
         .element
@@ -1154,7 +1157,7 @@ fn balanced_value_finding_path(
     None
 }
 
-fn generator_field(generator: &powerio::Generator, field: &str) -> Option<f64> {
+fn generator_field(generator: &crate::Generator, field: &str) -> Option<f64> {
     Some(match field {
         "mbase" => generator.mbase,
         "vg" => generator.vg,
@@ -1204,7 +1207,7 @@ fn sane_validate_multiconductor(
     for (i, obj) in net.untyped.iter().enumerate() {
         untyped.push(
             StructuredDiagnostic::of(
-                &codes::VALIDATE_MULTI_UNTYPED_OBJECT,
+                &powerio_dist::diagnostics::codes::VALIDATE_MULTI_UNTYPED_OBJECT,
                 format!(
                     "{} {} is preserved as an untyped object",
                     obj.class, obj.name
@@ -1216,7 +1219,7 @@ fn sane_validate_multiconductor(
 
     if net.sources.is_empty() {
         sources.push(StructuredDiagnostic::of(
-            &codes::VALIDATE_MULTI_NO_VOLTAGE_SOURCE,
+            &powerio_dist::diagnostics::codes::VALIDATE_MULTI_NO_VOLTAGE_SOURCE,
             "multiconductor package has no voltage source",
         ));
     }
@@ -1267,7 +1270,7 @@ fn validate_multiconductor_lines(
         {
             structure.push(
                 StructuredDiagnostic::of(
-                    &codes::VALIDATE_MULTI_STRUCTURE,
+                    &powerio_dist::diagnostics::codes::VALIDATE_MULTI_STRUCTURE,
                     format!(
                         "line {} references unknown linecode `{}`",
                         line.name, line.linecode
@@ -1469,7 +1472,7 @@ fn multiconductor_bus_index(
         if let Some(first) = first_seen.insert(key.clone(), bus.id.clone()) {
             diagnostics.push(
                 StructuredDiagnostic::of(
-                    &codes::VALIDATE_MULTI_STRUCTURE,
+                    &powerio_dist::diagnostics::codes::VALIDATE_MULTI_STRUCTURE,
                     format!("duplicate bus id `{}` conflicts with `{first}`", bus.id),
                 )
                 .with_element_path(format!("/model/multiconductor_network/buses/{i}/id")),
@@ -1491,7 +1494,7 @@ fn check_bus_ref(
     if !bus_ids.contains(&bus.to_ascii_lowercase()) {
         diagnostics.push(
             StructuredDiagnostic::of(
-                &codes::VALIDATE_MULTI_STRUCTURE,
+                &powerio_dist::diagnostics::codes::VALIDATE_MULTI_STRUCTURE,
                 format!("{what} references unknown bus `{bus}`"),
             )
             .with_element_path(path),
@@ -1510,7 +1513,7 @@ fn check_terminal_map(
     if terminal_map.is_empty() {
         diagnostics.push(
             StructuredDiagnostic::of(
-                &codes::VALIDATE_MULTI_TERMINAL_MAP,
+                &powerio_dist::diagnostics::codes::VALIDATE_MULTI_TERMINAL_MAP,
                 format!("{what} has an empty terminal map"),
             )
             .with_element_path(path),
@@ -1525,7 +1528,7 @@ fn check_terminal_map(
         if !known.contains(terminal) {
             diagnostics.push(
                 StructuredDiagnostic::of(
-                    &codes::VALIDATE_MULTI_TERMINAL_MAP,
+                    &powerio_dist::diagnostics::codes::VALIDATE_MULTI_TERMINAL_MAP,
                     format!("{what} references unknown terminal `{terminal}` on bus `{bus}`"),
                 )
                 .with_element_path(path),
@@ -1602,7 +1605,7 @@ fn balanced_summary(net: &BalancedNetwork) -> ObjectSummary {
     let reference_buses: Vec<String> = net
         .buses
         .iter()
-        .filter(|b| b.kind == powerio::BusType::Ref)
+        .filter(|b| b.kind == crate::BusType::Ref)
         .map(|b| b.id.0.to_string())
         .collect();
 
@@ -2198,12 +2201,12 @@ fn multiconductor_source_maps(
 mod tests {
     #[test]
     fn a_package_states_the_powerio_version_that_wrote_it() {
-        let net = powerio::BalancedNetwork::in_memory("demo", 100.0, vec![], vec![]);
+        let net = crate::BalancedNetwork::in_memory("demo", 100.0, vec![], vec![]);
         let pkg = super::NetworkPackage::from_balanced(net);
-        assert_eq!(pkg.powerio_version, powerio::VERSION);
+        assert_eq!(pkg.powerio_version, crate::VERSION);
         let text = pkg.to_json().unwrap();
         assert!(
-            text.contains(&format!("\"powerio_version\":\"{}\"", powerio::VERSION)),
+            text.contains(&format!("\"powerio_version\":\"{}\"", crate::VERSION)),
             "{text}"
         );
         assert!(
@@ -2217,7 +2220,7 @@ mod tests {
         // What every 0.8.x release wrote: `schema_version`, no
         // `powerio_version`. The reader must name the release rather than
         // report a missing field.
-        let net = powerio::BalancedNetwork::in_memory("demo", 100.0, vec![], vec![]);
+        let net = crate::BalancedNetwork::in_memory("demo", 100.0, vec![], vec![]);
         let text = super::NetworkPackage::from_balanced(net)
             .to_json()
             .unwrap()
@@ -2231,7 +2234,7 @@ mod tests {
 
     #[test]
     fn a_package_from_a_future_lineage_is_refused_with_both_versions() {
-        let net = powerio::BalancedNetwork::in_memory("demo", 100.0, vec![], vec![]);
+        let net = crate::BalancedNetwork::in_memory("demo", 100.0, vec![], vec![]);
         let mut pkg = super::NetworkPackage::from_balanced(net);
         pkg.powerio_version = "9.9.9".to_owned();
         let text = pkg.to_json().unwrap();
@@ -2239,7 +2242,7 @@ mod tests {
             .unwrap_err()
             .to_string();
         assert!(err.contains("9.9.9"), "{err}");
-        assert!(err.contains(powerio::VERSION), "{err}");
+        assert!(err.contains(crate::VERSION), "{err}");
         assert!(err.contains("regenerate"), "{err}");
     }
 

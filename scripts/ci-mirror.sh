@@ -44,13 +44,13 @@ cargo check -q -p powerio-prob --no-default-features
 # readers can run in a browser. Skipped rather than failing when the target
 # is not installed (rustup target add wasm32-unknown-unknown).
 if rustup target list --installed 2>/dev/null | grep -qx wasm32-unknown-unknown; then
-  run cargo check --target wasm32-unknown-unknown -p powerio -p powerio-tx -p powerio-dist -p powerio-pkg
+  run cargo check --target wasm32-unknown-unknown -p powerio -p powerio-tx -p powerio-dist
 else
   echo "=== skipped: wasm32-unknown-unknown target not installed ==="
 fi
 
 run cargo test -p powerio -p powerio-tx -p powerio-core -p powerio-matrix -p powerio-prob -p powerio-cli \
-    -p powerio-capi -p powerio-dist -p powerio-pkg
+    -p powerio-capi -p powerio-dist
 run cargo test -p powerio-prob --features matrix
 run cargo test -p powerio-matrix --features gridfm
 
@@ -92,7 +92,7 @@ run env "$lib_path_var=target/release" "$smoke_dir/smoke_release" \
 # `git status --porcelain`, which also sees the new directory a version bump
 # creates; a diff of tracked files would report nothing while it goes
 # uncommitted.
-run cargo run -q -p powerio-pkg --example generate_schemas --features schema -- docs/schema
+run cargo run -q -p powerio --example generate_schemas --features schema -- docs/schema
 if [ -n "$(git status --porcelain -- docs/schema)" ]; then
   git status --porcelain -- docs/schema
   echo "error: docs/schema is stale; commit the regenerated files" >&2

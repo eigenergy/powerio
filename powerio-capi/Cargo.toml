@@ -33,7 +33,7 @@ dist = ["dep:powerio-dist"]
 # in powerio-matrix (arrow + parquet) for the reader.
 gridfm = ["dep:powerio-matrix", "powerio-matrix/gridfm"]
 # `.pio.json` document API (`pio_package_*`). On by default.
-pkg = ["dep:powerio-pkg"]
+pkg = []
 # Numerical problem instances (`pio_scopf_*`).
 prob = ["dep:powerio-prob"]
 
@@ -41,7 +41,6 @@ prob = ["dep:powerio-prob"]
 powerio-core = { workspace = true }
 powerio.workspace = true
 powerio-dist = { workspace = true, optional = true }
-powerio-pkg = { workspace = true, optional = true }
 powerio-prob = { workspace = true, optional = true }
 # Only the C Data Interface (`ffi`) is needed; the heavy arrow defaults stay off.
 arrow = { workspace = true, features = ["ffi"], optional = true }

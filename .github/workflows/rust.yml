@@ -94,7 +94,7 @@ jobs:
       # the lineage, so the generator writes a NEW directory, and a diff of
       # tracked files reports nothing while the document goes uncommitted.
       run: |
-        cargo run -p powerio-pkg --example generate_schemas --features schema -- docs/schema
+        cargo run -p powerio --example generate_schemas --features schema -- docs/schema
         if [ -n "$(git status --porcelain -- docs/schema)" ]; then
           git status --porcelain -- docs/schema
           git diff -- docs/schema
@@ -132,7 +132,7 @@ jobs:
     # Bare `cargo test` only covers the default-members; name the C ABI crate
     # explicitly so its end-to-end ABI tests run in CI too.
     - name: Run tests
-      run: cargo test -p powerio -p powerio-core -p powerio-matrix -p powerio-prob -p powerio-cli -p powerio-capi -p powerio-dist -p powerio-pkg --verbose
+      run: cargo test -p powerio -p powerio-core -p powerio-matrix -p powerio-prob -p powerio-cli -p powerio-capi -p powerio-dist --verbose
     - name: Test problem matrix feature
       run: cargo test -p powerio-prob --features matrix --verbose
     - name: Check problem dependency boundaries
@@ -158,7 +158,7 @@ jobs:
         targets: wasm32-unknown-unknown
     - uses: Swatinem/rust-cache@v2
     - name: Check wasm32 parser crates
-      run: cargo check --target wasm32-unknown-unknown -p powerio -p powerio-dist -p powerio-pkg
+      run: cargo check --target wasm32-unknown-unknown -p powerio -p powerio-dist
 
   c-abi:
     name: C ABI (core no-default + C smoke test)

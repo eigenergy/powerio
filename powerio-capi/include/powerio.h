@@ -354,7 +354,7 @@ typedef struct PioNetwork PioNetwork;
 #if defined(PIO_PKG)
 /**
  * Opaque `.pio.json` compiler package handle. A package owns one
- * [`powerio_pkg::NetworkPackage`], which wraps either a balanced
+ * [`powerio::package::NetworkPackage`], which wraps either a balanced
  * [`PioNetwork`] payload or a multiconductor [`PioDistNetwork`] payload.
  */
 typedef struct PioPackage PioPackage;

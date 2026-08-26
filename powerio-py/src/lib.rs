@@ -20,6 +20,9 @@ use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList};
 use sprs::CsMat;
 
+use powerio::package::{
+    DiagnosticSeverity, NetworkPackage, OperatingPointSeries, Origin, SourceDescriptor,
+};
 use powerio_matrix::matrix::{
     BuildOptions, DcConvention, Scheme, SensitivityOptions, SensitivitySolver, build_adjacency,
     build_bdoubleprime, build_bprime, build_incidence, build_lacpf, build_ptdf_lodf_with_options,
@@ -28,9 +31,6 @@ use powerio_matrix::matrix::{
 use powerio_matrix::{
     BalancedNetwork, DisplayData, IndexCore, IndexedNetwork, MissingGenCostPolicy,
     NormalizeOptions, POWER_MODELS_ANGLE_BOUND_PAD, PwdDisplay, WriteOptions,
-};
-use powerio_pkg::{
-    DiagnosticSeverity, NetworkPackage, OperatingPointSeries, Origin, SourceDescriptor,
 };
 use powerio_prob::matrix::{
     DcOpfBundleMetadata, DcOpfBundleOptions, write_dcopf_bundle as write_bundle,
@@ -324,15 +324,15 @@ fn write_options(
     })
 }
 
-fn package_pyerr(e: powerio_pkg::Error) -> PyErr {
+fn package_pyerr(e: powerio::package::Error) -> PyErr {
     // A package failure is a PowerIOError like every other failure. It used to
     // raise a bare `ValueError` for everything, so `except powerio.PowerIOError`
     // did not catch it, and every distinct cause read as one opaque string.
     // A wrapped failure raises what it would have raised on its own: same
     // class, and `e.filename` still set on a missing file.
     match e {
-        powerio_pkg::Error::Core(inner) => core_pyerr(inner),
-        powerio_pkg::Error::Multiconductor(inner) => dist_to_pyerr(inner),
+        powerio::package::Error::Core(inner) => core_pyerr(inner),
+        powerio::package::Error::Multiconductor(inner) => dist_to_pyerr(inner),
         other => categorized_pyerr(other.category(), other.code(), other.to_string()),
     }
 }
@@ -351,7 +351,7 @@ fn serialize_pyerr(e: serde_json::Error) -> PyErr {
 /// `except powerio.PowerIOParseError` catches it and a consumer branching on
 /// the category fixes its input rather than retrying a write.
 fn payload_pyerr(e: serde_json::Error) -> PyErr {
-    package_pyerr(powerio_pkg::Error::Payload(e.to_string()))
+    package_pyerr(powerio::package::Error::Payload(e.to_string()))
 }
 
 fn package_to_json(pkg: &NetworkPackage) -> PyResult<String> {
@@ -1815,7 +1815,7 @@ impl PyMulticonductorNetwork {
     /// This network's coordinates as the canonical GeoJSON layer. Raises when
     /// the network carries none.
     fn geo_layer_json(&self) -> PyResult<String> {
-        powerio_pkg::dist_geo_layer(self.inner())
+        powerio::package::dist_geo_layer(self.inner())
             .extracted_geojson()
             .map_err(|error| PyValueError::new_err(error.to_string()))
     }
@@ -1833,7 +1833,7 @@ impl PyMulticonductorNetwork {
         let parsed = powerio_matrix::geo::GeoLayer::parse_bytes(text.as_bytes(), name_hint)
             .map_err(|error| PowerIOParseError::new_err(error.to_string()))?;
         let mut net = self.inner().clone();
-        let report = powerio_pkg::apply_dist_geo_layer(&mut net, &parsed.layer);
+        let report = powerio::package::apply_dist_geo_layer(&mut net, &parsed.layer);
         net.source_format = None;
         let mut rendered = self.rendered_warnings.clone();
         rendered.extend(
@@ -2052,8 +2052,8 @@ impl PyPackage {
     /// The explicit top level model kind.
     fn model_kind(&self) -> &'static str {
         match self.pkg.model_kind() {
-            powerio_pkg::ModelKind::Balanced => "balanced",
-            powerio_pkg::ModelKind::Multiconductor => "multiconductor",
+            powerio::package::ModelKind::Balanced => "balanced",
+            powerio::package::ModelKind::Multiconductor => "multiconductor",
             _ => "unknown",
         }
     }
@@ -2136,9 +2136,9 @@ impl PyPackage {
                 self.model_kind()
             ))
         })?;
-        let report = powerio_pkg::check_multiconductor_to_balanced_lowering(
+        let report = powerio::package::check_multiconductor_to_balanced_lowering(
             net,
-            powerio_pkg::MulticonductorToBalancedOptions {
+            powerio::package::MulticonductorToBalancedOptions {
                 base_mva,
                 ..Default::default()
             },
@@ -2150,7 +2150,7 @@ impl PyPackage {
     #[pyo3(signature = (base_mva=100.0))]
     fn lower_multiconductor_to_balanced(&self, base_mva: f64) -> PyResult<Self> {
         self.pkg
-            .lower_multiconductor_to_balanced(powerio_pkg::MulticonductorToBalancedOptions {
+            .lower_multiconductor_to_balanced(powerio::package::MulticonductorToBalancedOptions {
                 base_mva,
                 ..Default::default()
             })

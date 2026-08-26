@@ -4,7 +4,7 @@
 //! in `powerio-diag`; this module re-exports them so a package finding and a
 //! distribution finding are the same type. A finding carries a stable
 //! [`DiagnosticCode`], a [`DiagnosticSeverity`], a human message, and where
-//! known an element path, a [`crate::provenance::SourceRef`], details, and a
+//! known an element path, a [`crate::package::provenance::SourceRef`], details, and a
 //! suggested action. Human-readable warnings are rendered from these, never the
 //! other way around.
 //!
@@ -16,18 +16,17 @@
 //! [`codes`] is this crate's registry: one entry per code it emits, so an
 //! emission site names an entry rather than a loose string.
 
-pub use crate::legacy_diag::{
+pub use crate::package::legacy_diag::{
     DiagnosticCode, DiagnosticSeverity, DiagnosticStage, StructuredDiagnostic, render_line,
     render_lines,
 };
 pub use powerio_core::{CodeStatus, DiagnosticInfo, check_registry, code_is_well_formed};
 
-/// TEMPORARY. This registry is on the 1.0 vocabulary so the workspace gate
-/// stays whole while the crate is being dissolved. Every code here moves to its
-/// surviving 1.0 owner before this branch is ready: `READ.TRANSMISSION.*` to
-/// the balanced crate, `TRANSFORM.MULTI_TO_BALANCED.*` with the transformation,
-/// and the `*.PACKAGE.*` codes to the facade that takes over the stored
-/// document. The crate is not a 1.0 registry owner.
+/// The stored document's registry: the `*.PACKAGE.*` codes and the
+/// multiconductor to balanced lowering family, which lives with the facade
+/// because the transformation consumes both network models. The payload
+/// validation codes (`VALIDATE.BALANCED.*`, `VALIDATE.MULTI.*`) are declared
+/// by the network crates that own those models.
 pub mod codes {
     powerio_core::diagnostic_codes! {
         // READ: what a reader's own findings arrive as once the package lifts
@@ -38,29 +37,11 @@ pub mod codes {
         /// Retired in 0.9.0 for a code that names its three segments.
         READ_OPERATING_POINTS_DROPPED = "READ.OPERATING_POINTS_DROPPED", Warning,
             "a time series could not be lifted into operating points", retired = "0.9.0";
-        /// Retired in 0.9.0 for the per format spelling above.
-        READ_GOC3_OPERATING_POINTS_DROPPED = "READ.GOC3.OPERATING_POINTS_DROPPED", Warning,
-            "a GO Challenge 3 time series could not be lifted", retired = "0.9.0";
-        /// Retired in 0.9.0: every transmission read finding now carries its
-        /// own code, so the package no longer wraps them under one catch-all.
-        READ_TRANSMISSION_PARSE_WARNING = "READ.TRANSMISSION.PARSE_WARNING", Warning,
-            "a transmission parse finding with no identity of its own", retired = "0.9.0";
 
         // VALIDATE: the document's own internal consistency, nothing else.
-        VALIDATE_BALANCED_STRUCTURE = "VALIDATE.BALANCED.STRUCTURE", Error,
-            "a balanced payload's referential integrity does not hold";
-        VALIDATE_BALANCED_VALUE_DOMAIN = "VALIDATE.BALANCED.VALUE_DOMAIN", Warning,
-            "a balanced payload value is outside the domain the model states";
-        VALIDATE_BALANCED_PAYLOAD_IDENTITY = "VALIDATE.BALANCED.PAYLOAD_IDENTITY", Error,
-            "a balanced payload's uid identity does not hold";
-        VALIDATE_MULTI_STRUCTURE = "VALIDATE.MULTI.STRUCTURE", Error,
-            "a multiconductor payload's referential integrity does not hold";
-        VALIDATE_MULTI_TERMINAL_MAP = "VALIDATE.MULTI.TERMINAL_MAP", Error,
-            "a multiconductor terminal map does not match the element it belongs to";
-        VALIDATE_MULTI_UNTYPED_OBJECT = "VALIDATE.MULTI.UNTYPED_OBJECT", Warning,
-            "a multiconductor object is carried untyped";
-        VALIDATE_MULTI_NO_VOLTAGE_SOURCE = "VALIDATE.MULTI.NO_VOLTAGE_SOURCE", Warning,
-            "a multiconductor payload declares no voltage source";
+        // The payload level VALIDATE.BALANCED.* and VALIDATE.MULTI.* codes are
+        // declared by the network crates that own those models; this module
+        // still emits them from the payload validation profile.
         VALIDATE_PACKAGE_STUDY_MODEL_KIND = "VALIDATE.PACKAGE.STUDY_MODEL_KIND", Error,
             "the study block's model kind disagrees with the payload";
         VALIDATE_PACKAGE_STUDY_IDENTITY = "VALIDATE.PACKAGE.STUDY_IDENTITY", Error,

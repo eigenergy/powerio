@@ -1156,7 +1156,7 @@ fn every_fixture_echoes_through_a_package() {
             }
         };
         for payload in payloads {
-            let pkg = powerio_pkg::NetworkPackage::from_multiconductor(payload.network);
+            let pkg = powerio::package::NetworkPackage::from_multiconductor(payload.network);
             if let Err(err) = package_json_echoes(&pkg) {
                 failures.push(format!("{} as {}: {err}", payload.label, format.name));
             }
@@ -1184,7 +1184,7 @@ fn model_json_echoes(net: &BalancedNetwork) -> Result<(), String> {
 /// network: wrapping assigns row uids, which is the document doing its job,
 /// while anything the write and readback change is a defect.
 fn package_echoes(net: BalancedNetwork) -> Result<(), String> {
-    let pkg = powerio_pkg::NetworkPackage::from_balanced(net);
+    let pkg = powerio::package::NetworkPackage::from_balanced(net);
     let before = transmission_value(
         pkg.as_balanced()
             .ok_or("the package dropped its balanced payload")?,
@@ -1206,11 +1206,11 @@ fn package_echoes(net: BalancedNetwork) -> Result<(), String> {
 /// The document itself is round-trip stable: write, read, write again, and the
 /// two texts agree byte for byte.
 fn package_json_echoes(
-    pkg: &powerio_pkg::NetworkPackage,
-) -> Result<powerio_pkg::NetworkPackage, String> {
+    pkg: &powerio::package::NetworkPackage,
+) -> Result<powerio::package::NetworkPackage, String> {
     let first = pkg.to_json().map_err(|err| format!("write: {err}"))?;
-    let back =
-        powerio_pkg::NetworkPackage::from_json(&first).map_err(|err| format!("read: {err}"))?;
+    let back = powerio::package::NetworkPackage::from_json(&first)
+        .map_err(|err| format!("read: {err}"))?;
     let second = back.to_json().map_err(|err| format!("rewrite: {err}"))?;
     if first != second {
         return Err("the .pio.json document is not round-trip stable".to_owned());

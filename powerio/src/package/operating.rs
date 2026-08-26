@@ -5,9 +5,9 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 
-use powerio::format::goc3::{Goc3DeviceKind, Goc3Document, Goc3Record};
+use crate::format::goc3::{Goc3DeviceKind, Goc3Document, Goc3Record};
 
-use crate::model::ModelPayload;
+use crate::package::model::ModelPayload;
 
 /// A format neutral series of operating points over a package's static payload.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -49,11 +49,11 @@ impl OperatingPointSeries {
     }
 
     /// Return the only point with `index`, rejecting duplicate period indices.
-    pub fn unique_point(&self, index: usize) -> crate::Result<Option<&OperatingPoint>> {
+    pub fn unique_point(&self, index: usize) -> crate::package::Result<Option<&OperatingPoint>> {
         let mut matches = self.points.iter().filter(|point| point.index == index);
         let first = matches.next();
         if matches.next().is_some() {
-            return Err(crate::Error::Payload(format!(
+            return Err(crate::package::Error::Payload(format!(
                 "package has multiple operating points with index {index}"
             )));
         }
@@ -269,7 +269,7 @@ impl ElementUpdate {
 /// if any. GOC3 is the one document kind with a time series today.
 pub(crate) fn goc3_operating_points(
     document: &Goc3Document,
-) -> crate::Result<Option<OperatingPointSeries>> {
+) -> crate::package::Result<Option<OperatingPointSeries>> {
     let network = document.network()?;
     let time_series = document.time_series_input()?;
     let Some(general) = time_series.get("general").and_then(Value::as_object) else {
@@ -291,7 +291,7 @@ pub(crate) fn goc3_operating_points(
     let intervals = general.get("interval_duration").and_then(Value::as_array);
     let interval_len = intervals.map_or(0, Vec::len);
     if interval_len != periods {
-        return Err(crate::Error::Payload(format!(
+        return Err(crate::package::Error::Payload(format!(
             "time_series_input.general.time_periods ({periods}) does not match the \
              interval_duration length ({interval_len})"
         )));
@@ -338,7 +338,7 @@ fn add_goc3_device_updates(
     device_ts: &HashMap<String, &Value>,
     base_mva: f64,
     points: &mut [OperatingPoint],
-) -> crate::Result<()> {
+) -> crate::package::Result<()> {
     for device in document.dispatchable_devices()? {
         let Some(uid) = device.uid else {
             continue;
@@ -405,7 +405,7 @@ fn add_goc3_status_updates(
     target_table: &'static str,
     row_offset: usize,
     points: &mut [OperatingPoint],
-) -> crate::Result<()> {
+) -> crate::package::Result<()> {
     let source_items = document.network_records(source_section)?;
     if document.time_series_output().is_none() {
         return Ok(());
@@ -495,23 +495,24 @@ fn per_period_metadata(obj: &Map<String, Value>, index: usize) -> BTreeMap<Strin
 pub(crate) fn apply_operating_point_to_model(
     model: &ModelPayload,
     point: &OperatingPoint,
-) -> crate::Result<(ModelPayload, BTreeSet<String>)> {
+) -> crate::package::Result<(ModelPayload, BTreeSet<String>)> {
     let mut value = serde_json::to_value(model)?;
     let root = value.as_object_mut().ok_or_else(|| {
-        crate::Error::Payload("model payload did not serialize to object".to_owned())
+        crate::package::Error::Payload("model payload did not serialize to object".to_owned())
     })?;
     let payload_key = payload_key(model);
     let payload = root
         .get_mut(payload_key)
         .and_then(Value::as_object_mut)
         .ok_or_else(|| {
-            crate::Error::Payload(format!("model payload missing `{payload_key}` object"))
+            crate::package::Error::Payload(format!("model payload missing `{payload_key}` object"))
         })?;
 
     let mut indexes = HashMap::new();
     let mut resolved_rows = Vec::with_capacity(point.updates.len());
     for update in &point.updates {
-        let row = resolve_update(payload, &mut indexes, update).map_err(crate::Error::Payload)?;
+        let row = resolve_update(payload, &mut indexes, update)
+            .map_err(crate::package::Error::Payload)?;
         apply_update_fields(payload, &update.element.table, row, &update.fields)?;
         resolved_rows.push(row);
     }
@@ -533,8 +534,8 @@ pub(crate) fn apply_operating_point_to_model(
     // As in `study.rs`: the operating point's `set_fields` values are the
     // document's, inserted untyped, so a wrong type here is the caller's data
     // rather than our serialization.
-    let updated =
-        serde_json::from_value(value).map_err(|error| crate::Error::Payload(error.to_string()))?;
+    let updated = serde_json::from_value(value)
+        .map_err(|error| crate::package::Error::Payload(error.to_string()))?;
     validate_update_fields_survived(&updated, &point.updates, &resolved_rows)?;
     Ok((updated, updated_paths))
 }
@@ -694,14 +695,14 @@ pub(crate) fn apply_update_fields(
     table_name: &str,
     row: usize,
     fields: &BTreeMap<String, Value>,
-) -> crate::Result<()> {
+) -> crate::package::Result<()> {
     let row_object = payload
         .get_mut(table_name)
         .and_then(Value::as_array_mut)
         .and_then(|table| table.get_mut(row))
         .and_then(Value::as_object_mut)
         .ok_or_else(|| {
-            crate::Error::Payload(format!(
+            crate::package::Error::Payload(format!(
                 "operating point table `{table_name}` has no object row {row}"
             ))
         })?;
@@ -715,17 +716,17 @@ pub(crate) fn validate_update_fields_survived(
     model: &ModelPayload,
     updates: &[ElementUpdate],
     resolved_rows: &[usize],
-) -> crate::Result<()> {
+) -> crate::package::Result<()> {
     let value = serde_json::to_value(model)?;
     let root = value.as_object().ok_or_else(|| {
-        crate::Error::Payload("model payload did not serialize to object".to_owned())
+        crate::package::Error::Payload("model payload did not serialize to object".to_owned())
     })?;
     let payload_key = payload_key(model);
     let payload = root
         .get(payload_key)
         .and_then(Value::as_object)
         .ok_or_else(|| {
-            crate::Error::Payload(format!("model payload missing `{payload_key}` object"))
+            crate::package::Error::Payload(format!("model payload missing `{payload_key}` object"))
         })?;
 
     for (update, &resolved_row) in updates.iter().zip(resolved_rows) {
@@ -736,7 +737,7 @@ pub(crate) fn validate_update_fields_survived(
             .and_then(|table| table.get(resolved_row))
             .and_then(Value::as_object)
             .ok_or_else(|| {
-                crate::Error::Payload(format!(
+                crate::package::Error::Payload(format!(
                     "operating point table `{table_name}` has no object row {resolved_row} \
                      after typed materialization"
                 ))
@@ -744,7 +745,7 @@ pub(crate) fn validate_update_fields_survived(
 
         for field in update.fields.keys() {
             if !row.contains_key(field) {
-                return Err(crate::Error::Payload(format!(
+                return Err(crate::package::Error::Payload(format!(
                     "operating point field `{field}` is not present on table `{table_name}` \
                      row {resolved_row}"
                 )));

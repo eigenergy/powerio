@@ -2,7 +2,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::diagnostics::{DiagnosticSeverity, StructuredDiagnostic};
+use crate::package::diagnostics::{DiagnosticSeverity, StructuredDiagnostic};
 
 /// Overall validation status, ordered worst-last.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]

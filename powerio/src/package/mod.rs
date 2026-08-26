@@ -2,7 +2,7 @@
 //!
 //! PowerIO keeps two static network model families as separate types:
 //!
-//! - [`powerio::BalancedNetwork`], the scalar positive sequence transmission
+//! - [`crate::BalancedNetwork`], the scalar positive sequence transmission
 //!   model;
 //! - [`powerio_dist::MulticonductorNetwork`], the wire coordinate distribution
 //!   model.
@@ -23,7 +23,7 @@
 //! the explicit kind agrees with the payload variant.
 //!
 //! ```
-//! use powerio_pkg::{NetworkPackage, ModelKind};
+//! use powerio::package::{ModelKind, NetworkPackage};
 //!
 //! let net = powerio::BalancedNetwork::in_memory("demo", 100.0, vec![], vec![]);
 //! let pkg = NetworkPackage::from_balanced(net);
@@ -36,12 +36,12 @@
 //!
 
 pub mod diagnostics;
+pub mod document;
 pub mod geo;
 pub mod legacy_diag;
 pub mod lowering;
 pub mod model;
 pub mod operating;
-pub mod package;
 pub mod provenance;
 pub mod study;
 pub mod summary;
@@ -62,12 +62,12 @@ pub use lowering::{
 pub mod error;
 pub use error::{Error, Result};
 
-pub use model::{ModelKind, ModelPayload};
-pub use operating::{ElementRef, ElementUpdate, OperatingPoint, OperatingPointSeries, TimeAxis};
-pub use package::{
+pub use document::{
     DerivedMetadata, NetworkPackage, NormalizedSolverTableMetadata, NormalizedSolverTableRowCounts,
     NormalizedSolverTableSourceRows, ensure_payload_uids,
 };
+pub use model::{ModelKind, ModelPayload};
+pub use operating::{ElementRef, ElementUpdate, OperatingPoint, OperatingPointSeries, TimeAxis};
 pub use provenance::{
     Confidence, MappingKind, Origin, Producer, SourceDescriptor, SourceMapEntry, SourceRef,
 };

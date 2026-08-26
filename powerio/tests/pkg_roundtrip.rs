@@ -5,7 +5,7 @@ use helpers::*;
 
 use std::collections::BTreeMap;
 
-use powerio_pkg::{
+use powerio::package::{
     Confidence, DiagnosticCode, DiagnosticSeverity, DiagnosticStage, ElementRef, ElementUpdate,
     MappingKind, ModelKind, MulticonductorToBalancedOptions, MulticonductorToBalancedReadiness,
     NetworkPackage, OperatingPoint, OperatingPointSeries, Origin, SequenceTransformConvention,
@@ -490,7 +490,7 @@ fn goc3_operating_points_follow_parser_row_assignment() {
     assert_close(balanced.generators[1].pmax, 80.0);
     assert_eq!(materialized.package_id, None);
     match &materialized.origin {
-        powerio_pkg::Origin::Derived {
+        powerio::package::Origin::Derived {
             parent_package_id, ..
         } => assert_eq!(parent_package_id.as_deref(), Some("parent")),
         other => panic!("expected derived origin, got {other:?}"),
@@ -844,7 +844,7 @@ fn diagnostics_roundtrip() {
         .with_source_ref(SourceRef::new("src0").with_field("angmin").with_line(88))
         .with_suggested_action("Use MATPOWER if branch angle limits are required."),
     );
-    pkg.validation = powerio_pkg::ValidationSummary::from_diagnostics(&pkg.diagnostics);
+    pkg.validation = powerio::package::ValidationSummary::from_diagnostics(&pkg.diagnostics);
 
     assert_json_roundtrips(&pkg);
 
@@ -866,7 +866,7 @@ fn diagnostics_roundtrip() {
     );
     assert_eq!(
         back.validation.status,
-        powerio_pkg::ValidationStatus::Warning
+        powerio::package::ValidationStatus::Warning
     );
     assert_eq!(back.validation.counts.warning, 1);
 }
@@ -1338,7 +1338,7 @@ fn lowering_preflight_accepts_three_phase_without_neutral() {
     let net = preflight_network(&["1", "2", "3"], &[]);
     let report = check_multiconductor_to_balanced_lowering(
         &net,
-        powerio_pkg::MulticonductorToBalancedOptions::default(),
+        powerio::package::MulticonductorToBalancedOptions::default(),
     );
 
     assert_eq!(
@@ -1355,7 +1355,7 @@ fn lowering_preflight_records_kron_reduction_for_neutral() {
     let net = preflight_network(&["1", "2", "3", "4"], &["4"]);
     let report = check_multiconductor_to_balanced_lowering(
         &net,
-        powerio_pkg::MulticonductorToBalancedOptions::default(),
+        powerio::package::MulticonductorToBalancedOptions::default(),
     );
 
     assert_eq!(report.status, ValidationStatus::Info);
@@ -1379,7 +1379,7 @@ fn lowering_preflight_accepts_source_grounded_four_wire_fixture() {
     let net = helpers::dist_parse_str(FOUR_WIRE_DSS, "dss");
     let report = check_multiconductor_to_balanced_lowering(
         &net,
-        powerio_pkg::MulticonductorToBalancedOptions::default(),
+        powerio::package::MulticonductorToBalancedOptions::default(),
     );
 
     assert_eq!(report.status, ValidationStatus::Info);
@@ -1403,7 +1403,7 @@ fn lowering_preflight_rejects_one_phase_input() {
     let net = preflight_network(&["1"], &[]);
     let report = check_multiconductor_to_balanced_lowering(
         &net,
-        powerio_pkg::MulticonductorToBalancedOptions::default(),
+        powerio::package::MulticonductorToBalancedOptions::default(),
     );
 
     assert_eq!(report.status, ValidationStatus::Error);
@@ -1419,7 +1419,7 @@ fn lowering_preflight_rejects_two_wire_input() {
     let net = preflight_network(&["1", "2"], &[]);
     let report = check_multiconductor_to_balanced_lowering(
         &net,
-        powerio_pkg::MulticonductorToBalancedOptions::default(),
+        powerio::package::MulticonductorToBalancedOptions::default(),
     );
 
     assert_eq!(report.status, ValidationStatus::Error);
@@ -1439,7 +1439,7 @@ fn lowering_preflight_rejects_untyped_objects() {
         .push(UntypedObject::new("regcontrol", "r1", Vec::new()));
     let report = check_multiconductor_to_balanced_lowering(
         &net,
-        powerio_pkg::MulticonductorToBalancedOptions::default(),
+        powerio::package::MulticonductorToBalancedOptions::default(),
     );
 
     assert_eq!(report.status, ValidationStatus::Error);
@@ -1455,7 +1455,7 @@ fn lowering_preflight_rejects_missing_phase_reference() {
     net.sources.clear();
     let report = check_multiconductor_to_balanced_lowering(
         &net,
-        powerio_pkg::MulticonductorToBalancedOptions::default(),
+        powerio::package::MulticonductorToBalancedOptions::default(),
     );
 
     assert_eq!(report.status, ValidationStatus::Error);
@@ -1474,7 +1474,7 @@ fn lowering_preflight_rejects_transformers() {
         .push(DistTransformer::new("t1", Vec::new(), Vec::new(), 3));
     let report = check_multiconductor_to_balanced_lowering(
         &net,
-        powerio_pkg::MulticonductorToBalancedOptions::default(),
+        powerio::package::MulticonductorToBalancedOptions::default(),
     );
 
     assert_eq!(report.status, ValidationStatus::Error);
@@ -1681,7 +1681,7 @@ fn lowering_preserves_single_phase_shunt_total() {
 fn package_lowering_returns_derived_balanced_package() {
     let mut parent =
         NetworkPackage::from_multiconductor(preflight_network(&["1", "2", "3", "4"], &["4"]));
-    parent.push_lowering(powerio_pkg::LoweringRecord::new(
+    parent.push_lowering(powerio::package::LoweringRecord::new(
         "previous-pass",
         ModelKind::Multiconductor,
         ModelKind::Multiconductor,
@@ -1747,7 +1747,7 @@ fn package_lowering_rejects_balanced_package() {
 
 #[test]
 fn lowering_record_roundtrips() {
-    use powerio_pkg::LoweringRecord;
+    use powerio::package::LoweringRecord;
     let mut pkg = balanced_package();
     let mut rec = LoweringRecord::new(
         "multiconductor-to-balanced",
@@ -2163,7 +2163,7 @@ fn package_balanced_reader_findings_keep_their_own_code() {
     // The reader codes its own findings, so the package records them as they
     // are rather than wrapping them under one code of its own.
     let parsed = parse_str(MATPOWER_SRC, "matpower").expect("parse matpower");
-    let finding: powerio_pkg::StructuredDiagnostic = powerio::Diagnostic::of(
+    let finding: powerio::package::StructuredDiagnostic = powerio::Diagnostic::of(
         &powerio::diagnostics::codes::READ_PSSE_SECTION_UNSUPPORTED,
         "ignored source table",
     )
@@ -2623,7 +2623,7 @@ fn multiconductor_nonfinite_ratings_and_scalars_roundtrip() {
 fn refused_include_lifts_as_an_error_diagnostic() {
     // #275: a typed parse finding keeps its severity in the document, and
     // its warning twin does not appear a second time.
-    use powerio_pkg::{DiagnosticSeverity, ValidationStatus};
+    use powerio::package::{DiagnosticSeverity, ValidationStatus};
 
     let net = helpers::dist_parse_str("New Circuit.c1", "dss");
     let message = "redirect ../shared.dss: refused; include escapes the case directory";

@@ -13,7 +13,7 @@ use std::f64::consts::PI;
 use num_complex::Complex64;
 use serde::{Deserialize, Serialize};
 
-use powerio::{
+use crate::{
     BalancedNetwork, Branch, BranchCharging, Bus, BusId, BusType, Extras as BalancedExtras,
     Generator, Load, Shunt, SourceFormat,
 };
@@ -21,9 +21,9 @@ use powerio_dist::{
     DistBus, DistLine, DistLineCode, DistLoadVoltageModel, Mat, MulticonductorNetwork,
 };
 
-use crate::diagnostics::{DiagnosticSeverity, StructuredDiagnostic, codes};
-use crate::model::ModelKind;
-use crate::validation::ValidationStatus;
+use crate::package::diagnostics::{DiagnosticSeverity, StructuredDiagnostic, codes};
+use crate::package::model::ModelKind;
+use crate::package::validation::ValidationStatus;
 
 /// One lowering/normalization/emission pass and what it changed.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

@@ -50,7 +50,6 @@ case "$target" in
       -p powerio-cli \
       -p powerio-capi \
       -p powerio-dist \
-      -p powerio-pkg \
       -- -D warnings
     ;;
   matrix-gridfm)

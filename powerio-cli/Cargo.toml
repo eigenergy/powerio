@@ -38,7 +38,6 @@ powerio-prob = { workspace = true, features = ["matrix"] }
 # --to dss/pmd-json/bmopf-json`); only the C ABI gates it behind a feature.
 powerio-dist = { workspace = true, features = ["schema"] }
 schemars.workspace = true
-powerio-pkg.workspace = true
 sprs.workspace = true
 anyhow = "1"
 clap = { version = "4", features = ["derive"] }

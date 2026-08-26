@@ -8,7 +8,7 @@
 
 use thiserror::Error as ThisError;
 
-use crate::diagnostics::codes;
+use crate::package::diagnostics::codes;
 
 /// A `.pio.json` failure.
 #[derive(Debug, ThisError)]
@@ -37,7 +37,7 @@ pub enum Error {
 
     /// A failure from the balanced model, its readers, or its writers.
     #[error(transparent)]
-    Core(#[from] powerio::Error),
+    Core(#[from] crate::Error),
 
     /// A failure from the multiconductor model.
     #[error(transparent)]
@@ -82,8 +82,8 @@ impl Error {
 
     /// Classify this error, using the hub's taxonomy.
     #[must_use]
-    pub fn category(&self) -> powerio::ErrorCategory {
-        use powerio::ErrorCategory as C;
+    pub fn category(&self) -> crate::ErrorCategory {
+        use crate::ErrorCategory as C;
         match self {
             Error::Core(inner) => inner.category(),
             // `powerio_dist::Error` states no category of its own — that crate
@@ -104,7 +104,7 @@ pub type Result<T> = std::result::Result<T, Error>;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use powerio::ErrorCategory::{Data, Parse};
+    use crate::ErrorCategory::{Data, Parse};
 
     #[test]
     fn a_version_rejection_is_not_a_syntax_failure() {
@@ -122,7 +122,7 @@ mod tests {
     #[test]
     fn every_error_code_publishes_the_category_the_variant_reports() {
         let every: Vec<Error> = vec![
-            powerio::Error::MissingField("bus").into(),
+            crate::Error::MissingField("bus").into(),
             powerio_dist::Error::UnknownFormat("xyz".into()).into(),
             Error::UnsupportedVersion("stated 0.2.1".into()),
             Error::ModelKindMismatch,
@@ -136,10 +136,10 @@ mod tests {
 
     #[test]
     fn a_wrapped_hub_error_keeps_its_own_message() {
-        let wrapped: Error = powerio::Error::MissingField("bus").into();
+        let wrapped: Error = crate::Error::MissingField("bus").into();
         assert_eq!(
             wrapped.to_string(),
-            powerio::Error::MissingField("bus").to_string()
+            crate::Error::MissingField("bus").to_string()
         );
     }
 }

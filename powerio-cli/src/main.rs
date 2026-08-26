@@ -10,12 +10,12 @@ use std::path::{Path, PathBuf};
 
 use anyhow::Context;
 use clap::{Parser, Subcommand, ValueEnum};
+use powerio::package::{NetworkPackage, Origin, SourceDescriptor};
 use powerio_matrix::io::gridfm::{GridfmOptions, numbered_snapshots, write_gridfm_batch};
 use powerio_matrix::matrix::{BuildOptions, DcConvention, Scheme, sddm_check};
 use powerio_matrix::pipeline::{MatrixKind, Pipeline, RhsKind};
 use powerio_matrix::synth::{SynthSpec, Topology};
 use powerio_matrix::{MissingGenCostPolicy, SensitivityOptions, SensitivitySolver, WriteOptions};
-use powerio_pkg::{NetworkPackage, Origin, SourceDescriptor};
 use powerio_prob::matrix::{DcOpfBundleMetadata, DcOpfBundleOptions, write_dcopf_bundle};
 use powerio_prob::{DcOpfOptions, Units, build_dc_opf_instance};
 use serde_json::json;
@@ -1281,10 +1281,10 @@ fn package_text(
 
 /// [`parse_error_lines`] for the package's own diagnostic type: the dist and
 /// package crates carry twin diagnostic shapes without depending on each other.
-fn package_error_lines(diagnostics: &[powerio_pkg::StructuredDiagnostic]) -> Vec<String> {
+fn package_error_lines(diagnostics: &[powerio::package::StructuredDiagnostic]) -> Vec<String> {
     diagnostics
         .iter()
-        .filter(|d| d.severity >= powerio_pkg::DiagnosticSeverity::Error)
+        .filter(|d| d.severity >= powerio::package::DiagnosticSeverity::Error)
         .map(|d| format!("{}: {}", d.code, d.message))
         .collect()
 }
@@ -1724,7 +1724,7 @@ fn run_geo_extract(
             for w in &net.warnings {
                 eprintln!("parse: {w}");
             }
-            powerio_pkg::dist_geo_layer(&net.network)
+            powerio::package::dist_geo_layer(&net.network)
         }
         FamilyCase::Transmission(parsed) => {
             for w in &parsed.rendered_diagnostics() {
@@ -1766,7 +1766,7 @@ fn run_geo_apply(
                 eprintln!("parse: {w}");
             }
             let mut network = net.network;
-            report_geo_apply(&powerio_pkg::apply_dist_geo_layer(
+            report_geo_apply(&powerio::package::apply_dist_geo_layer(
                 &mut network,
                 &parsed.layer,
             ));
@@ -2030,7 +2030,7 @@ mod tests {
         run_convert, run_package, transmission_summary_json,
     };
     use clap::Parser;
-    use powerio_pkg::{MappingKind, NetworkPackage, Origin, ValidationStatus};
+    use powerio::package::{MappingKind, NetworkPackage, Origin, ValidationStatus};
     use std::path::Path;
     use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -2181,7 +2181,7 @@ mod tests {
         let input = data("case9.m");
         let (text, _) = package_text(&input, None, 0).unwrap();
         let pkg = NetworkPackage::from_json(&text).unwrap();
-        assert_eq!(pkg.model_kind, powerio_pkg::ModelKind::Balanced);
+        assert_eq!(pkg.model_kind, powerio::package::ModelKind::Balanced);
         assert!(pkg.kind_is_consistent());
         assert_eq!(pkg.as_balanced().unwrap().buses.len(), 9);
         match &pkg.origin {
@@ -2229,7 +2229,7 @@ mod tests {
         run_package(&data("case9.m"), Some(&output), None, 0).unwrap();
         let text = std::fs::read_to_string(&output).unwrap();
         let pkg = NetworkPackage::from_json(&text).unwrap();
-        assert_eq!(pkg.model_kind, powerio_pkg::ModelKind::Balanced);
+        assert_eq!(pkg.model_kind, powerio::package::ModelKind::Balanced);
         assert_eq!(pkg.sources[0].format.as_deref(), Some("matpower"));
 
         let _ = std::fs::remove_file(output);
@@ -2265,7 +2265,7 @@ mod tests {
     fn package_distribution_fixture_keeps_defaulted_source_maps() {
         let input = data("dist/micro/xfmr_single_phase.dss");
         let pkg = build_package(&input, None, 0).unwrap();
-        assert_eq!(pkg.model_kind, powerio_pkg::ModelKind::Multiconductor);
+        assert_eq!(pkg.model_kind, powerio::package::ModelKind::Multiconductor);
         match &pkg.origin {
             Origin::File { path, format, .. } => {
                 assert_eq!(path, &input.display().to_string());
@@ -2316,8 +2316,8 @@ mpc.branch = [
         let text = std::fs::read_to_string(&output).unwrap();
         assert!(text.contains("\"angmin\": \"NaN\""), "{text}");
         assert!(text.contains("\"angmax\": \"Infinity\""), "{text}");
-        let pkg = powerio_pkg::NetworkPackage::from_json(&text).unwrap();
-        let powerio_pkg::ModelPayload::Balanced { balanced_network } = &pkg.model else {
+        let pkg = powerio::package::NetworkPackage::from_json(&text).unwrap();
+        let powerio::package::ModelPayload::Balanced { balanced_network } = &pkg.model else {
             panic!("balanced payload expected");
         };
         assert!(balanced_network.branches[0].angmin.is_nan());

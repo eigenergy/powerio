@@ -38,7 +38,7 @@ use powerio::{
 use crate::diagnostics::coded_str;
 use crate::diagnostics::{coded, codes, err_line};
 #[cfg(feature = "pkg")]
-use powerio_pkg::diagnostics::codes as pkg_codes;
+use powerio::package::diagnostics::codes as pkg_codes;
 
 #[cfg(feature = "arrow")]
 mod arrow_export;
@@ -608,10 +608,10 @@ fn null_handle(what: &str) -> String {
 /// coded record and the C surface carries one message, so take the first
 /// record's own line rather than inventing a code for it.
 #[cfg(feature = "pkg")]
-fn lowering_err_line(e: &powerio_pkg::MulticonductorToBalancedError) -> String {
+fn lowering_err_line(e: &powerio::package::MulticonductorToBalancedError) -> String {
     e.diagnostics.first().map_or_else(
         || coded(&codes::BIND_CAPI_UNCODED_FAILURE, e),
-        powerio_pkg::diagnostics::render_line,
+        powerio::package::diagnostics::render_line,
     )
 }
 
@@ -2025,11 +2025,11 @@ pub unsafe extern "C" fn pio_arrow_catalog_json(errbuf: *mut c_char, errlen: usi
 // ---------------------------------------------------------------------------
 
 /// Opaque `.pio.json` compiler package handle. A package owns one
-/// [`powerio_pkg::NetworkPackage`], which wraps either a balanced
+/// [`powerio::package::NetworkPackage`], which wraps either a balanced
 /// [`PioNetwork`] payload or a multiconductor [`PioDistNetwork`] payload.
 #[cfg(feature = "pkg")]
 pub struct PioPackage {
-    package: powerio_pkg::NetworkPackage,
+    package: powerio::package::NetworkPackage,
 }
 
 #[cfg(feature = "pkg")]
@@ -2039,8 +2039,8 @@ const _: fn() = || {
 };
 
 #[cfg(feature = "pkg")]
-fn lowering_options(base_mva: f64) -> powerio_pkg::MulticonductorToBalancedOptions {
-    powerio_pkg::MulticonductorToBalancedOptions {
+fn lowering_options(base_mva: f64) -> powerio::package::MulticonductorToBalancedOptions {
+    powerio::package::MulticonductorToBalancedOptions {
         base_mva,
         ..Default::default()
     }
@@ -2051,7 +2051,7 @@ unsafe fn finish_package(
     errbuf: *mut c_char,
     errlen: usize,
     panic_msg: &str,
-    f: impl FnOnce() -> Result<powerio_pkg::NetworkPackage, String>,
+    f: impl FnOnce() -> Result<powerio::package::NetworkPackage, String>,
 ) -> *mut PioPackage {
     unsafe {
         match catch_unwind(AssertUnwindSafe(f)) {
@@ -2085,7 +2085,7 @@ pub unsafe extern "C" fn pio_package_parse_file(
             let path = required_cstr(path, "path")?;
             let text =
                 std::fs::read_to_string(path).map_err(|e| coded(&codes::READ_CAPI_IO_FAILED, e))?;
-            powerio_pkg::NetworkPackage::from_json(&text).map_err(err_line)
+            powerio::package::NetworkPackage::from_json(&text).map_err(err_line)
         })
     }
 }
@@ -2103,7 +2103,7 @@ pub unsafe extern "C" fn pio_package_parse_str(
     unsafe {
         finish_package(errbuf, errlen, "panic while parsing package", || {
             let text = required_cstr(text, "text")?;
-            powerio_pkg::NetworkPackage::from_json(text).map_err(err_line)
+            powerio::package::NetworkPackage::from_json(text).map_err(err_line)
         })
     }
 }
@@ -2181,10 +2181,11 @@ pub unsafe extern "C" fn pio_package_from_balanced_network(
             "panic while packaging balanced network",
             || {
                 let net = network_ref(net).ok_or_else(|| null_handle("network handle"))?;
-                let mut package = powerio_pkg::NetworkPackage::from_balanced_with_read_diagnostics(
-                    net.net().clone(),
-                    net.diagnostics().iter().cloned().map(Into::into),
-                );
+                let mut package =
+                    powerio::package::NetworkPackage::from_balanced_with_read_diagnostics(
+                        net.net().clone(),
+                        net.diagnostics().iter().cloned().map(Into::into),
+                    );
                 if include_solver_metadata != 0 {
                     package
                         .attach_normalized_solver_table_metadata()
@@ -2215,7 +2216,7 @@ pub unsafe extern "C" fn pio_package_from_multiconductor_network(
                     .as_ref()
                     .ok_or_else(|| null_handle("distribution network handle"))?;
                 Ok(
-                    powerio_pkg::NetworkPackage::from_multiconductor_with_read_diagnostics(
+                    powerio::package::NetworkPackage::from_multiconductor_with_read_diagnostics(
                         net.net().clone(),
                         net.module.diagnostics().iter().cloned().map(Into::into),
                     ),
@@ -2432,7 +2433,7 @@ pub unsafe extern "C" fn pio_package_set_operating_points(
         let result = catch_unwind(AssertUnwindSafe(|| {
             let pkg = pkg.as_mut().ok_or_else(|| null_handle("package handle"))?;
             let json = required_cstr(json, "json")?;
-            let series: Option<powerio_pkg::OperatingPointSeries> = serde_json::from_str(json)
+            let series: Option<powerio::package::OperatingPointSeries> = serde_json::from_str(json)
                 .map_err(|e| coded(&codes::PARSE_CAPI_JSON_MALFORMED, e))?;
             match series {
                 Some(series) => pkg.package.set_operating_points(series),
@@ -2575,7 +2576,7 @@ pub unsafe extern "C" fn pio_package_multiconductor_to_balanced_preflight_json(
                         ),
                     )
                 })?;
-                let report = powerio_pkg::check_multiconductor_to_balanced_lowering(
+                let report = powerio::package::check_multiconductor_to_balanced_lowering(
                     net,
                     lowering_options(base_mva),
                 );
@@ -3359,7 +3360,7 @@ pub unsafe extern "C" fn pio_dist_geo_extract(
             let c = net
                 .as_ref()
                 .ok_or_else(|| null_handle("distribution network handle"))?;
-            powerio_pkg::dist_geo_layer(c.net())
+            powerio::package::dist_geo_layer(c.net())
                 .extracted_geojson()
                 .map_err(err_line)
         })
@@ -3392,7 +3393,7 @@ pub unsafe extern "C" fn pio_dist_geo_apply(
             let parsed =
                 powerio::GeoLayer::parse_bytes(layer.as_bytes(), name_hint).map_err(err_line)?;
             let mut out = c.net().clone();
-            let report = powerio_pkg::apply_dist_geo_layer(&mut out, &parsed.layer);
+            let report = powerio::package::apply_dist_geo_layer(&mut out, &parsed.layer);
             out.source_format = None;
             let mut warnings = c.warnings.clone();
             warnings.extend(parsed.warnings);
@@ -5207,7 +5208,7 @@ mpc.branch = [
     #[cfg(feature = "pkg")]
     #[test]
     fn package_materialize_reports_unknown_identity() {
-        use powerio_pkg::{
+        use powerio::package::{
             ElementRef, ElementUpdate, NetworkPackage, OperatingPoint, OperatingPointSeries,
             TimeAxis,
         };
@@ -5251,7 +5252,7 @@ mpc.branch = [
     #[cfg(feature = "pkg")]
     #[test]
     fn package_set_operating_points_round_trips() {
-        use powerio_pkg::NetworkPackage;
+        use powerio::package::NetworkPackage;
 
         let case = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../tests/data")
@@ -5348,7 +5349,7 @@ mpc.branch = [
     #[cfg(feature = "pkg")]
     #[test]
     fn package_study_json_and_materialize_commit() {
-        use powerio_pkg::{ElementRef, NetworkPackage, StudyBlock, StudyCommit, StudyEdit};
+        use powerio::package::{ElementRef, NetworkPackage, StudyBlock, StudyCommit, StudyEdit};
 
         let case = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../tests/data")

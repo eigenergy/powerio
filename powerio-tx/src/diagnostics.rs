@@ -300,6 +300,19 @@ pub mod codes {
             "a geo feature matched no element in the network";
 
         // VALIDATE: the case's own internal consistency.
+        /// Emitted by the stored document's payload validation in the facade;
+        /// declared here because this crate owns the balanced model.
+        VALIDATE_BALANCED_STRUCTURE = "VALIDATE.BALANCED.STRUCTURE", Error,
+            "a balanced payload's referential integrity does not hold";
+        VALIDATE_BALANCED_VALUE_DOMAIN = "VALIDATE.BALANCED.VALUE_DOMAIN", Warning,
+            "a balanced payload value is outside the domain the model states";
+        VALIDATE_BALANCED_PAYLOAD_IDENTITY = "VALIDATE.BALANCED.PAYLOAD_IDENTITY", Error,
+            "a balanced payload's uid identity does not hold";
+        /// Retired in 0.9.0: every transmission read finding now carries its
+        /// own code, so the stored document no longer wraps them under one
+        /// catch-all.
+        READ_TRANSMISSION_PARSE_WARNING = "READ.TRANSMISSION.PARSE_WARNING", Warning,
+            "a transmission parse finding with no identity of its own", retired = "0.9.0";
         VALIDATE_GEN_COST_MISSING = "VALIDATE.GEN_COST.MISSING", Error,
             "a generator carries no cost data under a policy that requires one", category = Data;
         VALIDATE_GEN_COST_NOT_A_NUMBER = "VALIDATE.GEN_COST.NOT_A_NUMBER", Error,

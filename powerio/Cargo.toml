@@ -16,12 +16,21 @@ categories = ["science", "parsing"]
 all-features = true
 
 [features]
-schema = ["powerio-tx/schema", "powerio-core/schema", "powerio-dist/schema"]
+schema = ["dep:schemars", "powerio-tx/schema", "powerio-core/schema", "powerio-dist/schema"]
 
 [dependencies]
+num-complex = { workspace = true }
 powerio-core = { workspace = true }
 powerio-dist = { workspace = true }
 powerio-tx = { workspace = true }
+schemars = { workspace = true, optional = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = "2"
+
+[[example]]
+name = "generate_schemas"
+required-features = ["schema"]
 
 [lints]
 workspace = true

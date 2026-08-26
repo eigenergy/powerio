@@ -96,7 +96,7 @@ impl CodedError for powerio_dist::Error {
 }
 
 #[cfg(feature = "pkg")]
-impl CodedError for powerio_pkg::Error {
+impl CodedError for powerio::package::Error {
     fn code_str(&self) -> &'static str {
         self.code()
     }
@@ -138,12 +138,11 @@ mod workspace {
     fn registries() -> Vec<(&'static str, Vec<&'static DiagnosticInfo>)> {
         vec![
             ("powerio", powerio::diagnostics::registry()),
+            (
+                "powerio (stored document)",
+                powerio::package::diagnostics::registry(),
+            ),
             ("powerio-dist", powerio_dist::diagnostics::registry()),
-            // TEMPORARY. powerio-pkg retires before this branch is ready. It
-            // is in the gate only so the codes it still emits stay covered
-            // during the migration; each one moves to its surviving 1.0 owner
-            // in the package dissolution commit, and this line goes with it.
-            ("powerio-pkg", powerio_pkg::diagnostics::registry()),
             ("powerio-matrix", powerio_matrix::diagnostics::registry()),
             ("powerio-prob", powerio_prob::diagnostics::registry()),
             ("powerio-capi", registry()),

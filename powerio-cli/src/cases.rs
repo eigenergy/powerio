@@ -4,9 +4,9 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::Context;
+use powerio::package::{MulticonductorToBalancedOptions, lower_multiconductor_to_balanced};
 use powerio_matrix::format::routing::{Detection, JsonClass, SourceFormat as DetectedFormat};
 use powerio_matrix::network::BalancedNetwork;
-use powerio_pkg::{MulticonductorToBalancedOptions, lower_multiconductor_to_balanced};
 
 /// Extensions (lowercase) that identify a transmission case file.
 pub const TRANSMISSION_EXTENSIONS: &[&str] = &["m", "raw", "aux", "epc", "pwb"];
@@ -263,8 +263,8 @@ fn lower_to_balanced(
         (lowered.record.approximations.iter())
             .chain(&lowered.record.dropped_fields)
             .map(|s| {
-                powerio_pkg::diagnostics::render_line(&powerio_pkg::StructuredDiagnostic::of(
-                    &powerio_pkg::diagnostics::codes::TRANSFORM_MULTI_TO_BALANCED_UNSUPPORTED_OBJECT,
+                powerio::package::diagnostics::render_line(&powerio::package::StructuredDiagnostic::of(
+                    &powerio::package::diagnostics::codes::TRANSFORM_MULTI_TO_BALANCED_UNSUPPORTED_OBJECT,
                     format!("lowering: {s}"),
                 ))
             }),

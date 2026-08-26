@@ -20,8 +20,8 @@ pub struct Parsed {
     pub document: Option<std::sync::Arc<powerio::format::goc3::Goc3Document>>,
 }
 
-pub fn pkg_from_parsed(parsed: &Parsed) -> powerio_pkg::NetworkPackage {
-    let mut package = powerio_pkg::NetworkPackage::from_balanced_with_read_diagnostics(
+pub fn pkg_from_parsed(parsed: &Parsed) -> powerio::package::NetworkPackage {
+    let mut package = powerio::package::NetworkPackage::from_balanced_with_read_diagnostics(
         parsed.network.clone(),
         parsed.diagnostics.iter().cloned().map(Into::into),
     );

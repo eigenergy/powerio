@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 
 use powerio_core::DiagnosticInfo;
 
-use crate::legacy_diag::{DiagnosticCode, DiagnosticStage};
+use crate::package::legacy_diag::{DiagnosticCode, DiagnosticStage};
 
 /// Severity, ordered worst-last so [`Ord`] gives the dominant severity of a set.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -264,7 +264,7 @@ impl schemars::JsonSchema for StructuredDiagnostic {
     }
 
     fn schema_id() -> std::borrow::Cow<'static, str> {
-        "crate::legacy_diag::StructuredDiagnostic".into()
+        "crate::package::legacy_diag::StructuredDiagnostic".into()
     }
 
     fn json_schema(generator: &mut schemars::SchemaGenerator) -> schemars::Schema {

@@ -44,7 +44,7 @@ case format.
 
 ## The `.pio.json` document
 
-`powerio_pkg::NetworkPackage` is the implementation type for a `.pio.json`
+`powerio::package::NetworkPackage` is the implementation type for a `.pio.json`
 document. It records how a source was interpreted. Language bindings can pass
 the document without guessing whether it holds balanced or multiconductor data.
 
@@ -128,7 +128,7 @@ Each pass that transforms one model into another appends a `LoweringRecord`
 diagnostics, validation status) to `lowering_history`. The record makes the
 transformation explicit.
 
-`powerio_pkg::lower_multiconductor_to_balanced` lowers transparent three phase
+`powerio::package::lower_multiconductor_to_balanced` lowers transparent three phase
 `MulticonductorNetwork` values into `BalancedNetwork` using the
 `FortescuePowerInvariant` sequence convention. Neutral conductors are Kron
 reduced before the sequence transform. One wire and two wire inputs,

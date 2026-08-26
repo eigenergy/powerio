@@ -121,7 +121,7 @@ counts plus `unlocated_buses` and `unlocated_branches`, the elements that
 carry no geometry when the pass ends. The two together tell a layer that
 matched nothing from a model that needed nothing; `report.require_located()`
 is the strict caller's one line check. The multiconductor equivalents attach
-through `powerio-pkg` (`dist_geo_layer`, `apply_dist_geo_layer`). The CLI
+through the `powerio` facade's `package` module (`dist_geo_layer`, `apply_dist_geo_layer`). The CLI
 wraps the same surface:
 
 ```console

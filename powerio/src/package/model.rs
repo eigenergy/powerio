@@ -8,7 +8,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use powerio::BalancedNetwork;
+use crate::BalancedNetwork;
 use powerio_dist::MulticonductorNetwork;
 
 /// Which concrete static-grid IR family the payload is.
@@ -18,6 +18,9 @@ use powerio_dist::MulticonductorNetwork;
 #[non_exhaustive]
 pub enum ModelKind {
     /// Scalar positive-sequence transmission model ([`powerio::BalancedNetwork`]).
+    // The `powerio::` spelling is frozen into the generated 0.9 schema text;
+    // inside the facade itself that self-name does not resolve as a link.
+    #[allow(rustdoc::broken_intra_doc_links)]
     Balanced,
     /// Wire-coordinate distribution model ([`powerio_dist::MulticonductorNetwork`]).
     Multiconductor,
@@ -30,6 +33,9 @@ pub enum ModelKind {
 /// ([`powerio::BalancedNetwork`] / [`powerio_dist::MulticonductorNetwork`]); changes to it are
 /// document changes under the package `powerio_version`. See
 /// `docs/src/pio-json-schema.md`.
+// The `powerio::` spelling is frozen into the generated 0.9 schema text;
+// inside the facade itself that self-name does not resolve as a link.
+#[allow(rustdoc::broken_intra_doc_links)]
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(tag = "kind", rename_all = "snake_case")]

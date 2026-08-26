@@ -10,8 +10,8 @@
 
 use std::collections::HashMap;
 
-use powerio::geo::{GeoApplyTarget, apply_geo_features};
-use powerio::{CoordinateSpace, ElementKey, GeoApplyReport, GeoFeature, GeoGeometry, GeoLayer};
+use crate::geo::{GeoApplyTarget, apply_geo_features};
+use crate::{CoordinateSpace, ElementKey, GeoApplyReport, GeoFeature, GeoGeometry, GeoLayer};
 use powerio_dist::MulticonductorNetwork;
 
 /// Extract a multiconductor network's coordinates as a standalone
@@ -25,7 +25,7 @@ pub fn dist_geo_layer(net: &MulticonductorNetwork) -> GeoLayer {
             continue;
         };
         features.push(GeoFeature {
-            target: powerio::GeoTarget::Bus,
+            target: crate::GeoTarget::Bus,
             key: ElementKey {
                 uid: Some(format!("buses:{row}")),
                 id: Some(bus.id.clone()),
@@ -43,7 +43,7 @@ pub fn dist_geo_layer(net: &MulticonductorNetwork) -> GeoLayer {
             continue;
         };
         features.push(GeoFeature {
-            target: powerio::GeoTarget::Branch,
+            target: crate::GeoTarget::Branch,
             key: ElementKey {
                 uid: Some(format!("lines:{row}")),
                 id: Some(line.name.clone()),
@@ -58,7 +58,7 @@ pub fn dist_geo_layer(net: &MulticonductorNetwork) -> GeoLayer {
             kind: None,
         });
     }
-    let meta = mirror::<_, powerio::GeoMeta>(net.geo.as_ref());
+    let meta = mirror::<_, crate::GeoMeta>(net.geo.as_ref());
     GeoLayer {
         space: meta
             .as_ref()
@@ -81,7 +81,7 @@ pub fn apply_dist_geo_layer(net: &mut MulticonductorNetwork, layer: &GeoLayer) -
     };
     let report = apply_geo_features(layer, &mut target);
     if report.matched_buses > 0 || report.matched_branches > 0 {
-        net.geo = mirror(Some(&powerio::GeoMeta {
+        net.geo = mirror(Some(&crate::GeoMeta {
             space: layer.space.clone(),
             kind: layer.kind,
         }));
@@ -132,7 +132,7 @@ impl GeoApplyTarget for DistApply<'_> {
             })
     }
 
-    fn place_bus(&mut self, row: usize, point: [f64; 2], kind: Option<powerio::CoordsKind>) {
+    fn place_bus(&mut self, row: usize, point: [f64; 2], kind: Option<crate::CoordsKind>) {
         self.net.buses[row].location = Some(powerio_dist::DistLocation {
             x: point[0],
             y: point[1],
@@ -140,7 +140,7 @@ impl GeoApplyTarget for DistApply<'_> {
         });
     }
 
-    fn place_branch(&mut self, row: usize, path: &[[f64; 2]], kind: Option<powerio::CoordsKind>) {
+    fn place_branch(&mut self, row: usize, path: &[[f64; 2]], kind: Option<crate::CoordsKind>) {
         let kind = kind.and_then(kind_to_dist);
         self.net.lines[row].route = Some(
             path.iter()
@@ -223,22 +223,22 @@ fn name_pair(a: &str, b: &str) -> (String, String) {
 /// Direct variant maps between the mirrored provenance enums; both are
 /// `#[non_exhaustive]`, so a variant added on one side first goes through the
 /// shared JSON shape instead of being dropped silently.
-fn kind_to_balanced(kind: powerio_dist::DistCoordsKind) -> Option<powerio::CoordsKind> {
+fn kind_to_balanced(kind: powerio_dist::DistCoordsKind) -> Option<crate::CoordsKind> {
     match kind {
-        powerio_dist::DistCoordsKind::Source => Some(powerio::CoordsKind::Source),
-        powerio_dist::DistCoordsKind::Synthetic => Some(powerio::CoordsKind::Synthetic),
-        powerio_dist::DistCoordsKind::Manual => Some(powerio::CoordsKind::Manual),
-        powerio_dist::DistCoordsKind::Derived => Some(powerio::CoordsKind::Derived),
+        powerio_dist::DistCoordsKind::Source => Some(crate::CoordsKind::Source),
+        powerio_dist::DistCoordsKind::Synthetic => Some(crate::CoordsKind::Synthetic),
+        powerio_dist::DistCoordsKind::Manual => Some(crate::CoordsKind::Manual),
+        powerio_dist::DistCoordsKind::Derived => Some(crate::CoordsKind::Derived),
         _ => mirror(Some(&kind)),
     }
 }
 
-fn kind_to_dist(kind: powerio::CoordsKind) -> Option<powerio_dist::DistCoordsKind> {
+fn kind_to_dist(kind: crate::CoordsKind) -> Option<powerio_dist::DistCoordsKind> {
     match kind {
-        powerio::CoordsKind::Source => Some(powerio_dist::DistCoordsKind::Source),
-        powerio::CoordsKind::Synthetic => Some(powerio_dist::DistCoordsKind::Synthetic),
-        powerio::CoordsKind::Manual => Some(powerio_dist::DistCoordsKind::Manual),
-        powerio::CoordsKind::Derived => Some(powerio_dist::DistCoordsKind::Derived),
+        crate::CoordsKind::Source => Some(powerio_dist::DistCoordsKind::Source),
+        crate::CoordsKind::Synthetic => Some(powerio_dist::DistCoordsKind::Synthetic),
+        crate::CoordsKind::Manual => Some(powerio_dist::DistCoordsKind::Manual),
+        crate::CoordsKind::Derived => Some(powerio_dist::DistCoordsKind::Derived),
         _ => mirror(Some(&kind)),
     }
 }
