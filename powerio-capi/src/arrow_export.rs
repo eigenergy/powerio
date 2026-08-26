@@ -1422,7 +1422,7 @@ mod tests {
             .join(name);
         {
             let source = powerio_core::Source::open(&path).unwrap();
-            powerio::parse(source).unwrap().into_value()
+            powerio::format::parse(source).unwrap().into_value()
         }
     }
 
@@ -2443,7 +2443,7 @@ Q\n";
             let source = powerio_core::Source::from_bytes("case.raw", raw.as_bytes().to_vec())
                 .unwrap()
                 .with_format(powerio_core::FormatId::new("psse").unwrap());
-            powerio::parse(source).unwrap().into_value()
+            powerio::format::parse(source).unwrap().into_value()
         }
     }
 

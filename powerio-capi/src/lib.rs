@@ -197,7 +197,7 @@ fn parse_module_from_path(
                 .map_err(|e| core_err_line(&e))?,
         );
     }
-    powerio::parse(source).map_err(|e| core_err_line(&e))
+    powerio::format::parse(source).map_err(|e| core_err_line(&e))
 }
 
 fn parse_module_from_bytes(
@@ -210,7 +210,7 @@ fn parse_module_from_bytes(
             powerio_core::FormatId::new(from.to_ascii_lowercase().replace('_', "-"))
                 .map_err(|e| core_err_line(&e))?,
         );
-    powerio::parse(source).map_err(|e| core_err_line(&e))
+    powerio::format::parse(source).map_err(|e| core_err_line(&e))
 }
 
 /// Box a parsed module into an owned network handle, building its
@@ -3414,7 +3414,7 @@ mod tests {
             .with_format(powerio_core::FormatId::new(
                 from.to_ascii_lowercase().replace('_', "-"),
             )?);
-        powerio::parse(source).map(|module| TestParsed {
+        powerio::format::parse(source).map(|module| TestParsed {
             network: module.into_value(),
         })
     }
@@ -3434,7 +3434,7 @@ mod tests {
                 token.to_ascii_lowercase().replace('_', "-"),
             )?);
         }
-        powerio::parse(source).map(|module| TestParsed {
+        powerio::format::parse(source).map(|module| TestParsed {
             network: module.into_value(),
         })
     }

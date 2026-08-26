@@ -59,7 +59,7 @@ pub fn parse_file(
     from: Option<&str>,
 ) -> Result<Parsed, powerio_core::Error> {
     let source = declared(Source::open(path.as_ref())?, from)?;
-    powerio::parse(source).map(module_to_parsed)
+    powerio::format::parse(source).map(module_to_parsed)
 }
 
 pub fn parse_module(
@@ -67,7 +67,7 @@ pub fn parse_module(
     from: Option<&str>,
 ) -> Result<powerio_core::PioModule<BalancedNetwork>, powerio_core::Error> {
     let source = declared(Source::open(path.as_ref())?, from)?;
-    powerio::parse(source)
+    powerio::format::parse(source)
 }
 
 pub fn parse_str(text: &str, from: &str) -> Result<Parsed, powerio_core::Error> {
@@ -93,7 +93,7 @@ pub fn parse_str_with_name(
         Source::from_bytes(name, text.as_bytes().to_vec())?,
         Some(from),
     )?;
-    powerio::parse(source).map(module_to_parsed)
+    powerio::format::parse(source).map(module_to_parsed)
 }
 
 pub fn parse_bytes(bytes: &[u8], from: &str) -> Result<Parsed, powerio_core::Error> {
@@ -107,7 +107,7 @@ pub fn parse_bytes_with_name(
 ) -> Result<Parsed, powerio_core::Error> {
     let name = name_hint.map_or_else(|| "<memory>".to_owned(), std::string::ToString::to_string);
     let source = declared(Source::from_bytes(name, bytes.to_vec())?, Some(from))?;
-    powerio::parse(source).map(module_to_parsed)
+    powerio::format::parse(source).map(module_to_parsed)
 }
 
 pub fn parse_matpower(text: &str) -> Result<BalancedNetwork, powerio_core::Error> {

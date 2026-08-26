@@ -2001,6 +2001,7 @@ name = "powerio"
 version = "0.9.0"
 dependencies = [
  "powerio-core",
+ "powerio-dist",
  "powerio-tx",
 ]
 

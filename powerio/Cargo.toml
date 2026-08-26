@@ -16,10 +16,11 @@ categories = ["science", "parsing"]
 all-features = true
 
 [features]
-schema = ["powerio-tx/schema", "powerio-core/schema"]
+schema = ["powerio-tx/schema", "powerio-core/schema", "powerio-dist/schema"]
 
 [dependencies]
 powerio-core = { workspace = true }
+powerio-dist = { workspace = true }
 powerio-tx = { workspace = true }
 
 [lints]

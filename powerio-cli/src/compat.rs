@@ -45,7 +45,7 @@ pub(crate) fn parse_module(
     from: Option<&str>,
 ) -> Result<powerio_core::PioModule<BalancedNetwork>, powerio_core::Error> {
     let source = declared(powerio_core::Source::open(path.as_ref())?, from)?;
-    powerio::parse(source)
+    powerio::format::parse(source)
 }
 
 pub(crate) fn parse_file(
@@ -109,7 +109,7 @@ pub(crate) fn parse_str_with_name(
         powerio_core::Source::from_bytes(name, text.as_bytes().to_vec())?,
         Some(from),
     )?;
-    powerio::parse(source).map(module_to_parsed)
+    powerio::format::parse(source).map(module_to_parsed)
 }
 
 fn module_to_parsed(module: powerio_core::PioModule<BalancedNetwork>) -> ParsedCase {
