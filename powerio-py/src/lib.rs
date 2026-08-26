@@ -519,6 +519,26 @@ fn looks_like_distribution_input(input: &Path) -> PyResult<bool> {
     }
 }
 
+/// Whether a format token names the DOE GO Challenge 3 document, whose time
+/// series lift into the package's operating points. TEMPORARY alongside
+/// `parse_goc3_json`: the calculation instance types replace this extraction.
+fn format_is_goc3(token: &str) -> bool {
+    normalize(token) == "goc3" || normalize(token) == "goc3json"
+}
+
+/// Package a GO Challenge 3 document: the balanced snapshot plus the operating
+/// point series the document carries.
+fn goc3_package(text: &str) -> PyResult<NetworkPackage> {
+    let (network, diagnostics, document) =
+        powerio_matrix::format::parse_goc3_json(text).map_err(core_pyerr)?;
+    let mut pkg = NetworkPackage::from_balanced_with_read_diagnostics(
+        network,
+        diagnostics.into_iter().map(Into::into),
+    );
+    pkg.attach_goc3_operating_points(&document);
+    Ok(pkg)
+}
+
 fn build_package_from_path(
     input: &Path,
     from_: Option<&str>,
@@ -567,6 +587,31 @@ fn build_package_from_path(
             package_source_kind(input, format),
             format,
             retained_source,
+        );
+        pkg.run_sane_validation();
+        return Ok(pkg);
+    }
+
+    let declared_goc3 = from_.is_some_and(format_is_goc3);
+    let sniffed_goc3 = from_.is_none()
+        && input.extension().and_then(|e| e.to_str()) == Some("json")
+        && matches!(
+            std::fs::read_to_string(input)
+                .ok()
+                .map(|text| powerio_matrix::format::routing::classify_json_text(&text)),
+            Some(powerio_matrix::format::routing::JsonClass::Case(
+                powerio_matrix::format::routing::Detection::Known(format)
+            )) if format_is_goc3(format.name())
+        );
+    if declared_goc3 || sniffed_goc3 {
+        let text = std::fs::read_to_string(input).map_err(PyErr::from)?;
+        let mut pkg = goc3_package(&text)?;
+        set_package_source(
+            &mut pkg,
+            input,
+            package_source_kind(input, "goc3-json"),
+            "goc3-json",
+            false,
         );
         pkg.run_sane_validation();
         return Ok(pkg);
@@ -627,6 +672,12 @@ fn build_package_from_str(text: &str, from_: Option<&str>) -> PyResult<NetworkPa
             pkg.run_sane_validation();
             return Ok(pkg);
         }
+    }
+
+    if source_format.as_deref().is_some_and(format_is_goc3) {
+        let mut pkg = goc3_package(text)?;
+        pkg.run_sane_validation();
+        return Ok(pkg);
     }
 
     let module = py_parse_module_bytes(
@@ -716,17 +767,43 @@ impl PyBalancedNetwork {
 }
 
 fn core_error_pyerr(error: &powerio_core::Error) -> PyErr {
-    match error.category() {
+    let err = match error.category() {
         powerio_core::ErrorCategory::Parse => PowerIOParseError::new_err(error.to_string()),
         _ => PowerIOError::new_err(error.to_string()),
+    };
+    if let Some(code) = error.diagnostics().first().map(|d| d.code().to_owned()) {
+        Python::attach(|py| {
+            let _ = err.value(py).setattr("code", code);
+        });
     }
+    err
+}
+
+/// Projects a source acquisition failure with an operating system cause onto
+/// the precise `OSError` subclass with the path attached, matching what the
+/// old path entries raised; anything else falls back to the coded error.
+fn core_open_pyerr(path: &std::path::Path, error: &powerio_core::Error) -> PyErr {
+    let mut cause = std::error::Error::source(error);
+    while let Some(inner) = cause {
+        if let Some(io) = inner.downcast_ref::<std::io::Error>()
+            && let Some(errno) = io.raw_os_error()
+        {
+            return pyo3::exceptions::PyOSError::new_err((
+                errno,
+                io.to_string(),
+                path.display().to_string(),
+            ));
+        }
+        cause = inner.source();
+    }
+    core_error_pyerr(error)
 }
 
 fn py_parse_module_path(
     path: &std::path::Path,
     from: Option<&str>,
 ) -> PyResult<powerio_core::PioModule<powerio_matrix::BalancedNetwork>> {
-    let mut source = powerio_core::Source::open(path).map_err(|e| core_error_pyerr(&e))?;
+    let mut source = powerio_core::Source::open(path).map_err(|e| core_open_pyerr(path, &e))?;
     if let Some(token) = from {
         source = source.with_format(
             powerio_core::FormatId::new(token.to_ascii_lowercase().replace('_', "-"))
@@ -1062,9 +1139,11 @@ impl PyBalancedNetwork {
     }
 
     /// Serialize this case to MATPOWER `.m` text. For a MATPOWER-parsed case this
-    /// is the byte-exact source echo.
-    fn to_matpower(&self) -> String {
-        self.inner().to_matpower()
+    /// is the byte-exact source echo, written through the module.
+    fn to_matpower(&self) -> PyResult<String> {
+        powerio_matrix::write_as(&self.module, powerio_matrix::TargetFormat::Matpower)
+            .map(|conv| conv.text)
+            .map_err(|error| core_error_pyerr(&error))
     }
 
     /// Serialize this case to the JSON transport.
@@ -1537,7 +1616,7 @@ fn convert_file(
     )?;
     let conv =
         powerio_matrix::convert_file_with_options(std::path::Path::new(path), target, from_, &opts)
-            .map_err(|e| core_error_pyerr(&e))?;
+            .map_err(|e| core_open_pyerr(std::path::Path::new(path), &e))?;
     if let Some(out) = out {
         std::fs::write(out, &conv.text)
             .map_err(|e| PowerIOError::new_err(format!("writing {out}: {e}")))?;
@@ -1691,7 +1770,8 @@ fn dist_source_from_path(
     from: Option<&str>,
     include_root: Option<&str>,
 ) -> PyResult<powerio_core::Source> {
-    let mut source = powerio_core::Source::open(path).map_err(|error| core_error_pyerr(&error))?;
+    let mut source =
+        powerio_core::Source::open(path).map_err(|error| core_open_pyerr(path, &error))?;
     if let Some(root) = include_root {
         source = source
             .with_acquisition_root(root)
