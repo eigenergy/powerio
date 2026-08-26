@@ -44,12 +44,12 @@ cargo check -q -p powerio-prob --no-default-features
 # readers can run in a browser. Skipped rather than failing when the target
 # is not installed (rustup target add wasm32-unknown-unknown).
 if rustup target list --installed 2>/dev/null | grep -qx wasm32-unknown-unknown; then
-  run cargo check --target wasm32-unknown-unknown -p powerio -p powerio-dist -p powerio-pkg
+  run cargo check --target wasm32-unknown-unknown -p powerio -p powerio-tx -p powerio-dist -p powerio-pkg
 else
   echo "=== skipped: wasm32-unknown-unknown target not installed ==="
 fi
 
-run cargo test -p powerio -p powerio-core -p powerio-matrix -p powerio-prob -p powerio-cli \
+run cargo test -p powerio -p powerio-tx -p powerio-core -p powerio-matrix -p powerio-prob -p powerio-cli \
     -p powerio-capi -p powerio-dist -p powerio-pkg
 run cargo test -p powerio-prob --features matrix
 run cargo test -p powerio-matrix --features gridfm

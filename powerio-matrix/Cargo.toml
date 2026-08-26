@@ -27,7 +27,7 @@ path = "src/lib.rs"
 
 [dependencies]
 powerio-core = { workspace = true }
-powerio.workspace = true
+powerio-tx.workspace = true
 thiserror = "2"
 sprs.workspace = true
 num-complex.workspace = true

@@ -1,7 +1,7 @@
 //! The thermal limit an OPF instance carries for one branch.
 //!
 //! Both OPF builders synthesize a bound for an unrated branch from
-//! [`Branch::synthesize_rate_a`](powerio::Branch::synthesize_rate_a), read the
+//! [`Branch::synthesize_rate_a`](powerio_tx::Branch::synthesize_rate_a), read the
 //! window out of the same two fields, and apply the same unrated test, so the
 //! rule lives here once.
 
@@ -43,11 +43,11 @@ impl ThermalLimits {
     /// `power_scale`.
     pub(crate) fn of(
         &self,
-        branch: &powerio::Branch,
+        branch: &powerio_tx::Branch,
         angle_min_rad: f64,
         angle_max_rad: f64,
-        from: &powerio::Bus,
-        to: &powerio::Bus,
+        from: &powerio_tx::Bus,
+        to: &powerio_tx::Bus,
     ) -> f64 {
         if self.synthesize_unrated && branch.rate_a <= 0.0 {
             let window = angle_window(angle_min_rad, angle_max_rad);

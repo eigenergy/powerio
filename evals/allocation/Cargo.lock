@@ -306,19 +306,15 @@ dependencies = [
 name = "powerio"
 version = "0.9.0"
 dependencies = [
- "lexical-core",
- "num-complex",
- "petgraph",
  "powerio-core",
- "serde",
- "serde_json",
- "thiserror",
+ "powerio-tx",
 ]
 
 [[package]]
 name = "powerio-core"
 version = "0.9.0"
 dependencies = [
+ "libc",
  "serde",
  "serde_json",
 ]
@@ -347,8 +343,8 @@ name = "powerio-matrix"
 version = "0.9.0"
 dependencies = [
  "num-complex",
- "powerio",
  "powerio-core",
+ "powerio-tx",
  "rand",
  "rand_chacha",
  "rayon",
@@ -359,6 +355,19 @@ dependencies = [
  "sprs",
  "thiserror",
  "walkdir",
+]
+
+[[package]]
+name = "powerio-tx"
+version = "0.9.0"
+dependencies = [
+ "lexical-core",
+ "num-complex",
+ "petgraph",
+ "powerio-core",
+ "serde",
+ "serde_json",
+ "thiserror",
 ]
 
 [[package]]

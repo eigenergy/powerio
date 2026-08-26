@@ -8,8 +8,8 @@ name: Fuzz smoke
 on:
   pull_request:
     paths:
-      - "powerio/src/format/**"
-      - "powerio/src/geo/**"
+      - "powerio-tx/src/format/**"
+      - "powerio-tx/src/geo/**"
       - "powerio-dist/src/**"
       - "powerio-pkg/src/**"
       - "fuzz/**"

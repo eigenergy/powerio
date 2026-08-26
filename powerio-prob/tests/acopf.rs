@@ -1,8 +1,8 @@
-use powerio::{
+use powerio_prob::{AcOpfOptions, Error, Units, build_ac_opf_instance};
+use powerio_tx::{
     BalancedNetwork, Branch, BranchCharging, Bus, BusId, BusType, GenCost, Generator,
     IndexedNetwork, parse_matpower_file,
 };
-use powerio_prob::{AcOpfOptions, Error, Units, build_ac_opf_instance};
 
 fn case9() -> BalancedNetwork {
     parse_matpower_file("../tests/data/case9.m").expect("parse case9")
@@ -198,8 +198,9 @@ fn terminal_charging_split_and_asymmetric() {
 fn per_unit_and_native_units_scale_consistently() {
     let mut net = small_network();
     net.branches[0].rate_a = 250.0;
-    net.loads.push(powerio::Load::new(BusId(30), 90.0, 30.0));
-    net.shunts.push(powerio::Shunt::new(BusId(30), 2.0, 19.0));
+    net.loads.push(powerio_tx::Load::new(BusId(30), 90.0, 30.0));
+    net.shunts
+        .push(powerio_tx::Shunt::new(BusId(30), 2.0, 19.0));
     let view = IndexedNetwork::new(&net);
     let native = build_ac_opf_instance(
         &view,
@@ -256,7 +257,7 @@ fn missing_and_unsupported_costs_are_distinct() {
         .expect_err("missing cost");
     assert!(matches!(
         error,
-        Error::Core(powerio::Error::MissingGenCost { gen_index: 0 })
+        Error::Core(powerio_tx::Error::MissingGenCost { gen_index: 0 })
     ));
 
     let mut piecewise = small_network();
@@ -325,7 +326,7 @@ fn zero_impedance_skip_or_reject() {
     .expect_err("reject");
     assert!(matches!(
         error,
-        Error::Core(powerio::Error::ZeroImpedance { row: 0 })
+        Error::Core(powerio_tx::Error::ZeroImpedance { row: 0 })
     ));
 
     // Zero resistance with nonzero reactance is a valid series element.
@@ -359,7 +360,7 @@ fn an_impedance_the_instance_cannot_divide_by_reads_as_zero_impedance() {
     .expect_err("reject");
     assert!(matches!(
         error,
-        Error::Core(powerio::Error::ZeroImpedance { row: 0 })
+        Error::Core(powerio_tx::Error::ZeroImpedance { row: 0 })
     ));
 
     let mut small_x = small_network();
@@ -381,7 +382,7 @@ fn a_tap_the_instance_cannot_divide_by_is_refused() {
         assert!(
             matches!(
                 error,
-                Error::Core(powerio::Error::DegenerateTap { row: 0, .. })
+                Error::Core(powerio_tx::Error::DegenerateTap { row: 0, .. })
             ),
             "tap {tap}: {error}"
         );
@@ -637,6 +638,6 @@ fn zero_base_mva_is_rejected() {
         .expect_err("zero base");
     assert!(matches!(
         error,
-        Error::Core(powerio::Error::InvalidBaseMva { .. })
+        Error::Core(powerio_tx::Error::InvalidBaseMva { .. })
     ));
 }

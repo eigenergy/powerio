@@ -515,7 +515,7 @@ fn bprime_rejects_nan_reactance() {
     let err = build_bprime(&view, &BuildOptions::default()).unwrap_err();
     assert!(matches!(
         err,
-        crate::Error::Core(powerio::Error::NonFiniteSusceptance { .. })
+        crate::Error::Core(powerio_tx::Error::NonFiniteSusceptance { .. })
     ));
 }
 
@@ -527,7 +527,7 @@ fn ybus_rejects_nan_reactance() {
     let err = build_ybus(&view, &BuildOptions::default()).unwrap_err();
     assert!(matches!(
         err,
-        crate::Error::Core(powerio::Error::NonFiniteSusceptance { .. })
+        crate::Error::Core(powerio_tx::Error::NonFiniteSusceptance { .. })
     ));
 }
 
@@ -545,7 +545,7 @@ fn incidence_rejects_a_non_finite_reactance_under_every_convention() {
             matches!(
                 build_ybus(&view, &BuildOptions::default()),
                 Err(crate::Error::Core(
-                    powerio::Error::NonFiniteSusceptance { .. }
+                    powerio_tx::Error::NonFiniteSusceptance { .. }
                 ))
             ),
             "Ybus accepted x = {x}"
@@ -559,9 +559,9 @@ fn incidence_rejects_a_non_finite_reactance_under_every_convention() {
             assert!(
                 matches!(
                     got,
-                    Err(crate::Error::Core(powerio::Error::NonFiniteSusceptance {
-                        row: 0
-                    }))
+                    Err(crate::Error::Core(
+                        powerio_tx::Error::NonFiniteSusceptance { row: 0 }
+                    ))
                 ),
                 "{conv:?} accepted x = {x}: {:?}",
                 got.map(|parts| parts.b)
@@ -588,9 +588,9 @@ fn incidence_rejects_a_reactance_and_tap_whose_product_overflows() {
     assert!(
         matches!(
             got,
-            Err(crate::Error::Core(powerio::Error::NonFiniteSusceptance {
-                row: 0
-            }))
+            Err(crate::Error::Core(
+                powerio_tx::Error::NonFiniteSusceptance { row: 0 }
+            ))
         ),
         "accepted an overflowing denominator: {:?}",
         got.map(|parts| parts.b)
@@ -630,17 +630,17 @@ fn zero_impedance_policy_can_error_instead_of_skipping() {
     let bprime = build_bprime(&view, &opts).unwrap_err();
     assert!(matches!(
         bprime,
-        crate::Error::Core(powerio::Error::ZeroImpedance { row: 0 })
+        crate::Error::Core(powerio_tx::Error::ZeroImpedance { row: 0 })
     ));
     let ybus = build_ybus(&view, &opts).unwrap_err();
     assert!(matches!(
         ybus,
-        crate::Error::Core(powerio::Error::ZeroImpedance { row: 0 })
+        crate::Error::Core(powerio_tx::Error::ZeroImpedance { row: 0 })
     ));
     let inc = build_incidence(&view, DcConvention::ReactanceOnly, &opts).unwrap_err();
     assert!(matches!(
         inc,
-        crate::Error::Core(powerio::Error::ZeroImpedance { row: 0 })
+        crate::Error::Core(powerio_tx::Error::ZeroImpedance { row: 0 })
     ));
 }
 
@@ -734,7 +734,7 @@ fn a_reactance_below_the_divisible_bound_is_zero_impedance() {
     assert!(
         matches!(
             err,
-            crate::Error::Core(powerio::Error::ZeroImpedance { row: 0 })
+            crate::Error::Core(powerio_tx::Error::ZeroImpedance { row: 0 })
         ),
         "{err}"
     );
@@ -742,7 +742,7 @@ fn a_reactance_below_the_divisible_bound_is_zero_impedance() {
     assert!(
         matches!(
             err,
-            crate::Error::Core(powerio::Error::ZeroImpedance { row: 0 })
+            crate::Error::Core(powerio_tx::Error::ZeroImpedance { row: 0 })
         ),
         "{err}"
     );
@@ -789,7 +789,7 @@ fn a_tap_ratio_the_builders_cannot_divide_by_is_refused() {
         assert!(
             matches!(
                 err,
-                crate::Error::Core(powerio::Error::DegenerateTap { row: 0, .. })
+                crate::Error::Core(powerio_tx::Error::DegenerateTap { row: 0, .. })
             ),
             "Ybus, tap {tap}: {err}"
         );
@@ -798,7 +798,7 @@ fn a_tap_ratio_the_builders_cannot_divide_by_is_refused() {
         assert!(
             matches!(
                 err,
-                crate::Error::Core(powerio::Error::DegenerateTap { row: 0, .. })
+                crate::Error::Core(powerio_tx::Error::DegenerateTap { row: 0, .. })
             ),
             "incidence, tap {tap}: {err}"
         );

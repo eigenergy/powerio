@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use powerio::{BusId, DcConvention, IndexedNetwork};
+use powerio_tx::{BusId, DcConvention, IndexedNetwork};
 
 use crate::{Error, Result};
 
@@ -60,10 +60,10 @@ pub struct DcOpfOptions {
     pub convention: DcConvention,
     pub units: Units,
     /// Skip non-self-loop branches with zero reactance. If false, assembly
-    /// returns [`powerio::Error::ZeroImpedance`].
+    /// returns [`powerio_tx::Error::ZeroImpedance`].
     pub skip_zero_impedance: bool,
     /// Give a branch with no thermal rating the bound
-    /// [`Branch::synthesize_rate_a`](powerio::Branch::synthesize_rate_a)
+    /// [`Branch::synthesize_rate_a`](powerio_tx::Branch::synthesize_rate_a)
     /// states. If false, `rate_a <= 0` reaches `f_max` as zero, which reads as
     /// unlimited. `#[serde(default)]`: documents serialized before the field
     /// existed deserialize to the default (off), the pre-field behavior.
@@ -275,14 +275,14 @@ pub fn build_dc_opf_instance(
     for (source_row, generator) in case.in_service_gens() {
         let bus = case
             .bus_index(generator.bus)
-            .ok_or(powerio::Error::UnknownBus {
+            .ok_or(powerio_tx::Error::UnknownBus {
                 bus_id: generator.bus,
                 element_index: source_row,
             })?;
         let cost = generator
             .cost
             .as_ref()
-            .ok_or(powerio::Error::MissingGenCost {
+            .ok_or(powerio_tx::Error::MissingGenCost {
                 gen_index: source_row,
             })?;
         let (q_raw, c_raw, c0_raw) = nodal::quadratic_terms(cost, source_row)?;
@@ -314,13 +314,13 @@ pub fn build_dc_opf_instance(
     for (source_row, branch) in case.in_service_branches() {
         let from = case
             .bus_index(branch.from)
-            .ok_or(powerio::Error::UnknownBus {
+            .ok_or(powerio_tx::Error::UnknownBus {
                 bus_id: branch.from,
                 element_index: source_row,
             })?;
         let to = case
             .bus_index(branch.to)
-            .ok_or(powerio::Error::UnknownBus {
+            .ok_or(powerio_tx::Error::UnknownBus {
                 bus_id: branch.to,
                 element_index: source_row,
             })?;
@@ -332,12 +332,12 @@ pub fn build_dc_opf_instance(
         // The reactance the DC matrix builders bound, on the same rule: an
         // `x = 1e-300` gives a finite `b = 1e300` that annihilates every real
         // branch sharing a bus with it. Exact zero used to be the whole test.
-        if branch.x.abs() < powerio::dc::MIN_DIVISIBLE_MAGNITUDE {
+        if branch.x.abs() < powerio_tx::dc::MIN_DIVISIBLE_MAGNITUDE {
             if options.skip_zero_impedance {
                 skipped_zero_impedance.push(source_row);
                 continue;
             }
-            return Err(powerio::Error::ZeroImpedance { row: source_row }.into());
+            return Err(powerio_tx::Error::ZeroImpedance { row: source_row }.into());
         }
         let branch_b = options.convention.branch_susceptance(
             branch.r,
@@ -345,7 +345,7 @@ pub fn build_dc_opf_instance(
             branch.divisible_tap(source_row)?,
         ) * b_scale;
         if !branch_b.is_finite() {
-            return Err(powerio::Error::NonFiniteSusceptance { row: source_row }.into());
+            return Err(powerio_tx::Error::NonFiniteSusceptance { row: source_row }.into());
         }
         let shift_rad = if options.convention.includes_phase_shifts() {
             case.angle_radians(branch.shift)

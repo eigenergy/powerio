@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, HashSet};
 
-use powerio::BusId;
-use powerio::format::goc3::Goc3Document;
+use powerio_tx::BusId;
+use powerio_tx::format::goc3::Goc3Document;
 use serde_json::{Map, Value};
 
 use super::error::{ScopfError, ScopfResult};

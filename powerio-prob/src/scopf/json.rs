@@ -60,7 +60,7 @@ impl IndexBase {
 #[derive(Serialize)]
 struct Envelope {
     schema: &'static str,
-    /// The powerio release that wrote this document; see [`powerio::version`].
+    /// The powerio release that wrote this document; see [`powerio_tx::version`].
     #[serde(rename = "powerio_version")]
     powerio_version: &'static str,
     index_base: u8,
@@ -340,7 +340,7 @@ pub fn to_json_value_with_index_base(
     fields.insert("dt".to_owned(), serde_json::to_value(dt)?);
     Ok(serde_json::to_value(Envelope {
         schema: SCOPF_SCHEMA,
-        powerio_version: powerio::VERSION,
+        powerio_version: powerio_tx::VERSION,
         index_base: index_base.value(),
         instance: Value::Object(fields),
     })?)

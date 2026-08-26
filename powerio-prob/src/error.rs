@@ -16,7 +16,7 @@ use crate::diagnostics::codes;
 pub enum Error {
     /// A failure from the balanced model, its readers, or its writers.
     #[error(transparent)]
-    Core(#[from] powerio::Error),
+    Core(#[from] powerio_tx::Error),
 
     /// A failure from the matrix and dataset builders.
     #[cfg(feature = "matrix")]
@@ -66,8 +66,8 @@ impl Error {
     /// The match is exhaustive over the variant set, so a new variant must be
     /// classified here before it compiles.
     #[must_use]
-    pub fn category(&self) -> powerio::ErrorCategory {
-        use powerio::ErrorCategory as C;
+    pub fn category(&self) -> powerio_tx::ErrorCategory {
+        use powerio_tx::ErrorCategory as C;
         match self {
             Error::Core(inner) => inner.category(),
             #[cfg(feature = "matrix")]
@@ -87,7 +87,7 @@ pub type Result<T> = std::result::Result<T, Error>;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use powerio::ErrorCategory::{Data, Parse};
+    use powerio_tx::ErrorCategory::{Data, Parse};
 
     #[test]
     fn category_pins_the_intended_buckets() {
@@ -116,7 +116,7 @@ mod tests {
     #[test]
     fn every_error_code_publishes_the_category_the_variant_reports() {
         let every: Vec<Error> = vec![
-            powerio::Error::MissingField("gen").into(),
+            powerio_tx::Error::MissingField("gen").into(),
             std::io::Error::from(std::io::ErrorKind::NotFound).into(),
             Error::NoGenerators,
             Error::UnsupportedCostModel {
@@ -141,11 +141,11 @@ mod tests {
 
     #[test]
     fn a_wrapped_hub_error_keeps_its_own_category_and_message() {
-        let wrapped: Error = powerio::Error::MissingField("gen").into();
+        let wrapped: Error = powerio_tx::Error::MissingField("gen").into();
         assert_eq!(wrapped.category(), Parse);
         assert_eq!(
             wrapped.to_string(),
-            powerio::Error::MissingField("gen").to_string()
+            powerio_tx::Error::MissingField("gen").to_string()
         );
     }
 }

@@ -253,13 +253,13 @@ fn reference_bus_count_errors() {
     );
     assert!(matches!(
         IndexedNetwork::new(&two).reference_bus_index(),
-        Err(powerio::Error::ReferenceBusCount { found: 2, .. })
+        Err(powerio_tx::Error::ReferenceBusCount { found: 2, .. })
     ));
     // Zero reference buses.
     let zero = net("no_ref", vec![bus(1, BusType::Pq)], vec![]);
     assert!(matches!(
         IndexedNetwork::new(&zero).reference_bus_index(),
-        Err(powerio::Error::ReferenceBusCount { found: 0, .. })
+        Err(powerio_tx::Error::ReferenceBusCount { found: 0, .. })
     ));
 }
 
@@ -725,7 +725,7 @@ fn ungrounded_island_errors() {
     assert!(
         matches!(
             p,
-            Error::Core(powerio::Error::UngroundedComponent { components: 1 })
+            Error::Core(powerio_tx::Error::UngroundedComponent { components: 1 })
         ),
         "ptdf: {p:?}"
     );
@@ -733,7 +733,7 @@ fn ungrounded_island_errors() {
     assert!(
         matches!(
             l,
-            Error::Core(powerio::Error::UngroundedComponent { components: 1 })
+            Error::Core(powerio_tx::Error::UngroundedComponent { components: 1 })
         ),
         "lodf: {l:?}"
     );

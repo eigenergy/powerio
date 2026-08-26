@@ -23,7 +23,7 @@ pub use dc::{
     DcBranchData, DcGeneratorData, DcOpfInstance, DcOpfOptions, NodalGeneratorData, Units,
     build_dc_opf_instance,
 };
-pub use powerio::DcConvention;
+pub use powerio_tx::DcConvention;
 
 pub mod diagnostics;
 pub mod error;

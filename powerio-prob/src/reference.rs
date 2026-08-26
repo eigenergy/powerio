@@ -37,11 +37,11 @@ impl ReferenceBuses {
     /// The one reference bus.
     ///
     /// # Errors
-    /// [`powerio::Error::ReferenceBusCount`] unless the set holds exactly one bus.
+    /// [`powerio_tx::Error::ReferenceBusCount`] unless the set holds exactly one bus.
     pub fn single(&self) -> Result<usize> {
         match self.0.as_slice() {
             [bus] => Ok(*bus),
-            other => Err(powerio::Error::reference_bus_count(other.len()).into()),
+            other => Err(powerio_tx::Error::reference_bus_count(other.len()).into()),
         }
     }
 }

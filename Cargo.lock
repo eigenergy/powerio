@@ -2000,15 +2000,8 @@ checksum = "439ee305def115ba05938db6eb1644ff94165c5ab5e9420d1c1bcedbba909391"
 name = "powerio"
 version = "0.9.0"
 dependencies = [
- "criterion",
- "lexical-core",
- "num-complex",
- "petgraph",
  "powerio-core",
- "schemars",
- "serde",
- "serde_json",
- "thiserror 2.0.18",
+ "powerio-tx",
 ]
 
 [[package]]
@@ -2081,10 +2074,10 @@ dependencies = [
  "criterion",
  "num-complex",
  "parquet",
- "powerio",
  "powerio-core",
  "powerio-dist",
  "powerio-pkg",
+ "powerio-tx",
  "rand 0.9.4",
  "rand_chacha",
  "rayon",
@@ -2117,9 +2110,9 @@ name = "powerio-prob"
 version = "0.9.0"
 dependencies = [
  "num-complex",
- "powerio",
  "powerio-core",
  "powerio-matrix",
+ "powerio-tx",
  "serde",
  "serde_json",
  "tempfile",
@@ -2137,6 +2130,21 @@ dependencies = [
  "pyo3",
  "serde_json",
  "sprs",
+]
+
+[[package]]
+name = "powerio-tx"
+version = "0.9.0"
+dependencies = [
+ "criterion",
+ "lexical-core",
+ "num-complex",
+ "petgraph",
+ "powerio-core",
+ "schemars",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
 ]
 
 [[package]]

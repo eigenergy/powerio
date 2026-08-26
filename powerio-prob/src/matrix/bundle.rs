@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use powerio::{GenCostPolicyReport, MissingGenCostPolicy};
+use powerio_tx::{GenCostPolicyReport, MissingGenCostPolicy};
 
 use crate::Result;
 use powerio_matrix::SparseMatrix;
@@ -49,7 +49,7 @@ struct DcOpfMeta<'a> {
     base_mva: f64,
     dimensions: DcOpfDimensions,
     index_base: IndexBaseMeta,
-    dc_convention: powerio::DcConvention,
+    dc_convention: powerio_tx::DcConvention,
     build_options: BuildOptionsMeta,
     zero_impedance: ZeroImpedanceMeta<'a>,
     grounding: GroundingMeta<'a>,
@@ -58,7 +58,7 @@ struct DcOpfMeta<'a> {
     m: usize,
     n_gen: usize,
     reference_buses: &'a [usize],
-    convention: powerio::DcConvention,
+    convention: powerio_tx::DcConvention,
     units: Units,
     cost_policy: MissingGenCostPolicy,
     synthesized_gen_costs: usize,
@@ -250,7 +250,7 @@ pub fn write_dcopf_bundle(
             .iter()
             .filter_map(|path| path.file_name()?.to_str().map(str::to_owned))
             .collect(),
-        powerio_version: powerio::VERSION,
+        powerio_version: powerio_tx::VERSION,
     };
     let meta_path = dir.join("dcopf_meta.json");
     let json = serde_json::to_string_pretty(&meta)

@@ -1,8 +1,8 @@
-use powerio::BusId;
 use powerio_prob::scopf::json::{
     SCOPF_SCHEMA, to_json, to_json_value, to_json_value_with_index_base, to_json_with_index_base,
 };
 use powerio_prob::{IndexBase, ScopfDeviceClassLayout, ScopfError, ScopfInstance, parse_scopf_str};
+use powerio_tx::BusId;
 use serde_json::Value;
 
 const SMALL: &str = include_str!("data/goc3_small.json");
@@ -130,7 +130,7 @@ fn the_scopf_document_supports_zero_and_one_based_ordinals() {
         one
     );
     assert_eq!(zero["schema"], SCOPF_SCHEMA);
-    assert_eq!(zero["powerio_version"], powerio::VERSION);
+    assert_eq!(zero["powerio_version"], powerio_tx::VERSION);
     assert_eq!(zero["index_base"], 0);
     assert_eq!(one["index_base"], 1);
     assert_eq!(zero["instance"]["static"]["acl_branch"][0]["j_ln"], 0);

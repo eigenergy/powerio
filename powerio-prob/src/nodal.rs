@@ -8,7 +8,7 @@
 //! the bus total can reach. Cost aggregation is an approximation, stated in
 //! [`combine_costs`].
 
-use powerio::network::GenCost;
+use powerio_tx::network::GenCost;
 
 use crate::{Error, Result};
 

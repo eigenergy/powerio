@@ -1,6 +1,6 @@
 //! Failures the matrix and dataset builders raise.
 //!
-//! [`Error`] carries what this crate constructs and wraps [`powerio::Error`]
+//! [`Error`] carries what this crate constructs and wraps [`powerio_tx::Error`]
 //! for everything the hub raises underneath, so `?` moves a hub failure across
 //! the boundary without restating it. A caller that only wants the coarse
 //! split reads [`Error::category`], which is the same taxonomy the hub uses.
@@ -16,12 +16,12 @@ use crate::diagnostics::codes;
 pub enum Error {
     /// A failure from the balanced model, its readers, or its writers.
     #[error(transparent)]
-    Core(#[from] powerio::Error),
+    Core(#[from] powerio_tx::Error),
 
     /// An underlying I/O failure this crate raised itself.
     ///
     /// One the hub raised arrives as [`Error::Core`] wrapping
-    /// `powerio::Error::Io`, so a caller telling I/O apart from the rest reads
+    /// `powerio_tx::Error::Io`, so a caller telling I/O apart from the rest reads
     /// [`Error::category`] rather than matching this variant.
     #[error(transparent)]
     Io(#[from] std::io::Error),
@@ -130,8 +130,8 @@ impl Error {
     /// The match is exhaustive over the variant set, so a new variant must be
     /// classified here before it compiles.
     #[must_use]
-    pub fn category(&self) -> powerio::ErrorCategory {
-        use powerio::ErrorCategory as C;
+    pub fn category(&self) -> powerio_tx::ErrorCategory {
+        use powerio_tx::ErrorCategory as C;
         match self {
             Error::Core(inner) => inner.category(),
             Error::Io(_) => C::Io,
@@ -210,7 +210,7 @@ pub type Result<T> = std::result::Result<T, Error>;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use powerio::ErrorCategory::{Data, Output, Parse};
+    use powerio_tx::ErrorCategory::{Data, Output, Parse};
 
     #[test]
     fn category_pins_the_intended_buckets() {
@@ -225,7 +225,7 @@ mod tests {
     #[test]
     fn every_error_code_publishes_the_category_the_variant_reports() {
         let every: Vec<Error> = vec![
-            powerio::Error::MissingField("bus").into(),
+            powerio_tx::Error::MissingField("bus").into(),
             std::io::Error::from(std::io::ErrorKind::NotFound).into(),
             Error::DimensionMismatch { n: 2, b_len: 3 },
             Error::ShapeMismatch {
@@ -270,13 +270,13 @@ mod tests {
 
     #[test]
     fn a_wrapped_hub_error_keeps_its_own_category() {
-        let wrapped: Error = powerio::Error::MissingField("bus").into();
+        let wrapped: Error = powerio_tx::Error::MissingField("bus").into();
         assert_eq!(wrapped.category(), Parse);
         // And its message, byte for byte: the C ABI reports errors as text, so
         // a wrapper that restated the message would change what a binding sees.
         assert_eq!(
             wrapped.to_string(),
-            powerio::Error::MissingField("bus").to_string()
+            powerio_tx::Error::MissingField("bus").to_string()
         );
     }
 }

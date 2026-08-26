@@ -1,4 +1,4 @@
-use powerio::BusId;
+use powerio_tx::BusId;
 use serde::{Deserialize, Serialize};
 
 /// One bus row: `(i, uid, v_min, v_max)`.

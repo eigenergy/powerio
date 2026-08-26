@@ -81,11 +81,13 @@ pub(crate) fn build_ybus_with_flags(case: &IndexedNetwork, flags: YbusFlags) -> 
     let mut b_coo = CooBuilder::with_capacity(n, 4 * case.branches().len() + n);
 
     for (row_idx, br) in case.in_service_branches() {
-        let i = case.bus_index(br.from).ok_or(powerio::Error::UnknownBus {
-            bus_id: br.from,
-            element_index: row_idx,
-        })?;
-        let j = case.bus_index(br.to).ok_or(powerio::Error::UnknownBus {
+        let i = case
+            .bus_index(br.from)
+            .ok_or(powerio_tx::Error::UnknownBus {
+                bus_id: br.from,
+                element_index: row_idx,
+            })?;
+        let j = case.bus_index(br.to).ok_or(powerio_tx::Error::UnknownBus {
             bus_id: br.to,
             element_index: row_idx,
         })?;
@@ -148,8 +150,8 @@ pub(crate) fn build_ybus_with_flags(case: &IndexedNetwork, flags: YbusFlags) -> 
 /// error.
 ///
 /// # Errors
-/// [`powerio::Error::NonFiniteSusceptance`] when `r`/`x` are NaN/Inf, so a bad value can't
-/// slip a NaN into Y_bus or a Parquet column. [`powerio::Error::DegenerateTap`] when the
+/// [`powerio_tx::Error::NonFiniteSusceptance`] when `r`/`x` are NaN/Inf, so a bad value can't
+/// slip a NaN into Y_bus or a Parquet column. [`powerio_tx::Error::DegenerateTap`] when the
 /// tap ratio is one the four admittances cannot be divided by.
 #[allow(clippy::many_single_char_names)]
 pub(crate) fn branch_admittance(
@@ -163,11 +165,11 @@ pub(crate) fn branch_admittance(
     // Zero impedance in every sense the builder can act on; exact zero used to
     // be the whole test. The guard and the division are shared with the AC
     // path, so the two cannot drift; only the skip-vs-error policy is local.
-    let Some((g, b)) = powerio::series_admittance_of(r, x, row)? else {
+    let Some((g, b)) = powerio_tx::series_admittance_of(r, x, row)? else {
         if flags.skip_zero_impedance {
             return Ok(None);
         }
-        return Err(powerio::Error::ZeroImpedance { row }.into());
+        return Err(powerio_tx::Error::ZeroImpedance { row }.into());
     };
     let y_series = Complex64::new(g, b);
 
@@ -200,7 +202,7 @@ pub(crate) fn branch_admittance(
     // Each input is bounded on its own above; the products can still overflow
     // when several sit near their bound at once.
     if out.iter().any(|y| !y.re.is_finite() || !y.im.is_finite()) {
-        return Err(powerio::Error::NonFiniteSusceptance { row }.into());
+        return Err(powerio_tx::Error::NonFiniteSusceptance { row }.into());
     }
     Ok(Some(out))
 }

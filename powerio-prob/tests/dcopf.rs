@@ -1,8 +1,8 @@
-use powerio::{
+use powerio_prob::{DcOpfOptions, Error, Units, build_dc_opf_instance};
+use powerio_tx::{
     BalancedNetwork, Branch, Bus, BusId, BusType, DcConvention, GenCost, Generator, IndexedNetwork,
     parse_matpower_file,
 };
-use powerio_prob::{DcOpfOptions, Error, Units, build_dc_opf_instance};
 
 fn case9() -> BalancedNetwork {
     parse_matpower_file("../tests/data/case9.m").expect("parse case9")
@@ -243,7 +243,7 @@ fn a_network_of_two_islands_grounds_a_bus_in_each() {
     assert!(matches!(
         problem.reference_buses.single(),
         Err(powerio_prob::Error::Core(
-            powerio::Error::ReferenceBusCount { found: 2, .. }
+            powerio_tx::Error::ReferenceBusCount { found: 2, .. }
         ))
     ));
 
@@ -308,7 +308,7 @@ fn cost_constant_term_is_kept() {
 fn bus_shunt_conductance_reaches_the_instance() {
     let mut net = small_network();
     net.shunts
-        .push(powerio::network::Shunt::new(BusId(30), 5.0, 0.0));
+        .push(powerio_tx::network::Shunt::new(BusId(30), 5.0, 0.0));
     let view = IndexedNetwork::new(&net);
     let base = view.base_mva();
 
@@ -378,8 +378,8 @@ fn a_non_finite_susceptance_is_refused_under_every_convention() {
                 matches!(
                     got,
                     Err(Error::Core(
-                        powerio::Error::NonFiniteSusceptance { row: 0 }
-                            | powerio::Error::DegenerateTap { row: 0, .. }
+                        powerio_tx::Error::NonFiniteSusceptance { row: 0 }
+                            | powerio_tx::Error::DegenerateTap { row: 0, .. }
                     ))
                 ),
                 "{convention:?} accepted x = {x}, tap = {tap}: {:?}",
@@ -422,8 +422,8 @@ fn matpower_convention_applies_tap_and_phase_shift() {
 fn phase_shift_and_shunt_complete_the_dc_balance_and_flow_equations() {
     let mut net = small_network();
     net.branches[0].shift = 10.0;
-    net.loads.push(powerio::Load::new(BusId(30), 20.0, 0.0));
-    net.shunts.push(powerio::Shunt::new(BusId(30), 5.0, 0.0));
+    net.loads.push(powerio_tx::Load::new(BusId(30), 20.0, 0.0));
+    net.shunts.push(powerio_tx::Shunt::new(BusId(30), 5.0, 0.0));
     let problem = build_dc_opf_instance(
         &IndexedNetwork::new(&net),
         &DcOpfOptions {
@@ -481,7 +481,7 @@ fn missing_and_unsupported_costs_are_distinct() {
         .expect_err("missing cost");
     assert!(matches!(
         error,
-        Error::Core(powerio::Error::MissingGenCost { gen_index: 0 })
+        Error::Core(powerio_tx::Error::MissingGenCost { gen_index: 0 })
     ));
 
     let mut piecewise = small_network();
@@ -523,7 +523,7 @@ fn zero_reactance_can_be_skipped_or_rejected() {
     .expect_err("reject");
     assert!(matches!(
         error,
-        Error::Core(powerio::Error::ZeroImpedance { row: 0 })
+        Error::Core(powerio_tx::Error::ZeroImpedance { row: 0 })
     ));
 }
 
@@ -547,7 +547,7 @@ fn a_reactance_the_instance_cannot_divide_by_reads_as_zero_impedance() {
     .expect_err("reject");
     assert!(matches!(
         error,
-        Error::Core(powerio::Error::ZeroImpedance { row: 0 })
+        Error::Core(powerio_tx::Error::ZeroImpedance { row: 0 })
     ));
 }
 
@@ -567,7 +567,7 @@ fn a_tap_the_instance_cannot_divide_by_is_refused() {
         assert!(
             matches!(
                 error,
-                Error::Core(powerio::Error::DegenerateTap { row: 0, .. })
+                Error::Core(powerio_tx::Error::DegenerateTap { row: 0, .. })
             ),
             "tap {tap}: {error}"
         );
@@ -641,7 +641,7 @@ fn zero_base_mva_is_rejected() {
         .expect_err("zero base");
     assert!(matches!(
         error,
-        Error::Core(powerio::Error::InvalidBaseMva { .. })
+        Error::Core(powerio_tx::Error::InvalidBaseMva { .. })
     ));
 }
 
@@ -695,10 +695,10 @@ fn options_deserialize_without_synthesize_unrated_limits() {
 
 #[cfg(feature = "matrix")]
 mod matrix_tests {
-    use powerio::{GenCostPolicyReport, MissingGenCostPolicy};
     use powerio_prob::matrix::{
         DcOpfBundleMetadata, DcOpfBundleOptions, build_dc_opf_matrices, write_dcopf_bundle,
     };
+    use powerio_tx::{GenCostPolicyReport, MissingGenCostPolicy};
 
     use super::*;
 
@@ -749,7 +749,7 @@ mod matrix_tests {
         let mut net = parse_matpower_file("../tests/data/case14.m").expect("parse case14");
         net.branches[0].shift = 10.0;
         net.shunts
-            .push(powerio::Shunt::new(net.buses[1].id, 5.0, 0.0));
+            .push(powerio_tx::Shunt::new(net.buses[1].id, 5.0, 0.0));
         let problem = build_dc_opf_instance(
             &IndexedNetwork::new(&net),
             &DcOpfOptions {
@@ -779,7 +779,7 @@ mod matrix_tests {
         )
         .expect("manifest json");
         assert_eq!(manifest["schema"], "powerio.dcopf");
-        assert_eq!(manifest["powerio_version"], powerio::VERSION);
+        assert_eq!(manifest["powerio_version"], powerio_tx::VERSION);
         let c0_gen =
             powerio_matrix::io::read_vector_mtx(bundle.dir.join("c0_gen.mtx")).expect("c0_gen");
         assert_eq!(c0_gen, problem.generators.c0);

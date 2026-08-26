@@ -43,6 +43,7 @@ case "$target" in
   workspace)
     run cargo clippy --all-targets \
       -p powerio \
+      -p powerio-tx \
       -p powerio-core \
       -p powerio-matrix \
       -p powerio-prob \

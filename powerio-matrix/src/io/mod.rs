@@ -25,7 +25,7 @@ pub use sensitivity::write_sensitivity_mtx_with_options;
 /// `parse_file`.
 ///
 /// # Errors
-/// [`powerio::Error::UnknownFormat`] for a non-dataset format name; otherwise
+/// [`powerio_tx::Error::UnknownFormat`] for a non-dataset format name; otherwise
 /// as [`read_gridfm_dataset`].
 #[cfg(feature = "gridfm")]
 pub fn read_dataset_dir(
@@ -53,11 +53,11 @@ pub fn dataset_scenario_ids(
 }
 
 #[cfg(feature = "gridfm")]
-fn require_dataset_format(from: &str) -> powerio::Result<()> {
+fn require_dataset_format(from: &str) -> powerio_tx::Result<()> {
     if from.eq_ignore_ascii_case("gridfm") {
         return Ok(());
     }
-    Err(powerio::Error::UnknownFormat(format!(
+    Err(powerio_tx::Error::UnknownFormat(format!(
         "{from} is not a dataset directory format (dataset formats: gridfm); \
          PyPSA CSV directories parse through parse_file"
     )))

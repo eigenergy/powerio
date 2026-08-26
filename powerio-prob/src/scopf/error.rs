@@ -5,7 +5,7 @@ use std::fmt;
 #[non_exhaustive]
 pub enum ScopfError {
     Json(serde_json::Error),
-    Source(powerio::Error),
+    Source(powerio_tx::Error),
     UnsupportedFormat(String),
     InvalidDocument(String),
 }
@@ -61,8 +61,8 @@ impl From<serde_json::Error> for ScopfError {
     }
 }
 
-impl From<powerio::Error> for ScopfError {
-    fn from(error: powerio::Error) -> Self {
+impl From<powerio_tx::Error> for ScopfError {
+    fn from(error: powerio_tx::Error) -> Self {
         Self::Source(error)
     }
 }

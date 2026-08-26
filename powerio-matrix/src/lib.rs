@@ -3,7 +3,7 @@
 //! Outputs include signed incidence, weighted bus Laplacian, MATPOWER Bp/Bpp,
 //! Y bus, PTDF, LODF, adjacency, LACPF, and petgraph views. Builders take the
 //! dense [`IndexedNetwork`] view of a [`BalancedNetwork`]. The crate reexports
-//! [`powerio`] types and functions.
+//! [`powerio_tx`] types and functions.
 //!
 //! ```
 //! use powerio_matrix::{parse_file, IndexedNetwork, build_bprime, BuildOptions};
@@ -33,7 +33,7 @@
 // and so the matrix modules' `crate::network` / `crate::format` paths resolve
 // unchanged after the split. `Error` and `Result` are this crate's own: the
 // variants below are raised here and nowhere in the hub.
-pub use powerio::{
+pub use powerio_tx::{
     BalancedNetwork, Branch, Bus, BusId, BusType, ConnectivityReport, Conversion, DisplayData,
     DisplayFormat, ErrorCategory, Extras, GenCost, GenCostPatch, GenCostPolicyReport, Generator,
     Hvdc, IndexCore, IndexedNetwork, Load, MissingGenCostPolicy, NormalizeOptions,
@@ -55,7 +55,7 @@ pub mod error;
 pub use error::{ElementCounts, Error, Result, ScenarioMismatch};
 
 /// The hub's error, so a binding can map both through one taxonomy.
-pub use powerio::Error as CoreError;
+pub use powerio_tx::Error as CoreError;
 
 /// Compressed sparse row matrix used by the projection builders.
 pub type SparseMatrix = sprs::CsMat<f64>;
