@@ -1,0 +1,13 @@
+[package]
+name = "powerio-prob-prototype"
+version = "0.0.0"
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]
+powerio-dist-prototype = { path = "../powerio-dist" }
+powerio-core-prototype = { path = "../powerio-core" }
+powerio-tx-prototype = { path = "../powerio-tx" }
+
+[lints]
+workspace = true
