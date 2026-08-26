@@ -81,9 +81,24 @@ pub(crate) fn read_pypsa_csv_source(
     source: &powerio_core::Source,
     warnings: &mut Diagnostics,
 ) -> Result<BalancedNetwork> {
+    // A directory source yields its walk once, so the one listing threads
+    // through every consumer of it.
     let entries = source
         .entry_names()
         .map_err(|error| acquisition_error(&error))?;
+    read_pypsa_csv_static(source, entries, warnings, &HashSet::new())
+}
+
+/// The static read body; `entries` is the directory's one listing and
+/// `series_consumed` names the sibling series files a sequence entry
+/// interprets itself, so they are not reported as ignored.
+#[allow(clippy::too_many_lines)] // direct static-component CSV mapper; each block is one PyPSA table
+fn read_pypsa_csv_static(
+    source: &powerio_core::Source,
+    entries: Vec<powerio_core::ArtifactPath>,
+    warnings: &mut Diagnostics,
+    series_consumed: &HashSet<String>,
+) -> Result<BalancedNetwork> {
     let folder = PypsaFolder { source, entries };
     let path = Path::new(source.name());
     let network = folder.optional("network.csv")?;
@@ -453,6 +468,7 @@ pub(crate) fn read_pypsa_csv_source(
                     .extension()
                     .is_some_and(|e| e.eq_ignore_ascii_case("csv"))
                 && !consumed.contains(name)
+                && !series_consumed.contains(*name)
         })
         .map(str::to_owned)
         .collect();
@@ -1070,6 +1086,7 @@ fn storage_csv(net: &BalancedNetwork, key_of: &HashMap<BusId, String>) -> String
 
 #[derive(Debug)]
 struct CsvTable {
+    headers: Vec<String>,
     rows: Vec<CsvRow>,
 }
 
@@ -1102,12 +1119,290 @@ fn bad(message: impl Into<String>) -> Error {
     }
 }
 
+/// Which per point field one supported `{component}-{attribute}.csv` column
+/// patches.
+#[derive(Clone, Copy)]
+enum SeriesField {
+    LoadP,
+    LoadQ,
+    GenPg,
+    GenQg,
+    GenPmax,
+    GenPmin,
+    GenVg,
+    BusVm,
+    BusVa,
+}
+
+/// A parsed PyPSA sequence: the per snapshot networks, whether any problem
+/// input varied (else only solved state did), and the reader's findings.
+#[derive(Debug, Clone)]
+#[non_exhaustive]
+pub struct PypsaCsvSequence {
+    pub series: powerio_core::TimeSeries<BalancedNetwork>,
+    /// False when every varying column is solved electrical state, so the
+    /// sequence is one fixed network under changing state.
+    pub inputs_vary: bool,
+    pub diagnostics: Vec<crate::diagnostics::Diagnostic>,
+}
+
+/// The snapshot-local series files the sequence reader interprets: input
+/// setpoints and bounds, and complete electrical state output. Everything
+/// else stays reported rather than silently reduced.
+/// The field plus whether the column is problem input (a setpoint or bound,
+/// the `*_set`/`*_pu` spellings) rather than solved electrical state output
+/// (the bare `p`/`q`/voltage spellings). The distinction picks the
+/// sequence's value type: input changes produce a network per point, while a
+/// fixed network with only state output varying is an operating point
+/// series.
+fn series_field(component: &str, attribute: &str) -> Option<(SeriesField, bool)> {
+    match (component, attribute) {
+        ("loads", "p_set") => Some((SeriesField::LoadP, true)),
+        ("loads", "p") => Some((SeriesField::LoadP, false)),
+        ("loads", "q_set") => Some((SeriesField::LoadQ, true)),
+        ("loads", "q") => Some((SeriesField::LoadQ, false)),
+        ("generators", "p_set") => Some((SeriesField::GenPg, true)),
+        ("generators", "p") => Some((SeriesField::GenPg, false)),
+        ("generators", "q_set") => Some((SeriesField::GenQg, true)),
+        ("generators", "q") => Some((SeriesField::GenQg, false)),
+        ("generators", "p_max_pu") => Some((SeriesField::GenPmax, true)),
+        ("generators", "p_min_pu") => Some((SeriesField::GenPmin, true)),
+        ("generators", "v_mag_pu_set") => Some((SeriesField::GenVg, true)),
+        ("buses", "v_mag_pu") => Some((SeriesField::BusVm, false)),
+        ("buses", "v_ang") => Some((SeriesField::BusVa, false)),
+        _ => None,
+    }
+}
+
+/// One resolved series column: the field it patches, the element row, and one
+/// value per snapshot.
+struct SeriesColumn {
+    field: SeriesField,
+    /// Problem input rather than solved state output.
+    input: bool,
+    row: usize,
+    values: Vec<f64>,
+}
+
+/// Read a PyPSA CSV folder with time series siblings into a balanced network
+/// time series: one network handle per snapshot, static tables shared across
+/// the whole series, and the supported snapshot-local columns patched typed
+/// per point — load and generator setpoints, per unit dispatch bounds scaled
+/// by `p_nom`, voltage setpoints, and the solved bus voltage state. A series
+/// file outside that profile is reported and retained rather than silently
+/// reduced; a series column naming an unknown element, a non-numeric value,
+/// or a row axis that disagrees with `snapshots.csv` is refused.
+///
+/// # Errors
+/// A folder without `snapshots.csv`, a malformed series table, or any static
+/// profile error.
+// The listing scan, snapshot axis, column resolution, and per point patching
+// read as one sequence; splitting them would thread six locals through
+// helpers.
+#[allow(clippy::too_many_lines)]
+pub fn parse_pypsa_csv_time_series(source: &powerio_core::Source) -> Result<PypsaCsvSequence> {
+    let mut warnings = Diagnostics::new();
+    // A directory source yields its walk once; this one listing serves the
+    // series scan, the static read, and the series tables.
+    let entries = source
+        .entry_names()
+        .map_err(|error| acquisition_error(&error))?;
+
+    // Series siblings by name shape, before the static read so it does not
+    // report the interpreted ones as ignored.
+    let mut series_files: Vec<(String, String, String)> = Vec::new();
+    let mut consumed = HashSet::new();
+    for entry in &entries {
+        let name = entry.as_str();
+        if name.contains('/') {
+            continue;
+        }
+        let Some(stem) = name.strip_suffix(".csv") else {
+            continue;
+        };
+        let Some((component, attribute)) = stem.split_once('-') else {
+            continue;
+        };
+        if series_field(component, attribute).is_some() {
+            consumed.insert(name.to_string());
+        }
+        series_files.push((
+            name.to_string(),
+            component.to_string(),
+            attribute.to_string(),
+        ));
+    }
+
+    let base = read_pypsa_csv_static(source, entries.clone(), &mut warnings, &consumed)?;
+    let folder = PypsaFolder { source, entries };
+
+    // The snapshot axis. The label column is `snapshot` (the writer's and
+    // pandas' spelling), else `name`, else the leading index column.
+    let snapshot_table = folder
+        .optional("snapshots.csv")?
+        .ok_or_else(|| bad("a time series folder needs `snapshots.csv`"))?;
+    let label_column = ["snapshot", "name"]
+        .into_iter()
+        .find(|c| snapshot_table.headers.iter().any(|h| h == c))
+        .map(str::to_string)
+        .or_else(|| snapshot_table.headers.first().cloned())
+        .ok_or_else(|| bad("`snapshots.csv` has no columns"))?;
+    let snapshots: Vec<String> = snapshot_table
+        .rows
+        .iter()
+        .enumerate()
+        .map(|(i, row)| {
+            row.get(&label_column)
+                .cloned()
+                .ok_or_else(|| bad(format!("snapshots.csv row {}: empty snapshot label", i + 1)))
+        })
+        .collect::<Result<_>>()?;
+    if snapshots.is_empty() {
+        return Err(bad("`snapshots.csv` states no snapshots"));
+    }
+
+    // Element rows resolve by name in table order — the same order the static
+    // read built each table in.
+    let name_rows = |file: &str| -> Result<HashMap<String, usize>> {
+        let Some(table) = folder.optional(file)? else {
+            return Ok(HashMap::new());
+        };
+        Ok(table
+            .rows
+            .iter()
+            .enumerate()
+            .filter_map(|(i, row)| row.get("name").map(|n| (n.clone(), i)))
+            .collect())
+    };
+    let bus_rows: HashMap<String, usize> = folder
+        .required("buses.csv")?
+        .rows
+        .iter()
+        .enumerate()
+        .filter_map(|(i, row)| row.get("name").map(|n| (n.clone(), i)))
+        .collect();
+    let load_rows = name_rows("loads.csv")?;
+    let generator_rows = name_rows("generators.csv")?;
+    // `p_nom` scales the per unit dispatch bound series, with the static
+    // read's own fallback.
+    let p_nom: Vec<f64> = folder
+        .optional("generators.csv")?
+        .map_or_else(Vec::new, |t| {
+            t.rows
+                .iter()
+                .map(|row| {
+                    row.f("p_nom")
+                        .unwrap_or_else(|| row.f("p_set").unwrap_or(0.0).abs())
+                })
+                .collect()
+        });
+
+    let mut columns: Vec<SeriesColumn> = Vec::new();
+    for (file, component, attribute) in &series_files {
+        let Some((field, input)) = series_field(component, attribute) else {
+            warnings.push(&codes::READ_PYPSA_TABLE_UNSUPPORTED, format!(
+                "`{file}` is outside the snapshot-local series profile; retained for exact same format writing"
+            ));
+            continue;
+        };
+        let table = folder
+            .optional(file)?
+            .ok_or_else(|| bad(format!("`{file}` vanished between listing and read")))?;
+        if table.rows.len() != snapshots.len() {
+            return Err(bad(format!(
+                "`{file}` states {} rows for {} snapshots",
+                table.rows.len(),
+                snapshots.len()
+            )));
+        }
+        let rows_of: &HashMap<String, usize> = match field {
+            SeriesField::BusVm | SeriesField::BusVa => &bus_rows,
+            SeriesField::LoadP | SeriesField::LoadQ => &load_rows,
+            _ => &generator_rows,
+        };
+        for header in table.headers.iter().skip(1) {
+            if header.is_empty() {
+                continue;
+            }
+            let Some(&row) = rows_of.get(header) else {
+                return Err(bad(format!(
+                    "`{file}` column `{header}` names no element of its table"
+                )));
+            };
+            let values = table
+                .rows
+                .iter()
+                .enumerate()
+                .map(|(k, r)| {
+                    r.f(header).ok_or_else(|| {
+                        bad(format!(
+                            "`{file}` column `{header}` row {}: not a number",
+                            k + 1
+                        ))
+                    })
+                })
+                .collect::<Result<Vec<f64>>>()?;
+            columns.push(SeriesColumn {
+                field,
+                input,
+                row,
+                values,
+            });
+        }
+    }
+
+    let mut networks = Vec::with_capacity(snapshots.len());
+    for point in 0..snapshots.len() {
+        let mut network = base.clone();
+        for column in &columns {
+            let value = column.values[point];
+            match column.field {
+                SeriesField::LoadP => network.loads_mut()[column.row].p = value,
+                SeriesField::LoadQ => network.loads_mut()[column.row].q = value,
+                SeriesField::GenPg => network.generators_mut()[column.row].pg = value,
+                SeriesField::GenQg => network.generators_mut()[column.row].qg = value,
+                SeriesField::GenPmax => {
+                    network.generators_mut()[column.row].pmax =
+                        value * p_nom.get(column.row).copied().unwrap_or(0.0);
+                }
+                SeriesField::GenPmin => {
+                    network.generators_mut()[column.row].pmin =
+                        value * p_nom.get(column.row).copied().unwrap_or(0.0);
+                }
+                SeriesField::GenVg => network.generators_mut()[column.row].vg = value,
+                SeriesField::BusVm => network.buses_mut()[column.row].vm = value,
+                SeriesField::BusVa => {
+                    network.buses_mut()[column.row].va = value * crate::normalize::RAD_TO_DEG;
+                }
+            }
+        }
+        networks.push(network);
+    }
+
+    let time_points = snapshots
+        .iter()
+        .map(|label| powerio_core::TimePoint::new(label.clone(), None))
+        .collect::<std::result::Result<Vec<_>, powerio_core::Error>>()
+        .map_err(|e| bad(e.to_string()))?;
+    let series =
+        powerio_core::TimeSeries::new(time_points, networks).map_err(|e| bad(e.to_string()))?;
+    let inputs_vary = columns.iter().any(|column| column.input);
+    Ok(PypsaCsvSequence {
+        series,
+        inputs_vary,
+        diagnostics: warnings.into_records(),
+    })
+}
+
 fn parse_csv_table(text: &str, name: &str) -> Result<Option<CsvTable>> {
     let mut records = parse_csv(text, name)?
         .into_iter()
         .filter(|r| !(r.len() == 1 && r[0].trim().is_empty()));
     let Some(headers) = records.next() else {
-        return Ok(Some(CsvTable { rows: Vec::new() }));
+        return Ok(Some(CsvTable {
+            headers: Vec::new(),
+            rows: Vec::new(),
+        }));
     };
     let mut rows = Vec::new();
     for fields in records {
@@ -1118,7 +1413,7 @@ fn parse_csv_table(text: &str, name: &str) -> Result<Option<CsvTable>> {
             .collect();
         rows.push(CsvRow { vals });
     }
-    Ok(Some(CsvTable { rows }))
+    Ok(Some(CsvTable { headers, rows }))
 }
 
 /// Split a whole CSV file into records, honoring quoted fields: an embedded

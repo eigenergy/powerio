@@ -41,7 +41,10 @@ pub use prep::{AcOpfOptions, DcOpfOptions, Units};
 pub mod diagnostics;
 pub mod error;
 pub use error::{Error, Result};
-pub use formats::{parse_bmopf_instance, parse_goc3_instance, parse_opfdata_solution};
+pub use formats::{
+    PypsaSequence, parse_bmopf_instance, parse_goc3_instance, parse_opfdata_solution,
+    parse_pypsa_sequence,
+};
 pub use instance::{
     AcBusSpecification, AcOpfInstance, AcPfInstance, AcScucInstance, ActiveConstraints,
     ActiveControlMode, ConstraintSelection, DcBusSpecification, DcOpfInstance, DcPfInstance,

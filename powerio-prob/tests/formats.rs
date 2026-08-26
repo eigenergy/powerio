@@ -133,3 +133,88 @@ fn bmopf_without_a_source_is_refused_as_an_instance() {
     }"#;
     assert!(parse_bmopf_instance(text, "no_source").is_err());
 }
+
+fn write_pypsa_folder(dir: &std::path::Path, files: &[(&str, &str)]) {
+    std::fs::create_dir_all(dir).unwrap();
+    for (name, content) in files {
+        std::fs::write(dir.join(name), content).unwrap();
+    }
+}
+
+const PYPSA_STATIC: [(&str, &str); 4] = [
+    (
+        "network.csv",
+        "name
+seq
+",
+    ),
+    (
+        "buses.csv",
+        "name,v_nom
+B1,138.0
+B2,138.0
+",
+    ),
+    (
+        "loads.csv",
+        "name,bus,p_set,q_set
+L1,B2,5.0,1.0
+",
+    ),
+    (
+        "generators.csv",
+        "name,bus,control,p_nom,p_set
+G1,B1,Slack,100.0,12.0
+",
+    ),
+];
+
+#[test]
+fn pypsa_input_series_classify_as_networks() {
+    let temp = tempfile::tempdir().unwrap();
+    let dir = temp.path().join("inputs");
+    write_pypsa_folder(&dir, &PYPSA_STATIC);
+    write_pypsa_folder(
+        &dir,
+        &[
+            ("snapshots.csv", ",snapshot\n0,now\n1,later\n"),
+            ("loads-p_set.csv", "snapshot,L1\nnow,10.0\nlater,20.0\n"),
+        ],
+    );
+    let source = powerio_core::Source::open(&dir).unwrap();
+    let (sequence, _diagnostics) = powerio_prob::parse_pypsa_sequence(&source).unwrap();
+    match sequence {
+        powerio_prob::PypsaSequence::Networks(series) => assert_eq!(series.len(), 2),
+        other => panic!("expected networks, got {other:?}"),
+    }
+}
+
+#[test]
+fn pypsa_state_only_series_classify_as_operating_points() {
+    let temp = tempfile::tempdir().unwrap();
+    let dir = temp.path().join("state");
+    write_pypsa_folder(&dir, &PYPSA_STATIC);
+    write_pypsa_folder(
+        &dir,
+        &[
+            ("snapshots.csv", ",snapshot\n0,now\n1,later\n"),
+            (
+                "buses-v_mag_pu.csv",
+                "snapshot,B1,B2\nnow,1.0,0.99\nlater,1.0,0.97\n",
+            ),
+        ],
+    );
+    let source = powerio_core::Source::open(&dir).unwrap();
+    let (sequence, _diagnostics) = powerio_prob::parse_pypsa_sequence(&source).unwrap();
+    let powerio_prob::PypsaSequence::OperatingPoints(states) = sequence else {
+        panic!("expected operating points");
+    };
+    assert_eq!(states.len(), 2);
+    let later = &states.values()[1];
+    assert!((later.bus_voltage_magnitude(powerio_tx::BusId(2)).unwrap() - 0.97).abs() < 1e-12);
+    // One shared network under every point.
+    assert!(std::ptr::eq(
+        states.values()[0].network().buses().as_ptr(),
+        later.network().buses().as_ptr()
+    ));
+}

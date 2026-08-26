@@ -65,7 +65,9 @@ pub use powermodels::write_powermodels_json;
 pub use powerworld::{PwdDisplay, PwdSubstation, write_powerworld};
 pub use pslf::write_pslf;
 pub use psse::{write_psse, write_psse_rev};
-pub use pypsa::{PypsaCsvOutputs, write_pypsa_csv_folder};
+pub use pypsa::{
+    PypsaCsvOutputs, PypsaCsvSequence, parse_pypsa_csv_time_series, write_pypsa_csv_folder,
+};
 pub use surge::write_surge_json;
 
 /// A target case format. See [`write_as`].
