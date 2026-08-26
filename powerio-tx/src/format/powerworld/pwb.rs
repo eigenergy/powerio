@@ -87,12 +87,21 @@ const RESYNC_WINDOW: usize = 1024;
 /// truncation fixture peaks at 42M; exceeding the cap means the bytes are not
 /// a decodable layout, so the search stops and reports a read error instead
 /// of spinning.
+///
+/// #338 measured the ceiling: a systematic truncation sweep of the vendored
+/// ACTIVSg200.pwb (every 4 KiB, plus every 512 bytes over the first 64 KiB)
+/// peaks at 43,259,735 probes at 122,880 bytes — `probe_budget_tests` re-runs
+/// the sweep and guards the 2x headroom. A tighter budget would refuse real
+/// truncated saves, so the fuzz throughput cost of a header-shaped input
+/// spending its budget is inherent to the nested chain search; the
+/// structural fix (a table index instead of the chain search) stays open on
+/// #338.
 const SEARCH_PROBE_BUDGET: u64 = 128_000_000;
 
 /// Shared probe counter for one `parse_pwb` call. `tick` charges one probe and
 /// returns whether the budget still has room; `exhausted` reports afterward
 /// whether the search stopped because it ran out.
-struct SearchBudget(Cell<u64>);
+pub(crate) struct SearchBudget(pub(crate) Cell<u64>);
 
 impl SearchBudget {
     fn new() -> Self {
@@ -107,6 +116,27 @@ impl SearchBudget {
 
     fn exhausted(&self) -> bool {
         self.0.get() > SEARCH_PROBE_BUDGET
+    }
+}
+
+/// #338 measurement: after any parse, the probes that call spent are
+/// readable from the thread. The scheduled measurement test uses this to
+/// re-baseline `SEARCH_PROBE_BUDGET` against the vendored corpus and its
+/// truncations; nothing in production reads it.
+pub(crate) mod probe_report {
+    use std::cell::Cell;
+
+    thread_local! {
+        pub(crate) static LAST_PROBES: Cell<u64> = const { Cell::new(0) };
+    }
+
+    /// Records the budget's final count when the parse returns on any path.
+    pub(crate) struct Guard<'a>(pub(crate) &'a super::SearchBudget);
+
+    impl Drop for Guard<'_> {
+        fn drop(&mut self) {
+            LAST_PROBES.with(|slot| slot.set(self.0.0.get()));
+        }
     }
 }
 
@@ -221,6 +251,7 @@ fn parse_pwb_inner(bytes: &[u8], name_hint: Option<&str>) -> Result<BalancedNetw
     // shares the bus run cache so nothing is walked twice.
     let bus_runs = RefCell::new(HashMap::new());
     let budget = SearchBudget::new();
+    let _probe_guard = probe_report::Guard(&budget);
     let found = search_table_chain(
         bytes,
         name_hint,
@@ -2041,5 +2072,70 @@ mod tests {
         assert!((load.p - 50.0).abs() < 1e-9);
         assert!((load.q - 25.0).abs() < 1e-9);
         assert_eq!(c.pos, 41);
+    }
+}
+
+#[cfg(test)]
+mod probe_budget_tests {
+    use super::*;
+
+    fn activsg200() -> Vec<u8> {
+        std::fs::read(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../tests/data/powerworld/ACTIVSg200.pwb"
+        ))
+        .unwrap()
+    }
+
+    fn probes_for(bytes: &[u8]) -> u64 {
+        let _ = parse_pwb(bytes, None);
+        probe_report::LAST_PROBES.with(std::cell::Cell::get)
+    }
+
+    /// #338: the recorded worst truncation offset stays under half the
+    /// budget. One point, fast enough for every run; the full sweep below is
+    /// the measurement harness.
+    #[test]
+    fn recorded_worst_truncation_keeps_its_headroom() {
+        let full = activsg200();
+        let cut = 122_880.min(full.len());
+        let probes = probes_for(&full[..cut]);
+        assert!(
+            probes <= SEARCH_PROBE_BUDGET / 2,
+            "recorded worst offset now spends {probes}"
+        );
+    }
+
+    /// #338 measurement harness: the worst probe spend across the vendored
+    /// file and a systematic truncation sweep, printed with its offset.
+    /// `cargo test -p powerio-tx --release --lib truncation_probe -- --ignored --nocapture`
+    #[test]
+    #[ignore = "minutes-long sweep; run for a re-baseline measurement"]
+    fn truncation_probe_spend_stays_within_headroom() {
+        let full = activsg200();
+        let mut worst = (probes_for(&full), full.len());
+        // Every 4 KiB, plus a fine sweep over the first 64 KiB where the
+        // recorded historical worst case lives.
+        let coarse = (0..full.len()).step_by(4096);
+        let fine = (0..full.len().min(65536)).step_by(512);
+        for cut in coarse.chain(fine) {
+            let probes = probes_for(&full[..cut]);
+            if probes > worst.0 {
+                worst = (probes, cut);
+            }
+        }
+        println!(
+            "worst probe spend: {} at {} bytes (budget {SEARCH_PROBE_BUDGET})",
+            worst.0, worst.1
+        );
+        // Measured 2026-08: 43,259,735 probes at 122,880 bytes. The budget
+        // holds about 3x that; this guards the 2x line so a search change
+        // that erodes the headroom is caught with the number in hand.
+        assert!(
+            worst.0 <= SEARCH_PROBE_BUDGET / 2,
+            "worst truncation spend {} at {} bytes leaves under 2x headroom",
+            worst.0,
+            worst.1
+        );
     }
 }
