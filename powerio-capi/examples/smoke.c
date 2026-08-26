@@ -33,7 +33,7 @@ static long smoke_pid(void) { return (long)getpid(); }
 static void smoke_rmdir(const char *path) { rmdir(path); }
 #endif
 
-#if PIO_ABI_VERSION != 5
+#if PIO_ABI_VERSION != 6
 #error "PIO_ABI_VERSION changed without updating the C ABI smoke test"
 #endif
 
@@ -545,7 +545,113 @@ int main(int argc, char **argv) {
     CHECK(pio_n_buses(NULL) == 0, "NULL handle did not return 0");
     CHECK(pio_ref_bus_index(NULL) == -1, "NULL handle did not return -1");
 
-    pio_network_free(c);
+    /* ---- ABI v6: retain/release, error handles, modules, DC data ---- */
+
+    /* The v5 network handle carries the v6 lifecycle: a retained sibling
+     * survives the original's release, and release(NULL) is a no-op. */
+    {
+        PioNetwork *kept = pio_network_retain(c);
+        CHECK(kept != NULL, "network retain returned NULL");
+        pio_network_free(c);
+        CHECK(pio_n_buses(kept) == 9, "retained network lost its buses");
+        pio_network_release(kept);
+        pio_network_release(NULL);
+        c = NULL;
+    }
+
+    /* A failing v6 call returns a structured error handle. */
+    {
+        PioError *error = NULL;
+        PioModuleHandle *bad = pio_module_parse_str("not a case", "matpower", &error);
+        CHECK(bad == NULL, "malformed parse returned a module");
+        CHECK(error != NULL, "malformed parse returned no error handle");
+        CHECK(pio_error_code(error) != NULL && strchr(pio_error_code(error), '.') != NULL,
+              "error code is not a dotted diagnostic code");
+        CHECK(pio_error_message(error) != NULL && strlen(pio_error_message(error)) > 0,
+              "error message is empty");
+        CHECK(pio_error_diagnostics_json(error) != NULL,
+              "error diagnostics JSON is NULL");
+        PioError *kept_error = pio_error_retain(error);
+        pio_error_release(error);
+        CHECK(strlen(pio_error_message(kept_error)) > 0,
+              "retained error lost its message");
+        pio_error_release(kept_error);
+        pio_error_release(NULL);
+    }
+
+    /* The module handle: parse, write, reread, ownership orders. */
+    {
+        PioError *error = NULL;
+        PioModuleHandle *module = pio_module_parse_file(argv[1], NULL, &error);
+        CHECK(module != NULL, "module parse failed");
+        CHECK(error == NULL, "module parse stored an error on success");
+        CHECK(strcmp(pio_module_kind(module), "balanced_network") == 0,
+              "module kind is not balanced_network");
+
+        char *doc = pio_module_write_json(module, &error);
+        CHECK(doc != NULL, "module write failed");
+        PioModuleHandle *reread = pio_module_read_json(doc, &error);
+        CHECK(reread != NULL, "stored module reread failed");
+        pio_string_free(doc);
+
+        char *inspect = pio_module_inspect_json(reread, &error);
+        CHECK(inspect != NULL && strstr(inspect, "\"balanced_network\"") != NULL,
+              "module inspection missing the kind");
+        pio_string_free(inspect);
+
+        /* A static value refuses selection with a coded error. */
+        PioModuleHandle *exported = pio_module_export_state(reread, 0, NULL, &error);
+        CHECK(exported == NULL, "static value export unexpectedly succeeded");
+        CHECK(error != NULL &&
+                  strstr(pio_error_code(error), "REQUEST.STATE.NOT_A_COLLECTION") != NULL,
+              "static export refusal carries the wrong code");
+        pio_error_release(error);
+        error = NULL;
+
+        /* DC data: an independently owned result with stable mappings. */
+        PioDcData *dc = pio_dc_data_build(reread, "series_susceptance", &error);
+        CHECK(dc != NULL, "DC data build failed");
+        pio_module_release(reread);
+        pio_module_release(module);
+        size_t rows = pio_dc_data_n_rows(dc);
+        size_t buses = pio_dc_data_n_buses(dc);
+        CHECK(rows == 9 && buses == 9, "case9 DC data has 9 rows over 9 buses");
+        const int64_t *from = pio_dc_data_from_indices(dc);
+        const int64_t *to = pio_dc_data_to_indices(dc);
+        const double *b = pio_dc_data_susceptance(dc);
+        const char *const *row_ids = pio_dc_data_row_ids(dc);
+        const char *const *bus_ids = pio_dc_data_bus_ids(dc);
+        CHECK(from != NULL && to != NULL && b != NULL && row_ids != NULL && bus_ids != NULL,
+              "DC data spans are NULL");
+        for (size_t e = 0; e < rows; e++) {
+            CHECK(from[e] >= 0 && (size_t)from[e] < buses, "from index out of range");
+            CHECK(to[e] >= 0 && (size_t)to[e] < buses, "to index out of range");
+            CHECK(b[e] > 0.0, "case9 series susceptance should be positive");
+            CHECK(row_ids[e] != NULL && strncmp(row_ids[e], "branches:", 9) == 0,
+                  "row mapping is not a stable element ID");
+        }
+        CHECK(pio_dc_data_n_omitted(dc) == 0, "case9 omits no branch");
+        CHECK(strcmp(pio_dc_data_formula(dc), "series_susceptance") == 0,
+              "formula name drifted");
+
+        /* Sign conversion happens while filling the caller's buffer. */
+        double va[9] = {0};
+        va[(size_t)from[0]] = 0.05;
+        double flow[9] = {0};
+        CHECK(pio_dc_data_fill_branch_flow(dc, va, buses, flow, rows),
+              "branch flow fill failed");
+        CHECK(flow[0] != 0.0, "branch flow ignored the angle");
+        CHECK(!pio_dc_data_fill_branch_flow(dc, va, buses - 1, flow, rows),
+              "length mismatch was not refused");
+
+        PioDcData *dc_kept = pio_dc_data_retain(dc);
+        pio_dc_data_release(dc);
+        CHECK(pio_dc_data_n_rows(dc_kept) == rows, "retained DC data lost rows");
+        pio_dc_data_release(dc_kept);
+        pio_dc_data_release(NULL);
+        pio_module_release(NULL);
+    }
+
     printf("C ABI smoke test OK\n");
     return 0;
 }

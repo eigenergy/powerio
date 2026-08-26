@@ -43,6 +43,7 @@ use powerio::package::diagnostics::codes as pkg_codes;
 #[cfg(feature = "arrow")]
 mod arrow_export;
 pub mod diagnostics;
+pub mod v6;
 #[cfg(feature = "arrow")]
 pub use arrow_export::{
     PIO_ARROW_TABLE_BDOUBLEPRIME, PIO_ARROW_TABLE_BPRIME, PIO_ARROW_TABLE_BRANCH,
@@ -59,7 +60,7 @@ pub use arrow_export::{
 /// [`IndexCore`] derived from it once at parse time (so every indexed query
 /// reuses the same bus-id map and per-bus aggregates instead of rebuilding
 /// them), and the reader's fidelity warnings ([`pio_warnings`]).
-pub struct PioNetwork {
+pub struct NetworkState {
     /// The parsed module: the typed network plus retained source and the
     /// reader's findings. Same format writes echo the retained bytes exactly,
     /// as ABI v5 promises; a handle built from a bare network carries no
@@ -70,7 +71,7 @@ pub struct PioNetwork {
     warnings: Vec<String>,
 }
 
-impl PioNetwork {
+impl NetworkState {
     fn net(&self) -> &BalancedNetwork {
         self.module.value()
     }
@@ -79,6 +80,13 @@ impl PioNetwork {
         self.module.diagnostics()
     }
 }
+
+crate::v6::arc_handle!(
+    /// The opaque balanced network handle: an independently owned reference
+    /// over one immutable parsed network (ABI v6 lifecycle).
+    PioNetwork,
+    NetworkState
+);
 
 // The handle is immutable after construction and the C ABI documents concurrent
 // reads from any number of threads as safe (see the cbindgen header preamble).
@@ -218,11 +226,11 @@ fn parse_module_from_bytes(
 /// for `*mut PioNetwork`.
 fn make_network_module(module: powerio_core::PioModule<BalancedNetwork>) -> *mut PioNetwork {
     let core = IndexCore::build(module.value());
-    Box::into_raw(Box::new(PioNetwork {
+    PioNetwork::new_raw(NetworkState {
         core,
         warnings: powerio::diagnostics::render_diagnostics(module.diagnostics()),
         module,
-    }))
+    })
 }
 
 /// Box a bare network with findings: the constructor for derived handles,
@@ -309,7 +317,7 @@ unsafe fn finish_network(
 /// warning line reads `CODE: message`, and the seven conversion entry points
 /// publish structured records through `out_diagnostics_json` in place of the
 /// text `out_warnings` channel.
-pub const PIO_ABI_VERSION: u32 = 5;
+pub const PIO_ABI_VERSION: u32 = 6;
 
 /// Frozen at 1 and no longer meaningful. It existed to absorb distribution
 /// volatility, but that volatility lives in the BMOPF schema, which changes a
@@ -907,24 +915,32 @@ pub unsafe extern "C" fn pio_network_free(net: *mut PioNetwork) {
         // Under the same panic guard as every other entry point: the drop is
         // pure deallocation today, but "catches panics" must not depend on that
         // staying true.
-        guard((), || {
-            if !net.is_null() {
-                drop(Box::from_raw(net));
-            }
-        });
+        guard((), || PioNetwork::release_raw(net));
     }
 }
 
-unsafe fn network_ref<'a>(net: *const PioNetwork) -> Option<&'a PioNetwork> {
-    unsafe { net.as_ref() }
+/// Mint an independent handle to the same network. NULL stays NULL.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pio_network_retain(net: *const PioNetwork) -> *mut PioNetwork {
+    unsafe { guard(std::ptr::null_mut(), || PioNetwork::retain_raw(net)) }
+}
+
+/// Release one network handle: identical to `pio_network_free`, spelled with
+/// the ABI v6 lifecycle name. NULL is a no-op.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pio_network_release(net: *mut PioNetwork) {
+    unsafe {
+        guard((), || PioNetwork::release_raw(net));
+    }
+}
+
+unsafe fn network_ref<'a>(net: *const PioNetwork) -> Option<&'a NetworkState> {
+    unsafe { PioNetwork::get(net) }
 }
 
 /// View `net` through its cached [`IndexCore`] with no per-call rebuild.
 unsafe fn view<'a>(net: *const PioNetwork) -> Option<IndexedNetwork<'a>> {
-    unsafe {
-        net.as_ref()
-            .map(|c| IndexedNetwork::with_core(c.net(), &c.core))
-    }
+    unsafe { PioNetwork::get(net).map(|c| IndexedNetwork::with_core(c.net(), &c.core)) }
 }
 
 /// Solver preparation repairs for [`pio_normalize`], in the extensible options
@@ -2047,6 +2063,10 @@ pub unsafe extern "C" fn pio_arrow_catalog_json(errbuf: *mut c_char, errlen: usi
 /// Opaque `.pio.json` compiler package handle. A package owns one
 /// [`powerio::package::NetworkPackage`], which wraps either a balanced
 /// [`PioNetwork`] payload or a multiconductor [`PioDistNetwork`] payload.
+/// The 0.9 `.pio.json` package handle. The one single owner handle type:
+/// its API mutates in place (`pio_package_validate`,
+/// `pio_package_set_operating_points`), so it keeps the v5 lifecycle with no
+/// `retain`. The ABI v6 module handle (`pio_module_*`) supersedes it.
 #[cfg(feature = "pkg")]
 pub struct PioPackage {
     package: powerio::package::NetworkPackage,
@@ -2753,9 +2773,16 @@ fn geo_apply_summary(report: &powerio::GeoApplyReport) -> String {
 
 /// Opaque matrix free SCOPF instance.
 #[cfg(feature = "prob")]
-pub struct PioScopfInstance {
+pub struct ScopfInstanceState {
     instance: powerio_prob::ScucInputs,
 }
+
+#[cfg(feature = "prob")]
+crate::v6::arc_handle!(
+    /// The opaque SCOPF instance handle (ABI v6 lifecycle).
+    PioScopfInstance,
+    ScopfInstanceState
+);
 
 #[cfg(feature = "prob")]
 const _: fn() = || {
@@ -2779,7 +2806,7 @@ pub unsafe extern "C" fn pio_scopf_parse_str(
             let text = required_cstr(text, "text")?;
             let from = required_cstr(from, "from")?;
             let instance = powerio_prob::parse_scopf_str(text, from).map_err(err_line)?;
-            Ok(PioScopfInstance { instance })
+            Ok(PioScopfInstance::wrap(ScopfInstanceState { instance }))
         })
     }
 }
@@ -2857,11 +2884,30 @@ pub unsafe extern "C" fn pio_scopf_to_json_with_index_base(
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_scopf_instance_free(instance: *mut PioScopfInstance) {
     unsafe {
-        guard((), || {
-            if !instance.is_null() {
-                drop(Box::from_raw(instance));
-            }
-        });
+        guard((), || PioScopfInstance::release_raw(instance));
+    }
+}
+
+/// Mint an independent handle to the same SCOPF instance. NULL stays NULL.
+#[cfg(feature = "prob")]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pio_scopf_instance_retain(
+    instance: *const PioScopfInstance,
+) -> *mut PioScopfInstance {
+    unsafe {
+        guard(std::ptr::null_mut(), || {
+            PioScopfInstance::retain_raw(instance)
+        })
+    }
+}
+
+/// Release one SCOPF instance handle: identical to
+/// `pio_scopf_instance_free`, spelled with the ABI v6 lifecycle name.
+#[cfg(feature = "prob")]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pio_scopf_instance_release(instance: *mut PioScopfInstance) {
+    unsafe {
+        guard((), || PioScopfInstance::release_raw(instance));
     }
 }
 
@@ -2906,7 +2952,7 @@ unsafe fn finish_handle<H>(
 /// model); none of the `pio_n_*`/extractor functions accept it. Only built with
 /// the `dist` cargo feature.
 #[cfg(feature = "dist")]
-pub struct PioDistNetwork {
+pub struct DistNetworkState {
     /// The parsed module: the typed network plus retained source and the
     /// reader's findings. Same format writes echo the retained bytes exactly,
     /// as ABI v5 promises; a handle built from a bare network carries no
@@ -2917,26 +2963,36 @@ pub struct PioDistNetwork {
 }
 
 #[cfg(feature = "dist")]
-impl PioDistNetwork {
+impl DistNetworkState {
     fn net(&self) -> &powerio_dist::MulticonductorNetwork {
         self.module.value()
     }
+}
 
+#[cfg(feature = "dist")]
+crate::v6::arc_handle!(
+    /// The opaque multiconductor network handle (ABI v6 lifecycle).
+    PioDistNetwork,
+    DistNetworkState
+);
+
+#[cfg(feature = "dist")]
+impl PioDistNetwork {
     /// A parsed handle: warnings rendered from the module's findings.
     fn from_module(module: powerio_core::PioModule<powerio_dist::MulticonductorNetwork>) -> Self {
-        Self {
+        Self::wrap(DistNetworkState {
             warnings: powerio_dist::diagnostics::render_diagnostics(module.diagnostics()),
             module,
-        }
+        })
     }
 
     /// A derived handle: no retained source, so writes are canonical; the
     /// warning lines come from the deriving surface.
     fn from_network(net: powerio_dist::MulticonductorNetwork, warnings: Vec<String>) -> Self {
-        Self {
+        Self::wrap(DistNetworkState {
             module: powerio_core::PioModule::new(net),
             warnings,
-        }
+        })
     }
 }
 
@@ -3049,11 +3105,27 @@ pub unsafe extern "C" fn pio_dist_network_free(net: *mut PioDistNetwork) {
     unsafe {
         // Same rationale as `pio_network_free`: the boundary catches panics so a
         // Drop on the `serde_json::Value` extras can't unwind across the ABI.
-        guard((), || {
-            if !net.is_null() {
-                drop(Box::from_raw(net));
-            }
-        });
+        guard((), || PioDistNetwork::release_raw(net));
+    }
+}
+
+/// Mint an independent handle to the same multiconductor network. NULL stays
+/// NULL.
+#[cfg(feature = "dist")]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pio_dist_network_retain(
+    net: *const PioDistNetwork,
+) -> *mut PioDistNetwork {
+    unsafe { guard(std::ptr::null_mut(), || PioDistNetwork::retain_raw(net)) }
+}
+
+/// Release one multiconductor network handle: identical to
+/// `pio_dist_network_free`, spelled with the ABI v6 lifecycle name.
+#[cfg(feature = "dist")]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pio_dist_network_release(net: *mut PioDistNetwork) {
+    unsafe {
+        guard((), || PioDistNetwork::release_raw(net));
     }
 }
 
@@ -3929,7 +4001,7 @@ mod tests {
         // The ABI version is the load-time compatibility check; the version
         // string is static, NUL-terminated, and non-empty.
         assert_eq!(pio_abi_version(), PIO_ABI_VERSION);
-        assert_eq!(PIO_ABI_VERSION, 5);
+        assert_eq!(PIO_ABI_VERSION, 6);
         let v = unsafe { CStr::from_ptr(pio_version()) }.to_str().unwrap();
         assert_eq!(v, env!("CARGO_PKG_VERSION"));
         assert!(!v.is_empty());
@@ -4099,7 +4171,13 @@ mod tests {
     fn c_header_abi_manifest_is_pinned() {
         let actual = c_header_abi_manifest(include_str!("../include/powerio.h"));
         let expected = [
-            "#define PIO_ABI_VERSION 5",
+            "typedef struct PioNetwork PioNetwork;",
+            "typedef struct PioError PioError;",
+            "typedef struct PioModuleHandle PioModuleHandle;",
+            "typedef struct PioDcData PioDcData;",
+            "typedef struct PioDistNetwork PioDistNetwork;",
+            "typedef struct PioScopfInstance PioScopfInstance;",
+            "#define PIO_ABI_VERSION 6",
             "#define PIO_DIST_ABI_VERSION 1",
             "#define PIO_ERRBUF_MIN 256",
             "#define PIO_SCOPF_INDEX_BASE_ZERO 0",
@@ -4130,16 +4208,9 @@ mod tests {
             "#define PIO_ARROW_TABLE_MATRIX_BRANCH 20",
             "#define PIO_ARROW_TABLE_SOLVER_GEN_COST 21",
             "#define PIO_ARROW_TABLE_SOLVER_GEN_COST_COEFF 22",
-            "typedef struct PioDistNetwork PioDistNetwork;",
-            "typedef struct PioNetwork PioNetwork;",
             "typedef struct PioPackage PioPackage;",
-            "typedef struct PioScopfInstance PioScopfInstance;",
-            "typedef struct { size_t struct_size; int32_t clamp_angle_bounds; \
-             int32_t reserved; double angle_bound_pad; } PioNormalizeOptions;",
-            "typedef struct { size_t struct_size; int32_t missing_gen_cost_mode; \
-             int32_t reserved; double fill_c2; double fill_c1; double fill_c0; \
-             double fill_startup; double fill_shutdown; const char *gen_cost_csv; \
-             } PioWriteOptions;",
+            "typedef struct { size_t struct_size; int32_t clamp_angle_bounds; int32_t reserved; double angle_bound_pad; } PioNormalizeOptions;",
+            "typedef struct { size_t struct_size; int32_t missing_gen_cost_mode; int32_t reserved; double fill_c2; double fill_c1; double fill_c0; double fill_startup; double fill_shutdown; const char *gen_cost_csv; } PioWriteOptions;",
             "uint32_t pio_abi_version(void);",
             "uint32_t pio_dist_abi_version(void);",
             "char *pio_dist_capabilities_json(void);",
@@ -4158,6 +4229,8 @@ mod tests {
             "ptrdiff_t pio_scenario_ids(const char *dir, const char *from, int64_t *out, size_t cap, char *errbuf, size_t errlen);",
             "size_t pio_warnings(const PioNetwork *net, char *warnbuf, size_t warnlen);",
             "void pio_network_free(PioNetwork *net);",
+            "PioNetwork *pio_network_retain(const PioNetwork *net);",
+            "void pio_network_release(PioNetwork *net);",
             "PioNetwork *pio_normalize(const PioNetwork *net, const PioNormalizeOptions *opts, char *errbuf, size_t errlen);",
             "size_t pio_n_buses(const PioNetwork *net);",
             "size_t pio_n_branches(const PioNetwork *net);",
@@ -4210,9 +4283,13 @@ mod tests {
             "char *pio_scopf_to_json(const PioScopfInstance *instance, char *errbuf, size_t errlen);",
             "char *pio_scopf_to_json_with_index_base(const PioScopfInstance *instance, int32_t index_base, char *errbuf, size_t errlen);",
             "void pio_scopf_instance_free(PioScopfInstance *instance);",
+            "PioScopfInstance *pio_scopf_instance_retain(const PioScopfInstance *instance);",
+            "void pio_scopf_instance_release(PioScopfInstance *instance);",
             "PioDistNetwork *pio_dist_parse_file(const char *path, const char *from, char *errbuf, size_t errlen);",
             "PioDistNetwork *pio_dist_parse_str(const char *text, const char *format, char *errbuf, size_t errlen);",
             "void pio_dist_network_free(PioDistNetwork *net);",
+            "PioDistNetwork *pio_dist_network_retain(const PioDistNetwork *net);",
+            "void pio_dist_network_release(PioDistNetwork *net);",
             "size_t pio_dist_warnings(const PioDistNetwork *net, char *warnbuf, size_t warnlen);",
             "char *pio_dist_summary_json(const PioDistNetwork *net, char *errbuf, size_t errlen);",
             "char *pio_dist_to_json(const PioDistNetwork *net, char *errbuf, size_t errlen);",
@@ -4223,6 +4300,39 @@ mod tests {
             "char *pio_dist_convert_str(const char *text, const char *from, const char *to, char **out_diagnostics_json, char *errbuf, size_t errlen);",
             "char *pio_dist_geo_extract(const PioDistNetwork *net, char *errbuf, size_t errlen);",
             "PioDistNetwork *pio_dist_geo_apply(const PioDistNetwork *net, const char *layer, const char *name_hint, char *errbuf, size_t errlen);",
+            "const char *pio_error_code(const PioError *error);",
+            "const char *pio_error_message(const PioError *error);",
+            "const char *pio_error_diagnostics_json(const PioError *error);",
+            "PioError *pio_error_retain(const PioError *error);",
+            "void pio_error_release(PioError *error);",
+            "PioModuleHandle *pio_module_read_json(const char *text, PioError **error);",
+            "PioModuleHandle *pio_module_parse_file(const char *path, const char *format, PioError **error);",
+            "PioModuleHandle *pio_module_parse_str(const char *text, const char *format, PioError **error);",
+            "char *pio_module_write_json(const PioModuleHandle *module, PioError **error);",
+            "const char *pio_module_kind(const PioModuleHandle *module);",
+            "char *pio_module_inspect_json(const PioModuleHandle *module, PioError **error);",
+            "char *pio_module_state_inventory_json(const PioModuleHandle *module, PioError **error);",
+            "PioModuleHandle *pio_module_export_state(const PioModuleHandle *module, int64_t time_position, const char *scenario, PioError **error);",
+            "char *pio_module_lowering_readiness_json(const PioModuleHandle *module, double base_mva, PioError **error);",
+            "PioModuleHandle *pio_module_lower_to_balanced(const PioModuleHandle *module, double base_mva, PioError **error);",
+            "PioModuleHandle *pio_module_retain(const PioModuleHandle *module);",
+            "void pio_module_release(PioModuleHandle *module);",
+            "PioDcData *pio_dc_data_build(const PioModuleHandle *module, const char *formula, PioError **error);",
+            "size_t pio_dc_data_n_rows(const PioDcData *data);",
+            "size_t pio_dc_data_n_buses(const PioDcData *data);",
+            "const int64_t *pio_dc_data_from_indices(const PioDcData *data);",
+            "const int64_t *pio_dc_data_to_indices(const PioDcData *data);",
+            "const double *pio_dc_data_susceptance(const PioDcData *data);",
+            "const double *pio_dc_data_shift_injection(const PioDcData *data);",
+            "const char *const *pio_dc_data_row_ids(const PioDcData *data);",
+            "const char *const *pio_dc_data_bus_ids(const PioDcData *data);",
+            "size_t pio_dc_data_n_omitted(const PioDcData *data);",
+            "const char *const *pio_dc_data_omitted_ids(const PioDcData *data);",
+            "const char *const *pio_dc_data_omitted_reasons(const PioDcData *data);",
+            "const char *pio_dc_data_formula(const PioDcData *data);",
+            "bool pio_dc_data_fill_branch_flow(const PioDcData *data, const double *va, size_t va_len, double *out, size_t out_len);",
+            "PioDcData *pio_dc_data_retain(const PioDcData *data);",
+            "void pio_dc_data_release(PioDcData *data);",
         ]
         .into_iter()
         .map(str::to_string)
@@ -4234,7 +4344,8 @@ mod tests {
     fn c_header_and_rust_exported_symbols_match() {
         let manifest = c_header_abi_manifest(include_str!("../include/powerio.h"));
         let header_symbols = pio_symbol_names_from_manifest(&manifest);
-        let rust_symbols = source_exported_pio_symbols(include_str!("lib.rs"));
+        let source = format!("{}\n{}", include_str!("lib.rs"), include_str!("v6.rs"));
+        let rust_symbols = source_exported_pio_symbols(&source);
         assert_eq!(rust_symbols, header_symbols);
     }
 
@@ -6632,7 +6743,7 @@ mpc.branch = [
         #[test]
         fn dist_abi_version_is_frozen_at_one() {
             assert_eq!(pio_abi_version(), PIO_ABI_VERSION);
-            assert_eq!(PIO_ABI_VERSION, 5);
+            assert_eq!(PIO_ABI_VERSION, 6);
             assert_eq!(pio_dist_abi_version(), PIO_DIST_ABI_VERSION);
             assert_eq!(PIO_DIST_ABI_VERSION, 1);
             let feature = CString::new("dist").unwrap();

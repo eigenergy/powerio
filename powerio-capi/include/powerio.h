@@ -155,6 +155,25 @@
 #include <stddef.h>
 #include <stdint.h>
 #include <stdlib.h>
+/*
+ * ABI v6 opaque handle types. Declared here because their Rust definitions
+ * come from the shared handle macro cbindgen cannot expand. Every one is an
+ * independently owned reference with a retain/release pair; release(NULL) is
+ * a no-op; releasing a parent never invalidates a retained child; accessors
+ * return spans valid until the handle's last release. Concurrent immutable
+ * calls on one handle are allowed; releasing a raw handle concurrently with
+ * any call on that same raw handle is caller error.
+ */
+typedef struct PioNetwork PioNetwork;
+typedef struct PioError PioError;
+typedef struct PioModuleHandle PioModuleHandle;
+typedef struct PioDcData PioDcData;
+#if defined(PIO_DIST)
+typedef struct PioDistNetwork PioDistNetwork;
+#endif
+#if defined(PIO_PROB)
+typedef struct PioScopfInstance PioScopfInstance;
+#endif
 #if defined(PIO_ARROW)
 struct ArrowArray;
 struct ArrowSchema;
@@ -182,7 +201,7 @@ struct ArrowSchema;
  * publish structured records through `out_diagnostics_json` in place of the
  * text `out_warnings` channel.
  */
-#define PIO_ABI_VERSION 5
+#define PIO_ABI_VERSION 6
 
 #if defined(PIO_DIST)
 /**
@@ -333,38 +352,17 @@ struct ArrowSchema;
 #define PIO_ARROW_TABLE_SOLVER_GEN_COST_COEFF 22
 #endif
 
-#if defined(PIO_DIST)
-/**
- * Opaque parsed distribution network handle (the multiconductor wire coordinate
- * model). Distinct from [`PioNetwork`] (the positive sequence transmission
- * model); none of the `pio_n_*`/extractor functions accept it. Only built with
- * the `dist` cargo feature.
- */
-typedef struct PioDistNetwork PioDistNetwork;
-#endif
-
-/**
- * Opaque parsed network handle. Carries the parsed [`BalancedNetwork`], the
- * [`IndexCore`] derived from it once at parse time (so every indexed query
- * reuses the same bus-id map and per-bus aggregates instead of rebuilding
- * them), and the reader's fidelity warnings ([`pio_warnings`]).
- */
-typedef struct PioNetwork PioNetwork;
-
 #if defined(PIO_PKG)
 /**
  * Opaque `.pio.json` compiler package handle. A package owns one
  * [`powerio::package::NetworkPackage`], which wraps either a balanced
  * [`PioNetwork`] payload or a multiconductor [`PioDistNetwork`] payload.
+ * The 0.9 `.pio.json` package handle. The one single owner handle type:
+ * its API mutates in place (`pio_package_validate`,
+ * `pio_package_set_operating_points`), so it keeps the v5 lifecycle with no
+ * `retain`. The ABI v6 module handle (`pio_module_*`) supersedes it.
  */
 typedef struct PioPackage PioPackage;
-#endif
-
-#if defined(PIO_PROB)
-/**
- * Opaque matrix free SCOPF instance.
- */
-typedef struct PioScopfInstance PioScopfInstance;
 #endif
 
 /**
@@ -691,6 +689,17 @@ size_t pio_warnings(const PioNetwork *net, char *warnbuf, size_t warnlen);
  * `pio_read_dir`, or [`pio_normalize`].
  */
 void pio_network_free(PioNetwork *net);
+
+/**
+ * Mint an independent handle to the same network. NULL stays NULL.
+ */
+PioNetwork *pio_network_retain(const PioNetwork *net);
+
+/**
+ * Release one network handle: identical to `pio_network_free`, spelled with
+ * the ABI v6 lifecycle name. NULL is a no-op.
+ */
+void pio_network_release(PioNetwork *net);
 
 /**
  * Normalize `net` into a NEW network handle: per unit, radians, out of service
@@ -1306,6 +1315,21 @@ char *pio_scopf_to_json_with_index_base(const PioScopfInstance *instance,
 void pio_scopf_instance_free(PioScopfInstance *instance);
 #endif
 
+#if defined(PIO_PROB)
+/**
+ * Mint an independent handle to the same SCOPF instance. NULL stays NULL.
+ */
+PioScopfInstance *pio_scopf_instance_retain(const PioScopfInstance *instance);
+#endif
+
+#if defined(PIO_PROB)
+/**
+ * Release one SCOPF instance handle: identical to
+ * `pio_scopf_instance_free`, spelled with the ABI v6 lifecycle name.
+ */
+void pio_scopf_instance_release(PioScopfInstance *instance);
+#endif
+
 #if defined(PIO_DIST)
 /**
  * Parse a distribution case file into a [`PioDistNetwork`] handle. The format
@@ -1341,6 +1365,22 @@ PioDistNetwork *pio_dist_parse_str(const char *text,
  * [`pio_dist_parse_str`]. NULL is a no-op; free exactly once.
  */
 void pio_dist_network_free(PioDistNetwork *net);
+#endif
+
+#if defined(PIO_DIST)
+/**
+ * Mint an independent handle to the same multiconductor network. NULL stays
+ * NULL.
+ */
+PioDistNetwork *pio_dist_network_retain(const PioDistNetwork *net);
+#endif
+
+#if defined(PIO_DIST)
+/**
+ * Release one multiconductor network handle: identical to
+ * `pio_dist_network_free`, spelled with the ABI v6 lifecycle name.
+ */
+void pio_dist_network_release(PioDistNetwork *net);
 #endif
 
 #if defined(PIO_DIST)
@@ -1483,6 +1523,200 @@ PioDistNetwork *pio_dist_geo_apply(const PioDistNetwork *net,
                                    char *errbuf,
                                    size_t errlen);
 #endif
+
+/**
+ * The failure's stable diagnostic code, valid until the handle's release.
+ */
+const char *pio_error_code(const PioError *error);
+
+/**
+ * The rendered failure message, valid until the handle's release.
+ */
+const char *pio_error_message(const PioError *error);
+
+/**
+ * The structured diagnostics as a JSON array, valid until the handle's
+ * release.
+ */
+const char *pio_error_diagnostics_json(const PioError *error);
+
+/**
+ * Mint an independent handle to the same error. NULL stays NULL.
+ */
+PioError *pio_error_retain(const PioError *error);
+
+/**
+ * Release one error handle. NULL is a no-op.
+ */
+void pio_error_release(PioError *error);
+
+/**
+ * Read stored `.pio.json` text: version 1, or a released 0.9 package
+ * upgraded one way. Returns a new module handle, or NULL with `error` set.
+ */
+PioModuleHandle *pio_module_read_json(const char *text, PioError **error);
+
+/**
+ * Parse a case file into a module of whichever family claims it. `format`
+ * may be NULL for detection by name and content.
+ */
+PioModuleHandle *pio_module_parse_file(const char *path, const char *format, PioError **error);
+
+/**
+ * Parse in-memory case text into a module.
+ */
+PioModuleHandle *pio_module_parse_str(const char *text, const char *format, PioError **error);
+
+/**
+ * The stored version 1 document. Free with `pio_string_free`.
+ */
+char *pio_module_write_json(const PioModuleHandle *module, PioError **error);
+
+/**
+ * The value's permanent kind identifier, valid until the handle's release.
+ */
+const char *pio_module_kind(const PioModuleHandle *module);
+
+/**
+ * Value inspection and supported operation discovery, as JSON. Free with
+ * `pio_string_free`.
+ */
+char *pio_module_inspect_json(const PioModuleHandle *module, PioError **error);
+
+/**
+ * The typed time or scenario inventory as JSON. Free with `pio_string_free`.
+ */
+char *pio_module_state_inventory_json(const PioModuleHandle *module, PioError **error);
+
+/**
+ * Export one selected time point or scenario as an independent static
+ * module. `time_position >= 0` selects by position (scenario must be NULL);
+ * `scenario` non NULL selects by ID (time_position must be negative).
+ */
+PioModuleHandle *pio_module_export_state(const PioModuleHandle *module,
+                                         int64_t time_position,
+                                         const char *scenario,
+                                         PioError **error);
+
+/**
+ * Readiness of the multiconductor value for the balanced lowering, as JSON.
+ * Free with `pio_string_free`.
+ */
+char *pio_module_lowering_readiness_json(const PioModuleHandle *module,
+                                         double base_mva,
+                                         PioError **error);
+
+/**
+ * Explicitly lower the multiconductor value to a balanced module. Records
+ * and source ownership carry over; the pass appends its findings and one
+ * Transform history entry.
+ */
+PioModuleHandle *pio_module_lower_to_balanced(const PioModuleHandle *module,
+                                              double base_mva,
+                                              PioError **error);
+
+/**
+ * Mint an independent handle to the same module. NULL stays NULL.
+ */
+PioModuleHandle *pio_module_retain(const PioModuleHandle *module);
+
+/**
+ * Release one module handle. NULL is a no-op.
+ */
+void pio_module_release(PioModuleHandle *module);
+
+/**
+ * Build the DC branch data of a module's balanced network value under the
+ * named branch susceptance formula (`series_susceptance`,
+ * `tap_adjusted_reactance`, or `reactance_only`). The result is an
+ * independently owned handle: releasing the module never invalidates it.
+ */
+PioDcData *pio_dc_data_build(const PioModuleHandle *module, const char *formula, PioError **error);
+
+/**
+ * Included incidence row count (`m`).
+ */
+size_t pio_dc_data_n_rows(const PioDcData *data);
+
+/**
+ * Incidence column count (`n`, the bus count).
+ */
+size_t pio_dc_data_n_buses(const PioDcData *data);
+
+/**
+ * From bus column per included row (`A[e, from] = +1`), length `n_rows`.
+ */
+const int64_t *pio_dc_data_from_indices(const PioDcData *data);
+
+/**
+ * To bus column per included row (`A[e, to] = -1`), length `n_rows`.
+ */
+const int64_t *pio_dc_data_to_indices(const PioDcData *data);
+
+/**
+ * Branch susceptance per included row, PowerModels sign, length `n_rows`.
+ */
+const double *pio_dc_data_susceptance(const PioDcData *data);
+
+/**
+ * Phase shift bus injection `p_shift = A' * (b .* shift)`, length `n_buses`.
+ */
+const double *pio_dc_data_shift_injection(const PioDcData *data);
+
+/**
+ * Stable module element ID per included row, length `n_rows`. Both the
+ * table and the strings stay valid until the handle's release.
+ */
+const char *const *pio_dc_data_row_ids(const PioDcData *data);
+
+/**
+ * Stable bus element ID per incidence column, length `n_buses`.
+ */
+const char *const *pio_dc_data_bus_ids(const PioDcData *data);
+
+/**
+ * Count of branches the selected formula cannot represent.
+ */
+size_t pio_dc_data_n_omitted(const PioDcData *data);
+
+/**
+ * Stable element IDs of the omitted branches, length `n_omitted`.
+ */
+const char *const *pio_dc_data_omitted_ids(const PioDcData *data);
+
+/**
+ * Diagnostic reason per omitted branch, length `n_omitted`.
+ */
+const char *const *pio_dc_data_omitted_reasons(const PioDcData *data);
+
+/**
+ * The selected branch susceptance formula's stable name.
+ */
+const char *pio_dc_data_formula(const PioDcData *data);
+
+/**
+ * Fill `out` with the angle dependent branch flow
+ * `p_branch = -b .* (va_from - va_to) + b .* shift_unused` sign converted
+ * while filling: given bus voltage angles `va` (radians, length `n_buses`),
+ * writes `-b[e] * (va[from] - va[to])` per included row into `out` (length
+ * `n_rows`). Returns false on a NULL argument. No temporary vector is
+ * allocated.
+ */
+bool pio_dc_data_fill_branch_flow(const PioDcData *data,
+                                  const double *va,
+                                  size_t va_len,
+                                  double *out,
+                                  size_t out_len);
+
+/**
+ * Mint an independent handle to the same DC data. NULL stays NULL.
+ */
+PioDcData *pio_dc_data_retain(const PioDcData *data);
+
+/**
+ * Release one DC data handle. NULL is a no-op.
+ */
+void pio_dc_data_release(PioDcData *data);
 
 #ifdef __cplusplus
 }  // extern "C"

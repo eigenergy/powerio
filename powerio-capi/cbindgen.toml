@@ -166,6 +166,25 @@ header = """
 # structs from arrow_c_data_interface.h (forward-declared below, gated on
 # PIO_ARROW since the dep isn't parsed).
 after_includes = """
+/*
+ * ABI v6 opaque handle types. Declared here because their Rust definitions
+ * come from the shared handle macro cbindgen cannot expand. Every one is an
+ * independently owned reference with a retain/release pair; release(NULL) is
+ * a no-op; releasing a parent never invalidates a retained child; accessors
+ * return spans valid until the handle's last release. Concurrent immutable
+ * calls on one handle are allowed; releasing a raw handle concurrently with
+ * any call on that same raw handle is caller error.
+ */
+typedef struct PioNetwork PioNetwork;
+typedef struct PioError PioError;
+typedef struct PioModuleHandle PioModuleHandle;
+typedef struct PioDcData PioDcData;
+#if defined(PIO_DIST)
+typedef struct PioDistNetwork PioDistNetwork;
+#endif
+#if defined(PIO_PROB)
+typedef struct PioScopfInstance PioScopfInstance;
+#endif
 #if defined(PIO_ARROW)
 struct ArrowArray;
 struct ArrowSchema;
@@ -173,7 +192,7 @@ struct ArrowSchema;
 
 [export]
 prefix = ""
-include = ["PioNetwork", "PioDistNetwork", "PioPackage", "PioScopfInstance"]
+include = ["PioNetwork", "PioDistNetwork", "PioPackage", "PioScopfInstance", "PioError", "PioModuleHandle", "PioDcData"]
 
 [export.rename]
 "FFI_ArrowArray" = "struct ArrowArray"
