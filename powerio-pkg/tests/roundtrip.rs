@@ -1363,7 +1363,7 @@ fn lowering_preflight_records_kron_reduction_for_neutral() {
     assert!(report.is_ready());
     assert!(has_lowering_code(
         &report,
-        "LOWER.MULTI_TO_BALANCED.KRON_REDUCTION_REQUIRED"
+        "TRANSFORM.MULTI_TO_BALANCED.KRON_REDUCTION_REQUIRED"
     ));
     assert!(
         report
@@ -1387,10 +1387,13 @@ fn lowering_preflight_accepts_source_grounded_four_wire_fixture() {
     assert!(report.is_ready(), "{:?}", report.diagnostics);
     assert!(has_lowering_code(
         &report,
-        "LOWER.MULTI_TO_BALANCED.KRON_REDUCTION_REQUIRED"
+        "TRANSFORM.MULTI_TO_BALANCED.KRON_REDUCTION_REQUIRED"
     ));
     assert!(
-        !has_lowering_code(&report, "LOWER.MULTI_TO_BALANCED.UNSUPPORTED_CONDUCTOR_SET"),
+        !has_lowering_code(
+            &report,
+            "TRANSFORM.MULTI_TO_BALANCED.UNSUPPORTED_CONDUCTOR_SET"
+        ),
         "{:?}",
         report.diagnostics
     );
@@ -1408,7 +1411,7 @@ fn lowering_preflight_rejects_one_phase_input() {
     assert!(!report.is_ready());
     assert!(has_lowering_code(
         &report,
-        "LOWER.MULTI_TO_BALANCED.UNSUPPORTED_CONDUCTOR_SET"
+        "TRANSFORM.MULTI_TO_BALANCED.UNSUPPORTED_CONDUCTOR_SET"
     ));
 }
 
@@ -1424,7 +1427,7 @@ fn lowering_preflight_rejects_two_wire_input() {
     assert!(!report.is_ready());
     assert!(has_lowering_code(
         &report,
-        "LOWER.MULTI_TO_BALANCED.AMBIGUOUS_TERMINAL_MAP"
+        "TRANSFORM.MULTI_TO_BALANCED.AMBIGUOUS_TERMINAL_MAP"
     ));
 }
 
@@ -1443,7 +1446,7 @@ fn lowering_preflight_rejects_untyped_objects() {
     assert_eq!(report.status, ValidationStatus::Error);
     assert!(has_lowering_code(
         &report,
-        "LOWER.MULTI_TO_BALANCED.UNSUPPORTED_OBJECT"
+        "TRANSFORM.MULTI_TO_BALANCED.UNSUPPORTED_OBJECT"
     ));
 }
 
@@ -1459,7 +1462,7 @@ fn lowering_preflight_rejects_missing_phase_reference() {
     assert_eq!(report.status, ValidationStatus::Error);
     assert!(has_lowering_code(
         &report,
-        "LOWER.MULTI_TO_BALANCED.MISSING_PHASE_REFERENCE"
+        "TRANSFORM.MULTI_TO_BALANCED.MISSING_PHASE_REFERENCE"
     ));
 }
 
@@ -1478,7 +1481,7 @@ fn lowering_preflight_rejects_transformers() {
     assert_eq!(report.status, ValidationStatus::Error);
     assert!(has_lowering_code(
         &report,
-        "LOWER.MULTI_TO_BALANCED.UNSUPPORTED_TRANSFORMER"
+        "TRANSFORM.MULTI_TO_BALANCED.UNSUPPORTED_TRANSFORMER"
     ));
 }
 
@@ -1531,7 +1534,7 @@ fn lowering_produces_balanced_three_phase_with_neutral_kron() {
     assert_eq!(lowered.network.branches.len(), 1);
     assert!(has_diagnostic_code(
         &lowered.record.diagnostics,
-        "LOWER.MULTI_TO_BALANCED.KRON_REDUCTION_REQUIRED"
+        "TRANSFORM.MULTI_TO_BALANCED.KRON_REDUCTION_REQUIRED"
     ));
     assert!(
         lowered
@@ -1557,7 +1560,7 @@ fn lowering_produces_balanced_source_grounded_four_wire_fixture() {
     assert!(lowered.network.loads.iter().all(|load| load.p > 0.0));
     assert!(has_diagnostic_code(
         &lowered.record.diagnostics,
-        "LOWER.MULTI_TO_BALANCED.KRON_REDUCTION_REQUIRED"
+        "TRANSFORM.MULTI_TO_BALANCED.KRON_REDUCTION_REQUIRED"
     ));
 }
 
@@ -1565,7 +1568,7 @@ fn lowering_produces_balanced_source_grounded_four_wire_fixture() {
 fn lowering_rejects_one_phase_input() {
     assert_lowering_rejects(
         &preflight_network(&["1"], &[]),
-        "LOWER.MULTI_TO_BALANCED.UNSUPPORTED_CONDUCTOR_SET",
+        "TRANSFORM.MULTI_TO_BALANCED.UNSUPPORTED_CONDUCTOR_SET",
     );
 }
 
@@ -1573,7 +1576,7 @@ fn lowering_rejects_one_phase_input() {
 fn lowering_rejects_two_wire_input() {
     assert_lowering_rejects(
         &preflight_network(&["1", "2"], &[]),
-        "LOWER.MULTI_TO_BALANCED.AMBIGUOUS_TERMINAL_MAP",
+        "TRANSFORM.MULTI_TO_BALANCED.AMBIGUOUS_TERMINAL_MAP",
     );
 }
 
@@ -1581,7 +1584,7 @@ fn lowering_rejects_two_wire_input() {
 fn lowering_rejects_missing_phase_reference() {
     let mut net = preflight_network(&["1", "2", "3"], &[]);
     net.sources.clear();
-    assert_lowering_rejects(&net, "LOWER.MULTI_TO_BALANCED.MISSING_PHASE_REFERENCE");
+    assert_lowering_rejects(&net, "TRANSFORM.MULTI_TO_BALANCED.MISSING_PHASE_REFERENCE");
 }
 
 #[test]
@@ -1591,7 +1594,7 @@ fn lowering_rejects_transformer_input() {
     let mut net = preflight_network(&["1", "2", "3"], &[]);
     net.transformers
         .push(DistTransformer::new("t1", Vec::new(), Vec::new(), 3));
-    assert_lowering_rejects(&net, "LOWER.MULTI_TO_BALANCED.UNSUPPORTED_TRANSFORMER");
+    assert_lowering_rejects(&net, "TRANSFORM.MULTI_TO_BALANCED.UNSUPPORTED_TRANSFORMER");
 }
 
 #[test]
@@ -1601,7 +1604,7 @@ fn lowering_rejects_untyped_object_input() {
     let mut net = preflight_network(&["1", "2", "3"], &[]);
     net.untyped
         .push(UntypedObject::new("regcontrol", "r1", Vec::new()));
-    assert_lowering_rejects(&net, "LOWER.MULTI_TO_BALANCED.UNSUPPORTED_OBJECT");
+    assert_lowering_rejects(&net, "TRANSFORM.MULTI_TO_BALANCED.UNSUPPORTED_OBJECT");
 }
 
 #[test]
@@ -1617,7 +1620,10 @@ fn lowering_rejects_closed_switch_input() {
         strings(&["1", "2", "3"]),
         false,
     ));
-    assert_lowering_rejects(&net, "LOWER.MULTI_TO_BALANCED.UNSUPPORTED_CLOSED_SWITCH");
+    assert_lowering_rejects(
+        &net,
+        "TRANSFORM.MULTI_TO_BALANCED.UNSUPPORTED_CLOSED_SWITCH",
+    );
 }
 
 #[test]
@@ -1634,7 +1640,7 @@ fn lowering_rejects_generator_unknown_bus() {
         vec![0.0, 0.0, 0.0],
     ));
 
-    assert_lowering_rejects(&net, "LOWER.MULTI_TO_BALANCED.UNKNOWN_BUS");
+    assert_lowering_rejects(&net, "TRANSFORM.MULTI_TO_BALANCED.UNKNOWN_BUS");
 }
 
 #[test]
@@ -1699,7 +1705,7 @@ fn package_lowering_returns_derived_balanced_package() {
     );
     assert!(has_diagnostic_code(
         &lowered.diagnostics,
-        "LOWER.MULTI_TO_BALANCED.KRON_REDUCTION_REQUIRED"
+        "TRANSFORM.MULTI_TO_BALANCED.KRON_REDUCTION_REQUIRED"
     ));
     assert!(
         lowered
@@ -1736,7 +1742,7 @@ fn package_lowering_rejects_balanced_package() {
         .expect_err("balanced package is not accepted");
     assert!(has_diagnostic_code(
         &err.diagnostics,
-        "LOWER.MULTI_TO_BALANCED.WRONG_MODEL_KIND"
+        "TRANSFORM.MULTI_TO_BALANCED.WRONG_MODEL_KIND"
     ));
 }
 

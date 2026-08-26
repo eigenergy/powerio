@@ -1,6 +1,8 @@
 //! The collector an emitting pass threads through its call tree.
 
-use crate::legacy_diag::{DiagnosticInfo, DiagnosticSeverity, StructuredDiagnostic, render_lines};
+use powerio_core::DiagnosticInfo;
+
+use crate::legacy_diag::{DiagnosticSeverity, StructuredDiagnostic, render_lines};
 
 /// An ordered set of findings, built up as a reader, a lowering pass, or a
 /// writer runs.
@@ -19,14 +21,14 @@ impl Diagnostics {
     }
 
     /// Record a finding at its registered default severity.
-    pub fn push(&mut self, info: &DiagnosticInfo, message: impl Into<String>) {
+    pub fn push(&mut self, info: &'static DiagnosticInfo, message: impl Into<String>) {
         self.0.push(StructuredDiagnostic::of(info, message));
     }
 
     /// Record a finding at a severity this site raises or lowers.
     pub fn push_at(
         &mut self,
-        info: &DiagnosticInfo,
+        info: &'static DiagnosticInfo,
         severity: DiagnosticSeverity,
         message: impl Into<String>,
     ) {
@@ -112,12 +114,12 @@ mod tests {
 
     const DROPPED: DiagnosticInfo = DiagnosticInfo::new(
         "EMIT.PSSE.FIELD_DROPPED",
-        DiagnosticSeverity::Warning,
+        powerio_core::DiagnosticSeverity::Warning,
         "a field with no PSS/E record was dropped",
     );
     const REFUSED: DiagnosticInfo = DiagnosticInfo::new(
         "READ.DSS.INCLUDE_REFUSED",
-        DiagnosticSeverity::Error,
+        powerio_core::DiagnosticSeverity::Error,
         "an include escaping the case directory was refused",
     );
 

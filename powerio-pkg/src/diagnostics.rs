@@ -17,12 +17,19 @@
 //! emission site names an entry rather than a loose string.
 
 pub use crate::legacy_diag::{
-    CodeStatus, DiagnosticCode, DiagnosticInfo, DiagnosticSeverity, DiagnosticStage, Diagnostics,
-    StructuredDiagnostic, check_registry, code_is_well_formed, render_line, render_lines,
+    DiagnosticCode, DiagnosticSeverity, DiagnosticStage, StructuredDiagnostic, render_line,
+    render_lines,
 };
+pub use powerio_core::{CodeStatus, DiagnosticInfo, check_registry, code_is_well_formed};
 
+/// TEMPORARY. This registry is on the 1.0 vocabulary so the workspace gate
+/// stays whole while the crate is being dissolved. Every code here moves to its
+/// surviving 1.0 owner before this branch is ready: `READ.TRANSMISSION.*` to
+/// the balanced crate, `TRANSFORM.MULTI_TO_BALANCED.*` with the transformation,
+/// and the `*.PACKAGE.*` codes to the facade that takes over the stored
+/// document. The crate is not a 1.0 registry owner.
 pub mod codes {
-    crate::legacy_diagnostic_codes! {
+    powerio_core::diagnostic_codes! {
         // READ: what a reader's own findings arrive as once the package lifts
         // them. A reader finding keeps the code its crate gave it; these are
         // the package's own.
@@ -62,90 +69,90 @@ pub mod codes {
             "an operating point names a uid the payload does not declare";
 
         // LOWER: the multiconductor to balanced pass.
-        LOWER_MULTI_TO_BALANCED_AMBIGUOUS_TERMINAL_MAP =
-            "LOWER.MULTI_TO_BALANCED.AMBIGUOUS_TERMINAL_MAP", Error,
+        TRANSFORM_MULTI_TO_BALANCED_AMBIGUOUS_TERMINAL_MAP =
+            "TRANSFORM.MULTI_TO_BALANCED.AMBIGUOUS_TERMINAL_MAP", Error,
             "a terminal map does not determine one balanced phase assignment";
-        LOWER_MULTI_TO_BALANCED_BALANCED_VALUE_DOMAIN =
-            "LOWER.MULTI_TO_BALANCED.BALANCED_VALUE_DOMAIN", Warning,
+        TRANSFORM_MULTI_TO_BALANCED_BALANCED_VALUE_DOMAIN =
+            "TRANSFORM.MULTI_TO_BALANCED.BALANCED_VALUE_DOMAIN", Warning,
             "a lowered value is outside the domain the balanced model states";
-        LOWER_MULTI_TO_BALANCED_DROPPED_LOAD_VOLTAGE_MODEL =
-            "LOWER.MULTI_TO_BALANCED.DROPPED_LOAD_VOLTAGE_MODEL", Warning,
+        TRANSFORM_MULTI_TO_BALANCED_DROPPED_LOAD_VOLTAGE_MODEL =
+            "TRANSFORM.MULTI_TO_BALANCED.DROPPED_LOAD_VOLTAGE_MODEL", Warning,
             "a load voltage model has no balanced spelling and was dropped";
-        LOWER_MULTI_TO_BALANCED_DROPPED_OPEN_SWITCH =
-            "LOWER.MULTI_TO_BALANCED.DROPPED_OPEN_SWITCH", Info,
+        TRANSFORM_MULTI_TO_BALANCED_DROPPED_OPEN_SWITCH =
+            "TRANSFORM.MULTI_TO_BALANCED.DROPPED_OPEN_SWITCH", Remark,
             "an open switch was dropped from the balanced network";
-        LOWER_MULTI_TO_BALANCED_INVALID_BALANCED_OUTPUT =
-            "LOWER.MULTI_TO_BALANCED.INVALID_BALANCED_OUTPUT", Error,
+        TRANSFORM_MULTI_TO_BALANCED_INVALID_BALANCED_OUTPUT =
+            "TRANSFORM.MULTI_TO_BALANCED.INVALID_BALANCED_OUTPUT", Error,
             "the lowered network does not validate";
-        LOWER_MULTI_TO_BALANCED_INVALID_BASE_MVA =
-            "LOWER.MULTI_TO_BALANCED.INVALID_BASE_MVA", Error,
+        TRANSFORM_MULTI_TO_BALANCED_INVALID_BASE_MVA =
+            "TRANSFORM.MULTI_TO_BALANCED.INVALID_BASE_MVA", Error,
             "the requested base MVA is not a positive finite number";
-        LOWER_MULTI_TO_BALANCED_INVALID_LINECODE_MATRIX =
-            "LOWER.MULTI_TO_BALANCED.INVALID_LINECODE_MATRIX", Error,
+        TRANSFORM_MULTI_TO_BALANCED_INVALID_LINECODE_MATRIX =
+            "TRANSFORM.MULTI_TO_BALANCED.INVALID_LINECODE_MATRIX", Error,
             "a linecode matrix cannot be reduced to a balanced impedance";
-        LOWER_MULTI_TO_BALANCED_INVALID_PHASE_REFERENCE =
-            "LOWER.MULTI_TO_BALANCED.INVALID_PHASE_REFERENCE", Error,
+        TRANSFORM_MULTI_TO_BALANCED_INVALID_PHASE_REFERENCE =
+            "TRANSFORM.MULTI_TO_BALANCED.INVALID_PHASE_REFERENCE", Error,
             "a phase reference names a conductor the element does not have";
-        LOWER_MULTI_TO_BALANCED_INVALID_SHUNT_MATRIX =
-            "LOWER.MULTI_TO_BALANCED.INVALID_SHUNT_MATRIX", Error,
+        TRANSFORM_MULTI_TO_BALANCED_INVALID_SHUNT_MATRIX =
+            "TRANSFORM.MULTI_TO_BALANCED.INVALID_SHUNT_MATRIX", Error,
             "a shunt matrix cannot be reduced to a balanced admittance";
-        LOWER_MULTI_TO_BALANCED_KRON_REDUCTION_REQUIRED =
-            "LOWER.MULTI_TO_BALANCED.KRON_REDUCTION_REQUIRED", Info,
+        TRANSFORM_MULTI_TO_BALANCED_KRON_REDUCTION_REQUIRED =
+            "TRANSFORM.MULTI_TO_BALANCED.KRON_REDUCTION_REQUIRED", Remark,
             "a conductor set needs a Kron reduction the pass does not perform";
-        LOWER_MULTI_TO_BALANCED_LINECODE_TERMINAL_MISMATCH =
-            "LOWER.MULTI_TO_BALANCED.LINECODE_TERMINAL_MISMATCH", Error,
+        TRANSFORM_MULTI_TO_BALANCED_LINECODE_TERMINAL_MISMATCH =
+            "TRANSFORM.MULTI_TO_BALANCED.LINECODE_TERMINAL_MISMATCH", Error,
             "a linecode's dimension disagrees with the line's terminal map";
-        LOWER_MULTI_TO_BALANCED_MISSING_PHASE_REFERENCE =
-            "LOWER.MULTI_TO_BALANCED.MISSING_PHASE_REFERENCE", Error,
+        TRANSFORM_MULTI_TO_BALANCED_MISSING_PHASE_REFERENCE =
+            "TRANSFORM.MULTI_TO_BALANCED.MISSING_PHASE_REFERENCE", Error,
             "an element states no phase reference to lower against";
-        LOWER_MULTI_TO_BALANCED_NONFINITE_LINE_LENGTH =
-            "LOWER.MULTI_TO_BALANCED.NONFINITE_LINE_LENGTH", Error,
+        TRANSFORM_MULTI_TO_BALANCED_NONFINITE_LINE_LENGTH =
+            "TRANSFORM.MULTI_TO_BALANCED.NONFINITE_LINE_LENGTH", Error,
             "a line length is not finite, so its impedance is undefined";
-        LOWER_MULTI_TO_BALANCED_PHASE_MAP_MISMATCH =
-            "LOWER.MULTI_TO_BALANCED.PHASE_MAP_MISMATCH", Error,
+        TRANSFORM_MULTI_TO_BALANCED_PHASE_MAP_MISMATCH =
+            "TRANSFORM.MULTI_TO_BALANCED.PHASE_MAP_MISMATCH", Error,
             "the two ends of an element do not agree on their phase map";
-        LOWER_MULTI_TO_BALANCED_SEQUENCE_COUPLING_DROPPED =
-            "LOWER.MULTI_TO_BALANCED.SEQUENCE_COUPLING_DROPPED", Info,
+        TRANSFORM_MULTI_TO_BALANCED_SEQUENCE_COUPLING_DROPPED =
+            "TRANSFORM.MULTI_TO_BALANCED.SEQUENCE_COUPLING_DROPPED", Remark,
             "sequence coupling has no balanced spelling and was dropped";
-        LOWER_MULTI_TO_BALANCED_UNKNOWN_BUS = "LOWER.MULTI_TO_BALANCED.UNKNOWN_BUS", Error,
+        TRANSFORM_MULTI_TO_BALANCED_UNKNOWN_BUS = "TRANSFORM.MULTI_TO_BALANCED.UNKNOWN_BUS", Error,
             "an element references a bus the multiconductor payload does not declare";
-        LOWER_MULTI_TO_BALANCED_UNKNOWN_LINECODE =
-            "LOWER.MULTI_TO_BALANCED.UNKNOWN_LINECODE", Error,
+        TRANSFORM_MULTI_TO_BALANCED_UNKNOWN_LINECODE =
+            "TRANSFORM.MULTI_TO_BALANCED.UNKNOWN_LINECODE", Error,
             "a line references a linecode the payload does not declare";
-        LOWER_MULTI_TO_BALANCED_UNKNOWN_SOURCE_BUS =
-            "LOWER.MULTI_TO_BALANCED.UNKNOWN_SOURCE_BUS", Error,
+        TRANSFORM_MULTI_TO_BALANCED_UNKNOWN_SOURCE_BUS =
+            "TRANSFORM.MULTI_TO_BALANCED.UNKNOWN_SOURCE_BUS", Error,
             "a voltage source references a bus the payload does not declare";
-        LOWER_MULTI_TO_BALANCED_UNSUPPORTED_CLOSED_SWITCH =
-            "LOWER.MULTI_TO_BALANCED.UNSUPPORTED_CLOSED_SWITCH", Error,
+        TRANSFORM_MULTI_TO_BALANCED_UNSUPPORTED_CLOSED_SWITCH =
+            "TRANSFORM.MULTI_TO_BALANCED.UNSUPPORTED_CLOSED_SWITCH", Error,
             "a closed switch shape has no balanced spelling";
-        LOWER_MULTI_TO_BALANCED_UNSUPPORTED_CONDUCTOR_SET =
-            "LOWER.MULTI_TO_BALANCED.UNSUPPORTED_CONDUCTOR_SET", Error,
+        TRANSFORM_MULTI_TO_BALANCED_UNSUPPORTED_CONDUCTOR_SET =
+            "TRANSFORM.MULTI_TO_BALANCED.UNSUPPORTED_CONDUCTOR_SET", Error,
             "a conductor set has no balanced spelling";
-        LOWER_MULTI_TO_BALANCED_UNSUPPORTED_OBJECT =
-            "LOWER.MULTI_TO_BALANCED.UNSUPPORTED_OBJECT", Error,
+        TRANSFORM_MULTI_TO_BALANCED_UNSUPPORTED_OBJECT =
+            "TRANSFORM.MULTI_TO_BALANCED.UNSUPPORTED_OBJECT", Error,
             "an object has no balanced spelling and was dropped";
-        LOWER_MULTI_TO_BALANCED_UNSUPPORTED_TRANSFORMER =
-            "LOWER.MULTI_TO_BALANCED.UNSUPPORTED_TRANSFORMER", Error,
+        TRANSFORM_MULTI_TO_BALANCED_UNSUPPORTED_TRANSFORMER =
+            "TRANSFORM.MULTI_TO_BALANCED.UNSUPPORTED_TRANSFORMER", Error,
             "a transformer shape has no balanced spelling";
-        LOWER_MULTI_TO_BALANCED_WRONG_MODEL_KIND =
-            "LOWER.MULTI_TO_BALANCED.WRONG_MODEL_KIND", Error,
+        TRANSFORM_MULTI_TO_BALANCED_WRONG_MODEL_KIND =
+            "TRANSFORM.MULTI_TO_BALANCED.WRONG_MODEL_KIND", Error,
             "the package does not carry a multiconductor payload to lower";
 
         // Failures.
-        PARSE_PACKAGE_MALFORMED = "PARSE.PACKAGE.MALFORMED", Fatal,
+        PARSE_PACKAGE_MALFORMED = "PARSE.PACKAGE.MALFORMED", Error,
             "the document is not well formed .pio.json", category = Parse;
-        PARSE_PACKAGE_UNSUPPORTED_VERSION = "PARSE.PACKAGE.UNSUPPORTED_VERSION", Fatal,
+        PARSE_PACKAGE_UNSUPPORTED_VERSION = "PARSE.PACKAGE.UNSUPPORTED_VERSION", Error,
             "the document comes from a lineage this build does not read", category = Parse;
-        VALIDATE_PACKAGE_MODEL_KIND_MISMATCH = "VALIDATE.PACKAGE.MODEL_KIND_MISMATCH", Fatal,
+        VALIDATE_PACKAGE_MODEL_KIND_MISMATCH = "VALIDATE.PACKAGE.MODEL_KIND_MISMATCH", Error,
             "the document's model_kind disagrees with the payload it carries", category = Data;
-        REQUEST_PACKAGE_NO_SUCH_INDEX = "REQUEST.PACKAGE.NO_SUCH_INDEX", Fatal,
+        REQUEST_PACKAGE_NO_SUCH_INDEX = "REQUEST.PACKAGE.NO_SUCH_INDEX", Error,
             "the call names an operating point or study index the document does not carry",
             category = Data;
-        REQUEST_PACKAGE_WRONG_MODEL_KIND = "REQUEST.PACKAGE.WRONG_MODEL_KIND", Fatal,
+        REQUEST_PACKAGE_WRONG_MODEL_KIND = "REQUEST.PACKAGE.WRONG_MODEL_KIND", Error,
             "the call asks for a model family the document does not carry", category = Data;
-        BUILD_PACKAGE_PAYLOAD_FAILED = "BUILD.PACKAGE.PAYLOAD_FAILED", Fatal,
+        BUILD_PACKAGE_PAYLOAD_FAILED = "BUILD.PACKAGE.PAYLOAD_FAILED", Error,
             "the payload could not be built, applied, or serialized", category = Data;
-        EMIT_PACKAGE_SERIALIZE_FAILED = "EMIT.PACKAGE.SERIALIZE_FAILED", Fatal,
+        EMIT_PACKAGE_SERIALIZE_FAILED = "EMIT.PACKAGE.SERIALIZE_FAILED", Error,
             "serializing the package to JSON failed", category = Output;
     }
 }

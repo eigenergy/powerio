@@ -18,17 +18,33 @@ pub struct Error {
 
 impl Error {
     /// Construct a failure from a registered code carrying a category.
+    ///
+    /// A code that ends an operation must declare a category, because the
+    /// category is what a binding and an exit status project the failure onto.
+    /// A code that does not is a registry defect: the finding keeps its own
+    /// code so its identity is not lost, and a `REQUEST.DIAGNOSTIC.MISSING_CATEGORY`
+    /// note records the defect. A debug build asserts instead, so the defect
+    /// surfaces in tests rather than in a released binding.
     #[must_use]
     pub fn new(info: &'static DiagnosticInfo, message: impl Into<String>) -> Self {
-        let info = if info.category.is_some() {
-            info
-        } else {
-            &crate::codes::REQUEST_DIAGNOSTIC_MISSING_CATEGORY
-        };
+        debug_assert!(
+            info.category.is_some(),
+            "{} ends an operation but declares no error category",
+            info.code
+        );
+        let mut diagnostics =
+            vec![Diagnostic::of(info, message).with_severity(DiagnosticSeverity::Error)];
+        if info.category.is_none() {
+            diagnostics.push(
+                Diagnostic::of(
+                    &crate::codes::REQUEST_DIAGNOSTIC_MISSING_CATEGORY,
+                    format!("{} declares no error category", info.code),
+                )
+                .with_severity(DiagnosticSeverity::Note),
+            );
+        }
         Self {
-            diagnostics: vec![
-                Diagnostic::of(info, message).with_severity(DiagnosticSeverity::Error),
-            ],
+            diagnostics,
             cause: None,
             retained_source: None,
         }

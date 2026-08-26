@@ -135,23 +135,15 @@ pub fn registry() -> Vec<&'static DiagnosticInfo> {
 mod workspace {
     use super::*;
 
-    // powerio-pkg still carries the frozen 0.9 vocabulary for the stored
-    // document, so its entries are a different Rust type. Its scopes are
-    // checked against the 1.0 registries by code string below.
-    fn legacy_pkg_scopes() -> Vec<(&'static str, &'static str)> {
-        powerio_pkg::diagnostics::registry()
-            .into_iter()
-            .filter_map(|entry| {
-                let mut segments = entry.code.split('.');
-                Some((segments.next()?, segments.next()?))
-            })
-            .collect()
-    }
-
     fn registries() -> Vec<(&'static str, Vec<&'static DiagnosticInfo>)> {
         vec![
             ("powerio", powerio::diagnostics::registry()),
             ("powerio-dist", powerio_dist::diagnostics::registry()),
+            // TEMPORARY. powerio-pkg retires before this branch is ready. It
+            // is in the gate only so the codes it still emits stay covered
+            // during the migration; each one moves to its surviving 1.0 owner
+            // in the package dissolution commit, and this line goes with it.
+            ("powerio-pkg", powerio_pkg::diagnostics::registry()),
             ("powerio-matrix", powerio_matrix::diagnostics::registry()),
             ("powerio-prob", powerio_prob::diagnostics::registry()),
             ("powerio-capi", registry()),
@@ -177,21 +169,6 @@ mod workspace {
             .collect();
         let problems = check_scope_ownership(&borrowed);
         assert!(problems.is_empty(), "{problems:#?}");
-
-        // The retiring crate's scopes must not collide with the 1.0 ones.
-        let claimed: std::collections::BTreeSet<(&str, &str)> = owned
-            .iter()
-            .flat_map(|(_, entries)| entries)
-            .filter_map(|entry| {
-                let mut segments = entry.code.split('.');
-                Some((segments.next()?, segments.next()?))
-            })
-            .collect();
-        let collisions: Vec<_> = legacy_pkg_scopes()
-            .into_iter()
-            .filter(|scope| claimed.contains(scope))
-            .collect();
-        assert!(collisions.is_empty(), "{collisions:#?}");
     }
 
     // The three catch-alls this release retires exist only because the strings

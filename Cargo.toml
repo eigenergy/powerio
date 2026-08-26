@@ -24,7 +24,7 @@ default-members = [
 ]
 # The fuzz harnesses need nightly + cargo-fuzz; they build on their own (see
 # fuzz/README.md), never as part of the workspace.
-exclude = ["fuzz"]
+exclude = ["fuzz", "evals"]
 resolver = "2"
 
 # Single source for the release version and shared metadata; the crates inherit

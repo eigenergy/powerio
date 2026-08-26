@@ -1,0 +1,277 @@
+//! Wave 0 allocation, peak memory, and wall time baseline for PowerIO 1.0.
+//!
+//! Not part of the workspace. It links the current crates by path and reports
+//! deterministic allocation counts so later branches have a real "before".
+
+use std::alloc::{GlobalAlloc, Layout, System};
+use std::path::Path;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::time::Instant;
+
+static ALLOCS: AtomicUsize = AtomicUsize::new(0);
+static ALLOC_BYTES: AtomicUsize = AtomicUsize::new(0);
+static LIVE: AtomicUsize = AtomicUsize::new(0);
+static PEAK: AtomicUsize = AtomicUsize::new(0);
+
+struct Counting;
+
+unsafe impl GlobalAlloc for Counting {
+    unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+        let p = unsafe { System.alloc(layout) };
+        if !p.is_null() {
+            record_alloc(layout.size());
+        }
+        p
+    }
+
+    unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
+        LIVE.fetch_sub(layout.size(), Ordering::Relaxed);
+        unsafe { System.dealloc(ptr, layout) }
+    }
+
+    unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
+        let p = unsafe { System.realloc(ptr, layout, new_size) };
+        if !p.is_null() {
+            ALLOCS.fetch_add(1, Ordering::Relaxed);
+            if new_size > layout.size() {
+                let grew = new_size - layout.size();
+                ALLOC_BYTES.fetch_add(grew, Ordering::Relaxed);
+                bump_live(grew);
+            } else {
+                LIVE.fetch_sub(layout.size() - new_size, Ordering::Relaxed);
+            }
+        }
+        p
+    }
+}
+
+fn record_alloc(size: usize) {
+    ALLOCS.fetch_add(1, Ordering::Relaxed);
+    ALLOC_BYTES.fetch_add(size, Ordering::Relaxed);
+    bump_live(size);
+}
+
+fn bump_live(size: usize) {
+    let live = LIVE.fetch_add(size, Ordering::Relaxed) + size;
+    PEAK.fetch_max(live, Ordering::Relaxed);
+}
+
+#[global_allocator]
+static A: Counting = Counting;
+
+#[derive(Clone, Copy)]
+struct Sample {
+    allocs: usize,
+    bytes: usize,
+    peak: usize,
+    micros: u128,
+}
+
+fn measure<T>(f: impl FnOnce() -> T) -> (T, Sample) {
+    // Settle whatever the caller left in flight before taking a peak reading.
+    let base_live = LIVE.load(Ordering::Relaxed);
+    ALLOCS.store(0, Ordering::Relaxed);
+    ALLOC_BYTES.store(0, Ordering::Relaxed);
+    PEAK.store(base_live, Ordering::Relaxed);
+    let start = Instant::now();
+    let value = f();
+    let micros = start.elapsed().as_micros();
+    let sample = Sample {
+        allocs: ALLOCS.load(Ordering::Relaxed),
+        bytes: ALLOC_BYTES.load(Ordering::Relaxed),
+        peak: PEAK.load(Ordering::Relaxed).saturating_sub(base_live),
+        micros,
+    };
+    (value, sample)
+}
+
+fn row(case: &str, op: &str, input_bytes: u64, s: Sample) {
+    println!(
+        "{case}\t{op}\t{input_bytes}\t{}\t{}\t{}\t{}",
+        s.allocs, s.bytes, s.peak, s.micros
+    );
+}
+
+fn file_len(p: &Path) -> u64 {
+    std::fs::metadata(p).map(|m| m.len()).unwrap_or(0)
+}
+
+/// Repository root, so a run is reproducible from any working directory.
+fn root() -> std::path::PathBuf {
+    std::env::var_os("POWERIO_ROOT").map_or_else(
+        || {
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .parent()
+                .and_then(std::path::Path::parent)
+                .expect("evals/allocation sits two levels below the repository root")
+                .to_path_buf()
+        },
+        std::path::PathBuf::from,
+    )
+}
+
+fn balanced_cases() -> Vec<(&'static str, String)> {
+    let small = [
+        "tests/data/case9.m",
+        "tests/data/case118.m",
+        "tests/data/case2869pegase.m",
+    ];
+    let large = [
+        "tests/data/large/case_ACTIVSg2000.m",
+        "tests/data/large/case9241pegase.m",
+        "tests/data/large/case_ACTIVSg10k.m",
+        "tests/data/large/case_ACTIVSg25k.m",
+        "tests/data/large/case99k.m",
+    ];
+    small
+        .iter()
+        .chain(large.iter())
+        .map(|rel| {
+            let name: &'static str = Box::leak(
+                Path::new(rel)
+                    .file_name()
+                    .unwrap()
+                    .to_string_lossy()
+                    .into_owned()
+                    .into_boxed_str(),
+            );
+            (name, root().join(rel).to_string_lossy().into_owned())
+        })
+        .collect()
+}
+
+fn main() {
+    println!("case\top\tinput_bytes\tallocs\talloc_bytes\tpeak_live_bytes\twall_micros");
+
+    for (name, path) in balanced_cases() {
+        let p = Path::new(&path);
+        if !p.exists() {
+            eprintln!("skip missing {path}");
+            continue;
+        }
+        let len = file_len(p);
+
+        let (parsed, s) = measure(|| powerio::parse_file(&path, None));
+        let parsed = match parsed {
+            Ok(v) => v,
+            Err(e) => {
+                eprintln!("parse failed {name}: {e}");
+                continue;
+            }
+        };
+        row(name, "parse_matpower", len, s);
+
+        let net = parsed.network;
+
+        let (indexed, s) = measure(|| powerio::indexed::IndexedNetwork::new(&net));
+        row(name, "indexed_build", len, s);
+
+        let (_, s) = measure(|| net.clone());
+        row(name, "network_clone", len, s);
+
+        let opts = powerio_matrix::matrix::BuildOptions::default();
+        let (_, s) = measure(|| powerio_matrix::matrix::build_ybus(&indexed, &opts));
+        row(name, "ybus", len, s);
+
+        let (_, s) = measure(|| {
+            powerio_matrix::matrix::incidence::build_incidence(
+                &indexed,
+                powerio::dc::DcConvention::default(),
+                &opts,
+            )
+        });
+        row(name, "dc_incidence", len, s);
+
+        // The dense sensitivity path is quadratic; keep it to cases where that
+        // is still measurable in a reasonable time.
+        if indexed.n() <= 3000 {
+            let (_, s) = measure(|| {
+                powerio_matrix::matrix::sensitivity::build_ptdf(
+                    &indexed,
+                    powerio::dc::DcConvention::default(),
+                )
+            });
+            row(name, "ptdf", len, s);
+
+            let (_, s) = measure(|| {
+                powerio_matrix::matrix::sensitivity::build_ptdf_lodf(
+                    &indexed,
+                    powerio::dc::DcConvention::default(),
+                )
+            });
+            row(name, "ptdf_lodf", len, s);
+        }
+    }
+
+    // PSS/E, pandapower, PyPSA, Egret: the parsers the architecture calls out
+    // as allocating owned strings while scanning.
+    for (name, rel, from) in [
+        ("case14.raw", "tests/data/psse/case14.raw", Some("psse")),
+        (
+            "pandapower-example.json",
+            "tests/data/pandapower/example.json",
+            Some("pandapower"),
+        ),
+        ("pypsa-example", "tests/data/pypsa/example", Some("pypsa")),
+    ] {
+        let path = root().join(rel).to_string_lossy().into_owned();
+        let p = Path::new(&path);
+        if !p.exists() {
+            eprintln!("skip missing {path}");
+            continue;
+        }
+        let len = if p.is_dir() {
+            std::fs::read_dir(p)
+                .map(|d| d.filter_map(|e| e.ok()).map(|e| file_len(&e.path())).sum())
+                .unwrap_or(0)
+        } else {
+            file_len(p)
+        };
+        let (r, s) = measure(|| powerio::parse_file(&path, from));
+        match r {
+            Ok(_) => row(name, "parse", len, s),
+            Err(e) => eprintln!("parse failed {name}: {e}"),
+        }
+    }
+
+    // Multiconductor: OpenDSS and BMOPF.
+    for (name, rel, from) in [
+        (
+            "ieee13.dss",
+            "tests/data/dist/opendss/ieee13/IEEE13Nodeckt.dss",
+            None,
+        ),
+        (
+            "ieee123.dss",
+            "tests/data/dist/opendss/ieee123/IEEE123Master.dss",
+            None,
+        ),
+        (
+            "bmopf-ieee13.json",
+            "tests/data/dist/bmopf/example_ieee13.json",
+            Some("bmopf"),
+        ),
+        (
+            "bmopf-enwl.json",
+            "tests/data/dist/bmopf/example_enwl_n1_f2.json",
+            Some("bmopf"),
+        ),
+    ] {
+        let path = root().join(rel).to_string_lossy().into_owned();
+        let p = Path::new(&path);
+        if !p.exists() {
+            eprintln!("skip missing {path}");
+            continue;
+        }
+        let len = file_len(p);
+        let (r, s) = measure(|| powerio_dist::convert::parse_file(&path, from));
+        match r {
+            Ok(net) => {
+                row(name, "dist_parse", len, s);
+                let (_, s) = measure(|| net.clone());
+                row(name, "dist_network_clone", len, s);
+            }
+            Err(e) => eprintln!("dist parse failed {name}: {e}"),
+        }
+    }
+}

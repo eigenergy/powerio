@@ -51,7 +51,6 @@ pub use powerio::{
 
 pub mod diagnostics;
 pub mod error;
-pub use diagnostics::Diagnostics;
 pub use error::{ElementCounts, Error, Result, ScenarioMismatch};
 
 /// The hub's error, so a binding can map both through one taxonomy.

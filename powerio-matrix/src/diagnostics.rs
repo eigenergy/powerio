@@ -5,8 +5,12 @@
 //! side of the workspace registry. A hub failure that arrives through
 //! [`crate::Error::Core`] keeps the hub's own code.
 
+// The collector is workspace implementation support, not API: it is used
+// inside this crate and never re-exported.
+pub(crate) use powerio_core::__implementation::Diagnostics;
+
 pub use powerio_core::{
-    Diagnostic, DiagnosticInfo, DiagnosticSeverity, Diagnostics, check_registry, render_diagnostic,
+    Diagnostic, DiagnosticInfo, DiagnosticSeverity, check_registry, render_diagnostic,
     render_diagnostics,
 };
 

@@ -264,7 +264,7 @@ fn lower_to_balanced(
             .chain(&lowered.record.dropped_fields)
             .map(|s| {
                 powerio_pkg::diagnostics::render_line(&powerio_pkg::StructuredDiagnostic::of(
-                    &powerio_pkg::diagnostics::codes::LOWER_MULTI_TO_BALANCED_UNSUPPORTED_OBJECT,
+                    &powerio_pkg::diagnostics::codes::TRANSFORM_MULTI_TO_BALANCED_UNSUPPORTED_OBJECT,
                     format!("lowering: {s}"),
                 ))
             }),

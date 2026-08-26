@@ -2,7 +2,9 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::legacy_diag::{DiagnosticCode, DiagnosticInfo, DiagnosticStage};
+use powerio_core::DiagnosticInfo;
+
+use crate::legacy_diag::{DiagnosticCode, DiagnosticStage};
 
 /// Severity, ordered worst-last so [`Ord`] gives the dominant severity of a set.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -20,8 +22,26 @@ pub enum DiagnosticSeverity {
     Error,
     /// The operation could not complete. An error is a diagnostic that ended
     /// the operation, and it is the one severity that also carries a
-    /// [`crate::legacy_diag::ErrorCategory`].
+    /// [`crate::ErrorCategory`].
     Fatal,
+}
+
+impl DiagnosticSeverity {
+    /// Project a 1.0 registry entry onto the 0.9 ladder. `Fatal` was the 0.9
+    /// spelling for the finding that ends an operation, which is exactly the
+    /// entry that declares an error category.
+    #[must_use]
+    pub fn from_runtime(info: &DiagnosticInfo) -> Self {
+        use powerio_core::DiagnosticSeverity as Runtime;
+
+        match info.severity {
+            Runtime::Error if info.category.is_some() => Self::Fatal,
+            Runtime::Error => Self::Error,
+            Runtime::Warning => Self::Warning,
+            Runtime::Remark => Self::Info,
+            Runtime::Note => Self::Debug,
+        }
+    }
 }
 
 /// A pointer into one source artifact: where a canonical field came from.
@@ -132,8 +152,8 @@ impl StructuredDiagnostic {
     /// A finding from its registry entry, taking the entry's default severity.
     /// This is how an emission site names a code: the registry is the only
     /// place a code literal is written, so every emitted code is registered.
-    pub fn of(info: &DiagnosticInfo, message: impl Into<String>) -> Self {
-        Self::new(info.code, info.severity, message)
+    pub fn of(info: &'static DiagnosticInfo, message: impl Into<String>) -> Self {
+        Self::new(info.code, DiagnosticSeverity::from_runtime(info), message)
     }
 
     /// The stage this finding came from, decoded from the code. `None` when the

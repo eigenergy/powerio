@@ -204,14 +204,16 @@ impl serde::Serialize for NetworkPackage {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         NetworkPackage::serialize(
             self,
-            crate::legacy_diag::nonfinite::NonFiniteSer(serializer),
+            powerio_core::__implementation::nonfinite::NonFiniteSer(serializer),
         )
     }
 }
 
 impl<'de> serde::Deserialize<'de> for NetworkPackage {
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        NetworkPackage::deserialize(crate::legacy_diag::nonfinite::NonFiniteDe(deserializer))
+        NetworkPackage::deserialize(powerio_core::__implementation::nonfinite::NonFiniteDe(
+            deserializer,
+        ))
     }
 }
 
@@ -744,7 +746,7 @@ impl NetworkPackage {
     ) -> Result<Self, MulticonductorToBalancedError> {
         let Some(net) = self.as_multiconductor() else {
             let diagnostic = StructuredDiagnostic::of(
-                &codes::LOWER_MULTI_TO_BALANCED_WRONG_MODEL_KIND,
+                &codes::TRANSFORM_MULTI_TO_BALANCED_WRONG_MODEL_KIND,
                 format!(
                     "multiconductor to balanced lowering requires a multiconductor package, got {:?}",
                     self.model_kind

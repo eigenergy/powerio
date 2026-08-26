@@ -5,9 +5,7 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use crate::validation::{
-    MAX_ARTIFACT_PATH_BYTES, MAX_ARTIFACT_SEGMENT_BYTES, path_exists_without_following,
-};
+use crate::validation::{MAX_ARTIFACT_PATH_BYTES, MAX_ARTIFACT_SEGMENT_BYTES};
 use crate::{Diagnostic, Error};
 
 static STAGING_SEQUENCE: AtomicU64 = AtomicU64::new(0);
@@ -247,18 +245,6 @@ fn commit_path_output(
             "output path cannot be empty",
         ));
     }
-    if path_exists_without_following(target).map_err(|cause| {
-        Error::new(
-            &crate::codes::EMIT_IO_STAGING,
-            format!("cannot inspect output target '{}'", target.display()),
-        )
-        .with_cause(cause)
-    })? {
-        return Err(Error::new(
-            &crate::codes::REQUEST_OUTPUT_COLLISION,
-            format!("output target '{}' already exists", target.display()),
-        ));
-    }
     if let Some(parent) = target.parent()
         && !parent.as_os_str().is_empty()
     {
@@ -270,6 +256,11 @@ fn commit_path_output(
             .with_cause(cause)
         })?;
     }
+
+    // Claiming the name is the collision check. Inspecting the target and then
+    // renaming over it later is a race: a target created in between would be
+    // replaced by an output that refused to overwrite anything.
+    let reservation = Reservation::claim(target, directory)?;
 
     let mut staging = StagingGuard::create(target, directory)?;
     let result = if directory {
@@ -283,9 +274,13 @@ fn commit_path_output(
         )
     };
     if let Err(error) = result {
-        return Err(staging.cleanup_after(error));
+        let error = staging.cleanup_after(error);
+        return Err(reservation.release_after(error));
     }
-    staging.commit(target)?;
+    if let Err(error) = staging.commit(target) {
+        return Err(reservation.release_after(error));
+    }
+    reservation.into_committed();
 
     Ok(if directory {
         artifacts
@@ -340,6 +335,90 @@ fn write_directory_artifacts(staging: &Path, artifacts: &[MemoryArtifact]) -> Re
         write_single_artifact(&mut file, artifact)?;
     }
     Ok(())
+}
+
+/// The claimed output name.
+///
+/// The claim is the atomic operation: `create_dir` and `create_new` both fail
+/// with `AlreadyExists` rather than replacing an existing entry, so a target
+/// that appears after the claim cannot be silently overwritten. The staged
+/// output is then renamed onto the reservation, which is an entry this process
+/// created: a POSIX rename onto an empty directory succeeds and onto a regular
+/// file replaces it, and both fail if another writer filled the directory in
+/// the meantime.
+struct Reservation {
+    path: PathBuf,
+    directory: bool,
+    committed: bool,
+}
+
+impl Reservation {
+    fn claim(target: &Path, directory: bool) -> Result<Self, Error> {
+        let claimed = if directory {
+            std::fs::create_dir(target)
+        } else {
+            OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(target)
+                .map(|_| ())
+        };
+        match claimed {
+            Ok(()) => Ok(Self {
+                path: target.to_path_buf(),
+                directory,
+                committed: false,
+            }),
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => Err(Error::new(
+                &crate::codes::REQUEST_OUTPUT_COLLISION,
+                format!("output target '{}' already exists", target.display()),
+            )),
+            Err(cause) => Err(Error::new(
+                &crate::codes::EMIT_IO_STAGING,
+                format!("cannot claim output target '{}'", target.display()),
+            )
+            .with_cause(cause)),
+        }
+    }
+
+    fn into_committed(mut self) {
+        self.committed = true;
+    }
+
+    fn release_after(mut self, original: Error) -> Error {
+        self.committed = true;
+        let released = if self.directory {
+            std::fs::remove_dir(&self.path)
+        } else {
+            std::fs::remove_file(&self.path)
+        };
+        match released {
+            Ok(()) => original,
+            Err(cause) => original.with_diagnostic(
+                Diagnostic::of(
+                    &crate::codes::EMIT_IO_STAGING,
+                    format!(
+                        "left the claimed output target '{}' in place: {cause}",
+                        self.path.display()
+                    ),
+                )
+                .with_severity(crate::DiagnosticSeverity::Warning),
+            ),
+        }
+    }
+}
+
+impl Drop for Reservation {
+    fn drop(&mut self) {
+        if self.committed {
+            return;
+        }
+        let _ = if self.directory {
+            std::fs::remove_dir(&self.path)
+        } else {
+            std::fs::remove_file(&self.path)
+        };
+    }
 }
 
 struct StagingGuard {
@@ -526,6 +605,33 @@ mod tests {
             ["case/buses.csv", "case/lines.csv"]
         );
         assert_eq!(artifacts[0].bytes(), b"buses");
+    }
+
+    #[test]
+    fn the_target_name_is_claimed_before_anything_is_staged() {
+        // The claim is what makes the refusal race free: a target that appears
+        // after an existence check but before the commit used to be replaced.
+        let path = test_root("claimed-first");
+        let target = path.join("case.m");
+        commit_path_output(&target, false, &[artifact("case.m", b"one")]).unwrap();
+
+        // A second write finds the name taken and refuses, and the first
+        // output is still there byte for byte.
+        let error = commit_path_output(&target, false, &[artifact("case.m", b"two")])
+            .expect_err("an existing target is a collision");
+        assert_eq!(error.category(), crate::ErrorCategory::Request);
+        assert_eq!(std::fs::read(&target).unwrap(), b"one");
+
+        // A failed write releases the claim rather than leaving the name taken.
+        let directory = path.join("as-a-directory");
+        std::fs::create_dir_all(&directory).unwrap();
+        let blocked = directory.join("out");
+        std::fs::create_dir(&blocked).unwrap();
+        std::fs::write(blocked.join("keep"), b"kept").unwrap();
+        assert!(commit_path_output(&blocked, true, &[artifact("a.csv", b"a")]).is_err());
+        assert_eq!(std::fs::read(blocked.join("keep")).unwrap(), b"kept");
+
+        std::fs::remove_dir_all(&path).ok();
     }
 
     #[test]

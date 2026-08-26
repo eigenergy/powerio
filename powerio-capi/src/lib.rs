@@ -259,6 +259,31 @@ pub const PIO_SCOPF_INDEX_BASE_ZERO: i32 = 0;
 #[cfg(feature = "prob")]
 pub const PIO_SCOPF_INDEX_BASE_ONE: i32 = 1;
 
+/// The category tokens ABI v5 publishes.
+///
+/// Rust renamed `UnknownFormat` to `Request` for 1.0, but `pio_build_info` is
+/// an ABI v5 response and PowerIO.jl asserts this exact tuple
+/// (`test/test_public_api.jl`). The v5 spelling holds until the ABI v6 branch
+/// changes both sides together. `abi_v5_error_category_token` is exhaustive
+/// over `ErrorCategory`, so adding a category forces a decision here.
+const ABI_V5_ERROR_CATEGORY_TOKENS: [&str; 5] = [
+    abi_v5_error_category_token(powerio::ErrorCategory::Io),
+    abi_v5_error_category_token(powerio::ErrorCategory::Request),
+    abi_v5_error_category_token(powerio::ErrorCategory::Parse),
+    abi_v5_error_category_token(powerio::ErrorCategory::Data),
+    abi_v5_error_category_token(powerio::ErrorCategory::Output),
+];
+
+const fn abi_v5_error_category_token(category: powerio::ErrorCategory) -> &'static str {
+    match category {
+        powerio::ErrorCategory::Io => "io",
+        powerio::ErrorCategory::Request => "unknown_format",
+        powerio::ErrorCategory::Parse => "parse",
+        powerio::ErrorCategory::Data => "data",
+        powerio::ErrorCategory::Output => "output",
+    }
+}
+
 /// The ABI version the library was built with (see [`PIO_ABI_VERSION`]). Lets a
 /// consumer detect a stale or incompatible library at load time. Infallible.
 #[unsafe(no_mangle)]
@@ -403,7 +428,7 @@ fn build_info_ptr() -> *mut c_char {
         // owns the schema, which is why an integer checked once at load cannot
         // express it.
         "foreign_schemas": { "bmopf": bmopf_schema_version() },
-        "error_categories": powerio::ErrorCategory::TOKENS,
+        "error_categories": ABI_V5_ERROR_CATEGORY_TOKENS,
         "diagnostic_namespaces": powerio::diagnostics::DiagnosticStage::NAMESPACES,
         "json_classes": powerio::format::routing::JSON_CLASSES,
     });
@@ -3644,9 +3669,11 @@ mod tests {
                 "{name} disagrees between pio_build_info and pio_has_feature"
             );
         }
+        // ABI v5 spelling, asserted literally so the v6 branch has to change
+        // this test and PowerIO.jl together.
         assert_eq!(
             doc["error_categories"],
-            serde_json::json!(powerio::ErrorCategory::TOKENS)
+            serde_json::json!(["io", "unknown_format", "parse", "data", "output"])
         );
         assert_eq!(
             doc["diagnostic_namespaces"],
@@ -5660,7 +5687,7 @@ mpc.branch = [
                         .as_array()
                         .unwrap()
                         .iter()
-                        .any(|d| d["code"] == "LOWER.MULTI_TO_BALANCED.INVALID_BASE_MVA")
+                        .any(|d| d["code"] == "TRANSFORM.MULTI_TO_BALANCED.INVALID_BASE_MVA")
                 );
                 pio_string_free(invalid_report);
 

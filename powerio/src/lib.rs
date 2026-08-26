@@ -52,7 +52,7 @@ pub mod solver_tables;
 pub mod version;
 
 pub use dc::DcConvention;
-pub use diagnostics::{Diagnostic, DiagnosticCode, DiagnosticSeverity, Diagnostics, EmitFamily};
+pub use diagnostics::{Diagnostic, DiagnosticCode, DiagnosticSeverity, EmitFamily};
 pub use error::{Error, ErrorCategory, Result};
 pub use format::routing::{
     Detection, JSON_CLASSES, JsonClass, classify_json_bytes, classify_json_text,
@@ -90,7 +90,7 @@ pub use normalize::{
     NormalizeOptions, NormalizeSourceRows, NormalizedNetwork, POWER_MODELS_ANGLE_BOUND_PAD,
 };
 pub use operations::Selector;
-pub use powerio_core::nonfinite;
+
 pub use solver_tables::{
     NORMALIZED_SOLVER_TABLES_PASS, NormalizedSolverTables, SolverArcRow, SolverArcTerminal,
     SolverBranchRow, SolverBusRow, SolverCostRow, SolverGeneratorRow, SolverHvdcRow, SolverLoadRow,

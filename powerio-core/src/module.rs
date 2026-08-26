@@ -109,10 +109,12 @@ impl<T> PioModule<T> {
         self
     }
 
-    #[must_use]
-    pub fn with_diagnostic(mut self, diagnostic: Diagnostic) -> Self {
-        self.records.diagnostics.push(diagnostic);
-        self
+    /// Append a finding, applying the same duplicate identity and span
+    /// reference checks as [`PioModule::add_diagnostic`]. There is no unchecked
+    /// path onto a module's records.
+    pub fn with_diagnostic(mut self, diagnostic: Diagnostic) -> Result<Self, Error> {
+        self.add_diagnostic(diagnostic)?;
+        Ok(self)
     }
 
     pub fn add_source_descriptor(&mut self, source: SourceDescriptor) -> Result<(), Error> {
@@ -354,7 +356,8 @@ mod tests {
         let diagnostic = Diagnostic::of(&crate::codes::VALIDATE_TIME_SERIES_SHAPE, "kept");
         let module = PioModule::new(String::from("value"))
             .with_source(source)
-            .with_diagnostic(diagnostic);
+            .with_diagnostic(diagnostic)
+            .unwrap();
         let diagnostics_pointer = module.diagnostics().as_ptr();
         let source_pointer = module
             .source()
@@ -380,10 +383,12 @@ mod tests {
 
     #[test]
     fn failed_try_map_returns_the_original_module_and_records() {
-        let module = PioModule::new(String::from("value")).with_diagnostic(Diagnostic::of(
-            &crate::codes::VALIDATE_TIME_SERIES_SHAPE,
-            "kept",
-        ));
+        let module = PioModule::new(String::from("value"))
+            .with_diagnostic(Diagnostic::of(
+                &crate::codes::VALIDATE_TIME_SERIES_SHAPE,
+                "kept",
+            ))
+            .unwrap();
         let diagnostics_pointer = module.diagnostics().as_ptr();
         let recovered = module
             .__try_map_value::<usize>(Err)

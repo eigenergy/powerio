@@ -47,6 +47,10 @@ pub mod study;
 pub mod summary;
 pub mod validation;
 
+// The frozen 0.9 severity doc names this path, and the generated 0.9 schema
+// records that text, so the link has to resolve here.
+pub use powerio_core::ErrorCategory;
+
 pub use diagnostics::{DiagnosticCode, DiagnosticSeverity, DiagnosticStage, StructuredDiagnostic};
 pub use geo::{apply_dist_geo_layer, dist_geo_layer};
 pub use lowering::{

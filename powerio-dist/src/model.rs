@@ -960,13 +960,18 @@ pub struct MulticonductorNetwork {
 // `null` a pre-0.9 writer emitted (read side only).
 impl serde::Serialize for MulticonductorNetwork {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        MulticonductorNetwork::serialize(self, powerio_core::nonfinite::NonFiniteSer(serializer))
+        MulticonductorNetwork::serialize(
+            self,
+            powerio_core::__implementation::nonfinite::NonFiniteSer(serializer),
+        )
     }
 }
 
 impl<'de> serde::Deserialize<'de> for MulticonductorNetwork {
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        MulticonductorNetwork::deserialize(powerio_core::nonfinite::NonFiniteDe(deserializer))
+        MulticonductorNetwork::deserialize(powerio_core::__implementation::nonfinite::NonFiniteDe(
+            deserializer,
+        ))
     }
 }
 

@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::HashMap;
 use std::fmt;
 use std::sync::Arc;
 
@@ -78,11 +78,13 @@ impl<T> Scenario<T> {
 /// Named alternatives with no implied time order.
 pub struct ScenarioSet<T> {
     scenarios: Arc<[Scenario<T>]>,
+    /// ID to position. Built once, so `get` does not scan the set.
+    index: Arc<HashMap<Box<str>, usize>>,
 }
 
 impl<T> ScenarioSet<T> {
     pub fn new(scenarios: Vec<Scenario<T>>) -> Result<Self, Error> {
-        let mut ids = HashSet::new();
+        let mut ids: HashMap<Box<str>, usize> = HashMap::new();
         ids.try_reserve(scenarios.len()).map_err(|cause| {
             Error::new(
                 &crate::codes::VALIDATE_SCENARIO_ALLOCATION_REFUSED,
@@ -93,8 +95,8 @@ impl<T> ScenarioSet<T> {
             )
             .with_cause(cause)
         })?;
-        for scenario in &scenarios {
-            if !ids.insert(scenario.id.as_str()) {
+        for (position, scenario) in scenarios.iter().enumerate() {
+            if ids.insert(scenario.id.as_str().into(), position).is_some() {
                 return Err(Error::new(
                     &crate::codes::VALIDATE_SCENARIO_DUPLICATE_ID,
                     format!("duplicate scenario ID `{}`", scenario.id),
@@ -147,14 +149,15 @@ impl<T> ScenarioSet<T> {
 
         Ok(Self {
             scenarios: scenarios.into(),
+            index: Arc::new(ids),
         })
     }
 
     #[must_use]
+    /// Look one scenario up by its stable ID. Constant time: IDs are case
+    /// sensitive and never normalized, and the index is built once.
     pub fn get(&self, id: &str) -> Option<&Scenario<T>> {
-        self.scenarios
-            .iter()
-            .find(|scenario| scenario.id.as_str() == id)
+        self.scenarios.get(*self.index.get(id)?)
     }
 
     pub fn iter(&self) -> impl ExactSizeIterator<Item = &Scenario<T>> {
@@ -176,10 +179,17 @@ impl<T> Clone for ScenarioSet<T> {
     fn clone(&self) -> Self {
         Self {
             scenarios: Arc::clone(&self.scenarios),
+            index: Arc::clone(&self.index),
         }
     }
 }
 
+// The ID index is a derived view of `scenarios`, so printing it would only
+// repeat the IDs already shown.
+#[expect(
+    clippy::missing_fields_in_debug,
+    reason = "the index is derived from the scenarios it points into"
+)]
 impl<T: fmt::Debug> fmt::Debug for ScenarioSet<T> {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -203,6 +213,26 @@ fn compensated_sum(values: impl IntoIterator<Item = f64>) -> f64 {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn lookup_is_indexed_and_stays_correct_at_scale() {
+        // A linear scan is correct but not what the design allows, so this
+        // exercises enough entries that a scan would be visible in a profile
+        // and asserts the last one is reachable directly.
+        let scenarios: Vec<_> = (0..20_000)
+            .map(|index| Scenario::new(ScenarioId::new(format!("s{index}")).unwrap(), None, index))
+            .collect();
+        let set = ScenarioSet::new(scenarios).unwrap();
+        assert_eq!(set.get("s19999").map(Scenario::value), Some(&19_999));
+        assert_eq!(set.get("s0").map(Scenario::value), Some(&0));
+        assert!(set.get("S0").is_none(), "IDs are case sensitive");
+        assert!(set.get("missing").is_none());
+        // Cloning shares the index rather than rebuilding it.
+        assert_eq!(
+            set.clone().get("s12345").map(Scenario::value),
+            Some(&12_345)
+        );
+    }
     use super::*;
 
     fn scenario(id: &str, probability: Option<f64>) -> Scenario<u8> {

@@ -9,8 +9,12 @@
 //! Codes are families, not one per site: what differs between two sites of a
 //! family is which object or property it was, which belongs in `details`.
 
+// The collector is workspace implementation support, not API: it is used
+// inside this crate and never re-exported.
+pub(crate) use powerio_core::__implementation::Diagnostics;
+
 pub use powerio_core::{
-    Diagnostic, DiagnosticCode, DiagnosticInfo, DiagnosticSeverity, DiagnosticStage, Diagnostics,
+    Diagnostic, DiagnosticCode, DiagnosticInfo, DiagnosticSeverity, DiagnosticStage,
     check_registry, render_diagnostic, render_diagnostics,
 };
 

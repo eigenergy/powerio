@@ -360,13 +360,14 @@ impl Diagnostic {
 
     /// Name the element this finding is about.
     ///
-    /// Infallible on purpose: refusing to build a diagnostic because its
-    /// locator is malformed loses the finding, which is worse than carrying an
-    /// imprecise target. The stored document validates targets as RFC 6901
-    /// pointers when it writes them.
+    /// A target is identity, so it is never shortened: a truncated RFC 6901
+    /// pointer names a different element, or none. An empty, oversized, or
+    /// NUL-bearing locator is dropped and the finding is kept, because losing
+    /// the finding is worse than losing its locator.
     #[must_use]
     pub fn with_target(mut self, target: impl Into<String>) -> Self {
-        self.target = Some(bounded_identifier(&target.into()));
+        let target = target.into();
+        self.target = crate::validation::valid_diagnostic_target(&target).then_some(target);
         self
     }
 
@@ -395,9 +396,11 @@ impl Diagnostic {
         &mut self.details
     }
 
-    /// Replace the target of a finding already built.
+    /// Replace the target of a finding already built. Same rule as
+    /// [`Diagnostic::with_target`]: bounded, never shortened.
     pub fn set_target(&mut self, target: impl Into<String>) {
-        self.target = Some(bounded_identifier(&target.into()));
+        let target = target.into();
+        self.target = crate::validation::valid_diagnostic_target(&target).then_some(target);
     }
 
     #[must_use]
@@ -429,6 +432,7 @@ impl PartialEq for Diagnostic {
             && self.spans == other.spans
             && self.related == other.related
             && self.details == other.details
+            && self.suggested_action == other.suggested_action
     }
 }
 
@@ -547,6 +551,56 @@ fn bounded_identifier(value: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn suggested_action_is_part_of_a_finding_identity() {
+        let base = Diagnostic::of(&crate::codes::VALIDATE_TIME_SERIES_SHAPE, "same message");
+        let advised = Diagnostic::of(&crate::codes::VALIDATE_TIME_SERIES_SHAPE, "same message")
+            .with_suggested_action("rebuild the series");
+        assert_ne!(base, advised, "advice changes what the record says to do");
+        assert_eq!(
+            advised,
+            Diagnostic::of(&crate::codes::VALIDATE_TIME_SERIES_SHAPE, "same message")
+                .with_suggested_action("rebuild the series")
+        );
+    }
+
+    #[test]
+    fn a_target_is_never_shortened() {
+        let long = format!("/model/buses/{}", "a".repeat(4_000));
+        let kept = Diagnostic::of(&crate::codes::VALIDATE_TIME_SERIES_SHAPE, "long target")
+            .with_target(long.clone());
+        assert_eq!(kept.target(), Some(long.as_str()));
+
+        // Past the bound the locator is dropped, never truncated: a shortened
+        // pointer names a different element.
+        let oversize = "/".repeat(crate::validation::MAX_DIAGNOSTIC_TARGET_BYTES + 1);
+        let dropped = Diagnostic::of(&crate::codes::VALIDATE_TIME_SERIES_SHAPE, "oversize")
+            .with_target(oversize);
+        assert_eq!(dropped.target(), None);
+    }
+
+    #[test]
+    fn stored_findings_meet_the_limits_the_constructors_enforce() {
+        let mut document = serde_json::json!({
+            "code": "PARTNER.TEST.FINDING",
+            "severity": "warning",
+            "message": "line one\nline two",
+        });
+        let record: Diagnostic = serde_json::from_value(document.clone()).unwrap();
+        assert_eq!(record.message(), "line one line two");
+
+        document["related"] = serde_json::Value::Array(
+            (0..=crate::validation::MAX_DIAGNOSTIC_RELATED)
+                .map(|index| serde_json::Value::String(format!("d{index}")))
+                .collect(),
+        );
+        assert!(serde_json::from_value::<Diagnostic>(document.clone()).is_err());
+
+        document["related"] = serde_json::Value::Array(Vec::new());
+        document["target"] = serde_json::Value::String(String::new());
+        assert!(serde_json::from_value::<Diagnostic>(document).is_err());
+    }
     use super::*;
 
     #[test]
@@ -652,17 +706,49 @@ mod wire {
     impl TryFrom<DiagnosticWire> for Diagnostic {
         type Error = crate::Error;
 
+        // Serialized input is untrusted. It goes through the same limits the
+        // constructors apply, so a document cannot introduce a record the API
+        // could not have built.
         fn try_from(wire: DiagnosticWire) -> Result<Self, Self::Error> {
+            use crate::validation::{
+                MAX_DIAGNOSTIC_DETAIL_KEYS, MAX_DIAGNOSTIC_RELATED, MAX_DIAGNOSTIC_SPANS,
+                sanitize_message, valid_diagnostic_target,
+            };
+
+            let refuse = |what: &str, limit: usize| {
+                crate::Error::new(
+                    &crate::codes::REQUEST_RECORD_TOO_LARGE,
+                    format!("a stored diagnostic carries more than {limit} {what}"),
+                )
+            };
+            if wire.spans.len() > MAX_DIAGNOSTIC_SPANS {
+                return Err(refuse("source spans", MAX_DIAGNOSTIC_SPANS));
+            }
+            if wire.related.len() > MAX_DIAGNOSTIC_RELATED {
+                return Err(refuse("related records", MAX_DIAGNOSTIC_RELATED));
+            }
+            if wire.details.len() > MAX_DIAGNOSTIC_DETAIL_KEYS {
+                return Err(refuse("detail keys", MAX_DIAGNOSTIC_DETAIL_KEYS));
+            }
+            let target = match wire.target {
+                Some(target) if !valid_diagnostic_target(&target) => {
+                    return Err(crate::Error::new(
+                        &crate::codes::REQUEST_RECORD_INVALID_IDENTIFIER,
+                        "a stored diagnostic target is empty or oversized",
+                    ));
+                }
+                other => other,
+            };
             Ok(Diagnostic {
                 identity: DiagnosticIdentity::External(DiagnosticCode::new(wire.code)?),
                 id: wire.id,
                 severity: wire.severity,
-                message: wire.message,
-                target: wire.target,
+                message: sanitize_message(wire.message),
+                target,
                 spans: wire.spans,
                 related: wire.related,
                 details: wire.details,
-                suggested_action: wire.suggested_action,
+                suggested_action: wire.suggested_action.map(sanitize_message),
             })
         }
     }

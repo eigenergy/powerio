@@ -1,0 +1,15 @@
+[package]
+name = "powerio-eval-allocation"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+powerio = { path = "../../powerio" }
+powerio-dist = { path = "../../powerio-dist" }
+powerio-matrix = { path = "../../powerio-matrix" }
+
+# Debug symbols in release so a regression can be attributed to a call site
+# without changing the profile the numbers were taken under.
+[profile.release]
+debug = true

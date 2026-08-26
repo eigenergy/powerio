@@ -9,7 +9,7 @@ mod collect;
 mod diagnostic;
 mod error;
 mod module;
-pub mod nonfinite;
+pub(crate) mod nonfinite;
 mod output;
 mod records;
 mod scenario;
@@ -18,7 +18,6 @@ mod time_series;
 mod validation;
 
 pub use codes::CORE_DIAGNOSTIC_CODES;
-pub use collect::Diagnostics;
 pub use diagnostic::{
     CodeStatus, Diagnostic, DiagnosticCode, DiagnosticInfo, DiagnosticSeverity, DiagnosticStage,
     ErrorCategory, check_registry, check_scope_ownership, code_is_well_formed, render_diagnostic,
@@ -33,7 +32,26 @@ pub use records::{
 };
 pub use scenario::{SCENARIO_PROBABILITY_TOLERANCE, Scenario, ScenarioId, ScenarioSet};
 pub use source::{FormatId, Source, SourceBuffer};
-pub use time_series::{TimePoint, TimeSeries, checked_dimension_product};
+pub use time_series::{TimePoint, TimeSeries};
+
+/// Cross-crate implementation support.
+///
+/// These items exist because sibling crates in this workspace need them, not
+/// because they are part of the PowerIO API. Nothing here is stable, and no
+/// public PowerIO operation accepts or returns any of it. The facade does not
+/// re-export this module.
+#[doc(hidden)]
+pub mod __implementation {
+    /// The mutable collector an emitting pass threads through its call tree.
+    /// An operation returns `Vec<Diagnostic>` or an `Error`, never this.
+    pub use crate::collect::Diagnostics;
+    /// The serde adapters that spell nonfinite floats for JSON.
+    pub mod nonfinite {
+        pub use crate::nonfinite::*;
+    }
+    /// Overflow-checked table sizing.
+    pub use crate::time_series::checked_dimension_product;
+}
 
 /// Declare one crate's diagnostic registry.
 ///

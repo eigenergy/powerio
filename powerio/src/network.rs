@@ -399,7 +399,10 @@ impl Serialize for BalancedNetwork {
         &self,
         serializer: S,
     ) -> std::result::Result<S::Ok, S::Error> {
-        BalancedNetwork::serialize(self, crate::nonfinite::NonFiniteSer(serializer))
+        BalancedNetwork::serialize(
+            self,
+            powerio_core::__implementation::nonfinite::NonFiniteSer(serializer),
+        )
     }
 }
 
@@ -407,7 +410,9 @@ impl<'de> Deserialize<'de> for BalancedNetwork {
     fn deserialize<D: serde::Deserializer<'de>>(
         deserializer: D,
     ) -> std::result::Result<Self, D::Error> {
-        BalancedNetwork::deserialize(crate::nonfinite::NonFiniteDe(deserializer))
+        BalancedNetwork::deserialize(powerio_core::__implementation::nonfinite::NonFiniteDe(
+            deserializer,
+        ))
     }
 }
 
@@ -1680,6 +1685,13 @@ pub(crate) const GEN_EXTRA_KEYS: [&str; 11] = [
 /// A value-domain finding from [`BalancedNetwork::validate_values`]: an element field
 /// whose value falls outside its physical range, paired with the value
 /// [`repair`](BalancedNetwork::repair) would set in its place.
+///
+/// TRANSITIONAL. This is not a settled 1.0 record family. The 1.0 model records
+/// a repair as a structured `HistoryEntry` on the module plus a coded
+/// `Diagnostic`, which is why the name `Diagnostic` had to be freed here. This
+/// type survives only until the network migration moves retained source and the
+/// repair path onto the module, and it goes away in the same branch. Do not
+/// build a new API on it.
 ///
 /// `#[non_exhaustive]`: a returns-only record, so downstream code reads it but
 /// never constructs it, leaving room to add locator fields without a break.

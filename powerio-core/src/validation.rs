@@ -1,11 +1,19 @@
-use std::path::Path;
-
 pub(crate) const MAX_IDENTIFIER_BYTES: usize = 65_536;
 pub(crate) const MAX_DIAGNOSTIC_MESSAGE_BYTES: usize = 16_384;
 pub(crate) const MAX_ARTIFACT_PATH_BYTES: usize = 4_096;
 pub(crate) const MAX_ARTIFACT_SEGMENT_BYTES: usize = 255;
 pub(crate) const MAX_FORMAT_ID_BYTES: usize = 127;
 pub(crate) const MAX_DIAGNOSTIC_CODE_BYTES: usize = 255;
+pub(crate) const MAX_DIAGNOSTIC_TARGET_BYTES: usize = 8_192;
+pub(crate) const MAX_DIAGNOSTIC_SPANS: usize = 256;
+pub(crate) const MAX_DIAGNOSTIC_RELATED: usize = 256;
+pub(crate) const MAX_DIAGNOSTIC_DETAIL_KEYS: usize = 256;
+
+/// A locator identifies an element, so it is bounded but never shortened: a
+/// truncated RFC 6901 pointer names a different element, or none.
+pub(crate) fn valid_diagnostic_target(target: &str) -> bool {
+    !target.is_empty() && target.len() <= MAX_DIAGNOSTIC_TARGET_BYTES && !target.contains('\0')
+}
 
 pub(crate) fn valid_nonempty_text(value: &str) -> bool {
     !value.is_empty() && value.len() <= MAX_IDENTIFIER_BYTES && !value.contains('\0')
@@ -51,14 +59,6 @@ pub(crate) fn valid_rfc6901_pointer(pointer: &str) -> bool {
         index += 1;
     }
     true
-}
-
-pub(crate) fn path_exists_without_following(path: &Path) -> std::io::Result<bool> {
-    match std::fs::symlink_metadata(path) {
-        Ok(_) => Ok(true),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
-        Err(error) => Err(error),
-    }
 }
 
 #[cfg(test)]
