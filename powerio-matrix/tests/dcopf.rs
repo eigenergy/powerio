@@ -45,7 +45,7 @@ fn net_with_gens(
     generators: Vec<Generator>,
 ) -> BalancedNetwork {
     let mut network = net(name, buses, branches);
-    network.generators = generators;
+    *network.generators_mut() = generators;
     network
 }
 
@@ -104,9 +104,9 @@ fn is_spd(a: &[Vec<f64>]) -> bool {
 #[test]
 fn parses_generators_and_costs() {
     let case = load("../tests/data/case9.m");
-    assert_eq!(case.generators.len(), 3);
+    assert_eq!(case.generators().len(), 3);
     let quads: Vec<(f64, f64)> = case
-        .generators
+        .generators()
         .iter()
         .map(|g| g.cost.as_ref().unwrap().quadratic().unwrap())
         .collect();

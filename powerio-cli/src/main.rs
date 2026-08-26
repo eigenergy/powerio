@@ -1084,7 +1084,7 @@ fn run_dcopf(
     let outputs = write_dcopf_bundle(&instance, output, &bundle_options)
         .with_context(|| format!("export DC OPF bundle for {}", input.display()))?;
     tracing::info!(
-        case = %mpc.name,
+        case = %mpc.name(),
         dir = %outputs.dir.display(),
         files = outputs.files.len(),
         "wrote DC OPF bundle"
@@ -1139,7 +1139,7 @@ fn run_gridfm(
         );
     }
     tracing::info!(
-        case = %nets[0].name,
+        case = %nets[0].name(),
         scenarios = snapshots.len(),
         dir = %outputs.dir.display(),
         files = outputs.files.len(),
@@ -1161,7 +1161,7 @@ fn run_verify(input: &Path, kind: MatrixKind, scheme: Scheme) -> anyhow::Result<
     println!(
         "{} ({}): n={} nnz={} min_diag={:.3e} max_diag={:.3e} dd_margin={:.3e} M-sign={} ‖A‖_F={:.3e} skipped_zero_impedance={} SDDM={}",
         kind.label(),
-        mpc.name,
+        mpc.name(),
         stats.n,
         stats.nnz,
         stats.min_diag,
@@ -1310,7 +1310,7 @@ fn build_package(
         FamilyCase::Distribution(net) => {
             let format = net
                 .network
-                .source_format
+                .source_format()
                 .map(powerio_dist::DistSourceFormat::name)
                 .or_else(|| from.map(FormatArg::name))
                 .unwrap_or("unknown");
@@ -1326,7 +1326,7 @@ fn build_package(
             )
         }
         FamilyCase::Transmission(parsed) => {
-            let format = parsed.network.source_format.name();
+            let format = parsed.network.source_format().name();
             let retained_source = parsed.retained_source;
             let mut package = NetworkPackage::from_balanced_with_read_diagnostics(
                 parsed.network,
@@ -1422,16 +1422,16 @@ fn transmission_summary_json(
         powerio::version::VERSION_KEY: powerio::VERSION,
         "domain": "transmission",
         "model": "balanced",
-        "name": net.name,
-        "source_format": net.source_format.name(),
+        "name": net.name(),
+        "source_format": net.source_format().name(),
         "json_format": "model-json",
-        "base_mva": net.base_mva,
+        "base_mva": net.base_mva(),
         "elements": {
-            "buses": net.buses.len(),
-            "branches": net.branches.len(),
-            "generators": net.generators.len(),
-            "loads": net.loads.len(),
-            "shunts": net.shunts.len(),
+            "buses": net.buses().len(),
+            "branches": net.branches().len(),
+            "generators": net.generators().len(),
+            "loads": net.loads().len(),
+            "shunts": net.shunts().len(),
             "lines": serde_json::Value::Null,
             "transformers": serde_json::Value::Null,
             "sources": serde_json::Value::Null,
@@ -1455,19 +1455,19 @@ fn distribution_summary_json(
         powerio::version::VERSION_KEY: powerio::VERSION,
         "domain": "distribution",
         "model": "multiconductor",
-        "name": net.name,
-        "source_format": net.source_format.map(powerio_dist::DistSourceFormat::name),
+        "name": net.name(),
+        "source_format": net.source_format().map(powerio_dist::DistSourceFormat::name),
         "json_format": "bmopf-json",
         "base_mva": serde_json::Value::Null,
         "elements": {
-            "buses": net.buses.len(),
+            "buses": net.buses().len(),
             "branches": serde_json::Value::Null,
-            "generators": net.generators.len(),
-            "loads": net.loads.len(),
+            "generators": net.generators().len(),
+            "loads": net.loads().len(),
             "shunts": serde_json::Value::Null,
-            "lines": net.lines.len(),
-            "transformers": net.transformers.len(),
-            "sources": net.sources.len(),
+            "lines": net.lines().len(),
+            "transformers": net.transformers().len(),
+            "sources": net.sources().len(),
         },
         "topology": {
             "connected_components": serde_json::Value::Null,
@@ -1779,7 +1779,7 @@ fn run_geo_apply(
                     )
                 })?,
                 None => network
-                    .source_format
+                    .source_format()
                     .map(|f| f.name().parse())
                     .transpose()?
                     .ok_or_else(|| {
@@ -1807,13 +1807,13 @@ fn run_geo_apply(
                     )
                 })?,
                 None => {
-                    powerio_matrix::target_format_from_name(&format!("{:?}", net.source_format))
+                    powerio_matrix::target_format_from_name(&format!("{:?}", net.source_format()))
                         .ok_or_else(|| {
-                            anyhow::anyhow!(
-                                "`{:?}` has no write target; pass --to to choose one",
-                                net.source_format
-                            )
-                        })?
+                        anyhow::anyhow!(
+                            "`{:?}` has no write target; pass --to to choose one",
+                            net.source_format()
+                        )
+                    })?
                 }
             };
             let conv = net
@@ -2077,7 +2077,7 @@ mod tests {
 
         let parsed = crate::compat::parse_file(data("opfdataset/example_0.json"), None).unwrap();
         assert_eq!(
-            parsed.network.source_format,
+            parsed.network.source_format(),
             powerio_matrix::SourceFormat::DeepMindOpfDataJson
         );
     }
@@ -2130,8 +2130,8 @@ mod tests {
         .unwrap();
         match parse_family_case(&egret, None).unwrap() {
             FamilyCase::Transmission(parsed) => {
-                assert_eq!(parsed.network.buses.len(), 9);
-                assert_eq!(parsed.network.name, "myegret");
+                assert_eq!(parsed.network.buses().len(), 9);
+                assert_eq!(parsed.network.name(), "myegret");
             }
             FamilyCase::Distribution(_) => panic!("egret JSON classified as distribution"),
         }
@@ -2143,7 +2143,7 @@ mod tests {
         )
         .unwrap();
         match parse_family_case(&dist, None).unwrap() {
-            FamilyCase::Distribution(net) => assert_eq!(net.network.buses.len(), 1),
+            FamilyCase::Distribution(net) => assert_eq!(net.network.buses().len(), 1),
             FamilyCase::Transmission(_) => panic!("BMOPF JSON classified as transmission"),
         }
     }
@@ -2183,7 +2183,7 @@ mod tests {
         let pkg = NetworkPackage::from_json(&text).unwrap();
         assert_eq!(pkg.model_kind, powerio::package::ModelKind::Balanced);
         assert!(pkg.kind_is_consistent());
-        assert_eq!(pkg.as_balanced().unwrap().buses.len(), 9);
+        assert_eq!(pkg.as_balanced().unwrap().buses().len(), 9);
         match &pkg.origin {
             Origin::File {
                 path,
@@ -2320,8 +2320,8 @@ mpc.branch = [
         let powerio::package::ModelPayload::Balanced { balanced_network } = &pkg.model else {
             panic!("balanced payload expected");
         };
-        assert!(balanced_network.branches[0].angmin.is_nan());
-        assert_eq!(balanced_network.branches[0].angmax, f64::INFINITY);
+        assert!(balanced_network.branches()[0].angmin.is_nan());
+        assert_eq!(balanced_network.branches()[0].angmax, f64::INFINITY);
 
         let _ = std::fs::remove_file(input);
         let _ = std::fs::remove_file(output);
@@ -2406,12 +2406,12 @@ mpc.branch = [
             kind: None,
         });
         let mut net = powerio_dist::MulticonductorNetwork::default();
-        net.geo = Some(powerio_dist::DistGeoMeta {
+        *net.geo_mut() = Some(powerio_dist::DistGeoMeta {
             space: powerio_dist::CoordinateSpace::Geographic { crs: None },
             kind: Some(powerio_dist::DistCoordsKind::Source),
         });
-        net.buses = vec![bus];
-        net.sources.push(powerio_dist::VoltageSource::new(
+        *net.buses_mut() = vec![bus];
+        net.sources_mut().push(powerio_dist::VoltageSource::new(
             "source",
             "sourcebus",
             vec!["1".to_owned(), "4".to_owned()],

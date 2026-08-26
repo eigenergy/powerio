@@ -229,7 +229,7 @@ const DC_TERMINALS: [Injection; 4] = [
 fn per_bus(net: &BalancedNetwork, in_service_only: bool) -> BTreeMap<usize, [f64; 4]> {
     let mut map: BTreeMap<usize, [f64; 4]> = BTreeMap::new();
     for l in net
-        .loads
+        .loads()
         .iter()
         .filter(|l| l.in_service || !in_service_only)
     {
@@ -238,7 +238,7 @@ fn per_bus(net: &BalancedNetwork, in_service_only: bool) -> BTreeMap<usize, [f64
         e[1] += l.q;
     }
     for g in net
-        .generators
+        .generators()
         .iter()
         .filter(|g| g.in_service || !in_service_only)
     {
@@ -258,7 +258,11 @@ fn per_bus(net: &BalancedNetwork, in_service_only: bool) -> BTreeMap<usize, [f64
 /// equal.
 fn per_bus_dc(net: &BalancedNetwork, in_service_only: bool) -> BTreeMap<usize, [f64; 4]> {
     let mut map: BTreeMap<usize, [f64; 4]> = BTreeMap::new();
-    for d in net.hvdc.iter().filter(|d| d.in_service || !in_service_only) {
+    for d in net
+        .hvdc()
+        .iter()
+        .filter(|d| d.in_service || !in_service_only)
+    {
         let from = map.entry(d.from.0).or_default();
         from[0] += d.pf;
         from[2] += d.qf;
@@ -364,14 +368,17 @@ fn beyond_tol(x: f64, y: f64, tol: f64) -> bool {
 pub fn status_disagreements(a: &BalancedNetwork, b: &BalancedNetwork) -> usize {
     let off = |net: &BalancedNetwork| {
         [
-            net.generators.iter().filter(|g| !g.in_service).count(),
-            net.branches.iter().filter(|x| !x.in_service).count(),
-            net.loads.iter().filter(|l| !l.in_service).count(),
-            net.shunts.iter().filter(|s| !s.in_service).count(),
-            net.switches.iter().filter(|x| !x.closed).count(),
-            net.storage.iter().filter(|x| !x.in_service).count(),
-            net.hvdc.iter().filter(|d| !d.in_service).count(),
-            net.transformers_3w.iter().filter(|t| !t.in_service).count(),
+            net.generators().iter().filter(|g| !g.in_service).count(),
+            net.branches().iter().filter(|x| !x.in_service).count(),
+            net.loads().iter().filter(|l| !l.in_service).count(),
+            net.shunts().iter().filter(|s| !s.in_service).count(),
+            net.switches().iter().filter(|x| !x.closed).count(),
+            net.storage().iter().filter(|x| !x.in_service).count(),
+            net.hvdc().iter().filter(|d| !d.in_service).count(),
+            net.transformers_3w()
+                .iter()
+                .filter(|t| !t.in_service)
+                .count(),
         ]
     };
     off(a)
@@ -402,15 +409,15 @@ fn milli(x: f64) -> i64 {
 #[must_use]
 pub fn transmission_core(net: &BalancedNetwork) -> TransmissionCore {
     TransmissionCore {
-        buses: net.buses.len(),
-        branches: net.branches.len(),
-        generators: net.generators.len(),
-        loads: net.loads.len(),
-        shunts: net.shunts.len(),
-        load_p: milli(net.loads.iter().map(|load| load.p).sum()),
-        load_q: milli(net.loads.iter().map(|load| load.q).sum()),
-        gen_p: milli(net.generators.iter().map(|generator| generator.pg).sum()),
-        base_mva: milli(net.base_mva),
+        buses: net.buses().len(),
+        branches: net.branches().len(),
+        generators: net.generators().len(),
+        loads: net.loads().len(),
+        shunts: net.shunts().len(),
+        load_p: milli(net.loads().iter().map(|load| load.p).sum()),
+        load_q: milli(net.loads().iter().map(|load| load.q).sum()),
+        gen_p: milli(net.generators().iter().map(|generator| generator.pg).sum()),
+        base_mva: milli(net.base_mva()),
     }
 }
 
@@ -428,12 +435,12 @@ pub struct DistributionCore {
 #[must_use]
 pub fn distribution_core(net: &MulticonductorNetwork) -> DistributionCore {
     DistributionCore {
-        buses: net.buses.len(),
-        loads: net.loads.len(),
-        generators: net.generators.len(),
-        shunts: net.shunts.len(),
-        load_p: milli(net.loads.iter().flat_map(|load| load.p_nom.iter()).sum()),
-        load_q: milli(net.loads.iter().flat_map(|load| load.q_nom.iter()).sum()),
+        buses: net.buses().len(),
+        loads: net.loads().len(),
+        generators: net.generators().len(),
+        shunts: net.shunts().len(),
+        load_p: milli(net.loads().iter().flat_map(|load| load.p_nom.iter()).sum()),
+        load_q: milli(net.loads().iter().flat_map(|load| load.q_nom.iter()).sum()),
     }
 }
 
@@ -453,18 +460,18 @@ pub fn distribution_core(net: &MulticonductorNetwork) -> DistributionCore {
 #[must_use]
 pub fn transmission_value(net: &BalancedNetwork) -> serde_json::Value {
     let mut net = net.clone();
-    net.name = String::new();
-    net.source_format = powerio_matrix::SourceFormat::Matpower;
-    for br in &mut net.branches {
+    *net.name_mut() = String::new();
+    *net.source_format_mut() = powerio_matrix::SourceFormat::Matpower;
+    for br in net.branches_mut() {
         br.charging = Some(br.terminal_charging());
     }
-    net.buses.sort_by_key(|b| b.id);
-    net.branches.sort_by_key(|a| (a.from, a.to));
-    net.loads.sort_by_key(|l| l.bus);
-    net.shunts.sort_by_key(|s| s.bus);
-    net.generators.sort_by_key(|g| g.bus);
-    net.storage.sort_by_key(|s| s.bus);
-    net.hvdc.sort_by_key(|d| (d.from, d.to));
+    net.buses_mut().sort_by_key(|b| b.id);
+    net.branches_mut().sort_by_key(|a| (a.from, a.to));
+    net.loads_mut().sort_by_key(|l| l.bus);
+    net.shunts_mut().sort_by_key(|s| s.bus);
+    net.generators_mut().sort_by_key(|g| g.bus);
+    net.storage_mut().sort_by_key(|s| s.bus);
+    net.hvdc_mut().sort_by_key(|d| (d.from, d.to));
     serde_json::to_value(&net).unwrap()
 }
 
@@ -476,8 +483,8 @@ pub fn transmission_value(net: &BalancedNetwork) -> serde_json::Value {
 #[must_use]
 pub fn distribution_value(net: &MulticonductorNetwork) -> serde_json::Value {
     let mut net = net.clone();
-    net.name = None;
-    net.source_format = None;
+    *net.name_mut() = None;
+    *net.source_format_mut() = None;
     serde_json::to_value(&net).unwrap()
 }
 

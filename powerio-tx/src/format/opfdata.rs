@@ -801,11 +801,11 @@ pub(crate) fn parse_opfdata_source(
     }
 
     let mut network = BalancedNetwork::new(name_hint.unwrap_or("opfdata"), base);
-    network.buses = buses;
-    network.loads = loads;
-    network.shunts = shunts;
-    network.branches = branches;
-    network.generators = generators;
-    network.source_format = SourceFormat::DeepMindOpfDataJson;
+    *network.buses_mut() = buses;
+    *network.loads_mut() = loads;
+    *network.shunts_mut() = shunts;
+    *network.branches_mut() = branches;
+    *network.generators_mut() = generators;
+    *network.source_format_mut() = SourceFormat::DeepMindOpfDataJson;
     Ok(network)
 }

@@ -88,21 +88,25 @@ fn typed_data_survives_round_trip() {
         let written = write_matpower(&case);
         let reparsed = parse_matpower(&written).unwrap();
         let where_ = path.display();
-        assert_eq!(reparsed.base_mva, case.base_mva, "{where_}: baseMVA");
-        assert_eq!(reparsed.buses.len(), case.buses.len(), "{where_}: buses");
+        assert_eq!(reparsed.base_mva(), case.base_mva(), "{where_}: baseMVA");
         assert_eq!(
-            reparsed.branches.len(),
-            case.branches.len(),
+            reparsed.buses().len(),
+            case.buses().len(),
+            "{where_}: buses"
+        );
+        assert_eq!(
+            reparsed.branches().len(),
+            case.branches().len(),
             "{where_}: branches"
         );
         assert_eq!(
-            reparsed.generators.len(),
-            case.generators.len(),
+            reparsed.generators().len(),
+            case.generators().len(),
             "{where_}: gens"
         );
         assert_eq!(
-            reparsed.storage.len(),
-            case.storage.len(),
+            reparsed.storage().len(),
+            case.storage().len(),
             "{where_}: storage"
         );
     }
@@ -112,13 +116,19 @@ fn typed_data_survives_round_trip() {
 fn parses_bus_names() {
     let case = parse_matpower_file(data_dir().join("case14.m")).unwrap();
     assert!(
-        case.buses.iter().all(|b| b.name.is_some()),
+        case.buses().iter().all(|b| b.name.is_some()),
         "bus_name not attached to every bus"
     );
-    assert!(case.buses[0].name.as_deref().unwrap().starts_with("Bus 1"));
+    assert!(
+        case.buses()[0]
+            .name
+            .as_deref()
+            .unwrap()
+            .starts_with("Bus 1")
+    );
     // Names survive the round-trip.
     let reparsed = parse_matpower(&write_matpower(&case)).unwrap();
-    assert_eq!(reparsed.buses[0].name, case.buses[0].name);
+    assert_eq!(reparsed.buses()[0].name, case.buses()[0].name);
 }
 
 #[test]
@@ -126,13 +136,13 @@ fn parses_bus_names() {
 #[allow(clippy::float_cmp)]
 fn parses_hvdc_dclines() {
     let case = parse_matpower_file(data_dir().join("t_case9_dcline.m")).unwrap();
-    assert!(!case.hvdc.is_empty(), "mpc.dcline not parsed");
-    let dc = &case.hvdc[0];
+    assert!(!case.hvdc().is_empty(), "mpc.dcline not parsed");
+    let dc = &case.hvdc()[0];
     assert_eq!((dc.from, dc.to), (BusId(30), BusId(4)));
     assert_eq!(dc.pf, 10.0);
     // HVDC survives the round-trip (document passthrough).
     let reparsed = parse_matpower(&write_matpower(&case)).unwrap();
-    assert_eq!(reparsed.hvdc.len(), case.hvdc.len());
+    assert_eq!(reparsed.hvdc().len(), case.hvdc().len());
 }
 
 #[test]
@@ -141,7 +151,7 @@ fn captures_extra_generator_columns() {
     // be silently dropped.
     let case = parse_matpower_file(data_dir().join("case9.m")).unwrap();
     assert!(
-        case.generators[0].caps.iter().any(Option::is_some),
+        case.generators()[0].caps.iter().any(Option::is_some),
         "generator columns past PMIN were dropped"
     );
 }
@@ -154,8 +164,8 @@ fn unescapes_doubled_quotes_in_bus_names() {
         mpc.branch = [\n\t1\t2\t0.01\t0.1\t0\t250\t250\t250\t0\t0\t1\t-360\t360;\n];\n\
         mpc.bus_name = {\n\t'O''Brien';\n\t'Plain';\n};\n";
     let case = parse_matpower(src).unwrap();
-    assert_eq!(case.buses[0].name.as_deref(), Some("O'Brien"));
-    assert_eq!(case.buses[1].name.as_deref(), Some("Plain"));
+    assert_eq!(case.buses()[0].name.as_deref(), Some("O'Brien"));
+    assert_eq!(case.buses()[1].name.as_deref(), Some("Plain"));
     // The raw `''` is preserved on round-trip regardless of the typed unescape.
     assert!(write_matpower(&case).contains("'O''Brien'"));
 }

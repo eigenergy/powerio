@@ -704,7 +704,7 @@ pub(crate) fn id_from_f64(
 /// [`read_source`] funnel so every parse path (file and in-memory) is guarded,
 /// and in the PyPSA folder reader, which bypasses the funnel.
 pub(crate) fn reject_empty_case(net: &BalancedNetwork, format: &'static str) -> Result<()> {
-    if net.buses.is_empty() {
+    if net.buses().is_empty() {
         return Err(Error::FormatRead {
             format,
             message: "case has no buses".into(),
@@ -896,7 +896,7 @@ pub(crate) fn core_error(error: Error) -> powerio_core::Error {
 fn echo_text(module: &PioModule<BalancedNetwork>, target: TargetFormat) -> Option<String> {
     let source = module.source()?;
     let buffer = source.primary_buffer().ok()?;
-    if !same_format(target, module.value().source_format) {
+    if !same_format(target, module.value().source_format()) {
         return None;
     }
     let text = std::str::from_utf8(buffer.bytes()).ok()?;
@@ -1128,9 +1128,11 @@ fn warn_psse_downgrade(
         .source()
         .and_then(|source| source.primary_buffer().ok())
         .and_then(|buffer| String::from_utf8(buffer.content_bytes().to_vec()).ok());
-    if let (TargetFormat::Psse { rev }, SourceFormat::Psse, Some(src)) =
-        (format, module.value().source_format, source_text.as_deref())
-    {
+    if let (TargetFormat::Psse { rev }, SourceFormat::Psse, Some(src)) = (
+        format,
+        module.value().source_format(),
+        source_text.as_deref(),
+    ) {
         let src_rev = psse::header_rev(src);
         if src_rev > rev {
             conv.push(
@@ -1156,12 +1158,12 @@ fn warn_dropped_frequency(net: &BalancedNetwork, format: TargetFormat, conv: &mu
     if carries_frequency {
         return;
     }
-    if (net.base_frequency - crate::network::DEFAULT_BASE_FREQUENCY).abs() > 1e-9 {
+    if (net.base_frequency() - crate::network::DEFAULT_BASE_FREQUENCY).abs() > 1e-9 {
         conv.push(
             &format.emit_family().field_dropped,
             format!(
                 "system base frequency {} Hz dropped: {} has no frequency field (reads back as {} Hz)",
-                net.base_frequency,
+                net.base_frequency(),
                 format.label(),
                 crate::network::DEFAULT_BASE_FREQUENCY
             ),
@@ -1183,8 +1185,8 @@ fn warn_dropped_locations(net: &BalancedNetwork, format: TargetFormat, conv: &mu
     if carries_locations {
         return;
     }
-    let n = net.buses.iter().filter(|b| b.location.is_some()).count();
-    let routed = net.branches.iter().filter(|b| b.route.is_some()).count();
+    let n = net.buses().iter().filter(|b| b.location.is_some()).count();
+    let routed = net.branches().iter().filter(|b| b.route.is_some()).count();
     if n > 0 || routed > 0 {
         conv.push(
             &format.emit_family().field_dropped,
@@ -1211,7 +1213,7 @@ fn warn_dropped_transformer_charging(
         return;
     }
     let n = net
-        .branches
+        .branches()
         .iter()
         .filter(|b| b.is_transformer() && b.total_charging_b() != 0.0)
         .count();
@@ -1257,15 +1259,15 @@ pub(super) fn warn_dropped_extras(
     warnings: &mut Diagnostics,
 ) {
     let carries = |extras: &crate::network::Extras| extras.keys().any(|k| !consumed(k));
-    let dropped = net.buses.iter().filter(|e| carries(&e.extras)).count()
-        + net.branches.iter().filter(|e| carries(&e.extras)).count()
-        + net.loads.iter().filter(|e| carries(&e.extras)).count()
-        + net.shunts.iter().filter(|e| carries(&e.extras)).count()
-        + net.switches.iter().filter(|e| carries(&e.extras)).count()
-        + net.storage.iter().filter(|e| carries(&e.extras)).count()
-        + net.hvdc.iter().filter(|e| carries(&e.extras)).count()
+    let dropped = net.buses().iter().filter(|e| carries(&e.extras)).count()
+        + net.branches().iter().filter(|e| carries(&e.extras)).count()
+        + net.loads().iter().filter(|e| carries(&e.extras)).count()
+        + net.shunts().iter().filter(|e| carries(&e.extras)).count()
+        + net.switches().iter().filter(|e| carries(&e.extras)).count()
+        + net.storage().iter().filter(|e| carries(&e.extras)).count()
+        + net.hvdc().iter().filter(|e| carries(&e.extras)).count()
         + net
-            .transformers_3w
+            .transformers_3w()
             .iter()
             .filter(|e| carries(&e.extras))
             .count();
@@ -1288,12 +1290,12 @@ pub(super) fn warn_dropped_areas(
     net: &BalancedNetwork,
     warnings: &mut Diagnostics,
 ) {
-    if !net.areas.is_empty() {
+    if !net.areas().is_empty() {
         warnings.push(
             &family.areas_dropped,
             format!(
                 "{} area record(s) dropped: the {target} writer emits no area table",
-                net.areas.len()
+                net.areas().len()
             ),
         );
     }
@@ -1305,7 +1307,7 @@ pub(super) fn warn_extra_branch_rating_sets(
     net: &BalancedNetwork,
     warnings: &mut Diagnostics,
 ) {
-    for (branch_index, branch) in net.branches.iter().enumerate() {
+    for (branch_index, branch) in net.branches().iter().enumerate() {
         for rating in &branch.rating_sets {
             warnings.push(
                 &family.rating_set_dropped,
@@ -1491,7 +1493,7 @@ fn warn_missing_reference(net: &BalancedNetwork, format: TargetFormat, conv: &mu
 /// (which produces `PypsaCsvOutputs`, not a [`Conversion`], so it cannot go
 /// through [`warn_missing_reference`]).
 pub(super) fn missing_reference_warning(net: &BalancedNetwork) -> Option<String> {
-    (!net.buses.iter().any(|b| b.kind == BusType::Ref)).then(|| {
+    (!net.buses().iter().any(|b| b.kind == BusType::Ref)).then(|| {
         "no reference (slack) bus in the source network; power flow tools \
          reject such cases; to_normalized synthesizes a slack at the \
          largest pmax in service generator bus"
@@ -1532,7 +1534,7 @@ pub(super) fn normalized_tap_warning(net: &BalancedNetwork) -> Option<String> {
     // tap 1) both read as tap 1.0 / shift 0.0, so they cannot be told apart. Count
     // them together as the branches whose line/transformer label is now ambiguous.
     let ambiguous = net
-        .branches
+        .branches()
         .iter()
         .filter(|b| b.tap == 1.0 && b.shift == 0.0)
         .count();
@@ -1941,7 +1943,7 @@ mpc.branch = [
                     mpc.branch = [];\n";
         let source = powerio_core::Source::from_bytes("case.m", case.as_bytes().to_vec()).unwrap();
         let module = parse(source.with_format(format_id_for("matpower").unwrap())).unwrap();
-        assert_eq!(module.value().buses.len(), 1);
+        assert_eq!(module.value().buses().len(), 1);
         assert!(
             module.diagnostics().is_empty(),
             "{:?}",
@@ -1972,7 +1974,7 @@ mpc.branch = [
         let canonical = net.to_canonical_format(TargetFormat::Matpower).unwrap();
         assert_ne!(canonical.text, case);
         let reparsed = parse_str(&canonical.text, "matpower").unwrap();
-        assert_eq!(reparsed.network.buses.len(), 1);
+        assert_eq!(reparsed.network.buses().len(), 1);
     }
 
     #[test]

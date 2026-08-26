@@ -44,7 +44,7 @@ fn small_network() -> BalancedNetwork {
         vec![bus(10, BusType::Ref), bus(30, BusType::Pq)],
         vec![branch(10, 30, 0.05, 0.2)],
     );
-    network.generators.push(generator(10, 1.0, 2.0, 5.0));
+    network.generators_mut().push(generator(10, 1.0, 2.0, 5.0));
     network
 }
 
@@ -56,8 +56,8 @@ fn instance_is_complete_and_indexed() {
 
     assert_eq!(problem.name, "case9");
     assert_eq!(problem.n_buses, 9);
-    assert_eq!(problem.n_source_generators, net.generators.len());
-    assert_eq!(problem.n_source_branches, net.branches.len());
+    assert_eq!(problem.n_source_generators, net.generators().len());
+    assert_eq!(problem.n_source_branches, net.branches().len());
     assert_eq!(problem.n_generators(), 3);
     assert_eq!(problem.bus_ids.len(), problem.n_buses);
     assert_eq!(problem.reference_buses.single().expect("one bus"), 0);
@@ -152,7 +152,7 @@ fn case14_taps_shunt_and_series_admittance() {
     assert_close(problem.buses.b_s[bus9], 0.19);
     assert_close(problem.buses.g_s[bus9], 0.0);
 
-    let first = &net.branches[0];
+    let first = &net.branches()[0];
     let z_squared = first.r * first.r + first.x * first.x;
     assert_eq!(problem.branches.source_rows[0], 0);
     assert_close(problem.branches.g[0], first.r / z_squared);
@@ -163,8 +163,8 @@ fn case14_taps_shunt_and_series_admittance() {
 #[test]
 fn tap_and_shift_are_carried_separately() {
     let mut net = small_network();
-    net.branches[0].tap = 1.25;
-    net.branches[0].shift = 10.0;
+    net.branches_mut()[0].tap = 1.25;
+    net.branches_mut()[0].shift = 10.0;
     let view = IndexedNetwork::new(&net);
     let problem = build_ac_opf_instance(&view, &AcOpfOptions::default()).expect("build");
 
@@ -178,7 +178,7 @@ fn tap_and_shift_are_carried_separately() {
 #[test]
 fn terminal_charging_split_and_asymmetric() {
     let mut symmetric = small_network();
-    symmetric.branches[0].b = 0.10;
+    symmetric.branches_mut()[0].b = 0.10;
     let problem = build_ac_opf_instance(&IndexedNetwork::new(&symmetric), &AcOpfOptions::default())
         .expect("symmetric");
     assert_close(problem.branches.b_fr[0], 0.05);
@@ -187,7 +187,7 @@ fn terminal_charging_split_and_asymmetric() {
     assert_close(problem.branches.g_to[0], 0.0);
 
     let mut asymmetric = small_network();
-    asymmetric.branches[0].charging = Some(BranchCharging::new(0.001, 0.03, 0.002, 0.07));
+    asymmetric.branches_mut()[0].charging = Some(BranchCharging::new(0.001, 0.03, 0.002, 0.07));
     let problem =
         build_ac_opf_instance(&IndexedNetwork::new(&asymmetric), &AcOpfOptions::default())
             .expect("asymmetric");
@@ -200,9 +200,10 @@ fn terminal_charging_split_and_asymmetric() {
 #[test]
 fn per_unit_and_native_units_scale_consistently() {
     let mut net = small_network();
-    net.branches[0].rate_a = 250.0;
-    net.loads.push(powerio_tx::Load::new(BusId(30), 90.0, 30.0));
-    net.shunts
+    net.branches_mut()[0].rate_a = 250.0;
+    net.loads_mut()
+        .push(powerio_tx::Load::new(BusId(30), 90.0, 30.0));
+    net.shunts_mut()
         .push(powerio_tx::Shunt::new(BusId(30), 2.0, 19.0));
     let view = IndexedNetwork::new(&net);
     let native = build_ac_opf_instance(
@@ -255,7 +256,7 @@ fn cost_constant_term_is_kept() {
 #[test]
 fn missing_and_unsupported_costs_are_distinct() {
     let mut missing = small_network();
-    missing.generators[0].cost = None;
+    missing.generators_mut()[0].cost = None;
     let error = build_ac_opf_instance(&IndexedNetwork::new(&missing), &AcOpfOptions::default())
         .expect_err("missing cost");
     assert!(matches!(
@@ -264,7 +265,7 @@ fn missing_and_unsupported_costs_are_distinct() {
     ));
 
     let mut piecewise = small_network();
-    piecewise.generators[0].cost = Some(GenCost::with_ncost(
+    piecewise.generators_mut()[0].cost = Some(GenCost::with_ncost(
         1,
         0.0,
         0.0,
@@ -288,7 +289,7 @@ fn missing_and_unsupported_costs_are_distinct() {
 #[test]
 fn a_concave_cost_row_is_refused() {
     let mut lone = small_network();
-    lone.generators[0].cost = Some(GenCost::new(2, 0.0, 0.0, vec![-0.5, 5.0, 0.0]));
+    lone.generators_mut()[0].cost = Some(GenCost::new(2, 0.0, 0.0, vec![-0.5, 5.0, 0.0]));
     let error = build_ac_opf_instance(&IndexedNetwork::new(&lone), &AcOpfOptions::default())
         .expect_err("a lone concave row");
     assert!(
@@ -300,7 +301,7 @@ fn a_concave_cost_row_is_refused() {
     let mut shared = small_network();
     let mut concave = generator(10, -0.5, 5.0, 0.0);
     concave.uid = Some("concave".to_owned());
-    shared.generators.push(concave);
+    shared.generators_mut().push(concave);
     let error = build_ac_opf_instance(&IndexedNetwork::new(&shared), &AcOpfOptions::default())
         .expect_err("a concave row in a merge");
     assert!(
@@ -313,7 +314,7 @@ fn a_concave_cost_row_is_refused() {
 #[test]
 fn zero_impedance_skip_or_reject() {
     let mut net = small_network();
-    net.branches.insert(0, branch(10, 30, 0.0, 0.0));
+    net.branches_mut().insert(0, branch(10, 30, 0.0, 0.0));
     let view = IndexedNetwork::new(&net);
     let skipped = build_ac_opf_instance(&view, &AcOpfOptions::default()).expect("skip");
     assert_eq!(skipped.branches.skipped_zero_impedance, vec![0]);
@@ -334,7 +335,7 @@ fn zero_impedance_skip_or_reject() {
 
     // Zero resistance with nonzero reactance is a valid series element.
     let mut inductive = small_network();
-    inductive.branches[0].r = 0.0;
+    inductive.branches_mut()[0].r = 0.0;
     let problem = build_ac_opf_instance(&IndexedNetwork::new(&inductive), &AcOpfOptions::default())
         .expect("inductive");
     assert_eq!(problem.branches.skipped_zero_impedance, Vec::<usize>::new());
@@ -348,7 +349,7 @@ fn an_impedance_the_instance_cannot_divide_by_reads_as_zero_impedance() {
     // magnitude, so `x = 1e-300` is refused and the `x = 1e-100` beside it,
     // whose square is just as small, is still a branch the instance carries.
     let mut net = small_network();
-    net.branches.insert(0, branch(10, 30, 0.0, 1e-300));
+    net.branches_mut().insert(0, branch(10, 30, 0.0, 1e-300));
     let view = IndexedNetwork::new(&net);
     let skipped = build_ac_opf_instance(&view, &AcOpfOptions::default()).expect("skip");
     assert_eq!(skipped.branches.skipped_zero_impedance, vec![0]);
@@ -367,8 +368,8 @@ fn an_impedance_the_instance_cannot_divide_by_reads_as_zero_impedance() {
     ));
 
     let mut small_x = small_network();
-    small_x.branches[0].r = 0.0;
-    small_x.branches[0].x = 1e-100;
+    small_x.branches_mut()[0].r = 0.0;
+    small_x.branches_mut()[0].x = 1e-100;
     let problem =
         build_ac_opf_instance(&IndexedNetwork::new(&small_x), &AcOpfOptions::default()).expect("x");
     assert_eq!(problem.branches.skipped_zero_impedance, Vec::<usize>::new());
@@ -379,7 +380,7 @@ fn an_impedance_the_instance_cannot_divide_by_reads_as_zero_impedance() {
 fn a_tap_the_instance_cannot_divide_by_is_refused() {
     for tap in [1e-200, f64::NAN, f64::INFINITY] {
         let mut net = small_network();
-        net.branches[0].tap = tap;
+        net.branches_mut()[0].tap = tap;
         let error = build_ac_opf_instance(&IndexedNetwork::new(&net), &AcOpfOptions::default())
             .expect_err("a tap the pi model divides by must be refused");
         assert!(
@@ -395,8 +396,8 @@ fn a_tap_the_instance_cannot_divide_by_is_refused() {
 #[test]
 fn out_of_service_exclusion() {
     let mut net = case9();
-    net.generators[1].in_service = false;
-    net.branches[2].in_service = false;
+    net.generators_mut()[1].in_service = false;
+    net.branches_mut()[2].in_service = false;
     let view = IndexedNetwork::new(&net);
     let problem = build_ac_opf_instance(&view, &AcOpfOptions::default()).expect("build");
 
@@ -412,7 +413,7 @@ fn nodal_data_sums_the_reactive_range_and_flags_the_generator_buses() {
     let mut extra = generator(10, 3.0, 4.0, 2.0);
     extra.qmax = 10.0;
     extra.qmin = -5.0;
-    net.generators.push(extra);
+    net.generators_mut().push(extra);
     let problem =
         build_ac_opf_instance(&IndexedNetwork::new(&net), &AcOpfOptions::default()).expect("build");
 
@@ -431,9 +432,9 @@ fn nodal_data_sums_the_reactive_range_and_flags_the_generator_buses() {
 #[test]
 fn vm_setpoints_follow_generator_voltage() {
     let mut net = small_network();
-    net.buses[0].vm = 0.0;
-    net.buses[1].vm = 1.02;
-    net.generators[0].vg = 1.05;
+    net.buses_mut()[0].vm = 0.0;
+    net.buses_mut()[1].vm = 1.02;
+    net.generators_mut()[0].vg = 1.05;
     let problem =
         build_ac_opf_instance(&IndexedNetwork::new(&net), &AcOpfOptions::default()).expect("build");
     let setpoints = problem.vm_setpoints();
@@ -443,15 +444,15 @@ fn vm_setpoints_follow_generator_voltage() {
     // An out of band setpoint is carried unclamped; feasibility repair is
     // solver preparation.
     let mut wide = small_network();
-    wide.generators[0].vg = 1.5;
+    wide.generators_mut()[0].vg = 1.5;
     let problem = build_ac_opf_instance(&IndexedNetwork::new(&wide), &AcOpfOptions::default())
         .expect("build");
     assert_close(problem.vm_setpoints()[0], 1.5);
 
     // A generator without a setpoint leaves the case voltage in place.
     let mut unset = small_network();
-    unset.buses[0].vm = 1.01;
-    unset.generators[0].vg = 0.0;
+    unset.buses_mut()[0].vm = 1.01;
+    unset.generators_mut()[0].vg = 0.0;
     let problem = build_ac_opf_instance(&IndexedNetwork::new(&unset), &AcOpfOptions::default())
         .expect("build");
     assert_close(problem.vm_setpoints()[0], 1.01);
@@ -460,8 +461,8 @@ fn vm_setpoints_follow_generator_voltage() {
 #[test]
 fn an_unrated_branch_takes_a_synthesized_limit_on_request() {
     let mut net = small_network();
-    net.branches[0].angmin = -30.0;
-    net.branches[0].angmax = 30.0;
+    net.branches_mut()[0].angmin = -30.0;
+    net.branches_mut()[0].angmax = 30.0;
     let view = IndexedNetwork::new(&net);
     let options = AcOpfOptions {
         synthesize_unrated_limits: true,
@@ -556,7 +557,7 @@ mod matrix_tests {
         self_loop.tap = 1.1;
         self_loop.shift = 15.0;
         self_loop.b = 0.04;
-        net.branches.push(self_loop);
+        net.branches_mut().push(self_loop);
         let view = IndexedNetwork::new(&net);
         let problem = build_ac_opf_instance(&view, &AcOpfOptions::default()).expect("build");
         let n = problem.n_buses;
@@ -610,7 +611,7 @@ fn self_loop_folds_into_bus_shunt() {
     loop_branch.tap = 1.25;
     loop_branch.shift = 10.0;
     loop_branch.b = 0.10;
-    net.branches.push(loop_branch);
+    net.branches_mut().push(loop_branch);
     let plain = build_ac_opf_instance(
         &IndexedNetwork::new(&small_network()),
         &AcOpfOptions::default(),
@@ -636,7 +637,7 @@ fn self_loop_folds_into_bus_shunt() {
 #[test]
 fn zero_base_mva_is_rejected() {
     let mut net = small_network();
-    net.base_mva = 0.0;
+    *net.base_mva_mut() = 0.0;
     let error = build_ac_opf_instance(&IndexedNetwork::new(&net), &AcOpfOptions::default())
         .expect_err("zero base");
     assert!(matches!(

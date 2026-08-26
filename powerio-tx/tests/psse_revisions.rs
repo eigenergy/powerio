@@ -42,13 +42,13 @@ struct Core {
 fn core(net: &BalancedNetwork) -> Core {
     let r = |x: f64| (x * 1e3).round() as i64;
     Core {
-        buses: net.buses.len(),
-        branches: net.branches.len(),
-        gens: net.generators.len(),
-        loads: net.loads.len(),
-        load_p: r(net.loads.iter().map(|l| l.p).sum()),
-        load_q: r(net.loads.iter().map(|l| l.q).sum()),
-        gen_p: r(net.generators.iter().map(|g| g.pg).sum()),
+        buses: net.buses().len(),
+        branches: net.branches().len(),
+        gens: net.generators().len(),
+        loads: net.loads().len(),
+        load_p: r(net.loads().iter().map(|l| l.p).sum()),
+        load_q: r(net.loads().iter().map(|l| l.q).sum()),
+        gen_p: r(net.generators().iter().map(|g| g.pg).sum()),
     }
 }
 
@@ -61,8 +61,8 @@ fn v34_and_v35_fixtures_match_the_matpower_source() {
     assert_eq!(core(&v34), source, "v34 fixture lost or gained elements");
     assert_eq!(core(&v35), source, "v35 fixture lost or gained elements");
     // Frequency rides the header at every revision.
-    assert_eq!(v34.base_frequency, 60.0);
-    assert_eq!(v35.base_frequency, 60.0);
+    assert_eq!(v34.base_frequency(), 60.0);
+    assert_eq!(v35.base_frequency(), 60.0);
 }
 
 #[test]
@@ -73,11 +73,11 @@ fn transformer_control_round_trips_at_v34_and_v35() {
     // a write/read cycle at both revisions.
     let mut net = parse_matpower_file(data("case14.m")).unwrap();
     let idx = net
-        .branches
+        .branches()
         .iter()
         .position(powerio_tx::Branch::is_transformer)
         .expect("case14 has a transformer");
-    let (from, to) = (net.branches[idx].from, net.branches[idx].to);
+    let (from, to) = (net.branches()[idx].from, net.branches()[idx].to);
     let mut ctl = TransformerControl::new(TransformerControlMode::Voltage);
     ctl.controlled_bus = Some(to);
     ctl.tap_max = 1.08;
@@ -86,13 +86,13 @@ fn transformer_control_round_trips_at_v34_and_v35() {
     ctl.band_min = 0.98;
     ctl.ntp = 17;
     ctl.mva_base = 100.0;
-    net.branches[idx].control = Some(ctl);
+    net.branches_mut()[idx].control = Some(ctl);
 
     for rev in [34u32, 35] {
         let text = write_psse_rev(&net, rev).text;
         let back = parse_psse(&text).unwrap();
         let br = back
-            .branches
+            .branches()
             .iter()
             .find(|b| b.from == from && b.to == to)
             .unwrap();

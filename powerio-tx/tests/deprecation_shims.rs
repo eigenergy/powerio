@@ -12,7 +12,7 @@ use powerio_tx::{DcConvention, Network};
 fn the_08_type_name_still_compiles() {
     let net: Network = powerio_tx::BalancedNetwork::new("shim", 100.0);
     let same: &powerio_tx::BalancedNetwork = &net;
-    assert_eq!(same.name, "shim");
+    assert_eq!(same.name(), "shim");
 }
 
 #[test]
@@ -42,6 +42,6 @@ fn the_08_branch_method_still_answers() {
     )
     .unwrap()
     .network;
-    let b = &net.branches[0];
+    let b = &net.branches()[0];
     assert_eq!(b.legacy_total_charging_b(), b.total_charging_b());
 }

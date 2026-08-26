@@ -121,26 +121,26 @@ impl Writer {
 
 fn all_terminal_names(net: &MulticonductorNetwork) -> impl Iterator<Item = &str> {
     let maps = net
-        .lines
+        .lines()
         .iter()
         .flat_map(|l| [&l.terminal_map_from, &l.terminal_map_to])
         .chain(
-            net.switches
+            net.switches()
                 .iter()
                 .flat_map(|s| [&s.terminal_map_from, &s.terminal_map_to]),
         )
-        .chain(net.loads.iter().map(|l| &l.terminal_map))
-        .chain(net.generators.iter().map(|g| &g.terminal_map))
-        .chain(net.capacitors.iter().map(|c| &c.terminal_map))
-        .chain(net.shunts.iter().map(|s| &s.terminal_map))
-        .chain(net.sources.iter().map(|s| &s.terminal_map))
-        .chain(net.ibrs.iter().map(|i| &i.terminal_map))
+        .chain(net.loads().iter().map(|l| &l.terminal_map))
+        .chain(net.generators().iter().map(|g| &g.terminal_map))
+        .chain(net.capacitors().iter().map(|c| &c.terminal_map))
+        .chain(net.shunts().iter().map(|s| &s.terminal_map))
+        .chain(net.sources().iter().map(|s| &s.terminal_map))
+        .chain(net.ibrs().iter().map(|i| &i.terminal_map))
         .chain(
-            net.transformers
+            net.transformers()
                 .iter()
                 .flat_map(|t| t.windings.iter().map(|w| &w.terminal_map)),
         );
-    net.buses
+    net.buses()
         .iter()
         .flat_map(|b| [&b.terminals, &b.grounded])
         .chain(maps)
@@ -244,7 +244,7 @@ impl Writer {
     ) {
         if let Some(location) = b.location {
             if !matches!(
-                net.geo.as_ref().map(|geo| &geo.space),
+                net.geo().as_ref().map(|geo| &geo.space),
                 Some(CoordinateSpace::Geographic { .. })
             ) {
                 self.warnings.push(&C::EMIT_PMD_FIELD_DROPPED, format!(
@@ -283,11 +283,11 @@ impl Writer {
         doc.insert("data_model".into(), json!("ENGINEERING"));
         doc.insert(
             "name".into(),
-            json!(net.name.clone().unwrap_or_default().to_lowercase()),
+            json!(net.name().clone().unwrap_or_default().to_lowercase()),
         );
         doc.insert(
             "files".into(),
-            net.extras
+            net.extras()
                 .get("pmd_files")
                 .cloned()
                 .unwrap_or_else(|| json!([])),
@@ -296,7 +296,7 @@ impl Writer {
         // The reader's stash wins; synthesis covers dss/bmopf sourced
         // models.
         let settings = net
-            .extras
+            .extras()
             .get("pmd_settings")
             .cloned()
             .unwrap_or_else(|| synthesized_settings(net));
@@ -313,7 +313,7 @@ impl Writer {
         // conductors than its own `connections` arrays use, and a read back
         // and rewrite then produces a longer list.
         let max_conductor = net
-            .buses
+            .buses()
             .iter()
             .flat_map(|b| &b.terminals)
             .filter_map(|t| t.parse::<i64>().ok())
@@ -337,7 +337,7 @@ impl Writer {
         );
 
         let mut buses = Map::new();
-        for b in &net.buses {
+        for b in net.buses() {
             let mut o = Map::new();
             o.insert(
                 "terminals".into(),
@@ -400,7 +400,7 @@ impl Writer {
         self.injections(net, &mut doc);
         self.transformers(net, &mut doc);
 
-        for u in &net.untyped {
+        for u in net.untyped() {
             self.warn(
                 &C::EMIT_PMD_RECORD_DROPPED,
                 format!(
@@ -418,12 +418,12 @@ impl Writer {
         // without the marker also references them.
         let inlined = inlined_codes(net);
         let mut codes = Map::new();
-        for c in &net.linecodes {
+        for c in net.linecodes() {
             if inlined.contains(&c.name.to_lowercase()) {
                 continue;
             }
             let mut o = Map::new();
-            insert_impedance_matrices(&mut o, c, net.base_frequency);
+            insert_impedance_matrices(&mut o, c, net.base_frequency());
             if let Some(i_max) = &c.i_max {
                 o.insert("cm_ub".into(), json!(i_max));
             }
@@ -458,9 +458,9 @@ impl Writer {
     }
 
     fn branches(&mut self, net: &MulticonductorNetwork, doc: &mut Map<String, Value>) {
-        if !net.lines.is_empty() {
+        if !net.lines().is_empty() {
             let mut lines = Map::new();
-            for l in &net.lines {
+            for l in net.lines() {
                 let mut o = Map::new();
                 o.insert("f_bus".into(), json!(l.bus_from.to_lowercase()));
                 o.insert("t_bus".into(), json!(l.bus_to.to_lowercase()));
@@ -480,7 +480,7 @@ impl Writer {
                 let inline = l.extras.get("pmd_inline").and_then(Value::as_bool) == Some(true);
                 match net.linecode(&l.linecode) {
                     Some(c) if inline => {
-                        insert_impedance_matrices(&mut o, c, net.base_frequency);
+                        insert_impedance_matrices(&mut o, c, net.base_frequency());
                         if let Some(i_max) = &c.i_max {
                             o.insert("cm_ub".into(), json!(i_max));
                         }
@@ -510,9 +510,9 @@ impl Writer {
             doc.insert("line".into(), Value::Object(lines));
         }
 
-        if !net.switches.is_empty() {
+        if !net.switches().is_empty() {
             let mut switches = Map::new();
-            for s in &net.switches {
+            for s in net.switches() {
                 let mut o = Map::new();
                 let what = format!("switch {}", s.name);
                 let n = self.bounded_dim(s.terminal_map_from.len(), &what);
@@ -569,9 +569,9 @@ impl Writer {
     }
 
     fn loads(&mut self, net: &MulticonductorNetwork, doc: &mut Map<String, Value>) {
-        if !net.loads.is_empty() {
+        if !net.loads().is_empty() {
             let mut loads = Map::new();
-            for l in &net.loads {
+            for l in net.loads() {
                 let mut o = Map::new();
                 let what = format!("load {}", l.name);
                 let connections = self.conns(&l.terminal_map, &what);
@@ -654,9 +654,9 @@ impl Writer {
     }
 
     fn generators(&mut self, net: &MulticonductorNetwork, doc: &mut Map<String, Value>) {
-        if !net.generators.is_empty() {
+        if !net.generators().is_empty() {
             let mut gens = Map::new();
-            for g in &net.generators {
+            for g in net.generators() {
                 let mut o = Map::new();
                 let what = format!("generator {}", g.name);
                 o.insert("bus".into(), json!(g.bus.to_lowercase()));
@@ -721,15 +721,15 @@ impl Writer {
         self.loads(net, doc);
         self.generators(net, doc);
         // Typed BMOPF capacitor banks have no ENGINEERING conversion yet.
-        for c in &net.capacitors {
+        for c in net.capacitors() {
             self.warn(&C::EMIT_PMD_RECORD_DROPPED, format!(
                 "capacitor {}: rated capacitor banks are not converted to ENGINEERING JSON; dropped",
                 c.name
             ));
         }
-        if !net.shunts.is_empty() {
+        if !net.shunts().is_empty() {
             let mut shunts = Map::new();
-            for s in &net.shunts {
+            for s in net.shunts() {
                 let mut o = Map::new();
                 let what = format!("shunt {}", s.name);
                 o.insert("bus".into(), json!(s.bus.to_lowercase()));
@@ -762,7 +762,7 @@ impl Writer {
         }
 
         let mut sources = Map::new();
-        for vs in &net.sources {
+        for vs in net.sources() {
             sources.insert(vs.name.to_lowercase(), self.voltage_source(vs));
         }
         doc.insert("voltage_source".into(), Value::Object(sources));
@@ -836,11 +836,11 @@ impl Writer {
     }
 
     fn transformers(&mut self, net: &MulticonductorNetwork, doc: &mut Map<String, Value>) {
-        if net.transformers.is_empty() {
+        if net.transformers().is_empty() {
             return;
         }
         let mut out = Map::new();
-        for t in &net.transformers {
+        for t in net.transformers() {
             out.insert(t.name.to_lowercase(), self.transformer(t));
         }
         doc.insert("transformer".into(), Value::Object(out));
@@ -998,17 +998,17 @@ fn insert_tap_fields(o: &mut Map<String, Value>, t: &DistTransformer, phases: us
 /// in, and sbase is basemva in kVA (default 100 MVA).
 fn synthesized_settings(net: &MulticonductorNetwork) -> Value {
     let mut settings = Map::new();
-    settings.insert("base_frequency".into(), json!(net.base_frequency));
+    settings.insert("base_frequency".into(), json!(net.base_frequency()));
     settings.insert("power_scale_factor".into(), json!(1000.0));
     settings.insert("voltage_scale_factor".into(), json!(1000.0));
     let sbase = net
-        .sources
+        .sources()
         .first()
         .and_then(|vs| Writer::extras_f64(&vs.extras, "basemva"))
         .map_or(100_000.0, |mva| mva * 1e3);
     settings.insert("sbase_default".into(), json!(sbase));
     let mut vbases = Map::new();
-    for vs in &net.sources {
+    for vs in net.sources() {
         let phases = count_phases(vs).max(1) as f64;
         let vln_kv = Writer::extras_f64(&vs.extras, "basekv").map_or_else(
             || {
@@ -1050,9 +1050,9 @@ pub(super) fn lag_polarity(windings: &[DistWinding]) -> Vec<i64> {
 /// referencing line carries the reader's `pmd_inline` marker.
 fn inlined_codes(net: &MulticonductorNetwork) -> BTreeSet<String> {
     let mut inlined = BTreeSet::new();
-    for c in &net.linecodes {
+    for c in net.linecodes() {
         let mut refs = net
-            .lines
+            .lines()
             .iter()
             .filter(|l| l.linecode.eq_ignore_ascii_case(&c.name))
             .peekable();

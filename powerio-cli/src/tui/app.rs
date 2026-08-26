@@ -237,9 +237,9 @@ impl App {
                     Ok(loaded) => {
                         self.log.push_parse_warnings(&entry.path, &loaded.warnings);
                         ParseStatus::Loaded {
-                            n_buses: loaded.network.buses.len(),
-                            n_branches: loaded.network.branches.len(),
-                            base_mva: loaded.network.base_mva,
+                            n_buses: loaded.network.buses().len(),
+                            n_branches: loaded.network.branches().len(),
+                            base_mva: loaded.network.base_mva(),
                         }
                     }
                     Err(e) => ParseStatus::Failed(format!("{e:#}")),

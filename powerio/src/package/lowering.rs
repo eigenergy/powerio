@@ -268,14 +268,14 @@ impl<'a> LoweringState<'a> {
             "units are converted from W/var/V/ohm/siemens/radians to MW/MVAr/per-unit/degrees"
                 .to_owned(),
         );
-        if net.switches.iter().any(|sw| sw.open) {
+        if net.switches().iter().any(|sw| sw.open) {
             record
                 .dropped_fields
                 .push("open switches dropped from balanced model".to_owned());
         }
 
         let bus_ids = net
-            .buses
+            .buses()
             .iter()
             .enumerate()
             .map(|(idx, bus)| (bus.id.to_ascii_lowercase(), BusId(idx + 1)))
@@ -309,19 +309,18 @@ impl<'a> LoweringState<'a> {
 
         let mut network = BalancedNetwork::new(
             self.net
-                .name
+                .name()
                 .clone()
                 .unwrap_or_else(|| "lowered-multiconductor".to_owned()),
             self.options.base_mva,
         );
-        network.base_frequency = self.net.base_frequency;
-        network.buses = buses;
-        network.loads = loads;
-        network.shunts = shunts;
-        network.branches = branches;
-        network.generators = generators;
-        network.source_format = SourceFormat::InMemory;
-
+        *network.base_frequency_mut() = self.net.base_frequency();
+        *network.buses_mut() = buses;
+        *network.loads_mut() = loads;
+        *network.shunts_mut() = shunts;
+        *network.branches_mut() = branches;
+        *network.generators_mut() = generators;
+        *network.source_format_mut() = SourceFormat::InMemory;
         if let Err(err) = network.validate() {
             self.record.diagnostics.push(StructuredDiagnostic::of(
                 &codes::TRANSFORM_MULTI_TO_BALANCED_INVALID_BALANCED_OUTPUT,
@@ -357,7 +356,7 @@ impl<'a> LoweringState<'a> {
     }
 
     fn voltage_base(&mut self) -> Result<Option<VoltageBase>, MulticonductorToBalancedError> {
-        for (idx, source) in self.net.sources.iter().enumerate() {
+        for (idx, source) in self.net.sources().iter().enumerate() {
             let Some(bus) = self.net.bus(&source.bus) else {
                 self.record.diagnostics.push(
                     StructuredDiagnostic::of(
@@ -431,13 +430,13 @@ format!(
 
     fn lower_buses(&mut self, base: VoltageBase) -> Vec<Bus> {
         self.net
-            .buses
+            .buses()
             .iter()
             .enumerate()
             .map(|(idx, bus)| {
                 let source = self
                     .net
-                    .sources
+                    .sources()
                     .iter()
                     .find(|source| source.bus.eq_ignore_ascii_case(&bus.id));
                 let (vm, va) = source
@@ -497,7 +496,7 @@ format!(
     /// drops, and the record names it, because a silent drop removes
     /// reactive support the case depends on.
     fn record_capacitor_drops(&mut self) {
-        for capacitor in &self.net.capacitors {
+        for capacitor in self.net.capacitors() {
             self.record.dropped_fields.push(format!(
                 "capacitor {} dropped: a rated bank has no balanced shunt equivalent",
                 capacitor.name
@@ -526,14 +525,14 @@ format!(
     fn bus_kind(&self, bus_id: &str) -> BusType {
         if self
             .net
-            .sources
+            .sources()
             .iter()
             .any(|source| source.bus.eq_ignore_ascii_case(bus_id))
         {
             BusType::Ref
         } else if self
             .net
-            .generators
+            .generators()
             .iter()
             .any(|generator| generator.bus.eq_ignore_ascii_case(bus_id))
         {
@@ -548,8 +547,8 @@ format!(
         &mut self,
         base: VoltageBase,
     ) -> Result<Vec<Branch>, MulticonductorToBalancedError> {
-        let mut branches = Vec::with_capacity(self.net.lines.len());
-        for (idx, line) in self.net.lines.iter().enumerate() {
+        let mut branches = Vec::with_capacity(self.net.lines().len());
+        for (idx, line) in self.net.lines().iter().enumerate() {
             let Some(code) = self.net.linecode(&line.linecode) else {
                 self.record.diagnostics.push(
                     StructuredDiagnostic::of(
@@ -757,7 +756,7 @@ format!("line {line_idx} has no finite length ({length}), so its impedance canno
 
     fn lower_loads(&mut self) -> Vec<Load> {
         self.net
-            .loads
+            .loads()
             .iter()
             .enumerate()
             .filter_map(|(idx, load)| {
@@ -799,8 +798,8 @@ format!(
         &mut self,
         base: VoltageBase,
     ) -> Result<Vec<Shunt>, MulticonductorToBalancedError> {
-        let mut shunts = Vec::with_capacity(self.net.shunts.len());
-        for (idx, shunt) in self.net.shunts.iter().enumerate() {
+        let mut shunts = Vec::with_capacity(self.net.shunts().len());
+        for (idx, shunt) in self.net.shunts().iter().enumerate() {
             let Some(bus) = self.bus_id(&shunt.bus) else {
                 self.unknown_bus_diag("shunt", &shunt.name, &shunt.bus, idx, "bus");
                 continue;
@@ -850,7 +849,7 @@ format!(
 
     fn lower_generators(&mut self, buses: &[Bus]) -> Vec<Generator> {
         self.net
-            .generators
+            .generators()
             .iter()
             .enumerate()
             .filter_map(|(idx, generator)| {
@@ -1362,7 +1361,7 @@ fn check_bus_conductor_sets(
 ) {
     let neutral_terminals = global_neutral_terminals(net);
     let mut saw_neutral = false;
-    for (i, bus) in net.buses.iter().enumerate() {
+    for (i, bus) in net.buses().iter().enumerate() {
         let active_count = active_terminal_count(&bus.terminals, Some(bus), &neutral_terminals);
         if active_count < bus.terminals.len() {
             saw_neutral = true;
@@ -1419,7 +1418,7 @@ fn check_line_terminal_maps(
     report: &mut MulticonductorToBalancedReadiness,
 ) {
     let neutral_terminals = global_neutral_terminals(net);
-    for (i, line) in net.lines.iter().enumerate() {
+    for (i, line) in net.lines().iter().enumerate() {
         for (field, bus_id, terminal_map) in [
             (
                 "terminal_map_from",
@@ -1451,7 +1450,7 @@ format!(
 }
 
 fn check_linecodes(net: &MulticonductorNetwork, report: &mut MulticonductorToBalancedReadiness) {
-    for (i, line) in net.lines.iter().enumerate() {
+    for (i, line) in net.lines().iter().enumerate() {
         let Some(code) = net.linecode(&line.linecode) else {
             report.diagnostics.push(
                 StructuredDiagnostic::of(
@@ -1512,7 +1511,7 @@ fn square_matrix_shape(matrix: &Mat, n: usize) -> bool {
 }
 
 fn check_switches(net: &MulticonductorNetwork, report: &mut MulticonductorToBalancedReadiness) {
-    for (i, sw) in net.switches.iter().enumerate() {
+    for (i, sw) in net.switches().iter().enumerate() {
         if sw.open {
             report.diagnostics.push(
                 StructuredDiagnostic::of(
@@ -1540,7 +1539,7 @@ fn check_switches(net: &MulticonductorNetwork, report: &mut MulticonductorToBala
 }
 
 fn global_neutral_terminals(net: &MulticonductorNetwork) -> BTreeSet<String> {
-    net.buses
+    net.buses()
         .iter()
         .flat_map(|bus| bus.grounded.iter().cloned())
         .collect()
@@ -1573,7 +1572,7 @@ fn check_phase_reference(
     report: &mut MulticonductorToBalancedReadiness,
 ) {
     let neutral_terminals = global_neutral_terminals(net);
-    let has_three_phase_source = net.sources.iter().any(|source| {
+    let has_three_phase_source = net.sources().iter().any(|source| {
         let bus = net.bus(&source.bus);
         active_terminal_count(&source.terminal_map, bus, &neutral_terminals) == 3
     });
@@ -1587,7 +1586,7 @@ fn check_phase_reference(
 }
 
 fn check_transformers(net: &MulticonductorNetwork, report: &mut MulticonductorToBalancedReadiness) {
-    for (i, transformer) in net.transformers.iter().enumerate() {
+    for (i, transformer) in net.transformers().iter().enumerate() {
         report.diagnostics.push(
             StructuredDiagnostic::of(
                 &codes::TRANSFORM_MULTI_TO_BALANCED_UNSUPPORTED_TRANSFORMER,
@@ -1605,7 +1604,7 @@ fn check_untyped_objects(
     net: &MulticonductorNetwork,
     report: &mut MulticonductorToBalancedReadiness,
 ) {
-    for (i, obj) in net.untyped.iter().enumerate() {
+    for (i, obj) in net.untyped().iter().enumerate() {
         report.diagnostics.push(
             StructuredDiagnostic::of(
                 &codes::TRANSFORM_MULTI_TO_BALANCED_UNSUPPORTED_OBJECT,

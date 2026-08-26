@@ -893,11 +893,40 @@ impl UntypedObject {
 /// `source` retains the original text for the byte exact echo tier;
 /// `defaulted` records, per element (`"class.name"` key), the fields the
 /// reader materialized from format defaults rather than the source text.
+#[derive(Debug, Clone)]
+pub struct MulticonductorNetwork {
+    tables: std::sync::Arc<MulticonductorNetworkTables>,
+}
+
+impl MulticonductorNetwork {
+    pub(crate) fn from_tables(tables: MulticonductorNetworkTables) -> Self {
+        Self {
+            tables: std::sync::Arc::new(tables),
+        }
+    }
+
+    /// The one mutation door: copies the shared tables on first write to a
+    /// shared handle, so no other handle observes the change.
+    pub(crate) fn tables_mut(&mut self) -> &mut MulticonductorNetworkTables {
+        std::sync::Arc::make_mut(&mut self.tables)
+    }
+}
+
+/// A multiconductor distribution network.
+///
+/// `source` retains the original text for the byte exact echo tier;
+/// `defaulted` records, per element (`"class.name"` key), the fields the
+/// reader materialized from format defaults rather than the source text.
+// The one owned table store behind the `MulticonductorNetwork` handle. The
+// doc string above is frozen into the generated 0.9 schema description, so
+// the handle split leaves it as it was (its `source` sentence describes the
+// 0.9 document, which the upgrade reader still accepts); the schema also
+// keeps the handle's name through the schemars rename below.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "schema", schemars(rename = "MulticonductorNetwork"))]
 #[serde(remote = "Self")]
-#[non_exhaustive]
-pub struct MulticonductorNetwork {
+pub(crate) struct MulticonductorNetworkTables {
     pub name: Option<String>,
     /// Hz.
     pub base_frequency: f64,
@@ -944,8 +973,8 @@ pub struct MulticonductorNetwork {
 // `null` a pre-0.9 writer emitted (read side only).
 impl serde::Serialize for MulticonductorNetwork {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        MulticonductorNetwork::serialize(
-            self,
+        MulticonductorNetworkTables::serialize(
+            &self.tables,
             powerio_core::__implementation::nonfinite::NonFiniteSer(serializer),
         )
     }
@@ -953,18 +982,97 @@ impl serde::Serialize for MulticonductorNetwork {
 
 impl<'de> serde::Deserialize<'de> for MulticonductorNetwork {
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        MulticonductorNetwork::deserialize(powerio_core::__implementation::nonfinite::NonFiniteDe(
-            deserializer,
-        ))
+        MulticonductorNetworkTables::deserialize(
+            powerio_core::__implementation::nonfinite::NonFiniteDe(deserializer),
+        )
+        .map(MulticonductorNetwork::from_tables)
+    }
+}
+
+#[cfg(feature = "schema")]
+impl schemars::JsonSchema for MulticonductorNetwork {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        <MulticonductorNetworkTables as schemars::JsonSchema>::schema_name()
+    }
+
+    fn schema_id() -> std::borrow::Cow<'static, str> {
+        <MulticonductorNetworkTables as schemars::JsonSchema>::schema_id()
+    }
+
+    fn json_schema(generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        <MulticonductorNetworkTables as schemars::JsonSchema>::json_schema(generator)
+    }
+}
+
+macro_rules! dist_table_accessors {
+    ($($field:ident, $field_mut:ident: $ty:ty;)+) => {
+        impl MulticonductorNetwork {
+            $(
+                #[must_use]
+                pub fn $field(&self) -> &$ty {
+                    &self.tables.$field
+                }
+
+                /// Mutable access to the same table; a shared handle copies
+                /// its tables once here, so no other handle observes the
+                /// change.
+                #[must_use]
+                pub fn $field_mut(&mut self) -> &mut $ty {
+                    &mut self.tables_mut().$field
+                }
+            )+
+        }
+    };
+}
+
+dist_table_accessors! {
+    name, name_mut: Option<String>;
+    geo, geo_mut: Option<DistGeoMeta>;
+    buses, buses_mut: Vec<DistBus>;
+    linecodes, linecodes_mut: Vec<DistLineCode>;
+    lines, lines_mut: Vec<DistLine>;
+    switches, switches_mut: Vec<DistSwitch>;
+    transformers, transformers_mut: Vec<DistTransformer>;
+    loads, loads_mut: Vec<DistLoad>;
+    generators, generators_mut: Vec<DistGenerator>;
+    ibrs, ibrs_mut: Vec<DistIbr>;
+    control_profiles, control_profiles_mut: Vec<DistControlProfile>;
+    shunts, shunts_mut: Vec<DistShunt>;
+    capacitors, capacitors_mut: Vec<DistCapacitor>;
+    sources, sources_mut: Vec<VoltageSource>;
+    untyped, untyped_mut: Vec<UntypedObject>;
+    commands, commands_mut: Vec<(String, String)>;
+    options, options_mut: Vec<(String, String)>;
+    defaulted, defaulted_mut: BTreeMap<String, Vec<&'static str>>;
+    source_format, source_format_mut: Option<DistSourceFormat>;
+    extras, extras_mut: Extras;
+}
+
+impl MulticonductorNetwork {
+    /// Hz.
+    #[must_use]
+    pub fn base_frequency(&self) -> f64 {
+        self.tables.base_frequency
+    }
+
+    #[must_use]
+    pub fn base_frequency_mut(&mut self) -> &mut f64 {
+        &mut self.tables_mut().base_frequency
     }
 }
 
 impl Default for MulticonductorNetwork {
+    fn default() -> Self {
+        MulticonductorNetwork::from_tables(MulticonductorNetworkTables::default())
+    }
+}
+
+impl Default for MulticonductorNetworkTables {
     /// An empty network at the OpenDSS default frequency. A derived 0 Hz
     /// default would put NaN into every capacitance the dss writer converts
     /// through omega.
     fn default() -> Self {
-        MulticonductorNetwork {
+        MulticonductorNetworkTables {
             name: None,
             base_frequency: crate::dss::defaults::BASE_FREQUENCY,
             geo: None,
@@ -998,20 +1106,20 @@ impl MulticonductorNetwork {
 
     #[must_use]
     pub fn named(name: impl Into<String>) -> Self {
-        Self {
+        MulticonductorNetwork::from_tables(MulticonductorNetworkTables {
             name: Some(name.into()),
-            ..Self::default()
-        }
+            ..MulticonductorNetworkTables::default()
+        })
     }
 
     /// Case insensitive, matching the source formats' name semantics.
     pub fn bus(&self, id: &str) -> Option<&DistBus> {
-        self.buses.iter().find(|b| b.id.eq_ignore_ascii_case(id))
+        self.buses().iter().find(|b| b.id.eq_ignore_ascii_case(id))
     }
 
     /// Case insensitive, matching the source formats' name semantics.
     pub fn linecode(&self, name: &str) -> Option<&DistLineCode> {
-        self.linecodes
+        self.linecodes()
             .iter()
             .find(|c| c.name.eq_ignore_ascii_case(name))
     }
@@ -1027,7 +1135,7 @@ pub(crate) fn warn_defaulted_frequency(
     field: &str,
     diags: &mut crate::collect::Diagnostics,
 ) {
-    let charging = net.linecodes.iter().any(|c| {
+    let charging = net.linecodes().iter().any(|c| {
         [&c.b_from, &c.b_to]
             .iter()
             .flat_map(|m| m.iter())
@@ -1039,7 +1147,7 @@ pub(crate) fn warn_defaulted_frequency(
             &crate::diagnostics::codes::READ_MULTICONDUCTOR_VALUE_DEFAULTED,
             format!(
                 "document states no {field} and carries line susceptance; read at {} Hz",
-                net.base_frequency
+                net.base_frequency()
             ),
         );
     }
@@ -1058,12 +1166,12 @@ pub(crate) fn warn_unresolved_references(
 ) {
     use std::collections::BTreeSet;
     let buses: BTreeSet<String> = net
-        .buses
+        .buses()
         .iter()
         .map(|b| b.id.to_ascii_lowercase())
         .collect();
     let linecodes: BTreeSet<String> = net
-        .linecodes
+        .linecodes()
         .iter()
         .map(|c| c.name.to_ascii_lowercase())
         .collect();
@@ -1076,17 +1184,17 @@ pub(crate) fn warn_unresolved_references(
                 warnings.push(format!("{what}: references undefined bus `{id}`"));
             }
         };
-        for l in &net.lines {
+        for l in net.lines() {
             let what = format!("line {}", l.name);
             bus(&what, "bus_from", &l.bus_from);
             bus(&what, "bus_to", &l.bus_to);
         }
-        for sw in &net.switches {
+        for sw in net.switches() {
             let what = format!("switch {}", sw.name);
             bus(&what, "bus_from", &sw.bus_from);
             bus(&what, "bus_to", &sw.bus_to);
         }
-        for t in &net.transformers {
+        for t in net.transformers() {
             let what = format!("transformer {}", t.name);
             for w in &t.windings {
                 bus(&what, "bus", &w.bus);
@@ -1094,28 +1202,32 @@ pub(crate) fn warn_unresolved_references(
         }
         for (what, id) in std::iter::empty()
             .chain(
-                net.loads
+                net.loads()
                     .iter()
                     .map(|x| (format!("load {}", x.name), &x.bus)),
             )
             .chain(
-                net.generators
+                net.generators()
                     .iter()
                     .map(|x| (format!("generator {}", x.name), &x.bus)),
             )
             .chain(
-                net.shunts
+                net.shunts()
                     .iter()
                     .map(|x| (format!("shunt {}", x.name), &x.bus)),
             )
             .chain(
-                net.capacitors
+                net.capacitors()
                     .iter()
                     .map(|x| (format!("capacitor {}", x.name), &x.bus)),
             )
-            .chain(net.ibrs.iter().map(|x| (format!("ibr {}", x.name), &x.bus)))
             .chain(
-                net.sources
+                net.ibrs()
+                    .iter()
+                    .map(|x| (format!("ibr {}", x.name), &x.bus)),
+            )
+            .chain(
+                net.sources()
                     .iter()
                     .map(|x| (format!("voltage_source {}", x.name), &x.bus)),
             )
@@ -1123,7 +1235,7 @@ pub(crate) fn warn_unresolved_references(
             bus(&what, "bus", id);
         }
     }
-    for l in &net.lines {
+    for l in net.lines() {
         if l.linecode.is_empty() {
             warnings.push(format!(
                 "line {}: `linecode` reference is empty or missing",
@@ -1307,6 +1419,6 @@ mod deprecation_shim_tests {
     #[allow(deprecated)]
     fn the_08_type_name_still_compiles() {
         let net: crate::DistNetwork = crate::MulticonductorNetwork::named("shim");
-        assert_eq!(net.name.as_deref(), Some("shim"));
+        assert_eq!(net.name().as_deref(), Some("shim"));
     }
 }

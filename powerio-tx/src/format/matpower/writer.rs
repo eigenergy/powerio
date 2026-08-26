@@ -53,27 +53,27 @@ fn canonical_warnings(net: &BalancedNetwork) -> Diagnostics {
     // gencost/dcline/dclinecost/storage blocks only. Report every neutral-model
     // field it can't.
     let mut warnings = Diagnostics::new();
-    if !net.switches.is_empty() {
+    if !net.switches().is_empty() {
         warnings.push(
             &F.record_dropped,
             format!(
                 "{} switch(es) dropped: MATPOWER has no switch table",
-                net.switches.len()
+                net.switches().len()
             ),
         );
     }
-    if !net.transformers_3w.is_empty() {
+    if !net.transformers_3w().is_empty() {
         warnings.push(
             &F.record_dropped,
             format!(
                 "{} 3-winding transformer(s) dropped: the canonical MATPOWER writer emits no \
              3-winding record (star-expand them into branches before writing to keep them)",
-                net.transformers_3w.len()
+                net.transformers_3w().len()
             ),
         );
     }
     if net
-        .buses
+        .buses()
         .iter()
         .any(|b| b.evhi.is_some() || b.evlo.is_some())
     {
@@ -83,7 +83,7 @@ fn canonical_warnings(net: &BalancedNetwork) -> Diagnostics {
         );
     }
     let non_matpower_charging = net
-        .branches
+        .branches()
         .iter()
         .filter(|b| b.has_non_matpower_charging())
         .count();
@@ -93,7 +93,7 @@ fn canonical_warnings(net: &BalancedNetwork) -> Diagnostics {
         ));
     }
     let current_ratings = net
-        .branches
+        .branches()
         .iter()
         .filter(|b| b.current_ratings.is_some())
         .count();
@@ -108,9 +108,9 @@ fn canonical_warnings(net: &BalancedNetwork) -> Diagnostics {
     // Zero is not "unspecified" in those columns — `RAMP_10 = 0` states a unit
     // that cannot ramp — so the padding is a disclosure, and the readback
     // cannot tell it from stated data.
-    let with_caps = net.generators.iter().any(Generator::has_caps);
+    let with_caps = net.generators().iter().any(Generator::has_caps);
     if with_caps {
-        let padded = net.generators.iter().filter(|g| !g.has_caps()).count();
+        let padded = net.generators().iter().filter(|g| !g.has_caps()).count();
         if padded > 0 {
             warnings.push(
                 &F.value_defaulted,
@@ -127,11 +127,11 @@ fn canonical_warnings(net: &BalancedNetwork) -> Diagnostics {
     // value anyway states an idle element as live load, so it is dropped and
     // named here.
     let idle_load: (f64, f64) = net
-        .loads
+        .loads()
         .iter()
         .filter(|l| !l.in_service)
         .fold((0.0, 0.0), |acc, l| (acc.0 + l.p, acc.1 + l.q));
-    let idle_loads = net.loads.iter().filter(|l| !l.in_service).count();
+    let idle_loads = net.loads().iter().filter(|l| !l.in_service).count();
     if idle_loads > 0 {
         warnings.push(
             &F.record_dropped,
@@ -142,7 +142,7 @@ fn canonical_warnings(net: &BalancedNetwork) -> Diagnostics {
             ),
         );
     }
-    let idle_shunts = net.shunts.iter().filter(|s| !s.in_service).count();
+    let idle_shunts = net.shunts().iter().filter(|s| !s.in_service).count();
     if idle_shunts > 0 {
         warnings.push(&F.record_dropped, format!(
             "{idle_shunts} out of service shunt(s) dropped: a MATPOWER bus row states one shunt \
@@ -150,14 +150,18 @@ fn canonical_warnings(net: &BalancedNetwork) -> Diagnostics {
         ));
     }
     warn_extra_branch_rating_sets(&F, "MATPOWER .m", net, &mut warnings);
-    let branch_solutions = net.branches.iter().filter(|b| b.solution.is_some()).count();
+    let branch_solutions = net
+        .branches()
+        .iter()
+        .filter(|b| b.solution.is_some())
+        .count();
     if branch_solutions > 0 {
         warnings.push(&F.field_dropped, format!(
             "{branch_solutions} branch solution value set(s) dropped: MATPOWER branch rows do not carry solved flow columns"
         ));
     }
     let voltage_loads = net
-        .loads
+        .loads()
         .iter()
         .filter(|l| {
             l.voltage_model
@@ -174,11 +178,11 @@ fn canonical_warnings(net: &BalancedNetwork) -> Diagnostics {
     // — absence is the source's own shape, not a drop, so it earns no warning
     // (`MissingGenCostPolicy::zero` synthesizes costs for callers who need
     // them). Only a partial set is a real loss: the block is all-or-nothing.
-    let with_cost = net.generators.iter().filter(|g| g.cost.is_some()).count();
-    if with_cost > 0 && with_cost < net.generators.len() {
+    let with_cost = net.generators().iter().filter(|g| g.cost.is_some()).count();
+    if with_cost > 0 && with_cost < net.generators().len() {
         warnings.push(&F.field_dropped, format!(
             "gen cost dropped: {with_cost} of {} generators carry cost data, but MATPOWER's `mpc.gencost` block is all-or-nothing",
-            net.generators.len()
+            net.generators().len()
         ));
     }
     // The canonical writer emits named columns only and replays no extras key,
@@ -188,14 +192,14 @@ fn canonical_warnings(net: &BalancedNetwork) -> Diagnostics {
     crate::format::warn_dropped_extras(&F, "canonical MATPOWER .m", net, |_| false, &mut warnings);
     // `mpc.areas` carries the area number and reference bus and nothing else.
     let lossy_areas = net
-        .areas
+        .areas()
         .iter()
         .filter(|a| a.name.is_some() || a.net_interchange != 0.0 || a.tolerance != 0.0)
         .count();
     if lossy_areas > 0 {
         warnings.push(&F.field_dropped, format!(
             "{lossy_areas} of {} area record(s) carry a name or interchange data: `mpc.areas` holds only the area number and reference bus",
-            net.areas.len()
+            net.areas().len()
         ));
     }
     warnings
@@ -214,25 +218,25 @@ fn canonical(net: &BalancedNetwork) -> String {
     // its value in would state it as live load. `canonical_warnings` reports
     // what that leaves out.
     let mut demand: BTreeMap<BusId, (f64, f64)> = BTreeMap::new();
-    for l in net.loads.iter().filter(|l| l.in_service) {
+    for l in net.loads().iter().filter(|l| l.in_service) {
         let e = demand.entry(l.bus).or_default();
         e.0 += l.p;
         e.1 += l.q;
     }
     let mut shunt: BTreeMap<BusId, (f64, f64)> = BTreeMap::new();
-    for s in net.shunts.iter().filter(|s| s.in_service) {
+    for s in net.shunts().iter().filter(|s| s.in_service) {
         let e = shunt.entry(s.bus).or_default();
         e.0 += s.g;
         e.1 += s.b;
     }
 
     let mut s = String::new();
-    let _ = writeln!(s, "function mpc = {}", matlab_ident(&net.name));
+    let _ = writeln!(s, "function mpc = {}", matlab_ident(net.name()));
     let _ = writeln!(s, "mpc.version = '2';");
-    let _ = writeln!(s, "mpc.baseMVA = {};", net.base_mva);
+    let _ = writeln!(s, "mpc.baseMVA = {};", net.base_mva());
 
     let _ = writeln!(s, "mpc.bus = [");
-    for b in &net.buses {
+    for b in net.buses() {
         let (pd, qd) = demand.get(&b.id).copied().unwrap_or((0.0, 0.0));
         let (gs, bs) = shunt.get(&b.id).copied().unwrap_or((0.0, 0.0));
         let _ = writeln!(
@@ -259,9 +263,9 @@ fn canonical(net: &BalancedNetwork) -> String {
     // one quoted entry per bus in bus order (the reader attaches by position
     // and requires a full set). An unnamed bus writes the empty string, which
     // reads back as unnamed.
-    if net.buses.iter().any(|b| b.name.is_some()) {
+    if net.buses().iter().any(|b| b.name.is_some()) {
         let _ = writeln!(s, "mpc.bus_name = {{");
-        for b in &net.buses {
+        for b in net.buses() {
             let name = matlab_string(b.name.as_deref().unwrap_or(""));
             let _ = writeln!(s, "\t'{name}';");
         }
@@ -269,7 +273,7 @@ fn canonical(net: &BalancedNetwork) -> String {
     }
 
     let _ = writeln!(s, "mpc.branch = [");
-    for br in &net.branches {
+    for br in net.branches() {
         let _ = writeln!(
             s,
             "\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{};",
@@ -290,24 +294,24 @@ fn canonical(net: &BalancedNetwork) -> String {
     }
     let _ = writeln!(s, "];");
 
-    if !net.areas.is_empty() {
+    if !net.areas().is_empty() {
         // `mpc.areas` is `[area, refbus]` and the reader reads it back. An
         // area with no reference bus writes 0, which reads back as none.
         let _ = writeln!(s, "mpc.areas = [");
-        for a in &net.areas {
+        for a in net.areas() {
             let _ = writeln!(s, "\t{}\t{};", a.number, a.slack_bus.map_or(0, |b| b.0));
         }
         let _ = writeln!(s, "];");
     }
 
-    if !net.generators.is_empty() {
+    if !net.generators().is_empty() {
         // The 21-column layout (Pc1..APF) is standard MATPOWER and the reader
         // reads it; emit it whenever any generator carries capability/ramp
         // columns, padding absent slots with 0 (MATPOWER's own "unspecified")
         // to keep the matrix rectangular.
-        let with_caps = net.generators.iter().any(Generator::has_caps);
+        let with_caps = net.generators().iter().any(Generator::has_caps);
         let _ = writeln!(s, "mpc.gen = [");
-        for g in &net.generators {
+        for g in net.generators() {
             let _ = write!(
                 s,
                 "\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
@@ -331,19 +335,19 @@ fn canonical(net: &BalancedNetwork) -> String {
         }
         let _ = writeln!(s, "];");
 
-        if net.generators.iter().all(|g| g.cost.is_some()) {
+        if net.generators().iter().all(|g| g.cost.is_some()) {
             let _ = writeln!(s, "mpc.gencost = [");
             // MATPOWER's gencost is a rectangular matrix: pad every row's cost
             // values to the widest one with trailing zeros (a case that mixes
             // piecewise and polynomial models has rows of different lengths).
             let width = net
-                .generators
+                .generators()
                 .iter()
                 .filter_map(|g| g.cost.as_ref())
                 .map(|c| c.coeffs.len())
                 .max()
                 .unwrap_or(0);
-            for g in &net.generators {
+            for g in net.generators() {
                 let c = g.cost.as_ref().expect("checked all gens have cost");
                 let _ = write!(
                     s,
@@ -359,9 +363,9 @@ fn canonical(net: &BalancedNetwork) -> String {
         }
     }
 
-    if !net.hvdc.is_empty() {
+    if !net.hvdc().is_empty() {
         let _ = writeln!(s, "mpc.dcline = [");
-        for d in &net.hvdc {
+        for d in net.hvdc() {
             let _ = writeln!(
                 s,
                 "\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{};",
@@ -390,10 +394,10 @@ fn canonical(net: &BalancedNetwork) -> String {
         // with no usage cost takes the all-zero polynomial row `toggle_dcline`
         // itself pads with — zero cost and no cost term price a line the same
         // — so unlike `mpc.gencost` this block is never all-or-nothing.
-        if net.hvdc.iter().any(|d| d.cost.is_some()) {
+        if net.hvdc().iter().any(|d| d.cost.is_some()) {
             let _ = writeln!(s, "mpc.dclinecost = [");
             let width = net
-                .hvdc
+                .hvdc()
                 .iter()
                 .filter_map(|d| d.cost.as_ref())
                 .map(|c| c.coeffs.len())
@@ -407,7 +411,7 @@ fn canonical(net: &BalancedNetwork) -> String {
                 ncost: 2,
                 coeffs: Vec::new(),
             };
-            for d in &net.hvdc {
+            for d in net.hvdc() {
                 let c = d.cost.as_ref().unwrap_or(&zero);
                 let _ = write!(
                     s,
@@ -423,9 +427,9 @@ fn canonical(net: &BalancedNetwork) -> String {
         }
     }
 
-    if !net.storage.is_empty() {
+    if !net.storage().is_empty() {
         let _ = writeln!(s, "mpc.storage = [");
-        for st in &net.storage {
+        for st in net.storage() {
             let _ = writeln!(
                 s,
                 "\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{};",

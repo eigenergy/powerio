@@ -40,12 +40,12 @@ fn parse_bytes_reaches_the_binary_reader() {
         "{:?}",
         parsed.rendered_diagnostics()
     );
-    assert_eq!(parsed.network.buses.len(), 200);
-    assert_eq!(parsed.network.branches.len(), 246);
+    assert_eq!(parsed.network.buses().len(), 200);
+    assert_eq!(parsed.network.branches().len(), 246);
 
     // The name hint plays the role the file stem plays in parse_file.
     let named = parse_bytes_with_name(&bytes, "PWB", Some("from-memory")).unwrap();
-    assert_eq!(named.network.name, "from-memory");
+    assert_eq!(named.network.name(), "from-memory");
 
     // Text formats go through the same door and agree with the path parse.
     let m = std::fs::read(concat!(
@@ -54,7 +54,7 @@ fn parse_bytes_reaches_the_binary_reader() {
     ))
     .unwrap();
     let from_bytes = parse_bytes(&m, "matpower").unwrap().network;
-    assert_eq!(from_bytes.buses.len(), 9);
+    assert_eq!(from_bytes.buses().len(), 9);
 
     // A text format handed non-UTF-8 bytes reports that, rather than panicking
     // or blaming the case data.
@@ -77,14 +77,14 @@ fn activsg200_pwb_matches_its_aux_sibling() {
         .unwrap()
         .network;
 
-    assert_eq!(pwb.buses.len(), 200);
-    assert_eq!(pwb.generators.len(), 49);
-    assert_eq!(pwb.loads.len(), 160);
-    assert_eq!(pwb.shunts.len(), 4);
-    assert_eq!(pwb.branches.len(), 246);
+    assert_eq!(pwb.buses().len(), 200);
+    assert_eq!(pwb.generators().len(), 49);
+    assert_eq!(pwb.loads().len(), 160);
+    assert_eq!(pwb.shunts().len(), 4);
+    assert_eq!(pwb.branches().len(), 246);
 
     // Buses: identity, name, kV, area/zone, and the f64 solved state.
-    for (p, a) in pwb.buses.iter().zip(&aux.buses) {
+    for (p, a) in pwb.buses().iter().zip(aux.buses()) {
         assert_eq!(p.id, a.id);
         assert_eq!(p.name, a.name);
         assert!((p.base_kv - a.base_kv).abs() < 1e-4, "bus {} kV", p.id);
@@ -97,9 +97,13 @@ fn activsg200_pwb_matches_its_aux_sibling() {
     // aux marks exactly one Ref bus (189). The pwb bus types are therefore a
     // best effort, not asserted against the aux here; the electrical values
     // above are the parity expectation.
-    assert!(pwb.buses.iter().all(|b| b.kind != powerio_tx::BusType::Ref));
+    assert!(
+        pwb.buses()
+            .iter()
+            .all(|b| b.kind != powerio_tx::BusType::Ref)
+    );
     assert_eq!(
-        aux.buses
+        aux.buses()
             .iter()
             .filter(|b| b.kind == powerio_tx::BusType::Ref)
             .count(),
@@ -110,7 +114,7 @@ fn activsg200_pwb_matches_its_aux_sibling() {
     // in-service status comes from a single byte whose meaning is only
     // partly validated (every device in this case is in service), so the
     // electrical values are the parity expectation, not the status flag.
-    for (p, a) in pwb.loads.iter().zip(&aux.loads) {
+    for (p, a) in pwb.loads().iter().zip(aux.loads()) {
         assert_eq!(p.bus, a.bus);
         assert!(
             (p.p - a.p).abs() < 1e-4 * a.p.abs().max(1.0),
@@ -123,7 +127,7 @@ fn activsg200_pwb_matches_its_aux_sibling() {
             p.bus
         );
     }
-    for (p, a) in pwb.generators.iter().zip(&aux.generators) {
+    for (p, a) in pwb.generators().iter().zip(aux.generators()) {
         assert_eq!(p.bus, a.bus);
         for (x, y, what) in [
             (p.pg, a.pg, "pg"),
@@ -142,7 +146,7 @@ fn activsg200_pwb_matches_its_aux_sibling() {
             );
         }
     }
-    for (p, a) in pwb.shunts.iter().zip(&aux.shunts) {
+    for (p, a) in pwb.shunts().iter().zip(aux.shunts()) {
         assert_eq!(p.bus, a.bus);
         assert!(
             (p.b - a.b).abs() < 1e-4 * a.b.abs().max(1.0),
@@ -154,11 +158,11 @@ fn activsg200_pwb_matches_its_aux_sibling() {
     // Branches: identity (including the default circuit on the one record
     // that omits it), impedances, ratings, taps, device kind.
     let mut aux_by_id: BTreeMap<(usize, usize, String), &powerio_tx::Branch> = BTreeMap::default();
-    for (key, b) in branch_keys(&aux.branches).into_iter().zip(&aux.branches) {
+    for (key, b) in branch_keys(aux.branches()).into_iter().zip(aux.branches()) {
         aux_by_id.insert(key, b);
     }
     let mut transformers = 0;
-    for (key, p) in branch_keys(&pwb.branches).into_iter().zip(&pwb.branches) {
+    for (key, p) in branch_keys(pwb.branches()).into_iter().zip(pwb.branches()) {
         let a = aux_by_id
             .remove(&key)
             .unwrap_or_else(|| panic!("{key:?} not in aux"));
@@ -234,12 +238,12 @@ fn activsg200_pwb_matches_its_aux_sibling() {
         .unwrap()
         .network;
     let raw_by_pair: BTreeMap<(usize, usize), &powerio_tx::Branch> = raw
-        .branches
+        .branches()
         .iter()
         .map(|b| ((b.from.0, b.to.0), b))
         .collect();
     let mut snapshot_deltas = Vec::new();
-    for p in pwb.branches.iter().filter(|p| p.is_transformer()) {
+    for p in pwb.branches().iter().filter(|p| p.is_transformer()) {
         let pair = (p.from.0, p.to.0);
         let a = raw_by_pair
             .get(&pair)
@@ -283,15 +287,15 @@ fn texas2000_june2016_pwb_matches_its_aux_sibling() {
     let pwb = read_pwb(&pwb_path);
     let aux = parse_file(aux_path, None).unwrap().network;
 
-    assert_eq!(pwb.buses.len(), 2007);
-    assert_eq!(pwb.loads.len(), 1417);
-    assert_eq!(pwb.generators.len(), 282);
-    assert_eq!(pwb.shunts.len(), 41);
-    assert_eq!(pwb.branches.len(), 3043);
-    assert_eq!(aux.buses.len(), 2007);
-    assert_eq!(aux.branches.len(), 3043);
+    assert_eq!(pwb.buses().len(), 2007);
+    assert_eq!(pwb.loads().len(), 1417);
+    assert_eq!(pwb.generators().len(), 282);
+    assert_eq!(pwb.shunts().len(), 41);
+    assert_eq!(pwb.branches().len(), 3043);
+    assert_eq!(aux.buses().len(), 2007);
+    assert_eq!(aux.branches().len(), 3043);
 
-    for (p, a) in pwb.buses.iter().zip(&aux.buses) {
+    for (p, a) in pwb.buses().iter().zip(aux.buses()) {
         assert_eq!(p.id, a.id);
         assert_eq!(p.name, a.name);
         assert!((p.base_kv - a.base_kv).abs() < 1e-4, "bus {} kV", p.id);
@@ -312,7 +316,7 @@ fn texas2000_june2016_pwb_matches_its_aux_sibling() {
         );
     }
 
-    for (p, a) in pwb.loads.iter().zip(&aux.loads) {
+    for (p, a) in pwb.loads().iter().zip(aux.loads()) {
         assert_eq!(p.bus, a.bus);
         assert!(
             (p.p - a.p).abs() <= 1e-3,
@@ -329,7 +333,7 @@ fn texas2000_june2016_pwb_matches_its_aux_sibling() {
             a.q
         );
     }
-    for (p, a) in pwb.generators.iter().zip(&aux.generators) {
+    for (p, a) in pwb.generators().iter().zip(aux.generators()) {
         assert_eq!(p.bus, a.bus);
         for (x, y, what) in [
             (p.pg, a.pg, "pg"),
@@ -348,7 +352,7 @@ fn texas2000_june2016_pwb_matches_its_aux_sibling() {
             );
         }
     }
-    for (p, a) in pwb.shunts.iter().zip(&aux.shunts) {
+    for (p, a) in pwb.shunts().iter().zip(aux.shunts()) {
         assert_eq!(p.bus, a.bus);
         assert!(
             (p.b - a.b).abs() <= 1e-3,
@@ -360,11 +364,11 @@ fn texas2000_june2016_pwb_matches_its_aux_sibling() {
     }
 
     let mut aux_by_id: BTreeMap<(usize, usize, String), &powerio_tx::Branch> = BTreeMap::default();
-    for (key, b) in branch_keys(&aux.branches).into_iter().zip(&aux.branches) {
+    for (key, b) in branch_keys(aux.branches()).into_iter().zip(aux.branches()) {
         aux_by_id.insert(key, b);
     }
     let mut transformers = 0;
-    for (key, p) in branch_keys(&pwb.branches).into_iter().zip(&pwb.branches) {
+    for (key, p) in branch_keys(pwb.branches()).into_iter().zip(pwb.branches()) {
         let a = aux_by_id
             .remove(&key)
             .unwrap_or_else(|| panic!("{key:?} not in aux"));
@@ -423,12 +427,12 @@ fn activsg2000_v19_pwb_matches_the_published_case() {
     let pwb = read_pwb(&pwb_path);
     let m = parse_file(m_path, None).unwrap().network;
 
-    assert_eq!(pwb.buses.len(), 2000);
-    assert_eq!(pwb.loads.len(), 1350);
-    assert_eq!(pwb.generators.len(), 545);
-    assert_eq!(pwb.shunts.len(), 154);
-    assert_eq!(pwb.branches.len(), 3202);
-    assert_eq!(m.buses.len(), 2000);
+    assert_eq!(pwb.buses().len(), 2000);
+    assert_eq!(pwb.loads().len(), 1350);
+    assert_eq!(pwb.generators().len(), 545);
+    assert_eq!(pwb.shunts().len(), 154);
+    assert_eq!(pwb.branches().len(), 3202);
+    assert_eq!(m.buses().len(), 2000);
 
     // Bus identity by name: the published case renumbered and reordered the
     // buses, so order does not map them, but names are unique in both files
@@ -436,7 +440,7 @@ fn activsg2000_v19_pwb_matches_the_published_case() {
     // file's "MAY 0" mangled by a spreadsheet export). Two buses were
     // re-leveled after the v19 snapshot, pinned below.
     let m_by_name: BTreeMap<String, &powerio_tx::Bus> = m
-        .buses
+        .buses()
         .iter()
         .map(|b| {
             let n = b
@@ -451,7 +455,7 @@ fn activsg2000_v19_pwb_matches_the_published_case() {
     assert_eq!(m_by_name.len(), 2000, "duplicate .m bus names");
     let mut m_id_by_pwb_id = BTreeMap::new();
     let mut kv_deltas = Vec::new();
-    for p in &pwb.buses {
+    for p in pwb.buses() {
         let pn = p.name.as_deref().unwrap_or("").replace('\'', " ");
         let a = m_by_name
             .get(&pn)
@@ -466,7 +470,7 @@ fn activsg2000_v19_pwb_matches_the_published_case() {
     // Loads are unchanged between the snapshots: per bus totals match the
     // .m bus table at its print precision (2 decimals).
     let mut pwb_load: BTreeMap<usize, (f64, f64)> = BTreeMap::default();
-    for l in &pwb.loads {
+    for l in pwb.loads() {
         let e = pwb_load
             .entry(m_id_by_pwb_id[&l.bus.0])
             .or_insert((0.0, 0.0));
@@ -474,7 +478,7 @@ fn activsg2000_v19_pwb_matches_the_published_case() {
         e.1 += l.q;
     }
     let mut m_load: BTreeMap<usize, (f64, f64)> = BTreeMap::default();
-    for l in &m.loads {
+    for l in m.loads() {
         let e = m_load.entry(l.bus.0).or_insert((0.0, 0.0));
         e.0 += l.p;
         e.1 += l.q;
@@ -497,11 +501,11 @@ fn activsg2000_v19_pwb_matches_the_published_case() {
     // endpoint group sorted by impedance. Snapshot deltas are pinned.
     let pair = |a: usize, b: usize| (a.min(b), a.max(b));
     let mut m_by_pair: BTreeMap<(usize, usize), Vec<&powerio_tx::Branch>> = BTreeMap::default();
-    for b in &m.branches {
+    for b in m.branches() {
         m_by_pair.entry(pair(b.from.0, b.to.0)).or_default().push(b);
     }
     let mut p_by_pair: BTreeMap<(usize, usize), Vec<&powerio_tx::Branch>> = BTreeMap::default();
-    for p in &pwb.branches {
+    for p in pwb.branches() {
         p_by_pair
             .entry(pair(m_id_by_pwb_id[&p.from.0], m_id_by_pwb_id[&p.to.0]))
             .or_default()
@@ -579,9 +583,9 @@ fn activsg2000_v19_pwb_matches_the_published_case() {
     // Dispatch and shunt schedules moved between the snapshots; the
     // generator placement still has to line up. The one extra v19 machine
     // sits at bus 5052, the bus the revision re-leveled and rewired.
-    let m_gen_buses: BTreeSet<usize> = m.generators.iter().map(|g| g.bus.0).collect();
+    let m_gen_buses: BTreeSet<usize> = m.generators().iter().map(|g| g.bus.0).collect();
     let pwb_gen_buses: BTreeSet<usize> = pwb
-        .generators
+        .generators()
         .iter()
         .map(|g| m_id_by_pwb_id[&g.bus.0])
         .collect();
@@ -671,18 +675,18 @@ fn rts_gmlc_pwb_matches_its_matpower_and_raw_siblings() {
     let m = parse_file(m_path, None).unwrap().network;
     let raw = parse_file(raw_path, None).unwrap().network;
 
-    assert_eq!(pwb.buses.len(), 73);
-    assert_eq!(m.buses.len(), 73);
-    assert_eq!(raw.buses.len(), 73);
-    assert_eq!(pwb.branches.len(), 120);
-    assert_eq!(m.branches.len(), 120);
+    assert_eq!(pwb.buses().len(), 73);
+    assert_eq!(m.buses().len(), 73);
+    assert_eq!(raw.buses().len(), 73);
+    assert_eq!(pwb.branches().len(), 120);
+    assert_eq!(m.branches().len(), 120);
 
     // Bus identity by number (RTS-96 numbering, no renumbering between
     // formats), voltage level, and the solved state against the .RAW.
-    let m_bus: BTreeMap<usize, &powerio_tx::Bus> = m.buses.iter().map(|b| (b.id.0, b)).collect();
+    let m_bus: BTreeMap<usize, &powerio_tx::Bus> = m.buses().iter().map(|b| (b.id.0, b)).collect();
     let raw_bus: BTreeMap<usize, &powerio_tx::Bus> =
-        raw.buses.iter().map(|b| (b.id.0, b)).collect();
-    for p in &pwb.buses {
+        raw.buses().iter().map(|b| (b.id.0, b)).collect();
+    for p in pwb.buses() {
         let a = m_bus[&p.id.0];
         assert!((p.base_kv - a.base_kv).abs() < 1e-4, "bus {} kV", p.id);
         assert_eq!((p.area, p.zone), (a.area, a.zone), "bus {}", p.id);
@@ -700,11 +704,11 @@ fn rts_gmlc_pwb_matches_its_matpower_and_raw_siblings() {
     // circuit IDs); parallel units zip within a pair sorted by impedance.
     let pair = |a: usize, b: usize| (a.min(b), a.max(b));
     let mut m_by_pair: BTreeMap<(usize, usize), Vec<&powerio_tx::Branch>> = BTreeMap::default();
-    for b in &m.branches {
+    for b in m.branches() {
         m_by_pair.entry(pair(b.from.0, b.to.0)).or_default().push(b);
     }
     let mut p_by_pair: BTreeMap<(usize, usize), Vec<&powerio_tx::Branch>> = BTreeMap::default();
-    for p in &pwb.branches {
+    for p in pwb.branches() {
         p_by_pair.entry(pair(p.from.0, p.to.0)).or_default().push(p);
     }
     assert_eq!(p_by_pair.len(), m_by_pair.len());
@@ -765,8 +769,8 @@ fn rts_gmlc_pwb_matches_its_matpower_and_raw_siblings() {
     assert_eq!(transformers, 15);
 
     // Generator placement against the .m.
-    let m_gen_buses: BTreeSet<usize> = m.generators.iter().map(|g| g.bus.0).collect();
-    let p_gen_buses: BTreeSet<usize> = pwb.generators.iter().map(|g| g.bus.0).collect();
+    let m_gen_buses: BTreeSet<usize> = m.generators().iter().map(|g| g.bus.0).collect();
+    let p_gen_buses: BTreeSet<usize> = pwb.generators().iter().map(|g| g.bus.0).collect();
     assert_eq!(p_gen_buses, m_gen_buses);
 }
 
@@ -778,17 +782,17 @@ fn parse_file_dispatches_pwb_and_converts() {
     let net = parse_file(vendored("ACTIVSg200.pwb"), None)
         .unwrap()
         .network;
-    assert_eq!(net.buses.len(), 200);
-    assert_eq!(net.branches.len(), 246);
+    assert_eq!(net.buses().len(), 200);
+    assert_eq!(net.branches().len(), 246);
     let by_name = parse_file(vendored("ACTIVSg200.pwb"), Some("pwb"))
         .unwrap()
         .network;
-    assert_eq!(by_name.buses.len(), 200);
+    assert_eq!(by_name.buses().len(), 200);
 
     let conv = powerio_tx::write_network(&net, powerio_tx::TargetFormat::Matpower).unwrap();
     let back = parse_str(&conv.text, "matpower").unwrap().network;
-    assert_eq!(back.buses.len(), 200);
-    assert_eq!(back.branches.len(), 246);
+    assert_eq!(back.buses().len(), 200);
+    assert_eq!(back.branches().len(), 246);
 }
 
 /// The published ACTIVSg2000 set's current era export (bus flag bits 6/8)
@@ -812,15 +816,15 @@ fn activsg2000_current_era_pwb_matches_its_aux_sibling() {
     let pwb = read_pwb(&pwb_path);
     let aux = parse_file(aux_path, None).unwrap().network;
 
-    assert_eq!(pwb.buses.len(), 2000);
-    assert_eq!(pwb.branches.len(), 3206);
-    assert_eq!(pwb.buses.len(), aux.buses.len());
-    assert_eq!(pwb.loads.len(), aux.loads.len());
-    assert_eq!(pwb.generators.len(), aux.generators.len());
-    assert_eq!(pwb.shunts.len(), aux.shunts.len());
-    assert_eq!(pwb.branches.len(), aux.branches.len());
+    assert_eq!(pwb.buses().len(), 2000);
+    assert_eq!(pwb.branches().len(), 3206);
+    assert_eq!(pwb.buses().len(), aux.buses().len());
+    assert_eq!(pwb.loads().len(), aux.loads().len());
+    assert_eq!(pwb.generators().len(), aux.generators().len());
+    assert_eq!(pwb.shunts().len(), aux.shunts().len());
+    assert_eq!(pwb.branches().len(), aux.branches().len());
 
-    for (p, a) in pwb.buses.iter().zip(&aux.buses) {
+    for (p, a) in pwb.buses().iter().zip(aux.buses()) {
         assert_eq!(p.id, a.id);
         assert_eq!(p.name, a.name);
         assert!((p.base_kv - a.base_kv).abs() < 1e-4, "bus {} kV", p.id);
@@ -840,7 +844,7 @@ fn activsg2000_current_era_pwb_matches_its_aux_sibling() {
             a.va
         );
     }
-    for (p, a) in pwb.loads.iter().zip(&aux.loads) {
+    for (p, a) in pwb.loads().iter().zip(aux.loads()) {
         assert_eq!(p.bus, a.bus);
         assert!(
             (p.p - a.p).abs() <= 1e-3,
@@ -857,7 +861,7 @@ fn activsg2000_current_era_pwb_matches_its_aux_sibling() {
             a.q
         );
     }
-    for (p, a) in pwb.generators.iter().zip(&aux.generators) {
+    for (p, a) in pwb.generators().iter().zip(aux.generators()) {
         assert_eq!(p.bus, a.bus);
         for (x, y, what) in [
             (p.pg, a.pg, "pg"),
@@ -876,7 +880,7 @@ fn activsg2000_current_era_pwb_matches_its_aux_sibling() {
             );
         }
     }
-    for (p, a) in pwb.shunts.iter().zip(&aux.shunts) {
+    for (p, a) in pwb.shunts().iter().zip(aux.shunts()) {
         assert_eq!(p.bus, a.bus);
         assert!(
             (p.b - a.b).abs() <= 1e-3,
@@ -887,10 +891,10 @@ fn activsg2000_current_era_pwb_matches_its_aux_sibling() {
         );
     }
     let mut aux_by_id: BTreeMap<(usize, usize, String), &powerio_tx::Branch> = BTreeMap::default();
-    for (key, b) in branch_keys(&aux.branches).into_iter().zip(&aux.branches) {
+    for (key, b) in branch_keys(aux.branches()).into_iter().zip(aux.branches()) {
         aux_by_id.insert(key, b);
     }
-    for (key, p) in branch_keys(&pwb.branches).into_iter().zip(&pwb.branches) {
+    for (key, p) in branch_keys(pwb.branches()).into_iter().zip(pwb.branches()) {
         let a = aux_by_id
             .remove(&key)
             .unwrap_or_else(|| panic!("{key:?} not in aux"));
@@ -940,14 +944,14 @@ fn activsg500_pwb_matches_its_aux_sibling() {
     let pwb = read_pwb(&pwb_path);
     let aux = parse_file(aux_path, None).unwrap().network;
 
-    assert_eq!(pwb.buses.len(), 500);
-    assert_eq!(pwb.branches.len(), 599);
-    assert_eq!(pwb.loads.len(), aux.loads.len());
-    assert_eq!(pwb.generators.len(), aux.generators.len());
-    assert_eq!(pwb.shunts.len(), aux.shunts.len());
-    assert_eq!(pwb.branches.len(), aux.branches.len());
+    assert_eq!(pwb.buses().len(), 500);
+    assert_eq!(pwb.branches().len(), 599);
+    assert_eq!(pwb.loads().len(), aux.loads().len());
+    assert_eq!(pwb.generators().len(), aux.generators().len());
+    assert_eq!(pwb.shunts().len(), aux.shunts().len());
+    assert_eq!(pwb.branches().len(), aux.branches().len());
 
-    for (p, a) in pwb.buses.iter().zip(&aux.buses) {
+    for (p, a) in pwb.buses().iter().zip(aux.buses()) {
         assert_eq!(p.id, a.id);
         assert_eq!(p.name, a.name);
         assert_eq!((p.area, p.zone), (a.area, a.zone), "bus {}", p.id);
@@ -967,7 +971,7 @@ fn activsg500_pwb_matches_its_aux_sibling() {
             a.va
         );
     }
-    for (p, a) in pwb.loads.iter().zip(&aux.loads) {
+    for (p, a) in pwb.loads().iter().zip(aux.loads()) {
         assert_eq!(p.bus, a.bus);
         assert!(
             (p.p - a.p).abs() <= 1e-3,
@@ -984,7 +988,7 @@ fn activsg500_pwb_matches_its_aux_sibling() {
             a.q
         );
     }
-    for (p, a) in pwb.generators.iter().zip(&aux.generators) {
+    for (p, a) in pwb.generators().iter().zip(aux.generators()) {
         assert_eq!(p.bus, a.bus);
         for (x, y, what) in [
             (p.pg, a.pg, "pg"),
@@ -1003,7 +1007,7 @@ fn activsg500_pwb_matches_its_aux_sibling() {
             );
         }
     }
-    for (p, a) in pwb.shunts.iter().zip(&aux.shunts) {
+    for (p, a) in pwb.shunts().iter().zip(aux.shunts()) {
         assert_eq!(p.bus, a.bus);
         assert!(
             (p.b - a.b).abs() <= 1e-3,
@@ -1014,10 +1018,10 @@ fn activsg500_pwb_matches_its_aux_sibling() {
         );
     }
     let mut aux_by_id: BTreeMap<(usize, usize, String), &powerio_tx::Branch> = BTreeMap::default();
-    for (key, b) in branch_keys(&aux.branches).into_iter().zip(&aux.branches) {
+    for (key, b) in branch_keys(aux.branches()).into_iter().zip(aux.branches()) {
         aux_by_id.insert(key, b);
     }
-    for (key, p) in branch_keys(&pwb.branches).into_iter().zip(&pwb.branches) {
+    for (key, p) in branch_keys(pwb.branches()).into_iter().zip(pwb.branches()) {
         let a = aux_by_id
             .remove(&key)
             .unwrap_or_else(|| panic!("{key:?} not in aux"));
@@ -1065,13 +1069,13 @@ fn hawaii40_pwb_matches_its_aux_sibling() {
     let pwb = read_pwb(&pwb_path);
     let aux = parse_file(aux_path, None).unwrap().network;
 
-    assert_eq!(pwb.buses.len(), aux.buses.len());
-    assert_eq!(pwb.loads.len(), aux.loads.len());
-    assert_eq!(pwb.generators.len(), aux.generators.len());
-    assert_eq!(pwb.shunts.len(), aux.shunts.len());
-    assert_eq!(pwb.branches.len(), aux.branches.len());
+    assert_eq!(pwb.buses().len(), aux.buses().len());
+    assert_eq!(pwb.loads().len(), aux.loads().len());
+    assert_eq!(pwb.generators().len(), aux.generators().len());
+    assert_eq!(pwb.shunts().len(), aux.shunts().len());
+    assert_eq!(pwb.branches().len(), aux.branches().len());
 
-    for (p, a) in pwb.buses.iter().zip(&aux.buses) {
+    for (p, a) in pwb.buses().iter().zip(aux.buses()) {
         assert_eq!(p.id, a.id);
         assert_eq!(p.name, a.name);
         assert_eq!((p.area, p.zone), (a.area, a.zone), "bus {}", p.id);
@@ -1091,7 +1095,7 @@ fn hawaii40_pwb_matches_its_aux_sibling() {
             a.va
         );
     }
-    for (p, a) in pwb.loads.iter().zip(&aux.loads) {
+    for (p, a) in pwb.loads().iter().zip(aux.loads()) {
         assert_eq!(p.bus, a.bus);
         assert!(
             (p.p - a.p).abs() <= 1e-3,
@@ -1108,7 +1112,7 @@ fn hawaii40_pwb_matches_its_aux_sibling() {
             a.q
         );
     }
-    for (p, a) in pwb.generators.iter().zip(&aux.generators) {
+    for (p, a) in pwb.generators().iter().zip(aux.generators()) {
         assert_eq!(p.bus, a.bus);
         for (x, y, what) in [
             (p.pg, a.pg, "pg"),
@@ -1127,7 +1131,7 @@ fn hawaii40_pwb_matches_its_aux_sibling() {
             );
         }
     }
-    for (p, a) in pwb.shunts.iter().zip(&aux.shunts) {
+    for (p, a) in pwb.shunts().iter().zip(aux.shunts()) {
         assert_eq!(p.bus, a.bus);
         assert!(
             (p.b - a.b).abs() <= 1e-3,
@@ -1138,10 +1142,10 @@ fn hawaii40_pwb_matches_its_aux_sibling() {
         );
     }
     let mut aux_by_id: BTreeMap<(usize, usize, String), &powerio_tx::Branch> = BTreeMap::default();
-    for (key, b) in branch_keys(&aux.branches).into_iter().zip(&aux.branches) {
+    for (key, b) in branch_keys(aux.branches()).into_iter().zip(aux.branches()) {
         aux_by_id.insert(key, b);
     }
-    for (key, p) in branch_keys(&pwb.branches).into_iter().zip(&pwb.branches) {
+    for (key, p) in branch_keys(pwb.branches()).into_iter().zip(pwb.branches()) {
         let a = aux_by_id
             .remove(&key)
             .unwrap_or_else(|| panic!("{key:?} not in aux"));
@@ -1197,24 +1201,24 @@ fn texas7k_pwb_matches_its_aux_and_matpower_siblings() {
     let aux = parse_file(aux_path, None).unwrap().network;
     let m = parse_file(m_path, None).unwrap().network;
 
-    assert_eq!(pwb.buses.len(), 6717);
-    assert_eq!(pwb.loads.len(), 5095);
-    assert_eq!(pwb.generators.len(), 731);
-    assert_eq!(pwb.shunts.len(), 634);
-    assert_eq!(pwb.branches.len(), 9140);
-    assert_eq!(aux.buses.len(), pwb.buses.len());
-    assert_eq!(aux.loads.len(), pwb.loads.len());
-    assert_eq!(aux.generators.len(), pwb.generators.len());
-    assert_eq!(aux.shunts.len(), pwb.shunts.len());
-    assert_eq!(aux.branches.len(), pwb.branches.len());
-    assert_eq!(m.buses.len(), pwb.buses.len());
-    assert_eq!(m.generators.len(), pwb.generators.len());
-    assert_eq!(m.branches.len(), pwb.branches.len());
+    assert_eq!(pwb.buses().len(), 6717);
+    assert_eq!(pwb.loads().len(), 5095);
+    assert_eq!(pwb.generators().len(), 731);
+    assert_eq!(pwb.shunts().len(), 634);
+    assert_eq!(pwb.branches().len(), 9140);
+    assert_eq!(aux.buses().len(), pwb.buses().len());
+    assert_eq!(aux.loads().len(), pwb.loads().len());
+    assert_eq!(aux.generators().len(), pwb.generators().len());
+    assert_eq!(aux.shunts().len(), pwb.shunts().len());
+    assert_eq!(aux.branches().len(), pwb.branches().len());
+    assert_eq!(m.buses().len(), pwb.buses().len());
+    assert_eq!(m.generators().len(), pwb.generators().len());
+    assert_eq!(m.branches().len(), pwb.branches().len());
 
     // Buses: identity and the f64 solved state against the aux; the .m
     // prints vm at 7 and va at 6 decimals.
-    let m_bus: BTreeMap<usize, &powerio_tx::Bus> = m.buses.iter().map(|b| (b.id.0, b)).collect();
-    for (p, a) in pwb.buses.iter().zip(&aux.buses) {
+    let m_bus: BTreeMap<usize, &powerio_tx::Bus> = m.buses().iter().map(|b| (b.id.0, b)).collect();
+    for (p, a) in pwb.buses().iter().zip(aux.buses()) {
         assert_eq!(p.id, a.id);
         assert_eq!(p.name, a.name);
         assert!((p.base_kv - a.base_kv).abs() < 1e-4, "bus {} kV", p.id);
@@ -1234,11 +1238,15 @@ fn texas7k_pwb_matches_its_aux_and_matpower_siblings() {
     // generator bus PV whether or not its machines are in service, while
     // the derived pwb kinds mark only buses with an in service machine.
     // The electrical values above are the bus parity expectation.
-    assert!(pwb.buses.iter().all(|b| b.kind != powerio_tx::BusType::Ref));
+    assert!(
+        pwb.buses()
+            .iter()
+            .all(|b| b.kind != powerio_tx::BusType::Ref)
+    );
 
     // Loads against the aux (f32 storage); per bus totals against the .m
     // bus rows (printed at 2 decimals).
-    for (p, a) in pwb.loads.iter().zip(&aux.loads) {
+    for (p, a) in pwb.loads().iter().zip(aux.loads()) {
         assert_eq!(p.bus, a.bus);
         assert!(
             (p.p - a.p).abs() < 1e-4 * a.p.abs().max(1.0),
@@ -1253,13 +1261,13 @@ fn texas7k_pwb_matches_its_aux_and_matpower_siblings() {
         assert!(p.in_service, "load at {} in service", p.bus);
     }
     let mut pwb_pd: BTreeMap<usize, (f64, f64)> = BTreeMap::default();
-    for l in &pwb.loads {
+    for l in pwb.loads() {
         let e = pwb_pd.entry(l.bus.0).or_default();
         e.0 += l.p;
         e.1 += l.q;
     }
     let mut m_pd: BTreeMap<usize, (f64, f64)> = BTreeMap::default();
-    for l in &m.loads {
+    for l in m.loads() {
         let e = m_pd.entry(l.bus.0).or_default();
         e.0 += l.p;
         e.1 += l.q;
@@ -1283,7 +1291,7 @@ fn texas7k_pwb_matches_its_aux_and_matpower_siblings() {
     // Generators against the aux, including the in service bit: this case
     // is the first with open machines, and the binary's status byte is
     // validated here on all 637 + 94 of them.
-    for (p, a) in pwb.generators.iter().zip(&aux.generators) {
+    for (p, a) in pwb.generators().iter().zip(aux.generators()) {
         assert_eq!(p.bus, a.bus);
         assert_eq!(p.in_service, a.in_service, "gen at {} status", p.bus);
         for (x, y, what) in [
@@ -1303,7 +1311,10 @@ fn texas7k_pwb_matches_its_aux_and_matpower_siblings() {
             );
         }
     }
-    assert_eq!(pwb.generators.iter().filter(|g| !g.in_service).count(), 94);
+    assert_eq!(
+        pwb.generators().iter().filter(|g| !g.in_service).count(),
+        94
+    );
     // Placement, per bus dispatch, and statuses against the .m (printed at
     // 2 decimals; machine order within a bus is not preserved, so per bus
     // aggregates are the expectation).
@@ -1326,8 +1337,8 @@ fn texas7k_pwb_matches_its_aux_and_matpower_siblings() {
         }
         by
     };
-    let pwb_gen = aggregate(&pwb.generators);
-    let m_gen = aggregate(&m.generators);
+    let pwb_gen = aggregate(pwb.generators());
+    let m_gen = aggregate(m.generators());
     assert_eq!(
         pwb_gen.keys().collect::<Vec<_>>(),
         m_gen.keys().collect::<Vec<_>>()
@@ -1350,7 +1361,7 @@ fn texas7k_pwb_matches_its_aux_and_matpower_siblings() {
     }
 
     // Shunts against the aux; per bus totals against the .m.
-    for (p, a) in pwb.shunts.iter().zip(&aux.shunts) {
+    for (p, a) in pwb.shunts().iter().zip(aux.shunts()) {
         assert_eq!(p.bus, a.bus);
         assert!(
             (p.b - a.b).abs() < 1e-4 * a.b.abs().max(1.0),
@@ -1359,11 +1370,11 @@ fn texas7k_pwb_matches_its_aux_and_matpower_siblings() {
         );
     }
     let mut pwb_bs: BTreeMap<usize, f64> = BTreeMap::default();
-    for s in &pwb.shunts {
+    for s in pwb.shunts() {
         *pwb_bs.entry(s.bus.0).or_default() += s.b;
     }
     let mut m_bs: BTreeMap<usize, f64> = BTreeMap::default();
-    for s in &m.shunts {
+    for s in m.shunts() {
         *m_bs.entry(s.bus.0).or_default() += s.b;
     }
     for (bus, b) in &pwb_bs {
@@ -1380,10 +1391,10 @@ fn texas7k_pwb_matches_its_aux_and_matpower_siblings() {
 
     // Branches against the aux by full identity (endpoints + circuit).
     let mut aux_by_id: BTreeMap<(usize, usize, String), &powerio_tx::Branch> = BTreeMap::default();
-    for (key, b) in branch_keys(&aux.branches).into_iter().zip(&aux.branches) {
+    for (key, b) in branch_keys(aux.branches()).into_iter().zip(aux.branches()) {
         aux_by_id.insert(key, b);
     }
-    for (key, p) in branch_keys(&pwb.branches).into_iter().zip(&pwb.branches) {
+    for (key, p) in branch_keys(pwb.branches()).into_iter().zip(pwb.branches()) {
         let a = aux_by_id
             .remove(&key)
             .unwrap_or_else(|| panic!("{key:?} not in aux"));
@@ -1428,12 +1439,12 @@ fn texas7k_pwb_matches_its_aux_and_matpower_siblings() {
     // impedance), every branch in service on both sides.
     let pair = |a: usize, b: usize| (a.min(b), a.max(b));
     let mut m_by_pair: BTreeMap<(usize, usize), Vec<&powerio_tx::Branch>> = BTreeMap::default();
-    for b in &m.branches {
+    for b in m.branches() {
         assert!(b.in_service);
         m_by_pair.entry(pair(b.from.0, b.to.0)).or_default().push(b);
     }
     let mut p_by_pair: BTreeMap<(usize, usize), Vec<&powerio_tx::Branch>> = BTreeMap::default();
-    for p in &pwb.branches {
+    for p in pwb.branches() {
         p_by_pair.entry(pair(p.from.0, p.to.0)).or_default().push(p);
     }
     assert_eq!(p_by_pair.len(), m_by_pair.len());
@@ -1508,19 +1519,19 @@ fn texas7k_resaves_match_the_2022_aux() {
         let pwb = read_pwb(&pwb_path);
         let aux = parse_file(aux_path, None).unwrap().network;
 
-        assert_eq!(pwb.buses.len(), 6717, "{label}");
-        assert_eq!(pwb.loads.len(), aux.loads.len(), "{label}");
-        assert_eq!(pwb.generators.len(), aux.generators.len(), "{label}");
-        assert_eq!(pwb.shunts.len(), aux.shunts.len(), "{label}");
-        assert_eq!(pwb.branches.len(), 9140, "{label}");
-        assert_eq!(aux.branches.len(), 9140, "{label}");
+        assert_eq!(pwb.buses().len(), 6717, "{label}");
+        assert_eq!(pwb.loads().len(), aux.loads().len(), "{label}");
+        assert_eq!(pwb.generators().len(), aux.generators().len(), "{label}");
+        assert_eq!(pwb.shunts().len(), aux.shunts().len(), "{label}");
+        assert_eq!(pwb.branches().len(), 9140, "{label}");
+        assert_eq!(aux.branches().len(), 9140, "{label}");
 
-        for (p, a) in pwb.buses.iter().zip(&aux.buses) {
+        for (p, a) in pwb.buses().iter().zip(aux.buses()) {
             assert_eq!(p.id, a.id, "{label}");
             assert!((p.vm - a.vm).abs() < 1e-6, "{label} bus {} vm", p.id);
             assert!((p.va - a.va).abs() < 1e-4, "{label} bus {} va", p.id);
         }
-        for (p, a) in pwb.loads.iter().zip(&aux.loads) {
+        for (p, a) in pwb.loads().iter().zip(aux.loads()) {
             assert_eq!(p.bus, a.bus, "{label}");
             assert!(
                 (p.p - a.p).abs() < 1e-3 * a.p.abs().max(1.0),
@@ -1528,7 +1539,7 @@ fn texas7k_resaves_match_the_2022_aux() {
                 p.bus
             );
         }
-        for (p, a) in pwb.generators.iter().zip(&aux.generators) {
+        for (p, a) in pwb.generators().iter().zip(aux.generators()) {
             assert_eq!(p.bus, a.bus, "{label}");
             assert_eq!(p.in_service, a.in_service, "{label} gen at {}", p.bus);
             assert!(
@@ -1543,16 +1554,16 @@ fn texas7k_resaves_match_the_2022_aux() {
             );
         }
         assert_eq!(
-            pwb.generators.iter().filter(|g| !g.in_service).count(),
+            pwb.generators().iter().filter(|g| !g.in_service).count(),
             94,
             "{label}"
         );
         let mut aux_by_id: BTreeMap<(usize, usize, String), &powerio_tx::Branch> =
             BTreeMap::default();
-        for (key, b) in branch_keys(&aux.branches).into_iter().zip(&aux.branches) {
+        for (key, b) in branch_keys(aux.branches()).into_iter().zip(aux.branches()) {
             aux_by_id.insert(key, b);
         }
-        for (key, p) in branch_keys(&pwb.branches).into_iter().zip(&pwb.branches) {
+        for (key, p) in branch_keys(pwb.branches()).into_iter().zip(pwb.branches()) {
             let a = aux_by_id
                 .remove(&key)
                 .unwrap_or_else(|| panic!("{label}: {key:?} not in aux"));

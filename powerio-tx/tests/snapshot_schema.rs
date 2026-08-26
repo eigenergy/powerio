@@ -31,14 +31,14 @@ fn golden_v4() -> String {
 fn golden_v4_snapshot_still_parses() {
     let text = golden_v4();
     let net = BalancedNetwork::from_json(&text).expect("the v4 golden must still parse");
-    assert_eq!(net.buses.len(), 30);
-    assert_eq!(net.branches.len(), 41);
-    assert_eq!(net.generators.len(), 6);
-    assert_eq!(net.loads.len(), 20);
-    assert_eq!(net.shunts.len(), 2);
-    assert_eq!(net.base_mva.to_bits(), 100.0_f64.to_bits());
+    assert_eq!(net.buses().len(), 30);
+    assert_eq!(net.branches().len(), 41);
+    assert_eq!(net.generators().len(), 6);
+    assert_eq!(net.loads().len(), 20);
+    assert_eq!(net.shunts().len(), 2);
+    assert_eq!(net.base_mva().to_bits(), 100.0_f64.to_bits());
     assert!(
-        net.generators.iter().all(|g| g.cost.is_some()),
+        net.generators().iter().all(|g| g.cost.is_some()),
         "case30 gen costs must survive the round trip"
     );
 
@@ -57,8 +57,8 @@ fn golden_v4_snapshot_still_parses() {
         "the live serializer must still emit caps as an object"
     );
     let back = BalancedNetwork::from_json(&again).unwrap();
-    assert_eq!(back.buses.len(), net.buses.len());
-    assert_eq!(back.generators.len(), net.generators.len());
+    assert_eq!(back.buses().len(), net.buses().len());
+    assert_eq!(back.generators().len(), net.generators().len());
 }
 
 #[test]
@@ -76,9 +76,9 @@ fn snapshot_ignores_unknown_fields_and_defaults_omitted_caps() {
     let text = serde_json::to_string(&v).unwrap();
     let parsed = BalancedNetwork::from_json(&text)
         .expect("an unknown field and an omitted caps must still parse");
-    assert_eq!(parsed.generators.len(), 1);
+    assert_eq!(parsed.generators().len(), 1);
     assert!(
-        !parsed.generators[0].has_caps(),
+        !parsed.generators()[0].has_caps(),
         "an omitted caps field defaults to the empty set"
     );
 }
@@ -99,17 +99,17 @@ fn small_net() -> BalancedNetwork {
     g.caps = caps;
     let branch = Branch::new(BusId(1), BusId(2), 0.01, 0.1);
     let mut net = BalancedNetwork::new("schema_lock", 100.0);
-    net.buses = vec![bus(1, BusType::Ref), bus(2, BusType::Pq)];
-    net.branches = vec![branch];
-    net.generators = vec![g];
-    net.source_format = SourceFormat::InMemory;
+    *net.buses_mut() = vec![bus(1, BusType::Ref), bus(2, BusType::Pq)];
+    *net.branches_mut() = vec![branch];
+    *net.generators_mut() = vec![g];
+    *net.source_format_mut() = SourceFormat::InMemory;
     net
 }
 
 #[test]
 fn uid_survives_snapshot_roundtrip_and_stays_off_the_wire_when_absent() {
     let mut net = small_net();
-    net.generators[0].uid = Some("gen-a".to_owned());
+    net.generators_mut()[0].uid = Some("gen-a".to_owned());
 
     let v: serde_json::Value = serde_json::from_str(&net.to_json().unwrap()).unwrap();
     assert_eq!(v["generators"][0]["uid"], serde_json::json!("gen-a"));
@@ -118,8 +118,8 @@ fn uid_survives_snapshot_roundtrip_and_stays_off_the_wire_when_absent() {
     assert!(v["buses"][0].get("uid").is_none());
 
     let parsed = BalancedNetwork::from_json(&serde_json::to_string(&v).unwrap()).unwrap();
-    assert_eq!(parsed.generators[0].uid.as_deref(), Some("gen-a"));
-    assert_eq!(parsed.buses[0].uid, None);
+    assert_eq!(parsed.generators()[0].uid.as_deref(), Some("gen-a"));
+    assert_eq!(parsed.buses()[0].uid, None);
 }
 
 #[test]
@@ -136,11 +136,11 @@ fn geo_fields_roundtrip_and_stay_off_the_wire_when_absent() {
     assert!(v["buses"][0].get("location").is_none());
 
     let mut with_geo = net;
-    with_geo.geo = Some(GeoMeta {
+    *with_geo.geo_mut() = Some(GeoMeta {
         space: CoordinateSpace::Geographic { crs: None },
         kind: Some(CoordsKind::Source),
     });
-    with_geo.buses[0].location = Some(Location {
+    with_geo.buses_mut()[0].location = Some(Location {
         x: -80.0,
         y: 35.0,
         kind: None,
@@ -155,6 +155,6 @@ fn geo_fields_roundtrip_and_stay_off_the_wire_when_absent() {
     assert_eq!(v["buses"][0]["location"]["y"], serde_json::json!(35.0));
 
     let parsed = BalancedNetwork::from_json(&serde_json::to_string(&v).unwrap()).unwrap();
-    assert_eq!(parsed.geo, with_geo.geo);
-    assert_eq!(parsed.buses[0].location, with_geo.buses[0].location);
+    assert_eq!(parsed.geo(), with_geo.geo());
+    assert_eq!(parsed.buses()[0].location, with_geo.buses()[0].location);
 }

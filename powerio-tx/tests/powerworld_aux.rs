@@ -114,14 +114,14 @@ fn activsg200_canonical_write_is_idempotent() {
 #[test]
 fn activsg200_maps_the_power_flow_core() {
     let net = parse_file(fixture("ACTIVSg200.aux"), None).unwrap().network;
-    assert_eq!(net.buses.len(), 200);
-    assert_eq!(net.generators.len(), 49);
-    assert_eq!(net.loads.len(), 160);
-    assert_eq!(net.shunts.len(), 4);
-    assert_eq!(net.branches.len(), 246, "180 lines + 66 transformers");
+    assert_eq!(net.buses().len(), 200);
+    assert_eq!(net.generators().len(), 49);
+    assert_eq!(net.loads().len(), 160);
+    assert_eq!(net.shunts().len(), 4);
+    assert_eq!(net.branches().len(), 246, "180 lines + 66 transformers");
     // The line impedances live past the first header line; the gap list's
     // headline failure was all-zero reactance.
-    let nonzero_x = net.branches.iter().filter(|b| b.x != 0.0).count();
+    let nonzero_x = net.branches().iter().filter(|b| b.x != 0.0).count();
     assert!(
         nonzero_x >= 180,
         "expected line reactances to be read, got {nonzero_x} nonzero"

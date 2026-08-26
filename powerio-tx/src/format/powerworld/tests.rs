@@ -172,7 +172,7 @@ fn unmodeled_data_blocks_warn_on_parse() {
     )
     .unwrap();
 
-    assert_eq!(parsed.network.buses.len(), 1);
+    assert_eq!(parsed.network.buses().len(), 1);
     assert!(
         parsed
             .rendered_diagnostics()
@@ -201,14 +201,17 @@ fn bare_bus_latitude_and_longitude_promote_into_the_location() {
         "DATA (Bus, [BusNum, Latitude, Longitude])\n{\n1 34.2 -80.05\n2 34.3 \"\"\n}\n",
     )
     .unwrap();
-    let location = net.buses[0].location.expect("bus 1 location");
+    let location = net.buses()[0].location.expect("bus 1 location");
     assert_eq!((location.x, location.y), (-80.05, 34.2));
-    assert!(!net.buses[0].extras.contains_key("Latitude"));
-    assert!(!net.buses[0].extras.contains_key("Longitude"));
+    assert!(!net.buses()[0].extras.contains_key("Latitude"));
+    assert!(!net.buses()[0].extras.contains_key("Longitude"));
     // Half a pair promotes nothing, so the column stays in extras.
-    assert!(net.buses[1].location.is_none());
+    assert!(net.buses()[1].location.is_none());
     assert_eq!(
-        net.buses[1].extras.get("Latitude").and_then(|v| v.as_str()),
+        net.buses()[1]
+            .extras
+            .get("Latitude")
+            .and_then(|v| v.as_str()),
         Some("34.3")
     );
 }
@@ -224,21 +227,24 @@ fn a_bus_row_promotes_one_coordinate_pair_and_keeps_the_other() {
          {\n1 34.2 -80.05 30.1 -90.5\n2 \"\" -80.10 34.4 -80.20\n}\n",
     )
     .unwrap();
-    let location = net.buses[0].location.expect("bus 1 location");
+    let location = net.buses()[0].location.expect("bus 1 location");
     assert_eq!((location.x, location.y), (-80.05, 34.2));
     assert_eq!(
-        net.buses[0].extras.get("Latitude").and_then(|v| v.as_str()),
+        net.buses()[0]
+            .extras
+            .get("Latitude")
+            .and_then(|v| v.as_str()),
         Some("30.1")
     );
-    assert!(!net.buses[0].extras.contains_key("Latitude:1"));
+    assert!(!net.buses()[0].extras.contains_key("Latitude:1"));
 
     // Half of the substation pair promotes nothing from that pair, so the
     // bus's own pair promotes whole. Mixing the two would place the bus at
     // the substation's longitude.
-    let location = net.buses[1].location.expect("bus 2 location");
+    let location = net.buses()[1].location.expect("bus 2 location");
     assert_eq!((location.x, location.y), (-80.20, 34.4));
     assert_eq!(
-        net.buses[1]
+        net.buses()[1]
             .extras
             .get("Longitude:1")
             .and_then(|v| v.as_str()),
@@ -257,13 +263,13 @@ fn writer_sanitizes_bus_names_that_would_corrupt_a_value() {
         "DATA (Bus, [BusNum, BusName, BusNomVolt])\n{\n1 \"A\" 230\n2 \"B\" 138\n}\n",
     )
     .unwrap();
-    net.buses[0].name = Some("O\"Brien".to_string());
+    net.buses_mut()[0].name = Some("O\"Brien".to_string());
     let conv = write_powerworld(&net);
     let reparsed = parse_powerworld(&conv.text).unwrap();
-    assert_eq!(reparsed.buses.len(), 2);
-    assert_eq!(reparsed.buses[0].base_kv, 230.0);
-    assert_eq!(reparsed.buses[1].base_kv, 138.0);
-    assert!(!reparsed.buses[0].name.as_deref().unwrap().contains('"'));
+    assert_eq!(reparsed.buses().len(), 2);
+    assert_eq!(reparsed.buses()[0].base_kv, 230.0);
+    assert_eq!(reparsed.buses()[1].base_kv, 138.0);
+    assert!(!reparsed.buses()[0].name.as_deref().unwrap().contains('"'));
     assert!(
         conv.rendered_diagnostics()
             .iter()
@@ -286,10 +292,10 @@ fn uppercase_object_sections_read_like_their_canonical_spelling() {
          {\n1 2 \" 1\" \"Closed\" 0.01 0.1\n}\n",
     )
     .unwrap();
-    assert_eq!(net.buses.len(), 2);
-    assert_eq!(net.generators.len(), 1);
-    assert_eq!(net.loads.len(), 1);
-    assert_eq!(net.branches.len(), 1);
+    assert_eq!(net.buses().len(), 2);
+    assert_eq!(net.generators().len(), 1);
+    assert_eq!(net.loads().len(), 1);
+    assert_eq!(net.branches().len(), 1);
 }
 
 #[test]
@@ -302,7 +308,7 @@ fn zip_load_components_sum_and_survive_in_extras() {
          {\n1 \"1 \" \"Closed\" 10.0 2.0 4.0 1.0 6.0 3.0\n}\n",
     )
     .unwrap();
-    let l = &net.loads[0];
+    let l = &net.loads()[0];
     assert_eq!(l.p, 20.0, "S + I + Z MW at nominal voltage");
     assert_eq!(l.q, 6.0);
     assert_eq!(
@@ -325,7 +331,7 @@ fn pure_constant_power_zip_load_keeps_no_component_extras() {
          {\n1 10.0 2.0 0 0 0 0\n}\n",
     )
     .unwrap();
-    let l = &net.loads[0];
+    let l = &net.loads()[0];
     assert_eq!((l.p, l.q), (10.0, 2.0));
     assert!(!l.extras.contains_key("LoadSMW"));
 }
@@ -339,7 +345,7 @@ fn bus_kinds_derive_from_slack_flag_and_generators() {
          {\n1 \"1\" \"Closed\" 100\n2 \"1\" \"Closed\" 50\n3 \"1\" \"Open\" 0\n}\n",
     )
     .unwrap();
-    let kinds: Vec<BusType> = net.buses.iter().map(|b| b.kind).collect();
+    let kinds: Vec<BusType> = net.buses().iter().map(|b| b.kind).collect();
     assert_eq!(
         kinds,
         [BusType::Ref, BusType::Pv, BusType::Pq],
@@ -360,12 +366,12 @@ fn real_export_field_names_map_gen_shunt_and_transformer() {
          {\n1 2 \" 1\" \"Transformer\" \"Closed\" 0.001 0.05 0.002 0.9875 -2.5 250 260 270\n}\n",
     )
     .unwrap();
-    let g = &net.generators[0];
+    let g = &net.generators()[0];
     assert_eq!((g.pg, g.qg, g.vg, g.mbase), (80.5, 12.25, 1.04, 120.0));
-    let sh = &net.shunts[0];
+    let sh = &net.shunts()[0];
     assert_eq!((sh.g, sh.b), (0.0, 25.0));
     assert!(sh.in_service);
-    let br = &net.branches[0];
+    let br = &net.branches()[0];
     assert_eq!((br.r, br.x, br.b), (0.001, 0.05, 0.002));
     assert_eq!((br.tap, br.shift), (0.9875, -2.5));
     assert_eq!((br.rate_a, br.rate_b, br.rate_c), (250.0, 260.0, 270.0));
@@ -395,13 +401,13 @@ fn name_keyed_core_rows_resolve_bus_labels() {
     )
     .unwrap();
 
-    assert_eq!(net.buses[0].id, crate::network::BusId(10));
-    assert_eq!(net.loads[0].bus, crate::network::BusId(20));
-    assert_eq!(net.generators[0].bus, crate::network::BusId(10));
-    assert_eq!(net.shunts[0].bus, crate::network::BusId(20));
-    assert_eq!(net.branches[0].from, crate::network::BusId(10));
-    assert_eq!(net.branches[0].to, crate::network::BusId(20));
-    assert_eq!((net.branches[0].r, net.branches[0].x), (0.01, 0.05));
+    assert_eq!(net.buses()[0].id, crate::network::BusId(10));
+    assert_eq!(net.loads()[0].bus, crate::network::BusId(20));
+    assert_eq!(net.generators()[0].bus, crate::network::BusId(10));
+    assert_eq!(net.shunts()[0].bus, crate::network::BusId(20));
+    assert_eq!(net.branches()[0].from, crate::network::BusId(10));
+    assert_eq!(net.branches()[0].to, crate::network::BusId(20));
+    assert_eq!((net.branches()[0].r, net.branches()[0].x), (0.01, 0.05));
 }
 
 #[test]
@@ -414,10 +420,10 @@ fn blank_numeric_bus_keys_fall_back_to_labels_before_merging() {
     )
     .unwrap();
 
-    assert_eq!(net.loads.len(), 2);
-    assert_eq!(net.loads[0].bus, crate::network::BusId(10));
-    assert_eq!(net.loads[1].bus, crate::network::BusId(20));
-    assert_eq!((net.loads[0].p, net.loads[1].p), (12.0, 34.0));
+    assert_eq!(net.loads().len(), 2);
+    assert_eq!(net.loads()[0].bus, crate::network::BusId(10));
+    assert_eq!(net.loads()[1].bus, crate::network::BusId(20));
+    assert_eq!((net.loads()[0].p, net.loads()[1].p), (12.0, 34.0));
 }
 
 #[test]
@@ -428,7 +434,7 @@ fn branch_identity_survives_aux_to_aux_through_the_typed_model() {
     let net = parse_powerworld(src).unwrap();
     let out = super::write_powerworld(&net);
     let again = parse_powerworld(&out.text).unwrap();
-    let br = &again.branches[0];
+    let br = &again.branches()[0];
     assert_eq!(
         br.extras.get("LineCircuit").and_then(|v| v.as_str()),
         Some(" 2")
@@ -503,7 +509,7 @@ fn a_line_that_states_a_phase_shift_stays_a_line() {
          {\n1 2 \" 1\" \"Line\" \"Closed\" 0.01 0.1 3.5\n}\n";
     let net = parse_powerworld(src).unwrap();
     assert_eq!(
-        net.branches[0]
+        net.branches()[0]
             .extras
             .get("BranchDeviceType")
             .and_then(|v| v.as_str()),
@@ -525,7 +531,7 @@ fn a_line_that_states_a_phase_shift_stays_a_line() {
     // the round trip still lands on `Line`.
     let plain = src.replace(" 3.5\n", " 0\n");
     let net = parse_powerworld(&plain).unwrap();
-    assert!(!net.branches[0].extras.contains_key("BranchDeviceType"));
+    assert!(!net.branches()[0].extras.contains_key("BranchDeviceType"));
     let out = super::write_powerworld(&net);
     let row = out
         .text

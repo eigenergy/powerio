@@ -60,15 +60,15 @@ struct Fingerprint {
 fn fingerprint(net: &BalancedNetwork) -> Fingerprint {
     let r = |x: f64| (x * 1e3).round() as i64;
     Fingerprint {
-        buses: net.buses.len(),
-        branches: net.branches.len(),
-        gens: net.generators.len(),
-        loads: net.loads.len(),
-        shunts: net.shunts.len(),
-        load_p: r(net.loads.iter().map(|l| l.p).sum()),
-        load_q: r(net.loads.iter().map(|l| l.q).sum()),
-        gen_p: r(net.generators.iter().map(|g| g.pg).sum()),
-        base_mva: r(net.base_mva),
+        buses: net.buses().len(),
+        branches: net.branches().len(),
+        gens: net.generators().len(),
+        loads: net.loads().len(),
+        shunts: net.shunts().len(),
+        load_p: r(net.loads().iter().map(|l| l.p).sum()),
+        load_q: r(net.loads().iter().map(|l| l.q).sum()),
+        gen_p: r(net.generators().iter().map(|g| g.pg).sum()),
+        base_mva: r(net.base_mva()),
     }
 }
 
@@ -141,20 +141,20 @@ fn round_value(x: f64) -> i64 {
 
 fn value_fingerprint(net: &BalancedNetwork, target: TargetFormat) -> ValueFingerprint {
     ValueFingerprint {
-        base_mva: round_value(net.base_mva),
+        base_mva: round_value(net.base_mva()),
         buses: bus_values(net),
         // Sum only in-service injections: the by-bus aggregation cannot carry a
         // per-element service flag, so counting out-of-service p/q would both
         // mask a writer that flips in_service and fail a writer that correctly
         // drops out-of-service injections.
         loads_by_bus: bus_injections(
-            net.loads
+            net.loads()
                 .iter()
                 .filter(|load| load.in_service)
                 .map(|load| (load.bus.0, load.p, load.q)),
         ),
         shunts_by_bus: bus_injections(
-            net.shunts
+            net.shunts()
                 .iter()
                 .filter(|shunt| shunt.in_service)
                 .map(|shunt| (shunt.bus.0, shunt.g, shunt.b)),
@@ -166,7 +166,7 @@ fn value_fingerprint(net: &BalancedNetwork, target: TargetFormat) -> ValueFinger
 
 fn bus_values(net: &BalancedNetwork) -> Vec<BusValue> {
     let mut buses: Vec<_> = net
-        .buses
+        .buses()
         .iter()
         .map(|bus| BusValue {
             id: bus.id.0,
@@ -207,7 +207,7 @@ where
 fn branch_values(net: &BalancedNetwork, target: TargetFormat) -> Vec<BranchValue> {
     let mut branch_counts = BTreeMap::<(usize, usize), usize>::new();
     let mut branches: Vec<_> = net
-        .branches
+        .branches()
         .iter()
         .map(|branch| {
             let key = (branch.from.0, branch.to.0);
@@ -241,7 +241,7 @@ fn branch_values(net: &BalancedNetwork, target: TargetFormat) -> Vec<BranchValue
 fn generator_values(net: &BalancedNetwork, target: TargetFormat) -> Vec<GeneratorValue> {
     let mut generator_counts = BTreeMap::<usize, usize>::new();
     let mut generators: Vec<_> = net
-        .generators
+        .generators()
         .iter()
         .map(|generator| {
             let occurrence = *generator_counts
@@ -477,6 +477,6 @@ fn egret_fixtures_round_trip_byte_exact() {
     // dc_branch maps to an hvdc line on read.
     let hv =
         parse_egret_json(&std::fs::read_to_string(data("egret/dcline3.json")).unwrap()).unwrap();
-    assert_eq!(hv.hvdc.len(), 1, "dc_branch should map to one hvdc line");
-    assert_eq!(hv.buses.len(), 3);
+    assert_eq!(hv.hvdc().len(), 1, "dc_branch should map to one hvdc line");
+    assert_eq!(hv.buses().len(), 3);
 }

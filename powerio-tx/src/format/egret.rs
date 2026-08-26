@@ -17,8 +17,8 @@ use super::{Conversion, finish, jnum, warn_extra_branch_rating_sets};
 use crate::diagnostics::Diagnostics;
 use crate::diagnostics::codes::EMIT_EGRET as F;
 use crate::network::{
-    BalancedNetwork, Branch, Bus, BusId, BusType, Extras, GenCost, Generator, Hvdc, Load,
-    LoadVoltageModel, Shunt, SourceFormat,
+    BalancedNetwork, BalancedNetworkTables, Branch, Bus, BusId, BusType, Extras, GenCost,
+    Generator, Hvdc, Load, LoadVoltageModel, Shunt, SourceFormat,
 };
 use crate::{Error, Result};
 
@@ -29,31 +29,31 @@ pub fn write_egret_json(net: &BalancedNetwork) -> Conversion {
     let mut warnings = Diagnostics::new();
 
     let mut bus = Map::new();
-    for b in &net.buses {
+    for b in net.buses() {
         bus.insert(b.id.to_string(), bus_obj(b));
     }
 
     // egret keys each load/shunt; use a global running suffix (load_1, load_2, …)
     // so several loads on one bus stay distinct.
     let mut load = Map::new();
-    for (i, l) in net.loads.iter().enumerate() {
+    for (i, l) in net.loads().iter().enumerate() {
         load.insert(format!("load_{}", i + 1), load_obj(l));
     }
     let mut shunt = Map::new();
-    for (i, s) in net.shunts.iter().enumerate() {
+    for (i, s) in net.shunts().iter().enumerate() {
         shunt.insert(format!("shunt_{}", i + 1), shunt_obj(s));
     }
 
     let mut branch = Map::new();
-    for (i, br) in net.branches.iter().enumerate() {
+    for (i, br) in net.branches().iter().enumerate() {
         branch.insert((i + 1).to_string(), branch_obj(br));
     }
 
     let mut generator = Map::new();
-    for (i, g) in net.generators.iter().enumerate() {
+    for (i, g) in net.generators().iter().enumerate() {
         generator.insert((i + 1).to_string(), gen_obj(g, &mut warnings));
     }
-    let with_caps = net.generators.iter().filter(|g| g.has_caps()).count();
+    let with_caps = net.generators().iter().filter(|g| g.has_caps()).count();
     if with_caps > 0 {
         warnings.push(&F.field_dropped, format!(
             "generator capability/ramp columns dropped for {with_caps} generator(s): the egret generator records written here carry none"
@@ -61,7 +61,7 @@ pub fn write_egret_json(net: &BalancedNetwork) -> Conversion {
     }
 
     let mut dc_branch = Map::new();
-    for (i, dc) in net.hvdc.iter().enumerate() {
+    for (i, dc) in net.hvdc().iter().enumerate() {
         dc_branch.insert((i + 1).to_string(), dc_branch_obj(dc, &mut warnings));
     }
 
@@ -76,7 +76,7 @@ pub fn write_egret_json(net: &BalancedNetwork) -> Conversion {
     elements.insert("dc_branch".into(), Value::Object(dc_branch));
 
     let mut system = Map::new();
-    system.insert("baseMVA".into(), jnum(net.base_mva));
+    system.insert("baseMVA".into(), jnum(net.base_mva()));
     match reference_bus(net) {
         Some(r) => {
             system.insert("reference_bus".into(), Value::String(r.id.to_string()));
@@ -97,17 +97,17 @@ pub fn write_egret_json(net: &BalancedNetwork) -> Conversion {
 
 fn warn_egret_writer_losses(net: &BalancedNetwork, warnings: &mut Diagnostics) {
     super::warn_dropped_areas(&F, "egret JSON", net, warnings);
-    if !net.transformers_3w.is_empty() {
+    if !net.transformers_3w().is_empty() {
         warnings.push(
             &F.record_dropped,
             format!(
                 "{} 3-winding transformer(s) dropped: the egret writer emits no 3-winding record",
-                net.transformers_3w.len()
+                net.transformers_3w().len()
             ),
         );
     }
     if net
-        .buses
+        .buses()
         .iter()
         .any(|b| b.evhi.is_some() || b.evlo.is_some())
     {
@@ -116,17 +116,17 @@ fn warn_egret_writer_losses(net: &BalancedNetwork, warnings: &mut Diagnostics) {
             "emergency voltage band(s) (EVHI/EVLO) dropped: this writer carries one voltage band",
         );
     }
-    if !net.storage.is_empty() {
+    if !net.storage().is_empty() {
         warnings.push(
             &F.record_dropped,
             format!(
                 "{} storage unit(s) dropped: egret storage mapping not implemented",
-                net.storage.len()
+                net.storage().len()
             ),
         );
     }
     let voltage_loads = net
-        .loads
+        .loads()
         .iter()
         .filter(|l| {
             l.voltage_model
@@ -140,7 +140,7 @@ fn warn_egret_writer_losses(net: &BalancedNetwork, warnings: &mut Diagnostics) {
         ));
     }
     let terminal_charging = net
-        .branches
+        .branches()
         .iter()
         .filter(|b| b.has_non_matpower_charging())
         .count();
@@ -150,7 +150,7 @@ fn warn_egret_writer_losses(net: &BalancedNetwork, warnings: &mut Diagnostics) {
         ));
     }
     let current_ratings = net
-        .branches
+        .branches()
         .iter()
         .filter(|b| b.current_ratings.is_some())
         .count();
@@ -160,7 +160,11 @@ fn warn_egret_writer_losses(net: &BalancedNetwork, warnings: &mut Diagnostics) {
         ));
     }
     warn_extra_branch_rating_sets(&F, "egret JSON", net, warnings);
-    let branch_solutions = net.branches.iter().filter(|b| b.solution.is_some()).count();
+    let branch_solutions = net
+        .branches()
+        .iter()
+        .filter(|b| b.solution.is_some())
+        .count();
     if branch_solutions > 0 {
         warnings.push(&F.field_dropped, format!(
             "{branch_solutions} branch solution value set(s) dropped: egret branch result fields are not written"
@@ -169,7 +173,7 @@ fn warn_egret_writer_losses(net: &BalancedNetwork, warnings: &mut Diagnostics) {
 }
 
 fn reference_bus(net: &BalancedNetwork) -> Option<&Bus> {
-    let mut refs = net.buses.iter().filter(|b| b.kind == BusType::Ref);
+    let mut refs = net.buses().iter().filter(|b| b.kind == BusType::Ref);
     let first = refs.next()?;
     if refs.next().is_some() {
         None // not a single, unambiguous reference bus
@@ -421,7 +425,7 @@ pub(crate) fn parse_egret_source(source: &str, name_hint: Option<&str>) -> Resul
         }
     }
 
-    let net = BalancedNetwork {
+    let net = BalancedNetwork::from_tables(BalancedNetworkTables {
         name,
         base_mva,
         base_frequency: crate::network::DEFAULT_BASE_FREQUENCY,
@@ -438,7 +442,7 @@ pub(crate) fn parse_egret_source(source: &str, name_hint: Option<&str>) -> Resul
         areas: Vec::new(),
         solver: None,
         source_format: SourceFormat::EgretJson,
-    };
+    });
     net.check_references(FMT)?;
     Ok(net)
 }
@@ -854,14 +858,18 @@ mod tests {
     #[test]
     fn reads_buses_loads_branches_and_reference() {
         let net = parse_egret_json(&fixture("case30.json")).unwrap();
-        assert!((net.base_mva - 100.0).abs() < 1e-9);
-        assert_eq!(net.buses.len(), 30);
-        assert_eq!(net.loads.len(), 20);
-        assert_eq!(net.shunts.len(), 2);
-        assert_eq!(net.branches.len(), 41);
-        assert_eq!(net.generators.len(), 6);
+        assert!((net.base_mva() - 100.0).abs() < 1e-9);
+        assert_eq!(net.buses().len(), 30);
+        assert_eq!(net.loads().len(), 20);
+        assert_eq!(net.shunts().len(), 2);
+        assert_eq!(net.branches().len(), 41);
+        assert_eq!(net.generators().len(), 6);
         // Exactly one reference bus, parsed from matpower_bustype.
-        let refs = net.buses.iter().filter(|b| b.kind == BusType::Ref).count();
+        let refs = net
+            .buses()
+            .iter()
+            .filter(|b| b.kind == BusType::Ref)
+            .count();
         assert_eq!(refs, 1);
     }
 
@@ -869,10 +877,10 @@ mod tests {
     fn inverts_transformer_and_polynomial_cost() {
         let net = parse_egret_json(&fixture("case14.json")).unwrap();
         // case14 has tap-changing transformers (raw tap != 0 ⇒ is_transformer).
-        assert!(net.branches.iter().any(Branch::is_transformer));
+        assert!(net.branches().iter().any(Branch::is_transformer));
         // Generators carry a polynomial cost, highest order first.
         let cost = net
-            .generators
+            .generators()
             .iter()
             .find_map(|g| g.cost.as_ref())
             .expect("a generator cost");
@@ -883,8 +891,8 @@ mod tests {
     #[test]
     fn maps_dc_branch_to_hvdc() {
         let net = parse_egret_json(&fixture("dcline3.json")).unwrap();
-        assert_eq!(net.hvdc.len(), 1);
-        let dc = &net.hvdc[0];
+        assert_eq!(net.hvdc().len(), 1);
+        let dc = &net.hvdc()[0];
         assert_eq!((dc.from, dc.to), (BusId(1), BusId(3)));
         assert!((dc.loss1 - 0.1).abs() < 1e-12); // loss_factor → loss1
     }
@@ -967,22 +975,22 @@ mod tests {
             "system":{"baseMVA":100.0,"reference_bus":"1"}}"#;
         let net = parse_egret_json(doc).unwrap();
         assert_eq!(
-            net.buses[0].extras.get("vendor_ext"),
+            net.buses()[0].extras.get("vendor_ext"),
             Some(&Value::from(42))
         );
-        assert!(!net.buses[0].extras.contains_key("vm"));
+        assert!(!net.buses()[0].extras.contains_key("vm"));
         assert_eq!(
-            net.loads[0].extras.get("owner"),
+            net.loads()[0].extras.get("owner"),
             Some(&Value::String("co-op".into()))
         );
         assert!(
-            net.shunts[0].extras.is_empty(),
+            net.shunts()[0].extras.is_empty(),
             "{:?}",
-            net.shunts[0].extras
+            net.shunts()[0].extras
         );
-        assert_eq!(net.branches[0].extras.get("pf"), Some(&Value::from(12.5)));
+        assert_eq!(net.branches()[0].extras.get("pf"), Some(&Value::from(12.5)));
         assert_eq!(
-            net.hvdc[0].extras.get("rating_long_term"),
+            net.hvdc()[0].extras.get("rating_long_term"),
             Some(&Value::from(30.0))
         );
     }

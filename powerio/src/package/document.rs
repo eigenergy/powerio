@@ -869,23 +869,23 @@ fn materialize_study_commit_options(
 /// references resolve against these values.
 pub fn ensure_payload_uids(net: &mut BalancedNetwork) {
     macro_rules! fill {
-        ($table:ident) => {
-            for (row, element) in net.$table.iter_mut().enumerate() {
+        ($table:ident, $table_mut:ident) => {
+            for (row, element) in net.$table_mut().iter_mut().enumerate() {
                 if element.uid.is_none() {
                     element.uid = Some(format!(concat!(stringify!($table), ":{}"), row));
                 }
             }
         };
     }
-    fill!(buses);
-    fill!(loads);
-    fill!(shunts);
-    fill!(branches);
-    fill!(switches);
-    fill!(generators);
-    fill!(storage);
-    fill!(hvdc);
-    fill!(transformers_3w);
+    fill!(buses, buses_mut);
+    fill!(loads, loads_mut);
+    fill!(shunts, shunts_mut);
+    fill!(branches, branches_mut);
+    fill!(switches, switches_mut);
+    fill!(generators, generators_mut);
+    fill!(storage, storage_mut);
+    fill!(hvdc, hvdc_mut);
+    fill!(transformers_3w, transformers_3w_mut);
 }
 
 const SANE_VALIDATION_CODES: [&DiagnosticInfo; 10] = [
@@ -988,7 +988,7 @@ fn sane_validate_balanced(
     }
 
     let bus_index: HashMap<usize, usize> = net
-        .buses
+        .buses()
         .iter()
         .enumerate()
         .map(|(idx, b)| (b.id.0, idx))
@@ -1037,7 +1037,7 @@ fn sane_validate_balanced(
         ($table:ident) => {
             table_uid_duplicates(
                 stringify!($table),
-                net.$table.iter().map(|e| e.uid.as_deref()),
+                net.$table().iter().map(|e| e.uid.as_deref()),
                 &mut identity,
             )
         };
@@ -1136,7 +1136,7 @@ fn balanced_value_finding_path(
         // finding cannot be pinned to one array index, so skip the precise path
         // rather than misattribute it (see the ambiguity test).
         let mut matches = net
-            .generators
+            .generators()
             .iter()
             .enumerate()
             .filter(|(_, g)| {
@@ -1201,7 +1201,7 @@ fn sane_validate_multiconductor(
         &mut terminal_maps,
     );
 
-    for (i, obj) in net.untyped.iter().enumerate() {
+    for (i, obj) in net.untyped().iter().enumerate() {
         untyped.push(
             StructuredDiagnostic::of(
                 &powerio_dist::diagnostics::codes::VALIDATE_MULTI_UNTYPED_OBJECT,
@@ -1214,7 +1214,7 @@ fn sane_validate_multiconductor(
         );
     }
 
-    if net.sources.is_empty() {
+    if net.sources().is_empty() {
         sources.push(StructuredDiagnostic::of(
             &powerio_dist::diagnostics::codes::VALIDATE_MULTI_NO_VOLTAGE_SOURCE,
             "multiconductor package has no voltage source",
@@ -1245,7 +1245,7 @@ fn validate_multiconductor_lines(
     structure: &mut Vec<StructuredDiagnostic>,
     terminal_maps: &mut Vec<StructuredDiagnostic>,
 ) {
-    for (i, line) in net.lines.iter().enumerate() {
+    for (i, line) in net.lines().iter().enumerate() {
         check_bus_ref(
             &line.bus_from,
             &format!("line {} from bus", line.name),
@@ -1261,7 +1261,7 @@ fn validate_multiconductor_lines(
             structure,
         );
         if !net
-            .linecodes
+            .linecodes()
             .iter()
             .any(|c| c.name.eq_ignore_ascii_case(&line.linecode))
         {
@@ -1302,7 +1302,7 @@ fn validate_multiconductor_switches(
     structure: &mut Vec<StructuredDiagnostic>,
     terminal_maps: &mut Vec<StructuredDiagnostic>,
 ) {
-    for (i, sw) in net.switches.iter().enumerate() {
+    for (i, sw) in net.switches().iter().enumerate() {
         check_bus_ref(
             &sw.bus_from,
             &format!("switch {} from bus", sw.name),
@@ -1343,7 +1343,7 @@ fn validate_multiconductor_transformers(
     structure: &mut Vec<StructuredDiagnostic>,
     terminal_maps: &mut Vec<StructuredDiagnostic>,
 ) {
-    for (i, tx) in net.transformers.iter().enumerate() {
+    for (i, tx) in net.transformers().iter().enumerate() {
         for (j, winding) in tx.windings.iter().enumerate() {
             check_bus_ref(
                 &winding.bus,
@@ -1379,7 +1379,7 @@ fn validate_multiconductor_injections(
         structure,
         terminal_maps,
     };
-    for (i, load) in net.loads.iter().enumerate() {
+    for (i, load) in net.loads().iter().enumerate() {
         check_one_bus_element(
             &load.bus,
             &load.terminal_map,
@@ -1388,7 +1388,7 @@ fn validate_multiconductor_injections(
             &mut ctx,
         );
     }
-    for (i, generator) in net.generators.iter().enumerate() {
+    for (i, generator) in net.generators().iter().enumerate() {
         check_one_bus_element(
             &generator.bus,
             &generator.terminal_map,
@@ -1397,7 +1397,7 @@ fn validate_multiconductor_injections(
             &mut ctx,
         );
     }
-    for (i, shunt) in net.shunts.iter().enumerate() {
+    for (i, shunt) in net.shunts().iter().enumerate() {
         check_one_bus_element(
             &shunt.bus,
             &shunt.terminal_map,
@@ -1406,7 +1406,7 @@ fn validate_multiconductor_injections(
             &mut ctx,
         );
     }
-    for (i, capacitor) in net.capacitors.iter().enumerate() {
+    for (i, capacitor) in net.capacitors().iter().enumerate() {
         check_one_bus_element(
             &capacitor.bus,
             &capacitor.terminal_map,
@@ -1415,7 +1415,7 @@ fn validate_multiconductor_injections(
             &mut ctx,
         );
     }
-    for (i, source) in net.sources.iter().enumerate() {
+    for (i, source) in net.sources().iter().enumerate() {
         check_one_bus_element(
             &source.bus,
             &source.terminal_map,
@@ -1464,7 +1464,7 @@ fn multiconductor_bus_index(
     let mut ids = BTreeSet::new();
     let mut terminals = BTreeMap::new();
     let mut first_seen = BTreeMap::<String, String>::new();
-    for (i, bus) in net.buses.iter().enumerate() {
+    for (i, bus) in net.buses().iter().enumerate() {
         let key = bus.id.to_ascii_lowercase();
         if let Some(first) = first_seen.insert(key.clone(), bus.id.clone()) {
             diagnostics.push(
@@ -1536,7 +1536,7 @@ fn check_terminal_map(
 
 /// Canonical format name for a balanced source format.
 fn balanced_origin(net: &BalancedNetwork) -> Origin {
-    match net.source_format {
+    match net.source_format() {
         SourceFormat::InMemory => Origin::InMemory,
         SourceFormat::Normalized => Origin::Derived {
             parent_package_id: None,
@@ -1545,12 +1545,12 @@ fn balanced_origin(net: &BalancedNetwork) -> Origin {
         },
         SourceFormat::Gridfm | SourceFormat::PypsaCsv => Origin::Folder {
             path: String::new(),
-            format: net.source_format.name().to_owned(),
+            format: net.source_format().name().to_owned(),
             file_hashes: BTreeMap::new(),
         },
         SourceFormat::PowerWorldBinary => Origin::BinaryFile {
             path: String::new(),
-            format: net.source_format.name().to_owned(),
+            format: net.source_format().name().to_owned(),
             hash: None,
             decoded_sections: Vec::new(),
         },
@@ -1564,14 +1564,14 @@ fn balanced_origin(net: &BalancedNetwork) -> Origin {
 }
 
 fn balanced_sources(net: &BalancedNetwork) -> Vec<SourceDescriptor> {
-    let Some(kind) = balanced_source_kind(net.source_format) else {
+    let Some(kind) = balanced_source_kind(net.source_format()) else {
         return Vec::new();
     };
     vec![SourceDescriptor {
         id: "src0".to_owned(),
         kind: kind.to_owned(),
         path: None,
-        format: Some(net.source_format.name().to_owned()),
+        format: Some(net.source_format().name().to_owned()),
         hash: None,
     }]
 }
@@ -1587,20 +1587,20 @@ fn balanced_source_kind(f: SourceFormat) -> Option<&'static str> {
 
 fn balanced_summary(net: &BalancedNetwork) -> ObjectSummary {
     let mut elements = BTreeMap::new();
-    elements.insert("buses".to_owned(), net.buses.len() as u64);
-    elements.insert("loads".to_owned(), net.loads.len() as u64);
-    elements.insert("shunts".to_owned(), net.shunts.len() as u64);
-    elements.insert("branches".to_owned(), net.branches.len() as u64);
-    elements.insert("generators".to_owned(), net.generators.len() as u64);
-    elements.insert("storage".to_owned(), net.storage.len() as u64);
-    elements.insert("hvdc".to_owned(), net.hvdc.len() as u64);
+    elements.insert("buses".to_owned(), net.buses().len() as u64);
+    elements.insert("loads".to_owned(), net.loads().len() as u64);
+    elements.insert("shunts".to_owned(), net.shunts().len() as u64);
+    elements.insert("branches".to_owned(), net.branches().len() as u64);
+    elements.insert("generators".to_owned(), net.generators().len() as u64);
+    elements.insert("storage".to_owned(), net.storage().len() as u64);
+    elements.insert("hvdc".to_owned(), net.hvdc().len() as u64);
     elements.insert(
         "transformers_3w".to_owned(),
-        net.transformers_3w.len() as u64,
+        net.transformers_3w().len() as u64,
     );
 
     let reference_buses: Vec<String> = net
-        .buses
+        .buses()
         .iter()
         .filter(|b| b.kind == crate::BusType::Ref)
         .map(|b| b.id.0.to_string())
@@ -1615,7 +1615,7 @@ fn balanced_summary(net: &BalancedNetwork) -> ObjectSummary {
         units: Some(ObjectUnits {
             power: Some("MW/MVAr".to_owned()),
             angle: Some("degrees".to_owned()),
-            base_mva: Some(net.base_mva),
+            base_mva: Some(net.base_mva()),
         }),
     }
 }
@@ -1625,11 +1625,11 @@ fn balanced_source_maps(net: &BalancedNetwork, source_id: Option<&str>) -> Vec<S
         return Vec::new();
     };
     let mut entries = Vec::new();
-    push_balanced_network_maps(&mut entries, source_id, net.source_format);
-    push_balanced_bus_maps(&mut entries, source_id, net.buses.len());
+    push_balanced_network_maps(&mut entries, source_id, net.source_format());
+    push_balanced_bus_maps(&mut entries, source_id, net.buses().len());
     push_balanced_injection_maps(&mut entries, source_id, net);
     push_balanced_branch_maps(&mut entries, source_id, net);
-    push_balanced_generator_maps(&mut entries, source_id, net.generators.len());
+    push_balanced_generator_maps(&mut entries, source_id, net.generators().len());
     entries
 }
 
@@ -1677,14 +1677,14 @@ fn push_balanced_injection_maps(
     source_id: &str,
     net: &BalancedNetwork,
 ) {
-    if net.source_format == SourceFormat::Matpower {
+    if net.source_format() == SourceFormat::Matpower {
         push_matpower_injection_maps(entries, source_id, net);
     } else {
         push_balanced_record_maps(
             entries,
             source_id,
             "loads",
-            net.loads.len(),
+            net.loads().len(),
             "load",
             &["bus", "p", "q", "in_service"],
             MappingKind::Exact,
@@ -1693,7 +1693,7 @@ fn push_balanced_injection_maps(
             entries,
             source_id,
             "shunts",
-            net.shunts.len(),
+            net.shunts().len(),
             "shunt",
             &["bus", "g", "b", "in_service"],
             MappingKind::Exact,
@@ -1706,7 +1706,7 @@ fn push_balanced_branch_maps(
     source_id: &str,
     net: &BalancedNetwork,
 ) {
-    for (i, branch) in net.branches.iter().enumerate() {
+    for (i, branch) in net.branches().iter().enumerate() {
         push_balanced_record_map(
             entries,
             source_id,
@@ -1787,7 +1787,7 @@ fn push_matpower_injection_maps(
         entries,
         source_id,
         "loads",
-        net.loads.len(),
+        net.loads().len(),
         "bus",
         &["bus", "p", "q", "in_service"],
         MappingKind::Split,
@@ -1796,7 +1796,7 @@ fn push_matpower_injection_maps(
         entries,
         source_id,
         "shunts",
-        net.shunts.len(),
+        net.shunts().len(),
         "bus",
         &["bus", "g", "b", "in_service"],
         MappingKind::Split,
@@ -1866,16 +1866,16 @@ fn push_balanced_map(
 
 fn multiconductor_summary(net: &MulticonductorNetwork) -> ObjectSummary {
     let mut elements = BTreeMap::new();
-    elements.insert("buses".to_owned(), net.buses.len() as u64);
-    elements.insert("linecodes".to_owned(), net.linecodes.len() as u64);
-    elements.insert("lines".to_owned(), net.lines.len() as u64);
-    elements.insert("switches".to_owned(), net.switches.len() as u64);
-    elements.insert("transformers".to_owned(), net.transformers.len() as u64);
-    elements.insert("loads".to_owned(), net.loads.len() as u64);
-    elements.insert("generators".to_owned(), net.generators.len() as u64);
-    elements.insert("shunts".to_owned(), net.shunts.len() as u64);
-    elements.insert("capacitors".to_owned(), net.capacitors.len() as u64);
-    elements.insert("voltage_sources".to_owned(), net.sources.len() as u64);
+    elements.insert("buses".to_owned(), net.buses().len() as u64);
+    elements.insert("linecodes".to_owned(), net.linecodes().len() as u64);
+    elements.insert("lines".to_owned(), net.lines().len() as u64);
+    elements.insert("switches".to_owned(), net.switches().len() as u64);
+    elements.insert("transformers".to_owned(), net.transformers().len() as u64);
+    elements.insert("loads".to_owned(), net.loads().len() as u64);
+    elements.insert("generators".to_owned(), net.generators().len() as u64);
+    elements.insert("shunts".to_owned(), net.shunts().len() as u64);
+    elements.insert("capacitors".to_owned(), net.capacitors().len() as u64);
+    elements.insert("voltage_sources".to_owned(), net.sources().len() as u64);
 
     ObjectSummary {
         elements,
@@ -1889,12 +1889,12 @@ fn multiconductor_summary(net: &MulticonductorNetwork) -> ObjectSummary {
 }
 
 fn multiconductor_sources(net: &MulticonductorNetwork) -> Vec<SourceDescriptor> {
-    match net.source_format {
+    match net.source_format() {
         Some(sf) => vec![SourceDescriptor {
             id: "src0".to_owned(),
             kind: "file".to_owned(),
             path: None,
-            format: Some(dist_format_name(sf).to_owned()),
+            format: Some(dist_format_name(*sf).to_owned()),
             hash: None,
         }],
         None => Vec::new(),
@@ -1906,10 +1906,10 @@ fn dist_format_name(f: DistSourceFormat) -> &'static str {
 }
 
 fn multiconductor_origin(net: &MulticonductorNetwork) -> Origin {
-    match net.source_format {
+    match net.source_format() {
         Some(sf) => Origin::File {
             path: String::new(),
-            format: dist_format_name(sf).to_owned(),
+            format: dist_format_name(*sf).to_owned(),
             hash: None,
             retained_source: false,
         },
@@ -1952,7 +1952,7 @@ fn push_lowered_bus_maps(
     source_id: &str,
     input: &MulticonductorNetwork,
 ) {
-    for (idx, bus) in input.buses.iter().enumerate() {
+    for (idx, bus) in input.buses().iter().enumerate() {
         for (field, mapping_kind) in [
             ("id", MappingKind::Synthetic),
             ("kind", MappingKind::Lowered),
@@ -1996,7 +1996,7 @@ fn push_lowered_branch_maps(
     input: &MulticonductorNetwork,
     balanced: &BalancedNetwork,
 ) {
-    for (idx, branch) in balanced.branches.iter().enumerate() {
+    for (idx, branch) in balanced.branches().iter().enumerate() {
         let record = "multiconductor_line";
         for (field, mapping_kind) in [
             ("from", MappingKind::Lowered),
@@ -2020,7 +2020,7 @@ fn push_lowered_branch_maps(
             );
         }
         let has_rating = input
-            .lines
+            .lines()
             .get(idx)
             .and_then(|line| input.linecode(&line.linecode))
             .is_some_and(|code| code.i_max.is_some() || code.s_max.is_some());
@@ -2060,7 +2060,7 @@ fn push_lowered_load_maps(
     input: &MulticonductorNetwork,
     balanced: &BalancedNetwork,
 ) {
-    for idx in 0..balanced.loads.len().min(input.loads.len()) {
+    for idx in 0..balanced.loads().len().min(input.loads().len()) {
         for (field, mapping_kind) in [
             ("bus", MappingKind::Lowered),
             ("p", MappingKind::Aggregated),
@@ -2085,7 +2085,7 @@ fn push_lowered_shunt_maps(
     input: &MulticonductorNetwork,
     balanced: &BalancedNetwork,
 ) {
-    for idx in 0..balanced.shunts.len().min(input.shunts.len()) {
+    for idx in 0..balanced.shunts().len().min(input.shunts().len()) {
         for (field, mapping_kind) in [
             ("bus", MappingKind::Lowered),
             ("g", MappingKind::Aggregated),
@@ -2110,8 +2110,8 @@ fn push_lowered_generator_maps(
     input: &MulticonductorNetwork,
     balanced: &BalancedNetwork,
 ) {
-    for idx in 0..balanced.generators.len().min(input.generators.len()) {
-        let generator = &input.generators[idx];
+    for idx in 0..balanced.generators().len().min(input.generators().len()) {
+        let generator = &input.generators()[idx];
         for (field, mapping_kind) in [
             ("bus", MappingKind::Lowered),
             ("pg", MappingKind::Aggregated),
@@ -2181,7 +2181,7 @@ fn multiconductor_source_maps(
         return Vec::new();
     };
     let mut entries = Vec::new();
-    for (element, fields) in &net.defaulted {
+    for (element, fields) in net.defaulted() {
         for field in fields {
             entries.push(SourceMapEntry {
                 element_path: format!("/model/multiconductor_network/{element}#{field}"),

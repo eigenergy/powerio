@@ -114,7 +114,7 @@ pub fn apply_substation_points(net: &mut BalancedNetwork, layer: &GeoLayer) -> G
     let mut report = GeoApplyReport::default();
     // Substation number -> bus rows, built once for the whole pass.
     let mut rows_by_substation: HashMap<String, Vec<usize>> = HashMap::new();
-    for (row, bus) in net.buses.iter().enumerate() {
+    for (row, bus) in net.buses().iter().enumerate() {
         if let Some(substation) = bus_substation(bus) {
             rows_by_substation.entry(substation).or_default().push(row);
         }
@@ -136,7 +136,7 @@ pub fn apply_substation_points(net: &mut BalancedNetwork, layer: &GeoLayer) -> G
             continue;
         };
         for &row in rows {
-            let bus = &mut net.buses[row];
+            let bus = &mut net.buses_mut()[row];
             if bus.location.is_some() {
                 replaced += 1;
             }
@@ -154,8 +154,8 @@ pub fn apply_substation_points(net: &mut BalancedNetwork, layer: &GeoLayer) -> G
                 .notes
                 .push(format!("replaced {replaced} existing bus location(s)"));
         }
-        super::layer::note_space_change(&mut report, net.geo.as_ref(), &layer.space);
-        net.geo = Some(GeoMeta {
+        super::layer::note_space_change(&mut report, net.geo().as_ref(), &layer.space);
+        *net.geo_mut() = Some(GeoMeta {
             space: layer.space.clone(),
             kind: layer.kind,
         });

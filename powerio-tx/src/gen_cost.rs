@@ -113,9 +113,13 @@ impl BalancedNetwork {
         policy: MissingGenCostPolicy,
     ) -> Result<GenCostPolicyReport> {
         let patched = self.apply_gen_cost_patches(patches)?;
-        let missing_before = self.generators.iter().filter(|g| g.cost.is_none()).count();
+        let missing_before = self
+            .generators()
+            .iter()
+            .filter(|g| g.cost.is_none())
+            .count();
         let missing_in_service_before = self
-            .generators
+            .generators()
             .iter()
             .filter(|g| g.in_service && g.cost.is_none())
             .count();
@@ -125,7 +129,7 @@ impl BalancedNetwork {
             MissingGenCostPolicy::Preserve => {}
             MissingGenCostPolicy::Require => {
                 if let Some((idx, _)) = self
-                    .generators
+                    .generators()
                     .iter()
                     .enumerate()
                     .find(|(_, g)| g.in_service && g.cost.is_none())
@@ -141,7 +145,7 @@ impl BalancedNetwork {
                 shutdown,
             } => {
                 let cost = MissingGenCostPolicy::fill_cost(c2, c1, c0, startup, shutdown)?;
-                for generator in &mut self.generators {
+                for generator in self.generators_mut() {
                     if generator.cost.is_none() {
                         generator.cost = Some(cost.clone());
                         synthesized += 1;
@@ -168,13 +172,13 @@ impl BalancedNetwork {
                     reason: format!("duplicate gen_index {}", patch.gen_index),
                 });
             }
-            let Some(generator) = self.generators.get_mut(patch.gen_index) else {
+            let Some(generator) = self.generators_mut().get_mut(patch.gen_index) else {
                 return Err(Error::InvalidGenCostPatch {
                     row,
                     reason: format!(
                         "gen_index {} out of range for {} generator(s)",
                         patch.gen_index,
-                        self.generators.len()
+                        self.generators().len()
                     ),
                 });
             };

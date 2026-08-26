@@ -512,7 +512,7 @@ fn first_readable(bucket: &Bucket) -> Option<(String, Net)> {
             }
             Domain::Distribution => {
                 let mut net = multiconductor(&m.path)?;
-                net.source_format = None;
+                *net.source_format_mut() = None;
                 Net::Dist(net)
             }
         };

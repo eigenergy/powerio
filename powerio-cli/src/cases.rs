@@ -238,8 +238,8 @@ fn lower_to_balanced(
     path: &Path,
 ) -> anyhow::Result<LoadedCase> {
     let mut net = parsed.network;
-    if net.name.is_none() {
-        net.name = stem.map(str::to_owned);
+    if net.name().is_none() {
+        *net.name_mut() = stem.map(str::to_owned);
     }
     let lowered =
         lower_multiconductor_to_balanced(&net, MulticonductorToBalancedOptions::default())
@@ -359,7 +359,7 @@ mod tests {
         let path = tmp.path().join("myfeeder.json");
         std::fs::write(&path, doc.to_string()).unwrap();
         let loaded = load_network(&path).unwrap();
-        assert_eq!(loaded.network.name, "myfeeder");
+        assert_eq!(loaded.network.name(), "myfeeder");
     }
 
     #[test]

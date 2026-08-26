@@ -994,7 +994,7 @@ fn distribution_payloads(format: DistributionFormat) -> Result<Vec<DistributionP
         .map(|(label, rel, native_format)| {
             let mut base = dist_parse_file(data(rel), native_format.token)
                 .map_err(|err| format!("parse {rel}: {err}"))?;
-            base.network.source_format = None;
+            *base.network.source_format_mut() = None;
             let rendered = powerio_dist::write_network(&base.network, format.target);
             let parsed = parse_distribution_text(&rendered.text, format)
                 .map_err(|err| format!("read generated {rel} as {}: {err}", format.name))?;

@@ -173,10 +173,10 @@ mod tests {
     #[test]
     fn narrowing_moves_the_value_and_records_without_allocation() {
         let network = small_balanced();
-        let bus_ptr = network.buses.as_ptr();
+        let bus_ptr = network.buses().as_ptr();
         let module = PioModule::new(PioValue::from(network));
         let typed: PioModule<BalancedNetwork> = try_into_typed(module).unwrap();
-        assert_eq!(typed.value().buses.as_ptr(), bus_ptr);
+        assert_eq!(typed.value().buses().as_ptr(), bus_ptr);
     }
 
     fn small_balanced() -> BalancedNetwork {

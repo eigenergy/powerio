@@ -37,7 +37,7 @@ fn small_network() -> BalancedNetwork {
         vec![bus(10, BusType::Ref), bus(30, BusType::Pq)],
         vec![branch(10, 30, 0.2)],
     );
-    network.generators.push(generator(10, 1.0, 2.0));
+    network.generators_mut().push(generator(10, 1.0, 2.0));
     network
 }
 
@@ -81,8 +81,8 @@ fn two_island_network() -> BalancedNetwork {
         ],
         vec![branch(10, 30, 0.2), branch(50, 70, 0.3)],
     );
-    network.generators.push(generator(10, 1.0, 2.0));
-    network.generators.push(generator(50, 4.0, 6.0));
+    network.generators_mut().push(generator(10, 1.0, 2.0));
+    network.generators_mut().push(generator(50, 4.0, 6.0));
     network
 }
 
@@ -94,8 +94,8 @@ fn instance_is_complete_and_indexed() {
 
     assert_eq!(problem.name, "case9");
     assert_eq!(problem.n_buses, 9);
-    assert_eq!(problem.n_source_generators, net.generators.len());
-    assert_eq!(problem.n_source_branches, net.branches.len());
+    assert_eq!(problem.n_source_generators, net.generators().len());
+    assert_eq!(problem.n_source_branches, net.branches().len());
     assert_eq!(problem.n_generators(), 3);
     assert_eq!(problem.bus_ids.len(), problem.n_buses);
     assert_eq!(problem.p_d.len(), problem.n_buses);
@@ -122,10 +122,10 @@ fn instance_is_complete_and_indexed() {
 #[test]
 fn several_generators_at_one_bus_keep_separate_costs_and_aggregate() {
     let mut net = case9();
-    let mut extra = net.generators[0].clone();
+    let mut extra = net.generators()[0].clone();
     extra.uid = Some("extra-generator".to_owned());
     extra.cost = Some(GenCost::new(2, 0.0, 0.0, vec![7.0, 3.0, 1.0]));
-    net.generators.push(extra);
+    net.generators_mut().push(extra);
 
     let view = IndexedNetwork::new(&net);
     let problem = build_dc_opf_instance(&view, &DcOpfOptions::default()).expect("build");
@@ -164,8 +164,8 @@ fn several_generators_at_one_bus_keep_separate_costs_and_aggregate() {
 #[test]
 fn an_unrated_branch_takes_a_synthesized_limit_on_request() {
     let mut net = small_network();
-    net.branches[0].angmin = -30.0;
-    net.branches[0].angmax = 30.0;
+    net.branches_mut()[0].angmin = -30.0;
+    net.branches_mut()[0].angmax = 30.0;
     let view = IndexedNetwork::new(&net);
     let options = DcOpfOptions {
         synthesize_unrated_limits: true,
@@ -210,8 +210,8 @@ fn an_unrated_branch_takes_a_synthesized_limit_on_request() {
     // Bounds that run past the half turn state no window, so the bound falls
     // back to the voltage ceilings alone.
     let mut wide = net.clone();
-    wide.branches[0].angmin = -360.0;
-    wide.branches[0].angmax = 360.0;
+    wide.branches_mut()[0].angmin = -360.0;
+    wide.branches_mut()[0].angmax = 360.0;
     let wide = build_dc_opf_instance(&IndexedNetwork::new(&wide), &options).expect("wide bounds");
     assert_close(wide.branches.f_max[0], 1.1 * 2.2 / 0.2);
 
@@ -219,13 +219,13 @@ fn an_unrated_branch_takes_a_synthesized_limit_on_request() {
     // reaches the same bound. Reading it as a zero wide window would give a
     // zero limit, which the instance reads back as unlimited.
     let mut zero = net.clone();
-    zero.branches[0].angmin = 0.0;
-    zero.branches[0].angmax = 0.0;
+    zero.branches_mut()[0].angmin = 0.0;
+    zero.branches_mut()[0].angmax = 0.0;
     let zero = build_dc_opf_instance(&IndexedNetwork::new(&zero), &options).expect("zero bounds");
     assert_close(zero.branches.f_max[0], 1.1 * 2.2 / 0.2);
 
     let mut rated = net.clone();
-    rated.branches[0].rate_a = 50.0;
+    rated.branches_mut()[0].rate_a = 50.0;
     let kept = build_dc_opf_instance(&IndexedNetwork::new(&rated), &options).expect("rated branch");
     assert_close(kept.branches.f_max[0], 0.5);
 }
@@ -309,7 +309,7 @@ fn cost_constant_term_is_kept() {
 #[test]
 fn bus_shunt_conductance_reaches_the_instance() {
     let mut net = small_network();
-    net.shunts
+    net.shunts_mut()
         .push(powerio_tx::network::Shunt::new(BusId(30), 5.0, 0.0));
     let view = IndexedNetwork::new(&net);
     let base = view.base_mva();
@@ -355,8 +355,8 @@ fn a_non_finite_susceptance_is_refused_under_every_convention() {
     ];
     for (x, tap) in cases {
         let mut net = small_network();
-        net.branches[0].x = x;
-        net.branches[0].tap = tap;
+        net.branches_mut()[0].x = x;
+        net.branches_mut()[0].tap = tap;
         let view = IndexedNetwork::new(&net);
         for convention in [
             DcConvention::ReactanceOnly,
@@ -394,8 +394,8 @@ fn a_non_finite_susceptance_is_refused_under_every_convention() {
 #[test]
 fn matpower_convention_applies_tap_and_phase_shift() {
     let mut net = small_network();
-    net.branches[0].tap = 1.25;
-    net.branches[0].shift = 10.0;
+    net.branches_mut()[0].tap = 1.25;
+    net.branches_mut()[0].shift = 10.0;
     let view = IndexedNetwork::new(&net);
     let series = build_dc_opf_instance(&view, &DcOpfOptions::default()).expect("series");
     let matpower = build_dc_opf_instance(
@@ -423,9 +423,11 @@ fn matpower_convention_applies_tap_and_phase_shift() {
 #[test]
 fn phase_shift_and_shunt_complete_the_dc_balance_and_flow_equations() {
     let mut net = small_network();
-    net.branches[0].shift = 10.0;
-    net.loads.push(powerio_tx::Load::new(BusId(30), 20.0, 0.0));
-    net.shunts.push(powerio_tx::Shunt::new(BusId(30), 5.0, 0.0));
+    net.branches_mut()[0].shift = 10.0;
+    net.loads_mut()
+        .push(powerio_tx::Load::new(BusId(30), 20.0, 0.0));
+    net.shunts_mut()
+        .push(powerio_tx::Shunt::new(BusId(30), 5.0, 0.0));
     let problem = build_dc_opf_instance(
         &IndexedNetwork::new(&net),
         &DcOpfOptions {
@@ -462,8 +464,8 @@ fn phase_shift_and_shunt_complete_the_dc_balance_and_flow_equations() {
 #[test]
 fn source_maps_exclude_out_of_service_elements() {
     let mut net = case9();
-    net.generators[1].in_service = false;
-    net.branches[2].in_service = false;
+    net.generators_mut()[1].in_service = false;
+    net.branches_mut()[2].in_service = false;
     let view = IndexedNetwork::new(&net);
     let problem = build_dc_opf_instance(&view, &DcOpfOptions::default()).expect("build");
 
@@ -478,7 +480,7 @@ fn source_maps_exclude_out_of_service_elements() {
 #[test]
 fn missing_and_unsupported_costs_are_distinct() {
     let mut missing = small_network();
-    missing.generators[0].cost = None;
+    missing.generators_mut()[0].cost = None;
     let error = build_dc_opf_instance(&IndexedNetwork::new(&missing), &DcOpfOptions::default())
         .expect_err("missing cost");
     assert!(matches!(
@@ -487,7 +489,7 @@ fn missing_and_unsupported_costs_are_distinct() {
     ));
 
     let mut piecewise = small_network();
-    piecewise.generators[0].cost = Some(GenCost::with_ncost(
+    piecewise.generators_mut()[0].cost = Some(GenCost::with_ncost(
         1,
         0.0,
         0.0,
@@ -509,7 +511,7 @@ fn missing_and_unsupported_costs_are_distinct() {
 #[test]
 fn zero_reactance_can_be_skipped_or_rejected() {
     let mut net = small_network();
-    net.branches.insert(0, branch(10, 30, 0.0));
+    net.branches_mut().insert(0, branch(10, 30, 0.0));
     let view = IndexedNetwork::new(&net);
     let skipped = build_dc_opf_instance(&view, &DcOpfOptions::default()).expect("skip");
     assert_eq!(skipped.branches.skipped_zero_impedance, vec![0]);
@@ -534,7 +536,7 @@ fn a_reactance_the_instance_cannot_divide_by_reads_as_zero_impedance() {
     // #292, the rule the matrix builders apply: `x = 1e-300` gives a finite
     // `b = 1e300` that annihilates every real branch sharing a bus with it.
     let mut net = small_network();
-    net.branches.insert(0, branch(10, 30, 1e-300));
+    net.branches_mut().insert(0, branch(10, 30, 1e-300));
     let view = IndexedNetwork::new(&net);
     let skipped = build_dc_opf_instance(&view, &DcOpfOptions::default()).expect("skip");
     assert_eq!(skipped.branches.skipped_zero_impedance, vec![0]);
@@ -557,7 +559,7 @@ fn a_reactance_the_instance_cannot_divide_by_reads_as_zero_impedance() {
 fn a_tap_the_instance_cannot_divide_by_is_refused() {
     for tap in [1e-200, f64::NAN, f64::INFINITY] {
         let mut net = small_network();
-        net.branches[0].tap = tap;
+        net.branches_mut()[0].tap = tap;
         let error = build_dc_opf_instance(
             &IndexedNetwork::new(&net),
             &DcOpfOptions {
@@ -582,7 +584,7 @@ fn a_cost_rounding_artifact_reaches_neither_space() {
     // a linear curve. Generator space used to keep it, so the same case read
     // two ways gave two curves.
     let mut net = small_network();
-    net.generators[0].cost = Some(GenCost::new(2, 0.0, 0.0, vec![1e-17, 2.0, 5.0]));
+    net.generators_mut()[0].cost = Some(GenCost::new(2, 0.0, 0.0, vec![1e-17, 2.0, 5.0]));
     let problem =
         build_dc_opf_instance(&IndexedNetwork::new(&net), &DcOpfOptions::default()).expect("build");
     assert_eq!(problem.generators.q[0].to_bits(), 0.0_f64.to_bits());
@@ -638,7 +640,7 @@ fn a_flat_row_and_a_convex_row_still_build() {
 #[test]
 fn zero_base_mva_is_rejected() {
     let mut net = small_network();
-    net.base_mva = 0.0;
+    *net.base_mva_mut() = 0.0;
     let error = build_dc_opf_instance(&IndexedNetwork::new(&net), &DcOpfOptions::default())
         .expect_err("zero base");
     assert!(matches!(
@@ -749,9 +751,10 @@ mod matrix_tests {
         use std::collections::BTreeSet;
 
         let mut net = parse_matpower_file("../tests/data/case14.m").expect("parse case14");
-        net.branches[0].shift = 10.0;
-        net.shunts
-            .push(powerio_tx::Shunt::new(net.buses[1].id, 5.0, 0.0));
+        net.branches_mut()[0].shift = 10.0;
+        let shunt_bus = net.buses()[1].id;
+        net.shunts_mut()
+            .push(powerio_tx::Shunt::new(shunt_bus, 5.0, 0.0));
         let problem = build_dc_opf_instance(
             &IndexedNetwork::new(&net),
             &DcOpfOptions {

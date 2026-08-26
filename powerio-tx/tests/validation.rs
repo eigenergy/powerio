@@ -124,7 +124,7 @@ fn psse_reads_switched_shunt_as_fixed() {
     let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../tests/data/psse/case14.raw");
     let net = parse_psse(&std::fs::read_to_string(path).unwrap()).unwrap();
     let s = net
-        .shunts
+        .shunts()
         .iter()
         .find(|s| s.bus == BusId(9))
         .expect("switched shunt at bus 9 read as a fixed shunt");
@@ -155,17 +155,17 @@ Transformer (BusNumFrom, BusNumTo, Circuit, Rxfbase, Xxfbase, Tapxfbase)\n{\n\
 1 2 \"1\" 0.0015 0.0525 1.0375\n\
 }\n";
     let net = parse_powerworld(aux).unwrap();
-    assert_eq!(net.buses.len(), 2);
-    assert!((net.buses[0].base_kv - 138.0).abs() < 1e-9);
-    assert!((net.buses[0].vm - 1.02).abs() < 1e-9);
-    assert!((net.buses[0].va - -3.5).abs() < 1e-9);
-    assert_eq!(net.loads.len(), 1);
-    assert!((net.loads[0].p - 12.5).abs() < 1e-9);
-    assert!((net.loads[0].q - 3.25).abs() < 1e-9);
-    assert_eq!(net.generators.len(), 1);
-    assert!((net.generators[0].pg - 50.0).abs() < 1e-9);
-    assert_eq!(net.branches.len(), 1);
-    let br = &net.branches[0];
+    assert_eq!(net.buses().len(), 2);
+    assert!((net.buses()[0].base_kv - 138.0).abs() < 1e-9);
+    assert!((net.buses()[0].vm - 1.02).abs() < 1e-9);
+    assert!((net.buses()[0].va - -3.5).abs() < 1e-9);
+    assert_eq!(net.loads().len(), 1);
+    assert!((net.loads()[0].p - 12.5).abs() < 1e-9);
+    assert!((net.loads()[0].q - 3.25).abs() < 1e-9);
+    assert_eq!(net.generators().len(), 1);
+    assert!((net.generators()[0].pg - 50.0).abs() < 1e-9);
+    assert_eq!(net.branches().len(), 1);
+    let br = &net.branches()[0];
     // Real 2022 exports print the same impedance in the Branch and
     // Transformer sections (the Branch row already carries the corrected
     // value); the tap exists only on the Transformer section.
@@ -186,11 +186,11 @@ DATA (Branch, [BusNum, BusNum:1, LineCircuit, BranchDeviceType, LineR, LineX, Li
 1 2 \"1\" \"Transformer\" 0.001 0.05 1.0625\n\
 }\n";
     let net = parse_powerworld(aux).unwrap();
-    assert_eq!(net.branches.len(), 1);
+    assert_eq!(net.branches().len(), 1);
     assert!(
-        (net.branches[0].tap - 1.0625).abs() < 1e-9,
+        (net.branches()[0].tap - 1.0625).abs() < 1e-9,
         "bare LineTap read: {}",
-        net.branches[0].tap
+        net.branches()[0].tap
     );
 }
 
@@ -203,9 +203,9 @@ fn powerworld_status_vocabulary_is_closed() {
         )
     };
     // Case insensitive on the documented vocabulary.
-    assert!(!parse_powerworld(&base("open")).unwrap().loads[0].in_service);
-    assert!(!parse_powerworld(&base("OPEN")).unwrap().loads[0].in_service);
-    assert!(parse_powerworld(&base("closed")).unwrap().loads[0].in_service);
+    assert!(!parse_powerworld(&base("open")).unwrap().loads()[0].in_service);
+    assert!(!parse_powerworld(&base("OPEN")).unwrap().loads()[0].in_service);
+    assert!(parse_powerworld(&base("closed")).unwrap().loads()[0].in_service);
     // An unknown token must not silently mean energized.
     assert_eq!(
         parse_powerworld(&base("Disconnected"))
@@ -238,7 +238,7 @@ fn powerworld_reads_name_keyed_exports() {
 DATA (Bus, [BusName_NomVolt, BusNum, BusName])\n{\n\"A_138.0\" 1 \"A\"\n}\n\
 DATA (Load, [BusName_NomVolt, LoadID, LoadSMW])\n{\n\"A_138.0\" \"1\" 5.0\n}\n";
     let net = parse_powerworld(aux).unwrap();
-    assert_eq!(net.loads[0].bus.0, 1);
+    assert_eq!(net.loads()[0].bus.0, 1);
 
     let unknown = aux.replace("A_138.0\" \"1\" 5.0", "B_138.0\" \"1\" 5.0");
     let err = parse_powerworld(&unknown).unwrap_err();
@@ -275,7 +275,7 @@ fn case9_with_gencost_removed_reports_the_zero_objective_at_normalize() {
     let costless = format!("{}{}", &source[..start], &source[end..]);
 
     let parsed = parse_str(&costless, "matpower").unwrap();
-    assert!(parsed.network.generators.iter().all(|g| g.cost.is_none()));
+    assert!(parsed.network.generators().iter().all(|g| g.cost.is_none()));
     // The parse stays silent — a conversion leg must not count a property of
     // the case — and the solver-ready copy announces the zero objective.
     assert!(

@@ -151,7 +151,14 @@ fn main() {
         }
         let len = file_len(p);
 
-        let (parsed, s) = measure(|| powerio::parse_file(&path, None));
+        let (parsed, s) = measure(|| {
+            powerio_core::Source::open(&path)
+                .map_err(|e| e.to_string())
+                .and_then(|source| {
+                    powerio::format::parse(source).map_err(|e| e.to_string())
+                })
+                .map(powerio_core::PioModule::into_value)
+        });
         let parsed = match parsed {
             Ok(v) => v,
             Err(e) => {
@@ -161,7 +168,7 @@ fn main() {
         };
         row(name, "parse_matpower", len, s);
 
-        let net = parsed.network;
+        let net = parsed;
 
         let (indexed, s) = measure(|| powerio::indexed::IndexedNetwork::new(&net));
         row(name, "indexed_build", len, s);
@@ -227,7 +234,17 @@ fn main() {
         } else {
             file_len(p)
         };
-        let (r, s) = measure(|| powerio::parse_file(&path, from));
+        let (r, s) = measure(|| {
+            let mut source = powerio_core::Source::open(&path).map_err(|e| e.to_string())?;
+            if let Some(token) = from {
+                source = source.with_format(
+                    powerio_core::FormatId::new(token).map_err(|e| e.to_string())?,
+                );
+            }
+            powerio::format::parse(source)
+                .map(powerio_core::PioModule::into_value)
+                .map_err(|e| e.to_string())
+        });
         match r {
             Ok(_) => row(name, "parse", len, s),
             Err(e) => eprintln!("parse failed {name}: {e}"),
@@ -264,7 +281,18 @@ fn main() {
             continue;
         }
         let len = file_len(p);
-        let (r, s) = measure(|| powerio_dist::convert::parse_file(&path, from));
+        let (r, s) = measure(|| {
+            let mut source = powerio_core::Source::open(&path).map_err(|e| e.to_string())?;
+            if let Some(token) = from {
+                let token = if token == "bmopf" { "bmopf-json" } else { token };
+                source = source.with_format(
+                    powerio_core::FormatId::new(token).map_err(|e| e.to_string())?,
+                );
+            }
+            powerio_dist::parse(source)
+                .map(powerio_core::PioModule::into_value)
+                .map_err(|e| e.to_string())
+        });
         match r {
             Ok(net) => {
                 row(name, "dist_parse", len, s);

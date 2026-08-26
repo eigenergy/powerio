@@ -176,8 +176,8 @@ fn service_status_stays_out_of_the_bucketing_key() {
     // comparison exists to catch.
     let base = parse_matpower_file(data("case9.m")).unwrap();
     let mut switched = base.clone();
-    switched.branches[0].in_service = false;
-    switched.generators[0].in_service = false;
+    switched.branches_mut()[0].in_service = false;
+    switched.generators_mut()[0].in_service = false;
     assert_eq!(
         Fingerprint::of(&base).primary(),
         Fingerprint::of(&switched).primary()

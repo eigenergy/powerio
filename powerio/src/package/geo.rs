@@ -20,7 +20,7 @@ use powerio_dist::MulticonductorNetwork;
 #[must_use]
 pub fn dist_geo_layer(net: &MulticonductorNetwork) -> GeoLayer {
     let mut features = Vec::new();
-    for (row, bus) in net.buses.iter().enumerate() {
+    for (row, bus) in net.buses().iter().enumerate() {
         let Some(location) = bus.location else {
             continue;
         };
@@ -38,7 +38,7 @@ pub fn dist_geo_layer(net: &MulticonductorNetwork) -> GeoLayer {
             kind: location.kind.and_then(kind_to_balanced),
         });
     }
-    for (row, line) in net.lines.iter().enumerate() {
+    for (row, line) in net.lines().iter().enumerate() {
         let Some(route) = &line.route else {
             continue;
         };
@@ -58,7 +58,7 @@ pub fn dist_geo_layer(net: &MulticonductorNetwork) -> GeoLayer {
             kind: None,
         });
     }
-    let meta = mirror::<_, crate::GeoMeta>(net.geo.as_ref());
+    let meta = mirror::<_, crate::GeoMeta>(net.geo().as_ref());
     GeoLayer {
         space: meta
             .as_ref()
@@ -81,7 +81,7 @@ pub fn apply_dist_geo_layer(net: &mut MulticonductorNetwork, layer: &GeoLayer) -
     };
     let report = apply_geo_features(layer, &mut target);
     if report.matched_buses > 0 || report.matched_branches > 0 {
-        net.geo = mirror(Some(&crate::GeoMeta {
+        *net.geo_mut() = mirror(Some(&crate::GeoMeta {
             space: layer.space.clone(),
             kind: layer.kind,
         }));
@@ -123,7 +123,7 @@ impl GeoApplyTarget for DistApply<'_> {
                     .key
                     .index
                     .and_then(|index| index.checked_sub(1))
-                    .filter(|row| *row < self.net.lines.len())
+                    .filter(|row| *row < self.net.lines().len())
             })
             .or_else(|| {
                 let from = feature.from.as_deref()?;
@@ -133,7 +133,7 @@ impl GeoApplyTarget for DistApply<'_> {
     }
 
     fn place_bus(&mut self, row: usize, point: [f64; 2], kind: Option<crate::CoordsKind>) {
-        self.net.buses[row].location = Some(powerio_dist::DistLocation {
+        self.net.buses_mut()[row].location = Some(powerio_dist::DistLocation {
             x: point[0],
             y: point[1],
             kind: kind.and_then(kind_to_dist),
@@ -142,7 +142,7 @@ impl GeoApplyTarget for DistApply<'_> {
 
     fn place_branch(&mut self, row: usize, path: &[[f64; 2]], kind: Option<crate::CoordsKind>) {
         let kind = kind.and_then(kind_to_dist);
-        self.net.lines[row].route = Some(
+        self.net.lines_mut()[row].route = Some(
             path.iter()
                 .map(|[x, y]| powerio_dist::DistLocation { x: *x, y: *y, kind })
                 .collect(),
@@ -159,12 +159,12 @@ impl GeoApplyTarget for DistApply<'_> {
     fn unlocated_counts(&self) -> (usize, usize) {
         (
             self.net
-                .buses
+                .buses()
                 .iter()
                 .filter(|bus| bus.location.is_none())
                 .count(),
             self.net
-                .lines
+                .lines()
                 .iter()
                 .filter(|line| line.route.is_none())
                 .count(),
@@ -180,7 +180,7 @@ struct DistBusIndex {
 impl DistBusIndex {
     fn new(net: &MulticonductorNetwork) -> Self {
         let mut rows = HashMap::new();
-        for (row, bus) in net.buses.iter().enumerate() {
+        for (row, bus) in net.buses().iter().enumerate() {
             rows.insert(format!("buses:{row}"), row);
             rows.entry(bus.id.to_ascii_lowercase()).or_insert(row);
         }
@@ -199,7 +199,7 @@ impl DistLineIndex {
     fn new(net: &MulticonductorNetwork) -> Self {
         let mut rows = HashMap::new();
         let mut pairs = HashMap::new();
-        for (row, line) in net.lines.iter().enumerate() {
+        for (row, line) in net.lines().iter().enumerate() {
             rows.insert(format!("lines:{row}"), row);
             rows.entry(line.name.to_ascii_lowercase()).or_insert(row);
             pairs

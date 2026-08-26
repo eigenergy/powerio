@@ -309,7 +309,7 @@ pub fn build_dc_opf_instance(
     let mut skipped_zero_impedance = Vec::new();
     let mut p_shift = vec![0.0; n_buses];
     // Dense bus order is the position order of `network().buses`.
-    let buses = &case.network().buses;
+    let buses = &case.network().buses();
 
     for (source_row, branch) in case.in_service_branches() {
         let from = case

@@ -22,7 +22,8 @@ fn small_network() -> BalancedNetwork {
     bus2.name = Some("South".to_owned());
     let branch = powerio_tx::Branch::new(BusId(1), BusId(2), 0.01, 0.1);
     let mut net = BalancedNetwork::in_memory("small", 100.0, vec![bus1, bus2], vec![branch]);
-    net.generators.push(powerio_tx::Generator::new(BusId(1)));
+    net.generators_mut()
+        .push(powerio_tx::Generator::new(BusId(1)));
     net
 }
 
@@ -140,7 +141,7 @@ fn a_bare_feature_id_does_not_place_a_branch() {
     let mut net = small_network();
     let report = net.apply_geo_layer(&parsed.layer);
     assert_eq!(report.matched_branches, 0);
-    assert!(net.branches[0].route.is_none());
+    assert!(net.branches()[0].route.is_none());
 }
 
 #[test]
@@ -173,10 +174,10 @@ fn a_named_feature_id_still_matches_a_branch_uid() {
     assert_eq!(feature.key.index, None);
 
     let mut net = small_network();
-    net.branches[0].uid = Some("tie-a".to_owned());
+    net.branches_mut()[0].uid = Some("tie-a".to_owned());
     let report = net.apply_geo_layer(&parsed.layer);
     assert_eq!(report.matched_branches, 1);
-    assert!(net.branches[0].route.is_some());
+    assert!(net.branches()[0].route.is_some());
 }
 
 #[test]
@@ -189,7 +190,7 @@ fn positional_branch_id_is_a_read_only_row_alias() {
     let mut net = small_network();
     let report = net.apply_geo_layer(&parsed.layer);
     assert_eq!(report.matched_branches, 1);
-    assert!(net.branches[0].route.is_some());
+    assert!(net.branches()[0].route.is_some());
 
     // Never written: the canonical form carries the payload uid instead.
     let round = parse(net.geo_layer().to_geojson().as_bytes(), None);
@@ -210,17 +211,17 @@ fn positional_branch_id_is_a_read_only_row_alias() {
 #[test]
 fn canonical_write_round_trips_space_kind_and_keys() {
     let mut net = small_network();
-    net.buses[0].location = Some(Location {
+    net.buses_mut()[0].location = Some(Location {
         x: -80.05,
         y: 34.2,
         kind: Some(CoordsKind::Manual),
     });
-    net.buses[1].location = Some(Location {
+    net.buses_mut()[1].location = Some(Location {
         x: -80.1,
         y: 34.3,
         kind: None,
     });
-    net.branches[0].route = Some(vec![
+    net.branches_mut()[0].route = Some(vec![
         Location {
             x: -80.05,
             y: 34.2,
@@ -232,7 +233,7 @@ fn canonical_write_round_trips_space_kind_and_keys() {
             kind: None,
         },
     ]);
-    net.geo = Some(powerio_tx::GeoMeta {
+    *net.geo_mut() = Some(powerio_tx::GeoMeta {
         space: CoordinateSpace::Geographic { crs: None },
         kind: Some(CoordsKind::Synthetic),
     });
@@ -255,10 +256,10 @@ fn canonical_write_round_trips_space_kind_and_keys() {
     assert_eq!(report.matched_branches, 1);
     assert_eq!(report.unmatched_features, 0);
     assert_eq!(
-        bare.buses[0].location.unwrap().kind,
+        bare.buses()[0].location.unwrap().kind,
         Some(CoordsKind::Manual)
     );
-    assert_eq!(bare.geo, net.geo);
+    assert_eq!(bare.geo(), net.geo());
 }
 
 #[test]
@@ -301,9 +302,9 @@ fn apply_matches_by_id_name_and_pair_and_counts_misses() {
     assert_eq!(report.matched_buses, 2);
     assert_eq!(report.matched_branches, 1);
     assert_eq!(report.unmatched_features, 1);
-    assert!(net.buses[0].location.is_some());
-    assert!(net.buses[1].location.is_some());
-    assert!(net.branches[0].route.is_some());
+    assert!(net.buses()[0].location.is_some());
+    assert!(net.buses()[1].location.is_some());
+    assert!(net.branches()[0].route.is_some());
 }
 
 #[test]
@@ -317,22 +318,22 @@ fn bom_prefixed_json_reads() {
 #[test]
 fn branch_routes_match_source_uids_arriving_as_id_or_name() {
     let mut net = small_network();
-    net.branches[0].uid = Some("line-1".to_owned());
+    net.branches_mut()[0].uid = Some("line-1".to_owned());
     let text =
         r#"[{"branch": "line-1", "lat1": 34.2, "lon1": -80.05, "lat2": 34.3, "lon2": -80.1}]"#;
     let report = net.apply_geo_layer(&parse(text.as_bytes(), None).layer);
     assert_eq!(report.matched_branches, 1);
-    assert!(net.branches[0].route.is_some());
+    assert!(net.branches()[0].route.is_some());
 }
 
 #[test]
 fn apply_matches_source_uids() {
     let mut net = small_network();
-    net.buses[0].uid = Some("bus_00".to_owned());
+    net.buses_mut()[0].uid = Some("bus_00".to_owned());
     let text = r#"[{"uid": "bus_00", "id": "999", "lat": 34.2, "lon": -80.05}]"#;
     let report = net.apply_geo_layer(&parse(text.as_bytes(), None).layer);
     assert_eq!(report.matched_buses, 1);
-    assert!(net.buses[0].location.is_some());
+    assert!(net.buses()[0].location.is_some());
 }
 
 #[test]
@@ -389,7 +390,7 @@ fn pwd_promotes_to_a_diagram_layer_and_joins_on_subnum() {
     let report = apply_substation_points(&mut net, &layer);
     assert!(report.matched_buses > 0);
     assert!(matches!(
-        net.geo.as_ref().expect("geo meta").space,
+        net.geo().as_ref().expect("geo meta").space,
         CoordinateSpace::Diagram { .. }
     ));
     // The aux reader already placed geographic locations; replacing them with
@@ -430,12 +431,12 @@ fn aux_substations_lift_into_a_geographic_layer_that_joins_on_subnum() {
     let mut net = parse_file("../tests/data/powerworld/ACTIVSg200.aux", None)
         .expect("parse aux")
         .network;
-    let placed: Vec<Option<Location>> = net.buses.iter().map(|bus| bus.location).collect();
+    let placed: Vec<Option<Location>> = net.buses().iter().map(|bus| bus.location).collect();
     let report = apply_substation_points(&mut net, &layer);
-    assert_eq!(report.matched_buses, net.buses.len());
+    assert_eq!(report.matched_buses, net.buses().len());
     assert_eq!(report.unmatched_features, 0);
     assert_eq!(report.unlocated_buses, 0);
-    let joined: Vec<Option<Location>> = net.buses.iter().map(|bus| bus.location).collect();
+    let joined: Vec<Option<Location>> = net.buses().iter().map(|bus| bus.location).collect();
     assert_eq!(joined, placed);
 }
 
@@ -466,14 +467,14 @@ fn aux_substation_rows_skip_unusable_fields_and_keep_file_order() {
     // A bus carrying the number as a JSON number joins the same way, and the
     // later duplicate wins.
     let mut net = small_network();
-    net.buses[0]
+    net.buses_mut()[0]
         .extras
         .insert("SubNum".to_owned(), serde_json::json!(12.0));
     let report = apply_substation_points(&mut net, &layer);
     assert_eq!(report.matched_buses, 2);
-    let location = net.buses[0].location.expect("bus 1 location");
+    let location = net.buses()[0].location.expect("bus 1 location");
     assert_eq!((location.x, location.y), (-81.0, 35.0));
-    assert!(net.buses[1].location.is_none());
+    assert!(net.buses()[1].location.is_none());
 }
 
 #[test]
@@ -481,7 +482,7 @@ fn a_substation_join_counts_the_buses_it_leaves_unplaced() {
     let aux = parse_aux("DATA (Substation, [SubNum, Latitude, Longitude])\n{\n7 34.2 -80.05\n}\n")
         .expect("parse aux");
     let mut net = small_network();
-    net.buses[0]
+    net.buses_mut()[0]
         .extras
         .insert("SubNum".to_owned(), serde_json::json!("7"));
     let report = apply_substation_points(&mut net, &geo_layer_from_aux_substations(&aux));

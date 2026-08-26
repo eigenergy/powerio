@@ -92,9 +92,9 @@ impl DistGraph {
     /// Build the graph projection for one distribution network.
     #[must_use]
     pub fn from_network(net: &MulticonductorNetwork) -> Self {
-        let mut builder = GraphBuilder::new(&net.buses);
+        let mut builder = GraphBuilder::new(net.buses());
 
-        for line in &net.lines {
+        for line in net.lines() {
             let from = builder.canonical_bus_id(&line.bus_from);
             let to = builder.canonical_bus_id(&line.bus_to);
             builder.edges.push(DistGraphEdge {
@@ -108,7 +108,7 @@ impl DistGraph {
             });
         }
 
-        for switch in &net.switches {
+        for switch in net.switches() {
             let from = builder.canonical_bus_id(&switch.bus_from);
             let to = builder.canonical_bus_id(&switch.bus_to);
             builder.edges.push(DistGraphEdge {
@@ -125,11 +125,11 @@ impl DistGraph {
             });
         }
 
-        for transformer in &net.transformers {
+        for transformer in net.transformers() {
             builder.add_transformer_edges(transformer);
         }
 
-        for load in &net.loads {
+        for load in net.loads() {
             builder.add_load(
                 &load.bus,
                 &load.terminal_map,
@@ -137,7 +137,7 @@ impl DistGraph {
                 watts_to_kw(&load.p_nom),
             );
         }
-        for generator in &net.generators {
+        for generator in net.generators() {
             builder.add_generator(
                 &generator.bus,
                 &generator.terminal_map,
@@ -145,10 +145,10 @@ impl DistGraph {
                 watts_to_kw(&generator.p_nom),
             );
         }
-        for ibr in &net.ibrs {
+        for ibr in net.ibrs() {
             builder.add_ibr(ibr);
         }
-        for shunt in &net.shunts {
+        for shunt in net.shunts() {
             builder.add_attachment(
                 &shunt.bus,
                 &shunt.terminal_map,
@@ -159,7 +159,7 @@ impl DistGraph {
         // A rated capacitor bank attaches to a bus exactly like a raw
         // admittance shunt. It projects as one, so connectivity and the geo
         // layer see the bank.
-        for capacitor in &net.capacitors {
+        for capacitor in net.capacitors() {
             builder.add_attachment(
                 &capacitor.bus,
                 &capacitor.terminal_map,
@@ -167,7 +167,7 @@ impl DistGraph {
                 &capacitor.name,
             );
         }
-        for source in &net.sources {
+        for source in net.sources() {
             builder.add_source(source);
         }
 
@@ -391,6 +391,7 @@ fn number_extra(extras: &BTreeMap<String, serde_json::Value>, names: &[&str]) ->
 
 #[cfg(test)]
 mod tests {
+    use crate::model::MulticonductorNetworkTables;
     use std::path::Path;
 
     use super::*;
@@ -504,7 +505,7 @@ mod tests {
             .expect("parse bmopf");
         let graph = net.graph();
 
-        assert!(graph.buses.len() >= net.buses.len());
+        assert!(graph.buses.len() >= net.buses().len());
         assert!(
             graph
                 .edges
@@ -522,9 +523,9 @@ mod tests {
     #[test]
     fn graph_accumulates_terminal_attachments_and_generation() {
         let mut net = MulticonductorNetwork::new();
-        net.buses
+        net.buses_mut()
             .push(DistBus::new("b1", strings(&["a", "b", "n"])));
-        net.loads.push(DistLoad::new(
+        net.loads_mut().push(DistLoad::new(
             "load",
             "b1",
             strings(&["a", "n"]),
@@ -532,7 +533,7 @@ mod tests {
             vec![1000.0],
             vec![0.0],
         ));
-        net.generators.push(DistGenerator::new(
+        net.generators_mut().push(DistGenerator::new(
             "gen",
             "b1",
             strings(&["b", "n"]),
@@ -540,7 +541,7 @@ mod tests {
             vec![2000.0],
             vec![0.0],
         ));
-        net.sources.push(VoltageSource::new(
+        net.sources_mut().push(VoltageSource::new(
             "source",
             "b1",
             strings(&["a", "b", "n"]),
@@ -580,10 +581,10 @@ mod tests {
                 )
             })
             .collect();
-        let net = MulticonductorNetwork {
+        let net = MulticonductorNetwork::from_tables(MulticonductorNetworkTables {
             transformers: vec![DistTransformer::new("t1", windings, Vec::new(), 3)],
-            ..MulticonductorNetwork::new()
-        };
+            ..MulticonductorNetworkTables::default()
+        });
 
         let graph = net.graph();
         let pairs = MAX_WINDING_PAIRS_DIM * (MAX_WINDING_PAIRS_DIM - 1) / 2;
@@ -600,10 +601,10 @@ mod tests {
             .insert("longitude".into(), serde_json::json!(-80.0));
         bus.extras
             .insert("latitude".into(), serde_json::json!(35.0));
-        let net = MulticonductorNetwork {
+        let net = MulticonductorNetwork::from_tables(MulticonductorNetworkTables {
             buses: vec![bus],
-            ..MulticonductorNetwork::new()
-        };
+            ..MulticonductorNetworkTables::default()
+        });
 
         assert_eq!(net.graph().buses[0].xy, Some([-80.0, 35.0]));
     }

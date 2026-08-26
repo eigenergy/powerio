@@ -12,8 +12,8 @@ use super::{bus_kv, set_bus_kind, warn_extra_branch_rating_sets, zbase};
 use crate::diagnostics::codes::EMIT_PYPSA as F;
 use crate::diagnostics::{Diagnostics, codes};
 use crate::network::{
-    BalancedNetwork, Branch, BranchCharging, Bus, BusId, BusType, Extras, GenCost, Generator, Hvdc,
-    Load, LoadVoltageModel, Shunt, SourceFormat, Storage,
+    BalancedNetwork, BalancedNetworkTables, Branch, BranchCharging, Bus, BusId, BusType, Extras,
+    GenCost, Generator, Hvdc, Load, LoadVoltageModel, Shunt, SourceFormat, Storage,
 };
 use crate::{Error, Result};
 
@@ -463,7 +463,7 @@ pub(crate) fn read_pypsa_csv_source(
         ));
     }
 
-    let net = BalancedNetwork {
+    let net = BalancedNetwork::from_tables(BalancedNetworkTables {
         name,
         base_mva,
         base_frequency: crate::network::DEFAULT_BASE_FREQUENCY,
@@ -480,7 +480,7 @@ pub(crate) fn read_pypsa_csv_source(
         areas: Vec::new(),
         solver: None,
         source_format: SourceFormat::PypsaCsv,
-    };
+    });
     // This reader bypasses the read_source funnel (directory input), so it
     // guards against a hollow case itself.
     crate::format::reject_empty_case(&net, FMT)?;
@@ -534,19 +534,19 @@ pub(crate) fn pypsa_csv_artifacts(
     // unique by construction and (per the same rule) cannot displace a kept
     // name.
     let mut name_counts: HashMap<&str, usize> = HashMap::new();
-    for b in &net.buses {
+    for b in net.buses() {
         if let Some(n) = &b.name {
             *name_counts.entry(n.as_str()).or_insert(0) += 1;
         }
     }
     let id_owner: HashMap<String, BusId> = net
-        .buses
+        .buses()
         .iter()
         .map(|b| (b.id.0.to_string(), b.id))
         .collect();
     let mut displaced: Vec<String> = Vec::new();
     let key_of: HashMap<BusId, String> = net
-        .buses
+        .buses()
         .iter()
         .map(|b| {
             let key = match &b.name {
@@ -573,23 +573,23 @@ pub(crate) fn pypsa_csv_artifacts(
             displaced.join(", ")
         ));
     }
-    if !net.hvdc.is_empty() {
+    if !net.hvdc().is_empty() {
         warnings.push(
             &F.record_dropped,
             format!(
                 "{} dcline(s) dropped: the PyPSA CSV writer does not model HVDC links",
-                net.hvdc.len()
+                net.hvdc().len()
             ),
         );
     }
-    if !net.transformers_3w.is_empty() {
+    if !net.transformers_3w().is_empty() {
         warnings.push(&F.record_dropped, format!(
             "{} 3-winding transformer(s) dropped: the PyPSA CSV writer emits no 3-winding transformer",
-            net.transformers_3w.len()
+            net.transformers_3w().len()
         ));
     }
     if net
-        .buses
+        .buses()
         .iter()
         .any(|b| b.evhi.is_some() || b.evlo.is_some())
     {
@@ -598,11 +598,11 @@ pub(crate) fn pypsa_csv_artifacts(
             "emergency voltage band(s) (EVHI/EVLO) dropped: this writer carries one voltage band",
         );
     }
-    if net.generators.iter().any(Generator::has_caps) {
+    if net.generators().iter().any(Generator::has_caps) {
         warnings.push(&F.field_dropped, "generator capability/ramp columns dropped: PyPSA generator CSV has no MATPOWER capability columns");
     }
     let voltage_loads = net
-        .loads
+        .loads()
         .iter()
         .filter(|l| {
             l.voltage_model
@@ -616,7 +616,7 @@ pub(crate) fn pypsa_csv_artifacts(
         ));
     }
     let isolated = net
-        .buses
+        .buses()
         .iter()
         .filter(|b| b.kind == BusType::Isolated)
         .count();
@@ -626,7 +626,7 @@ pub(crate) fn pypsa_csv_artifacts(
         ));
     }
     let xf_angles = net
-        .branches
+        .branches()
         .iter()
         .filter(|b| b.is_transformer() && b.has_angle_limits())
         .count();
@@ -636,7 +636,7 @@ pub(crate) fn pypsa_csv_artifacts(
         ));
     }
     let rate_bc = net
-        .branches
+        .branches()
         .iter()
         .filter(|b| {
             super::nonzero_differs(b.rate_b, b.rate_a) || super::nonzero_differs(b.rate_c, b.rate_a)
@@ -648,7 +648,7 @@ pub(crate) fn pypsa_csv_artifacts(
         ));
     }
     let current_ratings = net
-        .branches
+        .branches()
         .iter()
         .filter(|b| b.current_ratings.is_some())
         .count();
@@ -659,14 +659,18 @@ pub(crate) fn pypsa_csv_artifacts(
     }
     warn_extra_branch_rating_sets(&F, "PyPSA CSV", net, &mut warnings);
     super::warn_dropped_areas(&F, "PyPSA CSV", net, &mut warnings);
-    let branch_solutions = net.branches.iter().filter(|b| b.solution.is_some()).count();
+    let branch_solutions = net
+        .branches()
+        .iter()
+        .filter(|b| b.solution.is_some())
+        .count();
     if branch_solutions > 0 {
         warnings.push(&F.field_dropped, format!(
             "{branch_solutions} branch solution value set(s) dropped: PyPSA result time series are not written"
         ));
     }
     let terminal_charging = net
-        .branches
+        .branches()
         .iter()
         .filter(|b| pypsa_loses_terminal_charging(b))
         .count();
@@ -685,7 +689,7 @@ pub(crate) fn pypsa_csv_artifacts(
     // shape the round trip preserves means a field is dropped on write.
     #[allow(clippy::float_cmp)]
     let lossy = net
-        .storage
+        .storage()
         .iter()
         .filter(|st| {
             let p_nom = st.charge_rating.max(st.discharge_rating);
@@ -713,17 +717,17 @@ pub(crate) fn pypsa_csv_artifacts(
         generators_csv(net, &key_of, &mut warnings),
     );
     // The v_nom per bus, shared by the writers that rebase impedances.
-    let kv_of: HashMap<BusId, f64> = net.buses.iter().map(|b| (b.id, b.base_kv)).collect();
+    let kv_of: HashMap<BusId, f64> = net.buses().iter().map(|b| (b.id, b.base_kv)).collect();
     write_file("loads.csv", loads_csv(net, &key_of));
     write_file("lines.csv", lines_csv(net, &key_of, &kv_of));
     let transformers = transformers_csv(net, &key_of);
     if transformers.lines().count() > 1 {
         write_file("transformers.csv", transformers);
     }
-    if !net.shunts.is_empty() {
+    if !net.shunts().is_empty() {
         write_file("shunt_impedances.csv", shunts_csv(net, &key_of, &kv_of));
     }
-    if !net.storage.is_empty() {
+    if !net.storage().is_empty() {
         write_file("storage_units.csv", storage_csv(net, &key_of));
     }
     (files, warnings.into_records())
@@ -732,8 +736,8 @@ pub(crate) fn pypsa_csv_artifacts(
 fn network_csv(net: &BalancedNetwork) -> String {
     format!(
         "name,srid,powerio_base_mva\n{},4326,{}\n",
-        esc(&net.name),
-        net.base_mva
+        esc(net.name()),
+        net.base_mva()
     )
 }
 
@@ -742,13 +746,13 @@ fn buses_csv(net: &BalancedNetwork, key_of: &HashMap<BusId, String>) -> String {
     // a case without geometry writes exactly as before. PyPSA defaults a
     // missing cell to 0, so a located case writes empty cells for the odd
     // bus without a point.
-    let write_locations = net.buses.iter().any(|b| b.location.is_some());
+    let write_locations = net.buses().iter().any(|b| b.location.is_some());
     let mut s = String::from(if write_locations {
         "name,v_nom,v_mag_pu_set,v_mag_pu_min,v_mag_pu_max,x,y\n"
     } else {
         "name,v_nom,v_mag_pu_set,v_mag_pu_min,v_mag_pu_max\n"
     });
-    for b in &net.buses {
+    for b in net.buses() {
         let _ = write!(
             s,
             "{},{},{},{},{}",
@@ -784,12 +788,12 @@ fn generators_csv(
     let mut s = String::from(
         "name,bus,control,p_nom,p_set,q_set,p_min_pu,p_max_pu,marginal_cost,marginal_cost_quadratic,active,v_mag_pu_set\n",
     );
-    let bus_kind: HashMap<BusId, BusType> = net.buses.iter().map(|b| (b.id, b.kind)).collect();
+    let bus_kind: HashMap<BusId, BusType> = net.buses().iter().map(|b| (b.id, b.kind)).collect();
     let mut dropped = 0usize;
     let mut truncated = 0usize;
     let mut empty = 0usize;
     let mut unbounded = 0usize;
-    for (i, g) in net.generators.iter().enumerate() {
+    for (i, g) in net.generators().iter().enumerate() {
         let p_nom = if g.pmax.is_finite() && g.pmax > 0.0 {
             g.pmax
         } else {
@@ -875,7 +879,7 @@ fn generators_csv(
         ));
     }
     let q_limited = net
-        .generators
+        .generators()
         .iter()
         .filter(|g| g.qmin.is_finite() || g.qmax.is_finite())
         .count();
@@ -885,9 +889,9 @@ fn generators_csv(
         ));
     }
     let off_base = net
-        .generators
+        .generators()
         .iter()
-        .filter(|g| g.mbase != 0.0 && g.mbase != net.base_mva)
+        .filter(|g| g.mbase != 0.0 && g.mbase != net.base_mva())
         .count();
     if off_base > 0 {
         warnings.push(&F.field_dropped, format!(
@@ -899,7 +903,7 @@ fn generators_csv(
 
 fn loads_csv(net: &BalancedNetwork, key_of: &HashMap<BusId, String>) -> String {
     let mut s = String::from("name,bus,p_set,q_set,active\n");
-    for (i, l) in net.loads.iter().enumerate() {
+    for (i, l) in net.loads().iter().enumerate() {
         let _ = writeln!(
             s,
             "load_{},{},{},{},{}",
@@ -930,13 +934,13 @@ fn lines_csv(
 ) -> String {
     let mut s = String::from("name,bus0,bus1,r,x,b,g,s_nom,v_ang_min,v_ang_max,active\n");
     for (i, br) in net
-        .branches
+        .branches()
         .iter()
         .enumerate()
         .filter(|(_, b)| !b.is_transformer())
     {
         // PyPSA per-unitizes line ohms on the BUS0 v_nom, not bus1.
-        let zb = zbase(*kv_of.get(&br.from).unwrap_or(&0.0), net.base_mva);
+        let zb = zbase(*kv_of.get(&br.from).unwrap_or(&0.0), net.base_mva());
         let charging = br.terminal_charging();
         let _ = writeln!(
             s,
@@ -960,7 +964,7 @@ fn lines_csv(
 fn transformers_csv(net: &BalancedNetwork, key_of: &HashMap<BusId, String>) -> String {
     let mut s = String::from("name,bus0,bus1,r,x,b,g,s_nom,tap_ratio,phase_shift,active\n");
     for (i, br) in net
-        .branches
+        .branches()
         .iter()
         .enumerate()
         .filter(|(_, b)| b.is_transformer())
@@ -971,7 +975,7 @@ fn transformers_csv(net: &BalancedNetwork, key_of: &HashMap<BusId, String>) -> S
         let s_nom = if br.rate_a > 0.0 {
             br.rate_a
         } else {
-            net.base_mva
+            net.base_mva()
         };
         let charging = br.charging.unwrap_or(BranchCharging {
             g_fr: 0.0,
@@ -985,10 +989,10 @@ fn transformers_csv(net: &BalancedNetwork, key_of: &HashMap<BusId, String>) -> S
             i + 1,
             key_for(key_of, br.from),
             key_for(key_of, br.to),
-            br.r * s_nom / net.base_mva,
-            br.x * s_nom / net.base_mva,
-            charging.b_fr * net.base_mva / s_nom,
-            charging.g_fr * net.base_mva / s_nom,
+            br.r * s_nom / net.base_mva(),
+            br.x * s_nom / net.base_mva(),
+            charging.b_fr * net.base_mva() / s_nom,
+            charging.g_fr * net.base_mva() / s_nom,
             s_nom,
             br.effective_tap(),
             br.shift,
@@ -1004,15 +1008,15 @@ fn shunts_csv(
     kv_of: &HashMap<BusId, f64>,
 ) -> String {
     let mut s = String::from("name,bus,g,b,active\n");
-    for (i, sh) in net.shunts.iter().enumerate() {
-        let zb = zbase(*kv_of.get(&sh.bus).unwrap_or(&0.0), net.base_mva);
+    for (i, sh) in net.shunts().iter().enumerate() {
+        let zb = zbase(*kv_of.get(&sh.bus).unwrap_or(&0.0), net.base_mva());
         let _ = writeln!(
             s,
             "shunt_{},{},{},{},{}",
             i + 1,
             key_for(key_of, sh.bus),
-            sh.g / (zb * net.base_mva),
-            sh.b / (zb * net.base_mva),
+            sh.g / (zb * net.base_mva()),
+            sh.b / (zb * net.base_mva()),
             sh.in_service
         );
     }
@@ -1023,7 +1027,7 @@ fn storage_csv(net: &BalancedNetwork, key_of: &HashMap<BusId, String>) -> String
     let mut s = String::from(
         "name,bus,p_nom,max_hours,p_set,q_set,state_of_charge_initial,efficiency_store,efficiency_dispatch,cyclic_state_of_charge\n",
     );
-    for (i, st) in net.storage.iter().enumerate() {
+    for (i, st) in net.storage().iter().enumerate() {
         let p_nom = st.charge_rating.max(st.discharge_rating);
         let max_hours = if p_nom > 0.0 {
             st.energy_rating / p_nom
@@ -1361,10 +1365,10 @@ mod tests {
             ],
         );
         let net = read_pypsa_csv_folder(&dir).unwrap().network;
-        assert_eq!(net.buses[0].id, BusId(5));
-        assert_eq!(net.buses[1].id, BusId(2));
-        assert!(net.buses[0].name.is_none());
-        assert_eq!(net.loads[0].bus, BusId(5));
+        assert_eq!(net.buses()[0].id, BusId(5));
+        assert_eq!(net.buses()[1].id, BusId(2));
+        assert!(net.buses()[0].name.is_none());
+        assert_eq!(net.loads()[0].bus, BusId(5));
     }
 
     #[test]
@@ -1377,12 +1381,12 @@ mod tests {
             ],
         );
         let net = read_pypsa_csv_folder(&dir).unwrap().network;
-        assert_eq!(net.buses[0].id, BusId(1));
-        assert_eq!(net.buses[1].id, BusId(2));
-        assert_eq!(net.buses[0].name.as_deref(), Some("2"));
-        assert_eq!(net.buses[1].name.as_deref(), Some("b"));
+        assert_eq!(net.buses()[0].id, BusId(1));
+        assert_eq!(net.buses()[1].id, BusId(2));
+        assert_eq!(net.buses()[0].name.as_deref(), Some("2"));
+        assert_eq!(net.buses()[1].name.as_deref(), Some("b"));
         // "2" resolves by name to the first bus, not numerically to the second.
-        assert_eq!(net.loads[0].bus, BusId(1));
+        assert_eq!(net.loads()[0].bus, BusId(1));
     }
 
     #[test]
@@ -1444,9 +1448,9 @@ mod tests {
             ],
         );
         let net = read_pypsa_csv_folder(&dir).unwrap().network;
-        assert_eq!(net.buses[0].kind, BusType::Ref);
-        assert_eq!(net.buses[1].kind, BusType::Pv);
-        assert_eq!(net.buses[2].kind, BusType::Pq);
+        assert_eq!(net.buses()[0].kind, BusType::Ref);
+        assert_eq!(net.buses()[1].kind, BusType::Pv);
+        assert_eq!(net.buses()[2].kind, BusType::Pq);
     }
 
     #[test]
@@ -1463,7 +1467,7 @@ mod tests {
             ],
         );
         let parsed = read_pypsa_csv_folder(&dir).unwrap();
-        let br = &parsed.network.branches[0];
+        let br = &parsed.network.branches()[0];
         close(br.r, 0.125); // 0.0625 * 100/50
         close(br.x, 0.5);
         close(br.b, 0.25); // 0.5 * 50/100
@@ -1513,7 +1517,7 @@ mod tests {
             ],
         );
         let parsed = read_pypsa_csv_folder(&dir).unwrap();
-        let charging = parsed.network.branches[0].terminal_charging();
+        let charging = parsed.network.branches()[0].terminal_charging();
         close(charging.g_fr, 1815.0);
         close(charging.g_to, 1815.0);
         assert!(
@@ -1526,8 +1530,9 @@ mod tests {
     #[test]
     fn transformer_write_rebases_to_s_nom_base() {
         let mut net = net_with(vec![bus(1, None), bus(2, None)]);
-        net.branches = vec![xfmr(1, 2, 50.0)];
-        let key_of: HashMap<BusId, String> = net.buses.iter().map(|b| (b.id, bus_key(b))).collect();
+        *net.branches_mut() = vec![xfmr(1, 2, 50.0)];
+        let key_of: HashMap<BusId, String> =
+            net.buses().iter().map(|b| (b.id, bus_key(b))).collect();
         let csv = transformers_csv(&net, &key_of);
         assert_eq!(
             csv.lines().nth(1).unwrap(),
@@ -1538,8 +1543,9 @@ mod tests {
     #[test]
     fn transformer_write_zero_rate_a_uses_base_mva() {
         let mut net = net_with(vec![bus(1, None), bus(2, None)]);
-        net.branches = vec![xfmr(1, 2, 0.0)];
-        let key_of: HashMap<BusId, String> = net.buses.iter().map(|b| (b.id, bus_key(b))).collect();
+        *net.branches_mut() = vec![xfmr(1, 2, 0.0)];
+        let key_of: HashMap<BusId, String> =
+            net.buses().iter().map(|b| (b.id, bus_key(b))).collect();
         let csv = transformers_csv(&net, &key_of);
         assert_eq!(
             csv.lines().nth(1).unwrap(),
@@ -1550,8 +1556,7 @@ mod tests {
     #[test]
     fn transformer_legacy_b_warns_about_terminal_charging_collapse() {
         let mut net = net_with(vec![bus(1, None), bus(2, None)]);
-        net.branches = vec![xfmr(1, 2, 50.0)];
-
+        *net.branches_mut() = vec![xfmr(1, 2, 50.0)];
         let out = write_pypsa_csv_folder(&net, tmp_dir("xf-legacy-b-warning")).unwrap();
 
         assert!(
@@ -1573,7 +1578,7 @@ mod tests {
             g_to: 0.4,
             b_to: 0.1,
         });
-        net.branches = vec![br];
+        *net.branches_mut() = vec![br];
         let dir = tmp_dir("line-g-write");
         let out = write_pypsa_csv_folder(&net, &dir).unwrap();
         assert!(
@@ -1590,7 +1595,7 @@ mod tests {
         );
 
         let back = read_pypsa_csv_folder(&dir).unwrap().network;
-        let charging = back.branches[0].terminal_charging();
+        let charging = back.branches()[0].terminal_charging();
         close(charging.g_fr, 0.4);
         close(charging.g_to, 0.4);
         close(charging.b_fr, 0.1);
@@ -1607,7 +1612,7 @@ mod tests {
             g_to: 0.0,
             b_to: 0.0,
         });
-        net.branches = vec![br];
+        *net.branches_mut() = vec![br];
         let dir = tmp_dir("xf-g-write");
         let out = write_pypsa_csv_folder(&net, &dir).unwrap();
         assert!(
@@ -1619,7 +1624,7 @@ mod tests {
         );
 
         let back = read_pypsa_csv_folder(&dir).unwrap().network;
-        let charging = back.branches[0].terminal_charging();
+        let charging = back.branches()[0].terminal_charging();
         close(charging.g_fr, 0.05);
         close(charging.g_to, 0.0);
         close(charging.b_fr, 0.25);
@@ -1629,7 +1634,7 @@ mod tests {
     #[test]
     fn storage_write_fields_and_round_trip() {
         let mut net = net_with(vec![bus(1, None)]);
-        net.storage = vec![storage_unit(1)];
+        *net.storage_mut() = vec![storage_unit(1)];
         let dir = tmp_dir("storage-rt");
         let out = write_pypsa_csv_folder(&net, &dir).unwrap();
         assert!(
@@ -1649,7 +1654,7 @@ mod tests {
             "storage_1,1,25,4,3,1.5,20,0.91,0.92,false"
         );
         let back = read_pypsa_csv_folder(&dir).unwrap().network;
-        let st = &back.storage[0];
+        let st = &back.storage()[0];
         assert_eq!(st.charge_rating, 25.0);
         assert_eq!(st.discharge_rating, 25.0);
         assert_eq!(st.energy_rating, 100.0);
@@ -1665,7 +1670,7 @@ mod tests {
         st.charge_rating = 10.0;
         st.discharge_rating = 20.0;
         st.thermal_rating = 20.0;
-        net.storage = vec![st];
+        *net.storage_mut() = vec![st];
         let out = write_pypsa_csv_folder(&net, tmp_dir("storage-lossy")).unwrap();
         assert!(
             out.diagnostics.iter().any(|d| d.message()
@@ -1678,8 +1683,8 @@ mod tests {
     #[test]
     fn named_buses_join_on_write() {
         let mut net = net_with(vec![bus(1, Some("North")), bus(2, None)]);
-        net.generators = vec![make_gen(1, None)];
-        net.loads = vec![Load {
+        *net.generators_mut() = vec![make_gen(1, None)];
+        *net.loads_mut() = vec![Load {
             bus: BusId(2),
             p: 5.0,
             q: 1.0,
@@ -1695,14 +1700,14 @@ mod tests {
         let gens = fs::read_to_string(dir.join("generators.csv")).unwrap();
         assert!(gens.lines().nth(1).unwrap().contains(",North,"), "{gens}");
         let back = read_pypsa_csv_folder(&dir).unwrap().network;
-        assert_eq!(back.buses[0].name.as_deref(), Some("North"));
-        assert_eq!(back.loads[0].bus, back.buses[1].id);
+        assert_eq!(back.buses()[0].name.as_deref(), Some("North"));
+        assert_eq!(back.loads()[0].bus, back.buses()[1].id);
     }
 
     #[test]
     fn duplicate_bus_names_fall_back_to_ids() {
         let mut net = net_with(vec![bus(1, Some("X")), bus(2, Some("X"))]);
-        net.loads = vec![Load {
+        *net.loads_mut() = vec![Load {
             bus: BusId(2),
             p: 5.0,
             q: 1.0,
@@ -1728,7 +1733,7 @@ mod tests {
         assert_eq!(keys, ["1", "2"]);
         // The folder is importable: elements join on the fallback keys.
         let back = read_pypsa_csv_folder(&dir).unwrap().network;
-        assert_eq!(back.loads[0].bus, back.buses[1].id);
+        assert_eq!(back.loads()[0].bus, back.buses()[1].id);
     }
 
     #[test]
@@ -1759,7 +1764,7 @@ mod tests {
             ],
         );
         let parsed = read_pypsa_csv_folder(&dir).unwrap();
-        let cost = parsed.network.generators[0].cost.as_ref().unwrap();
+        let cost = parsed.network.generators()[0].cost.as_ref().unwrap();
         assert_eq!(cost.coeffs, vec![0.25, 0.0, 0.0]);
     }
 
@@ -1796,7 +1801,7 @@ mod tests {
             ],
         );
         let parsed = read_pypsa_csv_folder(&dir).unwrap();
-        let h = &parsed.network.hvdc[0];
+        let h = &parsed.network.hvdc()[0];
         assert_eq!(h.from, BusId(1));
         assert_eq!(h.to, BusId(2));
         assert_eq!(h.pf, 10.0);
@@ -1859,7 +1864,7 @@ mod tests {
     #[test]
     fn cost_write_keeps_low_order_terms_and_warns() {
         let mut net = net_with(vec![bus(1, None), bus(2, None)]);
-        net.generators = vec![
+        *net.generators_mut() = vec![
             make_gen(
                 1,
                 Some(GenCost {
@@ -1891,7 +1896,8 @@ mod tests {
                 }),
             ),
         ];
-        let key_of: HashMap<BusId, String> = net.buses.iter().map(|b| (b.id, bus_key(b))).collect();
+        let key_of: HashMap<BusId, String> =
+            net.buses().iter().map(|b| (b.id, bus_key(b))).collect();
         let mut warnings = Diagnostics::new();
         let csv = generators_csv(&net, &key_of, &mut warnings);
         assert_eq!(

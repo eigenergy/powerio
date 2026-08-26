@@ -505,7 +505,7 @@ fn echo_text(
 ) -> Option<String> {
     let source = module.source()?;
     let buffer = source.primary_buffer().ok()?;
-    if !target.matches(module.value().source_format) {
+    if !target.matches(*module.value().source_format()) {
         return None;
     }
     let text = std::str::from_utf8(buffer.bytes()).ok()?;
@@ -525,7 +525,11 @@ pub fn write_network(net: &MulticonductorNetwork, format: DistTargetFormat) -> C
     };
     // No distribution format carries line routes; report the loss the
     // way bus locations already do (`.pio.json` keeps them).
-    let routed = net.lines.iter().filter(|line| line.route.is_some()).count();
+    let routed = net
+        .lines()
+        .iter()
+        .filter(|line| line.route.is_some())
+        .count();
     if routed > 0 {
         conv.push(
             &crate::diagnostics::codes::EMIT_MULTICONDUCTOR_ROUTE_DROPPED,
@@ -837,7 +841,7 @@ mod tests {
     fn byte_order_mark_is_retained_and_echoed() {
         let dss = "\u{feff}clear\nnew circuit.c basekv=12.47 bus1=src\n";
         let net = crate::testkit::parse_dss_str(dss);
-        assert_eq!(net.name.as_deref(), Some("c"));
+        assert_eq!(net.name().as_deref(), Some("c"));
         assert!(
             !net.warnings.iter().any(|w| w.contains("byte order mark")),
             "retaining the mark is not a loss: {:?}",
@@ -863,8 +867,8 @@ mod tests {
         let from_bytes =
             crate::testkit::parse_str(std::str::from_utf8(&bytes).unwrap(), "dss").unwrap();
         let from_file = crate::testkit::parse_file(path, None).unwrap();
-        assert_eq!(from_bytes.buses.len(), from_file.buses.len());
-        assert_eq!(from_bytes.loads.len(), from_file.loads.len());
+        assert_eq!(from_bytes.buses().len(), from_file.buses().len());
+        assert_eq!(from_bytes.loads().len(), from_file.loads().len());
         assert_eq!(from_bytes.source, from_file.source);
     }
 

@@ -394,9 +394,9 @@ impl Case {
 
     fn format(&self) -> String {
         match self {
-            Self::Balanced(net, _) => net.source_format.name().to_string(),
+            Self::Balanced(net, _) => net.source_format().name().to_string(),
             Self::Multiconductor(net, _) => net
-                .source_format
+                .source_format()
                 .as_ref()
                 .map_or("dss", |f| f.name())
                 .to_string(),
@@ -1026,7 +1026,7 @@ pub fn report(work: &Path, findings_path: &Path, summary_path: Option<&Path>) ->
             sanitizer.learn_path(&member.path);
             match read_case(&member.path) {
                 Ok(Case::Balanced(net, _)) => {
-                    sanitizer.learn_buses(net.buses.iter().map(|b| b.id.0));
+                    sanitizer.learn_buses(net.buses().iter().map(|b| b.id.0));
                     sanitizer.learn_network(&serde_json::to_value(&*net)?);
                 }
                 Ok(Case::Multiconductor(net, _)) => {

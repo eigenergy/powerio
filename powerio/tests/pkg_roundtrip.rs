@@ -106,9 +106,9 @@ fn balanced_package_with_gen() -> NetworkPackage {
         .network;
     // Source uids the sample operating point updates resolve against; every
     // other row gets a synthesized `{table}:{row}` uid at package build.
-    net.loads[0].uid = Some("load_1".to_owned());
-    net.generators[0].uid = Some("gen_1".to_owned());
-    net.branches[0].uid = Some("branch_1".to_owned());
+    net.loads_mut()[0].uid = Some("load_1".to_owned());
+    net.generators_mut()[0].uid = Some("gen_1".to_owned());
+    net.branches_mut()[0].uid = Some("branch_1".to_owned());
     NetworkPackage::from_balanced(net)
 }
 
@@ -225,15 +225,15 @@ fn preflight_network(terminals: &[&str], grounded: &[&str]) -> powerio_dist::Mul
     for id in ["sourcebus", "loadbus"] {
         let mut bus = DistBus::new(id, terminal_map.clone());
         bus.grounded = strings(grounded);
-        net.buses.push(bus);
+        net.buses_mut().push(bus);
     }
     let mut linecode = DistLineCode::new("lc", diagonal_matrix(n, 0.01), diagonal_matrix(n, 0.10));
     linecode.g_from = zero_matrix(n);
     linecode.b_from = zero_matrix(n);
     linecode.g_to = zero_matrix(n);
     linecode.b_to = zero_matrix(n);
-    net.linecodes.push(linecode);
-    net.lines.push(DistLine::new(
+    net.linecodes_mut().push(linecode);
+    net.lines_mut().push(DistLine::new(
         "l1",
         "sourcebus",
         "loadbus",
@@ -242,7 +242,7 @@ fn preflight_network(terminals: &[&str], grounded: &[&str]) -> powerio_dist::Mul
         "lc",
         1.0,
     ));
-    net.sources.push(VoltageSource::new(
+    net.sources_mut().push(VoltageSource::new(
         "source",
         "sourcebus",
         terminal_map,
@@ -376,25 +376,25 @@ fn balanced_payload_roundtrips() {
     let pkg = balanced_package();
     assert_eq!(pkg.model_kind(), ModelKind::Balanced);
     assert!(pkg.kind_is_consistent());
-    assert_eq!(pkg.as_balanced().unwrap().buses.len(), 2);
+    assert_eq!(pkg.as_balanced().unwrap().buses().len(), 2);
     assert!(pkg.as_multiconductor().is_none());
     assert_json_roundtrips(&pkg);
 
     // The payload survives the round trip.
     let json = pkg.to_json_pretty().unwrap();
     let back = NetworkPackage::from_json(&json).unwrap();
-    assert_eq!(back.as_balanced().unwrap().buses.len(), 2);
-    assert_eq!(back.as_balanced().unwrap().branches.len(), 1);
+    assert_eq!(back.as_balanced().unwrap().buses().len(), 2);
+    assert_eq!(back.as_balanced().unwrap().branches().len(), 1);
 }
 
 #[test]
 fn goc3_package_operating_points_materialize_static_snapshots() {
     let parsed = parse_str(GOC3_PACKAGE_SRC, "goc3-json").expect("parse goc3");
     let net = &parsed.network;
-    assert_eq!(net.generators.len(), 1);
-    assert_eq!(net.loads.len(), 1);
-    assert_close(net.generators[0].pmax, 100.0);
-    assert_close(net.loads[0].p, 40.0);
+    assert_eq!(net.generators().len(), 1);
+    assert_eq!(net.loads().len(), 1);
+    assert_close(net.generators()[0].pmax, 100.0);
+    assert_close(net.loads()[0].p, 40.0);
 
     let pkg = pkg_from_parsed(&parsed);
     let series = pkg.operating_points().expect("operating points");
@@ -407,13 +407,13 @@ fn goc3_package_operating_points_materialize_static_snapshots() {
         .materialize_balanced_operating_point(1)
         .expect("materialize")
         .expect("balanced payload");
-    assert_eq!(materialized.generators.len(), 1);
-    assert_eq!(materialized.loads.len(), 1);
-    assert_close(materialized.generators[0].pmax, 80.0);
-    assert_close(materialized.generators[0].pmin, 20.0);
-    assert_close(materialized.generators[0].qmax, 30.0);
-    assert_close(materialized.loads[0].p, 30.0);
-    assert_close(materialized.loads[0].q, 20.0);
+    assert_eq!(materialized.generators().len(), 1);
+    assert_eq!(materialized.loads().len(), 1);
+    assert_close(materialized.generators()[0].pmax, 80.0);
+    assert_close(materialized.generators()[0].pmin, 20.0);
+    assert_close(materialized.generators()[0].qmax, 30.0);
+    assert_close(materialized.loads()[0].p, 30.0);
+    assert_close(materialized.loads()[0].q, 20.0);
 
     let static_pkg = pkg.materialize_operating_point(0).expect("period 0");
     assert!(static_pkg.operating_points().is_none());
@@ -472,7 +472,7 @@ fn goc3_operating_points_follow_parser_row_assignment() {
         1,
     );
     let parsed = parse_str(&src, "goc3-json").expect("parse goc3");
-    assert_eq!(parsed.network.generators.len(), 2);
+    assert_eq!(parsed.network.generators().len(), 2);
 
     let pkg = pkg_from_parsed(&parsed).with_package_id("parent");
     let series = pkg.operating_points().expect("operating points");
@@ -489,8 +489,8 @@ fn goc3_operating_points_follow_parser_row_assignment() {
     let balanced = materialized.as_balanced().expect("balanced payload");
     // Row 0 (the uid-less device) keeps its static bounds; row 1 gets the
     // period 1 update.
-    assert_close(balanced.generators[0].pmax, 0.0);
-    assert_close(balanced.generators[1].pmax, 80.0);
+    assert_close(balanced.generators()[0].pmax, 0.0);
+    assert_close(balanced.generators()[1].pmax, 80.0);
     assert_eq!(materialized.package_id, None);
     match &materialized.origin {
         powerio::package::Origin::Derived {
@@ -513,7 +513,7 @@ fn multiconductor_payload_roundtrips() {
     let back = NetworkPackage::from_json(&json).unwrap();
     assert_eq!(back.model_kind(), ModelKind::Multiconductor);
     // The vsource is present in the payload after the round trip.
-    assert!(!back.as_multiconductor().unwrap().sources.is_empty());
+    assert!(!back.as_multiconductor().unwrap().sources().is_empty());
 }
 
 #[test]
@@ -572,12 +572,12 @@ fn materializes_balanced_operating_point_and_clears_series() {
     );
 
     let net = materialized.as_balanced().unwrap();
-    assert_eq!(net.loads.len(), 1);
-    assert_close(net.loads[0].p, 22.0);
-    assert_close(net.loads[0].q, 9.0);
-    assert_close(net.generators[0].pg, 61.0);
-    assert_close(net.generators[0].pmax, 90.0);
-    assert!(!net.branches[0].in_service);
+    assert_eq!(net.loads().len(), 1);
+    assert_close(net.loads()[0].p, 22.0);
+    assert_close(net.loads()[0].q, 9.0);
+    assert_close(net.generators()[0].pg, 61.0);
+    assert_close(net.generators()[0].pmax, 90.0);
+    assert!(!net.branches()[0].in_service);
     match &materialized.origin {
         Origin::Derived { pass, options, .. } => {
             assert_eq!(pass, "materialize-operating-point");
@@ -633,7 +633,7 @@ fn materialize_operating_point_rejects_duplicate_indices() {
             .contains("package has multiple operating points with index 0"),
         "{err}"
     );
-    assert_close(pkg.as_balanced().unwrap().loads[0].p, 10.0);
+    assert_close(pkg.as_balanced().unwrap().loads()[0].p, 10.0);
 }
 
 #[test]
@@ -1065,17 +1065,17 @@ fn balanced_origin_matches_source_artifact_kind() {
         .expect("parse matpower")
         .network;
 
-    net.source_format = powerio::SourceFormat::Gridfm;
+    *net.source_format_mut() = powerio::SourceFormat::Gridfm;
     let gridfm = NetworkPackage::from_balanced(net.clone());
     assert!(matches!(gridfm.origin, Origin::Folder { .. }));
     assert_eq!(gridfm.sources[0].kind, "folder");
 
-    net.source_format = powerio::SourceFormat::PypsaCsv;
+    *net.source_format_mut() = powerio::SourceFormat::PypsaCsv;
     let pypsa = NetworkPackage::from_balanced(net.clone());
     assert!(matches!(pypsa.origin, Origin::Folder { .. }));
     assert_eq!(pypsa.sources[0].kind, "folder");
 
-    net.source_format = powerio::SourceFormat::PowerWorldBinary;
+    *net.source_format_mut() = powerio::SourceFormat::PowerWorldBinary;
     let pwb = NetworkPackage::from_balanced(net);
     assert!(matches!(pwb.origin, Origin::BinaryFile { .. }));
     assert_eq!(pwb.sources[0].kind, "binary_file");
@@ -1095,7 +1095,7 @@ fn unknown_future_fields_are_tolerated() {
     let back = NetworkPackage::from_json(&json).expect("tolerate unknown field");
     assert_eq!(back.model_kind(), ModelKind::Balanced);
     assert!(back.kind_is_consistent());
-    assert_eq!(back.as_balanced().unwrap().buses.len(), 2);
+    assert_eq!(back.as_balanced().unwrap().buses().len(), 2);
 }
 
 #[test]
@@ -1296,8 +1296,9 @@ fn sane_validation_records_multiconductor_structure_findings() {
     use powerio_dist::{DistBus, DistLine, MulticonductorNetwork, UntypedObject};
 
     let mut net = MulticonductorNetwork::default();
-    net.buses.push(DistBus::new("a", vec!["1".to_owned()]));
-    net.lines.push(DistLine::new(
+    net.buses_mut()
+        .push(DistBus::new("a", vec!["1".to_owned()]));
+    net.lines_mut().push(DistLine::new(
         "l1",
         "a",
         "missing",
@@ -1306,7 +1307,7 @@ fn sane_validation_records_multiconductor_structure_findings() {
         "missing_code",
         1.0,
     ));
-    net.untyped
+    net.untyped_mut()
         .push(UntypedObject::new("regcontrol", "r1", Vec::new()));
 
     let mut pkg = NetworkPackage::from_multiconductor(net);
@@ -1438,7 +1439,7 @@ fn lowering_preflight_rejects_untyped_objects() {
     use powerio_dist::UntypedObject;
 
     let mut net = preflight_network(&["1", "2", "3"], &[]);
-    net.untyped
+    net.untyped_mut()
         .push(UntypedObject::new("regcontrol", "r1", Vec::new()));
     let report = check_multiconductor_to_balanced_lowering(
         &net,
@@ -1455,7 +1456,7 @@ fn lowering_preflight_rejects_untyped_objects() {
 #[test]
 fn lowering_preflight_rejects_missing_phase_reference() {
     let mut net = preflight_network(&["1", "2", "3"], &[]);
-    net.sources.clear();
+    net.sources_mut().clear();
     let report = check_multiconductor_to_balanced_lowering(
         &net,
         powerio::package::MulticonductorToBalancedOptions::default(),
@@ -1473,7 +1474,7 @@ fn lowering_preflight_rejects_transformers() {
     use powerio_dist::DistTransformer;
 
     let mut net = preflight_network(&["1", "2", "3"], &[]);
-    net.transformers
+    net.transformers_mut()
         .push(DistTransformer::new("t1", Vec::new(), Vec::new(), 3));
     let report = check_multiconductor_to_balanced_lowering(
         &net,
@@ -1513,13 +1514,13 @@ fn lowering_produces_balanced_three_phase_without_neutral() {
             .expect("lower three phase");
 
     let balanced = lowered.network;
-    assert_eq!(balanced.buses.len(), 2);
-    assert_eq!(balanced.branches.len(), 1);
-    assert_eq!(balanced.loads.len(), 0);
-    assert_eq!(balanced.buses[0].kind, powerio::BusType::Ref);
-    assert_eq!(balanced.buses[1].kind, powerio::BusType::Pq);
-    assert!(balanced.branches[0].x > 0.0);
-    assert_eq!(balanced.source_format, powerio::SourceFormat::InMemory);
+    assert_eq!(balanced.buses().len(), 2);
+    assert_eq!(balanced.branches().len(), 1);
+    assert_eq!(balanced.loads().len(), 0);
+    assert_eq!(balanced.buses()[0].kind, powerio::BusType::Ref);
+    assert_eq!(balanced.buses()[1].kind, powerio::BusType::Pq);
+    assert!(balanced.branches()[0].x > 0.0);
+    assert_eq!(balanced.source_format(), powerio::SourceFormat::InMemory);
     assert_eq!(lowered.record.input_kind, ModelKind::Multiconductor);
     assert_eq!(lowered.record.output_kind, ModelKind::Balanced);
     assert_eq!(lowered.record.validation_status, ValidationStatus::Ok);
@@ -1532,8 +1533,8 @@ fn lowering_produces_balanced_three_phase_with_neutral_kron() {
         lower_multiconductor_to_balanced(&net, MulticonductorToBalancedOptions::default())
             .expect("lower four wire");
 
-    assert_eq!(lowered.network.buses.len(), 2);
-    assert_eq!(lowered.network.branches.len(), 1);
+    assert_eq!(lowered.network.buses().len(), 2);
+    assert_eq!(lowered.network.branches().len(), 1);
     assert!(has_diagnostic_code(
         &lowered.record.diagnostics,
         "TRANSFORM.MULTI_TO_BALANCED.KRON_REDUCTION_REQUIRED"
@@ -1556,10 +1557,10 @@ fn lowering_produces_balanced_source_grounded_four_wire_fixture() {
         lower_multiconductor_to_balanced(&net, MulticonductorToBalancedOptions::default())
             .expect("lower source grounded four wire fixture");
 
-    assert!(lowered.network.buses.len() >= 2);
-    assert_eq!(lowered.network.branches.len(), 1);
-    assert_eq!(lowered.network.loads.len(), 3);
-    assert!(lowered.network.loads.iter().all(|load| load.p > 0.0));
+    assert!(lowered.network.buses().len() >= 2);
+    assert_eq!(lowered.network.branches().len(), 1);
+    assert_eq!(lowered.network.loads().len(), 3);
+    assert!(lowered.network.loads().iter().all(|load| load.p > 0.0));
     assert!(has_diagnostic_code(
         &lowered.record.diagnostics,
         "TRANSFORM.MULTI_TO_BALANCED.KRON_REDUCTION_REQUIRED"
@@ -1585,7 +1586,7 @@ fn lowering_rejects_two_wire_input() {
 #[test]
 fn lowering_rejects_missing_phase_reference() {
     let mut net = preflight_network(&["1", "2", "3"], &[]);
-    net.sources.clear();
+    net.sources_mut().clear();
     assert_lowering_rejects(&net, "TRANSFORM.MULTI_TO_BALANCED.MISSING_PHASE_REFERENCE");
 }
 
@@ -1594,7 +1595,7 @@ fn lowering_rejects_transformer_input() {
     use powerio_dist::DistTransformer;
 
     let mut net = preflight_network(&["1", "2", "3"], &[]);
-    net.transformers
+    net.transformers_mut()
         .push(DistTransformer::new("t1", Vec::new(), Vec::new(), 3));
     assert_lowering_rejects(&net, "TRANSFORM.MULTI_TO_BALANCED.UNSUPPORTED_TRANSFORMER");
 }
@@ -1604,7 +1605,7 @@ fn lowering_rejects_untyped_object_input() {
     use powerio_dist::UntypedObject;
 
     let mut net = preflight_network(&["1", "2", "3"], &[]);
-    net.untyped
+    net.untyped_mut()
         .push(UntypedObject::new("regcontrol", "r1", Vec::new()));
     assert_lowering_rejects(&net, "TRANSFORM.MULTI_TO_BALANCED.UNSUPPORTED_OBJECT");
 }
@@ -1614,7 +1615,7 @@ fn lowering_rejects_closed_switch_input() {
     use powerio_dist::DistSwitch;
 
     let mut net = preflight_network(&["1", "2", "3"], &[]);
-    net.switches.push(DistSwitch::new(
+    net.switches_mut().push(DistSwitch::new(
         "sw1",
         "sourcebus",
         "loadbus",
@@ -1633,7 +1634,7 @@ fn lowering_rejects_generator_unknown_bus() {
     use powerio_dist::{Configuration, DistGenerator};
 
     let mut net = preflight_network(&["1", "2", "3"], &[]);
-    net.generators.push(DistGenerator::new(
+    net.generators_mut().push(DistGenerator::new(
         "g_missing",
         "missing",
         strings(&["1", "2", "3"]),
@@ -1650,7 +1651,7 @@ fn lowering_preserves_single_phase_shunt_total() {
     use powerio_dist::DistShunt;
 
     let mut net = preflight_network(&["1", "2", "3"], &[]);
-    net.shunts.push(DistShunt::new(
+    net.shunts_mut().push(DistShunt::new(
         "s1",
         "loadbus",
         strings(&["1"]),
@@ -1661,11 +1662,11 @@ fn lowering_preserves_single_phase_shunt_total() {
     let lowered =
         lower_multiconductor_to_balanced(&net, MulticonductorToBalancedOptions::default())
             .expect("lower single phase shunt");
-    assert_eq!(lowered.network.shunts.len(), 1);
+    assert_eq!(lowered.network.shunts().len(), 1);
 
     let expected_g = 0.03 * 240.0 * 240.0 / 1_000_000.0;
     let expected_b = 0.06 * 240.0 * 240.0 / 1_000_000.0;
-    let shunt = &lowered.network.shunts[0];
+    let shunt = &lowered.network.shunts()[0];
     assert!(
         (shunt.g - expected_g).abs() < 1.0e-12,
         "got {}, expected {}",
@@ -1803,7 +1804,7 @@ fn load_voltage_model_survives_package_roundtrip() {
         vec![30.0, 30.0, 30.0],
     );
     load.voltage_model = zip.clone();
-    net.loads.push(load);
+    net.loads_mut().push(load);
 
     let pkg = NetworkPackage::from_multiconductor(net);
     assert_eq!(pkg.model_kind(), ModelKind::Multiconductor);
@@ -1811,7 +1812,7 @@ fn load_voltage_model_survives_package_roundtrip() {
 
     let back = NetworkPackage::from_json(&pkg.to_json_pretty().unwrap()).unwrap();
     assert_eq!(
-        back.as_multiconductor().unwrap().loads[0].voltage_model,
+        back.as_multiconductor().unwrap().loads()[0].voltage_model,
         zip
     );
 
@@ -1834,9 +1835,9 @@ fn package_synthesizes_row_identity() {
     let pkg = balanced_package();
     // MATPOWER has no source uids, so every row gets a synthesized identity.
     let net = pkg.as_balanced().unwrap();
-    assert_eq!(net.buses[0].uid.as_deref(), Some("buses:0"));
-    assert_eq!(net.buses[1].uid.as_deref(), Some("buses:1"));
-    assert_eq!(net.branches[0].uid.as_deref(), Some("branches:0"));
+    assert_eq!(net.buses()[0].uid.as_deref(), Some("buses:0"));
+    assert_eq!(net.buses()[1].uid.as_deref(), Some("buses:1"));
+    assert_eq!(net.branches()[0].uid.as_deref(), Some("branches:0"));
 
     let v = serde_json::to_value(&pkg).unwrap();
     assert_eq!(v["powerio_version"], serde_json::json!(powerio::VERSION));
@@ -1854,7 +1855,7 @@ fn duplicate_payload_uid_is_diagnosed_without_operating_points() {
     // validation must surface the ambiguity even when nothing (no operating
     // points, no study) references it yet.
     let mut net = parse_str(MATPOWER_SRC, "matpower").unwrap().network;
-    net.buses[1].uid = Some("buses:0".to_owned());
+    net.buses_mut()[1].uid = Some("buses:0".to_owned());
     let mut pkg = NetworkPackage::from_balanced(net);
     pkg.run_sane_validation();
 
@@ -1952,7 +1953,7 @@ fn identity_only_update_resolves_without_row() {
 
     let back = NetworkPackage::from_json(&pkg.to_json_pretty().unwrap()).unwrap();
     let materialized = back.materialize_operating_point(0).unwrap();
-    assert_close(materialized.as_balanced().unwrap().loads[0].p, 33.0);
+    assert_close(materialized.as_balanced().unwrap().loads()[0].p, 33.0);
 }
 
 #[test]
@@ -2005,8 +2006,8 @@ fn duplicate_payload_identities_are_rejected() {
     let mut net = parse_str(MATPOWER_SRC, "matpower")
         .expect("parse matpower")
         .network;
-    net.buses[0].uid = Some("dup".to_owned());
-    net.buses[1].uid = Some("dup".to_owned());
+    net.buses_mut()[0].uid = Some("dup".to_owned());
+    net.buses_mut()[1].uid = Some("dup".to_owned());
     let mut point = OperatingPoint::new(0);
     point.updates.push(ElementUpdate::new(
         ElementRef::by_source_uid("buses", "dup"),
@@ -2063,7 +2064,7 @@ fn payload_without_uids_keeps_row_semantics() {
 
     let bare = NetworkPackage::from_json(&v.to_string()).unwrap();
     let materialized = bare.materialize_operating_point(0).unwrap();
-    assert_close(materialized.as_balanced().unwrap().loads[0].p, 12.0);
+    assert_close(materialized.as_balanced().unwrap().loads()[0].p, 12.0);
 }
 
 #[test]
@@ -2113,11 +2114,14 @@ fn goc3_updates_resolve_by_identity_not_row_order() {
         1,
     );
     let net = parse_str(&src, "goc3-json").expect("parse goc3").network;
-    assert_eq!(net.generators[1].uid.as_deref(), Some("prod"));
+    assert_eq!(net.generators()[1].uid.as_deref(), Some("prod"));
     let pkg = NetworkPackage::from_balanced(net);
     let balanced = pkg.as_balanced().unwrap();
-    assert_eq!(balanced.generators[0].uid.as_deref(), Some("generators:0"));
-    assert_eq!(balanced.buses[0].uid.as_deref(), Some("bus_00"));
+    assert_eq!(
+        balanced.generators()[0].uid.as_deref(),
+        Some("generators:0")
+    );
+    assert_eq!(balanced.buses()[0].uid.as_deref(), Some("bus_00"));
 
     let mut by_identity = OperatingPoint::new(0);
     by_identity.updates.push(ElementUpdate::new(
@@ -2130,8 +2134,8 @@ fn goc3_updates_resolve_by_identity_not_row_order() {
         .materialize_operating_point(0)
         .expect("identity resolves");
     let updated = materialized.as_balanced().unwrap();
-    assert_close(updated.generators[1].pmax, 123.0);
-    assert_close(updated.generators[0].pmax, 0.0);
+    assert_close(updated.generators()[1].pmax, 123.0);
+    assert_close(updated.generators()[0].pmax, 0.0);
 
     let mut wrong_row = OperatingPoint::new(0);
     wrong_row.updates.push(ElementUpdate::new(
@@ -2194,8 +2198,8 @@ fn ensure_payload_uids_is_public_and_deterministic() {
     let mut net = parse_str(MATPOWER_WITH_GEN_SRC, "matpower")
         .expect("parse matpower")
         .network;
-    net.buses[0].uid = Some("source-bus".to_owned());
-    net.loads[0].uid = Some("source-load".to_owned());
+    net.buses_mut()[0].uid = Some("source-bus".to_owned());
+    net.loads_mut()[0].uid = Some("source-load".to_owned());
 
     ensure_payload_uids(&mut net);
     let first = serde_json::to_value(&net).expect("serialize network with uids");
@@ -2203,10 +2207,10 @@ fn ensure_payload_uids_is_public_and_deterministic() {
     let second = serde_json::to_value(&net).expect("serialize network with uids again");
 
     assert_eq!(first, second);
-    assert_eq!(net.buses[0].uid.as_deref(), Some("source-bus"));
-    assert_eq!(net.buses[1].uid.as_deref(), Some("buses:1"));
-    assert_eq!(net.loads[0].uid.as_deref(), Some("source-load"));
-    assert_eq!(net.generators[0].uid.as_deref(), Some("generators:0"));
+    assert_eq!(net.buses()[0].uid.as_deref(), Some("source-bus"));
+    assert_eq!(net.buses()[1].uid.as_deref(), Some("buses:1"));
+    assert_eq!(net.loads()[0].uid.as_deref(), Some("source-load"));
+    assert_eq!(net.generators()[0].uid.as_deref(), Some("generators:0"));
 }
 
 #[test]
@@ -2253,10 +2257,10 @@ fn study_commit_materialization_folds_commits_and_set_fields() {
     );
 
     let net = materialized.as_balanced().expect("balanced output");
-    assert_close(net.loads[0].p, 20.0);
-    assert_close(net.loads[0].q, 8.5);
-    assert_close(net.branches[0].rate_a, 90.0);
-    assert_close(net.generators[0].pg, 55.0);
+    assert_close(net.loads()[0].p, 20.0);
+    assert_close(net.loads()[0].q, 8.5);
+    assert_close(net.branches()[0].rate_a, 90.0);
+    assert_close(net.generators()[0].pg, 55.0);
 }
 
 #[test]
@@ -2264,10 +2268,10 @@ fn study_demand_delta_distributes_over_existing_loads() {
     let mut net = parse_str(MATPOWER_WITH_GEN_SRC, "matpower")
         .expect("parse matpower")
         .network;
-    net.loads[0].uid = Some("load_1".to_owned());
+    net.loads_mut()[0].uid = Some("load_1".to_owned());
     let mut extra_load = powerio::Load::new(powerio::BusId(2), 30.0, 15.0);
     extra_load.uid = Some("load_2".to_owned());
-    net.loads.push(extra_load);
+    net.loads_mut().push(extra_load);
 
     let study = study_block(vec![study_commit(vec![StudyEdit::DemandDelta {
         bus: ElementRef::by_source_uid("buses", "buses:1"),
@@ -2280,10 +2284,10 @@ fn study_demand_delta_distributes_over_existing_loads() {
         .expect("materialize proportional demand delta");
     let net = materialized.as_balanced().expect("balanced output");
 
-    assert_close(net.loads[0].p, 12.0);
-    assert_close(net.loads[0].q, 6.0);
-    assert_close(net.loads[1].p, 36.0);
-    assert_close(net.loads[1].q, 18.0);
+    assert_close(net.loads()[0].p, 12.0);
+    assert_close(net.loads()[0].q, 6.0);
+    assert_close(net.loads()[1].p, 36.0);
+    assert_close(net.loads()[1].q, 18.0);
 }
 
 #[test]
@@ -2291,7 +2295,7 @@ fn study_demand_delta_appends_synthetic_load_for_empty_bus() {
     let mut net = parse_str(MATPOWER_SRC, "matpower")
         .expect("parse matpower")
         .network;
-    net.loads.clear();
+    net.loads_mut().clear();
     let study = study_block(vec![study_commit(vec![StudyEdit::DemandDelta {
         bus: ElementRef::by_source_uid("buses", "buses:1"),
         p_mw: 12.0,
@@ -2304,13 +2308,13 @@ fn study_demand_delta_appends_synthetic_load_for_empty_bus() {
         .expect("materialize synthetic load");
     let net = materialized.as_balanced().expect("balanced output");
 
-    assert_eq!(net.loads.len(), 1);
-    assert_eq!(net.loads[0].bus, powerio::BusId(2));
-    assert_close(net.loads[0].p, 12.0);
-    assert_close(net.loads[0].q, 3.0);
-    assert_eq!(net.loads[0].uid.as_deref(), Some("study:load:buses:1"));
+    assert_eq!(net.loads().len(), 1);
+    assert_eq!(net.loads()[0].bus, powerio::BusId(2));
+    assert_close(net.loads()[0].p, 12.0);
+    assert_close(net.loads()[0].q, 3.0);
+    assert_eq!(net.loads()[0].uid.as_deref(), Some("study:load:buses:1"));
     assert_eq!(
-        net.loads[0]
+        net.loads()[0]
             .extras
             .get("study")
             .and_then(|v| v.get("synthetic"))
@@ -2335,8 +2339,8 @@ fn study_uses_base_operating_point_before_commits() {
         .expect("materialize study from operating point");
     let net = materialized.as_balanced().expect("balanced output");
 
-    assert_close(net.loads[0].p, 24.0);
-    assert_close(net.loads[0].q, 10.0);
+    assert_close(net.loads()[0].p, 24.0);
+    assert_close(net.loads()[0].q, 10.0);
     assert!(materialized.operating_points.is_none());
     assert!(materialized.study.is_none());
     assert_eq!(
@@ -2461,17 +2465,17 @@ New Line.l1 bus1=b1.1.2.3 bus2=b2.1.2.3 linecode=lc length=1 units=m\n";
     let shared = lower_multiconductor_to_balanced(&net, MulticonductorToBalancedOptions::default())
         .expect("lower")
         .network;
-    let shared_rate = shared.branches[0].rate_a;
+    let shared_rate = shared.branches()[0].rate_a;
 
     let mut with_line_rating = net.clone();
-    with_line_rating.lines[0].i_max = Some(vec![200.0, 200.0, 200.0]);
+    with_line_rating.lines_mut()[0].i_max = Some(vec![200.0, 200.0, 200.0]);
     let lowered = lower_multiconductor_to_balanced(
         &with_line_rating,
         MulticonductorToBalancedOptions::default(),
     )
     .expect("lower")
     .network;
-    let line_rate = lowered.branches[0].rate_a;
+    let line_rate = lowered.branches()[0].rate_a;
 
     assert!(shared_rate > 0.0, "the linecode rating is the baseline");
     assert!(
@@ -2486,7 +2490,7 @@ New Line.l1 bus1=b1.1.2.3 bus2=b2.1.2.3 linecode=lc length=1 units=m\n";
 #[test]
 fn a_dropped_capacitor_bank_is_recorded_and_counted() {
     let mut net = helpers::dist_parse_str("New Circuit.c1", "dss");
-    net.capacitors.push(powerio_dist::DistCapacitor::new(
+    net.capacitors_mut().push(powerio_dist::DistCapacitor::new(
         "cap1",
         "sourcebus",
         vec!["1".to_owned()],
@@ -2555,7 +2559,7 @@ fn multiconductor_nonfinite_floats_roundtrip() {
     );
     generator.p_max = Some(vec![500e3, f64::INFINITY]);
     generator.p_min = Some(vec![f64::NEG_INFINITY, 0.0]);
-    net.generators.push(generator);
+    net.generators_mut().push(generator);
     let mut switch = DistSwitch::new(
         "s1",
         "sourcebus",
@@ -2565,17 +2569,17 @@ fn multiconductor_nonfinite_floats_roundtrip() {
         false,
     );
     switch.i_max = Some(vec![f64::INFINITY]);
-    net.switches.push(switch);
+    net.switches_mut().push(switch);
 
     let pkg = NetworkPackage::from_multiconductor(net);
     let text = pkg.to_json().expect("serialize");
     let back = NetworkPackage::from_json(&text).expect("read back the package this wrote");
 
     let payload = back.as_multiconductor().expect("multiconductor payload");
-    let generator = &payload.generators[payload.generators.len() - 1];
+    let generator = &payload.generators()[payload.generators().len() - 1];
     assert_eq!(generator.p_max, Some(vec![500e3, f64::INFINITY]));
     assert_eq!(generator.p_min, Some(vec![f64::NEG_INFINITY, 0.0]));
-    let switch = &payload.switches[payload.switches.len() - 1];
+    let switch = &payload.switches()[payload.switches().len() - 1];
     assert_eq!(switch.i_max, Some(vec![f64::INFINITY]));
 }
 
@@ -2597,8 +2601,8 @@ fn multiconductor_nonfinite_ratings_and_scalars_roundtrip() {
     ibr.p_max = Some(vec![f64::INFINITY]);
     ibr.p_min = Some(vec![f64::NEG_INFINITY]);
     ibr.i_max = Some(vec![f64::INFINITY]);
-    net.ibrs.push(ibr);
-    net.capacitors.push(DistCapacitor::new(
+    net.ibrs_mut().push(ibr);
+    net.capacitors_mut().push(DistCapacitor::new(
         "c1",
         "sourcebus",
         vec!["1".into()],
@@ -2612,12 +2616,12 @@ fn multiconductor_nonfinite_ratings_and_scalars_roundtrip() {
     let back = NetworkPackage::from_json(&text).expect("read back the package this wrote");
 
     let payload = back.as_multiconductor().expect("multiconductor payload");
-    let ibr = &payload.ibrs[payload.ibrs.len() - 1];
+    let ibr = &payload.ibrs()[payload.ibrs().len() - 1];
     assert_eq!(ibr.s_max, vec![f64::INFINITY]);
     assert_eq!(ibr.p_max, Some(vec![f64::INFINITY]));
     assert_eq!(ibr.p_min, Some(vec![f64::NEG_INFINITY]));
     assert_eq!(ibr.i_max, Some(vec![f64::INFINITY]));
-    let capacitor = &payload.capacitors[payload.capacitors.len() - 1];
+    let capacitor = &payload.capacitors()[payload.capacitors().len() - 1];
     assert!(capacitor.q_rated.is_nan());
     assert!(capacitor.v_nom.is_nan());
 }

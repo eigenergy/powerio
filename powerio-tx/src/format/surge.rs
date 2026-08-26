@@ -13,9 +13,9 @@ use super::{Conversion, finish, jnum, warn_extra_branch_rating_sets};
 use crate::diagnostics::codes::EMIT_SURGE as F;
 use crate::diagnostics::{Diagnostics, codes};
 use crate::network::{
-    BalancedNetwork, Branch, BranchCharging, BranchCurrentRatings, BranchSolution, Bus, BusId,
-    BusType, Extras, GEN_EXTRA_KEYS, GenCaps, GenCost, Generator, Hvdc, Load, LoadVoltageModel,
-    Shunt, SourceFormat, Storage,
+    BalancedNetwork, BalancedNetworkTables, Branch, BranchCharging, BranchCurrentRatings,
+    BranchSolution, Bus, BusId, BusType, Extras, GEN_EXTRA_KEYS, GenCaps, GenCost, Generator, Hvdc,
+    Load, LoadVoltageModel, Shunt, SourceFormat, Storage,
 };
 use crate::normalize;
 use crate::{Error, Result};
@@ -30,40 +30,40 @@ pub fn write_surge_json(net: &BalancedNetwork) -> Conversion {
     let mut warnings = Diagnostics::new();
     let mut network = Map::new();
 
-    network.insert("name".into(), Value::String(net.name.clone()));
-    network.insert("base_mva".into(), jnum(net.base_mva));
-    network.insert("freq_hz".into(), jnum(net.base_frequency));
+    network.insert("name".into(), Value::String(net.name().clone()));
+    network.insert("base_mva".into(), jnum(net.base_mva()));
+    network.insert("freq_hz".into(), jnum(net.base_frequency()));
 
     network.insert(
         "buses".into(),
-        Value::Array(net.buses.iter().map(bus_obj).collect()),
+        Value::Array(net.buses().iter().map(bus_obj).collect()),
     );
     network.insert(
         "loads".into(),
-        Value::Array(net.loads.iter().enumerate().map(load_obj).collect()),
+        Value::Array(net.loads().iter().enumerate().map(load_obj).collect()),
     );
     network.insert(
         "fixed_shunts".into(),
-        Value::Array(net.shunts.iter().enumerate().map(shunt_obj).collect()),
+        Value::Array(net.shunts().iter().enumerate().map(shunt_obj).collect()),
     );
     network.insert(
         "branches".into(),
-        Value::Array(net.branches.iter().enumerate().map(branch_obj).collect()),
+        Value::Array(net.branches().iter().enumerate().map(branch_obj).collect()),
     );
 
     let mut gen_counts: BTreeMap<BusId, usize> = BTreeMap::new();
     let mut generators = Vec::new();
-    for generator in &net.generators {
+    for generator in net.generators() {
         generators.push(gen_obj(generator, &mut gen_counts, &mut warnings));
     }
-    for storage in &net.storage {
+    for storage in net.storage() {
         generators.push(storage_gen_obj(storage, &mut gen_counts));
     }
     network.insert("generators".into(), Value::Array(generators));
 
-    if !net.hvdc.is_empty() {
+    if !net.hvdc().is_empty() {
         let links = net
-            .hvdc
+            .hvdc()
             .iter()
             .enumerate()
             .map(|(i, dc)| hvdc_link_obj(dc, i, &mut warnings))
@@ -559,7 +559,7 @@ pub(crate) fn parse_surge_source(
         .unwrap_or("case")
         .to_string();
 
-    let net = BalancedNetwork {
+    let net = BalancedNetwork::from_tables(BalancedNetworkTables {
         name,
         base_mva: f_map_or(network, "base_mva", 100.0)?,
         base_frequency: f_map_or(network, "freq_hz", crate::network::DEFAULT_BASE_FREQUENCY)?,
@@ -582,7 +582,7 @@ pub(crate) fn parse_surge_source(
         areas: Vec::new(),
         solver: None,
         source_format: SourceFormat::SurgeJson,
-    };
+    });
     net.check_references(FMT)?;
     Ok(net)
 }

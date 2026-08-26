@@ -25,9 +25,9 @@ use crate::model::{
     DistControlProfile, DistGenerator, DistIbr, DistLine, DistLineCode, DistLoad,
     DistLoadVoltageModel, DistShunt, DistSourceFormat, DistSwitch, DistTransformer, DistWinding,
     DistWindingConn, Extras, IbrPrimeMover, IbrTopology, Mat, MulticonductorNetwork,
-    PowerFactorControl, ReactivePowerReference, ReactivePowerUnit, UntypedObject, VoltVarControl,
-    VoltWattControl, VoltageSource, open_delta_connection, open_delta_pairable, pair_keys,
-    square_from_rows, winding_phase_pair,
+    MulticonductorNetworkTables, PowerFactorControl, ReactivePowerReference, ReactivePowerUnit,
+    UntypedObject, VoltVarControl, VoltWattControl, VoltageSource, open_delta_connection,
+    open_delta_pairable, pair_keys, square_from_rows, winding_phase_pair,
 };
 
 /// Upper bound on any count property (`phases`, conductors, `windings`, tap
@@ -76,12 +76,12 @@ pub fn network_from_raw(
     let mut diags = crate::collect::Diagnostics::new();
     diags.absorb(raw.diagnostics.iter().cloned());
     let mut rd = Reader {
-        net: MulticonductorNetwork {
+        net: MulticonductorNetwork::from_tables(MulticonductorNetworkTables {
             name: raw.circuit_name.clone(),
             base_frequency: dd::BASE_FREQUENCY,
             source_format: Some(DistSourceFormat::Dss),
-            ..MulticonductorNetwork::default()
-        },
+            ..MulticonductorNetworkTables::default()
+        }),
         diags,
         buses: BTreeMap::new(),
         bus_order: Vec::new(),
@@ -100,35 +100,39 @@ pub fn network_from_raw(
         // resolution point.
         if name.len() >= "defaultb".len() && "defaultbasefrequency".starts_with(name.as_str()) {
             if let Ok(f) = value.to_f64(Some(rd.vars)) {
-                rd.net.base_frequency = f;
+                *rd.net.base_frequency_mut() = f;
             }
         }
-        rd.net.options.push((name.clone(), value.text.clone()));
+        rd.net
+            .options_mut()
+            .push((name.clone(), value.text.clone()));
     }
     for cmd in &raw.commands {
-        rd.net.commands.push((cmd.verb.clone(), cmd.args.clone()));
+        rd.net
+            .commands_mut()
+            .push((cmd.verb.clone(), cmd.args.clone()));
     }
 
     // Linecodes first: lines reference them. Then everything else in script
     // order per class.
     for obj in raw.of_class("linecode") {
         let lc = rd.linecode(obj);
-        rd.net.linecodes.push(lc);
+        rd.net.linecodes_mut().push(lc);
     }
     for obj in raw.of_class("vsource") {
         let vs = rd.vsource(obj);
-        rd.net.sources.push(vs);
+        rd.net.sources_mut().push(vs);
     }
     for obj in raw.of_class("line") {
         rd.line(obj);
     }
     for obj in raw.of_class("transformer") {
         let t = rd.transformer(obj);
-        rd.net.transformers.push(t);
+        rd.net.transformers_mut().push(t);
     }
     for obj in raw.of_class("load") {
         let l = rd.load(obj);
-        rd.net.loads.push(l);
+        rd.net.loads_mut().push(l);
     }
     for obj in raw.of_class("capacitor") {
         rd.capacitor(obj);
@@ -138,7 +142,7 @@ pub fn network_from_raw(
     }
     for obj in raw.of_class("generator") {
         let g = rd.generator(obj);
-        rd.net.generators.push(g);
+        rd.net.generators_mut().push(g);
     }
     read_ibr_objects(&mut rd, raw);
     for obj in raw.of_class("swtcontrol") {
@@ -150,7 +154,7 @@ pub fn network_from_raw(
     rd.classify_regulators();
     for obj in &raw.objects {
         if !TYPED_DSS_CLASSES.contains(&obj.class.as_str()) {
-            rd.net.untyped.push(UntypedObject::from(obj));
+            rd.net.untyped_mut().push(UntypedObject::from(obj));
         }
     }
 
@@ -161,13 +165,13 @@ pub fn network_from_raw(
     // either way; the reader does not substitute a default impedance.
     let known: std::collections::BTreeSet<String> = rd
         .net
-        .linecodes
+        .linecodes()
         .iter()
         .map(|c| c.name.to_ascii_lowercase())
         .collect();
     let missing: Vec<String> = rd
         .net
-        .lines
+        .lines()
         .iter()
         .filter(|l| !known.contains(&l.linecode.to_ascii_lowercase()))
         .map(|l| {
@@ -229,10 +233,10 @@ fn finish_buses(
                 kind: None,
             });
         }
-        net.buses.push(bus);
+        net.buses_mut().push(bus);
     }
     if !coords.is_empty() {
-        net.geo = Some(DistGeoMeta {
+        *net.geo_mut() = Some(DistGeoMeta {
             space: CoordinateSpace::Unknown,
             kind: Some(DistCoordsKind::Source),
         });
@@ -254,27 +258,27 @@ fn finish_buses(
             }
         }
     };
-    for l in &mut net.lines {
+    for l in net.lines_mut() {
         rewrite(&l.bus_from, &mut l.terminal_map_from);
         rewrite(&l.bus_to, &mut l.terminal_map_to);
     }
-    for s in &mut net.switches {
+    for s in net.switches_mut() {
         rewrite(&s.bus_from, &mut s.terminal_map_from);
         rewrite(&s.bus_to, &mut s.terminal_map_to);
     }
-    for l in &mut net.loads {
+    for l in net.loads_mut() {
         rewrite(&l.bus, &mut l.terminal_map);
     }
-    for g in &mut net.generators {
+    for g in net.generators_mut() {
         rewrite(&g.bus, &mut g.terminal_map);
     }
-    for s in &mut net.shunts {
+    for s in net.shunts_mut() {
         rewrite(&s.bus, &mut s.terminal_map);
     }
-    for v in &mut net.sources {
+    for v in net.sources_mut() {
         rewrite(&v.bus, &mut v.terminal_map);
     }
-    for t in &mut net.transformers {
+    for t in net.transformers_mut() {
         for w in &mut t.windings {
             rewrite(&w.bus, &mut w.terminal_map);
         }
@@ -422,7 +426,7 @@ impl Reader<'_> {
     fn defaulted(&mut self, class: &str, name: &str, field: &'static str) {
         let fields = self
             .net
-            .defaulted
+            .defaulted_mut()
             .entry(format!("{class}.{name}"))
             .or_default();
         if !fields.contains(&field) {
@@ -592,7 +596,7 @@ impl Reader<'_> {
 
         let freq = self
             .f64_prop(props.get("basefreq"))
-            .unwrap_or(self.net.base_frequency);
+            .unwrap_or(self.net.base_frequency());
 
         let z = self.impedance_matrices(
             &props,
@@ -862,7 +866,7 @@ impl Reader<'_> {
                     );
                 }
             }
-            self.net.switches.push(DistSwitch {
+            self.net.switches_mut().push(DistSwitch {
                 name: obj.name.clone(),
                 bus_from: spec1.name,
                 bus_to: spec2.name,
@@ -916,7 +920,7 @@ impl Reader<'_> {
         for (key, text) in malformed {
             extras.insert(key.to_string(), text.into());
         }
-        self.net.lines.push(DistLine {
+        self.net.lines_mut().push(DistLine {
             name: obj.name.clone(),
             bus_from: spec1.name,
             bus_to: spec2.name,
@@ -988,13 +992,13 @@ impl Reader<'_> {
         }
         let b_half = scale_mat(
             &z.c_nf,
-            std::f64::consts::TAU * self.net.base_frequency * 1e-9 / length_factor / 2.0,
+            std::f64::consts::TAU * self.net.base_frequency() * 1e-9 / length_factor / 2.0,
         );
         let zero = vec![vec![0.0; phases]; phases];
         let amps = self.f64_or(props, "emergamps", "line", line_name, dd::line::EMERGAMPS);
         let i_max = Some(vec![amps; phases]);
         let name = format!("_line_{line_name}");
-        self.net.linecodes.push(DistLineCode {
+        self.net.linecodes_mut().push(DistLineCode {
             name: name.clone(),
             n_conductors: phases,
             r_series: scale_mat(&z.r, 1.0 / length_factor),
@@ -1422,7 +1426,7 @@ impl Reader<'_> {
                     obj.name
                 ),
             );
-            self.net.untyped.push(UntypedObject::from(obj));
+            self.net.untyped_mut().push(UntypedObject::from(obj));
             return;
         }
         let bus = bus_spec(props.get("bus1"), "");
@@ -1443,7 +1447,7 @@ impl Reader<'_> {
                     obj.name
                 ),
             );
-            self.net.untyped.push(UntypedObject::from(obj));
+            self.net.untyped_mut().push(UntypedObject::from(obj));
             return;
         }
 
@@ -1458,7 +1462,7 @@ impl Reader<'_> {
                     obj.name
                 ),
             );
-            self.net.untyped.push(UntypedObject::from(obj));
+            self.net.untyped_mut().push(UntypedObject::from(obj));
             return;
         }
         let has_rx = props.by_name.contains_key("r") || props.by_name.contains_key("x");
@@ -1479,7 +1483,7 @@ impl Reader<'_> {
                         obj.name
                     ),
                 );
-                self.net.untyped.push(UntypedObject::from(obj));
+                self.net.untyped_mut().push(UntypedObject::from(obj));
             }
             return;
         }
@@ -1507,7 +1511,7 @@ impl Reader<'_> {
                     obj.name
                 ),
             );
-            self.net.untyped.push(UntypedObject::from(obj));
+            self.net.untyped_mut().push(UntypedObject::from(obj));
             return;
         };
         let denom = resistance * resistance + reactance * reactance;
@@ -1516,7 +1520,7 @@ impl Reader<'_> {
                 "reactor {}: zero impedance grounding reactor is not a typed shunt; kept untyped",
                 obj.name
             ));
-            self.net.untyped.push(UntypedObject::from(obj));
+            self.net.untyped_mut().push(UntypedObject::from(obj));
             return;
         }
         let map = self.terminals(bus, phases, phases + 1, phases);
@@ -1529,7 +1533,7 @@ impl Reader<'_> {
             conductance[idx][idx] = y_g;
             susceptance[idx][idx] = y_b;
         }
-        self.net.shunts.push(DistShunt {
+        self.net.shunts_mut().push(DistShunt {
             name: obj.name.clone(),
             bus: bus.name.clone(),
             terminal_map: map,
@@ -1557,7 +1561,7 @@ impl Reader<'_> {
                     spec.class, obj.name
                 ),
             );
-            self.net.untyped.push(UntypedObject::from(obj));
+            self.net.untyped_mut().push(UntypedObject::from(obj));
             return;
         }
         // InterpretConnection: `d*` and `ll` are delta for both Capacitor and
@@ -1576,7 +1580,7 @@ impl Reader<'_> {
                         spec.class, obj.name, spec.series_name
                     ),
                 );
-                self.net.untyped.push(UntypedObject::from(obj));
+                self.net.untyped_mut().push(UntypedObject::from(obj));
                 return;
             }
         }
@@ -1589,7 +1593,7 @@ impl Reader<'_> {
                     spec.class, obj.name
                 ),
             );
-            self.net.untyped.push(UntypedObject::from(obj));
+            self.net.untyped_mut().push(UntypedObject::from(obj));
             return;
         }
         // Read the first kvar array entry, as the DSS engine does for a
@@ -1624,7 +1628,7 @@ impl Reader<'_> {
                     spec.class, obj.name
                 ),
             );
-            self.net.untyped.push(UntypedObject::from(obj));
+            self.net.untyped_mut().push(UntypedObject::from(obj));
             return;
         }
 
@@ -1652,7 +1656,7 @@ impl Reader<'_> {
                     spec.class, obj.name
                 ),
             );
-            self.net.untyped.push(UntypedObject::from(obj));
+            self.net.untyped_mut().push(UntypedObject::from(obj));
             return;
         };
         let mut extras = extras_from_leftovers(props);
@@ -1661,7 +1665,7 @@ impl Reader<'_> {
         if conn_delta {
             extras.insert("conn".into(), "delta".into());
         }
-        self.net.shunts.push(DistShunt {
+        self.net.shunts_mut().push(DistShunt {
             name: obj.name.clone(),
             bus: bus.name,
             terminal_map: map,
@@ -1795,7 +1799,7 @@ impl Reader<'_> {
                     obj.name
                 ),
             );
-            self.net.untyped.push(UntypedObject::from(obj));
+            self.net.untyped_mut().push(UntypedObject::from(obj));
             return;
         }
         let conn_delta = props.get("conn").is_some_and(|v| {
@@ -1865,7 +1869,7 @@ impl Reader<'_> {
         if let Some(pf) = pf {
             let profile = format!("{}_pf", obj.name);
             ibr.control_profile = Some(profile.clone());
-            self.net.control_profiles.push(DistControlProfile {
+            self.net.control_profiles_mut().push(DistControlProfile {
                 name: profile,
                 power_factor: Some(PowerFactorControl { pf }),
                 volt_var: None,
@@ -1873,7 +1877,7 @@ impl Reader<'_> {
                 extras: Extras::new(),
             });
         }
-        self.net.ibrs.push(ibr);
+        self.net.ibrs_mut().push(ibr);
     }
 
     fn xycurve(&mut self, obj: &RawObject) {
@@ -1894,7 +1898,7 @@ impl Reader<'_> {
                     obj.name
                 ),
             );
-            self.net.untyped.push(UntypedObject::from(obj));
+            self.net.untyped_mut().push(UntypedObject::from(obj));
             return;
         }
         self.xycurves
@@ -1940,14 +1944,14 @@ impl Reader<'_> {
                     obj.name
                 ),
             );
-            self.net.untyped.push(UntypedObject::from(obj));
+            self.net.untyped_mut().push(UntypedObject::from(obj));
             return;
         }
         for der in derlist {
             let name = der.rsplit_once('.').map_or(der.as_str(), |(_, name)| name);
             if let Some(ibr) = self
                 .net
-                .ibrs
+                .ibrs_mut()
                 .iter_mut()
                 .find(|ibr| ibr.name.eq_ignore_ascii_case(name))
             {
@@ -1966,7 +1970,7 @@ impl Reader<'_> {
                 );
             }
         }
-        self.net.control_profiles.push(profile);
+        self.net.control_profiles_mut().push(profile);
     }
 
     fn invcontrol_volt_var(
@@ -2073,7 +2077,7 @@ impl Reader<'_> {
         derlist.iter().find_map(|der| {
             let name = der.rsplit_once('.').map_or(der.as_str(), |(_, name)| name);
             self.net
-                .ibrs
+                .ibrs()
                 .iter()
                 .find(|ibr| ibr.name.eq_ignore_ascii_case(name))
                 .and_then(|ibr| ibr.extras.get(key))
@@ -2086,7 +2090,7 @@ impl Reader<'_> {
         let name = der.rsplit_once('.').map_or(der.as_str(), |(_, name)| name);
         let ibr = self
             .net
-            .ibrs
+            .ibrs()
             .iter()
             .find(|ibr| ibr.name.eq_ignore_ascii_case(name))?;
         let kv = ibr
@@ -2137,7 +2141,7 @@ impl Reader<'_> {
         let open = open.unwrap_or(false);
         match self
             .net
-            .switches
+            .switches_mut()
             .iter_mut()
             .find(|s| s.name.eq_ignore_ascii_case(line_name))
         {
@@ -2164,7 +2168,7 @@ impl Reader<'_> {
         if !target.is_empty() {
             self.regulated.insert(target.to_ascii_lowercase());
         }
-        self.net.untyped.push(UntypedObject::from(obj));
+        self.net.untyped_mut().push(UntypedObject::from(obj));
     }
 
     /// Marks regcontrol targeted transformers with the BMOPF regulator
@@ -2179,7 +2183,7 @@ impl Reader<'_> {
             return;
         }
         let mut legs: Vec<usize> = Vec::new();
-        for (idx, t) in self.net.transformers.iter_mut().enumerate() {
+        for (idx, t) in self.net.transformers_mut().iter_mut().enumerate() {
             if !regulated.contains(&t.name.to_ascii_lowercase()) || !is_series_regulator(t) {
                 continue;
             }
@@ -2193,7 +2197,7 @@ impl Reader<'_> {
         }
         let mut groups: BTreeMap<(String, String), Vec<usize>> = BTreeMap::new();
         for &idx in &legs {
-            let t = &self.net.transformers[idx];
+            let t = &self.net.transformers()[idx];
             let key = (
                 t.windings[0].bus.to_ascii_lowercase(),
                 t.windings[1].bus.to_ascii_lowercase(),
@@ -2202,7 +2206,7 @@ impl Reader<'_> {
         }
         for idxs in groups.into_values() {
             let [a, b] = idxs[..] else { continue };
-            let (ta, tb) = (&self.net.transformers[a], &self.net.transformers[b]);
+            let (ta, tb) = (&self.net.transformers()[a], &self.net.transformers()[b]);
             let pair = |t: &DistTransformer| winding_phase_pair(&t.windings[0]);
             let (Some(pa), Some(pb)) = (pair(ta), pair(tb)) else {
                 continue;
@@ -2211,7 +2215,7 @@ impl Reader<'_> {
                 continue;
             }
             for idx in [a, b] {
-                self.net.transformers[idx]
+                self.net.transformers_mut()[idx]
                     .extras
                     .insert("bmopf_subtype".into(), "open_delta_regulator".into());
             }
@@ -2504,22 +2508,22 @@ mod tests {
              New Vsource.aux basekv=12.47 phases=4 bus1=b2\n\
              New Vsource.solo basekv=2.4 phases=1 bus1=b3.1",
         );
-        let two = &net.sources[0];
+        let two = &net.sources()[0];
         assert!((two.v_magnitude[0] - 12.47e3 * 1.05 / 2.0).abs() < 1e-9);
         // Spacing is -360/n degrees: the second phase of a 2 phase source
         // wraps to +pi.
         assert!((two.v_angle[1] - std::f64::consts::PI).abs() < 1e-12);
-        let four = &net.sources[1];
+        let four = &net.sources()[1];
         let chord = 2.0 * (std::f64::consts::PI / 4.0).sin();
         assert!((four.v_magnitude[0] - 12.47e3 / chord).abs() < 1e-9);
-        let solo = &net.sources[2];
+        let solo = &net.sources()[2];
         assert!((solo.v_magnitude[0] - 2.4e3).abs() < 1e-9);
     }
 
     #[test]
     fn vsource_defaults_are_recorded() {
         let net = parse_dss_str("New Circuit.c1");
-        let fields = net.defaulted.get("vsource.source").expect("entry");
+        let fields = net.defaulted().get("vsource.source").expect("entry");
         for key in ["phases", "pu", "angle", "basekv", "bus1"] {
             assert!(fields.contains(&key), "missing {key}");
         }
@@ -2532,7 +2536,7 @@ mod tests {
              New Linecode.lc nphases=1 rmatrix=(0.5){lc_tail}\n\
              New Line.l1 bus1=a.1 bus2=b.1 phases=1 linecode=lc{line_tail}"
         ));
-        let line = net.lines.iter().find(|l| l.name == "l1").unwrap();
+        let line = net.lines().iter().find(|l| l.name == "l1").unwrap();
         let code = net.linecode(&line.linecode).unwrap();
         (code.r_series[0][0], line.length)
     }
@@ -2570,7 +2574,7 @@ mod tests {
             "New Circuit.c\n\
              New Line.l1 bus1=a.1 bus2=b.1 phases=1 length=0.5 units=km r1=0.5 x1=0.2 c1=3",
         );
-        let line = net.lines.iter().find(|l| l.name == "l1").unwrap();
+        let line = net.lines().iter().find(|l| l.name == "l1").unwrap();
         let code = net.linecode(&line.linecode).unwrap();
         assert!((line.length - 500.0).abs() < 1e-9);
         assert!((code.r_series[0][0] * line.length - 0.25).abs() < 1e-12);
@@ -2593,10 +2597,10 @@ mod tests {
              New Capacitor.c2 bus1=b.1.2 phases=2 kv=12.47 kvar=600\n\
              New Capacitor.c1 bus1=b.3 phases=1 kv=7.2 kvar=300",
         );
-        let c2 = net.shunts.iter().find(|s| s.name == "c2").unwrap();
+        let c2 = net.shunts().iter().find(|s| s.name == "c2").unwrap();
         let v2 = 12.47e3 / 3f64.sqrt();
         assert!((c2.b[0][0] * v2 * v2 / 300e3 - 1.0).abs() < 1e-12);
-        let c1 = net.shunts.iter().find(|s| s.name == "c1").unwrap();
+        let c1 = net.shunts().iter().find(|s| s.name == "c1").unwrap();
         let v1 = 7.2e3;
         assert!((c1.b[0][0] * v1 * v1 / 300e3 - 1.0).abs() < 1e-12);
     }
@@ -2608,8 +2612,8 @@ mod tests {
              New Capacitor.cap bus1=b.1 phases=1 kv=7.2 kvar=300\n\
              New Reactor.rea bus1=b.2 phases=1 kv=7.2 kvar=300",
         );
-        let cap = net.shunts.iter().find(|s| s.name == "cap").unwrap();
-        let rea = net.shunts.iter().find(|s| s.name == "rea").unwrap();
+        let cap = net.shunts().iter().find(|s| s.name == "cap").unwrap();
+        let rea = net.shunts().iter().find(|s| s.name == "rea").unwrap();
         assert!(cap.b[0][0] > 0.0);
         assert!(rea.b[0][0] < 0.0);
         assert!((cap.b[0][0] + rea.b[0][0]).abs() < 1e-18);
@@ -2622,14 +2626,14 @@ mod tests {
              New Capacitor.cap bus1=b.1 phases=0 kv=7.2 kvar=300\n\
              New Reactor.rea bus1=b.2 phases=0 kv=7.2 kvar=300",
         );
-        assert!(net.shunts.is_empty());
+        assert!(net.shunts().is_empty());
         assert!(
-            net.untyped
+            net.untyped()
                 .iter()
                 .any(|u| u.class.eq_ignore_ascii_case("capacitor") && u.name == "cap")
         );
         assert!(
-            net.untyped
+            net.untyped()
                 .iter()
                 .any(|u| u.class.eq_ignore_ascii_case("reactor") && u.name == "rea")
         );
@@ -2653,14 +2657,14 @@ mod tests {
              New Generator.g bus1=b.1.2.3 phases=3 conn=ll kw=90 kvar=30 kv=4.16\n\
              New Capacitor.cap bus1=b.1.2.3 phases=3 conn=ll kvar=600 kv=4.16",
         );
-        assert_eq!(net.generators[0].configuration, Configuration::Delta);
+        assert_eq!(net.generators()[0].configuration, Configuration::Delta);
         // `ll` capacitor banks use the delta shunt path.
-        assert_eq!(net.shunts.len(), 1);
-        let sh = &net.shunts[0];
+        assert_eq!(net.shunts().len(), 1);
+        let sh = &net.shunts()[0];
         assert!(sh.b[0][1] < 0.0, "{:?}", sh.b);
         assert_eq!(sh.terminal_map, vec!["1", "2", "3"]);
         assert!(
-            net.untyped
+            net.untyped()
                 .iter()
                 .all(|u| !(u.class.eq_ignore_ascii_case("capacitor") && u.name == "cap"))
         );
@@ -2672,7 +2676,7 @@ mod tests {
         // earlier kvar is discarded and q comes from the default pf 0.88.
         let net =
             parse_dss_str("New Circuit.c\nNew Load.l bus1=b.1 phases=1 kv=2.4 kvar=20 kw=100");
-        let l = &net.loads[0];
+        let l = &net.loads()[0];
         let q: f64 = l.q_nom.iter().sum();
         assert!((q - 100e3 * 0.88f64.acos().tan()).abs() < 1e-6);
         assert_eq!(
@@ -2680,7 +2684,7 @@ mod tests {
             Some(0.88)
         );
         assert!(
-            net.defaulted
+            net.defaulted()
                 .get("load.l")
                 .is_some_and(|f| f.contains(&"pf"))
         );
@@ -2699,14 +2703,14 @@ mod tests {
              New Load.a bus1=b.1 phases=1 kv=2.4 kvar=20\n\
              New Load.b like=a kw=100",
         );
-        let b = net.loads.iter().find(|l| l.name == "b").unwrap();
+        let b = net.loads().iter().find(|l| l.name == "b").unwrap();
         let q: f64 = b.q_nom.iter().sum();
         assert!((q - 200e3).abs() < 1e-6);
         // Final spec is 0: the writer emits pf=, the recalced 0.4472.
         let pf = b.extras.get("pf").and_then(serde_json::Value::as_f64);
         assert!((pf.unwrap() - 0.447_213_595_499_957_9).abs() < 1e-12);
         // The source itself keeps its written kvar.
-        let a = net.loads.iter().find(|l| l.name == "a").unwrap();
+        let a = net.loads().iter().find(|l| l.name == "a").unwrap();
         let qa: f64 = a.q_nom.iter().sum();
         assert!((qa - 20e3).abs() < 1e-9);
     }
@@ -2721,7 +2725,7 @@ mod tests {
              New Load.l bus1=b.1 phases=1 kv=2.4 kvar=20\n\
              ~ kw=100",
         );
-        let q: f64 = net.loads[0].q_nom.iter().sum();
+        let q: f64 = net.loads()[0].q_nom.iter().sum();
         assert!((q - 200e3).abs() < 1e-6);
     }
 
@@ -2734,7 +2738,7 @@ mod tests {
         let net = parse_dss_str(
             "New Circuit.c\nNew Load.l bus1=b.1 phases=1 kv=2.4 kvar=20 pf=0.95 kw=100",
         );
-        let l = &net.loads[0];
+        let l = &net.loads()[0];
         let q: f64 = l.q_nom.iter().sum();
         assert!((q - 100e3 * 0.95f64.acos().tan()).abs() < 1e-6);
         assert_eq!(
@@ -2742,7 +2746,7 @@ mod tests {
             Some(0.95)
         );
         assert!(
-            !net.defaulted
+            !net.defaulted()
                 .get("load.l")
                 .is_some_and(|f| f.contains(&"pf"))
         );
@@ -2752,7 +2756,7 @@ mod tests {
     fn load_kvar_after_kw_stays() {
         let net =
             parse_dss_str("New Circuit.c\nNew Load.l bus1=b.1 phases=1 kv=2.4 kw=100 kvar=20");
-        let l = &net.loads[0];
+        let l = &net.loads()[0];
         let q: f64 = l.q_nom.iter().sum();
         assert!((q - 20e3).abs() < 1e-9);
         // The writer must emit kvar=, not pf=.
@@ -2766,7 +2770,7 @@ mod tests {
         // kvar=20 kw=100 scales q to 100 * 20/1000 = 2 kvar.
         let net =
             parse_dss_str("New Circuit.c\nNew Generator.g bus1=b.1 phases=1 kv=2.4 kvar=20 kw=100");
-        let q: f64 = net.generators[0].q_nom.iter().sum();
+        let q: f64 = net.generators()[0].q_nom.iter().sum();
         assert!((q - 2e3).abs() < 1e-6);
     }
 
@@ -2774,7 +2778,7 @@ mod tests {
     fn generator_kvar_after_kw_stays() {
         let net =
             parse_dss_str("New Circuit.c\nNew Generator.g bus1=b.1 phases=1 kv=2.4 kw=100 kvar=20");
-        let q: f64 = net.generators[0].q_nom.iter().sum();
+        let q: f64 = net.generators()[0].q_nom.iter().sum();
         assert!((q - 20e3).abs() < 1e-9);
     }
 
@@ -2785,7 +2789,7 @@ mod tests {
         let net = parse_dss_str(
             "New Circuit.c\nNew Generator.g bus1=b.1.2.3 phases=3 kv=4.16 kvar=20 pf=0.9",
         );
-        let q: f64 = net.generators[0].q_nom.iter().sum();
+        let q: f64 = net.generators()[0].q_nom.iter().sum();
         assert!((q - 1000e3 * 0.9f64.acos().tan()).abs() < 1e-3);
     }
 
@@ -2801,7 +2805,7 @@ mod tests {
         );
         assert!(has_warning(&net, "linecode bad") && has_warning(&net, "rmatrix"));
         assert!(
-            !net.defaulted
+            !net.defaulted()
                 .get("linecode.bad")
                 .is_some_and(|f| f.contains(&"rmatrix"))
         );
@@ -2817,7 +2821,7 @@ mod tests {
         assert!((code.r_series[0][0] - diag).abs() < 1e-12);
         // The inline line path lands the text on the line's extras.
         assert!(has_warning(&net, "line l2"));
-        let l2 = net.lines.iter().find(|l| l.name == "l2").unwrap();
+        let l2 = net.lines().iter().find(|l| l.name == "l2").unwrap();
         assert!(
             l2.extras
                 .get("rmatrix")
@@ -2833,7 +2837,7 @@ mod tests {
              New Line.sw1 bus1=a.1 bus2=b.1 phases=1 switch=y\n\
              New SwtControl.s1 SwitchedObj=LINE.sw1 Action=open",
         );
-        assert!(net.switches[0].open);
+        assert!(net.switches()[0].open);
     }
 
     #[test]
@@ -2846,7 +2850,7 @@ mod tests {
              New Generator.g bus1=b.1.2.3 kw=10 kvar=2 kv=4.16\n\
              New Capacitor.cap bus1=b.1.2.3 phases=3 kvar=600 kv=4.16",
         );
-        let l = &net.loads[0];
+        let l = &net.loads()[0];
         assert_eq!(l.terminal_map.len(), 3);
         assert_eq!(
             l.extras.get("phases").and_then(serde_json::Value::as_str),
@@ -2854,14 +2858,14 @@ mod tests {
         );
         // An unwritten phases= materializes the class default.
         assert_eq!(
-            net.generators[0]
+            net.generators()[0]
                 .extras
                 .get("phases")
                 .and_then(serde_json::Value::as_u64),
             Some(3)
         );
         assert_eq!(
-            net.shunts[0]
+            net.shunts()[0]
                 .extras
                 .get("phases")
                 .and_then(serde_json::Value::as_str),
@@ -2874,7 +2878,7 @@ mod tests {
         // The writer needs a number; RPN text would not read back.
         let net = parse_dss_str("New Circuit.c\nNew Load.l bus1=b.1 phases=1 kw=10 kv={4.8 2 /}");
         assert_eq!(
-            net.loads[0]
+            net.loads()[0]
                 .extras
                 .get("kv")
                 .and_then(serde_json::Value::as_f64),

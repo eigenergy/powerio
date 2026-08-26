@@ -134,7 +134,7 @@ mod tests {
         assert_eq!(module.value().kind(), PioValueKind::MulticonductorNetwork);
         let typed: powerio_core::PioModule<powerio_dist::MulticonductorNetwork> =
             try_into_typed(module).expect("narrows to the parsed kind");
-        assert_eq!(typed.value().name.as_deref(), Some("c"));
+        assert_eq!(typed.value().name().as_deref(), Some("c"));
     }
 
     #[test]

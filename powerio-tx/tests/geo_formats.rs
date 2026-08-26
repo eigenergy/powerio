@@ -31,11 +31,11 @@ fn aux_promotes_substation_coordinates_into_locations() {
         .unwrap()
         .network;
     assert!(matches!(
-        net.geo.as_ref().expect("geo meta").space,
+        net.geo().as_ref().expect("geo meta").space,
         CoordinateSpace::Geographic { crs: None }
     ));
     // Bus 1 sits in substation 1 (CREVE COEUR, 40.642116 / -89.59956).
-    let bus = &net.buses[0];
+    let bus = &net.buses()[0];
     let location = bus.location.expect("bus 1 location");
     assert!((location.y - 40.642_116).abs() < 1e-6, "{}", location.y);
     assert!((location.x - -89.599_56).abs() < 1e-6, "{}", location.x);
@@ -53,7 +53,7 @@ fn aux_writes_locations_back_and_round_trips() {
     let conv = write_powerworld(&net);
     assert!(conv.text.contains("Latitude:1"));
     let back = parse_str(&conv.text, "powerworld").unwrap().network;
-    assert_eq!(back.buses[0].location, net.buses[0].location);
+    assert_eq!(back.buses()[0].location, net.buses()[0].location);
 }
 
 #[test]
@@ -61,7 +61,7 @@ fn aux_without_locations_writes_the_old_header() {
     let mut net = parse_file(data("powerworld/ACTIVSg200.aux"), None)
         .unwrap()
         .network;
-    for bus in &mut net.buses {
+    for bus in net.buses_mut() {
         bus.location = None;
     }
     assert!(!write_powerworld(&net).text.contains("Latitude:1"));
@@ -73,10 +73,10 @@ fn pandapower_geo_points_round_trip() {
     let mut net = parse_file(data("pandapower/example.json"), None)
         .unwrap()
         .network;
-    assert!(net.buses.iter().all(|b| b.location.is_none()));
-    assert!(net.geo.is_none());
+    assert!(net.buses().iter().all(|b| b.location.is_none()));
+    assert!(net.geo().is_none());
 
-    net.buses[0].location = Some(Location {
+    net.buses_mut()[0].location = Some(Location {
         x: 7.09,
         y: 50.73,
         kind: None,
@@ -85,12 +85,12 @@ fn pandapower_geo_points_round_trip() {
     // exercise the canonical writer.
     let out = write_pandapower_json(&net);
     let back = parse_pandapower_json(&out.text).unwrap().network;
-    let location = back.buses[0].location.expect("harvested location");
+    let location = back.buses()[0].location.expect("harvested location");
     assert!((location.x - 7.09).abs() < 1e-12);
     assert!((location.y - 50.73).abs() < 1e-12);
-    assert!(back.buses[1].location.is_none());
+    assert!(back.buses()[1].location.is_none());
     assert!(matches!(
-        back.geo.as_ref().expect("geo meta").space,
+        back.geo().as_ref().expect("geo meta").space,
         CoordinateSpace::Geographic { crs: None }
     ));
 }
@@ -102,16 +102,16 @@ fn out_of_bounds_coordinates_read_as_unknown_space() {
         .network;
     // Projected meters in a geo column violate the format convention; the
     // reader keeps the points and declines the geographic claim.
-    net.buses[0].location = Some(Location {
+    net.buses_mut()[0].location = Some(Location {
         x: 350_000.0,
         y: 5_800_000.0,
         kind: None,
     });
     let out = write_pandapower_json(&net);
     let back = parse_pandapower_json(&out.text).unwrap().network;
-    assert!(back.buses[0].location.is_some());
+    assert!(back.buses()[0].location.is_some());
     assert!(matches!(
-        back.geo.as_ref().expect("geo meta").space,
+        back.geo().as_ref().expect("geo meta").space,
         CoordinateSpace::Unknown
     ));
 }
@@ -121,9 +121,9 @@ fn pypsa_bus_xy_round_trips() {
     let mut net = read_pypsa_csv_folder(data("pypsa/example"))
         .unwrap()
         .network;
-    assert!(net.buses.iter().all(|b| b.location.is_none()));
+    assert!(net.buses().iter().all(|b| b.location.is_none()));
 
-    net.buses[0].location = Some(Location {
+    net.buses_mut()[0].location = Some(Location {
         x: 10.4,
         y: 63.4,
         kind: None,
@@ -131,10 +131,10 @@ fn pypsa_bus_xy_round_trips() {
     let out = tmp_dir("geo-pypsa-csv");
     write_pypsa_csv_folder(&net, &out).unwrap();
     let back = read_pypsa_csv_folder(&out).unwrap().network;
-    let location = back.buses[0].location.expect("harvested location");
+    let location = back.buses()[0].location.expect("harvested location");
     assert!((location.x - 10.4).abs() < 1e-12);
     assert!((location.y - 63.4).abs() < 1e-12);
-    assert!(back.buses[1].location.is_none());
+    assert!(back.buses()[1].location.is_none());
     let _ = std::fs::remove_dir_all(&out);
 }
 
@@ -143,7 +143,7 @@ fn formats_without_geometry_report_dropped_locations() {
     let net = parse_file(data("powerworld/ACTIVSg200.aux"), None)
         .unwrap()
         .network;
-    assert!(net.buses[0].location.is_some());
+    assert!(net.buses()[0].location.is_some());
     for format in [
         TargetFormat::Matpower,
         TargetFormat::Psse { rev: 33 },
@@ -180,7 +180,7 @@ fn locations_and_routes_survive_the_model_snapshot() {
     let mut net = parse_file(data("powerworld/ACTIVSg200.aux"), None)
         .unwrap()
         .network;
-    net.branches[0].route = Some(vec![
+    net.branches_mut()[0].route = Some(vec![
         Location {
             x: -89.6,
             y: 40.6,
@@ -193,7 +193,7 @@ fn locations_and_routes_survive_the_model_snapshot() {
         },
     ]);
     let back = powerio_tx::BalancedNetwork::from_json(&net.to_json().unwrap()).unwrap();
-    assert_eq!(back.buses[0].location, net.buses[0].location);
-    assert_eq!(back.branches[0].route, net.branches[0].route);
-    assert_eq!(back.geo, net.geo);
+    assert_eq!(back.buses()[0].location, net.buses()[0].location);
+    assert_eq!(back.branches()[0].route, net.branches()[0].route);
+    assert_eq!(back.geo(), net.geo());
 }

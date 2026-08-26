@@ -15,8 +15,8 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::network::{
-    BalancedNetwork, Branch, Bus, BusId, BusType, GEN_EXTRA_KEYS, GenCost, Generator, Hvdc, Load,
-    LoadVoltageModel, Shunt, SourceFormat, Storage, Switch, Transformer3W,
+    BalancedNetwork, BalancedNetworkTables, Branch, Bus, BusId, BusType, GEN_EXTRA_KEYS, GenCost,
+    Generator, Hvdc, Load, LoadVoltageModel, Shunt, SourceFormat, Storage, Switch, Transformer3W,
 };
 use crate::{Error, Result};
 
@@ -109,15 +109,15 @@ impl NormalizeSourceRows {
     pub(crate) fn identity(net: &BalancedNetwork) -> Self {
         let ident = |n: usize| (0..n).map(Some).collect();
         Self {
-            buses: ident(net.buses.len()),
-            loads: ident(net.loads.len()),
-            shunts: ident(net.shunts.len()),
-            branches: ident(net.branches.len()),
-            switches: ident(net.switches.len()),
-            generators: ident(net.generators.len()),
-            storage: ident(net.storage.len()),
-            hvdc: ident(net.hvdc.len()),
-            transformers_3w: ident(net.transformers_3w.len()),
+            buses: ident(net.buses().len()),
+            loads: ident(net.loads().len()),
+            shunts: ident(net.shunts().len()),
+            branches: ident(net.branches().len()),
+            switches: ident(net.switches().len()),
+            generators: ident(net.generators().len()),
+            storage: ident(net.storage().len()),
+            hvdc: ident(net.hvdc().len()),
+            transformers_3w: ident(net.transformers_3w().len()),
         }
     }
 
@@ -679,7 +679,7 @@ impl BalancedNetwork {
     /// let (normalized, rows) = raw.to_normalized_with_source_rows(&NormalizeOptions::default())?;
     /// let view = IndexedNetwork::new(&normalized.network);
     /// for (dense, source) in rows.buses.iter().enumerate() {
-    ///     let bus = &view.network().buses[dense];
+    ///     let bus = &view.network().buses()[dense];
     ///     // `source` is `None` for the synthetic star bus the view appended.
     ///     let _ = (bus, source);
     /// }
@@ -704,17 +704,17 @@ impl BalancedNetwork {
     ) -> Result<(NormalizedNetwork, NormalizeSourceRows)> {
         validate_normalize_options(options)?;
         self.check_base_mva()?;
-        let base = self.base_mva;
+        let base = self.base_mva();
 
         // Kept buses keep their original `kind` for now (the reference scan below
         // reads it) and their source ids. Isolated buses are dropped.
-        let mut id_map: HashMap<BusId, BusId> = HashMap::with_capacity(self.buses.len());
-        let mut buses: Vec<Bus> = Vec::with_capacity(self.buses.len());
+        let mut id_map: HashMap<BusId, BusId> = HashMap::with_capacity(self.buses().len());
+        let mut buses: Vec<Bus> = Vec::with_capacity(self.buses().len());
         // The pass keeps only elements that came from a source row, so each row
         // here is `Some`; the `None` entries appear later, when
         // `pad_to_lowered` extends the map over what the star lowering appends.
-        let mut bus_rows: Vec<Option<usize>> = Vec::with_capacity(self.buses.len());
-        for (row, b) in self.buses.iter().enumerate() {
+        let mut bus_rows: Vec<Option<usize>> = Vec::with_capacity(self.buses().len());
+        for (row, b) in self.buses().iter().enumerate() {
             if b.kind == BusType::Isolated {
                 continue;
             }
@@ -725,19 +725,19 @@ impl BalancedNetwork {
             });
             bus_rows.push(Some(row));
         }
-        let (loads, load_rows) = norm_loads(&self.loads, base, &id_map);
-        let (shunts, shunt_rows) = norm_shunts(&self.shunts, base, &id_map);
-        let (mut branches, branch_rows) = norm_branches(&self.branches, base, &id_map);
+        let (loads, load_rows) = norm_loads(self.loads(), base, &id_map);
+        let (shunts, shunt_rows) = norm_shunts(self.shunts(), base, &id_map);
+        let (mut branches, branch_rows) = norm_branches(self.branches(), base, &id_map);
         let mut warnings = crate::diagnostics::Diagnostics::new();
         if options.clamp_angle_bounds {
             clamp_angle_bounds(&mut branches, options.angle_bound_pad, &mut warnings);
         }
-        let (switches, switch_rows) = norm_switches(&self.switches, base, &id_map);
-        let (generators, generator_rows) = norm_gens(&self.generators, base, &id_map);
-        let (storage, storage_rows) = norm_storage(&self.storage, base, &id_map);
-        let (hvdc, hvdc_rows) = norm_hvdc(&self.hvdc, base, &id_map);
+        let (switches, switch_rows) = norm_switches(self.switches(), base, &id_map);
+        let (generators, generator_rows) = norm_gens(self.generators(), base, &id_map);
+        let (storage, storage_rows) = norm_storage(self.storage(), base, &id_map);
+        let (hvdc, hvdc_rows) = norm_hvdc(self.hvdc(), base, &id_map);
         let (transformers_3w, transformer_3w_rows) =
-            norm_transformers_3w(&self.transformers_3w, base, &id_map);
+            norm_transformers_3w(self.transformers_3w(), base, &id_map);
         let source_rows = NormalizeSourceRows {
             buses: bus_rows,
             loads: load_rows,
@@ -778,11 +778,11 @@ impl BalancedNetwork {
             );
         }
 
-        let net = BalancedNetwork {
-            name: self.name.clone(),
+        let net = BalancedNetwork::from_tables(BalancedNetworkTables {
+            name: self.name().clone(),
             base_mva: base,
-            base_frequency: self.base_frequency,
-            geo: self.geo.clone(),
+            base_frequency: self.base_frequency(),
+            geo: self.geo().clone(),
             buses,
             loads,
             shunts,
@@ -797,7 +797,7 @@ impl BalancedNetwork {
             areas: Vec::new(),
             solver: None,
             source_format: SourceFormat::Normalized,
-        };
+        });
         // The filter drops every reference to a dropped bus by
         // construction, so the result is reference-consistent. Assert it in
         // debug builds to catch a future regression in the filtering logic.
@@ -835,14 +835,14 @@ mod tests {
         let net = angle_bound_fixture();
 
         let plain = net.to_normalized().unwrap();
-        assert!(approx(plain.branches[0].angmin, -std::f64::consts::TAU));
-        assert!(approx(plain.branches[0].angmax, std::f64::consts::TAU));
-        assert!(approx(plain.branches[1].angmin, 0.0));
-        assert!(approx(plain.branches[1].angmax, 0.0));
-        assert!(approx(plain.branches[3].angmin, -120.0 * DEG_TO_RAD));
-        assert!(approx(plain.branches[3].angmax, -100.0 * DEG_TO_RAD));
-        assert!(approx(plain.branches[4].angmin, 100.0 * DEG_TO_RAD));
-        assert!(approx(plain.branches[4].angmax, 120.0 * DEG_TO_RAD));
+        assert!(approx(plain.branches()[0].angmin, -std::f64::consts::TAU));
+        assert!(approx(plain.branches()[0].angmax, std::f64::consts::TAU));
+        assert!(approx(plain.branches()[1].angmin, 0.0));
+        assert!(approx(plain.branches()[1].angmax, 0.0));
+        assert!(approx(plain.branches()[3].angmin, -120.0 * DEG_TO_RAD));
+        assert!(approx(plain.branches()[3].angmax, -100.0 * DEG_TO_RAD));
+        assert!(approx(plain.branches()[4].angmin, 100.0 * DEG_TO_RAD));
+        assert!(approx(plain.branches()[4].angmax, 120.0 * DEG_TO_RAD));
 
         let out = net
             .to_normalized_with_options(&NormalizeOptions {
@@ -863,7 +863,7 @@ mod tests {
         assert!(clamps[2].contains("branch 3"));
         assert!(clamps[3].contains("branch 4"));
 
-        let branches = &out.network.branches;
+        let branches = &out.network.branches();
         assert!(approx(branches[0].angmin, -POWER_MODELS_ANGLE_BOUND_PAD));
         assert!(approx(branches[0].angmax, POWER_MODELS_ANGLE_BOUND_PAD));
         assert!(approx(branches[1].angmin, -POWER_MODELS_ANGLE_BOUND_PAD));
@@ -950,7 +950,7 @@ mod tests {
             ],
             vec![branch],
         );
-        net.generators.push(Generator {
+        net.generators_mut().push(Generator {
             bus: BusId(1),
             pg: 10.0,
             qg: 0.0,
@@ -967,7 +967,7 @@ mod tests {
             uid: None,
         });
         // A switched shunt on bus 2 whose control bus is the (dropped) isolated bus 3.
-        net.shunts.push(Shunt {
+        net.shunts_mut().push(Shunt {
             bus: BusId(2),
             g: 0.0,
             b: 10.0,
@@ -986,7 +986,7 @@ mod tests {
 
         let norm = net.to_normalized().unwrap();
         norm.validate().unwrap();
-        let c = norm.shunts[0].control.as_ref().expect("control retained");
+        let c = norm.shunts()[0].control.as_ref().expect("control retained");
         assert_eq!(
             c.control_bus, None,
             "a control bus pointing at a filtered-out isolated bus is dropped, not left dangling"
@@ -1031,16 +1031,15 @@ mod tests {
             uid: None,
         };
         let mut net = BalancedNetwork::in_memory("n", 100.0, vec![mkbus(1), mkbus(2)], Vec::new());
-        net.generators = vec![mkgen(1, f64::NAN), mkgen(2, 10.0)];
-
+        *net.generators_mut() = vec![mkgen(1, f64::NAN), mkgen(2, 10.0)];
         let norm = net.to_normalized().unwrap();
 
         assert_eq!(
-            norm.buses.iter().find(|b| b.id == BusId(1)).unwrap().kind,
+            norm.buses().iter().find(|b| b.id == BusId(1)).unwrap().kind,
             BusType::Pv
         );
         assert_eq!(
-            norm.buses.iter().find(|b| b.id == BusId(2)).unwrap().kind,
+            norm.buses().iter().find(|b| b.id == BusId(2)).unwrap().kind,
             BusType::Ref
         );
     }

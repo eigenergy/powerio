@@ -87,8 +87,11 @@ COMMENT
 Q
 ";
     let net = parse_psse(raw).unwrap();
-    assert!(net.branches.is_empty(), "a 3W is not folded into branches");
-    assert_eq!(net.transformers_3w.len(), 1);
+    assert!(
+        net.branches().is_empty(),
+        "a 3W is not folded into branches"
+    );
+    assert_eq!(net.transformers_3w().len(), 1);
 
     let view = IndexedNetwork::new(&net);
     assert_eq!(view.n(), 4, "three buses plus the synthetic star point");
@@ -102,9 +105,9 @@ Q
     assert_eq!(b.cols(), 4);
 
     // The canonical model is untouched: still three buses, no branches, one record.
-    assert_eq!(net.buses.len(), 3);
-    assert!(net.branches.is_empty());
-    assert_eq!(net.transformers_3w.len(), 1);
+    assert_eq!(net.buses().len(), 3);
+    assert!(net.branches().is_empty());
+    assert_eq!(net.transformers_3w().len(), 1);
 }
 
 #[test]
@@ -214,14 +217,14 @@ fn bprime_with_phase_shift_and_resistance_is_not_sddm() {
 fn bprime_ignores_bus_shunts_and_line_charging() {
     let base = three_bus();
     let mut decorated = base.clone();
-    decorated.shunts = vec![
+    *decorated.shunts_mut() = vec![
         Shunt::new(BusId(1), 1.0, -10.0),
         Shunt::new(BusId(2), 0.0, 15.0),
         Shunt::new(BusId(3), 0.5, -20.0),
     ];
-    decorated.branches[0].b = 0.8;
-    decorated.branches[1].charging = Some(BranchCharging::new(0.01, 0.3, 0.02, 0.5));
-    decorated.branches[2].b = -0.4;
+    decorated.branches_mut()[0].b = 0.8;
+    decorated.branches_mut()[1].charging = Some(BranchCharging::new(0.01, 0.3, 0.02, 0.5));
+    decorated.branches_mut()[2].b = -0.4;
 
     let base_view = IndexedNetwork::new(&base);
     let decorated_view = IndexedNetwork::new(&decorated);
@@ -287,11 +290,11 @@ fn bprime_folds_phase_shifted_self_loop_like_make_ybus() {
 #[test]
 fn bdoubleprime_clears_phase_shifts() {
     let mut shifted = three_bus();
-    shifted.branches[0].shift = 30.0;
-    shifted.branches[1].shift = -25.0;
+    shifted.branches_mut()[0].shift = 30.0;
+    shifted.branches_mut()[1].shift = -25.0;
 
     let mut unshifted = shifted.clone();
-    for br in &mut unshifted.branches {
+    for br in unshifted.branches_mut() {
         br.shift = 0.0;
     }
 
@@ -345,7 +348,7 @@ fn bdoubleprime_keeps_shunts_charging_and_taps() {
         vec![bus(1, BusType::Ref), bus(2, BusType::Pq)],
         vec![branch],
     );
-    net.shunts = vec![
+    *net.shunts_mut() = vec![
         Shunt::new(BusId(1), 0.0, -10.0),
         Shunt::new(BusId(2), 0.0, -20.0),
     ];
@@ -365,7 +368,7 @@ fn bdoubleprime_keeps_shunts_charging_and_taps() {
 #[test]
 fn bprime_ignores_out_of_service() {
     let mut net = three_bus();
-    net.branches[0].in_service = false;
+    net.branches_mut()[0].in_service = false;
     let view = IndexedNetwork::new(&net);
     let b = build_bprime(&view, &BuildOptions::default()).unwrap();
     let dense = b.to_dense();
@@ -377,7 +380,7 @@ fn bprime_ignores_out_of_service() {
 #[test]
 fn xb_and_bx_disagree_when_resistance_present() {
     let mut net = three_bus();
-    for b in &mut net.branches {
+    for b in net.branches_mut() {
         b.r = 0.05;
     }
     let view = IndexedNetwork::new(&net);
@@ -409,7 +412,7 @@ fn bdoubleprime_with_shunts_is_strictly_dominant() {
     let mut net = three_bus();
     // Add capacitive shunts to break the singularity (negative bs → positive
     // contribution to −Im(Y_bus)).
-    net.shunts = vec![
+    *net.shunts_mut() = vec![
         Shunt::new(BusId(1), 0.0, -10.0),
         Shunt::new(BusId(2), 0.0, -10.0),
         Shunt::new(BusId(3), 0.0, -10.0),
@@ -523,7 +526,7 @@ fn bprime_rejects_nan_reactance() {
     // A NaN reactance (the MATPOWER tokenizer accepts `NaN`) must error, not
     // write a non-finite entry that silently breaks the M-matrix/SDDM checks.
     let mut net = three_bus();
-    net.branches[0].x = f64::NAN;
+    net.branches_mut()[0].x = f64::NAN;
     let view = IndexedNetwork::new(&net);
     let err = build_bprime(&view, &BuildOptions::default()).unwrap_err();
     assert!(matches!(
@@ -535,7 +538,7 @@ fn bprime_rejects_nan_reactance() {
 #[test]
 fn ybus_rejects_nan_reactance() {
     let mut net = three_bus();
-    net.branches[0].x = f64::NAN;
+    net.branches_mut()[0].x = f64::NAN;
     let view = IndexedNetwork::new(&net);
     let err = build_ybus(&view, &BuildOptions::default()).unwrap_err();
     assert!(matches!(
@@ -552,7 +555,7 @@ fn incidence_rejects_a_non_finite_reactance_under_every_convention() {
     // zero-weight edge, disconnecting the network with nothing to report.
     for x in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
         let mut net = three_bus();
-        net.branches[0].x = x;
+        net.branches_mut()[0].x = x;
         let view = IndexedNetwork::new(&net);
         assert!(
             matches!(

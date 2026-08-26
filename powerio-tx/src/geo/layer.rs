@@ -826,7 +826,7 @@ impl BalancedNetwork {
     #[must_use]
     pub fn geo_layer(&self) -> GeoLayer {
         let mut features = Vec::new();
-        for (row, bus) in self.buses.iter().enumerate() {
+        for (row, bus) in self.buses().iter().enumerate() {
             let Some(location) = bus.location else {
                 continue;
             };
@@ -844,7 +844,7 @@ impl BalancedNetwork {
                 kind: location.kind,
             });
         }
-        for (row, branch) in self.branches.iter().enumerate() {
+        for (row, branch) in self.branches().iter().enumerate() {
             let Some(route) = &branch.route else {
                 continue;
             };
@@ -866,10 +866,10 @@ impl BalancedNetwork {
         }
         GeoLayer {
             space: self
-                .geo
+                .geo()
                 .as_ref()
                 .map_or(CoordinateSpace::Unknown, |geo| geo.space.clone()),
-            kind: self.geo.as_ref().and_then(|geo| geo.kind),
+            kind: self.geo().as_ref().and_then(|geo| geo.kind),
             features,
         }
     }
@@ -887,8 +887,8 @@ impl BalancedNetwork {
         };
         let mut report = apply_geo_features(layer, &mut target);
         if report.matched_buses > 0 || report.matched_branches > 0 {
-            note_space_change(&mut report, self.geo.as_ref(), &layer.space);
-            self.geo = Some(GeoMeta {
+            note_space_change(&mut report, self.geo().as_ref(), &layer.space);
+            *self.geo_mut() = Some(GeoMeta {
                 space: layer.space.clone(),
                 kind: layer.kind,
             });
@@ -979,11 +979,11 @@ impl GeoApplyTarget for BalancedApply<'_> {
     }
 
     fn branch_row(&self, feature: &GeoFeature) -> Option<usize> {
-        self.branches.row_for(feature, self.net.branches.len())
+        self.branches.row_for(feature, self.net.branches().len())
     }
 
     fn place_bus(&mut self, row: usize, point: [f64; 2], kind: Option<CoordsKind>) {
-        self.net.buses[row].location = Some(Location {
+        self.net.buses_mut()[row].location = Some(Location {
             x: point[0],
             y: point[1],
             kind,
@@ -991,7 +991,7 @@ impl GeoApplyTarget for BalancedApply<'_> {
     }
 
     fn place_branch(&mut self, row: usize, path: &[[f64; 2]], kind: Option<CoordsKind>) {
-        self.net.branches[row].route = Some(
+        self.net.branches_mut()[row].route = Some(
             path.iter()
                 .map(|[x, y]| Location { x: *x, y: *y, kind })
                 .collect(),
@@ -1012,11 +1012,11 @@ impl GeoApplyTarget for BalancedApply<'_> {
 /// and the feature join cannot disagree.
 pub(super) fn unlocated_counts(net: &BalancedNetwork) -> (usize, usize) {
     (
-        net.buses
+        net.buses()
             .iter()
             .filter(|bus| bus.location.is_none())
             .count(),
-        net.branches
+        net.branches()
             .iter()
             .filter(|branch| branch.route.is_none())
             .count(),
@@ -1038,7 +1038,7 @@ impl BalancedBusIndex {
             uids: HashMap::new(),
             names: HashMap::new(),
         };
-        for (row, bus) in net.buses.iter().enumerate() {
+        for (row, bus) in net.buses().iter().enumerate() {
             index.ids.insert(bus.id, row);
             index
                 .uids
@@ -1089,7 +1089,7 @@ impl BalancedBranchIndex {
             uids: HashMap::new(),
             pairs: HashMap::new(),
         };
-        for (row, branch) in net.branches.iter().enumerate() {
+        for (row, branch) in net.branches().iter().enumerate() {
             index
                 .uids
                 .insert(payload_uid("branches", row, branch.uid.as_deref()), row);

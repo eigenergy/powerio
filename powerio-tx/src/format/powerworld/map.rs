@@ -14,8 +14,8 @@ use crate::diagnostics::codes::EMIT_POWERWORLD as F;
 use crate::diagnostics::{Diagnostics, codes};
 use crate::format::{Conversion, sanitize_quoted, warn_extra_branch_rating_sets};
 use crate::network::{
-    BalancedNetwork, Branch, Bus, BusId, BusType, Extras, Generator, Load, LoadVoltageModel, Shunt,
-    SourceFormat,
+    BalancedNetwork, BalancedNetworkTables, Branch, Bus, BusId, BusType, Extras, Generator, Load,
+    LoadVoltageModel, Shunt, SourceFormat,
 };
 use crate::{Error, Result};
 
@@ -149,7 +149,7 @@ pub(in crate::format) fn parse_powerworld_source(
     }
     derive_bus_kinds(&mut buses, &generators);
 
-    let net = BalancedNetwork {
+    let net = BalancedNetwork::from_tables(BalancedNetworkTables {
         name,
         base_mva,
         base_frequency: crate::network::DEFAULT_BASE_FREQUENCY,
@@ -166,7 +166,7 @@ pub(in crate::format) fn parse_powerworld_source(
         areas: Vec::new(),
         solver: None,
         source_format: SourceFormat::PowerWorld,
-    };
+    });
     net.check_references(FMT)?;
     Ok(net)
 }
@@ -733,16 +733,16 @@ pub fn write_powerworld(net: &BalancedNetwork) -> Conversion {
     let _ = writeln!(
         s,
         "// PowerWorld auxiliary file — powerio export: {}",
-        sanitize_quoted(&net.name, NAME_FORBIDDEN, ' ')
+        sanitize_quoted(net.name(), NAME_FORBIDDEN, ' ')
     );
-    let _ = writeln!(s, "// baseMVA {}", net.base_mva);
+    let _ = writeln!(s, "// baseMVA {}", net.base_mva());
     let _ = writeln!(s);
 
     // The coordinate columns appear only when the case carries locations, so
     // a case without geometry writes exactly as before. A located case still
     // writes `""` for the odd bus without a point; the reader leaves those
     // unpromoted.
-    let write_locations = net.buses.iter().any(|b| b.location.is_some());
+    let write_locations = net.buses().iter().any(|b| b.location.is_some());
     block(
         &mut s,
         "Bus",
@@ -752,7 +752,7 @@ pub fn write_powerworld(net: &BalancedNetwork) -> Conversion {
             "[BusNum, BusName, BusNomVolt, BusPUVolt, BusAngle, AreaNum, ZoneNum, BusVMax, BusVMin, BusCat]"
         },
         |rows| {
-            for b in &net.buses {
+            for b in net.buses() {
                 let raw_name = b.name.as_deref().unwrap_or("");
                 let name = sanitize_quoted(raw_name, NAME_FORBIDDEN, ' ');
                 if matches!(name, std::borrow::Cow::Owned(_)) {
@@ -789,7 +789,7 @@ pub fn write_powerworld(net: &BalancedNetwork) -> Conversion {
         "Load",
         "[BusNum, LoadID, LoadMW, LoadMVR, LoadStatus]",
         |rows| {
-            for (i, l) in net.loads.iter().enumerate() {
+            for (i, l) in net.loads().iter().enumerate() {
                 rows.push(format!(
                     "{} \"{}\" {} {} \"{}\"",
                     l.bus,
@@ -807,7 +807,7 @@ pub fn write_powerworld(net: &BalancedNetwork) -> Conversion {
         "Shunt",
         "[BusNum, ShuntID, ShuntMW, ShuntMVR, ShuntStatus]",
         |rows| {
-            for (i, sh) in net.shunts.iter().enumerate() {
+            for (i, sh) in net.shunts().iter().enumerate() {
                 rows.push(format!(
                     "{} \"{}\" {} {} \"{}\"",
                     sh.bus,
@@ -825,7 +825,7 @@ pub fn write_powerworld(net: &BalancedNetwork) -> Conversion {
         "Gen",
         "[BusNum, GenID, GenMW, GenMVR, GenMWMax, GenMWMin, GenMVRMax, GenMVRMin, GenVoltSet, GenMVABase, GenStatus]",
         |rows| {
-            for (i, g) in net.generators.iter().enumerate() {
+            for (i, g) in net.generators().iter().enumerate() {
                 rows.push(format!(
                     "{} \"{}\" {} {} {} {} {} {} {} {} \"{}\"",
                     g.bus,
@@ -853,7 +853,7 @@ pub fn write_powerworld(net: &BalancedNetwork) -> Conversion {
             // circuit is the PowerWorld branch identity, and a reader (ours
             // included) treats equal identities as one device.
             let mut parallel: HashMap<(BusId, BusId), u32> = HashMap::new();
-            for br in &net.branches {
+            for br in net.branches() {
                 let kind = match br.extras.get(BRANCH_DEVICE_TYPE).and_then(|v| v.as_str()) {
                     Some(v) => v,
                     None if br.is_transformer() => "Transformer",
@@ -887,29 +887,29 @@ pub fn write_powerworld(net: &BalancedNetwork) -> Conversion {
         },
     );
 
-    if net.generators.iter().any(|g| g.cost.is_some()) {
+    if net.generators().iter().any(|g| g.cost.is_some()) {
         warnings.push(
             &F.field_dropped,
             "generator cost curves dropped: not written to PowerWorld .aux",
         );
     }
-    if !net.hvdc.is_empty() {
+    if !net.hvdc().is_empty() {
         warnings.push(
             &F.record_dropped,
             format!(
                 "{} dcline(s) dropped: PowerWorld HVDC not modeled",
-                net.hvdc.len()
+                net.hvdc().len()
             ),
         );
     }
-    if !net.transformers_3w.is_empty() {
+    if !net.transformers_3w().is_empty() {
         warnings.push(&F.record_dropped, format!(
             "{} 3-winding transformer(s) dropped: the PowerWorld .aux writer emits no 3-winding record",
-            net.transformers_3w.len()
+            net.transformers_3w().len()
         ));
     }
     if net
-        .buses
+        .buses()
         .iter()
         .any(|b| b.evhi.is_some() || b.evlo.is_some())
     {
@@ -918,17 +918,17 @@ pub fn write_powerworld(net: &BalancedNetwork) -> Conversion {
             "emergency voltage band(s) (EVHI/EVLO) dropped: this writer carries one voltage band",
         );
     }
-    if !net.storage.is_empty() {
+    if !net.storage().is_empty() {
         warnings.push(
             &F.record_dropped,
             format!(
                 "{} storage unit(s) dropped: PowerWorld storage not modeled",
-                net.storage.len()
+                net.storage().len()
             ),
         );
     }
     let voltage_loads = net
-        .loads
+        .loads()
         .iter()
         .filter(|l| {
             l.voltage_model
@@ -942,7 +942,7 @@ pub fn write_powerworld(net: &BalancedNetwork) -> Conversion {
         ));
     }
     let terminal_charging = net
-        .branches
+        .branches()
         .iter()
         .filter(|b| b.has_non_matpower_charging())
         .count();
@@ -952,7 +952,7 @@ pub fn write_powerworld(net: &BalancedNetwork) -> Conversion {
         ));
     }
     let current_ratings = net
-        .branches
+        .branches()
         .iter()
         .filter(|b| b.current_ratings.is_some())
         .count();
@@ -974,19 +974,23 @@ pub fn write_powerworld(net: &BalancedNetwork) -> Conversion {
         &mut warnings,
     );
     super::super::warn_dropped_areas(&F, "PowerWorld .aux", net, &mut warnings);
-    let branch_solutions = net.branches.iter().filter(|b| b.solution.is_some()).count();
+    let branch_solutions = net
+        .branches()
+        .iter()
+        .filter(|b| b.solution.is_some())
+        .count();
     if branch_solutions > 0 {
         warnings.push(&F.field_dropped, format!(
             "{branch_solutions} branch solution value set(s) dropped: PowerWorld aux result fields are not written"
         ));
     }
-    if net.branches.iter().any(Branch::has_angle_limits) {
+    if net.branches().iter().any(Branch::has_angle_limits) {
         warnings.push(
             &F.field_dropped,
             "branch angle limits (angmin/angmax) dropped: not written to PowerWorld .aux",
         );
     }
-    if net.generators.iter().any(Generator::has_caps) {
+    if net.generators().iter().any(Generator::has_caps) {
         warnings.push(
             &F.field_dropped,
             "generator ramp/capability columns dropped: not written to PowerWorld .aux",

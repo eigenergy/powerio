@@ -5,6 +5,7 @@ edition = "2024"
 publish = false
 
 [dependencies]
+powerio-core = { path = "../../powerio-core" }
 powerio = { path = "../../powerio" }
 powerio-dist = { path = "../../powerio-dist" }
 powerio-matrix = { path = "../../powerio-matrix" }

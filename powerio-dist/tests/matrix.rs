@@ -325,10 +325,10 @@ fn assert_loads_eq(
         assert_dss_loads_eq(a, b, what);
         return;
     }
-    assert_eq!(a.loads.len(), b.loads.len(), "{what}: loads");
-    for ((_, x), (_, y)) in by_name(&a.loads, |l| &l.name)
+    assert_eq!(a.loads().len(), b.loads().len(), "{what}: loads");
+    for ((_, x), (_, y)) in by_name(a.loads(), |l| &l.name)
         .iter()
-        .zip(&by_name(&b.loads, |l| &l.name))
+        .zip(&by_name(b.loads(), |l| &l.name))
     {
         for (p, q) in x.p_nom.iter().zip(&y.p_nom) {
             assert!(close_power(*p, *q), "{what}: load {} p {p} vs {q}", x.name);
@@ -361,9 +361,9 @@ fn assert_loads_eq(
 /// came back whole, or by its parts, and the two must state the same power.
 fn assert_dss_loads_eq(a: &MulticonductorNetwork, b: &MulticonductorNetwork, what: &str) {
     let mut matched = 0usize;
-    for x in &a.loads {
+    for x in a.loads() {
         let parts: Vec<&powerio_dist::DistLoad> = b
-            .loads
+            .loads()
             .iter()
             .filter(|y| {
                 y.name == x.name
@@ -426,9 +426,9 @@ fn assert_dss_loads_eq(a: &MulticonductorNetwork, b: &MulticonductorNetwork, wha
     }
     assert_eq!(
         matched,
-        b.loads.len(),
+        b.loads().len(),
         "{what}: {} loads came back unmatched",
-        b.loads.len() - matched
+        b.loads().len() - matched
     );
 }
 
@@ -476,9 +476,9 @@ fn assert_projection_eq(
 ) {
     // JSON formats key elements by name, so order is not preserved across
     // a round trip; compare per name.
-    assert_eq!(a.buses.len(), b.buses.len(), "{what}: bus count");
-    let buses_a = by_name(&a.buses, |b| &b.id);
-    let buses_b = by_name(&b.buses, |b| &b.id);
+    assert_eq!(a.buses().len(), b.buses().len(), "{what}: bus count");
+    let buses_a = by_name(a.buses(), |b| &b.id);
+    let buses_b = by_name(b.buses(), |b| &b.id);
     for ((_, x), (_, y)) in buses_a.iter().zip(&buses_b) {
         assert!(x.id.eq_ignore_ascii_case(&y.id), "{what}: bus set");
         assert_maps_eq(
@@ -499,10 +499,10 @@ fn assert_projection_eq(
             );
         }
     }
-    assert_eq!(a.switches.len(), b.switches.len(), "{what}: switches");
-    for ((_, x), (_, y)) in by_name(&a.switches, |s| &s.name)
+    assert_eq!(a.switches().len(), b.switches().len(), "{what}: switches");
+    for ((_, x), (_, y)) in by_name(a.switches(), |s| &s.name)
         .iter()
-        .zip(&by_name(&b.switches, |s| &s.name))
+        .zip(&by_name(b.switches(), |s| &s.name))
     {
         assert_eq!(x.open, y.open, "{what}: switch {}", x.name);
     }
@@ -511,10 +511,10 @@ fn assert_projection_eq(
     // exactly.
     let allow_derived_v_nom = target_may_materialize_v_nom(what);
     assert_loads_eq(a, b, what, allow_derived_v_nom);
-    assert_eq!(a.lines.len(), b.lines.len(), "{what}: lines");
-    for ((_, x), (_, y)) in by_name(&a.lines, |l| &l.name)
+    assert_eq!(a.lines().len(), b.lines().len(), "{what}: lines");
+    for ((_, x), (_, y)) in by_name(a.lines(), |l| &l.name)
         .iter()
-        .zip(&by_name(&b.lines, |l| &l.name))
+        .zip(&by_name(b.lines(), |l| &l.name))
     {
         assert!(
             x.name.eq_ignore_ascii_case(&y.name),
@@ -549,13 +549,13 @@ fn assert_projection_eq(
     }
     if transformers {
         assert_eq!(
-            a.transformers.len(),
-            b.transformers.len(),
+            a.transformers().len(),
+            b.transformers().len(),
             "{what}: transformers"
         );
-        for ((_, x), (_, y)) in by_name(&a.transformers, |t| &t.name)
+        for ((_, x), (_, y)) in by_name(a.transformers(), |t| &t.name)
             .iter()
-            .zip(&by_name(&b.transformers, |t| &t.name))
+            .zip(&by_name(b.transformers(), |t| &t.name))
         {
             assert_eq!(
                 x.windings.len(),
@@ -581,10 +581,14 @@ fn assert_projection_eq(
 /// basis change (the PMD capacitance form, the dss per length form) costs
 /// at most one rounding per direction.
 fn assert_linecodes_close(a: &MulticonductorNetwork, b: &MulticonductorNetwork, what: &str) {
-    assert_eq!(a.linecodes.len(), b.linecodes.len(), "{what}: linecodes");
+    assert_eq!(
+        a.linecodes().len(),
+        b.linecodes().len(),
+        "{what}: linecodes"
+    );
     let close = |x: f64, y: f64| (x - y).abs() <= 1e-12 * x.abs().max(y.abs()).max(1e-300);
-    let mut xs: Vec<_> = a.linecodes.iter().collect();
-    let mut ys: Vec<_> = b.linecodes.iter().collect();
+    let mut xs: Vec<_> = a.linecodes().iter().collect();
+    let mut ys: Vec<_> = b.linecodes().iter().collect();
     xs.sort_by_key(|c| c.name.to_ascii_lowercase());
     ys.sort_by_key(|c| c.name.to_ascii_lowercase());
     for (x, y) in xs.iter().zip(&ys) {
@@ -625,7 +629,7 @@ fn assert_linecodes_close(a: &MulticonductorNetwork, b: &MulticonductorNetwork, 
 fn normalize_grounded(net: &MulticonductorNetwork) -> MulticonductorNetwork {
     let mut net = net.clone();
     let grounded: BTreeMap<String, Vec<String>> = net
-        .buses
+        .buses()
         .iter()
         .map(|b| (b.id.to_ascii_lowercase(), b.grounded.clone()))
         .collect();
@@ -638,7 +642,7 @@ fn normalize_grounded(net: &MulticonductorNetwork) -> MulticonductorNetwork {
             }
         }
     };
-    for b in &mut net.buses {
+    for b in net.buses_mut() {
         let g = b.grounded.clone();
         for t in b.terminals.iter_mut().chain(b.grounded.iter_mut()) {
             if g.contains(t) {
@@ -646,18 +650,18 @@ fn normalize_grounded(net: &MulticonductorNetwork) -> MulticonductorNetwork {
             }
         }
     }
-    for l in &mut net.lines {
+    for l in net.lines_mut() {
         fix(&l.bus_from.clone(), &mut l.terminal_map_from);
         fix(&l.bus_to.clone(), &mut l.terminal_map_to);
     }
-    for s in &mut net.switches {
+    for s in net.switches_mut() {
         fix(&s.bus_from.clone(), &mut s.terminal_map_from);
         fix(&s.bus_to.clone(), &mut s.terminal_map_to);
     }
-    for l in &mut net.loads {
+    for l in net.loads_mut() {
         fix(&l.bus.clone(), &mut l.terminal_map);
     }
-    for t in &mut net.transformers {
+    for t in net.transformers_mut() {
         for w in &mut t.windings {
             fix(&w.bus.clone(), &mut w.terminal_map);
         }
@@ -677,34 +681,34 @@ fn normalize_bmopf_bus_metadata(
             .or_default()
             .extend(terms.iter().cloned());
     };
-    for l in &usage_net.lines {
+    for l in usage_net.lines() {
         add(&l.bus_from, &l.terminal_map_from);
         add(&l.bus_to, &l.terminal_map_to);
     }
-    for s in &usage_net.switches {
+    for s in usage_net.switches() {
         add(&s.bus_from, &s.terminal_map_from);
         add(&s.bus_to, &s.terminal_map_to);
     }
-    for l in &usage_net.loads {
+    for l in usage_net.loads() {
         add(&l.bus, &l.terminal_map);
     }
-    for g in &usage_net.generators {
+    for g in usage_net.generators() {
         add(&g.bus, &g.terminal_map);
     }
-    for s in &usage_net.shunts {
+    for s in usage_net.shunts() {
         add(&s.bus, &s.terminal_map);
     }
-    for s in &usage_net.sources {
+    for s in usage_net.sources() {
         add(&s.bus, &s.terminal_map);
     }
-    for t in &usage_net.transformers {
+    for t in usage_net.transformers() {
         for w in &t.windings {
             add(&w.bus, &w.terminal_map);
         }
     }
 
-    net.buses.retain(|b| usage.contains_key(&b.id));
-    for b in &mut net.buses {
+    net.buses_mut().retain(|b| usage.contains_key(&b.id));
+    for b in net.buses_mut() {
         let Some(used) = usage.get(&b.id) else {
             continue;
         };
@@ -931,7 +935,7 @@ fn terminal_maps(net: &MulticonductorNetwork) -> Vec<(String, String, Vec<String
     // spells perfect grounding as node 0, so a grounded terminal legitimately
     // leaves the list on that leg (the `dss_renames_grounded` carve-out).
     let mut out = Vec::new();
-    for line in &net.lines {
+    for line in net.lines() {
         let name = key(&line.name);
         out.push((
             format!("line {name} from"),
@@ -944,7 +948,7 @@ fn terminal_maps(net: &MulticonductorNetwork) -> Vec<(String, String, Vec<String
             line.terminal_map_to.clone(),
         ));
     }
-    for switch in &net.switches {
+    for switch in net.switches() {
         let name = key(&switch.name);
         out.push((
             format!("switch {name} from"),
@@ -957,21 +961,21 @@ fn terminal_maps(net: &MulticonductorNetwork) -> Vec<(String, String, Vec<String
             switch.terminal_map_to.clone(),
         ));
     }
-    for load in &net.loads {
+    for load in net.loads() {
         out.push((
             format!("load {}", key(&load.name)),
             key(&load.bus),
             load.terminal_map.clone(),
         ));
     }
-    for generator in &net.generators {
+    for generator in net.generators() {
         out.push((
             format!("generator {}", key(&generator.name)),
             key(&generator.bus),
             generator.terminal_map.clone(),
         ));
     }
-    for shunt in &net.shunts {
+    for shunt in net.shunts() {
         out.push((
             format!("shunt {}", key(&shunt.name)),
             key(&shunt.bus),

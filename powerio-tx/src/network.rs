@@ -335,16 +335,48 @@ impl SourceFormat {
     }
 }
 
+/// A balanced network with stable source bus IDs and separate element tables:
+/// an immutable cheap to clone owning handle over private shared tables.
+///
+/// Cloning the handle bumps one reference count and clones no table
+/// allocation. Reads go through the per field accessors; the `*_mut`
+/// accessors copy the shared tables once on first write to a shared handle
+/// (copy on write), so no other handle ever observes a mutation. The choice
+/// of whole value sharing is private and settled by the allocation
+/// benchmarks in `evals/allocation`.
+#[derive(Debug, Clone)]
+pub struct BalancedNetwork {
+    tables: std::sync::Arc<BalancedNetworkTables>,
+}
+
+impl BalancedNetwork {
+    pub(crate) fn from_tables(tables: BalancedNetworkTables) -> Self {
+        Self {
+            tables: std::sync::Arc::new(tables),
+        }
+    }
+
+    /// The one mutation door: copies the shared tables on first write to a
+    /// shared handle, so no other handle observes the change.
+    pub(crate) fn tables_mut(&mut self) -> &mut BalancedNetworkTables {
+        std::sync::Arc::make_mut(&mut self.tables)
+    }
+}
+
 /// A balanced network with stable source bus IDs and separate element tables.
 ///
 /// `remote = "Self"` turns the derived serde impls into inherent functions;
 /// the trait impls beneath the struct route them through [`crate::nonfinite`],
 /// so a nonfinite float spells as a string on every JSON route.
+// The one owned table store behind the `BalancedNetwork` handle. The doc
+// string above is frozen into the generated 0.9 schema description, so the
+// handle split leaves it as it was; the schema also keeps the handle's name
+// through the schemars rename below.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "schema", schemars(rename = "BalancedNetwork"))]
 #[serde(remote = "Self")]
-#[non_exhaustive]
-pub struct BalancedNetwork {
+pub(crate) struct BalancedNetworkTables {
     pub name: String,
     pub base_mva: f64,
     /// System base frequency in hertz (50 or 60). Threaded through the formats
@@ -394,8 +426,8 @@ impl Serialize for BalancedNetwork {
         &self,
         serializer: S,
     ) -> std::result::Result<S::Ok, S::Error> {
-        BalancedNetwork::serialize(
-            self,
+        BalancedNetworkTables::serialize(
+            &self.tables,
             powerio_core::__implementation::nonfinite::NonFiniteSer(serializer),
         )
     }
@@ -405,9 +437,103 @@ impl<'de> Deserialize<'de> for BalancedNetwork {
     fn deserialize<D: serde::Deserializer<'de>>(
         deserializer: D,
     ) -> std::result::Result<Self, D::Error> {
-        BalancedNetwork::deserialize(powerio_core::__implementation::nonfinite::NonFiniteDe(
+        BalancedNetworkTables::deserialize(powerio_core::__implementation::nonfinite::NonFiniteDe(
             deserializer,
         ))
+        .map(BalancedNetwork::from_tables)
+    }
+}
+
+#[cfg(feature = "schema")]
+impl schemars::JsonSchema for BalancedNetwork {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        <BalancedNetworkTables as schemars::JsonSchema>::schema_name()
+    }
+
+    fn schema_id() -> std::borrow::Cow<'static, str> {
+        <BalancedNetworkTables as schemars::JsonSchema>::schema_id()
+    }
+
+    fn json_schema(generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        <BalancedNetworkTables as schemars::JsonSchema>::json_schema(generator)
+    }
+}
+
+macro_rules! table_accessors {
+    ($($(#[$doc:meta])* $field:ident, $field_mut:ident: $ty:ty;)+) => {
+        impl BalancedNetwork {
+            $(
+                $(#[$doc])*
+                #[must_use]
+                pub fn $field(&self) -> &$ty {
+                    &self.tables.$field
+                }
+
+                /// Mutable access to the same table; a shared handle copies
+                /// its tables once here, so no other handle observes the
+                /// change.
+                #[must_use]
+                pub fn $field_mut(&mut self) -> &mut $ty {
+                    &mut self.tables_mut().$field
+                }
+            )+
+        }
+    };
+}
+
+table_accessors! {
+    /// The case name.
+    name, name_mut: String;
+    /// The geographic metadata when the source carries any.
+    geo, geo_mut: Option<GeoMeta>;
+    buses, buses_mut: Vec<Bus>;
+    loads, loads_mut: Vec<Load>;
+    shunts, shunts_mut: Vec<Shunt>;
+    branches, branches_mut: Vec<Branch>;
+    switches, switches_mut: Vec<Switch>;
+    generators, generators_mut: Vec<Generator>;
+    storage, storage_mut: Vec<Storage>;
+    hvdc, hvdc_mut: Vec<Hvdc>;
+    /// Three-winding transformers, kept as typed records.
+    transformers_3w, transformers_3w_mut: Vec<Transformer3W>;
+    /// Area records: scheduled interchange and per-area swing bus.
+    areas, areas_mut: Vec<Area>;
+    /// Solver / solution-control metadata when the source carries it.
+    solver, solver_mut: Option<SolverParams>;
+}
+
+impl BalancedNetwork {
+    /// System MVA base.
+    #[must_use]
+    pub fn base_mva(&self) -> f64 {
+        self.tables.base_mva
+    }
+
+    #[must_use]
+    pub fn base_mva_mut(&mut self) -> &mut f64 {
+        &mut self.tables_mut().base_mva
+    }
+
+    /// System base frequency in hertz (50 or 60).
+    #[must_use]
+    pub fn base_frequency(&self) -> f64 {
+        self.tables.base_frequency
+    }
+
+    #[must_use]
+    pub fn base_frequency_mut(&mut self) -> &mut f64 {
+        &mut self.tables_mut().base_frequency
+    }
+
+    /// The format the case was parsed from.
+    #[must_use]
+    pub fn source_format(&self) -> SourceFormat {
+        self.tables.source_format
+    }
+
+    #[must_use]
+    pub fn source_format_mut(&mut self) -> &mut SourceFormat {
+        &mut self.tables_mut().source_format
     }
 }
 
@@ -1810,7 +1936,7 @@ pub(crate) struct LoweredLengths {
 impl BalancedNetwork {
     #[must_use]
     pub fn new(name: impl Into<String>, base_mva: f64) -> BalancedNetwork {
-        BalancedNetwork {
+        BalancedNetwork::from_tables(BalancedNetworkTables {
             name: name.into(),
             base_mva,
             base_frequency: DEFAULT_BASE_FREQUENCY,
@@ -1827,7 +1953,7 @@ impl BalancedNetwork {
             areas: Vec::new(),
             solver: None,
             source_format: SourceFormat::InMemory,
-        }
+        })
     }
 
     /// A network assembled in memory from buses and branches, with no loads,
@@ -1843,8 +1969,8 @@ impl BalancedNetwork {
         branches: Vec<Branch>,
     ) -> BalancedNetwork {
         let mut net = Self::new(name, base_mva);
-        net.buses = buses;
-        net.branches = branches;
+        *net.buses_mut() = buses;
+        *net.branches_mut() = branches;
         net
     }
 
@@ -1954,7 +2080,7 @@ impl BalancedNetwork {
             message: e.to_string(),
         })?;
         net.check_references("JSON")?;
-        if net.buses.is_empty() {
+        if net.buses().is_empty() {
             return Err(Error::FormatRead {
                 format: "JSON",
                 message: "case has no buses".into(),
@@ -1985,7 +2111,7 @@ impl BalancedNetwork {
     /// takes a `&BalancedNetwork` can check this instead of silently assuming MW.
     #[must_use]
     pub fn is_normalized(&self) -> bool {
-        self.source_format == SourceFormat::Normalized
+        self.source_format() == SourceFormat::Normalized
     }
 
     /// Error unless `base_mva` is a positive, finite number. It is every
@@ -1994,11 +2120,11 @@ impl BalancedNetwork {
     /// consumers ([`to_normalized`](BalancedNetwork::to_normalized), the gridfm
     /// export) call this; any other unit-sensitive consumer should too.
     pub fn check_base_mva(&self) -> crate::Result<()> {
-        if self.base_mva.is_finite() && self.base_mva > 0.0 {
+        if self.base_mva().is_finite() && self.base_mva() > 0.0 {
             Ok(())
         } else {
             Err(crate::Error::InvalidBaseMva {
-                base: self.base_mva,
+                base: self.base_mva(),
             })
         }
     }
@@ -2024,7 +2150,7 @@ impl BalancedNetwork {
 
     pub(crate) fn value_findings(&self) -> Vec<ValueFinding> {
         let mut out = Vec::new();
-        for b in &self.buses {
+        for b in self.buses() {
             if let Some(new) = repair_vm(b.vm) {
                 out.push(ValueFinding {
                     element: format!("bus {}", b.id),
@@ -2044,8 +2170,8 @@ impl BalancedNetwork {
                 });
             }
         }
-        for g in &self.generators {
-            if let Some(new) = repair_mbase(g.mbase, self.base_mva) {
+        for g in self.generators() {
+            if let Some(new) = repair_mbase(g.mbase, self.base_mva()) {
                 out.push(ValueFinding {
                     element: format!("generator at bus {}", g.bus),
                     field: "mbase",
@@ -2075,8 +2201,8 @@ impl BalancedNetwork {
     /// retained source echo the mutation invalidates.
     pub(crate) fn repair_in_place(&mut self) -> Vec<ValueFinding> {
         let findings = self.value_findings();
-        let sbase = self.base_mva;
-        for b in &mut self.buses {
+        let sbase = self.base_mva();
+        for b in self.buses_mut() {
             if let Some(new) = repair_vm(b.vm) {
                 b.vm = new;
             }
@@ -2084,7 +2210,7 @@ impl BalancedNetwork {
                 b.va = new;
             }
         }
-        for g in &mut self.generators {
+        for g in self.generators_mut() {
             if let Some(new) = repair_mbase(g.mbase, sbase) {
                 g.mbase = new;
             }
@@ -2102,11 +2228,11 @@ impl BalancedNetwork {
     /// `lowered_lengths_match_the_expansion` pins the two against each other.
     pub(crate) fn lowered_lengths(&self) -> LoweredLengths {
         let mut lengths = LoweredLengths {
-            buses: self.buses.len(),
-            branches: self.branches.len(),
-            shunts: self.shunts.len(),
+            buses: self.buses().len(),
+            branches: self.branches().len(),
+            shunts: self.shunts().len(),
         };
-        for t in self.transformers_3w.iter().filter(|t| t.in_service) {
+        for t in self.transformers_3w().iter().filter(|t| t.in_service) {
             lengths.buses += 1;
             lengths.branches += 3;
             if t.mag_g != 0.0 || t.mag_b != 0.0 {
@@ -2127,7 +2253,7 @@ impl BalancedNetwork {
     /// builds behind the scenes, so callers never see the synthetic buses in the
     /// model they read or write.
     pub(crate) fn expand_transformers_3w(&self) -> std::borrow::Cow<'_, BalancedNetwork> {
-        if self.transformers_3w.is_empty() {
+        if self.transformers_3w().is_empty() {
             return std::borrow::Cow::Borrowed(self);
         }
         let mut net = self.clone();
@@ -2138,14 +2264,14 @@ impl BalancedNetwork {
         let scale = if net.is_normalized() {
             1.0
         } else {
-            net.base_mva
+            net.base_mva()
         };
         // check_references refuses bus ids without headroom for these
         // synthetic ids on every parse path; the checked arithmetic turns a
         // programmatic caller's overflow into a loud panic instead of a
         // wrapped id aliasing an existing bus.
         let base_id = net
-            .buses
+            .buses()
             .iter()
             .map(|b| b.id.0)
             .max()
@@ -2153,7 +2279,7 @@ impl BalancedNetwork {
             .checked_add(1)
             .expect("bus id space exhausted for star expansion");
         for (k, t) in self
-            .transformers_3w
+            .transformers_3w()
             .iter()
             .filter(|t| t.in_service)
             .enumerate()
@@ -2164,10 +2290,10 @@ impl BalancedNetwork {
                     .expect("bus id space exhausted for star expansion"),
             );
             let (star, branches) = t.star_expansion(star_id);
-            net.buses.push(star);
-            net.branches.extend(branches);
+            net.buses_mut().push(star);
+            net.branches_mut().extend(branches);
             if t.mag_g != 0.0 || t.mag_b != 0.0 {
-                net.shunts.push(Shunt {
+                net.shunts_mut().push(Shunt {
                     bus: star_id,
                     g: t.mag_g * scale,
                     b: t.mag_b * scale,
@@ -2178,7 +2304,7 @@ impl BalancedNetwork {
                 });
             }
         }
-        net.transformers_3w.clear();
+        net.transformers_3w_mut().clear();
         std::borrow::Cow::Owned(net)
     }
 
@@ -2200,8 +2326,8 @@ impl BalancedNetwork {
         // endpoint / load / shunt / gen is the dominant cost of a large parse, and
         // a BTreeSet pays a log-n pointer-chasing probe each time. Pre-size to skip
         // rehashing.
-        let mut ids = std::collections::HashSet::with_capacity(self.buses.len());
-        for b in &self.buses {
+        let mut ids = std::collections::HashSet::with_capacity(self.buses().len());
+        for b in self.buses() {
             // The readers parse ids through `as usize`, which saturates rather
             // than failing, and the C ABI reports them as int64. Two distinct
             // ids above the ceiling would surface as one value there, so a
@@ -2230,7 +2356,7 @@ impl BalancedNetwork {
             }
         };
         // Format the context only on the error path, not once per branch.
-        for (i, br) in self.branches.iter().enumerate() {
+        for (i, br) in self.branches().iter().enumerate() {
             for bus in [br.from, br.to] {
                 if !ids.contains(&bus) {
                     return Err(Error::FormatRead {
@@ -2243,7 +2369,7 @@ impl BalancedNetwork {
                 check(bus, "transformer control")?;
             }
         }
-        for (i, sw) in self.switches.iter().enumerate() {
+        for (i, sw) in self.switches().iter().enumerate() {
             for bus in [sw.from, sw.to] {
                 if !ids.contains(&bus) {
                     return Err(Error::FormatRead {
@@ -2253,34 +2379,34 @@ impl BalancedNetwork {
                 }
             }
         }
-        for l in &self.loads {
+        for l in self.loads() {
             check(l.bus, "load")?;
         }
-        for s in &self.shunts {
+        for s in self.shunts() {
             check(s.bus, "shunt")?;
             if let Some(bus) = s.control.as_ref().and_then(|c| c.control_bus) {
                 check(bus, "switched-shunt control")?;
             }
         }
-        for g in &self.generators {
+        for g in self.generators() {
             check(g.bus, "generator")?;
             if let Some(bus) = g.regulated_bus {
                 check(bus, "generator voltage control")?;
             }
         }
-        for d in &self.hvdc {
+        for d in self.hvdc() {
             check(d.from, "dcline")?;
             check(d.to, "dcline")?;
         }
-        for s in &self.storage {
+        for s in self.storage() {
             check(s.bus, "storage")?;
         }
-        for a in &self.areas {
+        for a in self.areas() {
             if let Some(slack) = a.slack_bus {
                 check(slack, "area swing")?;
             }
         }
-        for t in &self.transformers_3w {
+        for t in self.transformers_3w() {
             for w in &t.windings {
                 check(w.bus, "3-winding transformer")?;
             }
@@ -2296,14 +2422,14 @@ impl BalancedNetwork {
     /// `max(1, in-service count)`. No real case sits there, so refuse it at the
     /// boundary like any other malformed reference.
     fn check_star_expansion_headroom(&self, format: &'static str) -> crate::Result<()> {
-        if self.transformers_3w.is_empty() {
+        if self.transformers_3w().is_empty() {
             return Ok(());
         }
-        let Some(max_id) = self.buses.iter().map(|b| b.id.0).max() else {
+        let Some(max_id) = self.buses().iter().map(|b| b.id.0).max() else {
             return Ok(());
         };
         let needed = self
-            .transformers_3w
+            .transformers_3w()
             .iter()
             .filter(|t| t.in_service)
             .count()
@@ -2560,8 +2686,8 @@ mod tests {
         let mut with_bom = b"\xef\xbb\xbf".to_vec();
         with_bom.extend_from_slice(json.as_bytes());
         let back = BalancedNetwork::from_json_bytes(&with_bom).expect("read BOM prefixed JSON");
-        assert_eq!(back.name, "bytes");
-        assert_eq!(back.buses.len(), 1);
+        assert_eq!(back.name(), "bytes");
+        assert_eq!(back.buses().len(), 1);
 
         let error = BalancedNetwork::from_json_bytes(b"{\"buses\":[]\xff}")
             .expect_err("invalid UTF-8 must not be replaced");
@@ -2574,7 +2700,7 @@ mod tests {
         let empty = net
             .to_json()
             .expect("serialize model JSON")
-            .replace(&serde_json::to_string(&net.buses).unwrap(), "[]");
+            .replace(&serde_json::to_string(&net.buses()).unwrap(), "[]");
         let error = BalancedNetwork::from_json_bytes(empty.as_bytes())
             .expect_err("the byte API must keep no-bus validation");
         assert!(error.to_string().contains("case has no buses"), "{error}");
@@ -2648,13 +2774,13 @@ mod tests {
     fn three_winding_transformer_survives_json_transport() {
         let mut net =
             BalancedNetwork::in_memory("t", 100.0, vec![bus(1), bus(2), bus(3)], Vec::new());
-        net.transformers_3w.push(transformer_3w());
+        net.transformers_3w_mut().push(transformer_3w());
         net.validate().unwrap();
 
         let back = BalancedNetwork::from_json(&net.to_json().unwrap()).unwrap();
-        assert_eq!(back.transformers_3w.len(), 1);
-        close(back.transformers_3w[0].z[1].x, 0.20);
-        assert_eq!(back.transformers_3w[0].windings[2].bus, BusId(3));
+        assert_eq!(back.transformers_3w().len(), 1);
+        close(back.transformers_3w()[0].z[1].x, 0.20);
+        assert_eq!(back.transformers_3w()[0].windings[2].bus, BusId(3));
     }
 
     #[test]
@@ -2678,14 +2804,13 @@ mod tests {
         ] {
             let mut net =
                 BalancedNetwork::in_memory("t", 100.0, vec![bus(1), bus(2), bus(3)], Vec::new());
-            net.shunts.push(Shunt::new(BusId(1), 0.0, 0.5));
-            net.transformers_3w = units;
-
+            net.shunts_mut().push(Shunt::new(BusId(1), 0.0, 0.5));
+            *net.transformers_3w_mut() = units;
             let counted = net.lowered_lengths();
             let built = net.expand_transformers_3w();
-            assert_eq!(counted.buses, built.buses.len());
-            assert_eq!(counted.branches, built.branches.len());
-            assert_eq!(counted.shunts, built.shunts.len());
+            assert_eq!(counted.buses, built.buses().len());
+            assert_eq!(counted.branches, built.branches().len());
+            assert_eq!(counted.shunts, built.shunts().len());
         }
     }
 
@@ -2700,7 +2825,7 @@ mod tests {
             vec![bus(1), bus(2), bus(3), bus(i64::MAX as usize)],
             Vec::new(),
         );
-        net.transformers_3w.push(transformer_3w());
+        net.transformers_3w_mut().push(transformer_3w());
         let err = net.validate().unwrap_err().to_string();
         assert!(
             err.contains("no room to allocate synthetic star bus ids"),
@@ -2721,10 +2846,10 @@ mod tests {
             vec![bus(1), bus(2), bus(3), bus(i64::MAX as usize - 1)],
             Vec::new(),
         );
-        net.transformers_3w.push(transformer_3w());
+        net.transformers_3w_mut().push(transformer_3w());
         let mut out_of_service = transformer_3w();
         out_of_service.in_service = false;
-        net.transformers_3w.push(out_of_service);
+        net.transformers_3w_mut().push(out_of_service);
         net.validate()
             .expect("in-service count fits; must not be rejected");
     }
@@ -2745,14 +2870,14 @@ mod tests {
         assert!(err.contains("outside the int64 id space"), "got {err}");
 
         // The ceiling itself is a valid id.
-        net.buses[1].id = BusId(i64::MAX as usize);
+        net.buses_mut()[1].id = BusId(i64::MAX as usize);
         net.validate().expect("the ceiling itself is representable");
     }
 
     #[test]
     fn check_references_rejects_a_dangling_winding_bus() {
         let mut net = BalancedNetwork::in_memory("t", 100.0, vec![bus(1), bus(2)], Vec::new());
-        net.transformers_3w.push(transformer_3w()); // winding 3 references bus 3
+        net.transformers_3w_mut().push(transformer_3w()); // winding 3 references bus 3
         let err = net.validate().unwrap_err().to_string();
         assert!(
             err.contains("3-winding transformer references unknown bus 3"),
@@ -2800,11 +2925,11 @@ mod tests {
     fn transformer_control_survives_json_transport() {
         let mut net =
             BalancedNetwork::in_memory("t", 100.0, vec![bus(1), bus(2), bus(3)], Vec::new());
-        net.branches.push(regulating_branch(3));
+        net.branches_mut().push(regulating_branch(3));
         net.validate().unwrap();
 
         let back = BalancedNetwork::from_json(&net.to_json().unwrap()).unwrap();
-        let c = back.branches[0].control.as_ref().unwrap();
+        let c = back.branches()[0].control.as_ref().unwrap();
         assert_eq!(c.mode, TransformerControlMode::Voltage);
         assert_eq!(c.controlled_bus, Some(BusId(3)));
         close(c.tap_max, 1.05);
@@ -2932,7 +3057,7 @@ mod tests {
             vec![bus(1, f64::NAN), bus(2, 1.0)],
             vec![branch],
         );
-        net.generators.push(g);
+        net.generators_mut().push(g);
 
         let text = net.to_json().unwrap();
         assert!(text.contains(r#""vm":"NaN""#), "{text}");
@@ -2940,9 +3065,9 @@ mod tests {
         assert!(text.contains(r#""ramp_30":"Infinity""#), "{text}");
 
         let back = BalancedNetwork::from_json(&text).unwrap();
-        assert!(back.buses[0].vm.is_nan());
-        assert_eq!(back.branches[0].x, f64::INFINITY);
-        assert_eq!(back.generators[0].caps[8], Some(f64::INFINITY));
+        assert!(back.buses()[0].vm.is_nan());
+        assert_eq!(back.branches()[0].x, f64::INFINITY);
+        assert_eq!(back.generators()[0].caps[8], Some(f64::INFINITY));
 
         // Second write is byte stable, and the empty diagnostics channel
         // reflects that nothing was dropped.
@@ -2966,7 +3091,7 @@ mod tests {
     #[test]
     fn check_references_rejects_a_dangling_controlled_bus() {
         let mut net = BalancedNetwork::in_memory("t", 100.0, vec![bus(1), bus(2)], Vec::new());
-        net.branches.push(regulating_branch(9)); // controls a bus that doesn't exist
+        net.branches_mut().push(regulating_branch(9)); // controls a bus that doesn't exist
         let err = net.validate().unwrap_err().to_string();
         assert!(
             err.contains("transformer control references unknown bus 9"),
@@ -3001,11 +3126,11 @@ mod tests {
     fn switched_shunt_control_survives_json_transport() {
         let mut net =
             BalancedNetwork::in_memory("t", 100.0, vec![bus(1), bus(2), bus(3)], Vec::new());
-        net.shunts.push(switched_shunt(3));
+        net.shunts_mut().push(switched_shunt(3));
         net.validate().unwrap();
 
         let back = BalancedNetwork::from_json(&net.to_json().unwrap()).unwrap();
-        let c = back.shunts[0].control.as_ref().unwrap();
+        let c = back.shunts()[0].control.as_ref().unwrap();
         assert_eq!(c.mode, SwitchedShuntMode::Discrete);
         assert_eq!(c.control_bus, Some(BusId(3)));
         assert_eq!(c.blocks.len(), 2);
@@ -3015,7 +3140,7 @@ mod tests {
     #[test]
     fn check_references_rejects_a_dangling_switched_shunt_control_bus() {
         let mut net = BalancedNetwork::in_memory("t", 100.0, vec![bus(1), bus(2)], Vec::new());
-        net.shunts.push(switched_shunt(9)); // controls a bus that doesn't exist
+        net.shunts_mut().push(switched_shunt(9)); // controls a bus that doesn't exist
         let err = net.validate().unwrap_err().to_string();
         assert!(
             err.contains("switched-shunt control references unknown bus 9"),
@@ -3026,9 +3151,9 @@ mod tests {
     #[test]
     fn validate_values_flags_and_repair_clamps_out_of_domain_values() {
         let mut net = BalancedNetwork::in_memory("t", 100.0, vec![bus(1), bus(2)], Vec::new());
-        net.buses[0].vm = 0.0; // outside [0, 2]
-        net.buses[1].va = 9000.0; // past ±2000°
-        net.generators.push(Generator {
+        net.buses_mut()[0].vm = 0.0; // outside [0, 2]
+        net.buses_mut()[1].va = 9000.0; // past ±2000°
+        net.generators_mut().push(Generator {
             bus: BusId(1),
             pg: 10.0,
             qg: 0.0,
@@ -3064,16 +3189,16 @@ mod tests {
                 .all(|d| d.code() == "VALIDATE.BALANCED.VALUE_DOMAIN" && d.target().is_some())
         );
         // Non-mutating: the network still holds the bad values.
-        close(net.buses[0].vm, 0.0);
+        close(net.buses()[0].vm, 0.0);
 
         // The recorded path: repair the module, read the history entry.
         let module = powerio_core::PioModule::new(net);
         let module = repair_values(module).unwrap();
         let net = module.value();
-        close(net.buses[0].vm, 1.0);
-        close(net.buses[1].va, 0.0);
-        close(net.generators[0].mbase, 100.0); // → base_mva
-        close(net.generators[0].vg, 1.0);
+        close(net.buses()[0].vm, 1.0);
+        close(net.buses()[1].va, 0.0);
+        close(net.generators()[0].mbase, 100.0); // → base_mva
+        close(net.generators()[0].vg, 1.0);
         // Idempotent: nothing left to repair, and a second pass appends
         // nothing.
         assert!(net.validate_values().is_empty());

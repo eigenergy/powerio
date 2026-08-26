@@ -27,10 +27,10 @@ use super::{
 use crate::diagnostics::codes::EMIT_PSSE as F;
 use crate::diagnostics::{Diagnostics, codes};
 use crate::network::{
-    Area, BalancedNetwork, Branch, BranchCharging, BranchRatingSet, Bus, BusId, BusType, Extras,
-    Generator, Hvdc, Impedance, Load, LoadVoltageModel, Shunt, ShuntBlock, SolverParams,
-    SourceFormat, SwitchedShuntControl, SwitchedShuntMode, Transformer3W, TransformerControl,
-    TransformerControlMode, Winding,
+    Area, BalancedNetwork, BalancedNetworkTables, Branch, BranchCharging, BranchRatingSet, Bus,
+    BusId, BusType, Extras, Generator, Hvdc, Impedance, Load, LoadVoltageModel, Shunt, ShuntBlock,
+    SolverParams, SourceFormat, SwitchedShuntControl, SwitchedShuntMode, Transformer3W,
+    TransformerControl, TransformerControlMode, Winding,
 };
 use crate::{Error, Result};
 
@@ -201,13 +201,13 @@ pub fn write_psse_rev(net: &BalancedNetwork, rev: u32) -> Conversion {
     // The case name reaches the header line and the title line. Both are
     // single records, so an embedded terminator would make the rest of the
     // name parse as bus data.
-    let case_name = sanitize_quoted(&net.name, NAME_FORBIDDEN, ' ');
+    let case_name = sanitize_quoted(net.name(), NAME_FORBIDDEN, ' ');
     let _ = writeln!(
         s,
         "0, {}, {rev}, 0, {}, {}   / powerio export: {}",
-        net.base_mva,
+        net.base_mva(),
         i32::from(modern),
-        num(net.base_frequency),
+        num(net.base_frequency()),
         case_name
     );
     let _ = writeln!(s, "{case_name}");
@@ -215,7 +215,7 @@ pub fn write_psse_rev(net: &BalancedNetwork, rev: u32) -> Conversion {
     if modern {
         // v34+ system-wide block: emit the solver keyword lines (the fields that
         // are set), then close the block.
-        if let Some(sp) = &net.solver {
+        if let Some(sp) = &net.solver() {
             if let Some(t) = sp.zero_impedance_threshold {
                 let _ = writeln!(s, "GENERAL, THRSHZ={}", num(t));
             }
@@ -248,7 +248,7 @@ pub fn write_psse_rev(net: &BalancedNetwork, rev: u32) -> Conversion {
 
     // Bus, with area/zone kept for the load records that reference them.
     let mut bus_area: BTreeMap<BusId, (usize, usize)> = BTreeMap::new();
-    for b in &net.buses {
+    for b in net.buses() {
         bus_area.insert(b.id, (b.area, b.zone));
         let raw_name = b.name.as_deref().unwrap_or("");
         let name = sanitize_quoted(raw_name, NAME_FORBIDDEN, ' ');
@@ -282,7 +282,7 @@ pub fn write_psse_rev(net: &BalancedNetwork, rev: u32) -> Conversion {
     // Per-bus circuit-id counters so parallel devices on a bus get distinct ids
     // (PSS/E requires (bus, id) to be unique); a captured `extras["id"]` wins.
     let mut load_ids: BTreeMap<BusId, BTreeSet<String>> = BTreeMap::new();
-    for l in &net.loads {
+    for l in net.loads() {
         let (area, zone) = bus_area.get(&l.bus).copied().unwrap_or((1, 1));
         let id = quoted_device_id(&l.extras, l.bus, &mut load_ids, &mut sanitized_quoted);
         let (pl, ql, ip, iq, yp, yq) = load_components_for_write(l, &id, &mut warnings);
@@ -348,7 +348,7 @@ pub fn write_psse_rev(net: &BalancedNetwork, rev: u32) -> Conversion {
 
     // Fixed shunts here; switched shunts (control = Some) go in their own section.
     let mut shunt_ids: BTreeMap<BusId, BTreeSet<String>> = BTreeMap::new();
-    for sh in net.shunts.iter().filter(|s| s.control.is_none()) {
+    for sh in net.shunts().iter().filter(|s| s.control.is_none()) {
         let id = quoted_device_id(&sh.extras, sh.bus, &mut shunt_ids, &mut sanitized_quoted);
         let _ = writeln!(
             s,
@@ -362,7 +362,7 @@ pub fn write_psse_rev(net: &BalancedNetwork, rev: u32) -> Conversion {
     let _ = writeln!(s, "0 / END OF FIXED SHUNT DATA, BEGIN GENERATOR DATA");
 
     let mut gen_ids: BTreeMap<BusId, u32> = BTreeMap::new();
-    for g in &net.generators {
+    for g in net.generators() {
         let id = positional_id(g.bus, &mut gen_ids);
         // IREG (field 7): the remote regulated bus, or 0 for own-terminal control.
         let ireg = g.regulated_bus.map_or(0, |b| b.0);
@@ -391,7 +391,7 @@ pub fn write_psse_rev(net: &BalancedNetwork, rev: u32) -> Conversion {
     // keys a branch on (I, J, CKT)); a captured source CKT wins.
     let mut branch_ids: BTreeMap<(BusId, BusId), BTreeSet<String>> = BTreeMap::new();
     for (branch_index, br) in net
-        .branches
+        .branches()
         .iter()
         .enumerate()
         .filter(|(_, b)| !b.is_transformer())
@@ -462,7 +462,7 @@ pub fn write_psse_rev(net: &BalancedNetwork, rev: u32) -> Conversion {
     let _ = writeln!(s, "0 / END OF BRANCH DATA, BEGIN TRANSFORMER DATA");
 
     for (branch_index, br) in net
-        .branches
+        .branches()
         .iter()
         .enumerate()
         .filter(|(_, b)| b.is_transformer())
@@ -489,7 +489,7 @@ pub fn write_psse_rev(net: &BalancedNetwork, rev: u32) -> Conversion {
         let ctl = br.control.as_ref();
         let sbase = ctl
             .filter(|c| c.mva_base > 0.0)
-            .map_or(net.base_mva, |c| c.mva_base);
+            .map_or(net.base_mva(), |c| c.mva_base);
         let cod = ctl.map_or(0, |c| mode_to_cod(c.mode));
         let cont = ctl.and_then(|c| c.controlled_bus).map_or(0, |b| b.0);
         let (rma, rmi, vma, vmi, ntp) = ctl.map_or((1.1, 0.9, 1.1, 0.9, 33), |c| {
@@ -545,7 +545,7 @@ pub fn write_psse_rev(net: &BalancedNetwork, rev: u32) -> Conversion {
     // 3-winding transformers: a 5-line record. CW=1, CZ=1, CM=1 (same conventions
     // as the 2-winding record); line 2 carries the three pairwise impedances and
     // the star-point voltage, lines 3-5 the per-winding tap/angle/ratings.
-    for t in &net.transformers_3w {
+    for t in net.transformers_3w() {
         let raw_name = t.name.as_deref().unwrap_or("");
         let name = sanitize_quoted(raw_name, NAME_FORBIDDEN, ' ');
         if matches!(name, std::borrow::Cow::Owned(_)) {
@@ -610,7 +610,7 @@ pub fn write_psse_rev(net: &BalancedNetwork, rev: u32) -> Conversion {
         }
     }
     let _ = writeln!(s, "0 / END OF TRANSFORMER DATA, BEGIN AREA DATA");
-    for a in &net.areas {
+    for a in net.areas() {
         let raw_name = a.name.as_deref().unwrap_or("");
         let name = sanitize_quoted(raw_name, NAME_FORBIDDEN, ' ');
         if matches!(name, std::borrow::Cow::Owned(_)) {
@@ -631,7 +631,7 @@ pub fn write_psse_rev(net: &BalancedNetwork, rev: u32) -> Conversion {
     // emit their 3-line records (if any) between the begin/end markers, then the
     // remaining sections as bare terminators so the file parses as a complete case.
     let _ = writeln!(s, "{}", EMPTY_SECTIONS[0]);
-    for (i, dc) in net.hvdc.iter().enumerate() {
+    for (i, dc) in net.hvdc().iter().enumerate() {
         let raw_name = dc_str(&dc.extras, "psse_dc_name").unwrap_or_else(|| format!("DC{}", i + 1));
         let name = sanitize_quoted(&raw_name, NAME_FORBIDDEN, ' ');
         if matches!(name, std::borrow::Cow::Owned(_)) {
@@ -690,7 +690,7 @@ pub fn write_psse_rev(net: &BalancedNetwork, rev: u32) -> Conversion {
     // neither and use (N, B) pairs. The writer must match the reader's layout at
     // each revision or every later field is read columns off.
     let mut sw_ids: BTreeMap<BusId, BTreeSet<String>> = BTreeMap::new();
-    for sh in net.shunts.iter().filter(|s| s.control.is_some()) {
+    for sh in net.shunts().iter().filter(|s| s.control.is_some()) {
         let Some(c) = sh.control.as_ref() else {
             continue;
         };
@@ -737,7 +737,7 @@ pub fn write_psse_rev(net: &BalancedNetwork, rev: u32) -> Conversion {
     }
     let _ = writeln!(s, "Q");
 
-    if net.hvdc.iter().any(dc_states_beyond_record) {
+    if net.hvdc().iter().any(dc_states_beyond_record) {
         warnings.push(
             &F.value_defaulted,
             "DC line converter detail (firing angles, converter transformer taps, reactive \
@@ -745,35 +745,35 @@ pub fn write_psse_rev(net: &BalancedNetwork, rev: u32) -> Conversion {
              line resistance only",
         );
     }
-    if !net.storage.is_empty() {
+    if !net.storage().is_empty() {
         warnings.push(
             &F.record_dropped,
             format!(
                 "{} storage unit(s) dropped: PSS/E has no storage record",
-                net.storage.len()
+                net.storage().len()
             ),
         );
     }
-    if net.generators.iter().any(|g| g.cost.is_some()) {
+    if net.generators().iter().any(|g| g.cost.is_some()) {
         warnings.push(
             &F.field_dropped,
             "generator cost curves dropped: PSS/E .raw has no cost data",
         );
     }
-    if net.hvdc.iter().any(|d| d.cost.is_some()) {
+    if net.hvdc().iter().any(|d| d.cost.is_some()) {
         warnings.push(
             &F.field_dropped,
             "DC line cost curves dropped: PSS/E .raw has no cost data",
         );
     }
-    if net.branches.iter().any(Branch::has_angle_limits) {
+    if net.branches().iter().any(Branch::has_angle_limits) {
         warnings.push(
             &F.field_dropped,
             "branch angle limits (angmin/angmax) dropped: PSS/E branch records carry none",
         );
     }
     let current_ratings = net
-        .branches
+        .branches()
         .iter()
         .filter(|b| b.current_ratings.is_some())
         .count();
@@ -795,14 +795,18 @@ pub fn write_psse_rev(net: &BalancedNetwork, rev: u32) -> Conversion {
         |key| key == "id" || key.starts_with("psse_"),
         &mut warnings,
     );
-    let branch_solutions = net.branches.iter().filter(|b| b.solution.is_some()).count();
+    let branch_solutions = net
+        .branches()
+        .iter()
+        .filter(|b| b.solution.is_some())
+        .count();
     if branch_solutions > 0 {
         warnings.push(&F.field_dropped, format!(
             "{branch_solutions} branch solution value set(s) dropped: PSS/E RAW power flow result fields are not written"
         ));
     }
     let transformer_terminal_shunts = net
-        .branches
+        .branches()
         .iter()
         .filter(|b| {
             b.is_transformer()
@@ -815,7 +819,7 @@ pub fn write_psse_rev(net: &BalancedNetwork, rev: u32) -> Conversion {
             "{transformer_terminal_shunts} transformer terminal admittance record(s) collapsed to magnetizing admittance: PSS/E transformer records cannot preserve terminal side assignment"
         ));
     }
-    if net.generators.iter().any(Generator::has_caps) {
+    if net.generators().iter().any(Generator::has_caps) {
         warnings.push(
             &F.field_dropped,
             "generator ramp/capability columns dropped: PSS/E .raw has no equivalent fields",
@@ -1189,7 +1193,7 @@ pub(crate) fn parse_psse_source(
 
     warn_unmodeled_sections(unmodeled_sections, warnings);
 
-    let mut net = BalancedNetwork {
+    let mut net = BalancedNetwork::from_tables(BalancedNetworkTables {
         name,
         base_mva,
         base_frequency,
@@ -1206,7 +1210,7 @@ pub(crate) fn parse_psse_source(
         areas,
         solver: (!solver.is_empty()).then_some(solver),
         source_format: SourceFormat::Psse,
-    };
+    });
     drop_stale_control_pointers(&mut net, warnings);
     net.check_references(FMT)?;
     Ok(net)
@@ -1470,10 +1474,10 @@ fn warn_unmodeled_sections(totals: BTreeMap<String, usize>, warnings: &mut Diagn
 }
 
 fn drop_stale_control_pointers(net: &mut BalancedNetwork, warnings: &mut Diagnostics) {
-    let bus_ids: BTreeSet<BusId> = net.buses.iter().map(|b| b.id).collect();
+    let bus_ids: BTreeSet<BusId> = net.buses().iter().map(|b| b.id).collect();
     let missing = |bus: BusId| !bus_ids.contains(&bus);
 
-    for (idx, g) in net.generators.iter_mut().enumerate() {
+    for (idx, g) in net.generators_mut().iter_mut().enumerate() {
         let Some(bus) = g.regulated_bus.filter(|b| missing(*b)) else {
             continue;
         };
@@ -1486,7 +1490,7 @@ fn drop_stale_control_pointers(net: &mut BalancedNetwork, warnings: &mut Diagnos
         g.regulated_bus = None;
     }
 
-    for (idx, br) in net.branches.iter_mut().enumerate() {
+    for (idx, br) in net.branches_mut().iter_mut().enumerate() {
         let Some(control) = br.control.as_mut() else {
             continue;
         };
@@ -1503,7 +1507,7 @@ fn drop_stale_control_pointers(net: &mut BalancedNetwork, warnings: &mut Diagnos
         control.controlled_bus = None;
     }
 
-    for (idx, shunt) in net.shunts.iter_mut().enumerate() {
+    for (idx, shunt) in net.shunts_mut().iter_mut().enumerate() {
         let Some(control) = shunt.control.as_mut() else {
             continue;
         };
@@ -1519,7 +1523,7 @@ fn drop_stale_control_pointers(net: &mut BalancedNetwork, warnings: &mut Diagnos
         control.control_bus = None;
     }
 
-    for (idx, area) in net.areas.iter_mut().enumerate() {
+    for (idx, area) in net.areas_mut().iter_mut().enumerate() {
         let Some(bus) = area.slack_bus.filter(|b| missing(*b)) else {
             continue;
         };
@@ -2666,7 +2670,7 @@ COMMENT
 Q
 ";
         let parsed = crate::parse_str(raw, "psse").unwrap();
-        let control = parsed.network.branches[0].control.as_ref().unwrap();
+        let control = parsed.network.branches()[0].control.as_ref().unwrap();
         assert_eq!(control.mode, TransformerControlMode::Fixed);
     }
 
@@ -2749,12 +2753,12 @@ Q
 
     fn assert_terminal_charging_round_trip(text: &str) {
         let back = parse_psse(text).unwrap();
-        let charging = back.branches[0].terminal_charging();
+        let charging = back.branches()[0].terminal_charging();
         close(charging.g_fr, 0.01);
         close(charging.b_fr, 0.02);
         close(charging.g_to, 0.03);
         close(charging.b_to, 0.05);
-        close(back.branches[0].b, 0.07);
+        close(back.branches()[0].b, 0.07);
     }
 
     #[test]
@@ -2765,7 +2769,7 @@ Q
             vec![test_bus(1, BusType::Ref), test_bus(2, BusType::Pq)],
             Vec::new(),
         );
-        net.branches.push(branch_with_terminal_charging());
+        net.branches_mut().push(branch_with_terminal_charging());
 
         let rev33 = write_psse(&net);
         assert!(
@@ -2792,7 +2796,7 @@ Q
             vec![test_bus(1, BusType::Ref), test_bus(2, BusType::Pq)],
             Vec::new(),
         );
-        net.branches
+        net.branches_mut()
             .push(transformer_with_terminal_charging(BranchCharging {
                 g_fr: 0.01,
                 b_fr: 0.02,
@@ -2810,12 +2814,12 @@ Q
             conv.rendered_diagnostics()
         );
         let back = parse_psse(&conv.text).unwrap();
-        let charging = back.branches[0].terminal_charging();
+        let charging = back.branches()[0].terminal_charging();
         close(charging.g_fr, 0.01);
         close(charging.b_fr, 0.02);
         close(charging.g_to, 0.0);
         close(charging.b_to, 0.0);
-        close(back.branches[0].b, 0.02);
+        close(back.branches()[0].b, 0.02);
     }
 
     #[test]
@@ -2826,7 +2830,7 @@ Q
             vec![test_bus(1, BusType::Ref), test_bus(2, BusType::Pq)],
             Vec::new(),
         );
-        net.branches
+        net.branches_mut()
             .push(transformer_with_terminal_charging(BranchCharging {
                 g_fr: 0.01,
                 b_fr: 0.02,
@@ -2843,12 +2847,12 @@ Q
             conv.rendered_diagnostics()
         );
         let back = parse_psse(&conv.text).unwrap();
-        let charging = back.branches[0].terminal_charging();
+        let charging = back.branches()[0].terminal_charging();
         close(charging.g_fr, 0.04);
         close(charging.b_fr, 0.07);
         close(charging.g_to, 0.0);
         close(charging.b_to, 0.0);
-        close(back.branches[0].b, 0.07);
+        close(back.branches()[0].b, 0.07);
     }
 
     #[test]
@@ -2863,8 +2867,8 @@ Q
 
         let net = parse_psse(raw).unwrap();
 
-        assert_eq!(net.buses.len(), 1);
-        assert_eq!(net.buses[0].name.as_deref(), Some("A/B"));
+        assert_eq!(net.buses().len(), 1);
+        assert_eq!(net.buses()[0].name.as_deref(), Some("A/B"));
     }
 
     #[test]
@@ -2883,15 +2887,15 @@ Q
         let mut warnings = Diagnostics::new();
         let net = parse_psse_source(raw, None, &mut warnings).unwrap();
 
-        assert_eq!(net.loads.len(), 1);
-        close(net.loads[0].p, 13.0);
-        close(net.loads[0].q, 5.0);
+        assert_eq!(net.loads().len(), 1);
+        close(net.loads()[0].p, 13.0);
+        close(net.loads()[0].q, 5.0);
         let Some(LoadVoltageModel::Zip {
             p_constant_power,
             q_constant_current,
             p_constant_impedance,
             ..
-        }) = &net.loads[0].voltage_model
+        }) = &net.loads()[0].voltage_model
         else {
             panic!("missing typed ZIP load model");
         };
@@ -2916,8 +2920,8 @@ Q
             "modern load tail was not replayed: {text}"
         );
         let net2 = parse_psse(&text).unwrap();
-        close(net2.loads[0].p, 13.0);
-        close(net2.loads[0].q, 5.0);
+        close(net2.loads()[0].p, 13.0);
+        close(net2.loads()[0].q, 5.0);
     }
 
     #[test]
@@ -2936,7 +2940,7 @@ Q
         let net = parse_psse(raw).unwrap();
         let Some(LoadVoltageModel::Zip {
             p_constant_current, ..
-        }) = &net.loads[0].voltage_model
+        }) = &net.loads()[0].voltage_model
         else {
             panic!("tiny nonzero ZIP component was not typed");
         };
@@ -2972,15 +2976,15 @@ Q
             load_type,
             v_nom,
             ..
-        }) = &mut net.loads[0].voltage_model
+        }) = &mut net.loads_mut()[0].voltage_model
         else {
             panic!("missing typed ZIP load model");
         };
         *scaling = Some(0.0);
         *load_type = Some(7);
         *v_nom = Some(230_000.0);
-        net.loads[0].extras.remove("psse_scal");
-        net.loads[0].extras.remove("psse_loadtype");
+        net.loads_mut()[0].extras.remove("psse_scal");
+        net.loads_mut()[0].extras.remove("psse_loadtype");
 
         let conv = write_psse_rev(&net, 35);
 
@@ -3008,7 +3012,7 @@ Q
         let reparsed = parse_psse(&conv.text).unwrap();
         let Some(LoadVoltageModel::Zip {
             scaling, load_type, ..
-        }) = &reparsed.loads[0].voltage_model
+        }) = &reparsed.loads()[0].voltage_model
         else {
             panic!("missing reparsed ZIP load model");
         };
@@ -3030,8 +3034,8 @@ COMMENT
 Q
 ";
         let mut net = parse_psse(raw).unwrap();
-        net.loads[0].p = 20.0;
-        net.loads[0].q = 7.0;
+        net.loads_mut()[0].p = 20.0;
+        net.loads_mut()[0].q = 7.0;
 
         let conv = write_psse_rev(&net, 35);
 
@@ -3048,8 +3052,8 @@ Q
             conv.rendered_diagnostics()
         );
         let reparsed = parse_psse(&conv.text).unwrap();
-        close(reparsed.loads[0].p, 20.0);
-        close(reparsed.loads[0].q, 7.0);
+        close(reparsed.loads()[0].p, 20.0);
+        close(reparsed.loads()[0].q, 7.0);
     }
 
     #[test]
@@ -3096,9 +3100,9 @@ Q
 ";
         let net = parse_psse(raw).unwrap();
 
-        assert_eq!(net.branches.len(), 1);
-        close(net.branches[0].r, 0.0);
-        close(net.branches[0].x, 0.10);
+        assert_eq!(net.branches().len(), 1);
+        close(net.branches()[0].r, 0.0);
+        close(net.branches()[0].x, 0.10);
     }
 
     #[test]
@@ -3155,7 +3159,7 @@ Q
             "unexpected transformer base warning: {:?}",
             parsed.rendered_diagnostics()
         );
-        let br = &parsed.network.branches[0];
+        let br = &parsed.network.branches()[0];
         close(br.r, 0.02);
         close(br.x, 0.20);
         close(br.tap, 1.05);
@@ -3189,7 +3193,7 @@ Q
             "unexpected transformer base warning: {:?}",
             parsed.rendered_diagnostics()
         );
-        let br = &parsed.network.branches[0];
+        let br = &parsed.network.branches()[0];
         close(br.r, 0.01);
         close(br.x, (0.10_f64 * 0.10 - 0.005_f64 * 0.005).sqrt() * 2.0);
         close(br.tap, 1.05);
@@ -3225,7 +3229,7 @@ Q
             "unexpected transformer base warning: {:?}",
             parsed.rendered_diagnostics()
         );
-        let t = &parsed.network.transformers_3w[0];
+        let t = &parsed.network.transformers_3w()[0];
         close(t.z[0].r, 0.02);
         close(t.z[0].x, 0.20);
         close(t.z[1].r, 0.02);
@@ -3283,18 +3287,18 @@ Q
 
         let net = parse_psse(raw).unwrap();
 
-        close(net.base_mva, 100.0);
-        assert_eq!(net.buses.len(), 2);
-        assert_eq!(net.loads.len(), 1);
-        assert_eq!(net.generators.len(), 1);
-        assert_eq!(net.branches.len(), 1);
-        close(net.branches[0].rate_a, 100.0);
-        assert_eq!(net.branches[0].rating_sets.len(), 2);
-        assert_eq!(net.branches[0].rating_sets[0].name, "RATE4");
-        close(net.branches[0].rating_sets[0].rate_mva, 70.0);
-        assert_eq!(net.branches[0].rating_sets[1].name, "RATE6");
-        close(net.branches[0].rating_sets[1].rate_mva, 60.0);
-        assert!(net.branches[0].in_service);
+        close(net.base_mva(), 100.0);
+        assert_eq!(net.buses().len(), 2);
+        assert_eq!(net.loads().len(), 1);
+        assert_eq!(net.generators().len(), 1);
+        assert_eq!(net.branches().len(), 1);
+        close(net.branches()[0].rate_a, 100.0);
+        assert_eq!(net.branches()[0].rating_sets.len(), 2);
+        assert_eq!(net.branches()[0].rating_sets[0].name, "RATE4");
+        close(net.branches()[0].rating_sets[0].rate_mva, 70.0);
+        assert_eq!(net.branches()[0].rating_sets[1].name, "RATE6");
+        close(net.branches()[0].rating_sets[1].rate_mva, 60.0);
+        assert!(net.branches()[0].in_service);
 
         let written = write_psse_rev(&net, 34);
         assert!(
@@ -3306,11 +3310,11 @@ Q
             written.rendered_diagnostics()
         );
         let back = parse_psse(&written.text).unwrap();
-        assert_eq!(back.branches[0].rating_sets.len(), 2);
-        assert_eq!(back.branches[0].rating_sets[0].name, "RATE4");
-        close(back.branches[0].rating_sets[0].rate_mva, 70.0);
-        assert_eq!(back.branches[0].rating_sets[1].name, "RATE6");
-        close(back.branches[0].rating_sets[1].rate_mva, 60.0);
+        assert_eq!(back.branches()[0].rating_sets.len(), 2);
+        assert_eq!(back.branches()[0].rating_sets[0].name, "RATE4");
+        close(back.branches()[0].rating_sets[0].rate_mva, 70.0);
+        assert_eq!(back.branches()[0].rating_sets[1].name, "RATE6");
+        close(back.branches()[0].rating_sets[1].rate_mva, 60.0);
     }
 
     #[test]
@@ -3340,14 +3344,14 @@ COMMENT
 Q
 ";
         let net = parse_psse(raw).unwrap();
-        assert_eq!(net.branches.len(), 1, "K = 0.00 is a 2-winding record");
-        assert!(net.transformers_3w.is_empty());
+        assert_eq!(net.branches().len(), 1, "K = 0.00 is a 2-winding record");
+        assert!(net.transformers_3w().is_empty());
         assert_eq!(
-            net.areas.len(),
+            net.areas().len(),
             1,
             "the section after the transformer parsed"
         );
-        let br = &net.branches[0];
+        let br = &net.branches()[0];
         close(br.tap, 1.05);
         close(br.rate_a, 100.0);
         assert_eq!(br.rating_sets.len(), 1);
@@ -3379,7 +3383,7 @@ Q
         branch
             .rating_sets
             .push(BranchRatingSet::new("emergency", 125.0));
-        net.branches.push(branch);
+        net.branches_mut().push(branch);
 
         let written = write_psse_rev(&net, 34);
 
@@ -3393,9 +3397,9 @@ Q
             written.rendered_diagnostics()
         );
         let back = parse_psse(&written.text).unwrap();
-        assert_eq!(back.branches[0].rating_sets.len(), 1);
-        assert_eq!(back.branches[0].rating_sets[0].name, "RATE4");
-        close(back.branches[0].rating_sets[0].rate_mva, 125.0);
+        assert_eq!(back.branches()[0].rating_sets.len(), 1);
+        assert_eq!(back.branches()[0].rating_sets[0].name, "RATE4");
+        close(back.branches()[0].rating_sets[0].rate_mva, 125.0);
     }
 
     #[test]
@@ -3419,10 +3423,10 @@ Q
 
         let net = parse_psse(raw).unwrap();
 
-        assert_eq!(net.buses.len(), 2);
-        assert_eq!(net.loads.len(), 1);
-        assert_eq!(net.generators.len(), 1);
-        assert_eq!(net.branches.len(), 1);
+        assert_eq!(net.buses().len(), 2);
+        assert_eq!(net.loads().len(), 1);
+        assert_eq!(net.generators().len(), 1);
+        assert_eq!(net.branches().len(), 1);
     }
 
     #[test]
@@ -3444,11 +3448,11 @@ Q
 
         let net = parse_psse(raw).unwrap();
 
-        assert_eq!(net.branches.len(), 1);
-        close(net.branches[0].rate_a, 0.0);
-        close(net.branches[0].rate_b, 90.0);
-        close(net.branches[0].rate_c, 80.0);
-        assert!(net.branches[0].in_service);
+        assert_eq!(net.branches().len(), 1);
+        close(net.branches()[0].rate_a, 0.0);
+        close(net.branches()[0].rate_b, 90.0);
+        close(net.branches()[0].rate_c, 80.0);
+        assert!(net.branches()[0].in_service);
     }
 
     #[test]
@@ -3475,14 +3479,14 @@ Q
                 .map(str::to_owned)
         };
         let net = parse_psse(raw).unwrap();
-        assert_eq!(net.loads.len(), 2);
-        assert_eq!(id(&net.loads[0]).as_deref(), Some("A"));
-        assert_eq!(id(&net.loads[1]).as_deref(), Some("B"));
+        assert_eq!(net.loads().len(), 2);
+        assert_eq!(id(&net.loads()[0]).as_deref(), Some("A"));
+        assert_eq!(id(&net.loads()[1]).as_deref(), Some("B"));
 
         // A round trip keeps the captured ids.
         let net2 = parse_psse(&write_psse(&net).text).unwrap();
-        assert_eq!(id(&net2.loads[0]).as_deref(), Some("A"));
-        assert_eq!(id(&net2.loads[1]).as_deref(), Some("B"));
+        assert_eq!(id(&net2.loads()[0]).as_deref(), Some("A"));
+        assert_eq!(id(&net2.loads()[1]).as_deref(), Some("B"));
 
         // With the ids stripped (a synthesized network, e.g. from MATPOWER), the
         // two loads on bus 2 still write with distinct positional ids, so the
@@ -3490,13 +3494,13 @@ Q
         // The reader keeps only the second: id `1` is the positional default
         // the writer re-allocates on its own, so retaining it restates nothing.
         let mut synth = net.clone();
-        for l in &mut synth.loads {
+        for l in synth.loads_mut() {
             l.extras.remove("id");
         }
         let out = write_psse(&synth).text;
         assert!(out.contains("2, '1',") && out.contains("2, '2',"), "{out}");
         let net3 = parse_psse(&out).unwrap();
-        let ids: Vec<_> = net3.loads.iter().filter_map(&id).collect();
+        let ids: Vec<_> = net3.loads().iter().filter_map(&id).collect();
         assert_eq!(ids, vec!["2".to_string()]);
     }
 
@@ -3518,17 +3522,17 @@ COMMENT
 Q
 ";
         let mut net = parse_psse(raw).unwrap();
-        net.loads[0]
+        net.loads_mut()[0]
             .extras
             .insert("id".into(), Value::String("A/B".into()));
-        net.loads[1]
+        net.loads_mut()[1]
             .extras
             .insert("id".into(), Value::String("A'B".into()));
 
         let conv = write_psse(&net);
         let reparsed = parse_psse(&conv.text).unwrap();
         let ids: Vec<_> = reparsed
-            .loads
+            .loads()
             .iter()
             .filter_map(|l| l.extras.get("id").and_then(Value::as_str))
             .collect();
@@ -3567,12 +3571,12 @@ COMMENT
 Q
 ";
         let net = parse_psse(raw).unwrap();
-        assert_eq!(net.branches.len(), 1);
-        assert!(net.branches[0].is_transformer());
-        close(net.branches[0].b, 0.04);
+        assert_eq!(net.branches().len(), 1);
+        assert!(net.branches()[0].is_transformer());
+        close(net.branches()[0].b, 0.04);
 
         let net2 = parse_psse(&write_psse(&net).text).unwrap();
-        close(net2.branches[0].b, 0.04);
+        close(net2.branches()[0].b, 0.04);
     }
 
     #[test]
@@ -3601,11 +3605,11 @@ Q
                 .map(str::to_owned)
         };
         let net = parse_psse(raw).unwrap();
-        assert_eq!(net.branches.len(), 2);
+        assert_eq!(net.branches().len(), 2);
         // CKT `1` is the positional default the writer re-allocates on its own,
         // so only the second circuit's id carries information worth keeping.
-        assert_eq!(ckt(&net.branches[0]).as_deref(), None);
-        assert_eq!(ckt(&net.branches[1]).as_deref(), Some("2"));
+        assert_eq!(ckt(&net.branches()[0]).as_deref(), None);
+        assert_eq!(ckt(&net.branches()[1]).as_deref(), Some("2"));
 
         // Round trip keeps both circuits distinct: the id-less branch takes '1'
         // positionally and the explicit '2' is replayed.
@@ -3615,9 +3619,9 @@ Q
             "{out}"
         );
         let net2 = parse_psse(&out).unwrap();
-        assert_eq!(net2.branches.len(), 2);
-        assert_eq!(ckt(&net2.branches[0]).as_deref(), None);
-        assert_eq!(ckt(&net2.branches[1]).as_deref(), Some("2"));
+        assert_eq!(net2.branches().len(), 2);
+        assert_eq!(ckt(&net2.branches()[0]).as_deref(), None);
+        assert_eq!(ckt(&net2.branches()[1]).as_deref(), Some("2"));
     }
 
     #[test]
@@ -3634,7 +3638,7 @@ SOLVER, ACTAPS=1, AREAIN=0, PHSHFT=1, DCTAPS=1, SWSHNT=0
 Q
 ";
         let net = parse_psse(raw).unwrap();
-        let sp = net.solver.as_ref().expect("solver params parsed");
+        let sp = net.solver().as_ref().expect("solver params parsed");
         close(sp.zero_impedance_threshold.unwrap(), 0.0001);
         close(sp.newton_tolerance.unwrap(), 0.1);
         assert_eq!(sp.max_iterations, Some(25));
@@ -3646,7 +3650,7 @@ Q
         // Round trip at rev 34 keeps the tolerances and the adjustment flags.
         let net2 = parse_psse(&write_psse_rev(&net, 34).text).unwrap();
         let sp2 = net2
-            .solver
+            .solver()
             .as_ref()
             .expect("solver params survive the write");
         close(sp2.newton_tolerance.unwrap(), 0.1);
@@ -3673,8 +3677,8 @@ COMMENT
 Q
 ";
         let net = parse_psse(raw).unwrap();
-        assert_eq!(net.areas.len(), 1, "the area record was read");
-        let a = &net.areas[0];
+        assert_eq!(net.areas().len(), 1, "the area record was read");
+        let a = &net.areas()[0];
         assert_eq!(a.number, 1);
         assert_eq!(a.slack_bus, Some(BusId(5)));
         close(a.net_interchange, 100.0);
@@ -3683,8 +3687,8 @@ Q
 
         // Round trip: write and re-read keeps the interchange and swing bus.
         let net2 = parse_psse(&write_psse(&net).text).unwrap();
-        assert_eq!(net2.areas.len(), 1);
-        let a2 = &net2.areas[0];
+        assert_eq!(net2.areas().len(), 1);
+        let a2 = &net2.areas()[0];
         assert_eq!(a2.number, 1);
         assert_eq!(a2.slack_bus, Some(BusId(5)));
         close(a2.net_interchange, 100.0);
@@ -3711,8 +3715,8 @@ COMMENT
 Q
 ";
         let net = parse_psse(raw).unwrap();
-        assert_eq!(net.shunts.len(), 1);
-        let sh = &net.shunts[0];
+        assert_eq!(net.shunts().len(), 1);
+        let sh = &net.shunts()[0];
         assert_eq!(sh.bus, BusId(3));
         close(sh.b, 19.0);
         let c = sh.control.as_ref().expect("switched-shunt control parsed");
@@ -3731,8 +3735,8 @@ Q
         let text = write_psse(&net).text;
         assert!(text.contains("BEGIN SWITCHED SHUNT DATA"));
         let net2 = parse_psse(&text).unwrap();
-        assert_eq!(net2.shunts.len(), 1);
-        let c2 = net2.shunts[0]
+        assert_eq!(net2.shunts().len(), 1);
+        let c2 = net2.shunts()[0]
             .control
             .as_ref()
             .expect("control survives the write");
@@ -3740,7 +3744,7 @@ Q
         assert_eq!(c2.control_bus, Some(BusId(7)));
         assert_eq!(c2.blocks.len(), 2);
         close(c2.blocks[0].b, 25.0);
-        close(net2.shunts[0].b, 19.0);
+        close(net2.shunts()[0].b, 19.0);
     }
 
     #[test]
@@ -3768,8 +3772,8 @@ Q
         let net = parse_psse(raw).unwrap();
         let text = write_psse_rev(&net, 35).text;
         let net2 = parse_psse(&text).unwrap();
-        assert_eq!(net2.shunts.len(), 1);
-        let sh = &net2.shunts[0];
+        assert_eq!(net2.shunts().len(), 1);
+        let sh = &net2.shunts()[0];
         assert_eq!(sh.bus, BusId(3));
         close(sh.b, 19.0);
         let c = sh
@@ -3805,23 +3809,31 @@ COMMENT
 Q
 ";
         let net = parse_psse(raw).unwrap();
-        assert_eq!(net.generators.len(), 2);
-        let g3 = net.generators.iter().find(|g| g.bus == BusId(3)).unwrap();
+        assert_eq!(net.generators().len(), 2);
+        let g3 = net.generators().iter().find(|g| g.bus == BusId(3)).unwrap();
         assert_eq!(
             g3.regulated_bus,
             Some(BusId(7)),
             "IREG names the remote regulated bus"
         );
         // IREG 0 means own-terminal control: no remote bus.
-        let g1 = net.generators.iter().find(|g| g.bus == BusId(1)).unwrap();
+        let g1 = net.generators().iter().find(|g| g.bus == BusId(1)).unwrap();
         assert_eq!(g1.regulated_bus, None);
 
         // Round trip: IREG is written at field 7 and re-read intact.
         let text = write_psse(&net).text;
         let net2 = parse_psse(&text).unwrap();
-        let g3b = net2.generators.iter().find(|g| g.bus == BusId(3)).unwrap();
+        let g3b = net2
+            .generators()
+            .iter()
+            .find(|g| g.bus == BusId(3))
+            .unwrap();
         assert_eq!(g3b.regulated_bus, Some(BusId(7)));
-        let g1b = net2.generators.iter().find(|g| g.bus == BusId(1)).unwrap();
+        let g1b = net2
+            .generators()
+            .iter()
+            .find(|g| g.bus == BusId(1))
+            .unwrap();
         assert_eq!(g1b.regulated_bus, None);
     }
 
@@ -3845,8 +3857,8 @@ COMMENT
 Q
 ";
         let net = parse_psse(raw).unwrap();
-        assert_eq!(net.generators.len(), 1);
-        let g = &net.generators[0];
+        assert_eq!(net.generators().len(), 1);
+        let g = &net.generators()[0];
         close(g.mbase, 900.0);
         assert!(!g.in_service, "STAT = 0 at the shifted index");
         close(g.pmax, 80.0);
@@ -3855,7 +3867,7 @@ Q
 
         // The v35 writer emits NREG and BASLOD, so the record reads back intact.
         let net2 = parse_psse(&write_psse_rev(&net, 35).text).unwrap();
-        let g2 = &net2.generators[0];
+        let g2 = &net2.generators()[0];
         close(g2.mbase, 900.0);
         assert!(!g2.in_service);
         close(g2.pmax, 80.0);
@@ -3898,19 +3910,19 @@ Q
         let mut warnings = Diagnostics::new();
         let net = parse_psse_source(raw, None, &mut warnings).unwrap();
 
-        assert_eq!(net.generators[0].regulated_bus, None);
+        assert_eq!(net.generators()[0].regulated_bus, None);
         assert_eq!(
-            net.branches[0]
+            net.branches()[0]
                 .control
                 .as_ref()
                 .and_then(|c| c.controlled_bus),
             None
         );
         assert_eq!(
-            net.shunts[0].control.as_ref().and_then(|c| c.control_bus),
+            net.shunts()[0].control.as_ref().and_then(|c| c.control_bus),
             None
         );
-        assert_eq!(net.areas[0].slack_bus, None);
+        assert_eq!(net.areas()[0].slack_bus, None);
         assert!(
             warnings.lines().iter().any(|w| w.contains("GENERATOR DATA")
                 && w.contains("IREG")
@@ -4020,8 +4032,8 @@ COMMENT
 Q
 ";
         let net = parse_psse(raw).unwrap();
-        assert_eq!(net.shunts.len(), 1);
-        let sh = &net.shunts[0];
+        assert_eq!(net.shunts().len(), 1);
+        let sh = &net.shunts()[0];
         assert_eq!(sh.bus, BusId(5));
         close(sh.b, 19.0);
         assert!(sh.in_service);
@@ -4065,8 +4077,8 @@ COMMENT
 Q
 ";
         let net = parse_psse(raw).unwrap();
-        assert_eq!(net.hvdc.len(), 1, "the two-terminal DC line was read");
-        let dc = &net.hvdc[0];
+        assert_eq!(net.hvdc().len(), 1, "the two-terminal DC line was read");
+        let dc = &net.hvdc()[0];
         assert_eq!(dc.from, BusId(4), "rectifier bus is the from end");
         assert_eq!(dc.to, BusId(5), "inverter bus is the to end");
         assert!(dc.in_service);
@@ -4078,8 +4090,8 @@ Q
 
         // Round trip: write and re-read keeps the buses and both ends' power.
         let net2 = parse_psse(&write_psse(&net).text).unwrap();
-        assert_eq!(net2.hvdc.len(), 1, "the DC line survives the write");
-        let dc2 = &net2.hvdc[0];
+        assert_eq!(net2.hvdc().len(), 1, "the DC line survives the write");
+        let dc2 = &net2.hvdc()[0];
         assert_eq!(dc2.from, BusId(4));
         assert_eq!(dc2.to, BusId(5));
         assert!(dc2.in_service);
@@ -4120,7 +4132,7 @@ Q
         };
 
         // Inverter-measured demand: the rectifier supplies 350 + 1.225.
-        let dc = parse_psse(&record("1", "-350.0", "500.0")).unwrap().hvdc[0].clone();
+        let dc = parse_psse(&record("1", "-350.0", "500.0")).unwrap().hvdc()[0].clone();
         close(dc.pt, 350.0);
         close(dc.pf, 351.225);
 
@@ -4128,15 +4140,15 @@ Q
         // I²·RDC = 0.04 · 2.5 = 0.1 MW of drop. The write leg converts the
         // rectifier power back to amps, so a re-read agrees.
         let net = parse_psse(&record("2", "200.0", "500.0")).unwrap();
-        let dc = &net.hvdc[0];
+        let dc = &net.hvdc()[0];
         close(dc.pf, 100.0);
         close(dc.pt, 99.9);
         let back = parse_psse(&write_psse(&net).text).unwrap();
-        close(back.hvdc[0].pf, 100.0);
-        close(back.hvdc[0].pt, 99.9);
+        close(back.hvdc()[0].pf, 100.0);
+        close(back.hvdc()[0].pt, 99.9);
 
         // No scheduled voltage: no current to price the drop with.
-        let dc = parse_psse(&record("1", "350.0", "0.0")).unwrap().hvdc[0].clone();
+        let dc = parse_psse(&record("1", "350.0", "0.0")).unwrap().hvdc()[0].clone();
         close(dc.pf, 350.0);
         close(dc.pt, 350.0);
     }
@@ -4178,9 +4190,9 @@ Q
             ("1", "350.0", "0.0"),
         ] {
             let net = parse_psse(&record(mdc, setvl, vschd)).unwrap();
-            let dc = net.hvdc[0].clone();
+            let dc = net.hvdc()[0].clone();
             let back = parse_psse(&write_psse(&net).text).unwrap();
-            let dc2 = &back.hvdc[0];
+            let dc2 = &back.hvdc()[0];
             close(dc2.pf, dc.pf);
             close(dc2.pt, dc.pt);
             assert!(
@@ -4221,7 +4233,7 @@ COMMENT
 Q
 ";
         let parsed = crate::parse_str(text, "psse").unwrap();
-        let dc = &parsed.network.hvdc[0];
+        let dc = &parsed.network.hvdc()[0];
         close(dc.pf, 0.0);
         close(dc.pt, 0.0);
         assert!(
@@ -4266,7 +4278,7 @@ COMMENT
 Q
 ";
         let net = parse_psse(text).unwrap();
-        let dc = net.hvdc[0].clone();
+        let dc = net.hvdc()[0].clone();
         assert!(!dc.in_service);
         close(dc.pf, 350.0);
         close(dc.pt, 350.0);
@@ -4281,7 +4293,8 @@ Q
             "a record the rewrite reproduces exactly earns no warning: {:?}",
             conv.rendered_diagnostics()
         );
-        let back = &parse_psse(&conv.text).unwrap().hvdc[0];
+        let reparsed = parse_psse(&conv.text).unwrap();
+        let back = &reparsed.hvdc()[0];
         assert!(!back.in_service);
         close(back.pf, 350.0);
         close(back.pt, 350.0);
@@ -4308,8 +4321,8 @@ COMMENT
 Q
 ";
         let net = parse_psse(raw).unwrap();
-        assert_eq!(net.branches.len(), 1);
-        let c = net.branches[0].control.as_ref().expect("control parsed");
+        assert_eq!(net.branches().len(), 1);
+        let c = net.branches()[0].control.as_ref().expect("control parsed");
         assert_eq!(c.mode, TransformerControlMode::Voltage);
         assert_eq!(c.controlled_bus, Some(BusId(3)));
         close(c.tap_max, 1.08);
@@ -4320,13 +4333,16 @@ Q
 
         // Round trip: write and re-read keeps the control block and the tap/shift.
         let net2 = parse_psse(&write_psse(&net).text).unwrap();
-        let c2 = net2.branches[0].control.as_ref().expect("control survives");
+        let c2 = net2.branches()[0]
+            .control
+            .as_ref()
+            .expect("control survives");
         assert_eq!(c2.mode, TransformerControlMode::Voltage);
         assert_eq!(c2.controlled_bus, Some(BusId(3)));
         close(c2.tap_max, 1.08);
         assert_eq!(c2.ntp, 17);
-        close(net2.branches[0].tap, 1.025);
-        close(net2.branches[0].shift, 2.5);
+        close(net2.branches()[0].tap, 1.025);
+        close(net2.branches()[0].shift, 2.5);
     }
 
     #[test]
@@ -4352,12 +4368,15 @@ Q
 ";
         let net = parse_psse(raw).unwrap();
         assert_eq!(
-            net.transformers_3w.len(),
+            net.transformers_3w().len(),
             1,
             "the 3-winding record was read"
         );
-        assert!(net.branches.is_empty(), "a 3W is not folded into branches");
-        let t = &net.transformers_3w[0];
+        assert!(
+            net.branches().is_empty(),
+            "a 3W is not folded into branches"
+        );
+        let t = &net.transformers_3w()[0];
         assert_eq!(
             [t.windings[0].bus, t.windings[1].bus, t.windings[2].bus],
             [BusId(1), BusId(2), BusId(3)]
@@ -4372,9 +4391,9 @@ Q
 
         // Round trip: write and re-read keeps the windings and the star voltage.
         let net2 = parse_psse(&write_psse(&net).text).unwrap();
-        assert_eq!(net2.transformers_3w.len(), 1);
-        assert!(net2.branches.is_empty());
-        let t2 = &net2.transformers_3w[0];
+        assert_eq!(net2.transformers_3w().len(), 1);
+        assert!(net2.branches().is_empty());
+        let t2 = &net2.transformers_3w()[0];
         close(t2.z[1].x, 0.20);
         close(t2.windings[2].tap, 0.95);
         close(t2.star_va, -1.5);
@@ -4406,7 +4425,7 @@ COMMENT
 Q
 ";
         let net = parse_psse(raw).unwrap();
-        assert_eq!(net.transformers_3w.len(), 1);
+        assert_eq!(net.transformers_3w().len(), 1);
 
         // Cross-format write to MATPOWER drops the 3W but must report it, not drop
         // it silently.
@@ -4421,7 +4440,11 @@ Q
 
         // The normalized form keeps the 3-winding transformer.
         let norm = net.to_normalized().unwrap();
-        assert_eq!(norm.transformers_3w.len(), 1, "to_normalized keeps the 3W");
+        assert_eq!(
+            norm.transformers_3w().len(),
+            1,
+            "to_normalized keeps the 3W"
+        );
         norm.validate().unwrap();
     }
 
@@ -4505,14 +4528,14 @@ COMMENT
 Q
 ";
         let net = parse_psse(raw).unwrap();
-        let b1 = net.buses.iter().find(|b| b.id == BusId(1)).unwrap();
+        let b1 = net.buses().iter().find(|b| b.id == BusId(1)).unwrap();
         assert!(
             b1.evhi.is_some() && b1.evlo.is_some(),
             "distinct band typed"
         );
         close(b1.evhi.unwrap(), 1.2);
         close(b1.evlo.unwrap(), 0.8);
-        let b2 = net.buses.iter().find(|b| b.id == BusId(2)).unwrap();
+        let b2 = net.buses().iter().find(|b| b.id == BusId(2)).unwrap();
         assert!(
             b2.evhi.is_none() && b2.evlo.is_none(),
             "an emergency band equal to the normal band stays None"
@@ -4520,7 +4543,7 @@ Q
 
         // Round trip through the PSS/E writer keeps the distinct band.
         let net2 = parse_psse(&write_psse(&net).text).unwrap();
-        let r1 = net2.buses.iter().find(|b| b.id == BusId(1)).unwrap();
+        let r1 = net2.buses().iter().find(|b| b.id == BusId(1)).unwrap();
         close(r1.evhi.unwrap(), 1.2);
         close(r1.evlo.unwrap(), 0.8);
 
@@ -4554,11 +4577,11 @@ COMMENT
 Q
 ";
         let mut net = parse_psse(raw).unwrap();
-        net.name =
+        *net.name_mut() =
             "A\n42, 'INJECTED   ', 500.0, 2, 9, 9, 1, 1.0, 0.0, 1.1, 0.9, 1.1, 0.9".to_owned();
         let text = write_psse(&net).text;
         let back = parse_psse(&text).unwrap();
-        assert_eq!(back.buses.len(), 1, "forged bus record in:\n{text}");
+        assert_eq!(back.buses().len(), 1, "forged bus record in:\n{text}");
     }
 
     #[test]
@@ -4597,12 +4620,12 @@ Q
             );
 
             let back = parse_psse(&text).unwrap();
-            assert_eq!(back.buses.len(), 2);
-            assert_eq!(back.loads.len(), 1);
-            assert_eq!(back.branches.len(), 1);
-            close(back.branches[0].rate_a, 111.0);
-            close(back.loads[0].p, 10.0);
-            assert!(back.branches[0].in_service);
+            assert_eq!(back.buses().len(), 2);
+            assert_eq!(back.loads().len(), 1);
+            assert_eq!(back.branches().len(), 1);
+            close(back.branches()[0].rate_a, 111.0);
+            close(back.loads()[0].p, 10.0);
+            assert!(back.branches()[0].in_service);
         }
 
         // The v35 load record carries the trailing LOADTYPE field.
@@ -4632,15 +4655,15 @@ COMMENT
 Q
 ";
         let mut net = parse_psse(raw).unwrap();
-        net.buses[0].name = Some("O'Brien/X".to_string());
+        net.buses_mut()[0].name = Some("O'Brien/X".to_string());
 
         let conv = write_psse(&net);
         let reparsed = parse_psse(&conv.text).unwrap();
 
-        assert_eq!(reparsed.buses.len(), 2);
-        close(reparsed.buses[0].base_kv, 230.0);
-        close(reparsed.buses[1].base_kv, 138.0);
-        let name = reparsed.buses[0].name.as_deref().unwrap();
+        assert_eq!(reparsed.buses().len(), 2);
+        close(reparsed.buses()[0].base_kv, 230.0);
+        close(reparsed.buses()[1].base_kv, 138.0);
+        let name = reparsed.buses()[0].name.as_deref().unwrap();
         assert!(!name.contains('\'') && !name.contains('/'), "got {name:?}");
         assert!(
             conv.rendered_diagnostics()

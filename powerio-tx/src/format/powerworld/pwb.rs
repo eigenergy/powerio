@@ -59,7 +59,8 @@ use std::collections::hash_map::Entry;
 
 use super::map::{BRANCH_DEVICE_TYPE, LINE_CIRCUIT, derive_bus_kinds};
 use crate::network::{
-    BalancedNetwork, Branch, Bus, BusId, BusType, Extras, Generator, Load, Shunt, SourceFormat,
+    BalancedNetwork, BalancedNetworkTables, Branch, Bus, BusId, BusType, Extras, Generator, Load,
+    Shunt, SourceFormat,
 };
 use crate::{Error, Result};
 
@@ -159,13 +160,13 @@ pub(crate) fn parse_pwb_collecting(
     // read every machine as running. A 508 file may carry either record, and
     // which one matched is not observable here, so it is left unstated rather
     // than guessed at.
-    if matches!(expect_header(bytes)?, 338 | 368 | 425) && !net.generators.is_empty() {
+    if matches!(expect_header(bytes)?, 338 | 368 | 425) && !net.generators().is_empty() {
         warnings.push(
             &crate::diagnostics::codes::READ_POWERWORLD_VALUE_DEFAULTED,
             format!(
                 "{} generator(s) read as in service: this .pwb vintage's generator status byte is \
              not located, so an open machine is indistinguishable from a closed one",
-                net.generators.len()
+                net.generators().len()
             ),
         );
     }
@@ -613,7 +614,7 @@ fn checked_network(
         *nth += 1;
         super::drop_positional_id(&mut br.extras, &[LINE_CIRCUIT], *nth - 1);
     }
-    let net = BalancedNetwork {
+    let net = BalancedNetwork::from_tables(BalancedNetworkTables {
         name: name_hint.unwrap_or("case").to_string(),
         base_mva: MVA_BASE,
         base_frequency: crate::network::DEFAULT_BASE_FREQUENCY,
@@ -630,7 +631,7 @@ fn checked_network(
         areas: Vec::new(),
         solver: None,
         source_format: SourceFormat::PowerWorldBinary,
-    };
+    });
     net.check_references(FMT).map(|()| net)
 }
 
@@ -1995,7 +1996,7 @@ mod tests {
     use super::*;
 
     fn empty_network(name: &str) -> BalancedNetwork {
-        BalancedNetwork {
+        BalancedNetwork::from_tables(BalancedNetworkTables {
             name: name.to_string(),
             base_mva: MVA_BASE,
             base_frequency: crate::network::DEFAULT_BASE_FREQUENCY,
@@ -2012,7 +2013,7 @@ mod tests {
             areas: Vec::new(),
             solver: None,
             source_format: SourceFormat::PowerWorldBinary,
-        }
+        })
     }
 
     #[test]

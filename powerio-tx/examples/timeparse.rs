@@ -34,7 +34,7 @@ fn main() {
     let case = parse_case(&src);
     println!(
         "{parse:.3} ms  buses={} branches={}",
-        case.buses.len(),
-        case.branches.len()
+        case.buses().len(),
+        case.branches().len()
     );
 }

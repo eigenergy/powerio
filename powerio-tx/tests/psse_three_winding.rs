@@ -25,11 +25,11 @@ fn read() -> powerio_tx::BalancedNetwork {
 #[test]
 fn the_reader_keeps_the_three_winding_record_out_of_the_branch_table() {
     let net = read();
-    assert_eq!(net.buses.len(), 3);
-    assert_eq!(net.transformers_3w.len(), 1);
-    assert!(net.transformers_3w[0].in_service);
+    assert_eq!(net.buses().len(), 3);
+    assert_eq!(net.transformers_3w().len(), 1);
+    assert!(net.transformers_3w()[0].in_service);
     assert!(
-        net.branches.is_empty(),
+        net.branches().is_empty(),
         "a 3-winding record is one transformer, not three branches"
     );
 }
@@ -37,10 +37,14 @@ fn the_reader_keeps_the_three_winding_record_out_of_the_branch_table() {
 #[test]
 fn the_star_lowered_space_is_one_bus_wider_per_in_service_transformer() {
     let net = read();
-    let n_star = net.transformers_3w.iter().filter(|t| t.in_service).count();
+    let n_star = net
+        .transformers_3w()
+        .iter()
+        .filter(|t| t.in_service)
+        .count();
     let view = IndexedNetwork::new(&net);
 
-    assert_eq!(view.n(), net.buses.len() + n_star);
+    assert_eq!(view.n(), net.buses().len() + n_star);
     assert_eq!(view.n(), 4);
     assert_eq!(view.branches().len(), 3 * n_star);
 
@@ -64,7 +68,7 @@ fn the_reported_bus_ids_are_distinct_and_cover_the_file_ids() {
         view.n(),
         "the synthetic star point must not reuse a file bus id"
     );
-    for bus in &net.buses {
+    for bus in net.buses() {
         assert!(ids.contains(&bus.id), "file bus {:?} dropped", bus.id);
     }
 }

@@ -324,7 +324,7 @@ struct SnapshotView<'a> {
 fn snapshot_views<'a>(snapshots: &'a [GridfmSnapshot<'a>]) -> Result<Vec<SnapshotView<'a>>> {
     let first = snapshots.first().ok_or(Error::EmptyScenarioBatch)?;
     let expected = shape_of(first.net);
-    let expected_ids: Vec<BusId> = first.net.buses.iter().map(|b| b.id).collect();
+    let expected_ids: Vec<BusId> = first.net.buses().iter().map(|b| b.id).collect();
 
     let mut views = Vec::with_capacity(snapshots.len());
     for (k, snap) in snapshots.iter().enumerate() {
@@ -337,7 +337,7 @@ fn snapshot_views<'a>(snapshots: &'a [GridfmSnapshot<'a>]) -> Result<Vec<Snapsho
         }
         let ids_match = snap
             .net
-            .buses
+            .buses()
             .iter()
             .map(|b| b.id)
             .eq(expected_ids.iter().copied());
@@ -369,22 +369,22 @@ fn validate_snapshot_inputs(net: &BalancedNetwork, scenario: i64) -> Result<()> 
     // `±Inf` as the unbounded sentinel (the PowerModels reader defaults absent
     // gen limits to `±Inf`, MATPOWER files carry literal `Inf` tokens, and
     // Parquet stores `±Inf` natively) — only `NaN` is corrupt there.
-    for (row, b) in net.buses.iter().enumerate() {
+    for (row, b) in net.buses().iter().enumerate() {
         finite(scenario, "bus", row, "vm", b.vm)?;
         finite(scenario, "bus", row, "va", b.va)?;
         finite(scenario, "bus", row, "base_kv", b.base_kv)?;
         not_nan(scenario, "bus", row, "vmax", b.vmax)?;
         not_nan(scenario, "bus", row, "vmin", b.vmin)?;
     }
-    for (row, l) in net.loads.iter().enumerate() {
+    for (row, l) in net.loads().iter().enumerate() {
         finite(scenario, "load", row, "p", l.p)?;
         finite(scenario, "load", row, "q", l.q)?;
     }
-    for (row, s) in net.shunts.iter().enumerate() {
+    for (row, s) in net.shunts().iter().enumerate() {
         finite(scenario, "shunt", row, "g", s.g)?;
         finite(scenario, "shunt", row, "b", s.b)?;
     }
-    for (row, br) in net.branches.iter().enumerate() {
+    for (row, br) in net.branches().iter().enumerate() {
         finite(scenario, "branch", row, "r", br.r)?;
         finite(scenario, "branch", row, "x", br.x)?;
         finite(scenario, "branch", row, "b", br.total_charging_b())?;
@@ -394,7 +394,7 @@ fn validate_snapshot_inputs(net: &BalancedNetwork, scenario: i64) -> Result<()> 
         not_nan(scenario, "branch", row, "angmax", br.angmax)?;
         not_nan(scenario, "branch", row, "rate_a", br.rate_a)?;
     }
-    for (row, g) in net.generators.iter().enumerate() {
+    for (row, g) in net.generators().iter().enumerate() {
         finite(scenario, "generator", row, "pg", g.pg)?;
         finite(scenario, "generator", row, "qg", g.qg)?;
         not_nan(scenario, "generator", row, "pmax", g.pmax)?;
@@ -455,9 +455,9 @@ fn not_nan(
 /// The base element shape a scenario batch shares.
 fn shape_of(net: &BalancedNetwork) -> ElementCounts {
     ElementCounts {
-        buses: net.buses.len(),
-        branches: net.branches.len(),
-        gens: net.generators.len(),
+        buses: net.buses().len(),
+        branches: net.branches().len(),
+        gens: net.generators().len(),
     }
 }
 
@@ -577,7 +577,7 @@ fn write_gridfm_batch_inner(
     // The network name comes from input content, so it must not steer the
     // output path: unsanitized, a name like `../../x` would write outside
     // `out_dir`. The manifest keeps the original name.
-    let dir = out_dir.join(crate::sanitize_stem(&net.name)).join("raw");
+    let dir = out_dir.join(crate::sanitize_stem(net.name())).join("raw");
     std::fs::create_dir_all(&dir)?;
 
     let mut files = Vec::new();
@@ -592,31 +592,31 @@ fn write_gridfm_batch_inner(
     // across every snapshot — the totals describe the whole stacked dataset.
     let dropped_zero_impedance: usize = views
         .iter()
-        .flat_map(|v| v.view.network().branches.iter())
+        .flat_map(|v| v.view.network().branches().iter())
         .filter(|br| br.r * br.r + br.x * br.x == 0.0)
         .count();
     let missing_cost_gens: usize = views
         .iter()
-        .flat_map(|v| v.view.network().generators.iter())
+        .flat_map(|v| v.view.network().generators().iter())
         .filter(|g| g.cost.is_none())
         .count();
     let unsupported_cost_gens: usize = views
         .iter()
-        .flat_map(|v| v.view.network().generators.iter())
+        .flat_map(|v| v.view.network().generators().iter())
         .filter(|g| g.cost.is_some() && !cost_representable(g.cost.as_ref()))
         .count();
     let degenerate_cost_gens = missing_cost_gens + unsupported_cost_gens;
 
     let meta = GridfmMeta {
-        case_name: net.name.clone(),
-        base_mva: net.base_mva,
+        case_name: net.name().clone(),
+        base_mva: net.base_mva(),
         scenario: views[0].scenario,
         n_scenarios: views.len(),
         schema: "gridfm-datakit",
-        n_buses: net.buses.len(),
-        n_branches: net.branches.len(),
-        n_branches_in_service: net.branches.iter().filter(|b| b.in_service).count(),
-        n_gens: net.generators.len(),
+        n_buses: net.buses().len(),
+        n_branches: net.branches().len(),
+        n_branches_in_service: net.branches().iter().filter(|b| b.in_service).count(),
+        n_gens: net.generators().len(),
         reference_bus: views[0].ref_bus,
         dropped_zero_impedance,
         degenerate_cost_gens,
@@ -671,7 +671,7 @@ fn bus_batch(snaps: &[SnapshotView]) -> Result<RecordBatch> {
         let view = &s.view;
         let n = view.n();
         let base = view.base_mva();
-        let buses = &view.network().buses;
+        let buses = &view.network().buses();
 
         // Per-bus generation, summed over in-service generators (dense order).
         let mut pg = vec![0.0; n];
@@ -826,7 +826,7 @@ fn branch_batch(snaps: &[SnapshotView], opts: &GridfmOptions) -> Result<RecordBa
         let view = &s.view;
         let base = view.base_mva();
         let branches = view.branches();
-        let buses = &view.network().buses;
+        let buses = &view.network().buses();
         // Complex bus voltages `vm·e^{jθ}`, dense order, for the flow evaluation.
         let v: Vec<Complex64> = buses
             .iter()
@@ -1461,12 +1461,12 @@ fn build_network_from_columns(
     }
 
     let mut net = BalancedNetwork::new(name, base_mva);
-    net.buses = buses;
-    net.loads = loads;
-    net.shunts = shunts;
-    net.branches = branches;
-    net.generators = generators;
-    net.source_format = SourceFormat::Gridfm;
+    *net.buses_mut() = buses;
+    *net.loads_mut() = loads;
+    *net.shunts_mut() = shunts;
+    *net.branches_mut() = branches;
+    *net.generators_mut() = generators;
+    *net.source_format_mut() = SourceFormat::Gridfm;
     net.validate()?;
 
     // --- fidelity warnings: what the gridfm schema couldn't carry back ---
@@ -1475,26 +1475,26 @@ fn build_network_from_columns(
         format!(
             "synthesized bus ids 1..={}; original bus ids are not stored in a gridfm dataset, \
          so a written case is renumbered",
-            net.buses.len()
+            net.buses().len()
         ),
     );
-    if !net.loads.is_empty() {
+    if !net.loads().is_empty() {
         warnings.push(
             &codes::READ_GRIDFM_VALUE_COLLAPSED,
             format!(
                 "folded nodal load into {} synthetic per-bus Load(s); per-load granularity is \
              not recoverable",
-                net.loads.len()
+                net.loads().len()
             ),
         );
     }
-    if !net.shunts.is_empty() {
+    if !net.shunts().is_empty() {
         warnings.push(
             &codes::READ_GRIDFM_VALUE_COLLAPSED,
             format!(
                 "folded nodal shunts into {} synthetic per-bus Shunt(s); per-shunt granularity \
              is not recoverable",
-                net.shunts.len()
+                net.shunts().len()
             ),
         );
     }
@@ -1505,7 +1505,7 @@ fn build_network_from_columns(
              indistinguishable from a line and is read as one (the power flow is identical)"
         ));
     }
-    let no_cost_gens = net.generators.iter().filter(|g| g.cost.is_none()).count();
+    let no_cost_gens = net.generators().iter().filter(|g| g.cost.is_none()).count();
     if no_cost_gens > 0 {
         warnings.push(&codes::READ_GRIDFM_FIELD_DROPPED, format!(
             "{no_cost_gens} generator(s) read with no cost: an all-zero cost triple in the dataset \
@@ -1892,9 +1892,9 @@ mod tests {
         assert_eq!(names(&tables.branch), BRANCH_COLS);
         assert_eq!(names(tables.y_bus.as_ref().unwrap()), YBUS_COLS);
 
-        assert_eq!(tables.bus.num_rows(), net.buses.len()); // 14
-        assert_eq!(tables.generator.num_rows(), net.generators.len()); // 5
-        assert_eq!(tables.branch.num_rows(), net.branches.len()); // 20
+        assert_eq!(tables.bus.num_rows(), net.buses().len()); // 14
+        assert_eq!(tables.generator.num_rows(), net.generators().len()); // 5
+        assert_eq!(tables.branch.num_rows(), net.branches().len()); // 20
     }
 
     #[test]
@@ -1907,7 +1907,7 @@ mod tests {
         );
         let mut br = branch(1, 2, 0.01, 0.1);
         br.charging = Some(BranchCharging::new(0.01, 0.02, 0.03, 0.05));
-        net.branches.push(br);
+        net.branches_mut().push(br);
 
         let tables = gridfm_record_batches_single(&net, 0, &GridfmOptions::default()).unwrap();
         let b = col_f64(&tables.branch, "b").value(0);
@@ -1935,7 +1935,7 @@ mod tests {
 
         let bus = read(&raw.join("bus_data.parquet"));
         assert_eq!(names(&bus), BUS_COLS);
-        assert_eq!(bus.num_rows(), net.buses.len());
+        assert_eq!(bus.num_rows(), net.buses().len());
         assert_eq!(names(&read(&raw.join("gen_data.parquet"))), GEN_COLS);
         assert_eq!(names(&read(&raw.join("branch_data.parquet"))), BRANCH_COLS);
         assert_eq!(names(&read(&raw.join("y_bus_data.parquet"))), YBUS_COLS);
@@ -1956,7 +1956,7 @@ mod tests {
         }
 
         // GS/BS are the per-bus shunt aggregate divided by base_mva.
-        let base = net.base_mva;
+        let base = net.base_mva();
         let gs = col_f64(bus, "GS");
         for i in 0..bus.num_rows() {
             assert!((gs.value(i) - view.gs()[i] / base).abs() < 1e-12);
@@ -1979,7 +1979,7 @@ mod tests {
 
         let yff_r = col_f64(br, "Yff_r");
         let yff_i = col_f64(br, "Yff_i");
-        for (row, branch) in net.branches.iter().enumerate() {
+        for (row, branch) in net.branches().iter().enumerate() {
             // Raw fixture, so the shift is in degrees — convert as build_ybus does.
             let shift_rad = branch.shift.to_radians();
             if let Some(block) =
@@ -2034,15 +2034,15 @@ mod tests {
         assert!(loss > 1.0, "case14 has ~13 MW of real loss, got {loss}");
 
         let gen_p: f64 = net
-            .generators
+            .generators()
             .iter()
             .filter(|g| g.in_service)
             .map(|g| g.pg)
             .sum();
-        let load_p: f64 = net.loads.iter().map(|l| l.p).sum();
+        let load_p: f64 = net.loads().iter().map(|l| l.p).sum();
         // Real shunt draw at the stored voltages: gs() is MW at V = 1.
         let shunt_p: f64 = (0..view.n())
-            .map(|i| view.gs()[i] * net.buses[i].vm.powi(2))
+            .map(|i| view.gs()[i] * net.buses()[i].vm.powi(2))
             .sum();
         assert!(
             (loss - (gen_p - load_p - shunt_p)).abs() < 0.5,
@@ -2142,7 +2142,7 @@ mod tests {
     #[test]
     fn non_finite_bus_voltage_errors_before_parquet() {
         let mut net = case14();
-        net.buses[0].vm = f64::NAN;
+        net.buses_mut()[0].vm = f64::NAN;
         let err = gridfm_record_batches_single(&net, 7, &GridfmOptions::default()).unwrap_err();
         match err {
             Error::NonFiniteGridfmValue {
@@ -2165,7 +2165,7 @@ mod tests {
     #[test]
     fn non_finite_tap_errors_even_without_y_bus_table() {
         let mut net = case14();
-        net.branches[0].tap = f64::NAN;
+        net.branches_mut()[0].tap = f64::NAN;
         let opts = GridfmOptions {
             include_y_bus: false,
             ..Default::default()
@@ -2203,7 +2203,7 @@ mod tests {
             vec![bus(1, BusType::Ref), bus(2, BusType::Pq)],
             vec![branch(1, 2, 0.01, 0.1)],
         );
-        net.generators
+        net.generators_mut()
             .push(gen_at(1, gencost(2, 3, vec![f64::NAN, 1.0, 0.0])));
 
         // coeffs are highest-order first, so the NaN lands in the cp2 column.
@@ -2228,13 +2228,13 @@ mod tests {
         // literal Inf tokens; the unbounded sentinel must reach the Parquet
         // columns, not abort the export (only NaN is corrupt in a limit).
         let mut net = case14();
-        net.generators[0].qmax = f64::INFINITY;
-        net.generators[0].qmin = f64::NEG_INFINITY;
-        net.generators[1].pmax = f64::INFINITY;
-        net.branches[0].angmin = f64::NEG_INFINITY;
-        net.branches[0].angmax = f64::INFINITY;
-        net.branches[1].rate_a = f64::INFINITY;
-        net.buses[0].vmax = f64::INFINITY;
+        net.generators_mut()[0].qmax = f64::INFINITY;
+        net.generators_mut()[0].qmin = f64::NEG_INFINITY;
+        net.generators_mut()[1].pmax = f64::INFINITY;
+        net.branches_mut()[0].angmin = f64::NEG_INFINITY;
+        net.branches_mut()[0].angmax = f64::INFINITY;
+        net.branches_mut()[1].rate_a = f64::INFINITY;
+        net.buses_mut()[0].vmax = f64::INFINITY;
         let tables = gridfm_record_batches_single(&net, 0, &GridfmOptions::default()).unwrap();
         let qmax = col_f64(&tables.generator, "max_q_mvar");
         assert!(qmax.value(0).is_infinite() && qmax.value(0) > 0.0);
@@ -2243,7 +2243,7 @@ mod tests {
     #[test]
     fn nan_limit_still_errors() {
         let mut net = case14();
-        net.generators[0].qmax = f64::NAN;
+        net.generators_mut()[0].qmax = f64::NAN;
         let err = gridfm_record_batches_single(&net, 0, &GridfmOptions::default()).unwrap_err();
         assert!(
             matches!(
@@ -2262,11 +2262,11 @@ mod tests {
     /// operating point on the same topology, the scenario-batch invariant.
     fn scaled(net: &BalancedNetwork, factor: f64) -> BalancedNetwork {
         let mut s = net.clone();
-        for l in &mut s.loads {
+        for l in s.loads_mut() {
             l.p *= factor;
             l.q *= factor;
         }
-        for g in &mut s.generators {
+        for g in s.generators_mut() {
             g.pg *= factor;
             g.qg *= factor;
         }
@@ -2297,13 +2297,13 @@ mod tests {
         // Schema is unchanged; rows are 3× the single-snapshot counts.
         assert_eq!(names(&tables.bus), BUS_COLS);
         assert_eq!(names(&tables.branch), BRANCH_COLS);
-        assert_eq!(tables.bus.num_rows(), 3 * base.buses.len());
-        assert_eq!(tables.generator.num_rows(), 3 * base.generators.len());
-        assert_eq!(tables.branch.num_rows(), 3 * base.branches.len());
+        assert_eq!(tables.bus.num_rows(), 3 * base.buses().len());
+        assert_eq!(tables.generator.num_rows(), 3 * base.generators().len());
+        assert_eq!(tables.branch.num_rows(), 3 * base.branches().len());
 
         // The scenario column is blocked 0.., and the dense bus index resets to
         // 0..n within each scenario.
-        let n = base.buses.len();
+        let n = base.buses().len();
         let scen = col_i64(&tables.bus, "scenario");
         let lsi = col_i64(&tables.bus, "load_scenario_idx");
         let bus_idx = col_i64(&tables.bus, "bus");
@@ -2338,9 +2338,9 @@ mod tests {
             &tables.generator,
             &single.generator,
             "p_mw",
-            base.generators.len(),
+            base.generators().len(),
         );
-        bit_exact(&tables.branch, &single.branch, "pf", base.branches.len());
+        bit_exact(&tables.branch, &single.branch, "pf", base.branches().len());
 
         // The perturbed scenario's load really differs (guards against stamping
         // the same network three times).
@@ -2354,7 +2354,7 @@ mod tests {
         // The dataset directory comes from the network name, which is input
         // content; a separator-bearing name must not write outside out_dir.
         let mut net = case14();
-        net.name = "../escape".to_string();
+        *net.name_mut() = "../escape".to_string();
         let dir = tempfile::tempdir().unwrap();
         let out = write_gridfm_dataset(&net, 0, dir.path(), &GridfmOptions::default()).unwrap();
         assert!(
@@ -2384,10 +2384,10 @@ mod tests {
         let out = write_gridfm_batch(&snaps, dir.path(), &GridfmOptions::default()).unwrap();
 
         let bus = read(&out.dir.join("bus_data.parquet"));
-        assert_eq!(bus.num_rows(), 2 * base.buses.len());
+        assert_eq!(bus.num_rows(), 2 * base.buses().len());
         let scen = col_i64(&bus, "scenario");
         assert_eq!(scen.value(0), 0);
-        assert_eq!(scen.value(base.buses.len()), 1);
+        assert_eq!(scen.value(base.buses().len()), 1);
 
         let meta: serde_json::Value = serde_json::from_str(
             &std::fs::read_to_string(out.dir.join("gridfm_meta.json")).unwrap(),
@@ -2442,7 +2442,7 @@ mod tests {
         // rejected with the BusOrder reason (not the same-tuple Counts message).
         let base = case14();
         let mut reordered = base.clone();
-        reordered.buses.swap(0, 1);
+        reordered.buses_mut().swap(0, 1);
         let snaps = [
             GridfmSnapshot {
                 net: &base,
@@ -2474,8 +2474,8 @@ mod tests {
         // impedance may legitimately differ per scenario.
         let base = case14();
         let mut perturbed = base.clone();
-        perturbed.branches[0].r = 0.0;
-        perturbed.branches[0].x = 0.0;
+        perturbed.branches_mut()[0].r = 0.0;
+        perturbed.branches_mut()[0].x = 0.0;
         let snaps = [
             GridfmSnapshot {
                 net: &base,
@@ -2551,8 +2551,8 @@ mod tests {
         let mut g_off = gen_at(2, gencost(2, 3, vec![0.0, 1.0, 0.0]));
         g_off.pg = 30.0;
         g_off.in_service = false;
-        net.generators.push(g_on);
-        net.generators.push(g_off);
+        net.generators_mut().push(g_on);
+        net.generators_mut().push(g_off);
 
         let tables = gridfm_record_batches_single(&net, 0, &GridfmOptions::default()).unwrap();
 
@@ -2599,9 +2599,9 @@ mod tests {
             ],
             vec![branch(1, 2, 0.01, 0.1), branch(2, 3, 0.02, 0.2)],
         );
-        net.buses[1].va = -3.0;
-        net.buses[2].va = -6.0;
-        net.branches[0].in_service = false; // trip branch 0
+        net.buses_mut()[1].va = -3.0;
+        net.buses_mut()[2].va = -6.0;
+        net.branches_mut()[0].in_service = false; // trip branch 0
 
         let tables = gridfm_record_batches_single(&net, 0, &GridfmOptions::default()).unwrap();
         let br = &tables.branch;
@@ -2662,9 +2662,9 @@ mod tests {
             vec![bus(1, BusType::Ref), bus(2, BusType::Pq)],
             vec![branch(1, 2, 0.01, 0.1)],
         );
-        net.generators
+        net.generators_mut()
             .push(gen_at(1, gencost(1, 2, vec![0.0, 0.0, 1.0, 1.0]))); // piecewise
-        net.generators
+        net.generators_mut()
             .push(gen_at(2, gencost(2, 3, vec![0.01, 5.0, 0.0]))); // polynomial
 
         let tables = gridfm_record_batches_single(&net, 0, &GridfmOptions::default()).unwrap();
@@ -2702,8 +2702,8 @@ mod tests {
         );
         let mut missing = gen_at(1, gencost(2, 3, vec![1.0, 2.0, 3.0]));
         missing.cost = None;
-        net.generators.push(missing);
-        net.generators
+        net.generators_mut().push(missing);
+        net.generators_mut()
             .push(gen_at(2, gencost(1, 2, vec![0.0, 0.0, 1.0, 1.0])));
 
         let dir = tempfile::tempdir().unwrap();
@@ -2790,17 +2790,20 @@ mod tests {
         f64,
     ) {
         (
-            net.buses.len(),
-            net.branches.len(),
-            net.generators.len(),
-            net.buses.iter().filter(|b| b.kind == BusType::Ref).count(),
-            net.loads.iter().map(|l| l.p).sum(),
-            net.loads.iter().map(|l| l.q).sum(),
-            net.generators.iter().map(|g| g.pg).sum(),
-            net.branches.iter().map(|b| b.r).sum(),
-            net.branches.iter().map(|b| b.x).sum(),
-            net.branches.iter().map(|b| b.b).sum(),
-            net.base_mva,
+            net.buses().len(),
+            net.branches().len(),
+            net.generators().len(),
+            net.buses()
+                .iter()
+                .filter(|b| b.kind == BusType::Ref)
+                .count(),
+            net.loads().iter().map(|l| l.p).sum(),
+            net.loads().iter().map(|l| l.q).sum(),
+            net.generators().iter().map(|g| g.pg).sum(),
+            net.branches().iter().map(|b| b.r).sum(),
+            net.branches().iter().map(|b| b.x).sum(),
+            net.branches().iter().map(|b| b.b).sum(),
+            net.base_mva(),
         )
     }
 
@@ -2832,8 +2835,8 @@ mod tests {
 
         let read = read_gridfm_dataset(dir.path().join("case14").join("raw"), 0).unwrap();
         assert_eq!(read.scenario, 0);
-        assert_eq!(read.network.source_format, SourceFormat::Gridfm);
-        assert_eq!(read.network.name, "case14");
+        assert_eq!(read.network.source_format(), SourceFormat::Gridfm);
+        assert_eq!(read.network.name(), "case14");
         assert_fingerprint_close(&read.network, &net);
         // The reconstruction is structurally valid (validate() already ran inside).
         read.network.validate().unwrap();
@@ -2845,7 +2848,7 @@ mod tests {
         // fingerprint with no disk I/O.
         let net = case14();
         let tables = gridfm_record_batches_single(&net, 0, &GridfmOptions::default()).unwrap();
-        let read = read_gridfm_network(&tables, 0, net.base_mva, &net.name).unwrap();
+        let read = read_gridfm_network(&tables, 0, net.base_mva(), net.name()).unwrap();
         assert_fingerprint_close(&read.network, &net);
     }
 
@@ -2854,12 +2857,12 @@ mod tests {
         // case14 has a single bus shunt (Bs = 19 at bus 9). The writer divides by
         // base_mva; the reader must multiply it back.
         let net = case14();
-        let want_b: f64 = net.shunts.iter().map(|s| s.b).sum();
+        let want_b: f64 = net.shunts().iter().map(|s| s.b).sum();
         assert!(want_b.abs() > 1.0, "fixture should have a real shunt");
 
         let tables = gridfm_record_batches_single(&net, 0, &GridfmOptions::default()).unwrap();
-        let read = read_gridfm_network(&tables, 0, net.base_mva, &net.name).unwrap();
-        let got_b: f64 = read.network.shunts.iter().map(|s| s.b).sum();
+        let read = read_gridfm_network(&tables, 0, net.base_mva(), net.name()).unwrap();
+        let got_b: f64 = read.network.shunts().iter().map(|s| s.b).sum();
         assert!(
             (got_b - want_b).abs() < 1e-9,
             "shunt b not recovered at base_mva: {got_b} vs {want_b}"
@@ -2889,8 +2892,8 @@ mod tests {
         assert_eq!(reads.len(), 2);
         assert_eq!((reads[0].scenario, reads[1].scenario), (0, 1));
 
-        let load0: f64 = reads[0].network.loads.iter().map(|l| l.p).sum();
-        let load1: f64 = reads[1].network.loads.iter().map(|l| l.p).sum();
+        let load0: f64 = reads[0].network.loads().iter().map(|l| l.p).sum();
+        let load1: f64 = reads[1].network.loads().iter().map(|l| l.p).sum();
         assert!(load0 > 0.0);
         assert!(
             (load1 - 1.1 * load0).abs() < 1e-6,
@@ -2914,7 +2917,7 @@ mod tests {
         for d in [raw_dir.clone(), case_dir, out.to_path_buf()] {
             let read = read_gridfm_dataset(&d, 0)
                 .unwrap_or_else(|e| panic!("failed to resolve {}: {e}", d.display()));
-            assert_eq!(read.network.buses.len(), net.buses.len());
+            assert_eq!(read.network.buses().len(), net.buses().len());
         }
     }
 
@@ -2922,7 +2925,7 @@ mod tests {
     fn read_missing_scenario_errors() {
         let net = case14();
         let tables = gridfm_record_batches_single(&net, 0, &GridfmOptions::default()).unwrap();
-        let err = read_gridfm_network(&tables, 99, net.base_mva, &net.name).unwrap_err();
+        let err = read_gridfm_network(&tables, 99, net.base_mva(), net.name()).unwrap_err();
         assert!(
             matches!(
                 err,
@@ -2981,9 +2984,9 @@ mod tests {
 
         let read = read_gridfm_dataset(&out.dir, 0).unwrap();
         assert!(
-            (read.network.base_mva - 100.0).abs() < 1e-9,
+            (read.network.base_mva() - 100.0).abs() < 1e-9,
             "base_mva should default to 100, got {}",
-            read.network.base_mva
+            read.network.base_mva()
         );
         assert!(
             read.warnings.iter().any(|w| w.contains("base_mva")),
@@ -2996,7 +2999,7 @@ mod tests {
     fn read_surfaces_fidelity_warnings() {
         let net = case14();
         let tables = gridfm_record_batches_single(&net, 0, &GridfmOptions::default()).unwrap();
-        let read = read_gridfm_network(&tables, 0, net.base_mva, &net.name).unwrap();
+        let read = read_gridfm_network(&tables, 0, net.base_mva(), net.name()).unwrap();
         assert!(!read.warnings.is_empty());
         assert!(
             read.warnings
@@ -3017,11 +3020,11 @@ mod tests {
         // (not the old hard-coded 1.0).
         let net = case14();
         let tables = gridfm_record_batches_single(&net, 0, &GridfmOptions::default()).unwrap();
-        let read = read_gridfm_network(&tables, 0, net.base_mva, &net.name).unwrap();
-        for g in &read.network.generators {
+        let read = read_gridfm_network(&tables, 0, net.base_mva(), net.name()).unwrap();
+        for g in read.network.generators() {
             let bus = read
                 .network
-                .buses
+                .buses()
                 .iter()
                 .find(|b| b.id == g.bus)
                 .expect("gen references a known bus");
@@ -3034,7 +3037,7 @@ mod tests {
         }
         assert!(
             read.network
-                .generators
+                .generators()
                 .iter()
                 .any(|g| (g.vg - 1.0).abs() > 1e-3),
             "expected a generator with vg != 1.0 (case14's slack is at 1.06)"
@@ -3049,24 +3052,28 @@ mod tests {
         // PowerWorld misclassifies them. case14 has both lines and off-nominal
         // transformers, so the line/transformer split must survive the round trip.
         let net = case14();
-        let n_lines = net.branches.iter().filter(|b| !b.is_transformer()).count();
-        let n_xfmr = net.branches.iter().filter(|b| b.is_transformer()).count();
+        let n_lines = net
+            .branches()
+            .iter()
+            .filter(|b| !b.is_transformer())
+            .count();
+        let n_xfmr = net.branches().iter().filter(|b| b.is_transformer()).count();
         assert!(
             n_lines > 0 && n_xfmr > 0,
             "fixture needs both lines and transformers"
         );
 
         let tables = gridfm_record_batches_single(&net, 0, &GridfmOptions::default()).unwrap();
-        let read = read_gridfm_network(&tables, 0, net.base_mva, &net.name).unwrap();
+        let read = read_gridfm_network(&tables, 0, net.base_mva(), net.name()).unwrap();
         let read_lines = read
             .network
-            .branches
+            .branches()
             .iter()
             .filter(|b| !b.is_transformer())
             .count();
         let read_xfmr = read
             .network
-            .branches
+            .branches()
             .iter()
             .filter(|b| b.is_transformer())
             .count();
@@ -3097,9 +3104,9 @@ mod tests {
             vec![branch(1, 2, 0.01, 0.1)],
         );
         let tables = gridfm_record_batches_single(&net, 0, &GridfmOptions::default()).unwrap();
-        let read = read_gridfm_network(&tables, 0, net.base_mva, &net.name).unwrap();
-        assert!(read.network.generators.is_empty());
-        assert_eq!(read.network.branches.len(), 1);
+        let read = read_gridfm_network(&tables, 0, net.base_mva(), net.name()).unwrap();
+        assert!(read.network.generators().is_empty());
+        assert_eq!(read.network.branches().len(), 1);
     }
 
     #[test]
@@ -3113,12 +3120,12 @@ mod tests {
             vec![bus(1, BusType::Ref), bus(2, BusType::Pq)],
             vec![branch(1, 2, 0.01, 0.1)],
         );
-        net.generators
+        net.generators_mut()
             .push(gen_at(1, gencost(2, 3, vec![0.0, 0.0, 0.0])));
         let tables = gridfm_record_batches_single(&net, 0, &GridfmOptions::default()).unwrap();
-        let read = read_gridfm_network(&tables, 0, net.base_mva, &net.name).unwrap();
+        let read = read_gridfm_network(&tables, 0, net.base_mva(), net.name()).unwrap();
         assert!(
-            read.network.generators[0].cost.is_none(),
+            read.network.generators()[0].cost.is_none(),
             "all-zero cost should read back as None"
         );
         assert!(

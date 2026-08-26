@@ -15,7 +15,7 @@ use crate::error::{Error, Result};
 use crate::model::{
     Configuration, DistBus, DistGenerator, DistLine, DistLineCode, DistLoad, DistLoadVoltageModel,
     DistShunt, DistSourceFormat, DistSwitch, DistTransformer, DistWinding, DistWindingConn, Extras,
-    Mat, MulticonductorNetwork, UntypedObject, VoltageSource,
+    Mat, MulticonductorNetwork, MulticonductorNetworkTables, UntypedObject, VoltageSource,
 };
 
 pub(crate) fn parse_pmd_collecting(
@@ -49,11 +49,11 @@ pub(crate) fn parse_pmd_collecting(
             });
         }
     }
-    let mut net = MulticonductorNetwork {
+    let mut net = MulticonductorNetwork::from_tables(MulticonductorNetworkTables {
         source_format: Some(DistSourceFormat::PmdJson),
         base_frequency: 60.0,
-        ..MulticonductorNetwork::default()
-    };
+        ..MulticonductorNetworkTables::default()
+    });
     let mut rd = Reader {
         net: &mut net,
         diagnostics: crate::diagnostics::Diagnostics::new(),
@@ -383,23 +383,25 @@ const SECTIONS: &[&str] = &[
 impl Reader<'_> {
     fn document(&mut self, doc: &Map<String, Value>) {
         if let Some(name) = doc.get("name").and_then(Value::as_str) {
-            self.net.name = Some(name.to_string());
+            *self.net.name_mut() = Some(name.to_string());
         }
         let settings = doc.get("settings").and_then(Value::as_object);
         let stated = settings
             .and_then(|s| s.get("base_frequency"))
             .and_then(Value::as_f64);
         if let Some(f) = stated {
-            self.net.base_frequency = f;
+            *self.net.base_frequency_mut() = f;
         }
         if let Some(settings) = settings {
             self.net
-                .extras
+                .extras_mut()
                 .insert("pmd_settings".into(), Value::Object(settings.clone()));
         }
         for key in ["data_model", "files", "conductor_ids", "per_unit"] {
             if let Some(v) = doc.get(key) {
-                self.net.extras.insert(format!("pmd_{key}"), v.clone());
+                self.net
+                    .extras_mut()
+                    .insert(format!("pmd_{key}"), v.clone());
             }
         }
 
@@ -432,7 +434,7 @@ impl Reader<'_> {
                 format!("ENGINEERING `{key}` components are not typed; kept untyped"),
             );
             for (name, v) in items {
-                self.net.untyped.push(UntypedObject {
+                self.net.untyped_mut().push(UntypedObject {
                     class: key.clone(),
                     name: name.clone(),
                     props: vec![(None, v.to_string())],
@@ -500,7 +502,7 @@ impl Reader<'_> {
             };
             let v_min = bound("vm_lb", &mut self.diagnostics);
             let v_max = bound("vm_ub", &mut self.diagnostics);
-            self.net.buses.push(DistBus {
+            self.net.buses_mut().push(DistBus {
                 id: id.clone(),
                 terminals: ints_as_strings(o.get("terminals")),
                 grounded: ints_as_strings(o.get("grounded")),
@@ -515,14 +517,14 @@ impl Reader<'_> {
     fn linecodes(&mut self, items: &Map<String, Value>) {
         for (name, v) in items {
             let Value::Object(o) = v else { continue };
-            let mut lc = linecode_from(name, o, self.net.base_frequency, &mut self.diagnostics);
+            let mut lc = linecode_from(name, o, self.net.base_frequency(), &mut self.diagnostics);
             let mut extras = take_extras(
                 o,
                 &["rs", "xs", "g_fr", "g_to", "b_fr", "b_to", "cm_ub", "sm_ub"],
             );
             extras.append(&mut lc.extras);
             lc.extras = extras;
-            self.net.linecodes.push(lc);
+            self.net.linecodes_mut().push(lc);
         }
     }
 
@@ -556,8 +558,13 @@ impl Reader<'_> {
                     lc_name = format!("{name}_z{k}");
                     k += 1;
                 }
-                let lc = linecode_from(&lc_name, o, self.net.base_frequency, &mut self.diagnostics);
-                self.net.linecodes.push(lc);
+                let lc = linecode_from(
+                    &lc_name,
+                    o,
+                    self.net.base_frequency(),
+                    &mut self.diagnostics,
+                );
+                self.net.linecodes_mut().push(lc);
                 self.diagnostics.push(&C::READ_PMD_VALUE_INLINED, format!(
                     "line {name}: inline impedance materialized as linecode {lc_name}; the PMD writer re-inlines it"
                 ));
@@ -575,7 +582,7 @@ impl Reader<'_> {
                 &format!("line {name}"),
                 &mut self.diagnostics,
             );
-            self.net.lines.push(DistLine {
+            self.net.lines_mut().push(DistLine {
                 name: name.clone(),
                 bus_from: string(o.get("f_bus")),
                 bus_to: string(o.get("t_bus")),
@@ -628,7 +635,7 @@ impl Reader<'_> {
                 &format!("switch {name}"),
                 &mut self.diagnostics,
             );
-            self.net.switches.push(DistSwitch {
+            self.net.switches_mut().push(DistSwitch {
                 name: name.clone(),
                 bus_from: string(o.get("f_bus")),
                 bus_to: string(o.get("t_bus")),
@@ -718,7 +725,7 @@ impl Reader<'_> {
                 &format!("load {name}"),
                 &mut self.diagnostics,
             );
-            self.net.loads.push(DistLoad {
+            self.net.loads_mut().push(DistLoad {
                 name: name.clone(),
                 bus: string(o.get("bus")),
                 terminal_map: connections,
@@ -759,7 +766,7 @@ impl Reader<'_> {
                 &format!("generator {name}"),
                 &mut self.diagnostics,
             );
-            self.net.generators.push(DistGenerator {
+            self.net.generators_mut().push(DistGenerator {
                 name: name.clone(),
                 bus: string(o.get("bus")),
                 terminal_map: ints_as_strings(o.get("connections")),
@@ -800,7 +807,7 @@ impl Reader<'_> {
                 &format!("shunt {name}"),
                 &mut self.diagnostics,
             );
-            self.net.shunts.push(DistShunt {
+            self.net.shunts_mut().push(DistShunt {
                 name: name.clone(),
                 bus: string(o.get("bus")),
                 terminal_map: ints_as_strings(o.get("connections")),
@@ -824,7 +831,7 @@ impl Reader<'_> {
                 &format!("voltage source {name}"),
                 &mut self.diagnostics,
             );
-            self.net.sources.push(VoltageSource {
+            self.net.sources_mut().push(VoltageSource {
                 name: name.clone(),
                 bus: string(o.get("bus")),
                 terminal_map: ints_as_strings(o.get("connections")),
@@ -847,7 +854,7 @@ impl Reader<'_> {
         for (name, v) in items {
             let Value::Object(o) = v else { continue };
             let t = self.transformer(name, o);
-            self.net.transformers.push(t);
+            self.net.transformers_mut().push(t);
         }
     }
 

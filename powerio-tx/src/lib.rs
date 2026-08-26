@@ -32,7 +32,7 @@
 //! let source = Source::from_bytes("example.m", src.as_bytes().to_vec())?
 //!     .with_format(format_id_for("matpower")?);
 //! let module = parse(source)?;
-//! assert_eq!(module.value().buses.len(), 2);
+//! assert_eq!(module.value().buses().len(), 2);
 //! // An unchanged parsed module echoes its source bytes exactly.
 //! assert_eq!(write_as(&module, TargetFormat::Matpower)?.text, src);
 //! # Ok::<(), powerio_core::Error>(())

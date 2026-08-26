@@ -14,7 +14,8 @@ use std::collections::HashSet;
 use serde_json::Value;
 
 use crate::network::{
-    BalancedNetwork, Branch, Bus, BusId, BusType, Extras, Generator, Shunt, SourceFormat,
+    BalancedNetwork, BalancedNetworkTables, Branch, Bus, BusId, BusType, Extras, Generator, Shunt,
+    SourceFormat,
 };
 
 /// The endpoint of `b` other than `m` (assumes `m` is an endpoint).
@@ -98,7 +99,7 @@ impl BalancedNetwork {
     #[expect(clippy::too_many_lines)]
     pub fn subset(&self, sel: &Selector, keep_boundary: bool) -> BalancedNetwork {
         let in_scope: HashSet<BusId> = self
-            .buses
+            .buses()
             .iter()
             .filter(|b| sel.matches(b))
             .map(|b| b.id)
@@ -118,17 +119,17 @@ impl BalancedNetwork {
                 }
                 _ => {}
             };
-            for br in &self.branches {
+            for br in self.branches() {
                 edge(br.from, br.to);
             }
-            for d in &self.hvdc {
+            for d in self.hvdc() {
                 edge(d.from, d.to);
             }
         }
         let kept: HashSet<BusId> = in_scope.union(&boundary).copied().collect();
 
         let buses: Vec<Bus> = self
-            .buses
+            .buses()
             .iter()
             .filter(|b| kept.contains(&b.id))
             .map(|b| {
@@ -142,50 +143,50 @@ impl BalancedNetwork {
 
         // Injection elements live only on in-scope buses; tie buses are stubs.
         let loads = self
-            .loads
+            .loads()
             .iter()
             .filter(|l| in_scope.contains(&l.bus))
             .cloned()
             .collect();
         let mut shunts: Vec<Shunt> = self
-            .shunts
+            .shunts()
             .iter()
             .filter(|s| in_scope.contains(&s.bus))
             .cloned()
             .collect();
         let mut generators: Vec<Generator> = self
-            .generators
+            .generators()
             .iter()
             .filter(|g| in_scope.contains(&g.bus))
             .cloned()
             .collect();
         let storage = self
-            .storage
+            .storage()
             .iter()
             .filter(|s| in_scope.contains(&s.bus))
             .cloned()
             .collect();
 
         let mut branches: Vec<Branch> = self
-            .branches
+            .branches()
             .iter()
             .filter(|br| kept.contains(&br.from) && kept.contains(&br.to))
             .cloned()
             .collect();
         let switches = self
-            .switches
+            .switches()
             .iter()
             .filter(|sw| kept.contains(&sw.from) && kept.contains(&sw.to))
             .cloned()
             .collect();
         let hvdc = self
-            .hvdc
+            .hvdc()
             .iter()
             .filter(|d| kept.contains(&d.from) && kept.contains(&d.to))
             .cloned()
             .collect();
         let transformers_3w = self
-            .transformers_3w
+            .transformers_3w()
             .iter()
             .filter(|t| t.windings.iter().all(|w| kept.contains(&w.bus)))
             .cloned()
@@ -218,7 +219,7 @@ impl BalancedNetwork {
         // them would silently lose data a PSS/E/PSLF write of the subset emits.
         let kept_area_numbers: HashSet<usize> = buses.iter().map(|b| b.area).collect();
         let areas = self
-            .areas
+            .areas()
             .iter()
             .filter(|a| kept_area_numbers.contains(&a.number))
             .cloned()
@@ -230,11 +231,11 @@ impl BalancedNetwork {
             })
             .collect::<Vec<_>>();
 
-        let net = BalancedNetwork {
-            name: format!("{} (subset)", self.name),
-            base_mva: self.base_mva,
-            base_frequency: self.base_frequency,
-            geo: self.geo.clone(),
+        let net = BalancedNetwork::from_tables(BalancedNetworkTables {
+            name: format!("{} (subset)", self.name()),
+            base_mva: self.base_mva(),
+            base_frequency: self.base_frequency(),
+            geo: self.geo().clone(),
             buses,
             loads,
             shunts,
@@ -245,9 +246,9 @@ impl BalancedNetwork {
             hvdc,
             transformers_3w,
             areas,
-            solver: self.solver.clone(),
+            solver: self.solver().clone(),
             source_format: SourceFormat::InMemory,
-        };
+        });
         debug_assert!(
             net.validate().is_ok(),
             "subset produced a dangling reference"
@@ -273,59 +274,60 @@ impl BalancedNetwork {
             }
         };
 
-        for l in &mut self.loads {
+        for l in self.loads_mut() {
             remap(&mut l.bus);
         }
-        for s in &mut self.shunts {
+        for s in self.shunts_mut() {
             remap(&mut s.bus);
             if let Some(cb) = s.control.as_mut().and_then(|c| c.control_bus.as_mut()) {
                 remap(cb);
             }
         }
-        for g in &mut self.generators {
+        for g in self.generators_mut() {
             remap(&mut g.bus);
             if let Some(rb) = g.regulated_bus.as_mut() {
                 remap(rb);
             }
         }
-        for st in &mut self.storage {
+        for st in self.storage_mut() {
             remap(&mut st.bus);
         }
-        for br in &mut self.branches {
+        for br in self.branches_mut() {
             remap(&mut br.from);
             remap(&mut br.to);
             if let Some(cb) = br.control.as_mut().and_then(|c| c.controlled_bus.as_mut()) {
                 remap(cb);
             }
         }
-        self.branches.retain(|b| b.from != b.to);
-        for sw in &mut self.switches {
+        self.branches_mut().retain(|b| b.from != b.to);
+        for sw in self.switches_mut() {
             remap(&mut sw.from);
             remap(&mut sw.to);
         }
-        self.switches.retain(|s| s.from != s.to);
-        for d in &mut self.hvdc {
+        self.switches_mut().retain(|s| s.from != s.to);
+        for d in self.hvdc_mut() {
             remap(&mut d.from);
             remap(&mut d.to);
         }
-        self.hvdc.retain(|d| d.from != d.to);
-        for t in &mut self.transformers_3w {
+        self.hvdc_mut().retain(|d| d.from != d.to);
+        for t in self.transformers_3w_mut() {
             for w in &mut t.windings {
                 remap(&mut w.bus);
             }
         }
-        for a in &mut self.areas {
+        for a in self.areas_mut() {
             if let Some(slack) = a.slack_bus.as_mut() {
                 remap(slack);
             }
         }
 
         // Promote the surviving bus kind, then drop the merged bus.
-        let from_kind = self.buses.iter().find(|b| b.id == from).map(|b| b.kind);
-        self.buses.retain(|b| b.id != from);
-        if let (Some(fk), Some(into_bus)) =
-            (from_kind, self.buses.iter_mut().find(|b| b.id == into))
-        {
+        let from_kind = self.buses().iter().find(|b| b.id == from).map(|b| b.kind);
+        self.buses_mut().retain(|b| b.id != from);
+        if let (Some(fk), Some(into_bus)) = (
+            from_kind,
+            self.buses_mut().iter_mut().find(|b| b.id == into),
+        ) {
             if kind_priority(fk) > kind_priority(into_bus.kind) {
                 into_bus.kind = fk;
             }
@@ -346,9 +348,9 @@ impl BalancedNetwork {
     /// jumper); a jumper between two windings of the same 3-winding transformer is
     /// also skipped, since merging would collapse that transformer onto one node.
     pub fn reduce_zero_impedance(&mut self, threshold: f64) -> usize {
-        let before = self.branches.len();
+        let before = self.branches().len();
         // Re-scan after each merge: bus ids and the branch list both change.
-        while let Some((into, from)) = self.branches.iter().find_map(|b| {
+        while let Some((into, from)) = self.branches().iter().find_map(|b| {
             (b.in_service
                 && !b.is_transformer()
                 && b.from != b.to
@@ -358,13 +360,13 @@ impl BalancedNetwork {
         }) {
             self.merge_bus(into, from);
         }
-        before - self.branches.len()
+        before - self.branches().len()
     }
 
     /// Whether buses `a` and `b` are two windings of the same 3-winding
     /// transformer; merging them would short two windings onto one node.
     fn shares_transformer_3w(&self, a: BusId, b: BusId) -> bool {
-        self.transformers_3w
+        self.transformers_3w()
             .iter()
             .any(|t| t.windings.iter().any(|w| w.bus == a) && t.windings.iter().any(|w| w.bus == b))
     }
@@ -389,7 +391,7 @@ impl BalancedNetwork {
         // Re-scan after each fold: the equivalent branch becomes a section for the
         // next bus in a dummy chain, and the bus list shrinks.
         while let Some(mid) = self
-            .buses
+            .buses()
             .iter()
             .map(|b| b.id)
             .find(|&m| self.is_passthrough(m))
@@ -403,44 +405,44 @@ impl BalancedNetwork {
     /// Whether `m` is a collapsible degree-2 passthrough bus (see
     /// [`reduce_passthrough_buses`](BalancedNetwork::reduce_passthrough_buses)).
     fn is_passthrough(&self, m: BusId) -> bool {
-        let Some(bus) = self.buses.iter().find(|b| b.id == m) else {
+        let Some(bus) = self.buses().iter().find(|b| b.id == m) else {
             return false;
         };
         if bus.kind == BusType::Ref {
             return false;
         }
-        if self.loads.iter().any(|l| l.bus == m)
-            || self.generators.iter().any(|g| g.bus == m)
-            || self.shunts.iter().any(|s| s.bus == m)
-            || self.storage.iter().any(|s| s.bus == m)
-            || self.hvdc.iter().any(|d| d.from == m || d.to == m)
+        if self.loads().iter().any(|l| l.bus == m)
+            || self.generators().iter().any(|g| g.bus == m)
+            || self.shunts().iter().any(|s| s.bus == m)
+            || self.storage().iter().any(|s| s.bus == m)
+            || self.hvdc().iter().any(|d| d.from == m || d.to == m)
         {
             return false;
         }
         if self
-            .transformers_3w
+            .transformers_3w()
             .iter()
             .any(|t| t.windings.iter().any(|w| w.bus == m))
         {
             return false;
         }
-        if self.areas.iter().any(|a| a.slack_bus == Some(m)) {
+        if self.areas().iter().any(|a| a.slack_bus == Some(m)) {
             return false;
         }
         let controlled = self
-            .branches
+            .branches()
             .iter()
             .any(|b| b.control.as_ref().and_then(|c| c.controlled_bus) == Some(m));
         let regulated = self
-            .shunts
+            .shunts()
             .iter()
             .any(|s| s.control.as_ref().and_then(|c| c.control_bus) == Some(m));
-        let gen_regulated = self.generators.iter().any(|g| g.regulated_bus == Some(m));
+        let gen_regulated = self.generators().iter().any(|g| g.regulated_bus == Some(m));
         if controlled || regulated || gen_regulated {
             return false;
         }
         let incident: Vec<&Branch> = self
-            .branches
+            .branches()
             .iter()
             .filter(|b| b.from == m || b.to == m)
             .collect();
@@ -456,7 +458,7 @@ impl BalancedNetwork {
     /// and remove `m`. The caller has already checked [`is_passthrough`].
     fn collapse_passthrough(&mut self, m: BusId) {
         let mut sections: Vec<Branch> = Vec::new();
-        self.branches.retain(|b| {
+        self.branches_mut().retain(|b| {
             if b.from == m || b.to == m {
                 sections.push(b.clone());
                 false
@@ -478,7 +480,7 @@ impl BalancedNetwork {
             angmin = s1.angmin.min(s2.angmin);
             angmax = s1.angmax.max(s2.angmax);
         }
-        self.branches.push(Branch {
+        self.branches_mut().push(Branch {
             from: other_end(s1, m),
             to: other_end(s2, m),
             r: s1.r + s2.r,
@@ -501,7 +503,7 @@ impl BalancedNetwork {
             route: None,
             extras: Extras::new(),
         });
-        self.buses.retain(|b| b.id != m);
+        self.buses_mut().retain(|b| b.id != m);
         // The topology changed, so the retained source text is stale.
     }
 
@@ -518,21 +520,21 @@ impl BalancedNetwork {
     /// eligible.
     pub fn retype_isolated_buses(&mut self) -> usize {
         let mut connected: HashSet<BusId> = HashSet::new();
-        for br in self.branches.iter().filter(|b| b.in_service) {
+        for br in self.branches().iter().filter(|b| b.in_service) {
             connected.insert(br.from);
             connected.insert(br.to);
         }
-        for d in self.hvdc.iter().filter(|d| d.in_service) {
+        for d in self.hvdc().iter().filter(|d| d.in_service) {
             connected.insert(d.from);
             connected.insert(d.to);
         }
-        for t in self.transformers_3w.iter().filter(|t| t.in_service) {
+        for t in self.transformers_3w().iter().filter(|t| t.in_service) {
             for w in &t.windings {
                 connected.insert(w.bus);
             }
         }
         let mut retyped = 0;
-        for b in &mut self.buses {
+        for b in self.buses_mut() {
             if b.kind != BusType::Isolated && !connected.contains(&b.id) {
                 b.kind = BusType::Isolated;
                 retyped += 1;
@@ -618,8 +620,8 @@ mod tests {
             vec![bus(1, 1, 230.0), bus(2, 1, 230.0), bus(3, 2, 230.0)],
             vec![line(1, 2), line(2, 3)],
         );
-        net.loads.push(load(1));
-        net.loads.push(load(3));
+        net.loads_mut().push(load(1));
+        net.loads_mut().push(load(3));
         net
     }
 
@@ -675,15 +677,16 @@ mod tests {
     fn subset_clears_a_regulated_bus_outside_the_kept_set() {
         // A generator on in-scope bus 1 regulates bus 3, which the area filter drops.
         let mut net = two_area_net();
-        net.generators.push(gen_regulating(1, 3));
+        net.generators_mut().push(gen_regulating(1, 3));
         let sel = Selector {
             area: Some((1, 1)),
             ..Selector::default()
         };
         let sub = net.subset(&sel, false);
-        assert_eq!(sub.generators.len(), 1);
+        assert_eq!(sub.generators().len(), 1);
         assert_eq!(
-            sub.generators[0].regulated_bus, None,
+            sub.generators()[0].regulated_bus,
+            None,
             "the dropped remote regulated bus is cleared, not left dangling"
         );
         sub.validate().unwrap();
@@ -692,8 +695,8 @@ mod tests {
     #[test]
     fn merge_bus_remaps_regulated_bus_and_area_slack() {
         let mut net = two_area_net();
-        net.generators.push(gen_regulating(1, 3)); // gen on bus 1 regulates bus 3
-        net.areas.push(Area {
+        net.generators_mut().push(gen_regulating(1, 3)); // gen on bus 1 regulates bus 3
+        net.areas_mut().push(Area {
             number: 1,
             slack_bus: Some(BusId(3)),
             net_interchange: 0.0,
@@ -702,12 +705,12 @@ mod tests {
         });
         net.merge_bus(BusId(2), BusId(3)); // bus 3 merges into bus 2
         assert_eq!(
-            net.generators[0].regulated_bus,
+            net.generators()[0].regulated_bus,
             Some(BusId(2)),
             "the regulated bus follows the merge"
         );
         assert_eq!(
-            net.areas[0].slack_bus,
+            net.areas()[0].slack_bus,
             Some(BusId(2)),
             "the area swing follows the merge"
         );
@@ -724,9 +727,9 @@ mod tests {
             vec![bus(1, 1, 230.0), bus(2, 1, 230.0), bus(3, 1, 230.0)],
             vec![line(1, 2), line(2, 3)],
         );
-        net.generators.push(gen_regulating(1, 2));
+        net.generators_mut().push(gen_regulating(1, 2));
         assert_eq!(net.reduce_passthrough_buses(), 0);
-        assert_eq!(net.buses.len(), 3);
+        assert_eq!(net.buses().len(), 3);
         net.validate().unwrap();
     }
 
@@ -740,10 +743,10 @@ mod tests {
         let sub = net.subset(&sel, false);
 
         // Buses 1, 2 kept; bus 3 (area 2) dropped along with the crossing line.
-        assert_eq!(sub.buses.len(), 2);
-        assert!(sub.buses.iter().all(|b| b.area == 1));
-        assert_eq!(sub.branches.len(), 1, "only the intra-area line survives");
-        assert_eq!(sub.loads.len(), 1, "the area-2 load is dropped");
+        assert_eq!(sub.buses().len(), 2);
+        assert!(sub.buses().iter().all(|b| b.area == 1));
+        assert_eq!(sub.branches().len(), 1, "only the intra-area line survives");
+        assert_eq!(sub.loads().len(), 1, "the area-2 load is dropped");
         sub.validate().unwrap();
     }
 
@@ -757,12 +760,12 @@ mod tests {
         let sub = net.subset(&sel, true);
 
         // Bus 3 is pulled in as a tie bus so the crossing line keeps both ends.
-        assert_eq!(sub.buses.len(), 3);
-        assert_eq!(sub.branches.len(), 2);
-        let tie = sub.buses.iter().find(|b| b.id == BusId(3)).unwrap();
+        assert_eq!(sub.buses().len(), 3);
+        assert_eq!(sub.branches().len(), 2);
+        let tie = sub.buses().iter().find(|b| b.id == BusId(3)).unwrap();
         assert_eq!(tie.extras.get("tie_bus"), Some(&Value::Bool(true)));
         // The tie bus is a stub: its load is not pulled in.
-        assert_eq!(sub.loads.len(), 1);
+        assert_eq!(sub.loads().len(), 1);
         sub.validate().unwrap();
     }
 
@@ -770,20 +773,20 @@ mod tests {
     fn empty_selector_keeps_everything() {
         let net = two_area_net();
         let sub = net.subset(&Selector::default(), false);
-        assert_eq!(sub.buses.len(), net.buses.len());
-        assert_eq!(sub.branches.len(), net.branches.len());
+        assert_eq!(sub.buses().len(), net.buses().len());
+        assert_eq!(sub.branches().len(), net.branches().len());
     }
 
     #[test]
     fn base_kv_range_filters_by_voltage() {
         let mut net = two_area_net();
-        net.buses[2].base_kv = 115.0; // bus 3 to a different voltage class
+        net.buses_mut()[2].base_kv = 115.0; // bus 3 to a different voltage class
         let sel = Selector {
             base_kv: Some((200.0, 300.0)),
             ..Selector::default()
         };
         let sub = net.subset(&sel, false);
-        assert_eq!(sub.buses.len(), 2, "only the 230 kV buses match");
+        assert_eq!(sub.buses().len(), 2, "only the 230 kV buses match");
     }
 
     #[test]
@@ -791,27 +794,27 @@ mod tests {
         let mut net = two_area_net(); // buses 1,2,3; lines 1-2, 2-3; loads on 1, 3
         net.merge_bus(BusId(2), BusId(3));
 
-        assert_eq!(net.buses.len(), 2, "bus 3 removed");
-        assert!(net.buses.iter().all(|b| b.id != BusId(3)));
+        assert_eq!(net.buses().len(), 2, "bus 3 removed");
+        assert!(net.buses().iter().all(|b| b.id != BusId(3)));
         assert_eq!(
-            net.branches.len(),
+            net.branches().len(),
             1,
             "the 2-3 line collapsed to a self-loop"
         );
-        assert_eq!(net.branches[0].from, BusId(1));
-        assert_eq!(net.branches[0].to, BusId(2));
+        assert_eq!(net.branches()[0].from, BusId(1));
+        assert_eq!(net.branches()[0].to, BusId(2));
         // Both loads survive; the one on bus 3 moved to bus 2.
-        assert_eq!(net.loads.len(), 2);
-        assert!(net.loads.iter().any(|l| l.bus == BusId(2)));
+        assert_eq!(net.loads().len(), 2);
+        assert!(net.loads().iter().any(|l| l.bus == BusId(2)));
         net.validate().unwrap();
     }
 
     #[test]
     fn merge_bus_keeps_the_stronger_bus_kind() {
         let mut net = two_area_net();
-        net.buses[2].kind = BusType::Ref; // bus 3 is the slack
+        net.buses_mut()[2].kind = BusType::Ref; // bus 3 is the slack
         net.merge_bus(BusId(2), BusId(3)); // merge the slack into the PQ bus 2
-        let two = net.buses.iter().find(|b| b.id == BusId(2)).unwrap();
+        let two = net.buses().iter().find(|b| b.id == BusId(2)).unwrap();
         assert_eq!(two.kind, BusType::Ref, "the slack designation is not lost");
     }
 
@@ -838,14 +841,14 @@ mod tests {
 
         let removed = net.reduce_passthrough_buses();
         assert_eq!(removed, 2, "both dummy buses collapse");
-        assert_eq!(net.buses.len(), 2);
+        assert_eq!(net.buses().len(), 2);
         assert!(
-            net.buses
+            net.buses()
                 .iter()
                 .all(|b| b.id == BusId(1) || b.id == BusId(4))
         );
-        assert_eq!(net.branches.len(), 1, "one equivalent branch");
-        let eq = &net.branches[0];
+        assert_eq!(net.branches().len(), 1, "one equivalent branch");
+        let eq = &net.branches()[0];
         assert_eq!(
             [eq.from, eq.to].iter().copied().collect::<HashSet<_>>(),
             [BusId(1), BusId(4)].into_iter().collect::<HashSet<_>>(),
@@ -867,9 +870,9 @@ mod tests {
             vec![bus(1, 1, 230.0), bus(2, 1, 230.0), bus(3, 1, 230.0)],
             vec![line(1, 2), line(2, 3)],
         );
-        net.loads.push(load(2));
+        net.loads_mut().push(load(2));
         assert_eq!(net.reduce_passthrough_buses(), 0);
-        assert_eq!(net.buses.len(), 3);
+        assert_eq!(net.buses().len(), 3);
     }
 
     #[test]
@@ -884,7 +887,7 @@ mod tests {
             vec![line(1, 2), xfmr],
         );
         assert_eq!(net.reduce_passthrough_buses(), 0);
-        assert_eq!(net.buses.len(), 3);
+        assert_eq!(net.buses().len(), 3);
     }
 
     #[test]
@@ -897,10 +900,10 @@ mod tests {
             vec![line(1, 2)],
         );
         assert_eq!(net.retype_isolated_buses(), 1);
-        let three = net.buses.iter().find(|b| b.id == BusId(3)).unwrap();
+        let three = net.buses().iter().find(|b| b.id == BusId(3)).unwrap();
         assert_eq!(three.kind, BusType::Isolated);
         // The connected buses keep their kind.
-        let one = net.buses.iter().find(|b| b.id == BusId(1)).unwrap();
+        let one = net.buses().iter().find(|b| b.id == BusId(1)).unwrap();
         assert_eq!(one.kind, BusType::Pq);
         net.validate().unwrap();
     }
@@ -917,7 +920,7 @@ mod tests {
             vec![br],
         );
         assert_eq!(net.retype_isolated_buses(), 2);
-        assert!(net.buses.iter().all(|b| b.kind == BusType::Isolated));
+        assert!(net.buses().iter().all(|b| b.kind == BusType::Isolated));
     }
 
     #[test]
@@ -943,13 +946,16 @@ mod tests {
             vec![bus(1, 1, 230.0), bus(2, 1, 230.0), bus(3, 1, 230.0)],
             vec![line(1, 2), jumper],
         );
-        net.loads.push(load(3));
+        net.loads_mut().push(load(3));
 
         let removed = net.reduce_zero_impedance(1e-9);
         assert_eq!(removed, 1, "only the jumper is collapsed");
-        assert_eq!(net.buses.len(), 2);
-        assert_eq!(net.branches.len(), 1, "the real 1-2 line remains");
-        assert!(net.loads.iter().any(|l| l.bus == BusId(2)), "load re-homed");
+        assert_eq!(net.buses().len(), 2);
+        assert_eq!(net.branches().len(), 1, "the real 1-2 line remains");
+        assert!(
+            net.loads().iter().any(|l| l.bus == BusId(2)),
+            "load re-homed"
+        );
         net.validate().unwrap();
     }
 
@@ -969,8 +975,8 @@ mod tests {
 
         let removed = net.reduce_zero_impedance(1e-9);
         assert_eq!(removed, 0, "an open jumper is left in place");
-        assert_eq!(net.buses.len(), 3);
-        assert_eq!(net.branches.len(), 2);
+        assert_eq!(net.buses().len(), 3);
+        assert_eq!(net.branches().len(), 2);
         net.validate().unwrap();
     }
 
@@ -987,14 +993,14 @@ mod tests {
             vec![bus(1, 1, 230.0), bus(2, 1, 138.0), bus(3, 1, 13.8)],
             vec![line(1, 2), jumper],
         );
-        net.transformers_3w.push(transformer_3w(1, 2, 3));
+        net.transformers_3w_mut().push(transformer_3w(1, 2, 3));
 
         let removed = net.reduce_zero_impedance(1e-9);
         assert_eq!(
             removed, 0,
             "a jumper across two windings of one 3W transformer is kept"
         );
-        assert_eq!(net.buses.len(), 3);
+        assert_eq!(net.buses().len(), 3);
         net.validate().unwrap();
     }
 }

@@ -18,16 +18,16 @@ fn dist_network() -> powerio_dist::MulticonductorNetwork {
 fn dist_layer_extracts_and_applies_by_name() {
     let mut net = dist_network();
     let bus_row = net
-        .buses
+        .buses()
         .iter()
         .position(|bus| bus.id == "sourcebus")
         .expect("sourcebus");
-    net.buses[bus_row].location = Some(powerio_dist::DistLocation {
+    net.buses_mut()[bus_row].location = Some(powerio_dist::DistLocation {
         x: -89.6,
         y: 40.6,
         kind: Some(powerio_dist::DistCoordsKind::Manual),
     });
-    net.lines[0].route = Some(vec![
+    net.lines_mut()[0].route = Some(vec![
         powerio_dist::DistLocation {
             x: -89.6,
             y: 40.6,
@@ -39,7 +39,7 @@ fn dist_layer_extracts_and_applies_by_name() {
             kind: None,
         },
     ]);
-    net.geo = Some(powerio_dist::DistGeoMeta {
+    *net.geo_mut() = Some(powerio_dist::DistGeoMeta {
         space: powerio_dist::CoordinateSpace::Geographic { crs: None },
         kind: None,
     });
@@ -71,12 +71,12 @@ fn dist_layer_extracts_and_applies_by_name() {
     assert_eq!(report.matched_buses, 1);
     assert_eq!(report.matched_branches, 1);
     assert_eq!(report.unmatched_features, 0);
-    let applied = bare.buses[bus_row].location.expect("applied location");
+    let applied = bare.buses()[bus_row].location.expect("applied location");
     assert!((applied.x - -89.6).abs() < 1e-12);
     assert_eq!(applied.kind, Some(powerio_dist::DistCoordsKind::Manual));
-    assert!(bare.lines[0].route.is_some());
+    assert!(bare.lines()[0].route.is_some());
     assert!(matches!(
-        bare.geo.as_ref().expect("geo meta").space,
+        bare.geo().as_ref().expect("geo meta").space,
         powerio_dist::CoordinateSpace::Geographic { .. }
     ));
 }
@@ -93,7 +93,7 @@ fn dist_apply_reads_a_buscoords_sidecar() {
     let report = apply_dist_geo_layer(&mut net, &parsed.layer);
     assert_eq!(report.matched_buses, 2);
     assert!(
-        net.buses
+        net.buses()
             .iter()
             .find(|bus| bus.id == "loadbus")
             .expect("loadbus")

@@ -12,7 +12,7 @@ mod tests;
 pub use writer::write_matpower;
 pub(crate) use writer::write_matpower_conversion;
 
-use crate::network::{BalancedNetwork, Generator, Hvdc, SourceFormat};
+use crate::network::{BalancedNetwork, BalancedNetworkTables, Generator, Hvdc, SourceFormat};
 use crate::{Error, Result};
 
 /// Owned-source entry used by the format hub: move the buffer straight into the
@@ -125,7 +125,7 @@ fn build_case<'a>(name: &str, get: impl Fn(&str) -> Option<&'a str>) -> Result<B
         }
     }
 
-    Ok(BalancedNetwork {
+    Ok(BalancedNetwork::from_tables(BalancedNetworkTables {
         name: name.to_string(),
         base_mva,
         base_frequency: crate::network::DEFAULT_BASE_FREQUENCY,
@@ -142,7 +142,7 @@ fn build_case<'a>(name: &str, get: impl Fn(&str) -> Option<&'a str>) -> Result<B
         areas,
         solver: None,
         source_format: SourceFormat::Matpower,
-    })
+    }))
 }
 
 /// A cheap upper-bound row count for an assignment (one `;` per row), used to

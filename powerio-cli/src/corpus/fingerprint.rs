@@ -71,9 +71,9 @@ pub struct Fingerprint {
 impl Fingerprint {
     #[must_use]
     pub fn of(net: &BalancedNetwork) -> Self {
-        let mut degree: BTreeMap<usize, usize> = net.buses.iter().map(|b| (b.id.0, 0)).collect();
+        let mut degree: BTreeMap<usize, usize> = net.buses().iter().map(|b| (b.id.0, 0)).collect();
         let mut impedances = Vec::new();
-        for br in &net.branches {
+        for br in net.branches() {
             *degree.entry(br.from.0).or_default() += 1;
             *degree.entry(br.to.0).or_default() += 1;
             impedances.push(quantize(br.r.hypot(br.x), IMPEDANCE_QUANTUM));
@@ -82,13 +82,13 @@ impl Fingerprint {
         let mut degrees: Vec<usize> = degree.into_values().collect();
         degrees.sort_unstable();
         Self {
-            buses: net.buses.len(),
-            base_mva: quantize(net.base_mva, BASE_MVA_QUANTUM),
+            buses: net.buses().len(),
+            base_mva: quantize(net.base_mva(), BASE_MVA_QUANTUM),
             degrees,
             impedances,
-            hvdc: net.hvdc.len(),
-            load_p: quantize(net.loads.iter().map(|l| l.p).sum(), POWER_QUANTUM),
-            load_q: quantize(net.loads.iter().map(|l| l.q).sum(), POWER_QUANTUM),
+            hvdc: net.hvdc().len(),
+            load_p: quantize(net.loads().iter().map(|l| l.p).sum(), POWER_QUANTUM),
+            load_q: quantize(net.loads().iter().map(|l| l.q).sum(), POWER_QUANTUM),
         }
     }
 
@@ -103,11 +103,11 @@ impl Fingerprint {
     pub fn of_distribution(net: &powerio_dist::MulticonductorNetwork) -> Self {
         let mut counts: BTreeMap<String, usize> = BTreeMap::new();
         for (a, b) in net
-            .lines
+            .lines()
             .iter()
             .map(|l| (l.bus_from.as_str(), l.bus_to.as_str()))
             .chain(
-                net.switches
+                net.switches()
                     .iter()
                     .map(|s| (s.bus_from.as_str(), s.bus_to.as_str())),
             )
@@ -118,7 +118,7 @@ impl Fingerprint {
         let mut degrees: Vec<usize> = counts.into_values().collect();
         degrees.sort_unstable();
         Self {
-            buses: net.buses.len(),
+            buses: net.buses().len(),
             // A multiconductor network states no system base; the domain in
             // the primary key is what keeps these apart from balanced cases.
             base_mva: 0,
@@ -126,11 +126,11 @@ impl Fingerprint {
             impedances: Vec::new(),
             hvdc: 0,
             load_p: quantize(
-                net.loads.iter().flat_map(|l| l.p_nom.iter()).sum(),
+                net.loads().iter().flat_map(|l| l.p_nom.iter()).sum(),
                 POWER_QUANTUM,
             ),
             load_q: quantize(
-                net.loads.iter().flat_map(|l| l.q_nom.iter()).sum(),
+                net.loads().iter().flat_map(|l| l.q_nom.iter()).sum(),
                 POWER_QUANTUM,
             ),
         }
@@ -195,7 +195,7 @@ fn slack(quantized: i64) -> i64 {
 pub fn same_data(a: &BalancedNetwork, b: &BalancedNetwork) -> bool {
     let branches = |net: &BalancedNetwork| {
         let mut v: Vec<[i64; 5]> = net
-            .branches
+            .branches()
             .iter()
             .map(|br| {
                 [
@@ -212,7 +212,7 @@ pub fn same_data(a: &BalancedNetwork, b: &BalancedNetwork) -> bool {
     };
     let generators = |net: &BalancedNetwork| {
         let mut v: Vec<[i64; 4]> = net
-            .generators
+            .generators()
             .iter()
             .map(|g| {
                 [
@@ -228,7 +228,7 @@ pub fn same_data(a: &BalancedNetwork, b: &BalancedNetwork) -> bool {
     };
     let loads = |net: &BalancedNetwork| {
         let mut v: Vec<[i64; 2]> = net
-            .loads
+            .loads()
             .iter()
             .map(|l| [quantize(l.p, POWER_QUANTUM), quantize(l.q, POWER_QUANTUM)])
             .collect();

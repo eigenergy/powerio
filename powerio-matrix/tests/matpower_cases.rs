@@ -22,9 +22,9 @@ fn fixture(name: &str) -> PathBuf {
 #[test]
 fn case9_parses_correctly() {
     let net = parse_matpower_file(fixture("case9.m")).unwrap();
-    assert_eq!(net.buses.len(), 9);
-    assert_eq!(net.branches.len(), 9);
-    assert!((net.base_mva - 100.0).abs() < 1e-12);
+    assert_eq!(net.buses().len(), 9);
+    assert_eq!(net.branches().len(), 9);
+    assert!((net.base_mva() - 100.0).abs() < 1e-12);
     // case9 buses are contiguous 1..=9.
     let g = IndexedNetwork::new(&net);
     for i in 1..=9 {
@@ -35,14 +35,14 @@ fn case9_parses_correctly() {
 #[test]
 fn case14_parses_correctly() {
     let net = parse_matpower_file(fixture("case14.m")).unwrap();
-    assert_eq!(net.buses.len(), 14);
-    assert!(net.branches.len() >= 20);
+    assert_eq!(net.buses().len(), 14);
+    assert!(net.branches().len() >= 20);
 }
 
 #[test]
 fn case30_parses_correctly() {
     let net = parse_matpower_file(fixture("case30.m")).unwrap();
-    assert_eq!(net.buses.len(), 30);
+    assert_eq!(net.buses().len(), 30);
 }
 
 #[test]
@@ -60,8 +60,8 @@ fn bprime_is_singular_laplacian_on_real_cases() {
             stats.min_dd_margin
         );
         assert!(stats.min_diag > 0.0);
-        assert_eq!(b.rows(), net.buses.len());
-        assert_eq!(b.cols(), net.buses.len());
+        assert_eq!(b.rows(), net.buses().len());
+        assert_eq!(b.cols(), net.buses().len());
     }
 }
 
@@ -72,8 +72,8 @@ fn case2869pegase_bprime_is_asymmetric_and_not_sddm() {
     let b = build_bprime(&view, &BuildOptions::default()).unwrap();
     let stats = MatrixStats::from_csr(&b);
 
-    assert_eq!(b.rows(), net.buses.len());
-    assert_eq!(b.cols(), net.buses.len());
+    assert_eq!(b.rows(), net.buses().len());
+    assert_eq!(b.cols(), net.buses().len());
     assert!(stats.m_matrix_sign, "pegase Bp should keep M-matrix signs");
     assert!(
         !is_symmetric(&b),
@@ -103,13 +103,13 @@ fn ybus_split_matches_complex_invariants() {
     let net = parse_matpower_file(fixture("case14.m")).unwrap();
     let view = IndexedNetwork::new(&net);
     let parts = build_ybus(&view, &BuildOptions::default()).unwrap();
-    assert_eq!(parts.g.rows(), net.buses.len());
-    assert_eq!(parts.b.rows(), net.buses.len());
+    assert_eq!(parts.g.rows(), net.buses().len());
+    assert_eq!(parts.b.rows(), net.buses().len());
     // Without phase shifters case14 should yield symmetric Y_bus.
     let g = parts.g.to_dense();
     let b = parts.b.to_dense();
-    for i in 0..net.buses.len() {
-        for j in (i + 1)..net.buses.len() {
+    for i in 0..net.buses().len() {
+        for j in (i + 1)..net.buses().len() {
             assert!((g[[i, j]] - g[[j, i]]).abs() < 1e-12);
             assert!((b[[i, j]] - b[[j, i]]).abs() < 1e-12);
         }
@@ -125,13 +125,13 @@ fn ybus_invariant_to_normalization_on_case30() {
     // double-scale (~base x) without per_unit_base.
     let raw = parse_matpower_file(fixture("case30.m")).unwrap();
     let norm = raw.to_normalized().unwrap();
-    assert_eq!(norm.buses.len(), raw.buses.len(), "no buses dropped");
+    assert_eq!(norm.buses().len(), raw.buses().len(), "no buses dropped");
     let opts = BuildOptions::default();
     let yr = build_ybus(&IndexedNetwork::new(&raw), &opts).unwrap();
     let yn = build_ybus(&IndexedNetwork::new(&norm), &opts).unwrap();
     let (gr, gn) = (yr.g.to_dense(), yn.g.to_dense());
     let (br, bn) = (yr.b.to_dense(), yn.b.to_dense());
-    let n = raw.buses.len();
+    let n = raw.buses().len();
     for i in 0..n {
         for j in 0..n {
             assert!(
@@ -151,8 +151,8 @@ fn lacpf_block_dimensions() {
     let net = parse_matpower_file(fixture("case14.m")).unwrap();
     let view = IndexedNetwork::new(&net);
     let j = build_lacpf(&view, &BuildOptions::default()).unwrap();
-    assert_eq!(j.rows(), 2 * net.buses.len());
-    assert_eq!(j.cols(), 2 * net.buses.len());
+    assert_eq!(j.rows(), 2 * net.buses().len());
+    assert_eq!(j.cols(), 2 * net.buses().len());
 }
 
 #[test]

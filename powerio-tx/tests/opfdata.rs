@@ -35,30 +35,30 @@ fn parses_official_schema_complete_solved_snapshot() {
     let parsed = parse_file(fixture(), None).unwrap();
     let net = &parsed.network;
 
-    assert_eq!(net.source_format, SourceFormat::DeepMindOpfDataJson);
-    assert_eq!(net.name, "example_0");
-    assert_close(net.base_mva, 100.0);
-    assert_eq!(net.buses.len(), 14);
-    assert_eq!(net.generators.len(), 5);
-    assert_eq!(net.loads.len(), 11);
-    assert_eq!(net.shunts.len(), 1);
-    assert_eq!(net.branches.len(), 20);
+    assert_eq!(net.source_format(), SourceFormat::DeepMindOpfDataJson);
+    assert_eq!(net.name(), "example_0");
+    assert_close(net.base_mva(), 100.0);
+    assert_eq!(net.buses().len(), 14);
+    assert_eq!(net.generators().len(), 5);
+    assert_eq!(net.loads().len(), 11);
+    assert_eq!(net.shunts().len(), 1);
+    assert_eq!(net.branches().len(), 20);
 
-    assert_eq!(net.buses[0].id, BusId(1));
-    assert_eq!(net.buses[0].kind, BusType::Ref);
-    assert_eq!(net.buses[1].kind, BusType::Pv);
-    assert_close(net.buses[0].vm, 1.060_000_010_369_160_5);
-    assert_close(net.buses[0].va, 0.0);
-    assert_close(net.buses[0].vmin, 0.94);
-    assert_close(net.buses[0].vmax, 1.06);
+    assert_eq!(net.buses()[0].id, BusId(1));
+    assert_eq!(net.buses()[0].kind, BusType::Ref);
+    assert_eq!(net.buses()[1].kind, BusType::Pv);
+    assert_close(net.buses()[0].vm, 1.060_000_010_369_160_5);
+    assert_close(net.buses()[0].va, 0.0);
+    assert_close(net.buses()[0].vmin, 0.94);
+    assert_close(net.buses()[0].vmax, 1.06);
 
-    let generator = &net.generators[0];
+    let generator = &net.generators()[0];
     assert_eq!(generator.bus, BusId(1));
     assert_close(generator.pg, 286.070_948_069_333_44);
     assert_close(generator.qg, 3.883_803_174_297_159);
     assert_close(generator.pmin, 0.0);
     assert_close(generator.pmax, 340.0);
-    assert_close(generator.vg, net.buses[0].vm);
+    assert_close(generator.vg, net.buses()[0].vm);
     assert_close(generator.mbase, 100.0);
     let cost = generator.cost.as_ref().unwrap();
     assert_eq!(cost.model, 2);
@@ -67,14 +67,14 @@ fn parses_official_schema_complete_solved_snapshot() {
     assert_close(cost.coeffs[1], 7.920_951);
     assert_close(cost.coeffs[2], 0.0);
 
-    assert_eq!(net.loads[0].bus, BusId(2));
-    assert_close(net.loads[0].p, 20.649_686_030_854_52);
-    assert_close(net.loads[0].q, 14.970_012_102_581_254);
-    assert_eq!(net.shunts[0].bus, BusId(9));
-    assert_close(net.shunts[0].g, 0.0);
-    assert_close(net.shunts[0].b, 19.0);
+    assert_eq!(net.loads()[0].bus, BusId(2));
+    assert_close(net.loads()[0].p, 20.649_686_030_854_52);
+    assert_close(net.loads()[0].q, 14.970_012_102_581_254);
+    assert_eq!(net.shunts()[0].bus, BusId(9));
+    assert_close(net.shunts()[0].g, 0.0);
+    assert_close(net.shunts()[0].b, 19.0);
 
-    let line = &net.branches[0];
+    let line = &net.branches()[0];
     assert_eq!((line.from, line.to), (BusId(1), BusId(2)));
     assert_close(line.r, 0.01938);
     assert_close(line.x, 0.05917);
@@ -92,7 +92,7 @@ fn parses_official_schema_complete_solved_snapshot() {
     assert_close(flow.pt, -194.019_590_717_250_68);
     assert_close(flow.qt, 19.820_585_478_075_1);
 
-    let transformer = &net.branches[17];
+    let transformer = &net.branches()[17];
     assert_eq!((transformer.from, transformer.to), (BusId(4), BusId(7)));
     assert_close(transformer.x, 0.20912);
     assert_close(transformer.tap, 0.978);
@@ -122,7 +122,7 @@ fn detects_aliases_and_echoes_the_official_source_exactly() {
     ] {
         let parsed = parse_str(&source, alias).unwrap();
         assert_eq!(
-            parsed.network.source_format,
+            parsed.network.source_format(),
             SourceFormat::DeepMindOpfDataJson
         );
     }
@@ -139,10 +139,10 @@ fn converts_to_classical_json_and_matpower_with_fidelity_warnings() {
     let back = parse_str(&power_models.text, "powermodels-json")
         .unwrap()
         .network;
-    assert_eq!(back.buses.len(), 14);
-    assert_eq!(back.generators.len(), 5);
-    assert_eq!(back.branches.len(), 20);
-    assert_close(back.generators[0].pg, 286.070_948_069_333_44);
+    assert_eq!(back.buses().len(), 14);
+    assert_eq!(back.generators().len(), 5);
+    assert_eq!(back.branches().len(), 20);
+    assert_close(back.generators()[0].pg, 286.070_948_069_333_44);
     assert!(
         power_models
             .rendered_diagnostics()
@@ -215,8 +215,8 @@ fn accepts_variable_fulltop_and_n_minus_one_element_counts() {
         }
     });
     let parsed = parse_str(&line_outage, "opfdata").unwrap();
-    assert_eq!(parsed.network.generators.len(), 5);
-    assert_eq!(parsed.network.branches.len(), 19);
+    assert_eq!(parsed.network.generators().len(), 5);
+    assert_eq!(parsed.network.branches().len(), 19);
     assert!(
         !parsed
             .rendered_diagnostics()
@@ -254,8 +254,8 @@ fn accepts_variable_fulltop_and_n_minus_one_element_counts() {
         recompute_objective(value);
     });
     let parsed = parse_str(&generator_outage, "opfdata").unwrap();
-    assert_eq!(parsed.network.generators.len(), 4);
-    assert_eq!(parsed.network.branches.len(), 20);
+    assert_eq!(parsed.network.generators().len(), 4);
+    assert_eq!(parsed.network.branches().len(), 20);
     assert!(
         !parsed
             .rendered_diagnostics()
@@ -273,7 +273,7 @@ fn maps_general_quadratic_costs_from_per_unit_to_mw() {
         recompute_objective(value);
     });
     let parsed = parse_str(&source, "opfdata").unwrap();
-    let cost = parsed.network.generators[0].cost.as_ref().unwrap();
+    let cost = parsed.network.generators()[0].cost.as_ref().unwrap();
     assert_close(cost.coeffs[0], 0.01);
     assert_close(cost.coeffs[1], 2.0);
     assert_close(cost.coeffs[2], 3.0);

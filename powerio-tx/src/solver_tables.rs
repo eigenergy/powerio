@@ -327,12 +327,12 @@ impl NormalizedSolverTables {
 
         Ok(Self {
             pass: NORMALIZED_SOLVER_TABLES_PASS.to_string(),
-            network_name: net.name.clone(),
-            base_mva: net.base_mva,
-            base_frequency: net.base_frequency,
+            network_name: net.name().clone(),
+            base_mva: net.base_mva(),
+            base_frequency: net.base_frequency(),
             units: SolverTableUnits::default(),
             index: SolverTableIndex {
-                bus_ids: net.buses.iter().map(|b| b.id).collect(),
+                bus_ids: net.buses().iter().map(|b| b.id).collect(),
                 reference_bus_indices: view.reference_bus_indices(),
                 component_labels: view.connected_component_labels(),
                 branch_from_arc_indices: branch_arcs.branch_from_arc_indices,
@@ -379,7 +379,7 @@ fn normalized_for_solver(
 
 fn bus_rows(view: &IndexedNetwork<'_>, provenance: &NormalizeSourceRows) -> Vec<SolverBusRow> {
     view.network()
-        .buses
+        .buses()
         .iter()
         .enumerate()
         .map(|(i, bus)| SolverBusRow {
@@ -409,7 +409,7 @@ fn load_rows(
     provenance: &NormalizeSourceRows,
 ) -> Result<Vec<SolverLoadRow>> {
     view.network()
-        .loads
+        .loads()
         .iter()
         .enumerate()
         .map(|(i, load)| {
@@ -430,7 +430,7 @@ fn shunt_rows(
     provenance: &NormalizeSourceRows,
 ) -> Result<Vec<SolverShuntRow>> {
     view.network()
-        .shunts
+        .shunts()
         .iter()
         .enumerate()
         .map(|(i, shunt)| {
@@ -457,11 +457,11 @@ fn branch_and_arc_rows(
     provenance: &NormalizeSourceRows,
 ) -> Result<BranchArcRows> {
     let net = view.network();
-    let mut branch_from_arc_indices = Vec::with_capacity(net.branches.len());
-    let mut branch_to_arc_indices = Vec::with_capacity(net.branches.len());
-    let mut arcs = Vec::with_capacity(net.branches.len() * 2);
+    let mut branch_from_arc_indices = Vec::with_capacity(net.branches().len());
+    let mut branch_to_arc_indices = Vec::with_capacity(net.branches().len());
+    let mut arcs = Vec::with_capacity(net.branches().len() * 2);
     let branches = net
-        .branches
+        .branches()
         .iter()
         .enumerate()
         .map(|(i, branch)| {
@@ -535,7 +535,7 @@ fn switch_rows(
     provenance: &NormalizeSourceRows,
 ) -> Result<Vec<SolverSwitchRow>> {
     view.network()
-        .switches
+        .switches()
         .iter()
         .enumerate()
         .map(|(i, switch)| {
@@ -561,7 +561,7 @@ fn generator_rows(
     provenance: &NormalizeSourceRows,
 ) -> Result<Vec<SolverGeneratorRow>> {
     view.network()
-        .generators
+        .generators()
         .iter()
         .enumerate()
         .map(|(i, generator)| {
@@ -592,9 +592,9 @@ fn storage_rows(
     view: &IndexedNetwork<'_>,
     provenance: &NormalizeSourceRows,
 ) -> Result<Vec<SolverStorageRow>> {
-    let base_mva = view.network().base_mva;
+    let base_mva = view.network().base_mva();
     view.network()
-        .storage
+        .storage()
         .iter()
         .enumerate()
         .map(|(i, storage)| {
@@ -628,7 +628,7 @@ fn hvdc_rows(
     provenance: &NormalizeSourceRows,
 ) -> Result<Vec<SolverHvdcRow>> {
     view.network()
-        .hvdc
+        .hvdc()
         .iter()
         .enumerate()
         .map(|(i, hvdc)| hvdc_row(view, provenance, i, hvdc))
@@ -641,7 +641,7 @@ fn hvdc_row(
     i: usize,
     hvdc: &Hvdc,
 ) -> Result<SolverHvdcRow> {
-    let base_mva = view.network().base_mva;
+    let base_mva = view.network().base_mva();
     Ok(SolverHvdcRow {
         index: i,
         source_row: provenance.hvdc[i],
@@ -786,7 +786,7 @@ mod tests {
             ],
             vec![branch(1, 2, true), branch(1, 3, true), branch(1, 2, false)],
         );
-        net.loads.push(Load {
+        net.loads_mut().push(Load {
             bus: BusId(2),
             p: 10.0,
             q: 5.0,
@@ -795,7 +795,7 @@ mod tests {
             uid: None,
             extras: Extras::new(),
         });
-        net.loads.push(Load {
+        net.loads_mut().push(Load {
             bus: BusId(3),
             p: 99.0,
             q: 99.0,
@@ -804,10 +804,9 @@ mod tests {
             uid: None,
             extras: Extras::new(),
         });
-        net.generators.push(generator(1, true));
-        net.generators.push(generator(2, false));
-        net.source_format = SourceFormat::Matpower;
-
+        net.generators_mut().push(generator(1, true));
+        net.generators_mut().push(generator(2, false));
+        *net.source_format_mut() = SourceFormat::Matpower;
         let tables = net.to_normalized_solver_tables().unwrap();
 
         assert_eq!(tables.index.bus_ids, vec![BusId(1), BusId(2)]);
@@ -841,7 +840,7 @@ mod tests {
             ],
             vec![branch(1, 2, true), branch(1, 3, false)],
         );
-        net.loads.push(Load {
+        net.loads_mut().push(Load {
             bus: BusId(2),
             p: 0.1,
             q: 0.05,
@@ -850,7 +849,7 @@ mod tests {
             uid: None,
             extras: Extras::new(),
         });
-        net.loads.push(Load {
+        net.loads_mut().push(Load {
             bus: BusId(3),
             p: 0.2,
             q: 0.1,
@@ -859,10 +858,9 @@ mod tests {
             uid: None,
             extras: Extras::new(),
         });
-        net.generators.push(generator(1, false));
-        net.generators.push(generator(2, true));
-        net.source_format = SourceFormat::Normalized;
-
+        net.generators_mut().push(generator(1, false));
+        net.generators_mut().push(generator(2, true));
+        *net.source_format_mut() = SourceFormat::Normalized;
         let tables = net.to_normalized_solver_tables().unwrap();
 
         assert_eq!(
@@ -895,8 +893,8 @@ mod tests {
             vec![bus(1, BusType::Ref), bus(2, BusType::Pq)],
             Vec::new(),
         );
-        net.generators.push(generator(1, true));
-        net.storage.push(Storage {
+        net.generators_mut().push(generator(1, true));
+        net.storage_mut().push(Storage {
             bus: BusId(2),
             ps: 30.0,
             qs: -10.0,
@@ -918,7 +916,7 @@ mod tests {
             uid: None,
             extras: Extras::new(),
         });
-        net.hvdc.push(Hvdc {
+        net.hvdc_mut().push(Hvdc {
             from: BusId(1),
             to: BusId(2),
             in_service: true,

@@ -36,10 +36,10 @@ fn check(label: &str, path: &Path, expect: &Expect) {
             generators,
         } => {
             let net = outcome.unwrap_or_else(|e| panic!("{label}: expected a decode, got: {e}"));
-            assert_eq!(net.buses.len(), *buses, "{label} buses");
-            assert_eq!(net.branches.len(), *branches, "{label} branches");
+            assert_eq!(net.buses().len(), *buses, "{label} buses");
+            assert_eq!(net.branches().len(), *branches, "{label} branches");
             if let Some(generators) = generators {
-                assert_eq!(net.generators.len(), *generators, "{label} generators");
+                assert_eq!(net.generators().len(), *generators, "{label} generators");
             }
         }
         Expect::Rejected { evidence } => {
@@ -48,8 +48,8 @@ fn check(label: &str, path: &Path, expect: &Expect) {
                 Ok(net) => panic!(
                     "{label}: expected a rejection, decoded {} buses / {} branches; \
                      promote it in the coverage matrix",
-                    net.buses.len(),
-                    net.branches.len()
+                    net.buses().len(),
+                    net.branches().len()
                 ),
             };
             assert!(

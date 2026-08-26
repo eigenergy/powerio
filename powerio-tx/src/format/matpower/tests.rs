@@ -32,20 +32,20 @@ mpc.branch = [
 #[allow(clippy::float_cmp)]
 fn parses_tiny_case() {
     let net = parse_mpc(CASE_TINY).expect("parse tiny");
-    assert_eq!(net.name, "tiny");
-    assert_eq!(net.base_mva, 100.0);
-    assert_eq!(net.buses.len(), 3);
-    assert_eq!(net.branches.len(), 2);
+    assert_eq!(net.name(), "tiny");
+    assert_eq!(net.base_mva(), 100.0);
+    assert_eq!(net.buses().len(), 3);
+    assert_eq!(net.branches().len(), 2);
     // First bus has zero demand, so it produces no load; buses 2 and 3 do.
-    assert_eq!(net.buses[0].id, BusId(1));
-    assert_eq!(net.loads.len(), 2);
-    assert!(net.loads.iter().all(|l| l.bus != BusId(1)));
+    assert_eq!(net.buses()[0].id, BusId(1));
+    assert_eq!(net.loads().len(), 2);
+    assert!(net.loads().iter().all(|l| l.bus != BusId(1)));
     // Branch 0: 1->2, r=0.02, x=0.06, in service.
-    assert_eq!(net.branches[0].from, BusId(1));
-    assert_eq!(net.branches[0].to, BusId(2));
-    assert!((net.branches[0].r - 0.02).abs() < 1e-12);
-    assert!((net.branches[0].x - 0.06).abs() < 1e-12);
-    assert!(net.branches[0].in_service);
+    assert_eq!(net.branches()[0].from, BusId(1));
+    assert_eq!(net.branches()[0].to, BusId(2));
+    assert!((net.branches()[0].r - 0.02).abs() < 1e-12);
+    assert!((net.branches()[0].x - 0.06).abs() < 1e-12);
+    assert!(net.branches()[0].in_service);
 }
 
 #[test]
@@ -62,7 +62,7 @@ mpc.branch = [
 ];
 ";
     let net = parse_mpc(src).expect("parse sparse-ids");
-    assert_eq!(net.buses.len(), 2);
+    assert_eq!(net.buses().len(), 2);
     let g = IndexedNetwork::new(&net);
     assert_eq!(g.bus_index(BusId(7)), Some(0));
     assert_eq!(g.bus_index(BusId(42)), Some(1));
@@ -119,8 +119,8 @@ mpc.storage = [
 ];
 ";
     let net = parse_mpc(src).expect("parse storage");
-    assert_eq!(net.storage.len(), 2);
-    let s = &net.storage[0];
+    assert_eq!(net.storage().len(), 2);
+    let s = &net.storage()[0];
     assert_eq!(s.bus, BusId(4));
     assert!((s.energy - 1.0).abs() < 1e-12);
     assert!((s.energy_rating - 600.0).abs() < 1e-12);
@@ -129,13 +129,13 @@ mpc.storage = [
     assert!((s.qmin - (-1000.0)).abs() < 1e-12);
     assert!((s.x - 0.01).abs() < 1e-12);
     assert!(s.in_service);
-    assert!(!net.storage[1].in_service);
+    assert!(!net.storage()[1].in_service);
 }
 
 #[test]
 fn absent_storage_is_empty() {
     let net = parse_mpc(CASE_TINY).expect("parse tiny");
-    assert!(net.storage.is_empty());
+    assert!(net.storage().is_empty());
 }
 
 #[test]
@@ -212,7 +212,7 @@ fn accepts_last_row_without_trailing_semicolon() {
                \t1 2 0.01 0.05 0.02 0 0 0 0 0 1 -360 360;\n\
                ];\n";
     let net = parse_mpc(src).expect("closed matrix with unterminated last row");
-    assert_eq!(net.buses.len(), 2);
+    assert_eq!(net.buses().len(), 2);
 }
 
 #[test]
@@ -223,11 +223,10 @@ fn parsed_case_keeps_source_in_memory_case_does_not() {
     // always emits canonical text, whatever the network's origin.
     let parsed = parse_mpc(CASE_TINY).expect("parse tiny");
     let mut built = parsed.clone();
-    built.source_format = SourceFormat::InMemory;
-    // Canonical output is parseable and keeps the headline values.
+    *built.source_format_mut() = SourceFormat::InMemory; // Canonical output is parseable and keeps the headline values.
     let reparsed = parse_mpc(&write_matpower(&built)).expect("canonical reparses");
-    assert_eq!(reparsed.base_mva, 100.0);
-    assert_eq!(reparsed.buses.len(), built.buses.len());
+    assert_eq!(reparsed.base_mva(), 100.0);
+    assert_eq!(reparsed.buses().len(), built.buses().len());
 }
 
 #[test]
@@ -242,8 +241,8 @@ mpc.branch = [
 ];
 ";
     let net = parse_mpc(src).expect("NaN/Inf should parse");
-    assert!(net.branches[0].angmin.is_nan());
-    assert!(net.branches[0].angmax.is_infinite());
+    assert!(net.branches()[0].angmin.is_nan());
+    assert!(net.branches()[0].angmax.is_infinite());
 }
 
 #[test]
@@ -272,8 +271,8 @@ mpc.gencost = [
 ];
 ";
     let net = parse_mpc(src).expect("parse mixed gencost");
-    let c0 = net.generators[0].cost.as_ref().unwrap();
-    let c1 = net.generators[1].cost.as_ref().unwrap();
+    let c0 = net.generators()[0].cost.as_ref().unwrap();
+    let c1 = net.generators()[1].cost.as_ref().unwrap();
     // Piecewise: 2·ncost = 6 breakpoint values; polynomial: ncost = 2 coefficients
     // (the four padding zeros are dropped, not read as degree-2..5 terms).
     assert_eq!((c0.model, c0.coeffs.len()), (1, 6));
@@ -282,7 +281,7 @@ mpc.gencost = [
 
     // Canonical write pads both gencost rows to the same width.
     let mut built = net.clone();
-    built.source_format = SourceFormat::InMemory;
+    *built.source_format_mut() = SourceFormat::InMemory;
     let text = write_matpower(&built);
     let rows: Vec<usize> = text
         .lines()
@@ -296,11 +295,11 @@ mpc.gencost = [
     // And it re-parses to the same trimmed costs.
     let reparsed = parse_mpc(&text).expect("canonical mixed gencost reparses");
     assert_eq!(
-        reparsed.generators[0].cost.as_ref().unwrap().coeffs.len(),
+        reparsed.generators()[0].cost.as_ref().unwrap().coeffs.len(),
         6
     );
     assert_eq!(
-        reparsed.generators[1].cost.as_ref().unwrap().coeffs.len(),
+        reparsed.generators()[1].cost.as_ref().unwrap().coeffs.len(),
         2
     );
 }
@@ -318,20 +317,19 @@ fn piecewise_gencost_constructor_counts_breakpoints() {
         ],
         vec![Branch::new(BusId(1), BusId(2), 0.01, 0.1)],
     );
-    net.generators = vec![generator];
-
-    let cost = net.generators[0].cost.as_ref().unwrap();
+    *net.generators_mut() = vec![generator];
+    let cost = net.generators()[0].cost.as_ref().unwrap();
     assert_eq!(cost.ncost, 2);
     assert_eq!(cost.coeffs, vec![0.0, 0.0, 1.0, 1.0]);
 
     let restored = BalancedNetwork::from_json(&net.to_json().unwrap()).unwrap();
-    let restored_cost = restored.generators[0].cost.as_ref().unwrap();
+    let restored_cost = restored.generators()[0].cost.as_ref().unwrap();
     assert_eq!(restored_cost.ncost, 2);
     assert_eq!(restored_cost.coeffs, vec![0.0, 0.0, 1.0, 1.0]);
 
     let text = write_matpower(&net);
     let reparsed = parse_mpc(&text).expect("constructor PWL cost should reparse");
-    let reparsed_cost = reparsed.generators[0].cost.as_ref().unwrap();
+    let reparsed_cost = reparsed.generators()[0].cost.as_ref().unwrap();
     assert_eq!(reparsed_cost.model, 1);
     assert_eq!(reparsed_cost.ncost, 2);
     assert_eq!(reparsed_cost.coeffs, vec![0.0, 0.0, 1.0, 1.0]);
@@ -369,9 +367,9 @@ fn a_bus_name_never_breaks_the_cell_array() {
     let mut net = BalancedNetwork::new("names", 100.0);
     let mut bus = Bus::new(BusId(1), BusType::Ref, 345.0);
     bus.name = Some("SUB A\nEVIL'X".to_string());
-    net.buses.push(bus);
-    net.buses.push(Bus::new(BusId(2), BusType::Pq, 345.0));
-    net.branches
+    net.buses_mut().push(bus);
+    net.buses_mut().push(Bus::new(BusId(2), BusType::Pq, 345.0));
+    net.branches_mut()
         .push(Branch::new(BusId(1), BusId(2), 0.01, 0.1));
 
     let text = write_matpower(&net);
@@ -397,14 +395,15 @@ fn a_bus_name_never_breaks_the_cell_array() {
 #[test]
 fn zero_padded_capability_columns_are_declared() {
     let mut net = BalancedNetwork::new("caps", 100.0);
-    net.buses.push(Bus::new(BusId(1), BusType::Ref, 345.0));
-    net.buses.push(Bus::new(BusId(2), BusType::Pv, 345.0));
-    net.branches
+    net.buses_mut()
+        .push(Bus::new(BusId(1), BusType::Ref, 345.0));
+    net.buses_mut().push(Bus::new(BusId(2), BusType::Pv, 345.0));
+    net.branches_mut()
         .push(Branch::new(BusId(1), BusId(2), 0.01, 0.1));
     let mut stated = Generator::new(BusId(1));
     stated.caps[0] = Some(12.5);
-    net.generators.push(stated);
-    net.generators.push(Generator::new(BusId(2)));
+    net.generators_mut().push(stated);
+    net.generators_mut().push(Generator::new(BusId(2)));
 
     let warnings = crate::format::write_conversion(&net, crate::format::TargetFormat::Matpower)
         .unwrap()
@@ -417,7 +416,7 @@ fn zero_padded_capability_columns_are_declared() {
     // A network where no generator states caps keeps the 10-column row and
     // says nothing.
     let mut plain = net.clone();
-    plain.generators[0].caps = [None; 11];
+    plain.generators_mut()[0].caps = [None; 11];
     let warnings = crate::format::write_conversion(&plain, crate::format::TargetFormat::Matpower)
         .unwrap()
         .rendered_diagnostics();
@@ -434,20 +433,21 @@ fn zero_padded_capability_columns_are_declared() {
 #[test]
 fn an_out_of_service_load_does_not_become_live_demand() {
     let mut net = BalancedNetwork::new("oos", 100.0);
-    net.buses.push(Bus::new(BusId(1), BusType::Ref, 345.0));
-    net.buses.push(Bus::new(BusId(2), BusType::Pq, 345.0));
-    net.branches
+    net.buses_mut()
+        .push(Bus::new(BusId(1), BusType::Ref, 345.0));
+    net.buses_mut().push(Bus::new(BusId(2), BusType::Pq, 345.0));
+    net.branches_mut()
         .push(Branch::new(BusId(1), BusId(2), 0.01, 0.1));
     let mut idle = crate::network::Load::new(BusId(2), 90.0, 30.0);
     idle.in_service = false;
-    net.loads.push(idle);
-    net.loads
+    net.loads_mut().push(idle);
+    net.loads_mut()
         .push(crate::network::Load::new(BusId(2), 10.0, 5.0));
 
     let conversion =
         crate::format::write_conversion(&net, crate::format::TargetFormat::Matpower).unwrap();
     let back = parse_mpc(&conversion.text).unwrap();
-    let demand: f64 = back.loads.iter().map(|l| l.p).sum();
+    let demand: f64 = back.loads().iter().map(|l| l.p).sum();
     assert!(
         (demand - 10.0).abs() < 1e-9,
         "only the in-service load may reach the bus row, got {demand} MW"
@@ -465,28 +465,28 @@ fn an_out_of_service_load_does_not_become_live_demand() {
 #[test]
 fn areas_survive_the_canonical_round_trip() {
     let mut net = parse_mpc(CASE_TINY).unwrap();
-    net.source_format = SourceFormat::InMemory;
-    net.areas.push(crate::network::Area {
+    *net.source_format_mut() = SourceFormat::InMemory;
+    net.areas_mut().push(crate::network::Area {
         slack_bus: Some(BusId(1)),
         ..crate::network::Area::new(7)
     });
-    net.areas.push(crate::network::Area::new(9));
+    net.areas_mut().push(crate::network::Area::new(9));
 
     let text = write_matpower(&net);
     assert!(text.contains("mpc.areas"), "areas block missing:\n{text}");
     let back = parse_mpc(&text).unwrap();
-    assert_eq!(back.areas.len(), 2);
-    assert_eq!(back.areas[0].number, 7);
-    assert_eq!(back.areas[0].slack_bus, Some(BusId(1)));
-    assert_eq!(back.areas[1].number, 9);
-    assert_eq!(back.areas[1].slack_bus, None, "refbus 0 reads as none");
+    assert_eq!(back.areas().len(), 2);
+    assert_eq!(back.areas()[0].number, 7);
+    assert_eq!(back.areas()[0].slack_bus, Some(BusId(1)));
+    assert_eq!(back.areas()[1].number, 9);
+    assert_eq!(back.areas()[1].slack_bus, None, "refbus 0 reads as none");
 }
 
 #[test]
 fn an_area_name_or_interchange_is_a_declared_drop() {
     let mut net = parse_mpc(CASE_TINY).unwrap();
-    net.source_format = SourceFormat::InMemory;
-    net.areas.push(crate::network::Area {
+    *net.source_format_mut() = SourceFormat::InMemory;
+    net.areas_mut().push(crate::network::Area {
         name: Some("west".into()),
         net_interchange: 12.5,
         ..crate::network::Area::new(1)

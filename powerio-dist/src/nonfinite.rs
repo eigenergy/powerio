@@ -176,20 +176,20 @@ mod tests {
         let mut net = MulticonductorNetwork::named("nf");
         let mut code = DistLineCode::new("lc", vec![vec![0.1]], vec![vec![0.2]]);
         code.i_max = Some(vec![f64::INFINITY, 400.0]);
-        net.linecodes.push(code);
+        net.linecodes_mut().push(code);
 
         let text = serde_json::to_string(&net).unwrap();
         assert!(text.contains(r#""i_max":["Infinity",400.0]"#), "{text}");
 
         let back: MulticonductorNetwork = serde_json::from_str(&text).unwrap();
-        assert_eq!(back.linecodes[0].i_max, Some(vec![f64::INFINITY, 400.0]));
+        assert_eq!(back.linecodes()[0].i_max, Some(vec![f64::INFINITY, 400.0]));
         assert_eq!(serde_json::to_string(&back).unwrap(), text);
 
         // A pre-0.9 writer spelled the element `null`; the role default
         // (+Inf for an ampacity) still applies on read.
         let legacy = text.replace(r#""i_max":["Infinity",400.0]"#, r#""i_max":[null,400.0]"#);
         let back: MulticonductorNetwork = serde_json::from_str(&legacy).unwrap();
-        assert_eq!(back.linecodes[0].i_max, Some(vec![f64::INFINITY, 400.0]));
+        assert_eq!(back.linecodes()[0].i_max, Some(vec![f64::INFINITY, 400.0]));
     }
 
     /// A required field spelled `null` for a nonfinite value is still required:

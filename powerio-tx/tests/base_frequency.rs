@@ -28,11 +28,11 @@ fn psse_base_frequency_round_trips() {
         0 / END OF BUS DATA, BEGIN LOAD DATA\n\
         Q\n";
     let net = parse_psse(raw).unwrap();
-    assert_eq!(net.base_frequency, 50.0);
+    assert_eq!(net.base_frequency(), 50.0);
 
     let text = write_psse(&net).text;
     let reparsed = parse_psse(&text).unwrap();
-    assert_eq!(reparsed.base_frequency, 50.0);
+    assert_eq!(reparsed.base_frequency(), 50.0);
 }
 
 /// A PSS/E header without `BASFRQ` (the short `SBASE, title` form) defaults to 60.
@@ -42,7 +42,7 @@ fn psse_missing_base_frequency_defaults_to_sixty() {
         1,'B1          ', 230.0,3,1,1,1,1.0,0.0,1.1,0.9,1.1,0.9\n\
         0 / END OF BUS DATA, BEGIN LOAD DATA\nQ\n";
     let net = parse_psse(raw).unwrap();
-    assert_eq!(net.base_frequency, DEFAULT_BASE_FREQUENCY);
+    assert_eq!(net.base_frequency(), DEFAULT_BASE_FREQUENCY);
 }
 
 /// pandapower labels the file with `f_hz` and computes line charging against it,
@@ -62,17 +62,17 @@ fn pandapower_f_hz_round_trips_with_line_charging() {
         0 / END OF BRANCH DATA, BEGIN TRANSFORMER DATA\n\
         0 / END OF TRANSFORMER DATA, BEGIN AREA DATA\nQ\n";
     let mut net = parse_psse(raw).unwrap();
-    net.base_frequency = 50.0;
-    let b0 = net.branches[0].b;
+    *net.base_frequency_mut() = 50.0;
+    let b0 = net.branches()[0].b;
 
     let pp = write_pandapower_json(&net).text;
     let back = parse_pandapower_json(&pp).unwrap().network;
 
-    assert_eq!(back.base_frequency, 50.0);
+    assert_eq!(back.base_frequency(), 50.0);
     assert!(
-        (back.branches[0].b - b0).abs() < 1e-9,
+        (back.branches()[0].b - b0).abs() < 1e-9,
         "line charging changed across the f_hz hop: {} != {b0}",
-        back.branches[0].b
+        back.branches()[0].b
     );
 }
 
@@ -124,7 +124,7 @@ fn json_transport_round_trips_and_defaults() {
     let net = parse_psse(raw).unwrap();
     let json = net.to_json().unwrap();
     assert_eq!(
-        BalancedNetwork::from_json(&json).unwrap().base_frequency,
+        BalancedNetwork::from_json(&json).unwrap().base_frequency(),
         50.0
     );
 
@@ -135,7 +135,7 @@ fn json_transport_round_trips_and_defaults() {
         v
     };
     let restored = BalancedNetwork::from_json(&without.to_string()).unwrap();
-    assert_eq!(restored.base_frequency, DEFAULT_BASE_FREQUENCY);
+    assert_eq!(restored.base_frequency(), DEFAULT_BASE_FREQUENCY);
 }
 
 /// `parse_str` exposes the same threading for in-memory PSS/E text.
@@ -145,5 +145,5 @@ fn parse_str_psse_reads_frequency() {
         1,'B1          ', 230.0,3,1,1,1,1.0,0.0,1.1,0.9,1.1,0.9\n\
         0 / END OF BUS DATA, BEGIN LOAD DATA\nQ\n";
     let parsed = parse_str(raw, "psse").unwrap();
-    assert_eq!(parsed.network.base_frequency, 50.0);
+    assert_eq!(parsed.network.base_frequency(), 50.0);
 }

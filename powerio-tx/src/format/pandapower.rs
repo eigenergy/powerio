@@ -15,8 +15,8 @@ use super::{
 use crate::diagnostics::codes::EMIT_PANDAPOWER as F;
 use crate::diagnostics::{Diagnostics, codes};
 use crate::network::{
-    BalancedNetwork, Branch, BranchCharging, Bus, BusId, BusType, Extras, GenCost, Generator, Hvdc,
-    Load, LoadVoltageModel, Shunt, SourceFormat, Storage,
+    BalancedNetwork, BalancedNetworkTables, Branch, BranchCharging, Bus, BusId, BusType, Extras,
+    GenCost, Generator, Hvdc, Load, LoadVoltageModel, Shunt, SourceFormat, Storage,
 };
 use crate::{Error, Result};
 
@@ -742,7 +742,7 @@ pub(crate) fn parse_pandapower_source(
         }
     }
 
-    let net = BalancedNetwork {
+    let net = BalancedNetwork::from_tables(BalancedNetworkTables {
         name,
         base_mva,
         base_frequency: f_hz,
@@ -759,7 +759,7 @@ pub(crate) fn parse_pandapower_source(
         areas: Vec::new(),
         solver: None,
         source_format: SourceFormat::PandapowerJson,
-    };
+    });
     net.check_references(FMT)?;
     Ok(net)
 }
@@ -851,7 +851,7 @@ pub fn write_pandapower_json(net: &BalancedNetwork) -> Conversion {
     // The written vn_kv per bus, shared by every frame that rebases impedances
     // or stamps a shunt voltage.
     let kv_of: HashMap<BusId, f64> = net
-        .buses
+        .buses()
         .iter()
         .map(|b| (b.id, written_kv(b.base_kv)))
         .collect();
@@ -864,23 +864,23 @@ pub fn write_pandapower_json(net: &BalancedNetwork) -> Conversion {
         shunt_frame(net, &charging, &kv_of, &mut warnings),
     );
     object.insert("gen".into(), gen_frame(net, &mut warnings));
-    if net.generators.iter().any(|g| g.qg != 0.0) {
+    if net.generators().iter().any(|g| g.qg != 0.0) {
         object.insert("res_gen".into(), res_gen_frame(net, &mut warnings));
     }
     object.insert("ext_grid".into(), ext_grid_frame(net, &mut warnings));
-    if !net.hvdc.is_empty() {
+    if !net.hvdc().is_empty() {
         object.insert("dcline".into(), dcline_frame(net, &mut warnings));
     }
     object.insert("line".into(), line);
     object.insert("trafo".into(), trafo);
     object.insert("poly_cost".into(), poly_cost_frame(net, &mut warnings));
-    object.insert("name".into(), Value::String(net.name.clone()));
+    object.insert("name".into(), Value::String(net.name().clone()));
     // Label the file with the network's own frequency and compute c_nf_per_km
     // against the same value, so a re-read (which divides by the file's f_hz)
     // reconstructs the exact line charging. Defaults to 60 Hz for sources that
     // record none; a pandapower source carries its parsed f_hz back out.
-    object.insert("f_hz".into(), jnum(net.base_frequency));
-    object.insert("sn_mva".into(), jnum(net.base_mva));
+    object.insert("f_hz".into(), jnum(net.base_frequency()));
+    object.insert("sn_mva".into(), jnum(net.base_mva()));
     object.insert("version".into(), Value::String("3.0.0".into()));
     object.insert("format_version".into(), Value::String("3.0.0".into()));
 
@@ -895,14 +895,14 @@ pub fn write_pandapower_json(net: &BalancedNetwork) -> Conversion {
 }
 
 fn warn_pandapower_writer_losses(net: &BalancedNetwork, warnings: &mut Diagnostics) {
-    if !net.transformers_3w.is_empty() {
+    if !net.transformers_3w().is_empty() {
         warnings.push(&F.record_dropped, format!(
             "{} 3-winding transformer(s) dropped: the pandapower JSON writer emits no trafo3w table",
-            net.transformers_3w.len()
+            net.transformers_3w().len()
         ));
     }
     if net
-        .buses
+        .buses()
         .iter()
         .any(|b| b.evhi.is_some() || b.evlo.is_some())
     {
@@ -911,18 +911,18 @@ fn warn_pandapower_writer_losses(net: &BalancedNetwork, warnings: &mut Diagnosti
             "emergency voltage band(s) (EVHI/EVLO) dropped: this writer carries one voltage band",
         );
     }
-    if !net.storage.is_empty() {
+    if !net.storage().is_empty() {
         warnings.push(
             &F.record_dropped,
             format!(
                 "{} storage unit(s) dropped: the pandapower JSON writer does not model storage",
-                net.storage.len()
+                net.storage().len()
             ),
         );
     }
     warn_pandapower_generator_losses(net, warnings);
     warn_pandapower_branch_losses(net, warnings);
-    let no_kv = net.buses.iter().filter(|b| b.base_kv <= 0.0).count();
+    let no_kv = net.buses().iter().filter(|b| b.base_kv <= 0.0).count();
     if no_kv > 0 {
         warnings.push(
             &F.value_defaulted,
@@ -935,19 +935,23 @@ fn warn_pandapower_writer_losses(net: &BalancedNetwork, warnings: &mut Diagnosti
 }
 
 fn warn_pandapower_generator_losses(net: &BalancedNetwork, warnings: &mut Diagnostics) {
-    let with_caps = net.generators.iter().filter(|g| g.has_caps()).count();
+    let with_caps = net.generators().iter().filter(|g| g.has_caps()).count();
     if with_caps > 0 {
         warnings.push(&F.field_dropped, format!("generator capability/ramp columns dropped for {with_caps} generator(s): pandapower gen tables have no MATPOWER capability columns"));
     }
 }
 
 fn warn_pandapower_branch_losses(net: &BalancedNetwork, warnings: &mut Diagnostics) {
-    let constrained = net.branches.iter().filter(|b| b.has_angle_limits()).count();
+    let constrained = net
+        .branches()
+        .iter()
+        .filter(|b| b.has_angle_limits())
+        .count();
     if constrained > 0 {
         warnings.push(&F.field_dropped, format!("{constrained} branch angle limit(s) dropped: pandapower line/trafo tables do not carry MATPOWER angle limits"));
     }
     let rate_bc = net
-        .branches
+        .branches()
         .iter()
         .filter(|b| nonzero_differs(b.rate_b, b.rate_a) || nonzero_differs(b.rate_c, b.rate_a))
         .count();
@@ -957,7 +961,7 @@ fn warn_pandapower_branch_losses(net: &BalancedNetwork, warnings: &mut Diagnosti
         ));
     }
     let current_ratings = net
-        .branches
+        .branches()
         .iter()
         .filter(|b| b.current_ratings.is_some())
         .count();
@@ -968,7 +972,11 @@ fn warn_pandapower_branch_losses(net: &BalancedNetwork, warnings: &mut Diagnosti
     }
     warn_extra_branch_rating_sets(&F, "pandapower JSON", net, warnings);
     super::warn_dropped_areas(&F, "pandapower JSON", net, warnings);
-    let branch_solutions = net.branches.iter().filter(|b| b.solution.is_some()).count();
+    let branch_solutions = net
+        .branches()
+        .iter()
+        .filter(|b| b.solution.is_some())
+        .count();
     if branch_solutions > 0 {
         warnings.push(&F.field_dropped, format!(
             "{branch_solutions} branch solution value set(s) dropped: pandapower branch result tables are not written"
@@ -1000,9 +1008,9 @@ fn bus_frame(net: &BalancedNetwork, warnings: &mut Diagnostics) -> Value {
         "min_vm_pu",
         "max_vm_pu",
     ];
-    let mut index = Vec::with_capacity(net.buses.len());
-    let mut data = Vec::with_capacity(net.buses.len());
-    for b in &net.buses {
+    let mut index = Vec::with_capacity(net.buses().len());
+    let mut data = Vec::with_capacity(net.buses().len());
+    for b in net.buses() {
         index.push(pp_bus(b.id));
         data.push(vec![
             b.name.clone().map_or(Value::Null, Value::String),
@@ -1189,9 +1197,9 @@ fn load_frame(net: &BalancedNetwork, warnings: &mut Diagnostics) -> Value {
         "in_service",
         "type",
     ];
-    let mut index = Vec::with_capacity(net.loads.len());
-    let mut data = Vec::with_capacity(net.loads.len());
-    for l in &net.loads {
+    let mut index = Vec::with_capacity(net.loads().len());
+    let mut data = Vec::with_capacity(net.loads().len());
+    for l in net.loads() {
         let values = load_values_for_pandapower(l, warnings);
         index.push(Value::from(data.len() as u64));
         data.push(vec![
@@ -1230,9 +1238,9 @@ fn shunt_frame(
         "max_step",
         "in_service",
     ];
-    let mut index = Vec::with_capacity(net.shunts.len());
-    let mut data = Vec::with_capacity(net.shunts.len());
-    for s in &net.shunts {
+    let mut index = Vec::with_capacity(net.shunts().len());
+    let mut data = Vec::with_capacity(net.shunts().len());
+    for s in net.shunts() {
         index.push(Value::from(data.len() as u64));
         data.push(vec![
             pp_bus(s.bus),
@@ -1250,8 +1258,8 @@ fn shunt_frame(
         data.push(vec![
             pp_bus(*bus),
             Value::String("trafo charging".into()),
-            jnum(-b_pu * net.base_mva),
-            jnum(g_pu * net.base_mva),
+            jnum(-b_pu * net.base_mva()),
+            jnum(g_pu * net.base_mva()),
             jnum(*kv_of.get(bus).unwrap_or(&1.0)),
             Value::from(1_u64),
             Value::from(1_u64),
@@ -1279,10 +1287,10 @@ fn gen_frame(net: &BalancedNetwork, warnings: &mut Diagnostics) -> Value {
         "min_p_mw",
         "max_p_mw",
     ];
-    let bus_kind: HashMap<BusId, BusType> = net.buses.iter().map(|b| (b.id, b.kind)).collect();
-    let mut index = Vec::with_capacity(net.generators.len());
-    let mut data = Vec::with_capacity(net.generators.len());
-    for g in &net.generators {
+    let bus_kind: HashMap<BusId, BusType> = net.buses().iter().map(|b| (b.id, b.kind)).collect();
+    let mut index = Vec::with_capacity(net.generators().len());
+    let mut data = Vec::with_capacity(net.generators().len());
+    for g in net.generators() {
         index.push(Value::from(data.len() as u64));
         data.push(vec![
             Value::Null,
@@ -1366,14 +1374,14 @@ fn branch_frames(
     let mut trafo_data = Vec::new();
     let mut charging = Vec::new();
     let mut negative_x_trafos = 0usize;
-    for br in &net.branches {
+    for br in net.branches() {
         let v_from = *kv_of.get(&br.from).unwrap_or(&1.0);
         let v_to = *kv_of.get(&br.to).unwrap_or(&1.0);
         // pandapower refers line ohms and max_i_ka to the FROM bus voltage
         // (build_branch._calc_line_parameter); for written lines the two ends
         // agree by the trafo coercion below, but the reader holds the same
         // convention for third party files.
-        let zb = zbase(v_from, net.base_mva);
+        let zb = zbase(v_from, net.base_mva());
         // A branch across two voltage levels must be a trafo even with tap 1:
         // a pandapower line lives on one voltage level, so its ohmic values
         // would be rebased to the wrong vn on import.
@@ -1381,7 +1389,7 @@ fn branch_frames(
             let sn = if br.rate_a > 0.0 {
                 br.rate_a
             } else {
-                net.base_mva
+                net.base_mva()
             };
             let z = (br.r * br.r + br.x * br.x).sqrt();
             let tap = br.effective_tap();
@@ -1421,8 +1429,8 @@ fn branch_frames(
                 jnum(sn),
                 jnum(v_from),
                 jnum(v_to),
-                jnum(vk * sn * 100.0 / net.base_mva),
-                jnum(br.r * sn * 100.0 / net.base_mva),
+                jnum(vk * sn * 100.0 / net.base_mva()),
+                jnum(br.r * sn * 100.0 / net.base_mva()),
                 jnum(0.0),
                 jnum(0.0),
                 jnum(br.shift),
@@ -1457,7 +1465,7 @@ fn branch_frames(
                 jnum(br.r * zb),
                 jnum(br.x * zb),
                 jnum(
-                    terminal.total_b() / zb / (2.0 * std::f64::consts::PI * net.base_frequency)
+                    terminal.total_b() / zb / (2.0 * std::f64::consts::PI * net.base_frequency())
                         * 1e9,
                 ),
                 jnum((terminal.g_fr + terminal.g_to) / zb * 1e6),
@@ -1494,9 +1502,9 @@ fn branch_frames(
 /// pandapower net states it and where the reader takes it back.
 fn res_gen_frame(net: &BalancedNetwork, warnings: &mut Diagnostics) -> Value {
     let columns = ["p_mw", "q_mvar"];
-    let mut index = Vec::with_capacity(net.generators.len());
-    let mut data = Vec::with_capacity(net.generators.len());
-    for g in &net.generators {
+    let mut index = Vec::with_capacity(net.generators().len());
+    let mut data = Vec::with_capacity(net.generators().len());
+    for g in net.generators() {
         index.push(Value::from(data.len() as u64));
         data.push(vec![jnum(g.pg), jnum(g.qg)]);
     }
@@ -1535,7 +1543,7 @@ fn dcline_frame(net: &BalancedNetwork, warnings: &mut Diagnostics) -> Value {
     // dcline terminal claims, and every later conflicting terminal is coerced
     // to the claimed value and counted into a warning.
     let mut claimed: HashMap<BusId, f64> = HashMap::new();
-    for g in net.generators.iter().filter(|g| g.in_service) {
+    for g in net.generators().iter().filter(|g| g.in_service) {
         claimed.entry(g.bus).or_insert(g.vg);
     }
     let mut coerced = 0usize;
@@ -1546,9 +1554,9 @@ fn dcline_frame(net: &BalancedNetwork, warnings: &mut Diagnostics) -> Value {
         }
         held
     };
-    let mut index = Vec::with_capacity(net.hvdc.len());
-    let mut data = Vec::with_capacity(net.hvdc.len());
-    for d in &net.hvdc {
+    let mut index = Vec::with_capacity(net.hvdc().len());
+    let mut data = Vec::with_capacity(net.hvdc().len());
+    for d in net.hvdc() {
         let vf = terminal(d.from, d.vf);
         let vt = terminal(d.to, d.vt);
         index.push(Value::from(data.len() as u64));
@@ -1574,14 +1582,14 @@ fn dcline_frame(net: &BalancedNetwork, warnings: &mut Diagnostics) -> Value {
             "{coerced} dcline terminal voltage setpoint(s) coerced to the bus's controlling setpoint: pandapower enforces one voltage setpoint per bus"
         ));
     }
-    let floors = net.hvdc.iter().filter(|d| d.pmin != 0.0).count();
+    let floors = net.hvdc().iter().filter(|d| d.pmin != 0.0).count();
     if floors > 0 {
         warnings.push(&F.field_dropped, format!(
             "{floors} dcline sending power floor(s) (pmin) dropped: pandapower dcline caps max_p_mw only"
         ));
     }
     let flows = net
-        .hvdc
+        .hvdc()
         .iter()
         .filter(|d| d.qf != 0.0 || d.qt != 0.0)
         .count();
@@ -1591,7 +1599,7 @@ fn dcline_frame(net: &BalancedNetwork, warnings: &mut Diagnostics) -> Value {
         ));
     }
     let off_model = net
-        .hvdc
+        .hvdc()
         .iter()
         .filter(|d| !d.pt_matches_loss_model(1e-9))
         .count();
@@ -1600,7 +1608,7 @@ fn dcline_frame(net: &BalancedNetwork, warnings: &mut Diagnostics) -> Value {
             "{off_model} dcline received power value(s) dropped: pandapower dcline derives the receiving end from loss_mw/loss_percent, which disagree with the stated pt"
         ));
     }
-    if net.hvdc.iter().any(|d| d.cost.is_some()) {
+    if net.hvdc().iter().any(|d| d.cost.is_some()) {
         warnings.push(
             &F.field_dropped,
             "DC line cost curves dropped: pandapower dcline carries no cost data",
@@ -1623,8 +1631,8 @@ fn ext_grid_frame(net: &BalancedNetwork, warnings: &mut Diagnostics) -> Value {
     let mut data = Vec::new();
     // A Ref bus with no generator gets an ext_grid row so pandapower sees a
     // slack; reading the file back materializes the row as a Ref generator.
-    for b in &net.buses {
-        if b.kind != BusType::Ref || net.generators.iter().any(|g| g.bus == b.id) {
+    for b in net.buses() {
+        if b.kind != BusType::Ref || net.generators().iter().any(|g| g.bus == b.id) {
             continue;
         }
         index.push(Value::from(data.len() as u64));
@@ -1657,7 +1665,7 @@ fn poly_cost_frame(net: &BalancedNetwork, warnings: &mut Diagnostics) -> Value {
     let mut dropped = 0_usize;
     let mut truncated = 0_usize;
     let mut empty = 0_usize;
-    for (i, g) in net.generators.iter().enumerate() {
+    for (i, g) in net.generators().iter().enumerate() {
         let Some(cost) = &g.cost else {
             continue;
         };
@@ -2322,12 +2330,12 @@ mod tests {
         for (id, kv) in [(1, 138.0), (2, 500.0)] {
             let mut bus = crate::network::Bus::new(BusId(id), crate::network::BusType::Pq, 1.0);
             bus.base_kv = kv;
-            net.buses.push(bus);
+            net.buses_mut().push(bus);
         }
-        net.buses[0].kind = crate::network::BusType::Ref;
+        net.buses_mut()[0].kind = crate::network::BusType::Ref;
         let mut br = Branch::new(BusId(1), BusId(2), 0.00044, -0.00422);
         br.tap = 1.06772;
-        net.branches.push(br);
+        net.branches_mut().push(br);
 
         let conv = write_pandapower_json(&net);
         assert!(
@@ -2338,7 +2346,7 @@ mod tests {
             conv.rendered_diagnostics()
         );
         let back = parse_pandapower_json(&conv.text).unwrap().network;
-        let b = &back.branches[0];
+        let b = &back.branches()[0];
         assert!(
             b.x < 0.0,
             "the reactance sign must survive the round trip, got x = {}",
@@ -2364,7 +2372,7 @@ mod tests {
     #[test]
     fn bus_ids_shift_pandas_index_by_one() {
         let parsed = parse_pandapower_json(&pp_net(vec![bus_table(json!([0, 1, 2]))])).unwrap();
-        let ids: Vec<usize> = parsed.network.buses.iter().map(|b| b.id.0).collect();
+        let ids: Vec<usize> = parsed.network.buses().iter().map(|b| b.id.0).collect();
         assert_eq!(ids, vec![1, 2, 3]);
     }
 
@@ -2397,14 +2405,14 @@ mod tests {
         ]);
         let parsed = parse_pandapower_json(&net).unwrap();
         assert_eq!(
-            parsed.network.buses[0].extras.get("vendor_ext"),
+            parsed.network.buses()[0].extras.get("vendor_ext"),
             Some(&json!(42.0))
         );
-        assert!(!parsed.network.buses[0].extras.contains_key("type"));
-        assert!(!parsed.network.buses[0].extras.contains_key("empty"));
-        assert!(parsed.network.buses[1].extras.is_empty());
+        assert!(!parsed.network.buses()[0].extras.contains_key("type"));
+        assert!(!parsed.network.buses()[0].extras.contains_key("empty"));
+        assert!(parsed.network.buses()[1].extras.is_empty());
         assert_eq!(
-            parsed.network.branches[0].extras.get("vector_group"),
+            parsed.network.branches()[0].extras.get("vector_group"),
             Some(&json!("Dyn"))
         );
     }
@@ -2421,7 +2429,7 @@ mod tests {
 
         let parsed = parse_pandapower_json(&root.to_string()).unwrap();
 
-        assert_eq!(parsed.network.buses.len(), 2);
+        assert_eq!(parsed.network.buses().len(), 2);
     }
 
     #[test]
@@ -2532,7 +2540,7 @@ mod tests {
     #[test]
     fn bus_ref_accepts_float_encoded_integer() {
         let parsed = parse_pandapower_json(&pp_net(load_with_bus(json!(1.0)))).unwrap();
-        assert_eq!(parsed.network.loads[0].bus, BusId(2));
+        assert_eq!(parsed.network.loads()[0].bus, BusId(2));
     }
 
     #[test]
@@ -2588,8 +2596,8 @@ mod tests {
         ]))
         .unwrap();
         let net = &parsed.network;
-        assert_eq!(net.generators.len(), 1);
-        let g = &net.generators[0];
+        assert_eq!(net.generators().len(), 1);
+        let g = &net.generators()[0];
         assert_eq!(g.bus, BusId(1));
         assert_eq!(g.pg, 5.0);
         assert_eq!(g.qg, 1.0);
@@ -2600,7 +2608,7 @@ mod tests {
         assert_eq!(g.vg, 1.0);
         assert_eq!(g.mbase, 100.0);
         // sgen is a PQ injection: the bus kind stays untouched.
-        assert_eq!(net.buses[0].kind, BusType::Pq);
+        assert_eq!(net.buses()[0].kind, BusType::Pq);
     }
 
     #[test]
@@ -2633,7 +2641,7 @@ mod tests {
             ),
         ]))
         .unwrap();
-        let st = &parsed.network.storage[0];
+        let st = &parsed.network.storage()[0];
         assert_eq!(st.bus, BusId(1));
         assert_eq!(st.ps, 2.0);
         assert_eq!(st.qs, 0.5);
@@ -2664,7 +2672,7 @@ mod tests {
             ),
         ]))
         .unwrap();
-        let st = &parsed.network.storage[0];
+        let st = &parsed.network.storage()[0];
         assert_eq!(st.charge_rating, 2.5);
         assert_eq!(st.discharge_rating, 2.5);
         assert_eq!(st.thermal_rating, 2.5);
@@ -2701,7 +2709,7 @@ mod tests {
             ),
         ]))
         .unwrap();
-        let d = &parsed.network.hvdc[0];
+        let d = &parsed.network.hvdc()[0];
         assert_eq!(d.from, BusId(1));
         assert_eq!(d.to, BusId(2));
         assert_eq!(d.pf, 2.0);
@@ -2731,7 +2739,7 @@ mod tests {
             ),
         ]))
         .unwrap();
-        let d = &parsed.network.hvdc[0];
+        let d = &parsed.network.hvdc()[0];
         assert_eq!(d.pt, 5.0);
         assert_eq!((d.vf, d.vt), (1.0, 1.0));
         assert_eq!(d.pmax, f64::INFINITY);
@@ -2765,7 +2773,7 @@ mod tests {
         .unwrap();
         // length_km = 4 scales r/x and the charging b (pandapower build_branch
         // multiplies c_nf_per_km by the line length).
-        let br = &parsed.network.branches[0];
+        let br = &parsed.network.branches()[0];
         let zb = 110.0 * 110.0 / 100.0;
         assert!((br.r - 1.0 * 4.0 / zb / 2.0).abs() < 1e-12);
         assert!((br.x - 2.0 * 4.0 / zb / 2.0).abs() < 1e-12);
@@ -2795,7 +2803,7 @@ mod tests {
             json!([0, 1, 50.0, 10.0, 4.0, 2.0]),
         ))
         .unwrap();
-        let br = &parsed.network.branches[0];
+        let br = &parsed.network.branches()[0];
         let r0: f64 = 4.0 * 100.0 / (50.0 * 100.0);
         let z0: f64 = 10.0 * 100.0 / (50.0 * 100.0);
         let x0 = (z0 * z0 - r0 * r0).sqrt();
@@ -2818,7 +2826,7 @@ mod tests {
             json!([0, 1, 10.0, 1.0, 3.0, 2.0]),
         ))
         .unwrap();
-        let br = &parsed.network.branches[0];
+        let br = &parsed.network.branches()[0];
         assert!((br.tap - 1.04).abs() < 1e-12);
     }
 
@@ -2829,7 +2837,7 @@ mod tests {
             json!([0, 1, 10.0]),
         ))
         .unwrap();
-        assert_eq!(parsed.network.branches[0].tap, 1.0);
+        assert_eq!(parsed.network.branches()[0].tap, 1.0);
     }
 
     #[test]
@@ -2848,7 +2856,7 @@ mod tests {
             json!([0, 1, 10.0, "LV", 3.0, 2.0]),
         ))
         .unwrap();
-        let br = &parsed.network.branches[0];
+        let br = &parsed.network.branches()[0];
         assert!((br.tap - 1.0 / 1.06).abs() < 1e-12);
         assert!((br.x - 0.1 * 1.06 * 1.06).abs() < 1e-12);
         assert!(
@@ -2879,7 +2887,7 @@ mod tests {
             json!([0, 1, 10.0, 3.0, 2.0, null]),
         ))
         .unwrap();
-        assert_eq!(parsed.network.branches[0].tap, 1.0);
+        assert_eq!(parsed.network.branches()[0].tap, 1.0);
         assert!(
             !parsed
                 .rendered_diagnostics()
@@ -2897,7 +2905,7 @@ mod tests {
             json!([0, 1, 10.0, 3.0, 2.0, "Ratio"]),
         ))
         .unwrap();
-        assert!((parsed.network.branches[0].tap - 1.06).abs() < 1e-12);
+        assert!((parsed.network.branches()[0].tap - 1.06).abs() < 1e-12);
     }
 
     #[test]
@@ -2909,7 +2917,7 @@ mod tests {
             json!([0, 1, 10.0, 3.0, 2.0, "Ideal"]),
         ))
         .unwrap();
-        let br = &parsed.network.branches[0];
+        let br = &parsed.network.branches()[0];
         assert_eq!(br.tap, 1.0);
         let want = 2.0 * (3.0 * 2.0 / 200.0_f64).asin().to_degrees();
         assert!((br.shift - want).abs() < 1e-12, "{}", br.shift);
@@ -2929,7 +2937,7 @@ mod tests {
             json!([0, 1, 10.0, 2.0, 1.5, "Ideal"]),
         ))
         .unwrap();
-        let br = &parsed.network.branches[0];
+        let br = &parsed.network.branches()[0];
         assert_eq!(br.tap, 1.0);
         assert!((br.shift - 3.0).abs() < 1e-12, "{}", br.shift);
     }
@@ -2949,7 +2957,7 @@ mod tests {
             json!([0, 1, 10.0, 3.0, 2.0, true]),
         ))
         .unwrap();
-        let br = &parsed.network.branches[0];
+        let br = &parsed.network.branches()[0];
         assert_eq!(br.tap, 1.0);
         let want = 2.0 * (3.0 * 2.0 / 200.0_f64).asin().to_degrees();
         assert!((br.shift - want).abs() < 1e-12, "{}", br.shift);
@@ -2962,7 +2970,7 @@ mod tests {
             json!([0, 1, 10.0, 3.0, 2.0, "Tabular"]),
         ))
         .unwrap();
-        assert_eq!(parsed.network.branches[0].tap, 1.0);
+        assert_eq!(parsed.network.branches()[0].tap, 1.0);
         assert!(
             parsed.diagnostics.iter().any(|d| d.message()
                 == "`trafo`: 1 row(s) have a tabular or unrecognized tap changer; those taps were ignored"),
@@ -2995,7 +3003,7 @@ mod tests {
         let parsed = parse_pandapower_json(&text).unwrap();
         let zb = 110.0 * 110.0 / 100.0;
         let want = 100.0e-9 * 2.0 * std::f64::consts::PI * 60.0 * zb;
-        assert!((parsed.network.branches[0].b - want).abs() < 1e-15);
+        assert!((parsed.network.branches()[0].b - want).abs() < 1e-15);
     }
 
     #[test]
@@ -3009,7 +3017,7 @@ mod tests {
             ),
         )]))
         .unwrap();
-        assert_eq!(parsed.network.buses[1].kind, BusType::Isolated);
+        assert_eq!(parsed.network.buses()[1].kind, BusType::Isolated);
         let conv = write_pandapower_json(&parsed.network);
         let bus = written_frame(&conv.text, "bus");
         assert_eq!(col(&bus, "in_service"), vec![json!(true), json!(false)]);
@@ -3031,7 +3039,7 @@ mod tests {
             ),
         ]))
         .unwrap();
-        let s = &parsed.network.shunts[0];
+        let s = &parsed.network.shunts()[0];
         let ratio = (110.0_f64 / 10.0).powi(2);
         assert!((s.g - 2.0 * ratio).abs() < 1e-9);
         assert!((s.b + 5.0 * ratio).abs() < 1e-9);
@@ -3076,7 +3084,7 @@ mod tests {
         // load `sn_mva` is null on purpose (pandapower's default is NaN);
         // a network of finite loads must not trip the non-finite warning.
         let mut net = test_net(vec![test_bus(1, BusType::Ref)]);
-        net.loads.push(Load {
+        net.loads_mut().push(Load {
             bus: BusId(1),
             p: 1.0,
             q: 0.5,
@@ -3102,7 +3110,7 @@ mod tests {
         let mut g = test_gen(1, None);
         g.qmax = f64::INFINITY;
         g.qmin = f64::NEG_INFINITY;
-        net.generators.push(g);
+        net.generators_mut().push(g);
         let conv = write_pandapower_json(&net);
         assert!(
             conv.diagnostics.iter().any(|d| d.message()
@@ -3122,7 +3130,7 @@ mod tests {
             json!([0, 1, 10.0, 110.0, 104.5]),
         ))
         .unwrap();
-        let br = &parsed.network.branches[0];
+        let br = &parsed.network.branches()[0];
         let k: f64 = 104.5 / 110.0;
         assert!((br.tap - 1.0 / k).abs() < 1e-12);
         assert!((br.x - 0.1 * k * k).abs() < 1e-12);
@@ -3177,7 +3185,7 @@ mod tests {
             ),
         ]))
         .unwrap();
-        let cost = parsed.network.generators[0].cost.as_ref().expect("cost");
+        let cost = parsed.network.generators()[0].cost.as_ref().expect("cost");
         assert_eq!(cost.coeffs, vec![0.0, 2.5, 0.0]);
         assert!(
             parsed.diagnostics.iter().any(|d| d.message()
@@ -3237,11 +3245,11 @@ mod tests {
             parsed.rendered_diagnostics()
         );
         assert!(matches!(
-            &parsed.network.loads[0].voltage_model,
+            &parsed.network.loads()[0].voltage_model,
             Some(LoadVoltageModel::Zip { p_constant_impedance, .. }) if *p_constant_impedance == 0.2
         ));
-        assert!(parsed.network.branches[0].terminal_charging().g_fr > 0.0);
-        assert!(parsed.network.branches[1].terminal_charging().b_fr < 0.0);
+        assert!(parsed.network.branches()[0].terminal_charging().g_fr > 0.0);
+        assert!(parsed.network.branches()[1].terminal_charging().b_fr < 0.0);
     }
 
     #[test]
@@ -3274,7 +3282,7 @@ mod tests {
             parsed.rendered_diagnostics()
         );
         assert!(matches!(
-            &parsed.network.loads[0].voltage_model,
+            &parsed.network.loads()[0].voltage_model,
             Some(LoadVoltageModel::Zip { p_constant_impedance, .. }) if *p_constant_impedance == 0.1
         ));
     }
@@ -3302,7 +3310,7 @@ mod tests {
     }
 
     fn test_net(buses: Vec<Bus>) -> BalancedNetwork {
-        BalancedNetwork {
+        BalancedNetwork::from_tables(BalancedNetworkTables {
             name: "t".into(),
             base_mva: 100.0,
             base_frequency: crate::network::DEFAULT_BASE_FREQUENCY,
@@ -3319,7 +3327,7 @@ mod tests {
             areas: Vec::new(),
             solver: None,
             source_format: SourceFormat::InMemory,
-        }
+        })
     }
 
     fn test_gen(bus: usize, cost: Option<GenCost>) -> Generator {
@@ -3396,7 +3404,7 @@ mod tests {
             test_bus(2, BusType::Pq),
             test_bus(3, BusType::Ref),
         ]);
-        net.loads.push(Load {
+        net.loads_mut().push(Load {
             bus: BusId(2),
             p: 1.0,
             q: 0.0,
@@ -3405,11 +3413,11 @@ mod tests {
             uid: None,
             extras: Extras::default(),
         });
-        net.generators.push(test_gen(3, None));
+        net.generators_mut().push(test_gen(3, None));
         // Interleave: line, trafo, line — per table indices must stay contiguous.
-        net.branches.push(test_branch(1, 2, 0.0));
-        net.branches.push(test_branch(2, 3, 1.05));
-        net.branches.push(test_branch(1, 3, 0.0));
+        net.branches_mut().push(test_branch(1, 2, 0.0));
+        net.branches_mut().push(test_branch(2, 3, 1.05));
+        net.branches_mut().push(test_branch(1, 3, 0.0));
         let conv = write_pandapower_json(&net);
 
         let bus = written_frame(&conv.text, "bus");
@@ -3433,18 +3441,18 @@ mod tests {
     #[test]
     fn writer_tapped_trafo_carries_ratio_tap_changer_type() {
         let mut net = test_net(vec![test_bus(1, BusType::Ref), test_bus(2, BusType::Pq)]);
-        net.branches.push(test_branch(1, 2, 1.05));
+        net.branches_mut().push(test_branch(1, 2, 1.05));
         let conv = write_pandapower_json(&net);
         let trafo = written_frame(&conv.text, "trafo");
         assert_eq!(col(&trafo, "tap_changer_type"), vec![json!("Ratio")]);
         let rt = parse_pandapower_json(&conv.text).unwrap();
-        assert!((rt.network.branches[0].tap - 1.05).abs() < 1e-12);
+        assert!((rt.network.branches()[0].tap - 1.05).abs() < 1e-12);
     }
 
     #[test]
     fn writer_zip_load_columns_round_trip() {
         let mut net = test_net(vec![test_bus(1, BusType::Ref)]);
-        net.loads.push(Load {
+        net.loads_mut().push(Load {
             bus: BusId(1),
             p: 10.0,
             q: 5.0,
@@ -3485,7 +3493,7 @@ mod tests {
             q_constant_impedance,
             scaling,
             ..
-        }) = &back.loads[0].voltage_model
+        }) = &back.loads()[0].voltage_model
         else {
             panic!("missing ZIP load after write/read");
         };
@@ -3502,7 +3510,7 @@ mod tests {
         let mut net = test_net(vec![test_bus(1, BusType::Ref), test_bus(2, BusType::Pq)]);
         let mut br = test_branch(1, 2, 1.05);
         br.b = 0.04;
-        net.branches.push(br);
+        net.branches_mut().push(br);
         let conv = write_pandapower_json(&net);
         assert!(
             conv.diagnostics.iter().any(|d| d
@@ -3516,21 +3524,21 @@ mod tests {
         let shunt = written_frame(&conv.text, "shunt");
         assert_eq!(shunt.data.len(), 2);
         let rt = parse_pandapower_json(&conv.text).unwrap();
-        assert_eq!(rt.network.shunts.len(), 2);
-        let total_b: f64 = rt.network.shunts.iter().map(|s| s.b).sum();
+        assert_eq!(rt.network.shunts().len(), 2);
+        let total_b: f64 = rt.network.shunts().iter().map(|s| s.b).sum();
         // Shunt b is MVAr at v = 1 pu (the MATPOWER Bs convention), so the
         // per unit halves scale by base_mva.
         let want = (0.04 / 2.0 / (1.05 * 1.05) + 0.04 / 2.0) * 100.0;
         assert!((total_b - want).abs() < 1e-12, "{total_b}");
-        assert_eq!(rt.network.branches[0].b, 0.0);
+        assert_eq!(rt.network.branches()[0].b, 0.0);
     }
 
     #[test]
     fn writer_substitutes_one_kv_for_zero_base_kv() {
         let mut net = test_net(vec![test_bus(1, BusType::Ref), test_bus(2, BusType::Pq)]);
-        net.buses[0].base_kv = 0.0;
-        net.buses[1].base_kv = 0.0;
-        net.branches.push(test_branch(1, 2, 0.0));
+        net.buses_mut()[0].base_kv = 0.0;
+        net.buses_mut()[1].base_kv = 0.0;
+        net.branches_mut().push(test_branch(1, 2, 0.0));
         let conv = write_pandapower_json(&net);
         let bus = written_frame(&conv.text, "bus");
         assert_eq!(col(&bus, "vn_kv"), vec![json!(1.0), json!(1.0)]);
@@ -3542,7 +3550,7 @@ mod tests {
             conv.rendered_diagnostics()
         );
         let rt = parse_pandapower_json(&conv.text).unwrap();
-        let b = &rt.network.branches[0];
+        let b = &rt.network.branches()[0];
         assert!((b.r - 0.01).abs() < 1e-12);
         assert!((b.x - 0.1).abs() < 1e-12);
     }
@@ -3553,16 +3561,16 @@ mod tests {
         // across two levels must be written as a trafo to keep its ohms on
         // the right vn; the electrical values round trip.
         let mut net = test_net(vec![test_bus(1, BusType::Ref), test_bus(2, BusType::Pq)]);
-        net.buses[0].base_kv = 380.0;
-        net.buses[1].base_kv = 150.0;
+        net.buses_mut()[0].base_kv = 380.0;
+        net.buses_mut()[1].base_kv = 150.0;
         let mut br = test_branch(1, 2, 0.0);
         br.rate_a = 100.0;
-        net.branches.push(br);
+        net.branches_mut().push(br);
         let conv = write_pandapower_json(&net);
         assert!(written_frame(&conv.text, "line").data.is_empty());
         assert_eq!(written_frame(&conv.text, "trafo").data.len(), 1);
         let rt = parse_pandapower_json(&conv.text).unwrap();
-        let b = &rt.network.branches[0];
+        let b = &rt.network.branches()[0];
         assert!((b.r - 0.01).abs() < 1e-12);
         assert!((b.x - 0.1).abs() < 1e-12);
         assert!((b.rate_a - 100.0).abs() < 1e-9);
@@ -3571,7 +3579,7 @@ mod tests {
     #[test]
     fn writer_ext_grid_row_for_generator_less_ref_bus() {
         let mut net = test_net(vec![test_bus(1, BusType::Pq), test_bus(2, BusType::Ref)]);
-        net.buses[1].name = Some("slack".into());
+        net.buses_mut()[1].name = Some("slack".into());
         let conv = write_pandapower_json(&net);
         let eg = written_frame(&conv.text, "ext_grid");
         assert_eq!(eg.index, vec![json!(0)]);
@@ -3592,7 +3600,7 @@ mod tests {
     #[test]
     fn writer_ext_grid_empty_when_ref_bus_has_generator() {
         let mut net = test_net(vec![test_bus(1, BusType::Ref)]);
-        net.generators.push(test_gen(1, None));
+        net.generators_mut().push(test_gen(1, None));
         let conv = write_pandapower_json(&net);
         let eg = written_frame(&conv.text, "ext_grid");
         assert!(eg.data.is_empty());
@@ -3604,7 +3612,7 @@ mod tests {
     #[test]
     fn poly_cost_keeps_lowest_order_terms() {
         let mut net = test_net(vec![test_bus(1, BusType::Ref)]);
-        net.generators
+        net.generators_mut()
             .push(test_gen(1, Some(poly(vec![9.0, 3.0, 2.0, 1.0]))));
         let conv = write_pandapower_json(&net);
         let pc = written_frame(&conv.text, "poly_cost");
@@ -3629,10 +3637,11 @@ mod tests {
             ncost: 2,
             coeffs: vec![0.0, 0.0, 1.0, 1.0],
         };
-        net.generators.push(test_gen(1, Some(piecewise)));
-        net.generators
+        net.generators_mut().push(test_gen(1, Some(piecewise)));
+        net.generators_mut()
             .push(test_gen(1, Some(poly(vec![4.0, 3.0, 2.0, 1.0]))));
-        net.generators.push(test_gen(1, Some(poly(Vec::new()))));
+        net.generators_mut()
+            .push(test_gen(1, Some(poly(Vec::new()))));
         let conv = write_pandapower_json(&net);
         let pc = written_frame(&conv.text, "poly_cost");
         // gen 0 (piecewise) dropped; gens 1 and 2 written with 0-based

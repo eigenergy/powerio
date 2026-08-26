@@ -29,10 +29,10 @@ end
 fn parse_str_accepts_pslf_aliases() {
     for alias in ["pslf", "PSLF", "epc", "EPC", "pslf-epc", "Pslf_Epc"] {
         let parsed = parse_str(EPC, alias).unwrap();
-        assert_eq!(parsed.network.source_format, SourceFormat::Pslf);
-        assert_eq!(parsed.network.buses.len(), 2);
-        assert_eq!(parsed.network.branches.len(), 1);
-        assert_eq!(parsed.network.loads.len(), 1);
+        assert_eq!(parsed.network.source_format(), SourceFormat::Pslf);
+        assert_eq!(parsed.network.buses().len(), 2);
+        assert_eq!(parsed.network.branches().len(), 1);
+        assert_eq!(parsed.network.loads().len(), 1);
     }
 }
 
@@ -43,7 +43,7 @@ fn parse_file_infers_uppercase_epc_extension() {
 
     let parsed = parse_file(&path, None).unwrap();
 
-    assert_eq!(parsed.network.source_format, SourceFormat::Pslf);
+    assert_eq!(parsed.network.source_format(), SourceFormat::Pslf);
 }
 
 #[test]
@@ -53,7 +53,7 @@ fn parse_file_accepts_case_insensitive_pslf_hint() {
 
     for hint in ["PSLF", "EPC", "Pslf_Epc"] {
         let parsed = parse_file(&path, Some(hint)).unwrap();
-        assert_eq!(parsed.network.source_format, SourceFormat::Pslf);
+        assert_eq!(parsed.network.source_format(), SourceFormat::Pslf);
     }
 }
 
@@ -72,25 +72,25 @@ fn pslf_write_read_round_trip_preserves_the_core() {
     let text = write_pslf(&net0).text;
     let net1 = parse_pslf(&text).unwrap();
 
-    assert_eq!(net1.buses.len(), net0.buses.len());
-    assert_eq!(net1.branches.len(), net0.branches.len());
-    assert_eq!(net1.loads.len(), net0.loads.len());
-    assert_eq!(net1.generators.len(), net0.generators.len());
-    assert_eq!(net1.shunts.len(), net0.shunts.len());
+    assert_eq!(net1.buses().len(), net0.buses().len());
+    assert_eq!(net1.branches().len(), net0.branches().len());
+    assert_eq!(net1.loads().len(), net0.loads().len());
+    assert_eq!(net1.generators().len(), net0.generators().len());
+    assert_eq!(net1.shunts().len(), net0.shunts().len());
 
     let sum = |xs: &[f64]| xs.iter().sum::<f64>();
-    let p0 = sum(&net0.loads.iter().map(|l| l.p).collect::<Vec<_>>());
-    let p1 = sum(&net1.loads.iter().map(|l| l.p).collect::<Vec<_>>());
+    let p0 = sum(&net0.loads().iter().map(|l| l.p).collect::<Vec<_>>());
+    let p1 = sum(&net1.loads().iter().map(|l| l.p).collect::<Vec<_>>());
     assert!((p0 - p1).abs() < 1e-9, "load P changed: {p0} != {p1}");
     // The transformer survives the round trip with its tap.
     let tap0 = net0
-        .branches
+        .branches()
         .iter()
         .find(|b| b.is_transformer())
         .unwrap()
         .tap;
     let tap1 = net1
-        .branches
+        .branches()
         .iter()
         .find(|b| b.is_transformer())
         .unwrap()
@@ -124,7 +124,7 @@ fn pslf_write_reports_dropped_transformer_control() {
         1.0, 0\n\
         0 / END OF TRANSFORMER DATA, BEGIN AREA DATA\nQ\n";
     let net = parse_psse(raw).unwrap();
-    assert!(net.branches[0].control.is_some());
+    assert!(net.branches()[0].control.is_some());
 
     let conv = write_pslf(&net);
     assert!(
@@ -152,7 +152,10 @@ fn pslf_write_reports_dropped_generator_regulated_bus() {
         0 / END OF BRANCH DATA, BEGIN TRANSFORMER DATA\n\
         0 / END OF TRANSFORMER DATA, BEGIN AREA DATA\nQ\n";
     let net = parse_psse(raw).unwrap();
-    assert_eq!(net.generators[0].regulated_bus, Some(powerio_tx::BusId(7)));
+    assert_eq!(
+        net.generators()[0].regulated_bus,
+        Some(powerio_tx::BusId(7))
+    );
 
     let conv = write_pslf(&net);
     assert!(
@@ -180,9 +183,9 @@ end
 "#;
     let parsed = parse_str(epc, "pslf").unwrap();
 
-    assert_eq!(parsed.network.generators.len(), 1);
+    assert_eq!(parsed.network.generators().len(), 1);
     assert!(
-        (parsed.network.generators[0].vg - 1.04).abs() < 1e-12,
+        (parsed.network.generators()[0].vg - 1.04).abs() < 1e-12,
         "reg_kv should convert to p.u. on the bus base"
     );
 }
@@ -200,24 +203,25 @@ fn pslf_write_preserves_generator_voltage_setpoint() {
     generator.vg = 1.04;
     generator.mbase = 100.0;
     let mut net = BalancedNetwork::new("gen-vg", 100.0);
-    net.buses.push(bus);
-    net.generators.push(generator);
+    net.buses_mut().push(bus);
+    net.generators_mut().push(generator);
 
     let text = write_pslf(&net).text;
     let reparsed = parse_pslf(&text).unwrap();
 
-    assert_eq!(reparsed.generators.len(), 1);
+    assert_eq!(reparsed.generators().len(), 1);
     assert!(
-        (reparsed.generators[0].vg - 1.04).abs() < 1e-12,
+        (reparsed.generators()[0].vg - 1.04).abs() < 1e-12,
         "generator vg did not round trip through reg_kv: {}",
-        reparsed.generators[0].vg
+        reparsed.generators()[0].vg
     );
 }
 
 #[test]
 fn pslf_write_reports_dropped_switched_shunt_control() {
     let mut net = BalancedNetwork::new("switched-shunt", 100.0);
-    net.buses.push(Bus::new(BusId(1), BusType::Ref, 230.0));
+    net.buses_mut()
+        .push(Bus::new(BusId(1), BusType::Ref, 230.0));
     let mut shunt = Shunt::new(BusId(1), 0.0, 10.0);
     shunt.control = Some(SwitchedShuntControl::new(
         SwitchedShuntMode::Discrete,
@@ -225,7 +229,7 @@ fn pslf_write_reports_dropped_switched_shunt_control() {
         0.95,
         vec![ShuntBlock::new(2, 5.0)],
     ));
-    net.shunts.push(shunt);
+    net.shunts_mut().push(shunt);
 
     let conv = write_pslf(&net);
 
@@ -243,16 +247,17 @@ fn pslf_write_gives_parallel_devices_distinct_ids() {
     // Two loads and two shunts on one bus must not collapse onto (bus, "1"):
     // GE PSLF keys devices by (bus, id).
     let mut net = BalancedNetwork::new("parallel", 100.0);
-    net.buses.push(Bus::new(BusId(1), BusType::Ref, 230.0));
-    net.loads.push(Load::new(BusId(1), 10.0, 3.0));
-    net.loads.push(Load::new(BusId(1), 20.0, 6.0));
-    net.shunts.push(Shunt::new(BusId(1), 0.0, 5.0));
-    net.shunts.push(Shunt::new(BusId(1), 0.0, 7.0));
+    net.buses_mut()
+        .push(Bus::new(BusId(1), BusType::Ref, 230.0));
+    net.loads_mut().push(Load::new(BusId(1), 10.0, 3.0));
+    net.loads_mut().push(Load::new(BusId(1), 20.0, 6.0));
+    net.shunts_mut().push(Shunt::new(BusId(1), 0.0, 5.0));
+    net.shunts_mut().push(Shunt::new(BusId(1), 0.0, 7.0));
 
     let back = parse_pslf(&write_pslf(&net).text).unwrap();
 
-    assert_eq!(back.loads.len(), 2);
-    assert_eq!(back.shunts.len(), 2);
+    assert_eq!(back.loads().len(), 2);
+    assert_eq!(back.shunts().len(), 2);
     let id = |extras: &powerio_tx::Extras| {
         extras
             .get("id")
@@ -260,8 +265,8 @@ fn pslf_write_gives_parallel_devices_distinct_ids() {
             .unwrap_or_default()
             .to_string()
     };
-    let load_ids: Vec<String> = back.loads.iter().map(|l| id(&l.extras)).collect();
-    let shunt_ids: Vec<String> = back.shunts.iter().map(|s| id(&s.extras)).collect();
+    let load_ids: Vec<String> = back.loads().iter().map(|l| id(&l.extras)).collect();
+    let shunt_ids: Vec<String> = back.shunts().iter().map(|s| id(&s.extras)).collect();
     assert_ne!(load_ids[0], load_ids[1], "loads share an id: {load_ids:?}");
     assert_ne!(
         shunt_ids[0], shunt_ids[1],
@@ -294,21 +299,28 @@ end
             .and_then(serde_json::Value::as_str)
             .map(str::to_string)
     };
-    assert_eq!(as_id(&net.loads[0].extras).as_deref(), Some("L7"));
-    assert_eq!(as_id(&net.shunts[0].extras).as_deref(), Some("S2"));
+    assert_eq!(as_id(&net.loads()[0].extras).as_deref(), Some("L7"));
+    assert_eq!(as_id(&net.shunts()[0].extras).as_deref(), Some("S2"));
 
     // The direct writer (no retained-source echo) keeps the ids.
     let back = parse_pslf(&write_pslf(&net).text).unwrap();
-    assert_eq!(as_id(&back.loads[0].extras).as_deref(), Some("L7"));
-    assert_eq!(as_id(&back.shunts[0].extras).as_deref(), Some("S2"));
+    assert_eq!(as_id(&back.loads()[0].extras).as_deref(), Some("L7"));
+    assert_eq!(as_id(&back.shunts()[0].extras).as_deref(), Some("S2"));
 }
 
 #[test]
 fn pslf_reads_and_writes_a_three_winding_transformer() {
     let net = parse_pslf(EPC_3W).unwrap();
-    assert_eq!(net.transformers_3w.len(), 1, "the tertiary record was read");
-    assert!(net.branches.is_empty(), "a 3W is not folded into branches");
-    let t = &net.transformers_3w[0];
+    assert_eq!(
+        net.transformers_3w().len(),
+        1,
+        "the tertiary record was read"
+    );
+    assert!(
+        net.branches().is_empty(),
+        "a 3W is not folded into branches"
+    );
+    let t = &net.transformers_3w()[0];
     assert_eq!(
         [
             t.windings[0].bus.0,
@@ -325,9 +337,9 @@ fn pslf_reads_and_writes_a_three_winding_transformer() {
 
     // Round trip through the writer keeps the buses, impedances, and primary tap.
     let net2 = parse_pslf(&write_pslf(&net).text).unwrap();
-    assert_eq!(net2.transformers_3w.len(), 1);
-    assert!(net2.branches.is_empty());
-    let t2 = &net2.transformers_3w[0];
+    assert_eq!(net2.transformers_3w().len(), 1);
+    assert!(net2.branches().is_empty());
+    let t2 = &net2.transformers_3w()[0];
     assert!((t2.z[2].x - 0.07).abs() < 1e-9);
     assert!((t2.windings[0].tap - 1.05).abs() < 1e-9);
     assert_eq!(t2.windings[2].bus.0, 3);

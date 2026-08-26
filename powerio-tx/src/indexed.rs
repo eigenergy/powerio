@@ -58,9 +58,9 @@ impl IndexCore {
     /// call `validate` itself. Backstopped here by a `debug_assert`.
     #[must_use]
     pub fn build(net: &BalancedNetwork) -> Self {
-        let n = net.buses.len();
+        let n = net.buses().len();
         let bus_id_to_idx: HashMap<BusId, usize> = net
-            .buses
+            .buses()
             .iter()
             .enumerate()
             .map(|(idx, b)| (b.id, idx))
@@ -72,7 +72,7 @@ impl IndexCore {
         );
         let mut pd = vec![0.0; n];
         let mut qd = vec![0.0; n];
-        for l in &net.loads {
+        for l in net.loads() {
             if let Some(&idx) = bus_id_to_idx.get(&l.bus) {
                 pd[idx] += l.p;
                 qd[idx] += l.q;
@@ -80,7 +80,7 @@ impl IndexCore {
         }
         let mut gs = vec![0.0; n];
         let mut bs = vec![0.0; n];
-        for s in &net.shunts {
+        for s in net.shunts() {
             if let Some(&idx) = bus_id_to_idx.get(&s.bus) {
                 gs[idx] += s.g;
                 bs[idx] += s.b;
@@ -152,12 +152,12 @@ impl<'n> IndexedNetwork<'n> {
 
     #[inline]
     pub fn n(&self) -> usize {
-        self.net.buses.len()
+        self.net.buses().len()
     }
 
     #[inline]
     pub fn base_mva(&self) -> f64 {
-        self.net.base_mva
+        self.net.base_mva()
     }
 
     /// The divisor for turning a power quantity (shunt, load, generation) into
@@ -173,7 +173,7 @@ impl<'n> IndexedNetwork<'n> {
         if self.net.is_normalized() {
             1.0
         } else {
-            self.net.base_mva
+            self.net.base_mva()
         }
     }
 
@@ -195,19 +195,19 @@ impl<'n> IndexedNetwork<'n> {
 
     #[inline]
     pub fn name(&self) -> &str {
-        &self.net.name
+        self.net.name()
     }
 
     /// All branches, in source order (column order for incidence-based builds).
     #[inline]
     pub fn branches(&self) -> &[Branch] {
-        &self.net.branches
+        self.net.branches()
     }
 
     /// All generators, in source order.
     #[inline]
     pub fn generators(&self) -> &[Generator] {
-        &self.net.generators
+        self.net.generators()
     }
 
     /// Resolve a bus id to its dense `[0, n)` index.
@@ -224,7 +224,7 @@ impl<'n> IndexedNetwork<'n> {
     /// matrix row), not a raw bus id.
     #[inline]
     pub fn bus_id(&self, idx: usize) -> BusId {
-        self.net.buses[idx].id
+        self.net.buses()[idx].id
     }
 
     /// Nodal active demand, length `n`.
@@ -254,7 +254,7 @@ impl<'n> IndexedNetwork<'n> {
     /// In-service branches with their index into [`branches`](Self::branches).
     pub fn in_service_branches(&self) -> impl Iterator<Item = (usize, &Branch)> {
         self.net
-            .branches
+            .branches()
             .iter()
             .enumerate()
             .filter(|(_, b)| b.in_service)
@@ -263,7 +263,7 @@ impl<'n> IndexedNetwork<'n> {
     /// In-service generators with their index into [`generators`](Self::generators).
     pub fn in_service_gens(&self) -> impl Iterator<Item = (usize, &Generator)> {
         self.net
-            .generators
+            .generators()
             .iter()
             .enumerate()
             .filter(|(_, g)| g.in_service)
@@ -275,7 +275,7 @@ impl<'n> IndexedNetwork<'n> {
     /// per entry. Empty when the network has no reference bus.
     pub fn reference_bus_indices(&self) -> Vec<usize> {
         self.net
-            .buses
+            .buses()
             .iter()
             .enumerate()
             .filter(|(_, b)| b.kind == BusType::Ref)
@@ -297,7 +297,7 @@ impl<'n> IndexedNetwork<'n> {
     /// index into [`branches`](Self::branches). Out-of-service branches are
     /// skipped; parallel branches are kept as separate edges.
     pub fn to_petgraph(&self) -> UnGraph<usize, usize> {
-        let mut g = UnGraph::with_capacity(self.n(), self.net.branches.len());
+        let mut g = UnGraph::with_capacity(self.n(), self.net.branches().len());
         let nodes: Vec<_> = (0..self.n()).map(|i| g.add_node(i)).collect();
         for (idx, br) in self.in_service_branches() {
             if let (Some(i), Some(j)) = (self.bus_index(br.from), self.bus_index(br.to)) {
@@ -373,7 +373,7 @@ impl<'n> IndexedNetwork<'n> {
             .collect();
         ConnectivityReport {
             n_buses: self.n(),
-            n_branches_in_service: self.net.branches.iter().filter(|b| b.in_service).count(),
+            n_branches_in_service: self.net.branches().iter().filter(|b| b.in_service).count(),
             n_components,
             isolated_buses: isolated,
         }
@@ -434,7 +434,7 @@ mod tests {
             vec![bus(1, BusType::Ref), bus(2, BusType::Pq)],
             Vec::new(),
         );
-        net.loads.push(Load {
+        net.loads_mut().push(Load {
             bus: BusId(1),
             p: 10.0,
             q: 5.0,
@@ -443,7 +443,7 @@ mod tests {
             uid: None,
             extras: Extras::new(),
         });
-        net.loads.push(Load {
+        net.loads_mut().push(Load {
             bus: BusId(1),
             p: 3.0,
             q: 1.0,
@@ -452,7 +452,7 @@ mod tests {
             uid: None,
             extras: Extras::new(),
         });
-        net.shunts.push(Shunt {
+        net.shunts_mut().push(Shunt {
             bus: BusId(1),
             g: 0.2,
             b: 0.4,
@@ -461,7 +461,7 @@ mod tests {
             uid: None,
             extras: Extras::new(),
         });
-        net.shunts.push(Shunt {
+        net.shunts_mut().push(Shunt {
             bus: BusId(1),
             g: 0.1,
             b: 0.3,
@@ -530,7 +530,7 @@ mod tests {
         );
         let mut t = three_winding(1, 2, 3);
         t.mag_b = 0.05; // p.u. on the system base
-        net.transformers_3w.push(t);
+        net.transformers_3w_mut().push(t);
 
         let view = IndexedNetwork::new(&net);
         assert_eq!(view.n(), 4, "three buses plus the synthetic star point");
@@ -546,9 +546,9 @@ mod tests {
         }
 
         // The canonical model keeps the typed record and gains no buses/branches.
-        assert_eq!(net.buses.len(), 3);
-        assert!(net.branches.is_empty());
-        assert_eq!(net.transformers_3w.len(), 1);
+        assert_eq!(net.buses().len(), 3);
+        assert!(net.branches().is_empty());
+        assert_eq!(net.transformers_3w().len(), 1);
     }
 
     #[test]
@@ -565,7 +565,7 @@ mod tests {
         );
         let mut t = three_winding(1, 2, 3);
         t.in_service = false;
-        net.transformers_3w.push(t);
+        net.transformers_3w_mut().push(t);
 
         let view = IndexedNetwork::new(&net);
         // No star bus is synthesized for an out-of-service transformer, so the

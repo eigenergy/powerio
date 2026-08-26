@@ -306,8 +306,13 @@ dependencies = [
 name = "powerio"
 version = "0.9.0"
 dependencies = [
+ "num-complex",
  "powerio-core",
+ "powerio-dist",
  "powerio-tx",
+ "serde",
+ "serde_json",
+ "thiserror",
 ]
 
 [[package]]
@@ -334,6 +339,7 @@ name = "powerio-eval-allocation"
 version = "0.0.0"
 dependencies = [
  "powerio",
+ "powerio-core",
  "powerio-dist",
  "powerio-matrix",
 ]

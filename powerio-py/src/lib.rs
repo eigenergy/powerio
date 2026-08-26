@@ -575,7 +575,7 @@ fn build_package_from_path(
         let module = powerio_dist::parse(source).map_err(|error| core_error_pyerr(&error))?;
         let format = module
             .value()
-            .source_format
+            .source_format()
             .map(powerio_dist::DistSourceFormat::name)
             .or(from_)
             .unwrap_or("unknown");
@@ -618,7 +618,7 @@ fn build_package_from_path(
     }
 
     let module = py_parse_module_path(input, from_)?;
-    let format = module.value().source_format.name();
+    let format = module.value().source_format().name();
     let retained_source = module.source().is_some();
     let mut pkg = NetworkPackage::from_balanced_module(module);
     set_package_source(
@@ -886,17 +886,17 @@ impl PyBalancedNetwork {
 
     #[getter]
     fn name(&self) -> String {
-        self.inner().name.clone()
+        self.inner().name().clone()
     }
 
     #[getter]
     fn base_mva(&self) -> f64 {
-        self.inner().base_mva
+        self.inner().base_mva()
     }
 
     #[getter]
     fn source_format(&self) -> String {
-        self.inner().source_format.name().to_owned()
+        self.inner().source_format().name().to_owned()
     }
 
     /// Read fidelity warnings attached at parse time: tables and columns the
@@ -910,27 +910,27 @@ impl PyBalancedNetwork {
 
     #[getter]
     fn n_buses(&self) -> usize {
-        self.inner().buses.len()
+        self.inner().buses().len()
     }
 
     #[getter]
     fn n_branches(&self) -> usize {
-        self.inner().branches.len()
+        self.inner().branches().len()
     }
 
     #[getter]
     fn n_gens(&self) -> usize {
-        self.inner().generators.len()
+        self.inner().generators().len()
     }
 
     #[getter]
     fn n_loads(&self) -> usize {
-        self.inner().loads.len()
+        self.inner().loads().len()
     }
 
     #[getter]
     fn n_shunts(&self) -> usize {
-        self.inner().shunts.len()
+        self.inner().shunts().len()
     }
 
     #[getter]
@@ -977,8 +977,8 @@ impl PyBalancedNetwork {
 
     #[getter]
     fn buses<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyList>> {
-        let mut rows: Vec<Bound<'py, PyDict>> = Vec::with_capacity(self.inner().buses.len());
-        for b in &self.inner().buses {
+        let mut rows: Vec<Bound<'py, PyDict>> = Vec::with_capacity(self.inner().buses().len());
+        for b in self.inner().buses() {
             let d = PyDict::new(py);
             d.set_item("id", b.id.0)?;
             d.set_item("kind", b.kind.as_str())?;
@@ -997,8 +997,8 @@ impl PyBalancedNetwork {
 
     #[getter]
     fn loads<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyList>> {
-        let mut rows: Vec<Bound<'py, PyDict>> = Vec::with_capacity(self.inner().loads.len());
-        for l in &self.inner().loads {
+        let mut rows: Vec<Bound<'py, PyDict>> = Vec::with_capacity(self.inner().loads().len());
+        for l in self.inner().loads() {
             let d = PyDict::new(py);
             d.set_item("bus", l.bus.0)?;
             d.set_item("p", l.p)?;
@@ -1012,8 +1012,8 @@ impl PyBalancedNetwork {
 
     #[getter]
     fn shunts<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyList>> {
-        let mut rows: Vec<Bound<'py, PyDict>> = Vec::with_capacity(self.inner().shunts.len());
-        for s in &self.inner().shunts {
+        let mut rows: Vec<Bound<'py, PyDict>> = Vec::with_capacity(self.inner().shunts().len());
+        for s in self.inner().shunts() {
             let d = PyDict::new(py);
             d.set_item("bus", s.bus.0)?;
             d.set_item("g", s.g)?;
@@ -1027,8 +1027,8 @@ impl PyBalancedNetwork {
 
     #[getter]
     fn branches<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyList>> {
-        let mut rows: Vec<Bound<'py, PyDict>> = Vec::with_capacity(self.inner().branches.len());
-        for br in &self.inner().branches {
+        let mut rows: Vec<Bound<'py, PyDict>> = Vec::with_capacity(self.inner().branches().len());
+        for br in self.inner().branches() {
             let d = PyDict::new(py);
             d.set_item("from_id", br.from.0)?;
             d.set_item("to_id", br.to.0)?;
@@ -1071,8 +1071,8 @@ impl PyBalancedNetwork {
 
     #[getter]
     fn switches<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyList>> {
-        let mut rows: Vec<Bound<'py, PyDict>> = Vec::with_capacity(self.inner().switches.len());
-        for sw in &self.inner().switches {
+        let mut rows: Vec<Bound<'py, PyDict>> = Vec::with_capacity(self.inner().switches().len());
+        for sw in self.inner().switches() {
             let d = PyDict::new(py);
             d.set_item("from_id", sw.from.0)?;
             d.set_item("to_id", sw.to.0)?;
@@ -1091,8 +1091,8 @@ impl PyBalancedNetwork {
 
     #[getter]
     fn generators<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyList>> {
-        let mut rows: Vec<Bound<'py, PyDict>> = Vec::with_capacity(self.inner().generators.len());
-        for g in &self.inner().generators {
+        let mut rows: Vec<Bound<'py, PyDict>> = Vec::with_capacity(self.inner().generators().len());
+        for g in self.inner().generators() {
             let d = PyDict::new(py);
             d.set_item("bus", g.bus.0)?;
             d.set_item("pg", g.pg)?;
@@ -1511,10 +1511,10 @@ impl PyBalancedNetwork {
     fn __repr__(&self) -> String {
         format!(
             "BalancedNetwork(name={:?}, n_buses={}, n_branches={}, n_gens={})",
-            self.inner().name,
-            self.inner().buses.len(),
-            self.inner().branches.len(),
-            self.inner().generators.len()
+            self.inner().name(),
+            self.inner().buses().len(),
+            self.inner().branches().len(),
+            self.inner().generators().len()
         )
     }
 }
@@ -1798,12 +1798,12 @@ fn dist_source_from_bytes(bytes: &[u8], from: &str) -> PyResult<powerio_core::So
 #[pymethods]
 impl PyMulticonductorNetwork {
     fn name(&self) -> Option<&str> {
-        self.inner().name.as_deref()
+        self.inner().name().as_deref()
     }
 
     /// Format the case was parsed from (`dss`, `pmd-json`, `bmopf-json`).
     fn source_format(&self) -> Option<&'static str> {
-        self.inner().source_format.map(|f| f.name())
+        self.inner().source_format().map(|f| f.name())
     }
 
     /// Parse warnings: everything the reader could not represent or had to
@@ -1834,7 +1834,7 @@ impl PyMulticonductorNetwork {
             .map_err(|error| PowerIOParseError::new_err(error.to_string()))?;
         let mut net = self.inner().clone();
         let report = powerio::package::apply_dist_geo_layer(&mut net, &parsed.layer);
-        net.source_format = None;
+        *net.source_format_mut() = None;
         let mut rendered = self.rendered_warnings.clone();
         rendered.extend(
             parsed
@@ -1849,27 +1849,27 @@ impl PyMulticonductorNetwork {
     }
 
     fn n_buses(&self) -> usize {
-        self.inner().buses.len()
+        self.inner().buses().len()
     }
 
     fn n_lines(&self) -> usize {
-        self.inner().lines.len()
+        self.inner().lines().len()
     }
 
     fn n_transformers(&self) -> usize {
-        self.inner().transformers.len()
+        self.inner().transformers().len()
     }
 
     fn n_loads(&self) -> usize {
-        self.inner().loads.len()
+        self.inner().loads().len()
     }
 
     fn n_generators(&self) -> usize {
-        self.inner().generators.len()
+        self.inner().generators().len()
     }
 
     fn n_sources(&self) -> usize {
-        self.inner().sources.len()
+        self.inner().sources().len()
     }
 
     /// Serialize to `to` (`dss`, `pmd-json`, `bmopf-json`). Returns
@@ -1919,10 +1919,10 @@ impl PyMulticonductorNetwork {
     fn __repr__(&self) -> String {
         format!(
             "MulticonductorNetwork(n_buses={}, n_lines={}, n_transformers={}, n_loads={})",
-            self.inner().buses.len(),
-            self.inner().lines.len(),
-            self.inner().transformers.len(),
-            self.inner().loads.len()
+            self.inner().buses().len(),
+            self.inner().lines().len(),
+            self.inner().transformers().len(),
+            self.inner().loads().len()
         )
     }
 }

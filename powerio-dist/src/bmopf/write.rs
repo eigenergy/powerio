@@ -162,7 +162,7 @@ pub fn write_bmopf_json_with_options(
         options: *options,
         warnings: crate::diagnostics::Diagnostics::new(),
         grounded: net
-            .buses
+            .buses()
             .iter()
             .map(|b| (b.id.to_ascii_lowercase(), b.grounded.clone()))
             .collect(),
@@ -326,13 +326,13 @@ impl Writer {
         m.insert("$schema".into(), json!(BMOPF_SCHEMA_ID));
         m.insert(
             "frequency".into(),
-            self.num(net.base_frequency, "meta frequency"),
+            self.num(net.base_frequency(), "meta frequency"),
         );
         m.insert(
             "case_study_generator".into(),
             json!({"tool": "powerio", "version": env!("CARGO_PKG_VERSION")}),
         );
-        if let Some(Value::Object(stash)) = net.extras.get(BMOPF_META_STASH) {
+        if let Some(Value::Object(stash)) = net.extras().get(BMOPF_META_STASH) {
             for (key, value) in stash {
                 match key.as_str() {
                     // Writer-owned: this document is powerio's emission, at
@@ -354,12 +354,12 @@ impl Writer {
 
     fn document(&mut self, net: &MulticonductorNetwork) -> Value {
         let mut doc = Map::new();
-        if let Some(name) = &net.name {
+        if let Some(name) = &net.name() {
             doc.insert("name".into(), json!(name));
         }
         let meta = self.meta(net);
         doc.insert("meta".into(), meta);
-        if let Some(Value::Object(tc)) = net.extras.get(BMOPF_TERMINAL_CONVENTIONS_STASH) {
+        if let Some(Value::Object(tc)) = net.extras().get(BMOPF_TERMINAL_CONVENTIONS_STASH) {
             doc.insert("terminal_conventions".into(), Value::Object(tc.clone()));
         } else if let Some(tc) = authored_terminal_conventions(net) {
             doc.insert("terminal_conventions".into(), tc);
@@ -379,7 +379,7 @@ impl Writer {
         // Schema 0.1.0 dropped the IBR, control profile, DC, and time series
         // tables from the top level; `extras` is their sanctioned home.
         let mut extras = Map::new();
-        if let Some(Value::Object(stash)) = net.extras.get(BMOPF_EXTRAS_STASH) {
+        if let Some(Value::Object(stash)) = net.extras().get(BMOPF_EXTRAS_STASH) {
             extras.extend(stash.clone());
         }
         self.control_profiles(net, &mut extras);
@@ -399,7 +399,7 @@ impl Writer {
 
     fn buses(&mut self, net: &MulticonductorNetwork, doc: &mut Map<String, Value>) {
         let mut buses = Map::new();
-        for b in &net.buses {
+        for b in net.buses() {
             let mut o = Map::new();
             o.insert("terminal_names".into(), json!(b.terminals));
             if !b.grounded.is_empty() {
@@ -441,9 +441,9 @@ impl Writer {
     }
 
     fn linecodes(&mut self, net: &MulticonductorNetwork, doc: &mut Map<String, Value>) {
-        if !net.linecodes.is_empty() {
+        if !net.linecodes().is_empty() {
             let mut codes = Map::new();
-            for c in &net.linecodes {
+            for c in net.linecodes() {
                 let mut o = Map::new();
                 // The schema requires R_series_1_1 and X_series_1_1; an
                 // empty matrix would drop them and invalidate the output.
@@ -522,7 +522,7 @@ impl Writer {
             return;
         }
         if !matches!(
-            net.geo.as_ref().map(|geo| &geo.space),
+            net.geo().as_ref().map(|geo| &geo.space),
             Some(CoordinateSpace::Geographic { .. })
         ) {
             self.diagnostic(
@@ -567,7 +567,7 @@ impl Writer {
     }
 
     fn warn_unemitted_untyped(&mut self, net: &MulticonductorNetwork) {
-        for u in &net.untyped {
+        for u in net.untyped() {
             if Self::is_emitted_untyped(u) {
                 continue;
             }
@@ -605,7 +605,7 @@ impl Writer {
         extras: &mut Map<String, Value>,
     ) {
         self.clear_non_table_extras_slots(net, extras);
-        for u in &net.untyped {
+        for u in net.untyped() {
             let subtype = u.class.strip_prefix("transformer.");
             if subtype.is_none() && !RAW_BMOPF_EXTRAS_TABLES.contains(&u.class.as_str()) {
                 continue;
@@ -691,7 +691,7 @@ impl Writer {
         extras: &mut Map<String, Value>,
     ) {
         let classes: BTreeSet<&str> = net
-            .untyped
+            .untyped()
             .iter()
             .map(|u| u.class.as_str())
             .filter(|class| RAW_BMOPF_EXTRAS_TABLES.contains(class))
@@ -772,9 +772,9 @@ impl Writer {
 
     /// Lines and switches.
     fn branches(&mut self, net: &MulticonductorNetwork, doc: &mut Map<String, Value>) {
-        if !net.lines.is_empty() {
+        if !net.lines().is_empty() {
             let mut lines = Map::new();
-            for l in &net.lines {
+            for l in net.lines() {
                 let mut o = Map::new();
                 o.insert("length".into(), self.num(l.length, "line length"));
                 o.insert("linecode".into(), json!(l.linecode));
@@ -798,9 +798,9 @@ impl Writer {
             }
             doc.insert("line".into(), Value::Object(lines));
         }
-        if !net.switches.is_empty() {
+        if !net.switches().is_empty() {
             let mut switches = Map::new();
-            for s in &net.switches {
+            for s in net.switches() {
                 let mut o = Map::new();
                 o.insert("bus_from".into(), json!(s.bus_from));
                 o.insert("bus_to".into(), json!(s.bus_to));
@@ -822,11 +822,11 @@ impl Writer {
     /// Rated capacitor banks (schema 0.1.0 `capacitor`), distinct from the
     /// raw admittance `shunt` table.
     fn capacitors(&mut self, net: &MulticonductorNetwork, doc: &mut Map<String, Value>) {
-        if net.capacitors.is_empty() {
+        if net.capacitors().is_empty() {
             return;
         }
         let mut caps = Map::new();
-        for c in &net.capacitors {
+        for c in net.capacitors() {
             let mut o = Map::new();
             o.insert("bus".into(), json!(c.bus));
             o.insert("terminal_map".into(), json!(c.terminal_map));
@@ -842,7 +842,7 @@ impl Writer {
     /// Loads, generators, shunts, and the voltage sources.
     fn injections(&mut self, net: &MulticonductorNetwork, doc: &mut Map<String, Value>) {
         let mut loads = Map::new();
-        for l in &net.loads {
+        for l in net.loads() {
             let mut o = Map::new();
             o.insert("configuration".into(), json!(config_str(l.configuration)));
             o.insert("p_nom".into(), self.nums(&l.p_nom, "load p_nom"));
@@ -854,7 +854,7 @@ impl Writer {
             loads.insert(l.name.clone(), Value::Object(o));
         }
         let mut gens = Map::new();
-        for g in &net.generators {
+        for g in net.generators() {
             gens.insert(g.name.clone(), self.generator(g));
         }
         if !loads.is_empty() {
@@ -863,9 +863,9 @@ impl Writer {
         if !gens.is_empty() {
             doc.insert("generator".into(), Value::Object(gens));
         }
-        if !net.shunts.is_empty() {
+        if !net.shunts().is_empty() {
             let mut shunts = Map::new();
-            for s in &net.shunts {
+            for s in net.shunts() {
                 let mut o = Map::new();
                 o.insert("bus".into(), json!(s.bus));
                 o.insert("terminal_map".into(), json!(s.terminal_map));
@@ -942,11 +942,11 @@ impl Writer {
     }
 
     fn control_profiles(&mut self, net: &MulticonductorNetwork, doc: &mut Map<String, Value>) {
-        if net.control_profiles.is_empty() {
+        if net.control_profiles().is_empty() {
             return;
         }
         let mut profiles = Map::new();
-        for profile in &net.control_profiles {
+        for profile in net.control_profiles() {
             profiles.insert(profile.name.clone(), self.control_profile(profile));
         }
         doc.insert("control_profile".into(), Value::Object(profiles));
@@ -1036,11 +1036,11 @@ impl Writer {
     }
 
     fn ibrs(&mut self, net: &MulticonductorNetwork, doc: &mut Map<String, Value>) {
-        if net.ibrs.is_empty() {
+        if net.ibrs().is_empty() {
             return;
         }
         let mut ibrs = Map::new();
-        for ibr in &net.ibrs {
+        for ibr in net.ibrs() {
             ibrs.insert(ibr.name.clone(), self.ibr(ibr));
         }
         doc.insert("ibr".into(), Value::Object(ibrs));
@@ -1263,7 +1263,7 @@ impl Writer {
                 .insert(name, v);
         };
         let merged = self.open_delta_pairs(net, &mut by_subtype);
-        for t in &net.transformers {
+        for t in net.transformers() {
             if merged.contains(&t.name) {
                 continue;
             }
@@ -1449,7 +1449,7 @@ impl Writer {
     ) -> BTreeSet<String> {
         let mut merged = BTreeSet::new();
         let mut groups: BTreeMap<(String, String), Vec<&DistTransformer>> = BTreeMap::new();
-        for t in &net.transformers {
+        for t in net.transformers() {
             if !matches!(classify(t), Kind::OpenDeltaLeg) {
                 continue;
             }
@@ -2518,9 +2518,9 @@ enum PhaseArrangement {
 }
 
 fn bmopf_voltage_sources(net: &MulticonductorNetwork) -> Vec<SourceEmit> {
-    let emitted: Vec<SourceEmit> = net.sources.iter().map(SourceEmit::from).collect();
+    let emitted: Vec<SourceEmit> = net.sources().iter().map(SourceEmit::from).collect();
     let bus_ids: BTreeMap<String, String> = net
-        .buses
+        .buses()
         .iter()
         .map(|bus| (bus.id.to_ascii_lowercase(), bus.id.clone()))
         .collect();
@@ -2970,7 +2970,7 @@ fn bmopf_delta_roll(t: &DistTransformer, idx: usize, w: &DistWinding) -> Option<
 fn authored_terminal_conventions(net: &MulticonductorNetwork) -> Option<Value> {
     let mut phase: Vec<&String> = Vec::new();
     let mut neutral: Vec<&String> = Vec::new();
-    for b in &net.buses {
+    for b in net.buses() {
         for term in &b.terminals {
             let labels = if term.eq_ignore_ascii_case("n") {
                 &mut neutral
@@ -3048,8 +3048,8 @@ mod tests {
             }
         }"#;
         let net = parse_bmopf_str(text).unwrap();
-        let zip = net.loads.iter().find(|l| l.name == "zip").unwrap();
-        let exp = net.loads.iter().find(|l| l.name == "exp").unwrap();
+        let zip = net.loads().iter().find(|l| l.name == "zip").unwrap();
+        let exp = net.loads().iter().find(|l| l.name == "exp").unwrap();
         assert!(matches!(
             &zip.voltage_model,
             DistLoadVoltageModel::Zip { alpha_z, .. } if alpha_z == &vec![0.2, 0.2, 0.2]
@@ -3090,9 +3090,9 @@ mod tests {
         // would materialize dim x dim zeros for X.
         let mut lc = DistLineCode::new("big", Vec::new(), Vec::new());
         lc.r_series = vec![Vec::new(); 100_000];
-        net.linecodes.push(lc);
+        net.linecodes_mut().push(lc);
         // Same shape for a shunt's G/B pair.
-        net.shunts.push(DistShunt::new(
+        net.shunts_mut().push(DistShunt::new(
             "big",
             "b",
             Vec::new(),
@@ -3101,7 +3101,7 @@ mod tests {
         ));
         // A winding count beyond the cap would expand to ~n²/2 x_sc pairs.
         let winding = DistWinding::new("b", Vec::new(), DistWindingConn::Wye, 1.0, 1.0);
-        net.transformers.push(DistTransformer::new(
+        net.transformers_mut().push(DistTransformer::new(
             "many",
             vec![winding; MAX_DIM + 6],
             Vec::new(),

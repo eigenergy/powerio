@@ -1039,21 +1039,25 @@ pub unsafe extern "C" fn pio_n_branches(net: *const PioNetwork) -> usize {
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_n_switches(net: *const PioNetwork) -> usize {
-    unsafe { guard(0, || network_ref(net).map_or(0, |c| c.net().switches.len())) }
+    unsafe {
+        guard(0, || {
+            network_ref(net).map_or(0, |c| c.net().switches().len())
+        })
+    }
 }
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_n_gens(net: *const PioNetwork) -> usize {
     unsafe {
         guard(0, || {
-            network_ref(net).map_or(0, |c| c.net().generators.len())
+            network_ref(net).map_or(0, |c| c.net().generators().len())
         })
     }
 }
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_base_mva(net: *const PioNetwork) -> f64 {
-    unsafe { guard(0.0, || network_ref(net).map_or(0.0, |c| c.net().base_mva)) }
+    unsafe { guard(0.0, || network_ref(net).map_or(0.0, |c| c.net().base_mva())) }
 }
 
 /// Case name. Writes UTF-8 bytes into `out`, up to `cap`, NUL-terminates when
@@ -1068,8 +1072,8 @@ pub unsafe extern "C" fn pio_network_name(
     unsafe {
         guard(0, || {
             let Some(c) = network_ref(net) else { return 0 };
-            copy_to_buf(out, cap, &c.net().name);
-            c.net().name.len()
+            copy_to_buf(out, cap, c.net().name());
+            c.net().name().len()
         })
     }
 }
@@ -1087,7 +1091,7 @@ pub unsafe extern "C" fn pio_source_format(
     unsafe {
         guard(0, || {
             let Some(c) = network_ref(net) else { return 0 };
-            let name = c.net().source_format.name().to_owned();
+            let name = c.net().source_format().name().to_owned();
             copy_to_buf(out, cap, &name);
             name.len()
         })
@@ -1124,21 +1128,21 @@ pub unsafe extern "C" fn pio_summary_json(
                     .collect();
                 let summary = serde_json::json!({
                     powerio::version::VERSION_KEY: powerio::VERSION,
-                    "name": c.net().name,
-                    "source_format": c.net().source_format.name(),
-                    "base_mva": c.net().base_mva,
-                    "base_frequency": c.net().base_frequency,
+                    "name": c.net().name(),
+                    "source_format": c.net().source_format().name(),
+                    "base_mva": c.net().base_mva(),
+                    "base_frequency": c.net().base_frequency(),
                     "counts": {
-                        "buses": c.net().buses.len(),
-                        "loads": c.net().loads.len(),
-                        "shunts": c.net().shunts.len(),
-                        "branches": c.net().branches.len(),
-                        "switches": c.net().switches.len(),
-                        "generators": c.net().generators.len(),
-                        "storage": c.net().storage.len(),
-                        "hvdc": c.net().hvdc.len(),
-                        "transformers_3w": c.net().transformers_3w.len(),
-                        "areas": c.net().areas.len(),
+                        "buses": c.net().buses().len(),
+                        "loads": c.net().loads().len(),
+                        "shunts": c.net().shunts().len(),
+                        "branches": c.net().branches().len(),
+                        "switches": c.net().switches().len(),
+                        "generators": c.net().generators().len(),
+                        "storage": c.net().storage().len(),
+                        "hvdc": c.net().hvdc().len(),
+                        "transformers_3w": c.net().transformers_3w().len(),
+                        "areas": c.net().areas().len(),
                         "warnings": c.warnings.len(),
                     },
                     "topology": {
@@ -1800,41 +1804,57 @@ pub unsafe extern "C" fn pio_switches(
             fill(
                 from,
                 cap,
-                net.switches
+                net.switches()
                     .iter()
                     .map(|sw| i64::try_from(sw.from.0).unwrap_or(-1)),
             );
             fill(
                 to,
                 cap,
-                net.switches
+                net.switches()
                     .iter()
                     .map(|sw| i64::try_from(sw.to.0).unwrap_or(-1)),
             );
             fill(
                 closed,
                 cap,
-                net.switches.iter().map(|sw| u8::from(sw.closed)),
+                net.switches().iter().map(|sw| u8::from(sw.closed)),
             );
             fill(
                 thermal_rating,
                 cap,
-                net.switches
+                net.switches()
                     .iter()
                     .map(|sw| sw.thermal_rating.unwrap_or(0.0)),
             );
             fill(
                 current_rating,
                 cap,
-                net.switches
+                net.switches()
                     .iter()
                     .map(|sw| sw.current_rating.unwrap_or(0.0)),
             );
-            fill(pf, cap, net.switches.iter().map(|sw| sw.pf.unwrap_or(0.0)));
-            fill(qf, cap, net.switches.iter().map(|sw| sw.qf.unwrap_or(0.0)));
-            fill(pt, cap, net.switches.iter().map(|sw| sw.pt.unwrap_or(0.0)));
-            fill(qt, cap, net.switches.iter().map(|sw| sw.qt.unwrap_or(0.0)));
-            net.switches.len()
+            fill(
+                pf,
+                cap,
+                net.switches().iter().map(|sw| sw.pf.unwrap_or(0.0)),
+            );
+            fill(
+                qf,
+                cap,
+                net.switches().iter().map(|sw| sw.qf.unwrap_or(0.0)),
+            );
+            fill(
+                pt,
+                cap,
+                net.switches().iter().map(|sw| sw.pt.unwrap_or(0.0)),
+            );
+            fill(
+                qt,
+                cap,
+                net.switches().iter().map(|sw| sw.qt.unwrap_or(0.0)),
+            );
+            net.switches().len()
         })
     }
 }
@@ -1859,19 +1879,19 @@ pub unsafe extern "C" fn pio_gens(
             fill(
                 bus,
                 cap,
-                net.generators
+                net.generators()
                     .iter()
                     .map(|g| i64::try_from(g.bus.0).unwrap_or(-1)),
             );
-            fill(pg, cap, net.generators.iter().map(|g| g.pg));
-            fill(pmax, cap, net.generators.iter().map(|g| g.pmax));
-            fill(pmin, cap, net.generators.iter().map(|g| g.pmin));
+            fill(pg, cap, net.generators().iter().map(|g| g.pg));
+            fill(pmax, cap, net.generators().iter().map(|g| g.pmax));
+            fill(pmin, cap, net.generators().iter().map(|g| g.pmin));
             fill(
                 in_service,
                 cap,
-                net.generators.iter().map(|g| u8::from(g.in_service)),
+                net.generators().iter().map(|g| u8::from(g.in_service)),
             );
-            net.generators.len()
+            net.generators().len()
         })
     }
 }
@@ -2301,7 +2321,7 @@ pub unsafe extern "C" fn pio_package_to_multiconductor_network(
                 // provenance is #[serde(skip)], so dropping it here matches
                 // what a JSON crossing produces. The handle's warning lines
                 // are rendered from the package's diagnostics.
-                net.defaulted = Default::default();
+                *net.defaulted_mut() = Default::default();
                 Ok(PioDistNetwork::from_network(net, Vec::new()))
             },
         )
@@ -3082,23 +3102,23 @@ pub unsafe extern "C" fn pio_dist_summary_json(
                 let n = net.net();
                 let summary = serde_json::json!({
                     powerio::version::VERSION_KEY: powerio::VERSION,
-                    "name": n.name.as_deref(),
-                    "source_format": n.source_format.map(|f| f.name()),
-                    "base_frequency": n.base_frequency,
+                    "name": n.name().as_deref(),
+                    "source_format": n.source_format().map(|f| f.name()),
+                    "base_frequency": n.base_frequency(),
                     "counts": {
-                        "buses": n.buses.len(),
-                        "linecodes": n.linecodes.len(),
-                        "lines": n.lines.len(),
-                        "switches": n.switches.len(),
-                        "transformers": n.transformers.len(),
-                        "loads": n.loads.len(),
-                        "generators": n.generators.len(),
-                        "ibrs": n.ibrs.len(),
-                        "control_profiles": n.control_profiles.len(),
-                        "shunts": n.shunts.len(),
-                        "capacitors": n.capacitors.len(),
-                        "sources": n.sources.len(),
-                        "untyped": n.untyped.len(),
+                        "buses": n.buses().len(),
+                        "linecodes": n.linecodes().len(),
+                        "lines": n.lines().len(),
+                        "switches": n.switches().len(),
+                        "transformers": n.transformers().len(),
+                        "loads": n.loads().len(),
+                        "generators": n.generators().len(),
+                        "ibrs": n.ibrs().len(),
+                        "control_profiles": n.control_profiles().len(),
+                        "shunts": n.shunts().len(),
+                        "capacitors": n.capacitors().len(),
+                        "sources": n.sources().len(),
+                        "untyped": n.untyped().len(),
                         "warnings": net.warnings.len(),
                     },
                 });
@@ -3394,7 +3414,7 @@ pub unsafe extern "C" fn pio_dist_geo_apply(
                 powerio::GeoLayer::parse_bytes(layer.as_bytes(), name_hint).map_err(err_line)?;
             let mut out = c.net().clone();
             let report = powerio::package::apply_dist_geo_layer(&mut out, &parsed.layer);
-            out.source_format = None;
+            *out.source_format_mut() = None;
             let mut warnings = c.warnings.clone();
             warnings.extend(parsed.warnings);
             warnings.push(geo_apply_summary(&report));
@@ -5792,7 +5812,7 @@ mpc.branch = [
             for id in ["sourcebus", "loadbus"] {
                 let mut bus = DistBus::new(id, terminal_map.clone());
                 bus.grounded = strings(grounded);
-                net.buses.push(bus);
+                net.buses_mut().push(bus);
             }
             let mut linecode =
                 DistLineCode::new("lc", diagonal_matrix(n, 0.01), diagonal_matrix(n, 0.10));
@@ -5800,8 +5820,8 @@ mpc.branch = [
             linecode.b_from = zero_matrix(n);
             linecode.g_to = zero_matrix(n);
             linecode.b_to = zero_matrix(n);
-            net.linecodes.push(linecode);
-            net.lines.push(DistLine::new(
+            net.linecodes_mut().push(linecode);
+            net.lines_mut().push(DistLine::new(
                 "l1",
                 "sourcebus",
                 "loadbus",
@@ -5810,7 +5830,7 @@ mpc.branch = [
                 "lc",
                 1.0,
             ));
-            net.sources.push(VoltageSource::new(
+            net.sources_mut().push(VoltageSource::new(
                 "source",
                 "sourcebus",
                 terminal_map,
@@ -7282,7 +7302,7 @@ New Line.l1 bus1=a bus2=b phases=3
             unsafe {
                 let mem = pio_package_to_multiconductor_network(pkg, err.as_mut_ptr(), err.len());
                 assert!(!mem.is_null());
-                assert!((*mem).net().defaulted.is_empty());
+                assert!((*mem).net().defaulted().is_empty());
                 pio_dist_network_free(mem);
             }
 

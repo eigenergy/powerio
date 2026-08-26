@@ -122,7 +122,7 @@ fn rich_audit_network() -> BalancedNetwork {
         load_type: None,
         scaling: None,
     });
-    net.loads.push(load);
+    net.loads_mut().push(load);
     let mut branch = Branch::new(BusId(1), BusId(2), 0.01, 0.1);
     branch.charging = Some(BranchCharging::new(0.01, 0.02, 0.0, 0.05));
     branch.rate_a = 100.0;
@@ -131,7 +131,7 @@ fn rich_audit_network() -> BalancedNetwork {
         .push(BranchRatingSet::new("RATE4", 125.0));
     branch.current_ratings = Some(BranchCurrentRatings::new(500.0, 600.0, 700.0));
     branch.solution = Some(BranchSolution::new(1.0, 0.5, -0.9, -0.4));
-    net.branches.push(branch);
+    net.branches_mut().push(branch);
     net
 }
 
@@ -145,7 +145,7 @@ fn terminal_projection_network() -> BalancedNetwork {
     let mut branch = Branch::new(BusId(1), BusId(2), 0.01, 0.1);
     branch.charging = Some(BranchCharging::new(0.01, 0.02, 0.03, 0.05));
     branch.rate_a = 100.0;
-    net.branches.push(branch);
+    net.branches_mut().push(branch);
     net
 }
 
@@ -310,9 +310,9 @@ fn extra_branch_rating_sets_survive_model_json() {
 
     let back = BalancedNetwork::from_json(&net.to_json().unwrap()).unwrap();
 
-    assert_eq!(back.branches[0].rating_sets.len(), 1);
-    assert_eq!(back.branches[0].rating_sets[0].name, "RATE4");
-    assert!((back.branches[0].rating_sets[0].rate_mva - 125.0).abs() < 1e-12);
+    assert_eq!(back.branches()[0].rating_sets.len(), 1);
+    assert_eq!(back.branches()[0].rating_sets[0].name, "RATE4");
+    assert!((back.branches()[0].rating_sets[0].rate_mva - 125.0).abs() < 1e-12);
 }
 
 #[test]
@@ -326,7 +326,7 @@ fn terminal_charging_projection_feeds_legacy_writer_b_fields() {
         "total susceptance"
     ));
     let back = parse_matpower(&matpower.text).unwrap();
-    close(back.branches[0].b, want_b);
+    close(back.branches()[0].b, want_b);
 
     let egret = write_egret_json(&net);
     assert!(has_warning(
@@ -347,7 +347,7 @@ fn terminal_charging_projection_feeds_legacy_writer_b_fields() {
         "total susceptance"
     ));
     let back = parse_powerworld(&powerworld.text).unwrap();
-    close(back.branches[0].b, want_b);
+    close(back.branches()[0].b, want_b);
 
     let pslf = write_pslf(&net);
     assert!(has_warning(
@@ -355,7 +355,7 @@ fn terminal_charging_projection_feeds_legacy_writer_b_fields() {
         "total susceptance"
     ));
     let back = parse_pslf(&pslf.text).unwrap();
-    close(back.branches[0].b, want_b);
+    close(back.branches()[0].b, want_b);
 }
 
 #[derive(Debug, PartialEq)]
@@ -379,20 +379,20 @@ struct Core {
 fn core(net: &BalancedNetwork) -> Core {
     let r = |x: f64| (x * 1e6).round() as i64;
     Core {
-        buses: net.buses.len(),
-        branches: net.branches.len(),
-        gens: net.generators.len(),
-        loads: net.loads.len(),
-        shunts: net.shunts.len(),
-        load_p: r(net.loads.iter().map(|l| l.p).sum()),
-        load_q: r(net.loads.iter().map(|l| l.q).sum()),
-        shunt_g: r(net.shunts.iter().map(|s| s.g).sum()),
-        shunt_b: r(net.shunts.iter().map(|s| s.b).sum()),
-        gen_p: r(net.generators.iter().map(|g| g.pg).sum()),
-        branch_r: r(net.branches.iter().map(|b| b.r).sum()),
-        branch_x: r(net.branches.iter().map(|b| b.x).sum()),
-        branch_b: r(net.branches.iter().map(|b| b.b).sum()),
-        base_mva: r(net.base_mva),
+        buses: net.buses().len(),
+        branches: net.branches().len(),
+        gens: net.generators().len(),
+        loads: net.loads().len(),
+        shunts: net.shunts().len(),
+        load_p: r(net.loads().iter().map(|l| l.p).sum()),
+        load_q: r(net.loads().iter().map(|l| l.q).sum()),
+        shunt_g: r(net.shunts().iter().map(|s| s.g).sum()),
+        shunt_b: r(net.shunts().iter().map(|s| s.b).sum()),
+        gen_p: r(net.generators().iter().map(|g| g.pg).sum()),
+        branch_r: r(net.branches().iter().map(|b| b.r).sum()),
+        branch_x: r(net.branches().iter().map(|b| b.x).sum()),
+        branch_b: r(net.branches().iter().map(|b| b.b).sum()),
+        base_mva: r(net.base_mva()),
     }
 }
 
@@ -410,7 +410,7 @@ fn pandapower_json_round_trips_core_and_echoes_source() {
     );
     let reparsed = parse_str(&conv.text, "pandapower-json").unwrap();
     let back = reparsed.network.clone();
-    assert_eq!(back.source_format, SourceFormat::PandapowerJson);
+    assert_eq!(back.source_format(), SourceFormat::PandapowerJson);
     assert_eq!(core(&back), core(&net));
     assert_eq!(
         reparsed
@@ -423,7 +423,7 @@ fn pandapower_json_round_trips_core_and_echoes_source() {
     let inferred_path = tmp_path("case9-pandapower-json", "json");
     std::fs::write(&inferred_path, &conv.text).unwrap();
     let inferred = parse_file(&inferred_path, None).unwrap().network;
-    assert_eq!(inferred.source_format, SourceFormat::PandapowerJson);
+    assert_eq!(inferred.source_format(), SourceFormat::PandapowerJson);
 }
 
 #[test]
@@ -447,7 +447,7 @@ fn pypsa_csv_folder_round_trips_core() {
         assert!(names.contains(expected), "missing {expected} in {names:?}");
     }
     let back = read_pypsa_csv_folder(&out).unwrap().network;
-    assert_eq!(back.source_format, SourceFormat::PypsaCsv);
+    assert_eq!(back.source_format(), SourceFormat::PypsaCsv);
     assert_eq!(core(&back), core(&net));
 }
 
@@ -474,13 +474,13 @@ fn pypsa_csv_folder_preserves_nonnumeric_bus_names() {
     .unwrap();
 
     let net = read_pypsa_csv_folder(&dir).unwrap().network;
-    assert_eq!(net.buses[0].id, BusId(1));
-    assert_eq!(net.buses[0].name.as_deref(), Some("alpha"));
-    assert_eq!(net.buses[1].id, BusId(2));
-    assert_eq!(net.buses[1].name.as_deref(), Some("beta"));
-    assert_eq!(net.loads[0].bus, BusId(2));
-    assert_eq!(net.branches[0].from, BusId(1));
-    assert_eq!(net.branches[0].to, BusId(2));
+    assert_eq!(net.buses()[0].id, BusId(1));
+    assert_eq!(net.buses()[0].name.as_deref(), Some("alpha"));
+    assert_eq!(net.buses()[1].id, BusId(2));
+    assert_eq!(net.buses()[1].name.as_deref(), Some("beta"));
+    assert_eq!(net.loads()[0].bus, BusId(2));
+    assert_eq!(net.branches()[0].from, BusId(1));
+    assert_eq!(net.branches()[0].to, BusId(2));
 }
 
 #[test]
@@ -501,8 +501,8 @@ fn pypsa_csv_folder_reads_storage_units() {
     .unwrap();
 
     let net = read_pypsa_csv_folder(&dir).unwrap().network;
-    assert_eq!(net.storage.len(), 1);
-    let st = &net.storage[0];
+    assert_eq!(net.storage().len(), 1);
+    let st = &net.storage()[0];
     assert_eq!(st.bus, BusId(1));
     assert_eq!(st.energy_rating, 100.0);
     assert_eq!(st.charge_rating, 25.0);
@@ -590,22 +590,23 @@ fn pandapower_line_rating_sentinel_reads_as_unlimited() {
     ]);
     let net = parse_str(&text, "pandapower-json").unwrap().network;
     assert_eq!(
-        net.branches[0].rate_a, 0.0,
+        net.branches()[0].rate_a,
+        0.0,
         ">= 99999 kA is the unlimited sentinel"
     );
     let want = 110.0 * 3.0_f64.sqrt();
-    assert!((net.branches[1].rate_a - want).abs() < 1e-9);
+    assert!((net.branches()[1].rate_a - want).abs() < 1e-9);
 }
 
 #[test]
 #[allow(clippy::float_cmp)]
 fn pandapower_writer_keeps_zero_rating_zero() {
     let mut net = parse_matpower_file(data("case9.m")).unwrap();
-    net.branches[0].rate_a = 0.0;
+    net.branches_mut()[0].rate_a = 0.0;
     let conv = write_network(&net, TargetFormat::PandapowerJson).unwrap();
     let back = parse_str(&conv.text, "pandapower-json").unwrap().network;
-    assert_eq!(back.branches[0].rate_a, 0.0);
-    assert!(back.branches[1].rate_a > 0.0, "other ratings survive");
+    assert_eq!(back.branches()[0].rate_a, 0.0);
+    assert!(back.branches()[1].rate_a > 0.0, "other ratings survive");
 }
 
 #[test]
@@ -620,17 +621,17 @@ fn pypsa_csv_folder_requires_buses_csv() {
 #[test]
 fn pypsa_csv_quoted_fields_round_trip() {
     let mut net = parse_matpower_file(data("case9.m")).unwrap();
-    net.buses[0].name = Some("weird, name\nwith \"newline\"".into());
+    net.buses_mut()[0].name = Some("weird, name\nwith \"newline\"".into());
     let dir = tmp_dir("pypsa-quoted-names");
     write_pypsa_csv_folder(&net, &dir).unwrap();
     let back = read_pypsa_csv_folder(&dir).unwrap().network;
-    assert_eq!(back.buses.len(), net.buses.len());
+    assert_eq!(back.buses().len(), net.buses().len());
     assert!(
-        back.buses
+        back.buses()
             .iter()
             .any(|b| b.name.as_deref() == Some("weird, name\nwith \"newline\"")),
         "quoted name lost: {:?}",
-        back.buses.iter().map(|b| &b.name).collect::<Vec<_>>()
+        back.buses().iter().map(|b| &b.name).collect::<Vec<_>>()
     );
 }
 
@@ -644,11 +645,15 @@ fn parse_file_routes_pypsa_folders() {
     // case with hyphens; the helper lowercases, so mixed case still lands.
     for alias in ["pypsa", "PyPSA", "pypsa-csv"] {
         let back = parse_file(&dir, Some(alias)).unwrap().network;
-        assert_eq!(back.source_format, SourceFormat::PypsaCsv, "alias {alias}");
+        assert_eq!(
+            back.source_format(),
+            SourceFormat::PypsaCsv,
+            "alias {alias}"
+        );
     }
     // No format: a directory with network.csv auto-detects as PyPSA.
     let back = parse_file(&dir, None).unwrap().network;
-    assert_eq!(back.source_format, SourceFormat::PypsaCsv);
+    assert_eq!(back.source_format(), SourceFormat::PypsaCsv);
 }
 
 fn tmp_dir(label: &str) -> PathBuf {
@@ -677,13 +682,16 @@ fn powermodels_structure_and_split() {
     assert_eq!(v["per_unit"], Value::Bool(true));
     assert_eq!(v["source_type"], "matpower");
     // Buses are keyed by their MATPOWER id; loads/shunts are split out of the bus.
-    assert_eq!(v["bus"].as_object().unwrap().len(), case.buses.len());
-    assert_eq!(v["branch"].as_object().unwrap().len(), case.branches.len());
-    assert_eq!(v["gen"].as_object().unwrap().len(), case.generators.len());
+    assert_eq!(v["bus"].as_object().unwrap().len(), case.buses().len());
+    assert_eq!(
+        v["branch"].as_object().unwrap().len(),
+        case.branches().len()
+    );
+    assert_eq!(v["gen"].as_object().unwrap().len(), case.generators().len());
 
     // A load/shunt exists for each bus that carries demand / a shunt.
-    let want_loads = case.loads.len();
-    let want_shunts = case.shunts.len();
+    let want_loads = case.loads().len();
+    let want_shunts = case.shunts().len();
     assert_eq!(v["load"].as_object().unwrap().len(), want_loads);
     assert_eq!(v["shunt"].as_object().unwrap().len(), want_shunts);
     assert!(want_loads > 0, "case30 has loads");
@@ -746,11 +754,11 @@ fn powermodels_preserves_rich_branch_and_switch_fields() {
         parsed.rendered_diagnostics()
     );
     let net = parsed.network.clone();
-    assert_eq!(net.loads.len(), 2);
-    assert_eq!(net.loads[0].bus, BusId(1));
-    assert_eq!(net.loads[1].bus, BusId(1));
+    assert_eq!(net.loads().len(), 2);
+    assert_eq!(net.loads()[0].bus, BusId(1));
+    assert_eq!(net.loads()[1].bus, BusId(1));
 
-    let br = &net.branches[0];
+    let br = &net.branches()[0];
     let charging = br.terminal_charging();
     assert!((charging.g_fr - 0.001).abs() < 1e-12);
     assert!((charging.b_fr - 0.02).abs() < 1e-12);
@@ -760,7 +768,7 @@ fn powermodels_preserves_rich_branch_and_switch_fields() {
     assert!((br.current_ratings.unwrap().c_rating_b - 600.0).abs() < 1e-12);
     assert!((br.solution.unwrap().pf - 12.5).abs() < 1e-12);
 
-    let sw = &net.switches[0];
+    let sw = &net.switches()[0];
     assert!(sw.closed);
     assert_eq!(sw.thermal_rating, Some(75.0));
     assert_eq!(sw.current_rating, Some(9.0));
@@ -844,26 +852,30 @@ fn rich_powermodels_typed_fields_survive_json_transport() {
     }"#;
 
     let net = parse_powermodels_json(json).unwrap();
-    assert_eq!(net.loads.len(), 2, "multiple loads per bus are first class");
-    assert!(net.loads.iter().all(|l| l.bus == BusId(1)));
+    assert_eq!(
+        net.loads().len(),
+        2,
+        "multiple loads per bus are first class"
+    );
+    assert!(net.loads().iter().all(|l| l.bus == BusId(1)));
 
-    let br = &net.branches[0];
+    let br = &net.branches()[0];
     let charging = br.terminal_charging();
     close(charging.g_fr, 0.001);
     close(charging.b_to, 0.04);
     close(br.current_ratings.unwrap().c_rating_c, 700.0);
     close(br.solution.unwrap().pf, 12.5);
 
-    let sw = &net.switches[0];
+    let sw = &net.switches()[0];
     assert!(sw.closed);
     close(sw.thermal_rating.unwrap(), 75.0);
     close(sw.current_rating.unwrap(), 9.0);
     close(sw.pf.unwrap(), 1.0);
 
-    let storage = &net.storage[0];
+    let storage = &net.storage()[0];
     close(storage.current_rating.unwrap(), 4.2);
 
-    let cost = net.hvdc[0].cost.as_ref().expect("HVDC cost is typed");
+    let cost = net.hvdc()[0].cost.as_ref().expect("HVDC cost is typed");
     for (got, want) in cost.coeffs.iter().zip([0.02, 3.0, 10.0]) {
         close(*got, want);
     }
@@ -877,12 +889,12 @@ fn rich_powermodels_typed_fields_survive_json_transport() {
         out.rendered_diagnostics()
     );
     let back = parse_powermodels_json(&out.text).unwrap();
-    assert_eq!(back.loads.len(), 2);
-    assert_eq!(back.branches[0].terminal_charging(), charging);
-    assert_eq!(back.switches[0].current_rating, Some(9.0));
-    assert_eq!(back.storage[0].current_rating, Some(4.2));
+    assert_eq!(back.loads().len(), 2);
+    assert_eq!(back.branches()[0].terminal_charging(), charging);
+    assert_eq!(back.switches()[0].current_rating, Some(9.0));
+    assert_eq!(back.storage()[0].current_rating, Some(4.2));
     assert_eq!(
-        back.hvdc[0].cost.as_ref().unwrap().coeffs,
+        back.hvdc()[0].cost.as_ref().unwrap().coeffs,
         vec![0.02, 3.0, 10.0]
     );
 }
@@ -918,7 +930,7 @@ fn rich_matpower_terminal_admittance_warning_shape() {
         mp.rendered_diagnostics()
     );
     let reread = parse_matpower(&mp.text).unwrap();
-    close(reread.branches[0].b, 0.04);
+    close(reread.branches()[0].b, 0.04);
 
     let asymmetric = base.replace(
         r#""g_to": 0.0, "b_to": 0.02"#,
@@ -949,22 +961,22 @@ COMMENT
 Q
 ";
     let net = parse_psse(raw).unwrap();
-    assert_eq!(net.loads.len(), 1);
-    assert!(net.loads[0].extras.contains_key("psse_loadtype"));
+    assert_eq!(net.loads().len(), 1);
+    assert!(net.loads()[0].extras.contains_key("psse_loadtype"));
     let Some(LoadVoltageModel::Zip {
         p_constant_power,
         q_constant_current,
         p_constant_impedance,
         ..
-    }) = &net.loads[0].voltage_model
+    }) = &net.loads()[0].voltage_model
     else {
         panic!("PSS/E ZIP load pieces were not typed");
     };
     close(*p_constant_power, 10.0);
     close(*q_constant_current, 0.5);
     close(*p_constant_impedance, 2.0);
-    close(net.loads[0].p, 13.0);
-    close(net.loads[0].q, 5.0);
+    close(net.loads()[0].p, 13.0);
+    close(net.loads()[0].q, 5.0);
 }
 
 #[test]
@@ -996,7 +1008,7 @@ Q
         p_constant_current,
         p_constant_impedance,
         ..
-    }) = &back.loads[0].voltage_model
+    }) = &back.loads()[0].voltage_model
     else {
         panic!("PSLF writer flattened typed ZIP components");
     };
@@ -1062,7 +1074,7 @@ fn rich_pandapower_zip_and_terminal_conductance_are_typed() {
         q_constant_current,
         q_constant_impedance,
         ..
-    }) = &parsed.network.loads[0].voltage_model
+    }) = &parsed.network.loads()[0].voltage_model
     else {
         panic!("pandapower ZIP columns were not typed");
     };
@@ -1073,7 +1085,7 @@ fn rich_pandapower_zip_and_terminal_conductance_are_typed() {
     close(*q_constant_current, 2.0);
     close(*q_constant_power, 2.5);
     assert!(
-        parsed.network.branches[0].terminal_charging().g_fr > 0.0,
+        parsed.network.branches()[0].terminal_charging().g_fr > 0.0,
         "line shunt conductance should be typed terminal admittance"
     );
 }
@@ -1088,7 +1100,7 @@ fn powermodels_transformer_flag_tracks_raw_tap() {
     // shift ≠ 0) is a line. The writer must emit that same flag.
     let case = parse_matpower_file(data("case57.m")).unwrap();
     let v: Value = serde_json::from_str(&write_powermodels_json(&case).text).unwrap();
-    let any_explicit_tap = case.branches.iter().any(|b| b.tap == 1.0);
+    let any_explicit_tap = case.branches().iter().any(|b| b.tap == 1.0);
     assert!(
         any_explicit_tap,
         "fixture expectation: case57 has an explicit tap=1 branch"
@@ -1099,7 +1111,7 @@ fn powermodels_transformer_flag_tracks_raw_tap() {
         .values()
         .filter(|b| b["transformer"] == Value::Bool(true))
         .count();
-    let raw_xfmr = case.branches.iter().filter(|b| b.tap != 0.0).count();
+    let raw_xfmr = case.branches().iter().filter(|b| b.tap != 0.0).count();
     assert_eq!(xfmr, raw_xfmr);
 }
 
@@ -1125,16 +1137,19 @@ fn egret_structure() {
     let case = parse_matpower_file(data("case30.m")).unwrap();
     let v: Value = serde_json::from_str(&write_egret_json(&case).text).unwrap();
     let elements = &v["elements"];
-    assert_eq!(elements["bus"].as_object().unwrap().len(), case.buses.len());
+    assert_eq!(
+        elements["bus"].as_object().unwrap().len(),
+        case.buses().len()
+    );
     assert_eq!(
         elements["branch"].as_object().unwrap().len(),
-        case.branches.len()
+        case.branches().len()
     );
     assert_eq!(
         elements["generator"].as_object().unwrap().len(),
-        case.generators.len()
+        case.generators().len()
     );
-    assert_eq!(v["system"]["baseMVA"], case.base_mva);
+    assert_eq!(v["system"]["baseMVA"], case.base_mva());
     assert!(v["system"].get("reference_bus").is_some());
     // A branch is typed line/transformer and a generator carries a cost curve.
     assert!(elements["branch"]["1"]["branch_type"].is_string());
@@ -1188,16 +1203,19 @@ fn powermodels_json_to_matpower_two_way() {
     let orig = parse_matpower_file(data("case30.m")).unwrap();
     let json = write_powermodels_json(&orig).text;
     let net = parse_powermodels_json(&json).unwrap();
-    assert_eq!(net.source_format, powerio_tx::SourceFormat::PowerModelsJson);
+    assert_eq!(
+        net.source_format(),
+        powerio_tx::SourceFormat::PowerModelsJson
+    );
 
     let reparsed =
         parse_matpower(&write_network(&net, TargetFormat::Matpower).unwrap().text).unwrap();
-    assert_eq!(reparsed.buses.len(), orig.buses.len());
-    assert_eq!(reparsed.branches.len(), orig.branches.len());
-    assert_eq!(reparsed.generators.len(), orig.generators.len());
-    assert_eq!(reparsed.base_mva, orig.base_mva);
+    assert_eq!(reparsed.buses().len(), orig.buses().len());
+    assert_eq!(reparsed.branches().len(), orig.branches().len());
+    assert_eq!(reparsed.generators().len(), orig.generators().len());
+    assert_eq!(reparsed.base_mva(), orig.base_mva());
     // Total demand survives the bus→load split and the fold back onto the bus.
-    let load_of = |c: &powerio_tx::BalancedNetwork| c.loads.iter().map(|l| l.p).sum::<f64>();
+    let load_of = |c: &powerio_tx::BalancedNetwork| c.loads().iter().map(|l| l.p).sum::<f64>();
     assert!((load_of(&orig) - load_of(&reparsed)).abs() < 1e-9);
 }
 
@@ -1207,14 +1225,14 @@ fn psse_reads_real_pti_files() {
     // tests/data/psse). Validates the reader against third-party input, not just
     // powerio's own round-trip. Value-vs-PowerModels lives in validate_psse.jl.
     let c14 = parse_psse(&std::fs::read_to_string(data("psse/case14.raw")).unwrap()).unwrap();
-    assert_eq!(c14.buses.len(), 14);
-    assert_eq!(c14.source_format, SourceFormat::Psse);
-    assert!(!c14.branches.is_empty() && !c14.generators.is_empty());
+    assert_eq!(c14.buses().len(), 14);
+    assert_eq!(c14.source_format(), SourceFormat::Psse);
+    assert!(!c14.branches().is_empty() && !c14.generators().is_empty());
 
     // case5 carries phase-shifting and 2-winding transformers.
     let c5 = parse_psse(&std::fs::read_to_string(data("psse/case5.raw")).unwrap()).unwrap();
-    assert_eq!(c5.buses.len(), 5);
-    let transformers = c5.branches.iter().filter(|b| b.is_transformer()).count();
+    assert_eq!(c5.buses().len(), 5);
+    let transformers = c5.branches().iter().filter(|b| b.is_transformer()).count();
     assert!(transformers > 0, "case5.raw should have transformers");
 }
 
@@ -1223,8 +1241,12 @@ fn psse_reads_real_pti_files() {
 /// Endpoint identity alone would pass while a power or limit field silently
 /// changed, which is what a lossless mapping has to rule out.
 fn assert_hvdc_survives(before: &BalancedNetwork, after: &BalancedNetwork, format: &str) {
-    assert_eq!(after.hvdc.len(), before.hvdc.len(), "{format} dcline count");
-    for (i, (a, b)) in before.hvdc.iter().zip(&after.hvdc).enumerate() {
+    assert_eq!(
+        after.hvdc().len(),
+        before.hvdc().len(),
+        "{format} dcline count"
+    );
+    for (i, (a, b)) in before.hvdc().iter().zip(after.hvdc()).enumerate() {
         assert_eq!((b.from, b.to), (a.from, a.to), "{format} dcline {i} buses");
         assert_eq!(b.in_service, a.in_service, "{format} dcline {i} status");
         for (field, x, y) in [
@@ -1257,7 +1279,7 @@ fn hvdc_converts_and_round_trips() {
     // PSS/E round-trip them (PSS/E as two-terminal DC); PowerWorld and the
     // canonical MATPOWER writer drop them with a warning.
     let net = parse_matpower_file(data("t_case9_dcline.m")).unwrap();
-    assert!(!net.hvdc.is_empty(), "fixture should have dclines");
+    assert!(!net.hvdc().is_empty(), "fixture should have dclines");
 
     let pm = write_powermodels_json(&net);
     assert!(
@@ -1293,12 +1315,12 @@ fn hvdc_converts_and_round_trips() {
     let psse = write_psse(&net);
     let from_psse = parse_psse(&psse.text).unwrap();
     assert_eq!(
-        from_psse.hvdc.len(),
-        net.hvdc.len(),
+        from_psse.hvdc().len(),
+        net.hvdc().len(),
         "PSS/E keeps the dclines"
     );
-    assert_eq!(from_psse.hvdc[0].from, net.hvdc[0].from);
-    assert_eq!(from_psse.hvdc[0].to, net.hvdc[0].to);
+    assert_eq!(from_psse.hvdc()[0].from, net.hvdc()[0].from);
+    assert_eq!(from_psse.hvdc()[0].to, net.hvdc()[0].to);
     assert!(
         psse.rendered_diagnostics()
             .iter()
@@ -1320,7 +1342,7 @@ fn hvdc_converts_and_round_trips() {
     // blocks the reader reads. `net` itself is MATPOWER-sourced, so write_as
     // would echo its source; convert through PowerModels first to reach the
     // canonical MATPOWER path with HVDC still present.
-    assert_eq!(back.source_format, SourceFormat::PowerModelsJson);
+    assert_eq!(back.source_format(), SourceFormat::PowerModelsJson);
     let to_mp = write_network(&back, TargetFormat::Matpower).unwrap();
     assert!(
         !to_mp
@@ -1334,9 +1356,9 @@ fn hvdc_converts_and_round_trips() {
     assert_hvdc_survives(&net, &from_mp, "canonical MATPOWER .m");
     // The usage cost rides `mpc.dclinecost`: stated on dcline 5 -> 9 only, and
     // the zero padding rows on the other three read back as no cost.
-    let costs: Vec<_> = from_mp.hvdc.iter().map(|d| d.cost.is_some()).collect();
+    let costs: Vec<_> = from_mp.hvdc().iter().map(|d| d.cost.is_some()).collect();
     assert_eq!(costs, [false, false, false, true]);
-    let cost = from_mp.hvdc[3].cost.as_ref().unwrap();
+    let cost = from_mp.hvdc()[3].cost.as_ref().unwrap();
     assert_eq!((cost.model, cost.ncost), (2, 2));
     assert_eq!(cost.coeffs, [7.3, 0.0]);
 }
@@ -1348,7 +1370,7 @@ fn hvdc_round_trips_through_pslf() {
     // status. (PSLF keeps the AC converters separate from the DC line; the writer
     // synthesizes the DC bus join keys.)
     let net = parse_matpower_file(data("t_case9_dcline.m")).unwrap();
-    assert!(!net.hvdc.is_empty(), "fixture should have dclines");
+    assert!(!net.hvdc().is_empty(), "fixture should have dclines");
 
     let pslf = write_pslf(&net);
     // The writer zeroes every converter field the model does not carry, and the
@@ -1373,8 +1395,8 @@ fn hvdc_round_trips_through_pslf() {
         pslf.rendered_diagnostics()
     );
     let back = parse_pslf(&pslf.text).unwrap();
-    assert_eq!(back.hvdc.len(), net.hvdc.len(), "every dcline survives");
-    for (a, b) in net.hvdc.iter().zip(&back.hvdc) {
+    assert_eq!(back.hvdc().len(), net.hvdc().len(), "every dcline survives");
+    for (a, b) in net.hvdc().iter().zip(back.hvdc()) {
         assert_eq!(b.from, a.from);
         assert_eq!(b.to, a.to);
         assert_eq!(b.in_service, a.in_service);
@@ -1415,9 +1437,9 @@ fn surge_hvdc_carries_the_converter_terminal_fields_its_reader_reads() {
     let net = parse_matpower_file(data("t_case9_dcline.m")).unwrap();
     let surge = write_network(&net, TargetFormat::SurgeJson).unwrap();
     let back = parse_str(&surge.text, "surge-json").unwrap().network;
-    assert_eq!(back.hvdc.len(), net.hvdc.len());
+    assert_eq!(back.hvdc().len(), net.hvdc().len());
 
-    for (a, b) in net.hvdc.iter().zip(&back.hvdc) {
+    for (a, b) in net.hvdc().iter().zip(back.hvdc()) {
         for (field, x, y) in [
             ("vf", a.vf, b.vf),
             ("vt", a.vt, b.vt),
@@ -1458,7 +1480,7 @@ fn pslf_carries_the_voltage_setpoint_of_a_bus_with_no_base_kv() {
     // and needs no base, so the setpoint rides there instead of being dropped.
     let net = parse_matpower_file(data("case14.m")).unwrap();
     assert!(
-        net.buses.iter().all(|b| b.base_kv == 0.0),
+        net.buses().iter().all(|b| b.base_kv == 0.0),
         "case14 states no base kV, which is what makes reg_kv unusable"
     );
 
@@ -1472,8 +1494,8 @@ fn pslf_carries_the_voltage_setpoint_of_a_bus_with_no_base_kv() {
         pslf.rendered_diagnostics()
     );
     let back = parse_pslf(&pslf.text).unwrap();
-    assert_eq!(back.generators.len(), net.generators.len());
-    for (a, b) in net.generators.iter().zip(&back.generators) {
+    assert_eq!(back.generators().len(), net.generators().len());
+    for (a, b) in net.generators().iter().zip(back.generators()) {
         assert!(
             (a.vg - b.vg).abs() < 1e-9,
             "generator at bus {} setpoint changed: {} != {}",
@@ -1496,10 +1518,10 @@ fn powermodels_reader_handles_per_unit_input() {
       "load": {}, "shunt": {}, "dcline": {}, "storage": {}
     }"#;
     let net = parse_powermodels_json(json).unwrap();
-    let g = &net.generators[0];
+    let g = &net.generators()[0];
     assert!((g.pg - 200.0).abs() < 1e-6, "pg p.u.→MW"); // 2.0 * 100
     assert!((g.pmax - 300.0).abs() < 1e-6);
-    assert!((net.branches[0].angmax - 30.0).abs() < 1e-2, "rad→deg"); // 0.5236 rad
+    assert!((net.branches()[0].angmax - 30.0).abs() < 1e-2, "rad→deg"); // 0.5236 rad
     let cost = g.cost.as_ref().unwrap();
     assert!(
         (cost.coeffs[0] - 0.043_029_3).abs() < 1e-6,
@@ -1585,7 +1607,7 @@ fn powermodels_dcline_flips_pt_qf_qt_sign() {
     // can't catch a sign error on its own — this checks the absolute sign).
     let net = parse_matpower_file(data("t_case9_dcline.m")).unwrap();
     let dc = net
-        .hvdc
+        .hvdc()
         .iter()
         .find(|d| d.pt != 0.0)
         .expect("a dcline with nonzero Pt");
@@ -1605,7 +1627,7 @@ fn powermodels_dcline_flips_pt_qf_qt_sign() {
         "pt sign must flip on write"
     );
     assert!(
-        (emitted_pt + dc.pt / net.base_mva).abs() < 1e-9,
+        (emitted_pt + dc.pt / net.base_mva()).abs() < 1e-9,
         "pt = -Pt / base"
     );
 }
@@ -1613,7 +1635,7 @@ fn powermodels_dcline_flips_pt_qf_qt_sign() {
 #[test]
 fn powermodels_dcline_cost_round_trips() {
     let mut net = parse_matpower_file(data("t_case9_dcline.m")).unwrap();
-    let dc = net.hvdc.first_mut().expect("fixture has dclines");
+    let dc = net.hvdc_mut().first_mut().expect("fixture has dclines");
     dc.cost = Some(powerio_tx::network::GenCost::new(
         2,
         0.0,
@@ -1622,7 +1644,7 @@ fn powermodels_dcline_cost_round_trips() {
     ));
 
     let back = parse_powermodels_json(&write_powermodels_json(&net).text).unwrap();
-    let got = back.hvdc[0].cost.as_ref().expect("dcline cost survives");
+    let got = back.hvdc()[0].cost.as_ref().expect("dcline cost survives");
     assert_eq!(got.model, 2);
     assert_eq!(got.ncost, 3);
     for (got, want) in got.coeffs.iter().zip([0.02, 3.0, 10.0]) {
@@ -1642,7 +1664,7 @@ fn powermodels_storage_ps_qs_stay_raw() {
       "storage": {"1": {"index":1,"storage_bus":1,"ps":0.5,"qs":0.25,"energy":1.0,"energy_rating":6.0,"charge_rating":3.0,"discharge_rating":3.0,"charge_efficiency":0.9,"discharge_efficiency":0.9,"thermal_rating":3.0,"qmin":-1.0,"qmax":1.0,"r":0.0,"x":0.0,"p_loss":0.0,"q_loss":0.0,"status":1}}
     }"#;
     let net = parse_powermodels_json(json).unwrap();
-    let s = &net.storage[0];
+    let s = &net.storage()[0];
     assert!((s.ps - 0.5).abs() < 1e-9, "ps stays raw");
     assert!((s.qs - 0.25).abs() < 1e-9, "qs stays raw");
     assert!(
@@ -1657,8 +1679,8 @@ fn powermodels_unbounded_limit_round_trips_as_infinity() {
     // A gen qmax = Inf writes as JSON null (with a warning); the reader must read it
     // back as unbounded, not as a binding 0.0.
     let mut net = parse_matpower_file(data("case9.m")).unwrap();
-    net.generators[0].qmax = f64::INFINITY;
-    net.generators[0].qmin = f64::NEG_INFINITY;
+    net.generators_mut()[0].qmax = f64::INFINITY;
+    net.generators_mut()[0].qmin = f64::NEG_INFINITY;
     let conv = write_powermodels_json(&net);
     assert!(
         conv.rendered_diagnostics()
@@ -1667,8 +1689,8 @@ fn powermodels_unbounded_limit_round_trips_as_infinity() {
         "expected null warning"
     );
     let back = parse_powermodels_json(&conv.text).unwrap();
-    assert!(back.generators[0].qmax.is_infinite() && back.generators[0].qmax > 0.0);
-    assert!(back.generators[0].qmin.is_infinite() && back.generators[0].qmin < 0.0);
+    assert!(back.generators()[0].qmax.is_infinite() && back.generators()[0].qmax > 0.0);
+    assert!(back.generators()[0].qmin.is_infinite() && back.generators()[0].qmin < 0.0);
 }
 
 #[test]
@@ -1686,7 +1708,7 @@ fn parse_file_accepts_uppercase_and_mixed_case_extensions() {
         let net = result
             .unwrap_or_else(|e| panic!(".{ext} extension should be accepted: {e}"))
             .network;
-        assert_eq!(net.buses.len(), 14, ".{ext}: wrong bus count");
+        assert_eq!(net.buses().len(), 14, ".{ext}: wrong bus count");
     }
 
     // One uppercase probe per remaining extension; the JSON goes through the
@@ -1705,7 +1727,7 @@ fn parse_file_accepts_uppercase_and_mixed_case_extensions() {
         let parsed = result
             .unwrap_or_else(|e| panic!(".{ext} extension should be accepted: {e}"))
             .network;
-        assert_eq!(parsed.buses.len(), 14, ".{ext}: wrong bus count");
+        assert_eq!(parsed.buses().len(), 14, ".{ext}: wrong bus count");
     }
 }
 
@@ -1715,9 +1737,9 @@ fn oos_fixture_marks_out_of_service_elements() {
     // those in_service=false flags.
     // The fixture otherwise runs only in the Julia validators.
     let net = parse_matpower_file(data("t_case9_oos.m")).unwrap();
-    assert_eq!(net.generators.iter().filter(|g| !g.in_service).count(), 1);
+    assert_eq!(net.generators().iter().filter(|g| !g.in_service).count(), 1);
     let br = net
-        .branches
+        .branches()
         .iter()
         .find(|b| b.from == BusId(5) && b.to == BusId(6))
         .expect("branch 5-6");
@@ -1769,51 +1791,51 @@ fn pandapower_genuine_fixture_reads() {
     // unit and a dcline. sn_mva = 1, f_hz = 50.
     let parsed = parse_file(data("pandapower/example.json"), None).unwrap();
     let net = &parsed.network;
-    assert_eq!(net.source_format, SourceFormat::PandapowerJson);
-    assert_eq!(net.base_mva, 1.0);
+    assert_eq!(net.source_format(), SourceFormat::PandapowerJson);
+    assert_eq!(net.base_mva(), 1.0);
 
     // pandas index 0..=6 shifts to BusId 1..=7.
-    let ids: Vec<usize> = net.buses.iter().map(|b| b.id.0).collect();
+    let ids: Vec<usize> = net.buses().iter().map(|b| b.id.0).collect();
     assert_eq!(ids, (1..=7).collect::<Vec<_>>());
-    assert_eq!(net.buses[0].name.as_deref(), Some("HV Busbar"));
+    assert_eq!(net.buses()[0].name.as_deref(), Some("HV Busbar"));
 
     // ext_grid on pp bus 0 -> Ref; gen (slack=False) on pp bus 5 -> Pv; the
     // sgen on pp bus 6 is a PQ injection and leaves its bus kind alone.
-    assert_eq!(net.buses[0].kind, BusType::Ref);
-    assert_eq!(net.buses[5].kind, BusType::Pv);
-    assert_eq!(net.buses[6].kind, BusType::Pq);
+    assert_eq!(net.buses()[0].kind, BusType::Ref);
+    assert_eq!(net.buses()[5].kind, BusType::Pv);
+    assert_eq!(net.buses()[6].kind, BusType::Pq);
 
     // gen + ext_grid + sgen, in table order.
-    assert_eq!(net.generators.len(), 3);
-    let g = &net.generators[0];
+    assert_eq!(net.generators().len(), 3);
+    let g = &net.generators()[0];
     assert_eq!(g.bus, BusId(6));
     assert_eq!(g.pg, 6.0);
     assert_eq!(g.vg, 1.03);
-    let ext = &net.generators[1];
+    let ext = &net.generators()[1];
     assert_eq!(ext.bus, BusId(1));
     assert_eq!(ext.vg, 1.02);
     assert_eq!(ext.pg, 0.0);
-    let sgen = &net.generators[2];
+    let sgen = &net.generators()[2];
     assert_eq!(sgen.bus, BusId(7));
     assert_eq!(sgen.pg, 2.0);
     assert_eq!(sgen.qg, -0.5);
     assert_eq!(sgen.pmax, 2.0); // max_p_mw absent -> defaults to p_mw
 
     // load scaling 0.6 applies to p and q.
-    assert_eq!(net.loads.len(), 1);
-    close(net.loads[0].p, 2.0 * 0.6);
-    close(net.loads[0].q, 4.0 * 0.6);
+    assert_eq!(net.loads().len(), 1);
+    close(net.loads()[0].p, 2.0 * 0.6);
+    close(net.loads()[0].q, 4.0 * 0.6);
 
     // shunt: q_mvar = -0.96 -> b = +0.96 (MATPOWER sign).
-    assert_eq!(net.shunts.len(), 1);
-    assert_eq!(net.shunts[0].bus, BusId(3));
-    close(net.shunts[0].b, 0.96);
+    assert_eq!(net.shunts().len(), 1);
+    assert_eq!(net.shunts()[0].bus, BusId(3));
+    close(net.shunts()[0].b, 0.96);
 
     // 4 lines + 1 trafo. The trafo reconstructs r/x from vkr/vk on the sn_mva
     // base: vk=12%, vkr=0.41%, sn=25, base=1.
-    assert_eq!(net.branches.len(), 5);
+    assert_eq!(net.branches().len(), 5);
     let xf = net
-        .branches
+        .branches()
         .iter()
         .find(|b| b.is_transformer())
         .expect("trafo");
@@ -1834,7 +1856,7 @@ fn pandapower_genuine_fixture_reads() {
     // Line 1: 10 km at 110 kV. r/x/b all scale by length; b is
     // c_nf_per_km * length * 2*pi*f * zbase (pandapower build_branch).
     let l1 = net
-        .branches
+        .branches()
         .iter()
         .find(|b| (b.from, b.to) == (BusId(1), BusId(2)))
         .expect("Line 1");
@@ -1847,16 +1869,16 @@ fn pandapower_genuine_fixture_reads() {
     );
 
     // storage and dcline land on BalancedNetwork.storage / BalancedNetwork.hvdc.
-    assert_eq!(net.storage.len(), 1);
-    let st = &net.storage[0];
+    assert_eq!(net.storage().len(), 1);
+    let st = &net.storage()[0];
     assert_eq!(st.bus, BusId(7));
     assert_eq!(st.ps, 0.5);
     assert_eq!(st.qs, 0.1);
     assert_eq!(st.energy_rating, 2.0);
     assert_eq!(st.charge_rating, 0.5); // max_p_mw absent -> |ps|
     assert_eq!(st.discharge_rating, 0.5);
-    assert_eq!(net.hvdc.len(), 1);
-    let dc = &net.hvdc[0];
+    assert_eq!(net.hvdc().len(), 1);
+    let dc = &net.hvdc()[0];
     assert_eq!((dc.from, dc.to), (BusId(4), BusId(5)));
     assert_eq!(dc.pf, 2.0);
     close(dc.pt, 2.0 - 0.05 - 2.0 * 1.0 / 100.0);
@@ -1890,24 +1912,24 @@ fn pypsa_genuine_export_reads() {
     // parses as a PyPSA CSV folder without an explicit `from`.
     let parsed = parse_file(data("pypsa/example"), None).unwrap();
     let net = &parsed.network;
-    assert_eq!(net.source_format, SourceFormat::PypsaCsv);
-    assert_eq!(net.name, "example");
-    assert_eq!(net.base_mva, 1.0);
+    assert_eq!(net.source_format(), SourceFormat::PypsaCsv);
+    assert_eq!(net.name(), "example");
+    assert_eq!(net.base_mva(), 1.0);
 
     // Non-numeric names -> scheme B: positional ids, names kept.
-    assert_eq!(net.buses.len(), 3);
-    let names: Vec<_> = net.buses.iter().map(|b| b.name.as_deref()).collect();
+    assert_eq!(net.buses().len(), 3);
+    let names: Vec<_> = net.buses().iter().map(|b| b.name.as_deref()).collect();
     assert_eq!(names, [Some("north"), Some("south"), Some("east")]);
-    assert_eq!(net.buses[0].id, BusId(1));
-    assert_eq!(net.buses[2].base_kv, 20.0);
+    assert_eq!(net.buses()[0].id, BusId(1));
+    assert_eq!(net.buses()[2].base_kv, 20.0);
 
     // control Slack -> Ref, PV -> Pv, PQ leaves the bus alone.
-    assert_eq!(net.buses[0].kind, BusType::Ref);
-    assert_eq!(net.buses[1].kind, BusType::Pv);
-    assert_eq!(net.buses[2].kind, BusType::Pq);
+    assert_eq!(net.buses()[0].kind, BusType::Ref);
+    assert_eq!(net.buses()[1].kind, BusType::Pv);
+    assert_eq!(net.buses()[2].kind, BusType::Pq);
 
-    assert_eq!(net.generators.len(), 3);
-    let slack = &net.generators[0];
+    assert_eq!(net.generators().len(), 3);
+    let slack = &net.generators()[0];
     assert_eq!(slack.bus, BusId(1));
     assert_eq!(slack.pg, 50.0);
     assert_eq!(slack.pmax, 120.0);
@@ -1917,15 +1939,15 @@ fn pypsa_genuine_export_reads() {
     // Line l1 r/x are ohms -> per unit on zbase(110 kV, base 1); the
     // transformer t1 is per unit on its own s_nom = 60 and rebases by
     // base_mva / 60.
-    assert_eq!(net.branches.len(), 2);
-    let line = &net.branches[0];
+    assert_eq!(net.branches().len(), 2);
+    let line = &net.branches()[0];
     assert_eq!((line.from, line.to), (BusId(1), BusId(2)));
     let zb = 110.0 * 110.0 / 1.0;
     close(line.r, 0.5 / zb);
     close(line.x, 2.0 / zb);
     close(line.b, 1e-5 * zb);
     assert_eq!(line.rate_a, 100.0);
-    let xf = &net.branches[1];
+    let xf = &net.branches()[1];
     assert!(xf.is_transformer());
     assert_eq!((xf.from, xf.to), (BusId(2), BusId(3)));
     close(xf.r, 0.01 * 1.0 / 60.0);
@@ -1933,27 +1955,27 @@ fn pypsa_genuine_export_reads() {
     assert_eq!(xf.rate_a, 60.0);
     assert_eq!(xf.tap, 1.05);
 
-    assert_eq!(net.loads.len(), 1);
-    assert_eq!(net.loads[0].bus, BusId(3));
-    assert_eq!(net.loads[0].p, 40.0);
+    assert_eq!(net.loads().len(), 1);
+    assert_eq!(net.loads()[0].bus, BusId(3));
+    assert_eq!(net.loads()[0].p, 40.0);
 
     // storage p_nom = 25, max_hours = 4.
-    assert_eq!(net.storage.len(), 1);
-    let st = &net.storage[0];
+    assert_eq!(net.storage().len(), 1);
+    let st = &net.storage()[0];
     assert_eq!(st.charge_rating, 25.0);
     assert_eq!(st.energy_rating, 100.0);
     assert_eq!(st.ps, 3.0);
     assert_eq!(st.energy, 20.0);
 
     // link -> Hvdc, with the one fidelity warning.
-    assert_eq!(net.hvdc.len(), 1);
-    let h = &net.hvdc[0];
+    assert_eq!(net.hvdc().len(), 1);
+    let h = &net.hvdc()[0];
     assert_eq!(h.pf, 10.0);
     close(h.pt, 9.7);
     assert_eq!(h.pmax, 30.0);
 
-    assert_eq!(net.shunts.len(), 1);
-    close(net.shunts[0].b, 1e-4 * zb * 1.0);
+    assert_eq!(net.shunts().len(), 1);
+    close(net.shunts()[0].b, 1e-4 * zb * 1.0);
 
     assert_eq!(
         parsed
@@ -2032,14 +2054,14 @@ fn pypsa_empty_folder_rejected_via_parse_file() {
 // exercising the OOS transformer and OOS shunt write paths.
 fn knock_out_case14(net: &mut BalancedNetwork) {
     let xf = net
-        .branches
+        .branches_mut()
         .iter_mut()
         .find(|b| b.from == BusId(4) && b.to == BusId(7))
         .expect("case14 branch 4-7");
     assert!(xf.is_transformer(), "branch 4-7 is a transformer");
     xf.in_service = false;
     let sh = net
-        .shunts
+        .shunts_mut()
         .iter_mut()
         .find(|s| s.bus == BusId(9))
         .expect("case14 bus 9 shunt");
@@ -2061,26 +2083,29 @@ fn pandapower_json_round_trips_transformers_shunts_and_oos() {
         let back = parse_str(&conv.text, "pandapower-json").unwrap().network;
         assert_eq!(core(&back), core(&net), "{case}");
         assert_eq!(
-            back.branches.iter().filter(|b| b.is_transformer()).count(),
-            net.branches.iter().filter(|b| b.is_transformer()).count(),
+            back.branches()
+                .iter()
+                .filter(|b| b.is_transformer())
+                .count(),
+            net.branches().iter().filter(|b| b.is_transformer()).count(),
             "{case}: transformer count"
         );
         // The writers split lines and transformers into separate tables, so
         // branch order changes; compare keyed by endpoints (no parallel
         // branches in these cases).
-        for rb in &net.branches {
+        for rb in net.branches() {
             let b = back
-                .branches
+                .branches()
                 .iter()
                 .find(|b| b.from == rb.from && b.to == rb.to)
                 .unwrap_or_else(|| panic!("{case}: branch {:?}-{:?} lost", rb.from, rb.to));
             close(b.effective_tap(), rb.effective_tap());
             assert_eq!(b.in_service, rb.in_service, "{case}: branch in_service");
         }
-        for (g, rg) in back.generators.iter().zip(&net.generators) {
+        for (g, rg) in back.generators().iter().zip(net.generators()) {
             assert_eq!(g.in_service, rg.in_service, "{case}: gen in_service");
         }
-        for (s, rs) in back.shunts.iter().zip(&net.shunts) {
+        for (s, rs) in back.shunts().iter().zip(net.shunts()) {
             assert_eq!(s.bus, rs.bus, "{case}: shunt bus");
             assert_eq!(s.in_service, rs.in_service, "{case}: shunt in_service");
         }
@@ -2107,26 +2132,29 @@ fn pypsa_csv_round_trips_transformers_shunts_and_oos() {
         let back = read_pypsa_csv_folder(&out).unwrap().network;
         assert_eq!(core(&back), core(&net), "{case}");
         assert_eq!(
-            back.branches.iter().filter(|b| b.is_transformer()).count(),
-            net.branches.iter().filter(|b| b.is_transformer()).count(),
+            back.branches()
+                .iter()
+                .filter(|b| b.is_transformer())
+                .count(),
+            net.branches().iter().filter(|b| b.is_transformer()).count(),
             "{case}: transformer count"
         );
         // The writers split lines and transformers into separate tables, so
         // branch order changes; compare keyed by endpoints (no parallel
         // branches in these cases).
-        for rb in &net.branches {
+        for rb in net.branches() {
             let b = back
-                .branches
+                .branches()
                 .iter()
                 .find(|b| b.from == rb.from && b.to == rb.to)
                 .unwrap_or_else(|| panic!("{case}: branch {:?}-{:?} lost", rb.from, rb.to));
             close(b.effective_tap(), rb.effective_tap());
             assert_eq!(b.in_service, rb.in_service, "{case}: branch in_service");
         }
-        for (g, rg) in back.generators.iter().zip(&net.generators) {
+        for (g, rg) in back.generators().iter().zip(net.generators()) {
             assert_eq!(g.in_service, rg.in_service, "{case}: gen in_service");
         }
-        for (s, rs) in back.shunts.iter().zip(&net.shunts) {
+        for (s, rs) in back.shunts().iter().zip(net.shunts()) {
             assert_eq!(s.bus, rs.bus, "{case}: shunt bus");
             assert_eq!(s.in_service, rs.in_service, "{case}: shunt in_service");
         }
@@ -2140,8 +2168,8 @@ fn gen_costs_round_trip_through_pandapower_json() {
     let net = parse_matpower_file(data("case9.m")).unwrap();
     let conv = write_network(&net, TargetFormat::PandapowerJson).unwrap();
     let back = parse_str(&conv.text, "pandapower-json").unwrap().network;
-    assert_eq!(back.generators.len(), net.generators.len());
-    for (g, rg) in back.generators.iter().zip(&net.generators) {
+    assert_eq!(back.generators().len(), net.generators().len());
+    for (g, rg) in back.generators().iter().zip(net.generators()) {
         let got = &g.cost.as_ref().expect("cost survives").coeffs;
         let want = &rg.cost.as_ref().unwrap().coeffs;
         assert_eq!(got.len(), 3);
@@ -2159,7 +2187,7 @@ fn gen_costs_round_trip_through_pypsa_csv() {
     let out = tmp_dir("pypsa-costs");
     write_pypsa_csv_folder(&net, &out).unwrap();
     let back = read_pypsa_csv_folder(&out).unwrap().network;
-    for (g, rg) in back.generators.iter().zip(&net.generators) {
+    for (g, rg) in back.generators().iter().zip(net.generators()) {
         let got = &g.cost.as_ref().expect("cost survives").coeffs;
         let want = &rg.cost.as_ref().unwrap().coeffs;
         assert_eq!(got.len(), 3);
@@ -2266,7 +2294,7 @@ fn pypsa_written_folder_joins_on_bus_names() {
 
     // And the folder reads back with the references resolved by name.
     let back = read_pypsa_csv_folder(&out).unwrap().network;
-    assert_eq!(back.loads[0].bus, back.buses[2].id);
+    assert_eq!(back.loads()[0].bus, back.buses()[2].id);
 }
 
 #[test]
@@ -2325,8 +2353,8 @@ fn model_json_carries_non_finite_values_as_string_spellings() {
     // network with legitimate Inf limits round trips instead of degrading to
     // null. Pinned on a real case so a change to either side surfaces.
     let mut net = parse_matpower_file(data("case9.m")).unwrap();
-    net.branches[2].angmax = f64::INFINITY;
-    net.buses[0].vm = f64::NAN;
+    net.branches_mut()[2].angmax = f64::INFINITY;
+    net.buses_mut()[0].vm = f64::NAN;
     let (text, diagnostics) = net.to_json_with_diagnostics().unwrap();
     assert!(
         diagnostics.is_empty(),
@@ -2336,8 +2364,8 @@ fn model_json_carries_non_finite_values_as_string_spellings() {
     assert!(text.contains(r#""vm":"NaN""#), "{text}");
 
     let back = BalancedNetwork::from_json(&text).expect("string spellings read back");
-    assert_eq!(back.branches[2].angmax, f64::INFINITY);
-    assert!(back.buses[0].vm.is_nan());
+    assert_eq!(back.branches()[2].angmax, f64::INFINITY);
+    assert!(back.buses()[0].vm.is_nan());
 
     // A document from a pre-0.9 writer spelled these null; the refusal names
     // the change rather than reporting a bare type error.
@@ -2354,19 +2382,19 @@ fn model_json_round_trips_through_core_api() {
     let (text, diagnostics) = net.to_json_with_diagnostics().unwrap();
     assert!(diagnostics.is_empty(), "model JSON writes no records");
     let back = BalancedNetwork::from_json(&text).unwrap();
-    assert_eq!(back.buses.len(), net.buses.len());
-    assert_eq!(back.branches.len(), net.branches.len());
-    assert_eq!(back.generators.len(), net.generators.len());
+    assert_eq!(back.buses().len(), net.buses().len());
+    assert_eq!(back.branches().len(), net.branches().len());
+    assert_eq!(back.generators().len(), net.generators().len());
     // Bit-exact: the snapshot is lossless, so even the sign of a zero survives.
-    assert_eq!(back.base_mva.to_bits(), net.base_mva.to_bits());
-    assert_eq!(back.source_format, net.source_format);
+    assert_eq!(back.base_mva().to_bits(), net.base_mva().to_bits());
+    assert_eq!(back.source_format(), net.source_format());
 }
 
 #[test]
 fn psse_to_matpower_omits_missing_costs_without_synthesizing_zero() {
     let raw = std::fs::read_to_string(data("psse/case14.raw")).unwrap();
     let net = parse_psse(&raw).unwrap();
-    assert!(net.generators.iter().all(|g| g.cost.is_none()));
+    assert!(net.generators().iter().all(|g| g.cost.is_none()));
 
     let conv = write_network(&net, TargetFormat::Matpower).unwrap();
     assert!(conv.text.contains("mpc.gen = ["));
@@ -2407,8 +2435,8 @@ fn psse_to_matpower_can_explicitly_fill_zero_costs() {
         conv.rendered_diagnostics()
     );
     let back = parse_matpower(&conv.text).unwrap();
-    assert_eq!(back.generators.len(), net.generators.len());
-    for g in &back.generators {
+    assert_eq!(back.generators().len(), net.generators().len());
+    for g in back.generators() {
         let cost = g.cost.as_ref().expect("filled cost");
         assert_eq!(cost.model, 2);
         assert_eq!(cost.ncost, 3);
@@ -2419,8 +2447,8 @@ fn psse_to_matpower_can_explicitly_fill_zero_costs() {
 #[test]
 fn partial_matpower_costs_preserve_existing_rows_when_fill_policy_is_explicit() {
     let mut net = parse_matpower_file(data("case9.m")).unwrap();
-    let original = net.generators[0].cost.clone().expect("case9 cost");
-    net.generators[1].cost = None;
+    let original = net.generators()[0].cost.clone().expect("case9 cost");
+    net.generators_mut()[1].cost = None;
 
     let default = write_network(&net, TargetFormat::Matpower).unwrap();
     assert!(!default.text.contains("mpc.gencost = ["));
@@ -2445,11 +2473,11 @@ fn partial_matpower_costs_preserve_existing_rows_when_fill_policy_is_explicit() 
     .unwrap();
     let back = parse_matpower(&filled.text).unwrap();
     assert_eq!(
-        back.generators[0].cost.as_ref().unwrap().coeffs,
+        back.generators()[0].cost.as_ref().unwrap().coeffs,
         original.coeffs
     );
     assert_eq!(
-        back.generators[1].cost.as_ref().unwrap().coeffs,
+        back.generators()[1].cost.as_ref().unwrap().coeffs,
         vec![0.01, 2.0, 3.0]
     );
 }
@@ -2457,7 +2485,7 @@ fn partial_matpower_costs_preserve_existing_rows_when_fill_policy_is_explicit() 
 #[test]
 fn generator_cost_csv_patches_validate_index_and_bus() {
     let mut net = parse_matpower_file(data("case9.m")).unwrap();
-    let bus = net.generators[0].bus;
+    let bus = net.generators()[0].bus;
     let csv = format!("gen_index,bus,c2,c1,c0\n0,{bus},0.5,4.0,1.0\n");
     let patches = parse_gen_cost_csv(&csv).unwrap();
     let report = net
@@ -2465,7 +2493,7 @@ fn generator_cost_csv_patches_validate_index_and_bus() {
         .unwrap();
     assert_eq!(report.patched, 1);
     assert_eq!(
-        net.generators[0].cost.as_ref().unwrap().coeffs,
+        net.generators()[0].cost.as_ref().unwrap().coeffs,
         vec![0.5, 4.0, 1.0]
     );
 
@@ -2507,8 +2535,8 @@ fn model_json_file_is_refused_by_the_sniffer_and_named_as_such() {
     assert!(err.contains("from_json"), "got: {err}");
 
     let back = BalancedNetwork::from_json(&text).unwrap();
-    assert_eq!(back.buses.len(), 14);
-    assert_eq!(back.source_format, SourceFormat::Matpower);
+    assert_eq!(back.buses().len(), 14);
+    assert_eq!(back.source_format(), SourceFormat::Matpower);
 }
 
 #[test]
@@ -2516,46 +2544,46 @@ fn parses_goc3_json_static_network() {
     let parsed = parse_str(GOC3_TINY, "goc3-json").unwrap();
     let net = parsed.network.clone();
 
-    assert_eq!(net.source_format, SourceFormat::Goc3Json);
-    assert_close(net.base_mva, 100.0);
-    assert_eq!(net.buses.len(), 2);
-    assert_eq!(net.buses[0].id, BusId(1));
-    assert_eq!(net.buses[0].kind, BusType::Ref);
-    assert!((net.buses[0].va - 0.1 * 180.0 / std::f64::consts::PI).abs() < 1e-12);
-    assert_eq!(net.buses[1].kind, BusType::Pq);
+    assert_eq!(net.source_format(), SourceFormat::Goc3Json);
+    assert_close(net.base_mva(), 100.0);
+    assert_eq!(net.buses().len(), 2);
+    assert_eq!(net.buses()[0].id, BusId(1));
+    assert_eq!(net.buses()[0].kind, BusType::Ref);
+    assert!((net.buses()[0].va - 0.1 * 180.0 / std::f64::consts::PI).abs() < 1e-12);
+    assert_eq!(net.buses()[1].kind, BusType::Pq);
 
-    assert_eq!(net.branches.len(), 2);
-    assert_eq!(net.branches[0].from, BusId(1));
-    assert_eq!(net.branches[0].to, BusId(2));
-    assert_close(net.branches[0].rate_a, 2.0);
-    assert_close(net.branches[0].rate_b, 2.5);
+    assert_eq!(net.branches().len(), 2);
+    assert_eq!(net.branches()[0].from, BusId(1));
+    assert_eq!(net.branches()[0].to, BusId(2));
+    assert_close(net.branches()[0].rate_a, 2.0);
+    assert_close(net.branches()[0].rate_b, 2.5);
     // additional_shunt=1: b/2 per terminal is added to the extra shunts
     // (b_fr = 0.04/2 + 0.002, b_to = 0.04/2 + 0.004).
     assert_eq!(
-        net.branches[0].charging,
+        net.branches()[0].charging,
         Some(BranchCharging::new(0.001, 0.022, 0.003, 0.024))
     );
     // ac_line carries no bus angle difference limit.
-    assert_close(net.branches[0].angmin, -360.0);
-    assert_close(net.branches[0].angmax, 360.0);
-    assert_close(net.branches[1].tap, 1.03);
-    assert!((net.branches[1].shift - 0.05 * 180.0 / std::f64::consts::PI).abs() < 1e-12);
+    assert_close(net.branches()[0].angmin, -360.0);
+    assert_close(net.branches()[0].angmax, 360.0);
+    assert_close(net.branches()[1].tap, 1.03);
+    assert!((net.branches()[1].shift - 0.05 * 180.0 / std::f64::consts::PI).abs() < 1e-12);
     // ta_lb/ta_ub are the phase shift control range, not an angle difference
     // limit: they land on an ActiveFlow control, and angmin/angmax stay open.
-    assert_close(net.branches[1].angmin, -360.0);
-    assert_close(net.branches[1].angmax, 360.0);
-    let control = net.branches[1].control.as_ref().unwrap();
+    assert_close(net.branches()[1].angmin, -360.0);
+    assert_close(net.branches()[1].angmax, 360.0);
+    let control = net.branches()[1].control.as_ref().unwrap();
     assert_eq!(control.mode, TransformerControlMode::ActiveFlow);
     assert!((control.tap_min - (-0.1 * 180.0 / std::f64::consts::PI)).abs() < 1e-12);
     assert!((control.tap_max - (0.1 * 180.0 / std::f64::consts::PI)).abs() < 1e-12);
 
-    assert_eq!(net.shunts.len(), 1);
-    assert_eq!(net.shunts[0].bus, BusId(2));
-    assert_close(net.shunts[0].g, 2.0);
-    assert_close(net.shunts[0].b, -4.0);
+    assert_eq!(net.shunts().len(), 1);
+    assert_eq!(net.shunts()[0].bus, BusId(2));
+    assert_close(net.shunts()[0].g, 2.0);
+    assert_close(net.shunts()[0].b, -4.0);
 
-    assert_eq!(net.generators.len(), 1);
-    let generator = &net.generators[0];
+    assert_eq!(net.generators().len(), 1);
+    let generator = &net.generators()[0];
     assert_eq!(generator.bus, BusId(1));
     // initial_status.on_status = 0 marks the unit offline.
     assert!(!generator.in_service);
@@ -2570,18 +2598,18 @@ fn parses_goc3_json_static_network() {
     assert_eq!(cost.ncost, 3);
     assert_eq!(cost.coeffs, vec![0.0, 0.0, 10.0, 100.0, 100.0, 1180.0]);
 
-    assert_eq!(net.loads.len(), 1);
-    assert_eq!(net.loads[0].bus, BusId(2));
-    assert!(!net.loads[0].in_service);
-    assert_close(net.loads[0].p, 40.0);
-    assert_close(net.loads[0].q, 15.0);
+    assert_eq!(net.loads().len(), 1);
+    assert_eq!(net.loads()[0].bus, BusId(2));
+    assert!(!net.loads()[0].in_service);
+    assert_close(net.loads()[0].p, 40.0);
+    assert_close(net.loads()[0].q, 15.0);
 
-    assert_eq!(net.hvdc.len(), 1);
-    assert_close(net.hvdc[0].pmax, 50.0);
-    assert_close(net.hvdc[0].pmin, -50.0);
-    assert_close(net.hvdc[0].pf, 10.0);
-    assert_close(net.hvdc[0].qmaxf, 20.0);
-    assert_close(net.hvdc[0].qmaxt, 25.0);
+    assert_eq!(net.hvdc().len(), 1);
+    assert_close(net.hvdc()[0].pmax, 50.0);
+    assert_close(net.hvdc()[0].pmin, -50.0);
+    assert_close(net.hvdc()[0].pf, 10.0);
+    assert_close(net.hvdc()[0].qmaxf, 20.0);
+    assert_close(net.hvdc()[0].qmaxt, 25.0);
 
     assert!(
         parsed
@@ -2656,10 +2684,10 @@ fn goc3_accepts_nonnumeric_bus_uids_by_exact_reference() {
       }
     }"#;
     let net = parse_str(src, "goc3-json").unwrap().network;
-    assert_eq!(net.buses[0].id, BusId(1));
-    assert_eq!(net.buses[1].id, BusId(2));
-    assert_eq!(net.branches[0].from, BusId(1));
-    assert_eq!(net.branches[0].to, BusId(2));
+    assert_eq!(net.buses()[0].id, BusId(1));
+    assert_eq!(net.buses()[1].id, BusId(2));
+    assert_eq!(net.branches()[0].from, BusId(1));
+    assert_eq!(net.branches()[0].to, BusId(2));
 }
 
 #[test]
@@ -2672,7 +2700,7 @@ fn infers_goc3_json_file() {
     std::fs::write(&path, GOC3_TINY).unwrap();
 
     let parsed = parse_file(&path, None).unwrap();
-    assert_eq!(parsed.network.source_format, SourceFormat::Goc3Json);
+    assert_eq!(parsed.network.source_format(), SourceFormat::Goc3Json);
     let conv = convert_file(&path, TargetFormat::Matpower, None).unwrap();
     assert!(conv.text.contains("mpc.branch"));
 
@@ -2684,16 +2712,16 @@ fn parses_surge_json_network() {
     let parsed = parse_str(SURGE_TINY, "surge-json").unwrap();
     let net = parsed.network.clone();
 
-    assert_eq!(net.source_format, SourceFormat::SurgeJson);
-    assert_eq!(net.name, "surge-tiny");
-    assert_close(net.base_mva, 100.0);
-    assert_close(net.base_frequency, 50.0);
-    assert_eq!(net.buses.len(), 2);
-    assert_eq!(net.buses[0].kind, BusType::Ref);
-    assert!((net.buses[0].va - 0.1 * 180.0 / std::f64::consts::PI).abs() < 1e-12);
+    assert_eq!(net.source_format(), SourceFormat::SurgeJson);
+    assert_eq!(net.name(), "surge-tiny");
+    assert_close(net.base_mva(), 100.0);
+    assert_close(net.base_frequency(), 50.0);
+    assert_eq!(net.buses().len(), 2);
+    assert_eq!(net.buses()[0].kind, BusType::Ref);
+    assert!((net.buses()[0].va - 0.1 * 180.0 / std::f64::consts::PI).abs() < 1e-12);
 
-    assert_eq!(net.loads.len(), 1);
-    match net.loads[0].voltage_model.as_ref().unwrap() {
+    assert_eq!(net.loads().len(), 1);
+    match net.loads()[0].voltage_model.as_ref().unwrap() {
         LoadVoltageModel::Zip {
             p_constant_power,
             q_constant_power,
@@ -2713,12 +2741,12 @@ fn parses_surge_json_network() {
         other => panic!("unexpected load model: {other:?}"),
     }
 
-    assert_eq!(net.shunts.len(), 2);
-    assert_close(net.shunts.iter().map(|s| s.g).sum(), 1.5);
-    assert_close(net.shunts.iter().map(|s| s.b).sum(), -3.5);
+    assert_eq!(net.shunts().len(), 2);
+    assert_close(net.shunts().iter().map(|s| s.g).sum(), 1.5);
+    assert_close(net.shunts().iter().map(|s| s.b).sum(), -3.5);
 
-    assert_eq!(net.branches.len(), 1);
-    let branch = &net.branches[0];
+    assert_eq!(net.branches().len(), 1);
+    let branch = &net.branches()[0];
     assert_close(branch.tap, 0.0);
     assert_eq!(
         branch.charging,
@@ -2733,8 +2761,8 @@ fn parses_surge_json_network() {
         Some(BranchSolution::new(1.0, 0.5, -0.9, -0.4))
     );
 
-    assert_eq!(net.generators.len(), 1);
-    let generator = &net.generators[0];
+    assert_eq!(net.generators().len(), 1);
+    let generator = &net.generators()[0];
     assert_eq!(generator.regulated_bus, Some(BusId(2)));
     assert_close(generator.pg, 50.0);
     assert_eq!(
@@ -2742,16 +2770,16 @@ fn parses_surge_json_network() {
         vec![0.01, 2.0, 0.0]
     );
 
-    assert_eq!(net.storage.len(), 1);
-    assert_eq!(net.storage[0].bus, BusId(2));
-    assert_close(net.storage[0].charge_rating, 12.0);
-    assert_close(net.storage[0].discharge_rating, 10.0);
-    assert_eq!(net.storage[0].current_rating, Some(300.0));
+    assert_eq!(net.storage().len(), 1);
+    assert_eq!(net.storage()[0].bus, BusId(2));
+    assert_close(net.storage()[0].charge_rating, 12.0);
+    assert_close(net.storage()[0].discharge_rating, 10.0);
+    assert_eq!(net.storage()[0].current_rating, Some(300.0));
 
-    assert_eq!(net.hvdc.len(), 1);
-    assert_close(net.hvdc[0].pf, 25.0);
-    assert_close(net.hvdc[0].qmaxf, 6.0);
-    assert_close(net.hvdc[0].qmaxt, 5.0);
+    assert_eq!(net.hvdc().len(), 1);
+    assert_close(net.hvdc()[0].pf, 25.0);
+    assert_close(net.hvdc()[0].qmaxf, 6.0);
+    assert_close(net.hvdc()[0].qmaxt, 5.0);
 
     let echo = parsed.to_format(TargetFormat::SurgeJson).unwrap();
     assert_eq!(echo.text, SURGE_TINY);
@@ -2766,15 +2794,15 @@ fn parses_surge_json_network() {
 #[test]
 fn surge_storage_generator_is_not_duplicated_after_canonical_write() {
     let net = parse_str(SURGE_TINY, "surge-json").unwrap().network;
-    assert_eq!(net.generators.len(), 1);
-    assert_eq!(net.storage.len(), 1);
+    assert_eq!(net.generators().len(), 1);
+    assert_eq!(net.storage().len(), 1);
 
     let surge = write_network(&net, TargetFormat::SurgeJson).unwrap();
     let back = parse_str(&surge.text, "surge-json").unwrap().network;
 
-    assert_eq!(back.generators.len(), 1);
-    assert_eq!(back.storage.len(), 1);
-    assert_eq!(back.storage[0].bus, BusId(2));
+    assert_eq!(back.generators().len(), 1);
+    assert_eq!(back.storage().len(), 1);
+    assert_eq!(back.storage()[0].bus, BusId(2));
     assert!(surge.text.contains(r#""storage""#));
 }
 
@@ -2784,22 +2812,22 @@ fn surge_writer_round_trips_supported_core_fields() {
     let conv = write_network(&net, TargetFormat::SurgeJson).unwrap();
     let back = parse_str(&conv.text, "surge-json").unwrap().network;
 
-    assert_eq!(back.source_format, SourceFormat::SurgeJson);
-    assert_eq!(back.loads.len(), 1);
+    assert_eq!(back.source_format(), SourceFormat::SurgeJson);
+    assert_eq!(back.loads().len(), 1);
     assert!(matches!(
-        back.loads[0].voltage_model,
+        back.loads()[0].voltage_model,
         Some(LoadVoltageModel::Zip { .. })
     ));
     assert_eq!(
-        back.branches[0].charging,
+        back.branches()[0].charging,
         Some(BranchCharging::new(0.01, 0.02, 0.0, 0.05))
     );
     assert_eq!(
-        back.branches[0].current_ratings,
+        back.branches()[0].current_ratings,
         Some(BranchCurrentRatings::new(500.0, 600.0, 700.0))
     );
     assert_eq!(
-        back.branches[0].solution,
+        back.branches()[0].solution,
         Some(BranchSolution::new(1.0, 0.5, -0.9, -0.4))
     );
 }
@@ -2814,7 +2842,7 @@ fn infers_surge_json_file() {
     std::fs::write(&path, SURGE_TINY).unwrap();
 
     let parsed = parse_file(&path, None).unwrap();
-    assert_eq!(parsed.network.source_format, SourceFormat::SurgeJson);
+    assert_eq!(parsed.network.source_format(), SourceFormat::SurgeJson);
     let conv = convert_file(&path, TargetFormat::Matpower, None).unwrap();
     assert!(conv.text.contains("mpc.branch"));
 

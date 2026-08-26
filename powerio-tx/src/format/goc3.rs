@@ -13,8 +13,9 @@ use serde_json::{Map, Value};
 
 use crate::diagnostics::{Diagnostics, codes};
 use crate::network::{
-    BalancedNetwork, Branch, BranchCharging, BranchRatingSet, Bus, BusId, BusType, Extras, GenCost,
-    Generator, Hvdc, Load, Shunt, SourceFormat, TransformerControl, TransformerControlMode,
+    BalancedNetwork, BalancedNetworkTables, Branch, BranchCharging, BranchRatingSet, Bus, BusId,
+    BusType, Extras, GenCost, Generator, Hvdc, Load, Shunt, SourceFormat, TransformerControl,
+    TransformerControlMode,
 };
 use crate::normalize;
 use crate::{Error, Result};
@@ -254,7 +255,7 @@ pub(crate) fn parse_goc3_source(
 
     let hvdc = read_hvdc(network, base_mva, &bus_map)?;
 
-    let net = BalancedNetwork {
+    let net = BalancedNetwork::from_tables(BalancedNetworkTables {
         name,
         base_mva,
         base_frequency: crate::network::DEFAULT_BASE_FREQUENCY,
@@ -271,7 +272,7 @@ pub(crate) fn parse_goc3_source(
         areas: Vec::new(),
         solver: None,
         source_format: SourceFormat::Goc3Json,
-    };
+    });
     net.check_references(FMT)?;
     Ok((net, document))
 }
@@ -989,7 +990,7 @@ mod tests {
             usize::MAX
         );
         let (network, _diagnostics, _document) = parse_goc3_json(&content).unwrap();
-        assert_eq!(network.buses.len(), 1);
-        assert_eq!(network.buses[0].id, BusId(1));
+        assert_eq!(network.buses().len(), 1);
+        assert_eq!(network.buses()[0].id, BusId(1));
     }
 }

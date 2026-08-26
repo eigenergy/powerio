@@ -29,7 +29,7 @@ use common::{activsg2000_fetched as fetched, branch_keys, powerworld_vendored as
 
 /// Branch identity: from, to, circuit under the one id rule.
 fn branch_ids(net: &BalancedNetwork) -> BTreeSet<(usize, usize, String)> {
-    branch_keys(&net.branches).into_iter().collect()
+    branch_keys(net.branches()).into_iter().collect()
 }
 
 #[test]
@@ -43,10 +43,10 @@ fn activsg200_aux_vs_matpower_structural() {
 
     // Bus identity and voltage level agree bus for bus. The aux prints f32
     // noise in nominal kV (13.800000190734863), so the compare is approximate.
-    assert_eq!(aux.buses.len(), 200);
-    assert_eq!(m.buses.len(), 200);
-    let aux_kv: BTreeMap<usize, f64> = aux.buses.iter().map(|b| (b.id.0, b.base_kv)).collect();
-    for b in &m.buses {
+    assert_eq!(aux.buses().len(), 200);
+    assert_eq!(m.buses().len(), 200);
+    let aux_kv: BTreeMap<usize, f64> = aux.buses().iter().map(|b| (b.id.0, b.base_kv)).collect();
+    for b in m.buses() {
         let kv = aux_kv[&b.id.0];
         assert!(
             (kv - b.base_kv).abs() < 1e-4,
@@ -56,8 +56,8 @@ fn activsg200_aux_vs_matpower_structural() {
         );
     }
 
-    assert_eq!(aux.generators.len(), m.generators.len());
-    assert_eq!(aux.shunts.len(), 4);
+    assert_eq!(aux.generators().len(), m.generators().len());
+    assert_eq!(aux.shunts().len(), 4);
 
     // Branch identity: everything in the 2017 .m exists in the 2018 aux; the
     // aux adds exactly one line, 82-64 circuit 1.
@@ -71,11 +71,11 @@ fn activsg200_aux_vs_matpower_structural() {
 
     // Impedance, charging, and tap agree on every matched branch to the .m
     // file's print precision.
-    let by_id: BTreeMap<(usize, usize, String), &powerio_tx::Branch> = branch_keys(&aux.branches)
+    let by_id: BTreeMap<(usize, usize, String), &powerio_tx::Branch> = branch_keys(aux.branches())
         .into_iter()
-        .zip(&aux.branches)
+        .zip(aux.branches())
         .collect();
-    for mb in &m.branches {
+    for mb in m.branches() {
         let key = (mb.from.0, mb.to.0, "1".to_string());
         let ab = by_id[&key];
         assert!((ab.r - mb.r).abs() < 1e-5, "{key:?} R {} vs {}", ab.r, mb.r);
@@ -99,9 +99,9 @@ fn activsg200_aux_vs_psse_structural() {
         .unwrap()
         .network;
 
-    assert_eq!(raw.buses.len(), 200);
-    let aux_kv: BTreeMap<usize, f64> = aux.buses.iter().map(|b| (b.id.0, b.base_kv)).collect();
-    for b in &raw.buses {
+    assert_eq!(raw.buses().len(), 200);
+    let aux_kv: BTreeMap<usize, f64> = aux.buses().iter().map(|b| (b.id.0, b.base_kv)).collect();
+    for b in raw.buses() {
         let kv = aux_kv[&b.id.0];
         assert!(
             (kv - b.base_kv).abs() < 1e-4,
@@ -110,14 +110,14 @@ fn activsg200_aux_vs_psse_structural() {
             b.base_kv
         );
     }
-    assert_eq!(aux.generators.len(), raw.generators.len());
-    assert_eq!(aux.loads.len(), raw.loads.len());
+    assert_eq!(aux.generators().len(), raw.generators().len());
+    assert_eq!(aux.loads().len(), raw.loads().len());
 
     // The RAW reader does not carry circuit IDs yet, so branch parity here is
     // the multiset of bus pairs. Same one branch delta as the .m.
     let pairs = |net: &BalancedNetwork| -> BTreeMap<(usize, usize), usize> {
         let mut out = BTreeMap::new();
-        for b in &net.branches {
+        for b in net.branches() {
             *out.entry((b.from.0, b.to.0)).or_default() += 1;
         }
         out
@@ -144,13 +144,13 @@ fn activsg2000_june2016_aux_vs_matpower_values() {
     let aux = parse_file(&aux_path, Some("powerworld")).unwrap().network;
     let m = parse_file(&m_path, None).unwrap().network;
 
-    assert_eq!(aux.buses.len(), m.buses.len(), "bus count");
-    assert_eq!(aux.generators.len(), m.generators.len(), "gen count");
+    assert_eq!(aux.buses().len(), m.buses().len(), "bus count");
+    assert_eq!(aux.generators().len(), m.generators().len(), "gen count");
     // MATPOWER carries no circuit IDs, so branch identity parity is the
     // multiset of bus pairs.
     let pairs = |net: &BalancedNetwork| -> BTreeMap<(usize, usize), usize> {
         let mut out = BTreeMap::new();
-        for b in &net.branches {
+        for b in net.branches() {
             *out.entry((b.from.0, b.to.0)).or_default() += 1;
         }
         out
@@ -159,8 +159,8 @@ fn activsg2000_june2016_aux_vs_matpower_values() {
 
     // Solved state, bus for bus, to the .m print precision.
     let m_bus: BTreeMap<usize, (f64, f64)> =
-        m.buses.iter().map(|b| (b.id.0, (b.vm, b.va))).collect();
-    for b in &aux.buses {
+        m.buses().iter().map(|b| (b.id.0, (b.vm, b.va))).collect();
+    for b in aux.buses() {
         let (vm, va) = m_bus[&b.id.0];
         assert!(
             (b.vm - vm).abs() < 1e-6,
@@ -180,13 +180,13 @@ fn activsg2000_june2016_aux_vs_matpower_values() {
 
     // ZIP load totals per bus against the folded MATPOWER Pd/Qd.
     let mut aux_load: BTreeMap<BusId, (f64, f64)> = BTreeMap::new();
-    for l in aux.loads.iter().filter(|l| l.in_service) {
+    for l in aux.loads().iter().filter(|l| l.in_service) {
         let e = aux_load.entry(l.bus).or_default();
         e.0 += l.p;
         e.1 += l.q;
     }
     let mut m_load: BTreeMap<BusId, (f64, f64)> = BTreeMap::new();
-    for l in m.loads.iter().filter(|l| l.in_service) {
+    for l in m.loads().iter().filter(|l| l.in_service) {
         let e = m_load.entry(l.bus).or_default();
         e.0 += l.p;
         e.1 += l.q;
@@ -203,11 +203,11 @@ fn activsg2000_june2016_aux_vs_matpower_values() {
 
     // Dispatch and limits per generator (bus + position among the bus's gens).
     let mut m_gens: BTreeMap<usize, Vec<&powerio_tx::Generator>> = BTreeMap::new();
-    for g in &m.generators {
+    for g in m.generators() {
         m_gens.entry(g.bus.0).or_default().push(g);
     }
     let mut aux_gens: BTreeMap<usize, Vec<&powerio_tx::Generator>> = BTreeMap::new();
-    for g in &aux.generators {
+    for g in aux.generators() {
         aux_gens.entry(g.bus.0).or_default().push(g);
     }
     for (bus, gens) in &aux_gens {
@@ -235,7 +235,7 @@ fn activsg2000_june2016_aux_vs_matpower_values() {
     // (both exporters write parallels adjacently, circuit order preserved).
     let group = |net: &BalancedNetwork| -> BTreeMap<(usize, usize), Vec<powerio_tx::Branch>> {
         let mut out: BTreeMap<(usize, usize), Vec<powerio_tx::Branch>> = BTreeMap::new();
-        for b in &net.branches {
+        for b in net.branches() {
             out.entry((b.from.0, b.to.0)).or_default().push(b.clone());
         }
         out
@@ -281,7 +281,7 @@ fn activsg2000_june2016_aux_vs_matpower_values() {
             compared += 1;
         }
     }
-    assert_eq!(compared, aux.branches.len(), "every aux branch compared");
+    assert_eq!(compared, aux.branches().len(), "every aux branch compared");
 }
 
 /// The contingency payload of the vendored aux, through the typed accessor.

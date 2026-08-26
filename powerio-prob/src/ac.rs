@@ -365,7 +365,13 @@ pub fn build_ac_opf_instance(
         let amax = case.angle_radians(branch.angmax);
         tap.push(branch.divisible_tap(source_row)?);
         shift.push(case.angle_radians(branch.shift));
-        s_max.push(thermal.of(branch, amin, amax, &network.buses[from], &network.buses[to]));
+        s_max.push(thermal.of(
+            branch,
+            amin,
+            amax,
+            &network.buses()[from],
+            &network.buses()[to],
+        ));
         angle_min.push(amin);
         angle_max.push(amax);
         branch_rows.push(source_row);
@@ -374,7 +380,7 @@ pub fn build_ac_opf_instance(
     let mut vm_min = Vec::with_capacity(n_buses);
     let mut vm_max = Vec::with_capacity(n_buses);
     let mut vm = Vec::with_capacity(n_buses);
-    for bus in &network.buses {
+    for bus in network.buses() {
         vm_min.push(bus.vmin);
         vm_max.push(bus.vmax);
         vm.push(bus.vm);

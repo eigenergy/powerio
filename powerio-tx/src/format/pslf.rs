@@ -16,8 +16,8 @@ use super::{Conversion, sanitize_quoted, warn_extra_branch_rating_sets};
 use crate::diagnostics::codes::EMIT_PSLF as F;
 use crate::diagnostics::{Diagnostics, codes};
 use crate::network::{
-    BalancedNetwork, Branch, Bus, BusId, BusType, Extras, Generator, Hvdc, Impedance, Load,
-    LoadVoltageModel, Shunt, SourceFormat, Transformer3W, Winding,
+    BalancedNetwork, BalancedNetworkTables, Branch, Bus, BusId, BusType, Extras, Generator, Hvdc,
+    Impedance, Load, LoadVoltageModel, Shunt, SourceFormat, Transformer3W, Winding,
 };
 use crate::{Error, Result};
 
@@ -115,7 +115,7 @@ pub(crate) fn parse_pslf_source(
 
     warn_unmodeled_sections(&doc, warnings);
 
-    let net = BalancedNetwork {
+    let net = BalancedNetwork::from_tables(BalancedNetworkTables {
         name,
         base_mva,
         base_frequency: crate::network::DEFAULT_BASE_FREQUENCY,
@@ -132,7 +132,7 @@ pub(crate) fn parse_pslf_source(
         areas: Vec::new(),
         solver: None,
         source_format: SourceFormat::Pslf,
-    };
+    });
     net.check_references(FMT)?;
     Ok(net)
 }
@@ -1242,7 +1242,7 @@ pub fn write_pslf(net: &BalancedNetwork) -> Conversion {
 
     // Bus identity for the lhs of every downstream record, keyed by source id.
     let bus_refs: HashMap<BusId, BusRef> = net
-        .buses
+        .buses()
         .iter()
         .map(|b| {
             (
@@ -1277,13 +1277,13 @@ pub fn write_pslf(net: &BalancedNetwork) -> Conversion {
     let _ = writeln!(s, "title");
     // The title is one record; a terminator would end it and put the rest of
     // the name where the parser expects the next block.
-    let _ = writeln!(s, "{}", sanitize_quoted(&net.name, NAME_FORBIDDEN, ' '));
+    let _ = writeln!(s, "{}", sanitize_quoted(net.name(), NAME_FORBIDDEN, ' '));
     let _ = writeln!(s, "!");
     let _ = writeln!(s, "comments");
     let _ = writeln!(s, "powerio export");
     let _ = writeln!(s, "!");
     let _ = writeln!(s, "solution parameters");
-    let _ = writeln!(s, "sbase {}", num(net.base_mva));
+    let _ = writeln!(s, "sbase {}", num(net.base_mva()));
     let _ = writeln!(s, "!");
 
     // ---- bus data ----
@@ -1299,7 +1299,7 @@ pub fn write_pslf(net: &BalancedNetwork) -> Conversion {
     // One column per bus, so generators that disagree on a base-kV-less bus
     // keep only the first; the rest are what the generator loop reports.
     let mut setpoint_of: HashMap<BusId, f64> = HashMap::new();
-    for g in &net.generators {
+    for g in net.generators() {
         if g.vg.is_finite() && g.vg > 0.0 {
             setpoint_of.entry(g.bus).or_insert(g.vg);
         }
@@ -1307,9 +1307,9 @@ pub fn write_pslf(net: &BalancedNetwork) -> Conversion {
     let _ = writeln!(
         s,
         "bus data [{}] ty vsched volt angle ar zone vmax vmin",
-        net.buses.len()
+        net.buses().len()
     );
-    for b in &net.buses {
+    for b in net.buses() {
         let _ = writeln!(
             s,
             "{} {} {} : {} {} {} {} {} {} {} {}",
@@ -1332,16 +1332,16 @@ pub fn write_pslf(net: &BalancedNetwork) -> Conversion {
     }
 
     // ---- load data ----
-    if !net.loads.is_empty() {
+    if !net.loads().is_empty() {
         let _ = writeln!(
             s,
             "load data [{}] id long_id st mw mvar mw_i mvar_i mw_z mvar_z ar zone",
-            net.loads.len()
+            net.loads().len()
         );
         // Parallel loads on one bus get distinct ids; a captured `extras["id"]`
         // (from a PSS/E or PSLF source) wins, else positional.
         let mut load_ids: BTreeMap<BusId, BTreeSet<String>> = BTreeMap::new();
-        for l in &net.loads {
+        for l in net.loads() {
             let r = bus_ref(l.bus);
             let (mw, mvar, mw_i, mvar_i, mw_z, mvar_z) =
                 load_components_for_write(l, &mut warnings);
@@ -1366,24 +1366,24 @@ pub fn write_pslf(net: &BalancedNetwork) -> Conversion {
     }
 
     // ---- shunt data ----
-    if !net.shunts.is_empty() {
+    if !net.shunts().is_empty() {
         let _ = writeln!(
             s,
             "shunt data [{}] id ck se long_id st ar zone pu_mw pu_mvar",
-            net.shunts.len()
+            net.shunts().len()
         );
         // Same per-bus id rule as loads: `(bus, id)` must stay unique.
         let mut shunt_ids: BTreeMap<BusId, BTreeSet<String>> = BTreeMap::new();
-        for sh in &net.shunts {
+        for sh in net.shunts() {
             let r = bus_ref(sh.bus);
             // PSLF stores shunt G/B per unit on the system base; replay the read
             // values when present, else divide the MW/MVAr-at-1pu back out.
             let pu_mw = extra_f64(&sh.extras, "pslf_pu_mw")
                 .or_else(|| extra_f64(&sh.extras, "pslf_pu_g"))
-                .unwrap_or_else(|| safe_div(sh.g, net.base_mva));
+                .unwrap_or_else(|| safe_div(sh.g, net.base_mva()));
             let pu_mvar = extra_f64(&sh.extras, "pslf_pu_mvar")
                 .or_else(|| extra_f64(&sh.extras, "pslf_pu_b"))
-                .unwrap_or_else(|| safe_div(sh.b, net.base_mva));
+                .unwrap_or_else(|| safe_div(sh.b, net.base_mva()));
             let id = device_id(&sh.extras, sh.bus, &mut shunt_ids, &mut sanitized_ids);
             let _ = writeln!(
                 s,
@@ -1402,7 +1402,7 @@ pub fn write_pslf(net: &BalancedNetwork) -> Conversion {
 
     // ---- branch data (non-transformer) ----
     let lines: Vec<&Branch> = net
-        .branches
+        .branches()
         .iter()
         .filter(|b| !b.is_transformer())
         .collect();
@@ -1445,14 +1445,18 @@ pub fn write_pslf(net: &BalancedNetwork) -> Conversion {
     }
 
     // ---- transformer data (2- and 3-winding, one section) ----
-    let xfmrs: Vec<&Branch> = net.branches.iter().filter(|b| b.is_transformer()).collect();
-    let n_xfmr = xfmrs.len() + net.transformers_3w.len();
+    let xfmrs: Vec<&Branch> = net
+        .branches()
+        .iter()
+        .filter(|b| b.is_transformer())
+        .collect();
+    let n_xfmr = xfmrs.len() + net.transformers_3w().len();
     if n_xfmr > 0 {
         let _ = writeln!(s, "transformer data [{n_xfmr}]");
         for br in xfmrs {
             let f = bus_ref(br.from);
             let t = bus_ref(br.to);
-            let tbase = extra_f64(&br.extras, "pslf_tbase").unwrap_or(net.base_mva);
+            let tbase = extra_f64(&br.extras, "pslf_tbase").unwrap_or(net.base_mva());
             // First physical line: identity lhs, then the 21-field rhs the reader
             // indexes (status 0, tertiary 9 = 0, base 14, R 15, X 16, and the
             // pt/ts tertiary impedances 17-20 = 0 to mark a 2-winding unit). The
@@ -1483,7 +1487,7 @@ pub fn write_pslf(net: &BalancedNetwork) -> Conversion {
             line2[16] = num(br.effective_tap());
             let _ = writeln!(s, "{}", line2.join(" "));
         }
-        for tr in &net.transformers_3w {
+        for tr in net.transformers_3w() {
             let p = bus_ref(tr.windings[0].bus);
             let sec = bus_ref(tr.windings[1].bus);
             let [z12, z23, z31] = tr.z;
@@ -1524,14 +1528,14 @@ pub fn write_pslf(net: &BalancedNetwork) -> Conversion {
     }
 
     // ---- generator data ----
-    if !net.generators.is_empty() {
+    if !net.generators().is_empty() {
         let _ = writeln!(
             s,
             "generator data [{}] id long_id st no reg_name reg_kv prf qrf ar zone \
              pgen pmax pmin qgen qmax qmin mbase",
-            net.generators.len()
+            net.generators().len()
         );
-        for g in &net.generators {
+        for g in net.generators() {
             let r = bus_ref(g.bus);
             // rhs indices the reader reads: status 0, reg_kv 3, pgen 8, pmax 9,
             // pmin 10, qgen 11, qmax 12, qmin 13, mbase 14. `reg_name` is left as
@@ -1581,13 +1585,13 @@ pub fn write_pslf(net: &BalancedNetwork) -> Conversion {
     // `BalancedNetwork::Hvdc`. Every unmapped field is written as 0, the shape
     // `dc_states_detail` reads as "nothing stated", so this writer's own output
     // reads back without the retained-control-fields warning.
-    if !net.hvdc.is_empty() {
+    if !net.hvdc().is_empty() {
         let _ = writeln!(
             s,
             "dc converter data [{}] id name kv dc_bus",
-            net.hvdc.len() * 2
+            net.hvdc().len() * 2
         );
-        for (k, d) in net.hvdc.iter().enumerate() {
+        for (k, d) in net.hvdc().iter().enumerate() {
             for (ac, dc_bus, p, q) in [
                 (d.from, 2 * k + 1, d.pf, d.qf),
                 (d.to, 2 * k + 2, d.pt, d.qt),
@@ -1611,9 +1615,9 @@ pub fn write_pslf(net: &BalancedNetwork) -> Conversion {
         let _ = writeln!(
             s,
             "dc line data [{}] from name kv to st rate1",
-            net.hvdc.len()
+            net.hvdc().len()
         );
-        for (k, d) in net.hvdc.iter().enumerate() {
+        for (k, d) in net.hvdc().iter().enumerate() {
             // The reader reads the status (rhs 0) and rate1 (rhs 6); rate1 sets the
             // power limit, falling back to |p| when nonpositive, so emit pmax.
             let _ = writeln!(
@@ -1631,7 +1635,7 @@ pub fn write_pslf(net: &BalancedNetwork) -> Conversion {
 
     // ---- fidelity warnings ----
     let asymmetric_hvdc = net
-        .hvdc
+        .hvdc()
         .iter()
         .filter(|d| (d.pmin + d.pmax).abs() > 1e-9)
         .count();
@@ -1644,28 +1648,28 @@ pub fn write_pslf(net: &BalancedNetwork) -> Conversion {
             ),
         );
     }
-    if !net.storage.is_empty() {
+    if !net.storage().is_empty() {
         warnings.push(
             &F.record_dropped,
             format!(
                 "{} storage unit(s) dropped: PSLF .epc has no storage record",
-                net.storage.len()
+                net.storage().len()
             ),
         );
     }
-    if net.generators.iter().any(|g| g.cost.is_some()) {
+    if net.generators().iter().any(|g| g.cost.is_some()) {
         warnings.push(
             &F.field_dropped,
             "generator cost curves dropped: PSLF .epc carries no cost data",
         );
     }
-    let with_caps = net.generators.iter().filter(|g| g.has_caps()).count();
+    let with_caps = net.generators().iter().filter(|g| g.has_caps()).count();
     if with_caps > 0 {
         warnings.push(&F.field_dropped, format!(
             "generator capability/ramp columns dropped for {with_caps} generator(s): the PSLF .epc generator records written here carry no MATPOWER capability columns"
         ));
     }
-    if net.hvdc.iter().any(|d| d.cost.is_some()) {
+    if net.hvdc().iter().any(|d| d.cost.is_some()) {
         warnings.push(
             &F.field_dropped,
             "DC line cost curves dropped: PSLF .epc carries no cost data",
@@ -1675,7 +1679,7 @@ pub fn write_pslf(net: &BalancedNetwork) -> Conversion {
     // below), so exclude them here: only line records carry the collapsed total
     // susceptance this message describes.
     let terminal_charging = net
-        .branches
+        .branches()
         .iter()
         .filter(|b| b.has_non_matpower_charging() && !b.is_transformer())
         .count();
@@ -1685,7 +1689,7 @@ pub fn write_pslf(net: &BalancedNetwork) -> Conversion {
         ));
     }
     let transformer_charging = net
-        .branches
+        .branches()
         .iter()
         .filter(|b| {
             b.is_transformer()
@@ -1699,7 +1703,7 @@ pub fn write_pslf(net: &BalancedNetwork) -> Conversion {
         ));
     }
     let current_ratings = net
-        .branches
+        .branches()
         .iter()
         .filter(|b| b.current_ratings.is_some())
         .count();
@@ -1738,7 +1742,11 @@ pub fn write_pslf(net: &BalancedNetwork) -> Conversion {
         &mut warnings,
     );
     super::warn_dropped_areas(&F, "PSLF .epc", net, &mut warnings);
-    let branch_solutions = net.branches.iter().filter(|b| b.solution.is_some()).count();
+    let branch_solutions = net
+        .branches()
+        .iter()
+        .filter(|b| b.solution.is_some())
+        .count();
     if branch_solutions > 0 {
         warnings.push(&F.field_dropped, format!(
             "{branch_solutions} branch solution value set(s) dropped: PSLF solved flow fields are not written"
@@ -1747,7 +1755,7 @@ pub fn write_pslf(net: &BalancedNetwork) -> Conversion {
     // The generator record this writer emits regulates the unit's own terminal, so
     // a generator pointing at a remote regulated bus loses that target.
     let dropped_reg = net
-        .generators
+        .generators()
         .iter()
         .filter(|g| g.regulated_bus.is_some())
         .count();
@@ -1759,7 +1767,7 @@ pub fn write_pslf(net: &BalancedNetwork) -> Conversion {
     }
     // A 3-winding record here carries only the primary winding's ratio/ratings, so
     // report any non-nominal secondary/tertiary winding as a fidelity loss.
-    let drops_winding_detail = net.transformers_3w.iter().any(|t| {
+    let drops_winding_detail = net.transformers_3w().iter().any(|t| {
         t.windings[1..]
             .iter()
             .any(|w| (w.tap - 1.0).abs() > 1e-9 || w.rate_a.abs() > 1e-9)
@@ -1773,7 +1781,11 @@ pub fn write_pslf(net: &BalancedNetwork) -> Conversion {
     }
     // The `.epc` transformer record this writer emits has no regulating-control
     // columns (mode/limits/regulated bus), so a Branch carrying control loses it.
-    let dropped_control = net.branches.iter().filter(|b| b.control.is_some()).count();
+    let dropped_control = net
+        .branches()
+        .iter()
+        .filter(|b| b.control.is_some())
+        .count();
     if dropped_control > 0 {
         warnings.push(
             &F.field_dropped,
@@ -1785,7 +1797,7 @@ pub fn write_pslf(net: &BalancedNetwork) -> Conversion {
     }
     // Switched shunts write as fixed `.epc` shunts (G/B); the switching control
     // has no column in the shunt record this writer emits.
-    let dropped_sw = net.shunts.iter().filter(|s| s.control.is_some()).count();
+    let dropped_sw = net.shunts().iter().filter(|s| s.control.is_some()).count();
     if dropped_sw > 0 {
         warnings.push(
             &F.field_dropped,
@@ -2026,7 +2038,7 @@ end
         // Firing angle limits stated on the rectifier: retained-only data.
         let mut warnings = Diagnostics::new();
         let net = parse_pslf_source(&epc(" 15 90"), None, &mut warnings).unwrap();
-        assert_eq!(net.hvdc.len(), 1);
+        assert_eq!(net.hvdc().len(), 1);
         assert!(
             warnings
                 .lines()
@@ -2038,7 +2050,7 @@ end
         // The neutral shape the writer emits: nothing beyond status/p/q/rate.
         let mut warnings = Diagnostics::new();
         let net = parse_pslf_source(&epc(""), None, &mut warnings).unwrap();
-        assert_eq!(net.hvdc.len(), 1);
+        assert_eq!(net.hvdc().len(), 1);
         assert!(
             !warnings
                 .lines()
@@ -2046,7 +2058,7 @@ end
                 .any(|w| w.contains("unsupported control fields")),
             "zeros state nothing: {warnings:?}"
         );
-        let dc = &net.hvdc[0];
+        let dc = &net.hvdc()[0];
         assert!((dc.pf - 10.0).abs() < 1e-12 && (dc.pmax - 10.0).abs() < 1e-12);
     }
 
@@ -2078,16 +2090,16 @@ end
         let mut warnings = Diagnostics::new();
         let net = parse_pslf_source(epc, None, &mut warnings).unwrap();
 
-        assert_eq!(net.source_format, SourceFormat::Pslf);
-        assert_eq!(net.buses.len(), 2);
-        assert_eq!(net.branches.len(), 1);
-        assert_eq!(net.loads.len(), 1);
-        assert_eq!(net.generators.len(), 1);
-        assert_eq!(net.shunts.len(), 1);
-        assert_eq!(net.buses[0].kind, BusType::Ref);
-        close(net.loads[0].p, 13.0);
-        close(net.loads[0].q, 5.0);
-        close(net.shunts[0].b, 10.0);
+        assert_eq!(net.source_format(), SourceFormat::Pslf);
+        assert_eq!(net.buses().len(), 2);
+        assert_eq!(net.branches().len(), 1);
+        assert_eq!(net.loads().len(), 1);
+        assert_eq!(net.generators().len(), 1);
+        assert_eq!(net.shunts().len(), 1);
+        assert_eq!(net.buses()[0].kind, BusType::Ref);
+        close(net.loads()[0].p, 13.0);
+        close(net.loads()[0].q, 5.0);
+        close(net.shunts()[0].b, 10.0);
         assert!(warnings.lines().iter().any(|w| w.contains("ZIP load")));
     }
 
@@ -2134,7 +2146,7 @@ end
             ],
             Vec::new(),
         );
-        net.branches.push(Branch {
+        net.branches_mut().push(Branch {
             from: BusId(1),
             to: BusId(2),
             r: 0.01,

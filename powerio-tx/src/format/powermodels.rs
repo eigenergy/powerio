@@ -20,9 +20,9 @@ use super::{Conversion, finish, jnum, warn_extra_branch_rating_sets};
 use crate::diagnostics::codes::EMIT_POWERMODELS as F;
 use crate::diagnostics::{Diagnostics, codes};
 use crate::network::{
-    BalancedNetwork, Branch, BranchCharging, BranchCurrentRatings, BranchSolution, Bus, BusId,
-    BusType, GEN_EXTRA_KEYS, GenCost, Generator, Hvdc, Load, LoadVoltageModel, Shunt, SourceFormat,
-    Storage, Switch,
+    BalancedNetwork, BalancedNetworkTables, Branch, BranchCharging, BranchCurrentRatings,
+    BranchSolution, Bus, BusId, BusType, GEN_EXTRA_KEYS, GenCost, Generator, Hvdc, Load,
+    LoadVoltageModel, Shunt, SourceFormat, Storage, Switch,
 };
 use crate::normalize::{self, GEN_PU_KEYS};
 use crate::{Error, Result};
@@ -33,50 +33,50 @@ pub fn write_powermodels_json(net: &BalancedNetwork) -> Conversion {
 
     // Per-unit write factors, the exact inverse of the reader's pscale/ascale:
     // powers ÷ baseMVA, angles degrees → radians. Cost rescale needs the base.
-    let base = net.base_mva;
+    let base = net.base_mva();
     let p = 1.0 / base;
     let a = normalize::DEG_TO_RAD;
 
     let mut bus = Map::new();
-    for b in &net.buses {
+    for b in net.buses() {
         bus.insert(b.id.to_string(), bus_obj(b, a));
     }
 
     let mut branch = Map::new();
-    for (i, br) in net.branches.iter().enumerate() {
+    for (i, br) in net.branches().iter().enumerate() {
         let idx = i + 1;
         branch.insert(idx.to_string(), branch_obj(br, idx, p, a));
     }
 
     let mut gen_map = Map::new();
-    for (i, g) in net.generators.iter().enumerate() {
+    for (i, g) in net.generators().iter().enumerate() {
         let idx = i + 1;
         gen_map.insert(idx.to_string(), gen_obj(g, idx, p, base));
     }
 
     let mut load = Map::new();
-    for (i, l) in net.loads.iter().enumerate() {
+    for (i, l) in net.loads().iter().enumerate() {
         let idx = i + 1;
         load.insert(idx.to_string(), load_obj(l, idx, p));
     }
     let mut shunt = Map::new();
-    for (i, s) in net.shunts.iter().enumerate() {
+    for (i, s) in net.shunts().iter().enumerate() {
         let idx = i + 1;
         shunt.insert(idx.to_string(), shunt_obj(s, idx, p));
     }
 
     let mut dcline = Map::new();
-    for (i, dc) in net.hvdc.iter().enumerate() {
+    for (i, dc) in net.hvdc().iter().enumerate() {
         let idx = i + 1;
         dcline.insert(idx.to_string(), dcline_obj(dc, idx, p));
     }
     let mut storage = Map::new();
-    for (i, st) in net.storage.iter().enumerate() {
+    for (i, st) in net.storage().iter().enumerate() {
         let idx = i + 1;
         storage.insert(idx.to_string(), storage_obj(st, idx, p));
     }
     let mut switch = Map::new();
-    for (i, sw) in net.switches.iter().enumerate() {
+    for (i, sw) in net.switches().iter().enumerate() {
         let idx = i + 1;
         switch.insert(idx.to_string(), switch_obj(sw, idx, p));
     }
@@ -89,15 +89,15 @@ pub fn write_powermodels_json(net: &BalancedNetwork) -> Conversion {
             ),
         );
     }
-    if !net.transformers_3w.is_empty() {
+    if !net.transformers_3w().is_empty() {
         warnings.push(&F.record_dropped, format!(
             "{} 3-winding transformer(s) dropped: the PowerModels JSON writer emits no 3-winding record",
-            net.transformers_3w.len()
+            net.transformers_3w().len()
         ));
     }
     super::warn_dropped_areas(&F, "PowerModels JSON", net, &mut warnings);
     let voltage_loads = net
-        .loads
+        .loads()
         .iter()
         .filter(|l| {
             l.voltage_model
@@ -112,7 +112,7 @@ pub fn write_powermodels_json(net: &BalancedNetwork) -> Conversion {
     }
     warn_extra_branch_rating_sets(&F, "PowerModels JSON", net, &mut warnings);
     if net
-        .buses
+        .buses()
         .iter()
         .any(|b| b.evhi.is_some() || b.evlo.is_some())
     {
@@ -123,8 +123,8 @@ pub fn write_powermodels_json(net: &BalancedNetwork) -> Conversion {
     }
 
     let mut root = Map::new();
-    root.insert("name".into(), Value::String(net.name.clone()));
-    root.insert("baseMVA".into(), jnum(net.base_mva));
+    root.insert("name".into(), Value::String(net.name().clone()));
+    root.insert("baseMVA".into(), jnum(net.base_mva()));
     root.insert("per_unit".into(), Value::Bool(true));
     root.insert("source_type".into(), Value::String("matpower".into()));
     root.insert("source_version".into(), Value::String("2".into()));
@@ -484,7 +484,7 @@ pub(crate) fn parse_powermodels_json_source(
         .unwrap_or("case")
         .to_string();
 
-    let net = BalancedNetwork {
+    let net = BalancedNetwork::from_tables(BalancedNetworkTables {
         name,
         base_mva,
         base_frequency: crate::network::DEFAULT_BASE_FREQUENCY,
@@ -522,7 +522,7 @@ pub(crate) fn parse_powermodels_json_source(
         areas: Vec::new(),
         solver: None,
         source_format: SourceFormat::PowerModelsJson,
-    };
+    });
     net.check_references(FMT)?;
     Ok(net)
 }
@@ -1085,11 +1085,11 @@ mod tests {
             "gen":{"1":{"gen_bus":1,"pg":0.5,"gen_status":false}}}"#;
         let net = parse_powermodels_json(doc).unwrap();
         assert!(
-            !net.branches[0].in_service,
+            !net.branches()[0].in_service,
             "br_status: false must read out of service"
         );
         assert!(
-            !net.generators[0].in_service,
+            !net.generators()[0].in_service,
             "gen_status: false must read out of service"
         );
     }
@@ -1108,9 +1108,9 @@ mod tests {
         let net = parse_powermodels_json_source(doc, None, &mut warnings).unwrap();
         // The inference rule is unchanged: without the flag the tap is dropped
         // (raw 0 = line); only the drop of a non-unit value is reported.
-        assert_eq!(net.branches[0].tap, 0.0);
-        assert_eq!(net.branches[1].tap, 0.0);
-        assert_eq!(net.branches[2].tap, 1.05);
+        assert_eq!(net.branches()[0].tap, 0.0);
+        assert_eq!(net.branches()[1].tap, 0.0);
+        assert_eq!(net.branches()[2].tap, 1.05);
         // One aggregated warning naming the offending branch by its map key,
         // which is the identity a file without an inner `index` still has.
         let lines = warnings.lines();
