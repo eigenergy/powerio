@@ -967,7 +967,8 @@ fn run_sensitivities(
         },
         "sensitivity": &metadata
     });
-    serde_json::to_writer_pretty(std::fs::File::create(&meta_path)?, &meta)?;
+    commit_output_file(&meta_path, serde_json::to_vec_pretty(&meta)?)
+        .with_context(|| format!("writing {}", meta_path.display()))?;
     tracing::info!(
         case = %view.name(),
         ptdf = %ptdf_path.display(),
@@ -1253,7 +1254,8 @@ fn run_package(
     let (text, parse_errors) = package_text(input, from, scenario)?;
     match output {
         Some(p) if p.as_os_str() != "-" => {
-            std::fs::write(p, &text).with_context(|| format!("writing {}", p.display()))?;
+            commit_output_file(p, text.clone().into_bytes())
+                .with_context(|| format!("writing {}", p.display()))?;
             eprintln!("wrote {}", p.display());
         }
         _ => print!("{text}"),
@@ -1642,6 +1644,20 @@ fn fail_on_parse_errors(parse_errors: &[String]) -> anyhow::Result<()> {
 
 /// Write conversion `text` to `output` (stdout on `-` or `None`), placing any
 /// `sidecars` next to it. Sidecars cannot follow text to stdout; they are
+/// Commit one complete output file through the no-replace destination:
+/// staged beside the target and moved into place only when no entry exists
+/// there, so an existing entry is refused rather than replaced.
+fn commit_output_file(path: &std::path::Path, bytes: Vec<u8>) -> anyhow::Result<()> {
+    let artifact = powerio_core::MemoryArtifact::new(
+        powerio_core::ArtifactPath::new("case").expect("static placeholder name"),
+        bytes,
+    );
+    powerio_core::Destination::path(path)
+        .__commit_artifacts(false, vec![artifact], Vec::new())
+        .map(|_| ())
+        .map_err(|error| anyhow::anyhow!("{error}"))
+}
+
 /// reported instead.
 fn write_conversion_output(
     text: &str,
@@ -1650,30 +1666,44 @@ fn write_conversion_output(
 ) -> anyhow::Result<()> {
     match output {
         Some(p) if p.as_os_str() != "-" => {
-            std::fs::write(p, text).with_context(|| format!("writing {}", p.display()))?;
-            eprintln!("wrote {}", p.display());
-            let base = p.parent().unwrap_or_else(|| std::path::Path::new("."));
-            for sidecar in sidecars {
-                // A sidecar path names a file the primary output refers to,
-                // so it must stay under the output directory. Today's writers
-                // emit a fixed name, but the field is a plain `String` on a
-                // public struct, and joining an absolute or `..` path here
-                // would write anywhere the process can reach.
-                if !is_relative_component_path(&sidecar.path) {
-                    anyhow::bail!(
-                        "sidecar `{}` is not a relative path under the output directory",
-                        sidecar.path
-                    );
+            // The case file and its sidecars land beside each other in the
+            // caller's directory, which may hold unrelated files, so each
+            // file commits individually with no replacement and a refusal
+            // removes the files this call created.
+            let mut committed: Vec<std::path::PathBuf> = Vec::new();
+            let result = (|| -> anyhow::Result<()> {
+                commit_output_file(p, text.as_bytes().to_vec())
+                    .with_context(|| format!("writing {}", p.display()))?;
+                committed.push(p.to_path_buf());
+                eprintln!("wrote {}", p.display());
+                let base = p.parent().unwrap_or_else(|| std::path::Path::new("."));
+                for sidecar in sidecars {
+                    // A sidecar path names a file the primary output refers
+                    // to, so it must stay under the output directory. Today's
+                    // writers emit a fixed name, but the field is a plain
+                    // `String` on a public struct, and joining an absolute or
+                    // `..` path here would write anywhere the process can
+                    // reach.
+                    if !is_relative_component_path(&sidecar.path) {
+                        anyhow::bail!(
+                            "sidecar `{}` is not a relative path under the output directory",
+                            sidecar.path
+                        );
+                    }
+                    let path = base.join(&sidecar.path);
+                    commit_output_file(&path, sidecar.text.clone().into_bytes())
+                        .with_context(|| format!("writing {}", path.display()))?;
+                    committed.push(path.clone());
+                    eprintln!("wrote {}", path.display());
                 }
-                let path = base.join(&sidecar.path);
-                if let Some(parent) = path.parent() {
-                    std::fs::create_dir_all(parent)
-                        .with_context(|| format!("creating {}", parent.display()))?;
+                Ok(())
+            })();
+            if result.is_err() {
+                for created in &committed {
+                    let _ = std::fs::remove_file(created);
                 }
-                std::fs::write(&path, &sidecar.text)
-                    .with_context(|| format!("writing {}", path.display()))?;
-                eprintln!("wrote {}", path.display());
             }
+            result?;
         }
         _ => {
             for sidecar in sidecars {

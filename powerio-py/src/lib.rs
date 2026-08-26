@@ -1206,8 +1206,7 @@ impl PyBalancedNetwork {
     ) -> PyResult<Vec<String>> {
         let (text, warnings) =
             self.to_format(to, missing_gen_cost, default_gen_cost, gen_cost_csv)?;
-        std::fs::write(path, text)
-            .map_err(|e| PowerIOError::new_err(format!("writing {path}: {e}")))?;
+        commit_text_file(std::path::Path::new(path), text.into_bytes())?;
         Ok(warnings)
     }
 
@@ -1618,8 +1617,7 @@ fn convert_file(
         powerio_matrix::convert_file_with_options(std::path::Path::new(path), target, from_, &opts)
             .map_err(|e| core_open_pyerr(std::path::Path::new(path), &e))?;
     if let Some(out) = out {
-        std::fs::write(out, &conv.text)
-            .map_err(|e| PowerIOError::new_err(format!("writing {out}: {e}")))?;
+        commit_text_file(std::path::Path::new(out), conv.text.clone().into_bytes())?;
     }
     let rendered = conv.rendered_diagnostics();
     Ok((conv.text, rendered))
@@ -1680,32 +1678,58 @@ fn sidecar_stays_in_output_dir(path: &str) -> bool {
             .all(|c| matches!(c, std::path::Component::Normal(_)))
 }
 
+/// The case file and its sidecars land beside each other in the caller's
+/// directory, which may hold unrelated files, so each file commits
+/// individually through the no-replace destination and a refusal removes the
+/// files this call created, leaving the directory as it was.
 fn write_with_sidecars(
     path: &str,
     text: &str,
     sidecars: &[powerio_dist::ConversionSidecar],
 ) -> PyResult<()> {
     let path = std::path::Path::new(path);
-    std::fs::write(path, text)
-        .map_err(|e| PowerIOError::new_err(format!("writing {}: {e}", path.display())))?;
     let dir = path.parent().unwrap_or_else(|| std::path::Path::new("."));
-    for sidecar in sidecars {
-        if !sidecar_stays_in_output_dir(&sidecar.path) {
-            return Err(PowerIOError::new_err(format!(
-                "refusing to write the sidecar `{}`: the path must stay in the output directory",
-                sidecar.path
-            )));
+    let mut committed: Vec<std::path::PathBuf> = Vec::new();
+    let mut commit = |target: &std::path::Path, bytes: Vec<u8>| -> PyResult<()> {
+        commit_text_file(target, bytes)?;
+        committed.push(target.to_path_buf());
+        Ok(())
+    };
+    let result = (|| {
+        commit(path, text.as_bytes().to_vec())?;
+        for sidecar in sidecars {
+            if !sidecar_stays_in_output_dir(&sidecar.path) {
+                return Err(PowerIOError::new_err(format!(
+                    "refusing to write the sidecar `{}`: the path must stay in the output directory",
+                    sidecar.path
+                )));
+            }
+            commit(
+                dir.join(&sidecar.path).as_path(),
+                sidecar.text.clone().into_bytes(),
+            )?;
         }
-        let target = dir.join(&sidecar.path);
-        if let Some(parent) = target.parent() {
-            std::fs::create_dir_all(parent).map_err(|e| {
-                PowerIOError::new_err(format!("creating {}: {e}", parent.display()))
-            })?;
+        Ok(())
+    })();
+    if result.is_err() {
+        for created in &committed {
+            let _ = std::fs::remove_file(created);
         }
-        std::fs::write(&target, &sidecar.text)
-            .map_err(|e| PowerIOError::new_err(format!("writing {}: {e}", target.display())))?;
     }
-    Ok(())
+    result
+}
+
+/// Commit one complete text file through the no-replace destination: staged
+/// beside the target and moved into place only when no entry exists there.
+fn commit_text_file(path: &std::path::Path, bytes: Vec<u8>) -> PyResult<()> {
+    let artifact = powerio_core::MemoryArtifact::new(
+        powerio_core::ArtifactPath::new("case").expect("static placeholder name"),
+        bytes,
+    );
+    powerio_core::Destination::path(path)
+        .__commit_artifacts(false, vec![artifact], Vec::new())
+        .map(|_| ())
+        .map_err(|error| core_error_pyerr(&error))
 }
 
 fn dist_to_pyerr(e: powerio_dist::Error) -> PyErr {

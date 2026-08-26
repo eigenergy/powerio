@@ -461,13 +461,20 @@ fn a_sensitivity_write_never_replaces_an_existing_entry() {
         residue_free(temp.path());
     }
 
-    // Fresh paths still produce both matrices, and both read back.
+    // Fresh paths still produce both matrices, and both read back; a second
+    // write to the same targets refuses, with no staging residue either way.
     let temp = tempfile::tempdir().unwrap();
     let ptdf_path = temp.path().join("ptdf.mtx");
     let lodf_path = temp.path().join("lodf.mtx");
     write_sensitivity_mtx_with_options(&view, &options, &ptdf_path, &lodf_path).unwrap();
+    let ptdf_first = std::fs::read(&ptdf_path).unwrap();
     assert!(read_mtx(&ptdf_path).unwrap().nnz() > 0);
     assert!(read_mtx(&lodf_path).unwrap().nnz() > 0);
+    residue_free(temp.path());
+    let error =
+        write_sensitivity_mtx_with_options(&view, &options, &ptdf_path, &lodf_path).unwrap_err();
+    assert!(error.to_string().contains("already exists"), "{error}");
+    assert_eq!(std::fs::read(&ptdf_path).unwrap(), ptdf_first);
     residue_free(temp.path());
 }
 
