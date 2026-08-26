@@ -99,6 +99,14 @@ if [ -n "$(git status --porcelain -- docs/schema)" ]; then
   exit 1
 fi
 
+# crates.yml packages every publishable crate and audits each archive for the
+# license files a published crate must carry. Clear stale archives first: an
+# audit over a leftover target/package can pass on files a fresh package no
+# longer contains.
+rm -rf target/package
+run cargo package --workspace --exclude powerio-capi --exclude powerio-py --allow-dirty
+run python3 scripts/audit-release-archives.py target/package/*.crate
+
 # docs.yml runs both, and neither is reachable from cargo: an unannotated code
 # fence in the book is compiled as a Rust doctest, so a naming pattern or a
 # shell snippet fails a job nothing else here covers. Skipped when mdbook is
