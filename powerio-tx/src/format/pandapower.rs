@@ -249,7 +249,20 @@ pub(crate) fn parse_pandapower_source(
         }
     }
 
-    let costs = read_poly_costs(obj, warnings)?;
+    let mut costs = read_poly_costs(obj, warnings)?;
+    for (key, cost) in read_pwl_costs(obj, warnings)? {
+        match costs.entry(key) {
+            std::collections::btree_map::Entry::Vacant(slot) => {
+                slot.insert(cost);
+            }
+            std::collections::btree_map::Entry::Occupied(_) => {
+                warnings.push(&codes::READ_PANDAPOWER_FIELD_DROPPED, format!(
+                    "`pwl_cost`: et `{:?}` element {} also states a poly_cost; the polynomial curve is kept",
+                    key.0, key.1
+                ));
+            }
+        }
+    }
     // pandapower states a generator's reactive output as a power flow result,
     // not an input: `res_gen.q_mvar` (and `res_ext_grid.p_mw`/`q_mvar` for the
     // slack), index-aligned with the input tables. A solved net carries them,
@@ -712,7 +725,6 @@ pub(crate) fn parse_pandapower_source(
         "switches are not modeled; open switches are not applied",
         warnings,
     )?;
-    warn_nonempty_table(obj, "pwl_cost", "piecewise costs are not mapped", warnings)?;
 
     // The enumerations above cover the common element tables; anything else
     // shaped like a non-empty DataFrame (svc, tcsc, asymmetric loads, but
@@ -874,6 +886,9 @@ pub fn write_pandapower_json(net: &BalancedNetwork) -> Conversion {
     object.insert("line".into(), line);
     object.insert("trafo".into(), trafo);
     object.insert("poly_cost".into(), poly_cost_frame(net, &mut warnings));
+    if let Some(pwl) = pwl_cost_frame(net, &mut warnings) {
+        object.insert("pwl_cost".into(), pwl);
+    }
     object.insert("name".into(), Value::String(net.name().clone()));
     // Label the file with the network's own frequency and compute c_nf_per_km
     // against the same value, so a re-read (which divides by the file's f_hz)
@@ -1669,6 +1684,9 @@ fn poly_cost_frame(net: &BalancedNetwork, warnings: &mut Diagnostics) -> Value {
         let Some(cost) = &g.cost else {
             continue;
         };
+        if cost.model == 1 {
+            continue; // pwl_cost_frame carries piecewise curves
+        }
         if cost.model != 2 {
             dropped += 1;
             continue;
@@ -1703,7 +1721,7 @@ fn poly_cost_frame(net: &BalancedNetwork, warnings: &mut Diagnostics) -> Value {
     }
     if dropped > 0 {
         warnings.push(&F.field_dropped, format!(
-            "{dropped} generator costs dropped: pandapower poly_cost carries polynomial (model 2) costs only"
+            "{dropped} generator costs dropped: pandapower carries polynomial (poly_cost) and piecewise (pwl_cost) costs only"
         ));
     }
     if truncated > 0 {
@@ -1718,6 +1736,66 @@ fn poly_cost_frame(net: &BalancedNetwork, warnings: &mut Diagnostics) -> Value {
         );
     }
     frame("poly_cost", &columns, index, data, warnings)
+}
+
+/// The `pwl_cost` frame for piecewise (model 1) generator costs. A MATPOWER
+/// breakpoint curve `(p_i, f_i)` converts exactly to pandapower's per range
+/// `[p_from, p_to, slope]` points; the absolute cost level `f_1` has no
+/// pandapower field, so a nonzero level is declared as a shifted objective.
+fn pwl_cost_frame(net: &BalancedNetwork, warnings: &mut Diagnostics) -> Option<Value> {
+    let columns = ["power_type", "element", "et", "points"];
+    let mut index = Vec::new();
+    let mut data = Vec::new();
+    let mut shifted = 0_usize;
+    let mut malformed = 0_usize;
+    for (i, g) in net.generators().iter().enumerate() {
+        let Some(cost) = &g.cost else {
+            continue;
+        };
+        if cost.model != 1 {
+            continue;
+        }
+        let pairs: Vec<(f64, f64)> = cost
+            .coeffs
+            .chunks_exact(2)
+            .map(|pair| (pair[0], pair[1]))
+            .collect();
+        if pairs.len() < 2 || pairs.windows(2).any(|w| w[1].0 <= w[0].0) {
+            malformed += 1;
+            continue;
+        }
+        if pairs[0].1 != 0.0 {
+            shifted += 1;
+        }
+        let points: Vec<Value> = pairs
+            .windows(2)
+            .map(|w| {
+                let slope = (w[1].1 - w[0].1) / (w[1].0 - w[0].0);
+                Value::Array(vec![jnum(w[0].0), jnum(w[1].0), jnum(slope)])
+            })
+            .collect();
+        index.push(Value::from(data.len() as u64));
+        data.push(vec![
+            Value::String("p".into()),
+            Value::from(i as u64),
+            Value::String("gen".into()),
+            Value::Array(points),
+        ]);
+    }
+    if shifted > 0 {
+        warnings.push(&F.field_dropped, format!(
+            "{shifted} piecewise cost curves start at a nonzero cost; pandapower pwl_cost stores marginal cost per range only, so the absolute objective shifts by that constant"
+        ));
+    }
+    if malformed > 0 {
+        warnings.push(&F.field_dropped, format!(
+            "{malformed} piecewise cost curves dropped: fewer than two breakpoints or nonincreasing powers"
+        ));
+    }
+    if data.is_empty() {
+        return None;
+    }
+    Some(frame("pwl_cost", &columns, index, data, warnings))
 }
 
 /// pandapower bus column value for a 1-based [`BusId`]: pandapower indices are
@@ -2100,6 +2178,134 @@ fn read_poly_costs(
     if unmapped_rows > 0 {
         warnings.push(&codes::READ_PANDAPOWER_TABLE_UNSUPPORTED, format!(
             "`poly_cost`: {unmapped_rows} row(s) skipped; only gen/ext_grid/sgen costs map onto powerio generators"
+        ));
+    }
+    Ok(out)
+}
+
+/// Read `pwl_cost` piecewise curves into MATPOWER breakpoint (model 1)
+/// curves. pandapower states per range `[p_from, p_to, slope]` marginal
+/// costs with no absolute level, so the breakpoint costs start at zero at
+/// the first breakpoint and the unstated constant is declared.
+// The row scan, range validation, and breakpoint accumulation read as one
+// sequence.
+#[allow(clippy::too_many_lines)]
+fn read_pwl_costs(
+    root: &Map<String, Value>,
+    warnings: &mut Diagnostics,
+) -> Result<BTreeMap<(CostElement, usize), GenCost>> {
+    let mut out = BTreeMap::new();
+    let Some(frame) = read_frame(root, "pwl_cost")? else {
+        return Ok(out);
+    };
+    let mut reactive_rows = 0_usize;
+    let mut unmapped_rows = 0_usize;
+    let mut malformed_rows = 0_usize;
+    let mut read_rows = 0_usize;
+    for row in frame.rows() {
+        let et_raw = row.string("et").ok_or_else(|| {
+            bad(format!(
+                "`pwl_cost` row {}: required column `et` is missing",
+                row.label()
+            ))
+        })?;
+        let element = row
+            .get("element")
+            .and_then(|v| {
+                value_usize(v).or_else(|| {
+                    v.as_f64()
+                        .filter(|f| f.fract() == 0.0)
+                        .and_then(|f| crate::format::id_from_f64(f, "element").ok())
+                })
+            })
+            .ok_or_else(|| {
+                bad(format!(
+                    "`pwl_cost` row {}: required column `element` is missing or not a non-negative integer in the id range 0..2^63",
+                    row.label()
+                ))
+            })?;
+        if row
+            .string("power_type")
+            .is_some_and(|p| !p.eq_ignore_ascii_case("p"))
+        {
+            reactive_rows += 1;
+            continue;
+        }
+        let Some(et) = CostElement::from_et(&et_raw) else {
+            unmapped_rows += 1;
+            continue;
+        };
+        let ranges: Option<Vec<(f64, f64, f64)>> = row
+            .get("points")
+            .and_then(Value::as_array)
+            .and_then(|points| {
+                points
+                    .iter()
+                    .map(|point| {
+                        let triple = point.as_array()?;
+                        match triple.as_slice() {
+                            [from, to, slope] => {
+                                Some((from.as_f64()?, to.as_f64()?, slope.as_f64()?))
+                            }
+                            _ => None,
+                        }
+                    })
+                    .collect::<Option<Vec<_>>>()
+            });
+        let Some(ranges) = ranges else {
+            malformed_rows += 1;
+            continue;
+        };
+        // Contiguous ascending ranges convert exactly to breakpoints.
+        let contiguous = !ranges.is_empty()
+            && ranges.iter().all(|(from, to, _)| to > from)
+            && ranges
+                .windows(2)
+                .all(|w| w[1].0.to_bits() == w[0].1.to_bits());
+        if !contiguous {
+            malformed_rows += 1;
+            continue;
+        }
+        let mut coeffs = Vec::with_capacity((ranges.len() + 1) * 2);
+        let mut level = 0.0;
+        coeffs.extend([ranges[0].0, level]);
+        for (from, to, slope) in &ranges {
+            level += slope * (to - from);
+            coeffs.extend([*to, level]);
+        }
+        let curve = GenCost {
+            model: 1,
+            startup: 0.0,
+            shutdown: 0.0,
+            ncost: ranges.len() + 1,
+            coeffs,
+        };
+        read_rows += 1;
+        if out.insert((et, element), curve).is_some() {
+            return Err(bad(format!(
+                "`pwl_cost` row {}: duplicate cost for et `{et_raw}` element {element}",
+                row.label()
+            )));
+        }
+    }
+    if read_rows > 0 {
+        warnings.push(&codes::READ_PANDAPOWER_VALUE_INFERRED, format!(
+            "`pwl_cost`: {read_rows} piecewise curve(s) read; pandapower stores marginal cost per range only, so breakpoint costs start at zero at the first breakpoint and the absolute objective level is unstated"
+        ));
+    }
+    if reactive_rows > 0 {
+        warnings.push(&codes::READ_PANDAPOWER_FIELD_DROPPED, format!(
+            "`pwl_cost`: {reactive_rows} reactive power row(s) skipped; only active power costs are read"
+        ));
+    }
+    if unmapped_rows > 0 {
+        warnings.push(&codes::READ_PANDAPOWER_TABLE_UNSUPPORTED, format!(
+            "`pwl_cost`: {unmapped_rows} row(s) skipped; only gen/ext_grid/sgen costs map onto powerio generators"
+        ));
+    }
+    if malformed_rows > 0 {
+        warnings.push(&codes::READ_PANDAPOWER_FIELD_DROPPED, format!(
+            "`pwl_cost`: {malformed_rows} row(s) with missing, noncontiguous, or nonincreasing points skipped"
         ));
     }
     Ok(out)
@@ -3147,7 +3353,6 @@ mod tests {
             ("impedance", one_row()),
             ("motor", one_row()),
             ("switch", one_row()),
-            ("pwl_cost", one_row()),
         ]))
         .unwrap();
         for expected in [
@@ -3157,7 +3362,6 @@ mod tests {
             "`impedance` table ignored (1 rows): bus-to-bus impedance elements are not mapped",
             "`motor` table ignored (1 rows): motors are not mapped",
             "`switch` table ignored (1 rows): switches are not modeled; open switches are not applied",
-            "`pwl_cost` table ignored (1 rows): piecewise costs are not mapped",
         ] {
             assert!(
                 parsed.diagnostics.iter().any(|d| d.message() == expected),
@@ -3644,12 +3848,14 @@ mod tests {
             .push(test_gen(1, Some(poly(Vec::new()))));
         let conv = write_pandapower_json(&net);
         let pc = written_frame(&conv.text, "poly_cost");
-        // gen 0 (piecewise) dropped; gens 1 and 2 written with 0-based
-        // element = generator position and a contiguous 0-based index.
+        // gen 0 (piecewise) goes to pwl_cost; gens 1 and 2 written with
+        // 0-based element = generator position and a contiguous 0-based
+        // index.
         assert_eq!(pc.index, vec![json!(0), json!(1)]);
         assert_eq!(col(&pc, "element"), vec![json!(1), json!(2)]);
+        let pwl = written_frame(&conv.text, "pwl_cost");
+        assert_eq!(col(&pwl, "element"), vec![json!(0)]);
         for expected in [
-            "1 generator costs dropped: pandapower poly_cost carries polynomial (model 2) costs only",
             "1 generator costs truncated to quadratic: poly_cost carries cp0/cp1/cp2 only",
             "1 generator costs had no coefficients and were written as zero",
         ] {
@@ -3659,5 +3865,99 @@ mod tests {
                 conv.rendered_diagnostics()
             );
         }
+    }
+
+    #[test]
+    fn pwl_cost_reads_breakpoints_and_declares_the_level() {
+        let gen_frame = pp_frame(
+            &["bus", "p_mw", "slack"],
+            json!([0]),
+            json!([[0, 10.0, true]]),
+        );
+        let pwl = pp_frame(
+            &["power_type", "element", "et", "points"],
+            json!([0]),
+            json!([["p", 0, "gen", [[0.0, 10.0, 5.0], [10.0, 20.0, 8.0]]]]),
+        );
+        let parsed = parse_pandapower_json(&pp_net(vec![
+            bus_table(json!([0])),
+            ("gen", gen_frame),
+            ("pwl_cost", pwl),
+        ]))
+        .unwrap();
+        let cost = parsed.network.generators()[0].cost.as_ref().unwrap();
+        assert_eq!(cost.model, 1);
+        assert_eq!(cost.ncost, 3);
+        assert_eq!(cost.coeffs, vec![0.0, 0.0, 10.0, 50.0, 20.0, 130.0]);
+        assert!(
+            parsed
+                .diagnostics
+                .iter()
+                .any(|d| d.message().contains("absolute objective level is unstated")),
+            "{:?}",
+            parsed.rendered_diagnostics()
+        );
+    }
+
+    #[test]
+    fn pwl_cost_round_trips_through_the_writer() {
+        let gen_frame = pp_frame(
+            &["bus", "p_mw", "slack"],
+            json!([0]),
+            json!([[0, 10.0, true]]),
+        );
+        let pwl = pp_frame(
+            &["power_type", "element", "et", "points"],
+            json!([0]),
+            json!([["p", 0, "gen", [[0.0, 10.0, 5.0], [10.0, 20.0, 8.0]]]]),
+        );
+        let parsed = parse_pandapower_json(&pp_net(vec![
+            bus_table(json!([0])),
+            ("gen", gen_frame),
+            ("pwl_cost", pwl),
+        ]))
+        .unwrap();
+        let out = write_pandapower_json(&parsed.network);
+        let again = parse_pandapower_json(&out.text).unwrap();
+        assert_eq!(
+            again.network.generators()[0].cost,
+            parsed.network.generators()[0].cost
+        );
+    }
+
+    #[test]
+    fn pwl_cost_writer_declares_a_nonzero_level() {
+        let mut net = BalancedNetwork::in_memory(
+            "pwl-level",
+            100.0,
+            vec![{
+                let mut b = Bus::new(BusId(1), BusType::Ref, 110.0);
+                b.vm = 1.0;
+                b
+            }],
+            vec![],
+        );
+        let mut g = Generator::new(BusId(1));
+        g.pg = 10.0;
+        g.cost = Some(GenCost {
+            model: 1,
+            startup: 0.0,
+            shutdown: 0.0,
+            ncost: 2,
+            coeffs: vec![0.0, 7.0, 20.0, 107.0],
+        });
+        net.generators_mut().push(g);
+        let out = write_pandapower_json(&net);
+        assert!(
+            out.diagnostics
+                .iter()
+                .any(|d| d.message().contains("absolute objective shifts")),
+            "{:?}",
+            out.rendered_diagnostics()
+        );
+        // The shape survives; the level restarts at zero on read back.
+        let again = parse_pandapower_json(&out.text).unwrap();
+        let cost = again.network.generators()[0].cost.as_ref().unwrap();
+        assert_eq!(cost.coeffs, vec![0.0, 0.0, 20.0, 100.0]);
     }
 }

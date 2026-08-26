@@ -20,9 +20,9 @@ use crate::convert::{Conversion, ConversionSidecar};
 use crate::diagnostics::codes as C;
 use crate::model::{
     ActivePowerReference, Configuration, ControlVoltageReference, DistBus, DistControlProfile,
-    DistIbr, DistLoad, DistLoadVoltageModel, DistTransformer, DistWinding, DistWindingConn, Extras,
-    IbrPrimeMover, IbrTopology, IbrVoltageAggregation, Mat, MulticonductorNetwork,
-    ReactivePowerReference, VoltVarControl, VoltWattControl,
+    DistIbr, DistLineCode, DistLoad, DistLoadVoltageModel, DistTransformer, DistWinding,
+    DistWindingConn, Extras, IbrPrimeMover, IbrTopology, IbrVoltageAggregation, Mat,
+    MulticonductorNetwork, ReactivePowerReference, VoltVarControl, VoltWattControl,
 };
 
 use super::read::delta_edges;
@@ -495,6 +495,60 @@ impl DssWriter {
             .filter(|(_, t)| grounded.contains(*t));
         let (idx, _) = found.next()?;
         found.next().is_none().then_some(idx)
+    }
+
+    /// The conductor index of a line or switch's unique grounded return when
+    /// it sits before the end and the endpoints agree on it (a conductor is
+    /// one wire, so both maps and every conductor indexed matrix move by the
+    /// same permutation). `None` when no reorder applies or the endpoints
+    /// disagree — the plain order warning stands for those.
+    fn endpoint_return_index(
+        &self,
+        bus_from: &str,
+        map_from: &[String],
+        bus_to: &str,
+        map_to: &[String],
+    ) -> Option<usize> {
+        let n = map_from.len();
+        if map_to.len() != n {
+            return None;
+        }
+        let from = self.return_terminal_index(bus_from, map_from);
+        let to = self.return_terminal_index(bus_to, map_to);
+        let k = match (from, to) {
+            (Some(a), Some(b)) if a == b => a,
+            (Some(a), None) => a,
+            (None, Some(b)) => b,
+            _ => return None,
+        };
+        (k + 1 != n).then_some(k)
+    }
+
+    /// The node list with its unique grounded return moved last, when it
+    /// sits elsewhere: dss reads a node list positionally with the return
+    /// last, and the classes that call this carry no per conductor data into
+    /// the record, so the reorder renames nothing. The reorder is declared.
+    /// Lines and switches must not call this — they index impedance matrices
+    /// by these maps, and use the paired permutation instead.
+    fn return_last(&mut self, class: &str, name: &str, bus: &str, map: &[String]) -> Vec<String> {
+        let Some(index) = self.return_terminal_index(bus, map) else {
+            return map.to_vec();
+        };
+        if index + 1 == map.len() {
+            return map.to_vec();
+        }
+        let mut reordered = map.to_vec();
+        let terminal = reordered.remove(index);
+        self.warn(
+            &C::EMIT_DSS_VALUE_SUBSTITUTED,
+            format!(
+                "{class} {name} on bus {bus}: grounded return `{terminal}` moved last in \
+                 the node list; dss reads the list positionally and this record carries \
+                 no per conductor data to keep in step"
+            ),
+        );
+        reordered.push(terminal);
+        reordered
     }
 
     /// Report a positional node list whose unique grounded return is not
@@ -1053,6 +1107,54 @@ impl DssWriter {
     fn linecodes(&mut self, net: &MulticonductorNetwork) {
         let omega_nf = std::f64::consts::TAU * net.base_frequency() * 1e-9;
         for c in net.linecodes() {
+            self.emit_linecode(c, omega_nf);
+        }
+        // #307: a line whose unique grounded return is not the last conductor
+        // reorders its node lists; the matrices its linecode carries are
+        // indexed by that conductor order, so a permuted copy of the linecode
+        // is emitted and the line references it — the map and the matrices
+        // move together, and other lines keep the original.
+        let mut permuted: std::collections::HashSet<(String, usize)> =
+            std::collections::HashSet::new();
+        for l in net.lines() {
+            let Some(k) = self.endpoint_return_index(
+                &l.bus_from,
+                &l.terminal_map_from,
+                &l.bus_to,
+                &l.terminal_map_to,
+            ) else {
+                continue;
+            };
+            let Some(code) = net
+                .linecodes()
+                .iter()
+                .find(|c| c.name.eq_ignore_ascii_case(&l.linecode))
+            else {
+                continue;
+            };
+            if code.n_conductors != l.terminal_map_from.len()
+                || !permuted.insert((code.name.to_ascii_lowercase(), k))
+            {
+                continue;
+            }
+            let perm = return_permutation(k, code.n_conductors);
+            let mut clone = code.clone();
+            clone.name = format!("{}_ret{k}", code.name);
+            clone.r_series = permute_symmetric(&code.r_series, &perm);
+            clone.x_series = permute_symmetric(&code.x_series, &perm);
+            clone.g_from = permute_symmetric(&code.g_from, &perm);
+            clone.b_from = permute_symmetric(&code.b_from, &perm);
+            clone.g_to = permute_symmetric(&code.g_to, &perm);
+            clone.b_to = permute_symmetric(&code.b_to, &perm);
+            clone.i_max = code.i_max.as_ref().map(|v| permute_padded(v, &perm));
+            clone.s_max = code.s_max.as_ref().map(|v| permute_padded(v, &perm));
+            self.emit_linecode(&clone, omega_nf);
+        }
+        self.out.push('\n');
+    }
+
+    fn emit_linecode(&mut self, c: &DistLineCode, omega_nf: f64) {
+        {
             self.check_name("linecode", &c.name);
             let n = c.n_conductors;
             let what = format!("linecode {}", c.name);
@@ -1111,34 +1213,84 @@ impl DssWriter {
             s.push_str(&self.extras_tail("linecode", &c.name, &extras));
             self.line_out(&s);
         }
-        self.out.push('\n');
     }
 
+    // One block per record family; splitting the reorder decision from the
+    // emission would thread five locals through helpers.
+    #[allow(clippy::too_many_lines)]
     fn lines(&mut self, net: &MulticonductorNetwork) {
         for l in net.lines() {
             self.check_name("line", &l.name);
-            self.warn_terminal_order(
-                "line",
-                &l.name,
-                &l.bus_from,
-                Some("bus1"),
-                &l.terminal_map_from,
-            );
-            self.warn_terminal_order("line", &l.name, &l.bus_to, Some("bus2"), &l.terminal_map_to);
+            // #307: with an agreed return conductor before the end and a
+            // matching permuted linecode emitted, the node lists and the
+            // matrices move together; otherwise the order warning stands.
+            let reorder = self
+                .endpoint_return_index(
+                    &l.bus_from,
+                    &l.terminal_map_from,
+                    &l.bus_to,
+                    &l.terminal_map_to,
+                )
+                .filter(|_| {
+                    net.linecodes().iter().any(|c| {
+                        c.name.eq_ignore_ascii_case(&l.linecode)
+                            && c.n_conductors == l.terminal_map_from.len()
+                    })
+                });
+            let (map_from, map_to, code_name);
+            if let Some(k) = reorder {
+                let perm = return_permutation(k, l.terminal_map_from.len());
+                map_from = permute_names(&l.terminal_map_from, &perm);
+                map_to = permute_names(&l.terminal_map_to, &perm);
+                code_name = format!("{}_ret{k}", l.linecode);
+                self.warn(
+                    &C::EMIT_DSS_VALUE_SUBSTITUTED,
+                    format!(
+                        "line {}: grounded return moved last in both node lists; \
+                         linecode `{code_name}` carries the matrices permuted in step",
+                        l.name
+                    ),
+                );
+            } else {
+                self.warn_terminal_order(
+                    "line",
+                    &l.name,
+                    &l.bus_from,
+                    Some("bus1"),
+                    &l.terminal_map_from,
+                );
+                self.warn_terminal_order(
+                    "line",
+                    &l.name,
+                    &l.bus_to,
+                    Some("bus2"),
+                    &l.terminal_map_to,
+                );
+                map_from = l.terminal_map_from.clone();
+                map_to = l.terminal_map_to.clone();
+                code_name = l.linecode.clone();
+            }
             let phases = l.terminal_map_from.len();
             let mut s = format!(
                 "New Line.{} bus1={} bus2={} phases={phases} linecode={} length={} units=m",
                 l.name,
-                self.bus_ref(&l.bus_from, &l.terminal_map_from),
-                self.bus_ref(&l.bus_to, &l.terminal_map_to),
-                l.linecode,
+                self.bus_ref(&l.bus_from, &map_from),
+                self.bus_ref(&l.bus_to, &map_to),
+                code_name,
                 self.checked_num(l.length, 1.0, &format!("line {}: length", l.name)),
             );
             let mut extras = l.extras.clone();
             extras.remove("units"); // canonical output is in meters
+            let line_i_max = match reorder {
+                Some(k) => l
+                    .i_max
+                    .as_ref()
+                    .map(|v| permute_padded(v, &return_permutation(k, l.terminal_map_from.len()))),
+                None => l.i_max.clone(),
+            };
             // `i_max` maps to `emergamps`, as it does on a linecode. The
             // typed field wins over a token kept in extras.
-            match l.i_max.as_deref() {
+            match line_i_max.as_deref() {
                 Some([amps, rest @ ..]) if is_positive_finite(*amps) => {
                     extras.remove("emergamps");
                     let _ = write!(s, " emergamps={}", num(*amps));
@@ -1172,9 +1324,16 @@ impl DssWriter {
                 None => {}
             }
             if l.s_max.is_some() {
+                // dss Line carries current ratings only; an apparent power
+                // limit is a different quantity and is not folded into
+                // emergamps. The typed field drops, declared.
                 self.warn(
-                    &C::EMIT_DSS_EXTRAS_DROPPED,
-                    format!("line {}: `s_max` has no dss Line field; dropped", l.name),
+                    &C::EMIT_DSS_FIELD_DROPPED,
+                    format!(
+                        "line {}: `s_max` is an apparent power limit and dss Line \
+                         states current ratings only; dropped",
+                        l.name
+                    ),
                 );
             }
             s.push_str(&self.extras_tail("line", &l.name, &extras));
@@ -1186,26 +1345,51 @@ impl DssWriter {
     fn switches(&mut self, net: &MulticonductorNetwork) {
         for sw in net.switches() {
             self.check_name("line", &sw.name);
-            self.warn_terminal_order(
-                "switch",
-                &sw.name,
+            // #307: a switch is ideal — no conductor indexed matrices — so an
+            // agreed return conductor reorders both node lists together.
+            let reorder = self.endpoint_return_index(
                 &sw.bus_from,
-                Some("bus1"),
                 &sw.terminal_map_from,
-            );
-            self.warn_terminal_order(
-                "switch",
-                &sw.name,
                 &sw.bus_to,
-                Some("bus2"),
                 &sw.terminal_map_to,
             );
+            let (map_from, map_to);
+            if let Some(k) = reorder {
+                let perm = return_permutation(k, sw.terminal_map_from.len());
+                map_from = permute_names(&sw.terminal_map_from, &perm);
+                map_to = permute_names(&sw.terminal_map_to, &perm);
+                self.warn(
+                    &C::EMIT_DSS_VALUE_SUBSTITUTED,
+                    format!(
+                        "switch {}: grounded return moved last in both node lists; \
+                         the switch carries no per conductor data to keep in step",
+                        sw.name
+                    ),
+                );
+            } else {
+                self.warn_terminal_order(
+                    "switch",
+                    &sw.name,
+                    &sw.bus_from,
+                    Some("bus1"),
+                    &sw.terminal_map_from,
+                );
+                self.warn_terminal_order(
+                    "switch",
+                    &sw.name,
+                    &sw.bus_to,
+                    Some("bus2"),
+                    &sw.terminal_map_to,
+                );
+                map_from = sw.terminal_map_from.clone();
+                map_to = sw.terminal_map_to.clone();
+            }
             let phases = sw.terminal_map_from.len();
             let mut s = format!(
                 "New Line.{} bus1={} bus2={} phases={phases} switch=y",
                 sw.name,
-                self.bus_ref(&sw.bus_from, &sw.terminal_map_from),
-                self.bus_ref(&sw.bus_to, &sw.terminal_map_to),
+                self.bus_ref(&sw.bus_from, &map_from),
+                self.bus_ref(&sw.bus_to, &map_to),
             );
             match sw.i_max.as_deref() {
                 Some([amps, ..]) if amps.is_finite() => {
@@ -1972,7 +2156,7 @@ impl DssWriter {
                 continue;
             }
             self.check_name("capacitor", &c.name);
-            self.warn_terminal_order("capacitor", &c.name, &c.bus, None, &c.terminal_map);
+            let node_map = self.return_last("capacitor", &c.name, &c.bus, &c.terminal_map);
             let phases = self.element_phases(
                 &c.extras,
                 &c.terminal_map,
@@ -2010,7 +2194,7 @@ impl DssWriter {
             let mut line = format!(
                 "New Capacitor.{} bus1={} phases={phases} conn={conn} kv={} kvar={}",
                 c.name,
-                self.bus_ref(&c.bus, &c.terminal_map),
+                self.bus_ref(&c.bus, &node_map),
                 num(kv),
                 num(c.q_rated / 1e3),
             );
@@ -2039,7 +2223,7 @@ impl DssWriter {
     fn generators(&mut self, net: &MulticonductorNetwork) {
         for g in net.generators() {
             self.check_name("generator", &g.name);
-            self.warn_terminal_order("generator", &g.name, &g.bus, None, &g.terminal_map);
+            let node_map = self.return_last("generator", &g.name, &g.bus, &g.terminal_map);
             let phases = self.element_phases(
                 &g.extras,
                 &g.terminal_map,
@@ -2066,7 +2250,7 @@ impl DssWriter {
             let mut s = format!(
                 "New Generator.{} bus1={} phases={phases} conn={conn} kv={} kw={} kvar={}",
                 g.name,
-                self.bus_ref(&g.bus, &g.terminal_map),
+                self.bus_ref(&g.bus, &node_map),
                 num(kv),
                 num(kw),
                 num(kvar),
@@ -2126,7 +2310,7 @@ impl DssWriter {
     }
 
     fn write_fixed_ibr_generator(&mut self, ibr: &DistIbr) {
-        self.warn_terminal_order("ibr", &ibr.name, &ibr.bus, None, &ibr.terminal_map);
+        let node_map = self.return_last("ibr", &ibr.name, &ibr.bus, &ibr.terminal_map);
         let phases = ibr_phases(ibr);
         let configuration = ibr_configuration(ibr);
         let conn = self.element_conn(&ibr.extras, configuration, &ibr.bus, &ibr.terminal_map);
@@ -2142,7 +2326,7 @@ impl DssWriter {
         let mut line = format!(
             "New Generator.{} bus1={} phases={phases} conn={conn} kv={} kw={} kvar={} model=1 vminpu=0 vmaxpu=2",
             ibr.name,
-            self.bus_ref(&ibr.bus, &ibr.terminal_map),
+            self.bus_ref(&ibr.bus, &node_map),
             num(kv),
             num(kw),
             num(kvar),
@@ -2158,7 +2342,7 @@ impl DssWriter {
     }
 
     fn write_pvsystem(&mut self, ibr: &DistIbr, net: &MulticonductorNetwork) {
-        self.warn_terminal_order("ibr", &ibr.name, &ibr.bus, None, &ibr.terminal_map);
+        let node_map = self.return_last("ibr", &ibr.name, &ibr.bus, &ibr.terminal_map);
         let phases = ibr_phases(ibr);
         let configuration = ibr_configuration(ibr);
         let conn = self.element_conn(&ibr.extras, configuration, &ibr.bus, &ibr.terminal_map);
@@ -2172,7 +2356,7 @@ impl DssWriter {
         let mut line = format!(
             "New PVSystem.{} bus1={} phases={phases} conn={conn} kv={} kVA={} Pmpp={} irradiance=1 %Pmpp=100 WattPriority=No VarFollowInverter=Yes",
             ibr.name,
-            self.bus_ref(&ibr.bus, &ibr.terminal_map),
+            self.bus_ref(&ibr.bus, &node_map),
             num(kv),
             num(kva),
             num(pmpp),
@@ -2562,6 +2746,39 @@ fn has_off_diagonal(m: &Mat) -> bool {
     m.iter()
         .enumerate()
         .any(|(i, row)| row.iter().enumerate().any(|(j, &v)| i != j && v != 0.0))
+}
+
+/// The permutation that moves conductor `k` last.
+fn return_permutation(k: usize, n: usize) -> Vec<usize> {
+    (0..n).filter(|&i| i != k).chain([k]).collect()
+}
+
+/// Symmetric densified read of a possibly lower triangular matrix, permuted:
+/// entry `(i, j)` of the result is the stated `(perm[i], perm[j])` value,
+/// read from either triangle.
+fn permute_symmetric(m: &Mat, perm: &[usize]) -> Mat {
+    let at = |i: usize, j: usize| {
+        m.get(i)
+            .and_then(|row| row.get(j))
+            .copied()
+            .or_else(|| m.get(j).and_then(|row| row.get(i)).copied())
+            .unwrap_or(0.0)
+    };
+    perm.iter()
+        .map(|&i| perm.iter().map(|&j| at(i, j)).collect())
+        .collect()
+}
+
+/// A terminal name list permuted.
+fn permute_names(map: &[String], perm: &[usize]) -> Vec<String> {
+    perm.iter().map(|&i| map[i].clone()).collect()
+}
+
+/// A per conductor vector permuted, short vectors padded as unbounded.
+fn permute_padded(v: &[f64], perm: &[usize]) -> Vec<f64> {
+    perm.iter()
+        .map(|&i| v.get(i).copied().unwrap_or(f64::INFINITY))
+        .collect()
 }
 
 fn diag_at(m: &Mat, i: usize) -> f64 {
@@ -3544,98 +3761,107 @@ mod tests {
     }
 
     #[test]
-    fn misordered_grounded_returns_are_error_diagnostics_only() {
+    fn misordered_grounded_returns_reorder_when_nothing_is_indexed() {
         let out = write_dss(&terminal_order_network(&["p1", "n", "p2"]));
         let diagnostics = terminal_order_diagnostics(&out);
 
-        assert_eq!(diagnostics.len(), 8, "{:?}", out.diagnostics);
+        // The four element classes and the switch carry no conductor indexed
+        // data into their records, so their node lists reorder return-last
+        // with a declared substitution. The line references linecode `lc`,
+        // which this network does not define, so its matrices cannot be
+        // permuted in step and the order error stands for both endpoints.
+        assert_eq!(diagnostics.len(), 2, "{:?}", out.diagnostics);
         for diagnostic in &diagnostics {
-            assert_eq!(
-                diagnostic.severity(),
-                crate::diagnostics::DiagnosticSeverity::Error
-            );
-            assert_eq!(diagnostic.details()["grounded_terminal"], "n");
-            assert_eq!(diagnostic.details()["position"], 2);
-            assert_eq!(diagnostic.details()["terminal_count"], 3);
-            assert!(diagnostic.details().contains_key("class"));
-            assert!(diagnostic.details().contains_key("element_name"));
-            assert_eq!(diagnostic.details()["bus"], "lv");
+            assert_eq!(diagnostic.details()["class"], "line");
+            assert_eq!(diagnostic.details()["element_name"], "l1");
         }
-        for (class, name) in [
-            ("capacitor", "cap"),
-            ("generator", "gen"),
-            ("ibr", "fixed_ibr"),
-            ("ibr", "pv_ibr"),
-        ] {
-            assert!(diagnostics.iter().any(|d| {
-                d.details()["class"] == class
-                    && d.details()["element_name"] == name
-                    && !d.details().contains_key("endpoint")
-                    && d.target() == Some(&format!("{class} {name}"))
-            }));
-        }
+        let reordered = out
+            .diagnostics
+            .iter()
+            .filter(|d| d.message().contains("moved last"))
+            .count();
+        assert_eq!(reordered, 5, "{:?}", out.rendered_diagnostics());
 
-        // The mitigation adds records only. Pin every emitted byte so it
-        // cannot reorder, refuse, or otherwise repair an element by accident.
-        let expected = concat!(
-            "Clear\n",
-            "Set DefaultBaseFrequency=60\n",
-            "\n",
-            "New Circuit.terminal_order basekv=0.4156921938165305 pu=1 angle=0 phases=3 bus1=sb.1.2.3.0\n",
-            "\n",
-            "\n",
-            "New Line.l1 bus1=lv.1.0.3 bus2=lv.1.0.3 phases=3 linecode=lc length=1 units=m\n",
-            "\n",
-            "New Line.sw1 bus1=lv.1.0.3 bus2=lv.1.0.3 phases=3 switch=y\n",
-            "New SwtControl.sw1_state SwitchedObj=Line.sw1 Action=close\n",
-            "\n",
-            "\n",
-            "\n",
-            "\n",
-            "New Capacitor.cap bus1=lv.1.0.3 phases=1 conn=wye kv=0.24 kvar=1\n",
-            "New Generator.gen bus1=lv.1.0.3 phases=1 conn=wye kv=0.24 kw=1 kvar=0\n",
-            "New Generator.fixed_ibr bus1=lv.1.0.3 phases=1 conn=wye kv=0.24 kw=1 kvar=0 model=1 vminpu=0 vmaxpu=2 maxkvar=0 minkvar=0\n",
-            "New PVSystem.pv_ibr bus1=lv.1.0.3 phases=1 conn=wye kv=0.24 kVA=1 Pmpp=1 irradiance=1 %Pmpp=100 WattPriority=No VarFollowInverter=Yes\n",
-            "\n",
-            "\n",
-            "Set VoltageBases=[0.4156921938165305]\n",
-            "Calcvoltagebases\n",
-            "Solve\n",
-        );
-        assert_eq!(out.text, expected);
+        for expected in [
+            "New Capacitor.cap bus1=lv.1.3.0 ",
+            "New Generator.gen bus1=lv.1.3.0 ",
+            "New Generator.fixed_ibr bus1=lv.1.3.0 ",
+            "New PVSystem.pv_ibr bus1=lv.1.3.0 ",
+            "New Line.sw1 bus1=lv.1.3.0 bus2=lv.1.3.0 phases=3 switch=y",
+            "New Line.l1 bus1=lv.1.0.3 bus2=lv.1.0.3 phases=3 linecode=lc ",
+        ] {
+            assert!(
+                out.text.contains(expected),
+                "missing {expected:?}: {}",
+                out.text
+            );
+        }
     }
 
     #[test]
-    fn line_and_switch_diagnostics_distinguish_both_bus_endpoints() {
-        let out = write_dss(&terminal_order_network(&["p1", "n", "p2"]));
+    fn a_line_with_its_linecode_permutes_the_matrices_in_step() {
+        let mut net = terminal_order_network(&["p1", "n", "p2"]);
+        net.linecodes_mut().push(DistLineCode::new(
+            "lc",
+            vec![vec![1.0], vec![0.2, 2.0], vec![0.3, 0.4, 3.0]],
+            vec![vec![10.0], vec![0.0, 20.0], vec![0.0, 0.0, 30.0]],
+        ));
+        let out = write_dss(&net);
+
+        assert_eq!(
+            terminal_order_diagnostics(&out).len(),
+            0,
+            "{:?}",
+            out.rendered_diagnostics()
+        );
+        // The line references the permuted copy and both node lists move the
+        // return last.
+        assert!(
+            out.text
+                .contains("New Line.l1 bus1=lv.1.3.0 bus2=lv.1.3.0 phases=3 linecode=lc_ret1 "),
+            "{}",
+            out.text
+        );
+        // Conductor order [p1, p2, n]: the permuted rmatrix rows and columns
+        // move together, so row 2 is the old conductor 3 and the old mutual
+        // 0.4 sits at (3, 2).
+        assert!(
+            out.text
+                .contains("New Linecode.lc_ret1 nphases=3 units=m rmatrix=(1 | 0.3 3 | 0.2 0.4 2)"),
+            "{}",
+            out.text
+        );
+        // The original stays for any line that keeps its order.
+        assert!(
+            out.text
+                .contains("New Linecode.lc nphases=3 units=m rmatrix=(1 | 0.2 2 | 0.3 0.4 3)"),
+            "{}",
+            out.text
+        );
+    }
+
+    #[test]
+    fn disagreeing_endpoint_returns_keep_the_order_error() {
+        let mut net = terminal_order_network(&["p1", "n", "p2"]);
+        // The same wire cannot hold the return at conductor 2 on one end and
+        // conductor 1 on the other; no permutation is sound, so the order
+        // errors stand for the line and the switch.
+        net.lines_mut()[0].terminal_map_to = strings(&["n", "p1", "p2"]);
+        net.switches_mut()[0].terminal_map_to = strings(&["n", "p1", "p2"]);
+        let out = write_dss(&net);
         let diagnostics = terminal_order_diagnostics(&out);
-
-        for (class, name) in [("line", "l1"), ("switch", "sw1")] {
-            for endpoint in ["bus1", "bus2"] {
-                assert!(
-                    diagnostics.iter().any(|d| {
-                        d.details()["class"] == class
-                            && d.details()["element_name"] == name
-                            && d.details()["endpoint"] == endpoint
-                            && d.details()["bus"] == "lv"
-                    }),
-                    "missing {class} {name} {endpoint}: {diagnostics:?}"
-                );
-            }
-        }
-
-        let line = out
-            .text
-            .lines()
-            .find(|line| line.starts_with("New Line.l1 "))
-            .unwrap();
-        assert!(line.contains("bus1=lv.1.0.3 bus2=lv.1.0.3 "), "{line}");
-        let switch = out
-            .text
-            .lines()
-            .find(|line| line.starts_with("New Line.sw1 "))
-            .unwrap();
-        assert!(switch.contains("bus1=lv.1.0.3 bus2=lv.1.0.3 "), "{switch}");
+        assert!(
+            diagnostics
+                .iter()
+                .any(|d| d.details()["class"] == "switch" && d.details()["endpoint"] == "bus2"),
+            "{:?}",
+            out.rendered_diagnostics()
+        );
+        assert!(
+            out.text.contains("New Line.sw1 bus1=lv.1.0.3 "),
+            "{}",
+            out.text
+        );
     }
 
     #[test]

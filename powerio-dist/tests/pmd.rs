@@ -10,7 +10,9 @@ use powerio_dist::{
 };
 
 mod helpers;
-use helpers::{parse_dss_file, parse_pmd_file, parse_pmd_str, write_bmopf_json, write_pmd_json};
+use helpers::{
+    parse_dss_file, parse_dss_str, parse_pmd_file, parse_pmd_str, write_bmopf_json, write_pmd_json,
+};
 
 fn fixture(rel: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -1082,5 +1084,34 @@ fn bus_voltage_bounds_ride_vm_lb_and_vm_ub() {
         net.warnings.iter().any(|w| w.contains("non-uniform")),
         "{:?}",
         net.warnings
+    );
+}
+
+/// #376: a rated capacitor bank converts to an ENGINEERING shunt — the
+/// nameplate reactive power at the nameplate voltage becomes the
+/// susceptance matrix over the bank's own conductors, the same equivalence
+/// the admittance builder stamps.
+#[test]
+fn a_rated_capacitor_converts_to_an_engineering_shunt() {
+    let dss = "Clear\nNew Circuit.capnet basekv=4.16 pu=1.0 phases=3 bus1=sb.1.2.3\n\
+               New Capacitor.cbank bus1=sb.1.2.3 phases=3 kv=4.16 kvar=300 conn=wye\n\
+               Solve\n";
+    let net = parse_dss_str(dss);
+    let out = write_pmd_json(&net);
+    let doc: serde_json::Value = serde_json::from_str(&out.text).unwrap();
+    let shunt = &doc["shunt"]["cbank"];
+    assert_eq!(shunt["model"], "CAPACITOR", "{doc}");
+    assert_eq!(shunt["configuration"], "WYE");
+    // Wye: line to neutral base 4160/sqrt(3), 100 kvar per phase.
+    let v_ln: f64 = 4160.0 / 3f64.sqrt();
+    let b = 100_000.0 / (v_ln * v_ln);
+    let stated = shunt["bs"][0][0].as_f64().unwrap();
+    assert!((stated - b).abs() < 1e-9 * b, "bs {stated} want {b}");
+    assert!(
+        !out.warnings
+            .iter()
+            .any(|w| w.contains("capacitor") && w.contains("dropped")),
+        "{:?}",
+        out.warnings
     );
 }
