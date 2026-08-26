@@ -29,6 +29,17 @@ mod generate {
         // `.pio.json` files. The lineage is the same one the reader accepts, so
         // the path moves when and only when a document stops loading.
         let lineage = powerio::version::lineage_path();
+        // The stored module document: one integer version, its own lineage.
+        write_schema::<powerio::stored::StoredModuleV1>(
+            &out,
+            &format!("pio-module/{}", powerio::stored::SCHEMA_VERSION),
+            &format!(
+                "https://powerio.dev/schema/pio-module/{}/schema.json",
+                powerio::stored::SCHEMA_VERSION
+            ),
+            &[],
+        )?;
+
         write_schema::<powerio::package::NetworkPackage>(
             &out,
             &format!("pio-package/{lineage}"),

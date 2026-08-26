@@ -29,6 +29,16 @@ pub use powerio_core::{CodeStatus, DiagnosticInfo, check_registry, code_is_well_
 /// by the network crates that own those models.
 pub mod codes {
     powerio_core::diagnostic_codes! {
+        READ_MODULE_UNSUPPORTED = "READ.MODULE.UNSUPPORTED", Error,
+            "the stored module names a schema or version this build does not read", category = Request;
+        READ_MODULE_INVALID = "READ.MODULE.INVALID", Error,
+            "the stored module document is structurally invalid", category = Data;
+        READ_MODULE_LEGACY_STUDY = "READ.MODULE.LEGACY_STUDY", Error,
+            "a 0.9 package with a nonempty study block needs a revision materialized before upgrade", category = Request;
+        READ_MODULE_LEGACY_FIELD = "READ.MODULE.LEGACY_FIELD", Error,
+            "a 0.9 operating point update field has no state quantity", category = Data;
+        READ_MODULE_UPGRADED = "READ.MODULE.UPGRADED", Note,
+            "a released 0.9 package was upgraded one way to the stored module";
         // READ: what a reader's own findings arrive as once the package lifts
         // them. A reader finding keeps the code its crate gave it; these are
         // the package's own.

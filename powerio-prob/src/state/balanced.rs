@@ -315,6 +315,31 @@ impl BalancedStateBuilder {
         self.sparse(GENERATOR_ACTIVE_POWER, base, changes)
     }
 
+    /// Dense columns for a quantity by its accessor name, for stored decode:
+    /// an unknown name is refused rather than silently registered.
+    ///
+    /// # Errors
+    /// A name outside the balanced instantaneous vocabulary.
+    pub fn dense_by_name(self, quantity: &str, values: Vec<f64>) -> Result<Self, Error> {
+        let quantity = resolve_quantity(quantity)?;
+        Ok(self.dense(quantity, values))
+    }
+
+    /// Sparse columns for a quantity by its accessor name, as
+    /// [`Self::dense_by_name`].
+    ///
+    /// # Errors
+    /// A name outside the balanced instantaneous vocabulary.
+    pub fn sparse_by_name(
+        self,
+        quantity: &str,
+        base: Vec<f64>,
+        changes: Vec<Vec<(String, f64)>>,
+    ) -> Result<Self, Error> {
+        let quantity = resolve_quantity(quantity)?;
+        Ok(self.sparse(quantity, base, changes))
+    }
+
     fn layout_for(&self, quantity: &'static str) -> Result<QuantityLayout, Error> {
         let network = &self.network;
         match family_of(quantity) {
@@ -400,4 +425,33 @@ impl BalancedStateBuilder {
             .collect();
         TimeSeries::new(self.time_points, points)
     }
+}
+
+/// The static vocabulary name for a stored quantity spelling.
+fn resolve_quantity(name: &str) -> Result<&'static str, Error> {
+    const ALL: [&str; 14] = [
+        BUS_VOLTAGE_MAGNITUDE,
+        BUS_VOLTAGE_ANGLE,
+        BUS_ACTIVE_INJECTION,
+        BUS_REACTIVE_INJECTION,
+        GENERATOR_ACTIVE_POWER,
+        GENERATOR_REACTIVE_POWER,
+        GENERATOR_VOLTAGE_SETPOINT,
+        GENERATOR_IN_SERVICE,
+        LOAD_ACTIVE_POWER,
+        LOAD_REACTIVE_POWER,
+        BRANCH_IN_SERVICE,
+        BRANCH_TAP_RATIO,
+        BRANCH_PHASE_SHIFT,
+        SWITCH_CLOSED,
+    ];
+    ALL.iter()
+        .find(|known| **known == name)
+        .copied()
+        .ok_or_else(|| {
+            Error::new(
+                &codes::BUILD_STATE_SHAPE_MISMATCH,
+                format!("`{name}` is not a balanced instantaneous quantity"),
+            )
+        })
 }

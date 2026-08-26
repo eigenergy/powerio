@@ -22,11 +22,15 @@ schema = ["dep:schemars", "powerio-tx/schema", "powerio-core/schema", "powerio-d
 num-complex = { workspace = true }
 powerio-core = { workspace = true }
 powerio-dist = { workspace = true }
+powerio-prob = { workspace = true }
 powerio-tx = { workspace = true }
 schemars = { workspace = true, optional = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = "2"
+
+[dev-dependencies]
+powerio-matrix = { workspace = true }
 
 [[example]]
 name = "generate_schemas"

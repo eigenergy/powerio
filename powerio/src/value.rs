@@ -15,6 +15,9 @@ use powerio_tx::BalancedNetwork;
 pub enum PioValueKind {
     BalancedNetwork,
     MulticonductorNetwork,
+    BalancedNetworkTimeSeries,
+    BalancedOperatingPointTimeSeries,
+    BalancedNetworkScenarioSet,
 }
 
 impl PioValueKind {
@@ -23,6 +26,9 @@ impl PioValueKind {
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::BalancedNetwork => "balanced_network",
+            Self::BalancedNetworkTimeSeries => "balanced_network_time_series",
+            Self::BalancedOperatingPointTimeSeries => "balanced_operating_point_time_series",
+            Self::BalancedNetworkScenarioSet => "balanced_network_scenario_set",
             Self::MulticonductorNetwork => "multiconductor_network",
         }
     }
@@ -45,6 +51,12 @@ impl fmt::Display for PioValueKind {
 pub enum PioValue {
     BalancedNetwork(BalancedNetwork),
     MulticonductorNetwork(MulticonductorNetwork),
+    /// One balanced network per time point, static tables shared.
+    BalancedNetworkTimeSeries(powerio_core::TimeSeries<BalancedNetwork>),
+    /// One fixed balanced network under an operating point per time point.
+    BalancedOperatingPointTimeSeries(powerio_prob::BalancedOperatingPoints),
+    /// One balanced network per scenario, shared element tables.
+    BalancedNetworkScenarioSet(powerio_core::ScenarioSet<BalancedNetwork>),
 }
 
 impl PioValue {
@@ -53,6 +65,11 @@ impl PioValue {
         match self {
             Self::BalancedNetwork(_) => PioValueKind::BalancedNetwork,
             Self::MulticonductorNetwork(_) => PioValueKind::MulticonductorNetwork,
+            Self::BalancedNetworkTimeSeries(_) => PioValueKind::BalancedNetworkTimeSeries,
+            Self::BalancedOperatingPointTimeSeries(_) => {
+                PioValueKind::BalancedOperatingPointTimeSeries
+            }
+            Self::BalancedNetworkScenarioSet(_) => PioValueKind::BalancedNetworkScenarioSet,
         }
     }
 }
@@ -164,6 +181,21 @@ typed_module!(
     MulticonductorNetwork,
     MulticonductorNetwork,
     MulticonductorNetwork
+);
+typed_module!(
+    powerio_core::TimeSeries<BalancedNetwork>,
+    BalancedNetworkTimeSeries,
+    BalancedNetworkTimeSeries
+);
+typed_module!(
+    powerio_prob::BalancedOperatingPoints,
+    BalancedOperatingPointTimeSeries,
+    BalancedOperatingPointTimeSeries
+);
+typed_module!(
+    powerio_core::ScenarioSet<BalancedNetwork>,
+    BalancedNetworkScenarioSet,
+    BalancedNetworkScenarioSet
 );
 
 #[cfg(test)]

@@ -55,6 +55,14 @@ const EXPECTED: &[(&str, &str, Option<&str>)] = &[
         Some("pandapower-json"),
     ),
     ("model-json/case30_v4.json", "model-json", None),
+    // Frozen released 0.9 packages, kept for the one way stored module upgrade.
+    ("package/frozen-0.9-balanced.pio.json", "package", None),
+    (
+        "package/frozen-0.9-multiconductor.pio.json",
+        "package",
+        None,
+    ),
+    ("package/frozen-0.9-series.pio.json", "package", None),
     // PyPSA sidecars: a coordinate reference system string and an empty
     // metadata object, both beside the CSV folder that carries the case.
     ("pypsa/example/crs.json", "unknown", None),
