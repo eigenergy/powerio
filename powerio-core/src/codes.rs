@@ -31,6 +31,10 @@ crate::diagnostic_codes! {
         "source acquisition refused a symbolic link", category = Request;
     REQUEST_SOURCE_DIRECTORY_REQUIRED = "REQUEST.SOURCE.DIRECTORY_REQUIRED", Error,
         "a named child buffer was requested from a single-buffer source", category = Request;
+    REQUEST_SOURCE_ESCAPES_ROOT = "REQUEST.SOURCE.ESCAPES_ROOT", Error,
+        "a referenced file resolves outside the acquisition root", category = Request;
+    REQUEST_SOURCE_UNKNOWN_BUFFER = "REQUEST.SOURCE.UNKNOWN_BUFFER", Error,
+        "a referenced buffer was not supplied to an in-memory source", category = Request;
 
     READ_IO_METADATA = "READ.IO.METADATA", Error,
         "source metadata could not be read", category = Io;
@@ -42,6 +46,8 @@ crate::diagnostic_codes! {
         "a source buffer changed while it was being acquired", category = Io;
     READ_IO_ALLOCATION_REFUSED = "READ.IO.ALLOCATION_REFUSED", Error,
         "memory for a source buffer could not be reserved", category = Io;
+    READ_IO_REFERENCE_BUDGET = "READ.IO.REFERENCE_BUDGET", Error,
+        "acquiring another referenced file would pass the source acquisition budget", category = Io;
 
     VALIDATE_TIME_POINT_INVALID_LABEL = "VALIDATE.TIME_POINT.INVALID_LABEL", Error,
         "a time point label is empty, contains NUL, or exceeds its bound", category = Data;
