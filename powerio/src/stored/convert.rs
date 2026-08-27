@@ -27,7 +27,7 @@ fn invalid(message: impl Into<String>) -> powerio_core::Error {
 
 /// The balanced instantaneous quantity vocabulary, the accessor spellings the
 /// state module resolves. Stored quantities outside this list are refused.
-const BALANCED_QUANTITIES: [&str; 13] = [
+const BALANCED_QUANTITIES: [&str; 14] = [
     "bus_voltage_magnitude",
     "bus_voltage_angle",
     "bus_active_injection",
@@ -41,6 +41,7 @@ const BALANCED_QUANTITIES: [&str; 13] = [
     "branch_in_service",
     "branch_tap_ratio",
     "branch_phase_shift",
+    "switch_closed",
 ];
 
 /// Serialize one runtime module to the `.pio.json` version 1 document.
@@ -131,7 +132,272 @@ fn encode_value(value: &PioValue) -> Result<StoredValueV1> {
                     .collect(),
             })
         }
+        PioValue::MulticonductorOperatingPointTimeSeries(series) => {
+            StoredValueV1::MulticonductorOperatingPointTimeSeries(encode_mc_operating_points(
+                series,
+            )?)
+        }
+        PioValue::DcPfInstance(instance) => {
+            StoredValueV1::DcPfInstance(encode_dc_pf_instance(instance))
+        }
+        PioValue::AcPfInstance(instance) => {
+            StoredValueV1::AcPfInstance(encode_ac_pf_instance(instance))
+        }
+        PioValue::DcOpfInstance(instance) => {
+            StoredValueV1::DcOpfInstance(encode_dc_opf_instance(instance))
+        }
+        PioValue::AcOpfInstance(instance) => {
+            StoredValueV1::AcOpfInstance(encode_ac_opf_instance(instance))
+        }
+        PioValue::McAcPfInstance(instance) => {
+            StoredValueV1::McAcPfInstance(encode_mc_ac_pf_instance(instance))
+        }
+        PioValue::McAcOpfInstance(instance) => {
+            StoredValueV1::McAcOpfInstance(encode_mc_ac_opf_instance(instance))
+        }
+        PioValue::AcScucInstance(instance) => {
+            StoredValueV1::AcScucInstance(dto::AcScucInstanceV1 {
+                network: Box::new(instance.network().clone()),
+                inputs: Box::new(instance.inputs().clone()),
+            })
+        }
+        PioValue::DcPfSolution(solution) => {
+            StoredValueV1::DcPfSolution(Box::new(encode_dc_pf_solution(solution)))
+        }
+        PioValue::AcPfSolution(solution) => {
+            StoredValueV1::AcPfSolution(Box::new(encode_ac_pf_solution(solution)))
+        }
+        PioValue::DcOpfSolution(solution) => {
+            StoredValueV1::DcOpfSolution(Box::new(encode_dc_opf_solution(solution)))
+        }
+        PioValue::AcOpfSolution(solution) => {
+            StoredValueV1::AcOpfSolution(Box::new(encode_ac_opf_solution(solution)))
+        }
+        PioValue::McAcPfSolution(solution) => {
+            StoredValueV1::McAcPfSolution(Box::new(encode_mc_ac_pf_solution(solution)))
+        }
+        PioValue::McAcOpfSolution(solution) => {
+            StoredValueV1::McAcOpfSolution(Box::new(encode_mc_ac_opf_solution(solution)))
+        }
+        PioValue::AcScucSolution(solution) => {
+            StoredValueV1::AcScucSolution(Box::new(encode_ac_scuc_solution(solution)))
+        }
     })
+}
+
+/// The multiconductor instantaneous vocabulary, mirroring the state module's
+/// registered quantity names.
+const MULTICONDUCTOR_QUANTITIES: [&str; 7] = [
+    "terminal_voltage_magnitude",
+    "terminal_voltage_angle",
+    "load_active_power",
+    "load_reactive_power",
+    "switch_closed",
+    "transformer_tap",
+    "capacitor_steps",
+];
+
+/// The stable cross language DC formula names, spelled locally because this
+/// branch precedes the shared helper.
+fn dc_formula_name(convention: crate::DcConvention) -> &'static str {
+    match convention {
+        crate::DcConvention::Matpower => "tap_adjusted_reactance",
+        crate::DcConvention::ReactanceOnly => "reactance_only",
+        // The default series formula, and the spelling any future variant
+        // must replace deliberately.
+        _ => "series_susceptance",
+    }
+}
+
+fn dc_formula_from_name(name: &str) -> Result<crate::DcConvention> {
+    match name {
+        "series_susceptance" => Ok(crate::DcConvention::SeriesImpedance),
+        "tap_adjusted_reactance" => Ok(crate::DcConvention::Matpower),
+        "reactance_only" => Ok(crate::DcConvention::ReactanceOnly),
+        other => Err(invalid(format!(
+            "unknown branch susceptance formula `{other}`"
+        ))),
+    }
+}
+
+fn encode_point<N>(
+    point: &powerio_prob::OperatingPoint<N>,
+    vocabulary: &[&str],
+) -> dto::StoredOperatingPointV1 {
+    let mut quantities = BTreeMap::new();
+    for name in vocabulary {
+        let Some(order) = point.identity_order(name) else {
+            continue;
+        };
+        let identities: Vec<String> = order.map(str::to_string).collect();
+        let Some(row) = point.quantity_values(name) else {
+            continue;
+        };
+        quantities.insert(
+            (*name).to_string(),
+            StoredQuantityV1 {
+                identities,
+                values: row.into_iter().map(StoredF64).collect(),
+            },
+        );
+    }
+    dto::StoredOperatingPointV1 { quantities }
+}
+
+fn decode_balanced_point(
+    network: &crate::BalancedNetwork,
+    stored: dto::StoredOperatingPointV1,
+) -> Result<powerio_prob::OperatingPoint<crate::BalancedNetwork>> {
+    let time_points =
+        vec![TimePoint::new("initial", None).map_err(|error| invalid(error.to_string()))?];
+    let mut builder = powerio_prob::BalancedStateBuilder::new(network.clone(), time_points);
+    for (name, quantity) in stored.quantities {
+        let values: Vec<f64> = quantity.values.iter().map(|value| value.0).collect();
+        builder = builder
+            .dense_by_name(&name, values)
+            .map_err(|error| invalid(error.to_string()))?;
+    }
+    let series = builder
+        .build()
+        .map_err(|error| invalid(error.to_string()))?;
+    series
+        .values()
+        .first()
+        .cloned()
+        .ok_or_else(|| invalid("a stored operating point decoded to no point"))
+}
+
+fn decode_mc_point(
+    network: &powerio_dist::MulticonductorNetwork,
+    stored: dto::StoredOperatingPointV1,
+) -> Result<powerio_prob::OperatingPoint<powerio_dist::MulticonductorNetwork>> {
+    let time_points =
+        vec![TimePoint::new("initial", None).map_err(|error| invalid(error.to_string()))?];
+    let mut builder = powerio_prob::MulticonductorStateBuilder::new(network.clone(), time_points);
+    for (name, quantity) in stored.quantities {
+        let values: Vec<f64> = quantity.values.iter().map(|value| value.0).collect();
+        builder = mc_dense_by_name(builder, &name, values)?;
+    }
+    let series = builder
+        .build()
+        .map_err(|error| invalid(error.to_string()))?;
+    series
+        .values()
+        .first()
+        .cloned()
+        .ok_or_else(|| invalid("a stored operating point decoded to no point"))
+}
+
+fn mc_dense_by_name(
+    builder: powerio_prob::MulticonductorStateBuilder,
+    name: &str,
+    values: Vec<f64>,
+) -> Result<powerio_prob::MulticonductorStateBuilder> {
+    Ok(match name {
+        "terminal_voltage_magnitude" => builder.terminal_voltage_magnitudes(values),
+        "terminal_voltage_angle" => builder.terminal_voltage_angles(values),
+        "load_active_power" => builder.load_active_powers(values),
+        "load_reactive_power" => builder.load_reactive_powers(values),
+        "switch_closed" => builder.switch_closed(values),
+        "transformer_tap" => builder.transformer_taps(values),
+        "capacitor_steps" => builder.capacitor_steps(values),
+        other => {
+            return Err(invalid(format!(
+                "`{other}` is not a multiconductor state quantity"
+            )));
+        }
+    })
+}
+
+fn encode_mc_operating_points(
+    series: &powerio_prob::MulticonductorOperatingPoints,
+) -> Result<dto::MulticonductorOperatingPointTimeSeriesV1> {
+    let first = series
+        .values()
+        .first()
+        .ok_or_else(|| invalid("an operating point series needs at least one point"))?;
+    let mut quantities = BTreeMap::new();
+    for name in MULTICONDUCTOR_QUANTITIES {
+        let Some(order) = first.identity_order(name) else {
+            continue;
+        };
+        let identities: Vec<String> = order.map(str::to_string).collect();
+        let mut values = Vec::with_capacity(series.len() * identities.len());
+        for point in series.values() {
+            let row = point
+                .quantity_values(name)
+                .ok_or_else(|| invalid(format!("quantity `{name}` vanished mid series")))?;
+            values.extend(row.into_iter().map(StoredF64));
+        }
+        quantities.insert(name.to_string(), StoredQuantityV1 { identities, values });
+    }
+    Ok(dto::MulticonductorOperatingPointTimeSeriesV1 {
+        network: Box::new(first.network().clone()),
+        time_points: series.time_points().iter().map(encode_time_point).collect(),
+        quantities,
+    })
+}
+
+fn encode_dc_pf_instance(instance: &powerio_prob::DcPfInstance) -> dto::DcPfInstanceV1 {
+    dto::DcPfInstanceV1 {
+        network: Box::new(instance.network().clone()),
+        approximation: dc_formula_name(instance.approximation()).to_string(),
+        initial_state: instance
+            .initial_state()
+            .map(|point| encode_point(point, &BALANCED_QUANTITIES)),
+    }
+}
+
+fn encode_ac_pf_instance(instance: &powerio_prob::AcPfInstance) -> dto::AcPfInstanceV1 {
+    dto::AcPfInstanceV1 {
+        network: Box::new(instance.network().clone()),
+        initial_state: instance
+            .initial_state()
+            .map(|point| encode_point(point, &BALANCED_QUANTITIES)),
+    }
+}
+
+fn encode_dc_opf_instance(instance: &powerio_prob::DcOpfInstance) -> dto::DcOpfInstanceV1 {
+    dto::DcOpfInstanceV1 {
+        network: Box::new(instance.network().clone()),
+        approximation: dc_formula_name(instance.approximation()).to_string(),
+        objective: instance.objective().clone(),
+        constraints: instance.constraints().clone(),
+        initial_state: instance
+            .initial_state()
+            .map(|point| encode_point(point, &BALANCED_QUANTITIES)),
+    }
+}
+
+fn encode_ac_opf_instance(instance: &powerio_prob::AcOpfInstance) -> dto::AcOpfInstanceV1 {
+    dto::AcOpfInstanceV1 {
+        network: Box::new(instance.network().clone()),
+        objective: instance.objective().clone(),
+        constraints: instance.constraints().clone(),
+        initial_state: instance
+            .initial_state()
+            .map(|point| encode_point(point, &BALANCED_QUANTITIES)),
+    }
+}
+
+fn encode_mc_ac_pf_instance(instance: &powerio_prob::McAcPfInstance) -> dto::McAcPfInstanceV1 {
+    dto::McAcPfInstanceV1 {
+        network: Box::new(instance.network().clone()),
+        initial_state: instance
+            .initial_state()
+            .map(|point| encode_point(point, &MULTICONDUCTOR_QUANTITIES)),
+    }
+}
+
+fn encode_mc_ac_opf_instance(instance: &powerio_prob::McAcOpfInstance) -> dto::McAcOpfInstanceV1 {
+    dto::McAcOpfInstanceV1 {
+        network: Box::new(instance.network().clone()),
+        objective: instance.objective().clone(),
+        constraints: instance.constraints().clone(),
+        initial_state: instance
+            .initial_state()
+            .map(|point| encode_point(point, &MULTICONDUCTOR_QUANTITIES)),
+    }
 }
 
 fn encode_operating_points(
@@ -173,6 +439,274 @@ fn encode_time_point(point: &TimePoint) -> TimePointV1 {
     }
 }
 
+fn stored_row(values: &[f64]) -> Vec<StoredF64> {
+    values.iter().copied().map(StoredF64).collect()
+}
+
+fn plain_row(values: &[StoredF64]) -> Vec<f64> {
+    values.iter().map(|value| value.0).collect()
+}
+
+fn stored_grid(rows: &[Vec<f64>]) -> Vec<Vec<StoredF64>> {
+    rows.iter().map(|row| stored_row(row)).collect()
+}
+
+fn plain_grid(rows: &[Vec<StoredF64>]) -> Vec<Vec<f64>> {
+    rows.iter().map(|row| plain_row(row)).collect()
+}
+
+/// One balanced solution column per bus, read through the keyed accessor in
+/// bus table order.
+fn bus_column(
+    network: &crate::BalancedNetwork,
+    read: impl Fn(crate::BusId) -> Option<f64>,
+) -> Vec<StoredF64> {
+    network
+        .buses()
+        .iter()
+        .map(|bus| StoredF64(read(bus.id).unwrap_or(f64::NAN)))
+        .collect()
+}
+
+fn branch_identity(network: &crate::BalancedNetwork, row: usize) -> String {
+    match network.branches()[row].uid.as_deref() {
+        Some(uid) => uid.to_string(),
+        None => format!("branches:{row}"),
+    }
+}
+
+fn generator_identity(network: &crate::BalancedNetwork, row: usize) -> String {
+    match network.generators()[row].uid.as_deref() {
+        Some(uid) => uid.to_string(),
+        None => format!("generators:{row}"),
+    }
+}
+
+fn branch_column(
+    network: &crate::BalancedNetwork,
+    read: impl Fn(&str) -> Option<f64>,
+) -> Vec<StoredF64> {
+    (0..network.branches().len())
+        .map(|row| StoredF64(read(&branch_identity(network, row)).unwrap_or(f64::NAN)))
+        .collect()
+}
+
+fn generator_column(
+    network: &crate::BalancedNetwork,
+    read: impl Fn(&str) -> Option<f64>,
+) -> Vec<StoredF64> {
+    (0..network.generators().len())
+        .map(|row| StoredF64(read(&generator_identity(network, row)).unwrap_or(f64::NAN)))
+        .collect()
+}
+
+fn encode_dispatch(
+    dispatch: Option<&powerio_prob::GeneratorDispatch>,
+) -> Option<dto::GeneratorDispatchV1> {
+    dispatch.map(|dispatch| dto::GeneratorDispatchV1 {
+        p_mw: stored_row(&dispatch.p_mw),
+        q_mvar: stored_row(&dispatch.q_mvar),
+    })
+}
+
+fn encode_dc_pf_solution(solution: &powerio_prob::DcPfSolution) -> dto::DcPfSolutionV1 {
+    let network = solution.network();
+    dto::DcPfSolutionV1 {
+        instance: encode_dc_pf_instance(solution.instance()),
+        termination: solution.termination().clone(),
+        residuals: *solution.residuals(),
+        producer: solution.producer().map(str::to_string),
+        bus_voltage_angle: bus_column(network, |bus| solution.bus_voltage_angle(bus)),
+        bus_active_injection: bus_column(network, |bus| solution.bus_active_injection(bus)),
+        branch_from_active_flow: branch_column(network, |id| solution.branch_from_active_flow(id)),
+        branch_to_active_flow: branch_column(network, |id| solution.branch_to_active_flow(id)),
+        generator_dispatch: encode_dispatch(solution.generator_dispatch()),
+    }
+}
+
+fn encode_ac_pf_solution(solution: &powerio_prob::AcPfSolution) -> dto::AcPfSolutionV1 {
+    let network = solution.network();
+    dto::AcPfSolutionV1 {
+        instance: encode_ac_pf_instance(solution.instance()),
+        termination: solution.termination().clone(),
+        residuals: *solution.residuals(),
+        producer: solution.producer().map(str::to_string),
+        bus_voltage_magnitude: bus_column(network, |bus| solution.bus_voltage_magnitude(bus)),
+        bus_voltage_angle: bus_column(network, |bus| solution.bus_voltage_angle(bus)),
+        bus_active_injection: bus_column(network, |bus| solution.bus_active_injection(bus)),
+        bus_reactive_injection: bus_column(network, |bus| solution.bus_reactive_injection(bus)),
+        branch_from_active_flow: branch_column(network, |id| solution.branch_from_active_flow(id)),
+        branch_from_reactive_flow: branch_column(network, |id| {
+            solution.branch_from_reactive_flow(id)
+        }),
+        branch_to_active_flow: branch_column(network, |id| solution.branch_to_active_flow(id)),
+        branch_to_reactive_flow: branch_column(network, |id| solution.branch_to_reactive_flow(id)),
+        generator_dispatch: encode_dispatch(solution.generator_dispatch()),
+    }
+}
+
+fn encode_dc_opf_solution(solution: &powerio_prob::DcOpfSolution) -> dto::DcOpfSolutionV1 {
+    let network = solution.network();
+    dto::DcOpfSolutionV1 {
+        instance: encode_dc_opf_instance(solution.instance()),
+        termination: solution.termination().clone(),
+        residuals: *solution.residuals(),
+        producer: solution.producer().map(str::to_string),
+        bus_voltage_angle: bus_column(network, |bus| solution.bus_voltage_angle(bus)),
+        bus_active_injection: bus_column(network, |bus| solution.bus_active_injection(bus)),
+        branch_from_active_flow: branch_column(network, |id| solution.branch_from_active_flow(id)),
+        branch_to_active_flow: branch_column(network, |id| solution.branch_to_active_flow(id)),
+        generator_active_power: generator_column(network, |id| solution.generator_active_power(id)),
+        objective: StoredF64(solution.objective()),
+    }
+}
+
+fn encode_ac_opf_solution(solution: &powerio_prob::AcOpfSolution) -> dto::AcOpfSolutionV1 {
+    let network = solution.network();
+    dto::AcOpfSolutionV1 {
+        instance: encode_ac_opf_instance(solution.instance()),
+        termination: solution.termination().clone(),
+        residuals: *solution.residuals(),
+        producer: solution.producer().map(str::to_string),
+        bus_voltage_magnitude: bus_column(network, |bus| solution.bus_voltage_magnitude(bus)),
+        bus_voltage_angle: bus_column(network, |bus| solution.bus_voltage_angle(bus)),
+        bus_active_injection: bus_column(network, |bus| solution.bus_active_injection(bus)),
+        bus_reactive_injection: bus_column(network, |bus| solution.bus_reactive_injection(bus)),
+        branch_from_active_flow: branch_column(network, |id| solution.branch_from_active_flow(id)),
+        branch_from_reactive_flow: branch_column(network, |id| {
+            solution.branch_from_reactive_flow(id)
+        }),
+        branch_to_active_flow: branch_column(network, |id| solution.branch_to_active_flow(id)),
+        branch_to_reactive_flow: branch_column(network, |id| solution.branch_to_reactive_flow(id)),
+        generator_active_power: generator_column(network, |id| solution.generator_active_power(id)),
+        generator_reactive_power: generator_column(network, |id| {
+            solution.generator_reactive_power(id)
+        }),
+        objective: StoredF64(solution.objective()),
+    }
+}
+
+/// Every terminal of every bus, in bus table order with each bus's stated
+/// terminal order — the multiconductor solution column layout.
+fn terminal_column(
+    network: &powerio_dist::MulticonductorNetwork,
+    read: impl Fn(&str, &str) -> Option<f64>,
+) -> Vec<StoredF64> {
+    let mut column = Vec::new();
+    for bus in network.buses() {
+        for terminal in &bus.terminals {
+            column.push(StoredF64(read(&bus.id, terminal).unwrap_or(f64::NAN)));
+        }
+    }
+    column
+}
+
+/// The optional terminal columns are present when any terminal answers.
+fn optional_terminal_column(
+    network: &powerio_dist::MulticonductorNetwork,
+    read: impl Fn(&str, &str) -> Option<f64>,
+) -> Option<Vec<StoredF64>> {
+    let mut any = false;
+    let mut column = Vec::new();
+    for bus in network.buses() {
+        for terminal in &bus.terminals {
+            match read(&bus.id, terminal) {
+                Some(value) => {
+                    any = true;
+                    column.push(StoredF64(value));
+                }
+                None => column.push(StoredF64(f64::NAN)),
+            }
+        }
+    }
+    any.then_some(column)
+}
+
+fn encode_mc_ac_pf_solution(solution: &powerio_prob::McAcPfSolution) -> dto::McAcPfSolutionV1 {
+    let network = solution.network();
+    dto::McAcPfSolutionV1 {
+        instance: encode_mc_ac_pf_instance(solution.instance()),
+        termination: solution.termination().clone(),
+        residuals: *solution.residuals(),
+        producer: solution.producer().map(str::to_string),
+        terminal_voltage_magnitude: terminal_column(network, |bus, terminal| {
+            solution.terminal_voltage_magnitude(bus, terminal)
+        }),
+        terminal_voltage_angle: terminal_column(network, |bus, terminal| {
+            solution.terminal_voltage_angle(bus, terminal)
+        }),
+        terminal_current_magnitude: optional_terminal_column(network, |bus, terminal| {
+            solution.terminal_current_magnitude(bus, terminal)
+        }),
+        terminal_active_power: optional_terminal_column(network, |bus, terminal| {
+            solution.terminal_active_power(bus, terminal)
+        }),
+        source_active_injection: stored_row(solution.source_active_injections()),
+    }
+}
+
+fn encode_mc_ac_opf_solution(solution: &powerio_prob::McAcOpfSolution) -> dto::McAcOpfSolutionV1 {
+    let network = solution.network();
+    dto::McAcOpfSolutionV1 {
+        instance: encode_mc_ac_opf_instance(solution.instance()),
+        termination: solution.termination().clone(),
+        residuals: *solution.residuals(),
+        producer: solution.producer().map(str::to_string),
+        terminal_voltage_magnitude: terminal_column(network, |bus, terminal| {
+            solution.terminal_voltage_magnitude(bus, terminal)
+        }),
+        terminal_voltage_angle: terminal_column(network, |bus, terminal| {
+            solution.terminal_voltage_angle(bus, terminal)
+        }),
+        terminal_current_magnitude: optional_terminal_column(network, |bus, terminal| {
+            solution.terminal_current_magnitude(bus, terminal)
+        }),
+        terminal_active_power: optional_terminal_column(network, |bus, terminal| {
+            solution.terminal_active_power(bus, terminal)
+        }),
+        source_active_injection: stored_row(solution.source_active_injections()),
+        generator_active_power: stored_row(solution.generator_active_powers()),
+        objective: StoredF64(solution.objective()),
+    }
+}
+
+fn encode_ac_scuc_solution(solution: &powerio_prob::AcScucSolution) -> dto::AcScucSolutionV1 {
+    let network_outputs = solution.network_outputs();
+    let device_outputs = solution.device_outputs();
+    dto::AcScucSolutionV1 {
+        instance: dto::AcScucInstanceV1 {
+            network: Box::new(solution.instance().network().clone()),
+            inputs: Box::new(solution.instance().inputs().clone()),
+        },
+        termination: solution.termination().clone(),
+        residuals: *solution.residuals(),
+        producer: solution.producer().map(str::to_string),
+        network_outputs: dto::ScucNetworkOutputsV1 {
+            bus_vm: stored_grid(&network_outputs.bus_vm),
+            bus_va: stored_grid(&network_outputs.bus_va),
+            shunt_step: stored_grid(&network_outputs.shunt_step),
+            ac_line_on_status: stored_grid(&network_outputs.ac_line_on_status),
+            transformer_tm: stored_grid(&network_outputs.transformer_tm),
+            transformer_ta: stored_grid(&network_outputs.transformer_ta),
+            transformer_on_status: stored_grid(&network_outputs.transformer_on_status),
+        },
+        device_outputs: dto::ScucDeviceOutputsV1 {
+            on_status: stored_grid(&device_outputs.on_status),
+            p_on: stored_grid(&device_outputs.p_on),
+            q: stored_grid(&device_outputs.q),
+            p_reg_res_up: stored_grid(&device_outputs.p_reg_res_up),
+            p_reg_res_down: stored_grid(&device_outputs.p_reg_res_down),
+            p_syn_res: stored_grid(&device_outputs.p_syn_res),
+            p_nsyn_res: stored_grid(&device_outputs.p_nsyn_res),
+            p_ramp_res_up_online: stored_grid(&device_outputs.p_ramp_res_up_online),
+            p_ramp_res_down_online: stored_grid(&device_outputs.p_ramp_res_down_online),
+            q_res_up: stored_grid(&device_outputs.q_res_up),
+            q_res_down: stored_grid(&device_outputs.q_res_down),
+        },
+        objective: solution.objective().map(StoredF64),
+    }
+}
+
 // ---- value decoding ---------------------------------------------------------
 
 fn decode_stored(stored: StoredModuleV1) -> Result<PioModule<PioValue>> {
@@ -209,6 +743,10 @@ fn decode_stored(stored: StoredModuleV1) -> Result<PioModule<PioValue>> {
     Ok(module)
 }
 
+// One arm per stored kind: the length is the enum's, and splitting the arms
+// into twenty single-use functions would hide the exhaustiveness this match
+// enforces.
+#[allow(clippy::too_many_lines)]
 fn decode_value(value: StoredValueV1) -> Result<PioValue> {
     Ok(match value {
         StoredValueV1::BalancedNetwork(network) => PioValue::BalancedNetwork(*network),
@@ -256,7 +794,345 @@ fn decode_value(value: StoredValueV1) -> Result<PioValue> {
                     .map_err(|error| invalid(error.to_string()))?,
             )
         }
+        StoredValueV1::MulticonductorOperatingPointTimeSeries(series) => {
+            let time_points = decode_time_points(&series.time_points)?;
+            let mut builder =
+                powerio_prob::MulticonductorStateBuilder::new(*series.network, time_points);
+            for (name, quantity) in series.quantities {
+                let values: Vec<f64> = quantity.values.iter().map(|value| value.0).collect();
+                builder = mc_dense_by_name(builder, &name, values)?;
+            }
+            PioValue::MulticonductorOperatingPointTimeSeries(
+                builder
+                    .build()
+                    .map_err(|error| invalid(error.to_string()))?,
+            )
+        }
+        StoredValueV1::DcPfInstance(instance) => {
+            PioValue::DcPfInstance(decode_dc_pf_instance(instance)?)
+        }
+        StoredValueV1::AcPfInstance(instance) => {
+            PioValue::AcPfInstance(decode_ac_pf_instance(instance)?)
+        }
+        StoredValueV1::DcOpfInstance(instance) => {
+            PioValue::DcOpfInstance(decode_dc_opf_instance(instance)?)
+        }
+        StoredValueV1::AcOpfInstance(instance) => {
+            PioValue::AcOpfInstance(decode_ac_opf_instance(instance)?)
+        }
+        StoredValueV1::McAcPfInstance(instance) => {
+            PioValue::McAcPfInstance(decode_mc_ac_pf_instance(instance)?)
+        }
+        StoredValueV1::McAcOpfInstance(instance) => {
+            PioValue::McAcOpfInstance(decode_mc_ac_opf_instance(instance)?)
+        }
+        StoredValueV1::AcScucInstance(instance) => PioValue::AcScucInstance(
+            powerio_prob::AcScucInstance::new(*instance.network, *instance.inputs)
+                .map_err(|error| invalid(error.to_string()))?,
+        ),
+        StoredValueV1::DcPfSolution(solution) => {
+            let instance = std::sync::Arc::new(decode_dc_pf_instance(solution.instance.clone())?);
+            PioValue::DcPfSolution(with_solution_records(
+                powerio_prob::DcPfSolution::new(
+                    instance,
+                    solution.termination.clone(),
+                    plain_row(&solution.bus_voltage_angle),
+                    plain_row(&solution.bus_active_injection),
+                    plain_row(&solution.branch_from_active_flow),
+                    plain_row(&solution.branch_to_active_flow),
+                )
+                .map_err(|error| invalid(error.to_string()))?,
+                solution.residuals,
+                solution.producer.clone(),
+                powerio_prob::DcPfSolution::with_residuals,
+                powerio_prob::DcPfSolution::with_producer,
+                decode_dispatch(solution.generator_dispatch.as_ref()),
+                |value, dispatch| {
+                    value
+                        .with_generator_dispatch(dispatch)
+                        .map_err(|error| invalid(error.to_string()))
+                },
+            )?)
+        }
+        StoredValueV1::AcPfSolution(solution) => {
+            let instance = std::sync::Arc::new(decode_ac_pf_instance(solution.instance.clone())?);
+            PioValue::AcPfSolution(with_solution_records(
+                powerio_prob::AcPfSolution::new(
+                    instance,
+                    solution.termination.clone(),
+                    plain_row(&solution.bus_voltage_magnitude),
+                    plain_row(&solution.bus_voltage_angle),
+                    plain_row(&solution.bus_active_injection),
+                    plain_row(&solution.bus_reactive_injection),
+                    plain_row(&solution.branch_from_active_flow),
+                    plain_row(&solution.branch_from_reactive_flow),
+                    plain_row(&solution.branch_to_active_flow),
+                    plain_row(&solution.branch_to_reactive_flow),
+                )
+                .map_err(|error| invalid(error.to_string()))?,
+                solution.residuals,
+                solution.producer.clone(),
+                powerio_prob::AcPfSolution::with_residuals,
+                powerio_prob::AcPfSolution::with_producer,
+                decode_dispatch(solution.generator_dispatch.as_ref()),
+                |value, dispatch| {
+                    value
+                        .with_generator_dispatch(dispatch)
+                        .map_err(|error| invalid(error.to_string()))
+                },
+            )?)
+        }
+        StoredValueV1::DcOpfSolution(solution) => {
+            let instance = std::sync::Arc::new(decode_dc_opf_instance(solution.instance.clone())?);
+            let mut value = powerio_prob::DcOpfSolution::new(
+                instance,
+                solution.termination.clone(),
+                plain_row(&solution.bus_voltage_angle),
+                plain_row(&solution.bus_active_injection),
+                plain_row(&solution.branch_from_active_flow),
+                plain_row(&solution.branch_to_active_flow),
+                plain_row(&solution.generator_active_power),
+                solution.objective.0,
+            )
+            .map_err(|error| invalid(error.to_string()))?;
+            value = value.with_residuals(solution.residuals);
+            if let Some(producer) = solution.producer.clone() {
+                value = value.with_producer(producer);
+            }
+            PioValue::DcOpfSolution(value)
+        }
+        StoredValueV1::AcOpfSolution(solution) => {
+            let instance = std::sync::Arc::new(decode_ac_opf_instance(solution.instance.clone())?);
+            let mut value = powerio_prob::AcOpfSolution::new(
+                instance,
+                solution.termination.clone(),
+                plain_row(&solution.bus_voltage_magnitude),
+                plain_row(&solution.bus_voltage_angle),
+                plain_row(&solution.bus_active_injection),
+                plain_row(&solution.bus_reactive_injection),
+                plain_row(&solution.branch_from_active_flow),
+                plain_row(&solution.branch_from_reactive_flow),
+                plain_row(&solution.branch_to_active_flow),
+                plain_row(&solution.branch_to_reactive_flow),
+                plain_row(&solution.generator_active_power),
+                plain_row(&solution.generator_reactive_power),
+                solution.objective.0,
+            )
+            .map_err(|error| invalid(error.to_string()))?;
+            value = value.with_residuals(solution.residuals);
+            if let Some(producer) = solution.producer.clone() {
+                value = value.with_producer(producer);
+            }
+            PioValue::AcOpfSolution(value)
+        }
+        StoredValueV1::McAcPfSolution(solution) => {
+            let instance =
+                std::sync::Arc::new(decode_mc_ac_pf_instance(solution.instance.clone())?);
+            let mut value = powerio_prob::McAcPfSolution::new(
+                instance,
+                solution.termination.clone(),
+                plain_row(&solution.terminal_voltage_magnitude),
+                plain_row(&solution.terminal_voltage_angle),
+                plain_row(&solution.source_active_injection),
+            )
+            .map_err(|error| invalid(error.to_string()))?;
+            if let Some(currents) = &solution.terminal_current_magnitude {
+                value = value
+                    .with_terminal_currents(plain_row(currents))
+                    .map_err(|error| invalid(error.to_string()))?;
+            }
+            if let Some(powers) = &solution.terminal_active_power {
+                value = value
+                    .with_terminal_powers(plain_row(powers))
+                    .map_err(|error| invalid(error.to_string()))?;
+            }
+            value = value.with_residuals(solution.residuals);
+            if let Some(producer) = solution.producer.clone() {
+                value = value.with_producer(producer);
+            }
+            PioValue::McAcPfSolution(value)
+        }
+        StoredValueV1::McAcOpfSolution(solution) => {
+            let instance =
+                std::sync::Arc::new(decode_mc_ac_opf_instance(solution.instance.clone())?);
+            let mut value = powerio_prob::McAcOpfSolution::new(
+                instance,
+                solution.termination.clone(),
+                plain_row(&solution.terminal_voltage_magnitude),
+                plain_row(&solution.terminal_voltage_angle),
+                plain_row(&solution.source_active_injection),
+                plain_row(&solution.generator_active_power),
+                solution.objective.0,
+            )
+            .map_err(|error| invalid(error.to_string()))?;
+            if let Some(currents) = &solution.terminal_current_magnitude {
+                value = value
+                    .with_terminal_currents(plain_row(currents))
+                    .map_err(|error| invalid(error.to_string()))?;
+            }
+            if let Some(powers) = &solution.terminal_active_power {
+                value = value
+                    .with_terminal_powers(plain_row(powers))
+                    .map_err(|error| invalid(error.to_string()))?;
+            }
+            value = value.with_residuals(solution.residuals);
+            if let Some(producer) = solution.producer.clone() {
+                value = value.with_producer(producer);
+            }
+            PioValue::McAcOpfSolution(value)
+        }
+        StoredValueV1::AcScucSolution(solution) => {
+            let instance = std::sync::Arc::new(
+                powerio_prob::AcScucInstance::new(
+                    *solution.instance.network.clone(),
+                    (*solution.instance.inputs).clone(),
+                )
+                .map_err(|error| invalid(error.to_string()))?,
+            );
+            let mut network_outputs = powerio_prob::ScucNetworkOutputs::default();
+            network_outputs.bus_vm = plain_grid(&solution.network_outputs.bus_vm);
+            network_outputs.bus_va = plain_grid(&solution.network_outputs.bus_va);
+            network_outputs.shunt_step = plain_grid(&solution.network_outputs.shunt_step);
+            network_outputs.ac_line_on_status =
+                plain_grid(&solution.network_outputs.ac_line_on_status);
+            network_outputs.transformer_tm = plain_grid(&solution.network_outputs.transformer_tm);
+            network_outputs.transformer_ta = plain_grid(&solution.network_outputs.transformer_ta);
+            network_outputs.transformer_on_status =
+                plain_grid(&solution.network_outputs.transformer_on_status);
+            let mut device_outputs = powerio_prob::ScucDeviceOutputs::default();
+            device_outputs.on_status = plain_grid(&solution.device_outputs.on_status);
+            device_outputs.p_on = plain_grid(&solution.device_outputs.p_on);
+            device_outputs.q = plain_grid(&solution.device_outputs.q);
+            device_outputs.p_reg_res_up = plain_grid(&solution.device_outputs.p_reg_res_up);
+            device_outputs.p_reg_res_down = plain_grid(&solution.device_outputs.p_reg_res_down);
+            device_outputs.p_syn_res = plain_grid(&solution.device_outputs.p_syn_res);
+            device_outputs.p_nsyn_res = plain_grid(&solution.device_outputs.p_nsyn_res);
+            device_outputs.p_ramp_res_up_online =
+                plain_grid(&solution.device_outputs.p_ramp_res_up_online);
+            device_outputs.p_ramp_res_down_online =
+                plain_grid(&solution.device_outputs.p_ramp_res_down_online);
+            device_outputs.q_res_up = plain_grid(&solution.device_outputs.q_res_up);
+            device_outputs.q_res_down = plain_grid(&solution.device_outputs.q_res_down);
+            let mut value = powerio_prob::AcScucSolution::new(
+                instance,
+                solution.termination.clone(),
+                network_outputs,
+                device_outputs,
+                solution.objective.map(|value| value.0),
+            )
+            .map_err(|error| invalid(error.to_string()))?;
+            value = value.with_residuals(solution.residuals);
+            if let Some(producer) = solution.producer.clone() {
+                value = value.with_producer(producer);
+            }
+            PioValue::AcScucSolution(value)
+        }
     })
+}
+
+fn decode_dispatch(
+    dispatch: Option<&dto::GeneratorDispatchV1>,
+) -> Option<powerio_prob::GeneratorDispatch> {
+    dispatch.map(|dispatch| {
+        let mut decoded = powerio_prob::GeneratorDispatch::default();
+        decoded.p_mw = plain_row(&dispatch.p_mw);
+        decoded.q_mvar = plain_row(&dispatch.q_mvar);
+        decoded
+    })
+}
+
+/// Apply the shared optional records to a freshly constructed solution.
+#[allow(clippy::too_many_arguments)]
+fn with_solution_records<S>(
+    mut value: S,
+    residuals: powerio_prob::Residuals,
+    producer: Option<String>,
+    with_residuals: impl FnOnce(S, powerio_prob::Residuals) -> S,
+    with_producer: impl FnOnce(S, String) -> S,
+    dispatch: Option<powerio_prob::GeneratorDispatch>,
+    with_dispatch: impl FnOnce(S, powerio_prob::GeneratorDispatch) -> Result<S>,
+) -> Result<S> {
+    value = with_residuals(value, residuals);
+    if let Some(producer) = producer {
+        value = with_producer(value, producer);
+    }
+    if let Some(dispatch) = dispatch {
+        value = with_dispatch(value, dispatch)?;
+    }
+    Ok(value)
+}
+
+fn decode_dc_pf_instance(instance: dto::DcPfInstanceV1) -> Result<powerio_prob::DcPfInstance> {
+    let network = *instance.network;
+    let mut decoded = powerio_prob::DcPfInstance::from_network(network)
+        .map_err(|error| invalid(error.to_string()))?
+        .with_approximation(dc_formula_from_name(&instance.approximation)?);
+    if let Some(stored) = instance.initial_state {
+        let point = decode_balanced_point(decoded.network(), stored)?;
+        decoded = decoded.with_initial_state(point);
+    }
+    Ok(decoded)
+}
+
+fn decode_ac_pf_instance(instance: dto::AcPfInstanceV1) -> Result<powerio_prob::AcPfInstance> {
+    let mut decoded = powerio_prob::AcPfInstance::from_network(*instance.network)
+        .map_err(|error| invalid(error.to_string()))?;
+    if let Some(stored) = instance.initial_state {
+        let point = decode_balanced_point(decoded.network(), stored)?;
+        decoded = decoded.with_initial_state(point);
+    }
+    Ok(decoded)
+}
+
+fn decode_dc_opf_instance(instance: dto::DcOpfInstanceV1) -> Result<powerio_prob::DcOpfInstance> {
+    let mut decoded = powerio_prob::DcOpfInstance::from_network(*instance.network)
+        .map_err(|error| invalid(error.to_string()))?
+        .with_approximation(dc_formula_from_name(&instance.approximation)?)
+        .with_objective(instance.objective)
+        .with_constraints(instance.constraints);
+    if let Some(stored) = instance.initial_state {
+        let point = decode_balanced_point(decoded.network(), stored)?;
+        decoded = decoded.with_initial_state(point);
+    }
+    Ok(decoded)
+}
+
+fn decode_ac_opf_instance(instance: dto::AcOpfInstanceV1) -> Result<powerio_prob::AcOpfInstance> {
+    let mut decoded = powerio_prob::AcOpfInstance::from_network(*instance.network)
+        .map_err(|error| invalid(error.to_string()))?
+        .with_objective(instance.objective)
+        .with_constraints(instance.constraints);
+    if let Some(stored) = instance.initial_state {
+        let point = decode_balanced_point(decoded.network(), stored)?;
+        decoded = decoded.with_initial_state(point);
+    }
+    Ok(decoded)
+}
+
+fn decode_mc_ac_pf_instance(
+    instance: dto::McAcPfInstanceV1,
+) -> Result<powerio_prob::McAcPfInstance> {
+    let mut decoded = powerio_prob::McAcPfInstance::from_network(*instance.network)
+        .map_err(|error| invalid(error.to_string()))?;
+    if let Some(stored) = instance.initial_state {
+        let point = decode_mc_point(decoded.network(), stored)?;
+        decoded = decoded.with_initial_state(point);
+    }
+    Ok(decoded)
+}
+
+fn decode_mc_ac_opf_instance(
+    instance: dto::McAcOpfInstanceV1,
+) -> Result<powerio_prob::McAcOpfInstance> {
+    let mut decoded = powerio_prob::McAcOpfInstance::from_network(*instance.network)
+        .map_err(|error| invalid(error.to_string()))?
+        .with_objective(instance.objective)
+        .with_constraints(instance.constraints);
+    if let Some(stored) = instance.initial_state {
+        let point = decode_mc_point(decoded.network(), stored)?;
+        decoded = decoded.with_initial_state(point);
+    }
+    Ok(decoded)
 }
 
 fn decode_time_points(points: &[TimePointV1]) -> Result<Vec<TimePoint>> {

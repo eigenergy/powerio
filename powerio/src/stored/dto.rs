@@ -178,6 +178,272 @@ pub struct BalancedNetworkScenarioSetV1 {
     pub scenarios: Vec<BalancedNetworkScenarioV1>,
 }
 
+/// One stored operating point: the state quantities of a single point,
+/// keyed by the instantaneous vocabulary, each with its resolved identity
+/// order and one row of values.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct StoredOperatingPointV1 {
+    pub quantities: BTreeMap<String, StoredQuantityV1>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct MulticonductorOperatingPointTimeSeriesV1 {
+    pub network: Box<MulticonductorNetwork>,
+    pub time_points: Vec<TimePointV1>,
+    /// Quantity name → dense columns, the multiconductor instantaneous
+    /// vocabulary.
+    pub quantities: BTreeMap<String, StoredQuantityV1>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct DcPfInstanceV1 {
+    pub network: Box<BalancedNetwork>,
+    /// The selected branch susceptance formula's stable name.
+    pub approximation: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub initial_state: Option<StoredOperatingPointV1>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct AcPfInstanceV1 {
+    pub network: Box<BalancedNetwork>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub initial_state: Option<StoredOperatingPointV1>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct DcOpfInstanceV1 {
+    pub network: Box<BalancedNetwork>,
+    pub approximation: String,
+    /// The typed objective the instance states, in the calculation crate's
+    /// own serialization.
+    pub objective: powerio_prob::Objective,
+    pub constraints: powerio_prob::ActiveConstraints,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub initial_state: Option<StoredOperatingPointV1>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct AcOpfInstanceV1 {
+    pub network: Box<BalancedNetwork>,
+    pub objective: powerio_prob::Objective,
+    pub constraints: powerio_prob::ActiveConstraints,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub initial_state: Option<StoredOperatingPointV1>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct McAcPfInstanceV1 {
+    pub network: Box<MulticonductorNetwork>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub initial_state: Option<StoredOperatingPointV1>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct McAcOpfInstanceV1 {
+    pub network: Box<MulticonductorNetwork>,
+    pub objective: powerio_prob::Objective,
+    pub constraints: powerio_prob::MulticonductorActiveConstraints,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub initial_state: Option<StoredOperatingPointV1>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct AcScucInstanceV1 {
+    pub network: Box<BalancedNetwork>,
+    /// The complete SCUC inputs, in the calculation crate's own
+    /// `powerio.scopf` serialization (that document carries its own schema).
+    #[cfg_attr(feature = "schema", schemars(with = "serde_json::Value"))]
+    pub inputs: Box<powerio_prob::ScucInputs>,
+}
+
+/// A solution's producer stated generator dispatch.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct GeneratorDispatchV1 {
+    pub p_mw: Vec<StoredF64>,
+    pub q_mvar: Vec<StoredF64>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct DcPfSolutionV1 {
+    pub instance: DcPfInstanceV1,
+    pub termination: powerio_prob::Termination,
+    pub residuals: powerio_prob::Residuals,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub producer: Option<String>,
+    pub bus_voltage_angle: Vec<StoredF64>,
+    pub bus_active_injection: Vec<StoredF64>,
+    pub branch_from_active_flow: Vec<StoredF64>,
+    pub branch_to_active_flow: Vec<StoredF64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub generator_dispatch: Option<GeneratorDispatchV1>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct AcPfSolutionV1 {
+    pub instance: AcPfInstanceV1,
+    pub termination: powerio_prob::Termination,
+    pub residuals: powerio_prob::Residuals,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub producer: Option<String>,
+    pub bus_voltage_magnitude: Vec<StoredF64>,
+    pub bus_voltage_angle: Vec<StoredF64>,
+    pub bus_active_injection: Vec<StoredF64>,
+    pub bus_reactive_injection: Vec<StoredF64>,
+    pub branch_from_active_flow: Vec<StoredF64>,
+    pub branch_from_reactive_flow: Vec<StoredF64>,
+    pub branch_to_active_flow: Vec<StoredF64>,
+    pub branch_to_reactive_flow: Vec<StoredF64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub generator_dispatch: Option<GeneratorDispatchV1>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct DcOpfSolutionV1 {
+    pub instance: DcOpfInstanceV1,
+    pub termination: powerio_prob::Termination,
+    pub residuals: powerio_prob::Residuals,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub producer: Option<String>,
+    pub bus_voltage_angle: Vec<StoredF64>,
+    pub bus_active_injection: Vec<StoredF64>,
+    pub branch_from_active_flow: Vec<StoredF64>,
+    pub branch_to_active_flow: Vec<StoredF64>,
+    pub generator_active_power: Vec<StoredF64>,
+    pub objective: StoredF64,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct AcOpfSolutionV1 {
+    pub instance: AcOpfInstanceV1,
+    pub termination: powerio_prob::Termination,
+    pub residuals: powerio_prob::Residuals,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub producer: Option<String>,
+    pub bus_voltage_magnitude: Vec<StoredF64>,
+    pub bus_voltage_angle: Vec<StoredF64>,
+    pub bus_active_injection: Vec<StoredF64>,
+    pub bus_reactive_injection: Vec<StoredF64>,
+    pub branch_from_active_flow: Vec<StoredF64>,
+    pub branch_from_reactive_flow: Vec<StoredF64>,
+    pub branch_to_active_flow: Vec<StoredF64>,
+    pub branch_to_reactive_flow: Vec<StoredF64>,
+    pub generator_active_power: Vec<StoredF64>,
+    pub generator_reactive_power: Vec<StoredF64>,
+    pub objective: StoredF64,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct McAcPfSolutionV1 {
+    pub instance: McAcPfInstanceV1,
+    pub termination: powerio_prob::Termination,
+    pub residuals: powerio_prob::Residuals,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub producer: Option<String>,
+    pub terminal_voltage_magnitude: Vec<StoredF64>,
+    pub terminal_voltage_angle: Vec<StoredF64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub terminal_current_magnitude: Option<Vec<StoredF64>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub terminal_active_power: Option<Vec<StoredF64>>,
+    pub source_active_injection: Vec<StoredF64>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct McAcOpfSolutionV1 {
+    pub instance: McAcOpfInstanceV1,
+    pub termination: powerio_prob::Termination,
+    pub residuals: powerio_prob::Residuals,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub producer: Option<String>,
+    pub terminal_voltage_magnitude: Vec<StoredF64>,
+    pub terminal_voltage_angle: Vec<StoredF64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub terminal_current_magnitude: Option<Vec<StoredF64>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub terminal_active_power: Option<Vec<StoredF64>>,
+    pub source_active_injection: Vec<StoredF64>,
+    pub generator_active_power: Vec<StoredF64>,
+    pub objective: StoredF64,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct ScucNetworkOutputsV1 {
+    pub bus_vm: Vec<Vec<StoredF64>>,
+    pub bus_va: Vec<Vec<StoredF64>>,
+    pub shunt_step: Vec<Vec<StoredF64>>,
+    pub ac_line_on_status: Vec<Vec<StoredF64>>,
+    pub transformer_tm: Vec<Vec<StoredF64>>,
+    pub transformer_ta: Vec<Vec<StoredF64>>,
+    pub transformer_on_status: Vec<Vec<StoredF64>>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct ScucDeviceOutputsV1 {
+    pub on_status: Vec<Vec<StoredF64>>,
+    pub p_on: Vec<Vec<StoredF64>>,
+    pub q: Vec<Vec<StoredF64>>,
+    pub p_reg_res_up: Vec<Vec<StoredF64>>,
+    pub p_reg_res_down: Vec<Vec<StoredF64>>,
+    pub p_syn_res: Vec<Vec<StoredF64>>,
+    pub p_nsyn_res: Vec<Vec<StoredF64>>,
+    pub p_ramp_res_up_online: Vec<Vec<StoredF64>>,
+    pub p_ramp_res_down_online: Vec<Vec<StoredF64>>,
+    pub q_res_up: Vec<Vec<StoredF64>>,
+    pub q_res_down: Vec<Vec<StoredF64>>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct AcScucSolutionV1 {
+    pub instance: AcScucInstanceV1,
+    pub termination: powerio_prob::Termination,
+    pub residuals: powerio_prob::Residuals,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub producer: Option<String>,
+    pub network_outputs: ScucNetworkOutputsV1,
+    pub device_outputs: ScucDeviceOutputsV1,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub objective: Option<StoredF64>,
+}
+
 /// The tagged value DTO. `data` is a typed record, never an untyped JSON
 /// catchall; the network payloads are the typed serializations the network
 /// crates own (which carry the nonfinite spellings themselves).
@@ -194,7 +460,22 @@ pub enum StoredValueV1 {
     MulticonductorNetwork(Box<MulticonductorNetwork>),
     BalancedNetworkTimeSeries(BalancedNetworkTimeSeriesV1),
     BalancedOperatingPointTimeSeries(BalancedOperatingPointTimeSeriesV1),
+    MulticonductorOperatingPointTimeSeries(MulticonductorOperatingPointTimeSeriesV1),
     BalancedNetworkScenarioSet(BalancedNetworkScenarioSetV1),
+    DcPfInstance(DcPfInstanceV1),
+    AcPfInstance(AcPfInstanceV1),
+    DcOpfInstance(DcOpfInstanceV1),
+    AcOpfInstance(AcOpfInstanceV1),
+    McAcPfInstance(McAcPfInstanceV1),
+    McAcOpfInstance(McAcOpfInstanceV1),
+    AcScucInstance(AcScucInstanceV1),
+    DcPfSolution(Box<DcPfSolutionV1>),
+    AcPfSolution(Box<AcPfSolutionV1>),
+    DcOpfSolution(Box<DcOpfSolutionV1>),
+    AcOpfSolution(Box<AcOpfSolutionV1>),
+    McAcPfSolution(Box<McAcPfSolutionV1>),
+    McAcOpfSolution(Box<McAcOpfSolutionV1>),
+    AcScucSolution(Box<AcScucSolutionV1>),
 }
 
 impl StoredValueV1 {
@@ -206,7 +487,24 @@ impl StoredValueV1 {
             Self::MulticonductorNetwork(_) => "multiconductor_network",
             Self::BalancedNetworkTimeSeries(_) => "balanced_network_time_series",
             Self::BalancedOperatingPointTimeSeries(_) => "balanced_operating_point_time_series",
+            Self::MulticonductorOperatingPointTimeSeries(_) => {
+                "multiconductor_operating_point_time_series"
+            }
             Self::BalancedNetworkScenarioSet(_) => "balanced_network_scenario_set",
+            Self::DcPfInstance(_) => "dc_pf_instance",
+            Self::AcPfInstance(_) => "ac_pf_instance",
+            Self::DcOpfInstance(_) => "dc_opf_instance",
+            Self::AcOpfInstance(_) => "ac_opf_instance",
+            Self::McAcPfInstance(_) => "mc_ac_pf_instance",
+            Self::McAcOpfInstance(_) => "mc_ac_opf_instance",
+            Self::AcScucInstance(_) => "ac_scuc_instance",
+            Self::DcPfSolution(_) => "dc_pf_solution",
+            Self::AcPfSolution(_) => "ac_pf_solution",
+            Self::DcOpfSolution(_) => "dc_opf_solution",
+            Self::AcOpfSolution(_) => "ac_opf_solution",
+            Self::McAcPfSolution(_) => "mc_ac_pf_solution",
+            Self::McAcOpfSolution(_) => "mc_ac_opf_solution",
+            Self::AcScucSolution(_) => "ac_scuc_solution",
         }
     }
 }
@@ -464,6 +762,8 @@ pub fn validate(module: &StoredModuleV1) -> Result<(), String> {
     Ok(())
 }
 
+// One arm per stored kind, as in the decoder.
+#[allow(clippy::too_many_lines)]
 fn validate_value(value: &StoredValueV1) -> Result<(), String> {
     let points: &[TimePointV1] = match value {
         StoredValueV1::BalancedNetworkTimeSeries(series) => {
@@ -508,6 +808,74 @@ fn validate_value(value: &StoredValueV1) -> Result<(), String> {
             }
             return Ok(());
         }
+        StoredValueV1::MulticonductorOperatingPointTimeSeries(series) => {
+            if series.time_points.is_empty() {
+                return Err("a time series needs at least one time point".to_owned());
+            }
+            for (name, quantity) in &series.quantities {
+                let expected = series
+                    .time_points
+                    .len()
+                    .checked_mul(quantity.identities.len())
+                    .ok_or_else(|| format!("quantity `{name}` dimensions overflow"))?;
+                if quantity.values.len() != expected {
+                    return Err(format!(
+                        "quantity `{name}` has {} values; expected {expected}",
+                        quantity.values.len()
+                    ));
+                }
+            }
+            &series.time_points
+        }
+        StoredValueV1::DcPfInstance(instance) => {
+            validate_stored_point(instance.initial_state.as_ref())?;
+            return Ok(());
+        }
+        StoredValueV1::AcPfInstance(instance) => {
+            validate_stored_point(instance.initial_state.as_ref())?;
+            return Ok(());
+        }
+        StoredValueV1::DcOpfInstance(instance) => {
+            validate_stored_point(instance.initial_state.as_ref())?;
+            return Ok(());
+        }
+        StoredValueV1::AcOpfInstance(instance) => {
+            validate_stored_point(instance.initial_state.as_ref())?;
+            return Ok(());
+        }
+        StoredValueV1::McAcPfInstance(instance) => {
+            validate_stored_point(instance.initial_state.as_ref())?;
+            return Ok(());
+        }
+        StoredValueV1::McAcOpfInstance(instance) => {
+            validate_stored_point(instance.initial_state.as_ref())?;
+            return Ok(());
+        }
+        StoredValueV1::DcPfSolution(solution) => {
+            validate_stored_point(solution.instance.initial_state.as_ref())?;
+            return Ok(());
+        }
+        StoredValueV1::AcPfSolution(solution) => {
+            validate_stored_point(solution.instance.initial_state.as_ref())?;
+            return Ok(());
+        }
+        StoredValueV1::DcOpfSolution(solution) => {
+            validate_stored_point(solution.instance.initial_state.as_ref())?;
+            return Ok(());
+        }
+        StoredValueV1::AcOpfSolution(solution) => {
+            validate_stored_point(solution.instance.initial_state.as_ref())?;
+            return Ok(());
+        }
+        StoredValueV1::McAcPfSolution(solution) => {
+            validate_stored_point(solution.instance.initial_state.as_ref())?;
+            return Ok(());
+        }
+        StoredValueV1::McAcOpfSolution(solution) => {
+            validate_stored_point(solution.instance.initial_state.as_ref())?;
+            return Ok(());
+        }
+        StoredValueV1::AcScucInstance(_) | StoredValueV1::AcScucSolution(_) => return Ok(()),
         StoredValueV1::BalancedNetwork(_) | StoredValueV1::MulticonductorNetwork(_) => {
             return Ok(());
         }
@@ -520,6 +888,24 @@ fn validate_value(value: &StoredValueV1) -> Result<(), String> {
             return Err(format!(
                 "time point `{}` has an invalid nanosecond remainder {}",
                 point.label, duration.nanos
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// One stored operating point: each quantity carries exactly one row over
+/// its identities.
+fn validate_stored_point(point: Option<&StoredOperatingPointV1>) -> Result<(), String> {
+    let Some(point) = point else {
+        return Ok(());
+    };
+    for (name, quantity) in &point.quantities {
+        if quantity.values.len() != quantity.identities.len() {
+            return Err(format!(
+                "stored operating point quantity `{name}` has {} values for {} identities",
+                quantity.values.len(),
+                quantity.identities.len()
             ));
         }
     }
