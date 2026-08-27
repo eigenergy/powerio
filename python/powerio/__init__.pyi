@@ -148,45 +148,6 @@ class DisplayData(NamedTuple):
     kind: Literal["powerworld"]
     data: PwdDisplay
 
-class DenseBranch(NamedTuple):
-    from_id: Any  # numpy.ndarray
-    to_id: Any  # numpy.ndarray
-    r: Any  # numpy.ndarray
-    x: Any  # numpy.ndarray
-    b: Any  # numpy.ndarray
-    tap: Any  # numpy.ndarray
-    shift: Any  # numpy.ndarray
-    in_service: Any  # numpy.ndarray
-
-class DenseGen(NamedTuple):
-    bus: Any  # numpy.ndarray
-    pg: Any  # numpy.ndarray
-    pmax: Any  # numpy.ndarray
-    pmin: Any  # numpy.ndarray
-    in_service: Any  # numpy.ndarray
-
-class DenseDemand(NamedTuple):
-    pd: Any  # numpy.ndarray
-    qd: Any  # numpy.ndarray
-
-class DenseShunt(NamedTuple):
-    gs: Any  # numpy.ndarray
-    bs: Any  # numpy.ndarray
-
-class DenseNetwork(NamedTuple):
-    n: int
-    m: int
-    ng: int
-    base_mva: float
-    bus_ids: Any  # numpy.ndarray
-    branch: DenseBranch
-    gen: DenseGen
-    demand: DenseDemand
-    shunt: DenseShunt
-    reference_bus: Optional[int]
-    n_components: int
-    is_radial: bool
-
 class BalancedNetwork:
     # Data attributes and the non-matrix methods delegate to the compiled
     # `_powerio._BalancedNetwork` handle at runtime via `BalancedNetwork.__getattr__`.
@@ -251,7 +212,6 @@ class BalancedNetwork:
         default_gen_cost: Optional[str] = ...,
         gen_cost_csv: Optional[Any] = ...,
     ) -> List[str]: ...
-    def to_dense(self) -> DenseNetwork: ...
     def bprime(self, scheme: Scheme = ...) -> Any: ...
     def dc_data(self, formula: str = ...) -> Dict[str, Any]: ...
     def bdoubleprime(self, scheme: Scheme = ...) -> Any: ...
@@ -308,22 +268,28 @@ Format = str
 
 from . import dist as dist
 
-def parse_file(path: Any, from_: Optional[Format] = ...) -> BalancedNetwork: ...
 def parse_display_file(path: Any, from_: Optional[Format] = ...) -> DisplayData: ...
 def parse_display_bytes(data: bytes, from_: Format) -> DisplayData: ...
-def parse_str(text: str, from_: Format) -> BalancedNetwork: ...
-def parse_bytes(data: bytes, from_: Format) -> BalancedNetwork: ...
 def to_json(network: BalancedNetwork) -> str: ...
-def to_dense(network: BalancedNetwork) -> DenseNetwork: ...
 class StoredModule:
     _inner: Any
     def __init__(self, inner: Any) -> None: ...
     @classmethod
     def from_json(cls, text: str) -> StoredModule: ...
     @classmethod
-    def from_file(cls, path: Any, from_: Optional[str] = ...) -> StoredModule: ...
+    def from_file(
+        cls,
+        path: Any,
+        from_: Optional[str] = ...,
+        *,
+        include_root: Optional[Any] = ...,
+    ) -> StoredModule: ...
     @classmethod
     def from_str(cls, text: str, from_: Optional[str] = ...) -> StoredModule: ...
+    @classmethod
+    def from_bytes(cls, data: bytes, from_: Optional[str] = ...) -> StoredModule: ...
+    def as_balanced_network(self) -> BalancedNetwork: ...
+    def as_multiconductor_network(self) -> dist.MulticonductorNetwork: ...
     def to_json(self) -> str: ...
     @property
     def kind(self) -> str: ...
@@ -339,6 +305,13 @@ class StoredModule:
     def to_balanced_inspect(self, base_mva: float = ...) -> Any: ...
     def to_balanced(self, base_mva: float = ...) -> StoredModule: ...
 
+def parse(
+    source: Any,
+    from_: Optional[Format] = ...,
+    *,
+    include_root: Optional[Any] = ...,
+    value_type: Optional[type] = ...,
+) -> Any: ...
 def write_gridfm_batch(
     networks: List[BalancedNetwork],
     out_dir: Any,
@@ -353,4 +326,3 @@ def write_gridfm_batch(
 ) -> GridfmOutputs: ...
 def read_gridfm(dir: Any, scenario: int = ...) -> GridfmRead: ...
 def read_gridfm_scenarios(dir: Any) -> List[GridfmRead]: ...
-def read_pypsa_csv_folder(path: Any) -> BalancedNetwork: ...

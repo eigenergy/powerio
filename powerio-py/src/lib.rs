@@ -436,33 +436,6 @@ fn core_open_pyerr(path: &std::path::Path, error: &powerio_core::Error) -> PyErr
     core_error_pyerr(error)
 }
 
-fn py_parse_module_path(
-    path: &std::path::Path,
-    from: Option<&str>,
-) -> PyResult<powerio_core::PioModule<powerio_matrix::BalancedNetwork>> {
-    let mut source = powerio_core::Source::open(path).map_err(|e| core_open_pyerr(path, &e))?;
-    if let Some(token) = from {
-        source = source.with_format(
-            powerio_core::FormatId::new(token.to_ascii_lowercase().replace('_', "-"))
-                .map_err(|e| core_error_pyerr(&e))?,
-        );
-    }
-    powerio_matrix::parse(source).map_err(|e| core_error_pyerr(&e))
-}
-
-fn py_parse_module_bytes(
-    bytes: &[u8],
-    from: &str,
-) -> PyResult<powerio_core::PioModule<powerio_matrix::BalancedNetwork>> {
-    let source = powerio_core::Source::from_bytes("<memory>", bytes.to_vec())
-        .map_err(|e| core_error_pyerr(&e))?
-        .with_format(
-            powerio_core::FormatId::new(from.to_ascii_lowercase().replace('_', "-"))
-                .map_err(|e| core_error_pyerr(&e))?,
-        );
-    powerio_matrix::parse(source).map_err(|e| core_error_pyerr(&e))
-}
-
 /// Wrap a parsed module as a `PyBalancedNetwork`, building the index core once
 /// and keeping the reader's findings on the handle.
 fn case_from_module(module: powerio_core::PioModule<BalancedNetwork>) -> PyBalancedNetwork {
@@ -1166,34 +1139,6 @@ impl PyBalancedNetwork {
     }
 }
 
-/// Parse a case file from a path, inferring the format from the extension unless
-/// `from_` is given.
-#[pyfunction]
-#[pyo3(signature = (path, from_=None))]
-fn parse_file(path: &str, from_: Option<&str>) -> PyResult<PyBalancedNetwork> {
-    py_parse_module_path(std::path::Path::new(path), from_).map(case_from_module)
-}
-
-/// Parse a case from in-memory text in the named source format `from_`
-/// (`matpower`, `powermodels-json`, `egret-json`, `pandapower-json`, `psse`,
-/// `powerworld`, `pslf`, `goc3-json`, `surge-json`; aliases
-/// `m`/`pm`/`egret`/`pp`/`raw`/`aux`/`epc`/`goc3`/`surge`).
-#[pyfunction]
-#[pyo3(signature = (text, from_))]
-fn parse_str(text: &str, from_: &str) -> PyResult<PyBalancedNetwork> {
-    py_parse_module_bytes(text.as_bytes(), from_).map(case_from_module)
-}
-
-/// Parse a case from in-memory bytes in the named source format `from_`.
-/// Accepts every `parse_str` name plus `pwb`: PowerWorld binary has no text
-/// form, so this is the only in-memory way to read one. Text formats must be
-/// UTF-8.
-#[pyfunction]
-#[pyo3(signature = (data, from_))]
-fn parse_bytes(data: &[u8], from_: &str) -> PyResult<PyBalancedNetwork> {
-    py_parse_module_bytes(data, from_).map(case_from_module)
-}
-
 /// Parse a display file from a path, inferring the format from the extension
 /// unless `from_` is given. Returns `(kind, payload)`.
 #[pyfunction]
@@ -1226,12 +1171,6 @@ fn parse_display_bytes<'py>(
 fn from_json(text: &str) -> PyResult<PyBalancedNetwork> {
     let inner = powerio_matrix::BalancedNetwork::from_json(text).map_err(core_pyerr)?;
     Ok(case_from_parts(inner, Vec::new()))
-}
-
-/// Read a PyPSA CSV folder into a case.
-#[pyfunction]
-fn read_pypsa_csv_folder(path: &str) -> PyResult<PyBalancedNetwork> {
-    py_parse_module_path(std::path::Path::new(path), Some("pypsa-csv")).map(case_from_module)
 }
 
 /// Convert a case file to another format through the network model. Returns
@@ -1764,11 +1703,18 @@ impl PyStoredModule {
     }
 
     /// Parse a case file into a module of whichever family claims it.
+    /// `include_root` widens the acquisition root for formats whose includes
+    /// reference sibling files.
     #[staticmethod]
-    #[pyo3(signature = (path, from_=None))]
-    fn from_file(path: &str, from_: Option<&str>) -> PyResult<Self> {
+    #[pyo3(signature = (path, from_=None, include_root=None))]
+    fn from_file(path: &str, from_: Option<&str>, include_root: Option<&str>) -> PyResult<Self> {
         let mut source = powerio_core::Source::open(Path::new(path))
             .map_err(|error| core_open_pyerr(Path::new(path), &error))?;
+        if let Some(root) = include_root {
+            source = source
+                .with_acquisition_root(root)
+                .map_err(|error| core_error_pyerr(&error))?;
+        }
         if let Some(name) = from_ {
             let format =
                 powerio_core::FormatId::new(name).map_err(|error| core_error_pyerr(&error))?;
@@ -1786,6 +1732,25 @@ impl PyStoredModule {
     #[pyo3(signature = (text, from_=None))]
     fn from_str(text: &str, from_: Option<&str>) -> PyResult<Self> {
         let mut source = powerio_core::Source::from_bytes("<memory>", text.as_bytes().to_vec())
+            .map_err(|error| core_error_pyerr(&error))?;
+        if let Some(name) = from_ {
+            let format =
+                powerio_core::FormatId::new(name).map_err(|error| core_error_pyerr(&error))?;
+            source = source.with_format(format);
+        }
+        powerio::parse(source)
+            .map(|module| Self {
+                module: Some(module),
+            })
+            .map_err(|error| core_error_pyerr(&error))
+    }
+
+    /// Parse in-memory case bytes into a module. The only in-memory way to
+    /// read a binary format; text formats must be UTF-8.
+    #[staticmethod]
+    #[pyo3(signature = (data, from_=None))]
+    fn from_bytes(data: &[u8], from_: Option<&str>) -> PyResult<Self> {
+        let mut source = powerio_core::Source::from_bytes("<memory>", data.to_vec())
             .map_err(|error| core_error_pyerr(&error))?;
         if let Some(name) = from_ {
             let format =
@@ -1985,10 +1950,24 @@ impl PyStoredModule {
                 module.value().kind().as_str()
             )));
         };
-        Ok(case_from_parts(
-            network.clone(),
-            module.diagnostics().to_vec(),
-        ))
+        // Thread the module's provenance onto the handle so the byte exact
+        // same format echo survives the universal parse. Sources carry over
+        // first: a diagnostic's span validates against the sources on the
+        // module it is being added to.
+        let mut out = powerio_core::PioModule::new(network.clone());
+        for descriptor in module.sources() {
+            out.add_source_descriptor(descriptor.clone())
+                .expect("existing descriptors re-add cleanly");
+        }
+        for diagnostic in module.diagnostics() {
+            out.add_diagnostic(diagnostic.clone())
+                .expect("existing findings re-add cleanly");
+        }
+        let out = match module.source() {
+            Some(source) => out.with_source(source.clone()),
+            None => out,
+        };
+        Ok(case_from_module(out))
     }
 
     /// The multiconductor network value as a network handle.
@@ -2029,6 +2008,10 @@ impl PyStoredModule {
                 "failed to carry every diagnostic onto the multiconductor network handle: {error}"
             )));
         }
+        let inner = match module.source() {
+            Some(source) => inner.with_source(source.clone()),
+            None => inner,
+        };
         Ok(PyMulticonductorNetwork::from_module(inner))
     }
 
@@ -2243,13 +2226,9 @@ fn _powerio(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add("PowerIOParseError", m.py().get_type::<PowerIOParseError>())?;
     m.add("PowerIODataError", m.py().get_type::<PowerIODataError>())?;
     m.add_class::<PyBalancedNetwork>()?;
-    m.add_function(wrap_pyfunction!(parse_file, m)?)?;
-    m.add_function(wrap_pyfunction!(parse_str, m)?)?;
-    m.add_function(wrap_pyfunction!(parse_bytes, m)?)?;
     m.add_function(wrap_pyfunction!(parse_display_file, m)?)?;
     m.add_function(wrap_pyfunction!(parse_display_bytes, m)?)?;
     m.add_function(wrap_pyfunction!(from_json, m)?)?;
-    m.add_function(wrap_pyfunction!(read_pypsa_csv_folder, m)?)?;
     m.add_function(wrap_pyfunction!(convert_file, m)?)?;
     m.add_function(wrap_pyfunction!(convert_str, m)?)?;
     m.add_class::<PyMulticonductorNetwork>()?;

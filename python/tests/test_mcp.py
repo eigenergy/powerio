@@ -145,7 +145,7 @@ def test_parse_transmission_transport_round_trip(tmp_path):
 
     out = tmp_path / "case9.m"
     server.save(out_path=str(out), json=parsed["json"], json_format=parsed["json_format"])
-    assert powerio.parse_file(out).n_buses == 9
+    assert powerio.parse(out, value_type=powerio.BalancedNetwork).n_buses == 9
 
 
 def test_parse_distribution_uses_bmopf_transport(tmp_path):
@@ -192,7 +192,7 @@ def test_package_transport_flows_through_summary_matrix_and_save(tmp_path):
 
     out = tmp_path / "case9.m"
     server.save(out_path=str(out), package_json=package_json)
-    assert powerio.parse_file(out).n_buses == 9
+    assert powerio.parse(out, value_type=powerio.BalancedNetwork).n_buses == 9
 
     package_path = tmp_path / "case9.pio.json"
     package_path.write_text(package_json)
@@ -260,7 +260,7 @@ def test_minimal_bmopf_json_routes_without_format(tmp_path):
 
 
 def test_powermodels_json_still_routes_as_transmission():
-    pm = powerio.parse_file(str(DATA / "case9.m")).to_format("powermodels-json").text
+    pm = powerio.parse(str(DATA / "case9.m"), value_type=powerio.BalancedNetwork).to_format("powermodels-json").text
     parsed = server.parse(content=pm)
     assert parsed["domain"] == "transmission"
     assert parsed["json_format"] == "model-json"
@@ -286,7 +286,7 @@ def test_normalize_payload_has_schema_marker():
 
 
 def test_parse_reads_pypsa_folder(tmp_path):
-    net = powerio.parse_file(str(DATA / "case9.m"))
+    net = powerio.parse(str(DATA / "case9.m"), value_type=powerio.BalancedNetwork)
     folder = tmp_path / "case9-pypsa"
     net.write_pypsa_csv_folder(str(folder))
 
@@ -349,7 +349,7 @@ def test_bad_json_transport_leads_with_the_diagnostic_code():
 
 def test_parse_failures_carry_the_code_and_the_tools_lead_with_it():
     with pytest.raises(powerio.PowerIOError) as native:
-        powerio.parse_str("mpc.bus = [", "matpower")
+        powerio.parse(("mpc.bus = [").encode(), "matpower", value_type=powerio.BalancedNetwork)
     assert native.value.code == "PARSE.MATPOWER.MALFORMED"
     with pytest.raises(ValueError) as mapped:
         server.summary(content="mpc.bus = [", from_format="matpower")
@@ -449,7 +449,7 @@ def test_mcp_refuses_pypsa_child_symlink_escape(monkeypatch, tmp_path):
     outside = tmp_path / "outside"
     root.mkdir()
     outside.mkdir()
-    powerio.parse_file(str(DATA / "case9.m")).write_pypsa_csv_folder(str(folder))
+    powerio.parse(str(DATA / "case9.m"), value_type=powerio.BalancedNetwork).write_pypsa_csv_folder(str(folder))
     escaped = outside / "buses.csv"
     escaped.write_text((folder / "buses.csv").read_text())
     (folder / "buses.csv").unlink()
@@ -672,7 +672,7 @@ New Load.la bus1=loadbus.1.2.3 phases=3 conn=wye kv=0.416 kw=24 pf=0.95 model=1
 
 def _legacy_package_doc(**extra) -> dict:
     """A released 0.9 package document, the lineage the stored reader upgrades."""
-    network = json.loads(powerio.parse_file(str(DATA / "case9.m")).to_json())
+    network = json.loads(powerio.parse(str(DATA / "case9.m"), value_type=powerio.BalancedNetwork).to_json())
     return {
         "powerio_version": "0.9.0",
         "producer": {"tool": "powerio", "version": "0.9.0"},

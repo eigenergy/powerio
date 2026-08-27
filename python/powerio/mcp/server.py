@@ -501,10 +501,12 @@ def _parse_transmission(
                 int(result.scenario),
             )
         if path is not None:
-            net = powerio.parse_file(path, format)
+            net = powerio.parse(path, format, value_type=powerio.BalancedNetwork)
         else:
-            net = powerio.parse_str(
-                _required(content, "content"), format or "matpower"
+            net = powerio.parse(
+                _required(content, "content").encode(),
+                format or "matpower",
+                value_type=powerio.BalancedNetwork,
             )
     except powerio.PowerIOError as exc:
         raise _coded_error("parse failed", exc) from exc
