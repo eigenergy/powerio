@@ -43,7 +43,6 @@ Every optional entry point is behind a Cargo feature and a header guard, and is 
 | `matrix` | — | the balanced matrix Arrow tables |
 | `gridfm` | `PIO_GRIDFM` | `pio_read_dir`, `pio_scenario_ids` |
 | `dist` | `PIO_DIST` | the `pio_dist_*` multiconductor entry points |
-| `pkg` | `PIO_PKG` | the `pio_package_*` `.pio.json` entry points |
-| `prob` | `PIO_PROB` | the `pio_scopf_*` entry points |
+| `prob` | `PIO_PROB` | the problem data behind the module surface (`pio_dc_data_*`) |
 
-Released binaries carry all six. `pio_build_info` reports which ones a given library was built with, alongside its version, ABI integer, foreign schema versions and error category tokens.
+Released binaries carry all five. `pio_build_info` reports which ones a given library was built with, alongside its version, ABI integer, foreign schema versions and error category tokens.

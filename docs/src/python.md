@@ -17,26 +17,27 @@ pip install 'powerio[pandas]'   # pandas and pyarrow compatibility reads (Python
 pip install 'powerio[all]'      # matrix, graph, and gridfm reads
 ```
 
-`import powerio`, `parse_file`, `parse_str`, `convert_file`, `convert_str`,
-`to_matpower`, and `to_json` do not import NumPy, SciPy, NetworkX, Polars,
-pandas, or pyarrow.
+`import powerio`, `parse`, `convert_file`, `convert_str`, `to_matpower`, and
+`to_json` do not import NumPy, SciPy, NetworkX, Polars, pandas, or pyarrow.
 
-Transmission text and file format names accepted by `parse_*` and `convert_*` include
+Transmission text and file format names accepted by `parse` and `convert_*` include
 `matpower`, `psse`, `powerworld`, `pslf`, `powermodels-json`, `egret-json`,
 `pandapower-json`, `goc3-json`, `surge-json`, and `opfdata-json`, plus their
 documented aliases. Balanced model JSON is not a case format and has no name
-here: read and write it with `powerio.from_json` and `Network.to_json`. `opfdata-json` reads one extracted JSON document from a
-DeepMind OPFData FullTop or N-1 release without PyTorch. PyPSA CSV folders and
-GridFM Parquet datasets are directory formats; use `read_pypsa_csv_folder`, `Network.write_pypsa_csv_folder`,
-`read_gridfm`, `Network.write_gridfm`, or the conversion/package helpers that
-take a path.
+here: read and write it with `powerio.from_json` and
+`BalancedNetwork.to_json`. `opfdata-json` reads one extracted JSON document
+from a DeepMind OPFData FullTop or N-1 release without PyTorch, and parses to
+its solved calculation. PyPSA CSV folders and GridFM Parquet datasets are
+directory formats: `parse` takes the folder path, and
+`BalancedNetwork.write_pypsa_csv_folder`, `read_gridfm`, and
+`BalancedNetwork.write_gridfm` write and read them.
 
 ## Canonical use
 
 ```python
 import powerio as pio
 
-net = pio.parse_file("case9.m")
+net = pio.parse("case9.m", value_type=pio.BalancedNetwork)
 same_text = net.to_matpower()
 json_text = net.to_json()
 pm = net.to_format("powermodels-json")
@@ -45,17 +46,15 @@ raw = pio.convert_file("case9.m", "psse")
 aux = pio.convert_str(json_text, "powerworld", from_="powermodels-json")
 pypsa_out = net.write_pypsa_csv_folder("case9-pypsa")
 display = pio.parse_display_file("case.pwd")
-pkg = pio.Package.from_file("goc3_case.json", from_="goc3-json")
-points = pkg.operating_points()
-period_1 = pkg.materialize_operating_point(1)
+
+module = pio.parse("goc3_case.json")     # a calculation defining source
+module.kind                              # "ac_scuc_instance"
+module.inspect()                         # the operations the value supports
 
 normalized = net.to_normalized()
-dense = net.to_dense()       # needs powerio[matrix]
 bprime = net.bprime()        # needs powerio[matrix]
 graph = net.to_networkx()    # needs powerio[graph]
 dist_graph = pio.dist.parse_file("feeder.dss").graph()
-scopf = pio.parse_scopf(goc3_text, from_="goc3-json")
-scopf_for_julia = pio.parse_scopf(goc3_text, index_base=1)
 ```
 
 ## Model names
@@ -70,10 +69,12 @@ existing `powerio.dist.MulticonductorNetwork` handle name. The old
 `powerio.dist.DistCase` alias was removed in v0.4. `dist_net.graph()` returns
 the collapsed bus and terminal graph as Python data.
 
-`parse_file(path, from_=None)` reads network case files (inferred from the
-extension, or forced with `from_`); `parse_str(text, from_)` reads in-memory
-case text. Display artifacts are not network cases, so they use the separate
-display API:
+`parse(source, from_=None, include_root=..., value_type=...)` reads a case
+path or in-memory bytes into a `StoredModule` of whichever family claims it
+(inferred from the extension and content, or forced with `from_`);
+`value_type` narrows to `BalancedNetwork` or `dist.MulticonductorNetwork` in
+the same call. Display artifacts are not network cases, so they use the
+separate display API:
 
 ```python
 from pathlib import Path
@@ -89,15 +90,14 @@ print(first.number, first.name, first.x, first.y)
 `display.data` is a `PwdDisplay` with `canvas_width`,
 `canvas_height`, `stamp`, and `substations`.
 
-## Problem instances
+## Problem data
 
-`parse_scopf(text, from_="goc3-json", index_base=0)` assembles a matrix free
-SCOPF problem instance and returns the language neutral `powerio.scopf`
-document as a Python dictionary. Python defaults to 0-based ordinals;
-`index_base=1` requests 1-based ordinals. The document records the selected
-base. Source UIDs and source bus IDs never change. Invalid JSON, duplicate
-identities, missing references, period length mismatches, and an index base
-other than 0 or 1 raise `PowerIOError` subclasses or `ValueError`.
+A source that defines a calculation parses to that calculation's typed value:
+GO Challenge 3 JSON to an AC SCUC instance, BMOPF JSON to a multiconductor
+AC OPF instance, and OPFData JSON to a solved AC OPF. `parse` returns the
+`StoredModule` carrying it; `module.inspect()` names the operations the value
+supports, and `BalancedNetwork.dc_data(formula)` serves the DC branch data
+every language reads under the same names.
 
 ## PyPSA folders
 
@@ -107,9 +107,9 @@ helpers instead of `Conversion.text`.
 ```python
 import powerio as pio
 
-case = pio.parse_file("case14.m")
+case = pio.parse("case14.m", value_type=pio.BalancedNetwork)
 out = case.write_pypsa_csv_folder("case14-pypsa")
-round_trip = pio.read_pypsa_csv_folder(out["dir"])
+round_trip = pio.parse(out["dir"], "pypsa-csv", value_type=pio.BalancedNetwork)
 ```
 
 The written folder can be imported with
@@ -138,7 +138,7 @@ child.
 ```python
 import powerio as pio
 
-out = pio.parse_file("case14.m").write_gridfm("out")
+out = pio.parse("case14.m", value_type=pio.BalancedNetwork).write_gridfm("out")
 net, scenario, warnings = pio.read_gridfm(out["dir"])
 text = net.to_matpower()                 # gridfm → any classical format
 ```
@@ -155,36 +155,36 @@ Use `powerio[pandas]` only for downstream code that expects pandas DataFrames.
 
 ## `.pio.json` documents
 
-`powerio.Package` is the handle for `.pio.json` documents: it parses the
-document metadata once and every accessor reuses the handle. `Package.from_file`
-and `Package.from_str` build documents from case input, `Package.from_json`
-reads document text, and `Package.from_balanced` /
-`Package.from_multiconductor` wrap existing networks. `pkg.model_kind` names
-the document family;
-`pkg.as_balanced()` / `pkg.as_multiconductor()` rebuild typed network handles
-from the model JSON.
+`powerio.StoredModule` is the handle for `.pio.json` documents.
+`StoredModule.from_json` reads stored text (a released 0.9 package upgrades
+one way on read), `StoredModule.from_file` / `from_str` / `from_bytes` parse
+case input into a module, and `powerio.parse` is the same universal entry
+with `value_type` narrowing. `module.kind` names the typed value;
+`as_balanced_network()` / `as_multiconductor_network()` hand back typed
+network handles with the module's retained source and findings threaded on,
+so a same format write still echoes the source bytes.
 
-`pkg.operating_points()` returns a Python dict for the replayable operating
-point series, or `None`. `pkg.materialize_operating_point(i)` returns a new
-static `Package` with one point applied; updates resolve by the model rows'
-`uid` identities, and an unknown identity or a row that contradicts one raises
-`ValueError`. GOC3 documents populate this series from the source time series
-while the static model JSON holds the first interval. Network table dicts
-(`net.buses`, `net.loads`, ...) expose each row's `uid`.
-`pkg.study()` returns a Python dict for the package study block, or `None`;
-`pkg.materialize_study_commit(i)` folds cumulative commits through `i` into a
-new static package and clears both replay blocks.
-`pkg.validate()`, `pkg.validation()`, and `pkg.diagnostics()` expose the
-document validation profile, and multiconductor documents lower through
-`pkg.multiconductor_to_balanced_preflight()` and
-`pkg.lower_multiconductor_to_balanced()`.
+`module.inspect()` names the value and its supported operations;
+`module.diagnostics()` returns the findings; `module.state_inventory()`
+lists the typed time points or scenario IDs a collection carries;
+`module.select_state(...)` describes the selected item, and
+`module.export_state(...)` materializes it as an independent static module.
+Multiconductor values lower through `module.to_balanced_inspect()` and
+`module.to_balanced()`.
 
 ```python
-pkg = pio.Package.from_file("goc3_case.json", from_="goc3-json")
-series = pkg.operating_points()
-static_pkg = pkg.materialize_operating_point(0)
-net = static_pkg.as_balanced()
+module = pio.parse("goc3_case.json")           # ac_scuc_instance
+module.inspect()                               # names the supported operations
+
+series = pio.StoredModule.from_json(stored_series_text)
+inventory = series.state_inventory()           # typed time points or scenarios
+static_module = series.export_state(time_position=0)
+net = static_module.as_balanced_network()
 ```
+
+Selection and export apply to the collection kinds (network time series,
+operating point time series, scenario sets); a static or instance module
+refuses them with `REQUEST.STATE.NOT_A_COLLECTION`.
 
 ## MCP path handling
 

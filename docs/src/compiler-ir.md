@@ -44,9 +44,11 @@ case format.
 
 ## The `.pio.json` document
 
-`powerio::package::NetworkPackage` is the implementation type for a `.pio.json`
-document. It records how a source was interpreted. Language bindings can pass
-the document without guessing whether it holds balanced or multiconductor data.
+The stored module (`powerio::stored`) is the implementation of a `.pio.json`
+document: one typed value with the record of how it was produced. Language
+bindings pass the document without guessing what it holds; its `value.kind`
+says so. The released 0.9 `NetworkPackage` layout upgrades one way on read
+through a crate private frozen decoder.
 
 A `.pio.json` document always carries:
 
@@ -71,7 +73,7 @@ Challenge 3 document construction fills this block from `time_series_input`:
 the balanced model JSON holds the first interval, while every interval is
 available as an operating point.
 
-For balanced model JSON, `NetworkPackage::attach_normalized_solver_table_metadata`
+For balanced model JSON, the 0.9 package's solver table metadata attachment
 records compact metadata for
 `powerio::BalancedNetwork::to_normalized_solver_tables()`: pass name, units, row counts,
 dense bus ids, reference/component indices, branch to arc indices, and source row
@@ -134,13 +136,13 @@ transformation explicit.
 reduced before the sequence transform. One wire and two wire inputs,
 transformers, untyped objects, missing phase references, and closed switches
 return structured `LOWER.MULTI_TO_BALANCED.*` diagnostics.
-`NetworkPackage::lower_multiconductor_to_balanced` returns a derived balanced
+`powerio::transform::lower_multiconductor_to_balanced` returns a derived balanced
 document and appends the record. This pass is explicit only; readers, writers,
 matrix builders, bindings, and MCP operations do not run it implicitly.
 
 ### Operating point materialization
 
-`NetworkPackage::materialize_operating_point(index)` clones the document, applies
+The 0.9 operating point materialization clones the document, applies
 one point's field updates to the typed model JSON, clears `operating_points`, drops
 stale source maps and diagnostics for changed fields, recomputes validation, and
 records a `LoweringRecord` with `pass = "materialize-operating-point"`. If the

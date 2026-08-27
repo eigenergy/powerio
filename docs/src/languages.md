@@ -16,33 +16,27 @@ Verb taxonomy:
   hub also keeps `write_as` and per-format `write_*` text builders, the
   internals behind `to_format` and the `to_*` writers, which the bindings do
   not mirror
-- `read_*`: filesystem dataset inputs (`read_gridfm`, `read_pypsa_csv_folder`), the inverse of
-  `write_*`. Datasets are multi-file directories, so they read and write;
-  single documents parse and serialize (`parse_*`/`to_*`)
+- `read_*`: filesystem dataset inputs (`read_gridfm`), the inverse of
+  `write_*`. Datasets are multi-file directories; the universal `parse` reads
+  them too, and single documents parse and serialize (`parse`/`to_*`)
 - `export_*`: handoff to external memory or interface protocols
 
 | Concept | Rust | Python | Julia | C ABI |
 |---|---|---|---|---|
-| Parse path | `parse_file(path, from)` | `parse_file(path, from_=None)` | `parse_file(path; from=nothing)` | `pio_parse_file` |
-| Parse text | `parse_str(text, from)` | `parse_str(text, from_)` | `parse_str(text, format)` | `pio_parse_str` |
+| Universal parse | `powerio::parse(source)` | `parse(source, from_)` | `PowerIO.parse(source)` | `pio_module_parse_file` / `pio_module_parse_str` |
+| Balanced network handle | `try_into_typed` | `parse(..., value_type=BalancedNetwork)` | typed narrowing | `pio_parse_file` / `pio_parse_str` |
 | Parse display path | `parse_display_file(path, from)` | `parse_display_file(path, from_=None)` | — | n/a |
 | Parse display bytes | `parse_display_bytes(bytes, from)` | `parse_display_bytes(data, from_)` | — | n/a |
-| Parse IO | n/a | — | `parse_file(io, format)` | n/a |
 | JSON to Network | `BalancedNetwork::from_json` | `from_json` | `from_json` | `pio_from_json` |
 | File conversion | `convert_file(path, to, from)` | `convert_file(path, to, from_=None)` | `convert_file(path, to; from=nothing)` | `pio_convert_file` |
 | Text conversion | `convert_str(text, to, from)` | `convert_str(text, to, from_)` | `convert_str(text, to; from=format)` | `pio_convert_str` |
 | Parsed conversion | `net.to_format(to)` | `net.to_format(to)` | `to_format(net, to)` | `pio_to_format` |
 | MATPOWER text | `net.to_matpower()` | `net.to_matpower()` | `to_matpower(net)` | `pio_to_format` + `"matpower"` |
 | JSON text | `net.to_json()` | `net.to_json()` | `to_json(net)` | `pio_to_json` |
-| `.pio.json` document JSON | `NetworkPackage::to_json()` | `Package` class / package transport | `to_package` / `write_package` | `pio_package_*` |
-| `.pio.json` operating points | `pkg.operating_points()` | `pkg.operating_points()` | — | `pio_package_operating_points_json` |
-| Materialize operating point | `pkg.materialize_operating_point(i)` | `pkg.materialize_operating_point(i)` | — | `pio_package_materialize_operating_point` |
-| `.pio.json` study block | `pkg.study()` | `pkg.study()` | — | `pio_package_study_json` |
-| Materialize study commit | `pkg.materialize_study_commit(i)` | `pkg.materialize_study_commit(i)` | — | `pio_package_materialize_study_commit` |
-| Parse SCOPF instance | `parse_scopf_str` | `parse_scopf(text, from_="goc3-json", index_base=0)` | SCOPF document adapter | `pio_scopf_parse_str` |
+| `.pio.json` document JSON | `stored::write_module` | `StoredModule.to_json` / package transport | `write_module` | `pio_module_write_json` |
 | Normalized copy | `net.to_normalized()` | `net.to_normalized()` | `to_normalized(net)` | `pio_normalize` |
-| Dense tables | typed table API | `to_dense` | `to_dense` | `pio_*` extractors |
-| PyPSA CSV folder | `read_pypsa_csv_folder` / `write_pypsa_csv_folder` | `read_pypsa_csv_folder` / `net.write_pypsa_csv_folder` | `parse_file(dir; from="pypsa-csv")` / `write_pypsa_csv_folder` | `pio_parse_file` / `pio_write_dir` + `"pypsa-csv"` |
+| Dense extraction | typed table API | `pio_*` mirrors | native views | `pio_*` extractors |
+| PyPSA CSV folder | `parse` / `write_pypsa_csv_folder` | `parse(dir, "pypsa-csv")` / `net.write_pypsa_csv_folder` | `PowerIO.parse(dir)` / `write_pypsa_csv_folder` | `pio_parse_file` / `pio_write_dir` + `"pypsa-csv"` |
 | gridfm write | `write_gridfm_dataset` / `write_gridfm_batch` | `net.write_gridfm` / `write_gridfm_batch` | — | — |
 | gridfm read | `read_gridfm_dataset(dir, scenario)` | `read_gridfm(dir, scenario=0)` | `read_gridfm(dir; scenario=0)` | `pio_read_dir` + `"gridfm"` |
 | PYPOWER ppc dict | — | `net.to_ppc()` / `from_ppc(ppc)` | — | — |
@@ -58,20 +52,20 @@ language, down to the susceptance formula names (`series_susceptance`,
 |---|---|---|---|---|
 | Read stored `.pio.json` | `stored::read_module` | `StoredModule.from_json` | `read_module` | `pio_module_read_json` |
 | Write the stored document | `stored::write_module` | `StoredModule.to_json` | `write_module` | `pio_module_write_json` |
-| Parse a case to a module | `powerio::parse` | `StoredModule.from_file` | `parse_module` | `pio_module_parse_file` |
+| Parse a case to a module | `powerio::parse` | `parse` / `StoredModule.from_file` | `PowerIO.parse` | `pio_module_parse_file` |
 | Value kind | `value().kind()` | `.kind` | `module_kind` | `pio_module_kind` |
 | Inspect and discover operations | `select`/`stored` surfaces | `.inspect()` | `inspect_module` | `pio_module_inspect_json` |
 | Typed state inventory | `select::state_inventory` | `.state_inventory()` | `state_inventory` | `pio_module_state_inventory_json` |
 | Export selected state | `select::export_state` | `.export_state(...)` | `export_state` | `pio_module_export_state` |
-| Explicit balanced lowering | `package::lower_module_to_balanced` | `.to_balanced(...)` | `lower_module_to_balanced` | `pio_module_lower_to_balanced` |
+| Explicit balanced lowering | `transform::lower_module_to_balanced` | `.to_balanced(...)` | `lower_module_to_balanced` | `pio_module_lower_to_balanced` |
 | DC branch data | `dc_network_data` | `net.dc_data(formula)` | `dc_data(module)` | `pio_dc_data_build` |
 | Susceptance span | `.susceptance` | `data["susceptance"]` | `PowerIO.susceptance` | `pio_dc_data_susceptance` |
 | Row and bus mappings | `.row_ids` / `.bus_ids` | `data["row_ids"]` / `data["bus_ids"]` | `PowerIO.row_ids` / `PowerIO.bus_ids` | `pio_dc_data_row_ids` / `pio_dc_data_bus_ids` |
 | Omitted rows with reasons | `.omitted` | `data["omitted_ids"]` + `data["omitted_reasons"]` | `PowerIO.omitted` | `pio_dc_data_omitted_ids` + `..._omitted_reasons` |
 
-The 0.9 `NetworkPackage` rows in the table above are the migration surface:
-the module document supersedes them at 1.0, and the upgrade reader accepts
-every released 0.9 package one way.
+The module document is the one stored form at 1.0; the upgrade reader
+accepts every released 0.9 package one way, and the 0.9 package API is gone
+from every language surface.
 
 **Note:** the C ABI carries no per-format symbols: matpower, PyPSA CSV
 directories, and gridfm datasets are all format strings into
@@ -83,12 +77,12 @@ signature stays the same. The language APIs keep their per-format conveniences
 ## C ABI and binding compatibility
 
 The C ABI is the stable boundary for non Rust callers. Handles own parsed
-networks. `PioPackage` handles own `.pio.json` documents. Callers free
-network handles with `pio_network_free`, package handles with
-`pio_package_free`, and SCOPF handles with `pio_scopf_instance_free`. They free
-returned text with `pio_string_free`, size output buffers before filling them,
-and treat every format name as a string routed through the same parser and
-writer hub.
+networks; `PioModuleHandle` owns a stored module, `PioError` a structured
+failure, and `PioDcData` the DC branch data. Callers free network handles
+with `pio_network_free`, release module, error, and DC data handles with
+their `pio_*_release` entry points, free returned text with
+`pio_string_free`, size output buffers before filling them, and treat every
+format name as a string routed through the same parser and writer hub.
 
 C ABI review points:
 
