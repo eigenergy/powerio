@@ -513,3 +513,47 @@ fn scenario_set_shares_unchanged_tables() {
     assert!((second.generators()[0].pg - 42.0).abs() < 1e-9);
     assert!((first.generators()[0].pg - second.generators()[0].pg).abs() > 1.0);
 }
+
+#[cfg(unix)]
+#[test]
+fn a_symlinked_dataset_entry_is_refused_by_the_acquisition() {
+    // The path entry points read through the pinned acquisition, so an entry
+    // that is a symbolic link out of the dataset directory refuses instead of
+    // following it.
+    let base = powerio_tx::parse(
+        powerio_core::Source::open(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../tests/data/case9.m"
+        ))
+        .unwrap(),
+    )
+    .expect("case9 parses")
+    .into_value();
+    let outside = tempfile::tempdir().unwrap();
+    let dataset = tempfile::tempdir().unwrap();
+    let snapshots = [powerio_matrix::GridfmSnapshot::new(&base, 0)];
+    powerio_matrix::write_gridfm_batch(
+        &snapshots,
+        dataset.path(),
+        &powerio_matrix::GridfmOptions::default(),
+    )
+    .expect("dataset writes");
+    // Find the written raw dir and replace one table with a symlink that
+    // escapes the dataset.
+    let raw = ["", "raw", "case9/raw"]
+        .iter()
+        .map(|suffix| dataset.path().join(suffix))
+        .find(|candidate| candidate.join("bus_data.parquet").is_file())
+        .expect("the writer laid out a raw table");
+    let target = outside.path().join("bus_data.parquet");
+    std::fs::rename(raw.join("bus_data.parquet"), &target).unwrap();
+    std::os::unix::fs::symlink(&target, raw.join("bus_data.parquet")).unwrap();
+
+    let error = powerio::gridfm::read_gridfm_scenarios(dataset.path())
+        .expect_err("the symlinked entry refuses");
+    let text = error.to_string();
+    assert!(
+        text.contains("symbolic link") || text.contains("link") || text.contains("acquire"),
+        "unexpected refusal wording: {text}"
+    );
+}

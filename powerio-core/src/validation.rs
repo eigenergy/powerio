@@ -16,6 +16,13 @@ pub(crate) const MAX_DIAGNOSTIC_DETAIL_KEYS: usize = 256;
 pub(crate) const MAX_SOURCE_MAP_SPANS: usize = 256;
 pub(crate) const MAX_HISTORY_PARAMETERS: usize = 256;
 pub(crate) const MAX_HISTORY_NOTES: usize = 256;
+/// Module level record counts. Each stored module list is refused at its
+/// count while it is decoded, so a small hostile document cannot declare its
+/// way into an unbounded record allocation.
+pub const MAX_MODULE_SOURCES: usize = 262_144;
+pub const MAX_MODULE_SOURCE_MAP_ENTRIES: usize = 262_144;
+pub const MAX_MODULE_DIAGNOSTICS: usize = 262_144;
+pub const MAX_MODULE_HISTORY_ENTRIES: usize = 65_536;
 
 /// A locator identifies an element, so it is bounded but never shortened: a
 /// truncated RFC 6901 pointer names a different element, or none.
