@@ -82,8 +82,11 @@ enum Command {
     },
     /// Print matrix stats and the SDDM check for one case.
     Verify {
-        /// MATPOWER `.m` file.
+        /// Transmission case file (any readable format, or a stored `.pio.json`).
         input: PathBuf,
+        /// Override the inferred input format.
+        #[arg(long, value_enum)]
+        from: Option<FormatArg>,
         #[arg(long, value_enum, default_value = "bprime")]
         kind: MatrixKindArg,
         #[arg(long, value_enum, default_value = "bx")]
@@ -92,8 +95,11 @@ enum Command {
     /// Emit the static DC OPF matrix/vector bundle for one case.
     #[command(name = "dcopf", visible_alias = "dc-opf")]
     DcOpf {
-        /// MATPOWER `.m` file.
+        /// Transmission case file (any readable format, or a stored `.pio.json`).
         input: PathBuf,
+        /// Override the inferred input format.
+        #[arg(long, value_enum)]
+        from: Option<FormatArg>,
         /// Output directory; the bundle lands in `<output>/<case>_dcopf/`.
         #[arg(short, long)]
         output: PathBuf,
@@ -117,8 +123,11 @@ enum Command {
     },
     /// Emit DC sensitivity matrices (PTDF, LODF) for one case.
     Sensitivities {
-        /// MATPOWER `.m` file.
+        /// Transmission case file (any readable format, or a stored `.pio.json`).
         input: PathBuf,
+        /// Override the inferred input format.
+        #[arg(long, value_enum)]
+        from: Option<FormatArg>,
         /// Output directory; writes `<case>_ptdf.mtx` and `<case>_lodf.mtx`.
         #[arg(short, long)]
         output: PathBuf,
@@ -702,11 +711,13 @@ fn main() -> anyhow::Result<()> {
         } => run_gen_cli(topology, n, r_over_x, mean_x, seed, &output, matrices),
         Command::Verify {
             input,
+            from,
             kind,
             scheme,
-        } => run_verify(&input, kind.into(), scheme.into()),
+        } => run_verify(&input, from, kind.into(), scheme.into()),
         Command::DcOpf {
             input,
+            from,
             output,
             convention,
             units,
@@ -715,6 +726,7 @@ fn main() -> anyhow::Result<()> {
             gen_cost_csv,
         } => run_dcopf(
             &input,
+            from,
             &output,
             convention.into(),
             units.into(),
@@ -724,11 +736,12 @@ fn main() -> anyhow::Result<()> {
         ),
         Command::Sensitivities {
             input,
+            from,
             output,
             convention,
             solver,
             drop_tolerance,
-        } => run_sensitivities(&input, &output, convention, solver, drop_tolerance),
+        } => run_sensitivities(&input, from, &output, convention, solver, drop_tolerance),
         Command::Summary {
             input,
             from,
@@ -935,12 +948,13 @@ fn run_gen(
 
 fn run_sensitivities(
     input: &Path,
+    from: Option<FormatArg>,
     output: &Path,
     convention: DcConvArg,
     solver: SensitivitySolverArg,
     drop_tolerance: f64,
 ) -> anyhow::Result<()> {
-    let mpc = balanced_case(input).with_context(|| format!("parse {}", input.display()))?;
+    let mpc = balanced_case(input, from).with_context(|| format!("parse {}", input.display()))?;
     std::fs::create_dir_all(output)?;
     let view = powerio_matrix::IndexedNetwork::new(&mpc);
     let options = SensitivityOptions {
@@ -1055,6 +1069,7 @@ fn write_options(
 
 fn run_dcopf(
     input: &Path,
+    from: Option<FormatArg>,
     output: &Path,
     convention: DcConvention,
     units: Units,
@@ -1062,7 +1077,7 @@ fn run_dcopf(
     default_gen_cost: Option<&str>,
     gen_cost_csv: Option<&Path>,
 ) -> anyhow::Result<()> {
-    let mpc = balanced_case(input).with_context(|| format!("parse {}", input.display()))?;
+    let mpc = balanced_case(input, from).with_context(|| format!("parse {}", input.display()))?;
     let cost_opts = write_options(missing_gen_cost, default_gen_cost, gen_cost_csv)?;
     let mut policy_network = mpc.clone();
     let cost_report = policy_network
@@ -1146,8 +1161,13 @@ fn run_gridfm(
     Ok(())
 }
 
-fn run_verify(input: &Path, kind: MatrixKind, scheme: Scheme) -> anyhow::Result<()> {
-    let mpc = balanced_case(input)?;
+fn run_verify(
+    input: &Path,
+    from: Option<FormatArg>,
+    kind: MatrixKind,
+    scheme: Scheme,
+) -> anyhow::Result<()> {
+    let mpc = balanced_case(input, from)?;
     let opts = BuildOptions {
         scheme,
         ..Default::default()
@@ -1843,8 +1863,11 @@ enum FamilyCase {
 /// One balanced network from any single case input (a stored `.pio.json`
 /// included), for the matrix commands. A distribution input is refused with
 /// the family named.
-fn balanced_case(input: &Path) -> anyhow::Result<powerio_matrix::BalancedNetwork> {
-    match parse_family_case(input, None)? {
+fn balanced_case(
+    input: &Path,
+    from: Option<FormatArg>,
+) -> anyhow::Result<powerio_matrix::BalancedNetwork> {
+    match parse_family_case(input, from)? {
         FamilyCase::Transmission(parsed) => Ok(parsed.network),
         FamilyCase::Distribution(_) => anyhow::bail!(
             "{} is a distribution case; this command needs a transmission network",
@@ -2193,7 +2216,7 @@ mod tests {
             }
             super::FamilyCase::Distribution(_) => panic!("case9 is transmission"),
         }
-        let net = super::balanced_case(&path).unwrap();
+        let net = super::balanced_case(&path, None).unwrap();
         assert_eq!(net.buses().len(), 9);
         let _ = std::fs::remove_file(path);
     }
