@@ -23,6 +23,9 @@ powerio_core::diagnostic_codes! {
     REQUEST_STATE_OUT_OF_RANGE = "REQUEST.STATE.OUT_OF_RANGE", Error,
         "the requested time position is outside the collection's axis",
         category = Request;
+    REQUEST_STATE_UNBOUND_EXPORT = "REQUEST.STATE.UNBOUND_EXPORT", Error,
+        "the selected item's static materialization is not bound yet",
+        category = Request;
     REQUEST_STATE_UNKNOWN_SCENARIO = "REQUEST.STATE.UNKNOWN_SCENARIO", Error,
         "the requested scenario ID is not declared by the set",
         category = Request;

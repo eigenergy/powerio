@@ -32,7 +32,11 @@ fn operating_point(net: &BalancedNetwork) -> powerio_prob::OperatingPoint<Balanc
     let vm: Vec<f64> = (0..n)
         .map(|k| 1.0 + 0.01 * (k as f64) / (n as f64))
         .collect();
-    let va: Vec<f64> = (0..n).map(|k| 2.0 * (k as f64) / (n as f64)).collect(); // degrees
+    // Radians, per the state accessor's unit; off flat so every block fills,
+    // spelled exactly as the tests' independent references spell it.
+    let va: Vec<f64> = (0..n)
+        .map(|k| (2.0 * (k as f64) / (n as f64)).to_radians())
+        .collect();
     let series = BalancedStateBuilder::new(
         net.clone(),
         vec![powerio_core::TimePoint::new("0", None).unwrap()],

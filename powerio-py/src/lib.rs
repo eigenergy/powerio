@@ -92,7 +92,10 @@ fn categorized_pyerr(
 ) -> PyErr {
     use powerio_matrix::ErrorCategory as C;
     let err = match category {
-        C::Request => PyValueError::new_err(msg),
+        // A request refusal is a PowerIOError, never a bare ValueError, the
+        // same rule core_error_pyerr states; PowerIOError subclasses
+        // ValueError so existing except clauses keep matching.
+        C::Request => PowerIOError::new_err(msg),
         C::Parse => PowerIOParseError::new_err(msg),
         C::Data => PowerIODataError::new_err(msg),
         // `Io` is unwrapped by the callers below when it still carries the
@@ -447,7 +450,10 @@ fn py_parse_module_path(
                 .map_err(|e| core_error_pyerr(&e))?,
         );
     }
-    powerio_matrix::parse(source).map_err(|e| core_error_pyerr(&e))
+    // The parse can hit the filesystem lazily (a directory source acquires
+    // member files on demand), so its failures get the same OSError
+    // unwrapping as the open.
+    powerio_matrix::parse(source).map_err(|e| core_open_pyerr(path, &e))
 }
 
 fn py_parse_module_bytes(
