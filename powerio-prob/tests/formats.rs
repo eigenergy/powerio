@@ -35,7 +35,11 @@ fn goc3_parses_to_the_scuc_instance() {
         .iter()
         .zip(instance.network().buses())
     {
-        assert_eq!(row.i, bus.id, "bus {}", row.uid);
+        assert_eq!(
+            row.i, bus.id,
+            "static bus row {} disagrees with the network",
+            row.i
+        );
     }
 
     // The scheduling categories arrived typed: the time axis is stated.
