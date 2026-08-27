@@ -134,7 +134,7 @@ jobs:
     - name: Run tests
       run: cargo test -p powerio -p powerio-core -p powerio-matrix -p powerio-prob -p powerio-cli -p powerio-capi -p powerio-dist --verbose
     - name: Test problem matrix feature
-      run: cargo test -p powerio-prob --features matrix --verbose
+      run: cargo test -p powerio --features matrix --verbose
     - name: Check problem dependency boundaries
       run: |
         cargo check -p powerio-prob --no-default-features
