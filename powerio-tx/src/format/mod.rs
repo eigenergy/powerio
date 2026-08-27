@@ -596,7 +596,13 @@ fn parse_to_network(
     let text = source_text(&buffer)?;
     let fmt = match fmt_hint {
         Some(fmt) => fmt,
-        None => sniff_json(text)?,
+        None => match routing::classify_json_text(text) {
+            // The network serialization is not a case format, but it parses:
+            // a bare model JSON document decodes through `from_json` and
+            // routes to `BalancedNetwork` like any other balanced source.
+            JsonClass::ModelJson => return BalancedNetwork::from_json(text),
+            class => json_target_from_class(class)?,
+        },
     };
     read_source(text, fmt, stem, warnings)
 }
@@ -751,8 +757,16 @@ fn unknown_source_format(name: &str) -> Error {
 /// The JSON formats share the `.json` extension, so an explicit source format
 /// isn't always given. Classification lives here so the CLI and bindings use
 /// the same top level markers as the Rust parsers.
+#[cfg(test)]
 fn sniff_json(text: &str) -> Result<TargetFormat> {
-    match routing::classify_json_text(text) {
+    json_target_from_class(routing::classify_json_text(text))
+}
+
+/// The case format a JSON classification selects; the shapes that are not
+/// case formats are refused with the surface that reads them named. Model
+/// JSON never reaches this from `parse`, which decodes it directly.
+fn json_target_from_class(class: JsonClass) -> Result<TargetFormat> {
+    match class {
         JsonClass::Package => Err(Error::UnknownFormat(
             "JSON is a .pio.json package; read it with the package entry points \
              (pio_package_parse_str in C, powerio.Package.from_json in Python, \
