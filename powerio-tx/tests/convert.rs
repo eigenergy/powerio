@@ -2539,6 +2539,40 @@ fn model_json_file_parses_to_the_network_it_serializes() {
 }
 
 #[test]
+fn nameless_json_text_sniffs_like_a_json_file() {
+    // An in-memory source has no extension to state, so a JSON document is
+    // sniffed from the content: model JSON and a known case format both
+    // parse, and non-JSON text keeps the extension refusal.
+    let net = parse_matpower_file(data("case14.m")).unwrap();
+
+    let model = net.to_json().unwrap();
+    let source = powerio_core::Source::from_bytes("<memory>", model.into_bytes()).unwrap();
+    let parsed = powerio_tx::parse(source).expect("nameless model JSON parses");
+    assert_eq!(parsed.value().buses().len(), 14);
+
+    let pm = powerio_tx::write_as(
+        &powerio_core::PioModule::new(net),
+        TargetFormat::PowerModelsJson,
+    )
+    .unwrap()
+    .text;
+    let source = powerio_core::Source::from_bytes("<memory>", pm.into_bytes()).unwrap();
+    let parsed = powerio_tx::parse(source).expect("nameless PowerModels JSON parses");
+    assert_eq!(parsed.value().buses().len(), 14);
+    assert_eq!(
+        parsed.value().source_format(),
+        SourceFormat::PowerModelsJson
+    );
+
+    let source = powerio_core::Source::from_bytes("<memory>", b"not a case".to_vec()).unwrap();
+    let error = powerio_tx::parse(source).unwrap_err();
+    assert!(
+        error.to_string().contains("cannot infer"),
+        "non-JSON text keeps the extension refusal: {error}"
+    );
+}
+
+#[test]
 fn parses_goc3_json_static_network() {
     let parsed = parse_str(GOC3_TINY, "goc3-json").unwrap();
     let net = parsed.network.clone();
