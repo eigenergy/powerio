@@ -208,8 +208,14 @@ fn routed_family(
         "m" | "raw" | "aux" | "epc" | "pwb" | "pwd" => Ok(RoutedFamily::Balanced),
         _ => {
             let jsonish = source.primary_buffer().is_ok_and(|buffer| {
-                std::str::from_utf8(buffer.content_bytes())
-                    .is_ok_and(|text| text.trim_start().starts_with(['{', '[']))
+                std::str::from_utf8(buffer.content_bytes()).is_ok_and(|text| {
+                    // Strip a UTF-8 BOM the way the JSON classifier does, so
+                    // a BOM-prefixed nameless document routes the same as
+                    // the identical content saved with a .json name.
+                    text.trim_start_matches('\u{feff}')
+                        .trim_start()
+                        .starts_with(['{', '['])
+                })
             });
             if jsonish {
                 json_family(source)
