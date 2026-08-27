@@ -1067,6 +1067,18 @@ mod tests {
         assert!(unsafe { handle_ref(std::ptr::null::<HandleBox<String>>()) }.is_none());
     }
 
+    /// Test reads through accessor pointers, with the null case failed
+    /// explicitly rather than dereferenced.
+    unsafe fn checked<'a, T>(pointer: *const T) -> &'a T {
+        assert!(!pointer.is_null(), "accessor returned NULL");
+        unsafe { &*pointer }
+    }
+
+    unsafe fn checked_slice<'a, T>(pointer: *const T, len: usize) -> &'a [T] {
+        assert!(!pointer.is_null(), "accessor returned NULL");
+        unsafe { std::slice::from_raw_parts(pointer, len) }
+    }
+
     fn case_text() -> CString {
         CString::new(
             "function mpc = case\n\
@@ -1131,24 +1143,26 @@ mod tests {
 
             assert_eq!(pio_dc_data_n_rows(data), 1);
             assert_eq!(pio_dc_data_n_buses(data), 3);
-            let b = *pio_dc_data_susceptance(data);
+            let b = *checked(pio_dc_data_susceptance(data));
             // series, PowerModels sign: imag(1/(r+ix)) = -x/(r^2+x^2)
             let expected = -0.1 / (0.01_f64 * 0.01 + 0.1 * 0.1);
             assert!((b - expected).abs() < 1e-12, "{b}");
-            assert_eq!(*pio_dc_data_from_indices(data), 0);
-            assert_eq!(*pio_dc_data_to_indices(data), 1);
-            let row_id = CStr::from_ptr(*pio_dc_data_row_ids(data)).to_str().unwrap();
+            assert_eq!(*checked(pio_dc_data_from_indices(data)), 0);
+            assert_eq!(*checked(pio_dc_data_to_indices(data)), 1);
+            let row_id = CStr::from_ptr(*checked(pio_dc_data_row_ids(data)))
+                .to_str()
+                .unwrap();
             assert_eq!(row_id, "branches:0");
             let bus_ids = pio_dc_data_bus_ids(data);
-            assert_eq!(CStr::from_ptr(*bus_ids).to_str().unwrap(), "1");
+            assert_eq!(CStr::from_ptr(*checked(bus_ids)).to_str().unwrap(), "1");
 
             // The out of service branch is an omitted mapping, by stable ID.
             assert_eq!(pio_dc_data_n_omitted(data), 1);
-            let omitted = CStr::from_ptr(*pio_dc_data_omitted_ids(data))
+            let omitted = CStr::from_ptr(*checked(pio_dc_data_omitted_ids(data)))
                 .to_str()
                 .unwrap();
             assert_eq!(omitted, "branches:1");
-            let reason = CStr::from_ptr(*pio_dc_data_omitted_reasons(data))
+            let reason = CStr::from_ptr(*checked(pio_dc_data_omitted_reasons(data)))
                 .to_str()
                 .unwrap();
             assert!(reason.contains("out of service"), "{reason}");
@@ -1219,11 +1233,11 @@ mod tests {
             let m = pio_dc_data_n_rows(data);
             let n = pio_dc_data_n_buses(data);
             assert_eq!((m, n), (2, 3));
-            let b = std::slice::from_raw_parts(pio_dc_data_susceptance(data), m);
-            let shift = std::slice::from_raw_parts(pio_dc_data_shift(data), m);
-            let from = std::slice::from_raw_parts(pio_dc_data_from_indices(data), m);
-            let to = std::slice::from_raw_parts(pio_dc_data_to_indices(data), m);
-            let injection = std::slice::from_raw_parts(pio_dc_data_shift_injection(data), n);
+            let b = checked_slice(pio_dc_data_susceptance(data), m);
+            let shift = checked_slice(pio_dc_data_shift(data), m);
+            let from = checked_slice(pio_dc_data_from_indices(data), m);
+            let to = checked_slice(pio_dc_data_to_indices(data), m);
+            let injection = checked_slice(pio_dc_data_shift_injection(data), n);
             assert!((shift[0]).abs() < 1e-15);
             assert!(
                 (shift[1] - 10.0_f64.to_radians()).abs() < 1e-12,
@@ -1313,15 +1327,14 @@ mod tests {
             assert_eq!(n, 4);
             // The three winding branches all appear, included or omitted.
             assert!(m + omitted >= 3, "m {m} omitted {omitted}");
-            let bus_ids = pio_dc_data_bus_ids(data);
-            for column in 0..n {
-                let id = *bus_ids.add(column);
+            let bus_ids = checked_slice(pio_dc_data_bus_ids(data), n);
+            for (column, id) in bus_ids.iter().enumerate() {
                 assert!(!id.is_null(), "bus column {column}");
-                assert!(!CStr::from_ptr(id).to_bytes().is_empty());
+                assert!(!CStr::from_ptr(*id).to_bytes().is_empty());
             }
-            let row_ids = pio_dc_data_row_ids(data);
-            for row in 0..m {
-                assert!(!(*row_ids.add(row)).is_null(), "row {row}");
+            let row_ids = checked_slice(pio_dc_data_row_ids(data), m);
+            for (row, id) in row_ids.iter().enumerate() {
+                assert!(!id.is_null(), "row {row}");
             }
             pio_dc_data_release(data);
         }
