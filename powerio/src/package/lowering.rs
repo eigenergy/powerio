@@ -349,17 +349,48 @@ pub fn lower_module_to_balanced(
 }
 
 /// Cap a history note list at the record limit, replacing the overflow with
-/// one note stating how many entries were elided; the truncation is visible
-/// rather than silent.
+/// one note stating how many entries were elided, and normalize every kept
+/// note to the record layer's requirements: NUL replaced, never empty, and
+/// truncated at a character boundary within the identifier bound with a
+/// visible marker. Truncation and elision are always visible, never silent.
 fn capped_history_notes(notes: Vec<String>, what: &str) -> Vec<String> {
     let cap = powerio_core::limits::MAX_HISTORY_NOTES;
     if notes.len() <= cap {
-        return notes;
+        return notes.into_iter().map(normalized_note).collect();
     }
     let elided = notes.len() - (cap - 1);
-    let mut kept: Vec<String> = notes.into_iter().take(cap - 1).collect();
+    let mut kept: Vec<String> = notes
+        .into_iter()
+        .take(cap - 1)
+        .map(normalized_note)
+        .collect();
     kept.push(format!("{elided} more {what} elided"));
     kept
+}
+
+/// One history note made valid for the record layer, whatever the source
+/// element names carried: nonempty, free of NUL, within the identifier
+/// bound.
+fn normalized_note(note: String) -> String {
+    let mut note = if note.contains('\0') {
+        note.replace('\0', "\u{fffd}")
+    } else {
+        note
+    };
+    let bound = powerio_core::limits::MAX_IDENTIFIER_BYTES;
+    if note.len() > bound {
+        let marker = " [truncated]";
+        let mut end = bound - marker.len();
+        while !note.is_char_boundary(end) {
+            end -= 1;
+        }
+        note.truncate(end);
+        note.push_str(marker);
+    }
+    if note.is_empty() {
+        note.push_str("(an empty note was elided)");
+    }
+    note
 }
 
 /// A history id unused by the module: the stable name, then a numbered
