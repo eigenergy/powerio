@@ -7335,8 +7335,8 @@ New Line.l1 bus1=a bus2=b phases=3
             // defaulted provenance never survive extraction.
             unsafe {
                 let mem = pio_package_to_multiconductor_network(pkg, err.as_mut_ptr(), err.len());
-                assert!(!mem.is_null());
-                assert!((*mem).net().defaulted().is_empty());
+                let mem_ref = mem.as_ref().expect("in-memory extraction returned null");
+                assert!(mem_ref.net().defaulted().is_empty());
                 pio_dist_network_free(mem);
             }
 
