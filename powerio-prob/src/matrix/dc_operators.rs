@@ -59,6 +59,9 @@ pub struct DcOperators {
     /// Per branch phase shift, radians (zero when the approximation carries
     /// no shift injections).
     shift_radians: Vec<f64>,
+    /// Per column `(from row, to row)`, stored at build so no injection or
+    /// system fill rederives it from the incidence pattern.
+    endpoints: Vec<(usize, usize)>,
     /// Net per unit injection at each bus from the instance specifications.
     net_injection: Vec<f64>,
     reference_rows: Vec<usize>,
@@ -81,7 +84,12 @@ impl DcOperators {
         let approximation = instance.approximation();
         let base = network.base_mva();
         let bus_ids: Vec<BusId> = network.buses().iter().map(|bus| bus.id).collect();
-        let position_of = |bus: BusId| bus_ids.iter().position(|&id| id == bus);
+        let row_of: std::collections::BTreeMap<BusId, usize> = bus_ids
+            .iter()
+            .enumerate()
+            .map(|(row, &id)| (id, row))
+            .collect();
+        let position_of = |bus: BusId| row_of.get(&bus).copied();
 
         let mut branch_identities = Vec::new();
         let mut branch_susceptance = Vec::new();
@@ -171,6 +179,7 @@ impl DcOperators {
             incidence: incidence.finish_csr(),
             branch_susceptance,
             shift_radians,
+            endpoints,
             net_injection: Vec::new(),
             reference_rows: Vec::new(),
             approximation,
@@ -313,10 +322,14 @@ impl DcOperators {
             ));
         }
         let n = self.bus_ids.len();
+        let mut is_reference = vec![false; n];
+        for &row in &self.reference_rows {
+            is_reference[row] = true;
+        }
         let mut reduced_of_full = vec![usize::MAX; n];
         let mut retained_rows = Vec::with_capacity(n - self.reference_rows.len());
         for (row, reduced) in reduced_of_full.iter_mut().enumerate() {
-            if !self.reference_rows.contains(&row) {
+            if !is_reference[row] {
                 *reduced = retained_rows.len();
                 retained_rows.push(row);
             }
@@ -351,22 +364,12 @@ impl DcOperators {
     }
 
     fn endpoints(&self, column: usize) -> (usize, usize) {
-        self.endpoint_table()[column]
+        self.endpoints[column]
     }
 
     /// Endpoint rows per column, recovered from the incidence structure.
-    fn endpoint_table(&self) -> Vec<(usize, usize)> {
-        let mut table = vec![(usize::MAX, usize::MAX); self.branch_susceptance.len()];
-        for (row, row_vec) in self.incidence.outer_iterator().enumerate() {
-            for (column, &value) in row_vec.iter() {
-                if value > 0.0 {
-                    table[column].0 = row;
-                } else {
-                    table[column].1 = row;
-                }
-            }
-        }
-        table
+    fn endpoint_table(&self) -> &[(usize, usize)] {
+        &self.endpoints
     }
 }
 
