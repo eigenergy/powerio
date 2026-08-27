@@ -17,6 +17,8 @@ all-features = true
 [features]
 default = []
 matrix = ["dep:powerio-matrix"]
+# JSON Schema derives for the types the stored module document embeds.
+schema = ["dep:schemars"]
 
 [lib]
 name = "powerio_prob"
@@ -28,6 +30,7 @@ powerio-dist.workspace = true
 powerio-tx.workspace = true
 thiserror = "2"
 powerio-matrix = { workspace = true, optional = true }
+schemars = { workspace = true, optional = true }
 serde.workspace = true
 serde_json.workspace = true
 

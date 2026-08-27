@@ -11,6 +11,7 @@ use serde::{Deserialize, Serialize};
 
 /// One typed objective term.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "snake_case", tag = "term")]
 #[non_exhaustive]
 pub enum ObjectiveTerm {
@@ -28,6 +29,7 @@ pub enum ObjectiveTerm {
 
 /// The complete typed objective of one OPF instance: a sum of terms.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct Objective {
     terms: Vec<ObjectiveTerm>,
 }
