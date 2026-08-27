@@ -40,7 +40,7 @@ import powerio  # noqa: E402
 
 from validate_egret import core_pu as egret_core  # noqa: E402
 
-ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 os.chdir(ROOT)
 
 FORMATS = ["matpower", "powermodels-json", "psse", "powerworld", "egret-json"]
