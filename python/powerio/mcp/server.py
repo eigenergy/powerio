@@ -335,20 +335,46 @@ def _severity_counts(diagnostics: list[Dict[str, Any]]) -> Dict[str, int]:
     return counts
 
 
-def _package_diagnostic_messages(value: Dict[str, Any]) -> list[str]:
+def _diagnostic_message(item: Dict[str, Any]) -> Optional[str]:
+    """Format one diagnostic dict as `code: message`, or `message` alone when
+    code is absent."""
+    code = item.get("code")
+    message = item.get("message")
+    if code and message:
+        return f"{code}: {message}"
+    if message:
+        return str(message)
+    return None
+
+
+def _diagnostic_messages(
+    diagnostics: list[Any], keep_severities: frozenset[str]
+) -> list[str]:
     messages = []
-    for item in value.get("diagnostics", []):
+    for item in diagnostics:
         if not isinstance(item, dict):
             continue
-        if item.get("severity") not in ("warning", "error", "fatal"):
+        if item.get("severity") not in keep_severities:
             continue
-        code = item.get("code")
-        message = item.get("message")
-        if code and message:
-            messages.append(f"{code}: {message}")
-        elif message:
-            messages.append(str(message))
+        formatted = _diagnostic_message(item)
+        if formatted is not None:
+            messages.append(formatted)
     return messages
+
+
+# A package's diagnostics carry the older severity set, including `fatal`.
+_PACKAGE_WARNING_SEVERITIES = frozenset({"warning", "error", "fatal"})
+# A stored module's `DiagnosticV1` severity is `error`, `warning`, `remark`,
+# or `note`; only the first two are surfaced as warnings.
+_MODULE_WARNING_SEVERITIES = frozenset({"warning", "error"})
+
+
+def _package_diagnostic_messages(value: Dict[str, Any]) -> list[str]:
+    return _diagnostic_messages(value.get("diagnostics", []), _PACKAGE_WARNING_SEVERITIES)
+
+
+def _module_diagnostic_messages(module: "powerio.StoredModule") -> list[str]:
+    return _diagnostic_messages(module.diagnostics(), _MODULE_WARNING_SEVERITIES)
 
 
 def _diagnostics_payload(package_json: str, verbose: bool = False) -> Dict[str, Any]:
@@ -423,18 +449,19 @@ def _load_module(module_json: str) -> _Loaded:
     except ValueError as exc:
         raise _coded_error("module input", exc) from exc
     kind = module.kind
+    warnings = _module_diagnostic_messages(module)
     if kind == "balanced_network":
         return _Loaded(
             domain="transmission",
             network=powerio.BalancedNetwork(module._inner.as_balanced_network()),
-            warnings=[],
+            warnings=warnings,
             json_format="module",
         )
     if kind == "multiconductor_network":
         return _Loaded(
             domain="distribution",
             network=dist.MulticonductorNetwork(module._inner.as_multiconductor_network()),
-            warnings=[],
+            warnings=warnings,
             json_format="module",
         )
     raise ValueError(

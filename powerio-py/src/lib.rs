@@ -2352,10 +2352,32 @@ impl PyStoredModule {
             )));
         };
         let mut inner = powerio_core::PioModule::new(network.clone());
+        // Sources carry over first: a diagnostic's span validates against the
+        // sources on the module it is being added to, so an empty source list
+        // here would reject every span-bearing diagnostic below.
+        for source in module.sources() {
+            inner.add_source_descriptor(source.clone()).map_err(|error| {
+                PowerIODataError::new_err(format!(
+                    "failed to carry source `{}` onto the multiconductor network handle: {error}",
+                    source.id()
+                ))
+            })?;
+        }
+        // Every diagnostic is attempted, in order, even after a failure: a
+        // partial copy that stops early would return fewer diagnostics than
+        // the module carries with no error to say so.
+        let mut first_error = None;
         for diagnostic in module.diagnostics() {
-            if inner.add_diagnostic(diagnostic.clone()).is_err() {
-                break;
+            if let Err(error) = inner.add_diagnostic(diagnostic.clone())
+                && first_error.is_none()
+            {
+                first_error = Some(error);
             }
+        }
+        if let Some(error) = first_error {
+            return Err(PowerIODataError::new_err(format!(
+                "failed to carry every diagnostic onto the multiconductor network handle: {error}"
+            )));
         }
         Ok(PyMulticonductorNetwork::from_module(inner))
     }
