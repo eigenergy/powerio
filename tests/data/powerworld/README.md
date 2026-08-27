@@ -29,7 +29,7 @@ case, so parity against them is structural (identities, impedances, limits)
 rather than solved state.
 
 Larger ACTIVSg cases (2000 bus and up) are fetched, not vendored: see
-`benchmarks/fetch_powerworld.sh` (ACTIVSg2000 sibling sets from TAMU and from
+`evals/validation/fetch_powerworld.sh` (ACTIVSg2000 sibling sets from TAMU and from
 PowerWorld Corporation's synthetic case page,
 <https://www.powerworld.com/new-synthetic-power-flow-cases>) and
-`benchmarks/fetch_cases.sh` (MATPOWER exports of the larger grids).
+`evals/validation/fetch_cases.sh` (MATPOWER exports of the larger grids).

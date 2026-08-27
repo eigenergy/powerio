@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Write evals/validation/results/speed_powerworld.json from Criterion estimates.
+"""Write evals/performance/results/speed_powerworld.json from Criterion estimates.
 
 Run after:
 
@@ -16,9 +16,9 @@ import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
 
-REPO = Path(__file__).resolve().parent.parent
+REPO = Path(__file__).resolve().parent.parent.parent
 CRITERION = REPO / "target" / "criterion"
-OUT = REPO / "benchmarks" / "results" / "speed_powerworld.json"
+OUT = REPO / "evals" / "performance" / "results" / "speed_powerworld.json"
 
 ROWS = [
     {
