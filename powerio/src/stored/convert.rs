@@ -821,6 +821,9 @@ fn validate_decoded_networks(value: &PioValue) -> Result<()> {
     }
 }
 
+// One arm per stored value kind; splitting the match would scatter the
+// kind-to-decoder table this function is.
+#[allow(clippy::too_many_lines)]
 fn decode_value(value: StoredValueV1) -> Result<PioValue> {
     Ok(match value {
         StoredValueV1::BalancedNetwork(network) => PioValue::BalancedNetwork(*network),
