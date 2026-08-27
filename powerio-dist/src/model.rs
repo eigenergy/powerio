@@ -1163,6 +1163,20 @@ pub(crate) fn warn_defaulted_frequency(
 /// typo or an absent field would otherwise parse cleanly into a
 /// topologically wrong network. Comparison is ASCII case insensitive,
 /// matching [`MulticonductorNetwork::bus`] and [`MulticonductorNetwork::linecode`].
+/// The unresolved bus and linecode references of a network, as one message
+/// per finding: the same walk the reader's warning pass runs, exposed so a
+/// decoder can refuse a document whose network fails it.
+#[must_use]
+pub fn unresolved_references(net: &MulticonductorNetwork) -> Vec<String> {
+    let mut diags = crate::collect::Diagnostics::new();
+    warn_unresolved_references(net, &mut diags);
+    diags
+        .into_records()
+        .into_iter()
+        .map(|record| record.message().to_owned())
+        .collect()
+}
+
 pub(crate) fn warn_unresolved_references(
     net: &MulticonductorNetwork,
     diags: &mut crate::collect::Diagnostics,
