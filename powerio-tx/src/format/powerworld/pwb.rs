@@ -98,24 +98,49 @@ const RESYNC_WINDOW: usize = 1024;
 /// #338.
 const SEARCH_PROBE_BUDGET: u64 = 128_000_000;
 
+/// The retention ceiling across every run cache of one parse, in weighted
+/// units (one per retained record plus one per retained name byte). The
+/// count words of a hostile file can select long overlapping record runs;
+/// this bounds what all four search passes together may keep, and crossing
+/// it fails the parse loudly rather than shortening a table.
+const RETAINED_RUN_BUDGET: u64 = 16_000_000;
+
 /// Shared probe counter for one `parse_pwb` call. `tick` charges one probe and
 /// returns whether the budget still has room; `exhausted` reports afterward
 /// whether the search stopped because it ran out.
-pub(crate) struct SearchBudget(pub(crate) Cell<u64>);
+pub(crate) struct SearchBudget {
+    pub(crate) probes: Cell<u64>,
+    retained: Cell<u64>,
+}
 
 impl SearchBudget {
     fn new() -> Self {
-        Self(Cell::new(0))
+        Self {
+            probes: Cell::new(0),
+            retained: Cell::new(0),
+        }
     }
 
     fn tick(&self) -> bool {
-        let spent = self.0.get().saturating_add(1);
-        self.0.set(spent);
+        let spent = self.probes.get().saturating_add(1);
+        self.probes.set(spent);
         spent <= SEARCH_PROBE_BUDGET
     }
 
     fn exhausted(&self) -> bool {
-        self.0.get() > SEARCH_PROBE_BUDGET
+        self.probes.get() > SEARCH_PROBE_BUDGET
+    }
+
+    /// Charge `weight` retained units; false once the retention ceiling is
+    /// crossed, after which the parse boundary refuses the whole file.
+    fn retain(&self, weight: u64) -> bool {
+        let kept = self.retained.get().saturating_add(weight.max(1));
+        self.retained.set(kept);
+        kept <= RETAINED_RUN_BUDGET
+    }
+
+    fn retention_exhausted(&self) -> bool {
+        self.retained.get() > RETAINED_RUN_BUDGET
     }
 }
 
@@ -135,7 +160,7 @@ pub(crate) mod probe_report {
 
     impl Drop for Guard<'_> {
         fn drop(&mut self) {
-            LAST_PROBES.with(|slot| slot.set(self.0.0.get()));
+            LAST_PROBES.with(|slot| slot.set(self.0.probes.get()));
         }
     }
 }
@@ -286,7 +311,7 @@ fn parse_pwb_inner(bytes: &[u8], name_hint: Option<&str>) -> Result<BalancedNetw
             })
     });
     found.unwrap_or_else(|| {
-        if budget.exhausted() {
+        if budget.exhausted() || budget.retention_exhausted() {
             return Err(Error::FormatRead {
                 format: FMT,
                 message: "table search exceeded its work budget; the bytes are not a \
@@ -990,6 +1015,8 @@ impl<T: Clone> Run<T> {
     fn prefix(
         &mut self,
         count: usize,
+        budget: &SearchBudget,
+        weight: impl Fn(&T) -> u64,
         mut next: impl FnMut(usize, &T) -> Option<(T, usize)>,
     ) -> Option<(Vec<T>, usize)> {
         if count == 0 {
@@ -999,6 +1026,13 @@ impl<T: Clone> Run<T> {
             let after = *self.ends.last().unwrap();
             match next(after, self.items.last().unwrap()) {
                 Some((item, end)) => {
+                    // Retention is charged before the push; once the ceiling
+                    // is crossed the run dies and the parse boundary turns
+                    // the exhaustion into the coded refusal.
+                    if !budget.retain(weight(&item)) {
+                        self.dead = true;
+                        break;
+                    }
                     self.items.push(item);
                     self.ends.push(end);
                 }
@@ -1136,23 +1170,31 @@ fn bus_run(
         Entry::Vacant(e) => {
             let (head, end) = read_bus_head(b, first).ok()?;
             let family = bus_family(head.unk);
+            if !budget.retain(1 + head.bus.name.as_deref().map_or(0, str::len) as u64) {
+                return None;
+            }
             e.insert((Run::start((head.bus, head.unk, head.shunt), end), family))
         }
     };
     let family = *family;
-    run.prefix(count, |after, prev| {
-        // The record tail (undecoded; longer when flag bit 4 inserts a
-        // count prefixed list) separates this record from the next; find
-        // the next head by bounded scan (see resync_end).
-        (after..resync_end(b, after, prev.1 & 0x10 != 0))
-            .take_while(|_| budget.tick())
-            .find_map(|p| {
-                read_bus_head(b, p)
-                    .ok()
-                    .filter(|(h, _)| bus_family(h.unk) == family)
-                    .map(|(h, end)| ((h.bus, h.unk, h.shunt), end))
-            })
-    })
+    run.prefix(
+        count,
+        budget,
+        |item| 1 + item.0.name.as_deref().map_or(0, str::len) as u64,
+        |after, prev| {
+            // The record tail (undecoded; longer when flag bit 4 inserts a
+            // count prefixed list) separates this record from the next; find
+            // the next head by bounded scan (see resync_end).
+            (after..resync_end(b, after, prev.1 & 0x10 != 0))
+                .take_while(|_| budget.tick())
+                .find_map(|p| {
+                    read_bus_head(b, p)
+                        .ok()
+                        .filter(|(h, _)| bus_family(h.unk) == family)
+                        .map(|(h, end)| ((h.bus, h.unk, h.shunt), end))
+                })
+        },
+    )
 }
 
 /// Parse one bus record head at `at`; everything through the voltage angle.
@@ -1376,15 +1418,23 @@ fn device_run<T: Clone>(
         // A failed head parse is not cached, as in the sibling run lookups.
         Entry::Vacant(e) => {
             let (item, end) = read(b, first, bus_ids).ok()?;
+            if !budget.retain(1) {
+                return None;
+            }
             e.insert(Run::start(item, end))
         }
     };
-    run.prefix(count, |after, _| {
-        // The undecoded record tail separates this record from the next.
-        (after..after.saturating_add(RESYNC_WINDOW).min(b.len()))
-            .take_while(|_| budget.tick())
-            .find_map(|p| read(b, p, bus_ids).ok())
-    })
+    run.prefix(
+        count,
+        budget,
+        |_| 1,
+        |after, _| {
+            // The undecoded record tail separates this record from the next.
+            (after..after.saturating_add(RESYNC_WINDOW).min(b.len()))
+                .take_while(|_| budget.tick())
+                .find_map(|p| read(b, p, bus_ids).ok())
+        },
+    )
 }
 
 /// Load record: one undecoded byte, then constant power P and Q in per unit
@@ -1750,20 +1800,28 @@ fn branch_run(
         // A failed head parse is not cached, as in the sibling run lookups.
         Entry::Vacant(e) => {
             let (br, end, flags) = read_branch_head(b, first, bus_ids, bus_names).ok()?;
+            if !budget.retain(1) {
+                return None;
+            }
             e.insert(Run::start((br, flags), end))
         }
     };
-    run.prefix(count, |after, prev| {
-        // The undecoded record tail separates this record from the next;
-        // find the next head by bounded scan (see resync_end).
-        (after..resync_end(b, after, prev.1 & 0x10 != 0))
-            .take_while(|_| budget.tick())
-            .find_map(|p| {
-                read_branch_head(b, p, bus_ids, bus_names)
-                    .ok()
-                    .map(|(br, end, flags)| ((br, flags), end))
-            })
-    })
+    run.prefix(
+        count,
+        budget,
+        |_| 1,
+        |after, prev| {
+            // The undecoded record tail separates this record from the next;
+            // find the next head by bounded scan (see resync_end).
+            (after..resync_end(b, after, prev.1 & 0x10 != 0))
+                .take_while(|_| budget.tick())
+                .find_map(|p| {
+                    read_branch_head(b, p, bus_ids, bus_names)
+                        .ok()
+                        .map(|(br, end, flags)| ((br, flags), end))
+                })
+        },
+    )
 }
 
 /// Branch record, validated field by field against the aux siblings of all

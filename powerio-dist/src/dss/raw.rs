@@ -245,6 +245,9 @@ pub struct RawDss {
     pub diagnostics: Vec<crate::diagnostics::Diagnostic>,
     index: BTreeMap<(String, String), usize>,
     active: Option<usize>,
+    /// Properties retained across every object, charged by each push and
+    /// each `like=` splice against `MAX_TOTAL_PROPS`.
+    total_props: usize,
 }
 
 impl RawDss {
@@ -328,6 +331,13 @@ const MAX_TOTAL_INCLUDE_BYTES: usize = 64 << 20;
 /// on the order of 100 properties and legitimate scripts edit an object a
 /// handful of times.
 const MAX_OBJECT_PROPS: usize = 1 << 16;
+
+/// Properties retained across every object of one parse. A short script can
+/// fill one object to its cap and then `like=` splice it into many new
+/// objects; the whole-parse budget bounds what all of them together may
+/// retain, refusing further splices and assignments through the clamp
+/// diagnostic. The largest legitimate feeders stay far under it.
+const MAX_TOTAL_PROPS: usize = 1 << 22;
 
 /// Which directory the include containment confines to, for diagnostic
 /// wording: the refusal names the boundary actually in force.
@@ -1027,6 +1037,18 @@ impl<L: Loader> Executor<'_, L> {
                             );
                             continue;
                         }
+                        if self.raw.total_props.saturating_add(src_len) > MAX_TOTAL_PROPS {
+                            self.raw.warn(
+                                &C::READ_DSS_VALUE_CLAMPED,
+                                ctx(format!(
+                                    "like={}: the script's retained property count would exceed \
+                                 the supported maximum of {MAX_TOTAL_PROPS}; splice refused",
+                                    p.value.text
+                                )),
+                            );
+                            continue;
+                        }
+                        self.raw.total_props += src_len;
                         let cloned = self.raw.objects[src].props.clone();
                         let bounds: Vec<usize> = self.raw.objects[src]
                             .edit_bounds()
@@ -1053,6 +1075,18 @@ impl<L: Loader> Executor<'_, L> {
                 );
                 continue;
             }
+            if self.raw.total_props >= MAX_TOTAL_PROPS {
+                self.raw.warn(
+                    &C::READ_DSS_VALUE_CLAMPED,
+                    ctx(format!(
+                        "{}: the script's retained property count exceeds the supported maximum \
+                     of {MAX_TOTAL_PROPS}; further assignments dropped",
+                        self.raw.objects[idx].class
+                    )),
+                );
+                continue;
+            }
+            self.raw.total_props += 1;
             self.raw.objects[idx].props.push(p);
         }
         // This command line was one engine Edit; it ends in
@@ -1476,6 +1510,36 @@ mod tests {
         let b = raw.find("load", "b").unwrap();
         assert_eq!(b.get("kw").unwrap().text, "20");
         assert_eq!(b.get("pf").unwrap().text, "0.9");
+    }
+
+    #[test]
+    fn the_whole_parse_property_retention_is_bounded() {
+        // One object filled near its own cap, then spliced into many new
+        // objects: per object each splice is legal, but the script's total
+        // retained properties cross the whole-parse budget and further
+        // splices refuse through the clamp diagnostic.
+        let mut script = String::from("New Load.seed kW=1\n");
+        // Grow the seed to ~32k props by doubling (self splice under the
+        // per-object cap).
+        for _ in 0..15 {
+            script.push_str("Edit Load.seed like=seed\n");
+        }
+        for index in 0..200 {
+            script.push_str(&format!("New Load.c{index} like=seed\n"));
+        }
+        let raw = parse(&script);
+        let total: usize = raw.objects.iter().map(|object| object.props.len()).sum();
+        assert!(
+            total <= MAX_TOTAL_PROPS,
+            "retained {total} properties past the whole-parse budget"
+        );
+        assert!(
+            raw.warnings
+                .iter()
+                .any(|w| w.contains("retained property count")),
+            "expected the whole-parse refusal, got {} warnings",
+            raw.warnings.len()
+        );
     }
 
     #[test]
