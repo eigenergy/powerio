@@ -230,9 +230,10 @@ fn make_network_module(module: powerio_core::PioModule<BalancedNetwork>) -> *mut
 fn make_network(net: BalancedNetwork, diagnostics: Vec<Diagnostic>) -> *mut PioNetwork {
     let mut module = powerio_core::PioModule::new(net);
     for diagnostic in diagnostics {
-        module
-            .add_diagnostic(diagnostic)
-            .expect("derived findings carry no identities or spans to collide");
+        // A refusal here can only be the record cap; the finding that does
+        // not fit is dropped rather than failing the handle, since every
+        // retained record is already at the module maximum.
+        let _ = module.add_diagnostic(diagnostic);
     }
     make_network_module(module)
 }
