@@ -14,7 +14,7 @@
 # full, lossless count. That is a parse policy difference; the value level
 # cross checks live in validate_exapowerio.jl / validate_pandapower.py.
 
-const POWERIO_JL_CHECKOUT = normpath(joinpath(@__DIR__, "..", "..", "PowerIO.jl"))
+const POWERIO_JL_CHECKOUT = normpath(joinpath(@__DIR__, "..", "..", "..", "PowerIO.jl"))
 isdir(POWERIO_JL_CHECKOUT) && pushfirst!(LOAD_PATH, POWERIO_JL_CHECKOUT)
 
 using ExaPowerIO, PowerModels, BenchmarkTools, SparseArrays, Logging, PowerIO

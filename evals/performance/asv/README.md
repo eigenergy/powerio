@@ -12,8 +12,8 @@ PATH.
 ```
 pip install asv
 cd evals/performance/asv
-asv check -E existing:../../.venv/bin/python
-asv run --quick --show-stderr -E existing:../../.venv/bin/python --dry-run
+asv check -E existing:../../../.venv/bin/python
+asv run --quick --show-stderr -E existing:../../../.venv/bin/python --dry-run
 asv run main^!          # benchmark the current commit
 asv run main~10..main   # or a range of history
 asv publish && asv preview

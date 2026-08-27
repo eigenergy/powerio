@@ -41,12 +41,12 @@ Benchmark run metadata:
 
 All parser timings run in one Julia process under the same
 `BenchmarkTools.@benchmark` harness (`evals/performance/bench_julia.jl`). The headline
-PowerIO column calls the public `PowerIO.jl parse_file` API. The raw Rust C ABI
+PowerIO column calls the public `PowerIO.parse` API narrowed to the network handle. The raw Rust C ABI
 handle timing stays in the table as a lower bound. `net.data` measures the
-explicit JSON shaped view materialization that `parse_file` now avoids.
+explicit JSON shaped view materialization that the narrowed parse avoids.
 
 <!-- BENCH:speed-julia START -->
-| case | buses / branches | PowerIO.jl parse_file | ExaPowerIO.jl parse | PowerModels.jl parse | Rust C ABI handle | net.data |
+| case | buses / branches | PowerIO.jl parse | ExaPowerIO.jl parse | PowerModels.jl parse | Rust C ABI handle | net.data |
 | --- | --- | --- | --- | --- | --- | --- |
 | case2869pegase | 2869 / 4582 | 1.8 +/- 0.07 ms | 2.8 +/- 0.12 ms | 127.6 +/- 38 ms | 1.77 +/- 0.06 ms | 39.53 +/- 41.18 ms |
 | case_ACTIVSg2000 | 2000 / 3206 | 2.14 +/- 0.06 ms | 2.19 +/- 0.13 ms | 141.7 +/- 39.2 ms | 2.11 +/- 0.04 ms | 27.69 +/- 23.58 ms |

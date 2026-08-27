@@ -65,8 +65,8 @@ scripts/capi-smoke.sh
 POWERIO_CAPI=$PWD/target/release/libpowerio_capi.dylib \
   julia --project=../PowerIO.jl -e 'using Pkg; Pkg.test()'
 cargo bench -p powerio-matrix --bench matrix -- 'matrix_bprime|matrix_ybus|dcopf_'
-(cd evals/performance/asv && ../../.venv/bin/asv check -E existing:../../.venv/bin/python)
-(cd evals/performance/asv && ../../.venv/bin/asv run --quick --show-stderr -E existing:../../.venv/bin/python --dry-run)
+(cd evals/performance/asv && ../../../.venv/bin/asv check -E existing:../../../.venv/bin/python)
+(cd evals/performance/asv && ../../../.venv/bin/asv run --quick --show-stderr -E existing:../../../.venv/bin/python --dry-run)
 for target in matpower psse pslf model_json json_classify powerworld_aux pwb pwd; do
   cargo +nightly fuzz run "$target" -- -runs=1
 done
@@ -106,8 +106,8 @@ For an uncommitted worktree, smoke test it against the local venv:
 
 ```sh
 cd evals/performance/asv
-../../.venv/bin/asv check -E existing:../../.venv/bin/python
-../../.venv/bin/asv run --quick --show-stderr -E existing:../../.venv/bin/python --dry-run
+../../../.venv/bin/asv check -E existing:../../../.venv/bin/python
+../../../.venv/bin/asv run --quick --show-stderr -E existing:../../../.venv/bin/python --dry-run
 ```
 
 Do not update generated benchmark tables by hand. Update the snapshot
