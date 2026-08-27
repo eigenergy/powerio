@@ -43,10 +43,13 @@ pub use value::{FromPioValue, PioValue, PioValueKind, ValueKindMismatch, try_int
 /// ([`format::routing::classify_json_text`]), and every other name routes to
 /// the balanced network hub, whose own detection and refusals apply.
 ///
+/// Bare model JSON, the network serialization, decodes to
+/// [`PioValue::BalancedNetwork`] like any other balanced source.
+///
 /// # Errors
 /// The routed family's failure, carrying its findings and the retained
-/// source; a `.pio.json` package or bare model JSON is refused with the
-/// surface that reads it named.
+/// source; a `.pio.json` package is refused with the surface that reads it
+/// named.
 pub fn parse(
     source: powerio_core::Source,
 ) -> std::result::Result<powerio_core::PioModule<PioValue>, powerio_core::Error> {
@@ -156,6 +159,20 @@ mod tests {
         ))
         .expect("pmd parses");
         assert_eq!(module.value().kind(), PioValueKind::MulticonductorNetwork);
+    }
+
+    #[test]
+    fn bare_model_json_parses_to_the_balanced_kind() {
+        use powerio_tx::{Bus, BusId, BusType};
+        let network = powerio_tx::BalancedNetwork::in_memory(
+            "transport",
+            100.0,
+            vec![Bus::new(BusId(1), BusType::Ref, 230.0)],
+            vec![],
+        );
+        let json = network.to_json().expect("network serializes");
+        let module = parse(memory("net.json", &json)).expect("model json parses");
+        assert_eq!(module.value().kind(), PioValueKind::BalancedNetwork);
     }
 
     #[test]
