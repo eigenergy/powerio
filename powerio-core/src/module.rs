@@ -128,6 +128,9 @@ impl<T> PioModule<T> {
     }
 
     pub fn add_source_descriptor(&mut self, source: SourceDescriptor) -> Result<(), Error> {
+        if self.records.sources.len() >= crate::validation::MAX_MODULE_SOURCES {
+            return Err(record_cap("sources", crate::validation::MAX_MODULE_SOURCES));
+        }
         if self
             .records
             .sources
@@ -144,6 +147,12 @@ impl<T> PioModule<T> {
     }
 
     pub fn add_source_map_entry(&mut self, entry: SourceMapEntry) -> Result<(), Error> {
+        if self.records.source_map.len() >= crate::validation::MAX_MODULE_SOURCE_MAP_ENTRIES {
+            return Err(record_cap(
+                "source map entries",
+                crate::validation::MAX_MODULE_SOURCE_MAP_ENTRIES,
+            ));
+        }
         for span in entry.spans() {
             validate_span(span, &self.records.sources)?;
         }
@@ -152,6 +161,12 @@ impl<T> PioModule<T> {
     }
 
     pub fn add_diagnostic(&mut self, diagnostic: Diagnostic) -> Result<(), Error> {
+        if self.records.diagnostics.len() >= crate::validation::MAX_MODULE_DIAGNOSTICS {
+            return Err(record_cap(
+                "diagnostics",
+                crate::validation::MAX_MODULE_DIAGNOSTICS,
+            ));
+        }
         if let Some(id) = diagnostic.id()
             && self
                 .records
@@ -173,6 +188,12 @@ impl<T> PioModule<T> {
     }
 
     pub fn add_history_entry(&mut self, entry: HistoryEntry) -> Result<(), Error> {
+        if self.records.history.len() >= crate::validation::MAX_MODULE_HISTORY_ENTRIES {
+            return Err(record_cap(
+                "history entries",
+                crate::validation::MAX_MODULE_HISTORY_ENTRIES,
+            ));
+        }
         if self
             .records
             .history
@@ -357,6 +378,14 @@ impl<T: fmt::Debug> fmt::Debug for PioModule<T> {
             .field("records", &self.records)
             .finish()
     }
+}
+
+/// The uniform record count refusal every adder applies at its maximum.
+fn record_cap(what: &str, max: usize) -> Error {
+    Error::new(
+        &crate::codes::REQUEST_RECORD_TOO_LARGE,
+        format!("the module already holds the maximum {max} {what}"),
+    )
 }
 
 fn validate_span(span: &SourceSpan, sources: &[SourceDescriptor]) -> Result<(), Error> {
