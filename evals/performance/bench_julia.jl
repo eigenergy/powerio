@@ -130,7 +130,7 @@ function free_network!(net)
 end
 
 function powerio_jl_materialize_data(path)
-    net = PowerIO.parse(path)
+    net = PowerIO.parse(path; value_type = PowerIO.BalancedNetwork)
     try
         return net.data
     finally
@@ -151,7 +151,7 @@ for (name, f, run_pm_parse, _run_pm_ybus) in CASES
     samples = nbuses > 30_000 ? 5 : 30
 
     netref = Ref{Any}(nothing)
-    bj = @benchmark $netref[] = PowerIO.parse($f) teardown = (free_network!($netref[]); $netref[] = nothing) samples = samples evals = 1
+    bj = @benchmark $netref[] = PowerIO.parse($f; value_type = PowerIO.BalancedNetwork) teardown = (free_network!($netref[]); $netref[] = nothing) samples = samples evals = 1
     pj = trial_stats(bj)
 
     data = nothing
