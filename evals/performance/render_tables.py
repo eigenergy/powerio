@@ -33,7 +33,7 @@ METADATA_HEADER = (
     "| --- | --- | --- | --- |"
 )
 SPEED_HEADER = (
-    "| case | buses / branches | PowerIO.jl parse_file | ExaPowerIO.jl parse | PowerModels.jl parse | Rust C ABI handle | net.data |\n"
+    "| case | buses / branches | PowerIO.jl parse | ExaPowerIO.jl parse | PowerModels.jl parse | Rust C ABI handle | net.data |\n"
     "| --- | --- | --- | --- | --- | --- | --- |"
 )
 SPEED_YBUS_HEADER = (

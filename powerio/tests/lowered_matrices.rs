@@ -1,4 +1,4 @@
-use powerio::package::{MulticonductorToBalancedOptions, lower_multiconductor_to_balanced};
+use powerio::transform::{MulticonductorToBalancedOptions, lower_multiconductor_to_balanced};
 use powerio_matrix::{BuildOptions, IndexedNetwork, build_bprime, build_ybus};
 
 const FOUR_WIRE_DSS: &str = r"! Four wire line with an explicit neutral conductor (no Kron reduction).

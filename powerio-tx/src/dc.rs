@@ -36,10 +36,10 @@ pub(crate) fn series_admittance_parts(r: f64, x: f64) -> (f64, f64) {
 
 /// Rule for the DC branch susceptance `b`.
 ///
-/// `b` is positive for an inductive branch, the DC model convention MATPOWER
-/// `makeBdc` uses. It is the edge weight of the bus susceptance matrix and the
-/// coefficient in `f = b (theta_from - theta_to)`. The AC series susceptance
-/// `Im(1/(r + jx))` is its negation.
+/// The public `b` follows PowerModels: it is negative for an inductive
+/// branch, the imaginary part of the series admittance the selected formula
+/// models. The positive edge weight a sparse factorization uses is its
+/// negation, [`solver_edge_weight`](Self::solver_edge_weight).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[non_exhaustive]
 pub enum DcConvention {
@@ -51,9 +51,9 @@ pub enum DcConvention {
     /// `b = -1/(x tau)` with phase shift injections, matching MATPOWER
     /// `makeBdc` up to MATPOWER's own sign spelling.
     ///
-    /// Serialized as `Matpower`, the spelling every stored 0.9 document and
-    /// bundle manifest carries.
-    #[serde(rename = "Matpower", alias = "TapAdjustedReactance")]
+    /// Serialized under its own name; `Matpower`, the stored 0.9 spelling,
+    /// is still read.
+    #[serde(alias = "Matpower")]
     TapAdjustedReactance,
     /// `b = imag(inv(r + jx)) = -x/(r² + x²)` with phase shift injections.
     ///
@@ -62,9 +62,10 @@ pub enum DcConvention {
     /// `-1/x` when the resistance is zero. This is PowerModels' DC branch
     /// susceptance exactly.
     ///
-    /// Serialized as `SeriesImpedance`, the stored 0.9 spelling.
+    /// Serialized under its own name; `SeriesImpedance`, the stored 0.9
+    /// spelling, is still read.
     #[default]
-    #[serde(rename = "SeriesImpedance", alias = "SeriesSusceptance")]
+    #[serde(alias = "SeriesImpedance")]
     SeriesSusceptance,
 }
 
@@ -149,7 +150,7 @@ mod tests {
 
     /// The shared assembly: PowerModels orientation, stable identity for
     /// every included and omitted row, the per row shift in radians, and the
-    /// shift injection `p_shift = -A' (b .* shift)`.
+    /// shift injection `p_shift = A' (b .* shift)`.
     #[test]
     fn dc_network_data_maps_rows_and_omissions() {
         let network = three_bus_network();
@@ -170,9 +171,15 @@ mod tests {
         let shift = 30.0_f64.to_radians();
         assert!(data.shift[0].abs() < 1e-15);
         assert!((data.shift[1] - shift).abs() < 1e-12);
-        assert!((data.shift_injection[1] - (-b * shift)).abs() < 1e-12);
-        assert!((data.shift_injection[2] - (b * shift)).abs() < 1e-12);
+        // b is negative, so the from bus of the shifted row carries
+        // b * shift = (1/x)(-shift): the MATPOWER `makeBdc` fixed term.
+        assert!((data.shift_injection[1] - (b * shift)).abs() < 1e-12);
+        assert!((data.shift_injection[2] - (-b * shift)).abs() < 1e-12);
         assert!(data.shift_injection[0].abs() < 1e-15);
+        // Numeric pin: with x = 0.2 and a +30 degree shift at flat start the
+        // branch flow is (1/x)(dva - shift) = -b * shift = -2.618 per unit.
+        let p_branch = -b * 0.0 + b * shift;
+        assert!((p_branch - 5.0 * (0.0 - shift)).abs() < 1e-12);
     }
 
     /// Adversarial partition audit: every branch lands in exactly one of
@@ -442,9 +449,10 @@ mod tests {
 ///
 /// Rows follow `A[e, from] = +1`, `A[e, to] = -1` (PowerModels orientation);
 /// susceptance carries the PowerModels sign for the selected formula; the
-/// phase shift injection is `p_shift = -A' * (b .* shift)` per bus (the
-/// MATPOWER `makeBdc` sign), and the complete affine branch flow is
-/// `p_branch = -b .* (va_from - va_to) - b .* shift`, so
+/// phase shift injection is `p_shift = A' * (b .* shift)` per bus (with the
+/// negative `b`, the same fixed term MATPOWER's `makeBdc` builds), and the
+/// complete affine branch flow is
+/// `p_branch = -b .* (va_from - va_to) + b .* shift`, so
 /// `A' * p_branch` equals the angle terms plus `shift_injection`. Rows and
 /// columns describe the analysis network after three winding transformer
 /// expansion.
@@ -583,8 +591,8 @@ pub fn dc_network_data(
             0.0
         };
         if row_shift != 0.0 {
-            data.shift_injection[i] -= b * row_shift;
-            data.shift_injection[j] += b * row_shift;
+            data.shift_injection[i] += b * row_shift;
+            data.shift_injection[j] -= b * row_shift;
         }
         data.from_indices.push(i);
         data.to_indices.push(j);
