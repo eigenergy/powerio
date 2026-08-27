@@ -58,12 +58,13 @@ pub use value::{FromPioValue, PioValue, PioValueKind, ValueKindMismatch, try_int
 /// the balanced network hub, whose own detection and refusals apply.
 ///
 /// Bare model JSON, the network serialization, decodes to
-/// [`PioValue::BalancedNetwork`] like any other balanced source.
+/// [`PioValue::BalancedNetwork`] like any other balanced source, and a
+/// `.pio.json` document loads through the stored reader, including its one
+/// way 0.9 upgrade, retaining the file as the module's runtime source.
 ///
 /// # Errors
 /// The routed family's failure, carrying its findings and the retained
-/// source; a `.pio.json` package is refused with the surface that reads it
-/// named.
+/// source.
 pub fn parse(
     source: powerio_core::Source,
 ) -> std::result::Result<powerio_core::PioModule<PioValue>, powerio_core::Error> {
@@ -80,6 +81,7 @@ pub fn parse(
         }
         RoutedFamily::PypsaDirectory => parse_pypsa(source),
         RoutedFamily::Gridfm => parse_gridfm(source),
+        RoutedFamily::Stored => parse_stored(source),
         RoutedFamily::Egret => parse_egret(source),
         RoutedFamily::Balanced => {
             format::parse(source).map(|module| module.map_value(PioValue::from))
@@ -145,6 +147,33 @@ fn parse_gridfm(
     }
 }
 
+/// `.pio.json` dispatch: the versioned stored serialization of
+/// `PioModule<PioValue>` loads through the stored reader, including the one
+/// way 0.9 upgrade. The loaded module retains the `.pio.json` file as its
+/// runtime source, so a same format write echoes it and diagnostics can
+/// reference it.
+fn parse_stored(
+    source: powerio_core::Source,
+) -> std::result::Result<powerio_core::PioModule<PioValue>, powerio_core::Error> {
+    let loaded = {
+        let buffer = source.primary_buffer()?;
+        match std::str::from_utf8(buffer.content_bytes()) {
+            Ok(text) => stored::read_module(text),
+            Err(error) => {
+                let cause = powerio_tx::Error::FormatRead {
+                    format: "stored module",
+                    message: format!("not valid UTF-8: {error}"),
+                };
+                Err(powerio_core::Error::new(cause.code(), cause.to_string()))
+            }
+        }
+    };
+    match loaded {
+        Ok(module) => Ok(module.with_source(source)),
+        Err(error) => Err(error.with_source(source)),
+    }
+}
+
 /// Egret dispatch: a document declaring `system.time_keys` routes to the
 /// sequence reader and produces a balanced network time series; a scalar
 /// document routes through the balanced hub.
@@ -197,6 +226,7 @@ enum RoutedFamily {
     PypsaDirectory,
     Egret,
     Gridfm,
+    Stored,
 }
 
 fn routed_family(
@@ -260,10 +290,10 @@ fn routed_family(
                 // The balanced hub's own JSON detection carries the refusal
                 // wording for packages and unrecognized or ambiguous
                 // documents, and decodes bare model JSON itself.
+                JsonClass::Package => Ok(RoutedFamily::Stored),
                 JsonClass::Case(
                     Detection::Known(_) | Detection::Ambiguous | Detection::Unknown,
                 )
-                | JsonClass::Package
                 | JsonClass::ModelJson => Ok(RoutedFamily::Balanced),
             }
         }
@@ -546,6 +576,25 @@ mod tests {
             module.value().kind(),
             PioValueKind::BalancedNetworkTimeSeries
         );
+    }
+
+    #[test]
+    fn a_stored_module_parses_back_through_the_universal_parse() {
+        use powerio_tx::{Bus, BusId, BusType};
+        let network = powerio_tx::BalancedNetwork::in_memory(
+            "stored",
+            100.0,
+            vec![Bus::new(BusId(1), BusType::Ref, 230.0)],
+            vec![],
+        );
+        let text = stored::write_module(&powerio_core::PioModule::new(PioValue::BalancedNetwork(
+            network,
+        )))
+        .expect("module writes");
+        let module = parse(memory("case.pio.json", &text)).expect("stored module parses");
+        assert_eq!(module.value().kind(), PioValueKind::BalancedNetwork);
+        // The `.pio.json` file is the loaded module's runtime source.
+        assert!(module.source().is_some());
     }
 
     #[test]
