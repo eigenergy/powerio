@@ -73,7 +73,10 @@ the collapsed bus and terminal graph as Python data.
 path or in-memory bytes into a `StoredModule` of whichever family claims it
 (inferred from the extension and content, or forced with `from_`);
 `value_type` narrows to `BalancedNetwork` or `dist.MulticonductorNetwork` in
-the same call. Display artifacts are not network cases, so they use the
+the same call. When `include_root` is omitted, a file's referenced includes
+resolve only beneath its own containing directory; passing `include_root`
+widens that boundary to the named ancestor directory, and with it the set of
+files the parse may read. Display artifacts are not network cases, so they use the
 separate display API:
 
 ```python

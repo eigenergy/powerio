@@ -3,8 +3,23 @@
 ABI v6 is the 1.0 handle model. Every opaque handle is an independently
 owned reference with a `retain`/`release` pair, failures cross as structured
 `PioError` handles, and the stored module and DC branch data surfaces are
-new. The v5 entry points are unchanged, so a v5 caller recompiles against
-the v6 header without edits; `PIO_ABI_VERSION` is 6.
+new. The surviving v5 entry points keep their signatures, but the 0.9
+package and SCOPF surfaces are removed: `pio_package_parse_file`,
+`pio_package_parse_str`, `pio_package_free`, `pio_package_to_json`,
+`pio_package_from_balanced_network`, `pio_package_from_multiconductor_network`,
+`pio_package_to_balanced_network`, `pio_package_to_multiconductor_network`,
+`pio_package_validate`, `pio_package_validation_json`,
+`pio_package_diagnostics_json`, `pio_package_operating_points_json`,
+`pio_package_set_operating_points`, `pio_package_materialize_operating_point`,
+`pio_package_study_json`, `pio_package_materialize_study_commit`,
+`pio_package_multiconductor_to_balanced_preflight_json`,
+`pio_package_lower_multiconductor_to_balanced`, `pio_scopf_parse_str`,
+`pio_scopf_free`, `pio_scopf_to_json`, and
+`pio_scopf_to_json_with_index_base` no longer exist in the v6 header. A v5
+caller using any of them ports to the module surface (`pio_module_parse_*`
+plus `pio_module_as_network` / `pio_module_as_dist_network`) before
+recompiling; a caller of the surviving network surface recompiles without
+edits. `PIO_ABI_VERSION` is 6.
 
 ## The handle lifecycle
 
@@ -12,11 +27,9 @@ the v6 header without edits; `PIO_ABI_VERSION` is 6.
   `pio_*_release` drops one handle; `release(NULL)` is a no-op.
 - Releasing a parent never invalidates a retained child. A DC data result
   built from a module stays valid after the module's release.
-- `pio_network_free`, `pio_dist_network_free`, and `pio_scopf_instance_free`
-  remain as the release spelling existing callers link; the `_release` names
-  are the same operation.
-- The 0.9 package handle (`pio_package_*`) stays single owner deliberately:
-  its API mutates in place, and the module handle supersedes it.
+- `pio_network_free` and `pio_dist_network_free` remain as the release
+  spelling existing callers link; the `_release` names are the same
+  operation.
 - Concurrent immutable calls on one handle are allowed. Releasing a raw
   handle concurrently with a call on that same raw handle is caller error.
 
