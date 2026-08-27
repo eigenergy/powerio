@@ -32,11 +32,13 @@ pub use powerio_tx::*;
 #[cfg(feature = "matrix")]
 pub use powerio_matrix as matrix;
 
+pub mod codes;
 mod collect;
+pub mod dist_geo;
 pub mod gridfm;
-pub mod package;
 pub mod select;
 pub mod stored;
+pub mod transform;
 mod value;
 pub use value::{FromPioValue, PioValue, PioValueKind, ValueKindMismatch, try_into_typed};
 

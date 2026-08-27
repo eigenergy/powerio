@@ -174,10 +174,9 @@ def test_package_transport_flows_through_summary_matrix_and_save(tmp_path):
     assert parsed["model"] == "balanced"
     assert "package_json" in parsed
     package = json.loads(parsed["package_json"])
-    # The reader accepts the 0.2 lineage; do not pin the patch version.
-    assert package["powerio_version"] == powerio.__version__
-    assert package["model_kind"] == "balanced"
-    assert package["model"]["kind"] == "balanced"
+    assert package["schema"] == "powerio.module"
+    assert package["producer"]["version"] == powerio.__version__
+    assert package["value"]["kind"] == "balanced_network"
 
     package_json = parsed["package_json"]
     assert server.summary(json=package_json)["elements"]["buses"] == 9
@@ -205,8 +204,8 @@ def test_package_transport_flows_through_summary_matrix_and_save(tmp_path):
 def test_package_transport_routes_distribution_by_model_kind():
     parsed = server.parse(path=str(DSS), transport="package")
     package = json.loads(parsed["package_json"])
-    assert package["model_kind"] == "multiconductor"
-    assert package["model"]["kind"] == "multiconductor"
+    assert package["schema"] == "powerio.module"
+    assert package["value"]["kind"] == "multiconductor_network"
 
     summary = server.summary(json=parsed["package_json"])
     assert summary["domain"] == "distribution"
@@ -229,15 +228,21 @@ def test_package_diagnostics():
 
 def test_pre_0_9_package_is_recognized_and_rejected_by_version():
     """A package written before 0.9.0 states `schema_version`, so it has to be
-    recognized as a package before the version gate can name the problem."""
-    parsed = server.parse(path=str(DATA / "case9.m"), transport="package")
-    old = parsed["package_json"].replace('"powerio_version"', '"schema_version"', 1)
+    recognized as a stored document before the version gate can name the
+    problem: the pre 0.9 lineage is refused, never silently misread."""
+    old = json.dumps(
+        {
+            "schema_version": "0.2.1",
+            "model_kind": "balanced",
+            "model": {"kind": "balanced"},
+        }
+    )
     assert server._looks_like_package_json(old)
     with pytest.raises(ValueError) as excinfo:
         server.diagnostics(old)
     message = str(excinfo.value)
     assert "powerio_version" in message
-    assert "0.9.0" in message
+    assert "0.9" in message
 
 def test_minimal_bmopf_json_routes_without_format(tmp_path):
     parsed = server.parse(content=MINIMAL_BMOPF)
@@ -263,7 +268,7 @@ def test_powermodels_json_still_routes_as_transmission():
 
     packaged = server.parse(content=pm, transport="package")
     assert packaged["domain"] == "transmission"
-    assert json.loads(packaged["package_json"])["model_kind"] == "balanced"
+    assert json.loads(packaged["package_json"])["value"]["kind"] == "balanced_network"
     assert packaged["summary"]["elements"]["buses"] == 9
 
 
@@ -665,10 +670,23 @@ New Load.la bus1=loadbus.1.2.3 phases=3 conn=wye kv=0.416 kw=24 pf=0.95 model=1
 """
 
 
+def _legacy_package_doc(**extra) -> dict:
+    """A released 0.9 package document, the lineage the stored reader upgrades."""
+    network = json.loads(powerio.parse_file(str(DATA / "case9.m")).to_json())
+    return {
+        "powerio_version": "0.9.0",
+        "producer": {"tool": "powerio", "version": "0.9.0"},
+        "model_kind": "balanced",
+        "model": {"kind": "balanced", "balanced_network": network},
+        "origin": {"kind": "in_memory"},
+        "validation": {"status": "ok", "counts": {}},
+        **extra,
+    }
+
+
 def _series_module_json() -> str:
-    pkg = powerio.Package.from_file(DATA / "case9.m")
-    pkg.set_operating_points(
-        {
+    legacy = _legacy_package_doc(
+        operating_points={
             "time_axis": {
                 "periods": 2,
                 "duration_hours": [1.0, 1.0],
@@ -691,7 +709,7 @@ def _series_module_json() -> str:
             ],
         }
     )
-    return pkg.to_json()
+    return powerio.StoredModule.from_json(json.dumps(legacy)).to_json()
 
 
 def test_state_inventory_selection_and_export():
@@ -730,9 +748,9 @@ def test_selection_refusals_carry_codes():
         server._select_state_tool(module_json=module_json, time_position=9)
     with pytest.raises(ValueError, match="REQUEST.STATE.WRONG_SELECTOR"):
         server._select_state_tool(module_json=module_json, scenario="base")
-    static_pkg = powerio.Package.from_file(DATA / "case9.m").to_json()
+    static_module = powerio.StoredModule.from_file(DATA / "case9.m").to_json()
     with pytest.raises(ValueError, match="REQUEST.STATE.NOT_A_COLLECTION"):
-        server._state_inventory_tool(module_json=static_pkg)
+        server._state_inventory_tool(module_json=static_module)
     with pytest.raises(ValueError, match="exactly one of time_position"):
         server._select_state_tool(module_json=module_json)
 
@@ -858,10 +876,11 @@ def test_module_diagnostics_reach_summary_and_convert_warnings():
 
     # The same finding, carried by the older released package transport,
     # renders the identical "code: message" string: the two input forms agree.
-    package = json.loads(powerio.Package.from_file(DATA / "case9.m").to_json())
-    package["diagnostics"] = [
-        {"code": error["code"], "severity": error["severity"], "message": error["message"]}
-    ]
+    package = _legacy_package_doc(
+        diagnostics=[
+            {"code": error["code"], "severity": error["severity"], "message": error["message"]}
+        ]
+    )
     package_summary = server._summary_tool(package_json=json.dumps(package))
     assert package_summary["warnings"] == ["M.E.1: an error finding"]
 

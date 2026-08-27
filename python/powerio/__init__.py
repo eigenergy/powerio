@@ -2,7 +2,7 @@
 
 Readers produce a format neutral network model. Writers return retained source
 bytes where supported or report fields that a target format cannot represent.
-Packages, sparse matrices, graphs, and problem instances use the same parsed
+Stored modules, sparse matrices, graphs, and problem instances use the same parsed
 data::
 
     import powerio as pio
@@ -13,7 +13,6 @@ data::
     raw, warnings = pio.convert_file("case9.m", "psse")
     pp_json, warnings = pio.convert_file("case9.m", "pandapower-json")
     pypsa_out = net.write_pypsa_csv_folder("case9-pypsa")
-    pkg = pio.Package.from_file("goc3_case.json", from_="goc3-json")
     points = pkg.operating_points()
 
     B = net.bprime()                         # scipy.sparse, MATPOWER Bp
@@ -54,7 +53,6 @@ __all__ = [
     "DisplayData",
     "GridfmRead",
     "Incidence",
-    "Package",
     "PowerIODataError",
     "PowerIOError",
     "PowerIOParseError",
@@ -1082,117 +1080,6 @@ class StoredModule:
         return repr(self._inner)
 
 
-class Package:
-    """A parsed ``.pio.json`` package.
-
-    Parsing occurs once; every accessor reuses the native handle.
-    """
-
-    def __init__(self, inner: "_powerio._Package"):
-        self._inner = inner
-
-    @classmethod
-    def from_file(
-        cls, path: Any, from_: Optional[str] = None, scenario: int = 0
-    ) -> "Package":
-        """Build a package from a case file or folder."""
-        return cls(_powerio._Package.from_file(str(path), from_, scenario))
-
-    @classmethod
-    def from_str(cls, text: str, from_: Optional[str] = None) -> "Package":
-        """Build a package from in-memory case text."""
-        return cls(_powerio._Package.from_str(text, from_))
-
-    @classmethod
-    def from_json(cls, text: str) -> "Package":
-        """Parse a ``.pio.json`` document."""
-        return cls(_powerio._Package.from_json(text))
-
-    @classmethod
-    def from_balanced(
-        cls, network: BalancedNetwork, include_solver_metadata: bool = False
-    ) -> "Package":
-        """Wrap a balanced :class:`BalancedNetwork` in a package."""
-        return cls(
-            _powerio._Package.from_balanced(network._inner, include_solver_metadata)
-        )
-
-    @classmethod
-    def from_multiconductor(cls, network: "dist.MulticonductorNetwork") -> "Package":
-        """Wrap a multiconductor network in a package."""
-        return cls(_powerio._Package.from_multiconductor(network._inner))
-
-    @property
-    def model_kind(self) -> str:
-        """``"balanced"`` or ``"multiconductor"``."""
-        return self._inner.model_kind()
-
-    def to_json(self) -> str:
-        """Serialize to pretty ``.pio.json``."""
-        return self._inner.to_json()
-
-    def as_balanced(self) -> BalancedNetwork:
-        """Return the balanced payload as a :class:`BalancedNetwork`."""
-        return BalancedNetwork(self._inner.as_balanced())
-
-    def as_multiconductor(self) -> "dist.MulticonductorNetwork":
-        """Return the multiconductor payload."""
-        return dist.MulticonductorNetwork(self._inner.as_multiconductor())
-
-    def operating_points(self) -> Any:
-        """The operating point series as Python data, or ``None``.
-
-        GOC3 packages populate this from the source time series. Each point is
-        a set of field updates over the package's static payload.
-        """
-        return _json.loads(self._inner.operating_points_json())
-
-    def set_operating_points(self, points: Any) -> None:
-        """Replace the operating point series and rerun package validation.
-
-        ``None`` or an empty series clears it.
-        """
-        self._inner.set_operating_points_json(_json.dumps(points))
-
-    def study(self) -> Any:
-        """The study block as Python data, or ``None``."""
-        return _json.loads(self._inner.study_json())
-
-    def materialize_operating_point(self, index: int) -> "Package":
-        """Materialize one operating point into a new static package."""
-        return Package(self._inner.materialize_operating_point(index))
-
-    def materialize_study_commit(self, index: int) -> "Package":
-        """Materialize one study commit into a new static package."""
-        return Package(self._inner.materialize_study_commit(index))
-
-    def validate(self) -> None:
-        """Run the package semantic validation profile in place."""
-        self._inner.validate()
-
-    def validation(self) -> Any:
-        """The validation summary as Python data."""
-        return _json.loads(self._inner.validation_json())
-
-    def diagnostics(self) -> Any:
-        """The structured diagnostics as a list of Python dicts."""
-        return _json.loads(self._inner.diagnostics_json())
-
-    def multiconductor_to_balanced_preflight(self, base_mva: float = 100.0) -> Any:
-        """Readiness report for multiconductor to balanced lowering."""
-        return _json.loads(
-            self._inner.multiconductor_to_balanced_preflight_json(base_mva)
-        )
-
-    def lower_multiconductor_to_balanced(self, base_mva: float = 100.0) -> "Package":
-        """Lower a multiconductor package to a new balanced package."""
-        return Package(self._inner.lower_multiconductor_to_balanced(base_mva))
-
-    def __repr__(self) -> str:
-        return repr(self._inner)
-
-# 0.8 names, aliased for one release. The deprecated inventory script reads
-# `_RENAMED_IN_*`; delete the dict and the hook together at 1.0.0.
 _RENAMED_IN_0_9_0 = {"Network": "BalancedNetwork"}
 
 

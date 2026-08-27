@@ -8,7 +8,7 @@
 
 use thiserror::Error as ThisError;
 
-use crate::package::diagnostics::codes;
+use crate::codes;
 
 /// A `.pio.json` failure.
 #[derive(Debug, ThisError)]
