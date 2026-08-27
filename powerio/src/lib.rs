@@ -33,8 +33,10 @@ pub use powerio_tx::*;
 pub use powerio_matrix as matrix;
 
 pub mod codes;
+#[cfg(feature = "gridfm")]
 mod collect;
 pub mod dist_geo;
+#[cfg(feature = "gridfm")]
 pub mod gridfm;
 pub mod select;
 pub mod stored;
@@ -85,6 +87,7 @@ pub fn parse(
             powerio_dist::parse(source).map(|module| module.map_value(PioValue::from))
         }
         RoutedFamily::PypsaDirectory => parse_pypsa(source),
+        #[cfg(feature = "gridfm")]
         RoutedFamily::Gridfm => parse_gridfm(source),
         RoutedFamily::Stored => parse_stored(source),
         RoutedFamily::Egret => parse_egret(source),
@@ -135,6 +138,7 @@ fn parse_pypsa(
 
 /// gridfm dispatch: every scenario of the Parquet dataset as one scenario
 /// set over shared element identities.
+#[cfg(feature = "gridfm")]
 fn parse_gridfm(
     source: powerio_core::Source,
 ) -> std::result::Result<powerio_core::PioModule<PioValue>, powerio_core::Error> {
@@ -230,6 +234,7 @@ enum RoutedFamily {
     OpfData,
     PypsaDirectory,
     Egret,
+    #[cfg(feature = "gridfm")]
     Gridfm,
     Stored,
 }
@@ -250,6 +255,7 @@ fn routed_family(
         if source.buffer(&marker).is_ok() {
             return Ok(RoutedFamily::PypsaDirectory);
         }
+        #[cfg(feature = "gridfm")]
         if let Ok(entries) = source.entry_names()
             && entries.iter().any(|entry| {
                 entry.as_str().ends_with("bus_data.parquet")
@@ -275,8 +281,14 @@ fn routed_family(
         "m" | "raw" | "aux" | "epc" | "pwb" | "pwd" => Ok(RoutedFamily::Balanced),
         _ => {
             let jsonish = source.primary_buffer().is_ok_and(|buffer| {
-                std::str::from_utf8(buffer.content_bytes())
-                    .is_ok_and(|text| text.trim_start().starts_with(['{', '[']))
+                std::str::from_utf8(buffer.content_bytes()).is_ok_and(|text| {
+                    // Strip a UTF-8 BOM the way the JSON classifier does, so
+                    // a BOM-prefixed nameless document routes the same as
+                    // the identical content saved with a .json name.
+                    text.trim_start_matches('\u{feff}')
+                        .trim_start()
+                        .starts_with(['{', '['])
+                })
             });
             if jsonish {
                 json_family(source)
@@ -339,6 +351,7 @@ fn family_of_token(token: &str) -> RoutedFamily {
     if format::is_pypsa_csv_name(token) {
         return RoutedFamily::PypsaDirectory;
     }
+    #[cfg(feature = "gridfm")]
     if token.eq_ignore_ascii_case("gridfm") {
         return RoutedFamily::Gridfm;
     }
@@ -626,6 +639,7 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "gridfm")]
     #[test]
     fn a_stored_module_parses_back_through_the_universal_parse() {
         use powerio_tx::{Bus, BusId, BusType};
@@ -645,6 +659,7 @@ mod tests {
         assert!(module.source().is_some());
     }
 
+    #[cfg(feature = "gridfm")]
     #[test]
     fn a_gridfm_dataset_parses_to_the_scenario_set_kind() {
         // Write a two scenario dataset with the matrix writer, then parse the
