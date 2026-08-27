@@ -18,6 +18,8 @@
 //! [`merge_zero_impedance_buses`](super::merge_zero_impedance_buses) is the
 //! explicit, checked resolution.
 
+use std::collections::BTreeMap;
+
 use powerio_core::Error;
 use powerio_tx::{BalancedNetwork, BusId, BusType, DcConvention};
 use serde::{Deserialize, Serialize};
@@ -79,6 +81,7 @@ impl DcPfInstance {
     /// A network with no reference bus.
     pub fn from_network(network: BalancedNetwork) -> Result<Self, Error> {
         require_reference(&network)?;
+        let totals = aggregate_bus_elements(&network);
         let specifications = network
             .buses()
             .iter()
@@ -87,7 +90,7 @@ impl DcPfInstance {
                 BusType::Isolated => DcBusSpecification::Isolated,
                 // Every other declared kind states a net injection.
                 _ => DcBusSpecification::NetActivePower {
-                    p_mw: net_active_power(&network, bus.id),
+                    p_mw: net_active_power(&totals, bus.id),
                 },
             })
             .collect();
@@ -160,6 +163,7 @@ impl AcPfInstance {
     /// voltage setpoints are refused until an explicit edit resolves them.
     pub fn from_network(network: BalancedNetwork) -> Result<Self, Error> {
         require_reference(&network)?;
+        let totals = aggregate_bus_elements(&network);
         let specifications = network
             .buses()
             .iter()
@@ -167,17 +171,17 @@ impl AcPfInstance {
                 let spec = match bus.kind {
                     BusType::Isolated => AcBusSpecification::Isolated,
                     BusType::Pv => AcBusSpecification::Pv {
-                        p: net_active_power(&network, bus.id),
-                        vm: controlled_magnitude(&network, bus.id, bus.vm)?,
+                        p: net_active_power(&totals, bus.id),
+                        vm: controlled_magnitude(&totals, bus.id, bus.vm)?,
                     },
                     BusType::Ref => AcBusSpecification::Reference {
-                        vm: controlled_magnitude(&network, bus.id, bus.vm)?,
+                        vm: controlled_magnitude(&totals, bus.id, bus.vm)?,
                         va: bus.va,
                     },
                     // Every other declared kind is the PQ specification.
                     _ => AcBusSpecification::Pq {
-                        p: net_active_power(&network, bus.id),
-                        q: net_reactive_power(&network, bus.id),
+                        p: net_active_power(&totals, bus.id),
+                        q: net_reactive_power(&totals, bus.id),
                     },
                 };
                 Ok(spec)
@@ -491,65 +495,81 @@ impl AcOpfInstance {
 }
 
 /// Net stated active injection at one bus, MW, over in service elements.
-fn net_active_power(network: &BalancedNetwork, bus: BusId) -> f64 {
-    let generation: f64 = network
+/// Per bus totals of the in service generators and loads, plus the voltage
+/// setpoint agreement, gathered in one pass so instance construction stays
+/// linear in bus plus generator plus load count.
+#[derive(Default)]
+struct BusAggregate {
+    p_gen: f64,
+    q_gen: f64,
+    p_load: f64,
+    q_load: f64,
+    setpoint: Option<f64>,
+    conflicting: Option<f64>,
+}
+
+fn aggregate_bus_elements(network: &BalancedNetwork) -> BTreeMap<BusId, BusAggregate> {
+    let mut totals: BTreeMap<BusId, BusAggregate> = BTreeMap::new();
+    for generator in network
         .generators()
         .iter()
-        .filter(|generator| generator.in_service && generator.bus == bus)
-        .map(|generator| generator.pg)
-        .sum();
-    let demand: f64 = network
-        .loads()
-        .iter()
-        .filter(|load| load.in_service && load.bus == bus)
-        .map(|load| load.p)
-        .sum();
-    generation - demand
+        .filter(|generator| generator.in_service)
+    {
+        let entry = totals.entry(generator.bus).or_default();
+        entry.p_gen += generator.pg;
+        entry.q_gen += generator.qg;
+        match entry.setpoint {
+            None => entry.setpoint = Some(generator.vg),
+            Some(existing) if existing.to_bits() == generator.vg.to_bits() => {}
+            Some(_) => {
+                if entry.conflicting.is_none() {
+                    entry.conflicting = Some(generator.vg);
+                }
+            }
+        }
+    }
+    for load in network.loads().iter().filter(|load| load.in_service) {
+        let entry = totals.entry(load.bus).or_default();
+        entry.p_load += load.p;
+        entry.q_load += load.q;
+    }
+    totals
+}
+
+fn net_active_power(totals: &BTreeMap<BusId, BusAggregate>, bus: BusId) -> f64 {
+    totals
+        .get(&bus)
+        .map_or(0.0, |entry| entry.p_gen - entry.p_load)
 }
 
 /// Net stated reactive injection at one bus, MVAr, over in service elements.
-fn net_reactive_power(network: &BalancedNetwork, bus: BusId) -> f64 {
-    let generation: f64 = network
-        .generators()
-        .iter()
-        .filter(|generator| generator.in_service && generator.bus == bus)
-        .map(|generator| generator.qg)
-        .sum();
-    let demand: f64 = network
-        .loads()
-        .iter()
-        .filter(|load| load.in_service && load.bus == bus)
-        .map(|load| load.q)
-        .sum();
-    generation - demand
+fn net_reactive_power(totals: &BTreeMap<BusId, BusAggregate>, bus: BusId) -> f64 {
+    totals
+        .get(&bus)
+        .map_or(0.0, |entry| entry.q_gen - entry.q_load)
 }
 
 /// The controlled voltage magnitude at one bus: the in service generators'
 /// shared setpoint, else the bus's stated magnitude. Two in service
 /// generators stating different setpoints at one bus are conflicting active
 /// voltage controllers and are refused.
-fn controlled_magnitude(network: &BalancedNetwork, bus: BusId, stated: f64) -> Result<f64, Error> {
-    let mut setpoint: Option<f64> = None;
-    for generator in network
-        .generators()
-        .iter()
-        .filter(|generator| generator.in_service && generator.bus == bus)
-    {
-        match setpoint {
-            None => setpoint = Some(generator.vg),
-            Some(existing) if existing.to_bits() == generator.vg.to_bits() => {}
-            Some(existing) => {
-                return Err(Error::new(
-                    &codes::BUILD_INSTANCE_VOLTAGE_CONTROL_CONFLICT,
-                    format!(
-                        "bus {bus} has in service generators stating voltage setpoints {existing} and {}; resolve the conflict explicitly before constructing the power flow instance",
-                        generator.vg
-                    ),
-                ));
-            }
-        }
+fn controlled_magnitude(
+    totals: &BTreeMap<BusId, BusAggregate>,
+    bus: BusId,
+    stated: f64,
+) -> Result<f64, Error> {
+    let Some(entry) = totals.get(&bus) else {
+        return Ok(stated);
+    };
+    if let (Some(existing), Some(other)) = (entry.setpoint, entry.conflicting) {
+        return Err(Error::new(
+            &codes::BUILD_INSTANCE_VOLTAGE_CONTROL_CONFLICT,
+            format!(
+                "bus {bus} has in service generators stating voltage setpoints {existing} and {other}; resolve the conflict explicitly before constructing the power flow instance"
+            ),
+        ));
     }
-    Ok(setpoint.unwrap_or(stated))
+    Ok(entry.setpoint.unwrap_or(stated))
 }
 
 fn require_reference(network: &BalancedNetwork) -> Result<(), Error> {

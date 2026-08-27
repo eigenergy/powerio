@@ -441,10 +441,6 @@ fn is_pslf_name(name: &str) -> bool {
 /// malformed input. Findings collected before a failure ride the returned
 /// error.
 ///
-/// # Panics
-/// Never on external input: the internal expectations hold by construction
-/// (acquired buffer names are validated and reader findings carry no
-/// identities).
 pub fn parse(
     source: powerio_core::Source,
 ) -> std::result::Result<PioModule<BalancedNetwork>, powerio_core::Error> {
@@ -453,21 +449,21 @@ pub fn parse(
         Ok(network) => {
             let mut module = PioModule::new(network);
             for buffer in source.acquired_buffers() {
-                let descriptor = SourceDescriptor::new(
+                let descriptor = match SourceDescriptor::new(
                     buffer.id().clone(),
                     buffer.name(),
                     buffer.bytes().len() as u64,
-                )
-                .expect("acquired buffer names are validated");
-                module
-                    .add_source_descriptor(descriptor)
-                    .expect("acquired buffer identities are unique");
+                ) {
+                    Ok(descriptor) => descriptor,
+                    Err(error) => return Err(error.with_source(source)),
+                };
+                if let Err(error) = module.add_source_descriptor(descriptor) {
+                    return Err(error.with_source(source));
+                }
             }
             let mut module = module.with_source(source);
             for record in warnings.into_records() {
-                module
-                    .add_diagnostic(record)
-                    .expect("reader findings carry no identities or spans to collide");
+                module.add_diagnostic(record)?;
             }
             Ok(module)
         }
