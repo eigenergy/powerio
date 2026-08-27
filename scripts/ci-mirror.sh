@@ -144,7 +144,7 @@ PYVENV=target/ci-mirror-py
 # a stock macOS python3 is 3.9, so take the newest interpreter present.
 PYBIN=$(command -v python3.13 || command -v python3.12 || command -v python3.11 || command -v python3.10 || command -v python3)
 run "$PYBIN" -m venv "$PYVENV"
-run "$PYVENV/bin/pip" -q install '.[mcp]' ruff mypy pytest
+run "$PYVENV/bin/pip" -q install '.[all,mcp]' ruff mypy pytest
 run "$PYVENV/bin/ruff" check --no-fix .
 run "$PYVENV/bin/python" -m mypy python/powerio
 STUBDIR=$(mktemp -d)
