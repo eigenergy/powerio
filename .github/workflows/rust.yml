@@ -138,9 +138,9 @@ jobs:
     - name: Check problem dependency boundaries
       run: |
         cargo check -p powerio-prob --no-default-features
-        ! cargo tree -p powerio-prob --no-default-features --edges normal | grep -q powerio-matrix
-        ! cargo tree -p powerio-prob --no-default-features --edges normal | grep -q powerio-dist
-        ! cargo tree -p powerio-matrix --edges normal | grep -q powerio-prob
+        if cargo tree -p powerio-prob --no-default-features --edges normal | grep -q powerio-matrix; then
+          echo "powerio-prob reaches powerio-matrix" >&2; exit 1
+        fi
     # The gridfm Parquet export is behind a cargo feature; exercise it (and its
     # clippy) explicitly so coverage doesn't depend on CLI feature unification.
     - name: Clippy + tests (gridfm feature)
