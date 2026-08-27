@@ -419,3 +419,56 @@ fn module_record_counts_are_bounded() {
     );
     expect_refused(&raw);
 }
+
+fn legacy_package_json() -> serde_json::Value {
+    // The released 0.9 stored layout, spelled at the JSON level: the frozen
+    // decoder is crate private, so the wire shape is the test's fixture.
+    let network = serde_json::to_value(small_network()).unwrap();
+    serde_json::json!({
+        "powerio_version": "0.9.0",
+        "producer": {"tool": "powerio", "version": "0.9.0"},
+        "model_kind": "balanced",
+        "model": {"kind": "balanced", "balanced_network": network},
+        "origin": {"kind": "in_memory"},
+        "validation": {"status": "ok", "counts": {}}
+    })
+}
+
+#[test]
+fn legacy_record_lists_are_held_to_the_module_maxima() {
+    // A released 0.9 package one element past a module maximum is refused by
+    // the same bound the version 1 wire applies, before the list is retained.
+    let mut raw = legacy_package_json();
+    raw["diagnostics"] = serde_json::Value::Array(
+        (0..262_145)
+            .map(|index| {
+                serde_json::json!({
+                    "code": "READ.CASE.NOTE",
+                    "severity": "info",
+                    "stage": "parse",
+                    "message": format!("finding {index}")
+                })
+            })
+            .collect(),
+    );
+    let error = read_module(&raw.to_string()).unwrap_err();
+    let code = error
+        .diagnostics()
+        .first()
+        .map(|d| d.code().to_owned())
+        .unwrap_or_default();
+    // The legacy decode wraps the bound refusal in its own reader code; the
+    // message names the list that hit its maximum.
+    assert!(
+        code.contains("TOO_LARGE") || code.contains("MALFORMED") || code.contains("INVALID"),
+        "refusal code: {code}"
+    );
+    assert!(error.to_string().contains("diagnostics"), "{error}");
+
+    // An accepted upgrade satisfies the write/read law the fuzz target
+    // asserts: what read_module accepts, write_module emits and read_module
+    // accepts again.
+    let module = read_module(&legacy_package_json().to_string()).unwrap();
+    let written = write_module(&module).unwrap();
+    read_module(&written).expect("written module reads back");
+}
