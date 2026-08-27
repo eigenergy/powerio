@@ -25,24 +25,10 @@ fn invalid(message: impl Into<String>) -> powerio_core::Error {
     powerio_core::Error::new(&codes::READ_MODULE_INVALID, message)
 }
 
-/// The balanced instantaneous quantity vocabulary, the accessor spellings the
-/// state module resolves. Stored quantities outside this list are refused.
-const BALANCED_QUANTITIES: [&str; 14] = [
-    "bus_voltage_magnitude",
-    "bus_voltage_angle",
-    "bus_active_injection",
-    "bus_reactive_injection",
-    "generator_active_power",
-    "generator_reactive_power",
-    "generator_voltage_setpoint",
-    "generator_in_service",
-    "load_active_power",
-    "load_reactive_power",
-    "branch_in_service",
-    "branch_tap_ratio",
-    "branch_phase_shift",
-    "switch_closed",
-];
+/// The balanced instantaneous quantity vocabulary is
+/// [`powerio_prob::BALANCED_STATE_QUANTITIES`]: the set the writer emits is
+/// exactly the set the reader accepts, from one definition.
+use powerio_prob::BALANCED_STATE_QUANTITIES;
 
 /// Serialize one runtime module to the `.pio.json` version 1 document.
 ///
@@ -201,7 +187,7 @@ const MULTICONDUCTOR_QUANTITIES: [&str; 7] = [
 /// branch precedes the shared helper.
 fn dc_formula_name(convention: crate::DcConvention) -> &'static str {
     match convention {
-        crate::DcConvention::Matpower => "tap_adjusted_reactance",
+        crate::DcConvention::TapAdjustedReactance => "tap_adjusted_reactance",
         crate::DcConvention::ReactanceOnly => "reactance_only",
         // The default series formula, and the spelling any future variant
         // must replace deliberately.
@@ -211,8 +197,8 @@ fn dc_formula_name(convention: crate::DcConvention) -> &'static str {
 
 fn dc_formula_from_name(name: &str) -> Result<crate::DcConvention> {
     match name {
-        "series_susceptance" => Ok(crate::DcConvention::SeriesImpedance),
-        "tap_adjusted_reactance" => Ok(crate::DcConvention::Matpower),
+        "series_susceptance" => Ok(crate::DcConvention::SeriesSusceptance),
+        "tap_adjusted_reactance" => Ok(crate::DcConvention::TapAdjustedReactance),
         "reactance_only" => Ok(crate::DcConvention::ReactanceOnly),
         other => Err(invalid(format!(
             "unknown branch susceptance formula `{other}`"
@@ -244,6 +230,27 @@ fn encode_point<N>(
     dto::StoredOperatingPointV1 { quantities }
 }
 
+/// A stored quantity's identities must be exactly the order the network
+/// resolves for it; a permutation or a different set is refused rather than
+/// silently rebound to positions the document did not state.
+fn check_identity_order(quantity: &str, stated: &[String], resolved: &[String]) -> Result<()> {
+    if stated.len() != resolved.len() {
+        return Err(invalid(format!(
+            "quantity `{quantity}` states {} identities; the network resolves {}",
+            stated.len(),
+            resolved.len()
+        )));
+    }
+    if let Some(position) = stated.iter().zip(resolved).position(|(a, b)| a != b) {
+        return Err(invalid(format!(
+            "quantity `{quantity}` identity {position} is `{}`; the network resolves `{}` at \
+             that position",
+            stated[position], resolved[position]
+        )));
+    }
+    Ok(())
+}
+
 fn decode_balanced_point(
     network: &crate::BalancedNetwork,
     stored: dto::StoredOperatingPointV1,
@@ -252,6 +259,10 @@ fn decode_balanced_point(
         vec![TimePoint::new("initial", None).map_err(|error| invalid(error.to_string()))?];
     let mut builder = powerio_prob::BalancedStateBuilder::new(network.clone(), time_points);
     for (name, quantity) in stored.quantities {
+        let resolved = builder
+            .identity_order(&name)
+            .map_err(|error| invalid(error.to_string()))?;
+        check_identity_order(&name, &quantity.identities, &resolved)?;
         let values: Vec<f64> = quantity.values.iter().map(|value| value.0).collect();
         builder = builder
             .dense_by_name(&name, values)
@@ -275,6 +286,10 @@ fn decode_mc_point(
         vec![TimePoint::new("initial", None).map_err(|error| invalid(error.to_string()))?];
     let mut builder = powerio_prob::MulticonductorStateBuilder::new(network.clone(), time_points);
     for (name, quantity) in stored.quantities {
+        let resolved = builder
+            .identity_order(&name)
+            .map_err(|error| invalid(error.to_string()))?;
+        check_identity_order(&name, &quantity.identities, &resolved)?;
         let values: Vec<f64> = quantity.values.iter().map(|value| value.0).collect();
         builder = mc_dense_by_name(builder, &name, values)?;
     }
@@ -344,7 +359,7 @@ fn encode_dc_pf_instance(instance: &powerio_prob::DcPfInstance) -> dto::DcPfInst
         approximation: dc_formula_name(instance.approximation()).to_string(),
         initial_state: instance
             .initial_state()
-            .map(|point| encode_point(point, &BALANCED_QUANTITIES)),
+            .map(|point| encode_point(point, &BALANCED_STATE_QUANTITIES)),
     }
 }
 
@@ -353,7 +368,7 @@ fn encode_ac_pf_instance(instance: &powerio_prob::AcPfInstance) -> dto::AcPfInst
         network: Box::new(instance.network().clone()),
         initial_state: instance
             .initial_state()
-            .map(|point| encode_point(point, &BALANCED_QUANTITIES)),
+            .map(|point| encode_point(point, &BALANCED_STATE_QUANTITIES)),
     }
 }
 
@@ -365,7 +380,7 @@ fn encode_dc_opf_instance(instance: &powerio_prob::DcOpfInstance) -> dto::DcOpfI
         constraints: instance.constraints().clone(),
         initial_state: instance
             .initial_state()
-            .map(|point| encode_point(point, &BALANCED_QUANTITIES)),
+            .map(|point| encode_point(point, &BALANCED_STATE_QUANTITIES)),
     }
 }
 
@@ -376,7 +391,7 @@ fn encode_ac_opf_instance(instance: &powerio_prob::AcOpfInstance) -> dto::AcOpfI
         constraints: instance.constraints().clone(),
         initial_state: instance
             .initial_state()
-            .map(|point| encode_point(point, &BALANCED_QUANTITIES)),
+            .map(|point| encode_point(point, &BALANCED_STATE_QUANTITIES)),
     }
 }
 
@@ -408,7 +423,7 @@ fn encode_operating_points(
         .first()
         .ok_or_else(|| invalid("an operating point series needs at least one point"))?;
     let mut quantities = BTreeMap::new();
-    for name in BALANCED_QUANTITIES {
+    for name in BALANCED_STATE_QUANTITIES {
         let Some(order) = first.identity_order(name) else {
             continue;
         };
@@ -762,6 +777,10 @@ fn decode_value(value: StoredValueV1) -> Result<PioValue> {
             let time_points = decode_time_points(&series.time_points)?;
             let mut builder = powerio_prob::BalancedStateBuilder::new(*series.network, time_points);
             for (name, quantity) in series.quantities {
+                let resolved = builder
+                    .identity_order(&name)
+                    .map_err(|error| invalid(error.to_string()))?;
+                check_identity_order(&name, &quantity.identities, &resolved)?;
                 let values: Vec<f64> = quantity.values.iter().map(|value| value.0).collect();
                 builder = builder
                     .dense_by_name(&name, values)
@@ -799,6 +818,10 @@ fn decode_value(value: StoredValueV1) -> Result<PioValue> {
             let mut builder =
                 powerio_prob::MulticonductorStateBuilder::new(*series.network, time_points);
             for (name, quantity) in series.quantities {
+                let resolved = builder
+                    .identity_order(&name)
+                    .map_err(|error| invalid(error.to_string()))?;
+                check_identity_order(&name, &quantity.identities, &resolved)?;
                 let values: Vec<f64> = quantity.values.iter().map(|value| value.0).collect();
                 builder = mc_dense_by_name(builder, &name, values)?;
             }
