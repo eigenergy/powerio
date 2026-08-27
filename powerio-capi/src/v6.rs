@@ -401,6 +401,114 @@ pub unsafe extern "C" fn pio_module_parse_str(
     }
 }
 
+/// Parse in-memory case bytes into a module: the only in-memory way to read
+/// a binary format. Text formats must be UTF-8.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pio_module_parse_bytes(
+    data: *const u8,
+    len: usize,
+    format: *const c_char,
+    error: *mut *mut PioError,
+) -> *mut PioModuleHandle {
+    unsafe {
+        v6_entry(error, std::ptr::null_mut(), || {
+            if data.is_null() {
+                return Err(error_from_parts(
+                    codes::BIND_CAPI_NULL_ARGUMENT.code,
+                    "data must not be NULL",
+                    "[]",
+                ));
+            }
+            let bytes = std::slice::from_raw_parts(data, len).to_vec();
+            let format = optional_str(format, "format")?;
+            let source = powerio_core::Source::from_bytes("<memory>", bytes)
+                .map_err(|error| error_from_core(&error))?;
+            parse_source(source, format)
+        })
+    }
+}
+
+/// Rebuild a typed module around one value with the source module's
+/// provenance threaded on: sources first (a diagnostic's span validates
+/// against them), then the findings, then the retained source, so the byte
+/// exact same format echo survives the module surface.
+fn provenanced<T>(
+    module: &powerio_core::PioModule<powerio::PioValue>,
+    value: T,
+) -> powerio_core::PioModule<T> {
+    let mut out = powerio_core::PioModule::new(value);
+    for descriptor in module.sources() {
+        out.add_source_descriptor(descriptor.clone())
+            .expect("existing descriptors re-add cleanly");
+    }
+    for diagnostic in module.diagnostics() {
+        out.add_diagnostic(diagnostic.clone())
+            .expect("existing findings re-add cleanly");
+    }
+    match module.source() {
+        Some(source) => out.with_source(source.clone()),
+        None => out,
+    }
+}
+
+/// The module's balanced network value as an owned network handle, provenance
+/// included. Any other value kind is refused with the kind named.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pio_module_as_network(
+    module: *const PioModuleHandle,
+    error: *mut *mut PioError,
+) -> *mut crate::PioNetwork {
+    unsafe {
+        v6_entry(error, std::ptr::null_mut(), || {
+            let inner = required_module(module)?;
+            let powerio::PioValue::BalancedNetwork(network) = inner.module.value() else {
+                return Err(error_from_parts(
+                    powerio::codes::REQUEST_PACKAGE_WRONG_MODEL_KIND.code,
+                    &format!(
+                        "the module carries a {} value; as_network takes a balanced network",
+                        inner.module.value().kind().as_str()
+                    ),
+                    "[]",
+                ));
+            };
+            Ok(crate::make_network_module(provenanced(
+                &inner.module,
+                network.clone(),
+            )))
+        })
+    }
+}
+
+/// The module's multiconductor network value as an owned distribution
+/// handle, provenance included. Any other value kind is refused.
+#[cfg(feature = "dist")]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pio_module_as_dist_network(
+    module: *const PioModuleHandle,
+    error: *mut *mut PioError,
+) -> *mut crate::PioDistNetwork {
+    unsafe {
+        v6_entry(error, std::ptr::null_mut(), || {
+            let inner = required_module(module)?;
+            let powerio::PioValue::MulticonductorNetwork(network) = inner.module.value() else {
+                return Err(error_from_parts(
+                    powerio::codes::REQUEST_PACKAGE_WRONG_MODEL_KIND.code,
+                    &format!(
+                        "the module carries a {} value; as_dist_network takes a \
+                         multiconductor network",
+                        inner.module.value().kind().as_str()
+                    ),
+                    "[]",
+                ));
+            };
+            Ok(crate::PioDistNetwork::from_module_raw(provenanced(
+                &inner.module,
+                network.clone(),
+            )))
+        })
+    }
+}
+
 /// The stored version 1 document. Free with `pio_string_free`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_module_write_json(
@@ -1087,6 +1195,86 @@ mod tests {
              mpc.branch = [1 2 0.01 0.1 0 250 250 250 0 0 1 -30 30; 2 3 0.02 0.2 0 250 250 250 0 0 0 -30 30;];\n",
         )
         .unwrap()
+    }
+
+    #[test]
+    fn module_parse_bytes_reads_memory_and_refuses_null() {
+        unsafe {
+            let mut error = std::ptr::null_mut();
+            let matpower = CString::new("matpower").unwrap();
+            let text = case_text();
+            let bytes = text.as_bytes();
+            let module = pio_module_parse_bytes(
+                bytes.as_ptr(),
+                bytes.len(),
+                matpower.as_ptr(),
+                &raw mut error,
+            );
+            assert!(error.is_null());
+            assert_eq!(
+                CStr::from_ptr(pio_module_kind(module)).to_str().unwrap(),
+                "balanced_network"
+            );
+            pio_module_release(module);
+
+            let module =
+                pio_module_parse_bytes(std::ptr::null(), 0, matpower.as_ptr(), &raw mut error);
+            assert!(module.is_null());
+            assert!(!error.is_null());
+            assert_eq!(
+                CStr::from_ptr(pio_error_code(error)).to_str().unwrap(),
+                "BIND.CAPI.NULL_ARGUMENT"
+            );
+            pio_error_release(error);
+        }
+    }
+
+    #[test]
+    fn module_as_network_threads_provenance_and_refuses_other_kinds() {
+        unsafe {
+            let mut error = std::ptr::null_mut();
+            let matpower = CString::new("matpower").unwrap();
+            let module =
+                pio_module_parse_str(case_text().as_ptr(), matpower.as_ptr(), &raw mut error);
+            assert!(error.is_null());
+            let net = pio_module_as_network(module, &raw mut error);
+            assert!(error.is_null());
+            assert!(!net.is_null());
+            // The retained source threads through: a same format write echoes
+            // the exact source bytes.
+            let to = CString::new("matpower").unwrap();
+            let mut diag: *mut c_char = std::ptr::null_mut();
+            let mut err = [0 as c_char; crate::PIO_ERRBUF_MIN];
+            let text = crate::pio_to_format(
+                net,
+                to.as_ptr(),
+                std::ptr::null(),
+                &raw mut diag,
+                err.as_mut_ptr(),
+                err.len(),
+            );
+            assert!(!text.is_null());
+            let echoed = CStr::from_ptr(text).to_str().unwrap().to_owned();
+            assert_eq!(echoed, case_text().to_str().unwrap());
+            crate::pio_string_free(text);
+            if !diag.is_null() {
+                crate::pio_string_free(diag);
+            }
+            crate::pio_network_free(net);
+
+            #[cfg(feature = "dist")]
+            {
+                let wrong = pio_module_as_dist_network(module, &raw mut error);
+                assert!(wrong.is_null());
+                assert!(!error.is_null());
+                assert_eq!(
+                    CStr::from_ptr(pio_error_code(error)).to_str().unwrap(),
+                    "REQUEST.PACKAGE.WRONG_MODEL_KIND"
+                );
+                pio_error_release(error);
+            }
+            pio_module_release(module);
+        }
     }
 
     #[test]
