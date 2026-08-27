@@ -135,6 +135,8 @@ jobs:
       run: cargo test -p powerio -p powerio-core -p powerio-matrix -p powerio-prob -p powerio-cli -p powerio-capi -p powerio-dist --verbose
     - name: Test problem matrix feature
       run: cargo test -p powerio --features matrix --verbose
+    - name: Test gridfm reader feature
+      run: cargo test -p powerio --features gridfm --verbose
     - name: Check problem dependency boundaries
       run: |
         cargo check -p powerio-prob --no-default-features

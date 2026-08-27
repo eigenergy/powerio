@@ -32,7 +32,9 @@ pub use powerio_tx::*;
 #[cfg(feature = "matrix")]
 pub use powerio_matrix as matrix;
 
+#[cfg(feature = "gridfm")]
 mod collect;
+#[cfg(feature = "gridfm")]
 pub mod gridfm;
 pub mod package;
 mod value;
@@ -80,6 +82,7 @@ pub fn parse(
             powerio_dist::parse(source).map(|module| module.map_value(PioValue::from))
         }
         RoutedFamily::PypsaDirectory => parse_pypsa(source),
+        #[cfg(feature = "gridfm")]
         RoutedFamily::Gridfm => parse_gridfm(source),
         RoutedFamily::Egret => parse_egret(source),
         RoutedFamily::Balanced => {
@@ -129,6 +132,7 @@ fn parse_pypsa(
 
 /// gridfm dispatch: every scenario of the Parquet dataset as one scenario
 /// set over shared element identities.
+#[cfg(feature = "gridfm")]
 fn parse_gridfm(
     source: powerio_core::Source,
 ) -> std::result::Result<powerio_core::PioModule<PioValue>, powerio_core::Error> {
@@ -197,6 +201,7 @@ enum RoutedFamily {
     OpfData,
     PypsaDirectory,
     Egret,
+    #[cfg(feature = "gridfm")]
     Gridfm,
 }
 
@@ -216,6 +221,7 @@ fn routed_family(
         if source.buffer(&marker).is_ok() {
             return Ok(RoutedFamily::PypsaDirectory);
         }
+        #[cfg(feature = "gridfm")]
         if let Ok(entries) = source.entry_names()
             && entries.iter().any(|entry| {
                 entry.as_str().ends_with("bus_data.parquet")
@@ -305,6 +311,7 @@ fn family_of_token(token: &str) -> RoutedFamily {
     if format::is_pypsa_csv_name(token) {
         return RoutedFamily::PypsaDirectory;
     }
+    #[cfg(feature = "gridfm")]
     if token.eq_ignore_ascii_case("gridfm") {
         return RoutedFamily::Gridfm;
     }
@@ -592,6 +599,7 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "gridfm")]
     #[test]
     fn a_gridfm_dataset_parses_to_the_scenario_set_kind() {
         // Write a two scenario dataset with the matrix writer, then parse the

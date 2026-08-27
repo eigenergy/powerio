@@ -17,6 +17,9 @@ all-features = true
 
 [features]
 matrix = ["dep:powerio-matrix"]
+# The gridfm-datakit Parquet reader. Off by default so the facade pulls no
+# Arrow or Parquet into consumers that never read datasets.
+gridfm = ["dep:arrow", "dep:parquet", "dep:bytes"]
 schema = ["dep:schemars", "powerio-tx/schema", "powerio-core/schema", "powerio-dist/schema"]
 
 [dependencies]
@@ -27,11 +30,11 @@ powerio-matrix = { workspace = true, optional = true }
 powerio-prob = { workspace = true }
 powerio-tx = { workspace = true }
 schemars = { workspace = true, optional = true }
-bytes = "1.9"
+bytes = { version = "1.9", optional = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
-arrow = { workspace = true }
-parquet = { version = "59", default-features = false, features = ["arrow", "snap"] }
+arrow = { workspace = true, optional = true }
+parquet = { version = "59", default-features = false, features = ["arrow", "snap"], optional = true }
 thiserror = "2"
 
 [dev-dependencies]
