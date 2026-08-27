@@ -40,26 +40,58 @@ fn check_length(what: &'static str, got: usize, expected: usize) -> Result<(), E
     }
 }
 
-fn bus_position(network: &BalancedNetwork, bus: BusId) -> Option<usize> {
-    network.buses().iter().position(|row| row.id == bus)
+/// Identity to row position over one network's tables, built once per
+/// solution on first keyed access so repeated reads never rescan a table.
+#[derive(Clone, Debug, Default)]
+struct SolutionIndex {
+    bus: std::collections::BTreeMap<BusId, usize>,
+    branch: std::collections::BTreeMap<String, usize>,
+    generator: std::collections::BTreeMap<String, usize>,
 }
 
-fn branch_position(network: &BalancedNetwork, identity: &str) -> Option<usize> {
-    network
-        .branches()
-        .iter()
-        .enumerate()
-        .position(|(row, branch)| row_identity(branch.uid.as_deref(), "branches", row) == identity)
+impl SolutionIndex {
+    fn build(network: &BalancedNetwork) -> Self {
+        let bus = network
+            .buses()
+            .iter()
+            .enumerate()
+            .map(|(row, bus)| (bus.id, row))
+            .collect();
+        let branch = network
+            .branches()
+            .iter()
+            .enumerate()
+            .map(|(row, branch)| (row_identity(branch.uid.as_deref(), "branches", row), row))
+            .collect();
+        let generator = network
+            .generators()
+            .iter()
+            .enumerate()
+            .map(|(row, generator)| {
+                (
+                    row_identity(generator.uid.as_deref(), "generators", row),
+                    row,
+                )
+            })
+            .collect();
+        Self {
+            bus,
+            branch,
+            generator,
+        }
+    }
 }
 
-fn generator_position(network: &BalancedNetwork, identity: &str) -> Option<usize> {
-    network
-        .generators()
-        .iter()
-        .enumerate()
-        .position(|(row, generator)| {
-            row_identity(generator.uid.as_deref(), "generators", row) == identity
-        })
+fn bus_position(index: &SolutionIndex, bus: BusId) -> Option<usize> {
+    index.bus.get(&bus).copied()
+}
+
+fn branch_position(index: &SolutionIndex, identity: &str) -> Option<usize> {
+    index.branch.get(identity).copied()
+}
+
+fn generator_position(index: &SolutionIndex, identity: &str) -> Option<usize> {
+    index.generator.get(identity).copied()
 }
 
 macro_rules! shared_solution_accessors {
@@ -82,6 +114,39 @@ macro_rules! shared_solution_accessors {
         #[must_use]
         pub fn network(&self) -> &BalancedNetwork {
             self.instance.network()
+        }
+
+        fn row_index(&self) -> &SolutionIndex {
+            self.index
+                .get_or_init(|| SolutionIndex::build(self.network()))
+        }
+
+        /// Bus IDs in the column order every bulk accessor uses.
+        #[must_use]
+        pub fn bus_order(&self) -> Vec<BusId> {
+            self.network().buses().iter().map(|bus| bus.id).collect()
+        }
+
+        /// Stable branch identities in bulk column order.
+        #[must_use]
+        pub fn branch_order(&self) -> Vec<String> {
+            self.network()
+                .branches()
+                .iter()
+                .enumerate()
+                .map(|(row, branch)| row_identity(branch.uid.as_deref(), "branches", row))
+                .collect()
+        }
+
+        /// Stable generator identities in bulk column order.
+        #[must_use]
+        pub fn generator_order(&self) -> Vec<String> {
+            self.network()
+                .generators()
+                .iter()
+                .enumerate()
+                .map(|(row, generator)| row_identity(generator.uid.as_deref(), "generators", row))
+                .collect()
         }
 
         /// How the producing calculation ended.
@@ -175,6 +240,7 @@ pub struct DcPfSolution {
     branch_from_active_flow: Vec<f64>,
     branch_to_active_flow: Vec<f64>,
     generator_dispatch: Option<GeneratorDispatch>,
+    index: std::sync::OnceLock<SolutionIndex>,
 }
 
 impl DcPfSolution {
@@ -217,6 +283,7 @@ impl DcPfSolution {
             branch_from_active_flow,
             branch_to_active_flow,
             generator_dispatch: None,
+            index: std::sync::OnceLock::new(),
         })
     }
 
@@ -226,26 +293,47 @@ impl DcPfSolution {
     /// Voltage angle at one bus, degrees.
     #[must_use]
     pub fn bus_voltage_angle(&self, bus: BusId) -> Option<f64> {
-        Some(self.bus_voltage_angle[bus_position(self.network(), bus)?])
+        Some(self.bus_voltage_angle[bus_position(self.row_index(), bus)?])
     }
 
     /// Net active injection at one bus, MW.
     #[must_use]
     pub fn bus_active_injection(&self, bus: BusId) -> Option<f64> {
-        Some(self.bus_active_injection[bus_position(self.network(), bus)?])
+        Some(self.bus_active_injection[bus_position(self.row_index(), bus)?])
     }
 
     /// Active flow into the branch at its from terminal, MW, by stable
     /// branch identity.
     #[must_use]
     pub fn branch_from_active_flow(&self, identity: &str) -> Option<f64> {
-        Some(self.branch_from_active_flow[branch_position(self.network(), identity)?])
+        Some(self.branch_from_active_flow[branch_position(self.row_index(), identity)?])
     }
 
     /// Active flow into the branch at its to terminal, MW.
     #[must_use]
     pub fn branch_to_active_flow(&self, identity: &str) -> Option<f64> {
-        Some(self.branch_to_active_flow[branch_position(self.network(), identity)?])
+        Some(self.branch_to_active_flow[branch_position(self.row_index(), identity)?])
+    }
+
+    /// The complete `bus_voltage_angle` column, in `bus_order`.
+    #[must_use]
+    pub fn bus_voltage_angles(&self) -> &[f64] {
+        &self.bus_voltage_angle
+    }
+    /// The complete `bus_active_injection` column, in `bus_order`.
+    #[must_use]
+    pub fn bus_active_injections(&self) -> &[f64] {
+        &self.bus_active_injection
+    }
+    /// The complete `branch_from_active_flow` column, in `branch_order`.
+    #[must_use]
+    pub fn branch_from_active_flows(&self) -> &[f64] {
+        &self.branch_from_active_flow
+    }
+    /// The complete `branch_to_active_flow` column, in `branch_order`.
+    #[must_use]
+    pub fn branch_to_active_flows(&self) -> &[f64] {
+        &self.branch_to_active_flow
     }
 }
 
@@ -266,6 +354,7 @@ pub struct AcPfSolution {
     branch_to_active_flow: Vec<f64>,
     branch_to_reactive_flow: Vec<f64>,
     generator_dispatch: Option<GeneratorDispatch>,
+    index: std::sync::OnceLock<SolutionIndex>,
 }
 
 impl AcPfSolution {
@@ -333,6 +422,7 @@ impl AcPfSolution {
             branch_to_active_flow,
             branch_to_reactive_flow,
             generator_dispatch: None,
+            index: std::sync::OnceLock::new(),
         })
     }
 
@@ -342,50 +432,50 @@ impl AcPfSolution {
     /// Voltage magnitude at one bus, per unit.
     #[must_use]
     pub fn bus_voltage_magnitude(&self, bus: BusId) -> Option<f64> {
-        Some(self.bus_voltage_magnitude[bus_position(self.network(), bus)?])
+        Some(self.bus_voltage_magnitude[bus_position(self.row_index(), bus)?])
     }
 
     /// Voltage angle at one bus, degrees.
     #[must_use]
     pub fn bus_voltage_angle(&self, bus: BusId) -> Option<f64> {
-        Some(self.bus_voltage_angle[bus_position(self.network(), bus)?])
+        Some(self.bus_voltage_angle[bus_position(self.row_index(), bus)?])
     }
 
     /// Net active injection at one bus, MW.
     #[must_use]
     pub fn bus_active_injection(&self, bus: BusId) -> Option<f64> {
-        Some(self.bus_active_injection[bus_position(self.network(), bus)?])
+        Some(self.bus_active_injection[bus_position(self.row_index(), bus)?])
     }
 
     /// Net reactive injection at one bus, MVAr.
     #[must_use]
     pub fn bus_reactive_injection(&self, bus: BusId) -> Option<f64> {
-        Some(self.bus_reactive_injection[bus_position(self.network(), bus)?])
+        Some(self.bus_reactive_injection[bus_position(self.row_index(), bus)?])
     }
 
     /// Active flow into the branch at its from terminal, MW, by stable
     /// branch identity.
     #[must_use]
     pub fn branch_from_active_flow(&self, identity: &str) -> Option<f64> {
-        Some(self.branch_from_active_flow[branch_position(self.network(), identity)?])
+        Some(self.branch_from_active_flow[branch_position(self.row_index(), identity)?])
     }
 
     /// Reactive flow into the branch at its from terminal, MVAr.
     #[must_use]
     pub fn branch_from_reactive_flow(&self, identity: &str) -> Option<f64> {
-        Some(self.branch_from_reactive_flow[branch_position(self.network(), identity)?])
+        Some(self.branch_from_reactive_flow[branch_position(self.row_index(), identity)?])
     }
 
     /// Active flow into the branch at its to terminal, MW.
     #[must_use]
     pub fn branch_to_active_flow(&self, identity: &str) -> Option<f64> {
-        Some(self.branch_to_active_flow[branch_position(self.network(), identity)?])
+        Some(self.branch_to_active_flow[branch_position(self.row_index(), identity)?])
     }
 
     /// Reactive flow into the branch at its to terminal, MVAr.
     #[must_use]
     pub fn branch_to_reactive_flow(&self, identity: &str) -> Option<f64> {
-        Some(self.branch_to_reactive_flow[branch_position(self.network(), identity)?])
+        Some(self.branch_to_reactive_flow[branch_position(self.row_index(), identity)?])
     }
 }
 
@@ -403,6 +493,7 @@ pub struct DcOpfSolution {
     branch_to_active_flow: Vec<f64>,
     generator_active_power: Vec<f64>,
     objective: f64,
+    index: std::sync::OnceLock<SolutionIndex>,
 }
 
 impl DcOpfSolution {
@@ -453,6 +544,7 @@ impl DcOpfSolution {
             branch_to_active_flow,
             generator_active_power,
             objective,
+            index: std::sync::OnceLock::new(),
         })
     }
 
@@ -467,31 +559,31 @@ impl DcOpfSolution {
     /// Optimized active power of one generator, MW, by stable identity.
     #[must_use]
     pub fn generator_active_power(&self, identity: &str) -> Option<f64> {
-        Some(self.generator_active_power[generator_position(self.network(), identity)?])
+        Some(self.generator_active_power[generator_position(self.row_index(), identity)?])
     }
 
     /// Voltage angle at one bus, degrees.
     #[must_use]
     pub fn bus_voltage_angle(&self, bus: BusId) -> Option<f64> {
-        Some(self.bus_voltage_angle[bus_position(self.network(), bus)?])
+        Some(self.bus_voltage_angle[bus_position(self.row_index(), bus)?])
     }
 
     /// Net active injection at one bus, MW.
     #[must_use]
     pub fn bus_active_injection(&self, bus: BusId) -> Option<f64> {
-        Some(self.bus_active_injection[bus_position(self.network(), bus)?])
+        Some(self.bus_active_injection[bus_position(self.row_index(), bus)?])
     }
 
     /// Active flow into the branch at its from terminal, MW.
     #[must_use]
     pub fn branch_from_active_flow(&self, identity: &str) -> Option<f64> {
-        Some(self.branch_from_active_flow[branch_position(self.network(), identity)?])
+        Some(self.branch_from_active_flow[branch_position(self.row_index(), identity)?])
     }
 
     /// Active flow into the branch at its to terminal, MW.
     #[must_use]
     pub fn branch_to_active_flow(&self, identity: &str) -> Option<f64> {
-        Some(self.branch_to_active_flow[branch_position(self.network(), identity)?])
+        Some(self.branch_to_active_flow[branch_position(self.row_index(), identity)?])
     }
 }
 
@@ -514,6 +606,7 @@ pub struct AcOpfSolution {
     generator_active_power: Vec<f64>,
     generator_reactive_power: Vec<f64>,
     objective: f64,
+    index: std::sync::OnceLock<SolutionIndex>,
 }
 
 impl AcOpfSolution {
@@ -596,6 +689,7 @@ impl AcOpfSolution {
             generator_active_power,
             generator_reactive_power,
             objective,
+            index: std::sync::OnceLock::new(),
         })
     }
 
@@ -610,60 +704,111 @@ impl AcOpfSolution {
     /// Optimized active power of one generator, MW, by stable identity.
     #[must_use]
     pub fn generator_active_power(&self, identity: &str) -> Option<f64> {
-        Some(self.generator_active_power[generator_position(self.network(), identity)?])
+        Some(self.generator_active_power[generator_position(self.row_index(), identity)?])
     }
 
     /// Optimized reactive power of one generator, MVAr.
     #[must_use]
     pub fn generator_reactive_power(&self, identity: &str) -> Option<f64> {
-        Some(self.generator_reactive_power[generator_position(self.network(), identity)?])
+        Some(self.generator_reactive_power[generator_position(self.row_index(), identity)?])
     }
 
     /// Voltage magnitude at one bus, per unit.
     #[must_use]
     pub fn bus_voltage_magnitude(&self, bus: BusId) -> Option<f64> {
-        Some(self.bus_voltage_magnitude[bus_position(self.network(), bus)?])
+        Some(self.bus_voltage_magnitude[bus_position(self.row_index(), bus)?])
     }
 
     /// Voltage angle at one bus, degrees.
     #[must_use]
     pub fn bus_voltage_angle(&self, bus: BusId) -> Option<f64> {
-        Some(self.bus_voltage_angle[bus_position(self.network(), bus)?])
+        Some(self.bus_voltage_angle[bus_position(self.row_index(), bus)?])
     }
 
     /// Net active injection at one bus, MW.
     #[must_use]
     pub fn bus_active_injection(&self, bus: BusId) -> Option<f64> {
-        Some(self.bus_active_injection[bus_position(self.network(), bus)?])
+        Some(self.bus_active_injection[bus_position(self.row_index(), bus)?])
     }
 
     /// Net reactive injection at one bus, MVAr.
     #[must_use]
     pub fn bus_reactive_injection(&self, bus: BusId) -> Option<f64> {
-        Some(self.bus_reactive_injection[bus_position(self.network(), bus)?])
+        Some(self.bus_reactive_injection[bus_position(self.row_index(), bus)?])
     }
 
     /// Active flow into the branch at its from terminal, MW.
     #[must_use]
     pub fn branch_from_active_flow(&self, identity: &str) -> Option<f64> {
-        Some(self.branch_from_active_flow[branch_position(self.network(), identity)?])
+        Some(self.branch_from_active_flow[branch_position(self.row_index(), identity)?])
     }
 
     /// Reactive flow into the branch at its from terminal, MVAr.
     #[must_use]
     pub fn branch_from_reactive_flow(&self, identity: &str) -> Option<f64> {
-        Some(self.branch_from_reactive_flow[branch_position(self.network(), identity)?])
+        Some(self.branch_from_reactive_flow[branch_position(self.row_index(), identity)?])
     }
 
     /// Active flow into the branch at its to terminal, MW.
     #[must_use]
     pub fn branch_to_active_flow(&self, identity: &str) -> Option<f64> {
-        Some(self.branch_to_active_flow[branch_position(self.network(), identity)?])
+        Some(self.branch_to_active_flow[branch_position(self.row_index(), identity)?])
     }
 
     /// Reactive flow into the branch at its to terminal, MVAr.
     #[must_use]
     pub fn branch_to_reactive_flow(&self, identity: &str) -> Option<f64> {
-        Some(self.branch_to_reactive_flow[branch_position(self.network(), identity)?])
+        Some(self.branch_to_reactive_flow[branch_position(self.row_index(), identity)?])
+    }
+
+    /// The complete `bus_voltage_magnitude` column, in `bus_order`.
+    #[must_use]
+    pub fn bus_voltage_magnitudes(&self) -> &[f64] {
+        &self.bus_voltage_magnitude
+    }
+    /// The complete `bus_voltage_angle` column, in `bus_order`.
+    #[must_use]
+    pub fn bus_voltage_angles(&self) -> &[f64] {
+        &self.bus_voltage_angle
+    }
+    /// The complete `bus_active_injection` column, in `bus_order`.
+    #[must_use]
+    pub fn bus_active_injections(&self) -> &[f64] {
+        &self.bus_active_injection
+    }
+    /// The complete `bus_reactive_injection` column, in `bus_order`.
+    #[must_use]
+    pub fn bus_reactive_injections(&self) -> &[f64] {
+        &self.bus_reactive_injection
+    }
+    /// The complete `branch_from_active_flow` column, in `branch_order`.
+    #[must_use]
+    pub fn branch_from_active_flows(&self) -> &[f64] {
+        &self.branch_from_active_flow
+    }
+    /// The complete `branch_from_reactive_flow` column, in `branch_order`.
+    #[must_use]
+    pub fn branch_from_reactive_flows(&self) -> &[f64] {
+        &self.branch_from_reactive_flow
+    }
+    /// The complete `branch_to_active_flow` column, in `branch_order`.
+    #[must_use]
+    pub fn branch_to_active_flows(&self) -> &[f64] {
+        &self.branch_to_active_flow
+    }
+    /// The complete `branch_to_reactive_flow` column, in `branch_order`.
+    #[must_use]
+    pub fn branch_to_reactive_flows(&self) -> &[f64] {
+        &self.branch_to_reactive_flow
+    }
+    /// The complete `generator_active_power` column, in `generator_order`.
+    #[must_use]
+    pub fn generator_active_powers(&self) -> &[f64] {
+        &self.generator_active_power
+    }
+    /// The complete `generator_reactive_power` column, in `generator_order`.
+    #[must_use]
+    pub fn generator_reactive_powers(&self) -> &[f64] {
+        &self.generator_reactive_power
     }
 }

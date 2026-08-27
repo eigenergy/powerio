@@ -302,6 +302,25 @@ pub fn lower_module_to_balanced(
         merged_buses,
         removed_switches,
     } = lowering;
+    // Room for the pass's own records is checked against the module maxima
+    // before the value is consumed, so the additions below hold by
+    // construction and a cap-edge input is refused with its module intact.
+    let diagnostics_room =
+        powerio_core::limits::MAX_MODULE_DIAGNOSTICS.saturating_sub(module.diagnostics().len());
+    let history_room =
+        powerio_core::limits::MAX_MODULE_HISTORY_ENTRIES.saturating_sub(module.history().len());
+    if record.diagnostics.len() > diagnostics_room || history_room == 0 {
+        let error = MulticonductorToBalancedError::new(
+            options,
+            vec![StructuredDiagnostic::of(
+                &codes::TRANSFORM_MULTI_TO_BALANCED_RECORD_CAP,
+                "the module cannot hold the lowering's findings and history entry; export a \
+                 fresh module before lowering"
+                    .to_string(),
+            )],
+        );
+        return Err((module, Box::new(error)));
+    }
     let mut module = module.map_value(|_| crate::PioValue::BalancedNetwork(network));
     // The value's kind changed, so no RFC 6901 target survives the
     // transform: pre-existing diagnostic targets and the source map pointed
@@ -313,7 +332,7 @@ pub fn lower_module_to_balanced(
             .add_diagnostic(crate::stored::legacy09::diagnostics::to_module_diagnostic(
                 diagnostic, None,
             ))
-            .expect("pass diagnostics carry no identity and no span");
+            .expect("room was checked; pass diagnostics carry no identity and no span");
     }
     let mut entry = HistoryEntry::new(
         unused_history_id(&module, "multiconductor-to-balanced"),
@@ -346,7 +365,7 @@ pub fn lower_module_to_balanced(
     }
     module
         .add_history_entry(entry)
-        .expect("the history id is unique among existing entries by construction");
+        .expect("room was checked and the history id is unique by construction");
     Ok(module)
 }
 
