@@ -2272,6 +2272,16 @@ crate::v6::arc_handle!(
 
 #[cfg(feature = "dist")]
 impl PioDistNetwork {
+    /// A parsed handle boxed raw, for the C constructors.
+    pub(crate) fn from_module_raw(
+        module: powerio_core::PioModule<powerio_dist::MulticonductorNetwork>,
+    ) -> *mut Self {
+        Self::new_raw(DistNetworkState {
+            warnings: powerio_dist::diagnostics::render_diagnostics(module.diagnostics()),
+            module,
+        })
+    }
+
     /// A parsed handle: warnings rendered from the module's findings.
     fn from_module(module: powerio_core::PioModule<powerio_dist::MulticonductorNetwork>) -> Self {
         Self::wrap(DistNetworkState {
@@ -3463,6 +3473,9 @@ mod tests {
             "PioModuleHandle *pio_module_read_json(const char *text, PioError **error);",
             "PioModuleHandle *pio_module_parse_file(const char *path, const char *format, PioError **error);",
             "PioModuleHandle *pio_module_parse_str(const char *text, const char *format, PioError **error);",
+            "PioModuleHandle *pio_module_parse_bytes(const uint8_t *data, size_t len, const char *format, PioError **error);",
+            "PioNetwork *pio_module_as_network(const PioModuleHandle *module, PioError **error);",
+            "PioDistNetwork *pio_module_as_dist_network(const PioModuleHandle *module, PioError **error);",
             "char *pio_module_write_json(const PioModuleHandle *module, PioError **error);",
             "char *pio_module_diagnostics_json(const PioModuleHandle *module, PioError **error);",
             "const char *pio_module_kind(const PioModuleHandle *module);",
