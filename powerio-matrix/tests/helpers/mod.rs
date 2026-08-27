@@ -130,13 +130,3 @@ pub fn parse_deepmind_opfdata_json(text: &str) -> Result<Parsed, powerio_core::E
 pub fn read_pypsa_csv_folder(path: impl AsRef<Path>) -> Result<Parsed, powerio_core::Error> {
     parse_file(path, Some("pypsa-csv"))
 }
-
-/// Parse distribution text through the module surface, for the lowering test.
-pub fn dist_parse_str(text: &str, from: &str) -> powerio_dist::MulticonductorNetwork {
-    let source = powerio_core::Source::from_bytes("<memory>", text.as_bytes().to_vec())
-        .expect("memory source")
-        .with_format(powerio_core::FormatId::new(from).expect("format id"));
-    powerio_dist::parse(source)
-        .expect("distribution text parses")
-        .into_value()
-}

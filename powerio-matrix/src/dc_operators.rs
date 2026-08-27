@@ -74,7 +74,7 @@ impl DcOperators {
     /// Build the operators. Zero impedance branches are preserved by the
     /// instance and have no finite DC row, so they refuse the build until
     /// resolved explicitly with
-    /// [`merge_zero_impedance_buses`](crate::merge_zero_impedance_buses); no
+    /// [`merge_zero_impedance_buses`](powerio_prob::merge_zero_impedance_buses); no
     /// branch is ever skipped silently. Out of service branches and self
     /// loops carry no operator column.
     ///
