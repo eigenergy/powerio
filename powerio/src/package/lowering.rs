@@ -262,7 +262,9 @@ pub fn check_module_lowering(
 /// lowering's structured refusal.
 ///
 /// # Panics
-/// Never: the static history identifiers are valid by construction.
+/// Only on a broken internal invariant: the pass's diagnostics carry no
+/// identity and no span, the note lists are capped, and the history id is
+/// minted unused, so every record append succeeds.
 #[allow(clippy::result_large_err)]
 pub fn lower_module_to_balanced(
     module: powerio_core::PioModule<crate::PioValue>,
@@ -274,7 +276,7 @@ pub fn lower_module_to_balanced(
         Box<MulticonductorToBalancedError>,
     ),
 > {
-    use powerio_core::{HistoryEntry, HistoryId, HistoryKind};
+    use powerio_core::{HistoryEntry, HistoryKind};
 
     let crate::PioValue::MulticonductorNetwork(net) = module.value() else {
         let error = MulticonductorToBalancedError::new(
@@ -301,18 +303,18 @@ pub fn lower_module_to_balanced(
         removed_switches,
     } = lowering;
     let mut module = module.map_value(|_| crate::PioValue::BalancedNetwork(network));
-    // The record's element paths name the consumed multiconductor value, so
-    // no target survives the transform; the messages keep the element names.
+    // The value's kind changed, so no RFC 6901 target survives the
+    // transform: pre-existing diagnostic targets and the source map pointed
+    // into the consumed multiconductor value and are severed here; the
+    // pass's own findings are emitted with no target for the same reason.
+    module.sever_value_targets();
     for diagnostic in &record.diagnostics {
-        if module
+        module
             .add_diagnostic(super::diagnostics::to_module_diagnostic(diagnostic, None))
-            .is_err()
-        {
-            break;
-        }
+            .expect("pass diagnostics carry no identity and no span");
     }
     let mut entry = HistoryEntry::new(
-        HistoryId::new("multiconductor-to-balanced").expect("static id is valid"),
+        unused_history_id(&module, "multiconductor-to-balanced"),
         HistoryKind::Transform,
         "lower_multiconductor_to_balanced",
     )
@@ -330,20 +332,59 @@ pub fn lower_module_to_balanced(
             .iter()
             .map(|switch| format!("switch {switch} removed by its bus merge")),
     );
-    for note in notes {
-        match entry.clone().with_assumption(note) {
-            Ok(with) => entry = with,
-            Err(_) => break,
-        }
+    for note in capped_history_notes(notes, "assumptions") {
+        entry = entry
+            .with_assumption(note)
+            .expect("the note list is under the history cap by construction");
     }
-    for loss in &record.dropped_fields {
-        match entry.clone().with_loss(loss.clone()) {
-            Ok(with) => entry = with,
-            Err(_) => break,
-        }
+    for loss in capped_history_notes(record.dropped_fields.clone(), "dropped fields") {
+        entry = entry
+            .with_loss(loss)
+            .expect("the loss list is under the history cap by construction");
     }
-    let _ = module.add_history_entry(entry);
+    module
+        .add_history_entry(entry)
+        .expect("the history id is unique among existing entries by construction");
     Ok(module)
+}
+
+/// Cap a history note list at the record limit, replacing the overflow with
+/// one note stating how many entries were elided; the truncation is visible
+/// rather than silent.
+fn capped_history_notes(notes: Vec<String>, what: &str) -> Vec<String> {
+    let cap = powerio_core::limits::MAX_HISTORY_NOTES;
+    if notes.len() <= cap {
+        return notes;
+    }
+    let elided = notes.len() - (cap - 1);
+    let mut kept: Vec<String> = notes.into_iter().take(cap - 1).collect();
+    kept.push(format!("{elided} more {what} elided"));
+    kept
+}
+
+/// A history id unused by the module: the stable name, then a numbered
+/// spelling when a prior lowering already recorded one.
+fn unused_history_id(
+    module: &powerio_core::PioModule<crate::PioValue>,
+    base: &str,
+) -> powerio_core::HistoryId {
+    use powerio_core::HistoryId;
+    let taken: std::collections::BTreeSet<&str> = module
+        .history()
+        .iter()
+        .map(|entry| entry.id().as_str())
+        .collect();
+    if !taken.contains(base) {
+        return HistoryId::new(base).expect("static id is valid");
+    }
+    let mut counter = 2usize;
+    loop {
+        let candidate = format!("{base}-{counter}");
+        if !taken.contains(candidate.as_str()) {
+            return HistoryId::new(candidate).expect("numbered id is valid");
+        }
+        counter += 1;
+    }
 }
 
 fn wrong_kind_error(value: &crate::PioValue) -> powerio_core::Error {
@@ -1084,7 +1125,10 @@ format!("line {line_idx} has no finite length ({length}), so its impedance canno
             let tap = (high.v_ref * high.tap / base_from) / (low.v_ref * low.tap / base_to);
             let z_scale = (self.options.base_mva * 1_000_000.0 / high.s_rating)
                 * (high.v_ref / base_from).powi(2);
-            let r = ((high.r_pct + low.r_pct) / 100.0) * z_scale;
+            // Each winding states %R on its own power rating; the low winding
+            // figure converts onto the high winding base before the sum.
+            let low_rating_scale = high.s_rating / low.s_rating;
+            let r = ((high.r_pct + low.r_pct * low_rating_scale) / 100.0) * z_scale;
             let x = (transformer.xsc_pct[0] / 100.0) * z_scale;
             let shift = if high.v_ref >= low.v_ref { 30.0 } else { -30.0 };
             let rate = high.s_rating / 1_000_000.0;
@@ -1093,6 +1137,15 @@ format!("line {line_idx} has no finite length ({length}), so its impedance canno
                  {shift} degree connection shift (high voltage side leads)",
                 transformer.name
             ));
+            if (low_rating_scale - 1.0).abs() > 1e-9 {
+                self.record.assumptions.push(format!(
+                    "transformer {}: the low winding resistance was converted from its own \
+                     {:.3} kVA base onto the high winding {:.3} kVA base",
+                    transformer.name,
+                    low.s_rating / 1_000.0,
+                    high.s_rating / 1_000.0
+                ));
+            }
             if high.r_neutral.is_some()
                 || high.x_neutral.is_some()
                 || low.r_neutral.is_some()
@@ -2160,6 +2213,9 @@ fn classify_transformer<'net>(
     if !(high.s_rating.is_finite() && high.s_rating > 0.0) {
         return Err("has no finite positive power rating".to_owned());
     }
+    if !(low.s_rating.is_finite() && low.s_rating > 0.0) {
+        return Err("has no finite positive low winding power rating".to_owned());
+    }
     match transformer.xsc_pct.first() {
         Some(x) if x.is_finite() && *x >= 0.0 => {}
         _ => return Err("states no finite short circuit reactance".to_owned()),
@@ -2181,6 +2237,51 @@ fn check_untyped_objects(
                 ),
             )
             .with_element_path(format!("/model/multiconductor_network/untyped/{i}")),
+        );
+    }
+}
+
+#[cfg(test)]
+mod history_record_tests {
+    use super::{capped_history_notes, unused_history_id};
+
+    #[test]
+    fn note_overflow_is_stated_within_the_cap() {
+        let cap = powerio_core::limits::MAX_HISTORY_NOTES;
+        let notes: Vec<String> = (0..cap + 40).map(|index| format!("note {index}")).collect();
+        let kept = capped_history_notes(notes, "assumptions");
+        assert_eq!(kept.len(), cap);
+        assert_eq!(kept.last().unwrap(), "41 more assumptions elided");
+
+        let short: Vec<String> = (0..3).map(|index| format!("note {index}")).collect();
+        assert_eq!(capped_history_notes(short.clone(), "assumptions"), short);
+    }
+
+    #[test]
+    fn the_history_id_is_minted_unused() {
+        use powerio_core::{HistoryEntry, HistoryId, HistoryKind, PioModule};
+        let mut module = PioModule::new(crate::PioValue::BalancedNetwork(
+            crate::BalancedNetwork::in_memory("t", 100.0, Vec::new(), Vec::new()),
+        ));
+        assert_eq!(
+            unused_history_id(&module, "multiconductor-to-balanced").as_str(),
+            "multiconductor-to-balanced"
+        );
+        for id in ["multiconductor-to-balanced", "multiconductor-to-balanced-2"] {
+            module
+                .add_history_entry(
+                    HistoryEntry::new(
+                        HistoryId::new(id).unwrap(),
+                        HistoryKind::Transform,
+                        "lower_multiconductor_to_balanced",
+                    )
+                    .unwrap(),
+                )
+                .unwrap();
+        }
+        assert_eq!(
+            unused_history_id(&module, "multiconductor-to-balanced").as_str(),
+            "multiconductor-to-balanced-3"
         );
     }
 }

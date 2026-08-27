@@ -221,33 +221,44 @@ unsafe fn v6_entry<R>(
 /// The failure's stable diagnostic code, valid until the handle's release.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_error_code(error: *const PioError) -> *const c_char {
-    unsafe { PioError::get(error) }.map_or(std::ptr::null(), |inner| inner.code.as_ptr())
+    unsafe {
+        crate::guard(std::ptr::null(), || {
+            PioError::get(error).map_or(std::ptr::null(), |inner| inner.code.as_ptr())
+        })
+    }
 }
 
 /// The rendered failure message, valid until the handle's release.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_error_message(error: *const PioError) -> *const c_char {
-    unsafe { PioError::get(error) }.map_or(std::ptr::null(), |inner| inner.message.as_ptr())
+    unsafe {
+        crate::guard(std::ptr::null(), || {
+            PioError::get(error).map_or(std::ptr::null(), |inner| inner.message.as_ptr())
+        })
+    }
 }
 
 /// The structured diagnostics as a JSON array, valid until the handle's
 /// release.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_error_diagnostics_json(error: *const PioError) -> *const c_char {
-    unsafe { PioError::get(error) }
-        .map_or(std::ptr::null(), |inner| inner.diagnostics_json.as_ptr())
+    unsafe {
+        crate::guard(std::ptr::null(), || {
+            PioError::get(error).map_or(std::ptr::null(), |inner| inner.diagnostics_json.as_ptr())
+        })
+    }
 }
 
 /// Mint an independent handle to the same error. NULL stays NULL.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_error_retain(error: *const PioError) -> *mut PioError {
-    unsafe { PioError::retain_raw(error) }
+    unsafe { crate::guard(std::ptr::null_mut(), || PioError::retain_raw(error)) }
 }
 
 /// Release one error handle. NULL is a no-op.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_error_release(error: *mut PioError) {
-    unsafe { PioError::release_raw(error) }
+    unsafe { crate::guard((), || PioError::release_raw(error)) }
 }
 
 // ---- pio_module -------------------------------------------------------------
@@ -302,7 +313,7 @@ unsafe fn required_module<'a>(
 ) -> Result<&'a ModuleInner, *mut PioError> {
     unsafe { PioModuleHandle::get(raw) }.ok_or_else(|| {
         error_from_parts(
-            codes::BIND_CAPI_NULL_ARGUMENT.code,
+            codes::BIND_CAPI_NULL_HANDLE.code,
             "module handle must not be NULL",
             "[]",
         )
@@ -406,10 +417,50 @@ pub unsafe extern "C" fn pio_module_write_json(
     }
 }
 
+/// The module's diagnostics as a JSON array (stable code, severity, message,
+/// optional identity and target per entry). Free with `pio_string_free`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pio_module_diagnostics_json(
+    module: *const PioModuleHandle,
+    error: *mut *mut PioError,
+) -> *mut c_char {
+    unsafe {
+        v6_entry(error, std::ptr::null_mut(), || {
+            let inner = required_module(module)?;
+            let diagnostics: Vec<serde_json::Value> = inner
+                .module
+                .diagnostics()
+                .iter()
+                .map(|diagnostic| {
+                    serde_json::json!({
+                        "id": diagnostic.id().map(ToString::to_string),
+                        "code": diagnostic.code(),
+                        "severity": format!("{:?}", diagnostic.severity()).to_lowercase(),
+                        "message": diagnostic.message(),
+                        "target": diagnostic.target(),
+                    })
+                })
+                .collect();
+            let text = serde_json::to_string(&diagnostics).map_err(|error| {
+                error_from_parts(
+                    codes::EMIT_CAPI_SERIALIZE_FAILED.code,
+                    &error.to_string(),
+                    "[]",
+                )
+            })?;
+            owned_string(text)
+        })
+    }
+}
+
 /// The value's permanent kind identifier, valid until the handle's release.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_module_kind(module: *const PioModuleHandle) -> *const c_char {
-    unsafe { PioModuleHandle::get(module) }.map_or(std::ptr::null(), |inner| inner.kind.as_ptr())
+    unsafe {
+        crate::guard(std::ptr::null(), || {
+            PioModuleHandle::get(module).map_or(std::ptr::null(), |inner| inner.kind.as_ptr())
+        })
+    }
 }
 
 /// Value inspection and supported operation discovery, as JSON. Free with
@@ -454,7 +505,7 @@ unsafe fn selector<'a>(
         )),
         (position, Some(id)) if position < 0 => Ok(powerio::select::StateSelector::Scenario(id)),
         _ => Err(error_from_parts(
-            codes::BIND_CAPI_NULL_ARGUMENT.code,
+            codes::REQUEST_CAPI_SELECTOR_CONFLICT.code,
             "pass exactly one key: time_position >= 0 with scenario NULL, or \
              time_position < 0 with scenario set",
             "[]",
@@ -544,12 +595,11 @@ pub unsafe extern "C" fn pio_module_lower_to_balanced(
             .map_err(|(_, boxed)| {
                 let diagnostics =
                     serde_json::to_string(&boxed.diagnostics).unwrap_or_else(|_| "[]".to_owned());
-                let code = boxed
-                    .diagnostics
-                    .first()
-                    .map_or("TRANSFORM.MULTI_TO_BALANCED.WRONG_MODEL_KIND", |d| {
-                        d.code.as_str()
-                    });
+                let code = boxed.diagnostics.first().map_or(
+                    powerio::package::diagnostics::codes::TRANSFORM_MULTI_TO_BALANCED_WRONG_MODEL_KIND
+                        .code,
+                    |d| d.code.as_str(),
+                );
                 error_from_parts(code, &boxed.to_string(), &diagnostics)
             })
         })
@@ -559,13 +609,13 @@ pub unsafe extern "C" fn pio_module_lower_to_balanced(
 /// Mint an independent handle to the same module. NULL stays NULL.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_module_retain(module: *const PioModuleHandle) -> *mut PioModuleHandle {
-    unsafe { PioModuleHandle::retain_raw(module) }
+    unsafe { crate::guard(std::ptr::null_mut(), || PioModuleHandle::retain_raw(module)) }
 }
 
 /// Release one module handle. NULL is a no-op.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_module_release(module: *mut PioModuleHandle) {
-    unsafe { PioModuleHandle::release_raw(module) }
+    unsafe { crate::guard((), || PioModuleHandle::release_raw(module)) }
 }
 
 fn inspect_json(module: &powerio_core::PioModule<powerio::PioValue>) -> String {
@@ -663,13 +713,23 @@ fn inventory_json(inventory: &powerio::select::StateInventory) -> String {
 /// The DC branch data of one balanced network under one susceptance formula,
 /// with the stable element mappings that interpret every row. Arrays are
 /// owned by the handle; spans stay valid until its last release.
+///
+/// Rows and columns describe the analysis network after three winding
+/// transformer expansion: each in-service three winding transformer
+/// contributes one synthetic star bus (appended after the declared buses)
+/// and three winding branches, and every table here indexes that expanded
+/// form consistently.
 pub struct DcDataInner {
     /// Signed incidence rows: `A[e, from] = +1`, `A[e, to] = -1`.
-    from_index: Vec<i64>,
-    to_index: Vec<i64>,
+    from_indices: Vec<i64>,
+    to_indices: Vec<i64>,
     /// Branch susceptance per included row, PowerModels sign.
     susceptance: Vec<f64>,
-    /// Phase shift bus injection `p_shift = A' * (b .* shift)`, per bus.
+    /// Phase shift angle per included row, radians; `0` for an unshifted
+    /// branch or a formula that excludes shifts.
+    shift: Vec<f64>,
+    /// Phase shift bus injection `p_shift = -A' * (b .* shift)`, per bus,
+    /// the MATPOWER `makeBdc` sign.
     shift_injection: Vec<f64>,
     /// Stable module element ID per included row. The `_ids` vectors own the
     /// bytes the pointer tables alias, so they are read through the pointers.
@@ -705,7 +765,7 @@ arc_handle!(
 fn dc_formula(name: &str) -> Result<DcConvention, *mut PioError> {
     DcConvention::from_formula_name(name).ok_or_else(|| {
         error_from_parts(
-            codes::BIND_CAPI_NULL_ARGUMENT.code,
+            codes::REQUEST_CAPI_UNKNOWN_FORMULA.code,
             &format!(
                 "unknown branch susceptance formula `{name}`; expected series_susceptance, \
                  tap_adjusted_reactance, or reactance_only"
@@ -721,7 +781,9 @@ fn pointer_table(strings: &[CString]) -> Vec<*const c_char> {
 
 /// Project the shared [`powerio::dc_network_data`] assembly into the owned C
 /// spans: the same values Rust and Python read, with the strings pinned as
-/// NUL terminated copies the pointer tables alias.
+/// NUL terminated copies the pointer tables alias. Every table describes the
+/// analysis network after three winding transformer expansion, so `bus_ids`
+/// has exactly `n_buses` entries by construction.
 fn build_dc_data(
     network: &BalancedNetwork,
     convention: DcConvention,
@@ -740,17 +802,18 @@ fn build_dc_data(
     let omitted_id_pointers = pointer_table(&omitted_ids);
     let omitted_reason_pointers = pointer_table(&omitted_reasons);
     Ok(DcDataInner {
-        from_index: data
-            .from_index
+        from_indices: data
+            .from_indices
             .iter()
             .map(|&index| i64::try_from(index).expect("bus count fits i64"))
             .collect(),
-        to_index: data
-            .to_index
+        to_indices: data
+            .to_indices
             .iter()
             .map(|&index| i64::try_from(index).expect("bus count fits i64"))
             .collect(),
         susceptance: data.susceptance,
+        shift: data.shift,
         shift_injection: data.shift_injection,
         row_ids,
         row_id_pointers,
@@ -780,7 +843,7 @@ pub unsafe extern "C" fn pio_dc_data_build(
             let formula = dc_formula(required_str(formula, "formula")?)?;
             let powerio::PioValue::BalancedNetwork(network) = inner.module.value() else {
                 return Err(error_from_parts(
-                    "REQUEST.STATE.NOT_A_COLLECTION",
+                    codes::REQUEST_CAPI_NOT_A_BALANCED_NETWORK.code,
                     &format!(
                         "the module carries a {} value; DC data takes a balanced network",
                         inner.module.value().kind().as_str()
@@ -796,63 +859,115 @@ pub unsafe extern "C" fn pio_dc_data_build(
 /// Included incidence row count (`m`).
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_dc_data_n_rows(data: *const PioDcData) -> usize {
-    unsafe { PioDcData::get(data) }.map_or(0, |inner| inner.susceptance.len())
+    unsafe {
+        crate::guard(0, || {
+            PioDcData::get(data).map_or(0, |inner| inner.susceptance.len())
+        })
+    }
 }
 
 /// Incidence column count (`n`, the bus count).
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_dc_data_n_buses(data: *const PioDcData) -> usize {
-    unsafe { PioDcData::get(data) }.map_or(0, |inner| inner.shift_injection.len())
+    unsafe {
+        crate::guard(0, || {
+            PioDcData::get(data).map_or(0, |inner| inner.shift_injection.len())
+        })
+    }
 }
 
 /// From bus column per included row (`A[e, from] = +1`), length `n_rows`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_dc_data_from_indices(data: *const PioDcData) -> *const i64 {
-    unsafe { PioDcData::get(data) }.map_or(std::ptr::null(), |inner| inner.from_index.as_ptr())
+    unsafe {
+        crate::guard(std::ptr::null(), || {
+            PioDcData::get(data).map_or(std::ptr::null(), |inner| inner.from_indices.as_ptr())
+        })
+    }
 }
 
 /// To bus column per included row (`A[e, to] = -1`), length `n_rows`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_dc_data_to_indices(data: *const PioDcData) -> *const i64 {
-    unsafe { PioDcData::get(data) }.map_or(std::ptr::null(), |inner| inner.to_index.as_ptr())
+    unsafe {
+        crate::guard(std::ptr::null(), || {
+            PioDcData::get(data).map_or(std::ptr::null(), |inner| inner.to_indices.as_ptr())
+        })
+    }
 }
 
 /// Branch susceptance per included row, PowerModels sign, length `n_rows`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_dc_data_susceptance(data: *const PioDcData) -> *const f64 {
-    unsafe { PioDcData::get(data) }.map_or(std::ptr::null(), |inner| inner.susceptance.as_ptr())
+    unsafe {
+        crate::guard(std::ptr::null(), || {
+            PioDcData::get(data).map_or(std::ptr::null(), |inner| inner.susceptance.as_ptr())
+        })
+    }
 }
 
-/// Phase shift bus injection `p_shift = A' * (b .* shift)`, length `n_buses`.
+/// Phase shift angle per included row, radians, length `n_rows`. `0` for an
+/// unshifted branch or a formula that excludes shifts.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pio_dc_data_shift(data: *const PioDcData) -> *const f64 {
+    unsafe {
+        crate::guard(std::ptr::null(), || {
+            PioDcData::get(data).map_or(std::ptr::null(), |inner| inner.shift.as_ptr())
+        })
+    }
+}
+
+/// Phase shift bus injection `p_shift = -A' * (b .* shift)` (the MATPOWER
+/// `makeBdc` sign), length `n_buses`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_dc_data_shift_injection(data: *const PioDcData) -> *const f64 {
-    unsafe { PioDcData::get(data) }.map_or(std::ptr::null(), |inner| inner.shift_injection.as_ptr())
+    unsafe {
+        crate::guard(std::ptr::null(), || {
+            PioDcData::get(data).map_or(std::ptr::null(), |inner| inner.shift_injection.as_ptr())
+        })
+    }
 }
 
 /// Stable module element ID per included row, length `n_rows`. Both the
 /// table and the strings stay valid until the handle's release.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_dc_data_row_ids(data: *const PioDcData) -> *const *const c_char {
-    unsafe { PioDcData::get(data) }.map_or(std::ptr::null(), |inner| inner.row_id_pointers.as_ptr())
+    unsafe {
+        crate::guard(std::ptr::null(), || {
+            PioDcData::get(data).map_or(std::ptr::null(), |inner| inner.row_id_pointers.as_ptr())
+        })
+    }
 }
 
 /// Stable bus element ID per incidence column, length `n_buses`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_dc_data_bus_ids(data: *const PioDcData) -> *const *const c_char {
-    unsafe { PioDcData::get(data) }.map_or(std::ptr::null(), |inner| inner.bus_id_pointers.as_ptr())
+    unsafe {
+        crate::guard(std::ptr::null(), || {
+            PioDcData::get(data).map_or(std::ptr::null(), |inner| inner.bus_id_pointers.as_ptr())
+        })
+    }
 }
 
 /// Count of branches the selected formula cannot represent.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_dc_data_n_omitted(data: *const PioDcData) -> usize {
-    unsafe { PioDcData::get(data) }.map_or(0, |inner| inner.omitted_ids.len())
+    unsafe {
+        crate::guard(0, || {
+            PioDcData::get(data).map_or(0, |inner| inner.omitted_ids.len())
+        })
+    }
 }
 
 /// Stable element IDs of the omitted branches, length `n_omitted`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_dc_data_omitted_ids(data: *const PioDcData) -> *const *const c_char {
-    unsafe { PioDcData::get(data) }
-        .map_or(std::ptr::null(), |inner| inner.omitted_id_pointers.as_ptr())
+    unsafe {
+        crate::guard(std::ptr::null(), || {
+            PioDcData::get(data)
+                .map_or(std::ptr::null(), |inner| inner.omitted_id_pointers.as_ptr())
+        })
+    }
 }
 
 /// Diagnostic reason per omitted branch, length `n_omitted`.
@@ -860,23 +975,32 @@ pub unsafe extern "C" fn pio_dc_data_omitted_ids(data: *const PioDcData) -> *con
 pub unsafe extern "C" fn pio_dc_data_omitted_reasons(
     data: *const PioDcData,
 ) -> *const *const c_char {
-    unsafe { PioDcData::get(data) }.map_or(std::ptr::null(), |inner| {
-        inner.omitted_reason_pointers.as_ptr()
-    })
+    unsafe {
+        crate::guard(std::ptr::null(), || {
+            PioDcData::get(data).map_or(std::ptr::null(), |inner| {
+                inner.omitted_reason_pointers.as_ptr()
+            })
+        })
+    }
 }
 
 /// The selected branch susceptance formula's stable name.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_dc_data_formula(data: *const PioDcData) -> *const c_char {
-    unsafe { PioDcData::get(data) }.map_or(std::ptr::null(), |inner| inner.formula.as_ptr())
+    unsafe {
+        crate::guard(std::ptr::null(), || {
+            PioDcData::get(data).map_or(std::ptr::null(), |inner| inner.formula.as_ptr())
+        })
+    }
 }
 
-/// Fill `out` with the angle dependent branch flow
-/// `p_branch = -b .* (va_from - va_to) + b .* shift_unused` sign converted
-/// while filling: given bus voltage angles `va` (radians, length `n_buses`),
-/// writes `-b[e] * (va[from] - va[to])` per included row into `out` (length
-/// `n_rows`). Returns false on a NULL argument. No temporary vector is
-/// allocated.
+/// Fill `out` with the complete affine branch flow
+/// `p_branch = -b .* (va_from - va_to) - b .* shift`: given bus voltage
+/// angles `va` (radians, length `n_buses`), writes
+/// `-b[e] * (va[from] - va[to]) - b[e] * shift[e]` per included row into
+/// `out` (length `n_rows`), so `A' * p_branch` equals the bus injection
+/// including `shift_injection`. Returns false on a NULL argument or a length
+/// mismatch. No temporary vector is allocated.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_dc_data_fill_branch_flow(
     data: *const PioDcData,
@@ -885,35 +1009,40 @@ pub unsafe extern "C" fn pio_dc_data_fill_branch_flow(
     out: *mut f64,
     out_len: usize,
 ) -> bool {
-    let Some(inner) = (unsafe { PioDcData::get(data) }) else {
-        return false;
-    };
-    if va.is_null() || out.is_null() {
-        return false;
+    unsafe {
+        crate::guard(false, || {
+            let Some(inner) = PioDcData::get(data) else {
+                return false;
+            };
+            if va.is_null() || out.is_null() {
+                return false;
+            }
+            if va_len != inner.shift_injection.len() || out_len != inner.susceptance.len() {
+                return false;
+            }
+            let va = std::slice::from_raw_parts(va, va_len);
+            let out = std::slice::from_raw_parts_mut(out, out_len);
+            for (row, slot) in out.iter_mut().enumerate() {
+                let from = usize::try_from(inner.from_indices[row]).expect("stored nonnegative");
+                let to = usize::try_from(inner.to_indices[row]).expect("stored nonnegative");
+                *slot = -inner.susceptance[row] * (va[from] - va[to])
+                    - inner.susceptance[row] * inner.shift[row];
+            }
+            true
+        })
     }
-    if va_len != inner.shift_injection.len() || out_len != inner.susceptance.len() {
-        return false;
-    }
-    let va = unsafe { std::slice::from_raw_parts(va, va_len) };
-    let out = unsafe { std::slice::from_raw_parts_mut(out, out_len) };
-    for (row, slot) in out.iter_mut().enumerate() {
-        let from = usize::try_from(inner.from_index[row]).expect("stored nonnegative");
-        let to = usize::try_from(inner.to_index[row]).expect("stored nonnegative");
-        *slot = -inner.susceptance[row] * (va[from] - va[to]);
-    }
-    true
 }
 
 /// Mint an independent handle to the same DC data. NULL stays NULL.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_dc_data_retain(data: *const PioDcData) -> *mut PioDcData {
-    unsafe { PioDcData::retain_raw(data) }
+    unsafe { crate::guard(std::ptr::null_mut(), || PioDcData::retain_raw(data)) }
 }
 
 /// Release one DC data handle. NULL is a no-op.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_dc_data_release(data: *mut PioDcData) {
-    unsafe { PioDcData::release_raw(data) }
+    unsafe { crate::guard((), || PioDcData::release_raw(data)) }
 }
 
 #[cfg(test)]
@@ -1003,8 +1132,8 @@ mod tests {
             assert_eq!(pio_dc_data_n_rows(data), 1);
             assert_eq!(pio_dc_data_n_buses(data), 3);
             let b = *pio_dc_data_susceptance(data);
-            // series: -imag(1/(r+ix)) = x/(r^2+x^2)
-            let expected = 0.1 / (0.01_f64 * 0.01 + 0.1 * 0.1);
+            // series, PowerModels sign: imag(1/(r+ix)) = -x/(r^2+x^2)
+            let expected = -0.1 / (0.01_f64 * 0.01 + 0.1 * 0.1);
             assert!((b - expected).abs() < 1e-12, "{b}");
             assert_eq!(*pio_dc_data_from_indices(data), 0);
             assert_eq!(*pio_dc_data_to_indices(data), 1);
@@ -1053,6 +1182,331 @@ mod tests {
             assert_eq!(pio_dc_data_n_rows(kept), 1);
             pio_dc_data_release(kept);
             pio_dc_data_release(std::ptr::null_mut());
+        }
+    }
+
+    fn shifted_case_text() -> CString {
+        CString::new(
+            "function mpc = case\n\
+             mpc.version = '2';\n\
+             mpc.baseMVA = 100;\n\
+             mpc.bus = [1 3 0 0 0 0 1 1.0 0 230 1 1.1 0.9; 2 1 30 10 0 0 1 1.0 0 230 1 1.1 0.9; 3 1 20 5 0 0 1 1.0 0 230 1 1.1 0.9;];\n\
+             mpc.gen = [1 40 0 30 -30 1.0 100 1 100 0;];\n\
+             mpc.branch = [1 2 0.01 0.1 0 250 250 250 0 0 1 -30 30; 1 3 0.02 0.2 0 250 250 250 0 10 1 -30 30;];\n",
+        )
+        .unwrap()
+    }
+
+    /// The complete affine flow: `p_branch = -b (va_from - va_to) - b shift`,
+    /// and the KCL identity `A' * p_branch == -B va + shift_injection` holds
+    /// for a case with a nonzero phase shift branch.
+    #[test]
+    fn branch_flow_carries_the_phase_shift_term() {
+        unsafe {
+            let mut error = std::ptr::null_mut();
+            let matpower = CString::new("matpower").unwrap();
+            let module = pio_module_parse_str(
+                shifted_case_text().as_ptr(),
+                matpower.as_ptr(),
+                &raw mut error,
+            );
+            assert!(error.is_null());
+            let formula = CString::new("series_susceptance").unwrap();
+            let data = pio_dc_data_build(module, formula.as_ptr(), &raw mut error);
+            assert!(error.is_null());
+            pio_module_release(module);
+
+            let m = pio_dc_data_n_rows(data);
+            let n = pio_dc_data_n_buses(data);
+            assert_eq!((m, n), (2, 3));
+            let b = std::slice::from_raw_parts(pio_dc_data_susceptance(data), m);
+            let shift = std::slice::from_raw_parts(pio_dc_data_shift(data), m);
+            let from = std::slice::from_raw_parts(pio_dc_data_from_indices(data), m);
+            let to = std::slice::from_raw_parts(pio_dc_data_to_indices(data), m);
+            let injection = std::slice::from_raw_parts(pio_dc_data_shift_injection(data), n);
+            assert!((shift[0]).abs() < 1e-15);
+            assert!(
+                (shift[1] - 10.0_f64.to_radians()).abs() < 1e-12,
+                "{}",
+                shift[1]
+            );
+            // p_shift = -A' (b .* shift): -b*shift at the from bus, +b*shift
+            // at the to bus.
+            assert!((injection[0] - (-b[1] * shift[1])).abs() < 1e-12);
+            assert!((injection[2] - (b[1] * shift[1])).abs() < 1e-12);
+
+            let va = [0.03_f64, 0.01, -0.02];
+            let mut flow = [0.0_f64; 2];
+            assert!(pio_dc_data_fill_branch_flow(
+                data,
+                va.as_ptr(),
+                3,
+                flow.as_mut_ptr(),
+                2
+            ));
+            for row in 0..m {
+                let f = usize::try_from(from[row]).unwrap();
+                let t = usize::try_from(to[row]).unwrap();
+                let expected = -b[row] * (va[f] - va[t]) - b[row] * shift[row];
+                assert!((flow[row] - expected).abs() < 1e-12, "row {row}");
+            }
+            // KCL: A' * p_branch equals the angle terms plus shift_injection.
+            let mut bus_from_flows = [0.0_f64; 3];
+            for row in 0..m {
+                let f = usize::try_from(from[row]).unwrap();
+                let t = usize::try_from(to[row]).unwrap();
+                bus_from_flows[f] += flow[row];
+                bus_from_flows[t] -= flow[row];
+            }
+            for bus in 0..n {
+                let mut angle_term = 0.0;
+                for row in 0..m {
+                    let f = usize::try_from(from[row]).unwrap();
+                    let t = usize::try_from(to[row]).unwrap();
+                    let sign = if f == bus {
+                        1.0
+                    } else if t == bus {
+                        -1.0
+                    } else {
+                        0.0
+                    };
+                    angle_term += sign * (-b[row] * (va[f] - va[t]));
+                }
+                assert!(
+                    (bus_from_flows[bus] - (angle_term + injection[bus])).abs() < 1e-12,
+                    "bus {bus}"
+                );
+            }
+            pio_dc_data_release(data);
+        }
+    }
+
+    /// Every table describes the analysis network after three winding
+    /// expansion: the bus ID table has exactly `n_buses` entries (declared
+    /// buses plus the synthetic star bus) and the winding branches appear as
+    /// included or omitted rows.
+    #[test]
+    fn three_winding_expansion_keeps_the_tables_aligned() {
+        unsafe {
+            let mut error = std::ptr::null_mut();
+            let path = CString::new(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../tests/data/psse/case3_3w_v33.raw"
+            ))
+            .unwrap();
+            let psse = CString::new("psse").unwrap();
+            let module = pio_module_parse_file(path.as_ptr(), psse.as_ptr(), &raw mut error);
+            assert!(
+                error.is_null(),
+                "{:?}",
+                CStr::from_ptr(pio_error_message(error))
+            );
+            let formula = CString::new("series_susceptance").unwrap();
+            let data = pio_dc_data_build(module, formula.as_ptr(), &raw mut error);
+            assert!(error.is_null());
+            pio_module_release(module);
+
+            let n = pio_dc_data_n_buses(data);
+            let m = pio_dc_data_n_rows(data);
+            let omitted = pio_dc_data_n_omitted(data);
+            // Three declared buses plus the synthetic star bus.
+            assert_eq!(n, 4);
+            // The three winding branches all appear, included or omitted.
+            assert!(m + omitted >= 3, "m {m} omitted {omitted}");
+            let bus_ids = pio_dc_data_bus_ids(data);
+            for column in 0..n {
+                let id = *bus_ids.add(column);
+                assert!(!id.is_null(), "bus column {column}");
+                assert!(!CStr::from_ptr(id).to_bytes().is_empty());
+            }
+            let row_ids = pio_dc_data_row_ids(data);
+            for row in 0..m {
+                assert!(!(*row_ids.add(row)).is_null(), "row {row}");
+            }
+            pio_dc_data_release(data);
+        }
+    }
+
+    /// Every refusal carries its own registered code: NULL handles, an
+    /// unrecognized formula, conflicting selection keys, a value kind DC data
+    /// does not accept, and a static value's selection refusal all differ.
+    #[test]
+    fn refusals_carry_distinct_registered_codes() {
+        unsafe {
+            let code_of = |error: *mut PioError| {
+                let code = CStr::from_ptr(pio_error_code(error))
+                    .to_str()
+                    .unwrap()
+                    .to_owned();
+                pio_error_release(error);
+                code
+            };
+            let mut error = std::ptr::null_mut();
+
+            // NULL module handle.
+            let text = pio_module_write_json(std::ptr::null(), &raw mut error);
+            assert!(text.is_null());
+            assert_eq!(code_of(error), "BIND.CAPI.NULL_HANDLE");
+
+            let matpower = CString::new("matpower").unwrap();
+            let mut error = std::ptr::null_mut();
+            let module =
+                pio_module_parse_str(case_text().as_ptr(), matpower.as_ptr(), &raw mut error);
+            assert!(error.is_null());
+
+            // An unrecognized formula string.
+            let mut error = std::ptr::null_mut();
+            let bogus = CString::new("nodal_admittance").unwrap();
+            let data = pio_dc_data_build(module, bogus.as_ptr(), &raw mut error);
+            assert!(data.is_null());
+            assert_eq!(code_of(error), "REQUEST.CAPI.UNKNOWN_FORMULA");
+
+            // Both rejected selection key combinations.
+            let mut error = std::ptr::null_mut();
+            let scenario = CString::new("s1").unwrap();
+            let exported = pio_module_export_state(module, 0, scenario.as_ptr(), &raw mut error);
+            assert!(exported.is_null());
+            assert_eq!(code_of(error), "REQUEST.CAPI.SELECTOR_CONFLICT");
+            let mut error = std::ptr::null_mut();
+            let exported = pio_module_export_state(module, -1, std::ptr::null(), &raw mut error);
+            assert!(exported.is_null());
+            assert_eq!(code_of(error), "REQUEST.CAPI.SELECTOR_CONFLICT");
+
+            // A static value's selection refusal comes from the library and
+            // differs from the DC data kind refusal below.
+            let mut error = std::ptr::null_mut();
+            let exported = pio_module_export_state(module, 0, std::ptr::null(), &raw mut error);
+            assert!(exported.is_null());
+            let selection_code = code_of(error);
+            assert_eq!(selection_code, "REQUEST.STATE.NOT_A_COLLECTION");
+
+            // DC data against a value kind it does not accept.
+            let dss = CString::new("dss").unwrap();
+            let circuit = CString::new(
+                "Clear\nNew Circuit.tiny basekv=12.47 bus1=src\n\
+                 New Line.l1 bus1=src bus2=a length=1\nSet VoltageBases=[12.47]\n",
+            )
+            .unwrap();
+            let mut error = std::ptr::null_mut();
+            let mc = pio_module_parse_str(circuit.as_ptr(), dss.as_ptr(), &raw mut error);
+            assert!(error.is_null(), "dss parse failed");
+            let formula = CString::new("series_susceptance").unwrap();
+            let mut error = std::ptr::null_mut();
+            let data = pio_dc_data_build(mc, formula.as_ptr(), &raw mut error);
+            assert!(data.is_null());
+            let dc_kind_code = code_of(error);
+            assert_eq!(dc_kind_code, "REQUEST.CAPI.NOT_A_BALANCED_NETWORK");
+            assert_ne!(dc_kind_code, selection_code);
+
+            pio_module_release(mc);
+            pio_module_release(module);
+        }
+    }
+
+    /// The panic guard on the direct accessors: NULL handles fall back, and a
+    /// value that panics on drop leaves release returning normally.
+    #[test]
+    fn direct_accessors_fall_back_and_release_survives_a_drop_panic() {
+        unsafe {
+            assert!(pio_module_kind(std::ptr::null()).is_null());
+            assert!(pio_module_diagnostics_json(std::ptr::null(), std::ptr::null_mut()).is_null());
+            assert!(pio_error_code(std::ptr::null()).is_null());
+            assert!(pio_error_message(std::ptr::null()).is_null());
+            assert!(pio_error_diagnostics_json(std::ptr::null()).is_null());
+            assert!(pio_error_retain(std::ptr::null()).is_null());
+            assert_eq!(pio_dc_data_n_rows(std::ptr::null()), 0);
+            assert_eq!(pio_dc_data_n_buses(std::ptr::null()), 0);
+            assert!(pio_dc_data_from_indices(std::ptr::null()).is_null());
+            assert!(pio_dc_data_to_indices(std::ptr::null()).is_null());
+            assert!(pio_dc_data_susceptance(std::ptr::null()).is_null());
+            assert!(pio_dc_data_shift(std::ptr::null()).is_null());
+            assert!(pio_dc_data_shift_injection(std::ptr::null()).is_null());
+            assert!(pio_dc_data_row_ids(std::ptr::null()).is_null());
+            assert!(pio_dc_data_bus_ids(std::ptr::null()).is_null());
+            assert_eq!(pio_dc_data_n_omitted(std::ptr::null()), 0);
+            assert!(pio_dc_data_omitted_ids(std::ptr::null()).is_null());
+            assert!(pio_dc_data_omitted_reasons(std::ptr::null()).is_null());
+            assert!(pio_dc_data_formula(std::ptr::null()).is_null());
+            assert!(pio_dc_data_retain(std::ptr::null()).is_null());
+            assert!(!pio_dc_data_fill_branch_flow(
+                std::ptr::null(),
+                std::ptr::null(),
+                0,
+                std::ptr::null_mut(),
+                0
+            ));
+            // NULL release no-ops.
+            pio_error_release(std::ptr::null_mut());
+            pio_module_release(std::ptr::null_mut());
+            pio_dc_data_release(std::ptr::null_mut());
+
+            // A drop panic stays behind the same guard release uses.
+            struct PanicOnDrop;
+            impl Drop for PanicOnDrop {
+                fn drop(&mut self) {
+                    panic!("drop panicked");
+                }
+            }
+            let handle = handle_new(PanicOnDrop);
+            crate::guard((), || handle_release(handle));
+        }
+    }
+
+    /// Every operation `pio_module_inspect_json` advertises maps to an
+    /// exported symbol in the committed header, for each value family the
+    /// operations table branches on.
+    #[test]
+    fn every_inspect_operation_maps_to_an_exported_symbol() {
+        let header = include_str!("../include/powerio.h");
+        let symbol_of = |op: &str| match op {
+            "inspect" => "pio_module_inspect_json",
+            "diagnostics" => "pio_module_diagnostics_json",
+            "write" => "pio_module_write_json",
+            "dc_data" => "pio_dc_data_build",
+            "state_inventory" => "pio_module_state_inventory_json",
+            "export_state" => "pio_module_export_state",
+            "lowering_readiness" => "pio_module_lowering_readiness_json",
+            "lower_to_balanced" => "pio_module_lower_to_balanced",
+            other => panic!("operation `{other}` has no symbol mapping"),
+        };
+        let balanced = powerio::parse(
+            powerio_core::Source::from_bytes("case.m", case_text().into_bytes())
+                .unwrap()
+                .with_format(powerio_core::FormatId::new("matpower").unwrap()),
+        )
+        .unwrap();
+        let network = match balanced.value() {
+            powerio::PioValue::BalancedNetwork(network) => network.clone(),
+            _ => panic!("wrong kind"),
+        };
+        let series = powerio_core::TimeSeries::new(
+            vec![powerio_core::TimePoint::new("h0", None).unwrap()],
+            vec![network],
+        )
+        .unwrap();
+        let series_module =
+            powerio_core::PioModule::new(powerio::PioValue::BalancedNetworkTimeSeries(series));
+        let dss_module = powerio::parse(
+            powerio_core::Source::from_bytes(
+                "tiny.dss",
+                b"Clear\nNew Circuit.tiny basekv=12.47 bus1=src\nNew Line.l1 bus1=src bus2=a length=1\nSet VoltageBases=[12.47]\n".to_vec(),
+            )
+            .unwrap()
+            .with_format(powerio_core::FormatId::new("dss").unwrap()),
+        )
+        .unwrap();
+        for module in [&balanced, &series_module, &dss_module] {
+            let rendered = inspect_json(module);
+            let parsed: serde_json::Value = serde_json::from_str(&rendered).unwrap();
+            let operations = parsed["operations"].as_array().unwrap();
+            assert!(!operations.is_empty());
+            for operation in operations {
+                let symbol = symbol_of(operation.as_str().unwrap());
+                assert!(
+                    header.contains(&format!("{symbol}(")),
+                    "{symbol} is not in the committed header"
+                );
+            }
         }
     }
 

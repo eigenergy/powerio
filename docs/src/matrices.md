@@ -21,23 +21,23 @@ instances into sparse operators. The DC OPF bundle schema is in
 | signed incidence matrix \\(A\\) | \\(n \times m\\) | `build_incidence` | column \\(e\\) has \\(+1\\) at from-bus, \\(-1\\) at to-bus |
 | weighted bus Laplacian \\(L\\) | \\(n \times n\\) | `build_weighted_laplacian` | \\(L = A \operatorname{diag}(w) A^\mathsf{T}\\); for DC OPF and PTDF/LODF, \\(w\\) is the branch susceptance vector \\(b\\) |
 | flow map \\(B A^\mathsf{T}\\) | \\(m \times n\\) | `build_flow_map` | \\(f = B A^\mathsf{T}\theta\\) |
-| PTDF | \\(m \times n\\) | `build_ptdf` | dense oracle builder; `build_ptdf_lodf_with_options` can use iterative solves |
-| LODF | \\(m \times m\\) | `build_lodf` | dense oracle builder; option based builds can prune small output entries |
+| PTDF | \\(m \times n\\) | `build_ptdf` | routes through `Auto` solver selection; `build_ptdf_lodf_with_options` exposes the choice |
+| LODF | \\(m \times m\\) | `build_lodf` | routes through `Auto` solver selection; option based builds can prune small output entries |
 | adjacency | \\(n \times n\\) | `build_adjacency` | sparse graph adjacency |
 | petgraph graph | n/a | `IndexedNetwork::to_petgraph` | `UnGraph<bus_idx, branch_idx>` |
 
-Computing PTDF and LODF matrices requires a linear solve. The stable
-`build_ptdf`, `build_lodf`, and `build_ptdf_lodf` builders keep the dense
-grounded inverse path and remain the small case oracle. The option based
-`build_ptdf_lodf_with_options` path accepts `SensitivityOptions`: `Dense` forces
-the dense oracle path, `Iterative` uses preconditioned conjugate gradient on one
-grounded right hand side at a time, and `Auto` selects dense up to a reduced
-dimension of 512 and iterative above it. The iterative path avoids forming the
+Computing PTDF and LODF matrices requires a linear solve. Every builder —
+`build_ptdf`, `build_lodf`, `build_ptdf_lodf`, and the option based
+`build_ptdf_lodf_with_options` — routes through the same solver selection.
+`SensitivityOptions` names the choice: `Dense` forces the dense grounded
+factorization, `Sparse` factors the grounded DC bus susceptance matrix once
+with a sparse Cholesky and reuses the factorization across every right hand
+side, and `Auto` selects dense up to a reduced dimension of 512 (with a memory
+ceiling) and sparse above it. The sparse path avoids forming the
 \\((n-r) \times (n-r)\\) dense inverse; the PTDF/LODF outputs themselves can still
-be large. The iterative path requires positive finite branch susceptances, so
+be large. The sparse path requires positive finite branch susceptances, so
 the grounded DC bus susceptance matrix is positive definite after reference
-coverage is checked; the dense path remains the fallback for nonsingular
-indefinite cases.
+coverage is checked; the dense path handles nonsingular indefinite cases.
 Every connected component must contain at least one reference bus. The DC OPF
 instance bundle (\\(A\\), \\(b\\), \\(L\\), costs, bounds, thermal limits,
 \\(C_g\\)) is produced by `powerio-prob` and documented in
@@ -127,9 +127,9 @@ Matrices write as Matrix Market files or stay in memory. A symmetric matrix is
 stored as its lower triangle with the `symmetric` header and 1-based indices
 (`io::mtx::write_mtx`). The `sensitivities` command writes
 `<case>_ptdf.mtx`, `<case>_lodf.mtx`, and `<case>_sensitivity_meta.json`. Use
-`--solver dense|iterative|auto` to choose the PTDF/LODF solve path and
+`--solver dense|sparse|auto` to choose the PTDF/LODF solve path and
 `--drop-tolerance <value>` to omit entries with absolute value at or below the
-tolerance. When the CLI uses the iterative path, it writes retained Matrix
+tolerance. When the CLI uses the sparse path, it writes retained Matrix
 Market coordinates through temp files and does not hold the full sparse output
 in memory. The Rust `build_ptdf_lodf_with_options` API still returns `CsMat`
 values and is intended for outputs that fit in memory. The metadata records the
