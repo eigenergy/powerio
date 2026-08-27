@@ -1,0 +1,140 @@
+{
+  "schema": "powerio.module",
+  "version": 1,
+  "producer": {
+    "name": "powerio",
+    "version": "0.9.0"
+  },
+  "value": {
+    "kind": "dc_opf_instance",
+    "data": {
+      "network": {
+        "name": "calc",
+        "base_mva": 100.0,
+        "base_frequency": 60.0,
+        "buses": [
+          {
+            "id": 1,
+            "kind": "REF",
+            "vm": 1.01,
+            "va": 0.0,
+            "base_kv": 230.0,
+            "vmax": 1.1,
+            "vmin": 0.9,
+            "evhi": null,
+            "evlo": null,
+            "area": 1,
+            "zone": 1,
+            "name": null,
+            "extras": {}
+          },
+          {
+            "id": 2,
+            "kind": "PQ",
+            "vm": 1.0,
+            "va": 0.0,
+            "base_kv": 230.0,
+            "vmax": 1.1,
+            "vmin": 0.9,
+            "evhi": null,
+            "evlo": null,
+            "area": 1,
+            "zone": 1,
+            "name": null,
+            "extras": {}
+          }
+        ],
+        "loads": [
+          {
+            "bus": 2,
+            "p": 40.0,
+            "q": 10.0,
+            "voltage_model": null,
+            "in_service": true,
+            "extras": {}
+          }
+        ],
+        "shunts": [],
+        "branches": [
+          {
+            "from": 1,
+            "to": 2,
+            "r": 0.01,
+            "x": 0.1,
+            "b": 0.0,
+            "charging": null,
+            "rate_a": 0.0,
+            "rate_b": 0.0,
+            "rate_c": 0.0,
+            "rating_sets": [],
+            "current_ratings": null,
+            "tap": 0.0,
+            "shift": 0.0,
+            "in_service": true,
+            "angmin": -360.0,
+            "angmax": 360.0,
+            "control": null,
+            "solution": null,
+            "extras": {}
+          }
+        ],
+        "switches": [],
+        "generators": [
+          {
+            "bus": 1,
+            "pg": 42.0,
+            "qg": 0.0,
+            "pmax": 100.0,
+            "pmin": 0.0,
+            "qmax": 0.0,
+            "qmin": 0.0,
+            "vg": 1.0,
+            "mbase": 0.0,
+            "in_service": true,
+            "cost": {
+              "model": 2,
+              "startup": 0.0,
+              "shutdown": 0.0,
+              "ncost": 3,
+              "coeffs": [
+                0.01,
+                10.0,
+                0.0
+              ]
+            },
+            "caps": {},
+            "regulated_bus": null
+          }
+        ],
+        "storage": [],
+        "hvdc": [],
+        "transformers_3w": [],
+        "areas": [],
+        "solver": null,
+        "source_format": "in-memory"
+      },
+      "approximation": "series_susceptance",
+      "objective": {
+        "terms": [
+          {
+            "term": "network_generator_cost"
+          }
+        ]
+      },
+      "constraints": {
+        "generator_capability": {
+          "select": "all"
+        },
+        "voltage_bounds": {
+          "select": "all"
+        },
+        "thermal_limits": {
+          "select": "all"
+        },
+        "angle_bounds": {
+          "select": "all"
+        }
+      }
+    }
+  }
+}
