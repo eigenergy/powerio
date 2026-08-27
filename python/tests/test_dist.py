@@ -29,10 +29,8 @@ def test_multiconductor_is_the_only_model_name():
     # gone at 1.0.0. DistCase stays removed.
     import warnings as _warnings
 
-    with _warnings.catch_warnings(record=True) as caught:
-        _warnings.simplefilter("always")
-        assert dist.DistNetwork is dist.MulticonductorNetwork
-    assert any(issubclass(w.category, DeprecationWarning) for w in caught)
+    with pytest.raises(AttributeError):
+        dist.DistNetwork
     assert "DistNetwork" not in dist.__all__
     assert not hasattr(dist, "DistCase")
 

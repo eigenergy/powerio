@@ -20,6 +20,7 @@ mod merge;
 mod multiconductor;
 mod objective;
 mod scuc;
+pub mod scuc_inputs;
 
 pub use balanced::{
     AcBusSpecification, AcOpfInstance, AcPfInstance, DcBusSpecification, DcOpfInstance,
@@ -33,3 +34,4 @@ pub use multiconductor::{
 };
 pub use objective::{Objective, ObjectiveTerm};
 pub use scuc::AcScucInstance;
+pub use scuc_inputs::ScucInputs;

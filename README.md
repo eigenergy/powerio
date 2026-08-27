@@ -101,13 +101,13 @@ julia -e 'using Pkg; Pkg.add(url="https://github.com/eigenergy/PowerIO.jl")'
 
 ### Rust
 ```rust
-use powerio::{TargetFormat, parse_file};
+use powerio::{BalancedNetwork, TargetFormat, write_as};
 
-let parsed = parse_file("case14.m", None)?;
-let net = parsed.network;
-let conv = net.to_format(TargetFormat::PowerModelsJson)?;
+let module = powerio::parse(powerio_core::Source::open("case14.m")?)?;
+let module: powerio_core::PioModule<BalancedNetwork> = powerio::try_into_typed(module)?;
+let conv = write_as(&module, TargetFormat::PowerModelsJson)?;
 
-for warning in &conv.warnings {
+for warning in conv.rendered_diagnostics() {
     eprintln!("conversion warning: {warning}");
 }
 
@@ -118,7 +118,7 @@ std::fs::write("case14.json", conv.text)?;
 ```python
 import powerio as pio
 
-case = pio.parse_file("case9.m")
+case = pio.parse("case9.m", value_type=pio.BalancedNetwork)
 bprime = case.bprime()            # MATPOWER Bp, scipy.sparse, needs powerio[matrix]
 display = pio.parse_display_file("case.pwd")
 raw, warnings = pio.convert_file("case9.m", "psse")
@@ -128,7 +128,7 @@ raw, warnings = pio.convert_file("case9.m", "psse")
 ```julia
 using PowerIO
 
-case = parse_file("case9.m")
+case = PowerIO.parse("case9.m")
 text = to_matpower(case)
 json, warnings = to_format(case, "powermodels-json")
 ```
@@ -268,17 +268,17 @@ simulator servers and bridge tools.
 
 ### `.pio.json` documents
 
-`.pio.json` documents carry one balanced or multiconductor model payload
-with metadata: provenance, source maps, diagnostics, validation, summaries,
-lowering history, optional derived metadata, optional `operating_points`, and
-optional study commits. A GO Challenge 3 document stores the static first
-interval in `model` and the full replayable time series in `operating_points`;
-materializing one point returns a static document with the updates applied and
-the series cleared.
+`.pio.json` documents store one typed value — a network, a time or scenario
+collection, a problem instance, or a solution — beside the module's common
+records: source descriptors, source maps, diagnostics, history, and namespaced
+extensions. Released 0.9 packages upgrade one way on read; a 0.9 GO Challenge
+3 package with `operating_points` upgrades to a balanced operating point time
+series, and `export_state` materializes one static item from it.
 
-Rust uses `powerio::package::NetworkPackage`, Python uses the `powerio.Package`
-class, the C ABI uses `pio_package_*`, and the CLI writes documents with
-`powerio package`.
+Rust reads and writes the document with `powerio::stored::read_module` and
+`write_module`, Python with `powerio.StoredModule` (and `powerio.parse`,
+which loads either stored generation), the C ABI with `pio_module_*`, and
+the CLI writes documents with `powerio package`.
 
 ### GridFM
 

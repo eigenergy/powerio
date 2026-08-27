@@ -1,9 +1,10 @@
-# Study blocks
+# Study blocks (0.9, upgrade only)
 
-A `study` block stores cumulative edits to a `.pio.json` package. Rust, C, and
-Python can read the block and materialize a study commit. The CLI, authoring
-helpers, Julia bindings, and geographic edits are tracked in
-[#185](https://github.com/eigenergy/powerio/issues/185).
+A `study` block stored cumulative edits to a released 0.9 `.pio.json`
+package. The 1.0 stored module carries no study block: the upgrade reader
+refuses a 0.9 package whose study is nonempty and directs the producer to
+materialize a revision first, so this chapter documents the 0.9 lineage the
+upgrade specification refers to.
 
 Each study commit applies after every preceding commit. Materializing commit
 `k` applies commits 0 through `k` to a fresh copy of the base payload. This
@@ -69,7 +70,7 @@ commit without modifying the package.
 
 ## Materialization
 
-`NetworkPackage::materialize_study_commit(k)` applies commits 0 through `k` to
+The 0.9 materialization (`materialize_study_commit(k)`) applied commits 0 through `k` to
 a copy of the model payload. It removes the study and operating point blocks
 from the result and records the operation in `lowering_history`. The returned
 package is static and can be converted, projected into matrices, or passed to a
@@ -103,14 +104,7 @@ Study edits address payload rows by UID:
 `ensure_payload_uids(&mut Network)` adds missing UIDs before a consumer builds
 its own edit state. Use UIDs for stored references and row order for display.
 
-## APIs
-
-- Rust: `NetworkPackage::study`, `with_study`, `set_study`, `clear_study`,
-  `materialize_study_commit`, `materialize_balanced_study_commit`, and
-  `ensure_payload_uids`.
-- Python: `pkg.study()` and `pkg.materialize_study_commit(k)`.
-- C: `pio_package_study_json` and
-  `pio_package_materialize_study_commit`.
-
-The block, materialization rules, and UID behavior are tracked in
+The 0.9 package APIs that read and materialized study blocks are gone at
+1.0; the rules above remain as the record of what those releases wrote. The
+block's history is tracked in
 [#181](https://github.com/eigenergy/powerio/issues/181).

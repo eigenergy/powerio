@@ -199,7 +199,7 @@ powerio-tx/                   # 1.0 name of the current balanced parser crate
 ├── src/operations.rs        # in place Network edit operations
 ├── src/solver_tables.rs     # current internal solver preparation data
 ├── src/format/
-│   ├── mod.rs               # parse_file, parse_str, convert_file, write_as,
+│   ├── mod.rs               # parse (Source based), convert_file, write_as,
 │   │                        #   TargetFormat, Conversion, target_format_from_name
 │   ├── routing.rs           # classify_json_text (bare .json routing)
 │   ├── matpower/            # tokens, matlab, locate, rows, writer
@@ -324,8 +324,9 @@ fuzz/                        # libFuzzer targets (detached workspace; see fuzz/R
   durable source map, diagnostic, and history records. Retained source is run
   time data and is not serialized. `TimeSeries<T>` and `ScenarioSet<T>` belong
   in the typed value rather than common module fields and compose as
-  `ScenarioSet<TimeSeries<T>>`. `NetworkPackage` and `powerio-pkg` disappear
-  before 1.0. Typed entry selection must not serialize and clone the network.
+  `ScenarioSet<TimeSeries<T>>`. The 0.9 `NetworkPackage` is gone: its
+  decode survives crate private under `powerio::stored` for the one way
+  upgrade. Typed entry selection must not serialize and clone the network.
 - **Bus IDs.** MATPOWER 1 based; `IndexedNetwork::bus_index(id)` is the only mapping into dense `[0, n)`. Don't clamp out of range; return `Error::UnknownBus`.
 - **`BR_B` is already per unit.** Never divide by `base_mva` again.
 - **`tap == 0` ⇒ `tap = 1`.** Use `Branch::effective_tap()`.

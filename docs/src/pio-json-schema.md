@@ -5,8 +5,8 @@ typed value with the record of how it was produced. Version 1 is the 1.0
 document, described first below. The 0.9 `NetworkPackage` shape is the
 migration source: the same reader accepts every released 0.9 package and
 upgrades it one way, so the later sections describing the 0.9 layout are the
-specification of what upgrades, and `powerio::package::NetworkPackage`
-remains the implementation type of that migration surface.
+specification of what upgrades; the decoder for that lineage is crate
+private inside `powerio::stored` and exists only for the upgrade.
 [Compiler model layers](compiler-ir.md) describes the payload types.
 
 ## Purpose
@@ -101,7 +101,7 @@ documents. It does not define a standalone case format.
 **must** branch on it and **must not** infer the model kind from which field is
 present. The model JSON is additionally self-describing: `model` is tagged by
 `kind`, so `model.kind` and `model_kind` carry the same value.
-`NetworkPackage::kind_is_consistent` asserts the two agree; a reader should
+The 0.9 reader asserted the two agree (`kind_is_consistent`); a reader should
 reject a document where they disagree.
 
 ```json
@@ -206,7 +206,7 @@ The block shape is:
 GO Challenge 3 documents use this block for the scheduling time series. The
 static `model` reflects the first interval that can be represented by
 `BalancedNetwork`; `operating_points` carries replayable updates for every interval.
-`NetworkPackage::materialize_operating_point(index)` returns a new static
+The 0.9 materialization (`materialize_operating_point(index)`) returned a new static
 document with `origin.kind = "derived"` and
 `origin.pass = "materialize-operating-point"`.
 
@@ -287,7 +287,7 @@ with `mapping_kind = defaulted`, and its retained source becomes
 `origin.retained_source`. Validation diagnostics attach the matching `source_ref`
 when the document has a source map for the reported field.
 
-`NetworkPackage::lower_multiconductor_to_balanced(options)` returns a new
+The 0.9 lowering (`lower_multiconductor_to_balanced(options)`) returned a new
 balanced document with `origin.kind = derived` and
 `origin.pass = "multiconductor-to-balanced"`. It preserves the parent
 `lowering_history` and appends a `LoweringRecord` whose options, assumptions,
