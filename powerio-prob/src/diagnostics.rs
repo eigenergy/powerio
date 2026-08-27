@@ -30,6 +30,10 @@ pub mod codes {
         BUILD_INSTANCE_SHAPE_MISMATCH = "BUILD.INSTANCE.SHAPE_MISMATCH", Error,
             "a calculation input disagrees with the network's element tables",
             category = Data;
+        BUILD_OPERATOR_ZERO_IMPEDANCE = "BUILD.OPERATOR.ZERO_IMPEDANCE", Error,
+            "a zero impedance branch has no finite DC operator row", category = Data;
+        BUILD_OPERATOR_NOT_A_NUMBER = "BUILD.OPERATOR.NOT_A_NUMBER", Error,
+            "a branch value produced a non-finite operator entry", category = Data;
         BUILD_SOLUTION_SHAPE_MISMATCH = "BUILD.SOLUTION.SHAPE_MISMATCH", Error,
             "a solution column disagrees with the instance's element tables",
             category = Data;

@@ -799,3 +799,79 @@ def test_dc_data_over_mcp_carries_the_shared_names():
     assert data["row_ids"][0] == "branches:0"
     with pytest.raises(ValueError, match="balanced network"):
         server._dc_data_tool(content=LOWERABLE_DSS, from_format="dss")
+
+
+# ---- module diagnostics reach the MCP warnings -------------------------------
+
+
+def _balanced_module_with_diagnostics(diagnostics: list) -> str:
+    """A static `balanced_network` module document (exported from the time
+    series fixture) with the given diagnostics injected onto it."""
+    module = powerio.StoredModule.from_json(_series_module_json())
+    exported = module.export_state(time_position=1)
+    doc = json.loads(exported.to_json())
+    doc["diagnostics"] = diagnostics
+    return json.dumps(doc)
+
+
+def test_module_diagnostics_reach_summary_and_convert_warnings():
+    error = {
+        "id": "d-error",
+        "severity": "error",
+        "code": "M.E.1",
+        "message": "an error finding",
+    }
+    note = {
+        "id": "d-note",
+        "severity": "note",
+        "code": "M.N.1",
+        "message": "a note finding",
+    }
+
+    module_doc = _balanced_module_with_diagnostics([error, note])
+    summary = server._summary_tool(package_json=module_doc)
+    assert summary["warnings"] == ["M.E.1: an error finding"]
+
+    converted = server.convert(to="matpower", package_json=module_doc)
+    assert "M.E.1: an error finding" in converted["warnings"]
+    assert not any("M.N.1" in w for w in converted["warnings"])
+
+    note_only_doc = _balanced_module_with_diagnostics([note])
+    assert server._summary_tool(package_json=note_only_doc)["warnings"] == []
+
+    # The same finding, carried by the older released package transport,
+    # renders the identical "code: message" string: the two input forms agree.
+    package = json.loads(powerio.Package.from_file(DATA / "case9.m").to_json())
+    package["diagnostics"] = [
+        {"code": error["code"], "severity": error["severity"], "message": error["message"]}
+    ]
+    package_summary = server._summary_tool(package_json=json.dumps(package))
+    assert package_summary["warnings"] == ["M.E.1: an error finding"]
+
+
+def test_multiconductor_module_diagnostics_survive_in_order():
+    """Diagnostics carried by a stored multiconductor module reach the MCP
+    warnings in source order, including one whose span references the
+    module's own declared source and a trailing entry after it."""
+    module = powerio.StoredModule.from_str(LOWERABLE_DSS, "dss")
+    doc = json.loads(module.to_json())
+    source_id = doc["sources"][0]["id"]
+    doc["diagnostics"] = [
+        {"id": "d0", "severity": "warning", "code": "A.B.C", "message": "no span here"},
+        {
+            "id": "d1",
+            "severity": "error",
+            "code": "D.E.F",
+            "message": "in range span",
+            "spans": [{"source": source_id, "byte_start": 0, "byte_end": 10}],
+        },
+        {"id": "d2", "severity": "error", "code": "G.H.I", "message": "trailing error"},
+    ]
+    module_doc = json.dumps(doc)
+
+    summary = server._summary_tool(package_json=module_doc)
+    assert summary["warnings"] == [
+        "A.B.C: no span here",
+        "D.E.F: in range span",
+        "G.H.I: trailing error",
+    ]
