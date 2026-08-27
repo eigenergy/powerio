@@ -6,23 +6,13 @@ mod helpers;
 #[allow(unused_imports)]
 use helpers::*;
 
-use powerio_tx::{DcConvention, Network};
+use powerio_tx::Network;
 
 #[test]
 fn the_08_type_name_still_compiles() {
     let net: Network = powerio_tx::BalancedNetwork::new("shim", 100.0);
     let same: &powerio_tx::BalancedNetwork = &net;
     assert_eq!(same.name(), "shim");
-}
-
-#[test]
-fn paper_pure_works_in_expression_and_pattern_position() {
-    let convention = DcConvention::PaperPure;
-    assert_eq!(convention, DcConvention::ReactanceOnly);
-    match convention {
-        DcConvention::PaperPure => {}
-        other => panic!("PaperPure must match its successor, got {other:?}"),
-    }
 }
 
 #[test]
