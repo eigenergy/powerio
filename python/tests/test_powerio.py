@@ -1031,14 +1031,17 @@ def test_convention_aliases(case9):
 
 def test_sensitivity_solver_kwarg(case9):
     # On a small case the auto policy picks the dense path, so the explicit
-    # spellings must agree with the default. The iterative path agrees only
+    # spellings must agree with the default. The sparse path agrees only
     # to its 1e-10 relative residual.
     base = case9.ptdf().toarray()
     assert np.allclose(case9.ptdf(solver="dense").toarray(), base, atol=1e-9)
-    assert np.allclose(case9.ptdf(solver="iterative").toarray(), base, atol=1e-6)
+    assert np.allclose(case9.ptdf(solver="sparse").toarray(), base, atol=1e-6)
     lodf = case9.lodf().toarray()
     assert np.allclose(case9.lodf(solver="dense").toarray(), lodf, atol=1e-9)
-    assert np.allclose(case9.lodf(solver="CG").toarray(), lodf, atol=1e-6)
+    assert np.allclose(case9.lodf(solver="sparse").toarray(), lodf, atol=1e-6)
+    # The CG path is retired; its spelling is refused with the accepted set.
+    with pytest.raises(ValueError, match="expected 'auto', 'dense', or 'sparse'"):
+        case9.lodf(solver="CG")
 
 
 def test_bad_enum_strings_raise(case9, tmp_path):

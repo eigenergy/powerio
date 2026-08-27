@@ -46,7 +46,7 @@ Market files and `dcopf_meta.json`.
 | `A.mtx` | \\(n \times m\\) | signed incidence matrix; column \\(e\\) has \\(+1\\) at from-bus, \\(-1\\) at to-bus |
 | `L.mtx` | \\(n \times n\\) | DC bus susceptance matrix \\(L = A \operatorname{diag}(b) A^\mathsf{T}\\); with positive branch weights, its rank is \\(n-c\\) for \\(c\\) connected components |
 | `L_grounded.mtx` | \\((n-k) \times (n-k)\\) | \\(L\\) with \\(k\\) reference rows and columns removed; SPD when every island is grounded |
-| `BAt.mtx` | \\(m \times n\\) | angle dependent flow map \\(B A^\mathsf{T}\\); complete flow adds `flow_offset` |
+| `BAt.mtx` | \\(m \times n\\) | angle dependent flow map \\(B A^\mathsf{T}\\) over the bundle's positive weights; complete flow adds `flow_offset`. In PowerModels signs the same flow is \\(p_\text{branch} = -B_f\,v_a + b \odot \text{shift}\\) with negated susceptances |
 | `Cg.mtx` | \\(n \times n_{\mathrm{gen}}\\) | generator-to-bus incidence, one \\(1\\) per column |
 
 ## Vectors

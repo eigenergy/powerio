@@ -20,7 +20,7 @@ powerio sensitivities tests/data/case30.m -o out --solver auto --drop-tolerance 
 powerio
 ```
 
-`powerio sensitivities --solver iterative` writes Matrix Market coordinates
+`powerio sensitivities --solver sparse` writes Matrix Market coordinates
 through temp files, so the command does not keep the full sparse PTDF/LODF
 output in memory.
 
