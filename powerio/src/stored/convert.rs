@@ -16,7 +16,7 @@ use super::dto::{
     SourceMapEntryV1, SourceRelationV1, SourceSpanV1, StoredF64, StoredModuleV1, StoredQuantityV1,
     StoredValueV1, TimePointV1,
 };
-use crate::package::diagnostics::codes;
+use crate::codes;
 use crate::value::PioValue;
 
 type Result<T> = std::result::Result<T, powerio_core::Error>;

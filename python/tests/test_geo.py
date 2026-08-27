@@ -32,7 +32,7 @@ def test_parse_geo_rejects_input_without_coordinates():
 
 
 def test_network_apply_and_extract_round_trip():
-    net = pio.parse_file(DATA / "case9.m")
+    net = pio.parse(DATA / "case9.m", value_type=pio.BalancedNetwork)
     with pytest.raises(ValueError):
         net.geo_layer()
 
@@ -58,18 +58,3 @@ def test_dist_apply_returns_a_placed_copy():
     layer = placed.geo_layer()
     assert len(layer["features"]) == 2
 
-
-def test_acopf_instance_shape():
-    net = pio.parse_file(DATA / "case9.m")
-    instance = net.acopf_instance()
-    assert instance["n_buses"] == 9
-    assert instance["units"] == "PerUnit"
-    assert len(instance["generators"]["c0"]) == 3
-    assert len(instance["branches"]["g"]) == 9
-    assert len(instance["buses"]["p_d"]) == 9
-
-    native = net.acopf_instance(units="native")
-    assert native["units"] == "Native"
-
-    with pytest.raises(ValueError):
-        net.acopf_instance(units="percent")

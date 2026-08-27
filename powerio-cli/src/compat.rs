@@ -112,7 +112,7 @@ pub(crate) fn parse_str_with_name(
     powerio::format::parse(source).map(module_to_parsed)
 }
 
-fn module_to_parsed(module: powerio_core::PioModule<BalancedNetwork>) -> ParsedCase {
+pub(crate) fn module_to_parsed(module: powerio_core::PioModule<BalancedNetwork>) -> ParsedCase {
     ParsedCase {
         diagnostics: module.diagnostics().to_vec(),
         retained_source: module.source().is_some(),
@@ -163,7 +163,7 @@ pub(crate) fn dist_parse_str(text: &str, from: &str) -> Result<ParsedDist, power
     powerio_dist::parse(source).map(dist_module_to_parsed)
 }
 
-fn dist_module_to_parsed(
+pub(crate) fn dist_module_to_parsed(
     module: powerio_core::PioModule<powerio_dist::MulticonductorNetwork>,
 ) -> ParsedDist {
     ParsedDist {

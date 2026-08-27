@@ -9,7 +9,7 @@ use super::goc3::{
     Goc3Adapter, cost_cube, float_matrix, float_vec, initial_status, json_error, require_field,
     require_num, require_str,
 };
-use super::types::{
+use crate::instance::scuc_inputs::{
     ScopfAcContingencySurvivors, ScopfAcLineRow, ScopfAcLineSurvivorRow, ScopfActiveReserveRow,
     ScopfActiveReserveSetRow, ScopfBusRow, ScopfCostRow, ScopfDcContingencyFlowRow, ScopfDcLineRow,
     ScopfDeviceClassLayout, ScopfDeviceRow, ScopfEnergyWindowMaxCsRow, ScopfEnergyWindowMaxPrRow,
@@ -1157,15 +1157,6 @@ fn build_scopf_instance(document: &Goc3Document) -> Result<ScucInputs> {
 }
 
 /// Parse source text and build its SCOPF instance.
-/// The 0.8 spelling of [`parse_scopf_str`]. The alias goes away at 1.0.0.
-#[deprecated(
-    since = "0.9.0",
-    note = "renamed to parse_scopf_str in 0.9.0; the alias goes away at 1.0.0"
-)]
-pub fn build_scopf_instance_from_str(text: &str, from: &str) -> Result<ScucInputs> {
-    parse_scopf_str(text, from)
-}
-
 pub fn parse_scopf_str(text: &str, from: &str) -> Result<ScucInputs> {
     if from != "goc3-json" {
         return Err(ScopfError::UnsupportedFormat(from.to_owned()));
