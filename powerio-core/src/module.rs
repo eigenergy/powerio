@@ -310,6 +310,20 @@ impl<T> PioModule<T> {
         Ok(())
     }
 
+    /// Drop the value shaped provenance: the operation that calls this
+    /// replaced the value with one of a different kind, so RFC 6901 targets
+    /// into the old value no longer identify anything. Every diagnostic
+    /// keeps its code, message, severity, and spans but loses its target,
+    /// and the source map (whose entries are keyed by such targets) is
+    /// cleared. Pair this with [`PioModule::map_value`] in a kind changing
+    /// transform so the module still serializes.
+    pub fn sever_value_targets(&mut self) {
+        for diagnostic in &mut self.records.diagnostics {
+            diagnostic.clear_target();
+        }
+        self.records.source_map.clear();
+    }
+
     /// Move the value and every module record into another typed module.
     #[must_use]
     pub fn map_value<U>(self, convert: impl FnOnce(T) -> U) -> PioModule<U> {
