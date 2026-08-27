@@ -1518,6 +1518,7 @@ mod tests {
         // objects: per object each splice is legal, but the script's total
         // retained properties cross the whole-parse budget and further
         // splices refuse through the clamp diagnostic.
+        use std::fmt::Write as _;
         let mut script = String::from("New Load.seed kW=1\n");
         // Grow the seed to ~32k props by doubling (self splice under the
         // per-object cap).
@@ -1525,7 +1526,7 @@ mod tests {
             script.push_str("Edit Load.seed like=seed\n");
         }
         for index in 0..200 {
-            script.push_str(&format!("New Load.c{index} like=seed\n"));
+            let _ = writeln!(script, "New Load.c{index} like=seed");
         }
         let raw = parse(&script);
         let total: usize = raw.objects.iter().map(|object| object.props.len()).sum();
