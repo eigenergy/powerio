@@ -472,3 +472,27 @@ fn legacy_record_lists_are_held_to_the_module_maxima() {
     let written = write_module(&module).unwrap();
     read_module(&written).expect("written module reads back");
 }
+
+#[test]
+fn a_decoded_network_that_fails_validation_is_refused() {
+    // A branch naming an undeclared bus passes the wire decode but fails the
+    // model's own validation; the stored read refuses it instead of yielding
+    // the value.
+    let mut net = small_network();
+    let mut rogue = net.branches()[0].clone();
+    rogue.to = powerio_tx::BusId(9_999);
+    net.branches_mut().push(rogue);
+    let mut raw: serde_json::Value = serde_json::from_str(
+        &write_module(&powerio_core::PioModule::new(
+            powerio::PioValue::BalancedNetwork(net),
+        ))
+        .unwrap(),
+    )
+    .unwrap();
+    let _ = &mut raw;
+    let error = read_module(&raw.to_string()).unwrap_err();
+    assert!(
+        error.to_string().contains("fails validation"),
+        "unexpected refusal: {error}"
+    );
+}
