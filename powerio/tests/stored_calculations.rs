@@ -274,8 +274,11 @@ fn the_scuc_pair_round_trips_from_the_goc3_fixture() {
         "/../powerio-prob/tests/data/goc3_small.json"
     );
     let text = std::fs::read_to_string(path).unwrap();
-    let (instance, _diagnostics) =
-        powerio_prob::parse_goc3_instance(&text, "goc3_small.json").unwrap();
+    let module = powerio_prob::parse_goc3_instance(
+        powerio_core::Source::from_bytes("goc3_small.json", text.into_bytes()).unwrap(),
+    )
+    .unwrap();
+    let instance = module.value().clone();
     let periods = instance.inputs().dt.len();
     let buses = instance.network().buses().len();
     let devices =
@@ -312,9 +315,11 @@ fn goc3_instance() -> powerio_prob::AcScucInstance {
         "/../powerio-prob/tests/data/goc3_small.json"
     );
     let text = std::fs::read_to_string(path).unwrap();
-    powerio_prob::parse_goc3_instance(&text, "goc3_small.json")
-        .unwrap()
-        .0
+    powerio_prob::parse_goc3_instance(
+        powerio_core::Source::from_bytes("goc3_small.json", text.into_bytes()).unwrap(),
+    )
+    .unwrap()
+    .into_value()
 }
 
 fn full_scuc_outputs(

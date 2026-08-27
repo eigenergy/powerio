@@ -7,9 +7,11 @@ use powerio_tx::BalancedNetwork;
 
 use crate::state::{BalancedStateBuilder, OperatingPoint};
 
-/// A parsed PyPSA sequence, classified by what varies.
+/// A parsed PyPSA sequence, classified by what varies. The two
+/// classifications are fixed by the profile: a third would be a new
+/// promoted value kind, a breaking ontology change rather than an added
+/// variant.
 #[derive(Debug, Clone)]
-#[non_exhaustive]
 pub enum PypsaSequence {
     /// Problem input varies (setpoints, bounds): one network per snapshot,
     /// static tables shared across the series.
@@ -34,7 +36,10 @@ pub fn parse_pypsa_sequence(
 ) -> Result<(PypsaSequence, Vec<Diagnostic>), Error> {
     let sequence = powerio_tx::parse_pypsa_csv_time_series(source)
         .map_err(|error| Error::new(error.code(), error.to_string()))?;
-    if sequence.inputs_vary {
+    // An operating point series requires solved state actually varying. Input
+    // changes, or a declared axis with no series columns at all, preserve the
+    // axis as networks sharing every table.
+    if sequence.inputs_vary || !sequence.has_varying_columns {
         return Ok((
             PypsaSequence::Networks(sequence.series),
             sequence.diagnostics,

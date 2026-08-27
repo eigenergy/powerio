@@ -32,16 +32,20 @@ use powerio_matrix::{
     BalancedNetwork, DisplayData, IndexCore, IndexedNetwork, MissingGenCostPolicy,
     NormalizeOptions, POWER_MODELS_ANGLE_BOUND_PAD, PwdDisplay, WriteOptions,
 };
-use powerio_prob::matrix::{
-    DcOpfBundleMetadata, DcOpfBundleOptions, write_dcopf_bundle as write_bundle,
+use powerio_matrix::{
+    DcOpfAssemblyOptions, DcOpfBundleMetadata, DcOpfBundleOptions, Units,
+    write_dcopf_bundle as write_bundle,
 };
-use powerio_prob::{AcOpfOptions, DcOpfOptions, Units};
 
 #[cfg(feature = "gridfm")]
+use powerio::gridfm::{
+    GridfmRead, read_gridfm_dataset as gridfm_read_dataset,
+    read_gridfm_scenarios as gridfm_read_scenarios,
+};
+#[cfg(feature = "gridfm")]
 use powerio_matrix::io::gridfm::{
-    GridfmOptions, GridfmOutputs, GridfmRead, numbered_snapshots,
-    read_gridfm_dataset as gridfm_read_dataset, read_gridfm_scenarios as gridfm_read_scenarios,
-    write_gridfm_batch as gridfm_write_batch, write_gridfm_dataset as gridfm_write_dataset,
+    GridfmOptions, GridfmOutputs, numbered_snapshots, write_gridfm_batch as gridfm_write_batch,
+    write_gridfm_dataset as gridfm_write_dataset,
 };
 
 pyo3::create_exception!(
@@ -126,20 +130,6 @@ fn to_pyerr(e: powerio_matrix::Error) -> PyErr {
     match e {
         E::Io(io) => io.into(),
         E::Core(inner) => core_pyerr(inner),
-        other => {
-            let category = other.category();
-            let code = other.code().code;
-            categorized_pyerr(category, code, other.to_string())
-        }
-    }
-}
-
-fn prob_pyerr(e: powerio_prob::Error) -> PyErr {
-    use powerio_prob::Error as E;
-    match e {
-        E::Io(io) => io.into(),
-        E::Core(inner) => core_pyerr(inner),
-        E::Matrix(inner) => to_pyerr(inner),
         other => {
             let category = other.category();
             let code = other.code().code;
@@ -548,7 +538,7 @@ fn build_package_from_path(
         #[cfg(feature = "gridfm")]
         {
             let read = gridfm_read_dataset(input.to_string_lossy().as_ref(), scenario)
-                .map_err(to_pyerr)?;
+                .map_err(core_pyerr)?;
             let mut pkg = NetworkPackage::from_balanced_with_read_diagnostics(
                 read.network,
                 read.diagnostics.into_iter().map(Into::into),
@@ -1360,23 +1350,6 @@ impl PyBalancedNetwork {
         coo_triplets(py, &l)
     }
 
-    /// The matrix free AC OPF instance as its model JSON (dense 0-based
-    /// indices; the `AcOpfPreparation` serde shape). `units` is "perunit" (the
-    /// default) or "native".
-    #[pyo3(signature = (units=None))]
-    fn acopf_json(&self, units: Option<&str>) -> PyResult<String> {
-        let view = IndexedNetwork::with_core(self.inner(), &self.core);
-        let instance = powerio_prob::prep::build_ac_opf_preparation(
-            &view,
-            &AcOpfOptions {
-                units: parse_units(units.unwrap_or("perunit"))?,
-                ..AcOpfOptions::default()
-            },
-        )
-        .map_err(prob_pyerr)?;
-        serde_json::to_string(&instance).map_err(|error| PyValueError::new_err(error.to_string()))
-    }
-
     /// This network's coordinates as the canonical GeoJSON layer. Raises when
     /// the network carries none.
     fn geo_layer_json(&self) -> PyResult<String> {
@@ -1436,23 +1409,19 @@ impl PyBalancedNetwork {
         let cost_report = policy_network
             .apply_gen_cost_policy(&cost_opts.gen_cost_patches, cost_opts.missing_gen_cost)
             .map_err(core_pyerr)?;
-        let view = IndexedNetwork::new(&policy_network);
-        let instance = powerio_prob::prep::build_dc_opf_preparation(
-            &view,
-            &DcOpfOptions {
-                convention: parse_convention(convention.unwrap_or("series"))?,
-                units: parse_units(units.unwrap_or("perunit"))?,
-                ..DcOpfOptions::default()
-            },
-        )
-        .map_err(prob_pyerr)?;
+        let instance = powerio_prob::DcOpfInstance::from_network(policy_network)
+            .map_err(|error| core_error_pyerr(&error))?
+            .with_approximation(parse_convention(convention.unwrap_or("series"))?);
+        let mut assembly = DcOpfAssemblyOptions::default();
+        assembly.units = parse_units(units.unwrap_or("perunit"))?;
         let options = DcOpfBundleOptions {
+            assembly,
             metadata: DcOpfBundleMetadata {
                 cost_policy: cost_opts.missing_gen_cost,
                 cost_report,
             },
         };
-        let outputs = write_bundle(&instance, out_dir, &options).map_err(prob_pyerr)?;
+        let outputs = write_bundle(&instance, out_dir, &options).map_err(to_pyerr)?;
         dir_files_dict(py, &outputs.dir, &outputs.files)
     }
 
@@ -2389,7 +2358,7 @@ fn gridfm_read_to_py(read: GridfmRead) -> (PyBalancedNetwork, i64, Vec<String>) 
 fn read_gridfm(dir: &str, scenario: i64) -> PyResult<(PyBalancedNetwork, i64, Vec<String>)> {
     gridfm_read_dataset(dir, scenario)
         .map(gridfm_read_to_py)
-        .map_err(to_pyerr)
+        .map_err(core_pyerr)
 }
 
 /// Read every scenario of a gridfm dataset, one `(case, scenario, warnings)`
@@ -2399,7 +2368,7 @@ fn read_gridfm(dir: &str, scenario: i64) -> PyResult<(PyBalancedNetwork, i64, Ve
 #[cfg(feature = "gridfm")]
 #[pyfunction]
 fn read_gridfm_scenarios(dir: &str) -> PyResult<Vec<(PyBalancedNetwork, i64, Vec<String>)>> {
-    let reads = gridfm_read_scenarios(dir).map_err(to_pyerr)?;
+    let reads = gridfm_read_scenarios(dir).map_err(core_pyerr)?;
     Ok(reads.into_iter().map(gridfm_read_to_py).collect())
 }
 

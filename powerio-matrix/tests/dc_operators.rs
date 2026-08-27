@@ -2,10 +2,9 @@
 //! `p_branch = -Bf va + b .* shift`, stable axis mappings that survive source
 //! row reordering, formula-selective guards (#324), and injection updates
 //! that reconstruct no network dependent matrix.
-#![cfg(feature = "matrix")]
 
 use powerio_core::Source;
-use powerio_prob::matrix::DcOperators;
+use powerio_matrix::DcOperators;
 use powerio_prob::{DcPfInstance, merge_zero_impedance_buses};
 use powerio_tx::{BalancedNetwork, BusId, DcConvention};
 
