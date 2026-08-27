@@ -53,7 +53,7 @@ show_stat(s) = "$(s.ms) +/- $(s.std_ms) ms"
 
 function git_commit()
     try
-        return chomp(read(`git -C $(normpath(joinpath(@__DIR__, ".."))) rev-parse HEAD`, String))
+        return chomp(read(`git -C $(normpath(joinpath(@__DIR__, "..", ".."))) rev-parse HEAD`, String))
     catch
         return nothing
     end

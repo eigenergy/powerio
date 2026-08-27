@@ -64,7 +64,7 @@ def sample_stats(fn, n, warmup):
 
 
 def benchmark_metadata(args):
-    repo = Path(__file__).resolve().parent.parent
+    repo = Path(__file__).resolve().parent.parent.parent
     try:
         commit = subprocess.run(
             ["git", "rev-parse", "HEAD"],
