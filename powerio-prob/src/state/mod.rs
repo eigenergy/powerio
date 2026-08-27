@@ -20,7 +20,7 @@
 mod balanced;
 mod multiconductor;
 
-pub use balanced::{BalancedOperatingPoints, BalancedStateBuilder};
+pub use balanced::{BALANCED_STATE_QUANTITIES, BalancedOperatingPoints, BalancedStateBuilder};
 pub use multiconductor::{MulticonductorOperatingPoints, MulticonductorStateBuilder};
 
 /// One complete instantaneous state: a small owning handle over the
