@@ -32,7 +32,7 @@ pub struct DcOpfAssemblyOptions {
     /// Skip non-self-loop branches with zero reactance. Off by default:
     /// zero impedance branches are preserved in networks and instances, so
     /// assembly refuses them until the caller resolves them explicitly
-    /// ([`crate::merge_zero_impedance_buses`]) or opts into skipping.
+    /// ([`powerio_prob::merge_zero_impedance_buses`]) or opts into skipping.
     pub skip_zero_impedance: bool,
     /// Give a branch with no thermal rating the bound
     /// [`Branch::synthesize_rate_a`](powerio_tx::Branch::synthesize_rate_a)

@@ -583,10 +583,22 @@ fn parse_to_network(
                 Some("json") => None,
                 Some("dss") => return Err(unknown_source_format("dss")),
                 other => {
-                    return Err(Error::UnknownFormat(format!(
-                        "cannot infer from source name extension {other:?}; \
-                         declare a source format"
-                    )));
+                    // A nameless or oddly named source can still carry a JSON
+                    // document (in-memory text has no extension to state);
+                    // sniff it like a `.json` before refusing. The primary
+                    // buffer is already retained, so peeking is free.
+                    let jsonish = source.primary_buffer().is_ok_and(|buffer| {
+                        source_text(&buffer)
+                            .is_ok_and(|text| text.trim_start().starts_with(['{', '[']))
+                    });
+                    if jsonish {
+                        None
+                    } else {
+                        return Err(Error::UnknownFormat(format!(
+                            "cannot infer from source name extension {other:?}; \
+                             declare a source format"
+                        )));
+                    }
                 }
             }
         }

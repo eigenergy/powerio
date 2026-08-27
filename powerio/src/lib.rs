@@ -55,7 +55,9 @@ pub use value::{FromPioValue, PioValue, PioValueKind, ValueKindMismatch, try_int
 /// The family comes from the source's declared format when one was selected,
 /// and otherwise from the name and content: a `.dss` extension routes to the
 /// distribution reader, a `.json` document routes by its top level markers
-/// ([`format::routing::classify_json_text`]), and every other name routes to
+/// ([`format::routing::classify_json_text`]), a name with no recognized
+/// extension whose content opens a JSON document (an in-memory source has no
+/// extension to state) routes the same way, and every other name routes to
 /// the balanced network hub, whose own detection and refusals apply.
 ///
 /// Bare model JSON, the network serialization, decodes to
@@ -233,8 +235,6 @@ enum RoutedFamily {
 fn routed_family(
     source: &powerio_core::Source,
 ) -> std::result::Result<RoutedFamily, powerio_core::Error> {
-    use format::routing::{Detection, JsonClass, SourceFormat, TransmissionFormat};
-
     if let Some(declared) = source.format() {
         return Ok(family_of_token(declared.as_str()));
     }
@@ -265,40 +265,60 @@ fn routed_family(
         .to_ascii_lowercase();
     match extension.as_str() {
         "dss" => Ok(RoutedFamily::Distribution),
-        "json" => {
-            let buffer = source.primary_buffer()?;
-            // Family routing needs decoded text; a non-UTF-8 `.json` fails in
-            // the balanced hub with its own wording.
-            let Ok(text) = std::str::from_utf8(buffer.content_bytes()) else {
-                return Ok(RoutedFamily::Balanced);
-            };
-            match format::routing::classify_json_text(text) {
-                JsonClass::Case(Detection::Known(SourceFormat::Transmission(
-                    TransmissionFormat::Goc3Json,
-                ))) => Ok(RoutedFamily::Goc3),
-                JsonClass::Case(Detection::Known(SourceFormat::Transmission(
-                    TransmissionFormat::DeepMindOpfDataJson,
-                ))) => Ok(RoutedFamily::OpfData),
-                JsonClass::Case(Detection::Known(SourceFormat::Transmission(
-                    TransmissionFormat::EgretJson,
-                ))) => Ok(RoutedFamily::Egret),
-                JsonClass::Case(Detection::Known(SourceFormat::Distribution(dist_format))) => {
-                    Ok(match dist_format {
-                        format::routing::DistributionFormat::BmopfJson => RoutedFamily::Bmopf,
-                        _ => RoutedFamily::Distribution,
-                    })
-                }
-                // The balanced hub's own JSON detection carries the refusal
-                // wording for packages and unrecognized or ambiguous
-                // documents, and decodes bare model JSON itself.
-                JsonClass::Package => Ok(RoutedFamily::Stored),
-                JsonClass::Case(
-                    Detection::Known(_) | Detection::Ambiguous | Detection::Unknown,
-                )
-                | JsonClass::ModelJson => Ok(RoutedFamily::Balanced),
+        "json" => json_family(source),
+        // Extensions with dedicated non-JSON readers keep them; anything
+        // else (a nameless in-memory source above all) can still carry a
+        // JSON document, so content that opens one routes by classification,
+        // mirroring the balanced hub's own sniff.
+        "m" | "raw" | "aux" | "epc" | "pwb" | "pwd" => Ok(RoutedFamily::Balanced),
+        _ => {
+            let jsonish = source.primary_buffer().is_ok_and(|buffer| {
+                std::str::from_utf8(buffer.content_bytes())
+                    .is_ok_and(|text| text.trim_start().starts_with(['{', '[']))
+            });
+            if jsonish {
+                json_family(source)
+            } else {
+                Ok(RoutedFamily::Balanced)
             }
         }
-        _ => Ok(RoutedFamily::Balanced),
+    }
+}
+
+/// The family a JSON document's content markers select.
+fn json_family(
+    source: &powerio_core::Source,
+) -> std::result::Result<RoutedFamily, powerio_core::Error> {
+    use format::routing::{Detection, JsonClass, SourceFormat, TransmissionFormat};
+
+    let buffer = source.primary_buffer()?;
+    // Family routing needs decoded text; a non-UTF-8 `.json` fails in
+    // the balanced hub with its own wording.
+    let Ok(text) = std::str::from_utf8(buffer.content_bytes()) else {
+        return Ok(RoutedFamily::Balanced);
+    };
+    match format::routing::classify_json_text(text) {
+        JsonClass::Case(Detection::Known(SourceFormat::Transmission(
+            TransmissionFormat::Goc3Json,
+        ))) => Ok(RoutedFamily::Goc3),
+        JsonClass::Case(Detection::Known(SourceFormat::Transmission(
+            TransmissionFormat::DeepMindOpfDataJson,
+        ))) => Ok(RoutedFamily::OpfData),
+        JsonClass::Case(Detection::Known(SourceFormat::Transmission(
+            TransmissionFormat::EgretJson,
+        ))) => Ok(RoutedFamily::Egret),
+        JsonClass::Case(Detection::Known(SourceFormat::Distribution(dist_format))) => {
+            Ok(match dist_format {
+                format::routing::DistributionFormat::BmopfJson => RoutedFamily::Bmopf,
+                _ => RoutedFamily::Distribution,
+            })
+        }
+        JsonClass::Package => Ok(RoutedFamily::Stored),
+        // The balanced hub's own JSON detection carries the refusal
+        // wording for unrecognized or ambiguous documents, and decodes
+        // bare model JSON itself.
+        JsonClass::Case(Detection::Known(_) | Detection::Ambiguous | Detection::Unknown)
+        | JsonClass::ModelJson => Ok(RoutedFamily::Balanced),
     }
 }
 
@@ -454,6 +474,31 @@ mod tests {
         )
         .expect("declared bmopf parses");
         assert_eq!(module.value().kind(), PioValueKind::McAcOpfInstance);
+    }
+
+    #[test]
+    fn nameless_json_text_routes_by_content() {
+        use powerio_tx::{Bus, BusId, BusType};
+        // An in-memory source has no extension to state, so the family comes
+        // from the document's own markers: a calculation defining format, a
+        // distribution format, and bare model JSON all dispatch the same way
+        // they would from a `.json` file.
+        let goc3 = fixture("../powerio-prob/tests/data/goc3_small.json");
+        let module = parse(memory("<memory>", &goc3)).expect("nameless goc3 parses");
+        assert_eq!(module.value().kind(), PioValueKind::AcScucInstance);
+
+        let module = parse(memory("<memory>", BMOPF_TINY)).expect("nameless bmopf parses");
+        assert_eq!(module.value().kind(), PioValueKind::McAcOpfInstance);
+
+        let network = powerio_tx::BalancedNetwork::in_memory(
+            "transport",
+            100.0,
+            vec![Bus::new(BusId(1), BusType::Ref, 230.0)],
+            vec![],
+        );
+        let json = network.to_json().expect("network serializes");
+        let module = parse(memory("<memory>", &json)).expect("nameless model json parses");
+        assert_eq!(module.value().kind(), PioValueKind::BalancedNetwork);
     }
 
     #[test]
