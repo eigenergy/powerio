@@ -84,17 +84,12 @@
  *   are owned by the library; free them with pio_string_free. Handles from
  *   pio_parse_file / pio_parse_str / pio_parse_bytes / pio_read_dir /
  *   pio_normalize are freed
- *   with pio_network_free. Package handles use pio_package_free, distribution
- *   handles use pio_dist_network_free, and SCOPF handles use
- *   pio_scopf_instance_free. Arrow buffers are freed through their own release
- *   callbacks.
- * - A handle is immutable after construction unless a function takes it
- *   non-const: concurrent reads from any number of threads are safe; a
- *   non-const entry point, and the free functions, need exclusive access, and
- *   free exactly once. Two entry points take a handle non-const:
- *   pio_package_validate rewrites its diagnostics and validation summary, and
- *   pio_package_set_operating_points replaces its operating points and then
- *   revalidates.
+ *   with pio_network_free. Distribution handles use pio_dist_network_free,
+ *   and module, error, and DC data handles use their pio_*_release entry
+ *   points. Arrow buffers are freed through their own release callbacks.
+ * - A handle is immutable after construction: concurrent reads from any
+ *   number of threads are safe; the free and release functions need
+ *   exclusive access, and free exactly once.
  * - Every entry point catches Rust panics at the boundary and returns the
  *   documented failure value (NULL, 0, -1, 0.0) rather than unwinding across
  *   the ABI (requires the default panic = "unwind"; a panic = "abort" build
@@ -124,15 +119,9 @@
  * points (guarded by PIO_DIST): multiconductor distribution cases (OpenDSS,
  * PMD ENGINEERING JSON, BMOPF JSON) behind their own PioDistNetwork handle,
  * freed with pio_dist_network_free, string outputs freed with pio_string_free,
- * `--features pkg` for the pio_package_* entry points (guarded by
- * PIO_PKG): `.pio.json` compiler packages behind their own PioPackage handle,
- * freed with pio_package_free, and `--features prob` for the pio_scopf_*
- * entry points (guarded by PIO_PROB), behind a PioScopfInstance handle freed
- * with pio_scopf_instance_free. Two entry points need a pair of features:
- * pio_dist_geo_extract and pio_dist_geo_apply take a distribution handle but
- * read the geo layer through the package crate, so they are built only when
- * dist and pkg are both on (both are on by default). Each symbol's own #if
- * states what it needs; a runtime loader probes pio_has_feature per name.
+ * and `--features prob` (guarded by PIO_PROB) for the problem data the
+ * module surface serves. Each symbol's own #if states what it needs; a
+ * runtime loader probes pio_has_feature per name.
  * The dist C signatures follow PIO_ABI_VERSION like every other symbol.
  * PIO_DIST_ABI_VERSION is frozen at 1 and carries no meaning: it existed to
  * absorb IEEE BMOPF schema drift, and a schema revision changes a reader, a
@@ -141,7 +130,7 @@
  * the foreign schema versions from pio_build_info instead; the JSON payloads
  * (bmopf-json, powerio-dist-json) also carry their own meta.version.
  * Probe optional features at runtime with
- * pio_has_feature("arrow"|"matrix"|"gridfm"|"dist"|"pkg"|"prob").
+ * pio_has_feature("arrow"|"matrix"|"gridfm"|"dist"|"prob").
  *
  * Checked in and generated; regenerate from the Rust source with
  *   cbindgen --config cbindgen.toml --crate powerio-capi --output include/powerio.h
@@ -170,9 +159,6 @@ typedef struct PioModuleHandle PioModuleHandle;
 typedef struct PioDcData PioDcData;
 #if defined(PIO_DIST)
 typedef struct PioDistNetwork PioDistNetwork;
-#endif
-#if defined(PIO_PROB)
-typedef struct PioScopfInstance PioScopfInstance;
 #endif
 #if defined(PIO_ARROW)
 struct ArrowArray;
@@ -225,20 +211,6 @@ struct ArrowSchema;
  */
 #define PIO_ERRBUF_MIN 256
 
-#if defined(PIO_PROB)
-/**
- * Keep SCOPF document ordinals 0-based.
- */
-#define PIO_SCOPF_INDEX_BASE_ZERO 0
-#endif
-
-#if defined(PIO_PROB)
-/**
- * Renumber SCOPF document ordinals to 1-based.
- */
-#define PIO_SCOPF_INDEX_BASE_ONE 1
-#endif
-
 /**
  * `PioWriteOptions.missing_gen_cost_mode`: leave a missing cost row absent.
  */
@@ -285,42 +257,6 @@ struct ArrowSchema;
 #endif
 
 #if defined(PIO_ARROW)
-#define PIO_ARROW_TABLE_SOLVER_BUS 6
-#endif
-
-#if defined(PIO_ARROW)
-#define PIO_ARROW_TABLE_SOLVER_LOAD 7
-#endif
-
-#if defined(PIO_ARROW)
-#define PIO_ARROW_TABLE_SOLVER_SHUNT 8
-#endif
-
-#if defined(PIO_ARROW)
-#define PIO_ARROW_TABLE_SOLVER_BRANCH 9
-#endif
-
-#if defined(PIO_ARROW)
-#define PIO_ARROW_TABLE_SOLVER_SWITCH 10
-#endif
-
-#if defined(PIO_ARROW)
-#define PIO_ARROW_TABLE_SOLVER_ARC 11
-#endif
-
-#if defined(PIO_ARROW)
-#define PIO_ARROW_TABLE_SOLVER_GEN 12
-#endif
-
-#if defined(PIO_ARROW)
-#define PIO_ARROW_TABLE_SOLVER_STORAGE 13
-#endif
-
-#if defined(PIO_ARROW)
-#define PIO_ARROW_TABLE_SOLVER_HVDC 14
-#endif
-
-#if defined(PIO_ARROW)
 #define PIO_ARROW_TABLE_YBUS 15
 #endif
 
@@ -342,14 +278,6 @@ struct ArrowSchema;
 
 #if defined(PIO_ARROW)
 #define PIO_ARROW_TABLE_MATRIX_BRANCH 20
-#endif
-
-#if defined(PIO_ARROW)
-#define PIO_ARROW_TABLE_SOLVER_GEN_COST 21
-#endif
-
-#if defined(PIO_ARROW)
-#define PIO_ARROW_TABLE_SOLVER_GEN_COST_COEFF 22
 #endif
 
 /**
@@ -1087,63 +1015,6 @@ PioDistNetwork *pio_dist_geo_apply(const PioDistNetwork *net,
                                    size_t errlen);
 #endif
 
-#if defined(PIO_PROB)
-/**
- * Parse SCOPF source text into an owned problem instance. `from` currently
- * accepts `"goc3-json"`. Returns `NULL` on error and writes the message into
- * `errbuf`. Free the handle with `pio_scopf_instance_free`.
- */
-PioScopfInstance *pio_scopf_parse_str(const char *text,
-                                      const char *from,
-                                      char *errbuf,
-                                      size_t errlen);
-#endif
-
-#if defined(PIO_PROB)
-/**
- * Serialize a SCOPF instance as its language neutral 0-based document. The
- * JSON records its powerio version and index base. Free the returned string
- * with `pio_string_free`. Returns `NULL` for a null handle or serialization
- * error.
- */
-char *pio_scopf_to_json(const PioScopfInstance *instance, char *errbuf, size_t errlen);
-#endif
-
-#if defined(PIO_PROB)
-/**
- * Serialize a SCOPF instance with 0-based or 1-based ordinals. Pass
- * `PIO_SCOPF_INDEX_BASE_ZERO` or `PIO_SCOPF_INDEX_BASE_ONE`. Any other value
- * returns `NULL` and reports `BIND.CAPI.INVALID_OPTIONS`. The JSON records the
- * selected base. Free the returned string with `pio_string_free`.
- */
-char *pio_scopf_to_json_with_index_base(const PioScopfInstance *instance,
-                                        int32_t index_base,
-                                        char *errbuf,
-                                        size_t errlen);
-#endif
-
-#if defined(PIO_PROB)
-/**
- * Free a SCOPF instance handle. `NULL` is a no-op; free each handle once.
- */
-void pio_scopf_instance_free(PioScopfInstance *instance);
-#endif
-
-#if defined(PIO_PROB)
-/**
- * Mint an independent handle to the same SCOPF instance. NULL stays NULL.
- */
-PioScopfInstance *pio_scopf_instance_retain(const PioScopfInstance *instance);
-#endif
-
-#if defined(PIO_PROB)
-/**
- * Release one SCOPF instance handle: identical to
- * `pio_scopf_instance_free`, spelled with the ABI v6 lifecycle name.
- */
-void pio_scopf_instance_release(PioScopfInstance *instance);
-#endif
-
 #if defined(PIO_DIST)
 /**
  * Parse a distribution case file into a [`PioDistNetwork`] handle. The format
@@ -1458,7 +1329,7 @@ const double *pio_dc_data_susceptance(const PioDcData *data);
 const double *pio_dc_data_shift(const PioDcData *data);
 
 /**
- * Phase shift bus injection `p_shift = -A' * (b .* shift)` (the MATPOWER
+ * Phase shift bus injection `p_shift = A' * (b .* shift)` (the MATPOWER
  * `makeBdc` sign), length `n_buses`.
  */
 const double *pio_dc_data_shift_injection(const PioDcData *data);
@@ -1496,9 +1367,9 @@ const char *pio_dc_data_formula(const PioDcData *data);
 
 /**
  * Fill `out` with the complete affine branch flow
- * `p_branch = -b .* (va_from - va_to) - b .* shift`: given bus voltage
+ * `p_branch = -b .* (va_from - va_to) + b .* shift`: given bus voltage
  * angles `va` (radians, length `n_buses`), writes
- * `-b[e] * (va[from] - va[to]) - b[e] * shift[e]` per included row into
+ * `-b[e] * (va[from] - va[to]) + b[e] * shift[e]` per included row into
  * `out` (length `n_rows`), so `A' * p_branch` equals the bus injection
  * including `shift_injection`. Returns false on a NULL argument or a length
  * mismatch. No temporary vector is allocated.

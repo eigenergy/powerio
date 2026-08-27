@@ -105,13 +105,6 @@ impl CodedError for powerio_prob::Error {
     }
 }
 
-#[cfg(feature = "prob")]
-impl CodedError for powerio_prob::ScopfError {
-    fn code_str(&self) -> &'static str {
-        self.code().code
-    }
-}
-
 /// Every code this crate declares.
 #[must_use]
 pub fn registry() -> Vec<&'static DiagnosticInfo> {

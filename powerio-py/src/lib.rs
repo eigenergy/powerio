@@ -2080,28 +2080,6 @@ fn geo_report_dict<'py>(
     Ok(out)
 }
 
-/// Parse SCOPF source text and return its language neutral document as JSON.
-#[pyfunction(signature = (text, from_ = "goc3-json", *, index_base = 0))]
-fn parse_scopf(text: &str, from_: &str, index_base: i32) -> PyResult<String> {
-    let index_base = match index_base {
-        0 => powerio_prob::IndexBase::Zero,
-        1 => powerio_prob::IndexBase::One,
-        other => {
-            return Err(PyValueError::new_err(format!(
-                "index_base must be 0 or 1, got {other}"
-            )));
-        }
-    };
-    let instance = powerio_prob::parse_scopf_str(text, from_).map_err(|error| match error {
-        error @ powerio_prob::ScopfError::UnsupportedFormat(_) => {
-            PyValueError::new_err(error.to_string())
-        }
-        error => PowerIOParseError::new_err(error.to_string()),
-    })?;
-    powerio_prob::scopf::json::to_json_with_index_base(&instance, index_base)
-        .map_err(|error| PowerIOParseError::new_err(error.to_string()))
-}
-
 /// Build a `{dir, files}` dict from an outputs directory and its written files.
 /// Shared by the DC OPF and gridfm write paths. Paths go through [`path_to_str`]
 /// (so a non-UTF8 path raises instead of being mangled).
@@ -2250,7 +2228,6 @@ fn _powerio(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyStoredModule>()?;
     m.add_function(wrap_pyfunction!(classify_json_text, m)?)?;
     m.add_function(wrap_pyfunction!(json_classes, m)?)?;
-    m.add_function(wrap_pyfunction!(parse_scopf, m)?)?;
     m.add_function(wrap_pyfunction!(parse_geo, m)?)?;
     // Whether the gridfm Parquet surface (arrow/parquet) was compiled in, so the
     // pure-Python layer can raise an ImportError instead of an AttributeError.

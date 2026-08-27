@@ -9,7 +9,7 @@
 pub mod formats;
 pub mod instance;
 mod reference;
-pub mod scopf;
+pub(crate) mod scopf;
 pub mod solution;
 pub mod state;
 
@@ -26,15 +26,10 @@ pub use instance::{
     AcBusSpecification, AcOpfInstance, AcPfInstance, AcScucInstance, ActiveConstraints,
     ActiveControlMode, ConstraintSelection, DcBusSpecification, DcOpfInstance, DcPfInstance,
     McAcOpfInstance, McAcPfInstance, MulticonductorActiveConstraints, Objective, ObjectiveTerm,
-    PrescribedSourceVoltage, PrescribedTerminalPower, ZeroImpedanceMerge,
+    PrescribedSourceVoltage, PrescribedTerminalPower, ScucInputs, ZeroImpedanceMerge,
     merge_zero_impedance_buses,
 };
 pub use reference::ReferenceBuses;
-#[allow(deprecated)]
-pub use scopf::build_scopf_instance_from_str;
-pub use scopf::{
-    IndexBase, ScopfDeviceClassLayout, ScopfError, ScopfResult, ScucInputs, parse_scopf_str,
-};
 pub use solution::{
     AcOpfSolution, AcPfSolution, AcScucSolution, DcOpfSolution, DcPfSolution, GeneratorDispatch,
     McAcOpfSolution, McAcPfSolution, Producer, Residuals, SCUC_DEVICE_OUTPUT_SERIES,

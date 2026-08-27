@@ -71,7 +71,6 @@ __all__ = [
     "parse_display_file",
     "parse_file",
     "parse_geo",
-    "parse_scopf",
     "parse_str",
     "read_gridfm",
     "read_gridfm_scenarios",
@@ -689,19 +688,6 @@ def parse_bytes(data: bytes, from_: str) -> BalancedNetwork:
     file on disk. Text formats must be UTF-8.
     """
     return BalancedNetwork(_powerio.parse_bytes(data, from_))
-
-
-def parse_scopf(
-    text: str, from_: str = "goc3-json", *, index_base: int = 0
-) -> dict[str, Any]:
-    """Return a versioned SCOPF problem instance document.
-
-    ``from_`` currently accepts ``"goc3-json"``. ``index_base`` accepts 0 or 1
-    and defaults to Python's 0-based convention. Source identities remain
-    separate from document-order ordinals. Parse and assembly failures raise
-    :class:`PowerIOError`.
-    """
-    return _json.loads(_powerio.parse_scopf(text, from_, index_base=index_base))
 
 
 def parse_geo(text: str, name_hint: Optional[str] = None) -> dict[str, Any]:

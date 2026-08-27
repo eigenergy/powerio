@@ -1,11 +1,14 @@
-use powerio_prob::scopf::json::{
-    SCOPF_SCHEMA, to_json, to_json_value, to_json_value_with_index_base, to_json_with_index_base,
-};
-use powerio_prob::{IndexBase, ScopfDeviceClassLayout, ScopfError, ScucInputs, parse_scopf_str};
+//! The GOC3 to ScucInputs decode, exercised where the crate can still see
+//! the private types: the public surface is the typed [`AcScucInstance`],
+//! and these pins keep the decoder honest underneath it.
 use powerio_tx::BusId;
+
+use super::error::ScopfError;
+use super::projection::parse_scopf_str;
+use crate::instance::scuc_inputs::{ScopfDeviceClassLayout, ScucInputs};
 use serde_json::Value;
 
-const SMALL: &str = include_str!("data/goc3_small.json");
+const SMALL: &str = include_str!("../../tests/data/goc3_small.json");
 
 fn small_instance() -> ScucInputs {
     parse_scopf_str(SMALL, "goc3-json").expect("build small SCOPF instance")
@@ -95,71 +98,6 @@ fn small_instance_preserves_source_ids_and_uses_zero_based_indices() {
             .map(|row| (row.flat_jtk_dc, row.ctg, row.j_dc, row.t))
             .collect::<Vec<_>>(),
         vec![(0, 0, 0, 0), (1, 0, 0, 1), (2, 2, 0, 0), (3, 2, 0, 1)]
-    );
-}
-
-#[test]
-fn the_scopf_document_supports_zero_and_one_based_ordinals() {
-    let instance = small_instance();
-    let internal = serde_json::to_value(&instance).expect("serialize internal instance");
-    assert!(internal.get("static_data").is_some());
-    assert!(internal.get("static").is_none());
-    assert!(internal["lengths"].get("l_j_ln").is_some());
-    assert!(
-        internal["static_data"]["active_reserve"][0]
-            .get("sigma_rgu")
-            .is_some()
-    );
-
-    let zero = to_json_value(&instance).expect("serialize the default document");
-    let explicit_zero = to_json_value_with_index_base(&instance, IndexBase::Zero)
-        .expect("serialize the 0-based document");
-    let one = to_json_value_with_index_base(&instance, IndexBase::One)
-        .expect("serialize the 1-based document");
-    assert_eq!(zero, explicit_zero);
-    assert_eq!(
-        serde_json::from_str::<Value>(&to_json(&instance).expect("serialize default JSON"))
-            .expect("parse default JSON"),
-        zero
-    );
-    assert_eq!(
-        serde_json::from_str::<Value>(
-            &to_json_with_index_base(&instance, IndexBase::One).expect("serialize 1-based JSON"),
-        )
-        .expect("parse 1-based JSON"),
-        one
-    );
-    assert_eq!(zero["schema"], SCOPF_SCHEMA);
-    assert_eq!(zero["powerio_version"], powerio_tx::VERSION);
-    assert_eq!(zero["index_base"], 0);
-    assert_eq!(one["index_base"], 1);
-    assert_eq!(zero["instance"]["static"]["acl_branch"][0]["j_ln"], 0);
-    assert_eq!(one["instance"]["static"]["acl_branch"][0]["j_ln"], 1);
-    assert_eq!(zero["instance"]["static"]["active_reserve"][0]["n_p"], 0);
-    assert_eq!(one["instance"]["static"]["active_reserve"][0]["n_p"], 1);
-    assert_eq!(zero["instance"]["price_blocks"]["producer"][0]["t"], 0);
-    assert_eq!(one["instance"]["price_blocks"]["producer"][0]["t"], 1);
-    // Bus ids and initial status values are not ordinals and never move.
-    assert_eq!(zero["instance"]["static"]["bus"][0]["i"], 1);
-    assert_eq!(one["instance"]["static"]["bus"][0]["i"], 1);
-    assert_eq!(zero["instance"]["static"]["acl_branch"][0]["u_0"], 1);
-    assert_eq!(one["instance"]["static"]["acl_branch"][0]["u_0"], 1);
-    assert!(
-        zero["instance"]["static"]["active_reserve"][0]
-            .get("σ_rgu")
-            .is_some()
-    );
-    assert!(zero["instance"]["lengths"].get("L_J_ln").is_some());
-    // Renumbering is per declared field: counts and value fields pass
-    // through unchanged even where a name doubles as an index elsewhere
-    // (`p_max` on price blocks vs devices, `L_T` vs `t`).
-    assert_eq!(
-        zero["instance"]["lengths"]["L_T"],
-        u64::try_from(instance.lengths.l_t).expect("period count")
-    );
-    assert_eq!(
-        zero["instance"]["price_blocks"]["producer"][0]["p_max"],
-        instance.price_blocks.producer[0].p_max
     );
 }
 
@@ -634,13 +572,4 @@ fn named_uid_digits_do_not_define_document_ordinals() {
         instance.device_class_layout,
         ScopfDeviceClassLayout::Interleaved
     );
-}
-
-#[test]
-#[allow(deprecated)]
-fn the_08_scopf_entry_point_still_answers() {
-    let old = powerio_prob::build_scopf_instance_from_str(SMALL, "goc3-json")
-        .expect("the 0.8 alias builds");
-    let new = parse_scopf_str(SMALL, "goc3-json").expect("build small SCOPF instance");
-    assert_eq!(old.lengths, new.lengths);
 }

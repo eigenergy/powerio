@@ -288,20 +288,20 @@ pub struct ScopfStaticData {
 /// One device energy cost curve. `cost[t][m]` is `[c_en, p_max]` for price
 /// block `m` in period `t`.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub(super) struct ScopfCostRow {
-    pub(super) bus: BusId,
-    pub(super) uid: String,
-    pub(super) cost: Vec<Vec<[f64; 2]>>,
+pub(crate) struct ScopfCostRow {
+    pub(crate) bus: BusId,
+    pub(crate) uid: String,
+    pub(crate) cost: Vec<Vec<[f64; 2]>>,
 }
 
 /// Static index sets and the cost vectors used by the price block projection.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[non_exhaustive]
-pub(super) struct ScopfStaticDataProjection {
-    pub(super) static_data: ScopfStaticData,
-    pub(super) lengths: ScopfLengths,
-    pub(super) cost_vector_pr: Vec<ScopfCostRow>,
-    pub(super) cost_vector_cs: Vec<ScopfCostRow>,
+pub(crate) struct ScopfStaticDataProjection {
+    pub(crate) static_data: ScopfStaticData,
+    pub(crate) lengths: ScopfLengths,
+    pub(crate) cost_vector_pr: Vec<ScopfCostRow>,
+    pub(crate) cost_vector_cs: Vec<ScopfCostRow>,
 }
 
 macro_rules! energy_window_row {

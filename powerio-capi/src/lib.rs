@@ -2,7 +2,7 @@
 //!
 //! Functions parse, query, and convert networks through opaque handles. Feature
 //! gates add Arrow tables, directory datasets, distribution networks,
-//! `.pio.json` packages, and SCOPF problem instances. Each entry point is
+//! stored `.pio.json` modules, and problem data. Each entry point is
 //! `extern "C"` and writes errors to a caller provided buffer.
 //!
 //! The C API follows a fixed grammar, written out in the header preamble
@@ -45,11 +45,7 @@ pub use arrow_export::{
     PIO_ARROW_TABLE_BDOUBLEPRIME, PIO_ARROW_TABLE_BPRIME, PIO_ARROW_TABLE_BRANCH,
     PIO_ARROW_TABLE_BUS, PIO_ARROW_TABLE_GEN, PIO_ARROW_TABLE_INCIDENCE, PIO_ARROW_TABLE_LOAD,
     PIO_ARROW_TABLE_MATRIX_BRANCH, PIO_ARROW_TABLE_MATRIX_BUS, PIO_ARROW_TABLE_SHUNT,
-    PIO_ARROW_TABLE_SOLVER_ARC, PIO_ARROW_TABLE_SOLVER_BRANCH, PIO_ARROW_TABLE_SOLVER_BUS,
-    PIO_ARROW_TABLE_SOLVER_GEN, PIO_ARROW_TABLE_SOLVER_GEN_COST,
-    PIO_ARROW_TABLE_SOLVER_GEN_COST_COEFF, PIO_ARROW_TABLE_SOLVER_HVDC,
-    PIO_ARROW_TABLE_SOLVER_LOAD, PIO_ARROW_TABLE_SOLVER_SHUNT, PIO_ARROW_TABLE_SOLVER_STORAGE,
-    PIO_ARROW_TABLE_SOLVER_SWITCH, PIO_ARROW_TABLE_SWITCH, PIO_ARROW_TABLE_YBUS,
+    PIO_ARROW_TABLE_SWITCH, PIO_ARROW_TABLE_YBUS,
 };
 
 /// Opaque parsed network handle. Carries the parsed [`BalancedNetwork`], the
@@ -331,14 +327,6 @@ pub const PIO_DIST_ABI_VERSION: u32 = 1;
 /// Recommended error buffer size: pass a `char[PIO_ERRBUF_MIN]` to any
 /// `errbuf`/`warnbuf` parameter and a message always fits without truncation.
 pub const PIO_ERRBUF_MIN: usize = 256;
-
-/// Keep SCOPF document ordinals 0-based.
-#[cfg(feature = "prob")]
-pub const PIO_SCOPF_INDEX_BASE_ZERO: i32 = 0;
-
-/// Renumber SCOPF document ordinals to 1-based.
-#[cfg(feature = "prob")]
-pub const PIO_SCOPF_INDEX_BASE_ONE: i32 = 1;
 
 /// The category tokens ABI v5 publishes.
 ///
@@ -2214,150 +2202,6 @@ fn geo_apply_summary(report: &powerio::GeoApplyReport) -> String {
 }
 
 // ---------------------------------------------------------------------------
-// Problem instance API (`prob` feature).
-// ---------------------------------------------------------------------------
-
-/// Opaque matrix free SCOPF instance.
-#[cfg(feature = "prob")]
-pub struct ScopfInstanceState {
-    instance: powerio_prob::ScucInputs,
-}
-
-#[cfg(feature = "prob")]
-crate::v6::arc_handle!(
-    /// The opaque SCOPF instance handle (ABI v6 lifecycle).
-    PioScopfInstance,
-    ScopfInstanceState
-);
-
-#[cfg(feature = "prob")]
-const _: fn() = || {
-    fn assert_send_sync<T: Send + Sync>() {}
-    assert_send_sync::<PioScopfInstance>();
-};
-
-/// Parse SCOPF source text into an owned problem instance. `from` currently
-/// accepts `"goc3-json"`. Returns `NULL` on error and writes the message into
-/// `errbuf`. Free the handle with `pio_scopf_instance_free`.
-#[cfg(feature = "prob")]
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn pio_scopf_parse_str(
-    text: *const c_char,
-    from: *const c_char,
-    errbuf: *mut c_char,
-    errlen: usize,
-) -> *mut PioScopfInstance {
-    unsafe {
-        finish_handle(errbuf, errlen, "panic while parsing SCOPF instance", || {
-            let text = required_cstr(text, "text")?;
-            let from = required_cstr(from, "from")?;
-            let instance = powerio_prob::parse_scopf_str(text, from).map_err(err_line)?;
-            Ok(PioScopfInstance::wrap(ScopfInstanceState { instance }))
-        })
-    }
-}
-
-#[cfg(feature = "prob")]
-fn scopf_index_base_from_c(index_base: i32) -> Result<powerio_prob::IndexBase, String> {
-    match index_base {
-        PIO_SCOPF_INDEX_BASE_ZERO => Ok(powerio_prob::IndexBase::Zero),
-        PIO_SCOPF_INDEX_BASE_ONE => Ok(powerio_prob::IndexBase::One),
-        other => Err(coded(
-            &codes::BIND_CAPI_INVALID_OPTIONS,
-            format!(
-                "SCOPF index_base is {other}; expected {PIO_SCOPF_INDEX_BASE_ZERO} (zero) or \
-                 {PIO_SCOPF_INDEX_BASE_ONE} (one)"
-            ),
-        )),
-    }
-}
-
-#[cfg(feature = "prob")]
-unsafe fn scopf_to_json_impl(
-    instance: *const PioScopfInstance,
-    index_base: i32,
-    errbuf: *mut c_char,
-    errlen: usize,
-) -> *mut c_char {
-    unsafe {
-        finish_string(
-            errbuf,
-            errlen,
-            "panic while serializing SCOPF instance",
-            || {
-                let index_base = scopf_index_base_from_c(index_base)?;
-                let instance = instance
-                    .as_ref()
-                    .ok_or_else(|| null_handle("SCOPF instance handle"))?;
-                powerio_prob::scopf::json::to_json_with_index_base(&instance.instance, index_base)
-                    .map_err(err_line)
-            },
-        )
-    }
-}
-
-/// Serialize a SCOPF instance as its language neutral 0-based document. The
-/// JSON records its powerio version and index base. Free the returned string
-/// with `pio_string_free`. Returns `NULL` for a null handle or serialization
-/// error.
-#[cfg(feature = "prob")]
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn pio_scopf_to_json(
-    instance: *const PioScopfInstance,
-    errbuf: *mut c_char,
-    errlen: usize,
-) -> *mut c_char {
-    unsafe { scopf_to_json_impl(instance, PIO_SCOPF_INDEX_BASE_ZERO, errbuf, errlen) }
-}
-
-/// Serialize a SCOPF instance with 0-based or 1-based ordinals. Pass
-/// `PIO_SCOPF_INDEX_BASE_ZERO` or `PIO_SCOPF_INDEX_BASE_ONE`. Any other value
-/// returns `NULL` and reports `BIND.CAPI.INVALID_OPTIONS`. The JSON records the
-/// selected base. Free the returned string with `pio_string_free`.
-#[cfg(feature = "prob")]
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn pio_scopf_to_json_with_index_base(
-    instance: *const PioScopfInstance,
-    index_base: i32,
-    errbuf: *mut c_char,
-    errlen: usize,
-) -> *mut c_char {
-    unsafe { scopf_to_json_impl(instance, index_base, errbuf, errlen) }
-}
-
-/// Free a SCOPF instance handle. `NULL` is a no-op; free each handle once.
-#[cfg(feature = "prob")]
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn pio_scopf_instance_free(instance: *mut PioScopfInstance) {
-    unsafe {
-        guard((), || PioScopfInstance::release_raw(instance));
-    }
-}
-
-/// Mint an independent handle to the same SCOPF instance. NULL stays NULL.
-#[cfg(feature = "prob")]
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn pio_scopf_instance_retain(
-    instance: *const PioScopfInstance,
-) -> *mut PioScopfInstance {
-    unsafe {
-        guard(std::ptr::null_mut(), || {
-            PioScopfInstance::retain_raw(instance)
-        })
-    }
-}
-
-/// Release one SCOPF instance handle: identical to
-/// `pio_scopf_instance_free`, spelled with the ABI v6 lifecycle name.
-#[cfg(feature = "prob")]
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn pio_scopf_instance_release(instance: *mut PioScopfInstance) {
-    unsafe {
-        guard((), || PioScopfInstance::release_raw(instance));
-    }
-}
-
-// ---------------------------------------------------------------------------
 // Distribution API (`dist` feature). The multiconductor model behind its own
 // opaque `PioDistNetwork` handle and the `pio_dist_*` entry points. It is gated
 // on the `dist` feature / `PIO_DIST` define, exactly like `arrow`/`gridfm`; a
@@ -3522,12 +3366,9 @@ mod tests {
             "typedef struct PioModuleHandle PioModuleHandle;",
             "typedef struct PioDcData PioDcData;",
             "typedef struct PioDistNetwork PioDistNetwork;",
-            "typedef struct PioScopfInstance PioScopfInstance;",
             "#define PIO_ABI_VERSION 6",
             "#define PIO_DIST_ABI_VERSION 1",
             "#define PIO_ERRBUF_MIN 256",
-            "#define PIO_SCOPF_INDEX_BASE_ZERO 0",
-            "#define PIO_SCOPF_INDEX_BASE_ONE 1",
             "#define PIO_MISSING_GEN_COST_PRESERVE 0",
             "#define PIO_MISSING_GEN_COST_REQUIRE 1",
             "#define PIO_MISSING_GEN_COST_FILL 2",
@@ -3537,23 +3378,12 @@ mod tests {
             "#define PIO_ARROW_TABLE_LOAD 3",
             "#define PIO_ARROW_TABLE_SHUNT 4",
             "#define PIO_ARROW_TABLE_SWITCH 5",
-            "#define PIO_ARROW_TABLE_SOLVER_BUS 6",
-            "#define PIO_ARROW_TABLE_SOLVER_LOAD 7",
-            "#define PIO_ARROW_TABLE_SOLVER_SHUNT 8",
-            "#define PIO_ARROW_TABLE_SOLVER_BRANCH 9",
-            "#define PIO_ARROW_TABLE_SOLVER_SWITCH 10",
-            "#define PIO_ARROW_TABLE_SOLVER_ARC 11",
-            "#define PIO_ARROW_TABLE_SOLVER_GEN 12",
-            "#define PIO_ARROW_TABLE_SOLVER_STORAGE 13",
-            "#define PIO_ARROW_TABLE_SOLVER_HVDC 14",
             "#define PIO_ARROW_TABLE_YBUS 15",
             "#define PIO_ARROW_TABLE_INCIDENCE 16",
             "#define PIO_ARROW_TABLE_BPRIME 17",
             "#define PIO_ARROW_TABLE_BDOUBLEPRIME 18",
             "#define PIO_ARROW_TABLE_MATRIX_BUS 19",
             "#define PIO_ARROW_TABLE_MATRIX_BRANCH 20",
-            "#define PIO_ARROW_TABLE_SOLVER_GEN_COST 21",
-            "#define PIO_ARROW_TABLE_SOLVER_GEN_COST_COEFF 22",
             "typedef struct { size_t struct_size; int32_t clamp_angle_bounds; int32_t reserved; double angle_bound_pad; } PioNormalizeOptions;",
             "typedef struct { size_t struct_size; int32_t missing_gen_cost_mode; int32_t reserved; double fill_c2; double fill_c1; double fill_c0; double fill_startup; double fill_shutdown; const char *gen_cost_csv; } PioWriteOptions;",
             "uint32_t pio_abi_version(void);",
@@ -3608,12 +3438,6 @@ mod tests {
             "PioNetwork *pio_geo_apply(const PioNetwork *net, const char *layer, const char *name_hint, char *errbuf, size_t errlen);",
             "char *pio_dist_geo_extract(const PioDistNetwork *net, char *errbuf, size_t errlen);",
             "PioDistNetwork *pio_dist_geo_apply(const PioDistNetwork *net, const char *layer, const char *name_hint, char *errbuf, size_t errlen);",
-            "PioScopfInstance *pio_scopf_parse_str(const char *text, const char *from, char *errbuf, size_t errlen);",
-            "char *pio_scopf_to_json(const PioScopfInstance *instance, char *errbuf, size_t errlen);",
-            "char *pio_scopf_to_json_with_index_base(const PioScopfInstance *instance, int32_t index_base, char *errbuf, size_t errlen);",
-            "void pio_scopf_instance_free(PioScopfInstance *instance);",
-            "PioScopfInstance *pio_scopf_instance_retain(const PioScopfInstance *instance);",
-            "void pio_scopf_instance_release(PioScopfInstance *instance);",
             "PioDistNetwork *pio_dist_parse_file(const char *path, const char *from, char *errbuf, size_t errlen);",
             "PioDistNetwork *pio_dist_parse_str(const char *text, const char *format, char *errbuf, size_t errlen);",
             "void pio_dist_network_free(PioDistNetwork *net);",
@@ -4655,119 +4479,6 @@ mpc.branch = [
     }
 
     #[cfg(feature = "prob")]
-    const GOC3_SMALL_FIXTURE: &str = include_str!("../../powerio-prob/tests/data/goc3_small.json");
-
-    #[cfg(feature = "prob")]
-    #[test]
-    fn scopf_handle_serializes_json_document() {
-        let text = CString::new(GOC3_SMALL_FIXTURE).unwrap();
-        let from = CString::new("goc3-json").unwrap();
-        let feature = CString::new("prob").unwrap();
-        let mut err = [0 as c_char; PIO_ERRBUF_MIN];
-        unsafe {
-            assert_eq!(pio_has_feature(feature.as_ptr()), 1);
-            let instance =
-                pio_scopf_parse_str(text.as_ptr(), from.as_ptr(), err.as_mut_ptr(), err.len());
-            assert!(
-                !instance.is_null(),
-                "pio_scopf_parse_str failed: {}",
-                CStr::from_ptr(err.as_ptr()).to_str().unwrap()
-            );
-            let json = pio_scopf_to_json(instance, err.as_mut_ptr(), err.len());
-            assert!(!json.is_null());
-            let text = CStr::from_ptr(json).to_str().unwrap().to_owned();
-            let v: serde_json::Value = serde_json::from_str(&text).unwrap();
-
-            assert_eq!(v["schema"], "powerio.scopf");
-            assert_eq!(v[powerio::version::VERSION_KEY], powerio::VERSION);
-            assert_eq!(v["index_base"], 0);
-            assert_eq!(v["instance"]["lengths"]["I"], 2);
-            assert_eq!(v["instance"]["static"]["acl_branch"][0]["j_ln"], 0);
-
-            let explicit_zero_json = pio_scopf_to_json_with_index_base(
-                instance,
-                PIO_SCOPF_INDEX_BASE_ZERO,
-                err.as_mut_ptr(),
-                err.len(),
-            );
-            assert!(!explicit_zero_json.is_null());
-            assert_eq!(
-                CStr::from_ptr(explicit_zero_json).to_bytes(),
-                text.as_bytes()
-            );
-
-            let one_based_json = pio_scopf_to_json_with_index_base(
-                instance,
-                PIO_SCOPF_INDEX_BASE_ONE,
-                err.as_mut_ptr(),
-                err.len(),
-            );
-            assert!(!one_based_json.is_null());
-            let one_based: serde_json::Value =
-                serde_json::from_str(CStr::from_ptr(one_based_json).to_str().unwrap()).unwrap();
-            assert_eq!(one_based["index_base"], 1);
-            assert_eq!(one_based["instance"]["static"]["acl_branch"][0]["j_ln"], 1);
-
-            pio_string_free(json);
-            pio_string_free(explicit_zero_json);
-            pio_string_free(one_based_json);
-            pio_scopf_instance_free(instance);
-            pio_scopf_instance_free(std::ptr::null_mut());
-        }
-    }
-
-    #[cfg(feature = "prob")]
-    #[test]
-    fn scopf_handle_reports_format_parse_and_null_errors() {
-        let valid = CString::new(GOC3_SMALL_FIXTURE).unwrap();
-        let text = CString::new("not json").unwrap();
-        let from = CString::new("goc3-json").unwrap();
-        let unsupported = CString::new("matpower").unwrap();
-        let mut err = [0 as c_char; PIO_ERRBUF_MIN];
-        unsafe {
-            let instance =
-                pio_scopf_parse_str(text.as_ptr(), from.as_ptr(), err.as_mut_ptr(), err.len());
-            assert!(instance.is_null());
-            assert!(!CStr::from_ptr(err.as_ptr()).to_bytes().is_empty());
-
-            let instance = pio_scopf_parse_str(
-                valid.as_ptr(),
-                unsupported.as_ptr(),
-                err.as_mut_ptr(),
-                err.len(),
-            );
-            assert!(instance.is_null());
-            assert!(
-                CStr::from_ptr(err.as_ptr())
-                    .to_str()
-                    .unwrap()
-                    .contains("unsupported SCOPF source format")
-            );
-
-            let instance =
-                pio_scopf_parse_str(valid.as_ptr(), from.as_ptr(), err.as_mut_ptr(), err.len());
-            assert!(!instance.is_null());
-            let json = pio_scopf_to_json_with_index_base(instance, 2, err.as_mut_ptr(), err.len());
-            assert!(json.is_null());
-            assert!(
-                CStr::from_ptr(err.as_ptr())
-                    .to_str()
-                    .unwrap()
-                    .starts_with("BIND.CAPI.INVALID_OPTIONS: ")
-            );
-            pio_scopf_instance_free(instance);
-
-            let json = pio_scopf_to_json(std::ptr::null(), err.as_mut_ptr(), err.len());
-            assert!(json.is_null());
-            assert!(
-                CStr::from_ptr(err.as_ptr())
-                    .to_str()
-                    .unwrap()
-                    .contains("handle is NULL")
-            );
-        }
-    }
-
     #[test]
     fn geo_parse_normalizes_and_apply_returns_a_placed_handle() {
         let net = case9();
