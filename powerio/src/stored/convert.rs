@@ -766,27 +766,19 @@ fn decode_stored(stored: StoredModuleV1) -> Result<PioModule<PioValue>> {
 // into twenty single-use functions would hide the exhaustiveness this match
 // enforces.
 #[allow(clippy::too_many_lines)]
-/// Every network a decoded value embeds passes the model's own structural
-/// validation — the balanced reference walk, and the multiconductor
-/// unresolved reference check — so a stored document cannot smuggle a
-/// network the readers would refuse.
+/// Every network a decoded value embeds is held to its own model's rule: a
+/// balanced network passes the structural validation its readers enforce,
+/// so a stored document cannot smuggle a network they would refuse. The
+/// multiconductor unresolved reference walk is warning level in its reader
+/// (a refused include legitimately leaves dangling references beside the
+/// recorded findings), so it stays out of the decode gate.
 fn validate_decoded_networks(value: &PioValue) -> Result<()> {
     let balanced = |network: &powerio_tx::BalancedNetwork| -> Result<()> {
         network
             .validate()
             .map_err(|error| invalid(format!("decoded network fails validation: {error}")))
     };
-    let multiconductor = |network: &powerio_dist::MulticonductorNetwork| -> Result<()> {
-        let unresolved = powerio_dist::unresolved_references(network);
-        if unresolved.is_empty() {
-            Ok(())
-        } else {
-            Err(invalid(format!(
-                "decoded network fails validation: {}",
-                unresolved.join("; ")
-            )))
-        }
-    };
+    let multiconductor = |_network: &powerio_dist::MulticonductorNetwork| -> Result<()> { Ok(()) };
     match value {
         PioValue::BalancedNetwork(network) => balanced(network),
         PioValue::MulticonductorNetwork(network) => multiconductor(network),
