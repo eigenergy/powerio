@@ -24,7 +24,7 @@ def main() -> None:
     assert powerio.__version__ == versions["powerio_version"], versions
     assert versions["module_schema"] == {"name": "powerio.module", "version": 1}, versions
 
-    net = powerio.parse_str(CASE, "matpower")
+    net = powerio.parse(CASE.encode(), "matpower", value_type=powerio.BalancedNetwork)
     assert net.n_buses == 3 and net.n_branches == 3, (net.n_buses, net.n_branches)
 
     module = powerio.StoredModule.from_str(CASE, "matpower")

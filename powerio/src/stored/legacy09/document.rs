@@ -35,7 +35,12 @@ use crate::transform::{
 /// 1.x release writes this layout.
 fn version_is_frozen_lineage(version: &str) -> bool {
     let mut parts = version.split('.');
-    matches!((parts.next(), parts.next()), (Some("0"), Some("9")))
+    let (major, minor, patch) = (parts.next(), parts.next(), parts.next());
+    // A patch component must exist and open with a digit, so a bare "0.9"
+    // stays refused while a 0.9.x prerelease tag ("0.9.0-rc.1") loads.
+    major == Some("0")
+        && minor == Some("9")
+        && patch.is_some_and(|p| p.as_bytes().first().is_some_and(u8::is_ascii_digit))
 }
 
 fn default_powerio_version() -> String {
