@@ -212,6 +212,12 @@ enum SourceProvider {
 /// Opaque owner or provider of named immutable input buffers.
 ///
 /// File acquisition policy belongs here rather than to parser entry points.
+/// The primary buffer's reserved identity. The leading slash is a spelling
+/// [`resolve_segments`] can never produce (a referenced name must be
+/// relative), so an acquired or named buffer's identity is disjoint from the
+/// primary's by construction.
+pub const PRIMARY_SOURCE_ID: &str = "/input";
+
 /// [`Source::open`] on a file retains the primary bytes and permits
 /// constrained acquisition of referenced files beneath the file's canonical
 /// containing directory; [`Source::with_acquisition_root`] widens that root at
@@ -263,8 +269,12 @@ impl Source {
         }
         let bytes = read_open_file(file, &name, u64::MAX)?;
         let root_display = canonical_parent(&path)?;
-        let primary =
-            SourceBuffer::new(SourceId::new("input")?, name.to_string(), bytes, Vec::new());
+        let primary = SourceBuffer::new(
+            SourceId::new(PRIMARY_SOURCE_ID)?,
+            name.to_string(),
+            bytes,
+            Vec::new(),
+        );
         Ok(Self {
             name,
             provider: Arc::new(SourceProvider::File {
@@ -305,7 +315,7 @@ impl Source {
             ));
         }
         let primary = SourceBuffer::new(
-            SourceId::new("input")?,
+            SourceId::new(PRIMARY_SOURCE_ID)?,
             name.clone(),
             bytes.into(),
             Vec::new(),
