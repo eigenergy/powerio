@@ -32,10 +32,10 @@ use powerio_matrix::{
     BalancedNetwork, DisplayData, IndexCore, IndexedNetwork, MissingGenCostPolicy,
     NormalizeOptions, POWER_MODELS_ANGLE_BOUND_PAD, PwdDisplay, WriteOptions,
 };
-use powerio_prob::matrix::{
-    DcOpfBundleMetadata, DcOpfBundleOptions, write_dcopf_bundle as write_bundle,
+use powerio_matrix::{
+    DcOpfAssemblyOptions, DcOpfBundleMetadata, DcOpfBundleOptions, Units,
+    write_dcopf_bundle as write_bundle,
 };
-use powerio_prob::{AcOpfOptions, DcOpfOptions, Units};
 
 #[cfg(feature = "gridfm")]
 use powerio_matrix::io::gridfm::{
@@ -139,7 +139,6 @@ fn prob_pyerr(e: powerio_prob::Error) -> PyErr {
     match e {
         E::Io(io) => io.into(),
         E::Core(inner) => core_pyerr(inner),
-        E::Matrix(inner) => to_pyerr(inner),
         other => {
             let category = other.category();
             let code = other.code().code;
@@ -1360,23 +1359,6 @@ impl PyBalancedNetwork {
         coo_triplets(py, &l)
     }
 
-    /// The matrix free AC OPF instance as its model JSON (dense 0-based
-    /// indices; the `AcOpfPreparation` serde shape). `units` is "perunit" (the
-    /// default) or "native".
-    #[pyo3(signature = (units=None))]
-    fn acopf_json(&self, units: Option<&str>) -> PyResult<String> {
-        let view = IndexedNetwork::with_core(self.inner(), &self.core);
-        let instance = powerio_prob::prep::build_ac_opf_preparation(
-            &view,
-            &AcOpfOptions {
-                units: parse_units(units.unwrap_or("perunit"))?,
-                ..AcOpfOptions::default()
-            },
-        )
-        .map_err(prob_pyerr)?;
-        serde_json::to_string(&instance).map_err(|error| PyValueError::new_err(error.to_string()))
-    }
-
     /// This network's coordinates as the canonical GeoJSON layer. Raises when
     /// the network carries none.
     fn geo_layer_json(&self) -> PyResult<String> {
@@ -1436,23 +1418,19 @@ impl PyBalancedNetwork {
         let cost_report = policy_network
             .apply_gen_cost_policy(&cost_opts.gen_cost_patches, cost_opts.missing_gen_cost)
             .map_err(core_pyerr)?;
-        let view = IndexedNetwork::new(&policy_network);
-        let instance = powerio_prob::prep::build_dc_opf_preparation(
-            &view,
-            &DcOpfOptions {
-                convention: parse_convention(convention.unwrap_or("series"))?,
-                units: parse_units(units.unwrap_or("perunit"))?,
-                ..DcOpfOptions::default()
-            },
-        )
-        .map_err(prob_pyerr)?;
+        let instance = powerio_prob::DcOpfInstance::from_network(policy_network)
+            .map_err(|error| core_error_pyerr(&error))?
+            .with_approximation(parse_convention(convention.unwrap_or("series"))?);
+        let mut assembly = DcOpfAssemblyOptions::default();
+        assembly.units = parse_units(units.unwrap_or("perunit"))?;
         let options = DcOpfBundleOptions {
+            assembly,
             metadata: DcOpfBundleMetadata {
                 cost_policy: cost_opts.missing_gen_cost,
                 cost_report,
             },
         };
-        let outputs = write_bundle(&instance, out_dir, &options).map_err(prob_pyerr)?;
+        let outputs = write_bundle(&instance, out_dir, &options).map_err(to_pyerr)?;
         dir_files_dict(py, &outputs.dir, &outputs.files)
     }
 
