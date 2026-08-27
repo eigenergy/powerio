@@ -90,7 +90,11 @@ impl MulticonductorNodeIndex {
             }
         }
 
+        // Every union runs before any group is marked grounded, so a
+        // grounding is a property of the finished group and the index is
+        // identical under any declaration order of closed switches.
         let mut parent: Vec<usize> = (0..provisional.len()).collect();
+        let mut ground_touched: Vec<usize> = Vec::new();
         for switch in network.switches().iter().filter(|switch| !switch.open) {
             for (from, to) in switch
                 .terminal_map_from
@@ -106,14 +110,13 @@ impl MulticonductorNodeIndex {
                             parent[ra.max(rb)] = ra.min(rb);
                         }
                     }
-                    // A closed switch onto ground grounds the other side.
+                    // A closed switch onto ground grounds the other side's
+                    // whole finished group.
                     (Some(&a), None) if grounded.contains(&to_key) => {
-                        let root = find(&mut parent, a);
-                        grounded.insert(provisional[root].clone());
+                        ground_touched.push(a);
                     }
                     (None, Some(&b)) if grounded.contains(&from_key) => {
-                        let root = find(&mut parent, b);
-                        grounded.insert(provisional[root].clone());
+                        ground_touched.push(b);
                     }
                     _ => {
                         return Err(Error::Mtx(format!(
@@ -124,6 +127,10 @@ impl MulticonductorNodeIndex {
                 }
             }
         }
+        let grounded_roots: BTreeSet<usize> = ground_touched
+            .into_iter()
+            .map(|slot| find(&mut parent, slot))
+            .collect();
 
         // Dense rows: one per surviving root, in provisional (table) order.
         let mut dense_of_root: BTreeMap<usize, usize> = BTreeMap::new();
@@ -131,9 +138,9 @@ impl MulticonductorNodeIndex {
         let mut position = BTreeMap::new();
         for index in 0..provisional.len() {
             let root = find(&mut parent, index);
-            // A root whose representative was grounded through a switch
-            // grounds the whole group.
-            if grounded.contains(&provisional[root]) {
+            // A root whose group touched ground through a switch grounds the
+            // whole group.
+            if grounded_roots.contains(&root) {
                 grounded.insert(provisional[index].clone());
                 continue;
             }
