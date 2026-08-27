@@ -1,6 +1,8 @@
 //! Sparse projections and bundle output for problem instances.
 
+mod ac_jacobian;
 mod bundle;
+mod dc_operators;
 
 use powerio_matrix::matrix::incidence::diagonal;
 use powerio_matrix::matrix::triplet::CooBuilder;
@@ -10,7 +12,9 @@ use powerio_matrix::{
 
 use crate::prep::DcOpfPreparation;
 
+pub use ac_jacobian::{PowerFlowJacobian, VoltageCoordinates, calc_power_flow_jacobian};
 pub use bundle::{DcOpfBundleMetadata, DcOpfBundleOptions, DcOpfOutputs, write_dcopf_bundle};
+pub use dc_operators::{DcOperators, ReferenceConstrainedSystem};
 
 /// Sparse matrices for a DC OPF instance.
 #[derive(Debug, Clone)]

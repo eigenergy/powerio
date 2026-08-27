@@ -588,12 +588,14 @@ impl From<SchemeArg> for Scheme {
 
 #[derive(Clone, Copy, Debug, ValueEnum)]
 enum DcConvArg {
-    /// `b = x/(r² + x²)`, with phase shift injections.
+    /// The whole series impedance: `imag(inv(r + jx))`, with phase shift
+    /// injections.
     #[value(name = "series", alias = "series-impedance")]
-    SeriesImpedance,
-    /// `b = 1/(x tau)`, with phase shift injections.
+    SeriesSusceptance,
+    /// `-1/(x tau)`, with phase shift injections, matching MATPOWER
+    /// `makeBdc`.
     Matpower,
-    /// `b = 1/x`, ignoring resistance, taps, and shifts: the textbook DC
+    /// `-1/x`, ignoring resistance, taps, and shifts: the textbook DC
     /// linearization a published result reproduces.
     #[value(name = "reactance-only")]
     ReactanceOnly,
@@ -602,8 +604,8 @@ enum DcConvArg {
 impl From<DcConvArg> for DcConvention {
     fn from(value: DcConvArg) -> Self {
         match value {
-            DcConvArg::SeriesImpedance => Self::SeriesImpedance,
-            DcConvArg::Matpower => Self::Matpower,
+            DcConvArg::SeriesSusceptance => Self::SeriesSusceptance,
+            DcConvArg::Matpower => Self::TapAdjustedReactance,
             DcConvArg::ReactanceOnly => Self::ReactanceOnly,
         }
     }
@@ -613,7 +615,7 @@ impl From<DcConvArg> for DcConvention {
 enum SensitivitySolverArg {
     Auto,
     Dense,
-    Iterative,
+    Sparse,
 }
 
 impl From<SensitivitySolverArg> for SensitivitySolver {
@@ -621,7 +623,7 @@ impl From<SensitivitySolverArg> for SensitivitySolver {
         match value {
             SensitivitySolverArg::Auto => Self::Auto,
             SensitivitySolverArg::Dense => Self::Dense,
-            SensitivitySolverArg::Iterative => Self::Iterative,
+            SensitivitySolverArg::Sparse => Self::Sparse,
         }
     }
 }

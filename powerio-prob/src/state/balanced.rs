@@ -30,6 +30,26 @@ const BRANCH_TAP_RATIO: &str = "branch_tap_ratio";
 const BRANCH_PHASE_SHIFT: &str = "branch_phase_shift";
 const SWITCH_CLOSED: &str = "switch_closed";
 
+/// The complete balanced instantaneous vocabulary: the set of quantities the
+/// stored wire writes is exactly the set the builder accepts, from this one
+/// definition.
+pub const BALANCED_STATE_QUANTITIES: [&str; 14] = [
+    BUS_VOLTAGE_MAGNITUDE,
+    BUS_VOLTAGE_ANGLE,
+    BUS_ACTIVE_INJECTION,
+    BUS_REACTIVE_INJECTION,
+    GENERATOR_ACTIVE_POWER,
+    GENERATOR_REACTIVE_POWER,
+    GENERATOR_VOLTAGE_SETPOINT,
+    GENERATOR_IN_SERVICE,
+    LOAD_ACTIVE_POWER,
+    LOAD_REACTIVE_POWER,
+    BRANCH_IN_SERVICE,
+    BRANCH_TAP_RATIO,
+    BRANCH_PHASE_SHIFT,
+    SWITCH_CLOSED,
+];
+
 impl OperatingPoint<BalancedNetwork> {
     /// Bus voltage magnitude in per unit, `None` when the series states no
     /// voltages or the bus is unknown.
@@ -450,6 +470,21 @@ impl BalancedStateBuilder {
         Ok(self.dense(quantity, values))
     }
 
+    /// The identity order the network resolves for a quantity: the exact
+    /// sequence a dense column binds to, so a stored document's stated
+    /// identity list can be checked before its values are accepted.
+    ///
+    /// # Errors
+    /// A name outside the balanced instantaneous vocabulary.
+    pub fn identity_order(&self, quantity: &str) -> Result<Vec<String>, Error> {
+        let quantity = resolve_quantity(quantity)?;
+        Ok(self
+            .layout_for(quantity)?
+            .order()
+            .map(str::to_string)
+            .collect())
+    }
+
     /// Sparse columns for a quantity by its accessor name, as
     /// [`Self::dense_by_name`].
     ///
@@ -553,42 +588,9 @@ impl BalancedStateBuilder {
 }
 
 /// The static vocabulary name for a stored quantity spelling.
-/// The complete balanced instantaneous vocabulary, in declaration order.
-pub const BALANCED_STATE_QUANTITIES: [&str; 14] = [
-    BUS_VOLTAGE_MAGNITUDE,
-    BUS_VOLTAGE_ANGLE,
-    BUS_ACTIVE_INJECTION,
-    BUS_REACTIVE_INJECTION,
-    GENERATOR_ACTIVE_POWER,
-    GENERATOR_REACTIVE_POWER,
-    GENERATOR_VOLTAGE_SETPOINT,
-    GENERATOR_IN_SERVICE,
-    LOAD_ACTIVE_POWER,
-    LOAD_REACTIVE_POWER,
-    BRANCH_IN_SERVICE,
-    BRANCH_TAP_RATIO,
-    BRANCH_PHASE_SHIFT,
-    SWITCH_CLOSED,
-];
-
 fn resolve_quantity(name: &str) -> Result<&'static str, Error> {
-    const ALL: [&str; 14] = [
-        BUS_VOLTAGE_MAGNITUDE,
-        BUS_VOLTAGE_ANGLE,
-        BUS_ACTIVE_INJECTION,
-        BUS_REACTIVE_INJECTION,
-        GENERATOR_ACTIVE_POWER,
-        GENERATOR_REACTIVE_POWER,
-        GENERATOR_VOLTAGE_SETPOINT,
-        GENERATOR_IN_SERVICE,
-        LOAD_ACTIVE_POWER,
-        LOAD_REACTIVE_POWER,
-        BRANCH_IN_SERVICE,
-        BRANCH_TAP_RATIO,
-        BRANCH_PHASE_SHIFT,
-        SWITCH_CLOSED,
-    ];
-    ALL.iter()
+    BALANCED_STATE_QUANTITIES
+        .iter()
         .find(|known| **known == name)
         .copied()
         .ok_or_else(|| {

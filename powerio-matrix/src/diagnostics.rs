@@ -21,12 +21,17 @@ pub mod codes {
         // BUILD: assembling a derived object from a network that already parsed.
         BUILD_MATRIX_SHAPE_MISMATCH = "BUILD.MATRIX.SHAPE_MISMATCH", Error,
             "an operand's length does not match the matrix it is used with", category = Data;
+        BUILD_MULTI_UNSUPPORTED_STAMP = "BUILD.MULTI.UNSUPPORTED_STAMP", Warning,
+            "an element has no exact multiconductor admittance or ideal stamp and was omitted loudly";
         BUILD_SENSITIVITY_SINGULAR = "BUILD.SENSITIVITY.SINGULAR", Error,
             "the reference grounded Laplacian is singular", category = Data;
         BUILD_SENSITIVITY_INVALID_OPTION = "BUILD.SENSITIVITY.INVALID_OPTION", Error,
             "a DC sensitivity option is outside the range it is defined on", category = Data;
+        /// Retired in 1.0.0: the conjugate gradient solver this reported on
+        /// was replaced by a sparse direct factorization, which either
+        /// succeeds or reports singularity.
         BUILD_SENSITIVITY_NO_CONVERGENCE = "BUILD.SENSITIVITY.NO_CONVERGENCE", Error,
-            "the iterative DC sensitivity solve ran out of iterations", category = Data;
+            "the iterative DC sensitivity solve ran out of iterations", retired = "1.0.0";
         BUILD_GRIDFM_EMPTY_BATCH = "BUILD.GRIDFM.EMPTY_BATCH", Error,
             "a gridfm scenario batch holds no snapshot", category = Data;
         BUILD_GRIDFM_SCENARIO_ID_OVERFLOW = "BUILD.GRIDFM.SCENARIO_ID_OVERFLOW", Error,

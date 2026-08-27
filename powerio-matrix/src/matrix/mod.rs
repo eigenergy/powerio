@@ -13,6 +13,7 @@ mod bprime;
 pub mod incidence;
 mod lacpf;
 pub mod laplacian;
+pub mod multiconductor;
 pub mod sensitivity;
 pub mod triplet;
 mod ybus;

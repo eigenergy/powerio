@@ -451,6 +451,13 @@ impl Diagnostic {
         Ok(())
     }
 
+    /// Drop the target of a finding already built: the operation that calls
+    /// this changed the value it pointed into, so the locator no longer
+    /// identifies anything. Code, message, severity, and spans stay.
+    pub fn clear_target(&mut self) {
+        self.target = None;
+    }
+
     /// Replace the target of a finding already built. Same rule as
     /// [`Diagnostic::with_target`]: the complete locator is stored, or the
     /// call fails visibly.

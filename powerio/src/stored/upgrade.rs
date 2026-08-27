@@ -152,6 +152,55 @@ fn version_is_09(version: &str) -> bool {
         .is_some_and(|(major, minor)| *major == "0" && minor == "9")
 }
 
+/// Period slots the upgrade will materialize from a stated time axis. A year
+/// of five minute periods fits; a declared count past this refuses the
+/// document instead of sizing allocations from an untrusted number.
+const MAX_UPGRADE_PERIODS: usize = 131_072;
+
+fn upgrade_time_points(series: &OperatingPointSeries, periods: usize) -> Result<Vec<TimePoint>> {
+    let mut time_points = Vec::new();
+    time_points.try_reserve(periods).map_err(|_| {
+        refused(
+            &codes::READ_MODULE_INVALID,
+            format!("cannot reserve {periods} upgraded time points"),
+        )
+    })?;
+    for index in 0..periods {
+        let label = series
+            .time_axis
+            .labels
+            .get(index)
+            .cloned()
+            .unwrap_or_else(|| format!("period {index}"));
+        let duration = match series.time_axis.duration_hours.get(index) {
+            None => None,
+            Some(hours) => {
+                // Convert the seconds value that is actually stored, fallibly:
+                // the finiteness and range guard must apply to `hours * 3600`,
+                // and a stated duration that does not convert refuses the
+                // document rather than vanishing.
+                let seconds = hours * 3600.0;
+                Some(
+                    std::time::Duration::try_from_secs_f64(seconds).map_err(|_| {
+                        refused(
+                            &codes::READ_MODULE_INVALID,
+                            format!(
+                                "period {index} states {hours} hours, which is not a finite \
+                                 nonnegative duration"
+                            ),
+                        )
+                    })?,
+                )
+            }
+        };
+        time_points.push(
+            TimePoint::new(label, duration)
+                .map_err(|error| refused(&codes::READ_MODULE_INVALID, error.to_string()))?,
+        );
+    }
+    Ok(time_points)
+}
+
 /// Legacy operating points become the primary
 /// `TimeSeries<OperatingPoint<BalancedNetwork>>` value. Legacy updates state
 /// JSON fields on payload rows; each maps onto the fixed state vocabulary,
@@ -162,27 +211,18 @@ fn upgrade_series(
     series: &OperatingPointSeries,
 ) -> Result<PioValue> {
     let periods = series.time_axis.periods.max(series.points.len());
-    let mut time_points = Vec::with_capacity(periods);
-    for index in 0..periods {
-        let label = series
-            .time_axis
-            .labels
-            .get(index)
-            .cloned()
-            .unwrap_or_else(|| format!("period {index}"));
-        let duration = series
-            .time_axis
-            .duration_hours
-            .get(index)
-            .and_then(|hours| {
-                (hours.is_finite() && *hours >= 0.0)
-                    .then(|| std::time::Duration::from_secs_f64(hours * 3600.0))
-            });
-        time_points.push(
-            TimePoint::new(label, duration)
-                .map_err(|error| refused(&codes::READ_MODULE_INVALID, error.to_string()))?,
-        );
+    if periods > MAX_UPGRADE_PERIODS {
+        return Err(refused(
+            &codes::READ_MODULE_INVALID,
+            format!(
+                "the time axis declares {} periods over {} operating points; at most \
+                 {MAX_UPGRADE_PERIODS} periods upgrade",
+                series.time_axis.periods,
+                series.points.len()
+            ),
+        ));
     }
+    let time_points = upgrade_time_points(series, periods)?;
 
     // Sparse columns: base row from the static payload, overrides per point.
     let mut overrides: BTreeMap<&'static str, Vec<Vec<(String, f64)>>> = BTreeMap::new();
@@ -230,10 +270,21 @@ fn upgrade_series(
                         ),
                     ));
                 };
-                overrides
-                    .entry(quantity)
-                    .or_insert_with(|| vec![Vec::new(); periods])[point.index]
-                    .push((identity.clone(), value));
+                let column = match overrides.entry(quantity) {
+                    std::collections::btree_map::Entry::Occupied(entry) => entry.into_mut(),
+                    std::collections::btree_map::Entry::Vacant(entry) => {
+                        let mut columns = Vec::new();
+                        columns.try_reserve(periods).map_err(|_| {
+                            refused(
+                                &codes::READ_MODULE_INVALID,
+                                format!("cannot reserve {periods} override slots for `{quantity}`"),
+                            )
+                        })?;
+                        columns.resize_with(periods, Vec::new);
+                        entry.insert(columns)
+                    }
+                };
+                column[point.index].push((identity.clone(), value));
             }
         }
     }
