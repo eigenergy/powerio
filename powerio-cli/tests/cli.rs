@@ -257,7 +257,7 @@ fn sensitivities_write_solver_metadata() {
         "-o",
         out_dir.to_str().unwrap(),
         "--solver",
-        "iterative",
+        "sparse",
         "--drop-tolerance",
         "1e-10",
     ]);
@@ -276,8 +276,8 @@ fn sensitivities_write_solver_metadata() {
     )
     .unwrap();
     assert_eq!(meta["case"], "case9");
-    assert_eq!(meta["sensitivity"]["requested_solver"], "iterative");
-    assert_eq!(meta["sensitivity"]["solver_path"], "iterative_cg");
+    assert_eq!(meta["sensitivity"]["requested_solver"], "sparse");
+    assert_eq!(meta["sensitivity"]["solver_path"], "sparse_cholesky");
     assert_eq!(meta["sensitivity"]["drop_tolerance"], 1e-10);
     assert_eq!(meta["sensitivity"]["ptdf"]["rows"], 9);
     assert_eq!(meta["sensitivity"]["ptdf"]["cols"], 9);
