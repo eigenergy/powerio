@@ -2084,6 +2084,23 @@ fn read_legacy_branch_tail(c: &mut Cur<'_>, tail_start: usize) -> Probe<(&'stati
 mod tests {
     use super::*;
 
+    #[test]
+    fn the_retention_ceiling_kills_runs_and_reports_exhaustion() {
+        // Charge the whole retention ceiling, then ask a run to extend: the
+        // run dies without retaining the record and the parse boundary's
+        // exhaustion check reads true, which turns into the coded refusal.
+        let budget = SearchBudget::new();
+        // One large charge spends the ceiling in a single step.
+        assert!(!budget.retain(RETAINED_RUN_BUDGET + 1));
+        assert!(budget.retention_exhausted());
+
+        let mut run = Run::start((), 4);
+        let extended = run.prefix(3, &budget, |()| 1, |after, ()| Some(((), after + 1)));
+        assert!(extended.is_none(), "the exhausted budget must stop the run");
+        assert!(run.dead);
+        assert_eq!(run.items.len(), 1, "nothing was retained past the ceiling");
+    }
+
     fn empty_network(name: &str) -> BalancedNetwork {
         BalancedNetwork::from_tables(BalancedNetworkTables {
             name: name.to_string(),
