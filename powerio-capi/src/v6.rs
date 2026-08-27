@@ -1070,8 +1070,7 @@ mod tests {
     /// Test reads through accessor pointers, with the null case failed
     /// explicitly rather than dereferenced.
     unsafe fn checked<'a, T>(pointer: *const T) -> &'a T {
-        assert!(!pointer.is_null(), "accessor returned NULL");
-        unsafe { &*pointer }
+        unsafe { pointer.as_ref() }.expect("accessor returned NULL")
     }
 
     unsafe fn checked_slice<'a, T>(pointer: *const T, len: usize) -> &'a [T] {
