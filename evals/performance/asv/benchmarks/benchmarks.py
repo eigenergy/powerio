@@ -14,8 +14,10 @@ from pathlib import Path
 
 import powerio
 
-# evals/performance/asv/evals/validation/benchmarks.py -> repo root is four parents up.
-CASE = str(Path(__file__).resolve().parents[3] / "tests" / "data" / "case2869pegase.m")
+# This file sits four levels below the repo root, at
+# evals/performance/asv/benchmarks/benchmarks.py. That inner benchmarks/ name
+# is fixed by asv.conf.json's benchmark_dir setting; do not rename it.
+CASE = str(Path(__file__).resolve().parents[4] / "tests" / "data" / "case2869pegase.m")
 
 
 class Parse:

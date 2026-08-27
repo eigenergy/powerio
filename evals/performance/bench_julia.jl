@@ -20,7 +20,7 @@ isdir(POWERIO_JL_CHECKOUT) && pushfirst!(LOAD_PATH, POWERIO_JL_CHECKOUT)
 using ExaPowerIO, PowerModels, BenchmarkTools, SparseArrays, Logging, PowerIO
 using JSON, Dates, Statistics
 PowerModels.silence()
-include(joinpath(@__DIR__, "powerio_ffi.jl"))
+include(joinpath(@__DIR__, "..", "validation", "powerio_ffi.jl"))
 PowerIO.set_library!(get(ENV, "POWERIO_CAPI", LIBPOWERIO))
 
 # (name, path, run_powermodels_parse?, run_powermodels_ybus?)
@@ -67,7 +67,7 @@ function benchmark_metadata()
     )
 end
 
-# `--json`: also write evals/validation/results/speed_julia.json for render_tables.py.
+# `--json`: also write evals/performance/results/speed_julia.json for render_tables.py.
 const JSON_OUT = "--json" in ARGS
 jrows = NamedTuple[]
 matrix_jrows = NamedTuple[]

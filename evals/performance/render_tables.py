@@ -2,7 +2,7 @@
 """Regenerate the benchmark speed tables in evals/performance/RESULTS.md
 from the JSON the bench scripts emit, so the numbers stop being copied by hand.
 
-Reads evals/validation/results/{speed_julia,speed_python,speed_powerworld,speed_matrix}.json
+Reads evals/performance/results/{speed_julia,speed_python,speed_powerworld,speed_matrix}.json
 (written by `bench_julia.jl --json`, `bench_parse.py --json`, and the
 Criterion extractors documented in RESULTS.md) and rewrites only the regions
 fenced by `<!-- BENCH:<id> START -->` / `<!-- BENCH:<id> END -->`.
@@ -25,8 +25,8 @@ import re
 import sys
 from pathlib import Path
 
-REPO = Path(__file__).resolve().parent.parent
-RESULTS_DIR = REPO / "benchmarks" / "results"
+REPO = Path(__file__).resolve().parent.parent.parent
+RESULTS_DIR = REPO / "evals" / "performance" / "results"
 
 METADATA_HEADER = (
     "| suite | performed at (UTC) | commit | command |\n"

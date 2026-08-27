@@ -9,7 +9,7 @@
 #   bash evals/validation/run_rich_validation.sh --root /path/to/corpus --root /path/to/other/corpus
 
 set -uo pipefail
-cd "$(dirname "$0")/.."
+cd "$(dirname "$0")/../.."
 
 export XDG_CACHE_HOME="${XDG_CACHE_HOME:-$PWD/.cache}"
 export MPLCONFIGDIR="${MPLCONFIGDIR:-$XDG_CACHE_HOME/matplotlib}"

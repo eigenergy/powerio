@@ -57,7 +57,7 @@ repository under its code license.
 
 ## `large/` (not committed)
 
-Gitignored; `benchmarks/fetch_cases.sh` downloads the large benchmark cases
+Gitignored; `evals/validation/fetch_cases.sh` downloads the large benchmark cases
 on demand from the MATPOWER repository and
 [goghino/opf_benchmarks](https://github.com/goghino/opf_benchmarks) and
 documents their origins.
