@@ -102,7 +102,7 @@ now contain the exact 1.0 completion requirements.
 The final DC equations stay in PowerIO [#400](https://github.com/eigenergy/powerio/issues/400)
 and PowerIO.jl [#114](https://github.com/eigenergy/PowerIO.jl/issues/114).
 Both issue bodies now include
-`p_branch = -Bf * va + b .* shift`. The four preexisting PowerIO.jl 1.0 issues
+`p_branch = -Bf * va - b .* shift`. The four preexisting PowerIO.jl 1.0 issues
 [#111](https://github.com/eigenergy/PowerIO.jl/issues/111),
 [#112](https://github.com/eigenergy/PowerIO.jl/issues/112),
 [#113](https://github.com/eigenergy/PowerIO.jl/issues/113), and
@@ -155,7 +155,7 @@ Both also omit the affine branch shift term in documentation or tests. The
 required relation and regression are:
 
 ```text
-p_branch = -Bf * va + b .* shift
+p_branch = -Bf * va - b .* shift
 ```
 
 ### 0.9.1 maintenance release
