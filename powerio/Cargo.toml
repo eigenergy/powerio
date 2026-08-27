@@ -16,7 +16,7 @@ categories = ["science", "parsing"]
 all-features = true
 
 [features]
-schema = ["dep:schemars", "powerio-tx/schema", "powerio-core/schema", "powerio-dist/schema"]
+schema = ["dep:schemars", "powerio-tx/schema", "powerio-core/schema", "powerio-dist/schema", "powerio-prob/schema"]
 
 [dependencies]
 num-complex = { workspace = true }

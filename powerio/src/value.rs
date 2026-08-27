@@ -17,7 +17,22 @@ pub enum PioValueKind {
     MulticonductorNetwork,
     BalancedNetworkTimeSeries,
     BalancedOperatingPointTimeSeries,
+    MulticonductorOperatingPointTimeSeries,
     BalancedNetworkScenarioSet,
+    DcPfInstance,
+    AcPfInstance,
+    DcOpfInstance,
+    AcOpfInstance,
+    McAcPfInstance,
+    McAcOpfInstance,
+    AcScucInstance,
+    DcPfSolution,
+    AcPfSolution,
+    DcOpfSolution,
+    AcOpfSolution,
+    McAcPfSolution,
+    McAcOpfSolution,
+    AcScucSolution,
 }
 
 impl PioValueKind {
@@ -28,8 +43,25 @@ impl PioValueKind {
             Self::BalancedNetwork => "balanced_network",
             Self::BalancedNetworkTimeSeries => "balanced_network_time_series",
             Self::BalancedOperatingPointTimeSeries => "balanced_operating_point_time_series",
+            Self::MulticonductorOperatingPointTimeSeries => {
+                "multiconductor_operating_point_time_series"
+            }
             Self::BalancedNetworkScenarioSet => "balanced_network_scenario_set",
             Self::MulticonductorNetwork => "multiconductor_network",
+            Self::DcPfInstance => "dc_pf_instance",
+            Self::AcPfInstance => "ac_pf_instance",
+            Self::DcOpfInstance => "dc_opf_instance",
+            Self::AcOpfInstance => "ac_opf_instance",
+            Self::McAcPfInstance => "mc_ac_pf_instance",
+            Self::McAcOpfInstance => "mc_ac_opf_instance",
+            Self::AcScucInstance => "ac_scuc_instance",
+            Self::DcPfSolution => "dc_pf_solution",
+            Self::AcPfSolution => "ac_pf_solution",
+            Self::DcOpfSolution => "dc_opf_solution",
+            Self::AcOpfSolution => "ac_opf_solution",
+            Self::McAcPfSolution => "mc_ac_pf_solution",
+            Self::McAcOpfSolution => "mc_ac_opf_solution",
+            Self::AcScucSolution => "ac_scuc_solution",
         }
     }
 }
@@ -48,6 +80,10 @@ impl fmt::Display for PioValueKind {
 /// (`PioModule<MyValue>`) and never enter this enum.
 #[derive(Debug)]
 #[non_exhaustive]
+// The exact 20 variants are the architecture's fixed dynamic surface; the
+// larger calculation values stay unboxed because the enum is a transport
+// wrapper moved whole, never stored in bulk.
+#[allow(clippy::large_enum_variant)]
 pub enum PioValue {
     BalancedNetwork(BalancedNetwork),
     MulticonductorNetwork(MulticonductorNetwork),
@@ -55,8 +91,25 @@ pub enum PioValue {
     BalancedNetworkTimeSeries(powerio_core::TimeSeries<BalancedNetwork>),
     /// One fixed balanced network under an operating point per time point.
     BalancedOperatingPointTimeSeries(powerio_prob::BalancedOperatingPoints),
+    /// One fixed multiconductor network under an operating point per time
+    /// point.
+    MulticonductorOperatingPointTimeSeries(powerio_prob::MulticonductorOperatingPoints),
     /// One balanced network per scenario, shared element tables.
     BalancedNetworkScenarioSet(powerio_core::ScenarioSet<BalancedNetwork>),
+    DcPfInstance(powerio_prob::DcPfInstance),
+    AcPfInstance(powerio_prob::AcPfInstance),
+    DcOpfInstance(powerio_prob::DcOpfInstance),
+    AcOpfInstance(powerio_prob::AcOpfInstance),
+    McAcPfInstance(powerio_prob::McAcPfInstance),
+    McAcOpfInstance(powerio_prob::McAcOpfInstance),
+    AcScucInstance(powerio_prob::AcScucInstance),
+    DcPfSolution(powerio_prob::DcPfSolution),
+    AcPfSolution(powerio_prob::AcPfSolution),
+    DcOpfSolution(powerio_prob::DcOpfSolution),
+    AcOpfSolution(powerio_prob::AcOpfSolution),
+    McAcPfSolution(powerio_prob::McAcPfSolution),
+    McAcOpfSolution(powerio_prob::McAcOpfSolution),
+    AcScucSolution(powerio_prob::AcScucSolution),
 }
 
 impl PioValue {
@@ -69,7 +122,24 @@ impl PioValue {
             Self::BalancedOperatingPointTimeSeries(_) => {
                 PioValueKind::BalancedOperatingPointTimeSeries
             }
+            Self::MulticonductorOperatingPointTimeSeries(_) => {
+                PioValueKind::MulticonductorOperatingPointTimeSeries
+            }
             Self::BalancedNetworkScenarioSet(_) => PioValueKind::BalancedNetworkScenarioSet,
+            Self::DcPfInstance(_) => PioValueKind::DcPfInstance,
+            Self::AcPfInstance(_) => PioValueKind::AcPfInstance,
+            Self::DcOpfInstance(_) => PioValueKind::DcOpfInstance,
+            Self::AcOpfInstance(_) => PioValueKind::AcOpfInstance,
+            Self::McAcPfInstance(_) => PioValueKind::McAcPfInstance,
+            Self::McAcOpfInstance(_) => PioValueKind::McAcOpfInstance,
+            Self::AcScucInstance(_) => PioValueKind::AcScucInstance,
+            Self::DcPfSolution(_) => PioValueKind::DcPfSolution,
+            Self::AcPfSolution(_) => PioValueKind::AcPfSolution,
+            Self::DcOpfSolution(_) => PioValueKind::DcOpfSolution,
+            Self::AcOpfSolution(_) => PioValueKind::AcOpfSolution,
+            Self::McAcPfSolution(_) => PioValueKind::McAcPfSolution,
+            Self::McAcOpfSolution(_) => PioValueKind::McAcOpfSolution,
+            Self::AcScucSolution(_) => PioValueKind::AcScucSolution,
         }
     }
 }
@@ -197,6 +267,33 @@ typed_module!(
     BalancedNetworkScenarioSet,
     BalancedNetworkScenarioSet
 );
+typed_module!(
+    powerio_prob::MulticonductorOperatingPoints,
+    MulticonductorOperatingPointTimeSeries,
+    MulticonductorOperatingPointTimeSeries
+);
+typed_module!(powerio_prob::DcPfInstance, DcPfInstance, DcPfInstance);
+typed_module!(powerio_prob::AcPfInstance, AcPfInstance, AcPfInstance);
+typed_module!(powerio_prob::DcOpfInstance, DcOpfInstance, DcOpfInstance);
+typed_module!(powerio_prob::AcOpfInstance, AcOpfInstance, AcOpfInstance);
+typed_module!(powerio_prob::McAcPfInstance, McAcPfInstance, McAcPfInstance);
+typed_module!(
+    powerio_prob::McAcOpfInstance,
+    McAcOpfInstance,
+    McAcOpfInstance
+);
+typed_module!(powerio_prob::AcScucInstance, AcScucInstance, AcScucInstance);
+typed_module!(powerio_prob::DcPfSolution, DcPfSolution, DcPfSolution);
+typed_module!(powerio_prob::AcPfSolution, AcPfSolution, AcPfSolution);
+typed_module!(powerio_prob::DcOpfSolution, DcOpfSolution, DcOpfSolution);
+typed_module!(powerio_prob::AcOpfSolution, AcOpfSolution, AcOpfSolution);
+typed_module!(powerio_prob::McAcPfSolution, McAcPfSolution, McAcPfSolution);
+typed_module!(
+    powerio_prob::McAcOpfSolution,
+    McAcOpfSolution,
+    McAcOpfSolution
+);
+typed_module!(powerio_prob::AcScucSolution, AcScucSolution, AcScucSolution);
 
 #[cfg(test)]
 mod tests {
