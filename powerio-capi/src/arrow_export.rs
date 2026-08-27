@@ -10,12 +10,10 @@
 //! signatures.
 //!
 //! Tables 0..5 are the *raw* network fields, with EXTERNAL bus ids (the same id
-//! space as `pio_bus_ids`), not the gridfm-datakit schema. Tables 6..14 are the
-//! normalized solver table rules: per unit/radian values and dense zero based
-//! row ids. Matrix table ids after that carry COO triplets in the same dense bus
-//! index space, with matrix dimensions stored in Arrow schema metadata. Tables
-//! 21 and 22 carry normalized generator cost: a dense header row per solver
-//! generator and the flattened coefficient vector it slices into.
+//! space as `pio_bus_ids`), not the gridfm-datakit schema. The matrix table
+//! ids carry COO triplets in a dense bus index space, with matrix dimensions
+//! stored in Arrow schema metadata. Ids 6..14, 21, and 22 carried the retired
+//! 0.9 solver row projection and stay burned.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -27,7 +25,7 @@ use arrow::ffi::{FFI_ArrowArray, FFI_ArrowSchema};
 use arrow::record_batch::RecordBatch;
 #[cfg(feature = "matrix")]
 use powerio::IndexedNetwork;
-use powerio::{BalancedNetwork, BusId, IndexCore, NormalizedSolverTables, SolverArcTerminal};
+use powerio::{BalancedNetwork, BusId, IndexCore};
 
 /// Table selectors for [`pio_to_arrow`](crate::pio_to_arrow); the C
 /// header mirrors these as `PIO_ARROW_TABLE_*`.
@@ -37,28 +35,19 @@ pub const PIO_ARROW_TABLE_GEN: i32 = 2;
 pub const PIO_ARROW_TABLE_LOAD: i32 = 3;
 pub const PIO_ARROW_TABLE_SHUNT: i32 = 4;
 pub const PIO_ARROW_TABLE_SWITCH: i32 = 5;
-pub const PIO_ARROW_TABLE_SOLVER_BUS: i32 = 6;
-pub const PIO_ARROW_TABLE_SOLVER_LOAD: i32 = 7;
-pub const PIO_ARROW_TABLE_SOLVER_SHUNT: i32 = 8;
-pub const PIO_ARROW_TABLE_SOLVER_BRANCH: i32 = 9;
-pub const PIO_ARROW_TABLE_SOLVER_SWITCH: i32 = 10;
-pub const PIO_ARROW_TABLE_SOLVER_ARC: i32 = 11;
-pub const PIO_ARROW_TABLE_SOLVER_GEN: i32 = 12;
-pub const PIO_ARROW_TABLE_SOLVER_STORAGE: i32 = 13;
-pub const PIO_ARROW_TABLE_SOLVER_HVDC: i32 = 14;
 pub const PIO_ARROW_TABLE_YBUS: i32 = 15;
 pub const PIO_ARROW_TABLE_INCIDENCE: i32 = 16;
 pub const PIO_ARROW_TABLE_BPRIME: i32 = 17;
 pub const PIO_ARROW_TABLE_BDOUBLEPRIME: i32 = 18;
 pub const PIO_ARROW_TABLE_MATRIX_BUS: i32 = 19;
 pub const PIO_ARROW_TABLE_MATRIX_BRANCH: i32 = 20;
-pub const PIO_ARROW_TABLE_SOLVER_GEN_COST: i32 = 21;
-pub const PIO_ARROW_TABLE_SOLVER_GEN_COST_COEFF: i32 = 22;
 
 // These values are the ABI: the `PIO_ARROW_TABLE_*` macros in include/powerio.h
 // are hand-synced to them. The set is append-only: these ids and each table's
 // column order are frozen, a new table takes the next id and extends
 // this assert, and new columns append at the end so consumers read by name.
+// Ids 6 to 14, 21, and 22 carried the retired 0.9 solver row projection and
+// stay burned: a new table takes the next unused id, never a retired one.
 // Every exported field is non-nullable. Pin them so a Rust-side edit that
 // drifts from the header (a renumber, a
 // reorder, a dropped table) fails the build instead of silently exporting the
@@ -70,23 +59,12 @@ const _: () = assert!(
         && PIO_ARROW_TABLE_LOAD == 3
         && PIO_ARROW_TABLE_SHUNT == 4
         && PIO_ARROW_TABLE_SWITCH == 5
-        && PIO_ARROW_TABLE_SOLVER_BUS == 6
-        && PIO_ARROW_TABLE_SOLVER_LOAD == 7
-        && PIO_ARROW_TABLE_SOLVER_SHUNT == 8
-        && PIO_ARROW_TABLE_SOLVER_BRANCH == 9
-        && PIO_ARROW_TABLE_SOLVER_SWITCH == 10
-        && PIO_ARROW_TABLE_SOLVER_ARC == 11
-        && PIO_ARROW_TABLE_SOLVER_GEN == 12
-        && PIO_ARROW_TABLE_SOLVER_STORAGE == 13
-        && PIO_ARROW_TABLE_SOLVER_HVDC == 14
         && PIO_ARROW_TABLE_YBUS == 15
         && PIO_ARROW_TABLE_INCIDENCE == 16
         && PIO_ARROW_TABLE_BPRIME == 17
         && PIO_ARROW_TABLE_BDOUBLEPRIME == 18
         && PIO_ARROW_TABLE_MATRIX_BUS == 19
         && PIO_ARROW_TABLE_MATRIX_BRANCH == 20
-        && PIO_ARROW_TABLE_SOLVER_GEN_COST == 21
-        && PIO_ARROW_TABLE_SOLVER_GEN_COST_COEFF == 22
 );
 
 /// One table build or export failure as its errbuf line. Arrow's own error
@@ -110,33 +88,6 @@ pub fn export(
         PIO_ARROW_TABLE_LOAD => load_batch(net).map_err(export_err)?,
         PIO_ARROW_TABLE_SHUNT => shunt_batch(net).map_err(export_err)?,
         PIO_ARROW_TABLE_SWITCH => switch_batch(net).map_err(export_err)?,
-        PIO_ARROW_TABLE_SOLVER_BUS => solver_bus_batch(&solver_tables(net)?).map_err(export_err)?,
-        PIO_ARROW_TABLE_SOLVER_LOAD => {
-            solver_load_batch(&solver_tables(net)?).map_err(export_err)?
-        }
-        PIO_ARROW_TABLE_SOLVER_SHUNT => {
-            solver_shunt_batch(&solver_tables(net)?).map_err(export_err)?
-        }
-        PIO_ARROW_TABLE_SOLVER_BRANCH => {
-            solver_branch_batch(&solver_tables(net)?).map_err(export_err)?
-        }
-        PIO_ARROW_TABLE_SOLVER_SWITCH => {
-            solver_switch_batch(&solver_tables(net)?).map_err(export_err)?
-        }
-        PIO_ARROW_TABLE_SOLVER_ARC => solver_arc_batch(&solver_tables(net)?).map_err(export_err)?,
-        PIO_ARROW_TABLE_SOLVER_GEN => solver_gen_batch(&solver_tables(net)?).map_err(export_err)?,
-        PIO_ARROW_TABLE_SOLVER_STORAGE => {
-            solver_storage_batch(&solver_tables(net)?).map_err(export_err)?
-        }
-        PIO_ARROW_TABLE_SOLVER_HVDC => {
-            solver_hvdc_batch(&solver_tables(net)?).map_err(export_err)?
-        }
-        PIO_ARROW_TABLE_SOLVER_GEN_COST => {
-            solver_gen_cost_batch(&solver_tables(net)?).map_err(export_err)?
-        }
-        PIO_ARROW_TABLE_SOLVER_GEN_COST_COEFF => {
-            solver_gen_cost_coeff_batch(&solver_tables(net)?).map_err(export_err)?
-        }
         PIO_ARROW_TABLE_YBUS => matrix_ybus_batch(net, core)?,
         PIO_ARROW_TABLE_INCIDENCE => matrix_incidence_batch(net, core)?,
         PIO_ARROW_TABLE_BPRIME => matrix_bprime_batch(net, core)?,
@@ -225,65 +176,6 @@ fn catalog_value() -> serde_json::Value {
                 ("thermal_rating", "float64"), ("current_rating", "float64"),
                 ("pf", "float64"), ("qf", "float64"), ("pt", "float64"), ("qt", "float64"),
             ]),
-            table_spec(PIO_ARROW_TABLE_SOLVER_BUS, "solver_bus", "record_batch", &["arrow"], true, Some("solver_bus"), None, units_solver(), &[
-                ("index", "int64"), ("bus_id", "int64"), ("source_row", "int64"),
-                ("kind", "int64"), ("vm", "float64"), ("va", "float64"),
-                ("base_kv", "float64"), ("vmax", "float64"), ("vmin", "float64"),
-                ("pd", "float64"), ("qd", "float64"), ("gs", "float64"),
-                ("bs", "float64"), ("component_label", "int64"), ("is_reference", "uint8"),
-                ("area", "int64"), ("zone", "int64"),
-            ]),
-            table_spec(PIO_ARROW_TABLE_SOLVER_LOAD, "solver_load", "record_batch", &["arrow"], true, Some("solver_load"), None, units_solver(), &[
-                ("index", "int64"), ("source_row", "int64"), ("bus_index", "int64"),
-                ("p", "float64"), ("q", "float64"),
-            ]),
-            table_spec(PIO_ARROW_TABLE_SOLVER_SHUNT, "solver_shunt", "record_batch", &["arrow"], true, Some("solver_shunt"), None, units_solver(), &[
-                ("index", "int64"), ("source_row", "int64"), ("bus_index", "int64"),
-                ("g", "float64"), ("b", "float64"),
-            ]),
-            table_spec(PIO_ARROW_TABLE_SOLVER_BRANCH, "solver_branch", "record_batch", &["arrow"], true, Some("solver_branch"), None, units_solver(), &[
-                ("index", "int64"), ("source_row", "int64"), ("from_bus_index", "int64"),
-                ("to_bus_index", "int64"), ("r", "float64"), ("x", "float64"),
-                ("b", "float64"), ("g_fr", "float64"), ("b_fr", "float64"),
-                ("g_to", "float64"), ("b_to", "float64"), ("rate_a", "float64"),
-                ("rate_b", "float64"), ("rate_c", "float64"), ("tap", "float64"),
-                ("shift", "float64"), ("angmin", "float64"), ("angmax", "float64"),
-            ]),
-            table_spec(PIO_ARROW_TABLE_SOLVER_SWITCH, "solver_switch", "record_batch", &["arrow"], true, Some("solver_switch"), None, units_solver(), &[
-                ("index", "int64"), ("source_row", "int64"), ("from_bus_index", "int64"),
-                ("to_bus_index", "int64"), ("closed", "uint8"), ("thermal_rating", "float64"),
-                ("current_rating", "float64"), ("pf", "float64"), ("qf", "float64"),
-                ("pt", "float64"), ("qt", "float64"),
-            ]),
-            table_spec(PIO_ARROW_TABLE_SOLVER_ARC, "solver_arc", "record_batch", &["arrow"], true, Some("solver_arc"), None, units_solver(), &[
-                ("index", "int64"), ("branch_index", "int64"), ("terminal", "int64"),
-                ("from_bus_index", "int64"), ("to_bus_index", "int64"), ("tap", "float64"),
-                ("shift", "float64"), ("g_shunt", "float64"), ("b_shunt", "float64"),
-                ("rate_a", "float64"),
-            ]),
-            table_spec(PIO_ARROW_TABLE_SOLVER_GEN, "solver_gen", "record_batch", &["arrow"], true, Some("solver_gen"), None, units_solver(), &[
-                ("index", "int64"), ("source_row", "int64"), ("bus_index", "int64"),
-                ("pg", "float64"), ("qg", "float64"), ("pmax", "float64"),
-                ("pmin", "float64"), ("qmax", "float64"), ("qmin", "float64"),
-                ("vg", "float64"), ("mbase", "float64"), ("regulated_bus_index", "int64"),
-            ]),
-            table_spec(PIO_ARROW_TABLE_SOLVER_STORAGE, "solver_storage", "record_batch", &["arrow"], true, Some("solver_storage"), None, units_solver(), &[
-                ("index", "int64"), ("source_row", "int64"), ("bus_index", "int64"),
-                ("ps", "float64"), ("qs", "float64"), ("energy", "float64"),
-                ("energy_rating", "float64"), ("charge_rating", "float64"),
-                ("discharge_rating", "float64"), ("thermal_rating", "float64"),
-                ("qmin", "float64"), ("qmax", "float64"), ("r", "float64"),
-                ("x", "float64"), ("p_loss", "float64"), ("q_loss", "float64"),
-                ("charge_efficiency", "float64"), ("discharge_efficiency", "float64"),
-            ]),
-            table_spec(PIO_ARROW_TABLE_SOLVER_HVDC, "solver_hvdc", "record_batch", &["arrow"], true, Some("solver_hvdc"), None, units_solver(), &[
-                ("index", "int64"), ("source_row", "int64"), ("from_bus_index", "int64"),
-                ("to_bus_index", "int64"), ("pf", "float64"), ("pt", "float64"),
-                ("qf", "float64"), ("qt", "float64"), ("vf", "float64"), ("vt", "float64"),
-                ("pmin", "float64"), ("pmax", "float64"), ("qminf", "float64"),
-                ("qmaxf", "float64"), ("qmint", "float64"), ("qmaxt", "float64"),
-                ("loss0", "float64"), ("loss1", "float64"),
-            ]),
             table_spec(PIO_ARROW_TABLE_YBUS, "ybus", "coo", &["arrow", "matrix"], matrix_available, Some("matrix_bus"), Some("matrix_bus"), units_matrix(), &[
                 ("row_index", "int64"), ("col_index", "int64"), ("g", "float64"), ("b", "float64"),
             ]),
@@ -304,14 +196,6 @@ fn catalog_value() -> serde_json::Value {
                 ("index", "int64"), ("source_row", "int64"), ("from_bus_id", "int64"),
                 ("to_bus_id", "int64"),
             ]),
-            table_spec(PIO_ARROW_TABLE_SOLVER_GEN_COST, "solver_gen_cost", "record_batch", &["arrow"], true, Some("solver_gen"), None, units_cost(), &[
-                ("index", "int64"), ("model", "int64"), ("startup", "float64"),
-                ("shutdown", "float64"), ("ncost", "int64"), ("coeff_count", "int64"),
-                ("coeff_offset", "int64"),
-            ]),
-            table_spec(PIO_ARROW_TABLE_SOLVER_GEN_COST_COEFF, "solver_gen_cost_coeff", "coeff_list", &["arrow"], true, Some("solver_gen_cost_coeff"), None, units_cost(), &[
-                ("gen_index", "int64"), ("position", "int64"), ("value", "float64"),
-            ]),
         ]
     })
 }
@@ -322,27 +206,6 @@ fn units_source() -> serde_json::Value {
         "voltage": "source",
         "angle": "degree",
         "index_base": "external_bus_id"
-    })
-}
-
-fn units_solver() -> serde_json::Value {
-    serde_json::json!({
-        "power": "per_unit",
-        "voltage": "per_unit",
-        "angle": "radian",
-        "impedance": "per_unit",
-        "admittance": "per_unit",
-        "index_base": "zero"
-    })
-}
-
-fn units_cost() -> serde_json::Value {
-    serde_json::json!({
-        "power": "per_unit",
-        "index_base": "zero",
-        "cost_rate": "currency_per_hour",
-        "cost_basis": "per_unit_power",
-        "startup_shutdown": "currency_per_event"
     })
 }
 
@@ -359,10 +222,6 @@ fn units_axis() -> serde_json::Value {
         "source_row_base": "zero",
         "missing_source_row": -1
     })
-}
-
-fn solver_tables(net: &BalancedNetwork) -> Result<NormalizedSolverTables, String> {
-    net.to_normalized_solver_tables().map_err(export_err)
 }
 
 fn bus_batch(net: &BalancedNetwork) -> Result<RecordBatch, ArrowError> {
@@ -543,438 +402,6 @@ fn switch_batch(net: &BalancedNetwork) -> Result<RecordBatch, ArrowError> {
         ("qf", f64s(s.iter().map(|x| x.qf.unwrap_or(0.0)).collect())),
         ("pt", f64s(s.iter().map(|x| x.pt.unwrap_or(0.0)).collect())),
         ("qt", f64s(s.iter().map(|x| x.qt.unwrap_or(0.0)).collect())),
-    ])
-}
-
-fn solver_bus_batch(t: &NormalizedSolverTables) -> Result<RecordBatch, ArrowError> {
-    batch(vec![
-        (
-            "index",
-            i64s(t.buses.iter().map(|x| usz(x.index)).collect()),
-        ),
-        (
-            "bus_id",
-            i64s(t.buses.iter().map(|x| ext(x.bus_id)).collect()),
-        ),
-        (
-            "source_row",
-            i64s(t.buses.iter().map(|x| opt_usz(x.source_row)).collect()),
-        ),
-        (
-            "kind",
-            i64s(t.buses.iter().map(|x| i64::from(x.kind as u8)).collect()),
-        ),
-        ("vm", f64s(t.buses.iter().map(|x| x.vm).collect())),
-        ("va", f64s(t.buses.iter().map(|x| x.va).collect())),
-        ("base_kv", f64s(t.buses.iter().map(|x| x.base_kv).collect())),
-        ("vmax", f64s(t.buses.iter().map(|x| x.vmax).collect())),
-        ("vmin", f64s(t.buses.iter().map(|x| x.vmin).collect())),
-        ("pd", f64s(t.buses.iter().map(|x| x.pd).collect())),
-        ("qd", f64s(t.buses.iter().map(|x| x.qd).collect())),
-        ("gs", f64s(t.buses.iter().map(|x| x.gs).collect())),
-        ("bs", f64s(t.buses.iter().map(|x| x.bs).collect())),
-        (
-            "component_label",
-            i64s(t.index.component_labels.iter().map(|&x| usz(x)).collect()),
-        ),
-        (
-            "is_reference",
-            u8s(t
-                .buses
-                .iter()
-                .map(|x| u8::from(t.index.reference_bus_indices.contains(&x.index)))
-                .collect()),
-        ),
-        ("area", i64s(t.buses.iter().map(|x| usz(x.area)).collect())),
-        ("zone", i64s(t.buses.iter().map(|x| usz(x.zone)).collect())),
-    ])
-}
-
-fn solver_load_batch(t: &NormalizedSolverTables) -> Result<RecordBatch, ArrowError> {
-    batch(vec![
-        (
-            "index",
-            i64s(t.loads.iter().map(|x| usz(x.index)).collect()),
-        ),
-        (
-            "source_row",
-            i64s(t.loads.iter().map(|x| opt_usz(x.source_row)).collect()),
-        ),
-        (
-            "bus_index",
-            i64s(t.loads.iter().map(|x| usz(x.bus_index)).collect()),
-        ),
-        ("p", f64s(t.loads.iter().map(|x| x.p).collect())),
-        ("q", f64s(t.loads.iter().map(|x| x.q).collect())),
-    ])
-}
-
-fn solver_shunt_batch(t: &NormalizedSolverTables) -> Result<RecordBatch, ArrowError> {
-    batch(vec![
-        (
-            "index",
-            i64s(t.shunts.iter().map(|x| usz(x.index)).collect()),
-        ),
-        (
-            "source_row",
-            i64s(t.shunts.iter().map(|x| opt_usz(x.source_row)).collect()),
-        ),
-        (
-            "bus_index",
-            i64s(t.shunts.iter().map(|x| usz(x.bus_index)).collect()),
-        ),
-        ("g", f64s(t.shunts.iter().map(|x| x.g).collect())),
-        ("b", f64s(t.shunts.iter().map(|x| x.b).collect())),
-    ])
-}
-
-fn solver_branch_batch(t: &NormalizedSolverTables) -> Result<RecordBatch, ArrowError> {
-    batch(vec![
-        (
-            "index",
-            i64s(t.branches.iter().map(|x| usz(x.index)).collect()),
-        ),
-        (
-            "source_row",
-            i64s(t.branches.iter().map(|x| opt_usz(x.source_row)).collect()),
-        ),
-        (
-            "from_bus_index",
-            i64s(t.branches.iter().map(|x| usz(x.from_bus_index)).collect()),
-        ),
-        (
-            "to_bus_index",
-            i64s(t.branches.iter().map(|x| usz(x.to_bus_index)).collect()),
-        ),
-        ("r", f64s(t.branches.iter().map(|x| x.r).collect())),
-        ("x", f64s(t.branches.iter().map(|x| x.x).collect())),
-        ("b", f64s(t.branches.iter().map(|x| x.b).collect())),
-        ("g_fr", f64s(t.branches.iter().map(|x| x.g_fr).collect())),
-        ("b_fr", f64s(t.branches.iter().map(|x| x.b_fr).collect())),
-        ("g_to", f64s(t.branches.iter().map(|x| x.g_to).collect())),
-        ("b_to", f64s(t.branches.iter().map(|x| x.b_to).collect())),
-        (
-            "rate_a",
-            f64s(t.branches.iter().map(|x| x.rate_a).collect()),
-        ),
-        (
-            "rate_b",
-            f64s(t.branches.iter().map(|x| x.rate_b).collect()),
-        ),
-        (
-            "rate_c",
-            f64s(t.branches.iter().map(|x| x.rate_c).collect()),
-        ),
-        ("tap", f64s(t.branches.iter().map(|x| x.tap).collect())),
-        ("shift", f64s(t.branches.iter().map(|x| x.shift).collect())),
-        (
-            "angmin",
-            f64s(t.branches.iter().map(|x| x.angmin).collect()),
-        ),
-        (
-            "angmax",
-            f64s(t.branches.iter().map(|x| x.angmax).collect()),
-        ),
-    ])
-}
-
-fn solver_switch_batch(t: &NormalizedSolverTables) -> Result<RecordBatch, ArrowError> {
-    batch(vec![
-        (
-            "index",
-            i64s(t.switches.iter().map(|x| usz(x.index)).collect()),
-        ),
-        (
-            "source_row",
-            i64s(t.switches.iter().map(|x| opt_usz(x.source_row)).collect()),
-        ),
-        (
-            "from_bus_index",
-            i64s(t.switches.iter().map(|x| usz(x.from_bus_index)).collect()),
-        ),
-        (
-            "to_bus_index",
-            i64s(t.switches.iter().map(|x| usz(x.to_bus_index)).collect()),
-        ),
-        (
-            "closed",
-            u8s(t.switches.iter().map(|x| u8::from(x.closed)).collect()),
-        ),
-        (
-            "thermal_rating",
-            f64s(
-                t.switches
-                    .iter()
-                    .map(|x| x.thermal_rating.unwrap_or(0.0))
-                    .collect(),
-            ),
-        ),
-        (
-            "current_rating",
-            f64s(
-                t.switches
-                    .iter()
-                    .map(|x| x.current_rating.unwrap_or(0.0))
-                    .collect(),
-            ),
-        ),
-        (
-            "pf",
-            f64s(t.switches.iter().map(|x| x.pf.unwrap_or(0.0)).collect()),
-        ),
-        (
-            "qf",
-            f64s(t.switches.iter().map(|x| x.qf.unwrap_or(0.0)).collect()),
-        ),
-        (
-            "pt",
-            f64s(t.switches.iter().map(|x| x.pt.unwrap_or(0.0)).collect()),
-        ),
-        (
-            "qt",
-            f64s(t.switches.iter().map(|x| x.qt.unwrap_or(0.0)).collect()),
-        ),
-    ])
-}
-
-fn solver_arc_batch(t: &NormalizedSolverTables) -> Result<RecordBatch, ArrowError> {
-    batch(vec![
-        ("index", i64s(t.arcs.iter().map(|x| usz(x.index)).collect())),
-        (
-            "branch_index",
-            i64s(t.arcs.iter().map(|x| usz(x.branch_index)).collect()),
-        ),
-        (
-            "terminal",
-            i64s(
-                t.arcs
-                    .iter()
-                    .map(|x| match x.terminal {
-                        SolverArcTerminal::From => 0,
-                        SolverArcTerminal::To => 1,
-                    })
-                    .collect(),
-            ),
-        ),
-        (
-            "from_bus_index",
-            i64s(t.arcs.iter().map(|x| usz(x.from_bus_index)).collect()),
-        ),
-        (
-            "to_bus_index",
-            i64s(t.arcs.iter().map(|x| usz(x.to_bus_index)).collect()),
-        ),
-        ("tap", f64s(t.arcs.iter().map(|x| x.tap).collect())),
-        ("shift", f64s(t.arcs.iter().map(|x| x.shift).collect())),
-        ("g_shunt", f64s(t.arcs.iter().map(|x| x.g_shunt).collect())),
-        ("b_shunt", f64s(t.arcs.iter().map(|x| x.b_shunt).collect())),
-        ("rate_a", f64s(t.arcs.iter().map(|x| x.rate_a).collect())),
-    ])
-}
-
-fn solver_gen_batch(t: &NormalizedSolverTables) -> Result<RecordBatch, ArrowError> {
-    batch(vec![
-        (
-            "index",
-            i64s(t.generators.iter().map(|x| usz(x.index)).collect()),
-        ),
-        (
-            "source_row",
-            i64s(t.generators.iter().map(|x| opt_usz(x.source_row)).collect()),
-        ),
-        (
-            "bus_index",
-            i64s(t.generators.iter().map(|x| usz(x.bus_index)).collect()),
-        ),
-        ("pg", f64s(t.generators.iter().map(|x| x.pg).collect())),
-        ("qg", f64s(t.generators.iter().map(|x| x.qg).collect())),
-        ("pmax", f64s(t.generators.iter().map(|x| x.pmax).collect())),
-        ("pmin", f64s(t.generators.iter().map(|x| x.pmin).collect())),
-        ("qmax", f64s(t.generators.iter().map(|x| x.qmax).collect())),
-        ("qmin", f64s(t.generators.iter().map(|x| x.qmin).collect())),
-        ("vg", f64s(t.generators.iter().map(|x| x.vg).collect())),
-        (
-            "mbase",
-            f64s(t.generators.iter().map(|x| x.mbase).collect()),
-        ),
-        (
-            "regulated_bus_index",
-            i64s(
-                t.generators
-                    .iter()
-                    .map(|x| opt_usz(x.regulated_bus_index))
-                    .collect(),
-            ),
-        ),
-    ])
-}
-
-/// The two generator cost tables lowered together: a dense header row per
-/// solver generator and the flattened coefficient rows it slices into. One walk
-/// builds both, so an offset can never name a slice that was not emitted.
-#[derive(Default)]
-struct GenCostRows {
-    index: Vec<i64>,
-    model: Vec<i64>,
-    startup: Vec<f64>,
-    shutdown: Vec<f64>,
-    ncost: Vec<i64>,
-    coeff_count: Vec<i64>,
-    coeff_offset: Vec<i64>,
-    coeff_gen_index: Vec<i64>,
-    coeff_position: Vec<i64>,
-    coeff_value: Vec<f64>,
-}
-
-fn gen_cost_rows(t: &NormalizedSolverTables) -> GenCostRows {
-    let mut rows = GenCostRows::default();
-    for generator in &t.generators {
-        let index = usz(generator.index);
-        rows.index.push(index);
-        let Some(cost) = generator.cost.as_ref() else {
-            // No cost row: model 0 is the absent sentinel, and -1 the empty slice.
-            rows.model.push(0);
-            rows.startup.push(0.0);
-            rows.shutdown.push(0.0);
-            rows.ncost.push(0);
-            rows.coeff_count.push(0);
-            rows.coeff_offset.push(-1);
-            continue;
-        };
-        rows.model.push(i64::from(cost.model));
-        rows.startup.push(cost.startup);
-        rows.shutdown.push(cost.shutdown);
-        rows.ncost.push(usz(cost.ncost));
-        rows.coeff_count.push(usz(cost.coeffs.len()));
-        rows.coeff_offset.push(if cost.coeffs.is_empty() {
-            -1
-        } else {
-            usz(rows.coeff_value.len())
-        });
-        for (position, &value) in cost.coeffs.iter().enumerate() {
-            rows.coeff_gen_index.push(index);
-            rows.coeff_position.push(usz(position));
-            rows.coeff_value.push(value);
-        }
-    }
-    rows
-}
-
-fn solver_gen_cost_batch(t: &NormalizedSolverTables) -> Result<RecordBatch, ArrowError> {
-    let rows = gen_cost_rows(t);
-    batch_with_metadata(
-        vec![
-            ("index", i64s(rows.index)),
-            ("model", i64s(rows.model)),
-            ("startup", f64s(rows.startup)),
-            ("shutdown", f64s(rows.shutdown)),
-            ("ncost", i64s(rows.ncost)),
-            ("coeff_count", i64s(rows.coeff_count)),
-            ("coeff_offset", i64s(rows.coeff_offset)),
-        ],
-        cost_metadata("solver_gen_cost", "record_batch", "solver_gen", t.base_mva),
-    )
-}
-
-fn solver_gen_cost_coeff_batch(t: &NormalizedSolverTables) -> Result<RecordBatch, ArrowError> {
-    let rows = gen_cost_rows(t);
-    let mut metadata = cost_metadata(
-        "solver_gen_cost_coeff",
-        "coeff_list",
-        "solver_gen_cost_coeff",
-        t.base_mva,
-    );
-    metadata.insert("powerio.group_axis".to_owned(), "solver_gen".to_owned());
-    metadata.insert("powerio.group_column".to_owned(), "gen_index".to_owned());
-    batch_with_metadata(
-        vec![
-            ("gen_index", i64s(rows.coeff_gen_index)),
-            ("position", i64s(rows.coeff_position)),
-            ("value", f64s(rows.coeff_value)),
-        ],
-        metadata,
-    )
-}
-
-fn solver_storage_batch(t: &NormalizedSolverTables) -> Result<RecordBatch, ArrowError> {
-    batch(vec![
-        (
-            "index",
-            i64s(t.storage.iter().map(|x| usz(x.index)).collect()),
-        ),
-        (
-            "source_row",
-            i64s(t.storage.iter().map(|x| opt_usz(x.source_row)).collect()),
-        ),
-        (
-            "bus_index",
-            i64s(t.storage.iter().map(|x| usz(x.bus_index)).collect()),
-        ),
-        ("ps", f64s(t.storage.iter().map(|x| x.ps).collect())),
-        ("qs", f64s(t.storage.iter().map(|x| x.qs).collect())),
-        ("energy", f64s(t.storage.iter().map(|x| x.energy).collect())),
-        (
-            "energy_rating",
-            f64s(t.storage.iter().map(|x| x.energy_rating).collect()),
-        ),
-        (
-            "charge_rating",
-            f64s(t.storage.iter().map(|x| x.charge_rating).collect()),
-        ),
-        (
-            "discharge_rating",
-            f64s(t.storage.iter().map(|x| x.discharge_rating).collect()),
-        ),
-        (
-            "thermal_rating",
-            f64s(t.storage.iter().map(|x| x.thermal_rating).collect()),
-        ),
-        ("qmin", f64s(t.storage.iter().map(|x| x.qmin).collect())),
-        ("qmax", f64s(t.storage.iter().map(|x| x.qmax).collect())),
-        ("r", f64s(t.storage.iter().map(|x| x.r).collect())),
-        ("x", f64s(t.storage.iter().map(|x| x.x).collect())),
-        ("p_loss", f64s(t.storage.iter().map(|x| x.p_loss).collect())),
-        ("q_loss", f64s(t.storage.iter().map(|x| x.q_loss).collect())),
-        (
-            "charge_efficiency",
-            f64s(t.storage.iter().map(|x| x.charge_efficiency).collect()),
-        ),
-        (
-            "discharge_efficiency",
-            f64s(t.storage.iter().map(|x| x.discharge_efficiency).collect()),
-        ),
-    ])
-}
-
-fn solver_hvdc_batch(t: &NormalizedSolverTables) -> Result<RecordBatch, ArrowError> {
-    batch(vec![
-        ("index", i64s(t.hvdc.iter().map(|x| usz(x.index)).collect())),
-        (
-            "source_row",
-            i64s(t.hvdc.iter().map(|x| opt_usz(x.source_row)).collect()),
-        ),
-        (
-            "from_bus_index",
-            i64s(t.hvdc.iter().map(|x| usz(x.from_bus_index)).collect()),
-        ),
-        (
-            "to_bus_index",
-            i64s(t.hvdc.iter().map(|x| usz(x.to_bus_index)).collect()),
-        ),
-        ("pf", f64s(t.hvdc.iter().map(|x| x.pf).collect())),
-        ("pt", f64s(t.hvdc.iter().map(|x| x.pt).collect())),
-        ("qf", f64s(t.hvdc.iter().map(|x| x.qf).collect())),
-        ("qt", f64s(t.hvdc.iter().map(|x| x.qt).collect())),
-        ("vf", f64s(t.hvdc.iter().map(|x| x.vf).collect())),
-        ("vt", f64s(t.hvdc.iter().map(|x| x.vt).collect())),
-        ("pmin", f64s(t.hvdc.iter().map(|x| x.pmin).collect())),
-        ("pmax", f64s(t.hvdc.iter().map(|x| x.pmax).collect())),
-        ("qminf", f64s(t.hvdc.iter().map(|x| x.qminf).collect())),
-        ("qmaxf", f64s(t.hvdc.iter().map(|x| x.qmaxf).collect())),
-        ("qmint", f64s(t.hvdc.iter().map(|x| x.qmint).collect())),
-        ("qmaxt", f64s(t.hvdc.iter().map(|x| x.qmaxt).collect())),
-        ("loss0", f64s(t.hvdc.iter().map(|x| x.loss0).collect())),
-        ("loss1", f64s(t.hvdc.iter().map(|x| x.loss1).collect())),
     ])
 }
 
@@ -1338,24 +765,6 @@ fn batch_with_metadata(
     )
 }
 
-/// Schema metadata for the generator cost tables. `base_mva` rides along so a
-/// consumer converts currency per hour per per unit power to currency per MWh
-/// without a second call.
-fn cost_metadata(
-    table: &str,
-    format: &str,
-    row_axis: &str,
-    base_mva: f64,
-) -> HashMap<String, String> {
-    HashMap::from([
-        ("powerio.table".to_owned(), table.to_owned()),
-        ("powerio.version".to_owned(), powerio::VERSION.to_owned()),
-        ("powerio.format".to_owned(), format.to_owned()),
-        ("powerio.row_axis".to_owned(), row_axis.to_owned()),
-        ("powerio.base_mva".to_owned(), base_mva.to_string()),
-    ])
-}
-
 #[cfg(feature = "matrix")]
 fn matrix_metadata(
     table: &str,
@@ -1393,10 +802,6 @@ fn ext(id: BusId) -> i64 {
 
 fn usz(n: usize) -> i64 {
     i64::try_from(n).unwrap_or(-1)
-}
-
-fn opt_usz(n: Option<usize>) -> i64 {
-    n.map_or(-1, usz)
 }
 
 fn i64s(v: Vec<i64>) -> ArrayRef {
@@ -1479,6 +884,7 @@ mod tests {
             .unwrap()
     }
 
+    #[cfg(feature = "matrix")]
     fn i64_col<'a>(sa: &'a StructArray, name: &str) -> &'a Int64Array {
         sa.column_by_name(name)
             .unwrap()
@@ -1770,45 +1176,6 @@ mod tests {
     }
 
     #[test]
-    fn normalized_solver_tables_export_dense_per_unit_rows() {
-        let n = net("case14.m");
-        let tables = n.to_normalized_solver_tables().unwrap();
-
-        assert_eq!(
-            round_trip(&n, PIO_ARROW_TABLE_SOLVER_BUS).len(),
-            tables.buses.len()
-        );
-        assert_eq!(
-            round_trip(&n, PIO_ARROW_TABLE_SOLVER_BRANCH).len(),
-            tables.branches.len()
-        );
-        assert_eq!(
-            round_trip(&n, PIO_ARROW_TABLE_SOLVER_ARC).len(),
-            tables.arcs.len()
-        );
-        assert_eq!(
-            round_trip(&n, PIO_ARROW_TABLE_SOLVER_GEN).len(),
-            tables.generators.len()
-        );
-
-        let bus = round_trip(&n, PIO_ARROW_TABLE_SOLVER_BUS);
-        assert_eq!(i64_col(&bus, "index").value(1), 1);
-        assert_eq!(i64_col(&bus, "bus_id").value(1), 2);
-        assert_eq!(i64_col(&bus, "source_row").value(1), 1);
-        assert!((f64_col(&bus, "pd").value(1) - 21.7 / 100.0).abs() < 1e-12);
-
-        let branch = round_trip(&n, PIO_ARROW_TABLE_SOLVER_BRANCH);
-        assert_eq!(i64_col(&branch, "from_bus_index").value(0), 0);
-        assert_eq!(i64_col(&branch, "to_bus_index").value(0), 1);
-
-        let arc = round_trip(&n, PIO_ARROW_TABLE_SOLVER_ARC);
-        assert_eq!(i64_col(&arc, "branch_index").value(0), 0);
-        assert_eq!(i64_col(&arc, "terminal").value(0), 0);
-        assert_eq!(i64_col(&arc, "branch_index").value(1), 0);
-        assert_eq!(i64_col(&arc, "terminal").value(1), 1);
-    }
-
-    #[test]
     fn branch_table_b_is_legacy_projection() {
         let n = terminal_projection_net();
         let sa = round_trip(&n, PIO_ARROW_TABLE_BRANCH);
@@ -1829,497 +1196,37 @@ mod tests {
 
     #[test]
     fn arrow_table_ids_are_append_only() {
+        // The live ids are frozen; the retired solver ids stay burned and are
+        // refused rather than reassigned.
         assert_eq!(PIO_ARROW_TABLE_BUS, 0);
         assert_eq!(PIO_ARROW_TABLE_BRANCH, 1);
         assert_eq!(PIO_ARROW_TABLE_GEN, 2);
         assert_eq!(PIO_ARROW_TABLE_LOAD, 3);
         assert_eq!(PIO_ARROW_TABLE_SHUNT, 4);
         assert_eq!(PIO_ARROW_TABLE_SWITCH, 5);
-        assert_eq!(PIO_ARROW_TABLE_SOLVER_BUS, 6);
-        assert_eq!(PIO_ARROW_TABLE_SOLVER_LOAD, 7);
-        assert_eq!(PIO_ARROW_TABLE_SOLVER_SHUNT, 8);
-        assert_eq!(PIO_ARROW_TABLE_SOLVER_BRANCH, 9);
-        assert_eq!(PIO_ARROW_TABLE_SOLVER_SWITCH, 10);
-        assert_eq!(PIO_ARROW_TABLE_SOLVER_ARC, 11);
-        assert_eq!(PIO_ARROW_TABLE_SOLVER_GEN, 12);
-        assert_eq!(PIO_ARROW_TABLE_SOLVER_STORAGE, 13);
-        assert_eq!(PIO_ARROW_TABLE_SOLVER_HVDC, 14);
         assert_eq!(PIO_ARROW_TABLE_YBUS, 15);
         assert_eq!(PIO_ARROW_TABLE_INCIDENCE, 16);
         assert_eq!(PIO_ARROW_TABLE_BPRIME, 17);
         assert_eq!(PIO_ARROW_TABLE_BDOUBLEPRIME, 18);
         assert_eq!(PIO_ARROW_TABLE_MATRIX_BUS, 19);
         assert_eq!(PIO_ARROW_TABLE_MATRIX_BRANCH, 20);
-        assert_eq!(PIO_ARROW_TABLE_SOLVER_GEN_COST, 21);
-        assert_eq!(PIO_ARROW_TABLE_SOLVER_GEN_COST_COEFF, 22);
+        let n = net("case9.m");
+        let core = IndexCore::build(&n);
+        for retired in [6, 7, 8, 9, 10, 11, 12, 13, 14, 21, 22] {
+            assert!(export(&n, &core, retired).is_err(), "id {retired}");
+        }
     }
 
     #[test]
-    fn arrow_catalog_lists_ids_columns_axes_and_features() {
+    fn arrow_catalog_lists_the_live_tables() {
         let catalog: serde_json::Value = serde_json::from_str(&catalog_json()).unwrap();
-        assert_eq!(catalog[powerio::version::VERSION_KEY], powerio::VERSION);
-        let tables = catalog["tables"].as_array().unwrap();
-        let find = |name: &str| {
-            tables
-                .iter()
-                .find(|table| table["name"] == name)
-                .unwrap_or_else(|| panic!("missing catalog table {name}"))
-        };
-
-        let bus = find("bus");
-        assert_eq!(bus["id"], PIO_ARROW_TABLE_BUS);
-        assert_eq!(bus["feature_requirements"], serde_json::json!(["arrow"]));
-        assert_eq!(bus["columns"][0]["name"], "id");
-
-        let bprime = find("bprime");
-        assert_eq!(bprime["id"], PIO_ARROW_TABLE_BPRIME);
-        assert_eq!(bprime["format"], "coo");
-        assert_eq!(bprime["row_axis"], "matrix_bus");
-        assert_eq!(bprime["col_axis"], "matrix_bus");
-        assert_eq!(
-            bprime["feature_requirements"],
-            serde_json::json!(["arrow", "matrix"])
-        );
-        assert_eq!(bprime["available"], cfg!(feature = "matrix"));
-
-        let incidence = find("incidence");
-        assert_eq!(incidence["row_axis"], "matrix_bus");
-        assert_eq!(incidence["col_axis"], "matrix_branch");
-
-        let axis = find("matrix_bus");
-        assert_eq!(axis["id"], PIO_ARROW_TABLE_MATRIX_BUS);
-        assert_eq!(axis["format"], "axis_map");
-        assert_eq!(axis["columns"][1]["name"], "bus_id");
-
-        let cost = find("solver_gen_cost");
-        assert_eq!(cost["id"], PIO_ARROW_TABLE_SOLVER_GEN_COST);
-        assert_eq!(cost["format"], "record_batch");
-        assert_eq!(cost["row_axis"], "solver_gen");
-        assert_eq!(cost["col_axis"], serde_json::Value::Null);
-        assert_eq!(cost["feature_requirements"], serde_json::json!(["arrow"]));
-        assert_eq!(cost["available"], true);
-        assert_eq!(cost["units"]["cost_rate"], "currency_per_hour");
-        assert_eq!(cost["units"]["cost_basis"], "per_unit_power");
-        let names: Vec<&str> = cost["columns"]
+        let ids: Vec<i64> = catalog["tables"]
             .as_array()
             .unwrap()
             .iter()
-            .map(|c| c["name"].as_str().unwrap())
+            .map(|t| t["id"].as_i64().unwrap())
             .collect();
-        assert_eq!(
-            names,
-            [
-                "index",
-                "model",
-                "startup",
-                "shutdown",
-                "ncost",
-                "coeff_count",
-                "coeff_offset"
-            ]
-        );
-
-        let coeff = find("solver_gen_cost_coeff");
-        assert_eq!(coeff["id"], PIO_ARROW_TABLE_SOLVER_GEN_COST_COEFF);
-        assert_eq!(coeff["format"], "coeff_list");
-        assert_eq!(coeff["row_axis"], "solver_gen_cost_coeff");
-        assert_eq!(coeff["columns"][0]["name"], "gen_index");
-        assert_eq!(coeff["columns"][2]["name"], "value");
-        assert_eq!(coeff["columns"][2]["nullable"], false);
-
-        // solver_bus grew area and zone at the end; the frozen prefix stays put.
-        let solver_bus = find("solver_bus");
-        assert_eq!(solver_bus["columns"][0]["name"], "index");
-        assert_eq!(solver_bus["columns"][14]["name"], "is_reference");
-        assert_eq!(solver_bus["columns"][15]["name"], "area");
-        assert_eq!(solver_bus["columns"][16]["name"], "zone");
-
-        // solver_storage grew the two efficiencies at the end; same rule.
-        let solver_storage = find("solver_storage");
-        assert_eq!(solver_storage["columns"][0]["name"], "index");
-        assert_eq!(solver_storage["columns"][15]["name"], "q_loss");
-        assert_eq!(solver_storage["columns"][16]["name"], "charge_efficiency");
-        assert_eq!(
-            solver_storage["columns"][17]["name"],
-            "discharge_efficiency"
-        );
-    }
-
-    fn gen_cost_net() -> BalancedNetwork {
-        use powerio::{Branch, Bus, BusId, BusType, GenCost, Generator};
-
-        let mut net = BalancedNetwork::in_memory(
-            "gen-cost",
-            100.0,
-            vec![
-                Bus::new(BusId(1), BusType::Ref, 230.0),
-                Bus::new(BusId(2), BusType::Pv, 230.0),
-            ],
-            vec![Branch::new(BusId(1), BusId(2), 0.01, 0.1)],
-        );
-        // A generator with no cost row, one whose declared count outruns the
-        // coefficients it carries, and one with a model powerio does not read.
-        let mut plain = Generator::new(BusId(1));
-        plain.pmax = 100.0;
-        let mut short = Generator::new(BusId(2));
-        short.pmax = 100.0;
-        short.cost = Some(GenCost::with_ncost(2, 10.0, 20.0, 3, vec![1.0]));
-        let mut unknown = Generator::new(BusId(2));
-        unknown.pmax = 100.0;
-        unknown.cost = Some(GenCost::with_ncost(7, 0.0, 0.0, 2, vec![3.0, 4.0]));
-        *net.generators_mut() = vec![plain, short, unknown];
-        net
-    }
-
-    fn gen_cost_tables(n: &BalancedNetwork) -> (StructArray, StructArray) {
-        (
-            round_trip(n, PIO_ARROW_TABLE_SOLVER_GEN_COST),
-            round_trip(n, PIO_ARROW_TABLE_SOLVER_GEN_COST_COEFF),
-        )
-    }
-
-    /// Every documented structural rule of the pair: one header row per solver
-    /// generator in `solver_gen` order, monotone offsets, and slices that
-    /// partition the coefficient table with no row left over.
-    fn assert_gen_cost_slices_partition(n: &BalancedNetwork) {
-        let gens = round_trip(n, PIO_ARROW_TABLE_SOLVER_GEN);
-        let (header, coeff) = gen_cost_tables(n);
-        assert_eq!(header.len(), gens.len());
-        assert_eq!(
-            i64_col(&header, "index").values(),
-            i64_col(&gens, "index").values()
-        );
-
-        let counts = i64_col(&header, "coeff_count");
-        let offsets = i64_col(&header, "coeff_offset");
-        let gen_index = i64_col(&coeff, "gen_index");
-        let position = i64_col(&coeff, "position");
-        let mut covered = 0usize;
-        let mut previous = -1i64;
-        for row in 0..header.len() {
-            let count = counts.value(row);
-            let offset = offsets.value(row);
-            assert!(count >= 0);
-            if count == 0 {
-                assert_eq!(offset, -1, "empty slice must carry the -1 sentinel");
-                continue;
-            }
-            assert!(offset >= previous, "offsets must be nondecreasing");
-            assert_eq!(offset, i64::try_from(covered).unwrap(), "slices are packed");
-            previous = offset;
-            let index = i64_col(&header, "index").value(row);
-            for k in 0..count {
-                let at = usize::try_from(offset + k).unwrap();
-                assert_eq!(gen_index.value(at), index);
-                assert_eq!(position.value(at), k);
-            }
-            covered += usize::try_from(count).unwrap();
-        }
-        assert_eq!(covered, coeff.len(), "slices cover the coefficient table");
-    }
-
-    #[test]
-    fn gen_cost_tables_round_trip_and_partition() {
-        for case_file in ["case9.m", "case30.m", "t_case9_dcline.m"] {
-            assert_gen_cost_slices_partition(&net(case_file));
-        }
-        assert_gen_cost_slices_partition(&gen_cost_net());
-    }
-
-    #[test]
-    fn gen_cost_polynomial_coefficients_are_per_unit() {
-        // case9 generator 0: model 2, startup 1500, coeffs [0.11, 5, 150] on a
-        // 100 MVA base, so position i scales by base^(2-i).
-        let n = net("case9.m");
-        let (header, coeff) = gen_cost_tables(&n);
-        assert_eq!(i64_col(&header, "model").value(0), 2);
-        assert_eq!(f64_col(&header, "startup").value(0), 1500.0);
-        assert_eq!(f64_col(&header, "shutdown").value(0), 0.0);
-        assert_eq!(i64_col(&header, "ncost").value(0), 3);
-        assert_eq!(i64_col(&header, "coeff_count").value(0), 3);
-        assert_eq!(i64_col(&header, "coeff_offset").value(0), 0);
-        let values = f64_col(&coeff, "value");
-        assert!((values.value(0) - 0.11 * 100.0 * 100.0).abs() < 1e-9);
-        assert!((values.value(1) - 5.0 * 100.0).abs() < 1e-9);
-        assert!((values.value(2) - 150.0).abs() < 1e-9);
-    }
-
-    #[test]
-    fn gen_cost_piecewise_breakpoints_are_per_unit() {
-        // t_case9_dcline mixes a four breakpoint curve, a three breakpoint curve
-        // whose row is padded to the matrix width, and a two term polynomial.
-        let n = net("t_case9_dcline.m");
-        let (header, coeff) = gen_cost_tables(&n);
-        assert_eq!(i64_col(&header, "model").value(0), 1);
-        assert_eq!(i64_col(&header, "ncost").value(0), 4);
-        assert_eq!(i64_col(&header, "coeff_count").value(0), 8);
-        assert_eq!(i64_col(&header, "model").value(1), 1);
-        assert_eq!(i64_col(&header, "ncost").value(1), 3);
-        // The MATPOWER padding is stripped before the curve is stored.
-        assert_eq!(i64_col(&header, "coeff_count").value(1), 6);
-        assert_eq!(i64_col(&header, "coeff_offset").value(1), 8);
-        assert_eq!(i64_col(&header, "model").value(2), 2);
-        assert_eq!(i64_col(&header, "coeff_count").value(2), 2);
-
-        let values = f64_col(&coeff, "value");
-        // Even positions are MW breakpoints divided by the base, odd positions
-        // are currency per hour and stay.
-        assert!((values.value(2) - 1.0).abs() < 1e-9);
-        assert!((values.value(3) - 2500.0).abs() < 1e-9);
-        assert!((values.value(6) - 2.5).abs() < 1e-9);
-        assert!((values.value(7) - 7250.0).abs() < 1e-9);
-        // The polynomial on the third generator still scales by base^(k-1-i).
-        let offset = usize::try_from(i64_col(&header, "coeff_offset").value(2)).unwrap();
-        assert!((values.value(offset) - 24.035 * 100.0).abs() < 1e-6);
-        assert!((values.value(offset + 1) + 403.5).abs() < 1e-9);
-    }
-
-    #[test]
-    fn gen_cost_reports_absent_divergent_and_unknown_rows() {
-        let n = gen_cost_net();
-        let (header, coeff) = gen_cost_tables(&n);
-        assert_eq!(header.len(), 3);
-
-        // No cost row at all.
-        assert_eq!(i64_col(&header, "model").value(0), 0);
-        assert_eq!(i64_col(&header, "ncost").value(0), 0);
-        assert_eq!(i64_col(&header, "coeff_count").value(0), 0);
-        assert_eq!(i64_col(&header, "coeff_offset").value(0), -1);
-        assert_eq!(f64_col(&header, "startup").value(0), 0.0);
-
-        // A declared count the stored slice cannot back stays visible as the
-        // disagreement it is, rather than being repaired or dropped.
-        assert_eq!(i64_col(&header, "ncost").value(1), 3);
-        assert_eq!(i64_col(&header, "coeff_count").value(1), 1);
-        assert_eq!(i64_col(&header, "coeff_offset").value(1), 0);
-        assert_eq!(f64_col(&header, "startup").value(1), 10.0);
-        assert_eq!(f64_col(&header, "shutdown").value(1), 20.0);
-
-        // An unrecognized model byte passes through, values unscaled.
-        assert_eq!(i64_col(&header, "model").value(2), 7);
-        assert_eq!(i64_col(&header, "coeff_count").value(2), 2);
-        let values = f64_col(&coeff, "value");
-        assert_eq!(values.value(1), 3.0);
-        assert_eq!(values.value(2), 4.0);
-        assert_eq!(coeff.len(), 3);
-    }
-
-    #[test]
-    fn gen_cost_tables_carry_schema_metadata() {
-        let n = net("case9.m");
-        let tables = n.to_normalized_solver_tables().unwrap();
-        let header = solver_gen_cost_batch(&tables).unwrap();
-        let schema = header.schema();
-        let metadata = schema.metadata();
-        assert_eq!(metadata.get("powerio.table").unwrap(), "solver_gen_cost");
-        assert_eq!(metadata.get("powerio.version").unwrap(), powerio::VERSION);
-        assert_eq!(metadata.get("powerio.format").unwrap(), "record_batch");
-        assert_eq!(metadata.get("powerio.row_axis").unwrap(), "solver_gen");
-        assert_eq!(metadata.get("powerio.base_mva").unwrap(), "100");
-
-        let coeff = solver_gen_cost_coeff_batch(&tables).unwrap();
-        let schema = coeff.schema();
-        let metadata = schema.metadata();
-        assert_eq!(metadata.get("powerio.format").unwrap(), "coeff_list");
-        assert_eq!(
-            metadata.get("powerio.row_axis").unwrap(),
-            "solver_gen_cost_coeff"
-        );
-        assert_eq!(metadata.get("powerio.group_axis").unwrap(), "solver_gen");
-        assert_eq!(metadata.get("powerio.group_column").unwrap(), "gen_index");
-
-        // The metadata survives the C Data Interface, as the matrix tables' does.
-        let core = IndexCore::build(&n);
-        let (_array, schema) = export(&n, &core, PIO_ARROW_TABLE_SOLVER_GEN_COST).unwrap();
-        let imported = Schema::try_from(&schema).unwrap();
-        assert_eq!(
-            imported.metadata().get("powerio.table").unwrap(),
-            "solver_gen_cost"
-        );
-    }
-
-    #[test]
-    fn solver_bus_exports_area_and_zone() {
-        let n = net("case30.m");
-        let tables = n.to_normalized_solver_tables().unwrap();
-        let sa = round_trip(&n, PIO_ARROW_TABLE_SOLVER_BUS);
-        let expected: Vec<i64> = tables.buses.iter().map(|b| usz(b.area)).collect();
-        assert_eq!(i64_col(&sa, "area").values(), expected.as_slice());
-        let expected: Vec<i64> = tables.buses.iter().map(|b| usz(b.zone)).collect();
-        assert_eq!(i64_col(&sa, "zone").values(), expected.as_slice());
-        // The appended columns sit after the frozen prefix.
-        let names: Vec<&str> = sa
-            .fields()
-            .iter()
-            .map(|f| f.name().as_str())
-            .collect::<Vec<_>>();
-        assert_eq!(names[names.len() - 2..], ["area", "zone"]);
-        assert_eq!(names[0], "index");
-        assert_eq!(names[14], "is_reference");
-    }
-
-    fn storage_net() -> BalancedNetwork {
-        use powerio::{Bus, BusId, BusType, Generator, Storage};
-
-        let mut net = BalancedNetwork::in_memory(
-            "storage",
-            100.0,
-            vec![
-                Bus::new(BusId(1), BusType::Ref, 230.0),
-                Bus::new(BusId(2), BusType::Pq, 230.0),
-            ],
-            Vec::new(),
-        );
-        let mut generator = Generator::new(BusId(1));
-        generator.pmax = 100.0;
-        *net.generators_mut() = vec![generator]; // Every field distinct, so a column fed from the wrong field fails.
-        let mut storage = Storage::new(BusId(2));
-        storage.ps = 30.0;
-        storage.qs = -10.0;
-        storage.energy = 50.0;
-        storage.energy_rating = 90.0;
-        storage.charge_rating = 20.0;
-        storage.discharge_rating = 25.0;
-        storage.charge_efficiency = 0.9;
-        storage.discharge_efficiency = 0.85;
-        storage.thermal_rating = 40.0;
-        storage.qmin = -15.0;
-        storage.qmax = 15.0;
-        storage.r = 0.01;
-        storage.x = 0.02;
-        storage.p_loss = 2.0;
-        storage.q_loss = 1.0;
-        *net.storage_mut() = vec![storage];
-        net
-    }
-
-    #[test]
-    fn solver_storage_exports_charge_and_discharge_efficiency() {
-        let n = storage_net();
-        let tables = n.to_normalized_solver_tables().unwrap();
-        let sa = round_trip(&n, PIO_ARROW_TABLE_SOLVER_STORAGE);
-        assert_eq!(sa.len(), tables.storage.len());
-        let expected: Vec<f64> = tables.storage.iter().map(|s| s.charge_efficiency).collect();
-        assert_eq!(
-            f64_col(&sa, "charge_efficiency").values(),
-            expected.as_slice()
-        );
-        let expected: Vec<f64> = tables
-            .storage
-            .iter()
-            .map(|s| s.discharge_efficiency)
-            .collect();
-        assert_eq!(
-            f64_col(&sa, "discharge_efficiency").values(),
-            expected.as_slice()
-        );
-        // Pin the source values so the two columns cannot trade places.
-        assert_eq!(f64_col(&sa, "charge_efficiency").value(0), 0.9);
-        assert_eq!(f64_col(&sa, "discharge_efficiency").value(0), 0.85);
-        // The appended columns sit after the frozen prefix.
-        let names: Vec<&str> = sa
-            .fields()
-            .iter()
-            .map(|f| f.name().as_str())
-            .collect::<Vec<_>>();
-        assert_eq!(
-            names[names.len() - 2..],
-            ["charge_efficiency", "discharge_efficiency"]
-        );
-        assert_eq!(names[0], "index");
-        assert_eq!(names[15], "q_loss");
-    }
-
-    fn gen_cost_golden_json(case_file: &str) -> serde_json::Value {
-        let n = net(case_file);
-        let tables = n.to_normalized_solver_tables().unwrap();
-        let header = solver_gen_cost_batch(&tables).unwrap();
-        let coeff = solver_gen_cost_coeff_batch(&tables).unwrap();
-        // The version stamp is the crate version; pinning it here would make a
-        // patch release rewrite a fixture whose cost values did not move.
-        let metadata = |rb: &RecordBatch| {
-            let schema = rb.schema();
-            let mut map = serde_json::Map::new();
-            for (key, value) in schema.metadata() {
-                let value = if key == "powerio.version" {
-                    "<version>".to_owned()
-                } else {
-                    value.clone()
-                };
-                map.insert(key.clone(), serde_json::Value::String(value));
-            }
-            serde_json::Value::Object(map)
-        };
-        let i64_json = |rb: &RecordBatch, name: &str| {
-            serde_json::json!(
-                rb.column_by_name(name)
-                    .unwrap()
-                    .as_any()
-                    .downcast_ref::<Int64Array>()
-                    .unwrap()
-                    .values()
-                    .to_vec()
-            )
-        };
-        let f64_json = |rb: &RecordBatch, name: &str| {
-            serde_json::json!(
-                rb.column_by_name(name)
-                    .unwrap()
-                    .as_any()
-                    .downcast_ref::<Float64Array>()
-                    .unwrap()
-                    .values()
-                    .to_vec()
-            )
-        };
-        serde_json::json!({
-            "case": case_file,
-            "solver_gen_cost": {
-                "metadata": metadata(&header),
-                "index": i64_json(&header, "index"),
-                "model": i64_json(&header, "model"),
-                "startup": f64_json(&header, "startup"),
-                "shutdown": f64_json(&header, "shutdown"),
-                "ncost": i64_json(&header, "ncost"),
-                "coeff_count": i64_json(&header, "coeff_count"),
-                "coeff_offset": i64_json(&header, "coeff_offset"),
-            },
-            "solver_gen_cost_coeff": {
-                "metadata": metadata(&coeff),
-                "gen_index": i64_json(&coeff, "gen_index"),
-                "position": i64_json(&coeff, "position"),
-                "value": f64_json(&coeff, "value"),
-            },
-        })
-    }
-
-    const GEN_COST_GOLDEN_CASES: [&str; 2] = ["case9.m", "t_case9_dcline.m"];
-
-    fn gen_cost_golden_dir() -> std::path::PathBuf {
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../tests/data/capi_arrow")
-    }
-
-    #[test]
-    fn gen_cost_arrow_golden_fixtures_match() {
-        let dir = gen_cost_golden_dir();
-        for case_file in GEN_COST_GOLDEN_CASES {
-            let fixture = dir.join(case_file.replace(".m", "_gen_cost.json"));
-            let expected: serde_json::Value =
-                serde_json::from_str(&std::fs::read_to_string(&fixture).unwrap()).unwrap();
-            assert_eq!(gen_cost_golden_json(case_file), expected, "{case_file}");
-        }
-    }
-
-    #[ignore = "rewrites committed generator cost Arrow fixtures"]
-    #[test]
-    fn rewrite_gen_cost_arrow_golden_fixtures() {
-        let dir = gen_cost_golden_dir();
-        std::fs::create_dir_all(&dir).unwrap();
-        for case_file in GEN_COST_GOLDEN_CASES {
-            let fixture = dir.join(case_file.replace(".m", "_gen_cost.json"));
-            let text = serde_json::to_string_pretty(&gen_cost_golden_json(case_file)).unwrap();
-            std::fs::write(fixture, format!("{text}\n")).unwrap();
-        }
+        assert_eq!(ids, vec![0, 1, 2, 3, 4, 5, 15, 16, 17, 18, 19, 20]);
     }
 
     #[cfg(not(feature = "matrix"))]

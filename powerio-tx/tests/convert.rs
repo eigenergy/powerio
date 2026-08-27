@@ -2516,10 +2516,10 @@ fn generator_cost_csv_patches_validate_index_and_bus() {
 }
 
 #[test]
-fn model_json_file_is_refused_by_the_sniffer_and_named_as_such() {
+fn model_json_file_parses_to_the_network_it_serializes() {
     // Model JSON written to disk carries the generic .json extension. It is
-    // not a case format, so the sniffer refuses it and the message names the
-    // entry point that does read it, rather than routing it to a reader.
+    // the network serialization rather than a case format, and the sniffer
+    // routes it through `from_json`, so parsing it returns the same network.
     let net = parse_matpower_file(data("case14.m")).unwrap();
     let text = net.to_json().unwrap();
     let path = std::env::temp_dir().join(format!(
@@ -2529,14 +2529,55 @@ fn model_json_file_is_refused_by_the_sniffer_and_named_as_such() {
     std::fs::write(&path, &text).unwrap();
     let parsed = parse_file(&path, None);
     std::fs::remove_file(&path).ok();
-    let err = parsed
-        .expect_err("model JSON is not a case format")
-        .to_string();
-    assert!(err.contains("from_json"), "got: {err}");
+    let sniffed = parsed.expect("model JSON parses").network;
+    assert_eq!(sniffed.buses().len(), 14);
+    assert_eq!(sniffed.source_format(), SourceFormat::Matpower);
 
     let back = BalancedNetwork::from_json(&text).unwrap();
     assert_eq!(back.buses().len(), 14);
     assert_eq!(back.source_format(), SourceFormat::Matpower);
+}
+
+#[test]
+fn the_retired_powerio_json_token_gets_guidance() {
+    let err = parse_str("x", "powerio-json").unwrap_err();
+    let msg = err.to_string();
+    assert!(msg.contains("retired in 0.9.0"), "{msg}");
+    assert!(msg.contains("model-json"), "{msg}");
+}
+
+#[test]
+fn nameless_json_text_sniffs_like_a_json_file() {
+    // An in-memory source has no extension to state, so a JSON document is
+    // sniffed from the content: model JSON and a known case format both
+    // parse, and non-JSON text keeps the extension refusal.
+    let net = parse_matpower_file(data("case14.m")).unwrap();
+
+    let model = net.to_json().unwrap();
+    let source = powerio_core::Source::from_bytes("<memory>", model.into_bytes()).unwrap();
+    let parsed = powerio_tx::parse(source).expect("nameless model JSON parses");
+    assert_eq!(parsed.value().buses().len(), 14);
+
+    let pm = powerio_tx::write_as(
+        &powerio_core::PioModule::new(net),
+        TargetFormat::PowerModelsJson,
+    )
+    .unwrap()
+    .text;
+    let source = powerio_core::Source::from_bytes("<memory>", pm.into_bytes()).unwrap();
+    let parsed = powerio_tx::parse(source).expect("nameless PowerModels JSON parses");
+    assert_eq!(parsed.value().buses().len(), 14);
+    assert_eq!(
+        parsed.value().source_format(),
+        SourceFormat::PowerModelsJson
+    );
+
+    let source = powerio_core::Source::from_bytes("<memory>", b"not a case".to_vec()).unwrap();
+    let error = powerio_tx::parse(source).unwrap_err();
+    assert!(
+        error.to_string().contains("cannot infer"),
+        "non-JSON text keeps the extension refusal: {error}"
+    );
 }
 
 #[test]

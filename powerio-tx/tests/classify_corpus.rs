@@ -18,8 +18,6 @@ use powerio_tx::format::routing::{JSON_CLASSES, JsonClass, classify_json_text};
 const EXPECTED: &[(&str, &str, Option<&str>)] = &[
     // Golden Arrow and matrix table dumps: neither is a case document, and
     // neither carries a case marker at top level.
-    ("capi_arrow/case9_gen_cost.json", "unknown", None),
-    ("capi_arrow/t_case9_dcline_gen_cost.json", "unknown", None),
     ("capi_matrix/case30_arrow_coo.json", "unknown", None),
     ("capi_matrix/case9_arrow_coo.json", "unknown", None),
     // The BMOPF schema document describes cases; it is not one.

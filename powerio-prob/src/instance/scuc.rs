@@ -17,7 +17,7 @@ use crate::diagnostics::codes;
 use crate::instance::balanced::{
     AcOpfInstance, AcPfInstance, DcOpfInstance, DcPfInstance, transform_discarded,
 };
-use crate::scopf::ScucInputs;
+use crate::instance::scuc_inputs::ScucInputs;
 
 /// The AC security constrained unit commitment instance: the shared balanced
 /// network plus the complete GO Challenge 3 input categories.

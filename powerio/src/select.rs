@@ -11,7 +11,7 @@
 use powerio_core::{HistoryEntry, HistoryId, HistoryKind, PioModule};
 
 use crate::BalancedNetwork;
-use crate::package::diagnostics::codes;
+use crate::codes;
 use crate::value::PioValue;
 
 type Error = powerio_core::Error;
