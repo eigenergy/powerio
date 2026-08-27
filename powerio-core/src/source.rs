@@ -1372,9 +1372,6 @@ mod platform {
     #[derive(Debug)]
     pub(super) struct RootHandle {
         root: PathBuf,
-        /// Held for the lifetime of the source: pins the root against
-        /// deletion and renaming on platforms whose share mode enforces it.
-        _handle: File,
     }
 
     pub(super) fn open_no_follow(path: &Path) -> std::io::Result<File> {
@@ -1383,10 +1380,12 @@ mod platform {
     }
 
     pub(super) fn open_root(path: &Path) -> std::io::Result<RootHandle> {
-        let handle = open_directory_pinned(path)?;
+        // Verified at open; each walk re-pins the root for its own duration,
+        // so the source's lifetime holds no lock that would block legitimate
+        // tree changes between walks.
+        drop(open_directory_pinned(path)?);
         Ok(RootHandle {
             root: path.to_path_buf(),
-            _handle: handle,
         })
     }
 
@@ -1395,10 +1394,11 @@ mod platform {
             let mut path = self.root.clone();
             let (file_segment, directories) =
                 segments.split_last().expect("resolution yields a file");
-            // Every intermediate handle stays alive until the final open:
-            // the next component is opened only while every ancestor is
-            // still held.
-            let mut held = Vec::with_capacity(directories.len());
+            // Every handle from the root down stays alive until the final
+            // open: the next component is opened only while every ancestor
+            // is still held, and all release when the walk returns.
+            let mut held = Vec::with_capacity(directories.len() + 1);
+            held.push(open_directory_pinned(&self.root)?);
             for segment in directories {
                 push_plain_segment(&mut path, segment)?;
                 held.push(open_directory_pinned(&path)?);
