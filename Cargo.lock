@@ -2426,7 +2426,6 @@ dependencies = [
  "faer",
  "num-complex",
  "parquet",
- "powerio",
  "powerio-core",
  "powerio-dist",
  "powerio-tx",

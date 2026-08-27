@@ -5929,6 +5929,33 @@
           },
           "type": "array"
         },
+        "dc_line_pdc_fr": {
+          "items": {
+            "items": {
+              "$ref": "#/$defs/StoredF64"
+            },
+            "type": "array"
+          },
+          "type": "array"
+        },
+        "dc_line_qdc_fr": {
+          "items": {
+            "items": {
+              "$ref": "#/$defs/StoredF64"
+            },
+            "type": "array"
+          },
+          "type": "array"
+        },
+        "dc_line_qdc_to": {
+          "items": {
+            "items": {
+              "$ref": "#/$defs/StoredF64"
+            },
+            "type": "array"
+          },
+          "type": "array"
+        },
         "shunt_step": {
           "items": {
             "items": {
