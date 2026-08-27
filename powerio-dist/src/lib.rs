@@ -76,6 +76,6 @@ pub use model::{
     DistLoadVoltageModel, DistShunt, DistSourceFormat, DistSwitch, DistTransformer, DistWinding,
     DistWindingConn, Extras, IbrPrimeMover, IbrTopology, IbrVoltageAggregation, Mat,
     MulticonductorNetwork, PowerFactorControl, ReactivePowerReference, ReactivePowerUnit,
-    UntypedObject, VoltVarControl, VoltWattControl, VoltageSource,
+    UntypedObject, VoltVarControl, VoltWattControl, VoltageSource, unresolved_references,
 };
 pub use pmd::write_pmd_json;
