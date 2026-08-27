@@ -191,8 +191,10 @@ fn capacitor_susceptance(c: &crate::model::DistCapacitor) -> std::result::Result
             if n < 2 {
                 return Err(format!("delta bank maps {n} terminals"));
             }
-            let b = c.q_rated / (n as f64) / (c.v_nom * c.v_nom);
+            // Two terminals form one phase-to-phase leg, not two; divide the
+            // rated power by the legs actually stamped.
             let loops = if n == 2 { 1 } else { n };
+            let b = c.q_rated / (loops as f64) / (c.v_nom * c.v_nom);
             for pair in 0..loops {
                 couple(pair, (pair + 1) % n, b);
             }
