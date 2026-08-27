@@ -767,9 +767,16 @@ impl PyBalancedNetwork {
 }
 
 fn core_error_pyerr(error: &powerio_core::Error) -> PyErr {
+    // The same category to exception class mapping `categorized_pyerr` uses,
+    // so a caller branching on `except powerio.PowerIODataError` sees one
+    // taxonomy whichever layer raised the failure.
     let err = match error.category() {
+        powerio_core::ErrorCategory::Request => PyValueError::new_err(error.to_string()),
         powerio_core::ErrorCategory::Parse => PowerIOParseError::new_err(error.to_string()),
-        _ => PowerIOError::new_err(error.to_string()),
+        powerio_core::ErrorCategory::Data => PowerIODataError::new_err(error.to_string()),
+        powerio_core::ErrorCategory::Io | powerio_core::ErrorCategory::Output => {
+            PowerIOError::new_err(error.to_string())
+        }
     };
     if let Some(code) = error.diagnostics().first().map(|d| d.code().to_owned()) {
         Python::attach(|py| {
