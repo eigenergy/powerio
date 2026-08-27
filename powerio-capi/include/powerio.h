@@ -1226,6 +1226,29 @@ PioModuleHandle *pio_module_parse_file(const char *path, const char *format, Pio
 PioModuleHandle *pio_module_parse_str(const char *text, const char *format, PioError **error);
 
 /**
+ * Parse in-memory case bytes into a module: the only in-memory way to read
+ * a binary format. Text formats must be UTF-8.
+ */
+PioModuleHandle *pio_module_parse_bytes(const uint8_t *data,
+                                        size_t len,
+                                        const char *format,
+                                        PioError **error);
+
+/**
+ * The module's balanced network value as an owned network handle, provenance
+ * included. Any other value kind is refused with the kind named.
+ */
+PioNetwork *pio_module_as_network(const PioModuleHandle *module, PioError **error);
+
+#if defined(PIO_DIST)
+/**
+ * The module's multiconductor network value as an owned distribution
+ * handle, provenance included. Any other value kind is refused.
+ */
+PioDistNetwork *pio_module_as_dist_network(const PioModuleHandle *module, PioError **error);
+#endif
+
+/**
  * The stored version 1 document. Free with `pio_string_free`.
  */
 char *pio_module_write_json(const PioModuleHandle *module, PioError **error);
