@@ -31,7 +31,7 @@ dist = ["dep:powerio-dist"]
 # gridfm-datakit Parquet reader (`pio_read_dir` / `pio_scenario_ids`).
 # Off by default so the base ABI pulls in nothing but `powerio`; enabling it pulls
 # in powerio-matrix (arrow + parquet) for the reader.
-gridfm = ["dep:powerio-matrix", "powerio-matrix/gridfm"]
+gridfm = ["dep:powerio-matrix", "powerio-matrix/gridfm", "powerio/gridfm"]
 # Numerical problem data behind the module surface (`pio_dc_data_*`).
 prob = ["dep:powerio-prob"]
 
@@ -42,7 +42,8 @@ powerio-dist = { workspace = true, optional = true }
 powerio-prob = { workspace = true, optional = true }
 # Only the C Data Interface (`ffi`) is needed; the heavy arrow defaults stay off.
 arrow = { workspace = true, features = ["ffi"], optional = true }
-# Pulled in only by the `gridfm` feature: the reader lives in powerio-matrix.
+# Pulled in only by the `gridfm` feature: the writer lives in powerio-matrix,
+# the reader in the powerio facade.
 # It re-exports powerio, so `Network` is the same type `make_network` already takes.
 powerio-matrix = { workspace = true, optional = true }
 serde_json = { workspace = true }

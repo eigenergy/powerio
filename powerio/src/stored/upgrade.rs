@@ -46,8 +46,10 @@ pub(super) fn upgrade_legacy(
             &codes::READ_MODULE_LEGACY_STUDY,
             "this 0.9 package carries a nonempty `study` block, whose unapplied cumulative \
              commits and selectable base state cannot be upgraded without choosing a revision; \
-             materialize the selected commit with the 0.9 migration command \
-             (`powerio package --materialize`) and upgrade that static package"
+             materialize the selected commit on the 0.9 surface \
+             (`NetworkPackage::materialize_study_commit`, or \
+             `pio_package_materialize_study_commit` over the 0.9 C ABI) and \
+             upgrade that static package"
                 .to_string(),
         ));
     }
