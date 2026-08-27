@@ -992,16 +992,30 @@ pub fn write_demo(format: DemoFormat, destination: Destination) -> Result<WriteR
         },
         DestinationKind::Path(path) => match format {
             DemoFormat::OneFile => {
-                ensure_absent(&path)?;
                 if let Some(parent) = path.parent() {
                     std::fs::create_dir_all(parent).map_err(io_error)?;
                 }
+                // The staging entry exists only through an exclusive create
+                // (its unique name still cannot collide with a caller's
+                // file), and the commit is a hard link of that entry to the
+                // destination name: the link fails if anything appeared at
+                // the destination, so nothing is ever replaced.
                 let staging = staging_path(&path);
-                let result = std::fs::write(&staging, files[0].1)
-                    .and_then(|()| std::fs::rename(&staging, &path));
+                let result = (|| -> std::io::Result<()> {
+                    let mut file = std::fs::OpenOptions::new()
+                        .write(true)
+                        .create_new(true)
+                        .open(&staging)?;
+                    std::io::Write::write_all(&mut file, files[0].1)?;
+                    std::fs::hard_link(&staging, &path)
+                })();
+                let _ = std::fs::remove_file(&staging);
                 if let Err(error) = result {
-                    let _ = std::fs::remove_file(&staging);
-                    return Err(io_error(error));
+                    return Err(if error.kind() == std::io::ErrorKind::AlreadyExists {
+                        WriteError(format!("output `{}` already exists", path.display()))
+                    } else {
+                        io_error(error)
+                    });
                 }
                 WrittenOutput::Path {
                     root: path.clone(),
@@ -1009,18 +1023,26 @@ pub fn write_demo(format: DemoFormat, destination: Destination) -> Result<WriteR
                 }
             }
             DemoFormat::Directory => {
-                ensure_absent(&path)?;
-                let staging = staging_path(&path);
+                // The destination directory itself is the reservation: an
+                // exclusive create fails if the name is already present, and
+                // the artifacts land inside the reserved object, so an
+                // existing entry is refused and never replaced.
+                if let Err(error) = std::fs::create_dir(&path) {
+                    return Err(if error.kind() == std::io::ErrorKind::AlreadyExists {
+                        WriteError(format!("output `{}` already exists", path.display()))
+                    } else {
+                        io_error(error)
+                    });
+                }
                 let result = (|| -> Result<(), WriteError> {
-                    std::fs::create_dir_all(&staging).map_err(io_error)?;
                     for (name, bytes) in files {
-                        std::fs::write(staging.join(checked_relative(name)?), bytes)
+                        std::fs::write(path.join(checked_relative(name)?), bytes)
                             .map_err(io_error)?;
                     }
-                    std::fs::rename(&staging, &path).map_err(io_error)
+                    Ok(())
                 })();
                 if let Err(error) = result {
-                    let _ = std::fs::remove_dir_all(&staging);
+                    let _ = std::fs::remove_dir_all(&path);
                     return Err(error);
                 }
                 WrittenOutput::Path {
@@ -1034,16 +1056,6 @@ pub fn write_demo(format: DemoFormat, destination: Destination) -> Result<WriteR
         output,
         diagnostics: Vec::new(),
     })
-}
-
-fn ensure_absent(path: &Path) -> Result<(), WriteError> {
-    if path.exists() {
-        return Err(WriteError(format!(
-            "output `{}` already exists",
-            path.display()
-        )));
-    }
-    Ok(())
 }
 
 fn staging_path(path: &Path) -> PathBuf {
@@ -1376,5 +1388,43 @@ mod tests {
         assert!(write_demo(DemoFormat::OneFile, Destination::path(&path)).is_err());
         assert_eq!(std::fs::read(&path).unwrap(), b"existing");
         std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn a_target_appearing_before_the_commit_is_refused_untouched() {
+        // The commit is a non-replacing link: a file created at the
+        // destination after the parent exists but before the commit lands is
+        // refused, its bytes intact. The staged entry never survives.
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!(
+            "powerio-v1-api-prototype-race-{}-{unique}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("case.m");
+        // Simulate the race by pre-creating the target; the exclusive link
+        // refuses whatever the check-then-write ordering was.
+        std::fs::write(&path, b"raced").unwrap();
+        assert!(write_demo(DemoFormat::OneFile, Destination::path(&path)).is_err());
+        assert_eq!(std::fs::read(&path).unwrap(), b"raced");
+        let leftovers: Vec<_> = std::fs::read_dir(&dir)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .collect();
+        assert_eq!(leftovers, vec![std::ffi::OsString::from("case.m")]);
+
+        // The directory reservation is the exclusive create itself.
+        let existing_dir = dir.join("out");
+        std::fs::create_dir(&existing_dir).unwrap();
+        std::fs::write(existing_dir.join("keep.txt"), b"keep").unwrap();
+        assert!(write_demo(DemoFormat::Directory, Destination::path(&existing_dir)).is_err());
+        assert_eq!(
+            std::fs::read(existing_dir.join("keep.txt")).unwrap(),
+            b"keep"
+        );
+        std::fs::remove_dir_all(dir).unwrap();
     }
 }
