@@ -940,8 +940,7 @@ fn run_sensitivities(
     solver: SensitivitySolverArg,
     drop_tolerance: f64,
 ) -> anyhow::Result<()> {
-    let mpc =
-        compat_parse_matpower_file(input).with_context(|| format!("parse {}", input.display()))?;
+    let mpc = balanced_case(input).with_context(|| format!("parse {}", input.display()))?;
     std::fs::create_dir_all(output)?;
     let view = powerio_matrix::IndexedNetwork::new(&mpc);
     let options = SensitivityOptions {
@@ -1063,8 +1062,7 @@ fn run_dcopf(
     default_gen_cost: Option<&str>,
     gen_cost_csv: Option<&Path>,
 ) -> anyhow::Result<()> {
-    let mpc =
-        compat_parse_matpower_file(input).with_context(|| format!("parse {}", input.display()))?;
+    let mpc = balanced_case(input).with_context(|| format!("parse {}", input.display()))?;
     let cost_opts = write_options(missing_gen_cost, default_gen_cost, gen_cost_csv)?;
     let mut policy_network = mpc.clone();
     let cost_report = policy_network
@@ -1149,7 +1147,7 @@ fn run_gridfm(
 }
 
 fn run_verify(input: &Path, kind: MatrixKind, scheme: Scheme) -> anyhow::Result<()> {
-    let mpc = compat_parse_matpower_file(input)?;
+    let mpc = balanced_case(input)?;
     let opts = BuildOptions {
         scheme,
         ..Default::default()
@@ -1408,6 +1406,9 @@ fn run_convert(
     // target, so it takes the folder path and returns early.
     if to == FormatArg::PypsaCsv {
         return convert_to_pypsa_folder(input, output, from, scenario, gen_cost_options);
+    }
+    if from.is_none() && cases::stored_json(input)?.is_some() {
+        return convert_stored(input, to, output, &gen_cost_options);
     }
     // A `.json` with no --from is read and DOM-classified once here; the
     // family check below uses the verdict and the typed parse reuses the text.
@@ -1839,10 +1840,98 @@ enum FamilyCase {
 /// TUI, extended here to the single-file routes. Warnings stay on the returned
 /// value: the callers differ in where they surface them (summary JSON, package
 /// diagnostics, stderr).
-fn compat_parse_matpower_file(
-    path: impl AsRef<Path>,
-) -> Result<powerio_matrix::BalancedNetwork, powerio_core::Error> {
-    compat::parse_file(path, Some("matpower")).map(|parsed| parsed.network)
+/// One balanced network from any single case input (a stored `.pio.json`
+/// included), for the matrix commands. A distribution input is refused with
+/// the family named.
+fn balanced_case(input: &Path) -> anyhow::Result<powerio_matrix::BalancedNetwork> {
+    match parse_family_case(input, None)? {
+        FamilyCase::Transmission(parsed) => Ok(parsed.network),
+        FamilyCase::Distribution(_) => anyhow::bail!(
+            "{} is a distribution case; this command needs a transmission network",
+            input.display()
+        ),
+    }
+}
+
+/// Convert a stored `.pio.json` module's static network to `to`. The write
+/// is canonical: the stored document is not a case format, so there is no
+/// same format echo to preserve.
+fn convert_stored(
+    input: &Path,
+    to: FormatArg,
+    output: Option<&Path>,
+    gen_cost_options: &GenCostCliOptions,
+) -> anyhow::Result<()> {
+    let case = stored_family_case(input)?;
+    match (case, to.transmission(), to.distribution()) {
+        (FamilyCase::Transmission(parsed), Some(target), _) => {
+            let options = gen_cost_options.write_options()?;
+            let conv = powerio_matrix::write_as_with_options(
+                &powerio_core::PioModule::new(parsed.network),
+                target,
+                &options,
+            )
+            .with_context(|| format!("serializing to {target}"))?;
+            for w in conv.rendered_diagnostics() {
+                eprintln!("fidelity: {w}");
+            }
+            write_conversion_output(&conv.text, &[], output)?;
+            Ok(())
+        }
+        (FamilyCase::Distribution(parsed), _, Some(target)) => {
+            for w in &parsed.warnings {
+                eprintln!("parse: {w}");
+            }
+            let conv = parsed.to_format(target);
+            let mut diagnostics = parsed.diagnostics.clone();
+            diagnostics.extend(conv.diagnostics.iter().cloned());
+            for w in conv.rendered_diagnostics() {
+                eprintln!("fidelity: {w}");
+            }
+            write_conversion_output(&conv.text, &conv.sidecars, output)?;
+            fail_on_parse_errors(&parse_error_lines(&diagnostics))
+        }
+        (FamilyCase::Transmission(_), None, _) | (FamilyCase::Distribution(_), _, None) => {
+            anyhow::bail!(
+                "no conversion path between the transmission and distribution format \
+                 families (`{}` input to `{}`)",
+                input.display(),
+                to.name()
+            )
+        }
+    }
+}
+
+/// Load a stored `.pio.json` module and adapt its static value to the CLI's
+/// family case. A module storing anything but a static network names the
+/// export step instead of guessing a projection.
+fn stored_family_case(input: &Path) -> anyhow::Result<FamilyCase> {
+    let source = powerio_core::Source::open(input)
+        .with_context(|| format!("reading {}", input.display()))?;
+    let module = powerio::parse(source).with_context(|| format!("reading {}", input.display()))?;
+    match module.value().kind() {
+        powerio::PioValueKind::BalancedNetwork => {
+            let module: powerio_core::PioModule<powerio_matrix::BalancedNetwork> =
+                powerio::try_into_typed(module).expect("the kind was checked");
+            Ok(FamilyCase::Transmission(Box::new(
+                compat::module_to_parsed(module),
+            )))
+        }
+        powerio::PioValueKind::MulticonductorNetwork => {
+            let module: powerio_core::PioModule<powerio_dist::MulticonductorNetwork> =
+                powerio::try_into_typed(module).expect("the kind was checked");
+            Ok(FamilyCase::Distribution(Box::new(
+                compat::dist_module_to_parsed(module),
+            )))
+        }
+        other => anyhow::bail!(
+            "{} stores a {} value; export one static item first (`powerio package` with \
+             --scenario writes one from a scenario set, and the bindings' export_state \
+             selects by time position or scenario)",
+            input.display(),
+            other.as_str()
+        ),
+    }
 }
 
 fn parse_family_case(input: &Path, from: Option<FormatArg>) -> anyhow::Result<FamilyCase> {
@@ -1862,6 +1951,9 @@ fn parse_family_case(input: &Path, from: Option<FormatArg>) -> anyhow::Result<Fa
                 .with_context(|| format!("reading {}", input.display()))?;
             Ok(FamilyCase::Transmission(Box::new(parsed)))
         };
+    }
+    if cases::stored_json(input)?.is_some() {
+        return stored_family_case(input);
     }
     if let Some(case) = cases::classified_json(input)? {
         return parse_classified_case(&case, input);
@@ -2083,6 +2175,27 @@ mod tests {
             text.contains("not a recognized distribution document"),
             "{text}"
         );
+    }
+
+    #[test]
+    fn stored_module_reads_back_as_a_family_case() {
+        let stamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!("powerio-cli-stored-{stamp}.pio.json"));
+        let (text, _) = package_text(&data("case9.m"), None, None).unwrap();
+        std::fs::write(&path, text).unwrap();
+
+        match super::stored_family_case(&path).unwrap() {
+            super::FamilyCase::Transmission(parsed) => {
+                assert_eq!(parsed.network.buses().len(), 9);
+            }
+            super::FamilyCase::Distribution(_) => panic!("case9 is transmission"),
+        }
+        let net = super::balanced_case(&path).unwrap();
+        assert_eq!(net.buses().len(), 9);
+        let _ = std::fs::remove_file(path);
     }
 
     #[test]

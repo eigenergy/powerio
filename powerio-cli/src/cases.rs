@@ -55,6 +55,28 @@ impl ClassifiedCase {
     }
 }
 
+/// The stored `.pio.json` document text when `input` is one, `Ok(None)` for
+/// anything else. The single file commands load these through the universal
+/// parse instead of the case classifier.
+pub fn stored_json(input: &Path) -> anyhow::Result<Option<String>> {
+    let ext = input
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(str::to_ascii_lowercase);
+    if ext.as_deref() != Some(JSON_EXTENSION) {
+        return Ok(None);
+    }
+    let text = std::fs::read_to_string(input)
+        .with_context(|| format!("reading JSON format markers from {}", input.display()))?;
+    if matches!(
+        powerio_matrix::format::routing::classify_json_text(&text),
+        JsonClass::Package
+    ) {
+        return Ok(Some(text));
+    }
+    Ok(None)
+}
+
 /// Read and classify `input` when it is a `.json` file; `Ok(None)` for every
 /// other extension, whose family (if any) is named without touching the file.
 /// The single-file routes hand the returned text straight to the typed parser
@@ -90,9 +112,9 @@ fn classify_case_json(text: &str, path: &Path) -> anyhow::Result<DetectedFormat>
     match powerio_matrix::format::routing::classify_json_text(text) {
         JsonClass::Case(Detection::Known(format)) => Ok(format),
         JsonClass::Package => anyhow::bail!(
-            "{} is a .pio.json package; the `package` subcommand writes them, \
-             and the bindings read them (powerio.Package.from_json in Python, \
-             read_package in Julia)",
+            "{} is a stored .pio.json module; `summary`, `convert`, and `matrix` \
+             read it directly, and the bindings' parse loads it (powerio.parse \
+             in Python)",
             path.display()
         ),
         JsonClass::ModelJson => anyhow::bail!(
