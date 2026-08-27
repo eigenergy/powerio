@@ -9,7 +9,9 @@ mod dc;
 #[cfg(test)]
 mod dcopf_tests;
 pub mod instance;
+#[cfg(any(test, feature = "matrix"))]
 mod limits;
+#[cfg(any(test, feature = "matrix"))]
 mod nodal;
 mod reference;
 pub mod scopf;
@@ -23,8 +25,11 @@ pub mod matrix;
 /// export assembles from a network. These arrays are never public instance
 /// fields — the public instances share the typed network — and the builders
 /// that consume them derive them privately from an instance.
+#[cfg(any(test, feature = "matrix"))]
 pub(crate) mod prep {
-    pub(crate) use crate::dc::{DcOpfOptions, DcOpfPreparation, build_dc_opf_preparation};
+    #[cfg(feature = "matrix")]
+    pub(crate) use crate::dc::DcOpfPreparation;
+    pub(crate) use crate::dc::{DcOpfOptions, build_dc_opf_preparation};
 }
 pub use dc::Units;
 pub use powerio_tx::DcConvention;
