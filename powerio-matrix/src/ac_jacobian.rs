@@ -83,7 +83,8 @@ impl PowerFlowJacobian {
         instance: &AcPfInstance,
         point: &OperatingPoint<powerio_tx::BalancedNetwork>,
     ) -> Result<(), Error> {
-        let voltages = point_voltages(instance, point, &self.bus_ids)?;
+        let view = IndexedNetwork::new(instance.network());
+        let voltages = point_voltages(instance, point, &self.bus_ids, &view)?;
         fill_values(
             &mut self.matrix,
             &self.conductance,
@@ -114,10 +115,14 @@ pub fn calc_power_flow_jacobian(
     coordinates: VoltageCoordinates,
 ) -> Result<PowerFlowJacobian, Error> {
     let network = instance.network();
-    let bus_ids: Vec<BusId> = network.buses().iter().map(|bus| bus.id).collect();
-    let voltages = point_voltages(instance, point, &bus_ids)?;
-
+    // The analysis axis comes from the same lowered view the admittance is
+    // built from, so a three winding expansion's star buses are part of the
+    // pattern and the assembled dimension always equals the admittance
+    // dimension.
     let view = IndexedNetwork::new(network);
+    let bus_ids: Vec<BusId> = (0..view.n()).map(|idx| view.bus_id(idx)).collect();
+    let voltages = point_voltages(instance, point, &bus_ids, &view)?;
+
     let parts = crate::build_ybus(
         &view,
         &crate::BuildOptions {
@@ -182,33 +187,59 @@ pub fn calc_power_flow_jacobian(
 /// The complete voltage assignment from the operating point, in bus row
 /// order, with the identity checks #407 requires.
 fn point_voltages(
-    _instance: &AcPfInstance,
+    instance: &AcPfInstance,
     point: &OperatingPoint<powerio_tx::BalancedNetwork>,
     bus_ids: &[BusId],
+    view: &IndexedNetwork<'_>,
 ) -> Result<Voltages, Error> {
+    // The point must share the instance's own bus identity list exactly; the
+    // analysis axis may extend it with the expansion's star buses, whose
+    // voltages come from the lowered network below.
+    let raw_ids: Vec<BusId> = instance
+        .network()
+        .buses()
+        .iter()
+        .map(|bus| bus.id)
+        .collect();
     let point_ids: Vec<BusId> = point.network().buses().iter().map(|bus| bus.id).collect();
-    if point_ids != *bus_ids {
+    if point_ids != raw_ids {
         return Err(Error::new(
             &codes::BUILD_STATE_IDENTITY_UNKNOWN,
             "the operating point's network does not share the instance's bus identities",
         ));
     }
+    let point_ids: std::collections::BTreeSet<BusId> = raw_ids.into_iter().collect();
     let mut magnitude = Vec::with_capacity(bus_ids.len());
     let mut angle = Vec::with_capacity(bus_ids.len());
-    for &bus in bus_ids {
-        let (Some(vm), Some(va)) = (
-            point.bus_voltage_magnitude(bus),
-            point.bus_voltage_angle(bus),
-        ) else {
-            return Err(Error::new(
-                &codes::BUILD_STATE_SHAPE_MISMATCH,
-                format!(
-                    "the operating point does not state a complete complex voltage at bus {bus}; the Jacobian needs both quantities at every bus"
-                ),
-            ));
-        };
-        magnitude.push(vm);
-        angle.push(va);
+    for (idx, &bus) in bus_ids.iter().enumerate() {
+        if point_ids.contains(&bus) {
+            let (Some(vm), Some(va)) = (
+                point.bus_voltage_magnitude(bus),
+                point.bus_voltage_angle(bus),
+            ) else {
+                return Err(Error::new(
+                    &codes::BUILD_STATE_SHAPE_MISMATCH,
+                    format!(
+                        "the operating point does not state a complete complex voltage at bus {bus}; the Jacobian needs both quantities at every bus"
+                    ),
+                ));
+            };
+            magnitude.push(vm);
+            angle.push(va);
+        } else {
+            // A star bus the three winding expansion synthesized: the point
+            // cannot state it, so its voltage comes from the lowered
+            // network's own stated values.
+            let star = &view.network().buses()[idx];
+            if star.id != bus {
+                return Err(Error::new(
+                    &codes::BUILD_STATE_IDENTITY_UNKNOWN,
+                    "the operating point's network does not share the instance's bus identities",
+                ));
+            }
+            magnitude.push(star.vm);
+            angle.push(view.angle_radians(star.va));
+        }
     }
     Ok(Voltages { magnitude, angle })
 }
