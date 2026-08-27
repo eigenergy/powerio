@@ -142,6 +142,7 @@ mod workspace {
                 "powerio (stored document)",
                 powerio::package::diagnostics::registry(),
             ),
+            #[cfg(feature = "gridfm")]
             (
                 "powerio (gridfm reader)",
                 powerio::gridfm::codes::ALL.to_vec(),
