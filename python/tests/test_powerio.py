@@ -101,8 +101,7 @@ def test_public_type_is_balanced_network(case9):
     assert "BalancedNetwork" in powerio.__all__
     assert not hasattr(powerio, "Case")
     # The 0.8 bridge alias is gone at 1.0.0.
-    with pytest.raises(AttributeError):
-        powerio.Network
+    assert not hasattr(powerio, "Network")
     assert "Network" not in powerio.__all__
     assert repr(case9).startswith("BalancedNetwork(")
 
