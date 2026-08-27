@@ -142,7 +142,7 @@ powerio_core::diagnostic_codes! {
     BUILD_PACKAGE_PAYLOAD_FAILED = "BUILD.PACKAGE.PAYLOAD_FAILED", Error,
         "the payload could not be built, applied, or serialized", category = Data;
     EMIT_PACKAGE_SERIALIZE_FAILED = "EMIT.PACKAGE.SERIALIZE_FAILED", Error,
-        "serializing the package to JSON failed", category = Output;
+        "serializing the stored document to JSON failed", category = Output;
 }
 
 /// Every code this crate declares.
