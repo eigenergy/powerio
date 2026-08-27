@@ -122,6 +122,7 @@ mod workspace {
         vec![
             ("powerio", powerio::diagnostics::registry()),
             ("powerio (stored + transform)", powerio::codes::registry()),
+            #[cfg(feature = "gridfm")]
             (
                 "powerio (gridfm reader)",
                 powerio::gridfm::codes::ALL.to_vec(),
