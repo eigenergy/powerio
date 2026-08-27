@@ -7,7 +7,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 pattern='\bcontract\b|interchange format|exchange format'
-paths=(README.md CONTRIBUTING.md CHANGELOG.md docs/src python/powerio
+paths=(README.md CONTRIBUTING.md CHANGELOG.md AGENTS.md docs/src python/powerio
        powerio/src powerio-core/src powerio-tx/src powerio-dist/src
        powerio-prob/src powerio-matrix/src powerio-capi/src powerio-cli/src
        powerio-py/src)
