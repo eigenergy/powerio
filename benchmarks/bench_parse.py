@@ -94,7 +94,7 @@ def samples_for(nbuses):
 
 
 def bench_case(path: Path):
-    case = powerio.parse_file(str(path))
+    case = powerio.parse(str(path), value_type=powerio.BalancedNetwork)
     print(
         f"case {path.name}: {case.n_buses} buses, {case.n_branches} branches, "
         f"{case.n_gens} gens"
@@ -104,10 +104,10 @@ def bench_case(path: Path):
     def timed(fn):
         return sample_stats(fn, n, warm)
 
-    rows = [("powerio: parse", timed(lambda: powerio.parse_file(str(path))))]
+    rows = [("powerio: parse", timed(lambda: powerio.parse(str(path), value_type=powerio.BalancedNetwork)))]
 
     def full_path():
-        c = powerio.parse_file(str(path))
+        c = powerio.parse(str(path), value_type=powerio.BalancedNetwork)
         c.ybus()
         c.bprime()
 
