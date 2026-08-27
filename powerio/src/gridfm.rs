@@ -388,7 +388,7 @@ fn build_network_from_columns(
         if pd[r] != 0.0 || qd[r] != 0.0 {
             loads.push(Load::new(id, pd[r], qd[r]));
         }
-        // Undo the writer's `/ base_mva` (gridfm.rs:487) to recover MW/MVAr at V=1.
+        // Undo the writer's `/ base_mva` (powerio-matrix/src/io/gridfm.rs) to recover MW/MVAr at V=1.
         if gs[r] != 0.0 || bs[r] != 0.0 {
             shunts.push(Shunt::new(id, gs[r] * base_mva, bs[r] * base_mva));
         }
