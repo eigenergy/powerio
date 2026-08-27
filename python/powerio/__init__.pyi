@@ -4,7 +4,7 @@ __version__: str
 
 Scheme = Literal["bx", "xb"]
 Convention = Literal["series", "matpower", "reactance-only"]
-SensitivitySolver = Literal["auto", "dense", "iterative"]
+SensitivitySolver = Literal["auto", "dense", "sparse"]
 Units = Literal["perunit", "native"]
 GridfmOutputs = Dict[str, Any]
 

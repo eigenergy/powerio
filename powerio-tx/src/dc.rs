@@ -43,59 +43,76 @@ pub(crate) fn series_admittance_parts(r: f64, x: f64) -> (f64, f64) {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[non_exhaustive]
 pub enum DcConvention {
-    /// `b = 1/x`, ignoring resistance, transformer taps, and phase shifts.
+    /// `b = -1/x`, ignoring resistance, transformer taps, and phase shifts.
     ///
     /// The textbook DC linearization, which a paper reproducing a published
     /// result needs exactly as written.
     ReactanceOnly,
-    /// `b = 1/(x tau)` with phase shift injections, matching MATPOWER
-    /// `makeBdc`.
-    Matpower,
-    /// `b = x/(r² + x²)` with phase shift injections.
+    /// `b = -1/(x tau)` with phase shift injections, matching MATPOWER
+    /// `makeBdc` up to MATPOWER's own sign spelling.
+    ///
+    /// Serialized as `Matpower`, the spelling every stored 0.9 document and
+    /// bundle manifest carries.
+    #[serde(rename = "Matpower", alias = "TapAdjustedReactance")]
+    TapAdjustedReactance,
+    /// `b = imag(inv(r + jx)) = -x/(r² + x²)` with phase shift injections.
     ///
     /// Reads the whole series impedance, so it describes a branch with a real
-    /// r/x ratio. A transformer tap does not
-    /// scale it, and it reduces to `1/x` when the resistance is zero.
-    /// PowerModels' DC formulation uses the same quantity.
+    /// r/x ratio. A transformer tap does not scale it, and it reduces to
+    /// `-1/x` when the resistance is zero. This is PowerModels' DC branch
+    /// susceptance exactly.
+    ///
+    /// Serialized as `SeriesImpedance`, the stored 0.9 spelling.
     #[default]
-    SeriesImpedance,
+    #[serde(rename = "SeriesImpedance", alias = "SeriesSusceptance")]
+    SeriesSusceptance,
 }
 
 impl DcConvention {
-    /// The 0.8 spelling of [`DcConvention::ReactanceOnly`]. Works in
-    /// expression and pattern position; goes away at 1.0.0.
-    #[allow(non_upper_case_globals)]
-    #[deprecated(
-        since = "0.9.0",
-        note = "renamed to DcConvention::ReactanceOnly in 0.9.0; the alias goes away at 1.0.0"
-    )]
-    pub const PaperPure: DcConvention = DcConvention::ReactanceOnly;
-
-    /// The branch susceptance from resistance, reactance, and effective tap.
-    /// Only [`Self::Matpower`] reads the tap, and only
-    /// [`Self::SeriesImpedance`] reads the resistance.
+    /// The public branch susceptance, in PowerModels signs: the imaginary
+    /// part of the series admittance the selected formula models, negative
+    /// for an inductive branch. Only [`Self::TapAdjustedReactance`] reads the
+    /// tap, and only [`Self::SeriesSusceptance`] reads the resistance; a
+    /// value the selected formula never reads cannot reject a branch.
     ///
-    /// Non-finite in, non-finite out, which is what
-    /// [`Self::SeriesImpedance`] has always done and what the callers check.
-    /// The reciprocal rules need the guard because `1/±inf` is a finite `0.0`:
-    /// a branch Y_bus rejects outright would otherwise join the DC Laplacian as
-    /// a zero-weight edge with nothing to report it.
+    /// Non-finite in, non-finite out. The reciprocal rules need the guard
+    /// because `1/±inf` is a finite `0.0`: a branch Y_bus rejects outright
+    /// would otherwise join the DC system as a zero-weight edge with nothing
+    /// to report it.
     #[must_use]
     pub fn branch_susceptance(self, resistance: f64, reactance: f64, effective_tap: f64) -> f64 {
         // Guard the denominator, not its factors: `x * tap` can overflow to
         // infinity from two finite factors and reach the same silent zero.
-        let reciprocal = |denominator: f64| {
+        let negated_reciprocal = |denominator: f64| {
             if denominator.is_finite() {
-                1.0 / denominator
+                -1.0 / denominator
             } else {
                 f64::NAN
             }
         };
         match self {
-            Self::ReactanceOnly => reciprocal(reactance),
-            Self::Matpower => reciprocal(reactance * effective_tap),
-            Self::SeriesImpedance => -series_admittance_parts(resistance, reactance).1,
+            Self::ReactanceOnly => negated_reciprocal(reactance),
+            Self::TapAdjustedReactance => negated_reciprocal(reactance * effective_tap),
+            Self::SeriesSusceptance => series_admittance_parts(resistance, reactance).1,
         }
+    }
+
+    /// The internal positive factor weight of the same branch: the edge
+    /// weight of the positive semidefinite DC Laplacian a sparse Cholesky
+    /// solver factors, which is the negation of
+    /// [`branch_susceptance`](Self::branch_susceptance). Public results carry
+    /// PowerModels signs; a solver path fills its factor from this weight and
+    /// converts sign only while writing a caller's output.
+    #[must_use]
+    pub fn solver_edge_weight(self, resistance: f64, reactance: f64, effective_tap: f64) -> f64 {
+        -self.branch_susceptance(resistance, reactance, effective_tap)
+    }
+
+    /// Whether the selected formula reads the transformer tap, and so whether
+    /// the tap can bound or reject a branch.
+    #[must_use]
+    pub fn reads_tap(self) -> bool {
+        matches!(self, Self::TapAdjustedReactance)
     }
 
     /// Whether phase shifts contribute to the nodal injection vector.
@@ -103,7 +120,7 @@ impl DcConvention {
     pub fn includes_phase_shifts(self) -> bool {
         match self {
             Self::ReactanceOnly => false,
-            Self::Matpower | Self::SeriesImpedance => true,
+            Self::TapAdjustedReactance | Self::SeriesSusceptance => true,
         }
     }
 }
@@ -137,7 +154,7 @@ mod tests {
     fn dc_network_data_maps_rows_and_omissions() {
         let network = three_bus_network();
         let view = crate::IndexedNetwork::new(&network);
-        let data = dc_network_data(&view, DcConvention::SeriesImpedance);
+        let data = dc_network_data(&view, DcConvention::SeriesSusceptance);
         assert_eq!(data.formula, "series_susceptance");
         assert_eq!(data.from_indices, vec![0, 1]);
         assert_eq!(data.to_indices, vec![1, 2]);
@@ -148,7 +165,8 @@ mod tests {
         assert!(data.omitted[0].1.contains("out of service"));
 
         let b = data.susceptance[1];
-        assert!((b - 5.0).abs() < 1e-12);
+        // PowerModels sign: imag(inv(j 0.2)) = -5.
+        assert!((b + 5.0).abs() < 1e-12);
         let shift = 30.0_f64.to_radians();
         assert!(data.shift[0].abs() < 1e-15);
         assert!((data.shift[1] - shift).abs() < 1e-12);
@@ -180,7 +198,7 @@ mod tests {
         );
         let view = crate::IndexedNetwork::new(&network);
 
-        let series = dc_network_data(&view, DcConvention::SeriesImpedance);
+        let series = dc_network_data(&view, DcConvention::SeriesSusceptance);
         assert_eq!(series.row_ids, vec!["resistive"]);
         assert_eq!(series.from_indices, vec![0]);
         assert_eq!(series.to_indices, vec![1]);
@@ -188,7 +206,10 @@ mod tests {
         assert_eq!(series.omitted.len(), 1);
         assert_eq!(series.omitted[0].0, "nothing");
 
-        for convention in [DcConvention::Matpower, DcConvention::ReactanceOnly] {
+        for convention in [
+            DcConvention::TapAdjustedReactance,
+            DcConvention::ReactanceOnly,
+        ] {
             let data = dc_network_data(&view, convention);
             assert!(data.row_ids.is_empty(), "{convention:?}");
             let omitted: Vec<&str> = data.omitted.iter().map(|(id, _)| id.as_str()).collect();
@@ -213,7 +234,7 @@ mod tests {
             crate::parse(source.with_format(powerio_core::FormatId::new("psse").unwrap())).unwrap();
         let network = module.value();
         let view = crate::IndexedNetwork::new(network);
-        let data = dc_network_data(&view, DcConvention::SeriesImpedance);
+        let data = dc_network_data(&view, DcConvention::SeriesSusceptance);
         assert_eq!(data.bus_ids.len(), view.n());
         // Three declared buses plus the synthetic star bus.
         assert_eq!(data.bus_ids.len(), 4);
@@ -236,8 +257,8 @@ mod tests {
     #[test]
     fn formula_names_round_trip() {
         for convention in [
-            DcConvention::SeriesImpedance,
-            DcConvention::Matpower,
+            DcConvention::SeriesSusceptance,
+            DcConvention::TapAdjustedReactance,
             DcConvention::ReactanceOnly,
         ] {
             assert_eq!(
@@ -248,27 +269,45 @@ mod tests {
         assert_eq!(DcConvention::from_formula_name("mystery"), None);
     }
 
-    /// A resistanceless branch reads the same under both live conventions, so
-    /// the new default only moves a case that carries resistance.
+    /// Public values carry PowerModels signs: negative for an inductive
+    /// branch, `imag(inv(r + jx))` exactly. A resistanceless branch reads the
+    /// same under both live conventions, so the default only moves a case
+    /// that carries resistance.
     #[test]
-    fn series_impedance_reduces_to_one_over_x() {
-        let b = DcConvention::SeriesImpedance.branch_susceptance(0.0, 0.25, 1.0);
-        assert!((b - 4.0).abs() < 1e-12);
+    fn series_susceptance_reduces_to_negated_one_over_x() {
+        let b = DcConvention::SeriesSusceptance.branch_susceptance(0.0, 0.25, 1.0);
+        assert!((b + 4.0).abs() < 1e-12);
+        // The internal factor weight is its negation.
+        let weight = DcConvention::SeriesSusceptance.solver_edge_weight(0.0, 0.25, 1.0);
+        assert!((weight - 4.0).abs() < 1e-12);
     }
 
-    /// Resistance lowers the susceptance, by more as `r` grows against `x`.
+    /// Resistance lowers the susceptance magnitude, by more as `r` grows
+    /// against `x`.
     #[test]
-    fn resistance_lowers_the_susceptance() {
-        let lossless = DcConvention::SeriesImpedance.branch_susceptance(0.0, 0.1, 1.0);
-        let lossy = DcConvention::SeriesImpedance.branch_susceptance(0.1, 0.1, 1.0);
-        assert!(lossy < lossless);
-        assert!((lossy - 5.0).abs() < 1e-12);
+    fn resistance_lowers_the_susceptance_magnitude() {
+        let lossless = DcConvention::SeriesSusceptance.branch_susceptance(0.0, 0.1, 1.0);
+        let lossy = DcConvention::SeriesSusceptance.branch_susceptance(0.1, 0.1, 1.0);
+        assert!(lossy.abs() < lossless.abs());
+        assert!((lossy + 5.0).abs() < 1e-12);
     }
 
     #[test]
     fn matpower_scales_by_the_tap() {
-        let b = DcConvention::Matpower.branch_susceptance(0.01, 0.2, 2.0);
-        assert!((b - 2.5).abs() < 1e-12);
+        let b = DcConvention::TapAdjustedReactance.branch_susceptance(0.01, 0.2, 2.0);
+        assert!((b + 2.5).abs() < 1e-12);
+    }
+
+    /// Only the tap-reading formula can be rejected by a tap: the other
+    /// formulas never read the value (#324).
+    #[test]
+    fn an_unread_tap_never_rejects_a_branch() {
+        for conv in [DcConvention::ReactanceOnly, DcConvention::SeriesSusceptance] {
+            assert!(!conv.reads_tap());
+            let b = conv.branch_susceptance(0.01, 0.1, 1e-200);
+            assert!(b.is_finite(), "{conv:?} read the tap it never divides by");
+        }
+        assert!(DcConvention::TapAdjustedReactance.reads_tap());
     }
 
     /// `1/±inf` is `0.0`, which is finite, so a branch the Y_bus builder rejects
@@ -280,8 +319,8 @@ mod tests {
         for x in [f64::INFINITY, f64::NEG_INFINITY, f64::NAN] {
             for conv in [
                 DcConvention::ReactanceOnly,
-                DcConvention::Matpower,
-                DcConvention::SeriesImpedance,
+                DcConvention::TapAdjustedReactance,
+                DcConvention::SeriesSusceptance,
             ] {
                 let b = conv.branch_susceptance(0.01, x, 1.0);
                 assert!(!b.is_finite(), "{conv:?} read x = {x} as b = {b}");
@@ -293,7 +332,7 @@ mod tests {
             (1e300, 1e300),
             (1e300, -1e300),
         ] {
-            let b = DcConvention::Matpower.branch_susceptance(0.0, x, tap);
+            let b = DcConvention::TapAdjustedReactance.branch_susceptance(0.0, x, tap);
             assert!(!b.is_finite(), "x = {x}, tap = {tap} read as b = {b}");
         }
     }
@@ -308,18 +347,18 @@ mod tests {
         let (r, x) = (1e160, 1e160);
         assert!(r * r + x * x == f64::INFINITY, "the direct form overflows");
 
-        let b = DcConvention::SeriesImpedance.branch_susceptance(r, x, 1.0);
-        // b = x/(r² + x²) = 1/(2 · 1e160).
+        let b = DcConvention::SeriesSusceptance.branch_susceptance(r, x, 1.0);
+        // b = -x/(r² + x²) = -1/(2 · 1e160).
         assert!(
-            (b / 5e-161 - 1.0).abs() < 1e-12,
+            (b / -5e-161 - 1.0).abs() < 1e-12,
             "the branch is not dropped, got {b}"
         );
 
         let (g, susceptance) = series_admittance_parts(r, x);
         assert!((g / 5e-161 - 1.0).abs() < 1e-12, "got {g}");
         assert!(
-            (susceptance + b).abs() < 1e-175,
-            "the DC rule is its negation"
+            (susceptance - b).abs() < 1e-175,
+            "the public rule is the series susceptance itself"
         );
     }
 
@@ -384,8 +423,8 @@ impl DcConvention {
     #[must_use]
     pub fn formula_name(self) -> &'static str {
         match self {
-            Self::SeriesImpedance => "series_susceptance",
-            Self::Matpower => "tap_adjusted_reactance",
+            Self::SeriesSusceptance => "series_susceptance",
+            Self::TapAdjustedReactance => "tap_adjusted_reactance",
             Self::ReactanceOnly => "reactance_only",
         }
     }
@@ -395,8 +434,8 @@ impl DcConvention {
     #[must_use]
     pub fn from_formula_name(name: &str) -> Option<Self> {
         match name {
-            "series_susceptance" | "series" => Some(Self::SeriesImpedance),
-            "tap_adjusted_reactance" | "matpower" => Some(Self::Matpower),
+            "series_susceptance" | "series" => Some(Self::SeriesSusceptance),
+            "tap_adjusted_reactance" | "matpower" => Some(Self::TapAdjustedReactance),
             "reactance_only" => Some(Self::ReactanceOnly),
             _ => None,
         }
@@ -408,7 +447,7 @@ impl DcConvention {
 /// ID, never dropped silently and never replaced with an epsilon impedance.
 /// The degeneracy bound applies to the magnitude the selected formula
 /// actually divides by: the series impedance magnitude for
-/// [`DcConvention::SeriesImpedance`], the reactance alone for the two
+/// [`DcConvention::SeriesSusceptance`], the reactance alone for the two
 /// reactance formulas.
 #[must_use]
 pub fn dc_network_data(
@@ -451,18 +490,18 @@ pub fn dc_network_data(
             continue;
         }
         let degenerate = match convention {
-            DcConvention::SeriesImpedance => branch.r.hypot(branch.x) < MIN_DIVISIBLE_MAGNITUDE,
-            DcConvention::Matpower | DcConvention::ReactanceOnly => {
+            DcConvention::SeriesSusceptance => branch.r.hypot(branch.x) < MIN_DIVISIBLE_MAGNITUDE,
+            DcConvention::TapAdjustedReactance | DcConvention::ReactanceOnly => {
                 branch.x.abs() < MIN_DIVISIBLE_MAGNITUDE
             }
         };
         if degenerate {
             let reason = match convention {
-                DcConvention::SeriesImpedance => {
+                DcConvention::SeriesSusceptance => {
                     "zero impedance: the series impedance magnitude is below the divisibility \
                      floor"
                 }
-                DcConvention::Matpower | DcConvention::ReactanceOnly => {
+                DcConvention::TapAdjustedReactance | DcConvention::ReactanceOnly => {
                     "zero reactance: the selected formula divides by reactance"
                 }
             };

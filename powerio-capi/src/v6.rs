@@ -1132,8 +1132,8 @@ mod tests {
             assert_eq!(pio_dc_data_n_rows(data), 1);
             assert_eq!(pio_dc_data_n_buses(data), 3);
             let b = *pio_dc_data_susceptance(data);
-            // series: -imag(1/(r+ix)) = x/(r^2+x^2)
-            let expected = 0.1 / (0.01_f64 * 0.01 + 0.1 * 0.1);
+            // series, PowerModels sign: imag(1/(r+ix)) = -x/(r^2+x^2)
+            let expected = -0.1 / (0.01_f64 * 0.01 + 0.1 * 0.1);
             assert!((b - expected).abs() < 1e-12, "{b}");
             assert_eq!(*pio_dc_data_from_indices(data), 0);
             assert_eq!(*pio_dc_data_to_indices(data), 1);

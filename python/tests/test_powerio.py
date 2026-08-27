@@ -349,6 +349,37 @@ def test_read_warnings_surface():
     assert powerio.parse_file(DATA / "case9.m").read_warnings == []
 
 
+def test_stored_module_multiconductor_accessor_keeps_every_diagnostic():
+    """A stored module's diagnostics, including one whose span references the
+    module's own declared source, survive `as_multiconductor_network` in
+    source order. Regression: the accessor used to build the network handle
+    with no sources carried over, so a span validated against an empty source
+    list and the first span-bearing diagnostic silently dropped itself and
+    every diagnostic after it."""
+    path = DATA / "dist" / "micro" / "xfmr_single_phase.dss"
+    module = powerio.StoredModule.from_file(path)
+    doc = json.loads(module.to_json())
+    source_id = doc["sources"][0]["id"]
+    doc["diagnostics"] = [
+        {"id": "d0", "severity": "warning", "code": "A.B.C", "message": "no span here"},
+        {
+            "id": "d1",
+            "severity": "error",
+            "code": "D.E.F",
+            "message": "in range span",
+            "spans": [{"source": source_id, "byte_start": 0, "byte_end": 10}],
+        },
+        {"id": "d2", "severity": "error", "code": "G.H.I", "message": "trailing error"},
+    ]
+    reloaded = powerio.StoredModule.from_json(json.dumps(doc))
+    net = reloaded._inner.as_multiconductor_network()
+    assert net.warnings() == [
+        "A.B.C: no span here",
+        "D.E.F: in range span",
+        "G.H.I: trailing error",
+    ]
+
+
 def test_json_roundtrip_and_parsed_conversion():
     c = powerio.parse_file(DATA / "case9.m")
     back = powerio.from_json(c.to_json())
@@ -1000,14 +1031,17 @@ def test_convention_aliases(case9):
 
 def test_sensitivity_solver_kwarg(case9):
     # On a small case the auto policy picks the dense path, so the explicit
-    # spellings must agree with the default. The iterative path agrees only
+    # spellings must agree with the default. The sparse path agrees only
     # to its 1e-10 relative residual.
     base = case9.ptdf().toarray()
     assert np.allclose(case9.ptdf(solver="dense").toarray(), base, atol=1e-9)
-    assert np.allclose(case9.ptdf(solver="iterative").toarray(), base, atol=1e-6)
+    assert np.allclose(case9.ptdf(solver="sparse").toarray(), base, atol=1e-6)
     lodf = case9.lodf().toarray()
     assert np.allclose(case9.lodf(solver="dense").toarray(), lodf, atol=1e-9)
-    assert np.allclose(case9.lodf(solver="CG").toarray(), lodf, atol=1e-6)
+    assert np.allclose(case9.lodf(solver="sparse").toarray(), lodf, atol=1e-6)
+    # The CG path is retired; its spelling is refused with the accepted set.
+    with pytest.raises(ValueError, match="expected 'auto', 'dense', or 'sparse'"):
+        case9.lodf(solver="CG")
 
 
 def test_bad_enum_strings_raise(case9, tmp_path):
@@ -1485,7 +1519,7 @@ def test_dc_data_names_match_the_c_surface():
     assert data["shift"] == [0.0] * 9
     assert len(data["bus_ids"]) == 9
     assert data["row_ids"][0] == "branches:0"
-    assert all(b > 0 for b in data["susceptance"])
+    assert all(b < 0 for b in data["susceptance"])
     assert data["omitted_ids"] == [] and data["omitted_reasons"] == []
     # The tap adjusted formula divides by x*tap; case9 taps are nominal, so
     # the reactance only and tap adjusted rows agree.

@@ -465,9 +465,9 @@ class BalancedNetwork:
     def ptdf(self, convention: str = "series", solver: str = "auto"):
         """DC PTDF (m×n). ``convention`` is ``"series"`` or ``"matpower"``.
 
-        ``solver`` is ``"auto"``, ``"dense"``, or ``"iterative"``. ``"auto"``
-        uses the dense factorization on small cases and the iterative
-        conjugate gradient path on large ones, the same policy as the CLI.
+        ``solver`` is ``"auto"``, ``"dense"``, or ``"sparse"``. ``"auto"``
+        uses the dense factorization on small cases and the sparse Cholesky
+        path on large ones, the same policy as the CLI.
         """
         return _to_csr(self._inner.ptdf(convention, solver))
 
