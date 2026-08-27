@@ -721,8 +721,8 @@ fn inventory_json(inventory: &powerio::select::StateInventory) -> String {
 /// form consistently.
 pub struct DcDataInner {
     /// Signed incidence rows: `A[e, from] = +1`, `A[e, to] = -1`.
-    from_index: Vec<i64>,
-    to_index: Vec<i64>,
+    from_indices: Vec<i64>,
+    to_indices: Vec<i64>,
     /// Branch susceptance per included row, PowerModels sign.
     susceptance: Vec<f64>,
     /// Phase shift angle per included row, radians; `0` for an unshifted
@@ -762,134 +762,59 @@ arc_handle!(
     DcDataInner
 );
 
-fn element_id(uid: Option<&str>, table: &str, row: usize) -> String {
-    match uid {
-        Some(uid) => uid.to_owned(),
-        None => format!("{table}:{row}"),
-    }
-}
-
 fn dc_formula(name: &str) -> Result<DcConvention, *mut PioError> {
-    match name {
-        "series_susceptance" | "series" => Ok(DcConvention::SeriesSusceptance),
-        "tap_adjusted_reactance" | "matpower" => Ok(DcConvention::TapAdjustedReactance),
-        "reactance_only" => Ok(DcConvention::ReactanceOnly),
-        other => Err(error_from_parts(
+    DcConvention::from_formula_name(name).ok_or_else(|| {
+        error_from_parts(
             codes::REQUEST_CAPI_UNKNOWN_FORMULA.code,
             &format!(
-                "unknown branch susceptance formula `{other}`; expected series_susceptance, \
+                "unknown branch susceptance formula `{name}`; expected series_susceptance, \
                  tap_adjusted_reactance, or reactance_only"
             ),
             "[]",
-        )),
-    }
-}
-
-fn formula_name(convention: DcConvention) -> &'static str {
-    match convention {
-        DcConvention::SeriesSusceptance => "series_susceptance",
-        DcConvention::TapAdjustedReactance => "tap_adjusted_reactance",
-        DcConvention::ReactanceOnly => "reactance_only",
-        _ => "unknown",
-    }
+        )
+    })
 }
 
 fn pointer_table(strings: &[CString]) -> Vec<*const c_char> {
     strings.iter().map(|string| string.as_ptr()).collect()
 }
 
-/// Assemble the DC rows the way `powerio-matrix::build_incidence` does:
-/// in-service branches in table order, self loops dropped silently, zero
-/// impedance and degenerate taps reported as omitted rows by stable ID.
-///
-/// Every table describes the analysis network the indexed view resolves,
-/// after three winding transformer expansion: the branch loop, the bus ID
-/// table, and the incidence columns all come from that one expanded form, so
-/// `bus_ids` has exactly `n_buses` entries by construction.
+/// Project the shared [`powerio::dc_network_data`] assembly into the owned C
+/// spans: the same values Rust and Python read, with the strings pinned as
+/// NUL terminated copies the pointer tables alias. Every table describes the
+/// analysis network after three winding transformer expansion, so `bus_ids`
+/// has exactly `n_buses` entries by construction.
 fn build_dc_data(
     network: &BalancedNetwork,
     convention: DcConvention,
 ) -> Result<DcDataInner, *mut PioError> {
     let view = IndexedNetwork::new(network);
-    let n = view.n();
-    let expanded = view.network();
-    let mut from_index = Vec::new();
-    let mut to_index = Vec::new();
-    let mut susceptance = Vec::new();
-    let mut shift = Vec::new();
-    let mut shift_injection = vec![0.0; n];
-    let mut row_ids = Vec::new();
-    let mut omitted = Vec::new();
-
-    for (idx, branch) in expanded.branches().iter().enumerate() {
-        let id = element_id(branch.uid.as_deref(), "branches", idx);
-        if !branch.in_service {
-            omitted.push((id, "out of service".to_owned()));
-            continue;
-        }
-        let (Some(i), Some(j)) = (view.bus_index(branch.from), view.bus_index(branch.to)) else {
-            omitted.push((id, "references an undeclared bus".to_owned()));
-            continue;
-        };
-        if i == j {
-            omitted.push((id, "self loop".to_owned()));
-            continue;
-        }
-        if branch.x.abs() < powerio::dc::MIN_DIVISIBLE_MAGNITUDE {
-            omitted.push((
-                id,
-                "zero impedance: the selected formula has no finite susceptance".to_owned(),
-            ));
-            continue;
-        }
-        let tap = match branch.divisible_tap(idx) {
-            Ok(tap) => tap,
-            Err(error) => {
-                omitted.push((id, error.to_string()));
-                continue;
-            }
-        };
-        let b = convention.branch_susceptance(branch.r, branch.x, tap);
-        if !b.is_finite() {
-            omitted.push((id, "susceptance is not finite".to_owned()));
-            continue;
-        }
-        let row_shift = if convention.includes_phase_shifts() {
-            view.angle_radians(branch.shift)
-        } else {
-            0.0
-        };
-        if row_shift != 0.0 {
-            shift_injection[i] -= b * row_shift;
-            shift_injection[j] += b * row_shift;
-        }
-        from_index.push(i64::try_from(i).expect("bus count fits i64"));
-        to_index.push(i64::try_from(j).expect("bus count fits i64"));
-        susceptance.push(b);
-        shift.push(row_shift);
-        row_ids.push(lossy_cstring(&id));
-    }
-
-    let bus_ids: Vec<CString> = expanded
-        .buses()
-        .iter()
-        .map(|bus| lossy_cstring(&bus.id.0.to_string()))
-        .collect();
-    let (omitted_ids, omitted_reasons): (Vec<CString>, Vec<CString>) = omitted
+    let data = powerio::dc_network_data(&view, convention);
+    let row_ids: Vec<CString> = data.row_ids.iter().map(|id| lossy_cstring(id)).collect();
+    let bus_ids: Vec<CString> = data.bus_ids.iter().map(|id| lossy_cstring(id)).collect();
+    let (omitted_ids, omitted_reasons): (Vec<CString>, Vec<CString>) = data
+        .omitted
         .iter()
         .map(|(id, reason)| (lossy_cstring(id), lossy_cstring(reason)))
         .unzip();
-
     let row_id_pointers = pointer_table(&row_ids);
     let bus_id_pointers = pointer_table(&bus_ids);
     let omitted_id_pointers = pointer_table(&omitted_ids);
     let omitted_reason_pointers = pointer_table(&omitted_reasons);
     Ok(DcDataInner {
-        from_index,
-        to_index,
-        susceptance,
-        shift,
-        shift_injection,
+        from_indices: data
+            .from_indices
+            .iter()
+            .map(|&index| i64::try_from(index).expect("bus count fits i64"))
+            .collect(),
+        to_indices: data
+            .to_indices
+            .iter()
+            .map(|&index| i64::try_from(index).expect("bus count fits i64"))
+            .collect(),
+        susceptance: data.susceptance,
+        shift: data.shift,
+        shift_injection: data.shift_injection,
         row_ids,
         row_id_pointers,
         bus_ids,
@@ -898,7 +823,7 @@ fn build_dc_data(
         omitted_id_pointers,
         omitted_reasons,
         omitted_reason_pointers,
-        formula: lossy_cstring(formula_name(convention)),
+        formula: lossy_cstring(data.formula),
     })
 }
 
@@ -956,7 +881,7 @@ pub unsafe extern "C" fn pio_dc_data_n_buses(data: *const PioDcData) -> usize {
 pub unsafe extern "C" fn pio_dc_data_from_indices(data: *const PioDcData) -> *const i64 {
     unsafe {
         crate::guard(std::ptr::null(), || {
-            PioDcData::get(data).map_or(std::ptr::null(), |inner| inner.from_index.as_ptr())
+            PioDcData::get(data).map_or(std::ptr::null(), |inner| inner.from_indices.as_ptr())
         })
     }
 }
@@ -966,7 +891,7 @@ pub unsafe extern "C" fn pio_dc_data_from_indices(data: *const PioDcData) -> *co
 pub unsafe extern "C" fn pio_dc_data_to_indices(data: *const PioDcData) -> *const i64 {
     unsafe {
         crate::guard(std::ptr::null(), || {
-            PioDcData::get(data).map_or(std::ptr::null(), |inner| inner.to_index.as_ptr())
+            PioDcData::get(data).map_or(std::ptr::null(), |inner| inner.to_indices.as_ptr())
         })
     }
 }
@@ -1098,8 +1023,8 @@ pub unsafe extern "C" fn pio_dc_data_fill_branch_flow(
             let va = std::slice::from_raw_parts(va, va_len);
             let out = std::slice::from_raw_parts_mut(out, out_len);
             for (row, slot) in out.iter_mut().enumerate() {
-                let from = usize::try_from(inner.from_index[row]).expect("stored nonnegative");
-                let to = usize::try_from(inner.to_index[row]).expect("stored nonnegative");
+                let from = usize::try_from(inner.from_indices[row]).expect("stored nonnegative");
+                let to = usize::try_from(inner.to_indices[row]).expect("stored nonnegative");
                 *slot = -inner.susceptance[row] * (va[from] - va[to])
                     - inner.susceptance[row] * inner.shift[row];
             }
