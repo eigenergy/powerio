@@ -1090,14 +1090,19 @@ struct CsvTable {
     rows: Vec<CsvRow>,
 }
 
+/// One record: the fields actually present, resolved through the table's
+/// shared header index, so a table's retained size is its own field count
+/// rather than header count times row count.
 #[derive(Debug)]
 struct CsvRow {
-    vals: HashMap<String, String>,
+    column_of: std::sync::Arc<HashMap<String, usize>>,
+    fields: Vec<String>,
 }
 
 impl CsvRow {
     fn get(&self, key: &str) -> Option<&String> {
-        self.vals.get(key).filter(|s| !s.is_empty())
+        let column = *self.column_of.get(key)?;
+        self.fields.get(column).filter(|s| !s.is_empty())
     }
     fn f(&self, key: &str) -> Option<f64> {
         self.get(key).and_then(|s| s.parse().ok())
@@ -1455,14 +1460,19 @@ fn parse_csv_table(text: &str, name: &str) -> Result<Option<CsvTable>> {
             rows: Vec::new(),
         }));
     };
-    let mut rows = Vec::new();
-    for fields in records {
-        let vals = headers
+    let column_of: std::sync::Arc<HashMap<String, usize>> = std::sync::Arc::new(
+        headers
             .iter()
             .enumerate()
-            .map(|(i, h)| (h.clone(), fields.get(i).cloned().unwrap_or_default()))
-            .collect();
-        rows.push(CsvRow { vals });
+            .map(|(column, header)| (header.clone(), column))
+            .collect(),
+    );
+    let mut rows = Vec::new();
+    for fields in records {
+        rows.push(CsvRow {
+            column_of: std::sync::Arc::clone(&column_of),
+            fields,
+        });
     }
     Ok(Some(CsvTable { headers, rows }))
 }
