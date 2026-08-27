@@ -1156,17 +1156,6 @@ impl Branch {
         fr_vmax.max(to_vmax) * widest / zmag
     }
 
-    /// The 0.8 spelling of [`total_charging_b`](Branch::total_charging_b).
-    /// The alias goes away at 1.0.0.
-    #[deprecated(
-        since = "0.9.0",
-        note = "renamed to total_charging_b in 0.9.0; the alias goes away at 1.0.0"
-    )]
-    #[must_use]
-    pub fn legacy_total_charging_b(&self) -> f64 {
-        self.total_charging_b()
-    }
-
     /// Total susceptance projection for MATPOWER shaped formats that only carry
     /// one line charging value.
     #[must_use]
