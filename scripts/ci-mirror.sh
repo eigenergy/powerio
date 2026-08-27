@@ -140,7 +140,10 @@ fi
 # suite itself. One throwaway venv, the same wheel a user builds. stubtest
 # runs from an empty directory so mypy sees the package once.
 PYVENV=target/ci-mirror-py
-run python3 -m venv "$PYVENV"
+# The mcp extra (and so the mypy pass over the server) needs python >= 3.10;
+# a stock macOS python3 is 3.9, so take the newest interpreter present.
+PYBIN=$(command -v python3.13 || command -v python3.12 || command -v python3.11 || command -v python3.10 || command -v python3)
+run "$PYBIN" -m venv "$PYVENV"
 run "$PYVENV/bin/pip" -q install '.[mcp]' ruff mypy pytest
 run "$PYVENV/bin/ruff" check --no-fix .
 run "$PYVENV/bin/python" -m mypy python/powerio
