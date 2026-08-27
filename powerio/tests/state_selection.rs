@@ -247,3 +247,43 @@ fn a_network_series_item_exports_through_the_shared_handle() {
         item.loads().as_ptr()
     ));
 }
+
+#[test]
+fn a_multiconductor_series_is_a_selectable_collection() {
+    let dss = "New Circuit.c basekv=12.47 pu=1 phases=3 bus1=a\n\
+               New Line.l1 bus1=a.1.2.3 bus2=b.1.2.3 phases=3 r1=0.1 x1=0.2 length=1 units=km\n\
+               New Load.ld bus1=b.1.2.3 phases=3 conn=wye kv=7.2 kw=30 kvar=9\n";
+    let source = powerio_core::Source::from_bytes("<memory>", dss.as_bytes().to_vec())
+        .unwrap()
+        .with_format(powerio_core::FormatId::new("dss").unwrap());
+    let net = powerio_dist::parse(source).unwrap().into_value();
+    let terminals: usize = net.buses().iter().map(|b| b.terminals.len()).sum();
+    let labels: Vec<powerio_core::TimePoint> = (0..2)
+        .map(|k| powerio_core::TimePoint::new(k.to_string(), None).unwrap())
+        .collect();
+    let series = powerio_prob::MulticonductorStateBuilder::new(net, labels)
+        .terminal_voltage_magnitudes(vec![7200.0; 2 * terminals])
+        .build()
+        .unwrap();
+    let value = PioValue::MulticonductorOperatingPointTimeSeries(series);
+
+    // The inventory lists its time axis rather than refusing it as static.
+    let inventory = state_inventory(&value).expect("a time-indexed collection");
+    let StateInventory::TimePoints(points) = inventory else {
+        panic!("time points expected");
+    };
+    assert_eq!(points.len(), 2);
+
+    // Selection lands on the point; the unbound static export refuses with
+    // its own code, never the static-value wording.
+    let selected = select_state(&value, StateSelector::TimePosition(1)).unwrap();
+    assert!(matches!(
+        selected,
+        SelectedState::MulticonductorOperatingPoint(_)
+    ));
+    let error = export_state(&value, StateSelector::TimePosition(1)).unwrap_err();
+    assert_eq!(
+        error.diagnostics().first().map(|d| d.code().to_owned()),
+        Some("REQUEST.STATE.UNBOUND_EXPORT".to_owned())
+    );
+}

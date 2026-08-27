@@ -68,6 +68,11 @@ pub enum SelectedState<'value> {
     /// An operating point item: the series' own handle over the shared
     /// network and columns. Cloning it copies no table and no column.
     BalancedOperatingPoint(&'value powerio_prob::OperatingPoint<BalancedNetwork>),
+    /// A multiconductor operating point item, the same handle shape over the
+    /// shared multiconductor network.
+    MulticonductorOperatingPoint(
+        &'value powerio_prob::OperatingPoint<powerio_dist::MulticonductorNetwork>,
+    ),
 }
 
 /// The typed inventory of `value`, or a coded refusal for a static value.
@@ -80,6 +85,9 @@ pub fn state_inventory(value: &PioValue) -> Result<StateInventory> {
             time_entries(series.time_points()),
         )),
         PioValue::BalancedOperatingPointTimeSeries(series) => Ok(StateInventory::TimePoints(
+            time_entries(series.time_points()),
+        )),
+        PioValue::MulticonductorOperatingPointTimeSeries(series) => Ok(StateInventory::TimePoints(
             time_entries(series.time_points()),
         )),
         PioValue::BalancedNetworkScenarioSet(set) => Ok(StateInventory::Scenarios(
@@ -120,12 +128,23 @@ pub fn select_state<'value>(
                 .ok_or_else(|| out_of_range(position, series.len()))?;
             Ok(SelectedState::BalancedOperatingPoint(item))
         }
+        (
+            PioValue::MulticonductorOperatingPointTimeSeries(series),
+            StateSelector::TimePosition(position),
+        ) => {
+            let item = series
+                .value(position)
+                .ok_or_else(|| out_of_range(position, series.len()))?;
+            Ok(SelectedState::MulticonductorOperatingPoint(item))
+        }
         (PioValue::BalancedNetworkScenarioSet(set), StateSelector::Scenario(id)) => {
             let scenario = set.get(id).ok_or_else(|| unknown_scenario(id, set))?;
             Ok(SelectedState::BalancedNetwork(scenario.value()))
         }
         (
-            PioValue::BalancedNetworkTimeSeries(_) | PioValue::BalancedOperatingPointTimeSeries(_),
+            PioValue::BalancedNetworkTimeSeries(_)
+            | PioValue::BalancedOperatingPointTimeSeries(_)
+            | PioValue::MulticonductorOperatingPointTimeSeries(_),
             StateSelector::Scenario(_),
         )
         | (PioValue::BalancedNetworkScenarioSet(_), StateSelector::TimePosition(_)) => {
@@ -158,6 +177,14 @@ pub fn export_state(value: &PioValue, selector: StateSelector<'_>) -> Result<Pio
     let network = match select_state(value, selector)? {
         SelectedState::BalancedNetwork(network) => network.clone(),
         SelectedState::BalancedOperatingPoint(point) => point.materialize_network()?,
+        SelectedState::MulticonductorOperatingPoint(_) => {
+            return Err(Error::new(
+                &codes::REQUEST_STATE_UNBOUND_EXPORT,
+                "a multiconductor operating point selects and reads in place; its static \
+                 materialization is not bound yet"
+                    .to_string(),
+            ));
+        }
     };
     let mut module = PioModule::new(PioValue::BalancedNetwork(network));
     let entry = HistoryId::new("export-selected-state")
