@@ -241,7 +241,7 @@ impl DcOpfPreparation {
 #[allow(clippy::too_many_lines)]
 pub fn build_dc_opf_preparation(
     case: &IndexedNetwork,
-    options: &DcOpfOptions,
+    options: DcOpfOptions,
 ) -> Result<DcOpfPreparation> {
     case.check_reference_coverage()?;
     case.network().check_base_mva()?;

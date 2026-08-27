@@ -5,12 +5,32 @@ mod bundle;
 use powerio_matrix::matrix::incidence::diagonal;
 use powerio_matrix::matrix::triplet::CooBuilder;
 use powerio_matrix::{
-    SparseMatrix, build_flow_map, build_weighted_laplacian, ground_at_each, reference_indicator,
+    IndexedNetwork, SparseMatrix, build_flow_map, build_weighted_laplacian, ground_at_each,
+    reference_indicator,
 };
 
-use crate::prep::DcOpfPreparation;
+use crate::prep::{DcOpfOptions, DcOpfPreparation, build_dc_opf_preparation};
+use crate::{DcOpfInstance, Result, Units};
 
 pub use bundle::{DcOpfBundleMetadata, DcOpfBundleOptions, DcOpfOutputs, write_dcopf_bundle};
+
+/// Assembly choices that select the numerical content derived from an
+/// instance without changing the instance itself.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct DcOpfAssemblyOptions {
+    /// Power and cost scaling of the derived arrays.
+    pub units: Units,
+    /// Skip non-self-loop branches with zero reactance. Off by default:
+    /// zero impedance branches are preserved in networks and instances, so
+    /// assembly refuses them until the caller resolves them explicitly
+    /// ([`crate::merge_zero_impedance_buses`]) or opts into skipping.
+    pub skip_zero_impedance: bool,
+    /// Give a branch with no thermal rating the bound
+    /// [`Branch::synthesize_rate_a`](powerio_tx::Branch::synthesize_rate_a)
+    /// states. If false, an absent rating reads as unlimited.
+    pub synthesize_unrated_limits: bool,
+}
 
 /// Sparse matrices for a DC OPF instance.
 #[derive(Debug, Clone)]
@@ -26,9 +46,37 @@ pub struct DcOpfMatrices {
     pub reference_selector: Vec<f64>,
 }
 
-/// Build sparse matrices without reading the source network again.
-#[must_use]
-pub fn build_dc_opf_matrices(instance: &DcOpfPreparation) -> DcOpfMatrices {
+/// Derive the sparse DC OPF matrices from the instance. The instance keeps
+/// the typed network; the contiguous preparation arrays are private.
+///
+/// # Errors
+/// A network the selected approximation cannot assemble: missing reference
+/// coverage, an unresolved zero impedance branch, or an unusable cost curve.
+pub fn build_dc_opf_matrices(
+    instance: &DcOpfInstance,
+    options: &DcOpfAssemblyOptions,
+) -> Result<DcOpfMatrices> {
+    Ok(matrices_from_preparation(&prepare(instance, *options)?))
+}
+
+/// The private preparation arrays behind the matrix and bundle builders.
+pub(crate) fn prepare(
+    instance: &DcOpfInstance,
+    options: DcOpfAssemblyOptions,
+) -> Result<DcOpfPreparation> {
+    let view = IndexedNetwork::new(instance.network());
+    build_dc_opf_preparation(
+        &view,
+        DcOpfOptions {
+            convention: instance.approximation(),
+            units: options.units,
+            skip_zero_impedance: options.skip_zero_impedance,
+            synthesize_unrated_limits: options.synthesize_unrated_limits,
+        },
+    )
+}
+
+pub(crate) fn matrices_from_preparation(instance: &DcOpfPreparation) -> DcOpfMatrices {
     let n = instance.n_buses;
     let m = instance.n_branches();
     let mut incidence = CooBuilder::with_capacity_rect(n, m, 2 * m);
