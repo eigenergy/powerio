@@ -45,16 +45,24 @@ struct TerminalIndex {
 }
 
 impl TerminalIndex {
-    fn build(network: &MulticonductorNetwork) -> Self {
+    fn build(network: &MulticonductorNetwork) -> Result<Self, Error> {
         let mut position = std::collections::BTreeMap::new();
         let mut offset = 0usize;
         for row in network.buses() {
             for (column, terminal) in row.terminals.iter().enumerate() {
-                position.insert((row.id.clone(), terminal.clone()), offset + column);
+                if position
+                    .insert((row.id.clone(), terminal.clone()), offset + column)
+                    .is_some()
+                {
+                    return Err(Error::new(
+                        &codes::BUILD_STATE_IDENTITY_UNKNOWN,
+                        format!("bus `{}`: duplicate terminal identity `{terminal}`", row.id),
+                    ));
+                }
             }
             offset += row.terminals.len();
         }
-        Self { position }
+        Ok(Self { position })
     }
 }
 
@@ -82,8 +90,7 @@ macro_rules! shared_mc_solution_accessors {
         }
 
         fn terminal_index(&self) -> &TerminalIndex {
-            self.index
-                .get_or_init(|| TerminalIndex::build(self.network()))
+            &self.index
         }
 
         /// The network the solved instance calculates on.
@@ -209,7 +216,7 @@ pub struct McAcPfSolution {
     terminal_current_magnitude: Option<Vec<f64>>,
     terminal_active_power: Option<Vec<f64>>,
     source_active_injection: Vec<f64>,
-    index: std::sync::OnceLock<TerminalIndex>,
+    index: TerminalIndex,
 }
 
 impl McAcPfSolution {
@@ -244,6 +251,7 @@ impl McAcPfSolution {
             source_active_injection.len(),
             source_terminal_count(instance.network()),
         )?;
+        let index = TerminalIndex::build(instance.network())?;
         Ok(Self {
             instance,
             termination,
@@ -254,7 +262,7 @@ impl McAcPfSolution {
             terminal_current_magnitude: None,
             terminal_active_power: None,
             source_active_injection,
-            index: std::sync::OnceLock::new(),
+            index,
         })
     }
 
@@ -278,7 +286,7 @@ pub struct McAcOpfSolution {
     /// each generator's terminal map order, watts.
     generator_active_power: Vec<f64>,
     objective: f64,
-    index: std::sync::OnceLock<TerminalIndex>,
+    index: TerminalIndex,
 }
 
 impl McAcOpfSolution {
@@ -325,6 +333,7 @@ impl McAcOpfSolution {
             generator_active_power.len(),
             generator_conductors,
         )?;
+        let index = TerminalIndex::build(instance.network())?;
         Ok(Self {
             instance,
             termination,
@@ -337,7 +346,7 @@ impl McAcOpfSolution {
             source_active_injection,
             generator_active_power,
             objective,
-            index: std::sync::OnceLock::new(),
+            index,
         })
     }
 

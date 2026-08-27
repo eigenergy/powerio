@@ -54,7 +54,9 @@ own codes, and nothing ever invents an epsilon impedance.
   gone; GO Challenge 3 parses to a typed `AcScucInstance`.
 - Python: `powerio.parse(source, from_, include_root=..., value_type=...)`
   replaces `parse_file`, `parse_str`, `parse_bytes`, and
-  `read_pypsa_csv_folder`; `powerio.StoredModule` replaces the `Package`
+  `read_pypsa_csv_folder` (`include_root`, omitted by default, widens the
+  include acquisition boundary from the file's containing directory to the
+  named ancestor, widening what the parse may read); `powerio.StoredModule` replaces the `Package`
   class; `parse_scopf`, `to_dense`, the `Dense*` rows, and the 0.8 renamed
   alias hooks are gone.
 - C: `pio_package_*`, `pio_scopf_*`, and the 0.9 solver row Arrow tables
