@@ -13,7 +13,7 @@
 //! unit, `Va` degrees, `r, x, b` per unit, `GS, BS` divided by `base_mva`.
 //! `bus`, `from_bus`, `to_bus` are dense `[0, n)` indices.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use arrow::array::{Array, ArrayRef, Float64Array, Int64Array};
 use arrow::record_batch::RecordBatch;
