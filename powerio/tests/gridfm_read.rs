@@ -71,7 +71,8 @@ fn assert_fingerprint_close(got: &BalancedNetwork, want: &BalancedNetwork) {
         (g.9, w.9, "sum b"),
         (g.10, w.10, "base_mva"),
     ] {
-        assert!((a - b).abs() < 1e-9, "{label} differs: {a} vs {b}");
+        let delta = (a - b).abs();
+        assert!(delta < 1e-9, "{label} differs by {delta}");
     }
 }
 
