@@ -86,7 +86,7 @@ function do_compare(tmp, groups)
         for e in groups["egret"]
             b = stem(e)
             json = joinpath(tmp, "egret_$b.json")
-            mref = joinpath(@__DIR__, "..", "tests", "data", "$b.m")
+            mref = joinpath(@__DIR__, "..", "..", "tests", "data", "$b.m")
             leg!(io, "egret/$b", "egret-read", [json], () -> compare_core(mref, json)) || (fails += 1)
         end
     end
