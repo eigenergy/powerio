@@ -51,7 +51,7 @@ fi
 
 run cargo test -p powerio -p powerio-tx -p powerio-core -p powerio-matrix -p powerio-prob -p powerio-cli \
     -p powerio-capi -p powerio-dist
-run cargo test -p powerio-prob --features matrix
+run cargo test -p powerio --features matrix
 run cargo test -p powerio-matrix --features gridfm
 
 # The four powerio-capi combinations rust.yml builds.
