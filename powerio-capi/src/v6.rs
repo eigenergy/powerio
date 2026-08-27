@@ -435,20 +435,20 @@ pub unsafe extern "C" fn pio_module_parse_bytes(
 fn provenanced<T>(
     module: &powerio_core::PioModule<powerio::PioValue>,
     value: T,
-) -> powerio_core::PioModule<T> {
+) -> Result<powerio_core::PioModule<T>, *mut PioError> {
     let mut out = powerio_core::PioModule::new(value);
     for descriptor in module.sources() {
         out.add_source_descriptor(descriptor.clone())
-            .expect("existing descriptors re-add cleanly");
+            .map_err(|error| error_from_core(&error))?;
     }
     for diagnostic in module.diagnostics() {
         out.add_diagnostic(diagnostic.clone())
-            .expect("existing findings re-add cleanly");
+            .map_err(|error| error_from_core(&error))?;
     }
-    match module.source() {
+    Ok(match module.source() {
         Some(source) => out.with_source(source.clone()),
         None => out,
-    }
+    })
 }
 
 /// The module's balanced network value as an owned network handle, provenance
@@ -474,7 +474,7 @@ pub unsafe extern "C" fn pio_module_as_network(
             Ok(crate::make_network_module(provenanced(
                 &inner.module,
                 network.clone(),
-            )))
+            )?))
         })
     }
 }
@@ -504,7 +504,7 @@ pub unsafe extern "C" fn pio_module_as_dist_network(
             Ok(crate::PioDistNetwork::from_module_raw(provenanced(
                 &inner.module,
                 network.clone(),
-            )))
+            )?))
         })
     }
 }
