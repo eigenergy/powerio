@@ -464,14 +464,14 @@ def _load_module(module_json: str) -> _Loaded:
     if kind == "balanced_network":
         return _Loaded(
             domain="transmission",
-            network=powerio.BalancedNetwork(module._inner.as_balanced_network()),
+            network=module.as_balanced_network(),
             warnings=warnings,
             json_format="module",
         )
     if kind == "multiconductor_network":
         return _Loaded(
             domain="distribution",
-            network=dist.MulticonductorNetwork(module._inner.as_multiconductor_network()),
+            network=module.as_multiconductor_network(),
             warnings=warnings,
             json_format="module",
         )

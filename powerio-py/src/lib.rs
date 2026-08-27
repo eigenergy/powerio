@@ -1957,11 +1957,28 @@ impl PyStoredModule {
         let mut out = powerio_core::PioModule::new(network.clone());
         for descriptor in module.sources() {
             out.add_source_descriptor(descriptor.clone())
-                .expect("existing descriptors re-add cleanly");
+                .map_err(|error| {
+                    PowerIODataError::new_err(format!(
+                        "failed to carry source `{}` onto the network handle: {error}",
+                        descriptor.id()
+                    ))
+                })?;
         }
+        // Every diagnostic is attempted, in order, even after a failure: a
+        // partial copy that stops early would return fewer diagnostics than
+        // the module carries with no error to say so.
+        let mut first_error = None;
         for diagnostic in module.diagnostics() {
-            out.add_diagnostic(diagnostic.clone())
-                .expect("existing findings re-add cleanly");
+            if let Err(error) = out.add_diagnostic(diagnostic.clone())
+                && first_error.is_none()
+            {
+                first_error = Some(error);
+            }
+        }
+        if let Some(error) = first_error {
+            return Err(PowerIODataError::new_err(format!(
+                "failed to carry every diagnostic onto the network handle: {error}"
+            )));
         }
         let out = match module.source() {
             Some(source) => out.with_source(source.clone()),
