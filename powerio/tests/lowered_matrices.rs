@@ -1,8 +1,10 @@
-mod helpers;
-#[allow(unused_imports)]
-use helpers::*;
+//! The lowered balanced model feeds the matrix builders: the facade owns the
+//! lowering and, under the `matrix` feature, the builders, so the round trip
+//! lives here rather than as a matrix crate dependency on the facade.
+#![cfg(feature = "matrix")]
+
+use powerio::matrix::{BuildOptions, IndexedNetwork, build_bprime, build_ybus};
 use powerio::package::{MulticonductorToBalancedOptions, lower_multiconductor_to_balanced};
-use powerio_matrix::{BuildOptions, IndexedNetwork, build_bprime, build_ybus};
 
 const FOUR_WIRE_DSS: &str = r"! Four wire line with an explicit neutral conductor (no Kron reduction).
 Clear
@@ -25,7 +27,12 @@ New Load.lc bus1=loadbus.3.4 phases=1 conn=wye kv=0.24 kw=10 pf=0.95 model=1 vmi
 
 #[test]
 fn lowered_multiconductor_balanced_model_builds_matrices() {
-    let net = helpers::dist_parse_str(FOUR_WIRE_DSS, "dss");
+    let source = powerio_core::Source::from_bytes("<memory>", FOUR_WIRE_DSS.as_bytes().to_vec())
+        .expect("memory source")
+        .with_format(powerio_core::FormatId::new("dss").expect("format id"));
+    let net = powerio_dist::parse(source)
+        .expect("distribution text parses")
+        .into_value();
     let lowered =
         lower_multiconductor_to_balanced(&net, MulticonductorToBalancedOptions::default())
             .expect("lower to balanced");
