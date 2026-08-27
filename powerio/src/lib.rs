@@ -75,9 +75,91 @@ pub fn parse(
         RoutedFamily::Distribution => {
             powerio_dist::parse(source).map(|module| module.map_value(PioValue::from))
         }
+        RoutedFamily::PypsaDirectory => parse_pypsa(source),
+        RoutedFamily::Egret => parse_egret(source),
         RoutedFamily::Balanced => {
             format::parse(source).map(|module| module.map_value(PioValue::from))
         }
+    }
+}
+
+/// PyPSA CSV dispatch: one snapshot with no series siblings is the scalar
+/// profile through the balanced hub; a declared axis routes to the sequence
+/// reader, producing a network series or, when only complete solved state
+/// varies, an operating point series over one shared network.
+fn parse_pypsa(
+    source: powerio_core::Source,
+) -> std::result::Result<powerio_core::PioModule<PioValue>, powerio_core::Error> {
+    if !source.is_directory() {
+        // A file claiming the PyPSA token gets the hub's own refusal wording.
+        return format::parse(source).map(|module| module.map_value(PioValue::from));
+    }
+    let axis = match format::pypsa_axis(&source) {
+        Ok(axis) => axis,
+        Err(error) => {
+            let core = powerio_core::Error::new(error.code(), error.to_string());
+            return Err(core.with_source(source));
+        }
+    };
+    match axis {
+        format::PypsaAxis::SingleSnapshot => {
+            format::parse(source).map(|module| module.map_value(PioValue::from))
+        }
+        format::PypsaAxis::Series => match powerio_prob::parse_pypsa_sequence(&source) {
+            Ok((sequence, diagnostics)) => {
+                let value = match sequence {
+                    powerio_prob::PypsaSequence::Networks(series) => {
+                        PioValue::BalancedNetworkTimeSeries(series)
+                    }
+                    powerio_prob::PypsaSequence::OperatingPoints(states) => {
+                        PioValue::BalancedOperatingPointTimeSeries(states)
+                    }
+                };
+                powerio_core::PioModule::parsed(value, source, diagnostics)
+            }
+            Err(error) => Err(error.with_source(source)),
+        },
+    }
+}
+
+/// Egret dispatch: a document declaring `system.time_keys` routes to the
+/// sequence reader and produces a balanced network time series; a scalar
+/// document routes through the balanced hub.
+fn parse_egret(
+    source: powerio_core::Source,
+) -> std::result::Result<powerio_core::PioModule<PioValue>, powerio_core::Error> {
+    let declares_series = {
+        let buffer = source.primary_buffer()?;
+        std::str::from_utf8(buffer.content_bytes()).is_ok_and(format::egret_declares_time_series)
+    };
+    if !declares_series {
+        return format::parse(source).map(|module| module.map_value(PioValue::from));
+    }
+    let parsed = {
+        let buffer = source.primary_buffer()?;
+        let stem = std::path::Path::new(source.name())
+            .file_stem()
+            .and_then(|stem| stem.to_str())
+            .map(str::to_owned);
+        match std::str::from_utf8(buffer.content_bytes()) {
+            Ok(text) => format::parse_egret_time_series(text, stem.as_deref())
+                .map_err(|error| powerio_core::Error::new(error.code(), error.to_string())),
+            Err(error) => {
+                let cause = powerio_tx::Error::FormatRead {
+                    format: "case text",
+                    message: format!("not valid UTF-8: {error}"),
+                };
+                Err(powerio_core::Error::new(cause.code(), cause.to_string()))
+            }
+        }
+    };
+    match parsed {
+        Ok(series) => powerio_core::PioModule::parsed(
+            PioValue::BalancedNetworkTimeSeries(series),
+            source,
+            Vec::new(),
+        ),
+        Err(error) => Err(error.with_source(source)),
     }
 }
 
@@ -89,6 +171,8 @@ enum RoutedFamily {
     Goc3,
     Bmopf,
     OpfData,
+    PypsaDirectory,
+    Egret,
 }
 
 fn routed_family(
@@ -100,8 +184,13 @@ fn routed_family(
         return Ok(family_of_token(declared.as_str()));
     }
     if source.is_directory() {
-        // The only directory case format is a PyPSA CSV folder; the balanced
-        // hub owns that dispatch and the refusal for anything else.
+        // The only directory case format is a PyPSA CSV folder (one holding a
+        // network.csv); anything else falls to the balanced hub's refusal.
+        let marker = powerio_core::ArtifactPath::new("network.csv")
+            .expect("static name is a valid artifact path");
+        if source.buffer(&marker).is_ok() {
+            return Ok(RoutedFamily::PypsaDirectory);
+        }
         return Ok(RoutedFamily::Balanced);
     }
     let extension = std::path::Path::new(source.name())
@@ -125,6 +214,9 @@ fn routed_family(
                 JsonClass::Case(Detection::Known(SourceFormat::Transmission(
                     TransmissionFormat::DeepMindOpfDataJson,
                 ))) => Ok(RoutedFamily::OpfData),
+                JsonClass::Case(Detection::Known(SourceFormat::Transmission(
+                    TransmissionFormat::EgretJson,
+                ))) => Ok(RoutedFamily::Egret),
                 JsonClass::Case(Detection::Known(SourceFormat::Distribution(dist_format))) => {
                     Ok(match dist_format {
                         format::routing::DistributionFormat::BmopfJson => RoutedFamily::Bmopf,
@@ -157,9 +249,13 @@ fn family_of_token(token: &str) -> RoutedFamily {
             _ => RoutedFamily::Distribution,
         };
     }
+    if format::is_pypsa_csv_name(token) {
+        return RoutedFamily::PypsaDirectory;
+    }
     match format::target_format_from_name(token) {
         Some(TargetFormat::Goc3Json) => RoutedFamily::Goc3,
         Some(TargetFormat::DeepMindOpfDataJson) => RoutedFamily::OpfData,
+        Some(TargetFormat::EgretJson) => RoutedFamily::Egret,
         _ => RoutedFamily::Balanced,
     }
 }
@@ -300,5 +396,134 @@ mod tests {
         )
         .expect_err("malformed goc3");
         assert!(error.retained_source().is_some());
+    }
+
+    const PYPSA_STATIC: [(&str, &str); 4] = [
+        ("network.csv", "name\nseq\n"),
+        ("buses.csv", "name,v_nom\nB1,138.0\nB2,138.0\n"),
+        ("loads.csv", "name,bus,p_set,q_set\nL1,B2,5.0,1.0\n"),
+        (
+            "generators.csv",
+            "name,bus,control,p_nom,p_set\nG1,B1,Slack,100.0,12.0\n",
+        ),
+    ];
+
+    fn pypsa_folder(extra: &[(&str, &str)]) -> tempfile::TempDir {
+        let temp = tempfile::tempdir().unwrap();
+        for (name, content) in PYPSA_STATIC.iter().chain(extra) {
+            std::fs::write(temp.path().join(name), content).unwrap();
+        }
+        temp
+    }
+
+    #[test]
+    fn a_pypsa_snapshot_parses_to_the_balanced_kind() {
+        let dir = pypsa_folder(&[("snapshots.csv", ",snapshot\n0,now\n")]);
+        let module =
+            parse(powerio_core::Source::open(dir.path()).unwrap()).expect("snapshot parses");
+        assert_eq!(module.value().kind(), PioValueKind::BalancedNetwork);
+    }
+
+    #[test]
+    fn a_pypsa_input_series_parses_to_the_network_time_series_kind() {
+        let dir = pypsa_folder(&[
+            ("snapshots.csv", ",snapshot\n0,now\n1,later\n"),
+            ("loads-p_set.csv", "snapshot,L1\nnow,10.0\nlater,20.0\n"),
+        ]);
+        let module = parse(powerio_core::Source::open(dir.path()).unwrap()).expect("series parses");
+        assert_eq!(
+            module.value().kind(),
+            PioValueKind::BalancedNetworkTimeSeries
+        );
+        assert!(module.source().is_some());
+    }
+
+    #[test]
+    fn a_pypsa_state_only_series_parses_to_the_operating_point_kind() {
+        let dir = pypsa_folder(&[
+            ("snapshots.csv", ",snapshot\n0,now\n1,later\n"),
+            (
+                "buses-v_mag_pu.csv",
+                "snapshot,B1,B2\nnow,1.0,0.99\nlater,1.0,0.97\n",
+            ),
+            (
+                "buses-v_ang.csv",
+                "snapshot,B1,B2\nnow,0.0,-0.017453292519943295\nlater,0.0,-0.03490658503988659\n",
+            ),
+        ]);
+        let module =
+            parse(powerio_core::Source::open(dir.path()).unwrap()).expect("state series parses");
+        assert_eq!(
+            module.value().kind(),
+            PioValueKind::BalancedOperatingPointTimeSeries
+        );
+    }
+
+    #[test]
+    fn a_pypsa_axis_with_no_series_stays_a_network_time_series() {
+        // Several declared snapshots and nothing varying preserve the axis
+        // as networks sharing every table; nothing here is an operating
+        // point series.
+        let dir = pypsa_folder(&[("snapshots.csv", ",snapshot\n0,now\n1,later\n")]);
+        let module = parse(powerio_core::Source::open(dir.path()).unwrap()).expect("axis parses");
+        assert_eq!(
+            module.value().kind(),
+            PioValueKind::BalancedNetworkTimeSeries
+        );
+    }
+
+    const EGRET_SERIES: &str = r#"{
+        "model_name": "uc2",
+        "elements": {
+            "bus": {"1": {"matpower_bustype": "ref", "base_kv": 138.0},
+                    "2": {"matpower_bustype": "PQ", "base_kv": 138.0}},
+            "load": {"load_1": {"bus": "2",
+                "p_load": {"data_type": "time_series", "values": [10.0, 20.0]},
+                "q_load": 3.0}},
+            "generator": {"1": {"bus": "1", "pg": 12.0, "qg": 0.0,
+                "p_min": 0.0, "p_max": 50.0, "q_min": -10.0, "q_max": 10.0}},
+            "branch": {"1": {"from_bus": "1", "to_bus": "2",
+                "resistance": 0.01, "reactance": 0.1, "charging_susceptance": 0.0,
+                "rating_long_term": 100.0, "rating_short_term": 100.0,
+                "rating_emergency": 100.0, "transformer_phase_shift": 0.0}}
+        },
+        "system": {"baseMVA": 100.0, "time_keys": ["t1", "t2"]}
+    }"#;
+
+    #[test]
+    fn egret_time_keys_parse_to_the_network_time_series_kind() {
+        let module = parse(
+            memory("uc2.json", EGRET_SERIES)
+                .with_format(powerio_core::FormatId::new("egret-json").unwrap()),
+        )
+        .expect("egret series parses");
+        assert_eq!(
+            module.value().kind(),
+            PioValueKind::BalancedNetworkTimeSeries
+        );
+        assert!(module.source().is_some());
+
+        // The sniffed route agrees with the declared one.
+        let module = parse(memory("uc2.json", EGRET_SERIES)).expect("sniffed egret parses");
+        assert_eq!(
+            module.value().kind(),
+            PioValueKind::BalancedNetworkTimeSeries
+        );
+    }
+
+    #[test]
+    fn a_scalar_egret_document_stays_a_balanced_network() {
+        let scalar = EGRET_SERIES
+            .replace(r#", "time_keys": ["t1", "t2"]"#, "")
+            .replace(
+                r#"{"data_type": "time_series", "values": [10.0, 20.0]}"#,
+                "10.0",
+            );
+        let module = parse(
+            memory("uc2.json", &scalar)
+                .with_format(powerio_core::FormatId::new("egret-json").unwrap()),
+        )
+        .expect("scalar egret parses");
+        assert_eq!(module.value().kind(), PioValueKind::BalancedNetwork);
     }
 }

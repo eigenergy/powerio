@@ -575,6 +575,24 @@ pub fn parse_egret_time_series(
     powerio_core::TimeSeries::new(time_points, networks).map_err(|e| bad(e.to_string()))
 }
 
+/// Whether the document declares the Egret time series axis: a
+/// `system.time_keys` value selects the sequence reader. A document this
+/// probe cannot decode answers `false` and fails in the scalar reader with
+/// its own wording.
+#[must_use]
+pub fn egret_declares_time_series(content: &str) -> bool {
+    #[derive(Default, serde::Deserialize)]
+    struct ProbedSystem {
+        time_keys: Option<serde_json::Value>,
+    }
+    #[derive(Default, serde::Deserialize)]
+    struct Probe {
+        #[serde(default)]
+        system: ProbedSystem,
+    }
+    serde_json::from_str::<Probe>(content).is_ok_and(|probe| probe.system.time_keys.is_some())
+}
+
 fn is_time_series(value: &Value) -> bool {
     value
         .as_object()

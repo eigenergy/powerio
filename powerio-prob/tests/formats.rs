@@ -200,7 +200,9 @@ fn pypsa_input_series_classify_as_networks() {
     let (sequence, _diagnostics) = powerio_prob::parse_pypsa_sequence(&source).unwrap();
     match sequence {
         powerio_prob::PypsaSequence::Networks(series) => assert_eq!(series.len(), 2),
-        other => panic!("expected networks, got {other:?}"),
+        powerio_prob::PypsaSequence::OperatingPoints(states) => {
+            panic!("expected networks, got operating points: {states:?}")
+        }
     }
 }
 
