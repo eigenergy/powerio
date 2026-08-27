@@ -33,7 +33,7 @@ doc = false
 powerio = { workspace = true, features = ["schema"] }
 powerio-core = { workspace = true }
 powerio-matrix = { workspace = true, features = ["gridfm"] }
-powerio-prob = { workspace = true, features = ["matrix"] }
+powerio-prob = { workspace = true }
 # Unconditional: the CLI always ships the distribution surface (`convert
 # --to dss/pmd-json/bmopf-json`); only the C ABI gates it behind a feature.
 powerio-dist = { workspace = true, features = ["schema"] }

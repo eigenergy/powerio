@@ -28,6 +28,7 @@ path = "src/lib.rs"
 [dependencies]
 powerio-core = { workspace = true }
 powerio-dist.workspace = true
+powerio-prob.workspace = true
 powerio-tx.workspace = true
 thiserror = "2"
 sprs.workspace = true
@@ -49,6 +50,7 @@ parquet = { version = "59", default-features = false, features = ["arrow", "snap
 [dev-dependencies]
 approx = "0.5"
 criterion = { version = "0.5", default-features = false, features = ["cargo_bench_support"] }
+powerio.workspace = true
 powerio-dist.workspace = true
 tempfile = "3"
 

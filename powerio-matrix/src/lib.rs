@@ -46,7 +46,6 @@ pub use powerio_tx::{
     write_powermodels_json, write_powerworld, write_psse, write_pypsa_csv_folder,
 };
 
-mod collect;
 pub mod diagnostics;
 pub mod error;
 pub use error::{ElementCounts, Error, Result, ScenarioMismatch};
@@ -57,10 +56,20 @@ pub use powerio_tx::Error as CoreError;
 /// Compressed sparse row matrix used by the projection builders.
 pub type SparseMatrix = sprs::CsMat<f64>;
 
+mod ac_jacobian;
+mod dc_operators;
+mod dcopf;
 pub mod io;
 pub mod matrix;
 pub mod pipeline;
 pub mod synth;
+
+pub use ac_jacobian::{PowerFlowJacobian, VoltageCoordinates, calc_power_flow_jacobian};
+pub use dc_operators::{DcOperators, ReferenceConstrainedSystem};
+pub use dcopf::{
+    DcOpfAssemblyOptions, DcOpfBundleMetadata, DcOpfBundleOptions, DcOpfMatrices, DcOpfOutputs,
+    Units, build_dc_opf_matrices, write_dcopf_bundle,
+};
 
 pub use matrix::multiconductor::{
     AugmentedSystem, DistNode, MulticonductorAdmittance, MulticonductorNodeIndex, NodeRef,
@@ -82,10 +91,6 @@ pub use pipeline::{
 
 #[cfg(feature = "gridfm")]
 pub use io::gridfm::{
-    GridfmOptions, GridfmOutputs, GridfmRead, GridfmSnapshot, GridfmTables, gridfm_base_case,
-    gridfm_record_batches, gridfm_record_batches_single, gridfm_scenario_ids, numbered_snapshots,
-    read_gridfm_dataset, read_gridfm_network, read_gridfm_scenario_set, read_gridfm_scenarios,
-    write_gridfm_batch, write_gridfm_dataset,
+    GridfmOptions, GridfmOutputs, GridfmSnapshot, GridfmTables, gridfm_record_batches,
+    gridfm_record_batches_single, numbered_snapshots, write_gridfm_batch, write_gridfm_dataset,
 };
-#[cfg(feature = "gridfm")]
-pub use io::{dataset_scenario_ids, read_dataset_dir};
