@@ -92,6 +92,50 @@ pub fn read_gridfm_network(
     )
 }
 
+/// Open one dataset directory through the pinned acquisition and extract
+/// every table the reader uses: the same entry walk and buffer reads
+/// [`parse_gridfm_source`] performs, so the path entry points share its
+/// symbolic link and escape refusals.
+struct DatasetTables {
+    base_mva: f64,
+    name: String,
+    meta_warnings: Diagnostics,
+    bus: BusColumns,
+    gens: GenColumns,
+    branch: BranchColumns,
+}
+
+fn open_dataset_tables(dir: &Path) -> Result<DatasetTables> {
+    let source =
+        powerio_core::Source::open(dir).map_err(|error| powerio_tx::Error::FormatRead {
+            format: "gridfm",
+            message: format!("opening {}: {error}", dir.display()),
+        })?;
+    let entries = source
+        .entry_names()
+        .map_err(|error| powerio_tx::Error::FormatRead {
+            format: "gridfm",
+            message: format!("listing {}: {error}", dir.display()),
+        })?;
+    let prefix = resolve_raw_prefix(&entries)?;
+    let (base_mva, name, meta_warnings) = read_meta_source(&source, &prefix);
+    let bus = bus_columns(&read_parquet_buffer(&source, &prefix, "bus_data.parquet")?)?;
+    let gens = gen_columns(&read_parquet_buffer(&source, &prefix, "gen_data.parquet")?)?;
+    let branch = branch_columns(&read_parquet_buffer(
+        &source,
+        &prefix,
+        "branch_data.parquet",
+    )?)?;
+    Ok(DatasetTables {
+        base_mva,
+        name,
+        meta_warnings,
+        bus,
+        gens,
+        branch,
+    })
+}
+
 /// Read one `scenario` from a gridfm dataset on disk and rebuild a [`BalancedNetwork`].
 /// The inverse of `powerio_matrix::write_gridfm_dataset`.
 ///
@@ -103,12 +147,16 @@ pub fn read_gridfm_network(
 /// # Errors
 /// Propagates [`read_gridfm_network`] plus any filesystem / Parquet read error.
 pub fn read_gridfm_dataset(dir: impl AsRef<Path>, scenario: i64) -> Result<GridfmRead> {
-    let raw = resolve_raw_dir(dir.as_ref())?;
-    let (base_mva, name, warnings) = read_meta(&raw);
-    let bus = bus_columns(&read_parquet(&raw.join("bus_data.parquet"))?)?;
-    let gens = gen_columns(&read_parquet(&raw.join("gen_data.parquet"))?)?;
-    let branch = branch_columns(&read_parquet(&raw.join("branch_data.parquet"))?)?;
-    build_network_from_columns(&bus, &gens, &branch, scenario, base_mva, &name, warnings)
+    let tables = open_dataset_tables(dir.as_ref())?;
+    build_network_from_columns(
+        &tables.bus,
+        &tables.gens,
+        &tables.branch,
+        scenario,
+        tables.base_mva,
+        &tables.name,
+        tables.meta_warnings,
+    )
 }
 
 /// Read every scenario from a gridfm dataset, one [`BalancedNetwork`] per `scenario` id
@@ -119,19 +167,22 @@ pub fn read_gridfm_dataset(dir: impl AsRef<Path>, scenario: i64) -> Result<Gridf
 /// # Errors
 /// Propagates [`read_gridfm_dataset`]'s filesystem / Parquet / build errors.
 pub fn read_gridfm_scenarios(dir: impl AsRef<Path>) -> Result<Vec<GridfmRead>> {
-    let raw = resolve_raw_dir(dir.as_ref())?;
-    let (base_mva, name, warnings) = read_meta(&raw);
     // Extract every column once and reuse across scenarios; rebuilding each
     // scenario from the raw batches would re-concatenate each table n_scenarios
     // times (O(n_scenarios × table_size)).
-    let bus = bus_columns(&read_parquet(&raw.join("bus_data.parquet"))?)?;
-    let gens = gen_columns(&read_parquet(&raw.join("gen_data.parquet"))?)?;
-    let branch = branch_columns(&read_parquet(&raw.join("branch_data.parquet"))?)?;
-
-    distinct_sorted(&bus.scenario)
+    let tables = open_dataset_tables(dir.as_ref())?;
+    distinct_sorted(&tables.bus.scenario)
         .into_iter()
         .map(|s| {
-            build_network_from_columns(&bus, &gens, &branch, s, base_mva, &name, warnings.clone())
+            build_network_from_columns(
+                &tables.bus,
+                &tables.gens,
+                &tables.branch,
+                s,
+                tables.base_mva,
+                &tables.name,
+                tables.meta_warnings.clone(),
+            )
         })
         .collect()
 }
@@ -144,8 +195,20 @@ pub fn read_gridfm_scenarios(dir: impl AsRef<Path>) -> Result<Vec<GridfmRead>> {
 /// # Errors
 /// Propagates the directory resolution and `bus_data.parquet` read errors.
 pub fn gridfm_scenario_ids(dir: impl AsRef<Path>) -> Result<Vec<i64>> {
-    let raw = resolve_raw_dir(dir.as_ref())?;
-    let bus = bus_columns(&read_parquet(&raw.join("bus_data.parquet"))?)?;
+    let source = powerio_core::Source::open(dir.as_ref()).map_err(|error| {
+        powerio_tx::Error::FormatRead {
+            format: "gridfm",
+            message: format!("opening {}: {error}", dir.as_ref().display()),
+        }
+    })?;
+    let entries = source
+        .entry_names()
+        .map_err(|error| powerio_tx::Error::FormatRead {
+            format: "gridfm",
+            message: format!("listing {}: {error}", dir.as_ref().display()),
+        })?;
+    let prefix = resolve_raw_prefix(&entries)?;
+    let bus = bus_columns(&read_parquet_buffer(&source, &prefix, "bus_data.parquet")?)?;
     Ok(distinct_sorted(&bus.scenario))
 }
 
@@ -554,135 +617,12 @@ fn build_network_from_columns(
 
 // --- reader helpers --------------------------------------------------------
 
-/// Resolve the directory holding the gridfm parquet files, accepting (in order)
-/// the leaf `raw/` dir itself, a `<case>/` dir with a `raw/` child, or a parent
-/// dir with exactly one `*/raw/` child.
-fn resolve_raw_dir(dir: &Path) -> Result<PathBuf> {
-    let has_bus = |d: &Path| d.join("bus_data.parquet").is_file();
-    if has_bus(dir) {
-        return Ok(dir.to_path_buf());
-    }
-    let nested = dir.join("raw");
-    if has_bus(&nested) {
-        return Ok(nested);
-    }
-    // Parent-of-<case> fallback: scan for exactly one `*/raw/bus_data.parquet`.
-    // Surface read_dir / entry IO errors (missing dir, permissions) rather than
-    // masking them as "no dataset found".
-    let mut matches: Vec<PathBuf> = Vec::new();
-    let entries = std::fs::read_dir(dir).map_err(|e| powerio_tx::Error::FormatRead {
-        format: "gridfm",
-        message: format!("reading directory {}: {e}", dir.display()),
-    })?;
-    for entry in entries {
-        let entry = entry.map_err(|e| powerio_tx::Error::FormatRead {
-            format: "gridfm",
-            message: format!("reading an entry of {}: {e}", dir.display()),
-        })?;
-        let raw = entry.path().join("raw");
-        if has_bus(&raw) {
-            matches.push(raw);
-        }
-    }
-    match matches.len() {
-        1 => Ok(matches.pop().expect("len checked")),
-        0 => Err(powerio_tx::Error::FormatRead {
-            format: "gridfm",
-            message: format!(
-                "no gridfm dataset under {}; expected bus_data.parquet in the directory, a \
-                 raw/ child, or a single <case>/raw/ child",
-                dir.display()
-            ),
-        }),
-        n => Err(powerio_tx::Error::FormatRead {
-            format: "gridfm",
-            message: format!(
-                "{n} gridfm datasets under {}; point at the specific <case>/raw directory",
-                dir.display()
-            ),
-        }),
-    }
-}
-
 /// One `READ.GRIDFM.VALUE_DEFAULTED` note, for a manifest the reader could not
 /// use.
 fn defaulted_meta(message: impl Into<String>) -> Diagnostics {
     let mut diagnostics = Diagnostics::new();
     diagnostics.push(&codes::READ_GRIDFM_VALUE_DEFAULTED, message);
     diagnostics
-}
-
-/// Read `base_mva` and the case name from `raw/gridfm_meta.json`. A missing or
-/// unreadable manifest is not fatal — a bare prediction may lack one — so default
-/// `base_mva` to 100, derive the name from the `<case>/raw` parent, and warn.
-fn read_meta(raw: &Path) -> (f64, String, Diagnostics) {
-    let case_from_path = || {
-        raw.parent()
-            .and_then(Path::file_name)
-            .and_then(|s| s.to_str())
-            .map_or_else(|| "gridfm".to_string(), str::to_string)
-    };
-    let text = match std::fs::read_to_string(raw.join("gridfm_meta.json")) {
-        Ok(text) => text,
-        // Not just "not found": surface the underlying error (permissions, non-UTF-8,
-        // etc.) so a dataset problem is diagnosable, while still defaulting base_mva.
-        Err(e) => {
-            return (
-                100.0,
-                case_from_path(),
-                defaulted_meta(format!(
-                    "gridfm_meta.json could not be read ({e}); base_mva defaulted to 100"
-                )),
-            );
-        }
-    };
-    let Ok(meta) = serde_json::from_str::<serde_json::Value>(&text) else {
-        return (
-            100.0,
-            case_from_path(),
-            defaulted_meta("gridfm_meta.json is not valid JSON; base_mva defaulted to 100"),
-        );
-    };
-    let name = meta
-        .get("case_name")
-        .and_then(serde_json::Value::as_str)
-        .map_or_else(case_from_path, str::to_string);
-    let mut warnings = Diagnostics::new();
-    // base_mva must be a positive, finite number; anything else (absent, zero,
-    // negative, NaN) defaults to 100 with a note — shunt recovery scales by it.
-    let base = match meta.get("base_mva").and_then(serde_json::Value::as_f64) {
-        Some(b) if b.is_finite() && b > 0.0 => b,
-        _ => {
-            warnings.push(
-                &codes::READ_GRIDFM_VALUE_DEFAULTED,
-                "gridfm_meta.json has no usable base_mva (absent or not a positive number); \
-                 defaulted to 100",
-            );
-            100.0
-        }
-    };
-    (base, name, warnings)
-}
-
-/// Open a parquet file and collect every record batch (one for powerio-written
-/// data, possibly several for an externally-written prediction).
-fn read_parquet(path: &Path) -> Result<Vec<RecordBatch>> {
-    let file = std::fs::File::open(path).map_err(|e| powerio_tx::Error::FormatRead {
-        format: "gridfm",
-        message: format!("opening {}: {e}", path.display()),
-    })?;
-    let reader = ParquetRecordBatchReaderBuilder::try_new(file)
-        .and_then(ParquetRecordBatchReaderBuilder::build)
-        .map_err(|e| powerio_tx::Error::FormatRead {
-            format: "gridfm",
-            message: format!("reading {}: {e}", path.display()),
-        })?;
-    reader
-        .collect::<std::result::Result<Vec<_>, _>>()
-        .map_err(|e| powerio_tx::Error::FormatRead {
-            format: "gridfm",
-            message: format!("decoding {}: {e}", path.display()),
-        })
 }
 
 /// Row indices whose `scenario` column equals `scenario`, in table order.

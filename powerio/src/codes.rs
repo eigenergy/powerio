@@ -126,6 +126,10 @@ powerio_core::diagnostic_codes! {
     TRANSFORM_MULTI_TO_BALANCED_UNSUPPORTED_TRANSFORMER =
         "TRANSFORM.MULTI_TO_BALANCED.UNSUPPORTED_TRANSFORMER", Error,
         "a transformer shape has no balanced spelling";
+    TRANSFORM_MULTI_TO_BALANCED_RECORD_CAP =
+        "TRANSFORM.MULTI_TO_BALANCED.RECORD_CAP", Error,
+        "the lowered module's records would exceed a module maximum",
+        category = Request;
     TRANSFORM_MULTI_TO_BALANCED_WRONG_MODEL_KIND =
         "TRANSFORM.MULTI_TO_BALANCED.WRONG_MODEL_KIND", Error,
         "the package does not carry a multiconductor payload to lower";

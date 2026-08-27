@@ -201,16 +201,32 @@ pub struct NetworkPackage {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub study: Option<StudyBlock>,
     pub origin: Origin,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(
+        default,
+        skip_serializing_if = "Vec::is_empty",
+        deserialize_with = "bounded_legacy_sources"
+    )]
     pub sources: Vec<SourceDescriptor>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(
+        default,
+        skip_serializing_if = "Vec::is_empty",
+        deserialize_with = "bounded_legacy_source_maps"
+    )]
     pub source_maps: Vec<SourceMapEntry>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(
+        default,
+        skip_serializing_if = "Vec::is_empty",
+        deserialize_with = "bounded_legacy_diagnostics"
+    )]
     pub diagnostics: Vec<StructuredDiagnostic>,
     pub validation: ValidationSummary,
     #[serde(default)]
     pub summary: ObjectSummary,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(
+        default,
+        skip_serializing_if = "Vec::is_empty",
+        deserialize_with = "bounded_legacy_history"
+    )]
     pub lowering_history: Vec<LoweringRecord>,
     #[serde(default, skip_serializing_if = "DerivedMetadata::is_empty")]
     pub derived: DerivedMetadata,
@@ -2292,4 +2308,46 @@ mod tests {
         .unwrap_err();
         assert!(err.to_string().contains(".pio.json"), "got: {err}");
     }
+}
+
+// The 0.9 lists are held to the same module maxima the version 1 DTO applies
+// while decoding, so both stored generations share one set of record bounds.
+fn bounded_legacy_sources<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Vec<SourceDescriptor>, D::Error> {
+    powerio_core::limits::bounded_vec(
+        deserializer,
+        "sources",
+        powerio_core::limits::MAX_MODULE_SOURCES,
+    )
+}
+
+fn bounded_legacy_source_maps<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Vec<SourceMapEntry>, D::Error> {
+    powerio_core::limits::bounded_vec(
+        deserializer,
+        "source map entries",
+        powerio_core::limits::MAX_MODULE_SOURCE_MAP_ENTRIES,
+    )
+}
+
+fn bounded_legacy_diagnostics<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Vec<StructuredDiagnostic>, D::Error> {
+    powerio_core::limits::bounded_vec(
+        deserializer,
+        "diagnostics",
+        powerio_core::limits::MAX_MODULE_DIAGNOSTICS,
+    )
+}
+
+fn bounded_legacy_history<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Vec<LoweringRecord>, D::Error> {
+    powerio_core::limits::bounded_vec(
+        deserializer,
+        "lowering history entries",
+        powerio_core::limits::MAX_MODULE_HISTORY_ENTRIES,
+    )
 }
