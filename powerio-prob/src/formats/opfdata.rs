@@ -2,8 +2,9 @@
 
 use std::sync::Arc;
 
-use powerio_core::{Diagnostic, Error, TimePoint};
+use powerio_core::{Diagnostic, Error, PioModule, Source, TimePoint};
 
+use super::source_text;
 use crate::instance::AcOpfInstance;
 use crate::solution::{AcOpfSolution, Residuals, Termination};
 use crate::state::BalancedStateBuilder;
@@ -18,8 +19,17 @@ use crate::state::BalancedStateBuilder;
 ///
 /// # Errors
 /// An invalid document, or solved columns whose shapes disagree with the
-/// network's tables.
-pub fn parse_opfdata_solution(content: &str) -> Result<(AcOpfSolution, Vec<Diagnostic>), Error> {
+/// network's tables; every failure retains the source.
+pub fn parse_opfdata_solution(source: Source) -> Result<PioModule<AcOpfSolution>, Error> {
+    match parse_opfdata_text(&source) {
+        Ok((solution, diagnostics)) => PioModule::parsed(solution, source, diagnostics),
+        Err(error) => Err(error.with_source(source)),
+    }
+}
+
+fn parse_opfdata_text(source: &Source) -> Result<(AcOpfSolution, Vec<Diagnostic>), Error> {
+    let buffer = source.primary_buffer()?;
+    let content = source_text(&buffer)?;
     let (network, solved, diagnostics) = powerio_tx::parse_opfdata_json(content)
         .map_err(|error| Error::new(error.code(), error.to_string()))?;
 

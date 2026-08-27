@@ -16,21 +16,27 @@ categories = ["science", "parsing"]
 all-features = true
 
 [features]
+matrix = ["dep:powerio-matrix"]
 schema = ["dep:schemars", "powerio-tx/schema", "powerio-core/schema", "powerio-dist/schema", "powerio-prob/schema"]
 
 [dependencies]
 num-complex = { workspace = true }
 powerio-core = { workspace = true }
 powerio-dist = { workspace = true }
+powerio-matrix = { workspace = true, optional = true }
 powerio-prob = { workspace = true }
 powerio-tx = { workspace = true }
 schemars = { workspace = true, optional = true }
+bytes = "1.9"
 serde = { workspace = true }
 serde_json = { workspace = true }
+arrow = { workspace = true }
+parquet = { version = "59", default-features = false, features = ["arrow", "snap"] }
 thiserror = "2"
 
 [dev-dependencies]
-powerio-matrix = { workspace = true }
+powerio-matrix = { workspace = true, features = ["gridfm"] }
+tempfile = "3"
 
 [[example]]
 name = "generate_schemas"

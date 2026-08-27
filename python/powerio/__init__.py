@@ -306,14 +306,6 @@ class BalancedNetwork:
         inner, report = self._inner.apply_geo_layer(text, name_hint)
         return BalancedNetwork(inner), report
 
-    def acopf_instance(self, units: Optional[str] = None) -> dict[str, Any]:
-        """The matrix free AC OPF problem instance as Python data.
-
-        Dense 0-based indices; ``units`` is ``"perunit"`` (default) or
-        ``"native"``.
-        """
-        return _json.loads(self._inner.acopf_json(units))
-
     def to_format(
         self,
         to: str,

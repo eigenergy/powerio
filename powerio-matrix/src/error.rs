@@ -50,6 +50,23 @@ pub enum Error {
     #[error("invalid DC sensitivity option: {reason}")]
     InvalidSensitivityOptions { reason: String },
 
+    #[error("case has no generators; DC-OPF requires an `mpc.gen` block")]
+    NoGenerators,
+
+    #[error(
+        "generator {gen_index} has an unsupported cost model (model {model}, ncost {ncost}); need polynomial model 2 with degree ≤ 2"
+    )]
+    UnsupportedCostModel {
+        gen_index: usize,
+        model: u8,
+        ncost: usize,
+    },
+
+    #[error(
+        "generator {gen_index} has a concave cost row (c2 = {c2}); need a nonnegative quadratic coefficient"
+    )]
+    ConcaveCost { gen_index: usize, c2: f64 },
+
     #[error("matrix-market I/O: {0}")]
     Mtx(String),
 
@@ -116,6 +133,13 @@ impl Error {
             Error::NormalizedGridfmSnapshot { .. } => &codes::BUILD_GRIDFM_NORMALIZED_SNAPSHOT,
             Error::NonFiniteGridfmValue { .. } => &codes::BUILD_GRIDFM_NOT_A_NUMBER,
             Error::ScenarioShapeMismatch { .. } => &codes::BUILD_GRIDFM_SCENARIO_SHAPE_MISMATCH,
+            Error::NoGenerators => &powerio_prob::diagnostics::codes::BUILD_INSTANCE_NO_GENERATORS,
+            Error::UnsupportedCostModel { .. } => {
+                &powerio_prob::diagnostics::codes::BUILD_INSTANCE_UNSUPPORTED_COST_MODEL
+            }
+            Error::ConcaveCost { .. } => {
+                &powerio_prob::diagnostics::codes::BUILD_INSTANCE_CONCAVE_COST
+            }
             Error::Mtx(_) => &codes::EMIT_MTX_FAILED,
             Error::Parquet(_) => &codes::EMIT_PARQUET_FAILED,
         }
@@ -141,7 +165,10 @@ impl Error {
             | Error::ScenarioIdOverflow { .. }
             | Error::NormalizedGridfmSnapshot { .. }
             | Error::NonFiniteGridfmValue { .. }
-            | Error::ScenarioShapeMismatch { .. } => C::Data,
+            | Error::ScenarioShapeMismatch { .. }
+            | Error::NoGenerators
+            | Error::UnsupportedCostModel { .. }
+            | Error::ConcaveCost { .. } => C::Data,
             // Output-side serialization write failures.
             Error::Mtx(_) | Error::Parquet(_) => C::Output,
         }
@@ -246,6 +273,16 @@ mod tests {
             Error::ScenarioShapeMismatch {
                 index: 1,
                 reason: ScenarioMismatch::BusOrder,
+            },
+            Error::NoGenerators,
+            Error::UnsupportedCostModel {
+                gen_index: 0,
+                model: 1,
+                ncost: 4,
+            },
+            Error::ConcaveCost {
+                gen_index: 0,
+                c2: -0.5,
             },
             Error::Mtx("write failed".into()),
             Error::Parquet("write failed".into()),
