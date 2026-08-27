@@ -187,7 +187,7 @@ const MULTICONDUCTOR_QUANTITIES: [&str; 7] = [
 /// branch precedes the shared helper.
 fn dc_formula_name(convention: crate::DcConvention) -> &'static str {
     match convention {
-        crate::DcConvention::Matpower => "tap_adjusted_reactance",
+        crate::DcConvention::TapAdjustedReactance => "tap_adjusted_reactance",
         crate::DcConvention::ReactanceOnly => "reactance_only",
         // The default series formula, and the spelling any future variant
         // must replace deliberately.
@@ -197,8 +197,8 @@ fn dc_formula_name(convention: crate::DcConvention) -> &'static str {
 
 fn dc_formula_from_name(name: &str) -> Result<crate::DcConvention> {
     match name {
-        "series_susceptance" => Ok(crate::DcConvention::SeriesImpedance),
-        "tap_adjusted_reactance" => Ok(crate::DcConvention::Matpower),
+        "series_susceptance" => Ok(crate::DcConvention::SeriesSusceptance),
+        "tap_adjusted_reactance" => Ok(crate::DcConvention::TapAdjustedReactance),
         "reactance_only" => Ok(crate::DcConvention::ReactanceOnly),
         other => Err(invalid(format!(
             "unknown branch susceptance formula `{other}`"
