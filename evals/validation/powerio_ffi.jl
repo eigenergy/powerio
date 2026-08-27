@@ -9,7 +9,7 @@
 # every table lines up with bus_ids[k]. See powerio-capi/include/powerio.h.
 
 const _LIBEXT = Sys.iswindows() ? "dll" : (Sys.isapple() ? "dylib" : "so")
-const LIBPOWERIO = abspath(joinpath(@__DIR__, "..", "target", "release", "libpowerio_capi.$_LIBEXT"))
+const LIBPOWERIO = abspath(joinpath(@__DIR__, "..", "..", "target", "release", "libpowerio_capi.$_LIBEXT"))
 const PIO_ARROW_TABLE_YBUS = Int32(15)
 
 isfile(LIBPOWERIO) || error("libpowerio_capi not found at $LIBPOWERIO — run `cargo build --release -p powerio-capi --features arrow,matrix`")

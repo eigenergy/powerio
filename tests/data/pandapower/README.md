@@ -15,7 +15,7 @@ pp.to_json(net, "tests/data/pandapower/example.json")
 ```
 
 Regenerate with the same pandapower version (the CI pin in
-`benchmarks/requirements.txt`); a different version reshuffles column order and
+`evals/validation/requirements.txt`); a different version reshuffles column order and
 defaults, which breaks byte level comparisons.
 
 Provenance and license: the network data derives from

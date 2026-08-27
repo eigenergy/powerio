@@ -29,7 +29,7 @@ dependencies = []
 matrix = ["numpy>=1.21", "scipy>=1.7"]
 graph = ["networkx>=2.6"]
 all = ["numpy>=1.21", "scipy>=1.7", "networkx>=2.6", "polars>=1"]
-# Benchmark and validation oracles. These mirror benchmarks/requirements.txt.
+# Benchmark and validation oracles. These mirror evals/validation/requirements.txt.
 # The base package supports Python 3.9, but the oracle stack needs Python 3.11+.
 bench = [
     "pandapower==3.2.2; python_version >= '3.11'",

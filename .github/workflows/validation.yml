@@ -20,6 +20,7 @@ on:
       - "powerio-capi/**"
       - "powerio-prob/**"
       - "powerio-py/**"
+      - "evals/**"
       - "evals/validation/**"
       - "tests/data/dist/**"
       - "powerio-dist/examples/**"

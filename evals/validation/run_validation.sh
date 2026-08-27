@@ -45,7 +45,7 @@
 # Exits nonzero if any check fails.
 
 set -uo pipefail
-cd "$(dirname "$0")/.."
+cd "$(dirname "$0")/../.."
 
 export XDG_CACHE_HOME="${XDG_CACHE_HOME:-$PWD/.cache}"
 export MPLCONFIGDIR="${MPLCONFIGDIR:-$XDG_CACHE_HOME/matplotlib}"
