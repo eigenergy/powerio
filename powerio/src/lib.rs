@@ -656,6 +656,7 @@ mod tests {
         assert!(module.source().is_some());
     }
 
+    #[cfg(feature = "gridfm")]
     #[test]
     fn a_gridfm_dataset_parses_to_the_scenario_set_kind() {
         // Write a two scenario dataset with the matrix writer, then parse the
