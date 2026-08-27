@@ -44,9 +44,15 @@ the explicit balanced lowering.
 `pio_dc_data_build` returns the owned DC branch data under a named
 susceptance formula (`series_susceptance`, `tap_adjusted_reactance`,
 `reactance_only`), with the signed incidence row endpoints
-(`A[e, from] = +1`, `A[e, to] = -1`), the phase shift bus injection, stable
-module element IDs for every included row and bus column, and omitted
-branches with IDs and reasons. Spans stay valid until the handle's release.
-`pio_dc_data_fill_branch_flow` converts sign while filling the caller's
-buffer. The same values reach Rust as `powerio_tx::dc_network_data`, Python
-as `BalancedNetwork.dc_data`, and Julia as `DcData`.
+(`A[e, from] = +1`, `A[e, to] = -1`), the per row phase shift angles
+(`pio_dc_data_shift`, radians), the phase shift bus injection
+`p_shift = -A' (b .* shift)`, stable module element IDs for every included
+row and bus column, and omitted branches with IDs and reasons. Susceptance
+carries the PowerModels sign, tables describe the analysis network after
+three winding transformer expansion, and spans stay valid until the
+handle's release. `pio_dc_data_fill_branch_flow` writes the complete
+affine flow `p_branch = -b .* (va_from - va_to) - b .* shift` into the
+caller's buffer, so `A' p_branch` matches the bus injection.
+`pio_module_diagnostics_json` returns the module's findings as owned JSON.
+The same values reach Rust as `powerio_tx::dc_network_data`, Python as
+`BalancedNetwork.dc_data`, and Julia as `DcData`.
