@@ -1573,6 +1573,12 @@ PioModuleHandle *pio_module_parse_str(const char *text, const char *format, PioE
 char *pio_module_write_json(const PioModuleHandle *module, PioError **error);
 
 /**
+ * The module's diagnostics as a JSON array (stable code, severity, message,
+ * optional identity and target per entry). Free with `pio_string_free`.
+ */
+char *pio_module_diagnostics_json(const PioModuleHandle *module, PioError **error);
+
+/**
  * The value's permanent kind identifier, valid until the handle's release.
  */
 const char *pio_module_kind(const PioModuleHandle *module);
@@ -1659,7 +1665,14 @@ const int64_t *pio_dc_data_to_indices(const PioDcData *data);
 const double *pio_dc_data_susceptance(const PioDcData *data);
 
 /**
- * Phase shift bus injection `p_shift = A' * (b .* shift)`, length `n_buses`.
+ * Phase shift angle per included row, radians, length `n_rows`. `0` for an
+ * unshifted branch or a formula that excludes shifts.
+ */
+const double *pio_dc_data_shift(const PioDcData *data);
+
+/**
+ * Phase shift bus injection `p_shift = -A' * (b .* shift)` (the MATPOWER
+ * `makeBdc` sign), length `n_buses`.
  */
 const double *pio_dc_data_shift_injection(const PioDcData *data);
 
@@ -1695,12 +1708,13 @@ const char *const *pio_dc_data_omitted_reasons(const PioDcData *data);
 const char *pio_dc_data_formula(const PioDcData *data);
 
 /**
- * Fill `out` with the angle dependent branch flow
- * `p_branch = -b .* (va_from - va_to) + b .* shift_unused` sign converted
- * while filling: given bus voltage angles `va` (radians, length `n_buses`),
- * writes `-b[e] * (va[from] - va[to])` per included row into `out` (length
- * `n_rows`). Returns false on a NULL argument. No temporary vector is
- * allocated.
+ * Fill `out` with the complete affine branch flow
+ * `p_branch = -b .* (va_from - va_to) - b .* shift`: given bus voltage
+ * angles `va` (radians, length `n_buses`), writes
+ * `-b[e] * (va[from] - va[to]) - b[e] * shift[e]` per included row into
+ * `out` (length `n_rows`), so `A' * p_branch` equals the bus injection
+ * including `shift_injection`. Returns false on a NULL argument or a length
+ * mismatch. No temporary vector is allocated.
  */
 bool pio_dc_data_fill_branch_flow(const PioDcData *data,
                                   const double *va,

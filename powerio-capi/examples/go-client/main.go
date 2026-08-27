@@ -75,6 +75,19 @@ func main() {
 	C.pio_error_release(cerr)
 	cerr = nil
 
+	// An unrecognized formula name carries its own registered code.
+	bogus := C.CString("nodal_admittance")
+	defer C.free(unsafe.Pointer(bogus))
+	refused := C.pio_dc_data_build(reread, bogus, &cerr)
+	if refused != nil || cerr == nil {
+		fail("unknown formula should refuse", nil)
+	}
+	if C.GoString(C.pio_error_code(cerr)) != "REQUEST.CAPI.UNKNOWN_FORMULA" {
+		fail("unknown formula code", cerr)
+	}
+	C.pio_error_release(cerr)
+	cerr = nil
+
 	// DC data outlives the module that built it.
 	formula := C.CString("series_susceptance")
 	defer C.free(unsafe.Pointer(formula))
@@ -89,6 +102,9 @@ func main() {
 	buses := int(C.pio_dc_data_n_buses(dc))
 	if rows == 0 || buses == 0 {
 		fail("dc data is empty", nil)
+	}
+	if C.pio_dc_data_shift(dc) == nil {
+		fail("shift span is nil", nil)
 	}
 	b := unsafe.Slice(C.pio_dc_data_susceptance(dc), rows)
 	from := unsafe.Slice(C.pio_dc_data_from_indices(dc), rows)
