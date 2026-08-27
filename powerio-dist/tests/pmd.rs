@@ -1115,3 +1115,24 @@ fn a_rated_capacitor_converts_to_an_engineering_shunt() {
         out.warnings
     );
 }
+
+#[test]
+fn a_two_terminal_delta_capacitor_keeps_its_full_rating() {
+    // phases=1 conn=delta: one phase-to-phase leg. The whole rated power
+    // belongs to that single stamped loop.
+    let dss = "Clear\nNew Circuit.capnet basekv=4.16 pu=1.0 phases=3 bus1=sb.1.2.3\n\
+               New Capacitor.cpp bus1=sb.1.2 phases=1 kv=4.16 kvar=100 conn=delta\n\
+               Solve\n";
+    let net = parse_dss_str(dss);
+    let out = write_pmd_json(&net);
+    let doc: serde_json::Value = serde_json::from_str(&out.text).unwrap();
+    let shunt = &doc["shunt"]["cpp"];
+    assert_eq!(shunt["configuration"], "DELTA", "{doc}");
+    let b = 100_000.0 / (4160.0_f64 * 4160.0);
+    // One leg between the two terminals: the diagonal carries +b, the
+    // coupling -b, and nothing is halved.
+    let bs00 = shunt["bs"][0][0].as_f64().unwrap();
+    let bs01 = shunt["bs"][0][1].as_f64().unwrap();
+    assert!((bs00 - b).abs() < 1e-9 * b, "bs00 {bs00} want {b}");
+    assert!((bs01 + b).abs() < 1e-9 * b, "bs01 {bs01} want {}", -b);
+}
