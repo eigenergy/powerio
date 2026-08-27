@@ -704,6 +704,9 @@ fn encode_ac_scuc_solution(solution: &powerio_prob::AcScucSolution) -> dto::AcSc
             transformer_tm: stored_grid(&network_outputs.transformer_tm),
             transformer_ta: stored_grid(&network_outputs.transformer_ta),
             transformer_on_status: stored_grid(&network_outputs.transformer_on_status),
+            dc_line_pdc_fr: stored_grid(&network_outputs.dc_line_pdc_fr),
+            dc_line_qdc_fr: stored_grid(&network_outputs.dc_line_qdc_fr),
+            dc_line_qdc_to: stored_grid(&network_outputs.dc_line_qdc_to),
         },
         device_outputs: dto::ScucDeviceOutputsV1 {
             on_status: stored_grid(&device_outputs.on_status),
@@ -1022,6 +1025,9 @@ fn decode_value(value: StoredValueV1) -> Result<PioValue> {
             network_outputs.transformer_ta = plain_grid(&solution.network_outputs.transformer_ta);
             network_outputs.transformer_on_status =
                 plain_grid(&solution.network_outputs.transformer_on_status);
+            network_outputs.dc_line_pdc_fr = plain_grid(&solution.network_outputs.dc_line_pdc_fr);
+            network_outputs.dc_line_qdc_fr = plain_grid(&solution.network_outputs.dc_line_qdc_fr);
+            network_outputs.dc_line_qdc_to = plain_grid(&solution.network_outputs.dc_line_qdc_to);
             let mut device_outputs = powerio_prob::ScucDeviceOutputs::default();
             device_outputs.on_status = plain_grid(&solution.device_outputs.on_status);
             device_outputs.p_on = plain_grid(&solution.device_outputs.p_on);
