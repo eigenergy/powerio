@@ -5,8 +5,10 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
-use serde::de::Visitor;
+use serde::de::{DeserializeSeed, Visitor};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
+use powerio_core::limits;
 
 use crate::BalancedNetwork;
 use powerio_dist::MulticonductorNetwork;
@@ -99,20 +101,185 @@ pub struct ProducerV1 {
     pub version: String,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
-#[cfg_attr(feature = "schema", derive(JsonSchema))]
-#[serde(transparent)]
-pub struct SourceIdV1(pub String);
+// Decode time bounds: every sequence, map, and string on the version 1 record
+// wire is refused or truncated at its limit while it is decoded, before the
+// full collection has been retained, matching the core record wire.
+fn bounded_identifier<'de, D: Deserializer<'de>>(deserializer: D) -> Result<String, D::Error> {
+    limits::BoundedStr {
+        what: "record identifier",
+        max_bytes: limits::MAX_IDENTIFIER_BYTES,
+    }
+    .deserialize(deserializer)
+}
+
+fn bounded_code<'de, D: Deserializer<'de>>(deserializer: D) -> Result<String, D::Error> {
+    limits::BoundedStr {
+        what: "diagnostic code",
+        max_bytes: limits::MAX_DIAGNOSTIC_CODE_BYTES,
+    }
+    .deserialize(deserializer)
+}
+
+fn truncated_message<'de, D: Deserializer<'de>>(deserializer: D) -> Result<String, D::Error> {
+    deserializer.deserialize_str(limits::TruncatedStr {
+        max_bytes: limits::MAX_DIAGNOSTIC_MESSAGE_DECODE_BYTES,
+    })
+}
+
+fn bounded_target<'de, D: Deserializer<'de>>(deserializer: D) -> Result<String, D::Error> {
+    limits::BoundedStr {
+        what: "record target",
+        max_bytes: limits::MAX_DIAGNOSTIC_TARGET_BYTES,
+    }
+    .deserialize(deserializer)
+}
+
+fn bounded_opt_target<'de, D: Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<String>, D::Error> {
+    struct OptTarget;
+    impl<'de> Visitor<'de> for OptTarget {
+        type Value = Option<String>;
+        fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+            formatter.write_str("a bounded target string or null")
+        }
+        fn visit_none<E: serde::de::Error>(self) -> Result<Self::Value, E> {
+            Ok(None)
+        }
+        fn visit_unit<E: serde::de::Error>(self) -> Result<Self::Value, E> {
+            Ok(None)
+        }
+        fn visit_some<D2: Deserializer<'de>>(
+            self,
+            deserializer: D2,
+        ) -> Result<Self::Value, D2::Error> {
+            bounded_target(deserializer).map(Some)
+        }
+    }
+    deserializer.deserialize_option(OptTarget)
+}
+
+fn bounded_name<'de, D: Deserializer<'de>>(deserializer: D) -> Result<String, D::Error> {
+    bounded_identifier(deserializer)
+}
+
+fn bounded_btree_map<'de, D: Deserializer<'de>>(
+    deserializer: D,
+    what: &'static str,
+    max_keys: usize,
+) -> Result<BTreeMap<String, serde_json::Value>, D::Error> {
+    let map = limits::bounded_json_map(
+        deserializer,
+        what,
+        max_keys,
+        limits::MAX_IDENTIFIER_BYTES,
+        |key| !key.is_empty() && !key.contains('\0'),
+    )?;
+    Ok(map.into_iter().collect())
+}
+
+fn bounded_details<'de, D: Deserializer<'de>>(
+    deserializer: D,
+) -> Result<BTreeMap<String, serde_json::Value>, D::Error> {
+    bounded_btree_map(
+        deserializer,
+        "detail keys",
+        limits::MAX_DIAGNOSTIC_DETAIL_KEYS,
+    )
+}
+
+fn bounded_parameters<'de, D: Deserializer<'de>>(
+    deserializer: D,
+) -> Result<BTreeMap<String, serde_json::Value>, D::Error> {
+    bounded_btree_map(
+        deserializer,
+        "parameter keys",
+        limits::MAX_HISTORY_PARAMETERS,
+    )
+}
+
+fn bounded_extensions<'de, D: Deserializer<'de>>(
+    deserializer: D,
+) -> Result<BTreeMap<String, serde_json::Value>, D::Error> {
+    bounded_btree_map(
+        deserializer,
+        "extension keys",
+        limits::MAX_MODULE_EXTENSION_KEYS,
+    )
+}
+
+fn bounded_diagnostic_spans<'de, D: Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Vec<SourceSpanV1>, D::Error> {
+    limits::bounded_vec(deserializer, "source spans", limits::MAX_DIAGNOSTIC_SPANS)
+}
+
+fn bounded_map_spans<'de, D: Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Vec<SourceSpanV1>, D::Error> {
+    limits::bounded_vec(deserializer, "source spans", limits::MAX_SOURCE_MAP_SPANS)
+}
+
+fn bounded_related<'de, D: Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Vec<DiagnosticIdV1>, D::Error> {
+    limits::bounded_vec(
+        deserializer,
+        "related diagnostics",
+        limits::MAX_DIAGNOSTIC_RELATED,
+    )
+}
+
+fn bounded_notes<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Vec<String>, D::Error> {
+    limits::bounded_vec(deserializer, "history notes", limits::MAX_HISTORY_NOTES)
+}
+
+fn bounded_sources<'de, D: Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Vec<SourceDescriptorV1>, D::Error> {
+    limits::bounded_vec(deserializer, "sources", limits::MAX_MODULE_SOURCES)
+}
+
+fn bounded_source_map<'de, D: Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Vec<SourceMapEntryV1>, D::Error> {
+    limits::bounded_vec(
+        deserializer,
+        "source map entries",
+        limits::MAX_MODULE_SOURCE_MAP_ENTRIES,
+    )
+}
+
+fn bounded_diagnostics<'de, D: Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Vec<DiagnosticV1>, D::Error> {
+    limits::bounded_vec(deserializer, "diagnostics", limits::MAX_MODULE_DIAGNOSTICS)
+}
+
+fn bounded_history<'de, D: Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Vec<HistoryEntryV1>, D::Error> {
+    limits::bounded_vec(
+        deserializer,
+        "history entries",
+        limits::MAX_MODULE_HISTORY_ENTRIES,
+    )
+}
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(JsonSchema))]
 #[serde(transparent)]
-pub struct DiagnosticIdV1(pub String);
+pub struct SourceIdV1(#[serde(deserialize_with = "bounded_identifier")] pub String);
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(JsonSchema))]
 #[serde(transparent)]
-pub struct HistoryIdV1(pub String);
+pub struct DiagnosticIdV1(#[serde(deserialize_with = "bounded_identifier")] pub String);
+
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(JsonSchema))]
+#[serde(transparent)]
+pub struct HistoryIdV1(#[serde(deserialize_with = "bounded_identifier")] pub String);
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(JsonSchema))]
@@ -567,10 +734,15 @@ pub enum SourceRelationV1 {
 #[serde(deny_unknown_fields)]
 pub struct SourceMapEntryV1 {
     /// RFC 6901 pointer into `value.data`.
+    #[serde(deserialize_with = "bounded_target")]
     pub target: String,
     pub relation: SourceRelationV1,
     /// Empty only for `defaulted`, `synthetic`, or `transformed`.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(
+        default,
+        deserialize_with = "bounded_map_spans",
+        skip_serializing_if = "Vec::is_empty"
+    )]
     pub spans: Vec<SourceSpanV1>,
 }
 
@@ -590,15 +762,33 @@ pub enum SeverityV1 {
 pub struct DiagnosticV1 {
     pub id: DiagnosticIdV1,
     pub severity: SeverityV1,
+    #[serde(deserialize_with = "bounded_code")]
     pub code: String,
+    #[serde(deserialize_with = "truncated_message")]
     pub message: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        deserialize_with = "bounded_opt_target",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub target: Option<String>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(
+        default,
+        deserialize_with = "bounded_diagnostic_spans",
+        skip_serializing_if = "Vec::is_empty"
+    )]
     pub spans: Vec<SourceSpanV1>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(
+        default,
+        deserialize_with = "bounded_related",
+        skip_serializing_if = "Vec::is_empty"
+    )]
     pub related: Vec<DiagnosticIdV1>,
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    #[serde(
+        default,
+        deserialize_with = "bounded_details",
+        skip_serializing_if = "BTreeMap::is_empty"
+    )]
     pub details: BTreeMap<String, serde_json::Value>,
 }
 
@@ -622,16 +812,29 @@ pub struct HistoryEntryV1 {
     pub id: HistoryIdV1,
     pub kind: HistoryKindV1,
     /// Stable registered operation name.
+    #[serde(deserialize_with = "bounded_name")]
     pub name: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub input_kind: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub output_kind: Option<String>,
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    #[serde(
+        default,
+        deserialize_with = "bounded_parameters",
+        skip_serializing_if = "BTreeMap::is_empty"
+    )]
     pub parameters: BTreeMap<String, serde_json::Value>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(
+        default,
+        deserialize_with = "bounded_notes",
+        skip_serializing_if = "Vec::is_empty"
+    )]
     pub assumptions: Vec<String>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(
+        default,
+        deserialize_with = "bounded_notes",
+        skip_serializing_if = "Vec::is_empty"
+    )]
     pub losses: Vec<String>,
 }
 
@@ -643,16 +846,36 @@ pub struct StoredModuleV1 {
     pub version: u32,
     pub producer: ProducerV1,
     pub value: StoredValueV1,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(
+        default,
+        deserialize_with = "bounded_sources",
+        skip_serializing_if = "Vec::is_empty"
+    )]
     pub sources: Vec<SourceDescriptorV1>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(
+        default,
+        deserialize_with = "bounded_source_map",
+        skip_serializing_if = "Vec::is_empty"
+    )]
     pub source_map: Vec<SourceMapEntryV1>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(
+        default,
+        deserialize_with = "bounded_diagnostics",
+        skip_serializing_if = "Vec::is_empty"
+    )]
     pub diagnostics: Vec<DiagnosticV1>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(
+        default,
+        deserialize_with = "bounded_history",
+        skip_serializing_if = "Vec::is_empty"
+    )]
     pub history: Vec<HistoryEntryV1>,
     /// Nonsemantic third party annotations. Keys must be namespaced.
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    #[serde(
+        default,
+        deserialize_with = "bounded_extensions",
+        skip_serializing_if = "BTreeMap::is_empty"
+    )]
     pub extensions: BTreeMap<String, serde_json::Value>,
 }
 
@@ -678,13 +901,15 @@ pub fn validate(module: &StoredModuleV1) -> Result<(), String> {
             .diagnostics
             .iter()
             .any(|diagnostic| diagnostic.target.is_some());
-    let value_data = if needs_targets {
-        let stored_value =
-            serde_json::to_value(&module.value).map_err(|error| error.to_string())?;
-        stored_value.get("data").cloned()
+    // One generic representation, borrowed by every target check: the tagged
+    // value serializes with its `data` key, so targets resolve under a `/data`
+    // prefix instead of cloning the subtree out.
+    let stored_value = if needs_targets {
+        Some(serde_json::to_value(&module.value).map_err(|error| error.to_string())?)
     } else {
         None
     };
+    let value_data = stored_value.as_ref();
 
     let mut sources = BTreeMap::new();
     for source in &module.sources {
@@ -713,7 +938,7 @@ pub fn validate(module: &StoredModuleV1) -> Result<(), String> {
         if !diagnostics.insert(diagnostic.id.0.as_str()) {
             return Err(format!("duplicate diagnostic id `{}`", diagnostic.id.0));
         }
-        validate_target(diagnostic.target.as_deref(), value_data.as_ref())?;
+        validate_target(diagnostic.target.as_deref(), value_data)?;
         validate_spans(&diagnostic.spans, &sources)?;
     }
     for diagnostic in &module.diagnostics {
@@ -728,7 +953,7 @@ pub fn validate(module: &StoredModuleV1) -> Result<(), String> {
     }
 
     for entry in &module.source_map {
-        validate_target(Some(&entry.target), value_data.as_ref())?;
+        validate_target(Some(&entry.target), value_data)?;
         validate_spans(&entry.spans, &sources)?;
         let empty_allowed = matches!(
             entry.relation,
@@ -954,11 +1179,11 @@ fn validate_pointer(pointer: Option<&str>) -> Result<(), String> {
 
 fn validate_target(
     pointer: Option<&str>,
-    value_data: Option<&serde_json::Value>,
+    stored_value: Option<&serde_json::Value>,
 ) -> Result<(), String> {
     validate_pointer(pointer)?;
-    if let (Some(pointer), Some(data)) = (pointer, value_data)
-        && data.pointer(pointer).is_none()
+    if let (Some(pointer), Some(value)) = (pointer, stored_value)
+        && value.pointer(&format!("/data{pointer}")).is_none()
     {
         return Err(format!(
             "`{pointer}` does not identify a field in value.data"

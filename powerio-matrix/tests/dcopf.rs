@@ -344,7 +344,7 @@ fn lodf_diagonal_is_minus_one() {
 }
 
 #[test]
-fn iterative_sensitivities_match_dense_oracle() {
+fn sparse_sensitivities_match_dense_oracle() {
     for path in [
         "../tests/data/case9.m",
         "../tests/data/case14.m",
@@ -355,22 +355,22 @@ fn iterative_sensitivities_match_dense_oracle() {
         // Both paths take the same convention: this compares the two solvers,
         // not two weightings.
         let (dense_ptdf, dense_lodf) = build_ptdf_lodf(&view, DcConvention::default()).unwrap();
-        let iterative = build_ptdf_lodf_with_options(
+        let sparse = build_ptdf_lodf_with_options(
             &view,
             &SensitivityOptions {
-                solver: SensitivitySolver::Iterative,
+                solver: SensitivitySolver::Sparse,
                 drop_tolerance: 1e-12,
                 ..Default::default()
             },
         )
         .unwrap();
         assert_eq!(
-            iterative.metadata.solver_path,
-            SensitivitySolverPath::IterativeCg,
+            sparse.metadata.solver_path,
+            SensitivitySolverPath::SparseCholesky,
             "{path}: solver path"
         );
-        assert_matrix_close(&iterative.ptdf, &dense_ptdf, 1e-7, path);
-        assert_matrix_close(&iterative.lodf, &dense_lodf, 1e-7, path);
+        assert_matrix_close(&sparse.ptdf, &dense_ptdf, 1e-7, path);
+        assert_matrix_close(&sparse.lodf, &dense_lodf, 1e-7, path);
     }
 }
 
@@ -479,11 +479,11 @@ fn a_sensitivity_write_never_replaces_an_existing_entry() {
 }
 
 #[test]
-fn streamed_iterative_sensitivities_match_in_memory() {
+fn streamed_sparse_sensitivities_match_in_memory() {
     let case = load("../tests/data/case30.m");
     let view = IndexedNetwork::new(&case);
     let options = SensitivityOptions {
-        solver: SensitivitySolver::Iterative,
+        solver: SensitivitySolver::Sparse,
         drop_tolerance: 1e-9,
         ..Default::default()
     };
@@ -496,7 +496,7 @@ fn streamed_iterative_sensitivities_match_in_memory() {
     let ptdf = read_mtx(&ptdf_path).unwrap();
     let lodf = read_mtx(&lodf_path).unwrap();
 
-    assert_eq!(meta.solver_path, SensitivitySolverPath::IterativeCg);
+    assert_eq!(meta.solver_path, SensitivitySolverPath::SparseCholesky);
     assert_eq!(meta.ptdf.nnz, ptdf.nnz());
     assert_eq!(meta.lodf.nnz, lodf.nnz());
     assert_matrix_close(&ptdf, &expected.ptdf, 0.0, "streamed PTDF");
@@ -504,7 +504,7 @@ fn streamed_iterative_sensitivities_match_in_memory() {
 }
 
 #[test]
-fn auto_sensitivity_solver_switches_to_iterative_above_threshold() {
+fn auto_sensitivity_solver_switches_to_sparse_above_threshold() {
     let case = load("../tests/data/case118.m");
     let view = IndexedNetwork::new(&case);
     let out = build_ptdf_lodf_with_options(
@@ -519,7 +519,10 @@ fn auto_sensitivity_solver_switches_to_iterative_above_threshold() {
     .unwrap();
 
     assert_eq!(out.metadata.requested_solver, SensitivitySolver::Auto);
-    assert_eq!(out.metadata.solver_path, SensitivitySolverPath::IterativeCg);
+    assert_eq!(
+        out.metadata.solver_path,
+        SensitivitySolverPath::SparseCholesky
+    );
     assert_eq!(out.metadata.ptdf.rows, out.ptdf.rows());
     assert_eq!(out.metadata.ptdf.cols, out.ptdf.cols());
     assert_eq!(out.metadata.lodf.rows, out.lodf.rows());
@@ -528,7 +531,7 @@ fn auto_sensitivity_solver_switches_to_iterative_above_threshold() {
 }
 
 #[test]
-fn auto_writes_iterative_outputs_above_the_dense_threshold() {
+fn auto_writes_sparse_outputs_above_the_dense_threshold() {
     let n = 600;
     let mut buses = Vec::with_capacity(n);
     buses.push(bus(1, BusType::Ref));
@@ -542,9 +545,8 @@ fn auto_writes_iterative_outputs_above_the_dense_threshold() {
     let reduced_dimension = view.n() - view.reference_bus_indices().len();
     assert!(reduced_dimension > 512);
 
-    // Drive the routing through the knob rather than the default ceiling:
-    // 599 unknowns is far below the real dense/iterative crossover, so the
-    // default now (correctly) takes the dense path here.
+    // The knob is spelled out so the routing this asserts does not depend
+    // on the default ceiling's value.
     let options = SensitivityOptions {
         auto_dense_threshold: 512,
         ..SensitivityOptions::default()
@@ -556,7 +558,7 @@ fn auto_writes_iterative_outputs_above_the_dense_threshold() {
     let ptdf = read_mtx(&ptdf_path).unwrap();
     let lodf = read_mtx(&lodf_path).unwrap();
 
-    assert_eq!(meta.solver_path, SensitivitySolverPath::IterativeCg);
+    assert_eq!(meta.solver_path, SensitivitySolverPath::SparseCholesky);
     assert_eq!(meta.reduced_dimension, reduced_dimension);
     assert_eq!(ptdf.rows(), branch_count);
     assert_eq!(ptdf.cols(), n);
@@ -569,7 +571,7 @@ fn auto_writes_iterative_outputs_above_the_dense_threshold() {
 }
 
 #[test]
-fn auto_iterative_rejects_non_positive_susceptance() {
+fn auto_sparse_rejects_non_positive_susceptance() {
     let case = net(
         "negative_x",
         vec![bus(1, BusType::Ref), bus(2, BusType::Pq)],
@@ -724,7 +726,12 @@ fn matpower_convention_tap_and_shift() {
     assert!(pp.p_shift.iter().all(|&v| v == 0.0));
 
     // Matpower: b = 1/(x·τ); makeBdc injection ±b·shift at from/to.
-    let mp = build_incidence(&view, DcConvention::Matpower, &BuildOptions::default()).unwrap();
+    let mp = build_incidence(
+        &view,
+        DcConvention::TapAdjustedReactance,
+        &BuildOptions::default(),
+    )
+    .unwrap();
     let b_e = 1.0 / (x * tap);
     let shift_rad = shift_deg.to_radians();
     assert!((mp.b[0] - b_e).abs() < 1e-12, "b_e {} != {b_e}", mp.b[0]);
@@ -978,13 +985,13 @@ fn incidence_matpower_pshift_invariant_to_normalization() {
     let norm = raw.to_normalized().unwrap();
     let ir = build_incidence(
         &IndexedNetwork::new(&raw),
-        DcConvention::Matpower,
+        DcConvention::TapAdjustedReactance,
         &BuildOptions::default(),
     )
     .unwrap();
     let in_ = build_incidence(
         &IndexedNetwork::new(&norm),
-        DcConvention::Matpower,
+        DcConvention::TapAdjustedReactance,
         &BuildOptions::default(),
     )
     .unwrap();

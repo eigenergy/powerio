@@ -14,7 +14,7 @@ use serde_json::{Map, Value};
 
 /// A string field that is refused past `max_bytes`, checked before the text is
 /// retained.
-pub(crate) struct BoundedStr {
+pub struct BoundedStr {
     pub what: &'static str,
     pub max_bytes: usize,
 }
@@ -62,7 +62,7 @@ impl<'de> DeserializeSeed<'de> for BoundedStr {
 /// A string field that is truncated at a character boundary once `max_bytes`
 /// have been retained. Used for message text whose semantic limit is already a
 /// truncation rule rather than a refusal.
-pub(crate) struct TruncatedStr {
+pub struct TruncatedStr {
     pub max_bytes: usize,
 }
 
@@ -134,7 +134,7 @@ impl<'de, T: Deserialize<'de>> Visitor<'de> for BoundedSeq<T> {
     }
 }
 
-pub(crate) fn bounded_vec<'de, T: Deserialize<'de>, D: Deserializer<'de>>(
+pub fn bounded_vec<'de, T: Deserialize<'de>, D: Deserializer<'de>>(
     deserializer: D,
     what: &'static str,
     max_len: usize,
@@ -194,7 +194,7 @@ impl<'de> Visitor<'de> for BoundedJsonMap {
     }
 }
 
-pub(crate) fn bounded_json_map<'de, D: Deserializer<'de>>(
+pub fn bounded_json_map<'de, D: Deserializer<'de>>(
     deserializer: D,
     what: &'static str,
     max_keys: usize,
