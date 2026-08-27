@@ -13,6 +13,7 @@ run() { echo "=== $* ==="; "$@"; }
 run cargo fmt --all --check
 run ./scripts/ci-clippy.sh
 run bash scripts/terminology-gate.sh
+run bash scripts/deprecated-inventory.sh --assert-empty
 run ./scripts/capi-header-parity.sh
 run ./scripts/capi-header-regen.sh
 

@@ -1,5 +1,25 @@
 # Changelog
 
+## 1.0.0
+
+One model of the work: every parse compiles one source into a typed module, one document stores it, and every language reads the same names. The 0.9 compatibility names are gone, so this is the release to read before upgrading; the [migration guide](https://powerio.dev/guide/migration-v1.html) walks each surface.
+
+**The universal parse.** `powerio::parse(source)` compiles any supported input into `PioModule<PioValue>`: balanced and multiconductor networks, PyPSA CSV folders (a declared snapshot axis produces a network or operating point time series), gridfm Parquet datasets (a scenario set), Egret JSON with time series, and stored `.pio.json`. A source that defines a calculation produces that calculation's value: GO Challenge 3 JSON parses to an AC SCUC instance, BMOPF JSON to a multiconductor AC OPF instance, and DeepMind OPFData JSON to a solved AC OPF. Routing reads the declared format, then the name and content; in memory text with no extension sniffs the same way a `.json` file does, and every failure retains the source.
+
+**The stored module document.** `.pio.json` version 1 stores one typed value under `"schema": "powerio.module"` beside the module's records: producer, source descriptors, source maps, diagnostics, history, and namespaced extensions. Twenty value kinds cover the networks, the collections, and the seven problem instances and seven solutions. A released 0.9 package upgrades one way through the same reader, its operating points becoming a typed operating point time series; a nonempty legacy study block is refused with the materialize instruction, and the pre 0.9 lineage is refused outright. The 0.9 `NetworkPackage` API is gone from every language: the lowering lives at `powerio::transform`, the distribution geo layer at `powerio::dist_geo`, and the diagnostic registry at `powerio::codes`.
+
+**The crate graph reads top down.** `powerio-core` holds sources, diagnostics, and modules; `powerio-tx` and `powerio-dist` the two network families; `powerio-prob` the instances and solutions over them; `powerio-matrix` the projections over everything below it; and the `powerio` facade composes the set, with the matrix surface behind its `matrix` feature. A cargo metadata test pins the direction, and the solver preparation rows that used to leak from `powerio-prob` are private to the builders that consume them.
+
+**C ABI 6 replaces the 0.9 surface.** Owned handles with `retain`/`release`, structured `PioError` handles instead of prose buffers on the new entry points, the stored module surface (`pio_module_*`), and the DC branch data (`pio_dc_data_*`). `pio_package_*`, `pio_scopf_*`, and the 0.9 solver row Arrow tables (ids 6 to 14, 21, and 22) are gone; the ids stay burned and the catalog lists only the live tables. The header regenerates from the source and CI holds the two identical.
+
+**The DC phase shift carries the correct sign.** The shared assembly publishes `p_shift = A' (b .* shift)` per bus (with the PowerModels negative susceptance, the fixed term MATPOWER's `makeBdc` states) and the complete affine branch flow `p_branch = -b (va_from - va_to) + b shift`. The 0.9 releases and the first v6 draft negated the shift term; a flat start pin on a shifted fixture now asserts the MATPOWER value through Rust and C, and the KCL identity `A' p_branch = -B va + p_shift` holds by test.
+
+**One Python entry.** `powerio.parse(source, from_, include_root=..., value_type=...)` reads a path or in memory bytes into a `StoredModule`; `value_type` narrows to `BalancedNetwork` or `dist.MulticonductorNetwork` in the same call, and the typed accessors carry the module's retained source and findings, so a same format write still echoes the source bytes. `parse_file`, `parse_str`, `parse_bytes`, `read_pypsa_csv_folder`, `parse_scopf`, `to_dense` with the `Dense*` rows, the `Package` class, and the 0.8 renamed alias hooks are gone. The MCP server loads both stored generations through the same path.
+
+**The CLI reads what it writes.** `powerio package` emits the stored module for any input (`--scenario` exports one scenario of a set), and `summary`, `convert`, `verify`, `dcopf`, and `sensitivities` read a stored `.pio.json` directly; a module storing a collection or calculation names the export step. The matrix commands accept every case format, dropping their MATPOWER only loader.
+
+**No deprecated names.** `scripts/deprecated-inventory.sh --assert-empty` runs in CI and passes: the 0.8 aliases, the SCOPF projection with its index base selection, and the renamed hooks were removed rather than carried. A terminology gate holds the docs and public sources to the 1.0 controlled vocabulary.
+
 ## 0.9.0
 
 The API and C ABI that 1.0.0 ships. Everything here exists so a later change can be additive, so this release takes the breaks: C ABI 5, one version number across every document powerio authors, a registered code on every finding powerio reports, a DC susceptance that reads the whole series impedance, and one release of working compatibility names before 1.0 removes them. Read the headings below before upgrading; each one changes what a working consumer sees.

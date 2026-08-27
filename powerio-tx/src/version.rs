@@ -209,14 +209,21 @@ mod tests {
     #[test]
     fn a_zero_x_minor_is_its_own_lineage() {
         // While the major is 0 a minor bump is incompatible, so 0.8 and 0.9
-        // do not read each other. Both are read by their own patches.
-        let (major, minor) = current_lineage();
-        assert_eq!(major, 0, "update this test at 1.0.0");
-        assert!(supports(&format!("0.{minor}.0")));
-        assert!(supports(&format!("0.{minor}.99")));
-        assert!(!supports(&format!("0.{}.0", minor + 1)));
-        assert!(!supports(&format!("0.{}.0", minor - 1)));
-        assert!(!supports("1.0.0"));
+        // do not read each other. Both are read by their own patches. Stated
+        // over `reads` so the 0.x rule stays pinned from a 1.x build.
+        assert!(reads((0, 9), (0, 9)));
+        assert!(!reads((0, 9), (0, 10)));
+        assert!(!reads((0, 9), (0, 8)));
+        assert!(!reads((0, 9), (1, 0)));
+    }
+
+    #[test]
+    fn this_build_reads_its_own_version_and_the_frozen_lineage() {
+        assert!(supports(VERSION));
+        assert!(supports("0.9.0"));
+        assert!(supports("0.9.99"));
+        assert!(!supports("0.8.0"));
+        assert!(!supports("2.0.0"));
     }
 
     #[test]
