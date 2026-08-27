@@ -1,0 +1,878 @@
+{
+  "schema": "powerio.module",
+  "version": 1,
+  "producer": {
+    "name": "powerio",
+    "version": "0.9.0"
+  },
+  "value": {
+    "kind": "ac_scuc_instance",
+    "data": {
+      "network": {
+        "name": "goc3",
+        "base_mva": 100.0,
+        "base_frequency": 60.0,
+        "buses": [
+          {
+            "id": 1,
+            "kind": "REF",
+            "vm": 1.0,
+            "va": 0.0,
+            "base_kv": 0.0,
+            "vmax": 1.1,
+            "vmin": 0.9,
+            "evhi": null,
+            "evlo": null,
+            "area": 1,
+            "zone": 1,
+            "name": "bus_00",
+            "uid": "bus_00",
+            "extras": {
+              "active_reserve_uids": [
+                "azr_00"
+              ],
+              "reactive_reserve_uids": [
+                "rzr_00"
+              ]
+            }
+          },
+          {
+            "id": 2,
+            "kind": "PQ",
+            "vm": 1.0,
+            "va": 0.0,
+            "base_kv": 0.0,
+            "vmax": 1.1,
+            "vmin": 0.9,
+            "evhi": null,
+            "evlo": null,
+            "area": 1,
+            "zone": 1,
+            "name": "bus_01",
+            "uid": "bus_01",
+            "extras": {
+              "active_reserve_uids": [
+                "azr_00"
+              ],
+              "reactive_reserve_uids": [
+                "rzr_00"
+              ]
+            }
+          }
+        ],
+        "loads": [
+          {
+            "bus": 2,
+            "p": 400.0,
+            "q": 0.0,
+            "voltage_model": null,
+            "in_service": true,
+            "uid": "sd_01",
+            "extras": {
+              "energy_req_lb": [],
+              "energy_req_ub": [],
+              "on_cost": 1.0,
+              "p_nsyn_res_ub": 0.0,
+              "p_ramp_down_ub": 1.0,
+              "p_ramp_res_down_offline_ub": 0.0,
+              "p_ramp_res_down_online_ub": 0.0,
+              "p_ramp_res_up_offline_ub": 0.0,
+              "p_ramp_res_up_online_ub": 0.0,
+              "p_ramp_up_ub": 1.0,
+              "p_reg_res_down_ub": 0.0,
+              "p_reg_res_up_ub": 0.0,
+              "p_shutdown_ramp_ub": 1.0,
+              "p_startup_ramp_ub": 1.0,
+              "p_syn_res_ub": 0.0,
+              "q_bound_cap": 0,
+              "q_linear_cap": 0,
+              "startup_states": []
+            }
+          }
+        ],
+        "shunts": [
+          {
+            "bus": 1,
+            "g": 0.0,
+            "b": 300.0,
+            "in_service": true,
+            "control": null,
+            "uid": "sh_00",
+            "extras": {}
+          }
+        ],
+        "branches": [
+          {
+            "from": 1,
+            "to": 2,
+            "r": 0.0,
+            "x": 2.0,
+            "b": 0.0,
+            "charging": {
+              "g_fr": 0.0,
+              "b_fr": 0.0,
+              "g_to": 0.0,
+              "b_to": 0.0
+            },
+            "rate_a": 1.0,
+            "rate_b": 7.0,
+            "rate_c": 7.0,
+            "rating_sets": [
+              {
+                "name": "mva_ub_em",
+                "rate_mva": 7.0
+              }
+            ],
+            "current_ratings": null,
+            "tap": 0.0,
+            "shift": 0.0,
+            "in_service": true,
+            "angmin": -360.0,
+            "angmax": 360.0,
+            "control": null,
+            "solution": null,
+            "uid": "acl_00",
+            "extras": {
+              "connection_cost": 0.0,
+              "disconnection_cost": 0.0
+            }
+          },
+          {
+            "from": 1,
+            "to": 2,
+            "r": 0.0,
+            "x": 1.0,
+            "b": 0.0,
+            "charging": {
+              "g_fr": 0.0,
+              "b_fr": 0.0,
+              "g_to": 0.0,
+              "b_to": 0.0
+            },
+            "rate_a": 1.0,
+            "rate_b": 8.0,
+            "rate_c": 8.0,
+            "rating_sets": [
+              {
+                "name": "mva_ub_em",
+                "rate_mva": 8.0
+              }
+            ],
+            "current_ratings": null,
+            "tap": 0.0,
+            "shift": 0.0,
+            "in_service": false,
+            "angmin": -360.0,
+            "angmax": 360.0,
+            "control": null,
+            "solution": null,
+            "uid": "acl_01",
+            "extras": {
+              "connection_cost": 0.0,
+              "disconnection_cost": 0.0
+            }
+          },
+          {
+            "from": 1,
+            "to": 2,
+            "r": 0.0,
+            "x": 4.0,
+            "b": 0.0,
+            "charging": {
+              "g_fr": 0.0,
+              "b_fr": 0.0,
+              "g_to": 0.0,
+              "b_to": 0.0
+            },
+            "rate_a": 1.0,
+            "rate_b": 6.0,
+            "rate_c": 6.0,
+            "rating_sets": [
+              {
+                "name": "mva_ub_em",
+                "rate_mva": 6.0
+              }
+            ],
+            "current_ratings": null,
+            "tap": 1.0,
+            "shift": 0.0,
+            "in_service": true,
+            "angmin": -360.0,
+            "angmax": 360.0,
+            "control": {
+              "mode": "active_flow",
+              "controlled_bus": null,
+              "tap_min": 0.0,
+              "tap_max": 0.0,
+              "band_min": 0.9,
+              "band_max": 1.1,
+              "ntp": 33,
+              "mva_base": 0.0
+            },
+            "solution": null,
+            "uid": "xf_00",
+            "extras": {
+              "connection_cost": 0.0,
+              "disconnection_cost": 0.0
+            }
+          }
+        ],
+        "switches": [],
+        "generators": [
+          {
+            "bus": 1,
+            "pg": 1000.0,
+            "qg": 0.0,
+            "pmax": 500.0,
+            "pmin": 200.0,
+            "qmax": 100.0,
+            "qmin": -100.0,
+            "vg": 1.0,
+            "mbase": 100.0,
+            "in_service": true,
+            "cost": {
+              "model": 1,
+              "startup": 2.0,
+              "shutdown": 3.0,
+              "ncost": 2,
+              "coeffs": [
+                0.0,
+                0.0,
+                500.0,
+                50.0
+              ]
+            },
+            "caps": {},
+            "regulated_bus": null,
+            "uid": "sd_00"
+          }
+        ],
+        "storage": [],
+        "hvdc": [
+          {
+            "from": 1,
+            "to": 2,
+            "in_service": true,
+            "pf": 0.0,
+            "pt": -0.0,
+            "qf": 0.0,
+            "qt": 0.0,
+            "vf": 1.0,
+            "vt": 1.0,
+            "pmin": -100.0,
+            "pmax": 100.0,
+            "qminf": -100.0,
+            "qmaxf": 100.0,
+            "qmint": -100.0,
+            "qmaxt": 100.0,
+            "loss0": 0.0,
+            "loss1": 0.0,
+            "cost": null,
+            "uid": "dc_00",
+            "extras": {}
+          }
+        ],
+        "transformers_3w": [],
+        "areas": [],
+        "solver": null,
+        "source_format": "goc3-json"
+      },
+      "inputs": {
+        "static_data": {
+          "bus": [
+            {
+              "i": 1,
+              "uid": "bus_00",
+              "v_min": 0.9,
+              "v_max": 1.1
+            },
+            {
+              "i": 2,
+              "uid": "bus_01",
+              "v_min": 0.9,
+              "v_max": 1.1
+            }
+          ],
+          "shunt": [
+            {
+              "j_sh": 0,
+              "uid": "sh_00",
+              "bus": 1,
+              "g_sh": 0.0,
+              "b_sh": 3.0
+            }
+          ],
+          "acl_branch": [
+            {
+              "j_ln": 0,
+              "uid": "acl_00",
+              "to_bus": 2,
+              "fr_bus": 1,
+              "c_su": 0.0,
+              "c_sd": 0.0,
+              "u_0": 1,
+              "s_max": 1.0,
+              "g_sr": 0.0,
+              "b_sr": -0.5,
+              "b_ch": 0.0,
+              "g_fr": 0.0,
+              "g_to": 0.0,
+              "b_fr": 0.0,
+              "b_to": 0.0
+            },
+            {
+              "j_ln": 1,
+              "uid": "acl_01",
+              "to_bus": 2,
+              "fr_bus": 1,
+              "c_su": 0.0,
+              "c_sd": 0.0,
+              "u_0": 0,
+              "s_max": 1.0,
+              "g_sr": 0.0,
+              "b_sr": -1.0,
+              "b_ch": 0.0,
+              "g_fr": 0.0,
+              "g_to": 0.0,
+              "b_fr": 0.0,
+              "b_to": 0.0
+            }
+          ],
+          "acx_branch": [
+            {
+              "j_xf": 0,
+              "uid": "xf_00",
+              "to_bus": 2,
+              "fr_bus": 1,
+              "c_su": 0.0,
+              "c_sd": 0.0,
+              "u_0": 1,
+              "s_max": 1.0,
+              "g_sr": 0.0,
+              "b_sr": -0.25,
+              "b_ch": 0.0,
+              "g_fr": 0.0,
+              "g_to": 0.0,
+              "b_fr": 0.0,
+              "b_to": 0.0
+            }
+          ],
+          "vpd": [],
+          "fpd": [
+            {
+              "j_xf": 0,
+              "phi_o": 0.0
+            }
+          ],
+          "vwr": [],
+          "fwr": [
+            {
+              "j_xf": 0,
+              "tau_o": 1.0
+            }
+          ],
+          "dc_branch": [
+            {
+              "j_dc": 0,
+              "uid": "dc_00",
+              "pdc_max": 1.0,
+              "qdc_fr_min": -1.0,
+              "qdc_to_min": -1.0,
+              "qdc_fr_max": 1.0,
+              "qdc_to_max": 1.0,
+              "to_bus": 2,
+              "fr_bus": 1
+            }
+          ],
+          "prod": [
+            {
+              "bus": 1,
+              "uid": "sd_00",
+              "j_dev": 0,
+              "j_sdd": 0,
+              "c_on": 1.0,
+              "c_su": 2.0,
+              "c_sd": 3.0,
+              "p_ru": 1.0,
+              "p_rd": 1.0,
+              "p_ru_su": 1.0,
+              "p_rd_sd": 1.0,
+              "c_rgu": [
+                0.0,
+                0.0
+              ],
+              "c_rgd": [
+                0.0,
+                0.0
+              ],
+              "c_scr": [
+                0.0,
+                0.0
+              ],
+              "c_nsc": [
+                0.0,
+                0.0
+              ],
+              "c_rru_on": [
+                0.0,
+                0.0
+              ],
+              "c_rru_off": [
+                0.0,
+                0.0
+              ],
+              "c_rrd_on": [
+                0.0,
+                0.0
+              ],
+              "c_rrd_off": [
+                0.0,
+                0.0
+              ],
+              "c_qru": [
+                0.0,
+                0.0
+              ],
+              "c_qrd": [
+                0.0,
+                0.0
+              ],
+              "p_rgu_max": 0.0,
+              "p_rgd_max": 0.0,
+              "p_scr_max": 0.0,
+              "p_nsc_max": 0.0,
+              "p_rru_on_max": 0.0,
+              "p_rru_off_max": 0.0,
+              "p_rrd_on_max": 0.0,
+              "p_rrd_off_max": 0.0,
+              "p_0": 10.0,
+              "q_0": 0.0,
+              "u_0": 1,
+              "p_max": [
+                5.0,
+                5.0
+              ],
+              "p_min": [
+                2.0,
+                3.0
+              ],
+              "q_max": [
+                1.0,
+                1.0
+              ],
+              "q_min": [
+                -1.0,
+                -1.0
+              ],
+              "sus": [],
+              "q_bound_cap": 0,
+              "q_linear_cap": 0,
+              "beta_ub": null,
+              "beta_lb": null,
+              "q_0_ub": null,
+              "q_0_lb": null,
+              "beta": null,
+              "q_p0": null
+            }
+          ],
+          "cons": [
+            {
+              "bus": 2,
+              "uid": "sd_01",
+              "j_dev": 0,
+              "j_sdd": 1,
+              "c_on": 1.0,
+              "c_su": 2.0,
+              "c_sd": 3.0,
+              "p_ru": 1.0,
+              "p_rd": 1.0,
+              "p_ru_su": 1.0,
+              "p_rd_sd": 1.0,
+              "c_rgu": [
+                0.0,
+                0.0
+              ],
+              "c_rgd": [
+                0.0,
+                0.0
+              ],
+              "c_scr": [
+                0.0,
+                0.0
+              ],
+              "c_nsc": [
+                0.0,
+                0.0
+              ],
+              "c_rru_on": [
+                0.0,
+                0.0
+              ],
+              "c_rru_off": [
+                0.0,
+                0.0
+              ],
+              "c_rrd_on": [
+                0.0,
+                0.0
+              ],
+              "c_rrd_off": [
+                0.0,
+                0.0
+              ],
+              "c_qru": [
+                0.0,
+                0.0
+              ],
+              "c_qrd": [
+                0.0,
+                0.0
+              ],
+              "p_rgu_max": 0.0,
+              "p_rgd_max": 0.0,
+              "p_scr_max": 0.0,
+              "p_nsc_max": 0.0,
+              "p_rru_on_max": 0.0,
+              "p_rru_off_max": 0.0,
+              "p_rrd_on_max": 0.0,
+              "p_rrd_off_max": 0.0,
+              "p_0": 4.0,
+              "q_0": 0.0,
+              "u_0": 1,
+              "p_max": [
+                5.0,
+                5.0
+              ],
+              "p_min": [
+                0.0,
+                0.0
+              ],
+              "q_max": [
+                1.0,
+                1.0
+              ],
+              "q_min": [
+                -1.0,
+                -1.0
+              ],
+              "sus": [],
+              "q_bound_cap": 0,
+              "q_linear_cap": 0,
+              "beta_ub": null,
+              "beta_lb": null,
+              "q_0_ub": null,
+              "q_0_lb": null,
+              "beta": null,
+              "q_p0": null
+            }
+          ],
+          "active_reserve": [
+            {
+              "n_p": 0,
+              "uid": "azr_00",
+              "c_rgu": 1.0,
+              "c_rgd": 1.0,
+              "c_scr": 1.0,
+              "c_nsc": 1.0,
+              "c_rru": 1.0,
+              "c_rrd": 1.0,
+              "sigma_rgu": 1.0,
+              "sigma_rgd": 1.0,
+              "sigma_scr": 1.0,
+              "sigma_nsc": 1.0,
+              "p_rru_min": [
+                0.0,
+                0.0
+              ],
+              "p_rrd_min": [
+                0.0,
+                0.0
+              ]
+            }
+          ],
+          "reactive_reserve": [
+            {
+              "n_q": 0,
+              "uid": "rzr_00",
+              "c_qru": 1.0,
+              "c_qrd": 1.0,
+              "q_qru_min": [
+                0.0,
+                0.0
+              ],
+              "q_qrd_min": [
+                0.0,
+                0.0
+              ]
+            }
+          ],
+          "active_reserve_set_pr": [
+            {
+              "i": 1,
+              "n_p": 0,
+              "uid": "sd_00",
+              "j_dev": 0,
+              "j_sdd": 0
+            }
+          ],
+          "active_reserve_set_cs": [
+            {
+              "i": 2,
+              "n_p": 0,
+              "uid": "sd_01",
+              "j_dev": 0,
+              "j_sdd": 1
+            }
+          ],
+          "reactive_reserve_set_pr": [
+            {
+              "i": 1,
+              "n_q": 0,
+              "uid": "sd_00",
+              "j_dev": 0,
+              "j_sdd": 0
+            }
+          ],
+          "reactive_reserve_set_cs": [
+            {
+              "i": 2,
+              "n_q": 0,
+              "uid": "sd_01",
+              "j_dev": 0,
+              "j_sdd": 1
+            }
+          ]
+        },
+        "lengths": {
+          "l_j_xf": 1,
+          "l_j_ln": 2,
+          "l_j_ac": 3,
+          "l_j_dc": 1,
+          "l_j_br": 4,
+          "l_j_cs": 1,
+          "l_j_pr": 1,
+          "l_j_cspr": 2,
+          "l_j_sh": 1,
+          "i": 2,
+          "l_t": 2,
+          "l_n_p": 1,
+          "l_n_q": 1,
+          "k": 3
+        },
+        "energy_windows": {
+          "w_en_max_pr": [
+            {
+              "w_en_max_pr_ind": 0,
+              "uid": "sd_00",
+              "a_en_max_start": 0.0,
+              "a_en_max_end": 2.0,
+              "e_max": 9.0
+            }
+          ],
+          "w_en_max_cs": [],
+          "w_en_min_pr": [
+            {
+              "w_en_min_pr_ind": 0,
+              "uid": "sd_00",
+              "a_en_min_start": 0.0,
+              "a_en_min_end": 2.0,
+              "e_min": 1.0
+            }
+          ],
+          "w_en_min_cs": [],
+          "t_w_en_max_pr": [
+            {
+              "w_en_max_pr_ind": 0,
+              "uid": "sd_00",
+              "t": 0,
+              "dt": 1.0
+            },
+            {
+              "w_en_max_pr_ind": 0,
+              "uid": "sd_00",
+              "t": 1,
+              "dt": 1.0
+            }
+          ],
+          "t_w_en_max_cs": [],
+          "t_w_en_min_pr": [
+            {
+              "w_en_min_pr_ind": 0,
+              "uid": "sd_00",
+              "t": 0,
+              "dt": 1.0
+            },
+            {
+              "w_en_min_pr_ind": 0,
+              "uid": "sd_00",
+              "t": 1,
+              "dt": 1.0
+            }
+          ],
+          "t_w_en_min_cs": []
+        },
+        "price_blocks": {
+          "producer": [
+            {
+              "flat_k": 0,
+              "uid": "sd_00",
+              "t": 0,
+              "m": 0,
+              "c_en": 10.0,
+              "p_max": 5.0
+            },
+            {
+              "flat_k": 1,
+              "uid": "sd_00",
+              "t": 1,
+              "m": 0,
+              "c_en": 11.0,
+              "p_max": 6.0
+            }
+          ],
+          "consumer": [
+            {
+              "flat_k": 0,
+              "uid": "sd_01",
+              "t": 0,
+              "m": 0,
+              "c_en": 20.0,
+              "p_max": 5.0
+            },
+            {
+              "flat_k": 1,
+              "uid": "sd_01",
+              "t": 1,
+              "m": 0,
+              "c_en": 21.0,
+              "p_max": 6.0
+            }
+          ]
+        },
+        "ac_contingency_survivors": {
+          "ln": [
+            [
+              {
+                "ctg": 0,
+                "j_ln": 1,
+                "uid": "acl_01",
+                "to_bus": 2,
+                "fr_bus": 1,
+                "b_sr": -1.0,
+                "s_max_ctg": 8.0
+              }
+            ],
+            [
+              {
+                "ctg": 1,
+                "j_ln": 0,
+                "uid": "acl_00",
+                "to_bus": 2,
+                "fr_bus": 1,
+                "b_sr": -0.5,
+                "s_max_ctg": 7.0
+              },
+              {
+                "ctg": 1,
+                "j_ln": 1,
+                "uid": "acl_01",
+                "to_bus": 2,
+                "fr_bus": 1,
+                "b_sr": -1.0,
+                "s_max_ctg": 8.0
+              }
+            ],
+            [
+              {
+                "ctg": 2,
+                "j_ln": 1,
+                "uid": "acl_01",
+                "to_bus": 2,
+                "fr_bus": 1,
+                "b_sr": -1.0,
+                "s_max_ctg": 8.0
+              }
+            ]
+          ],
+          "xf": [
+            [
+              {
+                "ctg": 0,
+                "j_xf": 0,
+                "uid": "xf_00",
+                "to_bus": 2,
+                "fr_bus": 1,
+                "b_sr": -0.25,
+                "s_max_ctg": 6.0
+              }
+            ],
+            [
+              {
+                "ctg": 1,
+                "j_xf": 0,
+                "uid": "xf_00",
+                "to_bus": 2,
+                "fr_bus": 1,
+                "b_sr": -0.25,
+                "s_max_ctg": 6.0
+              }
+            ],
+            []
+          ]
+        },
+        "dc_contingency_flows": [
+          {
+            "flat_jtk_dc": 0,
+            "ctg": 0,
+            "j_dc": 0,
+            "to_bus": 2,
+            "fr_bus": 1,
+            "t": 0,
+            "dt": 1.0
+          },
+          {
+            "flat_jtk_dc": 1,
+            "ctg": 0,
+            "j_dc": 0,
+            "to_bus": 2,
+            "fr_bus": 1,
+            "t": 1,
+            "dt": 1.0
+          },
+          {
+            "flat_jtk_dc": 2,
+            "ctg": 2,
+            "j_dc": 0,
+            "to_bus": 2,
+            "fr_bus": 1,
+            "t": 0,
+            "dt": 1.0
+          },
+          {
+            "flat_jtk_dc": 3,
+            "ctg": 2,
+            "j_dc": 0,
+            "to_bus": 2,
+            "fr_bus": 1,
+            "t": 1,
+            "dt": 1.0
+          }
+        ],
+        "violation_cost": {
+          "p_bus": 1.0,
+          "q_bus": 1.0,
+          "s": 1.0,
+          "e": 1.0
+        },
+        "device_class_layout": {
+          "kind": "contiguous",
+          "producers_first": true
+        },
+        "dt": [
+          1.0,
+          1.0
+        ]
+      }
+    }
+  }
+}

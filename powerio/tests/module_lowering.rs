@@ -87,6 +87,46 @@ fn repeated_lowering_records_every_pass() {
     );
 }
 
+/// Hostile element names reach the history notes normalized: a bus id with
+/// a NUL byte and a switch name past the identifier bound still lower to Ok
+/// with every recorded note nonempty, NUL free, and within the bound.
+#[test]
+fn hostile_element_names_normalize_into_the_history_notes() {
+    let module = parse_mc_module(TWO_WINDING_DSS).sever_source();
+    let mut raw: serde_json::Value = serde_json::from_str(&write_module(&module).unwrap()).unwrap();
+    let network = &mut raw["value"]["data"];
+    // A NUL bearing name and an overlong name on elements the lowering
+    // names in its notes.
+    let hostile = format!(
+        "t\u{0}evil{}",
+        "x".repeat(powerio_core::limits::MAX_IDENTIFIER_BYTES + 40)
+    );
+    network["transformers"][0]["name"] = serde_json::json!(hostile);
+    let module = read_module(&raw.to_string()).unwrap();
+    let lowered =
+        lower_module_to_balanced(module, MulticonductorToBalancedOptions::default()).unwrap();
+    let entry = lowered
+        .history()
+        .iter()
+        .find(|entry| entry.name() == "lower_multiconductor_to_balanced")
+        .expect("the pass records its history entry");
+    let mut saw_replacement = false;
+    let mut saw_truncation = false;
+    for note in entry.assumptions().iter().chain(entry.losses()) {
+        assert!(!note.is_empty());
+        assert!(!note.contains('\0'), "NUL survived: {note:?}");
+        assert!(
+            note.len() <= powerio_core::limits::MAX_IDENTIFIER_BYTES,
+            "overlong note: {} bytes",
+            note.len()
+        );
+        saw_replacement |= note.contains('\u{fffd}');
+        saw_truncation |= note.contains("[truncated]");
+    }
+    assert!(saw_replacement, "no note carried the normalized NUL name");
+    assert!(saw_truncation, "no note carried the truncated long name");
+}
+
 /// The two windings state different power ratings; the low winding %R is
 /// converted onto the high winding base before the sum, and the conversion
 /// is recorded as an assumption.

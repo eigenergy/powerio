@@ -306,6 +306,96 @@ fn the_scuc_pair_round_trips_from_the_goc3_fixture() {
     );
 }
 
+fn goc3_instance() -> powerio_prob::AcScucInstance {
+    let path = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../powerio-prob/tests/data/goc3_small.json"
+    );
+    let text = std::fs::read_to_string(path).unwrap();
+    powerio_prob::parse_goc3_instance(&text, "goc3_small.json")
+        .unwrap()
+        .0
+}
+
+fn full_scuc_outputs(
+    periods: usize,
+) -> (
+    powerio_prob::ScucNetworkOutputs,
+    powerio_prob::ScucDeviceOutputs,
+) {
+    let series = |seed: f64| vec![vec![seed, seed + 0.5]; periods];
+    let mut network_outputs = ScucNetworkOutputs::default();
+    network_outputs.bus_vm = series(1.0);
+    network_outputs.bus_va = series(2.0);
+    network_outputs.shunt_step = series(3.0);
+    network_outputs.ac_line_on_status = series(4.0);
+    network_outputs.transformer_tm = series(5.0);
+    network_outputs.transformer_ta = series(6.0);
+    network_outputs.transformer_on_status = series(7.0);
+    network_outputs.dc_line_pdc_fr = series(8.0);
+    network_outputs.dc_line_qdc_fr = series(9.0);
+    network_outputs.dc_line_qdc_to = series(10.0);
+    let mut device_outputs = ScucDeviceOutputs::default();
+    device_outputs.on_status = series(11.0);
+    device_outputs.p_on = series(12.0);
+    device_outputs.q = series(13.0);
+    device_outputs.p_reg_res_up = series(14.0);
+    device_outputs.p_reg_res_down = series(15.0);
+    device_outputs.p_syn_res = series(16.0);
+    device_outputs.p_nsyn_res = series(17.0);
+    device_outputs.p_ramp_res_up_online = series(18.0);
+    device_outputs.p_ramp_res_down_online = series(19.0);
+    device_outputs.q_res_up = series(20.0);
+    device_outputs.q_res_down = series(21.0);
+    (network_outputs, device_outputs)
+}
+
+/// Every output series the runtime structs define survives the round trip,
+/// field by field, and the wire spells exactly the series vocabulary the
+/// defining crate exports.
+#[test]
+fn every_scuc_output_series_round_trips_under_its_exported_name() {
+    let instance = goc3_instance();
+    let periods = instance.inputs().dt.len();
+    let (network_outputs, device_outputs) = full_scuc_outputs(periods);
+    let solution = AcScucSolution::new(
+        Arc::new(instance),
+        Termination::Converged,
+        network_outputs.clone(),
+        device_outputs.clone(),
+        Some(4.25e3),
+    )
+    .unwrap();
+    let text = write_module(&PioModule::new(PioValue::AcScucSolution(solution))).unwrap();
+
+    let raw: serde_json::Value = serde_json::from_str(&text).unwrap();
+    let wire_network: Vec<&str> = raw["value"]["data"]["network_outputs"]
+        .as_object()
+        .unwrap()
+        .keys()
+        .map(String::as_str)
+        .collect();
+    let mut expected: Vec<&str> = powerio_prob::SCUC_NETWORK_OUTPUT_SERIES.to_vec();
+    expected.sort_unstable();
+    assert_eq!(wire_network, expected);
+    let wire_devices: Vec<&str> = raw["value"]["data"]["device_outputs"]
+        .as_object()
+        .unwrap()
+        .keys()
+        .map(String::as_str)
+        .collect();
+    let mut expected: Vec<&str> = powerio_prob::SCUC_DEVICE_OUTPUT_SERIES.to_vec();
+    expected.sort_unstable();
+    assert_eq!(wire_devices, expected);
+
+    let back = read_module(&text).unwrap();
+    let PioValue::AcScucSolution(solution) = back.value() else {
+        panic!("wrong kind");
+    };
+    assert_eq!(*solution.network_outputs(), network_outputs);
+    assert_eq!(*solution.device_outputs(), device_outputs);
+}
+
 /// Every kind string is stable and every fixture on disk rereads. The
 /// fixtures are written by the ignored generator below; regenerating them is
 /// a deliberate decision.
@@ -336,6 +426,8 @@ fn committed_calculation_fixtures_reread() {
             "ac_opf_solution",
             "ac_pf_instance",
             "ac_pf_solution",
+            "ac_scuc_instance",
+            "ac_scuc_solution",
             "dc_opf_instance",
             "dc_opf_solution",
             "dc_pf_instance",
@@ -387,6 +479,23 @@ fn generate_calculation_fixtures() {
             AcOpfInstance::from_network(net.clone())
                 .unwrap()
                 .with_objective(objective.clone()),
+        ),
+    );
+    let scuc = goc3_instance();
+    let scuc_periods = scuc.inputs().dt.len();
+    write("ac-scuc-instance", PioValue::AcScucInstance(scuc.clone()));
+    let (scuc_network_outputs, scuc_device_outputs) = full_scuc_outputs(scuc_periods);
+    write(
+        "ac-scuc-solution",
+        PioValue::AcScucSolution(
+            AcScucSolution::new(
+                Arc::new(scuc),
+                Termination::Converged,
+                scuc_network_outputs,
+                scuc_device_outputs,
+                Some(4.25e3),
+            )
+            .unwrap(),
         ),
     );
     write(
