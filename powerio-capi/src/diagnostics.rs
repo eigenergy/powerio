@@ -142,6 +142,10 @@ mod workspace {
                 "powerio (stored document)",
                 powerio::package::diagnostics::registry(),
             ),
+            (
+                "powerio (gridfm reader)",
+                powerio::gridfm::codes::ALL.to_vec(),
+            ),
             ("powerio-dist", powerio_dist::diagnostics::registry()),
             ("powerio-matrix", powerio_matrix::diagnostics::registry()),
             ("powerio-prob", powerio_prob::diagnostics::registry()),
