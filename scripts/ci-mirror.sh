@@ -101,6 +101,11 @@ if [ -n "$(git status --porcelain -- docs/schema)" ]; then
   exit 1
 fi
 
+# The same job checks the committed BMOPF example documents against the
+# writer; the examples embed the powerio version, so a version bump
+# regenerates them.
+run cargo run -q -p powerio-dist --example regen_bmopf_examples -- --check
+
 # crates.yml packages every publishable crate and audits each archive for the
 # license files a published crate must carry. The verify builds compile the freshly packaged siblings from cargo's overlay
 # registry, whose unpacks carry fixed tarball timestamps: a stale unpack or a
@@ -129,5 +134,22 @@ if command -v mdbook >/dev/null 2>&1; then
 else
   echo "=== skipped: mdbook not installed (cargo install mdbook) ==="
 fi
+
+# python.yml's quality and test lanes: ruff and mypy over the wrapper,
+# stubtest comparing the public stubs against the built extension, and the
+# suite itself. One throwaway venv, the same wheel a user builds. stubtest
+# runs from an empty directory so mypy sees the package once.
+PYVENV=target/ci-mirror-py
+run python3 -m venv "$PYVENV"
+run "$PYVENV/bin/pip" -q install '.[mcp]' ruff mypy pytest
+run "$PYVENV/bin/ruff" check --no-fix .
+run "$PYVENV/bin/python" -m mypy python/powerio
+STUBDIR=$(mktemp -d)
+echo "=== stubtest ==="
+(cd "$STUBDIR" && exec "$OLDPWD/$PYVENV/bin/python" -m mypy.stubtest powerio \
+    --mypy-config-file "$OLDPWD/mypy.ini" \
+    --ignore-missing-stub \
+    --allowlist "$OLDPWD/python/stubtest_allowlist.txt")
+run "$PYVENV/bin/python" -m pytest python/tests -q
 
 echo "=== all green ==="
