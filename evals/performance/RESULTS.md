@@ -15,7 +15,7 @@ The top level questions are:
    PowerModels.jl, ExaPowerIO.jl, egret, and pandapower.
 
 Numbers below come from one local snapshot, release build. Tables report median
-wall time +/- sample standard deviation; the JSON under `evals/validation/results/`
+wall time +/- sample standard deviation; the JSON under `evals/performance/results/`
 also records sample counts. Criterion backed rows use Criterion's median and
 standard deviation estimates. Re-run the scripts below before using the numbers
 in a paper, release note, or package page.

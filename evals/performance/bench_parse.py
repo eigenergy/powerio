@@ -43,7 +43,7 @@ logging.getLogger("pandapower").setLevel(logging.ERROR)
 FROM_MPC_MAX_BUSES = 25_000
 
 DEFAULT_CASES = [
-    Path(__file__).resolve().parent.parent / "tests" / "data" / "case2869pegase.m"
+    Path(__file__).resolve().parent.parent.parent / "tests" / "data" / "case2869pegase.m"
 ]
 
 
