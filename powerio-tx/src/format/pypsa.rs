@@ -1143,7 +1143,56 @@ pub struct PypsaCsvSequence {
     /// False when every varying column is solved electrical state, so the
     /// sequence is one fixed network under changing state.
     pub inputs_vary: bool,
+    /// Whether any recognized series column varied at all. A declared
+    /// snapshot axis with no series siblings preserves the axis as networks
+    /// sharing every table; it is not an operating point series.
+    pub has_varying_columns: bool,
     pub diagnostics: Vec<crate::diagnostics::Diagnostic>,
+}
+
+/// The declared snapshot axis of a PyPSA CSV folder, probed from entry names
+/// and `snapshots.csv` alone: a recognized series sibling or more than one
+/// declared snapshot selects the sequence reader, and one snapshot with no
+/// series is the scalar profile.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PypsaAxis {
+    SingleSnapshot,
+    Series,
+}
+
+/// Probe the folder's declared snapshot axis without reading the component
+/// tables.
+///
+/// # Errors
+/// The folder listing or `snapshots.csv` could not be acquired or decoded.
+pub fn pypsa_axis(source: &powerio_core::Source) -> Result<PypsaAxis> {
+    let entries = source
+        .entry_names()
+        .map_err(|error| acquisition_error(&error))?;
+    for entry in &entries {
+        let name = entry.as_str();
+        if name.contains('/') {
+            continue;
+        }
+        let Some(stem) = name.strip_suffix(".csv") else {
+            continue;
+        };
+        let Some((component, attribute)) = stem.split_once('-') else {
+            continue;
+        };
+        if series_field(component, attribute).is_some() {
+            return Ok(PypsaAxis::Series);
+        }
+    }
+    let folder = PypsaFolder { source, entries };
+    let Some(snapshot_table) = folder.optional("snapshots.csv")? else {
+        return Ok(PypsaAxis::SingleSnapshot);
+    };
+    if snapshot_table.rows.len() > 1 {
+        Ok(PypsaAxis::Series)
+    } else {
+        Ok(PypsaAxis::SingleSnapshot)
+    }
 }
 
 /// The snapshot-local series files the sequence reader interprets: input
@@ -1387,9 +1436,11 @@ pub fn parse_pypsa_csv_time_series(source: &powerio_core::Source) -> Result<Pyps
     let series =
         powerio_core::TimeSeries::new(time_points, networks).map_err(|e| bad(e.to_string()))?;
     let inputs_vary = columns.iter().any(|column| column.input);
+    let has_varying_columns = !columns.is_empty();
     Ok(PypsaCsvSequence {
         series,
         inputs_vary,
+        has_varying_columns,
         diagnostics: warnings.into_records(),
     })
 }

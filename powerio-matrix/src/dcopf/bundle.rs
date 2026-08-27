@@ -3,12 +3,11 @@ use std::path::{Path, PathBuf};
 use powerio_tx::{GenCostPolicyReport, MissingGenCostPolicy};
 
 use crate::Result;
-use powerio_matrix::SparseMatrix;
+use crate::SparseMatrix;
 use serde::Serialize;
 
-use crate::prep::{DcOpfPreparation, Units};
-
-use super::build_dc_opf_matrices;
+use super::prep::{DcOpfPreparation, Units};
+use super::{DcOpfAssemblyOptions, matrices_from_preparation};
 
 const DCOPF_SCHEMA: &str = "powerio.dcopf";
 
@@ -31,6 +30,8 @@ impl Default for DcOpfBundleMetadata {
 /// Options that affect bundle output without changing the instance.
 #[derive(Debug, Clone, Default)]
 pub struct DcOpfBundleOptions {
+    /// The assembly choices behind the written arrays.
+    pub assembly: DcOpfAssemblyOptions,
     pub metadata: DcOpfBundleMetadata,
 }
 
@@ -121,17 +122,35 @@ struct OperatorMeta {
     units: &'static str,
 }
 
-/// Write matrix projections for an assembled DC OPF instance.
+/// Write matrix projections for a DC OPF instance.
 ///
-/// The writer reads all costs, bounds, mappings, units, and conventions from
-/// `instance`. It does not retain or read a source network.
-#[allow(clippy::too_many_lines)]
+/// The writer derives every cost, bound, mapping, and array privately from
+/// the instance's typed network under `options.assembly`, then writes the
+/// bundle directory.
+///
+/// # Errors
+/// A network the selected approximation cannot assemble, or a filesystem
+/// refusal from the no-clobber output rules.
 pub fn write_dcopf_bundle(
+    instance: &powerio_prob::DcOpfInstance,
+    out_dir: impl AsRef<Path>,
+    options: &DcOpfBundleOptions,
+) -> Result<DcOpfOutputs> {
+    write_prepared(
+        &super::prepare(instance, options.assembly)?,
+        out_dir,
+        options,
+    )
+}
+
+/// The writer body over the private preparation arrays.
+#[allow(clippy::too_many_lines)]
+fn write_prepared(
     instance: &DcOpfPreparation,
     out_dir: impl AsRef<Path>,
     options: &DcOpfBundleOptions,
 ) -> Result<DcOpfOutputs> {
-    let matrices = build_dc_opf_matrices(instance);
+    let matrices = matrices_from_preparation(instance);
     let nodal = instance.nodal_generator_data();
     let fixed_withdrawal = instance.fixed_nodal_withdrawal();
     let flow_offset = instance.branch_flow_offset();
@@ -139,10 +158,9 @@ pub fn write_dcopf_bundle(
     // output path. `sanitize_stem` reduces it to one safe component and
     // disambiguates names that would otherwise sanitize alike, so a batch
     // export cannot be steered into overwriting an earlier bundle.
-    let bundle_root = out_dir.as_ref().join(format!(
-        "{}_dcopf",
-        powerio_matrix::sanitize_stem(&instance.name)
-    ));
+    let bundle_root = out_dir
+        .as_ref()
+        .join(format!("{}_dcopf", crate::sanitize_stem(&instance.name)));
 
     let mut inventory: Vec<(&'static str, Vec<u8>)> = Vec::new();
     put_mat(&mut inventory, "A.mtx", &matrices.incidence)?;
@@ -250,7 +268,7 @@ pub fn write_dcopf_bundle(
         powerio_version: powerio_tx::VERSION,
     };
     let json = serde_json::to_string_pretty(&meta)
-        .map_err(|error| powerio_matrix::Error::Mtx(error.to_string()))?;
+        .map_err(|error| crate::Error::Mtx(error.to_string()))?;
     inventory.push(("dcopf_meta.json", json.into_bytes()));
 
     // The complete bundle commits at once through the no-replace destination:
@@ -264,10 +282,10 @@ pub fn write_dcopf_bundle(
             ))
         })
         .collect::<std::result::Result<Vec<_>, powerio_core::Error>>()
-        .map_err(powerio_matrix::Error::from)?;
+        .map_err(crate::Error::from)?;
     let committed = powerio_core::Destination::path(&bundle_root)
         .__commit_artifacts(true, artifacts, Vec::new())
-        .map_err(powerio_matrix::Error::from)?;
+        .map_err(crate::Error::from)?;
     let powerio_core::WrittenOutput::Path { root, artifacts } = committed.into_output() else {
         unreachable!("a path destination returns a path output")
     };
@@ -542,7 +560,7 @@ fn put_mat(
     name: &'static str,
     matrix: &SparseMatrix,
 ) -> Result<()> {
-    inventory.push((name, powerio_matrix::io::mtx_bytes(matrix)?));
+    inventory.push((name, crate::io::mtx_bytes(matrix)?));
     Ok(())
 }
 
@@ -551,6 +569,6 @@ fn put_vec(
     name: &'static str,
     values: &[f64],
 ) -> Result<()> {
-    inventory.push((name, powerio_matrix::io::vector_mtx_bytes(values)?));
+    inventory.push((name, crate::io::vector_mtx_bytes(values)?));
     Ok(())
 }
