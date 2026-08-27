@@ -97,17 +97,12 @@ header = """
  *   are owned by the library; free them with pio_string_free. Handles from
  *   pio_parse_file / pio_parse_str / pio_parse_bytes / pio_read_dir /
  *   pio_normalize are freed
- *   with pio_network_free. Package handles use pio_package_free, distribution
- *   handles use pio_dist_network_free, and SCOPF handles use
- *   pio_scopf_instance_free. Arrow buffers are freed through their own release
- *   callbacks.
- * - A handle is immutable after construction unless a function takes it
- *   non-const: concurrent reads from any number of threads are safe; a
- *   non-const entry point, and the free functions, need exclusive access, and
- *   free exactly once. Two entry points take a handle non-const:
- *   pio_package_validate rewrites its diagnostics and validation summary, and
- *   pio_package_set_operating_points replaces its operating points and then
- *   revalidates.
+ *   with pio_network_free. Distribution handles use pio_dist_network_free,
+ *   and module, error, and DC data handles use their pio_*_release entry
+ *   points. Arrow buffers are freed through their own release callbacks.
+ * - A handle is immutable after construction: concurrent reads from any
+ *   number of threads are safe; the free and release functions need
+ *   exclusive access, and free exactly once.
  * - Every entry point catches Rust panics at the boundary and returns the
  *   documented failure value (NULL, 0, -1, 0.0) rather than unwinding across
  *   the ABI (requires the default panic = "unwind"; a panic = "abort" build
@@ -137,15 +132,9 @@ header = """
  * points (guarded by PIO_DIST): multiconductor distribution cases (OpenDSS,
  * PMD ENGINEERING JSON, BMOPF JSON) behind their own PioDistNetwork handle,
  * freed with pio_dist_network_free, string outputs freed with pio_string_free,
- * `--features pkg` for the pio_package_* entry points (guarded by
- * PIO_PKG): `.pio.json` compiler packages behind their own PioPackage handle,
- * freed with pio_package_free, and `--features prob` for the pio_scopf_*
- * entry points (guarded by PIO_PROB), behind a PioScopfInstance handle freed
- * with pio_scopf_instance_free. Two entry points need a pair of features:
- * pio_dist_geo_extract and pio_dist_geo_apply take a distribution handle but
- * read the geo layer through the package crate, so they are built only when
- * dist and pkg are both on (both are on by default). Each symbol's own #if
- * states what it needs; a runtime loader probes pio_has_feature per name.
+ * and `--features prob` (guarded by PIO_PROB) for the problem data the
+ * module surface serves. Each symbol's own #if states what it needs; a
+ * runtime loader probes pio_has_feature per name.
  * The dist C signatures follow PIO_ABI_VERSION like every other symbol.
  * PIO_DIST_ABI_VERSION is frozen at 1 and carries no meaning: it existed to
  * absorb IEEE BMOPF schema drift, and a schema revision changes a reader, a
@@ -154,7 +143,7 @@ header = """
  * the foreign schema versions from pio_build_info instead; the JSON payloads
  * (bmopf-json, powerio-dist-json) also carry their own meta.version.
  * Probe optional features at runtime with
- * pio_has_feature("arrow"|"matrix"|"gridfm"|"dist"|"pkg"|"prob").
+ * pio_has_feature("arrow"|"matrix"|"gridfm"|"dist"|"prob").
  *
  * Checked in and generated; regenerate from the Rust source with
  *   cbindgen --config cbindgen.toml --crate powerio-capi --output include/powerio.h
@@ -182,9 +171,6 @@ typedef struct PioDcData PioDcData;
 #if defined(PIO_DIST)
 typedef struct PioDistNetwork PioDistNetwork;
 #endif
-#if defined(PIO_PROB)
-typedef struct PioScopfInstance PioScopfInstance;
-#endif
 #if defined(PIO_ARROW)
 struct ArrowArray;
 struct ArrowSchema;
@@ -192,21 +178,20 @@ struct ArrowSchema;
 
 [export]
 prefix = ""
-include = ["PioNetwork", "PioDistNetwork", "PioPackage", "PioScopfInstance", "PioError", "PioModuleHandle", "PioDcData"]
+include = ["PioNetwork", "PioDistNetwork", "PioError", "PioModuleHandle", "PioDcData"]
 
 [export.rename]
 "FFI_ArrowArray" = "struct ArrowArray"
 "FFI_ArrowSchema" = "struct ArrowSchema"
 
 # Gate the optional features behind #ifdef (PIO_ARROW for `arrow`, PIO_DIST
-# for `dist`, PIO_GRIDFM for `gridfm`, PIO_PKG for `pkg`, PIO_PROB for `prob`): cbindgen emits the
+# for `dist`, PIO_GRIDFM for `gridfm`, PIO_PROB for `prob`): cbindgen emits the
 # cfg-gated symbols inside `#if defined(...)` even on a default (no-feature)
 # generation, so the checked-in header always carries every block.
 [defines]
 "feature = arrow" = "PIO_ARROW"
 "feature = dist" = "PIO_DIST"
 "feature = gridfm" = "PIO_GRIDFM"
-"feature = pkg" = "PIO_PKG"
 "feature = prob" = "PIO_PROB"
 
 [parse]

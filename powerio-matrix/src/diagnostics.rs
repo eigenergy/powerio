@@ -5,12 +5,6 @@
 //! side of the workspace registry. A hub failure that arrives through
 //! [`crate::Error::Core`] keeps the hub's own code.
 
-// The collector is crate-private implementation support, not API: each
-// emitting crate carries its own copy (src/collect.rs) and never exports it.
-// Only the gridfm feature emits through it in this crate.
-#[cfg_attr(not(feature = "gridfm"), allow(unused_imports))]
-pub(crate) use crate::collect::Diagnostics;
-
 pub use powerio_core::{
     Diagnostic, DiagnosticInfo, DiagnosticSeverity, check_registry, render_diagnostic,
     render_diagnostics,
@@ -51,22 +45,6 @@ pub mod codes {
         EMIT_PARQUET_FAILED = "EMIT.PARQUET.FAILED", Error,
             "a gridfm Parquet write failed", category = Output;
 
-        // READ.GRIDFM: the dataset reader's fidelity notes. The scope lives
-        // here rather than in the package crate, which only forwarded them.
-        READ_GRIDFM_FIELD_DROPPED = "READ.GRIDFM.FIELD_DROPPED", Warning,
-            "a field the gridfm schema does not carry is absent from the network";
-        READ_GRIDFM_VALUE_DEFAULTED = "READ.GRIDFM.VALUE_DEFAULTED", Warning,
-            "a manifest value the reader needs was absent and was defaulted";
-        READ_GRIDFM_VALUE_INFERRED = "READ.GRIDFM.VALUE_INFERRED", Warning,
-            "an identity the gridfm schema does not store was synthesized";
-        READ_GRIDFM_VALUE_COLLAPSED = "READ.GRIDFM.VALUE_COLLAPSED", Warning,
-            "nodal totals were folded into synthetic per bus elements";
-        READ_GRIDFM_ELEMENT_RELABELED = "READ.GRIDFM.ELEMENT_RELABELED", Warning,
-            "a unity ratio transformer is indistinguishable from a line and reads as one";
-        /// Retired in 0.9.0: every gridfm read finding now carries its own
-        /// code, so the package no longer wraps them under one catch-all.
-        READ_GRIDFM_FIDELITY_WARNING = "READ.GRIDFM.FIDELITY_WARNING", Warning,
-            "a gridfm read finding with no identity of its own", retired = "0.9.0";
     }
 }
 

@@ -18,7 +18,7 @@ int main(int argc, char **argv) {
     CHECK(pio_abi_version() == PIO_ABI_VERSION, "core ABI mismatch");
     CHECK(pio_dist_abi_version() == PIO_DIST_ABI_VERSION, "distribution ABI mismatch");
 
-    const char *features[] = {"arrow", "matrix", "gridfm", "dist", "pkg", "prob"};
+    const char *features[] = {"arrow", "matrix", "gridfm", "dist", "prob"};
     for (size_t i = 0; i < sizeof features / sizeof features[0]; i++) {
         CHECK(pio_has_feature(features[i]) == 1, "required release feature missing");
     }
@@ -47,8 +47,6 @@ int main(int argc, char **argv) {
     char *dist = pio_dist_capabilities_json();
     CHECK(dist != NULL, "distribution capability report missing");
     pio_string_free(dist);
-    pio_package_free(NULL);
-    pio_scopf_instance_free(NULL);
 
     printf("powerio %s; ABI %u; distribution ABI %u; release features OK\n",
            pio_version(), pio_abi_version(), pio_dist_abi_version());

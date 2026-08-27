@@ -92,7 +92,7 @@ During development, test the Julia binding against the local C ABI instead of
 a release artifact:
 
 ```sh
-cargo build -p powerio-capi --release --features arrow,matrix,gridfm,dist,pkg,prob
+cargo build -p powerio-capi --release --features arrow,matrix,gridfm,dist,prob
 POWERIO_CAPI=$PWD/target/release/libpowerio_capi.dylib \
   julia --project=../PowerIO.jl -e 'using Pkg; Pkg.test()'
 ```

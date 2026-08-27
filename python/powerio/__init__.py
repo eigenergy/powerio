@@ -2,19 +2,17 @@
 
 Readers produce a format neutral network model. Writers return retained source
 bytes where supported or report fields that a target format cannot represent.
-Packages, sparse matrices, graphs, and problem instances use the same parsed
+Stored modules, sparse matrices, graphs, and problem instances use the same parsed
 data::
 
     import powerio as pio
 
-    net = pio.parse_file("case9.m")          # format inferred from the extension
+    net = pio.parse("case9.m", value_type=pio.BalancedNetwork)
     print(net.n_buses, net.base_mva)         # 9 100.0
     text = net.to_matpower()                 # byte-exact MATPOWER echo
     raw, warnings = pio.convert_file("case9.m", "psse")
     pp_json, warnings = pio.convert_file("case9.m", "pandapower-json")
     pypsa_out = net.write_pypsa_csv_folder("case9-pypsa")
-    pkg = pio.Package.from_file("goc3_case.json", from_="goc3-json")
-    points = pkg.operating_points()
 
     B = net.bprime()                         # scipy.sparse, MATPOWER Bp
     Y = net.ybus()                           # complex csr, G + jB
@@ -23,9 +21,8 @@ data::
 PyPSA CSV folders carry static network topology. NetCDF and HDF5 time series
 are tracked in https://github.com/eigenergy/powerio/issues/107.
 
-GO Challenge 3 JSON is read as a static balanced network using the first
-interval. When it is parsed as a ``.pio.json`` package, the full source time
-series is exposed as replayable operating points.
+A source that defines a calculation parses to that calculation's typed
+value: :func:`parse` returns a :class:`StoredModule` whose kind names it.
 
 ``import powerio`` and the base parse, write, and conversion paths require no
 third party Python package. Matrix methods require SciPy and NumPy. Graph
@@ -46,15 +43,9 @@ from ._powerio import PowerIODataError, PowerIOError, PowerIOParseError, __versi
 __all__ = [
     "BalancedNetwork",
     "Conversion",
-    "DenseBranch",
-    "DenseDemand",
-    "DenseGen",
-    "DenseNetwork",
-    "DenseShunt",
     "DisplayData",
     "GridfmRead",
     "Incidence",
-    "Package",
     "PowerIODataError",
     "PowerIOError",
     "PowerIOParseError",
@@ -68,17 +59,12 @@ __all__ = [
     "dist",
     "from_json",
     "from_ppc",
-    "parse_bytes",
+    "parse",
     "parse_display_bytes",
     "parse_display_file",
-    "parse_file",
     "parse_geo",
-    "parse_scopf",
-    "parse_str",
     "read_gridfm",
     "read_gridfm_scenarios",
-    "read_pypsa_csv_folder",
-    "to_dense",
     "to_format",
     "to_json",
     "to_matpower",
@@ -123,7 +109,9 @@ Incidence.__doc__ = """Output of :meth:`BalancedNetwork.incidence`.
 
 Shapes, with ``n`` buses and ``m`` in-service branches:
 - ``A``: signed incidence csr_matrix, ``(n, m)``.
-- ``b``: branch susceptances, ``(m,)``; ``b[k]`` is column ``k``.
+- ``b``: positive Laplacian edge weights, ``(m,)``; ``b[k]`` is column ``k``.
+  These are the factor weights a sparse solver uses; PowerModels sign
+  susceptances live on :meth:`BalancedNetwork.dc_data`.
 - ``p_shift``: phase-shift injection, ``(n,)`` (all zero unless
   ``convention="matpower"``).
 - ``branch_of_col``: column→branch index map, ``(m,)``; ``branch_of_col[k]``
@@ -135,40 +123,6 @@ YbusParts.__doc__ = (
     "Output of :meth:`BalancedNetwork.ybus_parts`: ``g`` = Re(Y_bus), ``b`` = Im(Y_bus), "
     "each a real csr_matrix. ``BalancedNetwork.ybus()`` returns ``g + 1j*b``."
 )
-
-DenseBranch = namedtuple(
-    "DenseBranch", ["from_id", "to_id", "r", "x", "b", "tap", "shift", "in_service"]
-)
-DenseBranch.__doc__ = """Branch arrays in source order."""
-
-DenseGen = namedtuple("DenseGen", ["bus", "pg", "pmax", "pmin", "in_service"])
-DenseGen.__doc__ = """Generator arrays in source order."""
-
-DenseDemand = namedtuple("DenseDemand", ["pd", "qd"])
-DenseDemand.__doc__ = """Nodal active and reactive demand arrays in bus order."""
-
-DenseShunt = namedtuple("DenseShunt", ["gs", "bs"])
-DenseShunt.__doc__ = """Nodal shunt conductance and susceptance arrays in bus order."""
-
-DenseNetwork = namedtuple(
-    "DenseNetwork",
-    [
-        "n",
-        "m",
-        "ng",
-        "base_mva",
-        "bus_ids",
-        "branch",
-        "gen",
-        "demand",
-        "shunt",
-        "reference_bus",
-        "n_components",
-        "is_radial",
-    ],
-)
-DenseNetwork.__doc__ = """Copied dense NumPy table export of a parsed :class:`BalancedNetwork`."""
-
 
 def _require(module: str, extra: str):
     """Import ``module`` or raise a clear ImportError naming the extra to install."""
@@ -307,14 +261,6 @@ class BalancedNetwork:
         inner, report = self._inner.apply_geo_layer(text, name_hint)
         return BalancedNetwork(inner), report
 
-    def acopf_instance(self, units: Optional[str] = None) -> dict[str, Any]:
-        """The matrix free AC OPF problem instance as Python data.
-
-        Dense 0-based indices; ``units`` is ``"perunit"`` (default) or
-        ``"native"``.
-        """
-        return _json.loads(self._inner.acopf_json(units))
-
     def to_format(
         self,
         to: str,
@@ -362,59 +308,6 @@ class BalancedNetwork:
             missing_gen_cost=missing_gen_cost,
             default_gen_cost=default_gen_cost,
             gen_cost_csv=None if gen_cost_csv is None else str(gen_cost_csv),
-        )
-
-    def to_dense(self) -> DenseNetwork:
-        """Dense NumPy arrays for solver and adapter code.
-
-        This allocates new arrays, preserves bus and branch source order, and
-        sums loads and shunts per bus to match the Rust indexed analysis view.
-
-        That view is the star-lowered one, so a case with an in-service
-        3-winding transformer reports the star bus and its three branches here
-        even though :attr:`buses` and :attr:`branches` mirror the case file and
-        do not. ``reference_bus``, ``n_components`` and ``is_radial`` are
-        computed over the same lowered space, so all of them agree.
-        """
-        np = _require("numpy", "matrix")
-        lowered = self._inner.lowered()
-        buses = lowered.buses
-        branches = lowered.branches
-        generators = lowered.generators
-        bus_ids = np.asarray([b["id"] for b in buses], dtype=np.int64)
-        pd, qd, gs, bs = _bus_sums(np, buses, lowered.loads, lowered.shunts)
-
-        branch = DenseBranch(
-            from_id=np.asarray([br["from_id"] for br in branches], dtype=np.int64),
-            to_id=np.asarray([br["to_id"] for br in branches], dtype=np.int64),
-            r=np.asarray([br["r"] for br in branches], dtype=float),
-            x=np.asarray([br["x"] for br in branches], dtype=float),
-            b=np.asarray([br["b"] for br in branches], dtype=float),
-            tap=np.asarray([br["tap"] for br in branches], dtype=float),
-            shift=np.asarray([br["shift"] for br in branches], dtype=float),
-            in_service=np.asarray([br["in_service"] for br in branches], dtype=bool),
-        )
-        gen = DenseGen(
-            bus=np.asarray([g["bus"] for g in generators], dtype=np.int64),
-            pg=np.asarray([g["pg"] for g in generators], dtype=float),
-            pmax=np.asarray([g["pmax"] for g in generators], dtype=float),
-            pmin=np.asarray([g["pmin"] for g in generators], dtype=float),
-            in_service=np.asarray([g["in_service"] for g in generators], dtype=bool),
-        )
-        refs = self.reference_bus_indices()
-        return DenseNetwork(
-            n=len(buses),
-            m=len(branches),
-            ng=len(generators),
-            base_mva=self.base_mva,
-            bus_ids=bus_ids,
-            branch=branch,
-            gen=gen,
-            demand=DenseDemand(pd=pd, qd=qd),
-            shunt=DenseShunt(gs=gs, bs=bs),
-            reference_bus=refs[0] if len(refs) == 1 else None,
-            n_components=self.n_connected_components,
-            is_radial=self.is_radial,
         )
 
     # --- matrix builders (scipy.sparse) ---------------------------------
@@ -678,16 +571,6 @@ class BalancedNetwork:
         return g
 
 
-def parse_file(path: Any, from_: Optional[str] = None) -> BalancedNetwork:
-    """Parse a case file from a path, inferring the format from the extension.
-
-    Read fidelity warnings are on ``BalancedNetwork.read_warnings`` (empty for readers
-    that don't report any; currently pandapower JSON, PyPSA CSV, and PSLF EPC
-    report them).
-    """
-    return BalancedNetwork(_powerio.parse_file(str(path), from_))
-
-
 def parse_display_file(path: Any, from_: Optional[str] = None) -> DisplayData:
     """Parse a display artifact such as a PowerWorld ``.pwd`` file."""
     return _wrap_display(_powerio.parse_display_file(str(path), from_))
@@ -696,34 +579,6 @@ def parse_display_file(path: Any, from_: Optional[str] = None) -> DisplayData:
 def parse_display_bytes(data: bytes, from_: str) -> DisplayData:
     """Parse display bytes in the named display format ``from_``."""
     return _wrap_display(_powerio.parse_display_bytes(data, from_))
-
-
-def parse_str(text: str, from_: str) -> BalancedNetwork:
-    """Parse a case from in-memory text in the named source format ``from_``."""
-    return BalancedNetwork(_powerio.parse_str(text, from_))
-
-
-def parse_bytes(data: bytes, from_: str) -> BalancedNetwork:
-    """Parse a case from in-memory bytes in the named source format ``from_``.
-
-    Accepts every :func:`parse_str` format name plus ``"pwb"``. PowerWorld
-    binary has no text form, so this is the only way to read one without a
-    file on disk. Text formats must be UTF-8.
-    """
-    return BalancedNetwork(_powerio.parse_bytes(data, from_))
-
-
-def parse_scopf(
-    text: str, from_: str = "goc3-json", *, index_base: int = 0
-) -> dict[str, Any]:
-    """Return a versioned SCOPF problem instance document.
-
-    ``from_`` currently accepts ``"goc3-json"``. ``index_base`` accepts 0 or 1
-    and defaults to Python's 0-based convention. Source identities remain
-    separate from document-order ordinals. Parse and assembly failures raise
-    :class:`PowerIOError`.
-    """
-    return _json.loads(_powerio.parse_scopf(text, from_, index_base=index_base))
 
 
 def parse_geo(text: str, name_hint: Optional[str] = None) -> dict[str, Any]:
@@ -749,7 +604,7 @@ def from_json(text: str) -> BalancedNetwork:
 def _bus_sums(np, buses, loads, shunts):
     """Per bus `(pd, qd, gs, bs)` in bus order.
 
-    :meth:`BalancedNetwork.to_dense` and :meth:`BalancedNetwork.to_ppc` both fold the element
+    :meth:`BalancedNetwork.to_ppc` folds the element
     tables onto their bus the way the Rust indexed analysis view does. This is
     that fold, once.
     """
@@ -843,7 +698,8 @@ def from_ppc(ppc) -> BalancedNetwork:
     is not a sequence of numbers, or when a cell is not numeric; the message
     names the table and the row.
     """
-    return parse_str(_ppc_to_matpower_text(ppc), "matpower")
+    module = StoredModule.from_str(_ppc_to_matpower_text(ppc), "matpower")
+    return module.as_balanced_network()
 
 
 def convert_file(
@@ -937,11 +793,6 @@ def to_json(network: BalancedNetwork) -> str:
     return network.to_json()
 
 
-def to_dense(network: BalancedNetwork) -> DenseNetwork:
-    """Return copied dense NumPy tables for ``network``."""
-    return network.to_dense()
-
-
 def write_gridfm_batch(
     networks: "list[BalancedNetwork]",
     out_dir: Any,
@@ -1019,11 +870,6 @@ def read_gridfm_scenarios(dir: Any) -> "list[GridfmRead]":
     ]
 
 
-def read_pypsa_csv_folder(path: Any) -> BalancedNetwork:
-    """Read a PyPSA CSV folder into a :class:`BalancedNetwork`."""
-    return BalancedNetwork(_powerio.read_pypsa_csv_folder(str(path)))
-
-
 from . import dist  # noqa: E402  (needs Conversion defined above)
 
 
@@ -1055,14 +901,41 @@ class StoredModule:
         return cls(_powerio._StoredModule.from_json(text))
 
     @classmethod
-    def from_file(cls, path: Any, from_: Optional[str] = None) -> "StoredModule":
-        """Parse a case file into a module of whichever family claims it."""
-        return cls(_powerio._StoredModule.from_file(str(path), from_))
+    def from_file(
+        cls,
+        path: Any,
+        from_: Optional[str] = None,
+        *,
+        include_root: Optional[Any] = None,
+    ) -> "StoredModule":
+        """Parse a case file into a module of whichever family claims it.
+
+        ``include_root`` widens the acquisition root for formats whose
+        includes reference sibling files (OpenDSS redirects above all).
+        """
+        root = None if include_root is None else str(include_root)
+        return cls(_powerio._StoredModule.from_file(str(path), from_, root))
 
     @classmethod
     def from_str(cls, text: str, from_: Optional[str] = None) -> "StoredModule":
         """Parse in-memory case text into a module."""
         return cls(_powerio._StoredModule.from_str(text, from_))
+
+    @classmethod
+    def from_bytes(cls, data: bytes, from_: Optional[str] = None) -> "StoredModule":
+        """Parse in-memory case bytes into a module. The only in-memory way
+        to read a binary format; text formats must be UTF-8."""
+        return cls(_powerio._StoredModule.from_bytes(data, from_))
+
+    def as_balanced_network(self) -> "BalancedNetwork":
+        """The balanced network value as a network handle (cheap table
+        share). Raises when the module carries another kind."""
+        return BalancedNetwork(self._inner.as_balanced_network())
+
+    def as_multiconductor_network(self) -> "dist.MulticonductorNetwork":
+        """The multiconductor network value as a network handle. Raises when
+        the module carries another kind."""
+        return dist.MulticonductorNetwork(self._inner.as_multiconductor_network())
 
     def to_json(self) -> str:
         """Serialize to the stored version 1 document."""
@@ -1113,130 +986,40 @@ class StoredModule:
         return repr(self._inner)
 
 
-class Package:
-    """A parsed ``.pio.json`` package.
+def parse(
+    source: Any,
+    from_: Optional[str] = None,
+    *,
+    include_root: Optional[Any] = None,
+    value_type: Optional[type] = None,
+) -> Any:
+    """Parse one source into a stored module of whichever family claims it.
 
-    Parsing occurs once; every accessor reuses the native handle.
+    ``source`` is a filesystem path (``str`` or path-like) or in-memory
+    ``bytes`` (the only way to read a binary format without a file). The
+    result is a :class:`StoredModule` carrying the source's typed value;
+    ``module.kind`` names it, and a calculation defining source produces
+    that calculation rather than a bare network.
+
+    ``value_type`` narrows in one call: pass :class:`BalancedNetwork` or
+    :class:`dist.MulticonductorNetwork` to get that handle directly, raising
+    when the parsed value is another kind. ``include_root`` widens the
+    acquisition root for formats whose includes reference sibling files.
     """
-
-    def __init__(self, inner: "_powerio._Package"):
-        self._inner = inner
-
-    @classmethod
-    def from_file(
-        cls, path: Any, from_: Optional[str] = None, scenario: int = 0
-    ) -> "Package":
-        """Build a package from a case file or folder."""
-        return cls(_powerio._Package.from_file(str(path), from_, scenario))
-
-    @classmethod
-    def from_str(cls, text: str, from_: Optional[str] = None) -> "Package":
-        """Build a package from in-memory case text."""
-        return cls(_powerio._Package.from_str(text, from_))
-
-    @classmethod
-    def from_json(cls, text: str) -> "Package":
-        """Parse a ``.pio.json`` document."""
-        return cls(_powerio._Package.from_json(text))
-
-    @classmethod
-    def from_balanced(
-        cls, network: BalancedNetwork, include_solver_metadata: bool = False
-    ) -> "Package":
-        """Wrap a balanced :class:`BalancedNetwork` in a package."""
-        return cls(
-            _powerio._Package.from_balanced(network._inner, include_solver_metadata)
-        )
-
-    @classmethod
-    def from_multiconductor(cls, network: "dist.MulticonductorNetwork") -> "Package":
-        """Wrap a multiconductor network in a package."""
-        return cls(_powerio._Package.from_multiconductor(network._inner))
-
-    @property
-    def model_kind(self) -> str:
-        """``"balanced"`` or ``"multiconductor"``."""
-        return self._inner.model_kind()
-
-    def to_json(self) -> str:
-        """Serialize to pretty ``.pio.json``."""
-        return self._inner.to_json()
-
-    def as_balanced(self) -> BalancedNetwork:
-        """Return the balanced payload as a :class:`BalancedNetwork`."""
-        return BalancedNetwork(self._inner.as_balanced())
-
-    def as_multiconductor(self) -> "dist.MulticonductorNetwork":
-        """Return the multiconductor payload."""
-        return dist.MulticonductorNetwork(self._inner.as_multiconductor())
-
-    def operating_points(self) -> Any:
-        """The operating point series as Python data, or ``None``.
-
-        GOC3 packages populate this from the source time series. Each point is
-        a set of field updates over the package's static payload.
-        """
-        return _json.loads(self._inner.operating_points_json())
-
-    def set_operating_points(self, points: Any) -> None:
-        """Replace the operating point series and rerun package validation.
-
-        ``None`` or an empty series clears it.
-        """
-        self._inner.set_operating_points_json(_json.dumps(points))
-
-    def study(self) -> Any:
-        """The study block as Python data, or ``None``."""
-        return _json.loads(self._inner.study_json())
-
-    def materialize_operating_point(self, index: int) -> "Package":
-        """Materialize one operating point into a new static package."""
-        return Package(self._inner.materialize_operating_point(index))
-
-    def materialize_study_commit(self, index: int) -> "Package":
-        """Materialize one study commit into a new static package."""
-        return Package(self._inner.materialize_study_commit(index))
-
-    def validate(self) -> None:
-        """Run the package semantic validation profile in place."""
-        self._inner.validate()
-
-    def validation(self) -> Any:
-        """The validation summary as Python data."""
-        return _json.loads(self._inner.validation_json())
-
-    def diagnostics(self) -> Any:
-        """The structured diagnostics as a list of Python dicts."""
-        return _json.loads(self._inner.diagnostics_json())
-
-    def multiconductor_to_balanced_preflight(self, base_mva: float = 100.0) -> Any:
-        """Readiness report for multiconductor to balanced lowering."""
-        return _json.loads(
-            self._inner.multiconductor_to_balanced_preflight_json(base_mva)
-        )
-
-    def lower_multiconductor_to_balanced(self, base_mva: float = 100.0) -> "Package":
-        """Lower a multiconductor package to a new balanced package."""
-        return Package(self._inner.lower_multiconductor_to_balanced(base_mva))
-
-    def __repr__(self) -> str:
-        return repr(self._inner)
-
-# 0.8 names, aliased for one release. The deprecated inventory script reads
-# `_RENAMED_IN_*`; delete the dict and the hook together at 1.0.0.
-_RENAMED_IN_0_9_0 = {"Network": "BalancedNetwork"}
+    if isinstance(source, (bytes, bytearray, memoryview)):
+        module = StoredModule.from_bytes(bytes(source), from_)
+    else:
+        module = StoredModule.from_file(source, from_, include_root=include_root)
+    if value_type is None or value_type is StoredModule:
+        return module
+    if value_type is BalancedNetwork:
+        return module.as_balanced_network()
+    if value_type is dist.MulticonductorNetwork:
+        return module.as_multiconductor_network()
+    raise TypeError(
+        "value_type must be powerio.StoredModule, powerio.BalancedNetwork, or "
+        "powerio.dist.MulticonductorNetwork"
+    )
 
 
-def __getattr__(name):
-    if name in _RENAMED_IN_0_9_0:
-        import warnings
 
-        successor = _RENAMED_IN_0_9_0[name]
-        warnings.warn(
-            f"powerio.{name} was renamed powerio.{successor} in 0.9.0; "
-            "the alias goes away at 1.0.0",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-        return globals()[successor]
-    raise AttributeError(f"module 'powerio' has no attribute {name!r}")

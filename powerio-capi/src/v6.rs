@@ -545,9 +545,9 @@ pub unsafe extern "C" fn pio_module_lowering_readiness_json(
     unsafe {
         v6_entry(error, std::ptr::null_mut(), || {
             let inner = required_module(module)?;
-            let readiness = powerio::package::check_module_lowering(
+            let readiness = powerio::transform::check_module_lowering(
                 &inner.module,
-                powerio::package::MulticonductorToBalancedOptions {
+                powerio::transform::MulticonductorToBalancedOptions {
                     base_mva,
                     ..Default::default()
                 },
@@ -584,9 +584,9 @@ pub unsafe extern "C" fn pio_module_lower_to_balanced(
                 .map_err(|error| error_from_core(&error))?;
             let owned =
                 powerio::stored::read_module(&text).map_err(|error| error_from_core(&error))?;
-            powerio::package::lower_module_to_balanced(
+            powerio::transform::lower_module_to_balanced(
                 owned,
-                powerio::package::MulticonductorToBalancedOptions {
+                powerio::transform::MulticonductorToBalancedOptions {
                     base_mva,
                     ..Default::default()
                 },
@@ -596,8 +596,7 @@ pub unsafe extern "C" fn pio_module_lower_to_balanced(
                 let diagnostics =
                     serde_json::to_string(&boxed.diagnostics).unwrap_or_else(|_| "[]".to_owned());
                 let code = boxed.diagnostics.first().map_or(
-                    powerio::package::diagnostics::codes::TRANSFORM_MULTI_TO_BALANCED_WRONG_MODEL_KIND
-                        .code,
+                    powerio::codes::TRANSFORM_MULTI_TO_BALANCED_WRONG_MODEL_KIND.code,
                     |d| d.code.as_str(),
                 );
                 error_from_parts(code, &boxed.to_string(), &diagnostics)
@@ -728,7 +727,7 @@ pub struct DcDataInner {
     /// Phase shift angle per included row, radians; `0` for an unshifted
     /// branch or a formula that excludes shifts.
     shift: Vec<f64>,
-    /// Phase shift bus injection `p_shift = -A' * (b .* shift)`, per bus,
+    /// Phase shift bus injection `p_shift = A' * (b .* shift)`, per bus,
     /// the MATPOWER `makeBdc` sign.
     shift_injection: Vec<f64>,
     /// Stable module element ID per included row. The `_ids` vectors own the
@@ -917,7 +916,7 @@ pub unsafe extern "C" fn pio_dc_data_shift(data: *const PioDcData) -> *const f64
     }
 }
 
-/// Phase shift bus injection `p_shift = -A' * (b .* shift)` (the MATPOWER
+/// Phase shift bus injection `p_shift = A' * (b .* shift)` (the MATPOWER
 /// `makeBdc` sign), length `n_buses`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_dc_data_shift_injection(data: *const PioDcData) -> *const f64 {
@@ -995,9 +994,9 @@ pub unsafe extern "C" fn pio_dc_data_formula(data: *const PioDcData) -> *const c
 }
 
 /// Fill `out` with the complete affine branch flow
-/// `p_branch = -b .* (va_from - va_to) - b .* shift`: given bus voltage
+/// `p_branch = -b .* (va_from - va_to) + b .* shift`: given bus voltage
 /// angles `va` (radians, length `n_buses`), writes
-/// `-b[e] * (va[from] - va[to]) - b[e] * shift[e]` per included row into
+/// `-b[e] * (va[from] - va[to]) + b[e] * shift[e]` per included row into
 /// `out` (length `n_rows`), so `A' * p_branch` equals the bus injection
 /// including `shift_injection`. Returns false on a NULL argument or a length
 /// mismatch. No temporary vector is allocated.
@@ -1026,7 +1025,7 @@ pub unsafe extern "C" fn pio_dc_data_fill_branch_flow(
                 let from = usize::try_from(inner.from_indices[row]).expect("stored nonnegative");
                 let to = usize::try_from(inner.to_indices[row]).expect("stored nonnegative");
                 *slot = -inner.susceptance[row] * (va[from] - va[to])
-                    - inner.susceptance[row] * inner.shift[row];
+                    + inner.susceptance[row] * inner.shift[row];
             }
             true
         })
@@ -1210,7 +1209,7 @@ mod tests {
         .unwrap()
     }
 
-    /// The complete affine flow: `p_branch = -b (va_from - va_to) - b shift`,
+    /// The complete affine flow: `p_branch = -b (va_from - va_to) + b shift`,
     /// and the KCL identity `A' * p_branch == -B va + shift_injection` holds
     /// for a case with a nonzero phase shift branch.
     #[test]
@@ -1243,10 +1242,26 @@ mod tests {
                 "{}",
                 shift[1]
             );
-            // p_shift = -A' (b .* shift): -b*shift at the from bus, +b*shift
+            // p_shift = A' (b .* shift): b*shift at the from bus, -b*shift
             // at the to bus.
-            assert!((injection[0] - (-b[1] * shift[1])).abs() < 1e-12);
-            assert!((injection[2] - (b[1] * shift[1])).abs() < 1e-12);
+            assert!((injection[0] - (b[1] * shift[1])).abs() < 1e-12);
+            assert!((injection[2] - (-b[1] * shift[1])).abs() < 1e-12);
+
+            // Flat start pin: the shifted row alone carries b * shift, the
+            // MATPOWER (1/x)(0 - shift) fixed term, negative for a positive
+            // shift on an inductive branch.
+            let flat = [0.0_f64; 3];
+            let mut flow_flat = [0.0_f64; 2];
+            assert!(pio_dc_data_fill_branch_flow(
+                data,
+                flat.as_ptr(),
+                3,
+                flow_flat.as_mut_ptr(),
+                2
+            ));
+            assert!(flow_flat[0].abs() < 1e-15);
+            assert!((flow_flat[1] - b[1] * shift[1]).abs() < 1e-12);
+            assert!(flow_flat[1] < 0.0, "{}", flow_flat[1]);
 
             let va = [0.03_f64, 0.01, -0.02];
             let mut flow = [0.0_f64; 2];
@@ -1260,7 +1275,7 @@ mod tests {
             for row in 0..m {
                 let f = usize::try_from(from[row]).unwrap();
                 let t = usize::try_from(to[row]).unwrap();
-                let expected = -b[row] * (va[f] - va[t]) - b[row] * shift[row];
+                let expected = -b[row] * (va[f] - va[t]) + b[row] * shift[row];
                 assert!((flow[row] - expected).abs() < 1e-12, "row {row}");
             }
             // KCL: A' * p_branch equals the angle terms plus shift_injection.

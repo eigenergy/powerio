@@ -22,7 +22,9 @@ use super::{BuildOptions, ZeroImpedanceSkips};
 pub struct IncidenceParts {
     /// Signed incidence `A`, shape `n × m`.
     pub a: CsMat<f64>,
-    /// Branch susceptances `b_e`, length `m`.
+    /// Positive Laplacian edge weights `b_e`, length `m`: the factor weight
+    /// a sparse solver uses (`|b|` of the PowerModels susceptance). The
+    /// signed susceptance lives on the DC operator surface.
     pub b: Vec<f64>,
     /// Phase shift bus injection, length `n`. All zeros unless the selected
     /// convention carries shifts and the case has a phase shifter.
