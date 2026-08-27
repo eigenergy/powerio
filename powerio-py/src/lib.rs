@@ -92,7 +92,10 @@ fn categorized_pyerr(
 ) -> PyErr {
     use powerio_matrix::ErrorCategory as C;
     let err = match category {
-        C::Request => PyValueError::new_err(msg),
+        // A request refusal is a PowerIOError, never a bare ValueError, the
+        // same rule core_error_pyerr states; PowerIOError subclasses
+        // ValueError so existing except clauses keep matching.
+        C::Request => PowerIOError::new_err(msg),
         C::Parse => PowerIOParseError::new_err(msg),
         C::Data => PowerIODataError::new_err(msg),
         // `Io` is unwrapped by the callers below when it still carries the
