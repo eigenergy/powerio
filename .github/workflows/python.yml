@@ -275,7 +275,7 @@ jobs:
   # imports powerio, parses a case, verifies the reported version and schema
   # identity, narrows a typed module, builds one matrix, and checks the
   # stored document writes deterministically. Linux aarch64 runs under QEMU;
-  # macOS x86_64 runs the universal2 build's Intel slice under Rosetta.
+  # macOS x86_64 runs the cross compiled x86_64 wheel under Rosetta.
   wheel-smoke:
     name: wheel smoke (${{ matrix.platform.target }} on ${{ matrix.platform.runner }})
     if: github.event_name == 'release' || github.event_name == 'workflow_dispatch'
@@ -298,8 +298,10 @@ jobs:
         with:
           name: ${{ matrix.platform.artifact }}
           path: dist
+      # Only the QEMU docker leg brings its own interpreter; every other leg,
+      # the macOS arm64 one included, smokes natively and needs host Python.
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
-        if: matrix.platform.target != 'aarch64'
+        if: ${{ !(matrix.platform.runner == 'ubuntu-latest' && matrix.platform.target == 'aarch64') }}
         with:
           python-version: "3.12"
       - name: Enable QEMU emulation
