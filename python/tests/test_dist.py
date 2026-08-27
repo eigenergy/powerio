@@ -27,10 +27,7 @@ def test_multiconductor_is_the_only_model_name():
     assert "DistCase" not in dist.__all__
     # DistNetwork is the 0.8 bridge alias: same object, DeprecationWarning,
     # gone at 1.0.0. DistCase stays removed.
-    import warnings as _warnings
-
-    with pytest.raises(AttributeError):
-        dist.DistNetwork
+    assert not hasattr(dist, "DistNetwork")
     assert "DistNetwork" not in dist.__all__
     assert not hasattr(dist, "DistCase")
 
