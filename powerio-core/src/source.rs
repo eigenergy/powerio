@@ -217,6 +217,12 @@ enum SourceProvider {
 /// Opaque owner or provider of named immutable input buffers.
 ///
 /// File acquisition policy belongs here rather than to parser entry points.
+/// The primary buffer's reserved identity. The leading slash is a spelling
+/// [`resolve_segments`] can never produce (a referenced name must be
+/// relative), so an acquired or named buffer's identity is disjoint from the
+/// primary's by construction.
+pub const PRIMARY_SOURCE_ID: &str = "/input";
+
 /// [`Source::open`] on a file retains the primary bytes and permits
 /// constrained acquisition of referenced files beneath the file's canonical
 /// containing directory; [`Source::with_acquisition_root`] widens that root at
@@ -268,8 +274,12 @@ impl Source {
         }
         let bytes = read_open_file(file, &name, u64::MAX)?;
         let root_display = canonical_parent(&path)?;
-        let primary =
-            SourceBuffer::new(SourceId::new("input")?, name.to_string(), bytes, Vec::new());
+        let primary = SourceBuffer::new(
+            SourceId::new(PRIMARY_SOURCE_ID)?,
+            name.to_string(),
+            bytes,
+            Vec::new(),
+        );
         Ok(Self {
             name,
             provider: Arc::new(SourceProvider::File {
@@ -310,7 +320,7 @@ impl Source {
             ));
         }
         let primary = SourceBuffer::new(
-            SourceId::new("input")?,
+            SourceId::new(PRIMARY_SOURCE_ID)?,
             name.clone(),
             bytes.into(),
             Vec::new(),
@@ -1349,13 +1359,12 @@ mod platform {
 
 #[cfg(not(unix))]
 mod platform {
-    //! Windows and other platforms have no `openat`. The walk opens each
-    //! component by an incrementally extended absolute path with reparse
-    //! points refused on the opened handle, which refuses a symbolic link at
-    //! any component; a parent directory swapped between two component opens
-    //! remains detectable only by the next component's no-follow open. This is
-    //! the documented platform implementation, not the descriptor pinned walk
-    //! Unix uses.
+    //! Windows and other platforms have no `openat`. The walk opens every
+    //! intermediate directory into a handle held for the remainder of the
+    //! walk, with reparse points refused on the opened handle and the share
+    //! mode excluding delete, so a held component can be neither replaced by
+    //! a link nor renamed away while a child is opened beneath it — the same
+    //! invariant the Unix descriptor walk enforces.
 
     use std::fs::File;
     use std::path::{Path, PathBuf};
@@ -1363,6 +1372,9 @@ mod platform {
     #[derive(Debug)]
     pub(super) struct RootHandle {
         root: PathBuf,
+        /// Held for the lifetime of the source: pins the root against
+        /// deletion and renaming on platforms whose share mode enforces it.
+        _handle: File,
     }
 
     pub(super) fn open_no_follow(path: &Path) -> std::io::Result<File> {
@@ -1371,12 +1383,10 @@ mod platform {
     }
 
     pub(super) fn open_root(path: &Path) -> std::io::Result<RootHandle> {
-        let metadata = std::fs::symlink_metadata(path)?;
-        if !metadata.is_dir() {
-            return Err(std::io::Error::from(std::io::ErrorKind::NotADirectory));
-        }
+        let handle = open_directory_pinned(path)?;
         Ok(RootHandle {
             root: path.to_path_buf(),
+            _handle: handle,
         })
     }
 
@@ -1385,47 +1395,54 @@ mod platform {
             let mut path = self.root.clone();
             let (file_segment, directories) =
                 segments.split_last().expect("resolution yields a file");
+            // Every intermediate handle stays alive until the final open:
+            // the next component is opened only while every ancestor is
+            // still held.
+            let mut held = Vec::with_capacity(directories.len());
             for segment in directories {
                 push_plain_segment(&mut path, segment)?;
-                let metadata = std::fs::symlink_metadata(&path)?;
-                if metadata.file_type().is_symlink() {
-                    return Err(symlink_error());
-                }
-                if !metadata.is_dir() {
-                    return Err(std::io::Error::from(std::io::ErrorKind::NotADirectory));
-                }
+                held.push(open_directory_pinned(&path)?);
             }
             push_plain_segment(&mut path, file_segment)?;
-            open_reparse_refused(&path)
+            let file = open_reparse_refused(&path)?;
+            drop(held);
+            Ok(file)
         }
 
-        /// The root as a listing handle: the verified accumulated path each
-        /// child extends, re-verified immediately before it is listed.
+        /// The root as a listing handle: the pinned handle plus the verified
+        /// path each child extends.
         pub(super) fn duplicate_handle(&self) -> std::io::Result<DirectoryHandle> {
-            Ok(self.root.clone())
+            let handle = open_directory_pinned(&self.root)?;
+            Ok(DirectoryHandle {
+                path: self.root.clone(),
+                _handle: handle,
+            })
         }
     }
 
-    /// A verified accumulated directory path the listing walk extends one
-    /// plain component at a time.
-    pub(super) type DirectoryHandle = PathBuf;
+    /// A verified directory the listing walk extends one plain component at
+    /// a time, holding its own pinned handle; the walk keeps a frame per
+    /// level, so every ancestor of an open frame stays held.
+    #[derive(Debug)]
+    pub(super) struct DirectoryHandle {
+        path: PathBuf,
+        _handle: File,
+    }
 
-    /// Extend the verified path by one child directory, with a symbolic link
-    /// at the child refused.
+    /// Extend the walk by one child directory, opened while the parent's
+    /// handle is held, with a reparse point at the child refused on the
+    /// opened handle.
     pub(super) fn open_child_directory(
         parent: &DirectoryHandle,
         name: &str,
     ) -> std::io::Result<DirectoryHandle> {
-        let mut path = parent.clone();
+        let mut path = parent.path.clone();
         push_plain_segment(&mut path, name)?;
-        let metadata = std::fs::symlink_metadata(&path)?;
-        if metadata.file_type().is_symlink() {
-            return Err(symlink_error());
-        }
-        if !metadata.is_dir() {
-            return Err(std::io::Error::from(std::io::ErrorKind::NotADirectory));
-        }
-        Ok(path)
+        let handle = open_directory_pinned(&path)?;
+        Ok(DirectoryHandle {
+            path,
+            _handle: handle,
+        })
     }
 
     const ENTRY_BUDGET_MARKER: &str = "directory entry allowance exhausted";
@@ -1440,23 +1457,16 @@ mod platform {
         error.kind() == std::io::ErrorKind::Other && error.to_string().contains(ENTRY_BUDGET_MARKER)
     }
 
-    /// Read the entries of one verified directory, at most `max` of them: the
+    /// Read the entries of one held directory, at most `max` of them: the
     /// bound is enforced inside the read loop, before the entry that would
-    /// cross it is accepted. The path is re-verified immediately before the
-    /// listing.
+    /// cross it is accepted. The held handle keeps the listed path the
+    /// verified directory for the duration.
     pub(super) fn list_entries(
         directory: &DirectoryHandle,
         max: usize,
     ) -> std::io::Result<Vec<(String, bool)>> {
-        let metadata = std::fs::symlink_metadata(directory)?;
-        if metadata.file_type().is_symlink() {
-            return Err(symlink_error());
-        }
-        if !metadata.is_dir() {
-            return Err(std::io::Error::from(std::io::ErrorKind::NotADirectory));
-        }
         let mut entries = Vec::new();
-        for entry in std::fs::read_dir(directory)? {
+        for entry in std::fs::read_dir(&directory.path)? {
             let entry = entry?;
             let Ok(name) = entry.file_name().into_string() else {
                 continue;
@@ -1478,6 +1488,49 @@ mod platform {
         }
         path.push(segment);
         Ok(())
+    }
+
+    /// Open one directory into a held handle with the reparse point refused
+    /// on the handle itself. On Windows the open uses backup semantics (a
+    /// directory needs it), keeps `FILE_SHARE_DELETE` out of the share mode
+    /// so the held component cannot be renamed or deleted, and refuses a
+    /// handle whose attributes carry the reparse flag.
+    #[cfg(windows)]
+    fn open_directory_pinned(path: &Path) -> std::io::Result<File> {
+        use std::os::windows::fs::{MetadataExt, OpenOptionsExt};
+
+        const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+        const FILE_FLAG_BACKUP_SEMANTICS: u32 = 0x0200_0000;
+        const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0000_0400;
+        const FILE_ATTRIBUTE_DIRECTORY: u32 = 0x0000_0010;
+        const FILE_SHARE_READ: u32 = 0x0000_0001;
+        const FILE_SHARE_WRITE: u32 = 0x0000_0002;
+
+        let file = std::fs::OpenOptions::new()
+            .read(true)
+            .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE)
+            .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS)
+            .open(path)?;
+        let attributes = file.metadata()?.file_attributes();
+        if attributes & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+            return Err(symlink_error());
+        }
+        if attributes & FILE_ATTRIBUTE_DIRECTORY == 0 {
+            return Err(std::io::Error::from(std::io::ErrorKind::NotADirectory));
+        }
+        Ok(file)
+    }
+
+    #[cfg(not(windows))]
+    fn open_directory_pinned(path: &Path) -> std::io::Result<File> {
+        let metadata = std::fs::symlink_metadata(path)?;
+        if metadata.file_type().is_symlink() {
+            return Err(symlink_error());
+        }
+        if !metadata.is_dir() {
+            return Err(std::io::Error::from(std::io::ErrorKind::NotADirectory));
+        }
+        File::open(path)
     }
 
     #[cfg(windows)]
