@@ -327,8 +327,13 @@ def _header(schema: str) -> Dict[str, Any]:
     return {"schema": schema, _VERSION_KEY: powerio.__version__}
 
 
+# The 0.9 package severities plus the stored module's remark/note; one count
+# table serves both generations.
+_SEVERITY_KEYS = ("fatal", "error", "warning", "remark", "note", "info", "debug")
+
+
 def _severity_counts(diagnostics: list[Dict[str, Any]]) -> Dict[str, int]:
-    counts = {key: 0 for key in ("fatal", "error", "warning", "info", "debug")}
+    counts = {key: 0 for key in _SEVERITY_KEYS}
     for item in diagnostics:
         severity = item.get("severity")
         if severity in counts:
@@ -420,13 +425,13 @@ def _diagnostics_payload(package_json: str, verbose: bool = False) -> Dict[str, 
         if counts.get("info", 0)
         else "ok"
     )
-    total = sum(int(counts.get(key, 0)) for key in ("fatal", "error", "warning", "info", "debug"))
+    total = sum(int(counts.get(key, 0)) for key in _SEVERITY_KEYS)
     if total == 0:
         text = "ok: no diagnostics"
     else:
         parts = [
             f"{key}={int(counts.get(key, 0))}"
-            for key in ("fatal", "error", "warning", "info", "debug")
+            for key in _SEVERITY_KEYS
             if int(counts.get(key, 0))
         ]
         text = f"{status}: " + ", ".join(parts)

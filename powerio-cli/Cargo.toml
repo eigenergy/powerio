@@ -30,7 +30,7 @@ doc = false
 # document and must stamp it with the same key every other one carries.
 # `schema`: the corpus anonymizer derives its field name vocabulary from the
 # model's own JSON schema, so it stays complete without a hand-kept list.
-powerio = { workspace = true, features = ["schema"] }
+powerio = { workspace = true, features = ["schema", "gridfm"] }
 powerio-core = { workspace = true }
 powerio-matrix = { workspace = true, features = ["gridfm"] }
 powerio-prob = { workspace = true }

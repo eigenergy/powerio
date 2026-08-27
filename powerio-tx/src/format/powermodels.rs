@@ -13,6 +13,14 @@
 //! follows PowerModels' rule (raw tap `≠ 0`). `hvdc` maps onto `dcline` field
 //! for field; `storage` is mapped to the closest PowerModels block and emits a
 //! warning when present.
+//!
+//! The typed reader treats an explicit JSON `null` (or a value the lenient
+//! decoders cannot read) exactly like an absent key, uniformly: `bus_i: null`
+//! falls back to `index` the way a missing `bus_i` does, a null cost `model`
+//! drops the cost block, all-null ratings or solution fields read as unstated,
+//! and a null switch `state` falls through to `status`. The 0.9 tree walk was
+//! sensitive to key presence at those spots; one rule replaces the four
+//! special cases.
 
 use serde_json::{Map, Value};
 
