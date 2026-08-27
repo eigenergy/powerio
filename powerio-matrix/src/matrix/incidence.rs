@@ -73,12 +73,21 @@ pub fn build_incidence(
             bus_id: br.to,
             element_index: idx,
         })?;
-        // Zero impedance in every sense the builder can act on: `x = 1e-300`
-        // gives a finite `b = 1e300` that annihilates every real branch sharing
-        // a diagonal with it. Exact zero used to be the whole test.
-        let degenerate_x = br.x.abs() < crate::matrix::MIN_DIVISIBLE_MAGNITUDE;
-        if i == j || degenerate_x {
-            if i != j && degenerate_x {
+        // Zero impedance in every sense the selected formula can act on:
+        // `x = 1e-300` gives a finite weight of `1e300` that annihilates
+        // every real branch sharing a diagonal with it. The guard reads only
+        // the denominator the selected formula divides by, so a value the
+        // formula never reads cannot reject a branch (#324): the reciprocal
+        // rules bound the reactance, and the series formula bounds the whole
+        // impedance magnitude.
+        let degenerate = match conv {
+            DcConvention::SeriesSusceptance => {
+                br.r.hypot(br.x) < crate::matrix::MIN_DIVISIBLE_MAGNITUDE
+            }
+            _ => br.x.abs() < crate::matrix::MIN_DIVISIBLE_MAGNITUDE,
+        };
+        if i == j || degenerate {
+            if i != j && degenerate {
                 if !opts.skip_zero_impedance {
                     return Err(powerio_tx::Error::ZeroImpedance { row: idx }.into());
                 }
@@ -86,9 +95,18 @@ pub fn build_incidence(
             }
             continue;
         }
-        // `Matpower` divides the susceptance by the tap, so it is bounded here
-        // by the same rule Y_bus and the instance builders apply.
-        let b_e = conv.branch_susceptance(br.r, br.x, br.divisible_tap(idx)?);
+        // Only `TapAdjustedReactance` divides by the tap, so only it can be
+        // bounded or rejected by one (#324); the other formulas never read
+        // the value.
+        let tap = if conv.reads_tap() {
+            br.divisible_tap(idx)?
+        } else {
+            1.0
+        };
+        // The incidence parts carry the internal positive factor weight (the
+        // Laplacian edge weight a sparse solver factors); public PowerModels
+        // sign results are the DC operator surface's to emit.
+        let b_e = conv.solver_edge_weight(br.r, br.x, tap);
         // A NaN reactance slips past the guard above and poisons the whole
         // Laplacian.
         if !b_e.is_finite() {
@@ -161,10 +179,14 @@ pub fn susceptance_diag(b: &[f64]) -> CsMat<f64> {
     diagonal(b)
 }
 
-/// The angle dependent flow map `B Aᵀ`, shape `m × n`.
+/// The angle dependent flow map `B Aᵀ`, shape `m × n`, over the internal
+/// positive factor weights.
 ///
-/// A complete affine branch flow also adds `-b * shift`; problem instances
-/// expose that term through `DcOpfPreparation::branch_flow_offset`.
+/// A complete affine branch flow also adds `-b * shift`; problem
+/// preparations expose that term through
+/// `DcOpfPreparation::branch_flow_offset`. In the public PowerModels sign
+/// spelling the same flow is `p_branch = -Bf va + b .* shift` with negated
+/// susceptances.
 pub fn build_flow_map(a: &CsMat<f64>, b: &[f64]) -> CsMat<f64> {
     let d = susceptance_diag(b);
     let at = a.transpose_view().to_csr();

@@ -174,8 +174,8 @@ fn parse_scheme(s: &str) -> PyResult<Scheme> {
 /// `reactance-only` (case- and separator-insensitive).
 fn parse_convention(s: &str) -> PyResult<DcConvention> {
     match normalize(s).as_str() {
-        "series" | "seriesimpedance" => Ok(DcConvention::SeriesImpedance),
-        "matpower" | "mp" => Ok(DcConvention::Matpower),
+        "series" | "seriesimpedance" => Ok(DcConvention::SeriesSusceptance),
+        "matpower" | "mp" => Ok(DcConvention::TapAdjustedReactance),
         "reactanceonly" => Ok(DcConvention::ReactanceOnly),
         // 0.8 spelled b = 1/x "paper"/"paper-pure" and made it the default.
         // Name its successor: the nearest-looking option, "series", is a
@@ -192,10 +192,10 @@ fn parse_convention(s: &str) -> PyResult<DcConvention> {
 }
 
 /// PTDF/LODF options from the Python keywords. The solver defaults to `auto`,
-/// which is dense below the reduced-dimension threshold and the iterative
-/// conjugate gradient path above it — the same policy the CLI `sensitivities`
-/// command applies, so a very large case cannot force the dense n×n
-/// factorization from Python.
+/// which is dense below the reduced-dimension threshold and the sparse
+/// Cholesky path above it — the same policy the CLI `sensitivities` command
+/// applies, so a very large case cannot force the dense n×n factorization
+/// from Python.
 fn sensitivity_options(
     convention: Option<&str>,
     solver: Option<&str>,
@@ -204,10 +204,10 @@ fn sensitivity_options(
     let solver = match normalize(solver.unwrap_or("auto")).as_str() {
         "auto" => SensitivitySolver::Auto,
         "dense" => SensitivitySolver::Dense,
-        "iterative" | "cg" => SensitivitySolver::Iterative,
+        "sparse" => SensitivitySolver::Sparse,
         other => {
             return Err(PyValueError::new_err(format!(
-                "unknown solver {other:?}; expected 'auto', 'dense', or 'iterative'"
+                "unknown solver {other:?}; expected 'auto', 'dense', or 'sparse'"
             )));
         }
     };
@@ -1267,9 +1267,10 @@ impl PyBalancedNetwork {
         let view = IndexedNetwork::with_core(self.inner(), &self.core);
         let data = powerio::dc_network_data(&view, convention);
         let out = PyDict::new(py);
-        out.set_item("from_indices", data.from_index)?;
-        out.set_item("to_indices", data.to_index)?;
+        out.set_item("from_indices", data.from_indices)?;
+        out.set_item("to_indices", data.to_indices)?;
         out.set_item("susceptance", data.susceptance)?;
+        out.set_item("shift", data.shift)?;
         out.set_item("shift_injection", data.shift_injection)?;
         out.set_item("row_ids", data.row_ids)?;
         out.set_item("bus_ids", data.bus_ids)?;
@@ -2404,10 +2405,32 @@ impl PyStoredModule {
             )));
         };
         let mut inner = powerio_core::PioModule::new(network.clone());
+        // Sources carry over first: a diagnostic's span validates against the
+        // sources on the module it is being added to, so an empty source list
+        // here would reject every span-bearing diagnostic below.
+        for source in module.sources() {
+            inner.add_source_descriptor(source.clone()).map_err(|error| {
+                PowerIODataError::new_err(format!(
+                    "failed to carry source `{}` onto the multiconductor network handle: {error}",
+                    source.id()
+                ))
+            })?;
+        }
+        // Every diagnostic is attempted, in order, even after a failure: a
+        // partial copy that stops early would return fewer diagnostics than
+        // the module carries with no error to say so.
+        let mut first_error = None;
         for diagnostic in module.diagnostics() {
-            if inner.add_diagnostic(diagnostic.clone()).is_err() {
-                break;
+            if let Err(error) = inner.add_diagnostic(diagnostic.clone())
+                && first_error.is_none()
+            {
+                first_error = Some(error);
             }
+        }
+        if let Some(error) = first_error {
+            return Err(PowerIODataError::new_err(format!(
+                "failed to carry every diagnostic onto the multiconductor network handle: {error}"
+            )));
         }
         Ok(PyMulticonductorNetwork::from_module(inner))
     }
