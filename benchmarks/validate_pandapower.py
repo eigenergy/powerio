@@ -70,7 +70,7 @@ def sum_by_bus(elems, ka, kb):
 def check_case(path):
     """Validate one case. Returns the mark: "ok", "FAIL", or "n/a"."""
     name = path.name
-    case = powerio.parse_file(str(path))
+    case = powerio.parse(str(path), value_type=powerio.BalancedNetwork)
     try:
         ppc = _m2ppc(str(path), "mpc")
     except OverflowError as exc:
