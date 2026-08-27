@@ -1451,7 +1451,7 @@ def _dc_data_tool(
             f"the module carries a {module.kind} value; DC data takes a "
             "balanced network"
         )
-    net = powerio.BalancedNetwork(module._inner.as_balanced_network())
+    net = module.as_balanced_network()
     try:
         data = net.dc_data(formula)
     except ValueError as exc:
