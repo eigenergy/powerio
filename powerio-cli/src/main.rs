@@ -1067,6 +1067,7 @@ fn write_options(
     })
 }
 
+#[allow(clippy::too_many_arguments)]
 fn run_dcopf(
     input: &Path,
     from: Option<FormatArg>,
