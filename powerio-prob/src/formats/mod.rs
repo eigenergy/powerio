@@ -24,3 +24,17 @@ pub use bmopf::parse_bmopf_instance;
 pub use goc3::parse_goc3_instance;
 pub use opfdata::parse_opfdata_solution;
 pub use pypsa::{PypsaSequence, parse_pypsa_sequence};
+
+/// The text a reader decodes: the buffer's byte order mark free slice,
+/// validated as UTF-8.
+pub(crate) fn source_text(
+    buffer: &powerio_core::SourceBuffer,
+) -> Result<&str, powerio_core::Error> {
+    std::str::from_utf8(buffer.content_bytes()).map_err(|error| {
+        let cause = powerio_tx::Error::FormatRead {
+            format: "case text",
+            message: format!("not valid UTF-8: {error}"),
+        };
+        powerio_core::Error::new(cause.code(), cause.to_string())
+    })
+}

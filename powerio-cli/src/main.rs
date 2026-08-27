@@ -15,10 +15,10 @@ use powerio_matrix::io::gridfm::{GridfmOptions, numbered_snapshots, write_gridfm
 use powerio_matrix::matrix::{BuildOptions, DcConvention, Scheme, sddm_check};
 use powerio_matrix::pipeline::{MatrixKind, Pipeline, RhsKind};
 use powerio_matrix::synth::{SynthSpec, Topology};
+use powerio_matrix::{
+    DcOpfAssemblyOptions, DcOpfBundleMetadata, DcOpfBundleOptions, Units, write_dcopf_bundle,
+};
 use powerio_matrix::{MissingGenCostPolicy, SensitivityOptions, SensitivitySolver, WriteOptions};
-use powerio_prob::matrix::{DcOpfBundleMetadata, DcOpfBundleOptions, write_dcopf_bundle};
-use powerio_prob::prep::build_dc_opf_preparation;
-use powerio_prob::{DcOpfOptions, Units};
 use serde_json::json;
 mod cases;
 mod compat;
@@ -1070,16 +1070,13 @@ fn run_dcopf(
     let mut policy_network = mpc.clone();
     let cost_report = policy_network
         .apply_gen_cost_policy(&cost_opts.gen_cost_patches, cost_opts.missing_gen_cost)?;
-    let view = powerio_matrix::IndexedNetwork::new(&policy_network);
-    let instance = build_dc_opf_preparation(
-        &view,
-        &DcOpfOptions {
-            convention,
-            units,
-            ..DcOpfOptions::default()
-        },
-    )?;
+    let instance = powerio_prob::DcOpfInstance::from_network(policy_network)
+        .with_context(|| format!("build DC OPF instance for {}", input.display()))?
+        .with_approximation(convention);
+    let mut assembly = DcOpfAssemblyOptions::default();
+    assembly.units = units;
     let bundle_options = DcOpfBundleOptions {
+        assembly,
         metadata: DcOpfBundleMetadata {
             cost_policy: cost_opts.missing_gen_cost,
             cost_report,
@@ -1233,7 +1230,7 @@ fn run_summary(input: &Path, from: Option<FormatArg>, scenario: i64) -> anyhow::
     let value = if from == Some(FormatArg::Gridfm)
         || (from.is_none() && looks_like_gridfm_dir(input))
     {
-        let read = powerio_matrix::read_gridfm_dataset(input, scenario)
+        let read = powerio::gridfm::read_gridfm_dataset(input, scenario)
             .with_context(|| format!("reading gridfm dataset {}", input.display()))?;
         transmission_summary_json(&read.network, &read.warnings)
     } else {
@@ -1300,7 +1297,7 @@ fn build_package(
     scenario: i64,
 ) -> anyhow::Result<NetworkPackage> {
     if from == Some(FormatArg::Gridfm) || (from.is_none() && looks_like_gridfm_dir(input)) {
-        let read = powerio_matrix::read_gridfm_dataset(input, scenario)
+        let read = powerio::gridfm::read_gridfm_dataset(input, scenario)
             .with_context(|| format!("reading gridfm dataset {}", input.display()))?;
         let mut pkg = NetworkPackage::from_balanced_with_read_diagnostics(
             read.network,
@@ -1558,7 +1555,7 @@ fn run_convert(
         // `parse_file` can't), so it routes through powerio-matrix's reader,
         // surfacing its fidelity notes.
         let conv = if matches!(from, Some(FormatArg::Gridfm)) {
-            let read = powerio_matrix::read_gridfm_dataset(input, scenario)
+            let read = powerio::gridfm::read_gridfm_dataset(input, scenario)
                 .with_context(|| format!("reading gridfm dataset {}", input.display()))?;
             for w in &read.warnings {
                 eprintln!("fidelity: {w}");
@@ -1920,7 +1917,7 @@ fn convert_to_pypsa_folder(
         anyhow::bail!("`--to pypsa-csv` writes a directory and cannot write to stdout");
     }
     let net = if from == Some(FormatArg::Gridfm) {
-        let read = powerio_matrix::read_gridfm_dataset(input, scenario)
+        let read = powerio::gridfm::read_gridfm_dataset(input, scenario)
             .with_context(|| format!("reading gridfm dataset {}", input.display()))?;
         for w in &read.warnings {
             eprintln!("fidelity: {w}");

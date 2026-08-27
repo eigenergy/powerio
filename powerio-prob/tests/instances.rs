@@ -239,16 +239,11 @@ fn zero_impedance_branches_are_preserved_until_the_explicit_merge() {
     net.branches_mut().push(tie);
     let branch_count = net.branches().len();
 
-    // The instance preserves the branch; the finite projection refuses it by
-    // default rather than skipping.
+    // The instance preserves the branch; the finite projection's refusal by
+    // default (rather than skipping) is covered beside the private assembly
+    // in `dcopf_tests`.
     let instance = DcOpfInstance::from_network(net.clone()).unwrap();
     assert_eq!(instance.network().branches().len(), branch_count);
-    let view = powerio_matrix::IndexedNetwork::new(&net);
-    let refused = powerio_prob::prep::build_dc_opf_preparation(
-        &view,
-        &powerio_prob::prep::DcOpfOptions::default(),
-    );
-    assert!(refused.is_err(), "the default preserves and refuses");
 
     // The explicit merge returns the mapping and the diagnostics, and the
     // merged network projects.
@@ -268,13 +263,6 @@ fn zero_impedance_branches_are_preserved_until_the_explicit_merge() {
             .iter()
             .all(|branch| { branch.from != BusId(6) && branch.to != BusId(6) })
     );
-    let merged_view = powerio_matrix::IndexedNetwork::new(&merged);
-    powerio_prob::prep::build_dc_opf_preparation(
-        &merged_view,
-        &powerio_prob::prep::DcOpfOptions::default(),
-    )
-    .expect("the merged network projects without skipping");
-
     // The untouched input network still carries the branch.
     assert_eq!(net.branches().len(), branch_count);
 }
