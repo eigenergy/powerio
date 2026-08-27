@@ -4,7 +4,6 @@
 //! dual number automatic differentiation of the injection equations, the
 //! PowerModels basic Jacobian reconstructed from the physical matrix and bus
 //! types, and in place value updates over one sparse structure.
-#![cfg(feature = "matrix")]
 // k/m/n, G/B, and V are the textbook notation throughout this suite.
 #![allow(clippy::many_single_char_names)]
 // The dense reference implementations index square arrays by both loop
@@ -15,7 +14,7 @@ use std::sync::Arc;
 
 use num_complex::Complex64;
 use powerio_core::Source;
-use powerio_prob::matrix::{VoltageCoordinates, calc_power_flow_jacobian};
+use powerio_matrix::{VoltageCoordinates, calc_power_flow_jacobian};
 use powerio_prob::{AcPfInstance, BalancedStateBuilder};
 use powerio_tx::{BalancedNetwork, BusType};
 
