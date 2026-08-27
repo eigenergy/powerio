@@ -131,16 +131,16 @@ mod tests {
     }
 
     /// The shared assembly: PowerModels orientation, stable identity for
-    /// every included and omitted row, and the shift injection
-    /// `p_shift = A' (b .* shift)` with the shift read in radians.
+    /// every included and omitted row, the per row shift in radians, and the
+    /// shift injection `p_shift = -A' (b .* shift)`.
     #[test]
     fn dc_network_data_maps_rows_and_omissions() {
         let network = three_bus_network();
         let view = crate::IndexedNetwork::new(&network);
         let data = dc_network_data(&view, DcConvention::SeriesImpedance);
         assert_eq!(data.formula, "series_susceptance");
-        assert_eq!(data.from_index, vec![0, 1]);
-        assert_eq!(data.to_index, vec![1, 2]);
+        assert_eq!(data.from_indices, vec![0, 1]);
+        assert_eq!(data.to_indices, vec![1, 2]);
         assert_eq!(data.row_ids, vec!["branches:0", "branches:1"]);
         assert_eq!(data.bus_ids, vec!["1", "2", "3"]);
         assert_eq!(data.omitted.len(), 1);
@@ -150,9 +150,85 @@ mod tests {
         let b = data.susceptance[1];
         assert!((b - 5.0).abs() < 1e-12);
         let shift = 30.0_f64.to_radians();
+        assert!(data.shift[0].abs() < 1e-15);
+        assert!((data.shift[1] - shift).abs() < 1e-12);
         assert!((data.shift_injection[1] - (-b * shift)).abs() < 1e-12);
         assert!((data.shift_injection[2] - (b * shift)).abs() < 1e-12);
         assert!(data.shift_injection[0].abs() < 1e-15);
+    }
+
+    /// The degeneracy bound follows the selected formula: a purely resistive
+    /// branch has a finite (zero) series susceptance and stays an included
+    /// row under the series formula, while the two reactance formulas omit
+    /// it; a branch with no impedance at all is omitted under every formula.
+    #[test]
+    fn the_degeneracy_bound_follows_the_formula() {
+        use crate::{Branch, Bus, BusId, BusType};
+        let mut resistive = Branch::new(BusId(1), BusId(2), 0.05, 0.0);
+        resistive.uid = Some("resistive".to_owned());
+        let mut nothing = Branch::new(BusId(2), BusId(3), 0.0, 0.0);
+        nothing.uid = Some("nothing".to_owned());
+        let network = crate::BalancedNetwork::in_memory(
+            "dc-degenerate",
+            100.0,
+            vec![
+                Bus::new(BusId(1), BusType::Ref, 230.0),
+                Bus::new(BusId(2), BusType::Pq, 230.0),
+                Bus::new(BusId(3), BusType::Pq, 230.0),
+            ],
+            vec![resistive, nothing],
+        );
+        let view = crate::IndexedNetwork::new(&network);
+
+        let series = dc_network_data(&view, DcConvention::SeriesImpedance);
+        assert_eq!(series.row_ids, vec!["resistive"]);
+        assert_eq!(series.from_indices, vec![0]);
+        assert_eq!(series.to_indices, vec![1]);
+        assert!(series.susceptance[0].abs() < 1e-15);
+        assert_eq!(series.omitted.len(), 1);
+        assert_eq!(series.omitted[0].0, "nothing");
+
+        for convention in [DcConvention::Matpower, DcConvention::ReactanceOnly] {
+            let data = dc_network_data(&view, convention);
+            assert!(data.row_ids.is_empty(), "{convention:?}");
+            let omitted: Vec<&str> = data.omitted.iter().map(|(id, _)| id.as_str()).collect();
+            assert_eq!(omitted, vec!["resistive", "nothing"], "{convention:?}");
+            for (_, reason) in &data.omitted {
+                assert!(reason.contains("reactance"), "{reason}");
+            }
+        }
+    }
+
+    /// A three winding transformer's star bus and winding branches appear in
+    /// every table: `bus_ids` matches the incidence column count and the
+    /// winding rows are included or omitted, never absent.
+    #[test]
+    fn three_winding_expansion_keeps_every_table_aligned() {
+        let path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../tests/data/psse/case3_3w_v33.raw"
+        );
+        let source = powerio_core::Source::open(std::path::Path::new(path)).unwrap();
+        let module =
+            crate::parse(source.with_format(powerio_core::FormatId::new("psse").unwrap())).unwrap();
+        let network = module.value();
+        let view = crate::IndexedNetwork::new(network);
+        let data = dc_network_data(&view, DcConvention::SeriesImpedance);
+        assert_eq!(data.bus_ids.len(), view.n());
+        // Three declared buses plus the synthetic star bus.
+        assert_eq!(data.bus_ids.len(), 4);
+        assert!(
+            data.row_ids.len() + data.omitted.len() >= 3,
+            "winding branches missing: {} rows, {} omitted",
+            data.row_ids.len(),
+            data.omitted.len()
+        );
+        for index in &data.from_indices {
+            assert!(*index < data.bus_ids.len());
+        }
+        for index in &data.to_indices {
+            assert!(*index < data.bus_ids.len());
+        }
     }
 
     /// The formula names are the cross language vocabulary; unknown names
@@ -271,16 +347,24 @@ mod tests {
 ///
 /// Rows follow `A[e, from] = +1`, `A[e, to] = -1` (PowerModels orientation);
 /// susceptance carries the PowerModels sign for the selected formula; the
-/// phase shift injection is `p_shift = A' * (b .* shift)` per bus.
+/// phase shift injection is `p_shift = -A' * (b .* shift)` per bus (the
+/// MATPOWER `makeBdc` sign), and the complete affine branch flow is
+/// `p_branch = -b .* (va_from - va_to) - b .* shift`, so
+/// `A' * p_branch` equals the angle terms plus `shift_injection`. Rows and
+/// columns describe the analysis network after three winding transformer
+/// expansion.
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
 pub struct DcNetworkData {
     /// From bus column per included row.
-    pub from_index: Vec<usize>,
+    pub from_indices: Vec<usize>,
     /// To bus column per included row.
-    pub to_index: Vec<usize>,
+    pub to_indices: Vec<usize>,
     /// Branch susceptance per included row.
     pub susceptance: Vec<f64>,
+    /// Phase shift angle per included row, radians; `0` for an unshifted
+    /// branch or a formula that excludes shifts.
+    pub shift: Vec<f64>,
     /// Phase shift bus injection, one entry per bus.
     pub shift_injection: Vec<f64>,
     /// Stable module element ID per included row.
@@ -322,6 +406,10 @@ impl DcConvention {
 /// Assemble [`DcNetworkData`]: in-service branches in table order, self
 /// loops and formula degenerate branches reported as omitted rows by stable
 /// ID, never dropped silently and never replaced with an epsilon impedance.
+/// The degeneracy bound applies to the magnitude the selected formula
+/// actually divides by: the series impedance magnitude for
+/// [`DcConvention::SeriesImpedance`], the reactance alone for the two
+/// reactance formulas.
 #[must_use]
 pub fn dc_network_data(
     view: &crate::IndexedNetwork<'_>,
@@ -330,9 +418,10 @@ pub fn dc_network_data(
     let network = view.network();
     let n = view.n();
     let mut data = DcNetworkData {
-        from_index: Vec::new(),
-        to_index: Vec::new(),
+        from_indices: Vec::new(),
+        to_indices: Vec::new(),
         susceptance: Vec::new(),
+        shift: Vec::new(),
         shift_injection: vec![0.0; n],
         row_ids: Vec::new(),
         bus_ids: network
@@ -361,11 +450,23 @@ pub fn dc_network_data(
             data.omitted.push((id, "self loop".to_owned()));
             continue;
         }
-        if branch.x.abs() < MIN_DIVISIBLE_MAGNITUDE {
-            data.omitted.push((
-                id,
-                "zero impedance: the selected formula has no finite susceptance".to_owned(),
-            ));
+        let degenerate = match convention {
+            DcConvention::SeriesImpedance => branch.r.hypot(branch.x) < MIN_DIVISIBLE_MAGNITUDE,
+            DcConvention::Matpower | DcConvention::ReactanceOnly => {
+                branch.x.abs() < MIN_DIVISIBLE_MAGNITUDE
+            }
+        };
+        if degenerate {
+            let reason = match convention {
+                DcConvention::SeriesImpedance => {
+                    "zero impedance: the series impedance magnitude is below the divisibility \
+                     floor"
+                }
+                DcConvention::Matpower | DcConvention::ReactanceOnly => {
+                    "zero reactance: the selected formula divides by reactance"
+                }
+            };
+            data.omitted.push((id, reason.to_owned()));
             continue;
         }
         let tap = match branch.divisible_tap(idx) {
@@ -381,18 +482,19 @@ pub fn dc_network_data(
                 .push((id, "susceptance is not finite".to_owned()));
             continue;
         }
-        let shift = if convention.includes_phase_shifts() {
+        let row_shift = if convention.includes_phase_shifts() {
             view.angle_radians(branch.shift)
         } else {
             0.0
         };
-        if shift != 0.0 {
-            data.shift_injection[i] -= b * shift;
-            data.shift_injection[j] += b * shift;
+        if row_shift != 0.0 {
+            data.shift_injection[i] -= b * row_shift;
+            data.shift_injection[j] += b * row_shift;
         }
-        data.from_index.push(i);
-        data.to_index.push(j);
+        data.from_indices.push(i);
+        data.to_indices.push(j);
         data.susceptance.push(b);
+        data.shift.push(row_shift);
         data.row_ids.push(id);
     }
     data

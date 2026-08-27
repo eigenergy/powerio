@@ -1267,9 +1267,10 @@ impl PyBalancedNetwork {
         let view = IndexedNetwork::with_core(self.inner(), &self.core);
         let data = powerio::dc_network_data(&view, convention);
         let out = PyDict::new(py);
-        out.set_item("from_indices", data.from_index)?;
-        out.set_item("to_indices", data.to_index)?;
+        out.set_item("from_indices", data.from_indices)?;
+        out.set_item("to_indices", data.to_indices)?;
         out.set_item("susceptance", data.susceptance)?;
+        out.set_item("shift", data.shift)?;
         out.set_item("shift_injection", data.shift_injection)?;
         out.set_item("row_ids", data.row_ids)?;
         out.set_item("bus_ids", data.bus_ids)?;

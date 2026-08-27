@@ -608,6 +608,33 @@ int main(int argc, char **argv) {
         pio_error_release(error);
         error = NULL;
 
+        /* Distinct refusal codes: NULL handle, unknown formula, selector
+         * conflict each carry their own registered identity. */
+        char *none = pio_module_write_json(NULL, &error);
+        CHECK(none == NULL && error != NULL &&
+                  strcmp(pio_error_code(error), "BIND.CAPI.NULL_HANDLE") == 0,
+              "NULL handle refusal carries the wrong code");
+        pio_error_release(error);
+        error = NULL;
+        PioDcData *bad = pio_dc_data_build(reread, "nodal_admittance", &error);
+        CHECK(bad == NULL && error != NULL &&
+                  strcmp(pio_error_code(error), "REQUEST.CAPI.UNKNOWN_FORMULA") == 0,
+              "unknown formula refusal carries the wrong code");
+        pio_error_release(error);
+        error = NULL;
+        PioModuleHandle *conflicted = pio_module_export_state(reread, 0, "s1", &error);
+        CHECK(conflicted == NULL && error != NULL &&
+                  strcmp(pio_error_code(error), "REQUEST.CAPI.SELECTOR_CONFLICT") == 0,
+              "selector conflict refusal carries the wrong code");
+        pio_error_release(error);
+        error = NULL;
+
+        /* Module diagnostics as owned JSON. */
+        char *module_diagnostics = pio_module_diagnostics_json(reread, &error);
+        CHECK(module_diagnostics != NULL && module_diagnostics[0] == '[',
+              "module diagnostics JSON missing");
+        pio_string_free(module_diagnostics);
+
         /* DC data: an independently owned result with stable mappings. */
         PioDcData *dc = pio_dc_data_build(reread, "series_susceptance", &error);
         CHECK(dc != NULL, "DC data build failed");
@@ -631,6 +658,7 @@ int main(int argc, char **argv) {
                   "row mapping is not a stable element ID");
         }
         CHECK(pio_dc_data_n_omitted(dc) == 0, "case9 omits no branch");
+        CHECK(pio_dc_data_shift(dc) != NULL, "shift span is NULL");
         CHECK(strcmp(pio_dc_data_formula(dc), "series_susceptance") == 0,
               "formula name drifted");
 

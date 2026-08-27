@@ -1475,12 +1475,14 @@ def test_dc_data_names_match_the_c_surface():
         "omitted_ids",
         "omitted_reasons",
         "row_ids",
+        "shift",
         "shift_injection",
         "susceptance",
         "to_indices",
     ]
     assert data["formula"] == "series_susceptance"
     assert len(data["from_indices"]) == 9
+    assert data["shift"] == [0.0] * 9
     assert len(data["bus_ids"]) == 9
     assert data["row_ids"][0] == "branches:0"
     assert all(b > 0 for b in data["susceptance"])
