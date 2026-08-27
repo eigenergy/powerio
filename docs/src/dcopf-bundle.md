@@ -2,7 +2,7 @@
 
 `powerio dcopf <case>.m -o <out>` assembles a `DcOpfInstance` and writes
 `<out>/<case>_dcopf/`. Rust callers pass an assembled instance to
-`powerio_prob::matrix::write_dcopf_bundle`. The directory contains Matrix
+`powerio_matrix::write_dcopf_bundle`. The directory contains Matrix
 Market files and `dcopf_meta.json`.
 
 ## Conventions

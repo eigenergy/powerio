@@ -235,3 +235,43 @@ fn injection_updates_reconstruct_no_matrix() {
         "the incidence matrix was not reconstructed"
     );
 }
+
+#[test]
+fn the_grounded_rhs_subtracts_the_shift_injection() {
+    // A shifted branch makes the shift term visible: with p = -B va + p_shift,
+    // the grounded solve needs rhs = p - p_shift at the retained buses.
+    let mut net = case9();
+    net.branches_mut()[0].shift = 10.0;
+    let instance = DcPfInstance::from_network(net).unwrap();
+    let operators = DcOperators::build(&instance).unwrap();
+    let system = operators.reference_constrained_system().unwrap();
+
+    let p = operators.bus_power_injection().to_vec();
+    let shift = operators.phase_shift_injection();
+    assert!(
+        shift.iter().any(|value| value.abs() > 1e-9),
+        "the shifted branch must inject"
+    );
+    for (reduced, &row) in system.retained_rows.iter().enumerate() {
+        assert!(
+            (system.rhs[reduced] - (p[row] - shift[row])).abs() < 1e-12,
+            "row {row}"
+        );
+    }
+}
+
+#[test]
+fn a_subnormal_reactance_is_refused_like_zero() {
+    // x = 1e-160 divides to a finite 1e160 weight that would annihilate every
+    // real branch at its buses; the divisibility floor refuses it the same
+    // way exact zero is refused.
+    let mut net = case9();
+    net.branches_mut()[0].r = 0.0;
+    net.branches_mut()[0].x = 1e-160;
+    let instance = DcPfInstance::from_network(net).unwrap();
+    let error = DcOperators::build(&instance).unwrap_err();
+    assert!(
+        error.to_string().contains("merge_zero_impedance_buses"),
+        "{error}"
+    );
+}

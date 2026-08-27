@@ -1,6 +1,7 @@
 //! The gridfm Parquet read side against the matrix crate's write side. The
 //! facade owns the reader, so the write to read round trips live here; the
 //! writer's own structural tests stay in `powerio-matrix`.
+#![cfg(feature = "gridfm")]
 
 use powerio::gridfm::{
     gridfm_base_case, read_gridfm_dataset, read_gridfm_network, read_gridfm_scenario_set,

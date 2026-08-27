@@ -22,7 +22,7 @@ extension-module = ["pyo3/extension-module"]
 # Compile in the gridfm-datakit Parquet writer (`Network.write_gridfm`,
 # `write_gridfm_batch`). The PyPI build enables this; custom local builds can
 # omit it when they need only parse/write/convert and sparse matrices.
-gridfm = ["powerio-matrix/gridfm"]
+gridfm = ["powerio-matrix/gridfm", "powerio/gridfm"]
 
 [dependencies]
 powerio.workspace = true

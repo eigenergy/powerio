@@ -243,17 +243,25 @@ fn an_unstated_quantity_reads_as_none_not_zero() {
 fn repeated_keyed_access_does_not_allocate() {
     let net = case9();
     let n = net.buses().len();
+    let n_gen = net.generators().len();
     let series = BalancedStateBuilder::new(net, labels(2))
         .bus_voltage_magnitudes(vec![1.0; 2 * n])
+        .generator_active_powers(vec![10.0; 2 * n_gen])
         .build()
         .unwrap();
     let (_, point) = series.get(0).unwrap();
     // Warm every code path once (the BusId spelling allocates its lookup
     // string; the layout hash itself allocates nothing).
-    let _ = point.quantity_values("bus_voltage_magnitude");
-    let key = "1";
-    let quantity = point.identity_order("bus_voltage_magnitude").unwrap().len();
-    assert!(quantity > 0);
+    let _ = point.quantity_values("generator_active_power");
+    let key = point
+        .identity_order("generator_active_power")
+        .unwrap()
+        .next()
+        .expect("case9 states generators")
+        .to_owned();
+    let key = key.as_str();
+    // The hot accessor really reads a stored column.
+    assert!(point.generator_active_power(key).is_some());
     let direct = |p: &powerio_prob::OperatingPoint<powerio_tx::BalancedNetwork>| {
         // Keyed access through a preformed key string: no per-call layout or
         // column allocation.
@@ -282,23 +290,34 @@ fn multiconductor_points_address_terminals_and_share_the_network() {
     let load_conductors: usize = net.loads().iter().map(|l| l.terminal_map.len()).sum();
     let bus_ptr = net.buses().as_ptr();
 
+    // Distinct values per position: a wrong bus/terminal or load/conductor
+    // index reads back a different number, so addressing errors surface.
+    let vm: Vec<f64> = (0..2 * terminals).map(|k| 7200.0 + k as f64).collect();
+    let lp: Vec<f64> = (0..2 * load_conductors)
+        .map(|k| 10_000.0 + k as f64)
+        .collect();
     let series = MulticonductorStateBuilder::new(net.clone(), labels(2))
-        .terminal_voltage_magnitudes(vec![7200.0; 2 * terminals])
-        .load_active_powers(vec![10_000.0; 2 * load_conductors])
+        .terminal_voltage_magnitudes(vm.clone())
+        .load_active_powers(lp.clone())
         .build()
         .expect("multiconductor series builds");
     let (_, point) = series.get(0).unwrap();
     let bus = &net.buses()[0];
-    let terminal = bus.terminals[0].as_str();
-    assert_eq!(
-        point.terminal_voltage_magnitude(&bus.id, terminal),
-        Some(7200.0)
-    );
+    for (position, terminal) in bus.terminals.iter().enumerate() {
+        assert_eq!(
+            point.terminal_voltage_magnitude(&bus.id, terminal.as_str()),
+            Some(vm[position]),
+            "terminal {terminal}"
+        );
+    }
     let load = &net.loads()[0];
-    assert_eq!(
-        point.load_active_power(&load.name, load.terminal_map[0].as_str()),
-        Some(10_000.0)
-    );
+    for (position, conductor) in load.terminal_map.iter().enumerate() {
+        assert_eq!(
+            point.load_active_power(&load.name, conductor.as_str()),
+            Some(lp[position]),
+            "conductor {conductor}"
+        );
+    }
     let retained = point.clone();
     drop(series);
     assert_eq!(retained.network().buses().as_ptr(), bus_ptr);
