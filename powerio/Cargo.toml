@@ -24,6 +24,7 @@ num-complex = { workspace = true }
 powerio-core = { workspace = true }
 powerio-dist = { workspace = true }
 powerio-matrix = { workspace = true, optional = true }
+powerio-prob = { workspace = true }
 powerio-tx = { workspace = true }
 schemars = { workspace = true, optional = true }
 serde = { workspace = true }

@@ -2347,6 +2347,7 @@ dependencies = [
  "powerio-core",
  "powerio-dist",
  "powerio-matrix",
+ "powerio-prob",
  "powerio-tx",
  "schemars",
  "serde",

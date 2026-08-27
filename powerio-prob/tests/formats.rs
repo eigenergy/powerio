@@ -1,6 +1,8 @@
 //! Format to problem mappings: GO Challenge 3 to `AcScucInstance`, OPFData to
-//! `AcOpfSolution`.
+//! `AcOpfSolution`, BMOPF to `McAcOpfInstance`. Every entry takes the
+//! retained `Source` and returns the typed module.
 
+use powerio_core::Source;
 use powerio_prob::solution::Termination;
 use powerio_prob::{
     ObjectiveTerm, parse_bmopf_instance, parse_goc3_instance, parse_opfdata_solution,
@@ -11,10 +13,17 @@ fn fixture(path: &str) -> String {
     std::fs::read_to_string(root.join(path)).unwrap()
 }
 
+fn memory(name: &str, text: &str) -> Source {
+    Source::from_bytes(name, text.as_bytes().to_vec()).unwrap()
+}
+
 #[test]
 fn goc3_parses_to_the_scuc_instance() {
     let text = fixture("tests/data/goc3_small.json");
-    let (instance, _diagnostics) = parse_goc3_instance(&text, "goc3_small").unwrap();
+    let module = parse_goc3_instance(memory("goc3_small.json", &text)).unwrap();
+    // The module retains the source it parsed.
+    assert!(module.source().is_some());
+    let instance = module.value();
 
     // Both halves of the join describe the same system.
     assert_eq!(instance.network().buses().len(), 2);
@@ -36,8 +45,8 @@ fn goc3_parses_to_the_scuc_instance() {
 #[test]
 fn goc3_network_extraction_reports_the_discard() {
     let text = fixture("tests/data/goc3_small.json");
-    let (instance, _diagnostics) = parse_goc3_instance(&text, "goc3_small").unwrap();
-    let (_opf, diagnostics) = instance.to_dc_opf().unwrap();
+    let module = parse_goc3_instance(memory("goc3_small.json", &text)).unwrap();
+    let (_opf, diagnostics) = module.value().to_dc_opf().unwrap();
     assert!(
         diagnostics
             .iter()
@@ -47,14 +56,17 @@ fn goc3_network_extraction_reports_the_discard() {
 }
 
 #[test]
-fn goc3_rejects_a_malformed_document() {
-    assert!(parse_goc3_instance("{\"network\": {}}", "broken").is_err());
+fn goc3_rejects_a_malformed_document_and_retains_the_source() {
+    let error = parse_goc3_instance(memory("broken.json", "{\"network\": {}}")).unwrap_err();
+    assert!(error.retained_source().is_some());
 }
 
 #[test]
 fn opfdata_parses_to_the_solved_ac_opf() {
     let text = fixture("../tests/data/opfdataset/example_0.json");
-    let (solution, _diagnostics) = parse_opfdata_solution(&text).unwrap();
+    let module = parse_opfdata_solution(memory("example_0.json", &text)).unwrap();
+    assert!(module.source().is_some());
+    let solution = module.value();
 
     // The source claims a solution and says nothing about how it was reached.
     assert_eq!(*solution.termination(), Termination::NotReported);
@@ -90,7 +102,7 @@ fn opfdata_parses_to_the_solved_ac_opf() {
 
 #[test]
 fn opfdata_rejects_a_malformed_document() {
-    assert!(parse_opfdata_solution("{\"grid\": {}}").is_err());
+    assert!(parse_opfdata_solution(memory("broken.json", "{\"grid\": {}}")).is_err());
 }
 
 #[test]
@@ -105,7 +117,9 @@ fn bmopf_parses_to_the_multiconductor_opf_instance() {
         "configuration": "WYE", "p_max": [1000.0, 1000.0, 1000.0],
         "cost": [0.12, 0.15, 0.18]}}
     }"#;
-    let (instance, _diagnostics) = parse_bmopf_instance(text, "bmopf_small").unwrap();
+    let module = parse_bmopf_instance(memory("bmopf_small.json", text)).unwrap();
+    assert!(module.source().is_some());
+    let instance = module.value();
 
     // The per phase objective reference, backed by the exact stated array.
     assert_eq!(
@@ -125,11 +139,12 @@ fn bmopf_parses_to_the_multiconductor_opf_instance() {
 }
 
 #[test]
-fn bmopf_without_a_source_is_refused_as_an_instance() {
+fn bmopf_without_a_source_is_refused_as_an_instance_and_retains_the_bytes() {
     let text = r#"{
       "bus": {"a": {"terminal_names": ["1"]}},
       "generator": {"g": {"bus": "a", "terminal_map": ["1"],
         "configuration": "WYE", "cost": [0.1]}}
     }"#;
-    assert!(parse_bmopf_instance(text, "no_source").is_err());
+    let error = parse_bmopf_instance(memory("no_source.json", text)).unwrap_err();
+    assert!(error.retained_source().is_some());
 }
