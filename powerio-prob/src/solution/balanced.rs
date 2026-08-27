@@ -50,36 +50,70 @@ struct SolutionIndex {
 }
 
 impl SolutionIndex {
-    fn build(network: &BalancedNetwork) -> Self {
-        let bus = network
-            .buses()
-            .iter()
-            .enumerate()
-            .map(|(row, bus)| (bus.id, row))
-            .collect();
-        let branch = network
-            .branches()
-            .iter()
-            .enumerate()
-            .map(|(row, branch)| (row_identity(branch.uid.as_deref(), "branches", row), row))
-            .collect();
-        let generator = network
-            .generators()
-            .iter()
-            .enumerate()
-            .map(|(row, generator)| {
-                (
-                    row_identity(generator.uid.as_deref(), "generators", row),
-                    row,
-                )
-            })
-            .collect();
-        Self {
-            bus,
-            branch,
-            generator,
+    fn build(network: &BalancedNetwork) -> Result<Self, Error> {
+        let mut index = Self::default();
+        for (row, bus) in network.buses().iter().enumerate() {
+            if index.bus.insert(bus.id, row).is_some() {
+                return Err(duplicate_identity("bus", &bus.id.to_string()));
+            }
         }
+        for (row, branch) in network.branches().iter().enumerate() {
+            let identity = row_identity(branch.uid.as_deref(), "branches", row);
+            if index.branch.insert(identity.clone(), row).is_some() {
+                return Err(duplicate_identity("branch", &identity));
+            }
+        }
+        for (row, generator) in network.generators().iter().enumerate() {
+            let identity = row_identity(generator.uid.as_deref(), "generators", row);
+            if index.generator.insert(identity.clone(), row).is_some() {
+                return Err(duplicate_identity("generator", &identity));
+            }
+        }
+        Ok(index)
     }
+}
+
+/// The identity index a solution constructor builds once, refusing a network
+/// whose resolved identities are not all distinct so every keyed accessor
+/// reads its own row.
+fn solution_index<I>(instance: &std::sync::Arc<I>) -> Result<SolutionIndex, Error>
+where
+    I: NetworkCarrier,
+{
+    SolutionIndex::build(instance.network())
+}
+
+/// The one thing solution_index needs from each instance type.
+trait NetworkCarrier {
+    fn network(&self) -> &BalancedNetwork;
+}
+
+impl NetworkCarrier for DcPfInstance {
+    fn network(&self) -> &BalancedNetwork {
+        DcPfInstance::network(self)
+    }
+}
+impl NetworkCarrier for AcPfInstance {
+    fn network(&self) -> &BalancedNetwork {
+        AcPfInstance::network(self)
+    }
+}
+impl NetworkCarrier for DcOpfInstance {
+    fn network(&self) -> &BalancedNetwork {
+        DcOpfInstance::network(self)
+    }
+}
+impl NetworkCarrier for AcOpfInstance {
+    fn network(&self) -> &BalancedNetwork {
+        AcOpfInstance::network(self)
+    }
+}
+
+fn duplicate_identity(kind: &str, identity: &str) -> Error {
+    Error::new(
+        &codes::BUILD_STATE_IDENTITY_UNKNOWN,
+        format!("{kind}: duplicate element identity `{identity}`"),
+    )
 }
 
 fn bus_position(index: &SolutionIndex, bus: BusId) -> Option<usize> {
@@ -117,8 +151,7 @@ macro_rules! shared_solution_accessors {
         }
 
         fn row_index(&self) -> &SolutionIndex {
-            self.index
-                .get_or_init(|| SolutionIndex::build(self.network()))
+            &self.index
         }
 
         /// Bus IDs in the column order every bulk accessor uses.
@@ -240,7 +273,7 @@ pub struct DcPfSolution {
     branch_from_active_flow: Vec<f64>,
     branch_to_active_flow: Vec<f64>,
     generator_dispatch: Option<GeneratorDispatch>,
-    index: std::sync::OnceLock<SolutionIndex>,
+    index: SolutionIndex,
 }
 
 impl DcPfSolution {
@@ -273,6 +306,7 @@ impl DcPfSolution {
             branch_to_active_flow.len(),
             branches,
         )?;
+        let index = solution_index(&instance)?;
         Ok(Self {
             instance,
             termination,
@@ -283,7 +317,7 @@ impl DcPfSolution {
             branch_from_active_flow,
             branch_to_active_flow,
             generator_dispatch: None,
-            index: std::sync::OnceLock::new(),
+            index,
         })
     }
 
@@ -354,7 +388,7 @@ pub struct AcPfSolution {
     branch_to_active_flow: Vec<f64>,
     branch_to_reactive_flow: Vec<f64>,
     generator_dispatch: Option<GeneratorDispatch>,
-    index: std::sync::OnceLock<SolutionIndex>,
+    index: SolutionIndex,
 }
 
 impl AcPfSolution {
@@ -408,6 +442,7 @@ impl AcPfSolution {
             branch_to_reactive_flow.len(),
             branches,
         )?;
+        let index = solution_index(&instance)?;
         Ok(Self {
             instance,
             termination,
@@ -422,7 +457,7 @@ impl AcPfSolution {
             branch_to_active_flow,
             branch_to_reactive_flow,
             generator_dispatch: None,
-            index: std::sync::OnceLock::new(),
+            index,
         })
     }
 
@@ -493,7 +528,7 @@ pub struct DcOpfSolution {
     branch_to_active_flow: Vec<f64>,
     generator_active_power: Vec<f64>,
     objective: f64,
-    index: std::sync::OnceLock<SolutionIndex>,
+    index: SolutionIndex,
 }
 
 impl DcOpfSolution {
@@ -533,6 +568,7 @@ impl DcOpfSolution {
             generator_active_power.len(),
             instance.network().generators().len(),
         )?;
+        let index = solution_index(&instance)?;
         Ok(Self {
             instance,
             termination,
@@ -544,7 +580,7 @@ impl DcOpfSolution {
             branch_to_active_flow,
             generator_active_power,
             objective,
-            index: std::sync::OnceLock::new(),
+            index,
         })
     }
 
@@ -606,7 +642,7 @@ pub struct AcOpfSolution {
     generator_active_power: Vec<f64>,
     generator_reactive_power: Vec<f64>,
     objective: f64,
-    index: std::sync::OnceLock<SolutionIndex>,
+    index: SolutionIndex,
 }
 
 impl AcOpfSolution {
@@ -673,6 +709,7 @@ impl AcOpfSolution {
             generator_reactive_power.len(),
             generators,
         )?;
+        let index = solution_index(&instance)?;
         Ok(Self {
             instance,
             termination,
@@ -689,7 +726,7 @@ impl AcOpfSolution {
             generator_active_power,
             generator_reactive_power,
             objective,
-            index: std::sync::OnceLock::new(),
+            index,
         })
     }
 
