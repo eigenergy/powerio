@@ -37,19 +37,32 @@ fn source_terminal_count(network: &MulticonductorNetwork) -> usize {
         .sum()
 }
 
-fn terminal_position(network: &MulticonductorNetwork, bus: &str, terminal: &str) -> Option<usize> {
-    let mut offset = 0usize;
-    for row in network.buses() {
-        if row.id == bus {
-            return row
-                .terminals
-                .iter()
-                .position(|candidate| candidate == terminal)
-                .map(|position| offset + position);
+/// Bus-and-terminal to flat column position, built once per solution on
+/// first keyed access so repeated reads never rescan the bus table.
+#[derive(Clone, Debug, Default)]
+struct TerminalIndex {
+    position: std::collections::BTreeMap<(String, String), usize>,
+}
+
+impl TerminalIndex {
+    fn build(network: &MulticonductorNetwork) -> Self {
+        let mut position = std::collections::BTreeMap::new();
+        let mut offset = 0usize;
+        for row in network.buses() {
+            for (column, terminal) in row.terminals.iter().enumerate() {
+                position.insert((row.id.clone(), terminal.clone()), offset + column);
+            }
+            offset += row.terminals.len();
         }
-        offset += row.terminals.len();
+        Self { position }
     }
-    None
+}
+
+fn terminal_position(index: &TerminalIndex, bus: &str, terminal: &str) -> Option<usize> {
+    index
+        .position
+        .get(&(bus.to_owned(), terminal.to_owned()))
+        .copied()
 }
 
 macro_rules! shared_mc_solution_accessors {
@@ -66,6 +79,11 @@ macro_rules! shared_mc_solution_accessors {
         #[must_use]
         pub fn shared_instance(&self) -> Arc<$instance_type> {
             Arc::clone(&self.instance)
+        }
+
+        fn terminal_index(&self) -> &TerminalIndex {
+            self.index
+                .get_or_init(|| TerminalIndex::build(self.network()))
         }
 
         /// The network the solved instance calculates on.
@@ -109,13 +127,19 @@ macro_rules! shared_mc_solution_accessors {
         /// Voltage magnitude at one bus terminal, volts.
         #[must_use]
         pub fn terminal_voltage_magnitude(&self, bus: &str, terminal: &str) -> Option<f64> {
-            Some(self.terminal_voltage_magnitude[terminal_position(self.network(), bus, terminal)?])
+            Some(
+                self.terminal_voltage_magnitude
+                    [terminal_position(self.terminal_index(), bus, terminal)?],
+            )
         }
 
         /// Voltage angle at one bus terminal, radians.
         #[must_use]
         pub fn terminal_voltage_angle(&self, bus: &str, terminal: &str) -> Option<f64> {
-            Some(self.terminal_voltage_angle[terminal_position(self.network(), bus, terminal)?])
+            Some(
+                self.terminal_voltage_angle
+                    [terminal_position(self.terminal_index(), bus, terminal)?],
+            )
         }
 
         /// Current into the network at one bus terminal, amperes, when the
@@ -123,7 +147,7 @@ macro_rules! shared_mc_solution_accessors {
         #[must_use]
         pub fn terminal_current_magnitude(&self, bus: &str, terminal: &str) -> Option<f64> {
             let values = self.terminal_current_magnitude.as_ref()?;
-            Some(values[terminal_position(self.network(), bus, terminal)?])
+            Some(values[terminal_position(self.terminal_index(), bus, terminal)?])
         }
 
         /// Active power into the network at one bus terminal, watts, when
@@ -131,7 +155,7 @@ macro_rules! shared_mc_solution_accessors {
         #[must_use]
         pub fn terminal_active_power(&self, bus: &str, terminal: &str) -> Option<f64> {
             let values = self.terminal_active_power.as_ref()?;
-            Some(values[terminal_position(self.network(), bus, terminal)?])
+            Some(values[terminal_position(self.terminal_index(), bus, terminal)?])
         }
 
         /// Record per terminal current magnitudes, amperes.
@@ -185,6 +209,7 @@ pub struct McAcPfSolution {
     terminal_current_magnitude: Option<Vec<f64>>,
     terminal_active_power: Option<Vec<f64>>,
     source_active_injection: Vec<f64>,
+    index: std::sync::OnceLock<TerminalIndex>,
 }
 
 impl McAcPfSolution {
@@ -229,6 +254,7 @@ impl McAcPfSolution {
             terminal_current_magnitude: None,
             terminal_active_power: None,
             source_active_injection,
+            index: std::sync::OnceLock::new(),
         })
     }
 
@@ -252,6 +278,7 @@ pub struct McAcOpfSolution {
     /// each generator's terminal map order, watts.
     generator_active_power: Vec<f64>,
     objective: f64,
+    index: std::sync::OnceLock<TerminalIndex>,
 }
 
 impl McAcOpfSolution {
@@ -310,6 +337,7 @@ impl McAcOpfSolution {
             source_active_injection,
             generator_active_power,
             objective,
+            index: std::sync::OnceLock::new(),
         })
     }
 
