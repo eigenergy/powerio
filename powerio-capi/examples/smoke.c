@@ -653,7 +653,7 @@ int main(int argc, char **argv) {
         for (size_t e = 0; e < rows; e++) {
             CHECK(from[e] >= 0 && (size_t)from[e] < buses, "from index out of range");
             CHECK(to[e] >= 0 && (size_t)to[e] < buses, "to index out of range");
-            CHECK(b[e] > 0.0, "case9 series susceptance should be positive");
+            CHECK(b[e] < 0.0, "case9 series susceptance carries the PowerModels sign");
             CHECK(row_ids[e] != NULL && strncmp(row_ids[e], "branches:", 9) == 0,
                   "row mapping is not a stable element ID");
         }

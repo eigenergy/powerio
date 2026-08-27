@@ -771,8 +771,8 @@ fn element_id(uid: Option<&str>, table: &str, row: usize) -> String {
 
 fn dc_formula(name: &str) -> Result<DcConvention, *mut PioError> {
     match name {
-        "series_susceptance" | "series" => Ok(DcConvention::SeriesImpedance),
-        "tap_adjusted_reactance" | "matpower" => Ok(DcConvention::Matpower),
+        "series_susceptance" | "series" => Ok(DcConvention::SeriesSusceptance),
+        "tap_adjusted_reactance" | "matpower" => Ok(DcConvention::TapAdjustedReactance),
         "reactance_only" => Ok(DcConvention::ReactanceOnly),
         other => Err(error_from_parts(
             codes::REQUEST_CAPI_UNKNOWN_FORMULA.code,
@@ -787,8 +787,8 @@ fn dc_formula(name: &str) -> Result<DcConvention, *mut PioError> {
 
 fn formula_name(convention: DcConvention) -> &'static str {
     match convention {
-        DcConvention::SeriesImpedance => "series_susceptance",
-        DcConvention::Matpower => "tap_adjusted_reactance",
+        DcConvention::SeriesSusceptance => "series_susceptance",
+        DcConvention::TapAdjustedReactance => "tap_adjusted_reactance",
         DcConvention::ReactanceOnly => "reactance_only",
         _ => "unknown",
     }
@@ -1207,8 +1207,8 @@ mod tests {
             assert_eq!(pio_dc_data_n_rows(data), 1);
             assert_eq!(pio_dc_data_n_buses(data), 3);
             let b = *pio_dc_data_susceptance(data);
-            // series: -imag(1/(r+ix)) = x/(r^2+x^2)
-            let expected = 0.1 / (0.01_f64 * 0.01 + 0.1 * 0.1);
+            // series, PowerModels sign: imag(1/(r+ix)) = -x/(r^2+x^2)
+            let expected = -0.1 / (0.01_f64 * 0.01 + 0.1 * 0.1);
             assert!((b - expected).abs() < 1e-12, "{b}");
             assert_eq!(*pio_dc_data_from_indices(data), 0);
             assert_eq!(*pio_dc_data_to_indices(data), 1);
