@@ -458,9 +458,9 @@ fn case_from_parts(
 ) -> PyBalancedNetwork {
     let mut module = powerio_core::PioModule::new(network);
     for diagnostic in diagnostics {
-        module
-            .add_diagnostic(diagnostic)
-            .expect("derived findings carry no identities or spans to collide");
+        // A refusal here can only be the record cap; the finding that does
+        // not fit is dropped rather than failing the handle it annotates.
+        let _ = module.add_diagnostic(diagnostic);
     }
     case_from_module(module)
 }
