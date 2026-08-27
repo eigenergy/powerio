@@ -93,7 +93,7 @@ pub fn read_gridfm_network(
 }
 
 /// Read one `scenario` from a gridfm dataset on disk and rebuild a [`BalancedNetwork`].
-/// The inverse of [`write_gridfm_dataset`].
+/// The inverse of `powerio_matrix::write_gridfm_dataset`.
 ///
 /// `dir` is resolved leniently: the leaf `raw/` directory holding the parquet
 /// files, a `<case>/` directory with a `raw/` child, or a parent directory with
