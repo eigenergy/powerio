@@ -2516,10 +2516,10 @@ fn generator_cost_csv_patches_validate_index_and_bus() {
 }
 
 #[test]
-fn model_json_file_is_refused_by_the_sniffer_and_named_as_such() {
+fn model_json_file_parses_to_the_network_it_serializes() {
     // Model JSON written to disk carries the generic .json extension. It is
-    // not a case format, so the sniffer refuses it and the message names the
-    // entry point that does read it, rather than routing it to a reader.
+    // the network serialization rather than a case format, and the sniffer
+    // routes it through `from_json`, so parsing it returns the same network.
     let net = parse_matpower_file(data("case14.m")).unwrap();
     let text = net.to_json().unwrap();
     let path = std::env::temp_dir().join(format!(
@@ -2529,10 +2529,9 @@ fn model_json_file_is_refused_by_the_sniffer_and_named_as_such() {
     std::fs::write(&path, &text).unwrap();
     let parsed = parse_file(&path, None);
     std::fs::remove_file(&path).ok();
-    let err = parsed
-        .expect_err("model JSON is not a case format")
-        .to_string();
-    assert!(err.contains("from_json"), "got: {err}");
+    let sniffed = parsed.expect("model JSON parses").network;
+    assert_eq!(sniffed.buses().len(), 14);
+    assert_eq!(sniffed.source_format(), SourceFormat::Matpower);
 
     let back = BalancedNetwork::from_json(&text).unwrap();
     assert_eq!(back.buses().len(), 14);
