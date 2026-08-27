@@ -25,6 +25,13 @@
 
 pub use powerio_tx::*;
 
+/// Matrix and graph data, re-exported from `powerio-matrix` under the
+/// `matrix` feature. Matrix construction is never a parse result, so the
+/// facade's automatic parsing and [`PioValue`] do not change with this
+/// feature.
+#[cfg(feature = "matrix")]
+pub use powerio_matrix as matrix;
+
 pub mod package;
 mod value;
 pub use value::{FromPioValue, PioValue, PioValueKind, ValueKindMismatch, try_into_typed};

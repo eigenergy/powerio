@@ -1,8 +1,9 @@
 //! The DC OPF preparation assembly, over the crate private arrays the
 //! matrix and bundle builders derive from an instance.
 
-use crate::prep::{DcOpfOptions, build_dc_opf_preparation};
-use crate::{Error, Units};
+use super::prep::Units;
+use super::prep::{DcOpfOptions, build_dc_opf_preparation};
+use crate::Error;
 use powerio_tx::{
     BalancedNetwork, Branch, Bus, BusId, BusType, DcConvention, GenCost, Generator, IndexedNetwork,
 };
@@ -254,10 +255,9 @@ fn a_network_of_two_islands_grounds_a_bus_in_each() {
     );
     assert!(matches!(
         problem.reference_buses.single(),
-        Err(crate::Error::Core(powerio_tx::Error::ReferenceBusCount {
-            found: 2,
-            ..
-        }))
+        Err(powerio_prob::Error::Core(
+            powerio_tx::Error::ReferenceBusCount { found: 2, .. }
+        ))
     ));
 
     // The set serializes as a plain array of dense bus indices.
@@ -664,13 +664,12 @@ fn zero_base_mva_is_rejected() {
     ));
 }
 
-#[cfg(feature = "matrix")]
 mod matrix_tests {
-    use crate::DcOpfInstance;
-    use crate::matrix::{
+    use crate::dcopf::{
         DcOpfAssemblyOptions, DcOpfBundleMetadata, DcOpfBundleOptions, build_dc_opf_matrices,
         write_dcopf_bundle,
     };
+    use powerio_prob::DcOpfInstance;
     use powerio_tx::{GenCostPolicyReport, MissingGenCostPolicy};
 
     use super::*;
@@ -688,12 +687,9 @@ mod matrix_tests {
         assert_eq!(matrices.generator_bus.cols(), problem.n_generators());
         assert_eq!(matrices.generator_cost.rows(), problem.n_generators());
 
-        let incidence = powerio_matrix::build_incidence(
-            &view,
-            problem.convention,
-            &powerio_matrix::BuildOptions::default(),
-        )
-        .expect("matrix incidence");
+        let incidence =
+            crate::build_incidence(&view, problem.convention, &crate::BuildOptions::default())
+                .expect("matrix incidence");
         assert_eq!(matrices.incidence, incidence.a);
         assert_eq!(problem.branches.b, incidence.b);
         assert_eq!(problem.p_shift, incidence.p_shift);
@@ -793,7 +789,7 @@ mod matrix_tests {
         let instance = DcOpfInstance::from_network(net).expect("instance");
         // The private preparation the public writer derives, for the row
         // level expectations below.
-        let problem = crate::matrix::prepare(&instance, assembly).expect("prepare");
+        let problem = crate::dcopf::prepare(&instance, assembly).expect("prepare");
         let output = tempfile::tempdir().expect("tempdir");
         let options = DcOpfBundleOptions {
             assembly,
@@ -807,11 +803,11 @@ mod matrix_tests {
         };
         let bundle = write_dcopf_bundle(&instance, output.path(), &options).expect("bundle");
 
-        let incidence = powerio_matrix::io::read_mtx(bundle.dir.join("A.mtx")).expect("A");
-        let branch_b = powerio_matrix::io::read_vector_mtx(bundle.dir.join("b.mtx")).expect("b");
+        let incidence = crate::io::read_mtx(bundle.dir.join("A.mtx")).expect("A");
+        let branch_b = crate::io::read_vector_mtx(bundle.dir.join("b.mtx")).expect("b");
         assert_eq!(
             incidence,
-            crate::matrix::matrices_from_preparation(&problem).incidence
+            crate::dcopf::matrices_from_preparation(&problem).incidence
         );
         assert_eq!(branch_b, problem.branches.b);
         let manifest: serde_json::Value = serde_json::from_str(
@@ -820,23 +816,20 @@ mod matrix_tests {
         .expect("manifest json");
         assert_eq!(manifest["schema"], "powerio.dcopf");
         assert_eq!(manifest["powerio_version"], powerio_tx::VERSION);
-        let c0_gen =
-            powerio_matrix::io::read_vector_mtx(bundle.dir.join("c0_gen.mtx")).expect("c0_gen");
+        let c0_gen = crate::io::read_vector_mtx(bundle.dir.join("c0_gen.mtx")).expect("c0_gen");
         assert_eq!(c0_gen, problem.generators.c0);
-        let shift =
-            powerio_matrix::io::read_vector_mtx(bundle.dir.join("shift.mtx")).expect("shift");
+        let shift = crate::io::read_vector_mtx(bundle.dir.join("shift.mtx")).expect("shift");
         assert_eq!(shift, problem.branches.shift);
-        let flow_offset = powerio_matrix::io::read_vector_mtx(bundle.dir.join("flow_offset.mtx"))
-            .expect("flow_offset");
+        let flow_offset =
+            crate::io::read_vector_mtx(bundle.dir.join("flow_offset.mtx")).expect("flow_offset");
         assert_eq!(flow_offset, problem.branch_flow_offset());
-        let fixed_withdrawal =
-            powerio_matrix::io::read_vector_mtx(bundle.dir.join("fixed_withdrawal.mtx"))
-                .expect("fixed_withdrawal");
+        let fixed_withdrawal = crate::io::read_vector_mtx(bundle.dir.join("fixed_withdrawal.mtx"))
+            .expect("fixed_withdrawal");
         assert_eq!(fixed_withdrawal, problem.fixed_nodal_withdrawal());
         // The shunt conductance a nodal balance subtracts beside `pd`.
-        let g_s = powerio_matrix::io::read_vector_mtx(bundle.dir.join("gs.mtx")).expect("gs");
+        let g_s = crate::io::read_vector_mtx(bundle.dir.join("gs.mtx")).expect("gs");
         assert_eq!(g_s, problem.g_s);
-        let c0 = powerio_matrix::io::read_vector_mtx(bundle.dir.join("c0.mtx")).expect("c0");
+        let c0 = crate::io::read_vector_mtx(bundle.dir.join("c0.mtx")).expect("c0");
         assert_eq!(c0, problem.nodal_generator_data().c0);
         assert_eq!(manifest["dimensions"]["n_buses"], problem.n_buses);
         assert_eq!(
@@ -893,7 +886,7 @@ mod matrix_tests {
         assert!(refused.is_err(), "the default preserves and refuses");
 
         // The explicit merge resolves it, and the merged network projects.
-        let (merged, _, _) = crate::merge_zero_impedance_buses(&net).expect("merge");
+        let (merged, _, _) = powerio_prob::merge_zero_impedance_buses(&net).expect("merge");
         let merged_instance = DcOpfInstance::from_network(merged).expect("merged instance");
         build_dc_opf_matrices(&merged_instance, &DcOpfAssemblyOptions::default())
             .expect("the merged network projects without skipping");

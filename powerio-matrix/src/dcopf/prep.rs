@@ -3,8 +3,9 @@ use serde::{Deserialize, Serialize};
 use powerio_tx::{BusId, DcConvention, IndexedNetwork};
 
 use crate::{Error, Result};
+use powerio_prob::ReferenceBuses;
 
-use crate::{ReferenceBuses, limits, nodal};
+use super::{limits, nodal};
 
 /// Unit system for power and generator cost data.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]

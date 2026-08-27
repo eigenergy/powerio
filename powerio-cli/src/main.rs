@@ -15,11 +15,10 @@ use powerio_matrix::io::gridfm::{GridfmOptions, numbered_snapshots, write_gridfm
 use powerio_matrix::matrix::{BuildOptions, DcConvention, Scheme, sddm_check};
 use powerio_matrix::pipeline::{MatrixKind, Pipeline, RhsKind};
 use powerio_matrix::synth::{SynthSpec, Topology};
-use powerio_matrix::{MissingGenCostPolicy, SensitivityOptions, SensitivitySolver, WriteOptions};
-use powerio_prob::Units;
-use powerio_prob::matrix::{
-    DcOpfAssemblyOptions, DcOpfBundleMetadata, DcOpfBundleOptions, write_dcopf_bundle,
+use powerio_matrix::{
+    DcOpfAssemblyOptions, DcOpfBundleMetadata, DcOpfBundleOptions, Units, write_dcopf_bundle,
 };
+use powerio_matrix::{MissingGenCostPolicy, SensitivityOptions, SensitivitySolver, WriteOptions};
 use serde_json::json;
 mod cases;
 mod compat;

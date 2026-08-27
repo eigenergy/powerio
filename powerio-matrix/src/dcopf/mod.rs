@@ -1,22 +1,26 @@
-//! Sparse projections and bundle output for problem instances.
+//! DC OPF assembly: the private preparation arrays, sparse matrices, and
+//! bundle writer derived from a [`DcOpfInstance`].
 
-mod ac_jacobian;
 mod bundle;
-mod dc_operators;
+mod limits;
+mod nodal;
+mod prep;
+#[cfg(test)]
+mod tests;
 
-use powerio_matrix::matrix::incidence::diagonal;
-use powerio_matrix::matrix::triplet::CooBuilder;
-use powerio_matrix::{
+use crate::matrix::incidence::diagonal;
+use crate::matrix::triplet::CooBuilder;
+use crate::{
     IndexedNetwork, SparseMatrix, build_flow_map, build_weighted_laplacian, ground_at_each,
     reference_indicator,
 };
 
-use crate::prep::{DcOpfOptions, DcOpfPreparation, build_dc_opf_preparation};
-use crate::{DcOpfInstance, Result, Units};
+use crate::Result;
+use powerio_prob::DcOpfInstance;
+use prep::{DcOpfOptions, DcOpfPreparation, build_dc_opf_preparation};
 
-pub use ac_jacobian::{PowerFlowJacobian, VoltageCoordinates, calc_power_flow_jacobian};
 pub use bundle::{DcOpfBundleMetadata, DcOpfBundleOptions, DcOpfOutputs, write_dcopf_bundle};
-pub use dc_operators::{DcOperators, ReferenceConstrainedSystem};
+pub use prep::Units;
 
 /// Assembly choices that select the numerical content derived from an
 /// instance without changing the instance itself.

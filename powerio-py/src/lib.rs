@@ -32,9 +32,8 @@ use powerio_matrix::{
     BalancedNetwork, DisplayData, IndexCore, IndexedNetwork, MissingGenCostPolicy,
     NormalizeOptions, POWER_MODELS_ANGLE_BOUND_PAD, PwdDisplay, WriteOptions,
 };
-use powerio_prob::Units;
-use powerio_prob::matrix::{
-    DcOpfAssemblyOptions, DcOpfBundleMetadata, DcOpfBundleOptions,
+use powerio_matrix::{
+    DcOpfAssemblyOptions, DcOpfBundleMetadata, DcOpfBundleOptions, Units,
     write_dcopf_bundle as write_bundle,
 };
 
@@ -140,7 +139,6 @@ fn prob_pyerr(e: powerio_prob::Error) -> PyErr {
     match e {
         E::Io(io) => io.into(),
         E::Core(inner) => core_pyerr(inner),
-        E::Matrix(inner) => to_pyerr(inner),
         other => {
             let category = other.category();
             let code = other.code().code;
@@ -1432,7 +1430,7 @@ impl PyBalancedNetwork {
                 cost_report,
             },
         };
-        let outputs = write_bundle(&instance, out_dir, &options).map_err(prob_pyerr)?;
+        let outputs = write_bundle(&instance, out_dir, &options).map_err(to_pyerr)?;
         dir_files_dict(py, &outputs.dir, &outputs.files)
     }
 
