@@ -8,8 +8,8 @@ The advertised MCP surface is semantic and format neutral:
 The tools route balanced transmission models, multiconductor distribution
 models, PyPSA CSV folders, and gridfm datasets through the lower level powerio
 APIs. Transmission parses serialize through the ``model-json`` transport.
-Distribution parses serialize through canonical ``bmopf-json``. Package
-transport serializes either family through the ``.pio.json`` compiler package.
+Distribution parses serialize through canonical ``bmopf-json``. The stored
+module transport serializes either family through `.pio.json`.
 
 The filesystem containment policy for ``path`` and ``out_path`` lives in
 ``powerio.mcp.sandbox``, which imports no MCP SDK; the private helpers here
@@ -221,8 +221,8 @@ def _package_value(text: str) -> Optional[Dict[str, Any]]:
 
     Deliberately does not test `powerio_version`: a package written before
     0.9.0 states none, and it has to be recognized before it can be rejected
-    with a message that says so. `powerio.Package.from_json` owns the version
-    gate.
+    with a message that says so. `powerio.StoredModule.from_json` owns the
+    version gate.
     """
     try:
         value = jsonlib.loads(text)
@@ -241,7 +241,8 @@ def _package_value(text: str) -> Optional[Dict[str, Any]]:
 
 
 def _looks_like_package_json(text: str) -> bool:
-    return _package_value(text) is not None
+    """Both stored generations: the version 1 module and the legacy 0.9 package."""
+    return _module_header(text) or _package_value(text) is not None
 
 
 def _package_model_kind(value: Dict[str, Any]) -> str:
@@ -379,16 +380,26 @@ def _module_diagnostic_messages(module: "powerio.StoredModule") -> list[str]:
 
 def _diagnostics_payload(package_json: str, verbose: bool = False) -> Dict[str, Any]:
     value = _json_object(package_json, purpose="package_json")
-    if _package_value(package_json) is None:
-        raise ValueError("package_json is not a .pio.json package")
-    kind = _package_model_kind(value)
-    # Validate with the Rust package reader so schema version and payload
-    # consistency checks stay in one place.
-    powerio.Package.from_json(package_json)
+    if _module_header(package_json):
+        raw_value = value.get("value")
+        payload_kind = raw_value.get("kind") if isinstance(raw_value, dict) else None
+        if not isinstance(payload_kind, str):
+            raise ValueError("the stored module document has no `value.kind`")
+        kind = {
+            "balanced_network": "balanced",
+            "multiconductor_network": "multiconductor",
+        }.get(payload_kind, payload_kind)
+    elif _package_value(package_json) is not None:
+        kind = _package_model_kind(value)
+    else:
+        raise ValueError("package_json is not a stored .pio.json document")
+    # Validate with the stored reader (which upgrades a released 0.9
+    # package) so schema version and consistency checks stay in one place.
+    powerio.StoredModule.from_json(package_json)
     raw = value.get("diagnostics", [])
     diagnostics = [item for item in raw if isinstance(item, dict)]
     if not verbose:
-        keep = {"code", "severity", "stage", "message", "element_path"}
+        keep = {"code", "severity", "stage", "message", "element_path", "target"}
         diagnostics = [{k: v for k, v in item.items() if k in keep} for item in diagnostics]
     raw_validation = value.get("validation")
     validation = raw_validation if isinstance(raw_validation, dict) else {}
@@ -468,78 +479,6 @@ def _load_module(module_json: str) -> _Loaded:
         f"the module carries a {kind} value; select and export one static item "
         "with export_state first"
     )
-
-
-def _load_package(package_json: str) -> _Loaded:
-    value = _json_object(package_json, purpose="package_json")
-    if _package_value(package_json) is None:
-        raise ValueError("package_json is not a .pio.json package")
-    kind = _package_model_kind(value)
-    try:
-        pkg = powerio.Package.from_json(package_json)
-        if kind == "multiconductor":
-            return _Loaded(
-                "distribution",
-                pkg.as_multiconductor(),
-                _package_diagnostic_messages(value),
-                "bmopf-json",
-                package_json=package_json,
-            )
-        net = pkg.as_balanced()
-        return _Loaded(
-            "transmission",
-            net,
-            _package_diagnostic_messages(value),
-            "model-json",
-            package_json=package_json,
-        )
-    except powerio.PowerIOError as exc:
-        raise _coded_error("parse failed", exc) from exc
-    except (ValueError, KeyError, TypeError) as exc:
-        raise ValueError(f"parse failed: {exc}") from exc
-
-
-def _package_json_from_input(
-    path: Optional[str],
-    content: Optional[str],
-    from_format: Optional[str],
-    options: Optional[Dict[str, Any]] = None,
-) -> str:
-    _one_input(path, content)
-    opts = _opts(options)
-    from_l = _fmt(from_format)
-    try:
-        if path is not None:
-            path = _local_path(path, purpose="path")
-            if from_l in _PACKAGE_JSON_FORMATS or Path(path).suffix.lower() == ".json":
-                try:
-                    text = Path(path).read_text(encoding="utf-8")
-                except OSError as exc:
-                    raise ValueError(f"cannot read input: {exc}") from exc
-                if not _looks_like_package_json(text):
-                    if from_l in _PACKAGE_JSON_FORMATS:
-                        raise ValueError("input is not a .pio.json package")
-                else:
-                    powerio.Package.from_json(text)
-                    return text
-            return powerio.Package.from_file(
-                path, from_format, int(opts.get("scenario", 0))
-            ).to_json()
-        text = _required(content, "content")
-        if _looks_like_package_json(text):
-            powerio.Package.from_json(text)
-            return text
-        if from_l in _PACKAGE_JSON_FORMATS:
-            raise ValueError("content is not a .pio.json package")
-        return powerio.Package.from_str(text, from_format).to_json()
-    except powerio.PowerIOError as exc:
-        raise _coded_error("parse failed", exc) from exc
-    except FileNotFoundError as exc:
-        raise ValueError(f"file not found: {exc}") from exc
-    except ImportError as exc:
-        raise ValueError(str(exc)) from exc
-    except OSError as exc:
-        raise ValueError(f"cannot read input: {exc}") from exc
 
 
 def _parse_transmission(
@@ -632,8 +571,8 @@ def _parse_any(
                 text = Path(path).read_text(encoding="utf-8")
             except OSError as exc:
                 raise ValueError(f"cannot read input: {exc}") from exc
-            return _load_package(text)
-        return _load_package(_required(content, "content"))
+            return _load_module(text)
+        return _load_module(_required(content, "content"))
     if _is_gridfm_format(format):
         return _parse_transmission(path, content, format, options)
     if _is_dist_format(format):
@@ -651,7 +590,7 @@ def _parse_any(
             except OSError as exc:
                 raise ValueError(f"cannot read input: {exc}") from exc
             if _looks_like_package_json(text):
-                return _load_package(text)
+                return _load_module(text)
             domain, inferred = _format_from_json_class(*_json_path_class(path), path=path)
             if domain == "distribution":
                 return _parse_distribution(path, content, inferred, include_root)
@@ -660,7 +599,7 @@ def _parse_any(
         text = _required(content, "content")
         if format is None and _jsonish(text):
             if _looks_like_package_json(text):
-                return _load_package(text)
+                return _load_module(text)
             domain, inferred = _format_from_json_class(*_json_class(text))
             if domain == "distribution":
                 return _parse_distribution(path, text, inferred)
@@ -671,7 +610,7 @@ def _parse_any(
 def _load_transport(text: str, json_format: Optional[str]) -> _Loaded:
     kind = _transport_kind(text, json_format)
     if kind == "package":
-        return _load_package(text)
+        return _load_module(text)
     if kind in _BMOPF_JSON_FORMATS or kind in {"pmd-json", "pmd_json", "pmd", "engineering"}:
         return _parse_distribution(None, text, kind)
     try:
@@ -698,9 +637,9 @@ def _load_any(
     content, transport, package_json = content or None, transport or None, package_json or None
     _one_network_input(path, content, transport, package_json)
     if package_json is not None:
-        if _module_header(package_json):
-            return _load_module(package_json)
-        return _load_package(package_json)
+        # The stored reader upgrades a released 0.9 package one way, so both
+        # document generations load through the module path.
+        return _load_module(package_json)
     if transport is not None:
         return _load_transport(transport, json_format)
     return _parse_any(path, content, format, options)
@@ -1004,8 +943,9 @@ def _parse_impl(
     content = content or None
     transport_l = _fmt(transport or "json")
     if transport_l in _PACKAGE_JSON_FORMATS:
-        package_json = _package_json_from_input(path, content, from_format, options)
-        loaded = _load_package(package_json)
+        module = _stored_module(path=path, content=content, from_format=from_format)
+        package_json = module.to_json()
+        loaded = _load_module(package_json)
         summary = _summary(loaded)
         diag = _diagnostics_payload(package_json, verbose=True)
         return {

@@ -21,9 +21,9 @@ use powerio_dist::{
     DistBus, DistLine, DistLineCode, DistLoadVoltageModel, Mat, MulticonductorNetwork,
 };
 
-use crate::package::diagnostics::{DiagnosticSeverity, StructuredDiagnostic, codes};
-use crate::package::model::ModelKind;
-use crate::package::validation::ValidationStatus;
+use crate::stored::legacy09::diagnostics::{DiagnosticSeverity, StructuredDiagnostic, codes};
+use crate::stored::legacy09::model::ModelKind;
+use crate::stored::legacy09::validation::ValidationStatus;
 
 /// One lowering/normalization/emission pass and what it changed.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -310,7 +310,9 @@ pub fn lower_module_to_balanced(
     module.sever_value_targets();
     for diagnostic in &record.diagnostics {
         module
-            .add_diagnostic(super::diagnostics::to_module_diagnostic(diagnostic, None))
+            .add_diagnostic(crate::stored::legacy09::diagnostics::to_module_diagnostic(
+                diagnostic, None,
+            ))
             .expect("pass diagnostics carry no identity and no span");
     }
     let mut entry = HistoryEntry::new(

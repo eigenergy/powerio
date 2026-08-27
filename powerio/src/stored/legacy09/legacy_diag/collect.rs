@@ -2,7 +2,9 @@
 
 use powerio_core::DiagnosticInfo;
 
-use crate::package::legacy_diag::{DiagnosticSeverity, StructuredDiagnostic, render_lines};
+use crate::stored::legacy09::legacy_diag::{
+    DiagnosticSeverity, StructuredDiagnostic, render_lines,
+};
 
 /// An ordered set of findings, built up as a reader, a lowering pass, or a
 /// writer runs.

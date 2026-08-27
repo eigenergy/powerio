@@ -10,25 +10,25 @@ use crate::{
 };
 use powerio_dist::{DistSourceFormat, MulticonductorNetwork};
 
-use crate::package::diagnostics::{
-    DiagnosticInfo, DiagnosticSeverity, StructuredDiagnostic, codes,
+use powerio_core::DiagnosticInfo;
+
+use crate::stored::legacy09::diagnostics::{DiagnosticSeverity, StructuredDiagnostic, codes};
+use crate::stored::legacy09::error::Error;
+use crate::stored::legacy09::model::{ModelKind, ModelPayload};
+use crate::stored::legacy09::operating::{
+    OperatingPointSeries, apply_operating_point_to_model, check_series_identities,
 };
-use crate::package::error::Error;
-use crate::package::lowering::{
+use crate::stored::legacy09::provenance::{
+    Confidence, MappingKind, Origin, Producer, SourceDescriptor, SourceMapEntry, SourceRef,
+};
+use crate::stored::legacy09::study::{StudyBlock, apply_study_to_model, check_study_identities};
+use crate::stored::legacy09::summary::{ObjectSummary, ObjectTopology, ObjectUnits};
+use crate::stored::legacy09::validation::{ValidationPass, ValidationStatus, ValidationSummary};
+use crate::transform::{
     LoweringRecord, MulticonductorToBalancedError, MulticonductorToBalancedOptions,
     MulticonductorToBalancedReadiness, check_multiconductor_to_balanced_lowering,
     lower_multiconductor_to_balanced,
 };
-use crate::package::model::{ModelKind, ModelPayload};
-use crate::package::operating::{
-    OperatingPointSeries, apply_operating_point_to_model, check_series_identities,
-};
-use crate::package::provenance::{
-    Confidence, MappingKind, Origin, Producer, SourceDescriptor, SourceMapEntry, SourceRef,
-};
-use crate::package::study::{StudyBlock, apply_study_to_model, check_study_identities};
-use crate::package::summary::{ObjectSummary, ObjectTopology, ObjectUnits};
-use crate::package::validation::{ValidationPass, ValidationStatus, ValidationSummary};
 
 fn default_powerio_version() -> String {
     crate::VERSION.to_owned()
@@ -269,11 +269,11 @@ impl NetworkPackage {
     /// carries. TEMPORARY: the calculation instance types replace this
     /// extraction, and the package with it.
     pub fn attach_goc3_operating_points(&mut self, document: &crate::format::goc3::Goc3Document) {
-        match crate::package::operating::goc3_operating_points(document) {
+        match crate::stored::legacy09::operating::goc3_operating_points(document) {
             Ok(series) => self.operating_points = series,
             Err(error) => {
                 self.diagnostics.push(StructuredDiagnostic::of(
-                    &crate::package::diagnostics::codes::READ_PACKAGE_OPERATING_POINTS_DROPPED,
+                    &crate::codes::READ_PACKAGE_OPERATING_POINTS_DROPPED,
                     format!(
                         "time series could not be lifted into operating points; \
                          the package is static only: {error}"
@@ -454,9 +454,12 @@ impl NetworkPackage {
     /// The returned package has the same metadata and model kind, with its
     /// payload updated for `index`, `operating_points` cleared, and sane
     /// validation recomputed for the updated payload.
-    pub fn materialize_operating_point(&self, index: usize) -> crate::package::Result<Self> {
+    pub fn materialize_operating_point(
+        &self,
+        index: usize,
+    ) -> crate::stored::legacy09::Result<Self> {
         let series = self.operating_points.as_ref().ok_or_else(|| {
-            crate::package::Error::Payload("package has no operating points".to_owned())
+            crate::stored::legacy09::Error::Payload("package has no operating points".to_owned())
         })?;
         let point = series
             .unique_point(index)?
@@ -540,7 +543,7 @@ impl NetworkPackage {
     pub fn materialize_balanced_operating_point(
         &self,
         index: usize,
-    ) -> crate::package::Result<Option<BalancedNetwork>> {
+    ) -> crate::stored::legacy09::Result<Option<BalancedNetwork>> {
         Ok(self
             .materialize_operating_point(index)?
             .model
@@ -553,7 +556,7 @@ impl NetworkPackage {
     pub fn materialize_multiconductor_operating_point(
         &self,
         index: usize,
-    ) -> crate::package::Result<Option<MulticonductorNetwork>> {
+    ) -> crate::stored::legacy09::Result<Option<MulticonductorNetwork>> {
         Ok(self
             .materialize_operating_point(index)?
             .model
@@ -566,9 +569,12 @@ impl NetworkPackage {
     /// The returned package folds commits `0..=commit_index`, clears
     /// `operating_points` and `study`, and records the replay pass in
     /// `lowering_history`.
-    pub fn materialize_study_commit(&self, commit_index: usize) -> crate::package::Result<Self> {
+    pub fn materialize_study_commit(
+        &self,
+        commit_index: usize,
+    ) -> crate::stored::legacy09::Result<Self> {
         let study = self.study.as_ref().ok_or_else(|| {
-            crate::package::Error::Payload("package has no study block".to_owned())
+            crate::stored::legacy09::Error::Payload("package has no study block".to_owned())
         })?;
         let base = if let Some(index) = study.base_operating_point {
             self.materialize_operating_point(index)?
@@ -642,7 +648,7 @@ impl NetworkPackage {
     pub fn materialize_balanced_study_commit(
         &self,
         commit_index: usize,
-    ) -> crate::package::Result<Option<BalancedNetwork>> {
+    ) -> crate::stored::legacy09::Result<Option<BalancedNetwork>> {
         Ok(self
             .materialize_study_commit(commit_index)?
             .model
@@ -651,17 +657,17 @@ impl NetworkPackage {
     }
 
     /// Serialize to compact `.pio.json`.
-    pub fn to_json(&self) -> crate::package::Result<String> {
+    pub fn to_json(&self) -> crate::stored::legacy09::Result<String> {
         serde_json::to_string(self).map_err(Error::Serialize)
     }
 
     /// Serialize to pretty `.pio.json`.
-    pub fn to_json_pretty(&self) -> crate::package::Result<String> {
+    pub fn to_json_pretty(&self) -> crate::stored::legacy09::Result<String> {
         serde_json::to_string_pretty(self).map_err(Error::Serialize)
     }
 
     /// Deserialize from `.pio.json`.
-    pub fn from_json(text: &str) -> crate::package::Result<Self> {
+    pub fn from_json(text: &str) -> crate::stored::legacy09::Result<Self> {
         // Tolerate a leading UTF-8 byte order mark, as the format readers do.
         // Name the format in the error: a document the JSON classifier calls a
         // package (right `model_kind` and `model` markers) can still
@@ -684,7 +690,7 @@ impl NetworkPackage {
     /// Deserialize from `.pio.json` held as bytes, for a caller that never
     /// stages the text — an upload, an archive member. The bytes must decode
     /// as UTF-8; a leading byte order mark is tolerated as in [`Self::from_json`].
-    pub fn from_json_bytes(bytes: &[u8]) -> crate::package::Result<Self> {
+    pub fn from_json_bytes(bytes: &[u8]) -> crate::stored::legacy09::Result<Self> {
         let text = std::str::from_utf8(bytes).map_err(|e| {
             Error::Malformed(serde::de::Error::custom(format!("not valid UTF-8: {e}")))
         })?;

@@ -2,8 +2,8 @@
 //! change, the visible note cap, repeated lowering, and the winding rating
 //! base conversion.
 
-use powerio::package::{MulticonductorToBalancedOptions, lower_module_to_balanced};
 use powerio::stored::{read_module, write_module};
+use powerio::transform::{MulticonductorToBalancedOptions, lower_module_to_balanced};
 use powerio::{PioValue, VERSION};
 
 const TWO_WINDING_DSS: &str = r"Clear

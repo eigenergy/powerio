@@ -352,19 +352,6 @@ struct ArrowSchema;
 #define PIO_ARROW_TABLE_SOLVER_GEN_COST_COEFF 22
 #endif
 
-#if defined(PIO_PKG)
-/**
- * Opaque `.pio.json` compiler package handle. A package owns one
- * [`powerio::package::NetworkPackage`], which wraps either a balanced
- * [`PioNetwork`] payload or a multiconductor [`PioDistNetwork`] payload.
- * The 0.9 `.pio.json` package handle. The one single owner handle type:
- * its API mutates in place (`pio_package_validate`,
- * `pio_package_set_operating_points`), so it keeps the v5 lifecycle with no
- * `retain`. The ABI v6 module handle (`pio_module_*`) supersedes it.
- */
-typedef struct PioPackage PioPackage;
-#endif
-
 /**
  * Solver preparation repairs for [`pio_normalize`], in the extensible options
  * struct convention this header states once. Zero the struct, set
@@ -527,10 +514,9 @@ int32_t pio_matrix_available(void);
 
 /**
  * Whether an optional build feature is compiled in: pass `"arrow"`, `"matrix"`,
- * `"gridfm"`, `"dist"`, `"pkg"`, or `"prob"`. Returns 1 if present, 0 otherwise (and 0
+ * `"gridfm"`, `"dist"`, or `"prob"`. Returns 1 if present, 0 otherwise (and 0
  * for a NULL or unknown name). The optional entry points (`pio_to_arrow`, the
  * matrix Arrow tables, the `pio_read_dir`/gridfm path, the `pio_dist_*` block,
- * and the `pio_package_*` block) are only linked when their feature is built,
  * so a consumer that loaded the library at runtime probes for them here
  * instead of resolving symbols blind. Feature names are strings like format
  * names, so a new feature never changes this signature. Infallible.
@@ -1027,206 +1013,6 @@ int32_t pio_to_arrow(const PioNetwork *net,
 char *pio_arrow_catalog_json(char *errbuf, size_t errlen);
 #endif
 
-#if defined(PIO_PKG)
-/**
- * Parse a `.pio.json` package file into an opaque package handle. This reads
- * only the package; case format names still enter through
- * [`pio_parse_file`] / [`pio_dist_parse_file`] and package constructors.
- * Returns `NULL` on error and writes the message into `errbuf`. Free the handle
- * with [`pio_package_free`].
- */
-PioPackage *pio_package_parse_file(const char *path, char *errbuf, size_t errlen);
-#endif
-
-#if defined(PIO_PKG)
-/**
- * Parse in-memory `.pio.json` text into an opaque package handle. Returns
- * `NULL` on error and writes the message into `errbuf`. Free the handle with
- * [`pio_package_free`].
- */
-PioPackage *pio_package_parse_str(const char *text, char *errbuf, size_t errlen);
-#endif
-
-#if defined(PIO_PKG)
-/**
- * Free a package handle returned by `pio_package_*`. NULL is a no-op; free
- * exactly once.
- */
-void pio_package_free(PioPackage *pkg);
-#endif
-
-#if defined(PIO_PKG)
-/**
- * Serialize a package handle to compact `.pio.json`. Returns an owned C string
- * (free with [`pio_string_free`]) or `NULL` on error.
- */
-char *pio_package_to_json(const PioPackage *pkg, char *errbuf, size_t errlen);
-#endif
-
-#if defined(PIO_PKG)
-/**
- * Wrap a balanced [`PioNetwork`] handle in a `.pio.json` package. A
- * `PioNetwork` carries a `powerio::BalancedNetwork`.
- * `include_solver_metadata != 0` attaches compact normalized solver table
- * metadata.
- */
-PioPackage *pio_package_from_balanced_network(const PioNetwork *net,
-                                              int32_t include_solver_metadata,
-                                              char *errbuf,
-                                              size_t errlen);
-#endif
-
-#if (defined(PIO_PKG) && defined(PIO_DIST))
-/**
- * Wrap a multiconductor [`PioDistNetwork`] handle in a `.pio.json` package. A
- * `PioDistNetwork` carries a `powerio_dist::MulticonductorNetwork`.
- */
-PioPackage *pio_package_from_multiconductor_network(const PioDistNetwork *net,
-                                                    char *errbuf,
-                                                    size_t errlen);
-#endif
-
-#if defined(PIO_PKG)
-/**
- * Materialize the balanced payload of a package handle as an owned network
- * handle: the inverse of [`pio_package_from_balanced_network`]. Errors when
- * the package holds a different model kind. The handle is built from the
- * payload alone: it retains no source text, so a same format write is a fresh
- * serialization rather than a byte-exact echo, and it carries no parse
- * warnings. Free with [`pio_network_free`].
- */
-PioNetwork *pio_package_to_balanced_network(const PioPackage *pkg, char *errbuf, size_t errlen);
-#endif
-
-#if (defined(PIO_PKG) && defined(PIO_DIST))
-/**
- * Materialize the multiconductor payload of a package handle as an owned
- * distribution network handle: the inverse of
- * [`pio_package_from_multiconductor_network`]. Errors when the package holds
- * a different model kind. The handle retains no source text, so a
- * same format write is a fresh serialization, and carries no warning lines:
- * the package document owns the diagnostics. Free with
- * [`pio_dist_network_free`].
- */
-PioDistNetwork *pio_package_to_multiconductor_network(const PioPackage *pkg,
-                                                      char *errbuf,
-                                                      size_t errlen);
-#endif
-
-#if defined(PIO_PKG)
-/**
- * Run the package semantic validation profile in place. Returns `0` on
- * success, `-1` on error.
- *
- * Unlike the read-only accessors, this rewrites the handle's `diagnostics` and
- * `validation` (the payload is untouched), so it takes the handle non-`const`
- * and needs exclusive access: no other call may touch the same handle
- * concurrently. [`pio_package_set_operating_points`] is the other such
- * entry point; every other call takes the handle `const` and shares it.
- */
-int32_t pio_package_validate(PioPackage *pkg, char *errbuf, size_t errlen);
-#endif
-
-#if defined(PIO_PKG)
-/**
- * Return the package validation summary as JSON. The returned string is owned
- * by the library; free it with [`pio_string_free`].
- */
-char *pio_package_validation_json(const PioPackage *pkg, char *errbuf, size_t errlen);
-#endif
-
-#if defined(PIO_PKG)
-/**
- * Return the package structured diagnostics array as JSON. The returned string
- * is owned by the library; free it with [`pio_string_free`].
- */
-char *pio_package_diagnostics_json(const PioPackage *pkg, char *errbuf, size_t errlen);
-#endif
-
-#if defined(PIO_PKG)
-/**
- * Return the package operating point series as JSON, or `null` when absent.
- * The returned string is owned by the library; free it with
- * [`pio_string_free`].
- */
-char *pio_package_operating_points_json(const PioPackage *pkg, char *errbuf, size_t errlen);
-#endif
-
-#if defined(PIO_PKG)
-/**
- * Replace the package's operating point series from `json`. `null` or an
- * empty series clears it. Validation is recomputed before this function
- * returns. Returns `0` on success and `-1` on error.
- *
- * This rewrites the handle, so it takes it non-`const` and needs exclusive
- * access: no other call may touch the same handle concurrently. See
- * [`pio_package_validate`], the other such entry point.
- */
-int32_t pio_package_set_operating_points(PioPackage *pkg,
-                                         const char *json,
-                                         char *errbuf,
-                                         size_t errlen);
-#endif
-
-#if defined(PIO_PKG)
-/**
- * Return the package study block as JSON, or `null` when absent. The returned
- * string is owned by the library; free it with [`pio_string_free`].
- */
-char *pio_package_study_json(const PioPackage *pkg, char *errbuf, size_t errlen);
-#endif
-
-#if defined(PIO_PKG)
-/**
- * Materialize one operating point into a new static package.
- *
- * The returned handle owns a package with the selected updates applied and no
- * operating point series. Free it with [`pio_package_free`].
- */
-PioPackage *pio_package_materialize_operating_point(const PioPackage *pkg,
-                                                    int64_t index,
-                                                    char *errbuf,
-                                                    size_t errlen);
-#endif
-
-#if defined(PIO_PKG)
-/**
- * Materialize one study commit into a new static package.
- *
- * The returned handle owns a package with commits `0..=index` applied and no
- * operating point series or study block. Free it with [`pio_package_free`].
- */
-PioPackage *pio_package_materialize_study_commit(const PioPackage *pkg,
-                                                 int64_t index,
-                                                 char *errbuf,
-                                                 size_t errlen);
-#endif
-
-#if defined(PIO_PKG)
-/**
- * Return the multiconductor-to-balanced lowering preflight report as JSON.
- * `base_mva` is the three phase system power base used for the balanced
- * per-unit projection. Returns `NULL` if the package is not multiconductor.
- */
-char *pio_package_multiconductor_to_balanced_preflight_json(const PioPackage *pkg,
-                                                            double base_mva,
-                                                            char *errbuf,
-                                                            size_t errlen);
-#endif
-
-#if defined(PIO_PKG)
-/**
- * Lower a multiconductor package to a new balanced package. Call
- * [`pio_package_multiconductor_to_balanced_preflight_json`] first when the
- * caller needs structured blockers for unsupported inputs. `base_mva` is the
- * three phase system power base used for the balanced per-unit projection.
- */
-PioPackage *pio_package_lower_multiconductor_to_balanced(const PioPackage *pkg,
-                                                         double base_mva,
-                                                         char *errbuf,
-                                                         size_t errlen);
-#endif
-
 /**
  * Normalize a tolerant geographic sidecar (headerless buscoords CSV, aliased
  * CSV/JSON records, GeoJSON Point/LineString) to the canonical GeoJSON form.
@@ -1272,6 +1058,34 @@ PioNetwork *pio_geo_apply(const PioNetwork *net,
                           const char *name_hint,
                           char *errbuf,
                           size_t errlen);
+
+#if defined(PIO_DIST)
+/**
+ * One-line apply summary lifted into the returned handle's warnings.
+ * Extract a multiconductor network's coordinates as the canonical GeoJSON
+ * layer, keyed by the string bus and line names. Free the returned string
+ * with `pio_string_free`. Returns `NULL` (with a message) when the network
+ * carries no coordinates.
+ */
+char *pio_dist_geo_extract(const PioDistNetwork *net, char *errbuf, size_t errlen);
+#endif
+
+#if defined(PIO_DIST)
+/**
+ * Apply a geographic sidecar (any form [`pio_geo_parse`] accepts) onto a NEW
+ * distribution network handle; the input handle is unchanged and both are
+ * freed with `pio_dist_network_free`. `name_hint` (a file name, nullable)
+ * picks CSV against JSON as in [`pio_geo_parse`]. The returned handle drops
+ * the retained source text, so a same-format write re-serializes the placed
+ * case. The reader's notes and an apply summary are appended to the handle's
+ * warnings ([`pio_dist_warnings`]). Returns `NULL` on error.
+ */
+PioDistNetwork *pio_dist_geo_apply(const PioDistNetwork *net,
+                                   const char *layer,
+                                   const char *name_hint,
+                                   char *errbuf,
+                                   size_t errlen);
+#endif
 
 #if defined(PIO_PROB)
 /**
@@ -1495,33 +1309,6 @@ char *pio_dist_convert_str(const char *text,
                            char **out_diagnostics_json,
                            char *errbuf,
                            size_t errlen);
-#endif
-
-#if (defined(PIO_DIST) && defined(PIO_PKG))
-/**
- * Extract a multiconductor network's coordinates as the canonical GeoJSON
- * layer, keyed by the string bus and line names. Free the returned string
- * with `pio_string_free`. Returns `NULL` (with a message) when the network
- * carries no coordinates.
- */
-char *pio_dist_geo_extract(const PioDistNetwork *net, char *errbuf, size_t errlen);
-#endif
-
-#if (defined(PIO_DIST) && defined(PIO_PKG))
-/**
- * Apply a geographic sidecar (any form [`pio_geo_parse`] accepts) onto a NEW
- * distribution network handle; the input handle is unchanged and both are
- * freed with `pio_dist_network_free`. `name_hint` (a file name, nullable)
- * picks CSV against JSON as in [`pio_geo_parse`]. The returned handle drops
- * the retained source text, so a same-format write re-serializes the placed
- * case. The reader's notes and an apply summary are appended to the handle's
- * warnings ([`pio_dist_warnings`]). Returns `NULL` on error.
- */
-PioDistNetwork *pio_dist_geo_apply(const PioDistNetwork *net,
-                                   const char *layer,
-                                   const char *name_hint,
-                                   char *errbuf,
-                                   size_t errlen);
 #endif
 
 /**

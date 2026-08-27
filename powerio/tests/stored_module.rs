@@ -1,8 +1,6 @@
 //! The `.pio.json` version 1 wire: round trips, refusals, and the one way
 //! 0.9 upgrade.
 
-use std::collections::BTreeMap;
-
 use powerio::stored::{read_module, write_module};
 use powerio::{BalancedNetwork, PioValue};
 use powerio_core::{
@@ -158,93 +156,6 @@ fn pre_09_lineage_is_refused() {
     assert!(error.contains("regenerated"), "{error}");
 }
 
-// ---- the one way 0.9 upgrade ------------------------------------------------
-
-fn legacy_package_text(with_series: bool, with_study: bool) -> String {
-    use powerio::package::{
-        ElementRef, ElementUpdate, NetworkPackage, OperatingPoint, OperatingPointSeries, TimeAxis,
-    };
-    let mut package = NetworkPackage::from_balanced(small_network());
-    if with_series {
-        let mut update_fields = BTreeMap::new();
-        update_fields.insert("p".to_string(), serde_json::json!(75.0));
-        let mut axis = TimeAxis::new(2);
-        axis.duration_hours = vec![1.0, 1.0];
-        axis.labels = vec!["h0".into(), "h1".into()];
-        let mut angle_fields = BTreeMap::new();
-        angle_fields.insert("va".to_string(), serde_json::json!(30.0));
-        let mut second = OperatingPoint::new(1);
-        second.updates = vec![
-            ElementUpdate::new(ElementRef::new("loads", 0), update_fields),
-            ElementUpdate::new(ElementRef::new("buses", 1), angle_fields),
-        ];
-        package.operating_points = Some(OperatingPointSeries::new(
-            axis,
-            vec![OperatingPoint::new(0), second],
-        ));
-    }
-    let mut text = package.to_json().unwrap();
-    if with_study {
-        // Inject the study block at the JSON level: the runtime constructors
-        // are additive-only, and the upgrade must refuse the stored shape
-        // regardless of how it was produced.
-        let mut raw: serde_json::Value = serde_json::from_str(&text).unwrap();
-        raw["study"] = serde_json::json!({
-            "label": "scenario a",
-            "commits": [{"id": "c1"}]
-        });
-        text = raw.to_string();
-    }
-    text
-}
-
-#[test]
-fn a_released_09_package_upgrades_one_way() {
-    let text = legacy_package_text(false, false);
-    let module = read_module(&text).unwrap();
-    assert!(matches!(module.value(), PioValue::BalancedNetwork(_)));
-    assert!(
-        module
-            .diagnostics()
-            .iter()
-            .any(|d| d.code() == "READ.MODULE.UPGRADED"),
-        "{:?}",
-        module.diagnostics()
-    );
-    assert!(
-        module
-            .history()
-            .iter()
-            .any(|entry| entry.kind() == HistoryKind::Upgrade)
-    );
-}
-
-#[test]
-fn legacy_operating_points_become_the_primary_series_value() {
-    let text = legacy_package_text(true, false);
-    let module = read_module(&text).unwrap();
-    let PioValue::BalancedOperatingPointTimeSeries(series) = module.value() else {
-        panic!("expected the series value, got {:?}", module.value().kind());
-    };
-    assert_eq!(series.len(), 2);
-    // Point 0 keeps the static payload's load; point 1 carries the update.
-    assert_eq!(series.values()[0].load_active_power("loads:0"), Some(40.0));
-    assert_eq!(series.values()[1].load_active_power("loads:0"), Some(75.0));
-    // Legacy angles were degrees; the state vocabulary stores radians. The
-    // base row carries the static payload's angle, the update its own.
-    let base = series.values()[0].bus_voltage_angle(BusId(2)).unwrap();
-    assert!((base - 12.0_f64.to_radians()).abs() < 1e-12, "{base}");
-    let updated = series.values()[1].bus_voltage_angle(BusId(2)).unwrap();
-    assert!((updated - 30.0_f64.to_radians()).abs() < 1e-12, "{updated}");
-}
-
-#[test]
-fn a_nonempty_legacy_study_is_refused_with_direction() {
-    let text = legacy_package_text(false, true);
-    let error = read_module(&text).unwrap_err().to_string();
-    assert!(error.contains("materialize"), "{error}");
-}
-
 /// The frozen 0.9 upgrade fixture: a released-shape package committed as a
 /// file, upgrading forever. Regenerating it requires a deliberate decision,
 /// never a drive-by.
@@ -284,33 +195,6 @@ fn the_frozen_09_static_fixtures_upgrade() {
         panic!("expected the multiconductor value");
     };
     assert_eq!(network.buses().len(), 1);
-}
-
-#[test]
-#[ignore = "fixture generator"]
-fn generate_frozen_fixtures() {
-    let base = concat!(env!("CARGO_MANIFEST_DIR"), "/../tests/data/package");
-    std::fs::write(
-        format!("{base}/frozen-0.9-series.pio.json"),
-        legacy_package_text(true, false),
-    )
-    .unwrap();
-    std::fs::write(
-        format!("{base}/frozen-0.9-balanced.pio.json"),
-        legacy_package_text(false, false),
-    )
-    .unwrap();
-    let mut network = powerio_dist::MulticonductorNetwork::named("frozen-mc");
-    network.buses_mut().push(powerio_dist::DistBus::new(
-        "b1",
-        vec!["1".into(), "2".into()],
-    ));
-    let package = powerio::package::NetworkPackage::from_multiconductor(network);
-    std::fs::write(
-        format!("{base}/frozen-0.9-multiconductor.pio.json"),
-        package.to_json().unwrap(),
-    )
-    .unwrap();
 }
 
 // ---- the remaining promoted kinds round trip ---------------------------------
@@ -400,27 +284,4 @@ fn an_unnamespaced_extension_is_refused() {
     raw["extensions"] = serde_json::json!({"note": 1});
     let error = read_module(&raw.to_string()).unwrap_err().to_string();
     assert!(error.contains("not namespaced"), "{error}");
-}
-
-/// Legacy element paths translate into the value's own pointer grammar so an
-/// upgraded module writes cleanly; a path outside the value drops its target.
-#[test]
-fn legacy_diagnostic_targets_translate_and_write() {
-    let mut raw: serde_json::Value =
-        serde_json::from_str(&legacy_package_text(true, false)).unwrap();
-    raw["diagnostics"] = serde_json::json!([{
-        "code": "VALIDATE.BALANCED.VALUE_DOMAIN",
-        "severity": "warning",
-        "message": "bus 2 voltage magnitude is outside its domain",
-        "element_path": "/model/balanced_network/buses/1/vm"
-    }]);
-    let module = read_module(&raw.to_string()).unwrap();
-    let upgraded = module
-        .diagnostics()
-        .iter()
-        .find(|d| d.code() == "VALIDATE.BALANCED.VALUE_DOMAIN")
-        .expect("the legacy finding survives");
-    assert_eq!(upgraded.target(), Some("/network/buses/1/vm"));
-    // The rewritten document passes its own reference validation.
-    write_module(&module).unwrap();
 }

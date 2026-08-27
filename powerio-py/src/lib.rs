@@ -12,7 +12,6 @@
 //! Indices narrow to `i32` to match SciPy's default index width.
 //! `coo_triplets` checks the bound before conversion.
 
-use std::collections::BTreeMap;
 use std::path::Path;
 
 use pyo3::exceptions::PyValueError;
@@ -20,9 +19,6 @@ use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList};
 use sprs::CsMat;
 
-use powerio::package::{
-    DiagnosticSeverity, NetworkPackage, OperatingPointSeries, Origin, SourceDescriptor,
-};
 use powerio_matrix::matrix::{
     BuildOptions, DcConvention, Scheme, SensitivityOptions, SensitivitySolver, build_adjacency,
     build_bdoubleprime, build_bprime, build_incidence, build_lacpf, build_ptdf_lodf_with_options,
@@ -32,16 +28,20 @@ use powerio_matrix::{
     BalancedNetwork, DisplayData, IndexCore, IndexedNetwork, MissingGenCostPolicy,
     NormalizeOptions, POWER_MODELS_ANGLE_BOUND_PAD, PwdDisplay, WriteOptions,
 };
-use powerio_prob::matrix::{
-    DcOpfBundleMetadata, DcOpfBundleOptions, write_dcopf_bundle as write_bundle,
+use powerio_matrix::{
+    DcOpfAssemblyOptions, DcOpfBundleMetadata, DcOpfBundleOptions, Units,
+    write_dcopf_bundle as write_bundle,
 };
-use powerio_prob::{AcOpfOptions, DcOpfOptions, Units};
 
 #[cfg(feature = "gridfm")]
+use powerio::gridfm::{
+    GridfmRead, read_gridfm_dataset as gridfm_read_dataset,
+    read_gridfm_scenarios as gridfm_read_scenarios,
+};
+#[cfg(feature = "gridfm")]
 use powerio_matrix::io::gridfm::{
-    GridfmOptions, GridfmOutputs, GridfmRead, numbered_snapshots,
-    read_gridfm_dataset as gridfm_read_dataset, read_gridfm_scenarios as gridfm_read_scenarios,
-    write_gridfm_batch as gridfm_write_batch, write_gridfm_dataset as gridfm_write_dataset,
+    GridfmOptions, GridfmOutputs, numbered_snapshots, write_gridfm_batch as gridfm_write_batch,
+    write_gridfm_dataset as gridfm_write_dataset,
 };
 
 pyo3::create_exception!(
@@ -126,20 +126,6 @@ fn to_pyerr(e: powerio_matrix::Error) -> PyErr {
     match e {
         E::Io(io) => io.into(),
         E::Core(inner) => core_pyerr(inner),
-        other => {
-            let category = other.category();
-            let code = other.code().code;
-            categorized_pyerr(category, code, other.to_string())
-        }
-    }
-}
-
-fn prob_pyerr(e: powerio_prob::Error) -> PyErr {
-    use powerio_prob::Error as E;
-    match e {
-        E::Io(io) => io.into(),
-        E::Core(inner) => core_pyerr(inner),
-        E::Matrix(inner) => to_pyerr(inner),
         other => {
             let category = other.category();
             let code = other.code().code;
@@ -322,371 +308,19 @@ fn write_options(
     })
 }
 
-fn package_pyerr(e: powerio::package::Error) -> PyErr {
-    // A package failure is a PowerIOError like every other failure. It used to
-    // raise a bare `ValueError` for everything, so `except powerio.PowerIOError`
-    // did not catch it, and every distinct cause read as one opaque string.
-    // A wrapped failure raises what it would have raised on its own: same
-    // class, and `e.filename` still set on a missing file.
-    match e {
-        powerio::package::Error::Core(inner) => core_pyerr(inner),
-        powerio::package::Error::Multiconductor(inner) => dist_to_pyerr(inner),
-        other => categorized_pyerr(other.category(), other.code(), other.to_string()),
-    }
-}
-
-/// A JSON serialization failure, raised the way every other package failure is.
-///
-/// Only for JSON this crate wrote. The blanket `From<serde_json::Error>` names
-/// every failure `Error::Serialize`, whose category is `Output`, so a document
-/// the caller handed us must go through [`payload_pyerr`] instead of blaming
-/// our own writer for it.
+/// A JSON serialization failure in this binding's own writer, raised on the
+/// base class with the emit code, the same classification `Error::code()`
+/// gave it when the stored document owned the writer.
 fn serialize_pyerr(e: serde_json::Error) -> PyErr {
-    package_pyerr(e.into())
-}
-
-/// A failure reading JSON the caller supplied, raised as a data failure so
-/// `except powerio.PowerIOParseError` catches it and a consumer branching on
-/// the category fixes its input rather than retrying a write.
-fn payload_pyerr(e: serde_json::Error) -> PyErr {
-    package_pyerr(powerio::package::Error::Payload(e.to_string()))
-}
-
-fn package_to_json(pkg: &NetworkPackage) -> PyResult<String> {
-    let text = pkg.to_json_pretty().map_err(package_pyerr)?;
-    NetworkPackage::from_json(&text).map_err(package_pyerr)?;
-    Ok(text)
-}
-
-fn package_warning_messages(pkg: &NetworkPackage) -> Vec<String> {
-    pkg.diagnostics
-        .iter()
-        .filter(|d| {
-            matches!(
-                d.severity,
-                DiagnosticSeverity::Warning | DiagnosticSeverity::Error | DiagnosticSeverity::Fatal
-            )
-        })
-        .map(|d| format!("{}: {}", d.code, d.message))
-        .collect()
-}
-
-fn package_to_balanced_py(pkg: &NetworkPackage) -> PyResult<PyBalancedNetwork> {
-    let warnings = package_warning_messages(pkg);
-    let inner = pkg
-        .as_balanced()
-        .ok_or_else(|| PyValueError::new_err("package model_kind is not balanced"))?
-        .clone();
-    let _ = warnings;
-    Ok(case_from_parts(
-        inner,
-        pkg.diagnostics.iter().cloned().map(Into::into).collect(),
-    ))
-}
-
-fn package_to_dist_py(pkg: &NetworkPackage) -> PyResult<PyMulticonductorNetwork> {
-    let net = pkg
-        .as_multiconductor()
-        .ok_or_else(|| PyValueError::new_err("package model_kind is not multiconductor"))?
-        .clone();
-    Ok(PyMulticonductorNetwork::from_network(net, Vec::new()))
-}
-
-#[derive(Clone, Copy)]
-enum PackageSourceKind {
-    File,
-    BinaryFile,
-    Folder,
-}
-
-impl PackageSourceKind {
-    const fn as_str(self) -> &'static str {
-        match self {
-            Self::File => "file",
-            Self::BinaryFile => "binary_file",
-            Self::Folder => "folder",
-        }
-    }
-}
-
-fn package_source_kind(input: &Path, format: &str) -> PackageSourceKind {
-    if input.is_dir() {
-        PackageSourceKind::Folder
-    } else if format == "powerworld-pwb" {
-        PackageSourceKind::BinaryFile
-    } else {
-        PackageSourceKind::File
-    }
-}
-
-fn set_package_source(
-    pkg: &mut NetworkPackage,
-    input: &Path,
-    kind: PackageSourceKind,
-    format: &str,
-    retained_source: bool,
-) {
-    let path = input.display().to_string();
-    pkg.origin = match kind {
-        PackageSourceKind::File => Origin::File {
-            path: path.clone(),
-            format: format.to_owned(),
-            hash: None,
-            retained_source,
-        },
-        PackageSourceKind::BinaryFile => Origin::BinaryFile {
-            path: path.clone(),
-            format: format.to_owned(),
-            hash: None,
-            decoded_sections: Vec::new(),
-        },
-        PackageSourceKind::Folder => Origin::Folder {
-            path: path.clone(),
-            format: format.to_owned(),
-            file_hashes: BTreeMap::new(),
-        },
-    };
-    pkg.sources = vec![SourceDescriptor {
-        id: "src0".to_owned(),
-        kind: kind.as_str().to_owned(),
-        path: Some(path),
-        format: Some(format.to_owned()),
-        hash: None,
-    }];
-}
-
-fn format_is_gridfm(format: &str) -> bool {
-    normalize(format) == "gridfm"
-}
-
-fn format_is_distribution(format: &str) -> bool {
-    use powerio_matrix::format::routing::{Detection, SourceFormat};
-    matches!(
-        powerio_matrix::format::routing::classify_format_name(format),
-        Detection::Known(SourceFormat::Distribution(_))
+    categorized_pyerr(
+        powerio_matrix::ErrorCategory::Output,
+        powerio::codes::EMIT_PACKAGE_SERIALIZE_FAILED.code,
+        e.to_string(),
     )
-}
-
-fn looks_like_gridfm_dir(input: &Path) -> bool {
-    input.join("bus_data.parquet").is_file()
-        || input.join("raw").join("bus_data.parquet").is_file()
-        || std::fs::read_dir(input).is_ok_and(|entries| {
-            entries
-                .filter_map(std::result::Result::ok)
-                .filter(|e| e.path().join("raw").join("bus_data.parquet").is_file())
-                .take(2)
-                .count()
-                == 1
-        })
-}
-
-fn looks_like_distribution_input(input: &Path) -> PyResult<bool> {
-    let ext = input
-        .extension()
-        .and_then(|e| e.to_str())
-        .map(str::to_ascii_lowercase);
-    match ext.as_deref() {
-        Some("m" | "raw" | "aux" | "epc" | "pwb") => return Ok(false),
-        Some("dss") => return Ok(true),
-        Some("json") => {}
-        _ => return Ok(false),
-    }
-    let text = std::fs::read_to_string(input).map_err(|e| {
-        PyValueError::new_err(format!(
-            "reading JSON format markers from {}: {e}",
-            input.display()
-        ))
-    })?;
-    use powerio_matrix::format::routing::{Detection, Domain, JsonClass};
-    match powerio_matrix::format::routing::classify_json_text(&text) {
-        JsonClass::Package => Err(PyValueError::new_err(format!(
-            "{} is a .pio.json package; read it with powerio.Package.from_json",
-            input.display()
-        ))),
-        JsonClass::ModelJson => Err(PyValueError::new_err(format!(
-            "{} is bare powerio model JSON, which is not a case format; read it with \
-             powerio.from_json",
-            input.display()
-        ))),
-        JsonClass::Case(Detection::Known(format)) => Ok(format.domain() == Domain::Distribution),
-        JsonClass::Case(Detection::Unknown) => Ok(false),
-        JsonClass::Case(Detection::Ambiguous) => Err(PyValueError::new_err(format!(
-            "ambiguous JSON markers in {}; pass from_",
-            input.display()
-        ))),
-    }
-}
-
-/// Whether a format token names the DOE GO Challenge 3 document, whose time
-/// series lift into the package's operating points. TEMPORARY alongside
-/// `parse_goc3_json`: the calculation instance types replace this extraction.
-fn format_is_goc3(token: &str) -> bool {
-    normalize(token) == "goc3" || normalize(token) == "goc3json"
 }
 
 /// Package a GO Challenge 3 document: the balanced snapshot plus the operating
 /// point series the document carries.
-fn goc3_package(text: &str) -> PyResult<NetworkPackage> {
-    let (network, diagnostics, document) =
-        powerio_matrix::format::parse_goc3_json(text).map_err(core_pyerr)?;
-    let mut pkg = NetworkPackage::from_balanced_with_read_diagnostics(
-        network,
-        diagnostics.into_iter().map(Into::into),
-    );
-    pkg.attach_goc3_operating_points(&document);
-    Ok(pkg)
-}
-
-fn build_package_from_path(
-    input: &Path,
-    from_: Option<&str>,
-    scenario: i64,
-) -> PyResult<NetworkPackage> {
-    let reads_gridfm = from_.is_some_and(format_is_gridfm)
-        || (from_.is_none() && input.is_dir() && looks_like_gridfm_dir(input));
-    if reads_gridfm {
-        #[cfg(feature = "gridfm")]
-        {
-            let read = gridfm_read_dataset(input.to_string_lossy().as_ref(), scenario)
-                .map_err(to_pyerr)?;
-            let mut pkg = NetworkPackage::from_balanced_with_read_diagnostics(
-                read.network,
-                read.diagnostics.into_iter().map(Into::into),
-            );
-            set_package_source(&mut pkg, input, PackageSourceKind::Folder, "gridfm", false);
-            pkg.run_sane_validation();
-            return Ok(pkg);
-        }
-        #[cfg(not(feature = "gridfm"))]
-        {
-            let _ = scenario;
-            return Err(PyValueError::new_err(
-                "powerio was built without the gridfm Parquet surface",
-            ));
-        }
-    }
-
-    if from_.is_some_and(format_is_distribution)
-        || (from_.is_none() && looks_like_distribution_input(input)?)
-    {
-        let source = dist_source_from_path(input, from_, None)?;
-        let module = powerio_dist::parse(source).map_err(|error| core_error_pyerr(&error))?;
-        let format = module
-            .value()
-            .source_format()
-            .map(powerio_dist::DistSourceFormat::name)
-            .or(from_)
-            .unwrap_or("unknown");
-        let retained_source = module.source().is_some();
-        let mut pkg = NetworkPackage::from_multiconductor_module(module);
-        set_package_source(
-            &mut pkg,
-            input,
-            package_source_kind(input, format),
-            format,
-            retained_source,
-        );
-        pkg.run_sane_validation();
-        return Ok(pkg);
-    }
-
-    let declared_goc3 = from_.is_some_and(format_is_goc3);
-    let sniffed_goc3 = from_.is_none()
-        && input.extension().and_then(|e| e.to_str()) == Some("json")
-        && matches!(
-            std::fs::read_to_string(input)
-                .ok()
-                .map(|text| powerio_matrix::format::routing::classify_json_text(&text)),
-            Some(powerio_matrix::format::routing::JsonClass::Case(
-                powerio_matrix::format::routing::Detection::Known(format)
-            )) if format_is_goc3(format.name())
-        );
-    if declared_goc3 || sniffed_goc3 {
-        let text = std::fs::read_to_string(input).map_err(PyErr::from)?;
-        let mut pkg = goc3_package(&text)?;
-        set_package_source(
-            &mut pkg,
-            input,
-            package_source_kind(input, "goc3-json"),
-            "goc3-json",
-            false,
-        );
-        pkg.run_sane_validation();
-        return Ok(pkg);
-    }
-
-    let module = py_parse_module_path(input, from_)?;
-    let format = module.value().source_format().name();
-    let retained_source = module.source().is_some();
-    let mut pkg = NetworkPackage::from_balanced_module(module);
-    set_package_source(
-        &mut pkg,
-        input,
-        package_source_kind(input, format),
-        format,
-        retained_source,
-    );
-    pkg.run_sane_validation();
-    Ok(pkg)
-}
-
-fn build_package_from_str(text: &str, from_: Option<&str>) -> PyResult<NetworkPackage> {
-    if from_.is_some_and(format_is_gridfm) {
-        return Err(PyValueError::new_err(
-            "gridfm input is a dataset directory; provide a path",
-        ));
-    }
-
-    let source_format = if let Some(format) = from_ {
-        Some(format.to_owned())
-    } else {
-        use powerio_matrix::format::routing::{Detection, JsonClass};
-        match powerio_matrix::format::routing::classify_json_text(text) {
-            JsonClass::Package => {
-                return Err(PyValueError::new_err(
-                    "text is a .pio.json package; read it with \
-                     powerio.Package.from_json",
-                ));
-            }
-            JsonClass::ModelJson => {
-                return Err(PyValueError::new_err(
-                    "text is bare powerio model JSON, which is not a case format; \
-                     read it with powerio.from_json",
-                ));
-            }
-            JsonClass::Case(Detection::Known(format)) => Some(format.name().to_owned()),
-            JsonClass::Case(Detection::Ambiguous) => {
-                return Err(PyValueError::new_err("ambiguous JSON markers; pass from_"));
-            }
-            JsonClass::Case(Detection::Unknown) => None,
-        }
-    };
-
-    if let Some(format) = source_format.as_deref() {
-        if format_is_distribution(format) {
-            let source = dist_source_from_bytes(text.as_bytes(), format)?;
-            let module = powerio_dist::parse(source).map_err(|error| core_error_pyerr(&error))?;
-            let mut pkg = NetworkPackage::from_multiconductor_module(module);
-            pkg.run_sane_validation();
-            return Ok(pkg);
-        }
-    }
-
-    if source_format.as_deref().is_some_and(format_is_goc3) {
-        let mut pkg = goc3_package(text)?;
-        pkg.run_sane_validation();
-        return Ok(pkg);
-    }
-
-    let module = py_parse_module_bytes(
-        text.as_bytes(),
-        source_format.as_deref().unwrap_or("matpower"),
-    )?;
-    let mut pkg = NetworkPackage::from_balanced_module(module);
-    pkg.run_sane_validation();
-    Ok(pkg)
-}
-
 fn normalize(s: &str) -> String {
     s.to_ascii_lowercase().replace(['-', '_'], "")
 }
@@ -765,8 +399,13 @@ impl PyBalancedNetwork {
 }
 
 fn core_error_pyerr(error: &powerio_core::Error) -> PyErr {
+    // Parse and Data map onto their subclasses so a caller branching on
+    // `except powerio.PowerIODataError` sees one taxonomy whichever layer
+    // raised the failure; the other categories keep the base class the 0.9
+    // entries raised (a request refusal is a PowerIOError, never ValueError).
     let err = match error.category() {
         powerio_core::ErrorCategory::Parse => PowerIOParseError::new_err(error.to_string()),
+        powerio_core::ErrorCategory::Data => PowerIODataError::new_err(error.to_string()),
         _ => PowerIOError::new_err(error.to_string()),
     };
     if let Some(code) = error.diagnostics().first().map(|d| d.code().to_owned()) {
@@ -1360,23 +999,6 @@ impl PyBalancedNetwork {
         coo_triplets(py, &l)
     }
 
-    /// The matrix free AC OPF instance as its model JSON (dense 0-based
-    /// indices; the `AcOpfPreparation` serde shape). `units` is "perunit" (the
-    /// default) or "native".
-    #[pyo3(signature = (units=None))]
-    fn acopf_json(&self, units: Option<&str>) -> PyResult<String> {
-        let view = IndexedNetwork::with_core(self.inner(), &self.core);
-        let instance = powerio_prob::prep::build_ac_opf_preparation(
-            &view,
-            &AcOpfOptions {
-                units: parse_units(units.unwrap_or("perunit"))?,
-                ..AcOpfOptions::default()
-            },
-        )
-        .map_err(prob_pyerr)?;
-        serde_json::to_string(&instance).map_err(|error| PyValueError::new_err(error.to_string()))
-    }
-
     /// This network's coordinates as the canonical GeoJSON layer. Raises when
     /// the network carries none.
     fn geo_layer_json(&self) -> PyResult<String> {
@@ -1436,23 +1058,19 @@ impl PyBalancedNetwork {
         let cost_report = policy_network
             .apply_gen_cost_policy(&cost_opts.gen_cost_patches, cost_opts.missing_gen_cost)
             .map_err(core_pyerr)?;
-        let view = IndexedNetwork::new(&policy_network);
-        let instance = powerio_prob::prep::build_dc_opf_preparation(
-            &view,
-            &DcOpfOptions {
-                convention: parse_convention(convention.unwrap_or("series"))?,
-                units: parse_units(units.unwrap_or("perunit"))?,
-                ..DcOpfOptions::default()
-            },
-        )
-        .map_err(prob_pyerr)?;
+        let instance = powerio_prob::DcOpfInstance::from_network(policy_network)
+            .map_err(|error| core_error_pyerr(&error))?
+            .with_approximation(parse_convention(convention.unwrap_or("series"))?);
+        let mut assembly = DcOpfAssemblyOptions::default();
+        assembly.units = parse_units(units.unwrap_or("perunit"))?;
         let options = DcOpfBundleOptions {
+            assembly,
             metadata: DcOpfBundleMetadata {
                 cost_policy: cost_opts.missing_gen_cost,
                 cost_report,
             },
         };
-        let outputs = write_bundle(&instance, out_dir, &options).map_err(prob_pyerr)?;
+        let outputs = write_bundle(&instance, out_dir, &options).map_err(to_pyerr)?;
         dir_files_dict(py, &outputs.dir, &outputs.files)
     }
 
@@ -1837,7 +1455,7 @@ impl PyMulticonductorNetwork {
     /// This network's coordinates as the canonical GeoJSON layer. Raises when
     /// the network carries none.
     fn geo_layer_json(&self) -> PyResult<String> {
-        powerio::package::dist_geo_layer(self.inner())
+        powerio::dist_geo::dist_geo_layer(self.inner())
             .extracted_geojson()
             .map_err(|error| PyValueError::new_err(error.to_string()))
     }
@@ -1855,7 +1473,7 @@ impl PyMulticonductorNetwork {
         let parsed = powerio_matrix::geo::GeoLayer::parse_bytes(text.as_bytes(), name_hint)
             .map_err(|error| PowerIOParseError::new_err(error.to_string()))?;
         let mut net = self.inner().clone();
-        let report = powerio::package::apply_dist_geo_layer(&mut net, &parsed.layer);
+        let report = powerio::dist_geo::apply_dist_geo_layer(&mut net, &parsed.layer);
         *net.source_format_mut() = None;
         let mut rendered = self.rendered_warnings.clone();
         rendered.extend(
@@ -2286,9 +1904,9 @@ impl PyStoredModule {
     /// JSON: the inspect half of the transformation.
     #[pyo3(signature = (base_mva=100.0))]
     fn lowering_readiness_json(&self, base_mva: f64) -> PyResult<String> {
-        let readiness = powerio::package::check_module_lowering(
+        let readiness = powerio::transform::check_module_lowering(
             self.module()?,
-            powerio::package::MulticonductorToBalancedOptions {
+            powerio::transform::MulticonductorToBalancedOptions {
                 base_mva,
                 ..Default::default()
             },
@@ -2307,9 +1925,9 @@ impl PyStoredModule {
             .module
             .take()
             .ok_or_else(|| PyValueError::new_err("the module handle was consumed"))?;
-        match powerio::package::lower_module_to_balanced(
+        match powerio::transform::lower_module_to_balanced(
             module,
-            powerio::package::MulticonductorToBalancedOptions {
+            powerio::transform::MulticonductorToBalancedOptions {
                 base_mva,
                 ..Default::default()
             },
@@ -2392,180 +2010,6 @@ impl PyStoredModule {
             ),
             None => "StoredModule(<consumed>)".to_owned(),
         }
-    }
-}
-
-#[pyclass(name = "_Package", module = "powerio._powerio")]
-struct PyPackage {
-    pkg: NetworkPackage,
-}
-
-#[pymethods]
-impl PyPackage {
-    /// Parse `.pio.json` document text into a package handle.
-    #[staticmethod]
-    fn from_json(text: &str) -> PyResult<Self> {
-        NetworkPackage::from_json(text)
-            .map_err(package_pyerr)
-            .map(|pkg| Self { pkg })
-    }
-
-    /// Build a package from a case file or folder.
-    #[staticmethod]
-    #[pyo3(signature = (path, from_=None, scenario=0))]
-    fn from_file(path: &str, from_: Option<&str>, scenario: i64) -> PyResult<Self> {
-        build_package_from_path(Path::new(path), from_, scenario).map(|pkg| Self { pkg })
-    }
-
-    /// Build a package from in-memory case text.
-    #[staticmethod]
-    #[pyo3(signature = (text, from_=None))]
-    fn from_str(text: &str, from_: Option<&str>) -> PyResult<Self> {
-        build_package_from_str(text, from_).map(|pkg| Self { pkg })
-    }
-
-    /// Wrap a balanced network handle in a package.
-    #[staticmethod]
-    #[pyo3(signature = (network, include_solver_metadata=false))]
-    fn from_balanced(
-        network: PyRef<'_, PyBalancedNetwork>,
-        include_solver_metadata: bool,
-    ) -> PyResult<Self> {
-        let mut pkg = NetworkPackage::from_balanced_with_read_diagnostics(
-            network.inner().clone(),
-            network.diagnostics().iter().cloned().map(Into::into),
-        );
-        if include_solver_metadata {
-            pkg.attach_normalized_solver_table_metadata()
-                .map_err(core_pyerr)?;
-        }
-        Ok(Self { pkg })
-    }
-
-    /// Wrap a multiconductor network handle in a package.
-    #[staticmethod]
-    fn from_multiconductor(network: PyRef<'_, PyMulticonductorNetwork>) -> Self {
-        Self {
-            pkg: NetworkPackage::from_multiconductor(network.inner().clone()),
-        }
-    }
-
-    /// The explicit top level model kind.
-    fn model_kind(&self) -> &'static str {
-        match self.pkg.model_kind() {
-            powerio::package::ModelKind::Balanced => "balanced",
-            powerio::package::ModelKind::Multiconductor => "multiconductor",
-            _ => "unknown",
-        }
-    }
-
-    /// Serialize to pretty `.pio.json`.
-    fn to_json(&self) -> PyResult<String> {
-        package_to_json(&self.pkg)
-    }
-
-    /// Rebuild a balanced network handle from the payload.
-    fn as_balanced(&self) -> PyResult<PyBalancedNetwork> {
-        package_to_balanced_py(&self.pkg)
-    }
-
-    /// Rebuild a multiconductor network handle from the payload.
-    fn as_multiconductor(&self) -> PyResult<PyMulticonductorNetwork> {
-        package_to_dist_py(&self.pkg)
-    }
-
-    /// The operating point series as JSON, or `null` when absent.
-    fn operating_points_json(&self) -> PyResult<String> {
-        serde_json::to_string(&self.pkg.operating_points).map_err(serialize_pyerr)
-    }
-
-    /// Replace the operating point series from JSON and rerun validation.
-    /// `null` or an empty series clears it.
-    fn set_operating_points_json(&mut self, json: &str) -> PyResult<()> {
-        let series: Option<OperatingPointSeries> =
-            serde_json::from_str(json).map_err(payload_pyerr)?;
-        match series {
-            Some(series) => self.pkg.set_operating_points(series),
-            None => self.pkg.clear_operating_points(),
-        }
-        self.pkg.run_sane_validation();
-        Ok(())
-    }
-
-    /// The study block as JSON, or `null` when absent.
-    fn study_json(&self) -> PyResult<String> {
-        serde_json::to_string(&self.pkg.study).map_err(serialize_pyerr)
-    }
-
-    /// Materialize one operating point into a new static package handle.
-    fn materialize_operating_point(&self, index: usize) -> PyResult<Self> {
-        self.pkg
-            .materialize_operating_point(index)
-            .map_err(package_pyerr)
-            .map(|pkg| Self { pkg })
-    }
-
-    /// Materialize one study commit into a new static package handle.
-    fn materialize_study_commit(&self, index: usize) -> PyResult<Self> {
-        self.pkg
-            .materialize_study_commit(index)
-            .map_err(package_pyerr)
-            .map(|pkg| Self { pkg })
-    }
-
-    /// Run the package semantic validation profile in place.
-    fn validate(&mut self) {
-        self.pkg.run_sane_validation();
-    }
-
-    /// The validation summary as JSON.
-    fn validation_json(&self) -> PyResult<String> {
-        serde_json::to_string(&self.pkg.validation).map_err(serialize_pyerr)
-    }
-
-    /// The structured diagnostics array as JSON.
-    fn diagnostics_json(&self) -> PyResult<String> {
-        serde_json::to_string(&self.pkg.diagnostics).map_err(serialize_pyerr)
-    }
-
-    /// Readiness report for multiconductor to balanced lowering, as JSON.
-    #[pyo3(signature = (base_mva=100.0))]
-    fn multiconductor_to_balanced_preflight_json(&self, base_mva: f64) -> PyResult<String> {
-        let net = self.pkg.as_multiconductor().ok_or_else(|| {
-            PyValueError::new_err(format!(
-                "multiconductor preflight requires a multiconductor package, got {}",
-                self.model_kind()
-            ))
-        })?;
-        let report = powerio::package::check_multiconductor_to_balanced_lowering(
-            net,
-            powerio::package::MulticonductorToBalancedOptions {
-                base_mva,
-                ..Default::default()
-            },
-        );
-        serde_json::to_string(&report).map_err(serialize_pyerr)
-    }
-
-    /// Lower a multiconductor package to a new balanced package handle.
-    #[pyo3(signature = (base_mva=100.0))]
-    fn lower_multiconductor_to_balanced(&self, base_mva: f64) -> PyResult<Self> {
-        self.pkg
-            .lower_multiconductor_to_balanced(powerio::package::MulticonductorToBalancedOptions {
-                base_mva,
-                ..Default::default()
-            })
-            .map_err(|e| PowerIODataError::new_err(e.to_string()))
-            .map(|pkg| Self { pkg })
-    }
-
-    fn __repr__(&self) -> String {
-        format!(
-            "Package(model_kind={}, diagnostics={}, operating_points={})",
-            self.model_kind(),
-            self.pkg.diagnostics.len(),
-            self.pkg.operating_points().map_or(0, |s| s.points.len())
-        )
     }
 }
 
@@ -2768,7 +2212,7 @@ fn gridfm_read_to_py(read: GridfmRead) -> (PyBalancedNetwork, i64, Vec<String>) 
 fn read_gridfm(dir: &str, scenario: i64) -> PyResult<(PyBalancedNetwork, i64, Vec<String>)> {
     gridfm_read_dataset(dir, scenario)
         .map(gridfm_read_to_py)
-        .map_err(to_pyerr)
+        .map_err(core_pyerr)
 }
 
 /// Read every scenario of a gridfm dataset, one `(case, scenario, warnings)`
@@ -2778,7 +2222,7 @@ fn read_gridfm(dir: &str, scenario: i64) -> PyResult<(PyBalancedNetwork, i64, Ve
 #[cfg(feature = "gridfm")]
 #[pyfunction]
 fn read_gridfm_scenarios(dir: &str) -> PyResult<Vec<(PyBalancedNetwork, i64, Vec<String>)>> {
-    let reads = gridfm_read_scenarios(dir).map_err(to_pyerr)?;
+    let reads = gridfm_read_scenarios(dir).map_err(core_pyerr)?;
     Ok(reads.into_iter().map(gridfm_read_to_py).collect())
 }
 
@@ -2803,7 +2247,6 @@ fn _powerio(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(dist_parse_str, m)?)?;
     m.add_function(wrap_pyfunction!(dist_convert_file, m)?)?;
     m.add_function(wrap_pyfunction!(dist_convert_str, m)?)?;
-    m.add_class::<PyPackage>()?;
     m.add_class::<PyStoredModule>()?;
     m.add_function(wrap_pyfunction!(classify_json_text, m)?)?;
     m.add_function(wrap_pyfunction!(json_classes, m)?)?;

@@ -98,7 +98,7 @@ pub struct SourceDescriptor {
 
 /// A pointer into one source artifact: where a canonical field came from. It
 /// lives in `powerio-diag` because a diagnostic carries one.
-pub use crate::package::legacy_diag::SourceRef;
+pub use crate::stored::legacy09::legacy_diag::SourceRef;
 
 /// How a canonical field relates to its source value.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]

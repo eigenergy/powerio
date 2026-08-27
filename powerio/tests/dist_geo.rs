@@ -4,7 +4,7 @@ mod helpers;
 #[allow(unused_imports)]
 use helpers::*;
 
-use powerio::package::{apply_dist_geo_layer, dist_geo_layer};
+use powerio::dist_geo::{apply_dist_geo_layer, dist_geo_layer};
 use powerio::{CoordinateSpace, CoordsKind, GeoLayer, GeoTarget};
 
 const MASTER: &str = "New Circuit.c1 bus1=sourcebus basekv=12.47\n\

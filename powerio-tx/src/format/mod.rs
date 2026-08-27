@@ -57,7 +57,7 @@ mod pypsa;
 pub mod routing;
 mod surge;
 
-pub use egret::{parse_egret_time_series, write_egret_json};
+pub use egret::{egret_declares_time_series, parse_egret_time_series, write_egret_json};
 pub use goc3::parse_goc3_json;
 pub use matpower::write_matpower;
 pub use opfdata::{OpfDataSolution, parse_opfdata_json};
@@ -67,7 +67,8 @@ pub use powerworld::{PwdDisplay, PwdSubstation, write_powerworld};
 pub use pslf::write_pslf;
 pub use psse::{write_psse, write_psse_rev};
 pub use pypsa::{
-    PypsaCsvOutputs, PypsaCsvSequence, parse_pypsa_csv_time_series, write_pypsa_csv_folder,
+    PypsaAxis, PypsaCsvOutputs, PypsaCsvSequence, parse_pypsa_csv_time_series, pypsa_axis,
+    write_pypsa_csv_folder,
 };
 pub use surge::write_surge_json;
 
@@ -401,7 +402,7 @@ fn read_file_bytes(path: &std::path::Path) -> Result<Vec<u8>> {
 /// inputs, not text targets, so they have no [`TargetFormat`] arm; this is the
 /// companion alias matcher to [`target_format_from_name`] and the one place the
 /// PyPSA aliases live.
-fn is_pypsa_csv_name(name: &str) -> bool {
+pub fn is_pypsa_csv_name(name: &str) -> bool {
     matches!(
         name.to_ascii_lowercase().replace(['-', '_'], "").as_str(),
         "pypsacsv" | "pypsa"
@@ -582,10 +583,22 @@ fn parse_to_network(
                 Some("json") => None,
                 Some("dss") => return Err(unknown_source_format("dss")),
                 other => {
-                    return Err(Error::UnknownFormat(format!(
-                        "cannot infer from source name extension {other:?}; \
-                         declare a source format"
-                    )));
+                    // A nameless or oddly named source can still carry a JSON
+                    // document (in-memory text has no extension to state);
+                    // sniff it like a `.json` before refusing. The primary
+                    // buffer is already retained, so peeking is free.
+                    let jsonish = source.primary_buffer().is_ok_and(|buffer| {
+                        source_text(&buffer)
+                            .is_ok_and(|text| text.trim_start().starts_with(['{', '[']))
+                    });
+                    if jsonish {
+                        None
+                    } else {
+                        return Err(Error::UnknownFormat(format!(
+                            "cannot infer from source name extension {other:?}; \
+                             declare a source format"
+                        )));
+                    }
                 }
             }
         }
@@ -597,7 +610,13 @@ fn parse_to_network(
     let text = source_text(&buffer)?;
     let fmt = match fmt_hint {
         Some(fmt) => fmt,
-        None => sniff_json(text)?,
+        None => match routing::classify_json_text(text) {
+            // The network serialization is not a case format, but it parses:
+            // a bare model JSON document decodes through `from_json` and
+            // routes to `BalancedNetwork` like any other balanced source.
+            JsonClass::ModelJson => return BalancedNetwork::from_json(text),
+            class => json_target_from_class(class)?,
+        },
     };
     read_source(text, fmt, stem, warnings)
 }
@@ -752,8 +771,16 @@ fn unknown_source_format(name: &str) -> Error {
 /// The JSON formats share the `.json` extension, so an explicit source format
 /// isn't always given. Classification lives here so the CLI and bindings use
 /// the same top level markers as the Rust parsers.
+#[cfg(test)]
 fn sniff_json(text: &str) -> Result<TargetFormat> {
-    match routing::classify_json_text(text) {
+    json_target_from_class(routing::classify_json_text(text))
+}
+
+/// The case format a JSON classification selects; the shapes that are not
+/// case formats are refused with the surface that reads them named. Model
+/// JSON never reaches this from `parse`, which decodes it directly.
+fn json_target_from_class(class: JsonClass) -> Result<TargetFormat> {
+    match class {
         JsonClass::Package => Err(Error::UnknownFormat(
             "JSON is a .pio.json package; read it with the package entry points \
              (pio_package_parse_str in C, powerio.Package.from_json in Python, \

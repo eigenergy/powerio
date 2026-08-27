@@ -24,12 +24,9 @@ mod generate {
             .nth(1)
             .map_or_else(|| PathBuf::from("docs/schema"), PathBuf::from);
 
-        // One published document per powerio lineage; it embeds every payload
-        // type. The `$id` names the published location and is not written into
-        // `.pio.json` files. The lineage is the same one the reader accepts, so
-        // the path moves when and only when a document stops loading.
-        let lineage = powerio::version::lineage_path();
         // The stored module document: one integer version, its own lineage.
+        // The retired `pio-package` lineage stays committed and frozen under
+        // `docs/schema/`; its writer is gone, so nothing regenerates it.
         write_schema::<powerio::stored::StoredModuleV1>(
             &out,
             &format!("pio-module/{}", powerio::stored::SCHEMA_VERSION),
@@ -38,19 +35,6 @@ mod generate {
                 powerio::stored::SCHEMA_VERSION
             ),
             &[],
-        )?;
-
-        write_schema::<powerio::package::NetworkPackage>(
-            &out,
-            &format!("pio-package/{lineage}"),
-            &format!("https://powerio.dev/schema/pio-package/{lineage}/schema.json"),
-            // `powerio_version` carries `serde(default)` so the reader can name
-            // a missing field rather than fail on it, and schemars reads any
-            // `serde` default as "optional" — `schemars(required)` does not
-            // override it. Left alone, the published document would let a
-            // producer omit the one field the version gate reads, validate
-            // clean, and then be refused by `NetworkPackage::from_json`.
-            &["powerio_version"],
         )?;
 
         Ok(())

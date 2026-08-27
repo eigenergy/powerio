@@ -1,27 +1,38 @@
 //! Map DOE GO Challenge 3 JSON to [`AcScucInstance`].
 
-use powerio_core::{Diagnostic, Error};
+use powerio_core::{Error, PioModule, Source};
 
+use super::source_text;
 use crate::diagnostics::codes;
 use crate::instance::AcScucInstance;
 use crate::scopf::{ScopfError, parse_scopf_str};
 
-/// Parse one GO Challenge 3 input document into the AC security constrained
+/// Parse one GO Challenge 3 input source into the AC security constrained
 /// unit commitment instance: the balanced network the document describes plus
-/// the complete typed scheduling categories.
+/// the complete typed scheduling categories. The module retains the source
+/// and the reader's findings.
 ///
 /// The network comes from the hub's GOC3 reader and the categories from the
-/// typed GO Challenge 3 projection; both read the same document, and the bus
-/// identities the two halves resolved are reconciled here before the pair is
-/// accepted as one instance. `name` labels the source in errors.
+/// typed GO Challenge 3 projection; both read the same retained document, and
+/// the bus identities the two halves resolved are reconciled here before the
+/// pair is accepted as one instance.
 ///
 /// # Errors
 /// An invalid document from either half, or bus identities that disagree
-/// between the two.
-pub fn parse_goc3_instance(
-    content: &str,
-    name: &str,
-) -> Result<(AcScucInstance, Vec<Diagnostic>), Error> {
+/// between the two; every failure retains the source.
+pub fn parse_goc3_instance(source: Source) -> Result<PioModule<AcScucInstance>, Error> {
+    match parse_goc3_text(&source) {
+        Ok((instance, diagnostics)) => PioModule::parsed(instance, source, diagnostics),
+        Err(error) => Err(error.with_source(source)),
+    }
+}
+
+fn parse_goc3_text(
+    source: &Source,
+) -> Result<(AcScucInstance, Vec<powerio_core::Diagnostic>), Error> {
+    let name = source.name().to_owned();
+    let buffer = source.primary_buffer()?;
+    let content = source_text(&buffer)?;
     let (network, diagnostics, _document) = powerio_tx::parse_goc3_json(content)
         .map_err(|error| Error::new(error.code(), format!("{name}: {error}")))?;
     let inputs = parse_scopf_str(content, "goc3-json").map_err(|error| scopf_error(&error))?;

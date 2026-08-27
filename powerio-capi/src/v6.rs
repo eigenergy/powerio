@@ -545,9 +545,9 @@ pub unsafe extern "C" fn pio_module_lowering_readiness_json(
     unsafe {
         v6_entry(error, std::ptr::null_mut(), || {
             let inner = required_module(module)?;
-            let readiness = powerio::package::check_module_lowering(
+            let readiness = powerio::transform::check_module_lowering(
                 &inner.module,
-                powerio::package::MulticonductorToBalancedOptions {
+                powerio::transform::MulticonductorToBalancedOptions {
                     base_mva,
                     ..Default::default()
                 },
@@ -584,9 +584,9 @@ pub unsafe extern "C" fn pio_module_lower_to_balanced(
                 .map_err(|error| error_from_core(&error))?;
             let owned =
                 powerio::stored::read_module(&text).map_err(|error| error_from_core(&error))?;
-            powerio::package::lower_module_to_balanced(
+            powerio::transform::lower_module_to_balanced(
                 owned,
-                powerio::package::MulticonductorToBalancedOptions {
+                powerio::transform::MulticonductorToBalancedOptions {
                     base_mva,
                     ..Default::default()
                 },
@@ -596,8 +596,7 @@ pub unsafe extern "C" fn pio_module_lower_to_balanced(
                 let diagnostics =
                     serde_json::to_string(&boxed.diagnostics).unwrap_or_else(|_| "[]".to_owned());
                 let code = boxed.diagnostics.first().map_or(
-                    powerio::package::diagnostics::codes::TRANSFORM_MULTI_TO_BALANCED_WRONG_MODEL_KIND
-                        .code,
+                    powerio::codes::TRANSFORM_MULTI_TO_BALANCED_WRONG_MODEL_KIND.code,
                     |d| d.code.as_str(),
                 );
                 error_from_parts(code, &boxed.to_string(), &diagnostics)

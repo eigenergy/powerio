@@ -3,8 +3,9 @@ use serde::{Deserialize, Serialize};
 use powerio_tx::{BusId, DcConvention, IndexedNetwork};
 
 use crate::{Error, Result};
+use powerio_prob::ReferenceBuses;
 
-use crate::{ReferenceBuses, limits, nodal};
+use super::{limits, nodal};
 
 /// Unit system for power and generator cost data.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -63,7 +64,7 @@ pub struct DcOpfOptions {
     /// zero impedance branches are preserved in networks and instances, so
     /// assembly refuses them with [`powerio_tx::Error::ZeroImpedance`] until
     /// the caller resolves them explicitly
-    /// ([`crate::merge_zero_impedance_buses`]) or opts into skipping.
+    /// ([`powerio_prob::merge_zero_impedance_buses`]) or opts into skipping.
     pub skip_zero_impedance: bool,
     /// Give a branch with no thermal rating the bound
     /// [`Branch::synthesize_rate_a`](powerio_tx::Branch::synthesize_rate_a)
@@ -245,7 +246,7 @@ impl DcOpfPreparation {
 #[allow(clippy::too_many_lines)]
 pub fn build_dc_opf_preparation(
     case: &IndexedNetwork,
-    options: &DcOpfOptions,
+    options: DcOpfOptions,
 ) -> Result<DcOpfPreparation> {
     case.check_reference_coverage()?;
     case.network().check_base_mva()?;
