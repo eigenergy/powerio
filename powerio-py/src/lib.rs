@@ -134,19 +134,6 @@ fn to_pyerr(e: powerio_matrix::Error) -> PyErr {
     }
 }
 
-fn prob_pyerr(e: powerio_prob::Error) -> PyErr {
-    use powerio_prob::Error as E;
-    match e {
-        E::Io(io) => io.into(),
-        E::Core(inner) => core_pyerr(inner),
-        other => {
-            let category = other.category();
-            let code = other.code().code;
-            categorized_pyerr(category, code, other.to_string())
-        }
-    }
-}
-
 /// Convert an output path to a `String`, raising rather than returning a lossily
 /// mangled path that no longer opens the file that was written.
 fn path_to_str(p: &std::path::Path) -> PyResult<String> {
