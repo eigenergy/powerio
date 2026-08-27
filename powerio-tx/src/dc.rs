@@ -36,10 +36,10 @@ pub(crate) fn series_admittance_parts(r: f64, x: f64) -> (f64, f64) {
 
 /// Rule for the DC branch susceptance `b`.
 ///
-/// `b` is positive for an inductive branch, the DC model convention MATPOWER
-/// `makeBdc` uses. It is the edge weight of the bus susceptance matrix and the
-/// coefficient in `f = b (theta_from - theta_to)`. The AC series susceptance
-/// `Im(1/(r + jx))` is its negation.
+/// The public `b` follows PowerModels: it is negative for an inductive
+/// branch, the imaginary part of the series admittance the selected formula
+/// models. The positive edge weight a sparse factorization uses is its
+/// negation, [`solver_edge_weight`](Self::solver_edge_weight).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[non_exhaustive]
 pub enum DcConvention {
@@ -51,9 +51,9 @@ pub enum DcConvention {
     /// `b = -1/(x tau)` with phase shift injections, matching MATPOWER
     /// `makeBdc` up to MATPOWER's own sign spelling.
     ///
-    /// Serialized as `Matpower`, the spelling every stored 0.9 document and
-    /// bundle manifest carries.
-    #[serde(rename = "Matpower", alias = "TapAdjustedReactance")]
+    /// Serialized under its own name; `Matpower`, the stored 0.9 spelling,
+    /// is still read.
+    #[serde(alias = "Matpower")]
     TapAdjustedReactance,
     /// `b = imag(inv(r + jx)) = -x/(r² + x²)` with phase shift injections.
     ///
@@ -62,9 +62,10 @@ pub enum DcConvention {
     /// `-1/x` when the resistance is zero. This is PowerModels' DC branch
     /// susceptance exactly.
     ///
-    /// Serialized as `SeriesImpedance`, the stored 0.9 spelling.
+    /// Serialized under its own name; `SeriesImpedance`, the stored 0.9
+    /// spelling, is still read.
     #[default]
-    #[serde(rename = "SeriesImpedance", alias = "SeriesSusceptance")]
+    #[serde(alias = "SeriesImpedance")]
     SeriesSusceptance,
 }
 
