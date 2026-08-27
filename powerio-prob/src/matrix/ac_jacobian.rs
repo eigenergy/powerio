@@ -182,7 +182,7 @@ pub fn calc_power_flow_jacobian(
 /// The complete voltage assignment from the operating point, in bus row
 /// order, with the identity checks #407 requires.
 fn point_voltages(
-    instance: &AcPfInstance,
+    _instance: &AcPfInstance,
     point: &OperatingPoint<powerio_tx::BalancedNetwork>,
     bus_ids: &[BusId],
 ) -> Result<Voltages, Error> {
@@ -193,7 +193,6 @@ fn point_voltages(
             "the operating point's network does not share the instance's bus identities",
         ));
     }
-    let _ = instance;
     let mut magnitude = Vec::with_capacity(bus_ids.len());
     let mut angle = Vec::with_capacity(bus_ids.len());
     for &bus in bus_ids {
@@ -209,7 +208,7 @@ fn point_voltages(
             ));
         };
         magnitude.push(vm);
-        angle.push(va.to_radians());
+        angle.push(va);
     }
     Ok(Voltages { magnitude, angle })
 }
