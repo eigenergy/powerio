@@ -1,5 +1,337 @@
 {
   "$defs": {
+    "AcOpfInstanceV1": {
+      "additionalProperties": false,
+      "properties": {
+        "constraints": {
+          "$ref": "#/$defs/ActiveConstraints"
+        },
+        "initial_state": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/StoredOperatingPointV1"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "network": {
+          "$ref": "#/$defs/BalancedNetwork"
+        },
+        "objective": {
+          "$ref": "#/$defs/Objective"
+        }
+      },
+      "required": [
+        "network",
+        "objective",
+        "constraints"
+      ],
+      "type": "object"
+    },
+    "AcOpfSolutionV1": {
+      "additionalProperties": false,
+      "properties": {
+        "branch_from_active_flow": {
+          "items": {
+            "$ref": "#/$defs/StoredF64"
+          },
+          "type": "array"
+        },
+        "branch_from_reactive_flow": {
+          "items": {
+            "$ref": "#/$defs/StoredF64"
+          },
+          "type": "array"
+        },
+        "branch_to_active_flow": {
+          "items": {
+            "$ref": "#/$defs/StoredF64"
+          },
+          "type": "array"
+        },
+        "branch_to_reactive_flow": {
+          "items": {
+            "$ref": "#/$defs/StoredF64"
+          },
+          "type": "array"
+        },
+        "bus_active_injection": {
+          "items": {
+            "$ref": "#/$defs/StoredF64"
+          },
+          "type": "array"
+        },
+        "bus_reactive_injection": {
+          "items": {
+            "$ref": "#/$defs/StoredF64"
+          },
+          "type": "array"
+        },
+        "bus_voltage_angle": {
+          "items": {
+            "$ref": "#/$defs/StoredF64"
+          },
+          "type": "array"
+        },
+        "bus_voltage_magnitude": {
+          "items": {
+            "$ref": "#/$defs/StoredF64"
+          },
+          "type": "array"
+        },
+        "generator_active_power": {
+          "items": {
+            "$ref": "#/$defs/StoredF64"
+          },
+          "type": "array"
+        },
+        "generator_reactive_power": {
+          "items": {
+            "$ref": "#/$defs/StoredF64"
+          },
+          "type": "array"
+        },
+        "instance": {
+          "$ref": "#/$defs/AcOpfInstanceV1"
+        },
+        "objective": {
+          "$ref": "#/$defs/StoredF64"
+        },
+        "producer": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "residuals": {
+          "$ref": "#/$defs/Residuals"
+        },
+        "termination": {
+          "$ref": "#/$defs/Termination"
+        }
+      },
+      "required": [
+        "instance",
+        "termination",
+        "residuals",
+        "bus_voltage_magnitude",
+        "bus_voltage_angle",
+        "bus_active_injection",
+        "bus_reactive_injection",
+        "branch_from_active_flow",
+        "branch_from_reactive_flow",
+        "branch_to_active_flow",
+        "branch_to_reactive_flow",
+        "generator_active_power",
+        "generator_reactive_power",
+        "objective"
+      ],
+      "type": "object"
+    },
+    "AcPfInstanceV1": {
+      "additionalProperties": false,
+      "properties": {
+        "initial_state": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/StoredOperatingPointV1"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "network": {
+          "$ref": "#/$defs/BalancedNetwork"
+        }
+      },
+      "required": [
+        "network"
+      ],
+      "type": "object"
+    },
+    "AcPfSolutionV1": {
+      "additionalProperties": false,
+      "properties": {
+        "branch_from_active_flow": {
+          "items": {
+            "$ref": "#/$defs/StoredF64"
+          },
+          "type": "array"
+        },
+        "branch_from_reactive_flow": {
+          "items": {
+            "$ref": "#/$defs/StoredF64"
+          },
+          "type": "array"
+        },
+        "branch_to_active_flow": {
+          "items": {
+            "$ref": "#/$defs/StoredF64"
+          },
+          "type": "array"
+        },
+        "branch_to_reactive_flow": {
+          "items": {
+            "$ref": "#/$defs/StoredF64"
+          },
+          "type": "array"
+        },
+        "bus_active_injection": {
+          "items": {
+            "$ref": "#/$defs/StoredF64"
+          },
+          "type": "array"
+        },
+        "bus_reactive_injection": {
+          "items": {
+            "$ref": "#/$defs/StoredF64"
+          },
+          "type": "array"
+        },
+        "bus_voltage_angle": {
+          "items": {
+            "$ref": "#/$defs/StoredF64"
+          },
+          "type": "array"
+        },
+        "bus_voltage_magnitude": {
+          "items": {
+            "$ref": "#/$defs/StoredF64"
+          },
+          "type": "array"
+        },
+        "generator_dispatch": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/GeneratorDispatchV1"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "instance": {
+          "$ref": "#/$defs/AcPfInstanceV1"
+        },
+        "producer": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "residuals": {
+          "$ref": "#/$defs/Residuals"
+        },
+        "termination": {
+          "$ref": "#/$defs/Termination"
+        }
+      },
+      "required": [
+        "instance",
+        "termination",
+        "residuals",
+        "bus_voltage_magnitude",
+        "bus_voltage_angle",
+        "bus_active_injection",
+        "bus_reactive_injection",
+        "branch_from_active_flow",
+        "branch_from_reactive_flow",
+        "branch_to_active_flow",
+        "branch_to_reactive_flow"
+      ],
+      "type": "object"
+    },
+    "AcScucInstanceV1": {
+      "additionalProperties": false,
+      "properties": {
+        "inputs": {
+          "description": "The complete SCUC inputs, in the calculation crate's own\n`powerio.scopf` serialization (that document carries its own schema)."
+        },
+        "network": {
+          "$ref": "#/$defs/BalancedNetwork"
+        }
+      },
+      "required": [
+        "network",
+        "inputs"
+      ],
+      "type": "object"
+    },
+    "AcScucSolutionV1": {
+      "additionalProperties": false,
+      "properties": {
+        "device_outputs": {
+          "$ref": "#/$defs/ScucDeviceOutputsV1"
+        },
+        "instance": {
+          "$ref": "#/$defs/AcScucInstanceV1"
+        },
+        "network_outputs": {
+          "$ref": "#/$defs/ScucNetworkOutputsV1"
+        },
+        "objective": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/StoredF64"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "producer": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "residuals": {
+          "$ref": "#/$defs/Residuals"
+        },
+        "termination": {
+          "$ref": "#/$defs/Termination"
+        }
+      },
+      "required": [
+        "instance",
+        "termination",
+        "residuals",
+        "network_outputs",
+        "device_outputs"
+      ],
+      "type": "object"
+    },
+    "ActiveConstraints": {
+      "description": "The active constraint families of a balanced OPF instance.",
+      "properties": {
+        "angle_bounds": {
+          "$ref": "#/$defs/ConstraintSelection",
+          "description": "Branch angle difference bounds."
+        },
+        "generator_capability": {
+          "$ref": "#/$defs/ConstraintSelection",
+          "description": "Generator capability bounds (active and reactive limits)."
+        },
+        "thermal_limits": {
+          "$ref": "#/$defs/ConstraintSelection",
+          "description": "Branch thermal limits."
+        },
+        "voltage_bounds": {
+          "$ref": "#/$defs/ConstraintSelection",
+          "description": "Bus voltage magnitude bounds."
+        }
+      },
+      "required": [
+        "generator_capability",
+        "voltage_bounds",
+        "thermal_limits",
+        "angle_bounds"
+      ],
+      "type": "object"
+    },
     "ActivePowerReference": {
       "enum": [
         "P_AVAILABLE",
@@ -1088,6 +1420,57 @@
       ],
       "type": "string"
     },
+    "ConstraintSelection": {
+      "description": "Which elements of one constraint family are active, by stable element\nidentity (the payload `uid`, else `{table}:{row}`; buses by their id).",
+      "oneOf": [
+        {
+          "description": "Every element with a stated limit.",
+          "properties": {
+            "select": {
+              "const": "all",
+              "type": "string"
+            }
+          },
+          "required": [
+            "select"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "No element; the family is relaxed.",
+          "properties": {
+            "select": {
+              "const": "none",
+              "type": "string"
+            }
+          },
+          "required": [
+            "select"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Exactly the named elements.",
+          "properties": {
+            "identities": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "select": {
+              "const": "only",
+              "type": "string"
+            }
+          },
+          "required": [
+            "select",
+            "identities"
+          ],
+          "type": "object"
+        }
+      ]
+    },
     "ControlVoltageReference": {
       "enum": [
         "PN_PER_PHASE",
@@ -1108,6 +1491,197 @@
         "derived"
       ],
       "type": "string"
+    },
+    "DcOpfInstanceV1": {
+      "additionalProperties": false,
+      "properties": {
+        "approximation": {
+          "type": "string"
+        },
+        "constraints": {
+          "$ref": "#/$defs/ActiveConstraints"
+        },
+        "initial_state": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/StoredOperatingPointV1"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "network": {
+          "$ref": "#/$defs/BalancedNetwork"
+        },
+        "objective": {
+          "$ref": "#/$defs/Objective",
+          "description": "The typed objective the instance states, in the calculation crate's\nown serialization."
+        }
+      },
+      "required": [
+        "network",
+        "approximation",
+        "objective",
+        "constraints"
+      ],
+      "type": "object"
+    },
+    "DcOpfSolutionV1": {
+      "additionalProperties": false,
+      "properties": {
+        "branch_from_active_flow": {
+          "items": {
+            "$ref": "#/$defs/StoredF64"
+          },
+          "type": "array"
+        },
+        "branch_to_active_flow": {
+          "items": {
+            "$ref": "#/$defs/StoredF64"
+          },
+          "type": "array"
+        },
+        "bus_active_injection": {
+          "items": {
+            "$ref": "#/$defs/StoredF64"
+          },
+          "type": "array"
+        },
+        "bus_voltage_angle": {
+          "items": {
+            "$ref": "#/$defs/StoredF64"
+          },
+          "type": "array"
+        },
+        "generator_active_power": {
+          "items": {
+            "$ref": "#/$defs/StoredF64"
+          },
+          "type": "array"
+        },
+        "instance": {
+          "$ref": "#/$defs/DcOpfInstanceV1"
+        },
+        "objective": {
+          "$ref": "#/$defs/StoredF64"
+        },
+        "producer": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "residuals": {
+          "$ref": "#/$defs/Residuals"
+        },
+        "termination": {
+          "$ref": "#/$defs/Termination"
+        }
+      },
+      "required": [
+        "instance",
+        "termination",
+        "residuals",
+        "bus_voltage_angle",
+        "bus_active_injection",
+        "branch_from_active_flow",
+        "branch_to_active_flow",
+        "generator_active_power",
+        "objective"
+      ],
+      "type": "object"
+    },
+    "DcPfInstanceV1": {
+      "additionalProperties": false,
+      "properties": {
+        "approximation": {
+          "description": "The selected branch susceptance formula's stable name.",
+          "type": "string"
+        },
+        "initial_state": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/StoredOperatingPointV1"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "network": {
+          "$ref": "#/$defs/BalancedNetwork"
+        }
+      },
+      "required": [
+        "network",
+        "approximation"
+      ],
+      "type": "object"
+    },
+    "DcPfSolutionV1": {
+      "additionalProperties": false,
+      "properties": {
+        "branch_from_active_flow": {
+          "items": {
+            "$ref": "#/$defs/StoredF64"
+          },
+          "type": "array"
+        },
+        "branch_to_active_flow": {
+          "items": {
+            "$ref": "#/$defs/StoredF64"
+          },
+          "type": "array"
+        },
+        "bus_active_injection": {
+          "items": {
+            "$ref": "#/$defs/StoredF64"
+          },
+          "type": "array"
+        },
+        "bus_voltage_angle": {
+          "items": {
+            "$ref": "#/$defs/StoredF64"
+          },
+          "type": "array"
+        },
+        "generator_dispatch": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/GeneratorDispatchV1"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "instance": {
+          "$ref": "#/$defs/DcPfInstanceV1"
+        },
+        "producer": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "residuals": {
+          "$ref": "#/$defs/Residuals"
+        },
+        "termination": {
+          "$ref": "#/$defs/Termination"
+        }
+      },
+      "required": [
+        "instance",
+        "termination",
+        "residuals",
+        "bus_voltage_angle",
+        "bus_active_injection",
+        "branch_from_active_flow",
+        "branch_to_active_flow"
+      ],
+      "type": "object"
     },
     "DiagnosticV1": {
       "additionalProperties": false,
@@ -3652,6 +4226,29 @@
       ],
       "type": "object"
     },
+    "GeneratorDispatchV1": {
+      "additionalProperties": false,
+      "description": "A solution's producer stated generator dispatch.",
+      "properties": {
+        "p_mw": {
+          "items": {
+            "$ref": "#/$defs/StoredF64"
+          },
+          "type": "array"
+        },
+        "q_mvar": {
+          "items": {
+            "$ref": "#/$defs/StoredF64"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "p_mw",
+        "q_mvar"
+      ],
+      "type": "object"
+    },
     "GeoMeta": {
       "description": "Network level coordinate metadata.",
       "oneOf": [
@@ -4584,6 +5181,222 @@
       ],
       "type": "object"
     },
+    "McAcOpfInstanceV1": {
+      "additionalProperties": false,
+      "properties": {
+        "constraints": {
+          "$ref": "#/$defs/MulticonductorActiveConstraints"
+        },
+        "initial_state": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/StoredOperatingPointV1"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "network": {
+          "$ref": "#/$defs/MulticonductorNetwork"
+        },
+        "objective": {
+          "$ref": "#/$defs/Objective"
+        }
+      },
+      "required": [
+        "network",
+        "objective",
+        "constraints"
+      ],
+      "type": "object"
+    },
+    "McAcOpfSolutionV1": {
+      "additionalProperties": false,
+      "properties": {
+        "generator_active_power": {
+          "items": {
+            "$ref": "#/$defs/StoredF64"
+          },
+          "type": "array"
+        },
+        "instance": {
+          "$ref": "#/$defs/McAcOpfInstanceV1"
+        },
+        "objective": {
+          "$ref": "#/$defs/StoredF64"
+        },
+        "producer": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "residuals": {
+          "$ref": "#/$defs/Residuals"
+        },
+        "source_active_injection": {
+          "items": {
+            "$ref": "#/$defs/StoredF64"
+          },
+          "type": "array"
+        },
+        "terminal_active_power": {
+          "items": {
+            "$ref": "#/$defs/StoredF64"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "terminal_current_magnitude": {
+          "items": {
+            "$ref": "#/$defs/StoredF64"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "terminal_voltage_angle": {
+          "items": {
+            "$ref": "#/$defs/StoredF64"
+          },
+          "type": "array"
+        },
+        "terminal_voltage_magnitude": {
+          "items": {
+            "$ref": "#/$defs/StoredF64"
+          },
+          "type": "array"
+        },
+        "termination": {
+          "$ref": "#/$defs/Termination"
+        }
+      },
+      "required": [
+        "instance",
+        "termination",
+        "residuals",
+        "terminal_voltage_magnitude",
+        "terminal_voltage_angle",
+        "source_active_injection",
+        "generator_active_power",
+        "objective"
+      ],
+      "type": "object"
+    },
+    "McAcPfInstanceV1": {
+      "additionalProperties": false,
+      "properties": {
+        "initial_state": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/StoredOperatingPointV1"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "network": {
+          "$ref": "#/$defs/MulticonductorNetwork"
+        }
+      },
+      "required": [
+        "network"
+      ],
+      "type": "object"
+    },
+    "McAcPfSolutionV1": {
+      "additionalProperties": false,
+      "properties": {
+        "instance": {
+          "$ref": "#/$defs/McAcPfInstanceV1"
+        },
+        "producer": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "residuals": {
+          "$ref": "#/$defs/Residuals"
+        },
+        "source_active_injection": {
+          "items": {
+            "$ref": "#/$defs/StoredF64"
+          },
+          "type": "array"
+        },
+        "terminal_active_power": {
+          "items": {
+            "$ref": "#/$defs/StoredF64"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "terminal_current_magnitude": {
+          "items": {
+            "$ref": "#/$defs/StoredF64"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "terminal_voltage_angle": {
+          "items": {
+            "$ref": "#/$defs/StoredF64"
+          },
+          "type": "array"
+        },
+        "terminal_voltage_magnitude": {
+          "items": {
+            "$ref": "#/$defs/StoredF64"
+          },
+          "type": "array"
+        },
+        "termination": {
+          "$ref": "#/$defs/Termination"
+        }
+      },
+      "required": [
+        "instance",
+        "termination",
+        "residuals",
+        "terminal_voltage_magnitude",
+        "terminal_voltage_angle",
+        "source_active_injection"
+      ],
+      "type": "object"
+    },
+    "MulticonductorActiveConstraints": {
+      "description": "The active constraint families of a multiconductor OPF instance.",
+      "properties": {
+        "conductor_limits": {
+          "$ref": "#/$defs/ConstraintSelection",
+          "description": "Conductor current or apparent power limits."
+        },
+        "generator_capability": {
+          "$ref": "#/$defs/ConstraintSelection",
+          "description": "Per phase generator capability bounds."
+        },
+        "terminal_voltage_bounds": {
+          "$ref": "#/$defs/ConstraintSelection",
+          "description": "Terminal voltage magnitude bounds."
+        }
+      },
+      "required": [
+        "terminal_voltage_bounds",
+        "conductor_limits",
+        "generator_capability"
+      ],
+      "type": "object"
+    },
     "MulticonductorNetwork": {
       "description": "A multiconductor distribution network.\n\n`source` retains the original text for the byte exact echo tier;\n`defaulted` records, per element (`\"class.name\"` key), the fields the\nreader materialized from format defaults rather than the source text.",
       "properties": {
@@ -4765,6 +5578,109 @@
       ],
       "type": "object"
     },
+    "MulticonductorOperatingPointTimeSeriesV1": {
+      "additionalProperties": false,
+      "properties": {
+        "network": {
+          "$ref": "#/$defs/MulticonductorNetwork"
+        },
+        "quantities": {
+          "additionalProperties": {
+            "$ref": "#/$defs/StoredQuantityV1"
+          },
+          "description": "Quantity name → dense columns, the multiconductor instantaneous\nvocabulary.",
+          "type": "object"
+        },
+        "time_points": {
+          "items": {
+            "$ref": "#/$defs/TimePointV1"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "network",
+        "time_points",
+        "quantities"
+      ],
+      "type": "object"
+    },
+    "Objective": {
+      "description": "The complete typed objective of one OPF instance: a sum of terms.",
+      "properties": {
+        "terms": {
+          "items": {
+            "$ref": "#/$defs/ObjectiveTerm"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "terms"
+      ],
+      "type": "object"
+    },
+    "ObjectiveTerm": {
+      "description": "One typed objective term.",
+      "oneOf": [
+        {
+          "description": "The generator cost curves the network states, summed over the in\nservice generators the instance dispatches.",
+          "properties": {
+            "term": {
+              "const": "network_generator_cost",
+              "type": "string"
+            }
+          },
+          "required": [
+            "term"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "The per phase cost references a multiconductor calculation record\nstates (the BMOPF objective).",
+          "properties": {
+            "term": {
+              "const": "network_per_phase_cost",
+              "type": "string"
+            }
+          },
+          "required": [
+            "term"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "A differentiability regularization with its stated nonnegative weight,\nthe term Tellegen adds explicitly rather than a solver adding it\nsilently.",
+          "properties": {
+            "term": {
+              "const": "differentiability_regularization",
+              "type": "string"
+            },
+            "weight": {
+              "anyOf": [
+                {
+                  "format": "double",
+                  "type": "number"
+                },
+                {
+                  "enum": [
+                    "Infinity",
+                    "-Infinity",
+                    "NaN"
+                  ],
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "required": [
+            "term",
+            "weight"
+          ],
+          "type": "object"
+        }
+      ]
+    },
     "PowerFactorControl": {
       "properties": {
         "pf": {
@@ -4818,6 +5734,248 @@
         "VAR"
       ],
       "type": "string"
+    },
+    "Residuals": {
+      "description": "Numerical residuals of the solved equations, in the problem's power unit.\nA field is `None` when the producer did not report it.",
+      "properties": {
+        "max_active_power_mismatch": {
+          "anyOf": [
+            {
+              "format": "double",
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            {
+              "enum": [
+                "Infinity",
+                "-Infinity",
+                "NaN"
+              ],
+              "type": "string"
+            }
+          ],
+          "description": "Largest absolute active power balance mismatch, MW."
+        },
+        "max_reactive_power_mismatch": {
+          "anyOf": [
+            {
+              "format": "double",
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            {
+              "enum": [
+                "Infinity",
+                "-Infinity",
+                "NaN"
+              ],
+              "type": "string"
+            }
+          ],
+          "description": "Largest absolute reactive power balance mismatch, MVAr."
+        }
+      },
+      "type": "object"
+    },
+    "ScucDeviceOutputsV1": {
+      "additionalProperties": false,
+      "properties": {
+        "on_status": {
+          "items": {
+            "items": {
+              "$ref": "#/$defs/StoredF64"
+            },
+            "type": "array"
+          },
+          "type": "array"
+        },
+        "p_nsyn_res": {
+          "items": {
+            "items": {
+              "$ref": "#/$defs/StoredF64"
+            },
+            "type": "array"
+          },
+          "type": "array"
+        },
+        "p_on": {
+          "items": {
+            "items": {
+              "$ref": "#/$defs/StoredF64"
+            },
+            "type": "array"
+          },
+          "type": "array"
+        },
+        "p_ramp_res_down_online": {
+          "items": {
+            "items": {
+              "$ref": "#/$defs/StoredF64"
+            },
+            "type": "array"
+          },
+          "type": "array"
+        },
+        "p_ramp_res_up_online": {
+          "items": {
+            "items": {
+              "$ref": "#/$defs/StoredF64"
+            },
+            "type": "array"
+          },
+          "type": "array"
+        },
+        "p_reg_res_down": {
+          "items": {
+            "items": {
+              "$ref": "#/$defs/StoredF64"
+            },
+            "type": "array"
+          },
+          "type": "array"
+        },
+        "p_reg_res_up": {
+          "items": {
+            "items": {
+              "$ref": "#/$defs/StoredF64"
+            },
+            "type": "array"
+          },
+          "type": "array"
+        },
+        "p_syn_res": {
+          "items": {
+            "items": {
+              "$ref": "#/$defs/StoredF64"
+            },
+            "type": "array"
+          },
+          "type": "array"
+        },
+        "q": {
+          "items": {
+            "items": {
+              "$ref": "#/$defs/StoredF64"
+            },
+            "type": "array"
+          },
+          "type": "array"
+        },
+        "q_res_down": {
+          "items": {
+            "items": {
+              "$ref": "#/$defs/StoredF64"
+            },
+            "type": "array"
+          },
+          "type": "array"
+        },
+        "q_res_up": {
+          "items": {
+            "items": {
+              "$ref": "#/$defs/StoredF64"
+            },
+            "type": "array"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "on_status",
+        "p_on",
+        "q",
+        "p_reg_res_up",
+        "p_reg_res_down",
+        "p_syn_res",
+        "p_nsyn_res",
+        "p_ramp_res_up_online",
+        "p_ramp_res_down_online",
+        "q_res_up",
+        "q_res_down"
+      ],
+      "type": "object"
+    },
+    "ScucNetworkOutputsV1": {
+      "additionalProperties": false,
+      "properties": {
+        "ac_line_on_status": {
+          "items": {
+            "items": {
+              "$ref": "#/$defs/StoredF64"
+            },
+            "type": "array"
+          },
+          "type": "array"
+        },
+        "bus_va": {
+          "items": {
+            "items": {
+              "$ref": "#/$defs/StoredF64"
+            },
+            "type": "array"
+          },
+          "type": "array"
+        },
+        "bus_vm": {
+          "items": {
+            "items": {
+              "$ref": "#/$defs/StoredF64"
+            },
+            "type": "array"
+          },
+          "type": "array"
+        },
+        "shunt_step": {
+          "items": {
+            "items": {
+              "$ref": "#/$defs/StoredF64"
+            },
+            "type": "array"
+          },
+          "type": "array"
+        },
+        "transformer_on_status": {
+          "items": {
+            "items": {
+              "$ref": "#/$defs/StoredF64"
+            },
+            "type": "array"
+          },
+          "type": "array"
+        },
+        "transformer_ta": {
+          "items": {
+            "items": {
+              "$ref": "#/$defs/StoredF64"
+            },
+            "type": "array"
+          },
+          "type": "array"
+        },
+        "transformer_tm": {
+          "items": {
+            "items": {
+              "$ref": "#/$defs/StoredF64"
+            },
+            "type": "array"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "bus_vm",
+        "bus_va",
+        "shunt_step",
+        "ac_line_on_status",
+        "transformer_tm",
+        "transformer_ta",
+        "transformer_on_status"
+      ],
+      "type": "object"
     },
     "SeverityV1": {
       "enum": [
@@ -5502,6 +6660,22 @@
         }
       ]
     },
+    "StoredOperatingPointV1": {
+      "additionalProperties": false,
+      "description": "One stored operating point: the state quantities of a single point,\nkeyed by the instantaneous vocabulary, each with its resolved identity\norder and one row of values.",
+      "properties": {
+        "quantities": {
+          "additionalProperties": {
+            "$ref": "#/$defs/StoredQuantityV1"
+          },
+          "type": "object"
+        }
+      },
+      "required": [
+        "quantities"
+      ],
+      "type": "object"
+    },
     "StoredQuantityV1": {
       "additionalProperties": false,
       "description": "One state quantity's dense columns: the resolved identity order, then the\npoint major values (`time_points.len() × identities.len()`).",
@@ -5600,10 +6774,265 @@
           "additionalProperties": false,
           "properties": {
             "data": {
+              "$ref": "#/$defs/MulticonductorOperatingPointTimeSeriesV1"
+            },
+            "kind": {
+              "const": "multiconductor_operating_point_time_series",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "data"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "data": {
               "$ref": "#/$defs/BalancedNetworkScenarioSetV1"
             },
             "kind": {
               "const": "balanced_network_scenario_set",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "data"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "data": {
+              "$ref": "#/$defs/DcPfInstanceV1"
+            },
+            "kind": {
+              "const": "dc_pf_instance",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "data"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "data": {
+              "$ref": "#/$defs/AcPfInstanceV1"
+            },
+            "kind": {
+              "const": "ac_pf_instance",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "data"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "data": {
+              "$ref": "#/$defs/DcOpfInstanceV1"
+            },
+            "kind": {
+              "const": "dc_opf_instance",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "data"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "data": {
+              "$ref": "#/$defs/AcOpfInstanceV1"
+            },
+            "kind": {
+              "const": "ac_opf_instance",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "data"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "data": {
+              "$ref": "#/$defs/McAcPfInstanceV1"
+            },
+            "kind": {
+              "const": "mc_ac_pf_instance",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "data"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "data": {
+              "$ref": "#/$defs/McAcOpfInstanceV1"
+            },
+            "kind": {
+              "const": "mc_ac_opf_instance",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "data"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "data": {
+              "$ref": "#/$defs/AcScucInstanceV1"
+            },
+            "kind": {
+              "const": "ac_scuc_instance",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "data"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "data": {
+              "$ref": "#/$defs/DcPfSolutionV1"
+            },
+            "kind": {
+              "const": "dc_pf_solution",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "data"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "data": {
+              "$ref": "#/$defs/AcPfSolutionV1"
+            },
+            "kind": {
+              "const": "ac_pf_solution",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "data"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "data": {
+              "$ref": "#/$defs/DcOpfSolutionV1"
+            },
+            "kind": {
+              "const": "dc_opf_solution",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "data"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "data": {
+              "$ref": "#/$defs/AcOpfSolutionV1"
+            },
+            "kind": {
+              "const": "ac_opf_solution",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "data"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "data": {
+              "$ref": "#/$defs/McAcPfSolutionV1"
+            },
+            "kind": {
+              "const": "mc_ac_pf_solution",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "data"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "data": {
+              "$ref": "#/$defs/McAcOpfSolutionV1"
+            },
+            "kind": {
+              "const": "mc_ac_opf_solution",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "data"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "data": {
+              "$ref": "#/$defs/AcScucSolutionV1"
+            },
+            "kind": {
+              "const": "ac_scuc_solution",
               "type": "string"
             }
           },
@@ -5867,6 +7296,63 @@
           "const": "discrete",
           "description": "Discrete adjustment in fixed steps (`MODSW` 2 and up).",
           "type": "string"
+        }
+      ]
+    },
+    "Termination": {
+      "description": "How the producing calculation ended.",
+      "oneOf": [
+        {
+          "description": "The calculation converged to its stated tolerance.",
+          "properties": {
+            "kind": {
+              "const": "converged",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "The iteration limit ended the calculation before convergence.",
+          "properties": {
+            "kind": {
+              "const": "iteration_limit",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "The calculation failed.",
+          "properties": {
+            "kind": {
+              "const": "failed",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "The source records a solved calculation without termination\ninformation (DeepMind OPFData does).",
+          "properties": {
+            "kind": {
+              "const": "not_reported",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
         }
       ]
     },
