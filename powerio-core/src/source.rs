@@ -1111,10 +1111,29 @@ mod platform {
             Ok(file)
         }
 
-        /// A duplicate of the root descriptor, for a listing walk that opens
-        /// each child directory relative to its parent.
+        /// A fresh open file description of the root, for a listing walk
+        /// that opens each child directory relative to its parent. `dup`
+        /// would share the directory stream position with the pinned root
+        /// (and with every other walk), so a walk that stops early would
+        /// leave the next one a shorter listing; `openat(fd, ".")` yields an
+        /// independent description of the same directory with no path in
+        /// between.
         pub(super) fn duplicate_handle(&self) -> std::io::Result<DirectoryHandle> {
-            self.0.try_clone()
+            let segment = c_string(b".")?;
+            // SAFETY: the root descriptor is live for the call and the
+            // pointer references a NUL-terminated buffer owned by `segment`.
+            let fd = unsafe {
+                libc::openat(
+                    self.0.as_raw_fd(),
+                    segment.as_ptr(),
+                    libc::O_RDONLY | libc::O_CLOEXEC | libc::O_DIRECTORY,
+                )
+            };
+            if fd < 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            // SAFETY: `fd` is a freshly opened descriptor this function owns.
+            Ok(unsafe { OwnedFd::from_raw_fd(fd) })
         }
 
         fn open_at(
@@ -2333,5 +2352,27 @@ mod tests {
         );
         assert_eq!(source.acquired_buffers().len(), 1);
         std::fs::remove_dir_all(root).unwrap();
+    }
+    #[cfg(unix)]
+    #[test]
+    fn a_refused_listing_never_shortens_the_next_one() {
+        // A walk that stops early (the entry budget) must not leave the next
+        // walk a partially consumed directory stream: every retry reads the
+        // whole directory again and refuses the same way.
+        let root = test_root("refused-listing");
+        std::fs::create_dir_all(&root).unwrap();
+        for index in 0..(MAX_REFERENCED_FILES + 5) {
+            std::fs::write(root.join(format!("f{index}.txt")), b"x").unwrap();
+        }
+        let source = Source::open(&root).unwrap();
+        let first = source.entry_names().unwrap_err();
+        let second = source.entry_names().unwrap_err();
+        assert_eq!(
+            first.diagnostics().first().map(|d| d.code().to_owned()),
+            second.diagnostics().first().map(|d| d.code().to_owned()),
+            "the refusal repeats rather than shrinking into a partial listing"
+        );
+        drop(source);
+        let _ = std::fs::remove_dir_all(&root);
     }
 }
