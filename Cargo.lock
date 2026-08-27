@@ -2343,7 +2343,10 @@ checksum = "439ee305def115ba05938db6eb1644ff94165c5ab5e9420d1c1bcedbba909391"
 name = "powerio"
 version = "0.9.0"
 dependencies = [
+ "arrow",
+ "bytes",
  "num-complex",
+ "parquet",
  "powerio-core",
  "powerio-dist",
  "powerio-matrix",

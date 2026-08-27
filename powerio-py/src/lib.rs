@@ -38,10 +38,14 @@ use powerio_matrix::{
 };
 
 #[cfg(feature = "gridfm")]
+use powerio::gridfm::{
+    GridfmRead, read_gridfm_dataset as gridfm_read_dataset,
+    read_gridfm_scenarios as gridfm_read_scenarios,
+};
+#[cfg(feature = "gridfm")]
 use powerio_matrix::io::gridfm::{
-    GridfmOptions, GridfmOutputs, GridfmRead, numbered_snapshots,
-    read_gridfm_dataset as gridfm_read_dataset, read_gridfm_scenarios as gridfm_read_scenarios,
-    write_gridfm_batch as gridfm_write_batch, write_gridfm_dataset as gridfm_write_dataset,
+    GridfmOptions, GridfmOutputs, numbered_snapshots, write_gridfm_batch as gridfm_write_batch,
+    write_gridfm_dataset as gridfm_write_dataset,
 };
 
 pyo3::create_exception!(
@@ -123,19 +127,6 @@ fn core_pyerr(e: powerio_matrix::CoreError) -> PyErr {
 
 fn to_pyerr(e: powerio_matrix::Error) -> PyErr {
     use powerio_matrix::Error as E;
-    match e {
-        E::Io(io) => io.into(),
-        E::Core(inner) => core_pyerr(inner),
-        other => {
-            let category = other.category();
-            let code = other.code().code;
-            categorized_pyerr(category, code, other.to_string())
-        }
-    }
-}
-
-fn prob_pyerr(e: powerio_prob::Error) -> PyErr {
-    use powerio_prob::Error as E;
     match e {
         E::Io(io) => io.into(),
         E::Core(inner) => core_pyerr(inner),
@@ -547,7 +538,7 @@ fn build_package_from_path(
         #[cfg(feature = "gridfm")]
         {
             let read = gridfm_read_dataset(input.to_string_lossy().as_ref(), scenario)
-                .map_err(to_pyerr)?;
+                .map_err(core_pyerr)?;
             let mut pkg = NetworkPackage::from_balanced_with_read_diagnostics(
                 read.network,
                 read.diagnostics.into_iter().map(Into::into),
@@ -2367,7 +2358,7 @@ fn gridfm_read_to_py(read: GridfmRead) -> (PyBalancedNetwork, i64, Vec<String>) 
 fn read_gridfm(dir: &str, scenario: i64) -> PyResult<(PyBalancedNetwork, i64, Vec<String>)> {
     gridfm_read_dataset(dir, scenario)
         .map(gridfm_read_to_py)
-        .map_err(to_pyerr)
+        .map_err(core_pyerr)
 }
 
 /// Read every scenario of a gridfm dataset, one `(case, scenario, warnings)`
@@ -2377,7 +2368,7 @@ fn read_gridfm(dir: &str, scenario: i64) -> PyResult<(PyBalancedNetwork, i64, Ve
 #[cfg(feature = "gridfm")]
 #[pyfunction]
 fn read_gridfm_scenarios(dir: &str) -> PyResult<Vec<(PyBalancedNetwork, i64, Vec<String>)>> {
-    let reads = gridfm_read_scenarios(dir).map_err(to_pyerr)?;
+    let reads = gridfm_read_scenarios(dir).map_err(core_pyerr)?;
     Ok(reads.into_iter().map(gridfm_read_to_py).collect())
 }
 

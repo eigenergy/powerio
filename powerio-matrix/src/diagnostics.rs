@@ -5,12 +5,6 @@
 //! side of the workspace registry. A hub failure that arrives through
 //! [`crate::Error::Core`] keeps the hub's own code.
 
-// The collector is crate-private implementation support, not API: each
-// emitting crate carries its own copy (src/collect.rs) and never exports it.
-// Only the gridfm feature emits through it in this crate.
-#[cfg_attr(not(feature = "gridfm"), allow(unused_imports))]
-pub(crate) use crate::collect::Diagnostics;
-
 pub use powerio_core::{
     Diagnostic, DiagnosticInfo, DiagnosticSeverity, check_registry, render_diagnostic,
     render_diagnostics,

@@ -32,6 +32,8 @@ pub use powerio_tx::*;
 #[cfg(feature = "matrix")]
 pub use powerio_matrix as matrix;
 
+mod collect;
+pub mod gridfm;
 pub mod package;
 mod value;
 pub use value::{FromPioValue, PioValue, PioValueKind, ValueKindMismatch, try_into_typed};
@@ -76,6 +78,7 @@ pub fn parse(
             powerio_dist::parse(source).map(|module| module.map_value(PioValue::from))
         }
         RoutedFamily::PypsaDirectory => parse_pypsa(source),
+        RoutedFamily::Gridfm => parse_gridfm(source),
         RoutedFamily::Egret => parse_egret(source),
         RoutedFamily::Balanced => {
             format::parse(source).map(|module| module.map_value(PioValue::from))
@@ -119,6 +122,25 @@ fn parse_pypsa(
             }
             Err(error) => Err(error.with_source(source)),
         },
+    }
+}
+
+/// gridfm dispatch: every scenario of the Parquet dataset as one scenario
+/// set over shared element identities.
+fn parse_gridfm(
+    source: powerio_core::Source,
+) -> std::result::Result<powerio_core::PioModule<PioValue>, powerio_core::Error> {
+    if !source.is_directory() {
+        // A file claiming the gridfm token gets the hub's own refusal wording.
+        return format::parse(source).map(|module| module.map_value(PioValue::from));
+    }
+    match gridfm::parse_gridfm_source(&source) {
+        Ok((set, diagnostics)) => powerio_core::PioModule::parsed(
+            PioValue::BalancedNetworkScenarioSet(set),
+            source,
+            diagnostics,
+        ),
+        Err(error) => Err(error.with_source(source)),
     }
 }
 
@@ -173,6 +195,7 @@ enum RoutedFamily {
     OpfData,
     PypsaDirectory,
     Egret,
+    Gridfm,
 }
 
 fn routed_family(
@@ -184,12 +207,22 @@ fn routed_family(
         return Ok(family_of_token(declared.as_str()));
     }
     if source.is_directory() {
-        // The only directory case format is a PyPSA CSV folder (one holding a
-        // network.csv); anything else falls to the balanced hub's refusal.
+        // Two directory case formats exist: a PyPSA CSV folder (one holding
+        // a network.csv) and a gridfm Parquet dataset (bus_data.parquet at
+        // the root, under raw/, or under one <case>/raw/). Anything else
+        // falls to the balanced hub's refusal.
         let marker = powerio_core::ArtifactPath::new("network.csv")
             .expect("static name is a valid artifact path");
         if source.buffer(&marker).is_ok() {
             return Ok(RoutedFamily::PypsaDirectory);
+        }
+        if let Ok(entries) = source.entry_names()
+            && entries.iter().any(|entry| {
+                entry.as_str().ends_with("bus_data.parquet")
+                    && matches!(entry.as_str().matches('/').count(), 0..=2)
+            })
+        {
+            return Ok(RoutedFamily::Gridfm);
         }
         return Ok(RoutedFamily::Balanced);
     }
@@ -251,6 +284,9 @@ fn family_of_token(token: &str) -> RoutedFamily {
     }
     if format::is_pypsa_csv_name(token) {
         return RoutedFamily::PypsaDirectory;
+    }
+    if token.eq_ignore_ascii_case("gridfm") {
+        return RoutedFamily::Gridfm;
     }
     match format::target_format_from_name(token) {
         Some(TargetFormat::Goc3Json) => RoutedFamily::Goc3,
@@ -509,6 +545,52 @@ mod tests {
             module.value().kind(),
             PioValueKind::BalancedNetworkTimeSeries
         );
+    }
+
+    #[test]
+    fn a_gridfm_dataset_parses_to_the_scenario_set_kind() {
+        // Write a two scenario dataset with the matrix writer, then parse the
+        // directory through the universal parse.
+        let case = concat!(env!("CARGO_MANIFEST_DIR"), "/../tests/data/case9.m");
+        let base = powerio_tx::parse(powerio_core::Source::open(case).unwrap())
+            .expect("case9 parses")
+            .into_value();
+        let mut varied = base.clone();
+        varied.loads_mut()[0].p += 5.0;
+        let out = tempfile::tempdir().unwrap();
+        let snapshots = [
+            powerio_matrix::GridfmSnapshot::new(&base, 0),
+            powerio_matrix::GridfmSnapshot::new(&varied, 1),
+        ];
+        powerio_matrix::write_gridfm_batch(
+            &snapshots,
+            out.path(),
+            &powerio_matrix::GridfmOptions::default(),
+        )
+        .expect("dataset writes");
+
+        let module =
+            parse(powerio_core::Source::open(out.path()).unwrap()).expect("dataset parses");
+        assert_eq!(
+            module.value().kind(),
+            PioValueKind::BalancedNetworkScenarioSet
+        );
+        assert!(module.source().is_some());
+        let typed: powerio_core::PioModule<powerio_core::ScenarioSet<powerio_tx::BalancedNetwork>> =
+            try_into_typed(module).expect("narrows to the parsed kind");
+        let set = typed.value();
+        assert_eq!(set.len(), 2);
+        assert!(set.get("0").is_some());
+        assert!(set.get("1").is_some());
+    }
+
+    #[test]
+    fn an_unrecognized_directory_is_refused_with_the_hub_wording() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("notes.txt"), "not a case").unwrap();
+        let error =
+            parse(powerio_core::Source::open(dir.path()).unwrap()).expect_err("refused directory");
+        assert!(error.to_string().contains("directory"), "{error}");
     }
 
     #[test]
