@@ -780,6 +780,41 @@ def test_to_balanced_refuses_unsupported_input_structured():
     assert "[" in message and "code" in message
 
 
+TRANSFORMER_DSS = """! Two winding transformer feeder for name normalization.
+Clear
+Set DefaultBaseFrequency=60
+New Circuit.tiny basekv=12.47 pu=1.0 phases=3 bus1=src MVAsc3=2000 MVAsc1=2100
+New Transformer.t1 phases=3 windings=2 buses=(src, sec) conns=(delta, wye) kvs=(12.47, 0.416) kvas=(500, 300) %Rs=(0.5, 0.5) xhl=6
+New Load.l1 bus1=sec phases=3 conn=wye kv=0.416 kw=90 pf=0.95 model=1
+Set VoltageBases=[12.47, 0.416]
+"""
+
+
+def test_hostile_element_names_lower_with_normalized_history(tmp_path):
+    """A module whose transformer name carries a NUL byte and overflows the
+    identifier bound still lowers through the tool; the recorded history
+    notes are normalized rather than dropped or crashing the pass."""
+    feeder = tmp_path / "tiny.dss"
+    feeder.write_text(TRANSFORMER_DSS)
+    module = powerio.StoredModule.from_file(feeder, "dss")
+    doc = json.loads(module.to_json())
+    hostile = "t\u0000evil" + "x" * (70_000)
+    doc["value"]["data"]["transformers"][0]["name"] = hostile
+    lowered = server._to_balanced_tool(module_json=json.dumps(doc))
+    assert lowered["kind"] == "balanced_network"
+    history = json.loads(lowered["module_json"]).get("history", [])
+    entry = next(
+        e for e in history if e["name"] == "lower_multiconductor_to_balanced"
+    )
+    for note in entry.get("assumptions", []) + entry.get("losses", []):
+        assert note
+        assert "\u0000" not in note and "\x00" not in note
+        assert len(note.encode()) <= 65_536
+    assert any(
+        "[truncated]" in note for note in entry.get("assumptions", [])
+    )
+
+
 def test_wrong_kind_lowering_is_refused_by_name():
     with pytest.raises(ValueError, match="WRONG_MODEL_KIND"):
         server._to_balanced_tool(path=str(DATA / "case9.m"))

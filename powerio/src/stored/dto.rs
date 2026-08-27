@@ -577,6 +577,12 @@ pub struct ScucNetworkOutputsV1 {
     pub transformer_tm: Vec<Vec<StoredF64>>,
     pub transformer_ta: Vec<Vec<StoredF64>>,
     pub transformer_on_status: Vec<Vec<StoredF64>>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub dc_line_pdc_fr: Vec<Vec<StoredF64>>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub dc_line_qdc_fr: Vec<Vec<StoredF64>>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub dc_line_qdc_to: Vec<Vec<StoredF64>>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

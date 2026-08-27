@@ -60,8 +60,8 @@ pub use scopf::{
 };
 pub use solution::{
     AcOpfSolution, AcPfSolution, AcScucSolution, DcOpfSolution, DcPfSolution, GeneratorDispatch,
-    McAcOpfSolution, McAcPfSolution, Producer, Residuals, ScucDeviceOutputs, ScucNetworkOutputs,
-    Termination,
+    McAcOpfSolution, McAcPfSolution, Producer, Residuals, SCUC_DEVICE_OUTPUT_SERIES,
+    SCUC_NETWORK_OUTPUT_SERIES, ScucDeviceOutputs, ScucNetworkOutputs, Termination,
 };
 pub use state::{
     BALANCED_STATE_QUANTITIES, BalancedOperatingPoints, BalancedStateBuilder,

@@ -60,6 +60,8 @@ const EXPECTED: &[(&str, &str, Option<&str>)] = &[
     ("module-v1/ac-opf-instance.pio.json", "package", None),
     ("module-v1/ac-opf-solution.pio.json", "package", None),
     ("module-v1/ac-pf-instance.pio.json", "package", None),
+    ("module-v1/ac-scuc-instance.pio.json", "package", None),
+    ("module-v1/ac-scuc-solution.pio.json", "package", None),
     ("module-v1/ac-pf-solution.pio.json", "package", None),
     ("module-v1/dc-opf-instance.pio.json", "package", None),
     ("module-v1/dc-opf-solution.pio.json", "package", None),

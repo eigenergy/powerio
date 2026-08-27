@@ -19,7 +19,10 @@ mod scuc;
 
 pub use balanced::{AcOpfSolution, AcPfSolution, DcOpfSolution, DcPfSolution, GeneratorDispatch};
 pub use multiconductor::{McAcOpfSolution, McAcPfSolution};
-pub use scuc::{AcScucSolution, ScucDeviceOutputs, ScucNetworkOutputs};
+pub use scuc::{
+    AcScucSolution, SCUC_DEVICE_OUTPUT_SERIES, SCUC_NETWORK_OUTPUT_SERIES, ScucDeviceOutputs,
+    ScucNetworkOutputs,
+};
 
 use serde::{Deserialize, Serialize};
 
