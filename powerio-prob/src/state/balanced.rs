@@ -588,24 +588,6 @@ impl BalancedStateBuilder {
 }
 
 /// The static vocabulary name for a stored quantity spelling.
-/// The complete balanced instantaneous vocabulary, in declaration order.
-pub const BALANCED_STATE_QUANTITIES: [&str; 14] = [
-    BUS_VOLTAGE_MAGNITUDE,
-    BUS_VOLTAGE_ANGLE,
-    BUS_ACTIVE_INJECTION,
-    BUS_REACTIVE_INJECTION,
-    GENERATOR_ACTIVE_POWER,
-    GENERATOR_REACTIVE_POWER,
-    GENERATOR_VOLTAGE_SETPOINT,
-    GENERATOR_IN_SERVICE,
-    LOAD_ACTIVE_POWER,
-    LOAD_REACTIVE_POWER,
-    BRANCH_IN_SERVICE,
-    BRANCH_TAP_RATIO,
-    BRANCH_PHASE_SHIFT,
-    SWITCH_CLOSED,
-];
-
 fn resolve_quantity(name: &str) -> Result<&'static str, Error> {
     BALANCED_STATE_QUANTITIES
         .iter()
