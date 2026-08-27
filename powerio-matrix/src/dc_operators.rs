@@ -119,8 +119,17 @@ impl DcOperators {
             } else {
                 1.0
             };
-            let susceptance = approximation.branch_susceptance(branch.r, branch.x, tap);
-            if susceptance == 0.0 {
+            // The same divisibility floor the other DC builders apply: a
+            // formally nonzero impedance below it yields a finite weight big
+            // enough to annihilate every real branch sharing a bus.
+            let degenerate = match approximation {
+                DcConvention::SeriesSusceptance => {
+                    branch.r.hypot(branch.x) < powerio_tx::dc::MIN_DIVISIBLE_MAGNITUDE
+                }
+                // Any formula that reads a reactance is bounded by it.
+                _ => branch.x.abs() < powerio_tx::dc::MIN_DIVISIBLE_MAGNITUDE,
+            };
+            if degenerate {
                 return Err(Error::new(
                     &codes::BUILD_OPERATOR_ZERO_IMPEDANCE,
                     format!(
@@ -128,6 +137,7 @@ impl DcOperators {
                     ),
                 ));
             }
+            let susceptance = approximation.branch_susceptance(branch.r, branch.x, tap);
             if !susceptance.is_finite() {
                 return Err(Error::new(
                     &codes::BUILD_OPERATOR_ZERO_IMPEDANCE,
@@ -293,9 +303,10 @@ impl DcOperators {
     /// The reference constrained linear system over the internal positive
     /// factor weights: the reference grounded positive semidefinite matrix
     /// `L = -B` with reference rows and columns removed, and the right hand
-    /// side `p + p_shift` at the retained buses, so `L_grounded va = rhs`
-    /// solves the stated problem with the reference angles held. Sign
-    /// conversion from the public susceptances is confined to this fill.
+    /// side `p - p_shift` at the retained buses (from `p = -B va + p_shift`),
+    /// so `L_grounded va = rhs` solves the stated problem with the reference
+    /// angles held. Sign conversion from the public susceptances is confined
+    /// to this fill.
     ///
     /// # Errors
     /// An instance with no reference row.
@@ -335,7 +346,7 @@ impl DcOperators {
         let shift_injection = self.phase_shift_injection();
         let rhs = retained_rows
             .iter()
-            .map(|&row| self.net_injection[row] + shift_injection[row])
+            .map(|&row| self.net_injection[row] - shift_injection[row])
             .collect();
         Ok(ReferenceConstrainedSystem {
             matrix: matrix.finish_csr(),
