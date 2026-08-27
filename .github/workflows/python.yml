@@ -182,7 +182,8 @@ jobs:
           /tmp/zerodep/bin/python - <<'PY'
           import tempfile
           import sys, powerio
-          c = powerio.parse_file("tests/data/case14.m")
+          m = powerio.parse("tests/data/case14.m")
+          c = m.as_balanced_network()
           assert c.to_matpower() == open("tests/data/case14.m").read()
           assert "numpy" not in sys.modules and "scipy" not in sys.modules
           assert not powerio._powerio._has_gridfm
