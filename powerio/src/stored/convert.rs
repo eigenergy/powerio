@@ -729,6 +729,7 @@ fn encode_ac_scuc_solution(solution: &powerio_prob::AcScucSolution) -> dto::AcSc
 
 fn decode_stored(stored: StoredModuleV1) -> Result<PioModule<PioValue>> {
     let value = decode_value(stored.value)?;
+    validate_decoded_networks(&value)?;
     let mut module = PioModule::new(value).with_producer(
         Producer::new(stored.producer.name, stored.producer.version)
             .map_err(|error| invalid(error.to_string()))?,
@@ -765,6 +766,61 @@ fn decode_stored(stored: StoredModuleV1) -> Result<PioModule<PioValue>> {
 // into twenty single-use functions would hide the exhaustiveness this match
 // enforces.
 #[allow(clippy::too_many_lines)]
+/// Every network a decoded value embeds passes the model's own structural
+/// validation — the balanced reference walk, and the multiconductor
+/// unresolved reference check — so a stored document cannot smuggle a
+/// network the readers would refuse.
+fn validate_decoded_networks(value: &PioValue) -> Result<()> {
+    let balanced = |network: &powerio_tx::BalancedNetwork| -> Result<()> {
+        network
+            .validate()
+            .map_err(|error| invalid(format!("decoded network fails validation: {error}")))
+    };
+    let multiconductor = |network: &powerio_dist::MulticonductorNetwork| -> Result<()> {
+        let unresolved = powerio_dist::unresolved_references(network);
+        if unresolved.is_empty() {
+            Ok(())
+        } else {
+            Err(invalid(format!(
+                "decoded network fails validation: {}",
+                unresolved.join("; ")
+            )))
+        }
+    };
+    match value {
+        PioValue::BalancedNetwork(network) => balanced(network),
+        PioValue::MulticonductorNetwork(network) => multiconductor(network),
+        PioValue::BalancedNetworkTimeSeries(series) => {
+            series.values().iter().try_for_each(balanced)
+        }
+        PioValue::BalancedOperatingPointTimeSeries(series) => series
+            .values()
+            .first()
+            .map_or(Ok(()), |point| balanced(point.network())),
+        PioValue::MulticonductorOperatingPointTimeSeries(series) => series
+            .values()
+            .first()
+            .map_or(Ok(()), |point| multiconductor(point.network())),
+        PioValue::BalancedNetworkScenarioSet(set) => set
+            .iter()
+            .try_for_each(|scenario| balanced(scenario.value())),
+        PioValue::DcPfInstance(instance) => balanced(instance.network()),
+        PioValue::AcPfInstance(instance) => balanced(instance.network()),
+        PioValue::DcOpfInstance(instance) => balanced(instance.network()),
+        PioValue::AcOpfInstance(instance) => balanced(instance.network()),
+        PioValue::AcScucInstance(instance) => balanced(instance.network()),
+        PioValue::McAcPfInstance(instance) => multiconductor(instance.network()),
+        PioValue::McAcOpfInstance(instance) => multiconductor(instance.network()),
+        PioValue::DcPfSolution(solution) => balanced(solution.network()),
+        PioValue::AcPfSolution(solution) => balanced(solution.network()),
+        PioValue::DcOpfSolution(solution) => balanced(solution.network()),
+        PioValue::AcOpfSolution(solution) => balanced(solution.network()),
+        PioValue::McAcPfSolution(solution) => multiconductor(solution.network()),
+        PioValue::McAcOpfSolution(solution) => multiconductor(solution.network()),
+        _ => Ok(()),
+    }
+}
+
 fn decode_value(value: StoredValueV1) -> Result<PioValue> {
     Ok(match value {
         StoredValueV1::BalancedNetwork(network) => PioValue::BalancedNetwork(*network),
