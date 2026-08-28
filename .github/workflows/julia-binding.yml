@@ -172,6 +172,11 @@ jobs:
         version: '1'
     - uses: julia-actions/cache@v3
       if: steps.powerio-jl.outputs.available == 'true'
+    # Every pio_* symbol the paired binding names must be exported by this
+    # head; the same script's monotonicity clause runs in rust.yml.
+    - name: Companion symbol coverage
+      if: steps.powerio-jl.outputs.available == 'true'
+      run: POWERIO_JL=PowerIO.jl bash scripts/capi-export-monotonicity.sh
     # PowerIO.jl's ccall tests skip themselves when the cdylib is absent.
     # POWERIO_CAPI points them at the library just built.
     - name: Test PowerIO.jl against the built library
