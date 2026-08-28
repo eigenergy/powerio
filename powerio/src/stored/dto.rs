@@ -163,6 +163,31 @@ fn bounded_name<'de, D: Deserializer<'de>>(deserializer: D) -> Result<String, D:
     bounded_identifier(deserializer)
 }
 
+fn bounded_opt_action<'de, D: Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<String>, D::Error> {
+    struct OptAction;
+    impl<'de> Visitor<'de> for OptAction {
+        type Value = Option<String>;
+        fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+            formatter.write_str("a bounded suggested action string or null")
+        }
+        fn visit_none<E: serde::de::Error>(self) -> Result<Self::Value, E> {
+            Ok(None)
+        }
+        fn visit_unit<E: serde::de::Error>(self) -> Result<Self::Value, E> {
+            Ok(None)
+        }
+        fn visit_some<D2: Deserializer<'de>>(
+            self,
+            deserializer: D2,
+        ) -> Result<Self::Value, D2::Error> {
+            truncated_message(deserializer).map(Some)
+        }
+    }
+    deserializer.deserialize_option(OptAction)
+}
+
 fn bounded_btree_map<'de, D: Deserializer<'de>>(
     deserializer: D,
     what: &'static str,
@@ -789,6 +814,12 @@ pub struct DiagnosticV1 {
         skip_serializing_if = "Vec::is_empty"
     )]
     pub related: Vec<DiagnosticIdV1>,
+    #[serde(
+        default,
+        deserialize_with = "bounded_opt_action",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub suggested_action: Option<String>,
     #[serde(
         default,
         deserialize_with = "bounded_details",
