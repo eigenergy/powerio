@@ -1704,14 +1704,19 @@ mod tests {
         // Once the preserved ceiling fires partway through a coordinate
         // file, the halt stops the scan: lines past the refusal are neither
         // retained nor reported, and a well formed line is never called
-        // malformed just because its charge was refused.
+        // malformed just because its charge was refused. The unparseable
+        // tail after the crossing pins the latch itself: scanning past the
+        // halt would report those lines malformed.
         use std::fmt::Write as _;
         let root = std::env::temp_dir().join(format!("powerio-dist-fs008-{}", std::process::id()));
         std::fs::create_dir_all(&root).unwrap();
         let extra = 64usize;
-        let mut coords = String::with_capacity((MAX_TOTAL_PRESERVED + extra) * 12);
+        let mut coords = String::with_capacity((MAX_TOTAL_PRESERVED + 2 * extra) * 12);
         for index in 0..MAX_TOTAL_PRESERVED + extra {
             let _ = writeln!(coords, "b{index} 1 2");
+        }
+        for index in 0..extra {
+            let _ = writeln!(coords, "tail{index} xx yy");
         }
         std::fs::write(root.join("coords.csv"), coords).unwrap();
         std::fs::write(root.join("master.dss"), "Buscoords coords.csv\n").unwrap();
@@ -1730,16 +1735,25 @@ mod tests {
             .filter(|d| d.code() == "READ.DSS.INCLUDE_BUDGET")
             .count();
         assert_eq!((warned, recorded), (1, 1), "exactly one terminal refusal");
-        assert!(
-            !raw.warnings
-                .iter()
-                .any(|w| w.contains("PARSE.DSS.SOURCE_MALFORMED")),
-            "well formed coordinate lines reported malformed"
+        let malformed_warned = raw
+            .warnings
+            .iter()
+            .filter(|w| w.contains("PARSE.DSS.SOURCE_MALFORMED"))
+            .count();
+        let malformed_recorded = raw
+            .diagnostics
+            .iter()
+            .filter(|d| d.code() == "PARSE.DSS.SOURCE_MALFORMED")
+            .count();
+        assert_eq!(
+            (malformed_warned, malformed_recorded),
+            (0, 0),
+            "lines past the halt were scanned and reported"
         );
-        assert!(raw.buscoords.len() <= MAX_TOTAL_PRESERVED);
-        assert!(
-            raw.buscoords.len() < MAX_TOTAL_PRESERVED + extra,
-            "coordinates retained past the halt"
+        assert_eq!(
+            raw.buscoords.len(),
+            MAX_TOTAL_PRESERVED,
+            "retention must fill the budget exactly and stop"
         );
     }
 
