@@ -100,9 +100,9 @@ fn family_is_distribution(
                     Ok(json_format.domain() == Domain::Distribution)
                 }
                 // The balanced hub's own JSON detection carries the refusal
-                // wording for packages, model JSON, and unrecognized or
+                // wording for stored modules, model JSON, and unrecognized or
                 // ambiguous documents.
-                JsonClass::Package
+                JsonClass::Module
                 | JsonClass::ModelJson
                 | JsonClass::Case(Detection::Ambiguous | Detection::Unknown) => Ok(false),
             }
