@@ -248,6 +248,16 @@ pub struct RawDss {
     /// Properties retained across every object, charged by each push and
     /// each `like=` splice against `MAX_TOTAL_PROPS`.
     total_props: usize,
+    /// Diagnostic records retained, against `MAX_TOTAL_DIAGNOSTICS`. Survives
+    /// `clear` with the channel it counts.
+    total_diagnostics: usize,
+    /// Preserved records retained (`commands`, `options`, `buscoords`),
+    /// against `MAX_TOTAL_PRESERVED`. Reset by `clear` with the collections
+    /// it counts.
+    total_preserved: usize,
+    /// One of the whole parse ceilings was crossed: the terminal refusal is
+    /// recorded and no further script text executes.
+    halted: bool,
 }
 
 impl RawDss {
@@ -266,11 +276,50 @@ impl RawDss {
     }
 
     /// Record one finding. Both channels move together: the line is rendered
-    /// from the record it is added with.
+    /// from the record it is added with. At the whole parse ceiling one
+    /// terminal refusal is recorded and the parse halts.
     fn record(&mut self, diagnostic: crate::diagnostics::Diagnostic) {
+        if self.total_diagnostics >= MAX_TOTAL_DIAGNOSTICS {
+            if !self.halted {
+                self.halted = true;
+                let refusal = crate::diagnostics::Diagnostic::of(
+                    &crate::diagnostics::codes::READ_DSS_INCLUDE_BUDGET,
+                    format!(
+                        "the script's retained findings reached the whole parse ceiling of \
+                         {MAX_TOTAL_DIAGNOSTICS}; execution stopped"
+                    ),
+                );
+                self.warnings
+                    .push(crate::diagnostics::render_diagnostic(&refusal));
+                self.diagnostics.push(refusal);
+            }
+            return;
+        }
+        self.total_diagnostics += 1;
         self.warnings
             .push(crate::diagnostics::render_diagnostic(&diagnostic));
         self.diagnostics.push(diagnostic);
+    }
+
+    /// Charge one preserved record (`commands`, `options`, `buscoords`);
+    /// false once the ceiling is crossed, after which the terminal refusal
+    /// is recorded and the parse halts.
+    fn charge_preserved(&mut self) -> bool {
+        if self.total_preserved >= MAX_TOTAL_PRESERVED {
+            if !self.halted {
+                self.halted = true;
+                self.record(crate::diagnostics::Diagnostic::of(
+                    &crate::diagnostics::codes::READ_DSS_INCLUDE_BUDGET,
+                    format!(
+                        "the script's preserved records reached the whole parse ceiling of \
+                         {MAX_TOTAL_PRESERVED}; execution stopped"
+                    ),
+                ));
+            }
+            return false;
+        }
+        self.total_preserved += 1;
+        true
     }
 
     fn clear(&mut self) {
@@ -284,9 +333,12 @@ impl RawDss {
             std::mem::take(&mut self.warnings),
             std::mem::take(&mut self.diagnostics),
         );
+        let (total_diagnostics, halted) = (self.total_diagnostics, self.halted);
         *self = RawDss {
             warnings,
             diagnostics,
+            total_diagnostics,
+            halted,
             ..RawDss::default()
         };
     }
@@ -314,6 +366,17 @@ const MAX_REDIRECT_DEPTH: usize = 64;
 /// [`MAX_REDIRECT_DEPTH`], so 34 bytes never finish parsing. The largest
 /// fixture here (IEEE123Master.dss) follows 3.
 const MAX_TOTAL_INCLUDES: usize = 4096;
+
+/// Diagnostic records one parse retains, `warnings` and `diagnostics`
+/// together (they move in step). A re-executed include repeats its findings;
+/// the ceiling bounds what the whole parse may keep, independent of how many
+/// times a file re-executes. The largest legitimate feeders stay far under
+/// it.
+const MAX_TOTAL_DIAGNOSTICS: usize = 1 << 18;
+
+/// Preserved records one parse retains across `commands`, `options`, and
+/// `buscoords` together, on the same rule as the diagnostic ceiling.
+const MAX_TOTAL_PRESERVED: usize = 1 << 20;
 
 /// Script text a single parse may pull in through includes. The include count
 /// alone still admits amplification: one large file that redirects to itself is
@@ -424,6 +487,9 @@ fn command_lines(text: &str) -> impl Iterator<Item = (usize, &str)> {
 impl<L: Loader> Executor<'_, L> {
     fn run_script(&mut self, text: &str, file: &str) {
         for (line_no, line) in command_lines(text) {
+            if self.raw.halted {
+                return;
+            }
             self.run_command(line, file, line_no);
         }
     }
@@ -467,20 +533,24 @@ impl<L: Loader> Executor<'_, L> {
             Some("clear" | "clearall") => self.raw.clear(),
             Some("//") => {}
             Some(canonical) => {
-                self.raw.commands.push(RawCommand {
-                    verb: canonical.to_string(),
-                    args: scan.remainder().to_string(),
-                });
+                if self.raw.charge_preserved() {
+                    self.raw.commands.push(RawCommand {
+                        verb: canonical.to_string(),
+                        args: scan.remainder().to_string(),
+                    });
+                }
             }
             None => {
                 self.raw.warn(
                     &C::PARSE_DSS_SOURCE_MALFORMED,
                     ctx(format!("unknown command `{verb}`; line preserved verbatim")),
                 );
-                self.raw.commands.push(RawCommand {
-                    verb,
-                    args: scan.remainder().to_string(),
-                });
+                if self.raw.charge_preserved() {
+                    self.raw.commands.push(RawCommand {
+                        verb,
+                        args: scan.remainder().to_string(),
+                    });
+                }
             }
         }
     }
@@ -675,7 +745,9 @@ impl<L: Loader> Executor<'_, L> {
                 break;
             }
             let name = p.name.unwrap_or_default().to_ascii_lowercase();
-            self.raw.options.push((name, p.value));
+            if self.raw.charge_preserved() {
+                self.raw.options.push((name, p.value));
+            }
         }
     }
 
@@ -886,11 +958,13 @@ impl<L: Loader> Executor<'_, L> {
                     let x = s.next_param().map(|p| p.value).unwrap_or_default();
                     let y = s.next_param().map(|p| p.value).unwrap_or_default();
                     match (x.to_f64(None), y.to_f64(None)) {
-                        (Ok(x), Ok(y)) => self.raw.buscoords.push(BusCoord {
-                            bus: bus.value.text,
-                            x,
-                            y,
-                        }),
+                        (Ok(x), Ok(y)) if self.raw.charge_preserved() => {
+                            self.raw.buscoords.push(BusCoord {
+                                bus: bus.value.text,
+                                x,
+                                y,
+                            });
+                        }
                         _ => self.raw.warn(
                             &C::PARSE_DSS_SOURCE_MALFORMED,
                             ctx(format!(
@@ -935,7 +1009,9 @@ impl<L: Loader> Executor<'_, L> {
         }
         match (bus, x, y) {
             (Some(bus), Some(x), Some(y)) if !bus.is_empty() => {
-                self.raw.buscoords.push(BusCoord { bus, x, y });
+                if self.raw.charge_preserved() {
+                    self.raw.buscoords.push(BusCoord { bus, x, y });
+                }
             }
             _ => self.raw.warn(
                 &C::PARSE_DSS_SOURCE_MALFORMED,
@@ -1510,6 +1586,38 @@ mod tests {
         let b = raw.find("load", "b").unwrap();
         assert_eq!(b.get("kw").unwrap().text, "20");
         assert_eq!(b.get("pf").unwrap().text, "0.9");
+    }
+
+    #[test]
+    fn the_whole_parse_record_ceilings_bound_repeated_execution() {
+        // A tiny loader-backed include re-executed many times repeats its
+        // preserved commands and findings; the ceilings bound what one parse
+        // may keep and stop execution with exactly one terminal refusal.
+        struct Repeat;
+        impl Loader for Repeat {
+            fn load(&mut self, _: &Path) -> std::io::Result<String> {
+                // Each load yields many preserved commands and one warning.
+                let mut text = String::new();
+                for _ in 0..8192 {
+                    text.push_str("Solve\n");
+                }
+                text.push_str("Bogus命令 arg\n");
+                Ok(text)
+            }
+        }
+        let mut script = String::new();
+        for index in 0..512 {
+            script.push_str(&format!("Redirect inc{index}.dss\n"));
+        }
+        let raw = parse_raw_with(&script, "test.dss", &mut Repeat);
+        assert!(raw.commands.len() <= MAX_TOTAL_PRESERVED);
+        assert!(raw.diagnostics.len() <= MAX_TOTAL_DIAGNOSTICS + 1);
+        let refusals = raw
+            .warnings
+            .iter()
+            .filter(|w| w.contains("whole parse ceiling"))
+            .count();
+        assert_eq!(refusals, 1, "exactly one terminal refusal: {refusals}");
     }
 
     #[test]
