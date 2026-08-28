@@ -124,7 +124,10 @@ pub fn write_module_as(
 
 /// [`write_module_as`] for a single text artifact: the converted text and the
 /// writer's findings, without touching the filesystem. Directory targets
-/// (PyPSA CSV) are refused; write them through a path destination.
+/// (PyPSA CSV) are refused; write them through a path destination. A
+/// multiconductor target with a sidecar (georeferenced DSS and its buscoords
+/// CSV) returns the primary text and reports the dropped sidecar as a
+/// finding.
 ///
 /// # Errors
 /// As [`write_module_as`].
@@ -132,34 +135,60 @@ pub fn write_module_str(
     module: &PioModule<PioValue>,
     format: &str,
 ) -> Result<(String, Vec<Diagnostic>), Error> {
+    write_module_str_with_options(module, format, &powerio_tx::WriteOptions::default())
+}
+
+/// [`write_module_str`] with the balanced write-time cost policies applied.
+/// The policies are a balanced network concern; a multiconductor or stored
+/// document target ignores them.
+///
+/// # Errors
+/// As [`write_module_as`].
+pub fn write_module_str_with_options(
+    module: &PioModule<PioValue>,
+    format: &str,
+    options: &powerio_tx::WriteOptions,
+) -> Result<(String, Vec<Diagnostic>), Error> {
     if is_pypsa_dir(format) {
         return Err(Error::new(
             &codes::REQUEST_WRITE_UNSUPPORTED_VALUE_KIND,
             "pypsa-csv is a directory target; write it through a path destination",
         ));
     }
-    let result = write_module_as(module, format, Destination::memory("case")?)?;
-    let diagnostics = result.diagnostics().to_vec();
-    let powerio_core::WrittenOutput::Memory { artifacts } = result.into_output() else {
-        return Err(Error::new(
-            &codes::REQUEST_WRITE_UNSUPPORTED_VALUE_KIND,
-            "a memory destination produced path output",
-        ));
-    };
-    let mut artifacts = artifacts;
-    let Some(artifact) = artifacts.pop().filter(|_| artifacts.is_empty()) else {
-        return Err(Error::new(
-            &codes::REQUEST_WRITE_UNSUPPORTED_VALUE_KIND,
-            format!("{format} writes a directory, so it has no single text form"),
-        ));
-    };
-    let text = String::from_utf8(artifact.into_bytes()).map_err(|_| {
-        Error::new(
-            &codes::REQUEST_WRITE_UNKNOWN_FORMAT,
-            format!("{format} produced non UTF-8 output with no text form"),
-        )
-    })?;
-    Ok((text, diagnostics))
+    if is_pio_json(format) {
+        let text = crate::stored::write_module(module)?;
+        return Ok((text, Vec::new()));
+    }
+    match module.value() {
+        PioValue::BalancedNetwork(net) => {
+            let typed = typed_sibling(module, net.clone())?;
+            let Some(target) = powerio_tx::format::target_format_from_name(format) else {
+                return Err(unknown_format(format));
+            };
+            let conv = powerio_tx::format::write_as_with_options(&typed, target, options)?;
+            Ok((conv.text, conv.diagnostics))
+        }
+        PioValue::MulticonductorNetwork(net) => {
+            let Some(target) = powerio_dist::dist_target_from_name(format) else {
+                return Err(unknown_format(format));
+            };
+            let typed = typed_sibling(module, net.clone())?;
+            let conv = powerio_dist::write_as(&typed, target);
+            let mut diagnostics = conv.diagnostics;
+            for sidecar in &conv.sidecars {
+                diagnostics
+                    .push(sidecar.dropped_diagnostic("the text form carries one file"));
+            }
+            Ok((conv.text, diagnostics))
+        }
+        _ => {
+            if known_format_name(format) {
+                Err(unsupported_kind(module, format))
+            } else {
+                Err(unknown_format(format))
+            }
+        }
+    }
 }
 
 /// True when `format` is a name some family recognizes, used to tell "wrong
