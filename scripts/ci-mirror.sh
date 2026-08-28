@@ -111,10 +111,9 @@ if [ -n "$(git status --porcelain -- docs/schema)" ]; then
   exit 1
 fi
 
-# The same job checks the committed BMOPF example documents against the
-# writer; the examples embed the powerio version, so a version bump
-# regenerates them.
-run cargo run -q -p powerio-dist --example regen_bmopf_examples -- --check
+# Every shipped example compiles and the self-contained ones run, the BMOPF
+# example document check included.
+run bash scripts/check-examples.sh
 
 # crates.yml packages every publishable crate and audits each archive for the
 # license files a published crate must carry. The verify builds compile the freshly packaged siblings from cargo's overlay
