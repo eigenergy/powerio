@@ -3,7 +3,9 @@
 The advertised MCP surface is semantic and format neutral:
 
 ``convert``, ``save``, ``summary``, ``parse``, ``normalize``, ``matrix``,
-``diagnostics``, ``display``.
+``diagnostics``, ``display``, ``inspect``, ``state_inventory``,
+``select_state``, ``export_state``, ``to_balanced_inspect``, ``to_balanced``,
+``dc_data``, ``about``.
 
 The tools route balanced transmission models, multiconductor distribution
 models, PyPSA CSV folders, and gridfm datasets through the lower level powerio
