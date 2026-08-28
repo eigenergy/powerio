@@ -176,8 +176,7 @@ pub fn write_module_str_with_options(
             let conv = powerio_dist::write_as(&typed, target);
             let mut diagnostics = conv.diagnostics;
             for sidecar in &conv.sidecars {
-                diagnostics
-                    .push(sidecar.dropped_diagnostic("the text form carries one file"));
+                diagnostics.push(sidecar.dropped_diagnostic("the text form carries one file"));
             }
             Ok((conv.text, diagnostics))
         }
