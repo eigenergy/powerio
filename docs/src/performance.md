@@ -34,7 +34,7 @@ python3 evals/performance/render_tables.py --check
 ```
 
 The Julia benchmark writes `rows` for parse only and `matrix_rows` for parse
-plus Y bus construction. PowerIO measures `pio_parse_file` plus `pio_to_arrow`
+plus Y bus construction. PowerIO measures `pio_parse_file` plus `pio_balanced_network_to_arrow`
 for table `ybus`; PowerModels measures `parse_file`, `make_per_unit!`, and
 `calc_admittance_matrix`; ExaPowerIO measures `parse_matpower` plus a sparse
 Y bus assembled from its parsed branch admittance rows.
