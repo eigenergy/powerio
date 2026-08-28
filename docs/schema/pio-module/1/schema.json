@@ -248,7 +248,8 @@
       "additionalProperties": false,
       "properties": {
         "inputs": {
-          "description": "The complete SCUC inputs, in the calculation crate's own\n`powerio.scopf` serialization (that document carries its own schema)."
+          "$ref": "#/$defs/ScucInputs",
+          "description": "The complete SCUC inputs, in the calculation crate's own\nserialization, typed through this document's schema."
         },
         "network": {
           "$ref": "#/$defs/BalancedNetwork"
@@ -5781,6 +5782,3069 @@
       },
       "type": "object"
     },
+    "ScopfAcContingencySurvivors": {
+      "description": "Per-contingency surviving AC lines and transformers, one group per\ncontingency in `reliability.contingency` document order.",
+      "properties": {
+        "ln": {
+          "items": {
+            "items": {
+              "$ref": "#/$defs/ScopfAcLineSurvivorRow"
+            },
+            "type": "array"
+          },
+          "type": "array"
+        },
+        "xf": {
+          "items": {
+            "items": {
+              "$ref": "#/$defs/ScopfTransformerSurvivorRow"
+            },
+            "type": "array"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "ln",
+        "xf"
+      ],
+      "type": "object"
+    },
+    "ScopfAcLineRow": {
+      "description": "One AC line row.",
+      "properties": {
+        "b_ch": {
+          "anyOf": [
+            {
+              "format": "double",
+              "type": "number"
+            },
+            {
+              "enum": [
+                "Infinity",
+                "-Infinity",
+                "NaN"
+              ],
+              "type": "string"
+            }
+          ]
+        },
+        "b_fr": {
+          "anyOf": [
+            {
+              "format": "double",
+              "type": "number"
+            },
+            {
+              "enum": [
+                "Infinity",
+                "-Infinity",
+                "NaN"
+              ],
+              "type": "string"
+            }
+          ]
+        },
+        "b_sr": {
+          "anyOf": [
+            {
+              "format": "double",
+              "type": "number"
+            },
+            {
+              "enum": [
+                "Infinity",
+                "-Infinity",
+                "NaN"
+              ],
+              "type": "string"
+            }
+          ]
+        },
+        "b_to": {
+          "anyOf": [
+            {
+              "format": "double",
+              "type": "number"
+            },
+            {
+              "enum": [
+                "Infinity",
+                "-Infinity",
+                "NaN"
+              ],
+              "type": "string"
+            }
+          ]
+        },
+        "c_sd": {
+          "anyOf": [
+            {
+              "format": "double",
+              "type": "number"
+            },
+            {
+              "enum": [
+                "Infinity",
+                "-Infinity",
+                "NaN"
+              ],
+              "type": "string"
+            }
+          ]
+        },
+        "c_su": {
+          "anyOf": [
+            {
+              "format": "double",
+              "type": "number"
+            },
+            {
+              "enum": [
+                "Infinity",
+                "-Infinity",
+                "NaN"
+              ],
+              "type": "string"
+            }
+          ]
+        },
+        "fr_bus": {
+          "$ref": "#/$defs/BusId"
+        },
+        "g_fr": {
+          "anyOf": [
+            {
+              "format": "double",
+              "type": "number"
+            },
+            {
+              "enum": [
+                "Infinity",
+                "-Infinity",
+                "NaN"
+              ],
+              "type": "string"
+            }
+          ]
+        },
+        "g_sr": {
+          "anyOf": [
+            {
+              "format": "double",
+              "type": "number"
+            },
+            {
+              "enum": [
+                "Infinity",
+                "-Infinity",
+                "NaN"
+              ],
+              "type": "string"
+            }
+          ]
+        },
+        "g_to": {
+          "anyOf": [
+            {
+              "format": "double",
+              "type": "number"
+            },
+            {
+              "enum": [
+                "Infinity",
+                "-Infinity",
+                "NaN"
+              ],
+              "type": "string"
+            }
+          ]
+        },
+        "j_ln": {
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "s_max": {
+          "anyOf": [
+            {
+              "format": "double",
+              "type": "number"
+            },
+            {
+              "enum": [
+                "Infinity",
+                "-Infinity",
+                "NaN"
+              ],
+              "type": "string"
+            }
+          ]
+        },
+        "to_bus": {
+          "$ref": "#/$defs/BusId"
+        },
+        "u_0": {
+          "description": "The document's `initial_status.on_status`.",
+          "format": "int64",
+          "type": "integer"
+        },
+        "uid": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "j_ln",
+        "uid",
+        "to_bus",
+        "fr_bus",
+        "c_su",
+        "c_sd",
+        "u_0",
+        "s_max",
+        "g_sr",
+        "b_sr",
+        "b_ch",
+        "g_fr",
+        "g_to",
+        "b_fr",
+        "b_to"
+      ],
+      "type": "object"
+    },
+    "ScopfAcLineSurvivorRow": {
+      "description": "One AC line surviving a contingency.",
+      "properties": {
+        "b_sr": {
+          "anyOf": [
+            {
+              "format": "double",
+              "type": "number"
+            },
+            {
+              "enum": [
+                "Infinity",
+                "-Infinity",
+                "NaN"
+              ],
+              "type": "string"
+            }
+          ]
+        },
+        "ctg": {
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "fr_bus": {
+          "$ref": "#/$defs/BusId"
+        },
+        "j_ln": {
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "s_max_ctg": {
+          "anyOf": [
+            {
+              "format": "double",
+              "type": "number"
+            },
+            {
+              "enum": [
+                "Infinity",
+                "-Infinity",
+                "NaN"
+              ],
+              "type": "string"
+            }
+          ]
+        },
+        "to_bus": {
+          "$ref": "#/$defs/BusId"
+        },
+        "uid": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "ctg",
+        "j_ln",
+        "uid",
+        "to_bus",
+        "fr_bus",
+        "b_sr",
+        "s_max_ctg"
+      ],
+      "type": "object"
+    },
+    "ScopfActiveReserveRow": {
+      "description": "One active power zonal reserve row.",
+      "properties": {
+        "c_nsc": {
+          "anyOf": [
+            {
+              "format": "double",
+              "type": "number"
+            },
+            {
+              "enum": [
+                "Infinity",
+                "-Infinity",
+                "NaN"
+              ],
+              "type": "string"
+            }
+          ]
+        },
+        "c_rgd": {
+          "anyOf": [
+            {
+              "format": "double",
+              "type": "number"
+            },
+            {
+              "enum": [
+                "Infinity",
+                "-Infinity",
+                "NaN"
+              ],
+              "type": "string"
+            }
+          ]
+        },
+        "c_rgu": {
+          "anyOf": [
+            {
+              "format": "double",
+              "type": "number"
+            },
+            {
+              "enum": [
+                "Infinity",
+                "-Infinity",
+                "NaN"
+              ],
+              "type": "string"
+            }
+          ]
+        },
+        "c_rrd": {
+          "anyOf": [
+            {
+              "format": "double",
+              "type": "number"
+            },
+            {
+              "enum": [
+                "Infinity",
+                "-Infinity",
+                "NaN"
+              ],
+              "type": "string"
+            }
+          ]
+        },
+        "c_rru": {
+          "anyOf": [
+            {
+              "format": "double",
+              "type": "number"
+            },
+            {
+              "enum": [
+                "Infinity",
+                "-Infinity",
+                "NaN"
+              ],
+              "type": "string"
+            }
+          ]
+        },
+        "c_scr": {
+          "anyOf": [
+            {
+              "format": "double",
+              "type": "number"
+            },
+            {
+              "enum": [
+                "Infinity",
+                "-Infinity",
+                "NaN"
+              ],
+              "type": "string"
+            }
+          ]
+        },
+        "n_p": {
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "p_rrd_min": {
+          "items": {
+            "anyOf": [
+              {
+                "format": "double",
+                "type": "number"
+              },
+              {
+                "enum": [
+                  "Infinity",
+                  "-Infinity",
+                  "NaN"
+                ],
+                "type": "string"
+              }
+            ]
+          },
+          "type": "array"
+        },
+        "p_rru_min": {
+          "items": {
+            "anyOf": [
+              {
+                "format": "double",
+                "type": "number"
+              },
+              {
+                "enum": [
+                  "Infinity",
+                  "-Infinity",
+                  "NaN"
+                ],
+                "type": "string"
+              }
+            ]
+          },
+          "type": "array"
+        },
+        "sigma_nsc": {
+          "anyOf": [
+            {
+              "format": "double",
+              "type": "number"
+            },
+            {
+              "enum": [
+                "Infinity",
+                "-Infinity",
+                "NaN"
+              ],
+              "type": "string"
+            }
+          ]
+        },
+        "sigma_rgd": {
+          "anyOf": [
+            {
+              "format": "double",
+              "type": "number"
+            },
+            {
+              "enum": [
+                "Infinity",
+                "-Infinity",
+                "NaN"
+              ],
+              "type": "string"
+            }
+          ]
+        },
+        "sigma_rgu": {
+          "anyOf": [
+            {
+              "format": "double",
+              "type": "number"
+            },
+            {
+              "enum": [
+                "Infinity",
+                "-Infinity",
+                "NaN"
+              ],
+              "type": "string"
+            }
+          ]
+        },
+        "sigma_scr": {
+          "anyOf": [
+            {
+              "format": "double",
+              "type": "number"
+            },
+            {
+              "enum": [
+                "Infinity",
+                "-Infinity",
+                "NaN"
+              ],
+              "type": "string"
+            }
+          ]
+        },
+        "uid": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "n_p",
+        "uid",
+        "c_rgu",
+        "c_rgd",
+        "c_scr",
+        "c_nsc",
+        "c_rru",
+        "c_rrd",
+        "sigma_rgu",
+        "sigma_rgd",
+        "sigma_scr",
+        "sigma_nsc",
+        "p_rru_min",
+        "p_rrd_min"
+      ],
+      "type": "object"
+    },
+    "ScopfActiveReserveSetRow": {
+      "description": "One (bus, active reserve zone, device) membership row.",
+      "properties": {
+        "i": {
+          "$ref": "#/$defs/BusId"
+        },
+        "j_dev": {
+          "description": "The member device's ordinals ([`ScopfDeviceRow::j_dev`],\n[`ScopfDeviceRow::j_sdd`]).",
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "j_sdd": {
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "n_p": {
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "uid": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "i",
+        "n_p",
+        "uid",
+        "j_dev",
+        "j_sdd"
+      ],
+      "type": "object"
+    },
+    "ScopfBusRow": {
+      "description": "One bus row: `(i, uid, v_min, v_max)`.",
+      "properties": {
+        "i": {
+          "$ref": "#/$defs/BusId"
+        },
+        "uid": {
+          "type": "string"
+        },
+        "v_max": {
+          "anyOf": [
+            {
+              "format": "double",
+              "type": "number"
+            },
+            {
+              "enum": [
+                "Infinity",
+                "-Infinity",
+                "NaN"
+              ],
+              "type": "string"
+            }
+          ]
+        },
+        "v_min": {
+          "anyOf": [
+            {
+              "format": "double",
+              "type": "number"
+            },
+            {
+              "enum": [
+                "Infinity",
+                "-Infinity",
+                "NaN"
+              ],
+              "type": "string"
+            }
+          ]
+        }
+      },
+      "required": [
+        "i",
+        "uid",
+        "v_min",
+        "v_max"
+      ],
+      "type": "object"
+    },
+    "ScopfDcContingencyFlowRow": {
+      "description": "One surviving DC line in one contingency and period.",
+      "properties": {
+        "ctg": {
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "dt": {
+          "anyOf": [
+            {
+              "format": "double",
+              "type": "number"
+            },
+            {
+              "enum": [
+                "Infinity",
+                "-Infinity",
+                "NaN"
+              ],
+              "type": "string"
+            }
+          ]
+        },
+        "flat_jtk_dc": {
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "fr_bus": {
+          "$ref": "#/$defs/BusId"
+        },
+        "j_dc": {
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "t": {
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "to_bus": {
+          "$ref": "#/$defs/BusId"
+        }
+      },
+      "required": [
+        "flat_jtk_dc",
+        "ctg",
+        "j_dc",
+        "to_bus",
+        "fr_bus",
+        "t",
+        "dt"
+      ],
+      "type": "object"
+    },
+    "ScopfDcLineRow": {
+      "description": "One DC line row.",
+      "properties": {
+        "fr_bus": {
+          "$ref": "#/$defs/BusId"
+        },
+        "j_dc": {
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "pdc_max": {
+          "anyOf": [
+            {
+              "format": "double",
+              "type": "number"
+            },
+            {
+              "enum": [
+                "Infinity",
+                "-Infinity",
+                "NaN"
+              ],
+              "type": "string"
+            }
+          ]
+        },
+        "qdc_fr_max": {
+          "anyOf": [
+            {
+              "format": "double",
+              "type": "number"
+            },
+            {
+              "enum": [
+                "Infinity",
+                "-Infinity",
+                "NaN"
+              ],
+              "type": "string"
+            }
+          ]
+        },
+        "qdc_fr_min": {
+          "anyOf": [
+            {
+              "format": "double",
+              "type": "number"
+            },
+            {
+              "enum": [
+                "Infinity",
+                "-Infinity",
+                "NaN"
+              ],
+              "type": "string"
+            }
+          ]
+        },
+        "qdc_to_max": {
+          "anyOf": [
+            {
+              "format": "double",
+              "type": "number"
+            },
+            {
+              "enum": [
+                "Infinity",
+                "-Infinity",
+                "NaN"
+              ],
+              "type": "string"
+            }
+          ]
+        },
+        "qdc_to_min": {
+          "anyOf": [
+            {
+              "format": "double",
+              "type": "number"
+            },
+            {
+              "enum": [
+                "Infinity",
+                "-Infinity",
+                "NaN"
+              ],
+              "type": "string"
+            }
+          ]
+        },
+        "to_bus": {
+          "$ref": "#/$defs/BusId"
+        },
+        "uid": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "j_dc",
+        "uid",
+        "pdc_max",
+        "qdc_fr_min",
+        "qdc_to_min",
+        "qdc_fr_max",
+        "qdc_to_max",
+        "to_bus",
+        "fr_bus"
+      ],
+      "type": "object"
+    },
+    "ScopfDeviceClassLayout": {
+      "description": "How the two device classes sit in the `simple_dispatchable_device` section.\n\nA model that stacks producers and consumers into one variable vector\naddresses a device by a per class offset, which is a bijection only when\neach class owns one unbroken run. Reading the order without that\nprecondition is the one mistake this type makes unavailable.",
+      "oneOf": [
+        {
+          "description": "Each class is one unbroken run. `producers_first` says which run\nstarts first.",
+          "properties": {
+            "kind": {
+              "const": "contiguous",
+              "type": "string"
+            },
+            "producers_first": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "kind",
+            "producers_first"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "The two classes interleave, so no per class offset addresses a device.",
+          "properties": {
+            "kind": {
+              "const": "interleaved",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "ScopfDeviceRow": {
+      "description": "One simple dispatchable device row.\n\nProducers and consumers share this layout. Vector fields use the internal\nzero based period order.\n\nThe reactive capability block is the `q_bound_cap`/`q_linear_cap` pair and\nthe parameters of the mode each one selects. The two modes are mutually\nexclusive and a device can select neither. A parameter of a mode the device\ndid not select is `None`. Read the two flags before the parameters.",
+      "properties": {
+        "beta": {
+          "anyOf": [
+            {
+              "format": "double",
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            {
+              "enum": [
+                "Infinity",
+                "-Infinity",
+                "NaN"
+              ],
+              "type": "string"
+            }
+          ]
+        },
+        "beta_lb": {
+          "anyOf": [
+            {
+              "format": "double",
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            {
+              "enum": [
+                "Infinity",
+                "-Infinity",
+                "NaN"
+              ],
+              "type": "string"
+            }
+          ]
+        },
+        "beta_ub": {
+          "anyOf": [
+            {
+              "format": "double",
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            {
+              "enum": [
+                "Infinity",
+                "-Infinity",
+                "NaN"
+              ],
+              "type": "string"
+            }
+          ]
+        },
+        "bus": {
+          "$ref": "#/$defs/BusId"
+        },
+        "c_nsc": {
+          "items": {
+            "anyOf": [
+              {
+                "format": "double",
+                "type": "number"
+              },
+              {
+                "enum": [
+                  "Infinity",
+                  "-Infinity",
+                  "NaN"
+                ],
+                "type": "string"
+              }
+            ]
+          },
+          "type": "array"
+        },
+        "c_on": {
+          "anyOf": [
+            {
+              "format": "double",
+              "type": "number"
+            },
+            {
+              "enum": [
+                "Infinity",
+                "-Infinity",
+                "NaN"
+              ],
+              "type": "string"
+            }
+          ]
+        },
+        "c_qrd": {
+          "items": {
+            "anyOf": [
+              {
+                "format": "double",
+                "type": "number"
+              },
+              {
+                "enum": [
+                  "Infinity",
+                  "-Infinity",
+                  "NaN"
+                ],
+                "type": "string"
+              }
+            ]
+          },
+          "type": "array"
+        },
+        "c_qru": {
+          "items": {
+            "anyOf": [
+              {
+                "format": "double",
+                "type": "number"
+              },
+              {
+                "enum": [
+                  "Infinity",
+                  "-Infinity",
+                  "NaN"
+                ],
+                "type": "string"
+              }
+            ]
+          },
+          "type": "array"
+        },
+        "c_rgd": {
+          "items": {
+            "anyOf": [
+              {
+                "format": "double",
+                "type": "number"
+              },
+              {
+                "enum": [
+                  "Infinity",
+                  "-Infinity",
+                  "NaN"
+                ],
+                "type": "string"
+              }
+            ]
+          },
+          "type": "array"
+        },
+        "c_rgu": {
+          "items": {
+            "anyOf": [
+              {
+                "format": "double",
+                "type": "number"
+              },
+              {
+                "enum": [
+                  "Infinity",
+                  "-Infinity",
+                  "NaN"
+                ],
+                "type": "string"
+              }
+            ]
+          },
+          "type": "array"
+        },
+        "c_rrd_off": {
+          "items": {
+            "anyOf": [
+              {
+                "format": "double",
+                "type": "number"
+              },
+              {
+                "enum": [
+                  "Infinity",
+                  "-Infinity",
+                  "NaN"
+                ],
+                "type": "string"
+              }
+            ]
+          },
+          "type": "array"
+        },
+        "c_rrd_on": {
+          "items": {
+            "anyOf": [
+              {
+                "format": "double",
+                "type": "number"
+              },
+              {
+                "enum": [
+                  "Infinity",
+                  "-Infinity",
+                  "NaN"
+                ],
+                "type": "string"
+              }
+            ]
+          },
+          "type": "array"
+        },
+        "c_rru_off": {
+          "items": {
+            "anyOf": [
+              {
+                "format": "double",
+                "type": "number"
+              },
+              {
+                "enum": [
+                  "Infinity",
+                  "-Infinity",
+                  "NaN"
+                ],
+                "type": "string"
+              }
+            ]
+          },
+          "type": "array"
+        },
+        "c_rru_on": {
+          "items": {
+            "anyOf": [
+              {
+                "format": "double",
+                "type": "number"
+              },
+              {
+                "enum": [
+                  "Infinity",
+                  "-Infinity",
+                  "NaN"
+                ],
+                "type": "string"
+              }
+            ]
+          },
+          "type": "array"
+        },
+        "c_scr": {
+          "items": {
+            "anyOf": [
+              {
+                "format": "double",
+                "type": "number"
+              },
+              {
+                "enum": [
+                  "Infinity",
+                  "-Infinity",
+                  "NaN"
+                ],
+                "type": "string"
+              }
+            ]
+          },
+          "type": "array"
+        },
+        "c_sd": {
+          "anyOf": [
+            {
+              "format": "double",
+              "type": "number"
+            },
+            {
+              "enum": [
+                "Infinity",
+                "-Infinity",
+                "NaN"
+              ],
+              "type": "string"
+            }
+          ]
+        },
+        "c_su": {
+          "anyOf": [
+            {
+              "format": "double",
+              "type": "number"
+            },
+            {
+              "enum": [
+                "Infinity",
+                "-Infinity",
+                "NaN"
+              ],
+              "type": "string"
+            }
+          ]
+        },
+        "j_dev": {
+          "description": "0-based position within the row's own class list (`prod` or `cons`),\nin document order. Serialization can retain base 0 or select base 1.",
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "j_sdd": {
+          "description": "0-based position in the canonical device stacking: the producer block,\nthen the consumer block, document order within each. Sound for every\nuid spelling, including interleaved classes.",
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "p_0": {
+          "anyOf": [
+            {
+              "format": "double",
+              "type": "number"
+            },
+            {
+              "enum": [
+                "Infinity",
+                "-Infinity",
+                "NaN"
+              ],
+              "type": "string"
+            }
+          ]
+        },
+        "p_max": {
+          "items": {
+            "anyOf": [
+              {
+                "format": "double",
+                "type": "number"
+              },
+              {
+                "enum": [
+                  "Infinity",
+                  "-Infinity",
+                  "NaN"
+                ],
+                "type": "string"
+              }
+            ]
+          },
+          "type": "array"
+        },
+        "p_min": {
+          "items": {
+            "anyOf": [
+              {
+                "format": "double",
+                "type": "number"
+              },
+              {
+                "enum": [
+                  "Infinity",
+                  "-Infinity",
+                  "NaN"
+                ],
+                "type": "string"
+              }
+            ]
+          },
+          "type": "array"
+        },
+        "p_nsc_max": {
+          "anyOf": [
+            {
+              "format": "double",
+              "type": "number"
+            },
+            {
+              "enum": [
+                "Infinity",
+                "-Infinity",
+                "NaN"
+              ],
+              "type": "string"
+            }
+          ]
+        },
+        "p_rd": {
+          "anyOf": [
+            {
+              "format": "double",
+              "type": "number"
+            },
+            {
+              "enum": [
+                "Infinity",
+                "-Infinity",
+                "NaN"
+              ],
+              "type": "string"
+            }
+          ]
+        },
+        "p_rd_sd": {
+          "anyOf": [
+            {
+              "format": "double",
+              "type": "number"
+            },
+            {
+              "enum": [
+                "Infinity",
+                "-Infinity",
+                "NaN"
+              ],
+              "type": "string"
+            }
+          ]
+        },
+        "p_rgd_max": {
+          "anyOf": [
+            {
+              "format": "double",
+              "type": "number"
+            },
+            {
+              "enum": [
+                "Infinity",
+                "-Infinity",
+                "NaN"
+              ],
+              "type": "string"
+            }
+          ]
+        },
+        "p_rgu_max": {
+          "anyOf": [
+            {
+              "format": "double",
+              "type": "number"
+            },
+            {
+              "enum": [
+                "Infinity",
+                "-Infinity",
+                "NaN"
+              ],
+              "type": "string"
+            }
+          ]
+        },
+        "p_rrd_off_max": {
+          "anyOf": [
+            {
+              "format": "double",
+              "type": "number"
+            },
+            {
+              "enum": [
+                "Infinity",
+                "-Infinity",
+                "NaN"
+              ],
+              "type": "string"
+            }
+          ]
+        },
+        "p_rrd_on_max": {
+          "anyOf": [
+            {
+              "format": "double",
+              "type": "number"
+            },
+            {
+              "enum": [
+                "Infinity",
+                "-Infinity",
+                "NaN"
+              ],
+              "type": "string"
+            }
+          ]
+        },
+        "p_rru_off_max": {
+          "anyOf": [
+            {
+              "format": "double",
+              "type": "number"
+            },
+            {
+              "enum": [
+                "Infinity",
+                "-Infinity",
+                "NaN"
+              ],
+              "type": "string"
+            }
+          ]
+        },
+        "p_rru_on_max": {
+          "anyOf": [
+            {
+              "format": "double",
+              "type": "number"
+            },
+            {
+              "enum": [
+                "Infinity",
+                "-Infinity",
+                "NaN"
+              ],
+              "type": "string"
+            }
+          ]
+        },
+        "p_ru": {
+          "anyOf": [
+            {
+              "format": "double",
+              "type": "number"
+            },
+            {
+              "enum": [
+                "Infinity",
+                "-Infinity",
+                "NaN"
+              ],
+              "type": "string"
+            }
+          ]
+        },
+        "p_ru_su": {
+          "anyOf": [
+            {
+              "format": "double",
+              "type": "number"
+            },
+            {
+              "enum": [
+                "Infinity",
+                "-Infinity",
+                "NaN"
+              ],
+              "type": "string"
+            }
+          ]
+        },
+        "p_scr_max": {
+          "anyOf": [
+            {
+              "format": "double",
+              "type": "number"
+            },
+            {
+              "enum": [
+                "Infinity",
+                "-Infinity",
+                "NaN"
+              ],
+              "type": "string"
+            }
+          ]
+        },
+        "q_0": {
+          "anyOf": [
+            {
+              "format": "double",
+              "type": "number"
+            },
+            {
+              "enum": [
+                "Infinity",
+                "-Infinity",
+                "NaN"
+              ],
+              "type": "string"
+            }
+          ]
+        },
+        "q_0_lb": {
+          "anyOf": [
+            {
+              "format": "double",
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            {
+              "enum": [
+                "Infinity",
+                "-Infinity",
+                "NaN"
+              ],
+              "type": "string"
+            }
+          ]
+        },
+        "q_0_ub": {
+          "anyOf": [
+            {
+              "format": "double",
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            {
+              "enum": [
+                "Infinity",
+                "-Infinity",
+                "NaN"
+              ],
+              "type": "string"
+            }
+          ]
+        },
+        "q_bound_cap": {
+          "format": "int64",
+          "type": "integer"
+        },
+        "q_linear_cap": {
+          "format": "int64",
+          "type": "integer"
+        },
+        "q_max": {
+          "items": {
+            "anyOf": [
+              {
+                "format": "double",
+                "type": "number"
+              },
+              {
+                "enum": [
+                  "Infinity",
+                  "-Infinity",
+                  "NaN"
+                ],
+                "type": "string"
+              }
+            ]
+          },
+          "type": "array"
+        },
+        "q_min": {
+          "items": {
+            "anyOf": [
+              {
+                "format": "double",
+                "type": "number"
+              },
+              {
+                "enum": [
+                  "Infinity",
+                  "-Infinity",
+                  "NaN"
+                ],
+                "type": "string"
+              }
+            ]
+          },
+          "type": "array"
+        },
+        "q_p0": {
+          "anyOf": [
+            {
+              "format": "double",
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            {
+              "enum": [
+                "Infinity",
+                "-Infinity",
+                "NaN"
+              ],
+              "type": "string"
+            }
+          ],
+          "description": "The intercept of the linear capability line. The GOC3 document calls\nthis `q_0`, which this row already uses for `initial_status.q`."
+        },
+        "sus": {
+          "items": {
+            "items": {
+              "anyOf": [
+                {
+                  "format": "double",
+                  "type": "number"
+                },
+                {
+                  "enum": [
+                    "Infinity",
+                    "-Infinity",
+                    "NaN"
+                  ],
+                  "type": "string"
+                }
+              ]
+            },
+            "type": "array"
+          },
+          "type": "array"
+        },
+        "u_0": {
+          "description": "The document's `initial_status.on_status`.",
+          "format": "int64",
+          "type": "integer"
+        },
+        "uid": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "bus",
+        "uid",
+        "j_dev",
+        "j_sdd",
+        "c_on",
+        "c_su",
+        "c_sd",
+        "p_ru",
+        "p_rd",
+        "p_ru_su",
+        "p_rd_sd",
+        "c_rgu",
+        "c_rgd",
+        "c_scr",
+        "c_nsc",
+        "c_rru_on",
+        "c_rru_off",
+        "c_rrd_on",
+        "c_rrd_off",
+        "c_qru",
+        "c_qrd",
+        "p_rgu_max",
+        "p_rgd_max",
+        "p_scr_max",
+        "p_nsc_max",
+        "p_rru_on_max",
+        "p_rru_off_max",
+        "p_rrd_on_max",
+        "p_rrd_off_max",
+        "p_0",
+        "q_0",
+        "u_0",
+        "p_max",
+        "p_min",
+        "q_max",
+        "q_min",
+        "sus",
+        "q_bound_cap",
+        "q_linear_cap"
+      ],
+      "type": "object"
+    },
+    "ScopfEnergyWindowMaxCsRow": {
+      "properties": {
+        "a_en_max_end": {
+          "anyOf": [
+            {
+              "format": "double",
+              "type": "number"
+            },
+            {
+              "enum": [
+                "Infinity",
+                "-Infinity",
+                "NaN"
+              ],
+              "type": "string"
+            }
+          ]
+        },
+        "a_en_max_start": {
+          "anyOf": [
+            {
+              "format": "double",
+              "type": "number"
+            },
+            {
+              "enum": [
+                "Infinity",
+                "-Infinity",
+                "NaN"
+              ],
+              "type": "string"
+            }
+          ]
+        },
+        "e_max": {
+          "anyOf": [
+            {
+              "format": "double",
+              "type": "number"
+            },
+            {
+              "enum": [
+                "Infinity",
+                "-Infinity",
+                "NaN"
+              ],
+              "type": "string"
+            }
+          ]
+        },
+        "uid": {
+          "type": "string"
+        },
+        "w_en_max_cs_ind": {
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "w_en_max_cs_ind",
+        "uid",
+        "a_en_max_start",
+        "a_en_max_end",
+        "e_max"
+      ],
+      "type": "object"
+    },
+    "ScopfEnergyWindowMaxPrRow": {
+      "properties": {
+        "a_en_max_end": {
+          "anyOf": [
+            {
+              "format": "double",
+              "type": "number"
+            },
+            {
+              "enum": [
+                "Infinity",
+                "-Infinity",
+                "NaN"
+              ],
+              "type": "string"
+            }
+          ]
+        },
+        "a_en_max_start": {
+          "anyOf": [
+            {
+              "format": "double",
+              "type": "number"
+            },
+            {
+              "enum": [
+                "Infinity",
+                "-Infinity",
+                "NaN"
+              ],
+              "type": "string"
+            }
+          ]
+        },
+        "e_max": {
+          "anyOf": [
+            {
+              "format": "double",
+              "type": "number"
+            },
+            {
+              "enum": [
+                "Infinity",
+                "-Infinity",
+                "NaN"
+              ],
+              "type": "string"
+            }
+          ]
+        },
+        "uid": {
+          "type": "string"
+        },
+        "w_en_max_pr_ind": {
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "w_en_max_pr_ind",
+        "uid",
+        "a_en_max_start",
+        "a_en_max_end",
+        "e_max"
+      ],
+      "type": "object"
+    },
+    "ScopfEnergyWindowMinCsRow": {
+      "properties": {
+        "a_en_min_end": {
+          "anyOf": [
+            {
+              "format": "double",
+              "type": "number"
+            },
+            {
+              "enum": [
+                "Infinity",
+                "-Infinity",
+                "NaN"
+              ],
+              "type": "string"
+            }
+          ]
+        },
+        "a_en_min_start": {
+          "anyOf": [
+            {
+              "format": "double",
+              "type": "number"
+            },
+            {
+              "enum": [
+                "Infinity",
+                "-Infinity",
+                "NaN"
+              ],
+              "type": "string"
+            }
+          ]
+        },
+        "e_min": {
+          "anyOf": [
+            {
+              "format": "double",
+              "type": "number"
+            },
+            {
+              "enum": [
+                "Infinity",
+                "-Infinity",
+                "NaN"
+              ],
+              "type": "string"
+            }
+          ]
+        },
+        "uid": {
+          "type": "string"
+        },
+        "w_en_min_cs_ind": {
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "w_en_min_cs_ind",
+        "uid",
+        "a_en_min_start",
+        "a_en_min_end",
+        "e_min"
+      ],
+      "type": "object"
+    },
+    "ScopfEnergyWindowMinPrRow": {
+      "properties": {
+        "a_en_min_end": {
+          "anyOf": [
+            {
+              "format": "double",
+              "type": "number"
+            },
+            {
+              "enum": [
+                "Infinity",
+                "-Infinity",
+                "NaN"
+              ],
+              "type": "string"
+            }
+          ]
+        },
+        "a_en_min_start": {
+          "anyOf": [
+            {
+              "format": "double",
+              "type": "number"
+            },
+            {
+              "enum": [
+                "Infinity",
+                "-Infinity",
+                "NaN"
+              ],
+              "type": "string"
+            }
+          ]
+        },
+        "e_min": {
+          "anyOf": [
+            {
+              "format": "double",
+              "type": "number"
+            },
+            {
+              "enum": [
+                "Infinity",
+                "-Infinity",
+                "NaN"
+              ],
+              "type": "string"
+            }
+          ]
+        },
+        "uid": {
+          "type": "string"
+        },
+        "w_en_min_pr_ind": {
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "w_en_min_pr_ind",
+        "uid",
+        "a_en_min_start",
+        "a_en_min_end",
+        "e_min"
+      ],
+      "type": "object"
+    },
+    "ScopfEnergyWindowPeriodMaxCsRow": {
+      "description": "Period membership of one energy window: the period belongs when\nits midpoint falls within the window's `(start, end]` interval.",
+      "properties": {
+        "dt": {
+          "anyOf": [
+            {
+              "format": "double",
+              "type": "number"
+            },
+            {
+              "enum": [
+                "Infinity",
+                "-Infinity",
+                "NaN"
+              ],
+              "type": "string"
+            }
+          ]
+        },
+        "t": {
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "uid": {
+          "type": "string"
+        },
+        "w_en_max_cs_ind": {
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "w_en_max_cs_ind",
+        "uid",
+        "t",
+        "dt"
+      ],
+      "type": "object"
+    },
+    "ScopfEnergyWindowPeriodMaxPrRow": {
+      "description": "Period membership of one energy window: the period belongs when\nits midpoint falls within the window's `(start, end]` interval.",
+      "properties": {
+        "dt": {
+          "anyOf": [
+            {
+              "format": "double",
+              "type": "number"
+            },
+            {
+              "enum": [
+                "Infinity",
+                "-Infinity",
+                "NaN"
+              ],
+              "type": "string"
+            }
+          ]
+        },
+        "t": {
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "uid": {
+          "type": "string"
+        },
+        "w_en_max_pr_ind": {
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "w_en_max_pr_ind",
+        "uid",
+        "t",
+        "dt"
+      ],
+      "type": "object"
+    },
+    "ScopfEnergyWindowPeriodMinCsRow": {
+      "description": "Period membership of one energy window: the period belongs when\nits midpoint falls within the window's `(start, end]` interval.",
+      "properties": {
+        "dt": {
+          "anyOf": [
+            {
+              "format": "double",
+              "type": "number"
+            },
+            {
+              "enum": [
+                "Infinity",
+                "-Infinity",
+                "NaN"
+              ],
+              "type": "string"
+            }
+          ]
+        },
+        "t": {
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "uid": {
+          "type": "string"
+        },
+        "w_en_min_cs_ind": {
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "w_en_min_cs_ind",
+        "uid",
+        "t",
+        "dt"
+      ],
+      "type": "object"
+    },
+    "ScopfEnergyWindowPeriodMinPrRow": {
+      "description": "Period membership of one energy window: the period belongs when\nits midpoint falls within the window's `(start, end]` interval.",
+      "properties": {
+        "dt": {
+          "anyOf": [
+            {
+              "format": "double",
+              "type": "number"
+            },
+            {
+              "enum": [
+                "Infinity",
+                "-Infinity",
+                "NaN"
+              ],
+              "type": "string"
+            }
+          ]
+        },
+        "t": {
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "uid": {
+          "type": "string"
+        },
+        "w_en_min_pr_ind": {
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "w_en_min_pr_ind",
+        "uid",
+        "t",
+        "dt"
+      ],
+      "type": "object"
+    },
+    "ScopfEnergyWindows": {
+      "description": "Energy requirement windows and their period memberships.",
+      "properties": {
+        "t_w_en_max_cs": {
+          "items": {
+            "$ref": "#/$defs/ScopfEnergyWindowPeriodMaxCsRow"
+          },
+          "type": "array"
+        },
+        "t_w_en_max_pr": {
+          "items": {
+            "$ref": "#/$defs/ScopfEnergyWindowPeriodMaxPrRow"
+          },
+          "type": "array"
+        },
+        "t_w_en_min_cs": {
+          "items": {
+            "$ref": "#/$defs/ScopfEnergyWindowPeriodMinCsRow"
+          },
+          "type": "array"
+        },
+        "t_w_en_min_pr": {
+          "items": {
+            "$ref": "#/$defs/ScopfEnergyWindowPeriodMinPrRow"
+          },
+          "type": "array"
+        },
+        "w_en_max_cs": {
+          "items": {
+            "$ref": "#/$defs/ScopfEnergyWindowMaxCsRow"
+          },
+          "type": "array"
+        },
+        "w_en_max_pr": {
+          "items": {
+            "$ref": "#/$defs/ScopfEnergyWindowMaxPrRow"
+          },
+          "type": "array"
+        },
+        "w_en_min_cs": {
+          "items": {
+            "$ref": "#/$defs/ScopfEnergyWindowMinCsRow"
+          },
+          "type": "array"
+        },
+        "w_en_min_pr": {
+          "items": {
+            "$ref": "#/$defs/ScopfEnergyWindowMinPrRow"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "w_en_max_pr",
+        "w_en_max_cs",
+        "w_en_min_pr",
+        "w_en_min_cs",
+        "t_w_en_max_pr",
+        "t_w_en_max_cs",
+        "t_w_en_min_pr",
+        "t_w_en_min_cs"
+      ],
+      "type": "object"
+    },
+    "ScopfFixedPhaseRow": {
+      "description": "A transformer with a fixed phase shift (`fpd`).",
+      "properties": {
+        "j_xf": {
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "phi_o": {
+          "anyOf": [
+            {
+              "format": "double",
+              "type": "number"
+            },
+            {
+              "enum": [
+                "Infinity",
+                "-Infinity",
+                "NaN"
+              ],
+              "type": "string"
+            }
+          ]
+        }
+      },
+      "required": [
+        "j_xf",
+        "phi_o"
+      ],
+      "type": "object"
+    },
+    "ScopfFixedRatioRow": {
+      "description": "A transformer with a fixed winding ratio (`fwr`).",
+      "properties": {
+        "j_xf": {
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "tau_o": {
+          "anyOf": [
+            {
+              "format": "double",
+              "type": "number"
+            },
+            {
+              "enum": [
+                "Infinity",
+                "-Infinity",
+                "NaN"
+              ],
+              "type": "string"
+            }
+          ]
+        }
+      },
+      "required": [
+        "j_xf",
+        "tau_o"
+      ],
+      "type": "object"
+    },
+    "ScopfLengths": {
+      "description": "Set sizes for each indexed device class.",
+      "properties": {
+        "i": {
+          "description": "Bus count.",
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "k": {
+          "description": "Contingency count.",
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "l_j_ac": {
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "l_j_br": {
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "l_j_cs": {
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "l_j_cspr": {
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "l_j_dc": {
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "l_j_ln": {
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "l_j_pr": {
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "l_j_sh": {
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "l_j_xf": {
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "l_n_p": {
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "l_n_q": {
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "l_t": {
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "l_j_xf",
+        "l_j_ln",
+        "l_j_ac",
+        "l_j_dc",
+        "l_j_br",
+        "l_j_cs",
+        "l_j_pr",
+        "l_j_cspr",
+        "l_j_sh",
+        "i",
+        "l_t",
+        "l_n_p",
+        "l_n_q",
+        "k"
+      ],
+      "type": "object"
+    },
+    "ScopfPriceBlockRow": {
+      "description": "One flattened device, period, and price block row.",
+      "properties": {
+        "c_en": {
+          "anyOf": [
+            {
+              "format": "double",
+              "type": "number"
+            },
+            {
+              "enum": [
+                "Infinity",
+                "-Infinity",
+                "NaN"
+              ],
+              "type": "string"
+            }
+          ]
+        },
+        "flat_k": {
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "m": {
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "p_max": {
+          "anyOf": [
+            {
+              "format": "double",
+              "type": "number"
+            },
+            {
+              "enum": [
+                "Infinity",
+                "-Infinity",
+                "NaN"
+              ],
+              "type": "string"
+            }
+          ]
+        },
+        "t": {
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "uid": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "flat_k",
+        "uid",
+        "t",
+        "m",
+        "c_en",
+        "p_max"
+      ],
+      "type": "object"
+    },
+    "ScopfPriceBlocks": {
+      "description": "Flattened producer and consumer price blocks.",
+      "properties": {
+        "consumer": {
+          "items": {
+            "$ref": "#/$defs/ScopfPriceBlockRow"
+          },
+          "type": "array"
+        },
+        "producer": {
+          "items": {
+            "$ref": "#/$defs/ScopfPriceBlockRow"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "producer",
+        "consumer"
+      ],
+      "type": "object"
+    },
+    "ScopfReactiveReserveRow": {
+      "description": "One reactive (reactive-power) zonal reserve row.",
+      "properties": {
+        "c_qrd": {
+          "anyOf": [
+            {
+              "format": "double",
+              "type": "number"
+            },
+            {
+              "enum": [
+                "Infinity",
+                "-Infinity",
+                "NaN"
+              ],
+              "type": "string"
+            }
+          ]
+        },
+        "c_qru": {
+          "anyOf": [
+            {
+              "format": "double",
+              "type": "number"
+            },
+            {
+              "enum": [
+                "Infinity",
+                "-Infinity",
+                "NaN"
+              ],
+              "type": "string"
+            }
+          ]
+        },
+        "n_q": {
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "q_qrd_min": {
+          "items": {
+            "anyOf": [
+              {
+                "format": "double",
+                "type": "number"
+              },
+              {
+                "enum": [
+                  "Infinity",
+                  "-Infinity",
+                  "NaN"
+                ],
+                "type": "string"
+              }
+            ]
+          },
+          "type": "array"
+        },
+        "q_qru_min": {
+          "items": {
+            "anyOf": [
+              {
+                "format": "double",
+                "type": "number"
+              },
+              {
+                "enum": [
+                  "Infinity",
+                  "-Infinity",
+                  "NaN"
+                ],
+                "type": "string"
+              }
+            ]
+          },
+          "type": "array"
+        },
+        "uid": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "n_q",
+        "uid",
+        "c_qru",
+        "c_qrd",
+        "q_qru_min",
+        "q_qrd_min"
+      ],
+      "type": "object"
+    },
+    "ScopfReactiveReserveSetRow": {
+      "description": "One (bus, reactive reserve zone, device) membership row.",
+      "properties": {
+        "i": {
+          "$ref": "#/$defs/BusId"
+        },
+        "j_dev": {
+          "description": "The member device's ordinals ([`ScopfDeviceRow::j_dev`],\n[`ScopfDeviceRow::j_sdd`]).",
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "j_sdd": {
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "n_q": {
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "uid": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "i",
+        "n_q",
+        "uid",
+        "j_dev",
+        "j_sdd"
+      ],
+      "type": "object"
+    },
+    "ScopfShuntRow": {
+      "description": "One shunt row.",
+      "properties": {
+        "b_sh": {
+          "anyOf": [
+            {
+              "format": "double",
+              "type": "number"
+            },
+            {
+              "enum": [
+                "Infinity",
+                "-Infinity",
+                "NaN"
+              ],
+              "type": "string"
+            }
+          ]
+        },
+        "bus": {
+          "$ref": "#/$defs/BusId"
+        },
+        "g_sh": {
+          "anyOf": [
+            {
+              "format": "double",
+              "type": "number"
+            },
+            {
+              "enum": [
+                "Infinity",
+                "-Infinity",
+                "NaN"
+              ],
+              "type": "string"
+            }
+          ]
+        },
+        "j_sh": {
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "uid": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "j_sh",
+        "uid",
+        "bus",
+        "g_sh",
+        "b_sh"
+      ],
+      "type": "object"
+    },
+    "ScopfStaticData": {
+      "description": "Static buses, branches, devices, controls, reserves, and memberships.",
+      "properties": {
+        "acl_branch": {
+          "items": {
+            "$ref": "#/$defs/ScopfAcLineRow"
+          },
+          "type": "array"
+        },
+        "active_reserve": {
+          "items": {
+            "$ref": "#/$defs/ScopfActiveReserveRow"
+          },
+          "type": "array"
+        },
+        "active_reserve_set_cs": {
+          "items": {
+            "$ref": "#/$defs/ScopfActiveReserveSetRow"
+          },
+          "type": "array"
+        },
+        "active_reserve_set_pr": {
+          "items": {
+            "$ref": "#/$defs/ScopfActiveReserveSetRow"
+          },
+          "type": "array"
+        },
+        "acx_branch": {
+          "items": {
+            "$ref": "#/$defs/ScopfTransformerRow"
+          },
+          "type": "array"
+        },
+        "bus": {
+          "items": {
+            "$ref": "#/$defs/ScopfBusRow"
+          },
+          "type": "array"
+        },
+        "cons": {
+          "items": {
+            "$ref": "#/$defs/ScopfDeviceRow"
+          },
+          "type": "array"
+        },
+        "dc_branch": {
+          "items": {
+            "$ref": "#/$defs/ScopfDcLineRow"
+          },
+          "type": "array"
+        },
+        "fpd": {
+          "items": {
+            "$ref": "#/$defs/ScopfFixedPhaseRow"
+          },
+          "type": "array"
+        },
+        "fwr": {
+          "items": {
+            "$ref": "#/$defs/ScopfFixedRatioRow"
+          },
+          "type": "array"
+        },
+        "prod": {
+          "items": {
+            "$ref": "#/$defs/ScopfDeviceRow"
+          },
+          "type": "array"
+        },
+        "reactive_reserve": {
+          "items": {
+            "$ref": "#/$defs/ScopfReactiveReserveRow"
+          },
+          "type": "array"
+        },
+        "reactive_reserve_set_cs": {
+          "items": {
+            "$ref": "#/$defs/ScopfReactiveReserveSetRow"
+          },
+          "type": "array"
+        },
+        "reactive_reserve_set_pr": {
+          "items": {
+            "$ref": "#/$defs/ScopfReactiveReserveSetRow"
+          },
+          "type": "array"
+        },
+        "shunt": {
+          "items": {
+            "$ref": "#/$defs/ScopfShuntRow"
+          },
+          "type": "array"
+        },
+        "vpd": {
+          "items": {
+            "$ref": "#/$defs/ScopfVariablePhaseRow"
+          },
+          "type": "array"
+        },
+        "vwr": {
+          "items": {
+            "$ref": "#/$defs/ScopfVariableRatioRow"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "bus",
+        "shunt",
+        "acl_branch",
+        "acx_branch",
+        "vpd",
+        "fpd",
+        "vwr",
+        "fwr",
+        "dc_branch",
+        "prod",
+        "cons",
+        "active_reserve",
+        "reactive_reserve",
+        "active_reserve_set_pr",
+        "active_reserve_set_cs",
+        "reactive_reserve_set_pr",
+        "reactive_reserve_set_cs"
+      ],
+      "type": "object"
+    },
+    "ScopfTransformerRow": {
+      "description": "One two winding transformer row.",
+      "properties": {
+        "b_ch": {
+          "anyOf": [
+            {
+              "format": "double",
+              "type": "number"
+            },
+            {
+              "enum": [
+                "Infinity",
+                "-Infinity",
+                "NaN"
+              ],
+              "type": "string"
+            }
+          ]
+        },
+        "b_fr": {
+          "anyOf": [
+            {
+              "format": "double",
+              "type": "number"
+            },
+            {
+              "enum": [
+                "Infinity",
+                "-Infinity",
+                "NaN"
+              ],
+              "type": "string"
+            }
+          ]
+        },
+        "b_sr": {
+          "anyOf": [
+            {
+              "format": "double",
+              "type": "number"
+            },
+            {
+              "enum": [
+                "Infinity",
+                "-Infinity",
+                "NaN"
+              ],
+              "type": "string"
+            }
+          ]
+        },
+        "b_to": {
+          "anyOf": [
+            {
+              "format": "double",
+              "type": "number"
+            },
+            {
+              "enum": [
+                "Infinity",
+                "-Infinity",
+                "NaN"
+              ],
+              "type": "string"
+            }
+          ]
+        },
+        "c_sd": {
+          "anyOf": [
+            {
+              "format": "double",
+              "type": "number"
+            },
+            {
+              "enum": [
+                "Infinity",
+                "-Infinity",
+                "NaN"
+              ],
+              "type": "string"
+            }
+          ]
+        },
+        "c_su": {
+          "anyOf": [
+            {
+              "format": "double",
+              "type": "number"
+            },
+            {
+              "enum": [
+                "Infinity",
+                "-Infinity",
+                "NaN"
+              ],
+              "type": "string"
+            }
+          ]
+        },
+        "fr_bus": {
+          "$ref": "#/$defs/BusId"
+        },
+        "g_fr": {
+          "anyOf": [
+            {
+              "format": "double",
+              "type": "number"
+            },
+            {
+              "enum": [
+                "Infinity",
+                "-Infinity",
+                "NaN"
+              ],
+              "type": "string"
+            }
+          ]
+        },
+        "g_sr": {
+          "anyOf": [
+            {
+              "format": "double",
+              "type": "number"
+            },
+            {
+              "enum": [
+                "Infinity",
+                "-Infinity",
+                "NaN"
+              ],
+              "type": "string"
+            }
+          ]
+        },
+        "g_to": {
+          "anyOf": [
+            {
+              "format": "double",
+              "type": "number"
+            },
+            {
+              "enum": [
+                "Infinity",
+                "-Infinity",
+                "NaN"
+              ],
+              "type": "string"
+            }
+          ]
+        },
+        "j_xf": {
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "s_max": {
+          "anyOf": [
+            {
+              "format": "double",
+              "type": "number"
+            },
+            {
+              "enum": [
+                "Infinity",
+                "-Infinity",
+                "NaN"
+              ],
+              "type": "string"
+            }
+          ]
+        },
+        "to_bus": {
+          "$ref": "#/$defs/BusId"
+        },
+        "u_0": {
+          "description": "The document's `initial_status.on_status`.",
+          "format": "int64",
+          "type": "integer"
+        },
+        "uid": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "j_xf",
+        "uid",
+        "to_bus",
+        "fr_bus",
+        "c_su",
+        "c_sd",
+        "u_0",
+        "s_max",
+        "g_sr",
+        "b_sr",
+        "b_ch",
+        "g_fr",
+        "g_to",
+        "b_fr",
+        "b_to"
+      ],
+      "type": "object"
+    },
+    "ScopfTransformerSurvivorRow": {
+      "description": "One transformer surviving a contingency.",
+      "properties": {
+        "b_sr": {
+          "anyOf": [
+            {
+              "format": "double",
+              "type": "number"
+            },
+            {
+              "enum": [
+                "Infinity",
+                "-Infinity",
+                "NaN"
+              ],
+              "type": "string"
+            }
+          ]
+        },
+        "ctg": {
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "fr_bus": {
+          "$ref": "#/$defs/BusId"
+        },
+        "j_xf": {
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "s_max_ctg": {
+          "anyOf": [
+            {
+              "format": "double",
+              "type": "number"
+            },
+            {
+              "enum": [
+                "Infinity",
+                "-Infinity",
+                "NaN"
+              ],
+              "type": "string"
+            }
+          ]
+        },
+        "to_bus": {
+          "$ref": "#/$defs/BusId"
+        },
+        "uid": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "ctg",
+        "j_xf",
+        "uid",
+        "to_bus",
+        "fr_bus",
+        "b_sr",
+        "s_max_ctg"
+      ],
+      "type": "object"
+    },
+    "ScopfVariablePhaseRow": {
+      "description": "A transformer with a variable phase-shift control range (`vpd`).",
+      "properties": {
+        "j_xf": {
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "phi_max": {
+          "anyOf": [
+            {
+              "format": "double",
+              "type": "number"
+            },
+            {
+              "enum": [
+                "Infinity",
+                "-Infinity",
+                "NaN"
+              ],
+              "type": "string"
+            }
+          ]
+        },
+        "phi_min": {
+          "anyOf": [
+            {
+              "format": "double",
+              "type": "number"
+            },
+            {
+              "enum": [
+                "Infinity",
+                "-Infinity",
+                "NaN"
+              ],
+              "type": "string"
+            }
+          ]
+        }
+      },
+      "required": [
+        "j_xf",
+        "phi_min",
+        "phi_max"
+      ],
+      "type": "object"
+    },
+    "ScopfVariableRatioRow": {
+      "description": "A transformer with a variable winding ratio control range (`vwr`).",
+      "properties": {
+        "j_xf": {
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "tau_max": {
+          "anyOf": [
+            {
+              "format": "double",
+              "type": "number"
+            },
+            {
+              "enum": [
+                "Infinity",
+                "-Infinity",
+                "NaN"
+              ],
+              "type": "string"
+            }
+          ]
+        },
+        "tau_min": {
+          "anyOf": [
+            {
+              "format": "double",
+              "type": "number"
+            },
+            {
+              "enum": [
+                "Infinity",
+                "-Infinity",
+                "NaN"
+              ],
+              "type": "string"
+            }
+          ]
+        }
+      },
+      "required": [
+        "j_xf",
+        "tau_min",
+        "tau_max"
+      ],
+      "type": "object"
+    },
+    "ScopfViolationCost": {
+      "description": "The case's four violation prices. The GOC3 document spells them\n`p_bus_vio_cost`, `q_bus_vio_cost`, `s_vio_cost`, and `e_vio_cost` under\n`network.violation_cost`. Any one of them can be absent and is then `None`:\nGOCompetition's 14 bus validation case has no `e_vio_cost`.",
+      "properties": {
+        "e": {
+          "anyOf": [
+            {
+              "format": "double",
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            {
+              "enum": [
+                "Infinity",
+                "-Infinity",
+                "NaN"
+              ],
+              "type": "string"
+            }
+          ]
+        },
+        "p_bus": {
+          "anyOf": [
+            {
+              "format": "double",
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            {
+              "enum": [
+                "Infinity",
+                "-Infinity",
+                "NaN"
+              ],
+              "type": "string"
+            }
+          ]
+        },
+        "q_bus": {
+          "anyOf": [
+            {
+              "format": "double",
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            {
+              "enum": [
+                "Infinity",
+                "-Infinity",
+                "NaN"
+              ],
+              "type": "string"
+            }
+          ]
+        },
+        "s": {
+          "anyOf": [
+            {
+              "format": "double",
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            {
+              "enum": [
+                "Infinity",
+                "-Infinity",
+                "NaN"
+              ],
+              "type": "string"
+            }
+          ]
+        }
+      },
+      "type": "object"
+    },
     "ScucDeviceOutputsV1": {
       "additionalProperties": false,
       "properties": {
@@ -5896,6 +8960,71 @@
         "p_ramp_res_down_online",
         "q_res_up",
         "q_res_down"
+      ],
+      "type": "object"
+    },
+    "ScucInputs": {
+      "description": "Matrix free SCOPF input data.\n\nInternal class, period, contingency, window, and flattened row indices are\nzero based and follow the source document order of the section that owns\nthem. Source UIDs and external bus IDs remain separate fields.",
+      "properties": {
+        "ac_contingency_survivors": {
+          "$ref": "#/$defs/ScopfAcContingencySurvivors"
+        },
+        "dc_contingency_flows": {
+          "items": {
+            "$ref": "#/$defs/ScopfDcContingencyFlowRow"
+          },
+          "type": "array"
+        },
+        "device_class_layout": {
+          "$ref": "#/$defs/ScopfDeviceClassLayout"
+        },
+        "dt": {
+          "description": "The interval durations, so a model needs no raw-document read for its\ntime axis. `lengths.l_t` is this vector's length.",
+          "items": {
+            "anyOf": [
+              {
+                "format": "double",
+                "type": "number"
+              },
+              {
+                "enum": [
+                  "Infinity",
+                  "-Infinity",
+                  "NaN"
+                ],
+                "type": "string"
+              }
+            ]
+          },
+          "type": "array"
+        },
+        "energy_windows": {
+          "$ref": "#/$defs/ScopfEnergyWindows"
+        },
+        "lengths": {
+          "$ref": "#/$defs/ScopfLengths"
+        },
+        "price_blocks": {
+          "$ref": "#/$defs/ScopfPriceBlocks"
+        },
+        "static_data": {
+          "$ref": "#/$defs/ScopfStaticData",
+          "description": "Buses, branches, devices, controls, reserves, and memberships."
+        },
+        "violation_cost": {
+          "$ref": "#/$defs/ScopfViolationCost"
+        }
+      },
+      "required": [
+        "static_data",
+        "lengths",
+        "energy_windows",
+        "price_blocks",
+        "ac_contingency_survivors",
+        "dc_contingency_flows",
+        "violation_cost",
+        "device_class_layout",
+        "dt"
       ],
       "type": "object"
     },
