@@ -133,6 +133,10 @@ jobs:
       run: bash scripts/terminology-gate.sh
     - name: No deprecated items
       run: bash scripts/deprecated-inventory.sh --assert-empty
+    # The release decision paths a tag event would run, exercised on every
+    # pull request without writing anything.
+    - name: Release preflight
+      run: bash scripts/release-preflight.sh
     # Bare `cargo test` only covers the default-members; name the C ABI crate
     # explicitly so its end-to-end ABI tests run in CI too.
     - name: Run tests
