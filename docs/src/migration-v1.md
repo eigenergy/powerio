@@ -89,3 +89,9 @@ findings as native `Diagnostic` records from `diagnostics(case)`.
 ABI 6: owned handles with `retain`/`release`, structured `PioError`
 handles, one module surface, structured diagnostics, and the DC branch
 data. See [ABI history and symbol replacement](abi-v6.md).
+
+The 0.9 `pio_dist_capabilities_json` fidelity flags reported which optional
+BMOPF tables that build's writer could express. The 0.10 writer expresses
+all of them, and the report is gone: gate on the release version from
+`pio_version` or `pio_build_info`, and on the BMOPF schema vintage from
+`pio_schema_versions_json`, when behavior must be pinned per release.
