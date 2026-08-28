@@ -167,3 +167,67 @@ fn mismatched_winding_ratings_convert_the_resistance_base() {
     );
     let _ = VERSION;
 }
+
+#[test]
+fn a_module_at_a_record_cap_is_refused_intact() {
+    // A module whose records leave no room for the pass's own findings or
+    // history entry refuses under the record cap code with the module handed
+    // back unchanged, whichever cap binds.
+    let full_diagnostics = {
+        let mut module = parse_mc_module(TWO_WINDING_DSS);
+        let room = powerio_core::limits::MAX_MODULE_DIAGNOSTICS - module.diagnostics().len();
+        let filler = powerio_core::Diagnostic::new(
+            powerio_core::DiagnosticCode::new("READ.CASE.FILLER").unwrap(),
+            powerio_core::DiagnosticSeverity::Note,
+            "filler",
+        );
+        for _ in 0..room {
+            module.add_diagnostic(filler.clone()).unwrap();
+        }
+        module
+    };
+    let before = full_diagnostics.diagnostics().len();
+    let (returned, error) =
+        lower_module_to_balanced(full_diagnostics, MulticonductorToBalancedOptions::default())
+            .unwrap_err();
+    assert!(
+        error
+            .diagnostics
+            .iter()
+            .any(|d| d.code.as_str() == "TRANSFORM.MULTI_TO_BALANCED.RECORD_CAP"),
+        "{error:?}"
+    );
+    assert_eq!(returned.diagnostics().len(), before, "module unchanged");
+    assert!(matches!(
+        returned.value(),
+        PioValue::MulticonductorNetwork(_)
+    ));
+
+    // The history cap binds the same way.
+    let full_history = {
+        let mut module = parse_mc_module(TWO_WINDING_DSS);
+        let room = powerio_core::limits::MAX_MODULE_HISTORY_ENTRIES - module.history().len();
+        for index in 0..room {
+            let entry = powerio_core::HistoryEntry::new(
+                powerio_core::HistoryId::new(format!("filler-{index}")).unwrap(),
+                powerio_core::HistoryKind::Transform,
+                "filler",
+            )
+            .unwrap();
+            module.add_history_entry(entry).unwrap();
+        }
+        module
+    };
+    let before = full_history.history().len();
+    let (returned, error) =
+        lower_module_to_balanced(full_history, MulticonductorToBalancedOptions::default())
+            .unwrap_err();
+    assert!(
+        error
+            .diagnostics
+            .iter()
+            .any(|d| d.code.as_str() == "TRANSFORM.MULTI_TO_BALANCED.RECORD_CAP"),
+        "{error:?}"
+    );
+    assert_eq!(returned.history().len(), before, "module unchanged");
+}

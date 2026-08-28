@@ -1,15 +1,19 @@
 #!/usr/bin/env bash
-# The exported pio_* set may shrink only on a head that raises
-# PIO_ABI_VERSION. The stack parent is the newest first-parent merge's second
-# parent (how the stack cascades), else the fork point with main. When a
-# PowerIO.jl checkout sits beside the repo (or POWERIO_JL points at one), the
-# head's exports must also cover every pio_* symbol that binding resolves.
+# The exported pio_* entry point set may shrink only on a head that raises
+# PIO_ABI_VERSION above its stack parent's (the newest first-parent merge's
+# second parent, else the fork point with main). The set is the header's
+# declared entry points, extracted the way capi-header-parity.sh extracts
+# them, never every token in the file. When a PowerIO.jl checkout sits
+# beside the repo (or POWERIO_JL points at one), the head's exports must
+# cover every :pio_* symbol that binding names; the checkout is required
+# unless POWERIO_JL_OPTIONAL=1 states the run has none.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
 exports_at() {
   git show "$1:powerio-capi/include/powerio.h" 2>/dev/null \
-    | grep -oE '\bpio_[a-z0-9_]+' | sort -u
+    | grep -oE 'pio_[a-z0-9_]+ *\(' \
+    | grep -oE 'pio_[a-z0-9_]+' | sort -u
 }
 version_at() {
   git show "$1:powerio-capi/src/lib.rs" 2>/dev/null \
@@ -29,27 +33,33 @@ fi
 
 head_version="$(version_at HEAD)"
 parent_version="$(version_at "$parent")"
-if [ -n "$parent_version" ] && [ "$head_version" = "$parent_version" ]; then
-  lost="$(comm -23 <(exports_at "$parent") <(exports_at HEAD))"
-  if [ -n "$lost" ]; then
-    echo "error: exported pio_* symbols removed without a PIO_ABI_VERSION bump:" >&2
-    echo "$lost" >&2
-    exit 1
-  fi
+if [ -z "$head_version" ] || [ -z "$parent_version" ]; then
+  echo "error: could not read PIO_ABI_VERSION at HEAD or at the stack parent $parent" >&2
+  exit 1
 fi
-echo "export monotonicity holds (head v$head_version, parent v${parent_version:-?})"
+lost="$(comm -23 <(exports_at "$parent") <(exports_at HEAD))"
+if [ -n "$lost" ] && [ "$head_version" -le "$parent_version" ]; then
+  echo "error: exported pio_* entry points removed without a PIO_ABI_VERSION increase" >&2
+  echo "(head v$head_version, parent v$parent_version):" >&2
+  echo "$lost" >&2
+  exit 1
+fi
+echo "export monotonicity holds (head v$head_version, parent v$parent_version)"
 
 jl="${POWERIO_JL:-../PowerIO.jl}"
 if [ -d "$jl/src" ]; then
-  resolved="$(grep -rhoE '_library_symbol\([^,]+, :pio_[a-z0-9_]+' "$jl/src" \
+  named="$(grep -rhoE ':pio_[a-z0-9_]+' "$jl/src" \
     | grep -oE 'pio_[a-z0-9_]+' | sort -u)"
-  missing="$(comm -23 <(printf '%s\n' "$resolved") <(exports_at HEAD))"
+  missing="$(comm -23 <(printf '%s\n' "$named") <(exports_at HEAD))"
   if [ -n "$missing" ]; then
-    echo "error: the PowerIO.jl checkout resolves symbols this head does not export:" >&2
+    echo "error: the PowerIO.jl checkout names symbols this head does not export:" >&2
     echo "$missing" >&2
     exit 1
   fi
-  echo "companion symbol coverage holds ($(printf '%s\n' "$resolved" | grep -c .) resolved)"
+  echo "companion symbol coverage holds ($(printf '%s\n' "$named" | grep -c .) named)"
+elif [ "${POWERIO_JL_OPTIONAL:-0}" = 1 ]; then
+  echo "companion symbol coverage skipped: POWERIO_JL_OPTIONAL=1 and no checkout at $jl"
 else
-  echo "companion symbol coverage skipped: no PowerIO.jl checkout at $jl"
+  echo "error: no PowerIO.jl checkout at $jl; set POWERIO_JL or POWERIO_JL_OPTIONAL=1" >&2
+  exit 1
 fi
