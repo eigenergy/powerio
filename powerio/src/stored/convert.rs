@@ -772,7 +772,7 @@ fn decode_stored(stored: StoredModuleV1) -> Result<PioModule<PioValue>> {
 /// multiconductor unresolved reference walk is warning level in its reader
 /// (a refused include legitimately leaves dangling references beside the
 /// recorded findings), so it stays out of the decode gate.
-fn validate_decoded_networks(value: &PioValue) -> Result<()> {
+pub(super) fn validate_decoded_networks(value: &PioValue) -> Result<()> {
     let balanced = |network: &powerio_tx::BalancedNetwork| -> Result<()> {
         network
             .validate()
@@ -809,7 +809,7 @@ fn validate_decoded_networks(value: &PioValue) -> Result<()> {
         PioValue::AcOpfSolution(solution) => balanced(solution.network()),
         PioValue::McAcPfSolution(solution) => multiconductor(solution.network()),
         PioValue::McAcOpfSolution(solution) => multiconductor(solution.network()),
-        _ => Ok(()),
+        PioValue::AcScucSolution(solution) => balanced(solution.instance().network()),
     }
 }
 

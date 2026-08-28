@@ -55,6 +55,11 @@ pub(super) fn upgrade_legacy(
     }
 
     let value = upgrade_value(&legacy)?;
+    // The upgraded value is held to the same network gate the version 1
+    // decode applies, so both schema paths refuse a document whose balanced
+    // network fails the model's own validation.
+    crate::stored::convert::validate_decoded_networks(&value)
+        .map_err(|error| refused(&codes::READ_MODULE_INVALID, error.to_string()))?;
 
     let producer = Producer::new(
         legacy.producer.tool.clone(),
