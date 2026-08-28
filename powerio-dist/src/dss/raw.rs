@@ -1628,6 +1628,30 @@ mod tests {
         // Whichever ceiling fires first, the halt is one indivisible step:
         // exactly one READ.DSS.INCLUDE_BUDGET record lands in both channels
         // and the other ceiling's later crossing adds nothing.
+        struct Warny;
+        impl Loader for Warny {
+            fn load(&mut self, _: &Path) -> std::io::Result<String> {
+                let mut text = String::new();
+                for _ in 0..8192 {
+                    text.push_str("Bogus命令 arg\n");
+                }
+                for _ in 0..8192 {
+                    text.push_str("Solve\n");
+                }
+                Ok(text)
+            }
+        }
+        struct Quiet;
+        impl Loader for Quiet {
+            fn load(&mut self, _: &Path) -> std::io::Result<String> {
+                let mut text = String::new();
+                for _ in 0..16384 {
+                    text.push_str("Solve\n");
+                }
+                text.push_str("Bogus命令 arg\n");
+                Ok(text)
+            }
+        }
         let count = |raw: &RawDss| {
             (
                 raw.warnings
@@ -1643,19 +1667,6 @@ mod tests {
         // Findings first: unknown commands warn AND preserve, so a warning
         // heavy prefix crosses the diagnostic ceiling, then preserved lines
         // keep arriving.
-        struct Warny;
-        impl Loader for Warny {
-            fn load(&mut self, _: &Path) -> std::io::Result<String> {
-                let mut text = String::new();
-                for _ in 0..8192 {
-                    text.push_str("Bogus命令 arg\n");
-                }
-                for _ in 0..8192 {
-                    text.push_str("Solve\n");
-                }
-                Ok(text)
-            }
-        }
         let mut script = String::new();
         {
             use std::fmt::Write as _;
@@ -1670,17 +1681,6 @@ mod tests {
 
         // Preserved first: quiet preserved lines cross that ceiling, then
         // warning lines keep arriving.
-        struct Quiet;
-        impl Loader for Quiet {
-            fn load(&mut self, _: &Path) -> std::io::Result<String> {
-                let mut text = String::new();
-                for _ in 0..16384 {
-                    text.push_str("Solve\n");
-                }
-                text.push_str("Bogus命令 arg\n");
-                Ok(text)
-            }
-        }
         let mut script = String::new();
         {
             use std::fmt::Write as _;
