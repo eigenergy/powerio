@@ -179,7 +179,7 @@ def test_one_shot_convert_carries_parse_warnings():
         "bmopf-json",
         "dss",
     )
-    assert any("furlong" in w for w in conv.warnings)
+    assert any("furlong" in w.message for w in conv.warnings)
 
 
 def test_bmopf_containing_data_model_string_routes_to_bmopf(tmp_path):

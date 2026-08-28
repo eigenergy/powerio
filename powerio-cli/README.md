@@ -12,8 +12,8 @@ BMOPF JSON.
 powerio convert tests/data/case14.m --to psse -o case14.raw
 powerio convert case.surge.json --from surge-json --to matpower -o case.m
 powerio convert goc3_case.json --from goc3-json --to matpower -o case.m
-powerio package tests/data/case14.m -o case14.pio.json
-powerio package goc3_case.json --from goc3-json -o goc3_case.pio.json
+powerio module tests/data/case14.m -o case14.pio.json
+powerio module goc3_case.json --from goc3-json -o goc3_case.pio.json
 powerio verify tests/data/case30.m --kind bdoubleprime
 powerio dcopf tests/data/case30.m -o out
 powerio sensitivities tests/data/case30.m -o out --solver auto --drop-tolerance 1e-10

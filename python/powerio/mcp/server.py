@@ -117,6 +117,18 @@ _TARGET_FORMAT_HELP = (
 )
 
 
+def _warning_lines(findings) -> list:
+    """Render native findings to their `CODE: message` lines for the current
+    payload shape; strings pass through."""
+    lines = []
+    for finding in findings:
+        if isinstance(finding, str):
+            lines.append(finding)
+        else:
+            lines.append(f"{finding.code}: {finding.message}")
+    return lines
+
+
 @dataclass
 class _Loaded:
     domain: str
@@ -221,7 +233,7 @@ def _package_value(text: str) -> Optional[Dict[str, Any]]:
 
     Deliberately does not test `powerio_version`: a package written before
     0.9.0 states none, and it has to be recognized before it can be rejected
-    with a message that says so. `powerio.StoredModule.from_json` owns the
+    with a message that says so. `powerio.PioModule.from_json` owns the
     version gate.
     """
     try:
@@ -379,8 +391,16 @@ def _package_diagnostic_messages(value: Dict[str, Any]) -> list[str]:
     return _diagnostic_messages(value.get("diagnostics", []), _PACKAGE_WARNING_SEVERITIES)
 
 
-def _module_diagnostic_messages(module: "powerio.StoredModule") -> list[str]:
-    return _diagnostic_messages(module.diagnostics(), _MODULE_WARNING_SEVERITIES)
+def _module_diagnostic_messages(module: "powerio.PioModule") -> list[str]:
+    """Format a module's native diagnostics as `code: message` lines, kept to
+    warning and error severity. `module.diagnostics()` returns
+    `_powerio.Diagnostic` objects, not the dicts `_diagnostic_messages` reads,
+    since code and message are never absent on a native diagnostic."""
+    return [
+        f"{d.code}: {d.message}"
+        for d in module.diagnostics()
+        if d.severity in _MODULE_WARNING_SEVERITIES
+    ]
 
 
 def _diagnostics_payload(package_json: str, verbose: bool = False) -> Dict[str, Any]:
@@ -400,7 +420,7 @@ def _diagnostics_payload(package_json: str, verbose: bool = False) -> Dict[str, 
         raise ValueError("package_json is not a stored .pio.json document")
     # Validate with the stored reader (which upgrades a released 0.9
     # package) so schema version and consistency checks stay in one place.
-    powerio.StoredModule.from_json(package_json)
+    powerio.PioModule.from_json(package_json)
     raw = value.get("diagnostics", [])
     diagnostics = [item for item in raw if isinstance(item, dict)]
     if not verbose:
@@ -461,7 +481,7 @@ def _module_header(text: str) -> bool:
 def _load_module(module_json: str) -> _Loaded:
     """Load a stored module's static network value as a network handle."""
     try:
-        module = powerio.StoredModule.from_json(module_json)
+        module = powerio.PioModule.from_json(module_json)
     except ValueError as exc:
         raise _coded_error("module input", exc) from exc
     kind = module.kind
@@ -501,18 +521,18 @@ def _parse_transmission(
             return _Loaded(
                 "transmission",
                 result.network,
-                list(result.warnings),
+                _warning_lines(result.warnings),
                 "model-json",
                 int(result.scenario),
             )
         if path is not None:
-            net = powerio.parse(path, format, value_type=powerio.BalancedNetwork)
+            net = powerio.parse(path, format, value_type=powerio.BalancedNetwork).value
         else:
             net = powerio.parse(
                 _required(content, "content").encode(),
                 format or "matpower",
                 value_type=powerio.BalancedNetwork,
-            )
+            ).value
     except powerio.PowerIOError as exc:
         raise _coded_error("parse failed", exc) from exc
     except FileNotFoundError as exc:
@@ -552,7 +572,7 @@ def _parse_distribution(
         raise ValueError(f"file not found: {exc}") from exc
     except OSError as exc:
         raise ValueError(f"cannot read input: {exc}") from exc
-    return _Loaded("distribution", net, list(net.warnings), "bmopf-json")
+    return _Loaded("distribution", net, _warning_lines(net.warnings), "bmopf-json")
 
 
 def _parse_any(
@@ -707,7 +727,7 @@ def _distribution_summary(net: "dist.MulticonductorNetwork") -> Dict[str, Any]:
             "reference_buses": None,
             "connectivity_report": None,
         },
-        "warnings": list(net.warnings),
+        "warnings": _warning_lines(net.warnings),
     }
 
 
@@ -716,13 +736,13 @@ def _summary(loaded: _Loaded) -> Dict[str, Any]:
         summary = _distribution_summary(loaded.network)
     else:
         summary = _transmission_summary(loaded.network)
-    summary["warnings"] = list(loaded.warnings)
+    summary["warnings"] = _warning_lines(loaded.warnings)
     return summary
 
 
 def _dist_json(net: "dist.MulticonductorNetwork") -> tuple[str, list[str]]:
     conv = net.to_format("bmopf-json")
-    return conv.text, list(net.warnings) + list(conv.warnings)
+    return conv.text, _warning_lines(net.warnings) + _warning_lines(conv.warnings)
 
 
 def _write_text(
@@ -831,14 +851,14 @@ def _convert_impl(
                     "no conversion path between transmission and distribution formats"
                 )
             conv = loaded.network.to_format(to_format)
-            warnings = loaded.warnings + list(conv.warnings)
+            warnings = list(loaded.warnings) + _warning_lines(conv.warnings)
         else:
             if loaded.domain != "transmission":
                 raise ValueError(
                     "no conversion path between distribution and transmission formats"
                 )
             conv = loaded.network.to_format(to_format)
-            warnings = loaded.warnings + list(conv.warnings)
+            warnings = list(loaded.warnings) + _warning_lines(conv.warnings)
     except powerio.PowerIOError as exc:
         raise _coded_error("conversion failed", exc) from exc
     return {"text": conv.text, "warnings": warnings}
@@ -1280,19 +1300,19 @@ def _stored_module(
     path: Optional[str] = None,
     content: Optional[str] = None,
     from_format: Optional[str] = None,
-) -> "powerio.StoredModule":
+) -> "powerio.PioModule":
     """One module input: stored `.pio.json` text, a case path, or case text."""
     supplied = [value for value in (module_json, path, content) if value]
     if len(supplied) != 1:
         raise ValueError("pass exactly one of module_json, path, and content")
     try:
         if module_json:
-            return powerio.StoredModule.from_json(module_json)
+            return powerio.PioModule.from_json(module_json)
         if path is not None:
-            return powerio.StoredModule.from_file(
+            return powerio.PioModule.from_file(
                 _local_path(path, purpose="module input"), _fmt(from_format)
             )
-        return powerio.StoredModule.from_str(content or "", _fmt(from_format))
+        return powerio.PioModule.from_str(content or "", _fmt(from_format))
     except ValueError as exc:
         raise _coded_error("module input", exc) from exc
 

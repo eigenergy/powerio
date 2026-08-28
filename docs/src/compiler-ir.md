@@ -1,155 +1,31 @@
-# Compiler model layers
+# LLVM and MLIR lessons
 
-Readers parse source formats into typed models. Passes normalize or lower those
-models, and writers emit target artifacts. The `.pio.json` field reference is
-in
-[the `.pio.json` format chapter](pio-json-schema.md).
+PowerIO's design borrows from LLVM and MLIR where their problems genuinely overlap with reading, transforming, and writing power system data. This page records each adopted lesson against the shipped design, and the mechanisms deliberately not adopted. Primary references: the MLIR [language reference](https://mlir.llvm.org/docs/LangRef/), [diagnostics](https://mlir.llvm.org/docs/Diagnostics/), [interfaces](https://mlir.llvm.org/docs/Interfaces/), [pass management](https://mlir.llvm.org/docs/PassManagement/), and [dialect definition](https://mlir.llvm.org/docs/DefiningDialects/) documents.
 
-PowerIO keeps balanced and multiconductor models as separate types. A
-`.pio.json` document stores one model payload with provenance, diagnostics,
-validation results, and lowering history.
+## Adopted
 
-## Model families
+**A small shared foundation under acyclic higher layers.** LLVM's library layering puts Support under IR under the producers. PowerIO's `powerio-core` owns sources, diagnostics, errors, the module, and the generic containers; the network crates, the calculation crate, and the matrix crate stack over it in one direction, and CI asserts the edges from `cargo metadata` ([Crate graph](crate-graph.md)).
 
-PowerIO keeps two concrete static-grid IR families distinct. They share
-conventions while keeping separate types; code that needs both holds a
-`.pio.json` document rather than a union struct.
+**Source ownership that survives parsing.** MLIR's source manager keeps buffers alive so locations mean something after parsing. A `PioModule` retains its source; diagnostics carry a source identifier plus a byte range into those exact bytes, and the byte exact same format echo reads them back.
 
-### `BalancedNetwork`
+**Structured diagnostics with stable severities and attached context.** The four severities (`error`, `warning`, `remark`, `note`) are MLIR's, with the same meanings: a remark reports on success, a note attaches context to another finding. PowerIO adds the stable dotted code as the identity a consumer branches on, plus targets, related records, and suggested actions.
 
-`powerio::BalancedNetwork` is the scalar positive sequence model for transmission power flow, OPF, matrices, and graph
-analysis. Every electrical quantity is a single `f64`, with no phase or conductor
-dimension. Source bus IDs are not dense matrix indices; the dense solver view
-is derived separately and preserves source IDs. Loads and shunts have
-separate records rather than fields folded onto bus rows.
+**Typed representations at more than one abstraction level.** The value families span reusable networks, calculation instances, and solutions the way a compiler holds IR at several levels; nothing forces the richer levels through the poorer ones.
 
-### `MulticonductorNetwork`
+**Explicit transformations with testable boundaries.** Every transformation names its input and output types, returns diagnostics, and refuses what it cannot state (the balanced lowering's readiness report is the preflight MLIR's dialect conversion legality check suggests). Nothing rewrites as a side effect.
 
-`powerio_dist::MulticonductorNetwork` is the wire coordinate model for conductor level distribution. Bus IDs are
-strings; terminals are ordered string names; every element carries a terminal
-map; grounding is explicit; units are SI and radians. A neutral carries
-grounding and reduction semantics beyond a phase label. Format defaults and
-inferred facts are tracked, and unsupported objects are preserved rather than
-dropped.
+**Verification at representation boundaries.** Parsers and transformations verify what they produce and report findings rather than repairing silently; repairs are explicit operations that leave history records.
 
-A balanced model cannot represent conductor-level asymmetry; a multiconductor
-model carries terminal and grounding data that has no place in a positive
-sequence struct. The two families never merge into one struct.
+**Shared operations instead of per format switches.** The parse and write dispatchers route once, at the facade; matrix builders, writers, and inspectors consume the concrete typed values, so a new format adds one parser and one writer rather than a case in every consumer.
 
-BMOPF JSON is a strict case format for the distribution family. The `.pio.json`
-document uses the same `MulticonductorNetwork` model and wraps it with
-metadata: model kind, provenance, source maps, diagnostics, validation, and
-lowering history. The `.pio.json` chapter explains why the document is not a
-case format.
+**Private analysis caches.** Dense indexes, factorizations, and prepared solver arrays are derived data behind the public results, invalidated when their inputs change, the way pass manager analyses are.
 
-## The `.pio.json` document
+**Registries checked mechanically where tables drift.** The twenty kind strings, the format tokens, the diagnostic codes, and the drawn architecture edges are each held to one source by a CI gate, which is the maintainable slice of MLIR's declarative dialect definitions.
 
-The stored module (`powerio::stored`) is the implementation of a `.pio.json`
-document: one typed value with the record of how it was produced. Language
-bindings pass the document without guessing what it holds; its `value.kind`
-says so. The released 0.9 `NetworkPackage` layout upgrades one way on read
-through a crate private frozen decoder.
+**Serialization versioned apart from memory.** `.pio.json` version 1 is a schema with its own upgrade rules, in the spirit of MLIR bytecode versioning; the Rust structs never derive the wire layout.
 
-A `.pio.json` document always carries:
+**Scrutiny proportional to permanence.** A new core concept (a value family, a common module record) needs the promotion checklist: variant, stable string, stored DTO, and binding coverage. A new format adapter needs none of that.
 
-- `powerio_version` (semver), the powerio release that wrote the document;
-- `producer` metadata;
-- `model_kind`, explicit and authoritative;
-- `model`, the typed model payload, tagged by `kind`;
-- `origin` and `sources`;
-- `source_maps`;
-- `diagnostics`;
-- `validation`;
-- `summary`;
-- `lowering_history`;
-- optional `operating_points`;
-- optional `study` commits;
-- optional `derived` metadata.
+## Not adopted
 
-`operating_points` is a format neutral series of replayable field updates over
-the document's single static model payload. Materializing one point returns
-a static document with those updates applied and the series cleared. GO
-Challenge 3 document construction fills this block from `time_series_input`:
-the balanced model JSON holds the first interval, while every interval is
-available as an operating point.
-
-For balanced model JSON, the 0.9 package's solver table metadata attachment
-records compact metadata for
-`powerio::BalancedNetwork::to_normalized_solver_tables()`: pass name, units, row counts,
-dense bus ids, reference/component indices, branch to arc indices, and source row
-provenance. The document does not duplicate the full table rows; it records enough
-metadata for a compiler cache or sidecar artifact to verify table identity.
-
-### Explicit model kind
-
-`model_kind` is a standalone, authoritative field: a reader branches on it
-rather than inferring the model kind from which field is present. The reader
-requirements are in [the `.pio.json` format chapter](pio-json-schema.md).
-
-### Model JSON stability
-
-The model JSON changes are document changes, covered by the one
-`powerio_version`. Model rows carry stable `uid` identities that operating
-point updates resolve against. The bump rules are in
-[the `.pio.json` format chapter](pio-json-schema.md).
-
-### Provenance and source maps
-
-`Origin` distinguishes an in-memory model, a single file (with or without
-retained source), a folder dataset, a partially decoded binary, a derived
-product, or a composite. A `SourceMapEntry` points from a model field to its
-source with an `element_path`, a `SourceRef` into a declared source, a
-`mapping_kind` (`exact`, `defaulted`, `inferred`, `converted_units`, `lowered`,
-`aggregated`, `split`, `synthetic`, `retained_extra`), and a `confidence`.
-Balanced `source_ref.field` values use canonical model field names. Parser
-bookkeeping that should not live in the model JSON (retained source text,
-default-materialization records) is lifted into this layer rather than the raw
-model JSON.
-
-### Structured diagnostics
-
-Every finding carries a stable dotted `code`, a `severity` (`debug`, `info`,
-`warning`, `error`, `fatal`; worst-last so a set's dominant severity is its max),
-a human `message`, and where known an `element_path`, a `source_ref`, a
-`details` object, and a `suggested_action`. The structured record is primary;
-human-readable warnings are rendered from it as `CODE: message` lines. The
-record, the code grammar, and the severity ladder live in `powerio-core`, below
-both model crates and the package crate, so one finding type crosses all three.
-
-A code reads `NAMESPACE.SCOPE.SPECIFIC`. The leading segment names the stage the
-finding came from and is the only segment a consumer parses: `PARSE`, `READ`,
-`CANONICALIZE`, `VALIDATE`, `LOWER`, `BUILD`, `EMIT`, `BIND`, `PARTNER`,
-`REQUEST`. powerio emits nothing outside those ten, so a downstream verifier
-picks any other leading segment and the two streams merge into one report
-without coordination.
-
-### Lowering
-
-Each pass that transforms one model into another appends a `LoweringRecord`
-(input and output kind, options, assumptions, approximations, dropped fields,
-diagnostics, validation status) to `lowering_history`. The record makes the
-transformation explicit.
-
-`powerio::package::lower_multiconductor_to_balanced` lowers transparent three phase
-`MulticonductorNetwork` values into `BalancedNetwork` using the
-`FortescuePowerInvariant` sequence convention. Neutral conductors are Kron
-reduced before the sequence transform. One wire and two wire inputs,
-transformers, untyped objects, missing phase references, and closed switches
-return structured `LOWER.MULTI_TO_BALANCED.*` diagnostics.
-`powerio::transform::lower_multiconductor_to_balanced` returns a derived balanced
-document and appends the record. This pass is explicit only; readers, writers,
-matrix builders, bindings, and MCP operations do not run it implicitly.
-
-### Operating point materialization
-
-The 0.9 operating point materialization clones the document, applies
-one point's field updates to the typed model JSON, clears `operating_points`, drops
-stale source maps and diagnostics for changed fields, recomputes validation, and
-records a `LoweringRecord` with `pass = "materialize-operating-point"`. If the
-document already carried normalized solver table metadata, the metadata is
-rebuilt for the updated static model JSON.
-
-## Versioning
-
-The metadata and model JSON versioning policies are in
-[the `.pio.json` format chapter](pio-json-schema.md#pio-package).
+PowerIO 0.10 has no SSA values, no generic operation tree, no region nesting, no global context, no open runtime dialect registry, no generic pass manager, and no bytecode. The existing Rust types state power system data more directly than an operation tree would, and none of those mechanisms has a PowerIO use with measured benefit. Public names stay power system names: a bus is a bus, a lowering names its concrete result, and no Rust struct is renamed an operation to resemble MLIR. A `PioContext` would be justified only by measured interning or shared allocation needs, and none has appeared.

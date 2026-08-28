@@ -131,6 +131,8 @@ jobs:
       run: bash scripts/ci-clippy.sh workspace
     - name: Terminology gate
       run: bash scripts/terminology-gate.sh
+    - name: Documentation symbols
+      run: python3 scripts/check-doc-symbols.py
     - name: No deprecated items
       run: bash scripts/deprecated-inventory.sh --assert-empty
     # The release decision paths a tag event would run, exercised on every

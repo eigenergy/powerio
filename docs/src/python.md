@@ -62,7 +62,7 @@ dist_graph = pio.dist.parse_file("feeder.dss").graph()
 `powerio.BalancedNetwork` is the existing balanced transmission handle. v0.4 also
 exports `powerio.BalancedNetwork` as the long term family name for the same
 handle.
-The old `powerio.Case` compatibility alias was removed in v0.4.
+The old `Case` compatibility alias was removed in v0.4.
 
 For distribution models, use `powerio.dist.MulticonductorNetwork` or the
 existing `powerio.dist.MulticonductorNetwork` handle name. The old

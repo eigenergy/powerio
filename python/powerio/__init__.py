@@ -2,12 +2,12 @@
 
 Readers produce a format neutral network model. Writers return retained source
 bytes where supported or report fields that a target format cannot represent.
-Stored modules, sparse matrices, graphs, and problem instances use the same parsed
+Modules, sparse matrices, graphs, and problem instances use the same parsed
 data::
 
     import powerio as pio
 
-    net = pio.parse("case9.m", value_type=pio.BalancedNetwork)
+    net = pio.parse("case9.m", value_type=pio.BalancedNetwork).value
     print(net.n_buses, net.base_mva)         # 9 100.0
     text = net.to_matpower()                 # byte-exact MATPOWER echo
     raw, warnings = pio.convert_file("case9.m", "psse")
@@ -22,7 +22,8 @@ PyPSA CSV folders carry static network topology. NetCDF and HDF5 time series
 are tracked in https://github.com/eigenergy/powerio/issues/107.
 
 A source that defines a calculation parses to that calculation's typed
-value: :func:`parse` returns a :class:`StoredModule` whose kind names it.
+value: :func:`parse` returns a :class:`PioModule` whose kind names it, and
+whose ``.value`` property reads the typed value back out.
 
 ``import powerio`` and the base parse, write, and conversion paths require no
 third party Python package. Matrix methods require SciPy and NumPy. Graph
@@ -38,20 +39,46 @@ from collections import namedtuple
 from typing import Any, Optional
 
 from . import _powerio
-from ._powerio import PowerIODataError, PowerIOError, PowerIOParseError, __version__
+from ._powerio import (
+    Diagnostic,
+    PowerIODataError,
+    PowerIOError,
+    PowerIOParseError,
+    SourceSpan,
+    __version__,
+)
 
 __all__ = [
+    "AcOpfInstance",
+    "AcOpfSolution",
+    "AcPfInstance",
+    "AcPfSolution",
+    "AcScucInstance",
+    "AcScucSolution",
     "BalancedNetwork",
     "Conversion",
+    "DcOpfInstance",
+    "DcOpfSolution",
+    "DcPfInstance",
+    "DcPfSolution",
+    "Diagnostic",
     "DisplayData",
     "GridfmRead",
     "Incidence",
+    "McAcOpfInstance",
+    "McAcOpfSolution",
+    "McAcPfInstance",
+    "McAcPfSolution",
+    "PioModule",
     "PowerIODataError",
     "PowerIOError",
     "PowerIOParseError",
     "PwdDisplay",
     "PwdSubstation",
-    "StoredModule",
+    "ScenarioSet",
+    "SourceSpan",
+    "TimeSeries",
+    "UnknownValue",
     "YbusParts",
     "__version__",
     "convert_file",
@@ -698,7 +725,7 @@ def from_ppc(ppc) -> BalancedNetwork:
     is not a sequence of numbers, or when a cell is not numeric; the message
     names the table and the row.
     """
-    module = StoredModule.from_str(_ppc_to_matpower_text(ppc), "matpower")
+    module = PioModule.from_str(_ppc_to_matpower_text(ppc), "matpower")
     return module.as_balanced_network()
 
 
@@ -884,7 +911,126 @@ def versions() -> Any:
     return _json.loads(_powerio.versions_json())
 
 
-class StoredModule:
+class _TypedValue:
+    """Base for a thin typed wrapper around a :class:`PioModule` value that
+    has no dedicated handle type of its own.
+
+    Holds the owning module and its kind; this release exposes no per field
+    accessors for these kinds, so read a value back from ``module`` (its
+    ``to_json``, ``inspect``, or — for a series or scenario set —
+    ``state_inventory``/``select_state``/``export_state``).
+    """
+
+    __slots__ = ("module", "kind")
+
+    def __init__(self, module: "PioModule", kind: str) -> None:
+        self.module = module
+        self.kind = kind
+
+    def __repr__(self) -> str:
+        return f"{type(self).__name__}(kind={self.kind!r})"
+
+
+class TimeSeries(_TypedValue):
+    """A balanced network, balanced operating point, or multiconductor
+    operating point time series (kind ``*_time_series``)."""
+
+
+class ScenarioSet(_TypedValue):
+    """A balanced network scenario set (kind ``balanced_network_scenario_set``)."""
+
+
+class DcPfInstance(_TypedValue):
+    """A DC power flow problem instance."""
+
+
+class AcPfInstance(_TypedValue):
+    """An AC power flow problem instance."""
+
+
+class DcOpfInstance(_TypedValue):
+    """A DC OPF problem instance."""
+
+
+class AcOpfInstance(_TypedValue):
+    """An AC OPF problem instance."""
+
+
+class McAcPfInstance(_TypedValue):
+    """A multiconductor AC power flow problem instance."""
+
+
+class McAcOpfInstance(_TypedValue):
+    """A multiconductor AC OPF problem instance."""
+
+
+class AcScucInstance(_TypedValue):
+    """An AC security constrained unit commitment problem instance."""
+
+
+class DcPfSolution(_TypedValue):
+    """A DC power flow solution."""
+
+
+class AcPfSolution(_TypedValue):
+    """An AC power flow solution."""
+
+
+class DcOpfSolution(_TypedValue):
+    """A DC OPF solution."""
+
+
+class AcOpfSolution(_TypedValue):
+    """An AC OPF solution."""
+
+
+class McAcPfSolution(_TypedValue):
+    """A multiconductor AC power flow solution."""
+
+
+class McAcOpfSolution(_TypedValue):
+    """A multiconductor AC OPF solution."""
+
+
+class AcScucSolution(_TypedValue):
+    """An AC security constrained unit commitment solution."""
+
+
+class UnknownValue(_TypedValue):
+    """A module kind this release of powerio does not wrap in a typed class.
+
+    Reached only for a kind newer than this release recognizes; ``module``
+    and ``kind`` still work, so a caller can still inspect and re-export it.
+    """
+
+
+# kind string (PioModule.kind) -> the .value wrapper it reads back as. The two
+# network kinds ("balanced_network", "multiconductor_network") are not here:
+# PioModule.value special-cases them to the real network handle instead of one
+# of these thin wrappers.
+_VALUE_CLASSES: "dict[str, type]" = {
+    "balanced_network_time_series": TimeSeries,
+    "balanced_operating_point_time_series": TimeSeries,
+    "multiconductor_operating_point_time_series": TimeSeries,
+    "balanced_network_scenario_set": ScenarioSet,
+    "dc_pf_instance": DcPfInstance,
+    "ac_pf_instance": AcPfInstance,
+    "dc_opf_instance": DcOpfInstance,
+    "ac_opf_instance": AcOpfInstance,
+    "mc_ac_pf_instance": McAcPfInstance,
+    "mc_ac_opf_instance": McAcOpfInstance,
+    "ac_scuc_instance": AcScucInstance,
+    "dc_pf_solution": DcPfSolution,
+    "ac_pf_solution": AcPfSolution,
+    "dc_opf_solution": DcOpfSolution,
+    "ac_opf_solution": AcOpfSolution,
+    "mc_ac_pf_solution": McAcPfSolution,
+    "mc_ac_opf_solution": McAcOpfSolution,
+    "ac_scuc_solution": AcScucSolution,
+}
+
+
+class PioModule:
     """A runtime module handle: one typed value with its common records.
 
     The stored form is ``.pio.json`` version 1; released 0.9 packages upgrade
@@ -892,13 +1038,13 @@ class StoredModule:
     separate explicit materialization.
     """
 
-    def __init__(self, inner: "_powerio._StoredModule"):
+    def __init__(self, inner: "_powerio._PioModule"):
         self._inner = inner
 
     @classmethod
-    def from_json(cls, text: str) -> "StoredModule":
+    def from_json(cls, text: str) -> "PioModule":
         """Read stored ``.pio.json`` text."""
-        return cls(_powerio._StoredModule.from_json(text))
+        return cls(_powerio._PioModule.from_json(text))
 
     @classmethod
     def from_file(
@@ -907,34 +1053,59 @@ class StoredModule:
         from_: Optional[str] = None,
         *,
         include_root: Optional[Any] = None,
-    ) -> "StoredModule":
+    ) -> "PioModule":
         """Parse a case file into a module of whichever family claims it.
 
         ``include_root`` widens the acquisition root for formats whose
         includes reference sibling files (OpenDSS redirects above all).
         """
         root = None if include_root is None else str(include_root)
-        return cls(_powerio._StoredModule.from_file(str(path), from_, root))
+        return cls(_powerio._PioModule.from_file(str(path), from_, root))
 
     @classmethod
-    def from_str(cls, text: str, from_: Optional[str] = None) -> "StoredModule":
+    def from_str(cls, text: str, from_: Optional[str] = None) -> "PioModule":
         """Parse in-memory case text into a module."""
-        return cls(_powerio._StoredModule.from_str(text, from_))
+        return cls(_powerio._PioModule.from_str(text, from_))
 
     @classmethod
-    def from_bytes(cls, data: bytes, from_: Optional[str] = None) -> "StoredModule":
+    def from_bytes(cls, data: bytes, from_: Optional[str] = None) -> "PioModule":
         """Parse in-memory case bytes into a module. The only in-memory way
         to read a binary format; text formats must be UTF-8."""
-        return cls(_powerio._StoredModule.from_bytes(data, from_))
+        return cls(_powerio._PioModule.from_bytes(data, from_))
+
+    @property
+    def value(self) -> Any:
+        """The typed value ``kind`` names, as the ordinary Python object for it.
+
+        ``balanced_network`` and ``multiconductor_network`` read back as the
+        network handle (:class:`BalancedNetwork` /
+        :class:`dist.MulticonductorNetwork`). Every other kind reads back as
+        a thin wrapper — :class:`TimeSeries`, :class:`ScenarioSet`, or one of
+        the calculation instance/solution classes (:class:`DcPfInstance`,
+        :class:`AcOpfSolution`, and so on) — holding this module; a kind this
+        release does not recognize reads back as :class:`UnknownValue`. This
+        is the ordinary way to read the value :func:`parse` narrowed to with
+        ``value_type``.
+        """
+        kind = self.kind
+        if kind == "balanced_network":
+            return self.as_balanced_network()
+        if kind == "multiconductor_network":
+            return self.as_multiconductor_network()
+        return _VALUE_CLASSES.get(kind, UnknownValue)(self, kind)
 
     def as_balanced_network(self) -> "BalancedNetwork":
         """The balanced network value as a network handle (cheap table
-        share). Raises when the module carries another kind."""
+        share). Raises when the module carries another kind. ``.value`` is
+        the ordinary spelling; call this directly only when the static
+        ``BalancedNetwork`` return type (rather than ``Any``) matters."""
         return BalancedNetwork(self._inner.as_balanced_network())
 
     def as_multiconductor_network(self) -> "dist.MulticonductorNetwork":
         """The multiconductor network value as a network handle. Raises when
-        the module carries another kind."""
+        the module carries another kind. ``.value`` is the ordinary
+        spelling; call this directly only when the static
+        ``MulticonductorNetwork`` return type (rather than ``Any``) matters."""
         return dist.MulticonductorNetwork(self._inner.as_multiconductor_network())
 
     def to_json(self) -> str:
@@ -950,9 +1121,10 @@ class StoredModule:
         """Value inspection and supported operation discovery."""
         return _json.loads(self._inner.inspect_json())
 
-    def diagnostics(self) -> Any:
-        """The module's diagnostics as a list of Python dicts."""
-        return _json.loads(self._inner.diagnostics_json())
+    def diagnostics(self) -> "list[_powerio.Diagnostic]":
+        """The module's diagnostics as native :class:`Diagnostic` objects, in
+        encounter order."""
+        return self._inner.diagnostics()
 
     def state_inventory(self) -> Any:
         """The typed time or scenario inventory."""
@@ -963,24 +1135,32 @@ class StoredModule:
         time_position: Optional[int] = None,
         scenario: Optional[str] = None,
     ) -> Any:
-        """Describe the selected existing typed item without materializing."""
+        """Describe the selected existing typed item without materializing.
+
+        ``time_position`` is zero based, the C convention: the first point in
+        the series or scenario set is position ``0``.
+        """
         return _json.loads(self._inner.select_json(time_position, scenario))
 
     def export_state(
         self,
         time_position: Optional[int] = None,
         scenario: Optional[str] = None,
-    ) -> "StoredModule":
-        """Export the selected item as an independent static module."""
-        return StoredModule(self._inner.export_selected(time_position, scenario))
+    ) -> "PioModule":
+        """Export the selected item as an independent static module.
+
+        ``time_position`` is zero based, the C convention: the first point in
+        the series or scenario set is position ``0``.
+        """
+        return PioModule(self._inner.export_selected(time_position, scenario))
 
     def to_balanced_inspect(self, base_mva: float = 100.0) -> Any:
         """Readiness of the multiconductor value for the balanced lowering."""
         return _json.loads(self._inner.lowering_readiness_json(base_mva))
 
-    def to_balanced(self, base_mva: float = 100.0) -> "StoredModule":
+    def to_balanced(self, base_mva: float = 100.0) -> "PioModule":
         """Lower the multiconductor value to a balanced module."""
-        return StoredModule(self._inner.lower_to_balanced(base_mva))
+        return PioModule(self._inner.lower_to_balanced(base_mva))
 
     def __repr__(self) -> str:
         return repr(self._inner)
@@ -992,34 +1172,46 @@ def parse(
     *,
     include_root: Optional[Any] = None,
     value_type: Optional[type] = None,
-) -> Any:
-    """Parse one source into a stored module of whichever family claims it.
+) -> "PioModule":
+    """Parse one source into a module of whichever family claims it.
 
     ``source`` is a filesystem path (``str`` or path-like) or in-memory
     ``bytes`` (the only way to read a binary format without a file). The
-    result is a :class:`StoredModule` carrying the source's typed value;
-    ``module.kind`` names it, and a calculation defining source produces
-    that calculation rather than a bare network.
+    result is always a :class:`PioModule` carrying the source's typed value;
+    ``module.kind`` names it, and ``module.value`` reads the typed value
+    (a calculation defining source produces that calculation rather than a
+    bare network).
 
-    ``value_type`` narrows in one call: pass :class:`BalancedNetwork` or
-    :class:`dist.MulticonductorNetwork` to get that handle directly, raising
-    when the parsed value is another kind. ``include_root`` widens the
-    acquisition root for formats whose includes reference sibling files.
+    ``value_type`` is an optional assertion, not a different return: pass
+    :class:`BalancedNetwork` or :class:`dist.MulticonductorNetwork` to assert
+    the parsed value's kind, raising :class:`ValueError` naming both the
+    detected and the requested kind on a mismatch. Either way — assertion
+    passed, or ``value_type`` left at its default ``None`` — the call returns
+    the :class:`PioModule`; read `.value` to get the typed value.
+    ``include_root`` widens the acquisition root for formats whose includes
+    reference sibling files.
     """
     if isinstance(source, (bytes, bytearray, memoryview)):
-        module = StoredModule.from_bytes(bytes(source), from_)
+        module = PioModule.from_bytes(bytes(source), from_)
     else:
-        module = StoredModule.from_file(source, from_, include_root=include_root)
-    if value_type is None or value_type is StoredModule:
+        module = PioModule.from_file(source, from_, include_root=include_root)
+    if value_type is None or value_type is PioModule:
         return module
     if value_type is BalancedNetwork:
-        return module.as_balanced_network()
-    if value_type is dist.MulticonductorNetwork:
-        return module.as_multiconductor_network()
-    raise TypeError(
-        "value_type must be powerio.StoredModule, powerio.BalancedNetwork, or "
-        "powerio.dist.MulticonductorNetwork"
-    )
+        expected = "balanced_network"
+    elif value_type is dist.MulticonductorNetwork:
+        expected = "multiconductor_network"
+    else:
+        raise TypeError(
+            "value_type must be powerio.PioModule, powerio.BalancedNetwork, or "
+            "powerio.dist.MulticonductorNetwork"
+        )
+    if module.kind != expected:
+        raise ValueError(
+            f"parsed value has kind {module.kind!r}; value_type="
+            f"{value_type.__name__} asserts {expected!r}"
+        )
+    return module
 
 
 

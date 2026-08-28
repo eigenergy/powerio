@@ -1,27 +1,10 @@
 # powerio-prob
 
-A problem instance is the complete numerical input for one problem family. It
-contains indexed coefficients, bounds, mappings, units, and conventions. It is
-separate from the source network, matrix projections, solver formulations, and
-solutions.
+Operating points, the seven calculation instances, and the seven solutions, over the two network families. A calculation instance is the complete input for one named calculation and contains or shares its network; a solution is one calculation's result and shares the instance it solves. DOE GO Challenge 3 parsing (`AcScucInstance`), DeepMind OPFData parsing (`AcOpfSolution`), and BMOPF instance assembly (`McAcOpfInstance`) live here.
 
-`powerio-prob`, short for problem instance builders, assembles these instances
-from PowerIO models.
+The crate stays matrix free: sparse operators over these instances belong to `powerio-matrix`, and the ordinary way in is the `powerio` facade's one parse.
 
-The default build has no sparse matrix dependency. It provides index based
-`DcOpfInstance` and `AcOpfInstance` data whose bus, generator, and branch
-arrays can be consumed directly by an operations research model, and a matrix
-free `ScopfInstance` for GOC3 data. Relaxations of AC OPF, the SOC forms
-included, consume the same `AcOpfInstance`. Enable the `matrix` feature to
-derive sparse DC OPF operators from a `DcOpfInstance`.
-
-```rust
-use powerio::{IndexedNetwork, parse_matpower_file};
-use powerio_prob::{DcOpfOptions, build_dc_opf_instance};
-
-let net = parse_matpower_file("case14.m")?;
-let view = IndexedNetwork::new(&net);
-let problem = build_dc_opf_instance(&view, &DcOpfOptions::default())?;
-assert_eq!(problem.n_buses, view.n());
-# Ok::<(), powerio::Error>(())
+```rust,ignore
+let module = powerio::parse(powerio_core::Source::open("scenario_002.json")?)?;
+assert_eq!(module.value().kind().as_str(), "ac_scuc_instance");
 ```

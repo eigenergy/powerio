@@ -1,12 +1,12 @@
 # Matrix outputs and conventions
 
-`powerio-matrix` builds sparse matrices and graph views from a parsed `BalancedNetwork`.
-Builders take an `IndexedNetwork`, which maps source bus IDs to dense indices in
-\\([0,n)\\).
+`powerio-matrix` builds sparse matrices and graph data from the parsed
+networks. Every numerical result carries the element mappings needed to read
+its rows and columns: source bus identifiers are not dense indices, and the
+dense `[0, n)` space exists only inside results that state their own mapping.
 
-`powerio-prob` builds problem instances (matrix free DC OPF and AC OPF input
-data plus the GOC3 SCOPF instance) and its `matrix` feature projects those
-instances into sparse operators. The DC OPF bundle schema is in
+`powerio-prob` owns the calculation instances (matrix free by design), and
+the matrix crate projects them into sparse operators. The DC OPF bundle schema is in
 [the DC OPF bundle guide](https://eigenergy.github.io/powerio/guide/dcopf-bundle.html). Per-builder API detail is in the
 [crate docs](https://eigenergy.github.io/powerio/powerio_matrix/).
 
