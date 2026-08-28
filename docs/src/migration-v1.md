@@ -1,6 +1,8 @@
-# Migrating to 1.0
+# Migrating from 0.9
 
-PowerIO 1.0 makes `PioModule<PioValue>` the one runtime unit and `.pio.json`
+PowerIO 0.10 is the public beta of the 1.0 API. API corrections may land before 1.0.0 as downstream integrations exercise the new design.
+
+0.10 makes `PioModule` the one runtime unit and `.pio.json`
 version 1 its stored form. Everything a released 0.9 package carried either
 upgrades one way on read or is refused with a directed instruction.
 
@@ -24,7 +26,7 @@ upgrades one way on read or is refused with a directed instruction.
   series, legacy element paths translate into the value's own pointer
   grammar, and the upgrade is recorded as history plus a
   `READ.MODULE.UPGRADED` diagnostic. A nonempty legacy `study` is refused
-  with the materialize instruction (`powerio package --materialize` in 0.9).
+  with the materialize instruction (`powerio package --materialize` in a 0.9 install).
   The pre 0.9 lineage is refused and must be regenerated.
 
 ## Typed state selection
@@ -56,18 +58,34 @@ own codes, and nothing ever invents an epsilon impedance.
   replaces `parse_file`, `parse_str`, `parse_bytes`, and
   `read_pypsa_csv_folder` (`include_root`, omitted by default, widens the
   include acquisition boundary from the file's containing directory to the
-  named ancestor, widening what the parse may read); `powerio.StoredModule` replaces the `Package`
-  class; `parse_scopf`, `to_dense`, the `Dense*` rows, and the 0.8 renamed
-  alias hooks are gone.
-- C: `pio_package_*`, `pio_scopf_*`, and the 0.9 solver row Arrow tables
-  (ids 6 to 14, 21, 22) are gone; the ids stay burned. The module surface
-  and `pio_dc_data_*` replace them.
-- CLI: `powerio package` writes the stored module (`--scenario` exports one
+  named ancestor, widening what the parse may read). `powerio.PioModule`
+  replaces the `Package` class, `value_type` asserts the kind without
+  changing the returned module, and `module.value` reads the typed value.
+  `parse_scopf`, `to_dense` solver rows, the `Dense*` rows, and the 0.8
+  renamed alias hooks are gone.
+- C: the whole 0.9 surface is replaced, not extended. `pio_package_*`,
+  `pio_scopf_*`, the network returning parse family with caller error
+  buffers, the separate distribution parse pair, and the solver row Arrow
+  tables (ids 6 to 14, 21, 22; the ids stay burned) are gone. One parse
+  family returns module handles, typed accessors return network handles,
+  and every failure is a structured `PioError`. The complete classified
+  delta and porting table: [ABI history](abi-v6.md).
+- CLI: `powerio module` writes the stored module (`--scenario` exports one
   scenario of a set), and every single case command reads a stored
   `.pio.json` directly.
 
+## Julia
+
+`parse_file(path)` is the ordinary call after `using PowerIO` and returns
+`PioModule{T}` for the detected kind; `parse_bytes` covers memory and
+stream input. The `value_type` keyword, the type marker parse forms, the
+public `StoredModule`, and the `read_module`/`parse_module` family are
+gone: read the typed value from `case.value`, assert a kind with an
+ordinary `::PioModule{MulticonductorNetwork}` annotation, and read
+findings as native `Diagnostic` records from `diagnostics(case)`.
+
 ## The C ABI
 
-ABI v6: owned handles with `retain`/`release`, structured `PioError`
-handles, the stored module surface, and the DC branch data. See
-[Migrating to ABI 6](abi-v6.md).
+ABI 6: owned handles with `retain`/`release`, structured `PioError`
+handles, one module surface, structured diagnostics, and the DC branch
+data. See [ABI history and symbol replacement](abi-v6.md).
