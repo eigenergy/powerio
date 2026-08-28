@@ -482,7 +482,7 @@ fn null_handle(what: &str) -> String {
 ///
 /// - `transmission:<format>` (e.g. `transmission:powermodels-json`)
 /// - `distribution:<format>` (e.g. `distribution:pmd-json`)
-/// - `module` (a `.pio.json` stored module; read it with [`pio_parse_str`])
+/// - `module` (a `.pio.json` stored module; read it with [`pio_parse_str`](v6::pio_parse_str))
 /// - `model-json` (bare balanced model JSON; read it with [`pio_balanced_network_from_json`])
 /// - `ambiguous` (strong markers from both domains; pass an explicit format)
 /// - `unknown` (no recognized marker, or not a JSON object)
@@ -1094,7 +1094,7 @@ unsafe fn write_options_from_c(opts: *const PioWriteOptions) -> Result<WriteOpti
 }
 
 /// Convert the case file at `path` from format `from` (NULL to infer from the
-/// path, as [`pio_parse_file`]) to format `to`, without keeping a handle.
+/// path, as [`pio_parse_file`](v6::pio_parse_file)) to format `to`, without keeping a handle.
 /// `opts` carries the write-time cost policies (NULL for every default); see
 /// [`PioWriteOptions`].
 /// Returns the converted text as an owned C string (free with
@@ -1860,8 +1860,9 @@ pub unsafe extern "C" fn pio_multiconductor_network_summary_json(
 /// Serialize `net` to its model JSON: the network serialization the stored
 /// carries under `model.multiconductor_network`, without the surrounding
 /// document. This is the bindings' data transport, not a case format: the
-/// converter, CLI, and format inference do not know it; distribution cases
-/// exchanged with other tools are BMOPF JSON ([`pio_dist_to_format`]).
+/// converter, CLI, and format inference do not know it; a distribution case
+/// other tools read is BMOPF JSON, written through
+/// [`pio_module_write_str`](v6::pio_module_write_str).
 /// Returns an owned C string (free with [`pio_string_release`]), `NULL` on error.
 #[cfg(feature = "dist")]
 #[unsafe(no_mangle)]
