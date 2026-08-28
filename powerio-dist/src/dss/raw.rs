@@ -280,19 +280,10 @@ impl RawDss {
     /// terminal refusal is recorded and the parse halts.
     fn record(&mut self, diagnostic: crate::diagnostics::Diagnostic) {
         if self.total_diagnostics >= MAX_TOTAL_DIAGNOSTICS {
-            if !self.halted {
-                self.halted = true;
-                let refusal = crate::diagnostics::Diagnostic::of(
-                    &crate::diagnostics::codes::READ_DSS_INCLUDE_BUDGET,
-                    format!(
-                        "the script's retained findings reached the whole parse ceiling of \
-                         {MAX_TOTAL_DIAGNOSTICS}; execution stopped"
-                    ),
-                );
-                self.warnings
-                    .push(crate::diagnostics::render_diagnostic(&refusal));
-                self.diagnostics.push(refusal);
-            }
+            self.halt(format!(
+                "the script's retained findings reached the whole parse ceiling of \
+                 {MAX_TOTAL_DIAGNOSTICS}; execution stopped"
+            ));
             return;
         }
         self.total_diagnostics += 1;
@@ -301,21 +292,32 @@ impl RawDss {
         self.diagnostics.push(diagnostic);
     }
 
+    /// The one halt step: set the flag and emit the single terminal refusal
+    /// into both channels directly, indivisibly, whichever ceiling fired
+    /// first and whatever the other counter holds.
+    fn halt(&mut self, message: String) {
+        if self.halted {
+            return;
+        }
+        self.halted = true;
+        let refusal = crate::diagnostics::Diagnostic::of(
+            &crate::diagnostics::codes::READ_DSS_INCLUDE_BUDGET,
+            message,
+        );
+        self.warnings
+            .push(crate::diagnostics::render_diagnostic(&refusal));
+        self.diagnostics.push(refusal);
+    }
+
     /// Charge one preserved record (`commands`, `options`, `buscoords`);
     /// false once the ceiling is crossed, after which the terminal refusal
     /// is recorded and the parse halts.
     fn charge_preserved(&mut self) -> bool {
         if self.total_preserved >= MAX_TOTAL_PRESERVED {
-            if !self.halted {
-                self.halted = true;
-                self.record(crate::diagnostics::Diagnostic::of(
-                    &crate::diagnostics::codes::READ_DSS_INCLUDE_BUDGET,
-                    format!(
-                        "the script's preserved records reached the whole parse ceiling of \
-                         {MAX_TOTAL_PRESERVED}; execution stopped"
-                    ),
-                ));
-            }
+            self.halt(format!(
+                "the script's preserved records reached the whole parse ceiling of \
+                 {MAX_TOTAL_PRESERVED}; execution stopped"
+            ));
             return false;
         }
         self.total_preserved += 1;
@@ -1619,6 +1621,77 @@ mod tests {
             .filter(|w| w.contains("whole parse ceiling"))
             .count();
         assert_eq!(refusals, 1, "exactly one terminal refusal: {refusals}");
+    }
+
+    #[test]
+    fn crossing_both_ceilings_in_either_order_leaves_one_refusal() {
+        // Whichever ceiling fires first, the halt is one indivisible step:
+        // exactly one READ.DSS.INCLUDE_BUDGET record lands in both channels
+        // and the other ceiling's later crossing adds nothing.
+        let count = |raw: &RawDss| {
+            (
+                raw.warnings
+                    .iter()
+                    .filter(|w| w.contains("READ.DSS.INCLUDE_BUDGET"))
+                    .count(),
+                raw.diagnostics
+                    .iter()
+                    .filter(|d| d.code() == "READ.DSS.INCLUDE_BUDGET")
+                    .count(),
+            )
+        };
+        // Findings first: unknown commands warn AND preserve, so a warning
+        // heavy prefix crosses the diagnostic ceiling, then preserved lines
+        // keep arriving.
+        struct Warny;
+        impl Loader for Warny {
+            fn load(&mut self, _: &Path) -> std::io::Result<String> {
+                let mut text = String::new();
+                for _ in 0..8192 {
+                    text.push_str("Bogus命令 arg\n");
+                }
+                for _ in 0..8192 {
+                    text.push_str("Solve\n");
+                }
+                Ok(text)
+            }
+        }
+        let mut script = String::new();
+        {
+            use std::fmt::Write as _;
+            for index in 0..64 {
+                let _ = writeln!(script, "Redirect winc{index}.dss");
+            }
+        }
+        let raw = parse_raw_with(&script, "test.dss", &mut Warny);
+        assert!(raw.commands.len() <= MAX_TOTAL_PRESERVED);
+        assert!(raw.diagnostics.len() <= MAX_TOTAL_DIAGNOSTICS + 1);
+        assert_eq!(count(&raw), (1, 1), "findings-first order");
+
+        // Preserved first: quiet preserved lines cross that ceiling, then
+        // warning lines keep arriving.
+        struct Quiet;
+        impl Loader for Quiet {
+            fn load(&mut self, _: &Path) -> std::io::Result<String> {
+                let mut text = String::new();
+                for _ in 0..16384 {
+                    text.push_str("Solve\n");
+                }
+                text.push_str("Bogus命令 arg\n");
+                Ok(text)
+            }
+        }
+        let mut script = String::new();
+        {
+            use std::fmt::Write as _;
+            for index in 0..80 {
+                let _ = writeln!(script, "Redirect qinc{index}.dss");
+            }
+        }
+        let raw = parse_raw_with(&script, "test.dss", &mut Quiet);
+        assert!(raw.commands.len() <= MAX_TOTAL_PRESERVED);
+        assert!(raw.diagnostics.len() <= MAX_TOTAL_DIAGNOSTICS + 1);
+        assert_eq!(count(&raw), (1, 1), "preserved-first order");
     }
 
     #[test]
