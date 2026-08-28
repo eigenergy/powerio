@@ -57,9 +57,11 @@ _PYPSA_FORMATS = frozenset({"pypsa", "pypsa-csv"})
 # than the C ABI, so an input alias costs nothing and spares a client.
 _MODEL_JSON_FORMATS = frozenset({"model-json", "powerio", "powerio-json", "json"})
 _BMOPF_JSON_FORMATS = frozenset({"bmopf", "bmopf-json", "bmopf_json"})
-_PACKAGE_JSON_FORMATS = frozenset(
-    {"package", "pio", "pio-json", "pio_json", "pio-package", "pio_package"}
-)
+# The stored `.pio.json` transport: a version 1 module, or a released 0.9
+# package (the stored reader upgrades the latter on read). Named apart from
+# `_MODEL_JSON_FORMATS` above, which is the balanced network case JSON
+# transport, an unrelated concept one letter away in spelling.
+_STORED_FORMATS = frozenset({"module", "pio", "pio-json", "pio_json"})
 _VERSION_KEY = "powerio_version"
 
 _MATRIX_KIND_ALIASES = {
@@ -93,7 +95,7 @@ _MATRIX_HELP = (
 _JsonFormatArg: TypeAlias = Optional[
     Annotated[
         str,
-        Field(json_schema_extra={"enum": ["package", "model-json", "bmopf-json"]}),
+        Field(json_schema_extra={"enum": ["module", "model-json", "bmopf-json"]}),
     ]
 ]
 # A FieldInfo constant rather than an `Annotated[str, ...]` alias: stubtest
@@ -129,14 +131,51 @@ def _warning_lines(findings) -> list:
     return lines
 
 
+def _diagnostic_record(finding: "powerio.Diagnostic") -> Dict[str, Any]:
+    """One native diagnostic as a JSON safe record: the three required
+    fields, plus every optional field the finding actually carries. Absent
+    optional fields are omitted rather than written as null."""
+    record: Dict[str, Any] = {
+        "code": finding.code,
+        "severity": finding.severity,
+        "message": finding.message,
+    }
+    if finding.target is not None:
+        record["target"] = finding.target
+    if finding.id is not None:
+        record["id"] = finding.id
+    if finding.suggested_action is not None:
+        record["suggested_action"] = finding.suggested_action
+    if finding.related:
+        record["related"] = list(finding.related)
+    if finding.spans:
+        record["spans"] = [
+            {"source": span.source, "byte_start": span.byte_start, "byte_end": span.byte_end}
+            for span in finding.spans
+        ]
+    if finding.details:
+        record["details"] = dict(finding.details)
+    return record
+
+
+def _diagnostic_records(findings) -> "list[Dict[str, Any]]":
+    """Native diagnostics (e.g. `Conversion.warnings`, `PioModule.diagnostics()`)
+    as JSON safe records, for a payload field that used to hold `_warning_lines`
+    text."""
+    return [_diagnostic_record(finding) for finding in findings]
+
+
 @dataclass
 class _Loaded:
     domain: str
     network: Any
-    warnings: list[str]
+    # A parse-time warning is text the Rust reader already rendered, with no
+    # structure left to recover; a module load's warnings are `_diagnostic_record`
+    # dicts. The field carries either, depending on how it was loaded.
+    warnings: "list[Any]"
     json_format: str
     scenario: Optional[int] = None
-    package_json: Optional[str] = None
+    module_json: Optional[str] = None
 
 
 def _fmt(value: Optional[str]) -> Optional[str]:
@@ -177,11 +216,11 @@ def _one_network_input(
     path: Optional[str],
     content: Optional[str],
     transport: Optional[str],
-    package_json: Optional[str],
+    module_json: Optional[str],
 ) -> None:
-    if sum(v is not None for v in (path, content, transport, package_json)) != 1:
+    if sum(v is not None for v in (path, content, transport, module_json)) != 1:
         raise ValueError(
-            "provide exactly one of `path`, `content`, `json`, or `package_json`"
+            "provide exactly one of `path`, `content`, `json`, or `module_json`"
         )
 
 
@@ -252,7 +291,7 @@ def _package_value(text: str) -> Optional[Dict[str, Any]]:
     return value
 
 
-def _looks_like_package_json(text: str) -> bool:
+def _looks_like_stored_json(text: str) -> bool:
     """Both stored generations: the version 1 module and the legacy 0.9 package."""
     return _module_header(text) or _package_value(text) is not None
 
@@ -291,10 +330,10 @@ def _format_from_json_class(
     where = f" in {path}" if path is not None else ""
     if status == "known" and domain is not None and format is not None:
         return domain, format
-    if status == "package":
+    if status == "module":
         raise ValueError(
-            f"JSON{where} is a .pio.json package; pass it as "
-            "`json_format=\"package\"` or read it with the package tools"
+            f"JSON{where} is a stored .pio.json module; pass it as "
+            "`json_format=\"module\"` or read it with the module tools"
         )
     if status == "model-json":
         return "transmission", "model-json"
@@ -308,18 +347,18 @@ def _format_from_json_class(
 
 
 def _transport_kind(text: str, json_format: Optional[str]) -> str:
-    if _looks_like_package_json(text):
-        return "package"
+    if _looks_like_stored_json(text):
+        return "module"
     fmt = _fmt(json_format)
-    if fmt in _PACKAGE_JSON_FORMATS:
-        return "package"
+    if fmt in _STORED_FORMATS:
+        return "module"
     if fmt in _MODEL_JSON_FORMATS:
         return "model-json"
     if fmt in _BMOPF_JSON_FORMATS:
         return "bmopf-json"
     if fmt is not None:
         raise ValueError(
-            "`json_format` must be `package`, `model-json`, or `bmopf-json`, "
+            "`json_format` must be `module`, `model-json`, or `bmopf-json`, "
             f"got {json_format!r}"
         )
     domain, format = _format_from_json_class(*_json_class(text))
@@ -391,21 +430,51 @@ def _package_diagnostic_messages(value: Dict[str, Any]) -> list[str]:
     return _diagnostic_messages(value.get("diagnostics", []), _PACKAGE_WARNING_SEVERITIES)
 
 
-def _module_diagnostic_messages(module: "powerio.PioModule") -> list[str]:
-    """Format a module's native diagnostics as `code: message` lines, kept to
-    warning and error severity. `module.diagnostics()` returns
-    `_powerio.Diagnostic` objects, not the dicts `_diagnostic_messages` reads,
-    since code and message are never absent on a native diagnostic."""
+def _module_diagnostic_records(module: "powerio.PioModule") -> "list[Dict[str, Any]]":
+    """A module's native diagnostics as records, kept to warning and error
+    severity. `module.diagnostics()` returns `_powerio.Diagnostic` objects,
+    not the dicts `_diagnostic_messages` reads, since code and message are
+    never absent on a native diagnostic."""
     return [
-        f"{d.code}: {d.message}"
+        _diagnostic_record(d)
         for d in module.diagnostics()
         if d.severity in _MODULE_WARNING_SEVERITIES
     ]
 
 
-def _diagnostics_payload(package_json: str, verbose: bool = False) -> Dict[str, Any]:
-    value = _json_object(package_json, purpose="package_json")
-    if _module_header(package_json):
+def _v1_diagnostic_record(item: Dict[str, Any]) -> Dict[str, Any]:
+    """One stored version 1 `DiagnosticV1` row narrowed to the record shape:
+    the three required fields, plus every optional field the row carries."""
+    record = {
+        "code": item.get("code"),
+        "severity": item.get("severity"),
+        "message": item.get("message"),
+    }
+    for key in ("target", "id", "suggested_action", "related", "spans", "details"):
+        if key in item:
+            record[key] = item[key]
+    return record
+
+
+def _legacy_diagnostic_record(item: Dict[str, Any]) -> Dict[str, Any]:
+    """One legacy 0.9 `StructuredDiagnostic` row narrowed to the same record
+    shape a version 1 module uses: `element_path` becomes `target`, and the
+    legacy-only `stage`, `source_ref`, `details`, and `suggested_action`
+    fields do not carry over."""
+    record = {
+        "code": item.get("code"),
+        "severity": item.get("severity"),
+        "message": item.get("message"),
+    }
+    if "element_path" in item:
+        record["target"] = item["element_path"]
+    return record
+
+
+def _diagnostics_payload(module_json: str, verbose: bool = False) -> Dict[str, Any]:
+    value = _json_object(module_json, purpose="module_json")
+    is_v1 = _module_header(module_json)
+    if is_v1:
         raw_value = value.get("value")
         payload_kind = raw_value.get("kind") if isinstance(raw_value, dict) else None
         if not isinstance(payload_kind, str):
@@ -414,25 +483,29 @@ def _diagnostics_payload(package_json: str, verbose: bool = False) -> Dict[str, 
             "balanced_network": "balanced",
             "multiconductor_network": "multiconductor",
         }.get(payload_kind, payload_kind)
-    elif _package_value(package_json) is not None:
+    elif _package_value(module_json) is not None:
         kind = _package_model_kind(value)
     else:
-        raise ValueError("package_json is not a stored .pio.json document")
+        raise ValueError("module_json is not a stored .pio.json document")
     # Validate with the stored reader (which upgrades a released 0.9
     # package) so schema version and consistency checks stay in one place.
-    powerio.PioModule.from_json(package_json)
+    powerio.PioModule.from_json(module_json)
     raw = value.get("diagnostics", [])
-    diagnostics = [item for item in raw if isinstance(item, dict)]
-    if not verbose:
-        keep = {"code", "severity", "stage", "message", "element_path", "target"}
-        diagnostics = [{k: v for k, v in item.items() if k in keep} for item in diagnostics]
+    rows = [item for item in raw if isinstance(item, dict)]
+    if verbose:
+        # The stored rows exactly as written, whichever generation they came from.
+        diagnostics = rows
+    elif is_v1:
+        diagnostics = [_v1_diagnostic_record(item) for item in rows]
+    else:
+        diagnostics = [_legacy_diagnostic_record(item) for item in rows]
     raw_validation = value.get("validation")
     validation = raw_validation if isinstance(raw_validation, dict) else {}
     raw_counts = validation.get("counts")
     counts = (
         dict(raw_counts)
         if isinstance(raw_counts, dict)
-        else _severity_counts(diagnostics)
+        else _severity_counts(rows)
     )
     status = validation.get("status") or (
         "fatal"
@@ -485,7 +558,7 @@ def _load_module(module_json: str) -> _Loaded:
     except ValueError as exc:
         raise _coded_error("module input", exc) from exc
     kind = module.kind
-    warnings = _module_diagnostic_messages(module)
+    warnings = _module_diagnostic_records(module)
     if kind == "balanced_network":
         return _Loaded(
             domain="transmission",
@@ -592,7 +665,7 @@ def _parse_any(
         # force. Unconfined, the case directory default stands.
         root = sandbox.admitting_root(Path(path))
         include_root = str(root) if root is not None else None
-    if _fmt(format) in _PACKAGE_JSON_FORMATS:
+    if _fmt(format) in _STORED_FORMATS:
         if path is not None:
             try:
                 text = Path(path).read_text(encoding="utf-8")
@@ -616,7 +689,7 @@ def _parse_any(
                 text = Path(path).read_text(encoding="utf-8")
             except OSError as exc:
                 raise ValueError(f"cannot read input: {exc}") from exc
-            if _looks_like_package_json(text):
+            if _looks_like_stored_json(text):
                 return _load_module(text)
             domain, inferred = _format_from_json_class(*_json_path_class(path), path=path)
             if domain == "distribution":
@@ -625,7 +698,7 @@ def _parse_any(
     else:
         text = _required(content, "content")
         if format is None and _jsonish(text):
-            if _looks_like_package_json(text):
+            if _looks_like_stored_json(text):
                 return _load_module(text)
             domain, inferred = _format_from_json_class(*_json_class(text))
             if domain == "distribution":
@@ -636,7 +709,7 @@ def _parse_any(
 
 def _load_transport(text: str, json_format: Optional[str]) -> _Loaded:
     kind = _transport_kind(text, json_format)
-    if kind == "package":
+    if kind == "module":
         return _load_module(text)
     if kind in _BMOPF_JSON_FORMATS or kind in {"pmd-json", "pmd_json", "pmd", "engineering"}:
         return _parse_distribution(None, text, kind)
@@ -653,7 +726,7 @@ def _load_any(
     path: Optional[str],
     content: Optional[str],
     transport: Optional[str],
-    package_json: Optional[str],
+    module_json: Optional[str],
     format: Optional[str],
     json_format: Optional[str],
     options: Optional[Dict[str, Any]] = None,
@@ -661,12 +734,12 @@ def _load_any(
     # The tools spell an unset text argument as "" (a bare `str` annotation
     # keeps the SDK from re-parsing JSON text before validation); empty
     # transport text is invalid anyway, so "" means absent here.
-    content, transport, package_json = content or None, transport or None, package_json or None
-    _one_network_input(path, content, transport, package_json)
-    if package_json is not None:
+    content, transport, module_json = content or None, transport or None, module_json or None
+    _one_network_input(path, content, transport, module_json)
+    if module_json is not None:
         # The stored reader upgrades a released 0.9 package one way, so both
         # document generations load through the module path.
-        return _load_module(package_json)
+        return _load_module(module_json)
     if transport is not None:
         return _load_transport(transport, json_format)
     return _parse_any(path, content, format, options)
@@ -736,13 +809,18 @@ def _summary(loaded: _Loaded) -> Dict[str, Any]:
         summary = _distribution_summary(loaded.network)
     else:
         summary = _transmission_summary(loaded.network)
-    summary["warnings"] = _warning_lines(loaded.warnings)
+    # `loaded.warnings` is already in its final form (rendered parse-time
+    # text, or `_diagnostic_record` dicts from a module load); no further
+    # rendering.
+    summary["warnings"] = list(loaded.warnings)
     return summary
 
 
-def _dist_json(net: "dist.MulticonductorNetwork") -> tuple[str, list[str]]:
+def _dist_json(net: "dist.MulticonductorNetwork") -> "tuple[str, list[Any]]":
     conv = net.to_format("bmopf-json")
-    return conv.text, _warning_lines(net.warnings) + _warning_lines(conv.warnings)
+    # `net.warnings` is parse-time text with no structure to recover;
+    # `conv.warnings` is native diagnostics from the writer.
+    return conv.text, list(net.warnings) + _diagnostic_records(conv.warnings)
 
 
 def _write_text(
@@ -829,7 +907,7 @@ def _convert_impl(
     path: Optional[str] = None,
     content: Optional[str] = None,
     json: Optional[str] = None,
-    package_json: Optional[str] = None,
+    module_json: Optional[str] = None,
     from_format: Optional[str] = None,
     json_format: Optional[str] = None,
     options: Optional[Dict[str, Any]] = None,
@@ -842,7 +920,7 @@ def _convert_impl(
     if _is_gridfm_format(to_l):
         raise ValueError("`gridfm` writes a dataset; use save(to_format='gridfm')")
     loaded = _load_any(
-        path, content, json, package_json, from_format, json_format, options
+        path, content, json, module_json, from_format, json_format, options
     )
     try:
         if _is_dist_format(to_l):
@@ -851,14 +929,14 @@ def _convert_impl(
                     "no conversion path between transmission and distribution formats"
                 )
             conv = loaded.network.to_format(to_format)
-            warnings = list(loaded.warnings) + _warning_lines(conv.warnings)
+            warnings = list(loaded.warnings) + _diagnostic_records(conv.warnings)
         else:
             if loaded.domain != "transmission":
                 raise ValueError(
                     "no conversion path between distribution and transmission formats"
                 )
             conv = loaded.network.to_format(to_format)
-            warnings = list(loaded.warnings) + _warning_lines(conv.warnings)
+            warnings = list(loaded.warnings) + _diagnostic_records(conv.warnings)
     except powerio.PowerIOError as exc:
         raise _coded_error("conversion failed", exc) from exc
     return {"text": conv.text, "warnings": warnings}
@@ -869,7 +947,7 @@ def _save_impl(
     path: Optional[str] = None,
     content: Optional[str] = None,
     json: Optional[str] = None,
-    package_json: Optional[str] = None,
+    module_json: Optional[str] = None,
     to_format: Optional[str] = None,
     from_format: Optional[str] = None,
     json_format: Optional[str] = None,
@@ -880,7 +958,7 @@ def _save_impl(
     out_path = _local_path(out_path, purpose="out_path", for_write=True)
     target = to_format or _infer_to_format_from_out_path(out_path)
     loaded = _load_any(
-        path, content, json, package_json, from_format, json_format, options
+        path, content, json, module_json, from_format, json_format, options
     )
     to_l = _fmt(target)
 
@@ -934,7 +1012,8 @@ def _save_impl(
             conv = loaded.network.to_format(target)
         except powerio.PowerIOError as exc:
             raise _coded_error("conversion failed", exc) from exc
-        return _write_text(out_path, conv.text, loaded.warnings + list(conv.warnings), overwrite)
+        warnings = loaded.warnings + _diagnostic_records(conv.warnings)
+        return _write_text(out_path, conv.text, warnings, overwrite)
 
     if loaded.domain != "transmission":
         raise ValueError("target is a transmission format but source is distribution")
@@ -942,20 +1021,21 @@ def _save_impl(
         conv = loaded.network.to_format(target)
     except powerio.PowerIOError as exc:
         raise _coded_error("conversion failed", exc) from exc
-    return _write_text(out_path, conv.text, loaded.warnings + list(conv.warnings), overwrite)
+    warnings = loaded.warnings + _diagnostic_records(conv.warnings)
+    return _write_text(out_path, conv.text, warnings, overwrite)
 
 
 def _summary_impl(
     path: Optional[str] = None,
     content: Optional[str] = None,
     json: Optional[str] = None,
-    package_json: Optional[str] = None,
+    module_json: Optional[str] = None,
     from_format: Optional[str] = None,
     json_format: Optional[str] = None,
     options: Optional[Dict[str, Any]] = None,
 ) -> dict:
     return _summary(
-        _load_any(path, content, json, package_json, from_format, json_format, options)
+        _load_any(path, content, json, module_json, from_format, json_format, options)
     )
 
 
@@ -969,27 +1049,27 @@ def _parse_impl(
     # "" means absent, as in `_load_any`.
     content = content or None
     transport_l = _fmt(transport or "json")
-    if transport_l in _PACKAGE_JSON_FORMATS:
+    if transport_l in _STORED_FORMATS:
         module = _stored_module(path=path, content=content, from_format=from_format)
-        package_json = module.to_json()
-        loaded = _load_module(package_json)
+        module_json = module.to_json()
+        loaded = _load_module(module_json)
         summary = _summary(loaded)
-        diag = _diagnostics_payload(package_json, verbose=True)
+        diag = _diagnostics_payload(module_json, verbose=True)
         return {
             **_header("powerio.parse"),
-            "transport": "package",
+            "transport": "module",
             "domain": loaded.domain,
             "model": summary["model"],
             "source_format": summary["source_format"],
-            "json_format": "package",
-            "package_json": package_json,
+            "json_format": "module",
+            "module_json": module_json,
             "summary": summary,
             "diagnostics": diag["diagnostics"],
             "diagnostics_summary": diag["summary"],
             "warnings": loaded.warnings,
         }
     if transport_l not in {"json", "legacy"}:
-        raise ValueError("`transport` must be `json` or `package`")
+        raise ValueError("`transport` must be `json` or `module`")
     loaded = _parse_any(path, content, from_format, options)
     if loaded.domain == "distribution":
         text, warnings = _dist_json(loaded.network)
@@ -1012,13 +1092,13 @@ def _normalize_impl(
     path: Optional[str] = None,
     content: Optional[str] = None,
     json: Optional[str] = None,
-    package_json: Optional[str] = None,
+    module_json: Optional[str] = None,
     from_format: Optional[str] = None,
     json_format: Optional[str] = None,
     options: Optional[Dict[str, Any]] = None,
 ) -> dict:
     loaded = _load_any(
-        path, content, json, package_json, from_format, json_format, options
+        path, content, json, module_json, from_format, json_format, options
     )
     if loaded.domain != "transmission":
         raise ValueError("normalization is not defined for distribution networks")
@@ -1045,7 +1125,7 @@ def _matrix_impl(
     path: Optional[str] = None,
     content: Optional[str] = None,
     json: Optional[str] = None,
-    package_json: Optional[str] = None,
+    module_json: Optional[str] = None,
     from_format: Optional[str] = None,
     json_format: Optional[str] = None,
     options: Optional[Dict[str, Any]] = None,
@@ -1056,7 +1136,7 @@ def _matrix_impl(
     if canonical is None:
         raise ValueError(f"unknown matrix kind {kind!r}; expected one of: {_MATRIX_HELP}")
     loaded = _load_any(
-        path, content, json, package_json, from_format, json_format, options
+        path, content, json, module_json, from_format, json_format, options
     )
     if loaded.domain != "transmission":
         raise ValueError("matrix outputs need a transmission network")
@@ -1134,7 +1214,7 @@ def _display_impl(path: str, from_format: Optional[str] = None) -> dict:
 
 
 # The tool text arguments that can carry JSON (`content`, `json`,
-# `package_json`) are annotated bare `str`: under any other annotation the
+# `module_json`) are annotated bare `str`: under any other annotation the
 # SDK re-parses a string that reads as JSON, destroying the text. "" means
 # unset.
 @mcp.tool(
@@ -1149,7 +1229,7 @@ def _convert_tool(
     path: Optional[str] = None,
     content: str = "",
     json: str = "",
-    package_json: str = "",
+    module_json: str = "",
     from_format: Optional[str] = None,
     json_format: _JsonFormatArg = None,
     options: Optional[Dict[str, Any]] = None,
@@ -1159,7 +1239,7 @@ def _convert_tool(
         path=path,
         content=content,
         json=json,
-        package_json=package_json,
+        module_json=module_json,
         from_format=from_format,
         json_format=json_format,
         options=options,
@@ -1178,7 +1258,7 @@ def _save_tool(
     path: Optional[str] = None,
     content: str = "",
     json: str = "",
-    package_json: str = "",
+    module_json: str = "",
     to_format: Optional[str] = None,
     from_format: Optional[str] = None,
     json_format: _JsonFormatArg = None,
@@ -1190,7 +1270,7 @@ def _save_tool(
         path=path,
         content=content,
         json=json,
-        package_json=package_json,
+        module_json=module_json,
         to_format=to_format,
         from_format=from_format,
         json_format=json_format,
@@ -1208,20 +1288,20 @@ def _summary_tool(
     path: Optional[str] = None,
     content: str = "",
     json: str = "",
-    package_json: str = "",
+    module_json: str = "",
     from_format: Optional[str] = None,
     json_format: _JsonFormatArg = None,
     options: Optional[Dict[str, Any]] = None,
 ) -> dict:
     return _summary_impl(
-        path, content, json, package_json, from_format, json_format, options
+        path, content, json, module_json, from_format, json_format, options
     )
 
 
 @mcp.tool(
     name="parse",
-    description="Parse a model and return legacy JSON or a `.pio.json` "
-    "package. " + _SOURCE_FORMAT_HELP,
+    description="Parse a model and return legacy JSON or a stored "
+    "`.pio.json` module. " + _SOURCE_FORMAT_HELP,
 )
 def _parse_tool(
     path: Optional[str] = None,
@@ -1242,13 +1322,13 @@ def _normalize_tool(
     path: Optional[str] = None,
     content: str = "",
     json: str = "",
-    package_json: str = "",
+    module_json: str = "",
     from_format: Optional[str] = None,
     json_format: _JsonFormatArg = None,
     options: Optional[Dict[str, Any]] = None,
 ) -> dict:
     return _normalize_impl(
-        path, content, json, package_json, from_format, json_format, options
+        path, content, json, module_json, from_format, json_format, options
     )
 
 
@@ -1262,7 +1342,7 @@ def _matrix_tool(
     path: Optional[str] = None,
     content: str = "",
     json: str = "",
-    package_json: str = "",
+    module_json: str = "",
     from_format: Optional[str] = None,
     json_format: _JsonFormatArg = None,
     options: Optional[Dict[str, Any]] = None,
@@ -1274,7 +1354,7 @@ def _matrix_tool(
         path=path,
         content=content,
         json=json,
-        package_json=package_json,
+        module_json=module_json,
         from_format=from_format,
         json_format=json_format,
         options=options,
@@ -1284,9 +1364,9 @@ def _matrix_tool(
 
 
 @mcp.tool(name="diagnostics")
-def _diagnostics_tool(package_json: str, verbose: bool = False) -> dict:
-    """Return package diagnostics as structured JSON plus a concise summary."""
-    return _diagnostics_payload(package_json, verbose)
+def _diagnostics_tool(module_json: str, verbose: bool = False) -> dict:
+    """Return module diagnostics as structured JSON plus a concise summary."""
+    return _diagnostics_payload(module_json, verbose)
 
 
 @mcp.tool(name="display")
@@ -1523,7 +1603,7 @@ def convert(
     to: Optional[str] = None,
     format: Optional[str] = None,
     from_: Optional[str] = None,
-    package_json: Optional[str] = None,
+    module_json: Optional[str] = None,
 ) -> dict:
     target = _require_to_format(to_format, to=to)
     source = _choose_from_format(from_format, format=format, from_=from_)
@@ -1532,7 +1612,7 @@ def convert(
         path=path,
         content=content,
         json=json,
-        package_json=package_json,
+        module_json=module_json,
         from_format=source,
         json_format=json_format,
         options=options,
@@ -1553,7 +1633,7 @@ def save(
     to: Optional[str] = None,
     format: Optional[str] = None,
     from_: Optional[str] = None,
-    package_json: Optional[str] = None,
+    module_json: Optional[str] = None,
 ) -> dict:
     target = _choose_to_format(to_format, to=to)
     source = _choose_from_format(from_format, format=format, from_=from_)
@@ -1562,7 +1642,7 @@ def save(
         path=path,
         content=content,
         json=json,
-        package_json=package_json,
+        module_json=module_json,
         to_format=target,
         from_format=source,
         json_format=json_format,
@@ -1581,10 +1661,10 @@ def summary(
     *,
     format: Optional[str] = None,
     from_: Optional[str] = None,
-    package_json: Optional[str] = None,
+    module_json: Optional[str] = None,
 ) -> dict:
     source = _choose_from_format(from_format, format=format, from_=from_)
-    return _summary_impl(path, content, json, package_json, source, json_format, options)
+    return _summary_impl(path, content, json, module_json, source, json_format, options)
 
 
 def parse(
@@ -1611,10 +1691,10 @@ def normalize(
     *,
     format: Optional[str] = None,
     from_: Optional[str] = None,
-    package_json: Optional[str] = None,
+    module_json: Optional[str] = None,
 ) -> dict:
     source = _choose_from_format(from_format, format=format, from_=from_)
-    return _normalize_impl(path, content, json, package_json, source, json_format, options)
+    return _normalize_impl(path, content, json, module_json, source, json_format, options)
 
 
 def matrix(
@@ -1630,7 +1710,7 @@ def matrix(
     *,
     format: Optional[str] = None,
     from_: Optional[str] = None,
-    package_json: Optional[str] = None,
+    module_json: Optional[str] = None,
 ) -> dict:
     source = _choose_from_format(from_format, format=format, from_=from_)
     return _matrix_impl(
@@ -1638,7 +1718,7 @@ def matrix(
         path=path,
         content=content,
         json=json,
-        package_json=package_json,
+        module_json=module_json,
         from_format=source,
         json_format=json_format,
         options=options,
@@ -1658,8 +1738,8 @@ def display(
     return _display_impl(path, source)
 
 
-def diagnostics(package_json: str, verbose: bool = False) -> dict:
-    return _diagnostics_payload(package_json, verbose)
+def diagnostics(module_json: str, verbose: bool = False) -> dict:
+    return _diagnostics_payload(module_json, verbose)
 
 
 def compute_matrix(*args: Any, **kwargs: Any) -> dict:
