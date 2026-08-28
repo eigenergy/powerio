@@ -326,7 +326,7 @@ fn json_family(
                 _ => RoutedFamily::Distribution,
             })
         }
-        JsonClass::Package => Ok(RoutedFamily::Stored),
+        JsonClass::Module => Ok(RoutedFamily::Stored),
         // The balanced hub's own JSON detection carries the refusal
         // wording for unrecognized or ambiguous documents, and decodes
         // bare model JSON itself.
