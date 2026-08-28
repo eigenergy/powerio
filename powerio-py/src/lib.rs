@@ -1819,13 +1819,6 @@ impl From<&powerio_core::Diagnostic> for PyDiagnostic {
     }
 }
 
-/// Low level handle around a parsed module document. Parses the document
-/// once; the user facing `powerio.PioModule` wraps it. Not frozen: `validate`
-/// rewrites the handle's diagnostics in place, matching the Rust and C APIs.
-/// The runtime module handle: `PioModule<PioValue>` with its records. The
-/// stored form is `.pio.json` version 1 (released 0.9 packages upgrade one
-/// way on read). Methods that transform take the module out of the handle
-/// and put it back on failure, so a refused call leaves the handle usable.
 /// Version and schema identity of this build: the release API discovery
 /// document. Keys agree with the C `pio_schema_versions_json` report where
 /// both apply; the wheel embeds the Rust core directly, so there is no C ABI
