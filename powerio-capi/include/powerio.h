@@ -177,15 +177,16 @@ struct ArrowSchema;
  * specific JSON schemas. Existing signatures do not change without an ABI
  * version increment.
  *
- * 5 is the current version. It bumped because every ABI visible JSON document
- * changed shape: `pio_schema_versions_json` dropped four keys,
- * `pio_dist_capabilities_json` renamed `schema_version` to `powerio_version`,
- * and the Arrow metadata key became `powerio.version`. A binding built against
- * 4 would pass a handshake it should fail and read `null` for keys it mirrors.
- * The same bump carries the diagnostic grammar: every errbuf message and
- * warning line reads `CODE: message`, and the seven conversion entry points
- * publish structured records through `out_diagnostics_json` in place of the
- * text `out_warnings` channel.
+ * 6 is the current version. It bumped because the exported symbol set
+ * shrank: the 0.9 package surface (`pio_package_*`, eighteen entry points
+ * and the `pkg` feature token) and the SCOPF surface (`pio_scopf_*`, plus
+ * the solver row Arrow tables) are withdrawn on the head that raises the
+ * version; the stored module (`pio_module_*`), DC branch data
+ * (`pio_dc_data_*`), structured `PioError`, and `retain`/`release` handle
+ * surfaces arrive as additive growth under the unchanged value. A binding
+ * built against 5 that used a withdrawn entry would resolve a missing
+ * symbol; the handshake refuses first. The 4 to 5 bump reshaped every ABI
+ * visible JSON document and the diagnostic grammar.
  */
 #define PIO_ABI_VERSION 6
 
