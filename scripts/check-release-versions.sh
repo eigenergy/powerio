@@ -63,3 +63,17 @@ grep -q "PowerIO $workspace_version release notes" "docs/release-notes/$workspac
     || { echo "the release notes draft title does not state $workspace_version" >&2; exit 1; }
 
 echo "release identity OK: ABI $rust_abi, module schema $schema_name/$schema_version, workspace $workspace_version, tag v$workspace_version"
+
+# The Arrow payload goldens embed the producing build's powerio_version; a
+# renumber that misses one fails the golden comparisons later. Stored
+# document fixtures under other directories legitimately keep the versions
+# of the generations they exercise, so only the live-build goldens sweep.
+stale=$(grep -rlL "\"powerio_version\": \"$workspace_version\"" \
+    tests/data/capi_matrix 2>/dev/null || true)
+if [ -n "$stale" ]; then
+    echo "goldens embed a powerio_version other than $workspace_version:" >&2
+    echo "$stale" >&2
+    exit 1
+fi
+
+echo "release versions OK"
