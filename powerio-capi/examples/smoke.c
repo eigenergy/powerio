@@ -194,7 +194,6 @@ int main(int argc, char **argv) {
 
 #ifdef PIO_PROB
     CHECK(pio_has_feature("prob") == 1, "pio_has_feature(prob) should be 1");
-    pio_scopf_instance_free(NULL);
 #endif
 
     /* In-memory parse: read the bytes ourselves and parse them with an explicit

@@ -84,17 +84,12 @@
  *   are owned by the library; free them with pio_string_free. Handles from
  *   pio_parse_file / pio_parse_str / pio_parse_bytes / pio_read_dir /
  *   pio_normalize are freed
- *   with pio_network_free. Package handles use pio_package_free, distribution
- *   handles use pio_dist_network_free, and SCOPF handles use
- *   pio_scopf_instance_free. Arrow buffers are freed through their own release
- *   callbacks.
+ *   with pio_network_free; distribution handles use pio_dist_network_free.
+ *   Arrow buffers are freed through their own release callbacks.
  * - A handle is immutable after construction unless a function takes it
  *   non-const: concurrent reads from any number of threads are safe; a
  *   non-const entry point, and the free functions, need exclusive access, and
- *   free exactly once. Two entry points take a handle non-const:
- *   pio_package_validate rewrites its diagnostics and validation summary, and
- *   pio_package_set_operating_points replaces its operating points and then
- *   revalidates.
+ *   free exactly once.
  * - Every entry point catches Rust panics at the boundary and returns the
  *   documented failure value (NULL, 0, -1, 0.0) rather than unwinding across
  *   the ABI (requires the default panic = "unwind"; a panic = "abort" build
@@ -124,14 +119,11 @@
  * points (guarded by PIO_DIST): multiconductor distribution cases (OpenDSS,
  * PMD ENGINEERING JSON, BMOPF JSON) behind their own PioDistNetwork handle,
  * freed with pio_dist_network_free, string outputs freed with pio_string_free,
- * `--features pkg` for the pio_package_* entry points (guarded by
- * PIO_PKG): `.pio.json` compiler packages behind their own PioPackage handle,
- * freed with pio_package_free, and `--features prob` for the pio_scopf_*
- * entry points (guarded by PIO_PROB), behind a PioScopfInstance handle freed
- * with pio_scopf_instance_free. Two entry points need a pair of features:
+ * `--features prob` for the problem data entry points (guarded by
+ * PIO_PROB). Two entry points need a pair of features:
  * pio_dist_geo_extract and pio_dist_geo_apply take a distribution handle but
- * read the geo layer through the package crate, so they are built only when
- * dist and pkg are both on (both are on by default). Each symbol's own #if
+ * read the geo layer through the facade, so they are built only when
+ * dist is on (it is on by default). Each symbol's own #if
  * states what it needs; a runtime loader probes pio_has_feature per name.
  * The dist C signatures follow PIO_ABI_VERSION like every other symbol.
  * PIO_DIST_ABI_VERSION is frozen at 1 and carries no meaning: it existed to
@@ -204,20 +196,6 @@ struct ArrowSchema;
  * `errbuf`/`warnbuf` parameter and a message always fits without truncation.
  */
 #define PIO_ERRBUF_MIN 256
-
-#if defined(PIO_PROB)
-/**
- * Keep SCOPF document ordinals 0-based.
- */
-#define PIO_SCOPF_INDEX_BASE_ZERO 0
-#endif
-
-#if defined(PIO_PROB)
-/**
- * Renumber SCOPF document ordinals to 1-based.
- */
-#define PIO_SCOPF_INDEX_BASE_ONE 1
-#endif
 
 /**
  * `PioWriteOptions.missing_gen_cost_mode`: leave a missing cost row absent.
@@ -349,13 +327,6 @@ typedef struct PioDistNetwork PioDistNetwork;
  * them), and the reader's fidelity warnings ([`pio_warnings`]).
  */
 typedef struct PioNetwork PioNetwork;
-
-#if defined(PIO_PROB)
-/**
- * Opaque matrix free SCOPF instance.
- */
-typedef struct PioScopfInstance PioScopfInstance;
-#endif
 
 /**
  * Solver preparation repairs for [`pio_normalize`], in the extensible options
@@ -1079,48 +1050,6 @@ PioDistNetwork *pio_dist_geo_apply(const PioDistNetwork *net,
                                    const char *name_hint,
                                    char *errbuf,
                                    size_t errlen);
-#endif
-
-#if defined(PIO_PROB)
-/**
- * Parse SCOPF source text into an owned problem instance. `from` currently
- * accepts `"goc3-json"`. Returns `NULL` on error and writes the message into
- * `errbuf`. Free the handle with `pio_scopf_instance_free`.
- */
-PioScopfInstance *pio_scopf_parse_str(const char *text,
-                                      const char *from,
-                                      char *errbuf,
-                                      size_t errlen);
-#endif
-
-#if defined(PIO_PROB)
-/**
- * Serialize a SCOPF instance as its language neutral 0-based document. The
- * JSON records its powerio version and index base. Free the returned string
- * with `pio_string_free`. Returns `NULL` for a null handle or serialization
- * error.
- */
-char *pio_scopf_to_json(const PioScopfInstance *instance, char *errbuf, size_t errlen);
-#endif
-
-#if defined(PIO_PROB)
-/**
- * Serialize a SCOPF instance with 0-based or 1-based ordinals. Pass
- * `PIO_SCOPF_INDEX_BASE_ZERO` or `PIO_SCOPF_INDEX_BASE_ONE`. Any other value
- * returns `NULL` and reports `BIND.CAPI.INVALID_OPTIONS`. The JSON records the
- * selected base. Free the returned string with `pio_string_free`.
- */
-char *pio_scopf_to_json_with_index_base(const PioScopfInstance *instance,
-                                        int32_t index_base,
-                                        char *errbuf,
-                                        size_t errlen);
-#endif
-
-#if defined(PIO_PROB)
-/**
- * Free a SCOPF instance handle. `NULL` is a no-op; free each handle once.
- */
-void pio_scopf_instance_free(PioScopfInstance *instance);
 #endif
 
 #if defined(PIO_DIST)
