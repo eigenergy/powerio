@@ -175,7 +175,6 @@ class _Loaded:
     warnings: "list[Any]"
     json_format: str
     scenario: Optional[int] = None
-    module_json: Optional[str] = None
 
 
 def _fmt(value: Optional[str]) -> Optional[str]:
@@ -402,32 +401,6 @@ def _diagnostic_message(item: Dict[str, Any]) -> Optional[str]:
     if message:
         return str(message)
     return None
-
-
-def _diagnostic_messages(
-    diagnostics: list[Any], keep_severities: frozenset[str]
-) -> list[str]:
-    messages = []
-    for item in diagnostics:
-        if not isinstance(item, dict):
-            continue
-        if item.get("severity") not in keep_severities:
-            continue
-        formatted = _diagnostic_message(item)
-        if formatted is not None:
-            messages.append(formatted)
-    return messages
-
-
-# A package's diagnostics carry the older severity set, including `fatal`.
-_PACKAGE_WARNING_SEVERITIES = frozenset({"warning", "error", "fatal"})
-# A stored module's `DiagnosticV1` severity is `error`, `warning`, `remark`,
-# or `note`; only the first two are surfaced as warnings.
-_MODULE_WARNING_SEVERITIES = frozenset({"warning", "error"})
-
-
-def _package_diagnostic_messages(value: Dict[str, Any]) -> list[str]:
-    return _diagnostic_messages(value.get("diagnostics", []), _PACKAGE_WARNING_SEVERITIES)
 
 
 def _module_diagnostic_records(module: "powerio.PioModule") -> "list[Dict[str, Any]]":
