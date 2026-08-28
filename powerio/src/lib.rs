@@ -297,7 +297,7 @@ fn json_family(
         // wording for packages and unrecognized or ambiguous
         // documents, and decodes bare model JSON itself.
         JsonClass::Case(Detection::Known(_) | Detection::Ambiguous | Detection::Unknown)
-        | JsonClass::Package
+        | JsonClass::Module
         | JsonClass::ModelJson => Ok(RoutedFamily::Balanced),
     }
 }
