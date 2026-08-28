@@ -94,8 +94,9 @@ def main() -> int:
               f"to {new_abi}; an additive surface keeps its number",
               file=sys.stderr)
         return 1
-    print(f"ABI necessity OK: {'breaking' if breaking else 'additive'} delta, "
-          f"ABI {old_abi} -> {new_abi}")
+    if "--json" not in sys.argv:
+        print(f"ABI necessity OK: {'breaking' if breaking else 'additive'} delta, "
+              f"ABI {old_abi} -> {new_abi}")
     return 0
 
 if __name__ == "__main__":
