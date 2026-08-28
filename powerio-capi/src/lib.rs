@@ -4172,10 +4172,10 @@ mpc.branch = [
                 "BIND.CAPI.NULL_HANDLE"
             );
             pio_error_release(error);
-            error = std::ptr::null_mut();
 
             #[cfg(feature = "arrow")]
             {
+                error = std::ptr::null_mut();
                 let mut array = std::mem::zeroed::<arrow::ffi::FFI_ArrowArray>();
                 let mut schema = std::mem::zeroed::<arrow::ffi::FFI_ArrowSchema>();
                 let rc =
