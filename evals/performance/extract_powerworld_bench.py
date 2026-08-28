@@ -48,15 +48,20 @@ ROWS = [
         "branches": 9140,
         "aux": "parse_aux_extra",
         "pwb": "parse_pwb_extra",
+        # Runs only where POWERIO_BENCH_AUX/POWERIO_BENCH_PWB point at the
+        # local copy; absent estimates skip the row instead of failing.
+        "optional": True,
     },
 ]
 
 
-def estimate(bench):
+def estimate(bench, optional=False):
     if bench is None:
         return None, None, 0
     path = CRITERION / bench / "new" / "estimates.json"
     if not path.exists():
+        if optional:
+            return None, None, 0
         raise SystemExit(f"missing Criterion estimate: {path}")
     data = json.loads(path.read_text())
     center = data.get("median", data["mean"])["point_estimate"]
@@ -96,8 +101,11 @@ def metadata():
 def main():
     rows = []
     for row in ROWS:
-        aux_ms, aux_std_ms, aux_n = estimate(row["aux"])
-        pwb_ms, pwb_std_ms, pwb_n = estimate(row["pwb"])
+        optional = row.get("optional", False)
+        aux_ms, aux_std_ms, aux_n = estimate(row["aux"], optional)
+        pwb_ms, pwb_std_ms, pwb_n = estimate(row["pwb"], optional)
+        if optional and aux_ms is None and pwb_ms is None:
+            continue
         rows.append(
             {
                 "case": row["case"],
