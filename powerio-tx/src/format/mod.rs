@@ -749,15 +749,20 @@ pub const SOURCE_FORMAT_NAMES: &str = "matpower/m, powermodels-json/powermodels/
 fn unknown_source_format(name: &str) -> Error {
     if name.eq_ignore_ascii_case("powerio-json") {
         return Error::UnknownFormat(
-            "the `powerio-json` token was retired in 0.9.0: model JSON is not a case format              or a conversion target; write it with `to_json` (`pio_to_json` in C, `json_format              model-json` on the MCP server), package the case as `.pio.json`, and classify a              JSON document with `classify_json_text` (family `model-json`)"
+            "the `powerio-json` token was retired in 0.9.0: model JSON is not a case \
+             format or a conversion target; write it with `to_json` \
+             (`pio_balanced_network_to_json` in C, `json_format model-json` on the MCP \
+             server), store the case as `.pio.json`, and classify a JSON document with \
+             `classify_json_text` (family `model-json`)"
                 .into(),
         );
     }
     if let Some(dist) = routing::distribution_format_from_name(name) {
         return Error::UnknownFormat(format!(
             "`{}` is a distribution format, and this parser reads only balanced \
-             transmission formats; use the distribution surface (powerio_dist::parse_file, \
-             pio_dist_parse_file in C, or the format-routed parse_file in the bindings)",
+             transmission formats; parse it through the one module family \
+             (powerio::parse in Rust, pio_parse_file in C, powerio.parse in Python, \
+             parse_file in Julia), which routes distribution formats",
             dist.name()
         ));
     }

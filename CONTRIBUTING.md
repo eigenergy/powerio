@@ -46,8 +46,8 @@ updates `Cargo.lock`. Then:
 1. Merge the bump, tag the commit `vX.Y.Z`, push the tag. The release-binaries
    workflow builds the C ABI tarballs and stages a draft GitHub release.
 2. Publish the draft release. The release event fires the PyPI publish
-   (python.yml) and the crates.io publish (crates.yml: powerio, powerio-dist,
-   powerio-pkg, powerio-matrix, powerio-prob, powerio-cli, in dependency order). Both deploy
+   (python.yml) and the crates.io publish (crates.yml: powerio-core, powerio,
+   powerio-dist, powerio-matrix, powerio-prob, powerio-cli, in dependency order). Both deploy
    through reviewer protected environments (`pypi`, `crates-io`; the protection
    lives in the repo settings). PyPI skips already-uploaded files and crates.io
    skips versions already in the index, so a partial failure is recovered by
