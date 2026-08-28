@@ -14,6 +14,7 @@ run cargo fmt --all --check
 run ./scripts/ci-clippy.sh
 run bash scripts/terminology-gate.sh
 run ./scripts/capi-header-parity.sh
+run bash scripts/capi-removed-surface.sh
 run bash scripts/capi-export-monotonicity.sh
 run ./scripts/capi-header-regen.sh
 

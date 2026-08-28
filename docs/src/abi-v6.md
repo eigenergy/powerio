@@ -4,21 +4,44 @@ ABI v6 is the 1.0 handle model. Every opaque handle is an independently
 owned reference with a `retain`/`release` pair, failures cross as structured
 `PioError` handles, and the stored module and DC branch data surfaces are
 new. The surviving v5 entry points keep their signatures, but the 0.9
-package and SCOPF surfaces are removed: `pio_package_parse_file`,
-`pio_package_parse_str`, `pio_package_free`, `pio_package_to_json`,
-`pio_package_from_balanced_network`, `pio_package_from_multiconductor_network`,
-`pio_package_to_balanced_network`, `pio_package_to_multiconductor_network`,
-`pio_package_validate`, `pio_package_validation_json`,
-`pio_package_diagnostics_json`, `pio_package_operating_points_json`,
-`pio_package_set_operating_points`, `pio_package_materialize_operating_point`,
-`pio_package_study_json`, `pio_package_materialize_study_commit`,
+package and SCOPF surfaces are removed. The list below is the exact set of
+symbols declared in the v0.9.0 header and absent from the v6 header
+(`scripts/capi-removed-surface.sh` holds it to that set difference):
+
+<!-- removed-c-surface:begin -->
+`pio_package_diagnostics_json`,
+`pio_package_free`,
+`pio_package_from_balanced_network`,
+`pio_package_from_multiconductor_network`,
+`pio_package_lower_multiconductor_to_balanced`,
+`pio_package_materialize_operating_point`,
+`pio_package_materialize_study_commit`,
 `pio_package_multiconductor_to_balanced_preflight_json`,
-`pio_package_lower_multiconductor_to_balanced`, `pio_scopf_parse_str`,
-`pio_scopf_free`, `pio_scopf_to_json`, and
-`pio_scopf_to_json_with_index_base` no longer exist in the v6 header. A v5
-caller using any of them ports to the module surface (`pio_module_parse_*`
-plus `pio_module_as_network` / `pio_module_as_dist_network`) before
-recompiling; a caller of the surviving network surface recompiles without
+`pio_package_operating_points_json`,
+`pio_package_parse_file`,
+`pio_package_parse_str`,
+`pio_package_set_operating_points`,
+`pio_package_study_json`,
+`pio_package_to_balanced_network`,
+`pio_package_to_json`,
+`pio_package_to_multiconductor_network`,
+`pio_package_validate`,
+`pio_package_validation_json`,
+`pio_scopf_instance_free`,
+`pio_scopf_parse_str`,
+`pio_scopf_to_json`,
+`pio_scopf_to_json_with_index_base`
+<!-- removed-c-surface:end -->
+
+A v5 caller of the package group ports to the module surface: parse with
+`pio_module_parse_file` / `pio_module_parse_str` / `pio_module_parse_bytes`,
+take networks out with `pio_module_as_network` /
+`pio_module_as_dist_network`, lower with `pio_module_lower_to_balanced`,
+read findings with `pio_module_diagnostics_json`, and serialize with
+`pio_module_write_json`. A v5 caller of the SCOPF group parses the same way
+and reads the instance as JSON through `pio_module_inspect_json` or
+`pio_module_write_json`; the module's release call replaces the freed
+handle. A caller of the surviving network surface recompiles without
 edits. `PIO_ABI_VERSION` is 6.
 
 ## The handle lifecycle
