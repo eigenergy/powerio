@@ -70,7 +70,7 @@ pub fn stored_json(input: &Path) -> anyhow::Result<Option<String>> {
         .with_context(|| format!("reading JSON format markers from {}", input.display()))?;
     if matches!(
         powerio_matrix::format::routing::classify_json_text(&text),
-        JsonClass::Package
+        JsonClass::Module
     ) {
         return Ok(Some(text));
     }
@@ -111,7 +111,7 @@ pub fn classified_json(input: &Path) -> anyhow::Result<Option<ClassifiedCase>> {
 fn classify_case_json(text: &str, path: &Path) -> anyhow::Result<DetectedFormat> {
     match powerio_matrix::format::routing::classify_json_text(text) {
         JsonClass::Case(Detection::Known(format)) => Ok(format),
-        JsonClass::Package => anyhow::bail!(
+        JsonClass::Module => anyhow::bail!(
             "{} is a stored .pio.json module; `summary`, `convert`, and `matrix` \
              read it directly, and the bindings' parse loads it (powerio.parse \
              in Python)",

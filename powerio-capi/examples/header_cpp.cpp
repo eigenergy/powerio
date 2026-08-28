@@ -6,11 +6,6 @@
 #include <cstdint>
 
 static_assert(PIO_ABI_VERSION == 6);
-static_assert(PIO_ERRBUF_MIN == 256);
-
-#ifdef PIO_DIST
-static_assert(PIO_DIST_ABI_VERSION == 1);
-#endif
 
 #ifdef PIO_ARROW
 static_assert(PIO_ARROW_TABLE_BUS == 0);
@@ -27,6 +22,6 @@ static_assert(PIO_ARROW_TABLE_MATRIX_BRANCH == 20);
 #endif
 
 int main() {
-    (void)pio_matrix_available();
+    (void)pio_has_feature("matrix");
     return pio_abi_version() == PIO_ABI_VERSION ? 0 : 1;
 }
