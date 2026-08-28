@@ -40,3 +40,4 @@ private/
 
 # Playwright MCP browser session artifacts
 .playwright-mcp/
+.venv*/
