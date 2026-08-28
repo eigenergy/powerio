@@ -4711,8 +4711,8 @@ mpc.branch = [
         fn module_of_multiconductor_network_wraps_for_semantic_writing() {
             // Wrapping a multiconductor network handle back into a module and
             // writing the same format echoes the retained source exactly:
-            // the multiconductor twin of pio_module_of_balanced_network's
-            // contract, pinned on the balanced side by
+            // the multiconductor twin of the pio_module_of_balanced_network
+            // behavior pinned on the balanced side by
             // module_as_network_threads_provenance_and_refuses_other_kinds
             // in v6.rs.
             let path = fourwire_cstr();
