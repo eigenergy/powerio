@@ -18,7 +18,7 @@ There is no one universal network format in this family. `BalancedNetwork` is th
 
 ## Stored documents are serializations
 
-`.pio.json` is one versioned serialization of the dynamic module. It is the way to persist any value kind with its records, and its schema version moves independently of the package version. It is not the IR itself and not a preferred exchange format; the case formats remain the exchange surface.
+`.pio.json` is one versioned serialization of the dynamic module. It is the way to persist any value kind with its records, and its schema version moves independently of the package version. The IR is the in-memory module; `.pio.json` is its stored form, a native artifact for PowerIO round trips rather than a case format.
 
 ## Transformations name their input and output
 
