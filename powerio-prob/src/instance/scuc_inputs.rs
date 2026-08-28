@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 
 /// One bus row: `(i, uid, v_min, v_max)`.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[non_exhaustive]
 pub struct ScopfBusRow {
     pub i: BusId,
@@ -13,6 +14,7 @@ pub struct ScopfBusRow {
 
 /// One shunt row.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[non_exhaustive]
 pub struct ScopfShuntRow {
     pub j_sh: usize,
@@ -24,6 +26,7 @@ pub struct ScopfShuntRow {
 
 /// One AC line row.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[non_exhaustive]
 pub struct ScopfAcLineRow {
     pub j_ln: usize,
@@ -46,6 +49,7 @@ pub struct ScopfAcLineRow {
 
 /// One two winding transformer row.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[non_exhaustive]
 pub struct ScopfTransformerRow {
     pub j_xf: usize,
@@ -68,6 +72,7 @@ pub struct ScopfTransformerRow {
 
 /// One DC line row.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[non_exhaustive]
 pub struct ScopfDcLineRow {
     pub j_dc: usize,
@@ -83,6 +88,7 @@ pub struct ScopfDcLineRow {
 
 /// A transformer with a variable phase-shift control range (`vpd`).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[non_exhaustive]
 pub struct ScopfVariablePhaseRow {
     pub j_xf: usize,
@@ -92,6 +98,7 @@ pub struct ScopfVariablePhaseRow {
 
 /// A transformer with a fixed phase shift (`fpd`).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[non_exhaustive]
 pub struct ScopfFixedPhaseRow {
     pub j_xf: usize,
@@ -100,6 +107,7 @@ pub struct ScopfFixedPhaseRow {
 
 /// A transformer with a variable winding ratio control range (`vwr`).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[non_exhaustive]
 pub struct ScopfVariableRatioRow {
     pub j_xf: usize,
@@ -109,6 +117,7 @@ pub struct ScopfVariableRatioRow {
 
 /// A transformer with a fixed winding ratio (`fwr`).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[non_exhaustive]
 pub struct ScopfFixedRatioRow {
     pub j_xf: usize,
@@ -125,6 +134,7 @@ pub struct ScopfFixedRatioRow {
 /// exclusive and a device can select neither. A parameter of a mode the device
 /// did not select is `None`. Read the two flags before the parameters.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[non_exhaustive]
 pub struct ScopfDeviceRow {
     pub bus: BusId,
@@ -184,6 +194,7 @@ pub struct ScopfDeviceRow {
 
 /// One active power zonal reserve row.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[non_exhaustive]
 pub struct ScopfActiveReserveRow {
     pub n_p: usize,
@@ -204,6 +215,7 @@ pub struct ScopfActiveReserveRow {
 
 /// One reactive (reactive-power) zonal reserve row.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[non_exhaustive]
 pub struct ScopfReactiveReserveRow {
     pub n_q: usize,
@@ -216,6 +228,7 @@ pub struct ScopfReactiveReserveRow {
 
 /// One (bus, active reserve zone, device) membership row.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[non_exhaustive]
 pub struct ScopfActiveReserveSetRow {
     pub i: BusId,
@@ -229,6 +242,7 @@ pub struct ScopfActiveReserveSetRow {
 
 /// One (bus, reactive reserve zone, device) membership row.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[non_exhaustive]
 pub struct ScopfReactiveReserveSetRow {
     pub i: BusId,
@@ -242,6 +256,7 @@ pub struct ScopfReactiveReserveSetRow {
 
 /// Set sizes for each indexed device class.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[non_exhaustive]
 pub struct ScopfLengths {
     pub l_j_xf: usize,
@@ -264,6 +279,7 @@ pub struct ScopfLengths {
 
 /// Static buses, branches, devices, controls, reserves, and memberships.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[non_exhaustive]
 pub struct ScopfStaticData {
     pub bus: Vec<ScopfBusRow>,
@@ -288,6 +304,7 @@ pub struct ScopfStaticData {
 /// One device energy cost curve. `cost[t][m]` is `[c_en, p_max]` for price
 /// block `m` in period `t`.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub(crate) struct ScopfCostRow {
     pub(crate) bus: BusId,
     pub(crate) uid: String,
@@ -296,6 +313,7 @@ pub(crate) struct ScopfCostRow {
 
 /// Static index sets and the cost vectors used by the price block projection.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[non_exhaustive]
 pub(crate) struct ScopfStaticDataProjection {
     pub(crate) static_data: ScopfStaticData,
@@ -307,6 +325,7 @@ pub(crate) struct ScopfStaticDataProjection {
 macro_rules! energy_window_row {
     ($name:ident, $ind_field:ident, $start_field:ident, $end_field:ident, $bound_field:ident) => {
         #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+        #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
         pub struct $name {
             pub $ind_field: usize,
             pub uid: String,
@@ -351,6 +370,7 @@ macro_rules! energy_window_period_row {
         /// Period membership of one energy window: the period belongs when
         /// its midpoint falls within the window's `(start, end]` interval.
         #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+        #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
         pub struct $name {
             pub $ind_field: usize,
             pub uid: String,
@@ -367,6 +387,7 @@ energy_window_period_row!(ScopfEnergyWindowPeriodMinCsRow, w_en_min_cs_ind);
 
 /// Energy requirement windows and their period memberships.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[non_exhaustive]
 pub struct ScopfEnergyWindows {
     pub w_en_max_pr: Vec<ScopfEnergyWindowMaxPrRow>,
@@ -381,6 +402,7 @@ pub struct ScopfEnergyWindows {
 
 /// One flattened device, period, and price block row.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[non_exhaustive]
 pub struct ScopfPriceBlockRow {
     pub flat_k: usize,
@@ -393,6 +415,7 @@ pub struct ScopfPriceBlockRow {
 
 /// Flattened producer and consumer price blocks.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[non_exhaustive]
 pub struct ScopfPriceBlocks {
     pub producer: Vec<ScopfPriceBlockRow>,
@@ -401,6 +424,7 @@ pub struct ScopfPriceBlocks {
 
 /// One AC line surviving a contingency.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[non_exhaustive]
 pub struct ScopfAcLineSurvivorRow {
     pub ctg: usize,
@@ -414,6 +438,7 @@ pub struct ScopfAcLineSurvivorRow {
 
 /// One transformer surviving a contingency.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[non_exhaustive]
 pub struct ScopfTransformerSurvivorRow {
     pub ctg: usize,
@@ -428,6 +453,7 @@ pub struct ScopfTransformerSurvivorRow {
 /// Per-contingency surviving AC lines and transformers, one group per
 /// contingency in `reliability.contingency` document order.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[non_exhaustive]
 pub struct ScopfAcContingencySurvivors {
     pub ln: Vec<Vec<ScopfAcLineSurvivorRow>>,
@@ -436,6 +462,7 @@ pub struct ScopfAcContingencySurvivors {
 
 /// One surviving DC line in one contingency and period.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[non_exhaustive]
 pub struct ScopfDcContingencyFlowRow {
     pub flat_jtk_dc: usize,
@@ -452,6 +479,7 @@ pub struct ScopfDcContingencyFlowRow {
 /// `network.violation_cost`. Any one of them can be absent and is then `None`:
 /// GOCompetition's 14 bus validation case has no `e_vio_cost`.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[non_exhaustive]
 pub struct ScopfViolationCost {
     pub p_bus: Option<f64>,
@@ -466,6 +494,7 @@ pub struct ScopfViolationCost {
 /// zero based and follow the source document order of the section that owns
 /// them. Source UIDs and external bus IDs remain separate fields.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[non_exhaustive]
 pub struct ScucInputs {
     /// Buses, branches, devices, controls, reserves, and memberships.
@@ -489,6 +518,7 @@ pub struct ScucInputs {
 /// each class owns one unbroken run. Reading the order without that
 /// precondition is the one mistake this type makes unavailable.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "snake_case", tag = "kind")]
 #[non_exhaustive]
 pub enum ScopfDeviceClassLayout {
