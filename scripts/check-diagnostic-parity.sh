@@ -33,11 +33,14 @@ for accessor in code severity message id target suggested_action details_json \
         || { echo "powerio.h has no pio_diagnostic_$accessor" >&2; exit 1; }
 done
 
-# The Python class.
+# The Python class: defined in the native module's stub, re-exported by the
+# package stub.
 for field in code severity message id target suggested_action spans related details; do
-    grep -q "$field" python/powerio/__init__.pyi \
+    grep -q "$field" python/powerio/_powerio.pyi \
         || { echo "the Python stub does not name Diagnostic.$field" >&2; exit 1; }
 done
+grep -q "from ._powerio import Diagnostic" python/powerio/__init__.pyi \
+    || { echo "the package stub does not re-export Diagnostic" >&2; exit 1; }
 
 if [ -n "${POWERIO_JL:-}" ] && [ -f "$POWERIO_JL/src/diagnostics.jl" ]; then
     for field in $fields; do
