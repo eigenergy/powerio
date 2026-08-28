@@ -13,6 +13,7 @@ run() { echo "=== $* ==="; "$@"; }
 run cargo fmt --all --check
 run ./scripts/ci-clippy.sh
 run ./scripts/capi-header-parity.sh
+run bash scripts/capi-export-monotonicity.sh
 run ./scripts/capi-header-regen.sh
 
 # A Windows editor has twice corrupted text in a PR: a UTF-8 BOM, and UTF-8

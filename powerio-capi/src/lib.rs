@@ -296,16 +296,15 @@ unsafe fn finish_network(
 /// specific JSON schemas. Existing signatures do not change without an ABI
 /// version increment.
 ///
-/// 5 is the current version. It bumped because every ABI visible JSON document
-/// changed shape: `pio_schema_versions_json` dropped four keys,
-/// `pio_dist_capabilities_json` renamed `schema_version` to `powerio_version`,
-/// and the Arrow metadata key became `powerio.version`. A binding built against
-/// 4 would pass a handshake it should fail and read `null` for keys it mirrors.
-/// The same bump carries the diagnostic grammar: every errbuf message and
-/// warning line reads `CODE: message`, and the seven conversion entry points
-/// publish structured records through `out_diagnostics_json` in place of the
-/// text `out_warnings` channel.
-pub const PIO_ABI_VERSION: u32 = 5;
+/// 6 is the current version. It bumped because the exported symbol set
+/// shrank: the 0.9 package surface (`pio_package_*`, eighteen entry points
+/// and the `pkg` feature token) and the SCOPF surface are withdrawn; a
+/// binding built against 5 that used a withdrawn entry would resolve a
+/// missing symbol, so the handshake refuses first. The version raises on
+/// the same head the set shrinks; later heads add the 1.0 module surfaces
+/// as additive growth under the unchanged value. The 4 to 5 bump reshaped
+/// every ABI visible JSON document and the diagnostic grammar.
+pub const PIO_ABI_VERSION: u32 = 6;
 
 /// Frozen at 1 and no longer meaningful. It existed to absorb distribution
 /// volatility, but that volatility lives in the BMOPF schema, which changes a
