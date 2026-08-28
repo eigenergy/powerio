@@ -164,10 +164,10 @@ fn every_json_fixture_classifies_as_stated() {
 #[test]
 fn classifier_and_diagnostic_types_are_crate_root_exports() {
     let class = powerio_tx::classify_json_text(r#"{"model_kind":"balanced","model":{}}"#);
-    assert!(matches!(class, powerio_tx::JsonClass::Package));
+    assert!(matches!(class, powerio_tx::JsonClass::Module));
     assert!(matches!(
         powerio_tx::classify_json_bytes(b"{\"model_kind\":\"balanced\",\"model\":{}}"),
-        powerio_tx::JsonClass::Package
+        powerio_tx::JsonClass::Module
     ));
     assert!(matches!(
         powerio_tx::classify_json_text("not json"),

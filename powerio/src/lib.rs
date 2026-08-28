@@ -40,6 +40,8 @@ pub mod dist_geo;
 pub mod gridfm;
 pub mod select;
 pub mod stored;
+pub mod write;
+pub use write::{write_module_as, write_module_str};
 pub mod transform;
 mod value;
 pub use value::{FromPioValue, PioValue, PioValueKind, ValueKindMismatch, try_into_typed};
@@ -327,7 +329,7 @@ fn json_family(
                 _ => RoutedFamily::Distribution,
             })
         }
-        JsonClass::Package => Ok(RoutedFamily::Stored),
+        JsonClass::Module => Ok(RoutedFamily::Stored),
         // The balanced hub's own JSON detection carries the refusal
         // wording for unrecognized or ambiguous documents, and decodes
         // bare model JSON itself.

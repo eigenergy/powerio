@@ -89,7 +89,7 @@ pub fn classified_json(input: &Path) -> anyhow::Result<Option<ClassifiedCase>> {
 fn classify_case_json(text: &str, path: &Path) -> anyhow::Result<DetectedFormat> {
     match powerio_matrix::format::routing::classify_json_text(text) {
         JsonClass::Case(Detection::Known(format)) => Ok(format),
-        JsonClass::Package => anyhow::bail!(
+        JsonClass::Module => anyhow::bail!(
             "{} is a .pio.json package; the `package` subcommand writes them, \
              and the bindings read them (powerio.Package.from_json in Python, \
              read_package in Julia)",
