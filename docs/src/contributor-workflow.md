@@ -34,7 +34,7 @@ Use the smallest gate set that covers the changed surface, then run the
 | rich model fields | `bash evals/validation/run_rich_validation.sh` |
 | matrix builders | `cargo test -p powerio-matrix`; `cargo bench -p powerio-matrix --bench matrix` |
 | problem instances or DC OPF bundles | `cargo test -p powerio-prob --no-default-features`; `cargo test -p powerio --features matrix` |
-| PowerWorld binary reader | PowerWorld parser tests plus `cargo bench -p powerio --bench parse -- "parse_aux_|parse_pwb_"` |
+| PowerWorld binary reader | PowerWorld parser tests plus `cargo bench -p powerio-tx --bench parse -- "parse_aux_|parse_pwb_"` |
 | C ABI | `scripts/capi-header-parity.sh`; `scripts/capi-smoke.sh`; `cargo test -p powerio-capi --no-default-features`; `cargo test -p powerio-capi --features arrow,matrix,gridfm,dist,prob`; `bash scripts/ci-clippy.sh capi-no-default`; `bash scripts/ci-clippy.sh capi-release` |
 | Python package metadata or extras | `maturin build --release --out /tmp/powerio-wheel-check`; inspect wheel `METADATA` |
 | Julia binding compatibility | build `powerio-capi --features arrow,matrix,gridfm,dist,prob`, then run `PowerIO.jl` tests with `POWERIO_CAPI` |
@@ -91,7 +91,7 @@ Regenerate benchmark JSON before changing published tables:
 ```sh
 julia --project=evals/validation evals/performance/bench_julia.jl --json
 .venv/bin/python evals/performance/bench_parse.py --json <cases>
-cargo bench -p powerio --bench parse -- "parse_aux_|parse_pwb_"
+cargo bench -p powerio-tx --bench parse -- "parse_aux_|parse_pwb_"
 python3 evals/performance/extract_powerworld_bench.py
 cargo bench -p powerio-matrix --bench matrix
 python3 evals/performance/extract_matrix_bench.py
