@@ -210,8 +210,8 @@ Known limits for every format are documented in the
 - Adjacency matrix and `petgraph` graph output
 
 `powerio-prob` builds matrix free problem instances: DC OPF and AC OPF input
-data plus the GOC3 SCOPF instance. Its optional `matrix` feature adds sparse
-projections and DC OPF Matrix Market bundles.
+data plus the GO Challenge 3 AC SCUC instance. Its optional `matrix` feature
+adds sparse projections and DC OPF Matrix Market bundles.
 
 Current conventions for signs, taps, phase shifts, per unit scaling, reference buses, and line parameters are documented in the [matrices guide](https://eigenergy.github.io/powerio/guide/matrices.html).
 
@@ -243,7 +243,7 @@ Build with `--features arrow` to enable `pio_to_arrow` over the
 and add `--features matrix` for sparse matrix COO tables. Matrix Arrow ABI v1
 is COO plus explicit `matrix_bus` and `matrix_branch` axis map tables; language
 bindings assemble native sparse matrix types on their side. The optional
-`prob` feature exposes matrix free SCOPF problem instances.
+`prob` feature exposes the matrix free DC branch data spans.
 
 ### PowerAgent
 
