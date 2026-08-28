@@ -84,6 +84,15 @@ impl PowerFlowJacobian {
         point: &OperatingPoint<powerio_tx::BalancedNetwork>,
     ) -> Result<(), Error> {
         let view = IndexedNetwork::new(instance.network());
+        // The refresh operates on the axis the structure was assembled over;
+        // an instance lowering to a different bus count is a different
+        // problem, never a value update.
+        if view.n() != self.bus_ids.len() {
+            return Err(Error::new(
+                &codes::BUILD_STATE_IDENTITY_UNKNOWN,
+                "the instance's lowered bus axis does not match the assembled Jacobian's",
+            ));
+        }
         let voltages = point_voltages(instance, point, &self.bus_ids, &view)?;
         fill_values(
             &mut self.matrix,
@@ -229,14 +238,18 @@ fn point_voltages(
         } else {
             // A star bus the three winding expansion synthesized: the point
             // cannot state it, so its voltage comes from the lowered
-            // network's own stated values.
-            let star = &view.network().buses()[idx];
-            if star.id != bus {
+            // network's own stated values, through a checked lookup.
+            let star = view
+                .network()
+                .buses()
+                .get(idx)
+                .filter(|star| star.id == bus);
+            let Some(star) = star else {
                 return Err(Error::new(
                     &codes::BUILD_STATE_IDENTITY_UNKNOWN,
                     "the operating point's network does not share the instance's bus identities",
                 ));
-            }
+            };
             magnitude.push(star.vm);
             angle.push(view.angle_radians(star.va));
         }
