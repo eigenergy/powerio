@@ -1,6 +1,8 @@
 # Changelog
 
-## 1.0.0
+## 0.10.0
+
+PowerIO 0.10 is the public beta of the 1.0 API. API corrections may land before 1.0.0 as downstream integrations exercise the new design.
 
 One model of the work: every parse compiles one source into a typed module, one document stores it, and every language reads the same names. The 0.9 compatibility names are gone, so this is the release to read before upgrading; the [migration guide](https://powerio.dev/guide/migration-v1.html) walks each surface.
 

@@ -38,4 +38,28 @@ for manifest in powerio/Cargo.toml powerio-core/Cargo.toml powerio-tx/Cargo.toml
         || { echo "$manifest does not take the workspace version" >&2; exit 1; }
 done
 
-echo "release identity OK: ABI $rust_abi, module schema $schema_name/$schema_version, workspace $workspace_version"
+# The internal dependency pins publish with the crates, so each must state the
+# workspace version it resolves to.
+while read -r pinned; do
+    if [ "$pinned" != "$workspace_version" ]; then
+        echo "an internal dependency pin says $pinned, the workspace says $workspace_version" >&2
+        exit 1
+    fi
+done < <(grep -E '^powerio[a-z-]* = \{ path = "[^"]+", version = "[0-9.]+"' Cargo.toml \
+    | grep -oE '[0-9]+\.[0-9]+\.[0-9]+')
+
+# The changelog's top section and the release notes draft state the workspace
+# version; the eventual tag is v<workspace version>.
+changelog_version=$(grep -m1 -oE '^## [0-9]+\.[0-9]+\.[0-9]+' CHANGELOG.md | grep -oE '[0-9.]+')
+if [ "$changelog_version" != "$workspace_version" ]; then
+    echo "CHANGELOG.md leads with $changelog_version, the workspace says $workspace_version" >&2
+    exit 1
+fi
+if [ ! -f "docs/release-notes/$workspace_version-draft.md" ]; then
+    echo "docs/release-notes/$workspace_version-draft.md is not checked in" >&2
+    exit 1
+fi
+grep -q "PowerIO $workspace_version release notes" "docs/release-notes/$workspace_version-draft.md" \
+    || { echo "the release notes draft title does not state $workspace_version" >&2; exit 1; }
+
+echo "release identity OK: ABI $rust_abi, module schema $schema_name/$schema_version, workspace $workspace_version, tag v$workspace_version"
