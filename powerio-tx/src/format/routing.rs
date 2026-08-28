@@ -166,12 +166,11 @@ pub fn distribution_format_from_name(name: &str) -> Option<DistributionFormat> {
 /// question.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum JsonClass {
-    /// A `.pio.json` package. A package is not a converter boundary
-    /// format, so it stays out of [`SourceFormat`]; callers route it to the
-    /// package reader instead of a case parser.
+    /// A `.pio.json` stored module document. The stored document is not a
+    /// converter boundary format, so it stays out of [`SourceFormat`];
+    /// callers route it to the stored module reader instead of a case parser.
     Module,
-    /// Bare [`BalancedNetwork`](crate::BalancedNetwork) model JSON: the object
-    /// a package carries under `model.balanced_network`, written by
+    /// Bare [`BalancedNetwork`](crate::BalancedNetwork) model JSON, written by
     /// `to_json` and read by `from_json`. powerio authors it, so it is not a
     /// case format and stays out of [`SourceFormat`]; callers route it to
     /// those two methods instead of a case parser.
