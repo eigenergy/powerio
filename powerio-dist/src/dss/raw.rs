@@ -952,6 +952,9 @@ impl<L: Loader> Executor<'_, L> {
             Ok(text) => {
                 self.include_bytes += text.len();
                 for (line_no, line) in text.lines().enumerate() {
+                    if self.raw.halted {
+                        break;
+                    }
                     let mut s = Scanner::new(line, None);
                     let Some(bus) = s.next_param() else { continue };
                     if bus.value.text.is_empty() {
@@ -960,12 +963,14 @@ impl<L: Loader> Executor<'_, L> {
                     let x = s.next_param().map(|p| p.value).unwrap_or_default();
                     let y = s.next_param().map(|p| p.value).unwrap_or_default();
                     match (x.to_f64(None), y.to_f64(None)) {
-                        (Ok(x), Ok(y)) if self.raw.charge_preserved() => {
-                            self.raw.buscoords.push(BusCoord {
-                                bus: bus.value.text,
-                                x,
-                                y,
-                            });
+                        (Ok(x), Ok(y)) => {
+                            if self.raw.charge_preserved() {
+                                self.raw.buscoords.push(BusCoord {
+                                    bus: bus.value.text,
+                                    x,
+                                    y,
+                                });
+                            }
                         }
                         _ => self.raw.warn(
                             &C::PARSE_DSS_SOURCE_MALFORMED,
@@ -1692,6 +1697,50 @@ mod tests {
         assert!(raw.commands.len() <= MAX_TOTAL_PRESERVED);
         assert!(raw.diagnostics.len() <= MAX_TOTAL_DIAGNOSTICS + 1);
         assert_eq!(count(&raw), (1, 1), "preserved-first order");
+    }
+
+    #[test]
+    fn a_ceiling_crossed_inside_buscoords_halts_without_false_malformed_findings() {
+        // Once the preserved ceiling fires partway through a coordinate
+        // file, the halt stops the scan: lines past the refusal are neither
+        // retained nor reported, and a well formed line is never called
+        // malformed just because its charge was refused.
+        use std::fmt::Write as _;
+        let root = std::env::temp_dir().join(format!("powerio-dist-fs008-{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        let extra = 64usize;
+        let mut coords = String::with_capacity((MAX_TOTAL_PRESERVED + extra) * 12);
+        for index in 0..MAX_TOTAL_PRESERVED + extra {
+            let _ = writeln!(coords, "b{index} 1 2");
+        }
+        std::fs::write(root.join("coords.csv"), coords).unwrap();
+        std::fs::write(root.join("master.dss"), "Buscoords coords.csv\n").unwrap();
+
+        let raw = parse_raw_file(root.join("master.dss")).unwrap();
+        std::fs::remove_dir_all(&root).unwrap();
+
+        let warned = raw
+            .warnings
+            .iter()
+            .filter(|w| w.contains("READ.DSS.INCLUDE_BUDGET"))
+            .count();
+        let recorded = raw
+            .diagnostics
+            .iter()
+            .filter(|d| d.code() == "READ.DSS.INCLUDE_BUDGET")
+            .count();
+        assert_eq!((warned, recorded), (1, 1), "exactly one terminal refusal");
+        assert!(
+            !raw.warnings
+                .iter()
+                .any(|w| w.contains("PARSE.DSS.SOURCE_MALFORMED")),
+            "well formed coordinate lines reported malformed"
+        );
+        assert!(raw.buscoords.len() <= MAX_TOTAL_PRESERVED);
+        assert!(
+            raw.buscoords.len() < MAX_TOTAL_PRESERVED + extra,
+            "coordinates retained past the halt"
+        );
     }
 
     #[test]
