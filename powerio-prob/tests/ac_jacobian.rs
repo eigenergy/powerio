@@ -490,3 +490,34 @@ fn mismatched_identities_and_incomplete_points_are_refused() {
     assert!(error.to_string().contains("complete"), "{error}");
     let _ = Arc::new(instance);
 }
+
+#[test]
+fn an_update_over_a_different_axis_is_refused() {
+    // A Jacobian assembled over one network refuses a refresh from an
+    // instance whose lowered axis is a different size, in both directions.
+    let big = case("case14.m");
+    let small = case("case9.m");
+    let big_instance = AcPfInstance::from_network(big.clone()).unwrap();
+    let small_instance = AcPfInstance::from_network(small.clone()).unwrap();
+    let mut jacobian = calc_power_flow_jacobian(
+        &big_instance,
+        &operating_point(&big),
+        VoltageCoordinates::Polar,
+    )
+    .unwrap();
+    let error = jacobian
+        .update(&small_instance, &operating_point(&small))
+        .unwrap_err();
+    assert!(error.to_string().contains("bus axis"), "{error}");
+
+    let mut small_jacobian = calc_power_flow_jacobian(
+        &small_instance,
+        &operating_point(&small),
+        VoltageCoordinates::Polar,
+    )
+    .unwrap();
+    let error = small_jacobian
+        .update(&big_instance, &operating_point(&big))
+        .unwrap_err();
+    assert!(error.to_string().contains("bus axis"), "{error}");
+}
