@@ -130,7 +130,7 @@ header = """
  * `--features gridfm` for pio_read_dir / pio_scenario_ids
  * (guarded by PIO_GRIDFM), `--features dist` for the pio_dist_* entry
  * points (guarded by PIO_DIST): multiconductor distribution cases (OpenDSS,
- * PMD ENGINEERING JSON, BMOPF JSON) behind their own PioDistNetwork handle,
+ * PMD ENGINEERING JSON, BMOPF JSON) behind their own PioMulticonductorNetwork handle,
  * freed with pio_dist_network_free, string outputs freed with pio_string_free,
  * and `--features prob` (guarded by PIO_PROB) for the problem data the
  * module surface serves. Each symbol's own #if states what it needs; a
@@ -164,12 +164,12 @@ after_includes = """
  * calls on one handle are allowed; releasing a raw handle concurrently with
  * any call on that same raw handle is caller error.
  */
-typedef struct PioNetwork PioNetwork;
+typedef struct PioBalancedNetwork PioBalancedNetwork;
 typedef struct PioError PioError;
-typedef struct PioModuleHandle PioModuleHandle;
+typedef struct PioModule PioModule;
 typedef struct PioDcData PioDcData;
 #if defined(PIO_DIST)
-typedef struct PioDistNetwork PioDistNetwork;
+typedef struct PioMulticonductorNetwork PioMulticonductorNetwork;
 #endif
 #if defined(PIO_ARROW)
 struct ArrowArray;
@@ -178,7 +178,7 @@ struct ArrowSchema;
 
 [export]
 prefix = ""
-include = ["PioNetwork", "PioDistNetwork", "PioError", "PioModuleHandle", "PioDcData"]
+include = ["PioBalancedNetwork", "PioMulticonductorNetwork", "PioError", "PioModule", "PioDcData"]
 
 [export.rename]
 "FFI_ArrowArray" = "struct ArrowArray"

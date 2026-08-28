@@ -84,30 +84,30 @@ int main(int argc, char **argv) {
     printf("powerio %s (ABI %u)\n", pio_version(), pio_abi_version());
 
     char err[PIO_ERRBUF_MIN];
-    PioNetwork *c = pio_parse_file(argv[1], NULL, err, sizeof err);
+    PioBalancedNetwork *c = pio_parse_file(argv[1], NULL, err, sizeof err);
     CHECK(c != NULL, err);
 
-    size_t nb = pio_n_buses(c);
-    size_t m = pio_n_branches(c);
-    size_t ng = pio_n_gens(c);
-    double base = pio_base_mva(c);
+    size_t nb = pio_balanced_network_n_buses(c);
+    size_t m = pio_balanced_network_n_branches(c);
+    size_t ng = pio_balanced_network_n_gens(c);
+    double base = pio_balanced_network_base_mva(c);
     printf("parsed %s: %zu buses, %zu branches, %zu gens, baseMVA %g\n", argv[1],
            nb, m, ng, base);
     CHECK(nb > 0 && m > 0, "empty case");
-    CHECK(pio_n_islands(c) >= 1, "bad island count");
-    CHECK(pio_ref_bus_index(c) >= 0, "no single reference bus");
+    CHECK(pio_balanced_network_n_islands(c) >= 1, "bad island count");
+    CHECK(pio_balanced_network_ref_bus_index(c) >= 0, "no single reference bus");
     /* The MATPOWER reader is total: no warnings attached to the handle. */
     CHECK(pio_warnings(c, NULL, 0) == 0, "unexpected parse warnings");
 
-    /* Pull branch endpoints (1-based bus ids, same space as pio_bus_ids) and
+    /* Pull branch endpoints (1-based bus ids, same space as pio_balanced_network_bus_ids) and
      * reactances, as a solver would. The all-NULL call is the count query; the
      * fill returns the same total, so a short buffer is detectable. */
-    CHECK(pio_branches(c, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, 0) == m,
-          "count query disagrees with pio_n_branches");
+    CHECK(pio_balanced_network_branches(c, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, 0) == m,
+          "count query disagrees with pio_balanced_network_n_branches");
     int64_t *from = malloc(m * sizeof *from);
     double *x = malloc(m * sizeof *x);
     CHECK(from && x, "out of memory");
-    CHECK(pio_branches(c, from, NULL, NULL, x, NULL, NULL, NULL, NULL, m) == m,
+    CHECK(pio_balanced_network_branches(c, from, NULL, NULL, x, NULL, NULL, NULL, NULL, m) == m,
           "branch fill did not return the total");
     for (size_t k = 0; k < m; k++) {
         CHECK(from[k] >= 1, "branch from-id should be a valid 1-based bus id");
@@ -123,7 +123,7 @@ int main(int argc, char **argv) {
     char *echo = pio_to_format(c, "matpower", NULL, &diags, err, sizeof err);
     CHECK(echo != NULL && strlen(echo) > 0, err);
     CHECK(diags == NULL || diags[0] == '[', "diagnostics are a JSON array");
-    pio_string_free(diags);
+    pio_string_release(diags);
 
     /* The options struct: zero it, set struct_size, ask for a policy. A zeroed
      * struct is every default, so it must agree byte for byte with NULL. */
@@ -134,7 +134,7 @@ int main(int argc, char **argv) {
         char *same = pio_to_format(c, "matpower", &opts, NULL, err, sizeof err);
         CHECK(same != NULL, err);
         CHECK(strcmp(same, echo) == 0, "a zeroed PioWriteOptions differs from NULL");
-        pio_string_free(same);
+        pio_string_release(same);
 
         /* A cost policy the CLI has shipped for releases, now reachable here. */
         opts.missing_gen_cost_mode = PIO_MISSING_GEN_COST_FILL;
@@ -142,7 +142,7 @@ int main(int argc, char **argv) {
         opts.fill_c1 = 5.0;
         char *filled = pio_to_format(c, "matpower", &opts, NULL, err, sizeof err);
         CHECK(filled != NULL, err);
-        pio_string_free(filled);
+        pio_string_release(filled);
 
         /* A struct_size past this build's, with a field set beyond it, is
          * refused: the library will not drop an option it cannot honor. */
@@ -163,31 +163,31 @@ int main(int argc, char **argv) {
         wide.future = 0.0;
         char *served = pio_to_format(c, "matpower", &wide.head, NULL, err, sizeof err);
         CHECK(served != NULL, err);
-        pio_string_free(served);
+        pio_string_release(served);
     }
-    pio_string_free(echo);
+    pio_string_release(echo);
 
     /* Cross-format convert reaches the converter and returns owned text.
      * A NULL out_diagnostics_json discards them. */
     char *raw = pio_convert_file(argv[1], NULL, "psse", NULL, NULL, err, sizeof err);
     CHECK(raw != NULL, err);
-    pio_string_free(raw);
+    pio_string_release(raw);
 
     /* Model JSON: serialize it, parse it back, and confirm the counts survive.
      * Lossless, validated on read. It is powerio's own document rather than a
      * case format, so it has no format token. */
-    char *json = pio_to_json(c, err, sizeof err);
+    char *json = pio_balanced_network_to_json(c, err, sizeof err);
     CHECK(json != NULL, err);
-    PioNetwork *c2 = pio_from_json(json, err, sizeof err);
+    PioBalancedNetwork *c2 = pio_balanced_network_from_json(json, err, sizeof err);
     CHECK(c2 != NULL, err);
-    CHECK(pio_n_buses(c2) == nb && pio_n_branches(c2) == m && pio_n_gens(c2) == ng,
+    CHECK(pio_balanced_network_n_buses(c2) == nb && pio_balanced_network_n_branches(c2) == m && pio_balanced_network_n_gens(c2) == ng,
           "model JSON round-trip changed the table sizes");
     {
         char label[64];
         pio_classify_str(json, label, sizeof label);
         CHECK(strcmp(label, "model-json") == 0, "model JSON should classify as model-json");
     }
-    pio_string_free(json);
+    pio_string_release(json);
     pio_network_free(c2);
 
 #ifdef PIO_PROB
@@ -208,18 +208,18 @@ int main(int argc, char **argv) {
         buf[rd] = '\0';
         fclose(fp);
 
-        PioNetwork *cs = pio_parse_str(buf, "matpower", err, sizeof err);
+        PioBalancedNetwork *cs = pio_parse_str(buf, "matpower", err, sizeof err);
         CHECK(cs != NULL, err);
-        CHECK(pio_n_buses(cs) == nb && pio_n_branches(cs) == m && pio_n_gens(cs) == ng,
+        CHECK(pio_balanced_network_n_buses(cs) == nb && pio_balanced_network_n_branches(cs) == m && pio_balanced_network_n_gens(cs) == ng,
               "pio_parse_str disagrees with pio_parse_file on table sizes");
 
         /* The byte entry point takes an explicit length, so the buffer need
          * not be NUL-terminated; it also reaches the binary readers, which
          * pio_parse_str cannot. */
-        PioNetwork *cb = pio_parse_bytes((const uint8_t *)buf, rd, "matpower",
+        PioBalancedNetwork *cb = pio_parse_bytes((const uint8_t *)buf, rd, "matpower",
                                          err, sizeof err);
         CHECK(cb != NULL, err);
-        CHECK(pio_n_buses(cb) == nb && pio_n_branches(cb) == m,
+        CHECK(pio_balanced_network_n_buses(cb) == nb && pio_balanced_network_n_branches(cb) == m,
               "pio_parse_bytes disagrees with pio_parse_file on table sizes");
         pio_network_free(cb);
 
@@ -227,12 +227,12 @@ int main(int argc, char **argv) {
         char *pm = pio_convert_str(buf, "matpower", "powermodels-json",
                                    NULL, NULL, err, sizeof err);
         CHECK(pm != NULL, err);
-        pio_string_free(pm);
+        pio_string_release(pm);
 
         char *old_order = pio_convert_str(buf, "powermodels-json", "matpower",
                                           NULL, NULL, err, sizeof err);
         if (old_order != NULL) {
-            pio_string_free(old_order);
+            pio_string_release(old_order);
             CHECK(0, "pio_convert_str accepted target/source argument order");
         }
         CHECK(strlen(err) > 0, "pio_convert_str old-order error was empty");
@@ -241,15 +241,15 @@ int main(int argc, char **argv) {
         /* Normalize into a NEW handle: per unit, radians, filtered, reindexed.
          * It has no more buses than the raw case, has at least one reference bus
          * (several if the file marked several), and still snapshots. Count the
-         * references with the NULL-out query, not pio_ref_bus_index >= 0: the
+         * references with the NULL-out query, not pio_balanced_network_ref_bus_index >= 0: the
          * latter returns -1 for a multi-slack case, which is valid here. */
-        PioNetwork *cn = pio_normalize(cs, NULL, err, sizeof err);
+        PioBalancedNetwork *cn = pio_balanced_network_normalize(cs, NULL, err, sizeof err);
         CHECK(cn != NULL, err);
-        CHECK(pio_n_buses(cn) <= nb && pio_n_buses(cn) > 0, "normalized bus count out of range");
-        CHECK(pio_ref_bus_indices(cn, NULL, 0) >= 1, "normalized case lost its reference bus");
-        char *njson = pio_to_json(cn, err, sizeof err);
+        CHECK(pio_balanced_network_n_buses(cn) <= nb && pio_balanced_network_n_buses(cn) > 0, "normalized bus count out of range");
+        CHECK(pio_balanced_network_ref_bus_indices(cn, NULL, 0) >= 1, "normalized case lost its reference bus");
+        char *njson = pio_balanced_network_to_json(cn, err, sizeof err);
         CHECK(njson != NULL, err);
-        pio_string_free(njson);
+        pio_string_release(njson);
 
         /* The solver preparation repairs ride the same options struct as the
          * write entry points: zero it, set struct_size, ask for the clamp. A
@@ -259,14 +259,14 @@ int main(int argc, char **argv) {
             memset(&nopts, 0, sizeof nopts);
             nopts.struct_size = sizeof nopts;
             nopts.clamp_angle_bounds = 1;
-            PioNetwork *clamped = pio_normalize(cs, &nopts, err, sizeof err);
+            PioBalancedNetwork *clamped = pio_balanced_network_normalize(cs, &nopts, err, sizeof err);
             CHECK(clamped != NULL, err);
-            CHECK(pio_n_buses(clamped) == pio_n_buses(cn), "the clamp changed the bus count");
+            CHECK(pio_balanced_network_n_buses(clamped) == pio_balanced_network_n_buses(cn), "the clamp changed the bus count");
             pio_network_free(clamped);
 
             /* A pad outside (0, pi/2) is the reader's own refusal. */
             nopts.angle_bound_pad = 2.0;
-            PioNetwork *refused = pio_normalize(cs, &nopts, err, sizeof err);
+            PioBalancedNetwork *refused = pio_balanced_network_normalize(cs, &nopts, err, sizeof err);
             CHECK(refused == NULL, "an out of range angle_bound_pad should fail the call");
             CHECK(strlen(err) > 0, "the refusal should name the field");
         }
@@ -288,7 +288,7 @@ int main(int argc, char **argv) {
         CHECK(rc == 0, err);
         CHECK(dirdiags != (char *)0x1,
               "pio_write_dir left out_diagnostics_json untouched");
-        pio_string_free(dirdiags);
+        pio_string_release(dirdiags);
         char buses[600];
         snprintf(buses, sizeof buses, "%s/buses.csv", outdir);
         FILE *bf = fopen(buses, "rb");
@@ -321,7 +321,7 @@ int main(int argc, char **argv) {
 
 #ifdef PIO_GRIDFM
     /* Dataset reader surface: gridfm is a directory format and returns the same
-     * PioNetwork handle family as parse_file/parse_str. */
+     * PioBalancedNetwork handle family as parse_file/parse_str. */
     {
         const char *gridfm_dir = argv[2];
         CHECK(pio_has_feature("gridfm") == 1, "pio_has_feature(gridfm) should be 1");
@@ -332,9 +332,9 @@ int main(int argc, char **argv) {
         CHECK(pio_scenario_ids(gridfm_dir, "gridfm", ids, 4, err, sizeof err) == count,
               "scenario-id fill did not return the total");
 
-        PioNetwork *g = pio_read_dir(gridfm_dir, "gridfm", ids[0], err, sizeof err);
+        PioBalancedNetwork *g = pio_read_dir(gridfm_dir, "gridfm", ids[0], err, sizeof err);
         CHECK(g != NULL, err);
-        CHECK(pio_n_buses(g) > 0, "gridfm read returned an empty network");
+        CHECK(pio_balanced_network_n_buses(g) > 0, "gridfm read returned an empty network");
         CHECK(pio_warnings(g, NULL, 0) > 0, "gridfm read should report fidelity warnings");
         pio_network_free(g);
         printf("gridfm surface OK\n");
@@ -351,7 +351,7 @@ int main(int argc, char **argv) {
             "new line.l1 bus1=src bus2=b2 length=100 units=m\n"
             "new load.d1 bus1=b2 kv=12.47 kw=50\n"
             "solve\n";
-        PioDistNetwork *d = pio_dist_parse_str(dss, "dss", err, sizeof err);
+        PioMulticonductorNetwork *d = pio_dist_parse_str(dss, "dss", err, sizeof err);
         CHECK(d != NULL, err);
 
         char warn[1024];
@@ -366,8 +366,8 @@ int main(int argc, char **argv) {
         CHECK(bmopf != NULL, err);
         CHECK(strstr(bmopf, "\"bus\"") != NULL, "BMOPF output lost the bus table");
         CHECK(cdiags == NULL || cdiags[0] == '[', "diagnostics are a JSON array");
-        pio_string_free(cdiags);
-        pio_string_free(bmopf);
+        pio_string_release(cdiags);
+        pio_string_release(bmopf);
 
         /* Same-format write echoes the retained source byte for byte. */
         cdiags = NULL;
@@ -375,7 +375,7 @@ int main(int argc, char **argv) {
         CHECK(echo2 != NULL, err);
         CHECK(strcmp(echo2, dss) == 0, "dss echo is not byte exact");
         CHECK(cdiags == NULL, "a byte-exact echo should report no findings");
-        pio_string_free(echo2);
+        pio_string_release(echo2);
         pio_dist_network_free(d);
 
         /* One-shot string conversion into PMD ENGINEERING JSON; parameter
@@ -384,13 +384,13 @@ int main(int argc, char **argv) {
         CHECK(pmd != NULL, err);
         CHECK(strstr(pmd, "\"data_model\": \"ENGINEERING\"") != NULL,
               "PMD output lost the data_model marker");
-        pio_string_free(cdiags);
-        pio_string_free(pmd);
+        pio_string_release(cdiags);
+        pio_string_release(pmd);
 
         char *old_dist_order = pio_dist_convert_str(dss, "pmd", "dss",
                                                     NULL, err, sizeof err);
         if (old_dist_order != NULL) {
-            pio_string_free(old_dist_order);
+            pio_string_release(old_dist_order);
             CHECK(0, "pio_dist_convert_str accepted target/source argument order");
         }
         CHECK(strlen(err) > 0, "pio_dist_convert_str old-order error was empty");
@@ -422,7 +422,7 @@ int main(int argc, char **argv) {
               "voltage source merge capability missing");
         CHECK(strstr(dist_caps, "\"bmopf_transformer_diagnostics\":true") != NULL,
               "transformer diagnostics capability missing");
-        pio_string_free(dist_caps);
+        pio_string_release(dist_caps);
         printf("dist surface OK\n");
     }
 #endif
@@ -435,7 +435,7 @@ int main(int argc, char **argv) {
         struct ArrowSchema sch;
         memset(&arr, 0, sizeof arr);
         memset(&sch, 0, sizeof sch);
-        int rc = pio_to_arrow(c, PIO_ARROW_TABLE_BUS, &arr, &sch, err, sizeof err);
+        int rc = pio_balanced_network_to_arrow(c, PIO_ARROW_TABLE_BUS, &arr, &sch, err, sizeof err);
         CHECK(rc == 0, err);
         CHECK(arr.length == (int64_t)nb, "arrow bus table row count mismatch");
         CHECK(arr.release != NULL && sch.release != NULL, "missing arrow release callbacks");
@@ -450,7 +450,7 @@ int main(int argc, char **argv) {
         struct ArrowSchema sch;
         memset(&arr, 0, sizeof arr);
         memset(&sch, 0, sizeof sch);
-        int rc = pio_to_arrow(c, PIO_ARROW_TABLE_BPRIME, &arr, &sch, err, sizeof err);
+        int rc = pio_balanced_network_to_arrow(c, PIO_ARROW_TABLE_BPRIME, &arr, &sch, err, sizeof err);
         CHECK(rc == 0, err);
         CHECK(arr.length > 0, "Bprime table should not be empty for case9");
         CHECK(arr.release != NULL && sch.release != NULL,
@@ -459,7 +459,7 @@ int main(int argc, char **argv) {
         sch.release(&sch);
         memset(&arr, 0, sizeof arr);
         memset(&sch, 0, sizeof sch);
-        rc = pio_to_arrow(c, PIO_ARROW_TABLE_MATRIX_BUS, &arr, &sch, err, sizeof err);
+        rc = pio_balanced_network_to_arrow(c, PIO_ARROW_TABLE_MATRIX_BUS, &arr, &sch, err, sizeof err);
         CHECK(rc == 0, err);
         CHECK(arr.length == (int64_t)nb, "matrix_bus axis row count mismatch");
         CHECK(arr.release != NULL && sch.release != NULL,
@@ -473,7 +473,7 @@ int main(int argc, char **argv) {
               "Arrow catalog missing matrix_bus");
         CHECK(strstr(catalog, "\"name\":\"matrix_branch\"") != NULL,
               "Arrow catalog missing matrix_branch");
-        pio_string_free(catalog);
+        pio_string_release(catalog);
         printf("matrix arrow export OK\n");
     }
 #else
@@ -484,7 +484,7 @@ int main(int argc, char **argv) {
         struct ArrowSchema sch;
         memset(&arr, 0, sizeof arr);
         memset(&sch, 0, sizeof sch);
-        int rc = pio_to_arrow(c, PIO_ARROW_TABLE_BPRIME, &arr, &sch, err, sizeof err);
+        int rc = pio_balanced_network_to_arrow(c, PIO_ARROW_TABLE_BPRIME, &arr, &sch, err, sizeof err);
         CHECK(rc == -1, "matrix Arrow table should fail without matrix support");
         CHECK(strlen(err) > 0, "matrix Arrow failure should explain the missing feature");
     }
@@ -492,27 +492,27 @@ int main(int argc, char **argv) {
 #endif
 
     /* NULL handle is the documented safe default. */
-    CHECK(pio_n_buses(NULL) == 0, "NULL handle did not return 0");
-    CHECK(pio_ref_bus_index(NULL) == -1, "NULL handle did not return -1");
+    CHECK(pio_balanced_network_n_buses(NULL) == 0, "NULL handle did not return 0");
+    CHECK(pio_balanced_network_ref_bus_index(NULL) == -1, "NULL handle did not return -1");
 
     /* ---- ABI v6: retain/release, error handles, modules, DC data ---- */
 
     /* The v5 network handle carries the v6 lifecycle: a retained sibling
      * survives the original's release, and release(NULL) is a no-op. */
     {
-        PioNetwork *kept = pio_network_retain(c);
+        PioBalancedNetwork *kept = pio_balanced_network_retain(c);
         CHECK(kept != NULL, "network retain returned NULL");
         pio_network_free(c);
-        CHECK(pio_n_buses(kept) == 9, "retained network lost its buses");
-        pio_network_release(kept);
-        pio_network_release(NULL);
+        CHECK(pio_balanced_network_n_buses(kept) == 9, "retained network lost its buses");
+        pio_balanced_network_release(kept);
+        pio_balanced_network_release(NULL);
         c = NULL;
     }
 
     /* A failing v6 call returns a structured error handle. */
     {
         PioError *error = NULL;
-        PioModuleHandle *bad = pio_module_parse_str("not a case", "matpower", &error);
+        PioModule *bad = pio_parse_str("not a case", "matpower", &error);
         CHECK(bad == NULL, "malformed parse returned a module");
         CHECK(error != NULL, "malformed parse returned no error handle");
         CHECK(pio_error_code(error) != NULL && strchr(pio_error_code(error), '.') != NULL,
@@ -532,7 +532,7 @@ int main(int argc, char **argv) {
     /* The module handle: parse, write, reread, ownership orders. */
     {
         PioError *error = NULL;
-        PioModuleHandle *module = pio_module_parse_file(argv[1], NULL, &error);
+        PioModule *module = pio_parse_file(argv[1], NULL, &error);
         CHECK(module != NULL, "module parse failed");
         CHECK(error == NULL, "module parse stored an error on success");
         CHECK(strcmp(pio_module_kind(module), "balanced_network") == 0,
@@ -540,17 +540,17 @@ int main(int argc, char **argv) {
 
         char *doc = pio_module_write_json(module, &error);
         CHECK(doc != NULL, "module write failed");
-        PioModuleHandle *reread = pio_module_read_json(doc, &error);
+        PioModule *reread = pio_module_read_json(doc, &error);
         CHECK(reread != NULL, "stored module reread failed");
-        pio_string_free(doc);
+        pio_string_release(doc);
 
         char *inspect = pio_module_inspect_json(reread, &error);
         CHECK(inspect != NULL && strstr(inspect, "\"balanced_network\"") != NULL,
               "module inspection missing the kind");
-        pio_string_free(inspect);
+        pio_string_release(inspect);
 
         /* A static value refuses selection with a coded error. */
-        PioModuleHandle *exported = pio_module_export_state(reread, 0, NULL, &error);
+        PioModule *exported = pio_module_export_state(reread, 0, NULL, &error);
         CHECK(exported == NULL, "static value export unexpectedly succeeded");
         CHECK(error != NULL &&
                   strstr(pio_error_code(error), "REQUEST.STATE.NOT_A_COLLECTION") != NULL,
@@ -572,7 +572,7 @@ int main(int argc, char **argv) {
               "unknown formula refusal carries the wrong code");
         pio_error_release(error);
         error = NULL;
-        PioModuleHandle *conflicted = pio_module_export_state(reread, 0, "s1", &error);
+        PioModule *conflicted = pio_module_export_state(reread, 0, "s1", &error);
         CHECK(conflicted == NULL && error != NULL &&
                   strcmp(pio_error_code(error), "REQUEST.CAPI.SELECTOR_CONFLICT") == 0,
               "selector conflict refusal carries the wrong code");
@@ -583,7 +583,7 @@ int main(int argc, char **argv) {
         char *module_diagnostics = pio_module_diagnostics_json(reread, &error);
         CHECK(module_diagnostics != NULL && module_diagnostics[0] == '[',
               "module diagnostics JSON missing");
-        pio_string_free(module_diagnostics);
+        pio_string_release(module_diagnostics);
 
         /* DC data: an independently owned result with stable mappings. */
         PioDcData *dc = pio_dc_data_build(reread, "series_susceptance", &error);

@@ -26,7 +26,7 @@ int main(int argc, char **argv) {
     char *schemas = pio_schema_versions_json();
     CHECK(schemas != NULL, "schema version report missing");
     CHECK(strstr(schemas, "powerio_version") != NULL, "schema report has no release version");
-    pio_string_free(schemas);
+    pio_string_release(schemas);
 
     char *build = pio_build_info();
     CHECK(build != NULL, "build report missing");
@@ -34,19 +34,19 @@ int main(int argc, char **argv) {
     for (size_t i = 0; i < sizeof features / sizeof features[0]; i++) {
         CHECK(strstr(build, features[i]) != NULL, "build report omits a release feature");
     }
-    pio_string_free(build);
+    pio_string_release(build);
 
     /* Exercise one representative entry point for each additive feature. */
     char err[PIO_ERRBUF_MIN] = {0};
     char *arrow = pio_arrow_catalog_json(err, sizeof err);
     CHECK(arrow != NULL, err);
-    pio_string_free(arrow);
+    pio_string_release(arrow);
     CHECK(pio_matrix_available() == 1, "matrix entry point is unavailable");
     CHECK(pio_scenario_ids("", "gridfm", NULL, 0, err, sizeof err) < 0,
           "invalid gridfm path should fail through the gridfm entry point");
     char *dist = pio_dist_capabilities_json();
     CHECK(dist != NULL, "distribution capability report missing");
-    pio_string_free(dist);
+    pio_string_release(dist);
 
     printf("powerio %s; ABI %u; distribution ABI %u; release features OK\n",
            pio_version(), pio_abi_version(), pio_dist_abi_version());

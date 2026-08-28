@@ -13,10 +13,10 @@
 //!   effect, `convert` transcodes without keeping a handle, `free` destroys.
 //! - `to_` marks a representation change of the same network; the target is a
 //!   format string (`pio_to_format`) unless the output type differs
-//!   (`pio_to_arrow` fills Arrow C Data Interface structs).
+//!   (`pio_balanced_network_to_arrow` fills Arrow C Data Interface structs).
 //! - Format names never appear in symbols: formats are strings, so a new
-//!   format never changes this ABI. Model JSON uses `pio_to_json` and
-//!   `pio_from_json`.
+//!   format never changes this ABI. Model JSON uses `pio_balanced_network_to_json` and
+//!   `pio_balanced_network_from_json`.
 //! - Array extractors share the cap/count convention: write up to `cap`
 //!   values, return the total available, `NULL` out is a pure count query.
 //! - Vocabulary: a *bus* is a named connection point (this API is bus
@@ -76,17 +76,17 @@ impl NetworkState {
 crate::v6::arc_handle!(
     /// The opaque balanced network handle: an independently owned reference
     /// over one immutable parsed network (ABI v6 lifecycle).
-    PioNetwork,
+    PioBalancedNetwork,
     NetworkState
 );
 
 // The handle is immutable after construction and the C ABI documents concurrent
 // reads from any number of threads as safe (see the cbindgen header preamble).
-// That guarantee requires `PioNetwork: Send + Sync`; pin it at compile time so
+// That guarantee requires `PioBalancedNetwork: Send + Sync`; pin it at compile time so
 // a future field that is not `Sync` fails the build instead of weakening it.
 const _: fn() = || {
     fn assert_send_sync<T: Send + Sync>() {}
-    assert_send_sync::<PioNetwork>();
+    assert_send_sync::<PioBalancedNetwork>();
 };
 
 /// Copy `msg` (truncated to fit) into a caller `char[len]` buffer, always
@@ -129,49 +129,80 @@ fn into_cstring(s: String) -> Option<*mut c_char> {
     CString::new(s).ok().map(CString::into_raw)
 }
 
-/// Finish a `*mut c_char` entry point: hand back the owned C string, or on an
-/// interior NUL write the error into `errbuf` (NULL/0 to skip) and return NULL.
-/// The shared tail of the string-returning functions.
-fn finish_cstring(s: String, errbuf: *mut c_char, errlen: usize) -> *mut c_char {
-    match into_cstring(s) {
-        Some(p) => p,
-        None => {
-            unsafe {
-                let msg = coded(
-                    &codes::BIND_CAPI_INTERIOR_NUL,
-                    "output contained an interior NUL byte",
-                );
-                copy_to_buf(errbuf, errlen, &msg);
-            };
-            std::ptr::null_mut()
-        }
-    }
-}
-
-/// Finish a `*mut c_char` entry point: run `f` (the string payload or an error
-/// message) under the panic guard and hand back an owned C string, or write
-/// the error (`panic_msg` if `f` panicked) into `errbuf` and return NULL. The
-/// shared tail of the string-returning functions that carry no warning buffer.
-/// Used by the always built `pio_to_json` as well as the dist and pkg
-/// entry points, so it carries no feature gate.
-unsafe fn finish_string(
-    errbuf: *mut c_char,
-    errlen: usize,
-    panic_msg: &str,
+/// v6 shell for a text producing entry point: catch panics, convert the
+/// rendered `CODE: message` failure line into a structured [`v6::PioError`],
+/// and hand back an owned C string.
+unsafe fn finish_string_v6(
+    error: *mut *mut v6::PioError,
     f: impl FnOnce() -> Result<String, String>,
 ) -> *mut c_char {
     unsafe {
-        match catch_unwind(AssertUnwindSafe(f)) {
-            Ok(Ok(text)) => finish_cstring(text, errbuf, errlen),
-            Ok(Err(msg)) => {
-                copy_to_buf(errbuf, errlen, &msg);
-                std::ptr::null_mut()
-            }
-            Err(_) => {
-                copy_to_buf(errbuf, errlen, &coded(&codes::BIND_CAPI_PANIC, panic_msg));
-                std::ptr::null_mut()
-            }
+        v6::v6_entry(error, std::ptr::null_mut(), || {
+            let text = f().map_err(|line| v6::error_from_line(&line))?;
+            CString::new(text).map(CString::into_raw).map_err(|_| {
+                v6::error_from_parts(
+                    codes::BIND_CAPI_INTERIOR_NUL.code,
+                    "the produced text holds an interior NUL and cannot cross as a C string",
+                    "[]",
+                )
+            })
+        })
+    }
+}
+
+/// v6 shell for an entry point producing a bare balanced network.
+unsafe fn finish_network_v6(
+    error: *mut *mut v6::PioError,
+    f: impl FnOnce() -> Result<(BalancedNetwork, Vec<Diagnostic>), String>,
+) -> *mut PioBalancedNetwork {
+    unsafe {
+        v6::v6_entry(error, std::ptr::null_mut(), || {
+            f().map(|(net, diagnostics)| make_network(net, diagnostics))
+                .map_err(|line| v6::error_from_line(&line))
+        })
+    }
+}
+
+#[cfg(feature = "dist")]
+/// v6 shell for an entry point producing a multiconductor network handle.
+unsafe fn finish_multiconductor_v6(
+    error: *mut *mut v6::PioError,
+    f: impl FnOnce() -> Result<PioMulticonductorNetwork, String>,
+) -> *mut PioMulticonductorNetwork {
+    unsafe {
+        v6::v6_entry(error, std::ptr::null_mut(), || {
+            f().map(|handle| Box::into_raw(Box::new(handle)))
+                .map_err(|line| v6::error_from_line(&line))
+        })
+    }
+}
+
+/// v6 shell for a conversion: the findings cross as a structured
+/// [`v6::PioDiagnostics`] handle (NULL for the parameter discards them), and
+/// the converted text is an owned C string.
+unsafe fn finish_conversion_v6(
+    out_diagnostics: *mut *mut v6::PioDiagnostics,
+    error: *mut *mut v6::PioError,
+    f: impl FnOnce() -> Result<(String, Vec<Diagnostic>), String>,
+) -> *mut c_char {
+    unsafe {
+        if !out_diagnostics.is_null() {
+            *out_diagnostics = std::ptr::null_mut();
         }
+        v6::v6_entry(error, std::ptr::null_mut(), || {
+            let (text, diagnostics) = f().map_err(|line| v6::error_from_line(&line))?;
+            let out = CString::new(text).map(CString::into_raw).map_err(|_| {
+                v6::error_from_parts(
+                    codes::BIND_CAPI_INTERIOR_NUL.code,
+                    "the produced text holds an interior NUL and cannot cross as a C string",
+                    "[]",
+                )
+            })?;
+            if !out_diagnostics.is_null() {
+                *out_diagnostics = v6::diagnostics_handle(&diagnostics);
+            }
+            Ok(out)
+        })
     }
 }
 
@@ -186,39 +217,12 @@ fn core_err_line(error: &powerio_core::Error) -> String {
     error.to_string()
 }
 
-fn parse_module_from_path(
-    path: &std::path::Path,
-    from: Option<&str>,
-) -> Result<powerio_core::PioModule<BalancedNetwork>, String> {
-    let mut source = powerio_core::Source::open(path).map_err(|e| core_err_line(&e))?;
-    if let Some(token) = from {
-        source = source.with_format(
-            powerio_core::FormatId::new(token.to_ascii_lowercase().replace('_', "-"))
-                .map_err(|e| core_err_line(&e))?,
-        );
-    }
-    powerio::format::parse(source).map_err(|e| core_err_line(&e))
-}
-
-fn parse_module_from_bytes(
-    bytes: &[u8],
-    from: &str,
-) -> Result<powerio_core::PioModule<BalancedNetwork>, String> {
-    let source = powerio_core::Source::from_bytes("<memory>", bytes.to_vec())
-        .map_err(|e| core_err_line(&e))?
-        .with_format(
-            powerio_core::FormatId::new(from.to_ascii_lowercase().replace('_', "-"))
-                .map_err(|e| core_err_line(&e))?,
-        );
-    powerio::format::parse(source).map_err(|e| core_err_line(&e))
-}
-
 /// Box a parsed module into an owned network handle, building its
 /// [`IndexCore`] once so every indexed query reuses it. The one constructor
-/// for `*mut PioNetwork`.
-fn make_network_module(module: powerio_core::PioModule<BalancedNetwork>) -> *mut PioNetwork {
+/// for `*mut PioBalancedNetwork`.
+fn make_network_module(module: powerio_core::PioModule<BalancedNetwork>) -> *mut PioBalancedNetwork {
     let core = IndexCore::build(module.value());
-    PioNetwork::new_raw(NetworkState {
+    PioBalancedNetwork::new_raw(NetworkState {
         core,
         warnings: powerio::diagnostics::render_diagnostics(module.diagnostics()),
         module,
@@ -227,7 +231,7 @@ fn make_network_module(module: powerio_core::PioModule<BalancedNetwork>) -> *mut
 
 /// Box a bare network with findings: the constructor for derived handles,
 /// which carry no retained source and write canonically.
-fn make_network(net: BalancedNetwork, diagnostics: Vec<Diagnostic>) -> *mut PioNetwork {
+fn make_network(net: BalancedNetwork, diagnostics: Vec<Diagnostic>) -> *mut PioBalancedNetwork {
     let mut module = powerio_core::PioModule::new(net);
     for diagnostic in diagnostics {
         // A refusal here can only be the record cap; the finding that does
@@ -236,58 +240,6 @@ fn make_network(net: BalancedNetwork, diagnostics: Vec<Diagnostic>) -> *mut PioN
         let _ = module.add_diagnostic(diagnostic);
     }
     make_network_module(module)
-}
-
-/// Finish a `*mut PioNetwork` entry point: run `f` (producing a `BalancedNetwork` with
-/// its read findings, or an error message) under the panic guard, hand back an
-/// owned handle, or write the error, `panic_msg` if `f` panicked, into `errbuf`
-/// and return NULL. The shared tail of every handle-returning function
-/// (`pio_parse_file`, `pio_parse_str`, `pio_read_dir`, `pio_normalize`).
-unsafe fn finish_module(
-    errbuf: *mut c_char,
-    errlen: usize,
-    panic_msg: &str,
-    f: impl FnOnce() -> Result<powerio_core::PioModule<BalancedNetwork>, String>,
-) -> *mut PioNetwork {
-    unsafe {
-        match catch_unwind(AssertUnwindSafe(|| f().map(make_network_module))) {
-            Ok(Ok(handle)) => handle,
-            Ok(Err(msg)) => {
-                copy_to_buf(errbuf, errlen, &msg);
-                std::ptr::null_mut()
-            }
-            Err(_) => {
-                copy_to_buf(errbuf, errlen, panic_msg);
-                std::ptr::null_mut()
-            }
-        }
-    }
-}
-
-unsafe fn finish_network(
-    errbuf: *mut c_char,
-    errlen: usize,
-    panic_msg: &str,
-    f: impl FnOnce() -> Result<(BalancedNetwork, Vec<Diagnostic>), String>,
-) -> *mut PioNetwork {
-    unsafe {
-        // make_network runs inside the guard: IndexCore::build is part of the
-        // entry point's work and the header promises panics never cross the
-        // boundary.
-        match catch_unwind(AssertUnwindSafe(|| {
-            f().map(|(net, diagnostics)| make_network(net, diagnostics))
-        })) {
-            Ok(Ok(handle)) => handle,
-            Ok(Err(msg)) => {
-                copy_to_buf(errbuf, errlen, &msg);
-                std::ptr::null_mut()
-            }
-            Err(_) => {
-                copy_to_buf(errbuf, errlen, &coded(&codes::BIND_CAPI_PANIC, panic_msg));
-                std::ptr::null_mut()
-            }
-        }
-    }
 }
 
 /// ABI version of this C interface. Bump on any breaking change to an existing
@@ -362,61 +314,8 @@ pub extern "C" fn pio_abi_version() -> u32 {
     PIO_ABI_VERSION
 }
 
-/// The ABI version of the optional `pio_dist_*` C API. Only linked when the
-/// `dist` feature is compiled in; probe that first with `pio_has_feature("dist")`
-/// if loading dynamically.
-#[cfg(feature = "dist")]
-#[unsafe(no_mangle)]
-pub extern "C" fn pio_dist_abi_version() -> u32 {
-    PIO_DIST_ABI_VERSION
-}
-
-#[cfg(feature = "dist")]
-fn dist_capabilities_json() -> String {
-    serde_json::json!({
-        "dist": true,
-        // This document is powerio's own, so it states the release that wrote
-        // it. The BMOPF schema it reports below belongs to the task force, and
-        // its version is theirs to set.
-        powerio::version::VERSION_KEY: powerio::VERSION,
-        "bmopf_fixed_taps": true,
-        "bmopf_center_tap_leakage": true,
-        "bmopf_delta_wye_leakage": true,
-        "bmopf_delta_roll": true,
-        "bmopf_voltage_source_merge": true,
-        "bmopf_transformer_diagnostics": true,
-        // Not a fetch location. Use it together with `bmopf_schema_version`.
-        "bmopf_schema_id": powerio_dist::BMOPF_SCHEMA_ID,
-        "bmopf_schema_version": powerio_dist::BMOPF_SCHEMA_VERSION,
-        "typed_capacitors": true,
-        "line_and_generator_ratings": true,
-        "per_sequence_bus_bounds": true,
-        "transformer_extras_relocation": true,
-    })
-    .to_string()
-}
-
-/// Return distribution capability flags as owned JSON. Free the returned string
-/// with [`pio_string_free`]. Only linked when the `dist` feature is compiled in;
-/// runtime loaders can either check `pio_has_feature("dist")` or probe for this
-/// symbol directly. The JSON schema is versioned separately from
-/// [`PIO_DIST_ABI_VERSION`] so new additive flags do not force a C signature
-/// change.
-#[cfg(feature = "dist")]
-#[unsafe(no_mangle)]
-pub extern "C" fn pio_dist_capabilities_json() -> *mut c_char {
-    // Guarded like every other allocating entry point: `serde_json::json!`
-    // expands to `to_value(..).unwrap()`, so the panic-free property would
-    // otherwise rest on the current field types alone.
-    unsafe {
-        guard(std::ptr::null_mut(), || {
-            into_cstring(dist_capabilities_json()).unwrap_or(std::ptr::null_mut())
-        })
-    }
-}
-
 /// Report the schema version of each document format in this library, as
-/// owned JSON. Free the returned string with [`pio_string_free`]. Infallible.
+/// owned JSON. Free the returned string with [`pio_string_release`]. Infallible.
 ///
 /// [`PIO_ABI_VERSION`] does not cover these versions. A binding that
 /// mirrors one of them must read it from here and refuse a library it does
@@ -458,7 +357,7 @@ fn schema_versions_json_ptr() -> *mut c_char {
 }
 
 /// Everything a loader needs to decide what this library can do, as one owned
-/// JSON document. Free the returned string with [`pio_string_free`]. Infallible.
+/// JSON document. Free the returned string with [`pio_string_release`]. Infallible.
 ///
 /// `curl_version_info` is the shape: one call, one report, and new keys arrive
 /// without a new symbol. Keys are only added. A caller with no JSON parser
@@ -505,17 +404,9 @@ fn build_info_ptr() -> *mut c_char {
     into_cstring(doc.to_string()).unwrap_or(std::ptr::null_mut())
 }
 
-/// Whether the matrix Arrow table API is usable in this build. Returns 1
-/// only when both `arrow` and `matrix` are compiled in. Matrix tables use
-/// `pio_to_arrow`. Infallible.
-#[unsafe(no_mangle)]
-pub extern "C" fn pio_matrix_available() -> i32 {
-    i32::from(cfg!(all(feature = "arrow", feature = "matrix")))
-}
-
 /// Whether an optional build feature is compiled in: pass `"arrow"`, `"matrix"`,
 /// `"gridfm"`, `"dist"`, or `"prob"`. Returns 1 if present, 0 otherwise (and 0
-/// for a NULL or unknown name). The optional entry points (`pio_to_arrow`, the
+/// for a NULL or unknown name). The optional entry points (`pio_balanced_network_to_arrow`, the
 /// matrix Arrow tables, the `pio_read_dir`/gridfm path, the `pio_dist_*` block,
 /// so a consumer that loaded the library at runtime probes for them here
 /// instead of resolving symbols blind. Feature names are strings like format
@@ -595,99 +486,13 @@ fn null_handle(what: &str) -> String {
     coded(&codes::BIND_CAPI_NULL_HANDLE, format!("{what} is NULL"))
 }
 
-/// Parse `path` (format from extension, or `from` if non-NULL) into a network
-/// handle. `from` accepts the [`pio_parse_str`] format names plus
-/// `pypsa-csv`/`pypsa`, `goc3-json`/`goc3`, `surge-json`/`surge`, and `pwb`;
-/// that includes `pslf`/`epc`, and `.epc` is inferred by extension. A PyPSA CSV folder is a directory, so it can only
-/// enter through this function, with `from = "pypsa-csv"` (or NULL when the
-/// directory holds a `network.csv`). Read fidelity warnings attach to the
-/// handle ([`pio_warnings`]). Returns `NULL` on error and writes the message
-/// into `errbuf`. Free the handle with [`pio_network_free`].
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn pio_parse_file(
-    path: *const c_char,
-    from: *const c_char,
-    errbuf: *mut c_char,
-    errlen: usize,
-) -> *mut PioNetwork {
-    unsafe {
-        finish_module(errbuf, errlen, "panic while parsing", || {
-            let path = required_cstr(path, "path")?;
-            let from = optional_cstr(from, "from")?;
-            parse_module_from_path(std::path::Path::new(path), from)
-        })
-    }
-}
-
-/// Parse in-memory case `text` of the named `format` into a network handle.
-/// Unlike [`pio_parse_file`] there is no path to infer from, so `format` is
-/// required: one of `matpower`/`m`, `powermodels`/`pm`, `egret`,
-/// `pandapower-json`/`pandapower`/`pp`, `psse`/`raw`, `psse34`, `psse35`,
-/// `powerworld`/`aux`, `pslf`/`epc`, `goc3-json`/`goc3`, `surge-json`/`surge`,
-/// or `opfdata-json`/`opfdata`. PyPSA CSV folders are
-/// directories, not text; parse them with [`pio_parse_file`] and
-/// `from = "pypsa-csv"`. Read fidelity warnings attach to the handle
-/// ([`pio_warnings`]). Returns `NULL` on error and writes the message into
-/// `errbuf`. Free the handle with [`pio_network_free`]. Balanced model JSON is
-/// not a case format and has no token here: read it with [`pio_from_json`].
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn pio_parse_str(
-    text: *const c_char,
-    format: *const c_char,
-    errbuf: *mut c_char,
-    errlen: usize,
-) -> *mut PioNetwork {
-    unsafe {
-        finish_module(errbuf, errlen, "panic while parsing", || {
-            let text = required_cstr(text, "text")?;
-            let format = required_cstr(format, "format")?;
-            parse_module_from_bytes(text.as_bytes(), format)
-        })
-    }
-}
-
-/// Parse `len` bytes of in-memory case data of the named `format` into a
-/// network handle. Accepts every [`pio_parse_str`] format name plus `pwb`:
-/// PowerWorld binary has no text form, so before this call the only way to
-/// reach that reader was [`pio_parse_file`], which means staging a temporary
-/// file. `bytes` need not be NUL-terminated and may contain interior NULs;
-/// text formats are decoded as UTF-8 and fail with a message if they are not.
-///
-/// Read fidelity warnings attach to the handle ([`pio_warnings`]). Returns
-/// `NULL` on error and writes the message into `errbuf`. Free the handle with
-/// [`pio_network_free`].
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn pio_parse_bytes(
-    bytes: *const u8,
-    len: usize,
-    format: *const c_char,
-    errbuf: *mut c_char,
-    errlen: usize,
-) -> *mut PioNetwork {
-    unsafe {
-        finish_module(errbuf, errlen, "panic while parsing", || {
-            let format = required_cstr(format, "format")?;
-            // A zero length read is an empty case, and every reader rejects
-            // one with its own message; a NULL pointer is a caller bug.
-            let slice = if len == 0 {
-                &[][..]
-            } else if bytes.is_null() {
-                return Err(coded(&codes::BIND_CAPI_NULL_ARGUMENT, "bytes is NULL"));
-            } else {
-                std::slice::from_raw_parts(bytes, len)
-            };
-            parse_module_from_bytes(slice, format)
-        })
-    }
-}
-
 /// Classify in-memory JSON case `text` by its top level markers, without
 /// parsing the case. Writes one of
 ///
 /// - `transmission:<format>` (e.g. `transmission:powermodels-json`)
 /// - `distribution:<format>` (e.g. `distribution:pmd-json`)
 /// - `package` (a `.pio.json` package; read it with the package entry points)
-/// - `model-json` (bare balanced model JSON; read it with [`pio_from_json`])
+/// - `model-json` (bare balanced model JSON; read it with [`pio_balanced_network_from_json`])
 /// - `ambiguous` (strong markers from both domains; pass an explicit format)
 /// - `unknown` (no recognized marker, or not a JSON object)
 ///
@@ -740,35 +545,33 @@ fn classify_label(text: &str) -> String {
 /// carries under `model.balanced_network`, without the surrounding document.
 /// This is the bindings' data transport and the only route to it: model JSON
 /// is powerio's own document rather than a case format, so it has no format
-/// token. Returns an owned C string (free with [`pio_string_free`]), `NULL` on
+/// token. Returns an owned C string (free with [`pio_string_release`]), `NULL` on
 /// error.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn pio_to_json(
-    net: *const PioNetwork,
-    errbuf: *mut c_char,
-    errlen: usize,
+pub unsafe extern "C" fn pio_balanced_network_to_json(
+    net: *const PioBalancedNetwork,
+    error: *mut *mut v6::PioError,
 ) -> *mut c_char {
     unsafe {
-        finish_string(errbuf, errlen, "panic while serializing model JSON", || {
+        finish_string_v6(error, || {
             let net = net.as_ref().ok_or_else(|| null_handle("network handle"))?;
             net.net().to_json().map_err(err_line)
         })
     }
 }
 
-/// Parse model JSON produced by [`pio_to_json`] (or lifted from a `.pio.json`
+/// Parse model JSON produced by [`pio_balanced_network_to_json`] (or lifted from a `.pio.json`
 /// document's `model.balanced_network`) back into an owned handle, the inverse
-/// of [`pio_to_json`]. A bare `.json` file holding this document classifies as
+/// of [`pio_balanced_network_to_json`]. A bare `.json` file holding this document classifies as
 /// `model-json` through [`pio_classify_str`]. Returns `NULL` on error. Free
 /// with [`pio_network_free`].
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn pio_from_json(
+pub unsafe extern "C" fn pio_balanced_network_from_json(
     text: *const c_char,
-    errbuf: *mut c_char,
-    errlen: usize,
-) -> *mut PioNetwork {
+    error: *mut *mut v6::PioError,
+) -> *mut PioBalancedNetwork {
     unsafe {
-        finish_network(errbuf, errlen, "panic while parsing model JSON", || {
+        finish_network_v6(error, || {
             let text = required_cstr(text, "text")?;
             BalancedNetwork::from_json(text)
                 .map(|net| (net, Vec::new()))
@@ -777,145 +580,31 @@ pub unsafe extern "C" fn pio_from_json(
     }
 }
 
-/// Read one scenario of a dataset directory in the named `from` format into a
-/// network handle. `gridfm` (the
-/// gridfm-datakit Parquet layout; `dir` resolves leniently: the `raw/` leaf,
-/// a `<case>/` directory with a `raw/` child, or a parent holding exactly one
-/// such case) is the currently supported dataset format. `scenario` selects within a
-/// multi-scenario dataset ([`pio_scenario_ids`] enumerates them); formats
-/// without scenarios take `0`. Read fidelity warnings attach to the handle
-/// ([`pio_warnings`]). Returns `NULL` on error and writes the message into
-/// `errbuf`. Free the handle with [`pio_network_free`]. Built
-/// `--features gridfm`.
-#[cfg(feature = "gridfm")]
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn pio_read_dir(
-    dir: *const c_char,
-    from: *const c_char,
-    scenario: i64,
-    errbuf: *mut c_char,
-    errlen: usize,
-) -> *mut PioNetwork {
-    unsafe {
-        finish_network(errbuf, errlen, "panic while reading dataset", || {
-            let dir = required_cstr(dir, "dir")?;
-            let from = required_cstr(from, "from")?;
-            powerio::gridfm::read_dataset_dir(std::path::Path::new(dir), from, scenario)
-                .map(|read| (read.network, read.diagnostics))
-                .map_err(err_line)
-        })
-    }
-}
-
-/// Write the distinct scenario ids (ascending) of the dataset directory `dir`
-/// in the named `from` format into `out`, up to `cap` entries, and return the
-/// total count: the cap/count convention of [`pio_bus_ids`]. `gridfm` is the
-/// currently supported dataset format. Returns `-1` on error and writes the message into
-/// `errbuf` (unlike the handle extractors, this reads the filesystem and can
-/// fail). Built `--features gridfm`.
-#[cfg(feature = "gridfm")]
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn pio_scenario_ids(
-    dir: *const c_char,
-    from: *const c_char,
-    out: *mut i64,
-    cap: usize,
-    errbuf: *mut c_char,
-    errlen: usize,
-) -> isize {
-    unsafe {
-        let r = catch_unwind(AssertUnwindSafe(|| {
-            let dir = required_cstr(dir, "dir")?;
-            let from = required_cstr(from, "from")?;
-            powerio::gridfm::dataset_scenario_ids(std::path::Path::new(dir), from).map_err(err_line)
-        }));
-        match r {
-            Ok(Ok(ids)) => {
-                let Ok(total) = isize::try_from(ids.len()) else {
-                    let msg = coded(
-                        &codes::BIND_CAPI_INDEX_OUT_OF_RANGE,
-                        "scenario count exceeds isize",
-                    );
-                    copy_to_buf(errbuf, errlen, &msg);
-                    return -1;
-                };
-                fill(out, cap, ids.iter().copied());
-                total
-            }
-            Ok(Err(msg)) => {
-                copy_to_buf(errbuf, errlen, &msg);
-                -1
-            }
-            Err(_) => {
-                let msg = coded(&codes::BIND_CAPI_PANIC, "panic while reading scenario ids");
-                copy_to_buf(errbuf, errlen, &msg);
-                -1
-            }
-        }
-    }
-}
-
-/// The fidelity warnings attached to the handle at construction (by whichever
-/// of [`pio_parse_file`], [`pio_parse_str`], `pio_read_dir`, or
-/// [`pio_normalize`] built it), `\n`-joined into `warnbuf` (truncated to fit
-/// on a UTF-8 boundary; NULL/0 to skip). Returns the byte length of the full
-/// joined text, excluding the NUL; call once with `(NULL, 0)` to size, then
-/// pass a `char[len + 1]`. `0` means no warnings (or a NULL handle); readers
-/// that are total attach none. Each line reads `CODE: message`; split at the
-/// first `": "` to recover the code.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn pio_warnings(
-    net: *const PioNetwork,
-    warnbuf: *mut c_char,
-    warnlen: usize,
-) -> usize {
-    unsafe {
-        guard(0, || {
-            let Some(c) = network_ref(net) else { return 0 };
-            let msg = c.warnings.join("\n");
-            copy_to_buf(warnbuf, warnlen, &msg);
-            msg.len()
-        })
-    }
-}
-
-/// Free a network handle from [`pio_parse_file`], [`pio_parse_str`],
-/// `pio_read_dir`, or [`pio_normalize`].
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn pio_network_free(net: *mut PioNetwork) {
-    unsafe {
-        // Under the same panic guard as every other entry point: the drop is
-        // pure deallocation today, but "catches panics" must not depend on that
-        // staying true.
-        guard((), || PioNetwork::release_raw(net));
-    }
-}
-
 /// Mint an independent handle to the same network. NULL stays NULL.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn pio_network_retain(net: *const PioNetwork) -> *mut PioNetwork {
-    unsafe { guard(std::ptr::null_mut(), || PioNetwork::retain_raw(net)) }
+pub unsafe extern "C" fn pio_balanced_network_retain(net: *const PioBalancedNetwork) -> *mut PioBalancedNetwork {
+    unsafe { guard(std::ptr::null_mut(), || PioBalancedNetwork::retain_raw(net)) }
 }
 
 /// Release one network handle: identical to `pio_network_free`, spelled with
 /// the ABI v6 lifecycle name. NULL is a no-op.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn pio_network_release(net: *mut PioNetwork) {
+pub unsafe extern "C" fn pio_balanced_network_release(net: *mut PioBalancedNetwork) {
     unsafe {
-        guard((), || PioNetwork::release_raw(net));
+        guard((), || PioBalancedNetwork::release_raw(net));
     }
 }
 
-unsafe fn network_ref<'a>(net: *const PioNetwork) -> Option<&'a NetworkState> {
-    unsafe { PioNetwork::get(net) }
+unsafe fn network_ref<'a>(net: *const PioBalancedNetwork) -> Option<&'a NetworkState> {
+    unsafe { PioBalancedNetwork::get(net) }
 }
 
 /// View `net` through its cached [`IndexCore`] with no per-call rebuild.
-unsafe fn view<'a>(net: *const PioNetwork) -> Option<IndexedNetwork<'a>> {
-    unsafe { PioNetwork::get(net).map(|c| IndexedNetwork::with_core(c.net(), &c.core)) }
+unsafe fn view<'a>(net: *const PioBalancedNetwork) -> Option<IndexedNetwork<'a>> {
+    unsafe { PioBalancedNetwork::get(net).map(|c| IndexedNetwork::with_core(c.net(), &c.core)) }
 }
 
-/// Solver preparation repairs for [`pio_normalize`], in the extensible options
+/// Solver preparation repairs for [`pio_balanced_network_normalize`], in the extensible options
 /// struct convention this header states once. Zero the struct, set
 /// `struct_size` to `sizeof(PioNormalizeOptions)`, fill what you need; NULL is
 /// every default, which is the plain per unit pass with no repair.
@@ -984,14 +673,13 @@ unsafe fn normalize_options_from_c(
 /// MVA, or an options struct this build cannot honor) and writes the message
 /// into `errbuf`.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn pio_normalize(
-    net: *const PioNetwork,
+pub unsafe extern "C" fn pio_balanced_network_normalize(
+    net: *const PioBalancedNetwork,
     opts: *const PioNormalizeOptions,
-    errbuf: *mut c_char,
-    errlen: usize,
-) -> *mut PioNetwork {
+    error: *mut *mut v6::PioError,
+) -> *mut PioBalancedNetwork {
     unsafe {
-        finish_network(errbuf, errlen, "panic while normalizing", || {
+        finish_network_v6(error, || {
             let c = network_ref(net).ok_or_else(|| null_handle("network handle"))?;
             let options = normalize_options_from_c(opts)?;
             let out = c
@@ -1007,18 +695,18 @@ pub unsafe extern "C" fn pio_normalize(
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn pio_n_buses(net: *const PioNetwork) -> usize {
+pub unsafe extern "C" fn pio_balanced_network_n_buses(net: *const PioBalancedNetwork) -> usize {
     // The star-lowered space, which is what every other per-bus extractor
     // reports. Through v4 this counted the unexpanded table while
-    // pio_bus_demand, pio_bus_shunt and pio_n_islands counted the expansion, so
+    // pio_balanced_network_bus_demand, pio_balanced_network_bus_shunt and pio_balanced_network_n_islands counted the expansion, so
     // a caller sizing a per-bus buffer from here read short by one entry per
     // in-service 3-winding transformer.
     unsafe { guard(0, || view(net).map_or(0, |v| v.n())) }
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn pio_n_branches(net: *const PioNetwork) -> usize {
-    // The star-lowered space, matching pio_n_buses: a 3-winding transformer
+pub unsafe extern "C" fn pio_balanced_network_n_branches(net: *const PioBalancedNetwork) -> usize {
+    // The star-lowered space, matching pio_balanced_network_n_buses: a 3-winding transformer
     // becomes a star bus plus three branches, and a caller building a matrix
     // from these tables needs both halves of that or the star bus is an
     // isolated row.
@@ -1026,7 +714,7 @@ pub unsafe extern "C" fn pio_n_branches(net: *const PioNetwork) -> usize {
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn pio_n_switches(net: *const PioNetwork) -> usize {
+pub unsafe extern "C" fn pio_balanced_network_n_switches(net: *const PioBalancedNetwork) -> usize {
     unsafe {
         guard(0, || {
             network_ref(net).map_or(0, |c| c.net().switches().len())
@@ -1035,7 +723,7 @@ pub unsafe extern "C" fn pio_n_switches(net: *const PioNetwork) -> usize {
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn pio_n_gens(net: *const PioNetwork) -> usize {
+pub unsafe extern "C" fn pio_balanced_network_n_gens(net: *const PioBalancedNetwork) -> usize {
     unsafe {
         guard(0, || {
             network_ref(net).map_or(0, |c| c.net().generators().len())
@@ -1044,7 +732,7 @@ pub unsafe extern "C" fn pio_n_gens(net: *const PioNetwork) -> usize {
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn pio_base_mva(net: *const PioNetwork) -> f64 {
+pub unsafe extern "C" fn pio_balanced_network_base_mva(net: *const PioBalancedNetwork) -> f64 {
     unsafe { guard(0.0, || network_ref(net).map_or(0.0, |c| c.net().base_mva())) }
 }
 
@@ -1052,8 +740,8 @@ pub unsafe extern "C" fn pio_base_mva(net: *const PioNetwork) -> f64 {
 /// possible, and returns the byte length needed excluding the NUL. `NULL` or
 /// `cap == 0` is a size query.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn pio_network_name(
-    net: *const PioNetwork,
+pub unsafe extern "C" fn pio_balanced_network_name(
+    net: *const PioBalancedNetwork,
     out: *mut c_char,
     cap: usize,
 ) -> usize {
@@ -1069,10 +757,10 @@ pub unsafe extern "C" fn pio_network_name(
 /// Source format token used by the JSON snapshot and accepted by every
 /// `from` parameter, for example `matpower`, `powermodels-json`, or
 /// `normalized`. Uses the same cap/count string convention as
-/// [`pio_network_name`].
+/// [`pio_balanced_network_name`].
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn pio_source_format(
-    net: *const PioNetwork,
+pub unsafe extern "C" fn pio_balanced_network_source_format(
+    net: *const PioBalancedNetwork,
     out: *mut c_char,
     cap: usize,
 ) -> usize {
@@ -1087,26 +775,21 @@ pub unsafe extern "C" fn pio_source_format(
 }
 
 /// Serialize a compact balanced network summary as JSON for display and scalar
-/// queries without serializing [`pio_to_json`]'s full payload.
+/// queries without serializing [`pio_balanced_network_to_json`]'s full payload.
 ///
 /// `counts` is the case file's own inventory, so it counts a 3-winding
 /// transformer once under `transformers_3w` rather than as the star bus and
 /// three branches it lowers to. `topology.n_buses` and `topology.n_branches`
-/// are that lowered space, the one [`pio_n_buses`] and [`pio_branches`]
+/// are that lowered space, the one [`pio_balanced_network_n_buses`] and [`pio_balanced_network_branches`]
 /// report and the one the rest of `topology` is computed over. The two differ
 /// only for a case with an in-service 3-winding transformer.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn pio_summary_json(
-    net: *const PioNetwork,
-    errbuf: *mut c_char,
-    errlen: usize,
+pub unsafe extern "C" fn pio_balanced_network_summary_json(
+    net: *const PioBalancedNetwork,
+    error: *mut *mut v6::PioError,
 ) -> *mut c_char {
     unsafe {
-        finish_string(
-            errbuf,
-            errlen,
-            "panic while serializing summary JSON",
-            || {
+        finish_string_v6(error, || {
                 let c = network_ref(net).ok_or_else(|| null_handle("network handle"))?;
                 let v = IndexedNetwork::with_core(c.net(), &c.core);
                 let reference_bus_indices = v.reference_bus_indices();
@@ -1150,13 +833,13 @@ pub unsafe extern "C" fn pio_summary_json(
 }
 
 /// Dense `[0, n)` index of the single reference (slack) bus, or `-1` if not
-/// exactly one. An INDEX into the [`pio_bus_ids`] ordering, not a bus id;
-/// `pio_branches` from/to carry ids, so the unit is in the name. A network may
+/// exactly one. An INDEX into the [`pio_balanced_network_bus_ids`] ordering, not a bus id;
+/// `pio_balanced_network_branches` from/to carry ids, so the unit is in the name. A network may
 /// carry several references (one per island, or a normalized case that kept
-/// the file's multiple `REF` buses); [`pio_ref_bus_indices`] reads them all,
+/// the file's multiple `REF` buses); [`pio_balanced_network_ref_bus_indices`] reads them all,
 /// and its count (`NULL` out) tells zero from many.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn pio_ref_bus_index(net: *const PioNetwork) -> i64 {
+pub unsafe extern "C" fn pio_balanced_network_ref_bus_index(net: *const PioBalancedNetwork) -> i64 {
     unsafe {
         guard(-1, || match view(net) {
             Some(v) => v
@@ -1169,12 +852,12 @@ pub unsafe extern "C" fn pio_ref_bus_index(net: *const PioNetwork) -> i64 {
 
 /// Write the dense `[0, n)` indices of the reference (slack) buses, ascending,
 /// into `out`, up to `cap` entries, and return the total count: the cap/count
-/// convention of [`pio_bus_ids`]. `0` means none; `> 1` means one reference
+/// convention of [`pio_balanced_network_bus_ids`]. `0` means none; `> 1` means one reference
 /// per island or several fixed references in one island (a normalized case
 /// always reports `>= 1`).
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn pio_ref_bus_indices(
-    net: *const PioNetwork,
+pub unsafe extern "C" fn pio_balanced_network_ref_bus_indices(
+    net: *const PioBalancedNetwork,
     out: *mut i64,
     cap: usize,
 ) -> usize {
@@ -1195,13 +878,13 @@ pub unsafe extern "C" fn pio_ref_bus_indices(
 
 /// Number of islands: connected components of the in-service topology.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn pio_n_islands(net: *const PioNetwork) -> usize {
+pub unsafe extern "C" fn pio_balanced_network_n_islands(net: *const PioBalancedNetwork) -> usize {
     unsafe { guard(0, || view(net).map_or(0, |v| v.n_connected_components())) }
 }
 
 /// `1` if the in-service topology is radial (every island a tree), else `0`.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn pio_is_radial(net: *const PioNetwork) -> i32 {
+pub unsafe extern "C" fn pio_balanced_network_is_radial(net: *const PioBalancedNetwork) -> i32 {
     unsafe { guard(0, || view(net).map_or(0, |v| i32::from(v.is_radial()))) }
 }
 
@@ -1375,129 +1058,15 @@ unsafe fn write_options_from_c(opts: *const PioWriteOptions) -> Result<WriteOpti
     })
 }
 
-/// Serialize `net` to the named format `to`: the one text serializer; every
-/// format is named by a string. Accepts the [`pio_parse_str`] names:
-/// `matpower` is a byte-exact echo when the handle was parsed from MATPOWER.
-/// Model JSON is not a case format and has no token here: write it with
-/// [`pio_to_json`].
-///
-/// `opts` carries the write-time cost policies (NULL for every default); see
-/// [`PioWriteOptions`]. A non-default policy works on a copy, so the handle is
-/// unchanged, and the policy's own findings lead `out_diagnostics_json`.
-///
-/// Returns the text as an owned C string (free with [`pio_string_free`]),
-/// `NULL` on error (message into `errbuf`). The writer's findings, if any, are
-/// published through `out_diagnostics_json` as one owned JSON array of
-/// diagnostic records (free it with [`pio_string_free`]), or NULL when there
-/// are none; a returned string has no handle to attach them to. Pass NULL to
-/// discard them. `out_diagnostics_json` is written on every return path and is
-/// NULL whenever this returns NULL, so an error return leaves nothing to free.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn pio_to_format(
-    net: *const PioNetwork,
-    to: *const c_char,
-    opts: *const PioWriteOptions,
-    out_diagnostics_json: *mut *mut c_char,
-    errbuf: *mut c_char,
-    errlen: usize,
-) -> *mut c_char {
-    unsafe {
-        finish_conversion(
-            out_diagnostics_json,
-            errbuf,
-            errlen,
-            "panic while converting",
-            || {
-                let c = network_ref(net).ok_or_else(|| null_handle("network handle"))?;
-                let target = target_format_from_c(to)?;
-                let options = write_options_from_c(opts)?;
-                // The module write: a same format target of an unchanged
-                // parsed handle echoes the retained source bytes exactly, as
-                // ABI v5 promises.
-                let conv = powerio::write_as_with_options(&c.module, target, &options)
-                    .map_err(|e| core_err_line(&e))?;
-                Ok((conv.text, conv.diagnostics))
-            },
-        )
-    }
-}
-
-/// Write `diagnostics` to `out_diagnostics_json` as one owned JSON array, or
-/// NULL when there are none. NULL `out_diagnostics_json` discards them.
-///
-/// A caller buffer cannot work here. Findings are unbounded in a way an error
-/// message is not: one per lossy element, so a large case produces more than
-/// any fixed size a caller can guess. The errbuf idiom stays for errors, which
-/// are one message.
-unsafe fn set_out_diagnostics(out_diagnostics_json: *mut *mut c_char, diagnostics: &[Diagnostic]) {
-    unsafe {
-        if out_diagnostics_json.is_null() {
-            return;
-        }
-        *out_diagnostics_json = if diagnostics.is_empty() {
-            std::ptr::null_mut()
-        } else {
-            // A serialization or interior NUL failure here would have to be
-            // reported through a channel the caller reads as "nothing was
-            // lost", so reporting no findings beats handing back a prefix of
-            // the set as the whole of it.
-            serde_json::to_string(diagnostics)
-                .ok()
-                .and_then(into_cstring)
-                .unwrap_or(std::ptr::null_mut())
-        };
-    }
-}
-
-/// Finish a text entry point that publishes findings: run `f` (producing the
-/// text with its findings, or an error message) under the panic guard, publish
-/// the findings through `out_diagnostics_json`, and hand back the owned C
-/// string, or write the error (`panic_msg` if `f` panicked) and return NULL.
-/// The shared tail of [`pio_to_format`], [`pio_convert_file`],
-/// [`pio_convert_str`] and [`pio_geo_parse`], mirroring [`finish_network`].
-unsafe fn finish_conversion(
-    out_diagnostics_json: *mut *mut c_char,
-    errbuf: *mut c_char,
-    errlen: usize,
-    panic_msg: &str,
-    f: impl FnOnce() -> Result<(String, Vec<Diagnostic>), String>,
-) -> *mut c_char {
-    unsafe {
-        // Set before running f: a caller reads it on every return path, and a
-        // stale value from an earlier call must not be mistaken for this one's.
-        set_out_diagnostics(out_diagnostics_json, &[]);
-        match catch_unwind(AssertUnwindSafe(f)) {
-            Ok(Ok((text, diagnostics))) => {
-                // Build the returned string before publishing: an interior NUL
-                // in the text fails here, and a caller reading NULL as an error
-                // never frees what a publish would have left behind.
-                let out = finish_cstring(text, errbuf, errlen);
-                if !out.is_null() {
-                    set_out_diagnostics(out_diagnostics_json, &diagnostics);
-                }
-                out
-            }
-            Ok(Err(msg)) => {
-                copy_to_buf(errbuf, errlen, &msg);
-                std::ptr::null_mut()
-            }
-            Err(_) => {
-                let msg = coded(&codes::BIND_CAPI_PANIC, panic_msg);
-                copy_to_buf(errbuf, errlen, &msg);
-                std::ptr::null_mut()
-            }
-        }
-    }
-}
 
 /// Convert the case file at `path` from format `from` (NULL to infer from the
 /// path, as [`pio_parse_file`]) to format `to`, without keeping a handle.
 /// `opts` carries the write-time cost policies (NULL for every default); see
 /// [`PioWriteOptions`].
 /// Returns the converted text as an owned C string (free with
-/// [`pio_string_free`]), `NULL` on error. The findings, read side first, are
+/// [`pio_string_release`]), `NULL` on error. The findings, read side first, are
 /// published through `out_diagnostics_json` as one owned JSON array of
-/// diagnostic records (free it with [`pio_string_free`]), NULL when there are
+/// diagnostic records (free it with [`pio_string_release`]), NULL when there are
 /// none. Pass NULL to discard them. `out_diagnostics_json` is written on every
 /// return path and is NULL whenever this returns NULL, so an error return
 /// leaves nothing to free.
@@ -1507,17 +1076,11 @@ pub unsafe extern "C" fn pio_convert_file(
     from: *const c_char,
     to: *const c_char,
     opts: *const PioWriteOptions,
-    out_diagnostics_json: *mut *mut c_char,
-    errbuf: *mut c_char,
-    errlen: usize,
+    out_diagnostics: *mut *mut v6::PioDiagnostics,
+    error: *mut *mut v6::PioError,
 ) -> *mut c_char {
     unsafe {
-        finish_conversion(
-            out_diagnostics_json,
-            errbuf,
-            errlen,
-            "panic while converting",
-            || {
+        finish_conversion_v6(out_diagnostics, error, || {
                 let path = required_cstr(path, "path")?;
                 let from = optional_cstr(from, "from")?;
                 let target = target_format_from_c(to)?;
@@ -1539,9 +1102,9 @@ pub unsafe extern "C" fn pio_convert_file(
 /// path to infer from) to format `to` without keeping a handle. `opts` carries
 /// the write-time cost policies (NULL for every default); see
 /// [`PioWriteOptions`]. Returns the converted text as an owned C
-/// string (free with [`pio_string_free`]), `NULL` on error. The findings, read
+/// string (free with [`pio_string_release`]), `NULL` on error. The findings, read
 /// side first, are published through `out_diagnostics_json` as one owned JSON
-/// array of diagnostic records (free it with [`pio_string_free`]), NULL when
+/// array of diagnostic records (free it with [`pio_string_release`]), NULL when
 /// there are none. Pass NULL to discard them. `out_diagnostics_json` is written
 /// on every return path and is NULL whenever this returns NULL, so an error
 /// return leaves nothing to free.
@@ -1551,17 +1114,11 @@ pub unsafe extern "C" fn pio_convert_str(
     from: *const c_char,
     to: *const c_char,
     opts: *const PioWriteOptions,
-    out_diagnostics_json: *mut *mut c_char,
-    errbuf: *mut c_char,
-    errlen: usize,
+    out_diagnostics: *mut *mut v6::PioDiagnostics,
+    error: *mut *mut v6::PioError,
 ) -> *mut c_char {
     unsafe {
-        finish_conversion(
-            out_diagnostics_json,
-            errbuf,
-            errlen,
-            "panic while converting",
-            || {
+        finish_conversion_v6(out_diagnostics, error, || {
                 let text = required_cstr(text, "text")?;
                 let from = required_cstr(from, "from")?;
                 let target = target_format_from_c(to)?;
@@ -1574,58 +1131,9 @@ pub unsafe extern "C" fn pio_convert_str(
     }
 }
 
-/// Write `net` into `out_dir` as the named directory format `to`. PyPSA CSV
-/// (`pypsa-csv`/`pypsa`) is the currently supported directory format; a text format name is
-/// an error pointing back at [`pio_to_format`]. `opts` carries the write-time
-/// cost policies (NULL for every default); see [`PioWriteOptions`].
-/// Returns `0` on success and
-/// `-1` on error (message into `errbuf`). The writer's findings, if any, are
-/// published through `out_diagnostics_json` as one owned JSON array of
-/// diagnostic records (free it with [`pio_string_free`]), NULL when there are
-/// none. Pass NULL to discard them. `out_diagnostics_json` is written on every
-/// return path and is NULL whenever this returns `-1`, so an error return
-/// leaves nothing to free.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn pio_write_dir(
-    net: *const PioNetwork,
-    to: *const c_char,
-    out_dir: *const c_char,
-    opts: *const PioWriteOptions,
-    out_diagnostics_json: *mut *mut c_char,
-    errbuf: *mut c_char,
-    errlen: usize,
-) -> i32 {
-    unsafe {
-        set_out_diagnostics(out_diagnostics_json, &[]);
-        let r = catch_unwind(AssertUnwindSafe(|| {
-            let c = network_ref(net).ok_or_else(|| null_handle("network handle"))?;
-            let to = required_cstr(to, "to")?;
-            let out_dir = required_cstr(out_dir, "out_dir")?;
-            let options = write_options_from_c(opts)?;
-            powerio::write_dir_with_options(c.net(), to, std::path::Path::new(out_dir), &options)
-                .map_err(|error| core_err_line(&error))
-        }));
-        match r {
-            Ok(Ok(warnings)) => {
-                set_out_diagnostics(out_diagnostics_json, &warnings);
-                0
-            }
-            Ok(Err(msg)) => {
-                copy_to_buf(errbuf, errlen, &msg);
-                -1
-            }
-            Err(_) => {
-                let msg = coded(&codes::BIND_CAPI_PANIC, "panic while writing directory");
-                copy_to_buf(errbuf, errlen, &msg);
-                -1
-            }
-        }
-    }
-}
-
 /// Free any owned C string returned by this API.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn pio_string_free(s: *mut c_char) {
+pub unsafe extern "C" fn pio_string_release(s: *mut c_char) {
     unsafe {
         // Same rationale as `pio_network_free`: the boundary catches panics.
         guard((), || {
@@ -1659,7 +1167,7 @@ unsafe fn fill<T: Copy>(out: *mut T, cap: usize, vals: impl ExactSizeIterator<It
 /// keeps the source name, and a numeric id past that range is refused at the
 /// read boundary rather than passed through.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn pio_bus_ids(net: *const PioNetwork, out: *mut i64, cap: usize) -> usize {
+pub unsafe extern "C" fn pio_balanced_network_bus_ids(net: *const PioBalancedNetwork, out: *mut i64, cap: usize) -> usize {
     unsafe {
         guard(0, || {
             // The star-lowered space, so every per-bus column keyed to this
@@ -1680,12 +1188,12 @@ pub unsafe extern "C" fn pio_bus_ids(net: *const PioNetwork, out: *mut i64, cap:
 /// Write the branch table as parallel arrays, each up to `cap` entries, and
 /// return the total branch count. A branch is any two-terminal series element
 /// lines and transformers alike (a transformer has `tap != 0`). `from`/`to`
-/// are 1-based bus IDS (the [`pio_bus_ids`] id space, not dense indices); map
-/// them to dense matrix rows with the [`pio_bus_ids`] ordering. Any output
+/// are 1-based bus IDS (the [`pio_balanced_network_bus_ids`] id space, not dense indices); map
+/// them to dense matrix rows with the [`pio_balanced_network_bus_ids`] ordering. Any output
 /// pointer may be NULL to skip that column; all NULL is the count query.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn pio_branches(
-    net: *const PioNetwork,
+pub unsafe extern "C" fn pio_balanced_network_branches(
+    net: *const PioBalancedNetwork,
     from: *mut i64,
     to: *mut i64,
     r: *mut f64,
@@ -1732,8 +1240,8 @@ pub unsafe extern "C" fn pio_branches(
 /// Write the branch terminal charging table as parallel arrays, each up to
 /// `cap` entries, and return the total branch count. Columns are p.u.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn pio_branch_charging(
-    net: *const PioNetwork,
+pub unsafe extern "C" fn pio_balanced_network_branch_charging(
+    net: *const PioBalancedNetwork,
     g_fr: *mut f64,
     b_fr: *mut f64,
     g_to: *mut f64,
@@ -1772,8 +1280,8 @@ pub unsafe extern "C" fn pio_branch_charging(
 /// Write the switch table as parallel arrays, each up to `cap` entries, and
 /// return the total switch count. `from`/`to` are external bus ids.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn pio_switches(
-    net: *const PioNetwork,
+pub unsafe extern "C" fn pio_balanced_network_switches(
+    net: *const PioBalancedNetwork,
     from: *mut i64,
     to: *mut i64,
     closed: *mut u8,
@@ -1849,10 +1357,10 @@ pub unsafe extern "C" fn pio_switches(
 
 /// Write the generator table as parallel arrays, each up to `cap` entries, and
 /// return the total generator count. `bus` is the 1-based bus id (the
-/// [`pio_bus_ids`] id space). Any output pointer may be NULL to skip.
+/// [`pio_balanced_network_bus_ids`] id space). Any output pointer may be NULL to skip.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn pio_gens(
-    net: *const PioNetwork,
+pub unsafe extern "C" fn pio_balanced_network_gens(
+    net: *const PioBalancedNetwork,
     bus: *mut i64,
     pg: *mut f64,
     pmax: *mut f64,
@@ -1885,11 +1393,11 @@ pub unsafe extern "C" fn pio_gens(
 }
 
 /// Write the per-bus demand aggregates (active `pd`, reactive `qd`, summed
-/// over each bus's loads, dense [`pio_bus_ids`] order), each up to `cap`
+/// over each bus's loads, dense [`pio_balanced_network_bus_ids`] order), each up to `cap`
 /// entries, and return the total bus count. Either pointer may be NULL.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn pio_bus_demand(
-    net: *const PioNetwork,
+pub unsafe extern "C" fn pio_balanced_network_bus_demand(
+    net: *const PioBalancedNetwork,
     pd: *mut f64,
     qd: *mut f64,
     cap: usize,
@@ -1908,11 +1416,11 @@ pub unsafe extern "C" fn pio_bus_demand(
 }
 
 /// Write the per-bus shunt aggregates (conductance `gs`, susceptance `bs`,
-/// dense [`pio_bus_ids`] order), each up to `cap` entries, and return the
+/// dense [`pio_balanced_network_bus_ids`] order), each up to `cap` entries, and return the
 /// total bus count. Either pointer may be NULL.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn pio_bus_shunt(
-    net: *const PioNetwork,
+pub unsafe extern "C" fn pio_balanced_network_bus_shunt(
+    net: *const PioBalancedNetwork,
     gs: *mut f64,
     bs: *mut f64,
     cap: usize,
@@ -1920,7 +1428,7 @@ pub unsafe extern "C" fn pio_bus_shunt(
     unsafe {
         guard(0, || {
             view(net).map_or(0, |v| {
-                // Explicit bus count, not the last fill's result (see pio_bus_demand).
+                // Explicit bus count, not the last fill's result (see pio_balanced_network_bus_demand).
                 let n = fill(gs, cap, v.gs().iter().copied());
                 fill(bs, cap, v.bs().iter().copied());
                 n
@@ -1950,7 +1458,7 @@ pub unsafe extern "C" fn pio_bus_shunt(
 /// signature.
 ///
 /// `table` is one of the `PIO_ARROW_TABLE_*` selectors. Raw table columns use
-/// EXTERNAL bus ids (the `pio_bus_ids` id space), not the gridfm schema. On
+/// EXTERNAL bus ids (the `pio_balanced_network_bus_ids` id space), not the gridfm schema. On
 /// success (returns `0`),
 /// `out_array` and `out_schema` are populated with owned C Data Interface
 /// structs: ownership of the Arrow buffers transfers to the caller, both
@@ -1960,45 +1468,33 @@ pub unsafe extern "C" fn pio_bus_shunt(
 /// out-params are left untouched. Only built with the `arrow` cargo feature.
 #[cfg(feature = "arrow")]
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn pio_to_arrow(
-    net: *const PioNetwork,
+pub unsafe extern "C" fn pio_balanced_network_to_arrow(
+    net: *const PioBalancedNetwork,
     table: i32,
     out_array: *mut arrow::ffi::FFI_ArrowArray,
     out_schema: *mut arrow::ffi::FFI_ArrowSchema,
-    errbuf: *mut c_char,
-    errlen: usize,
+    error: *mut *mut v6::PioError,
 ) -> i32 {
     unsafe {
-        let r = catch_unwind(AssertUnwindSafe(|| {
+        v6::v6_entry(error, -1, || {
             if out_array.is_null() || out_schema.is_null() {
-                return Err(coded(
+                return Err(v6::error_from_line(&coded(
                     &codes::BIND_CAPI_NULL_ARGUMENT,
                     "out_array or out_schema is NULL",
-                ));
+                )));
             }
-            let c = network_ref(net).ok_or_else(|| null_handle("network handle"))?;
-            arrow_export::export(c.net(), &c.core, table)
-        }));
-        match r {
-            Ok(Ok((array, schema))) => {
-                // Move the FFI structs into caller memory: ptr::write does not
-                // drop the (caller-zeroed) destination and does not run Drop on
-                // `array`/`schema`, so the producer release callbacks transfer to
-                // the caller. Exactly one owner.
-                std::ptr::write(out_array, array);
-                std::ptr::write(out_schema, schema);
-                0
-            }
-            Ok(Err(msg)) => {
-                copy_to_buf(errbuf, errlen, &msg);
-                -1
-            }
-            Err(_) => {
-                let msg = coded(&codes::BIND_CAPI_PANIC, "panic while exporting Arrow");
-                copy_to_buf(errbuf, errlen, &msg);
-                -1
-            }
-        }
+            let c = network_ref(net)
+                .ok_or_else(|| v6::error_from_line(&null_handle("network handle")))?;
+            let (array, schema) = arrow_export::export(c.net(), &c.core, table)
+                .map_err(|line| v6::error_from_line(&line))?;
+            // Move the FFI structs into caller memory: ptr::write does not
+            // drop the (caller-zeroed) destination and does not run Drop on
+            // `array`/`schema`, so the producer release callbacks transfer to
+            // the caller. Exactly one owner.
+            std::ptr::write(out_array, array);
+            std::ptr::write(out_schema, schema);
+            Ok(0)
+        })
     }
 }
 
@@ -2013,14 +1509,14 @@ pub unsafe extern "C" fn pio_to_arrow(
 /// `schema_version`; one release version now covers every document powerio
 /// authors, so the top level names it and the per-table copy is gone.
 ///
-/// Free the returned string with [`pio_string_free`]. On error this returns
+/// Free the returned string with [`pio_string_release`]. On error this returns
 /// NULL and writes the message into `errbuf`. Only built with the `arrow` cargo
 /// feature.
 #[cfg(feature = "arrow")]
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn pio_arrow_catalog_json(errbuf: *mut c_char, errlen: usize) -> *mut c_char {
+pub unsafe extern "C" fn pio_arrow_catalog_json(error: *mut *mut v6::PioError) -> *mut c_char {
     unsafe {
-        finish_string(errbuf, errlen, "panic while building Arrow catalog", || {
+        finish_string_v6(error, || {
             Ok(arrow_export::catalog_json())
         })
     }
@@ -2036,12 +1532,12 @@ pub unsafe extern "C" fn pio_arrow_catalog_json(errbuf: *mut c_char, errlen: usi
 /// CSV/JSON records, GeoJSON Point/LineString) to the canonical GeoJSON form.
 /// `name_hint` (a file name, nullable) picks CSV against JSON when given;
 /// otherwise the content is sniffed. Free the returned string with
-/// [`pio_string_free`]. Returns `NULL` on input that carries no usable
+/// [`pio_string_release`]. Returns `NULL` on input that carries no usable
 /// coordinates and writes the message into `errbuf`.
 ///
 /// The tolerant reader's notes, one per record it read past, are published
 /// through `out_diagnostics_json` as one owned JSON array of diagnostic
-/// records (free it with [`pio_string_free`]), or NULL when the reader used
+/// records (free it with [`pio_string_release`]), or NULL when the reader used
 /// every record. Pass NULL to discard them. `out_diagnostics_json` is written
 /// on every return path and is NULL whenever this returns NULL, so an error
 /// return leaves nothing to free.
@@ -2049,17 +1545,11 @@ pub unsafe extern "C" fn pio_arrow_catalog_json(errbuf: *mut c_char, errlen: usi
 pub unsafe extern "C" fn pio_geo_parse(
     text: *const c_char,
     name_hint: *const c_char,
-    out_diagnostics_json: *mut *mut c_char,
-    errbuf: *mut c_char,
-    errlen: usize,
+    out_diagnostics: *mut *mut v6::PioDiagnostics,
+    error: *mut *mut v6::PioError,
 ) -> *mut c_char {
     unsafe {
-        finish_conversion(
-            out_diagnostics_json,
-            errbuf,
-            errlen,
-            "panic while parsing geo layer",
-            || {
+        finish_conversion_v6(out_diagnostics, error, || {
                 let text = required_cstr(text, "text")?;
                 let name_hint = optional_cstr(name_hint, "name_hint")?;
                 let parsed =
@@ -2072,16 +1562,15 @@ pub unsafe extern "C" fn pio_geo_parse(
 
 /// Extract a network's coordinates as the canonical GeoJSON layer: one point
 /// per located bus, one route per routed branch. Free the returned string
-/// with `pio_string_free`. Returns `NULL` (with a message) when the network
+/// with `pio_string_release`. Returns `NULL` (with a message) when the network
 /// carries no coordinates.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn pio_geo_extract(
-    net: *const PioNetwork,
-    errbuf: *mut c_char,
-    errlen: usize,
+pub unsafe extern "C" fn pio_balanced_network_geo_extract(
+    net: *const PioBalancedNetwork,
+    error: *mut *mut v6::PioError,
 ) -> *mut c_char {
     unsafe {
-        finish_string(errbuf, errlen, "panic while extracting geo layer", || {
+        finish_string_v6(error, || {
             let c = network_ref(net).ok_or_else(|| null_handle("network handle"))?;
             c.net().geo_layer().extracted_geojson().map_err(err_line)
         })
@@ -2098,15 +1587,14 @@ pub unsafe extern "C" fn pio_geo_extract(
 /// (`geo apply: N bus point(s), ...`) are appended to the handle's warnings
 /// ([`pio_warnings`]). Returns `NULL` on error.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn pio_geo_apply(
-    net: *const PioNetwork,
+pub unsafe extern "C" fn pio_balanced_network_geo_apply(
+    net: *const PioBalancedNetwork,
     layer: *const c_char,
     name_hint: *const c_char,
-    errbuf: *mut c_char,
-    errlen: usize,
-) -> *mut PioNetwork {
+    error: *mut *mut v6::PioError,
+) -> *mut PioBalancedNetwork {
     unsafe {
-        finish_network(errbuf, errlen, "panic while applying geo layer", || {
+        finish_network_v6(error, || {
             let c = network_ref(net).ok_or_else(|| null_handle("network handle"))?;
             let layer = required_cstr(layer, "layer")?;
             let name_hint = optional_cstr(name_hint, "name_hint")?;
@@ -2134,17 +1622,16 @@ pub unsafe extern "C" fn pio_geo_apply(
 /// One-line apply summary lifted into the returned handle's warnings.
 /// Extract a multiconductor network's coordinates as the canonical GeoJSON
 /// layer, keyed by the string bus and line names. Free the returned string
-/// with `pio_string_free`. Returns `NULL` (with a message) when the network
+/// with `pio_string_release`. Returns `NULL` (with a message) when the network
 /// carries no coordinates.
 #[cfg(feature = "dist")]
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn pio_dist_geo_extract(
-    net: *const PioDistNetwork,
-    errbuf: *mut c_char,
-    errlen: usize,
+pub unsafe extern "C" fn pio_multiconductor_network_geo_extract(
+    net: *const PioMulticonductorNetwork,
+    error: *mut *mut v6::PioError,
 ) -> *mut c_char {
     unsafe {
-        finish_string(errbuf, errlen, "panic while extracting geo layer", || {
+        finish_string_v6(error, || {
             let c = net
                 .as_ref()
                 .ok_or_else(|| null_handle("distribution network handle"))?;
@@ -2163,15 +1650,14 @@ pub unsafe extern "C" fn pio_dist_geo_extract(
 /// warnings ([`pio_dist_warnings`]). Returns `NULL` on error.
 #[cfg(feature = "dist")]
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn pio_dist_geo_apply(
-    net: *const PioDistNetwork,
+pub unsafe extern "C" fn pio_multiconductor_network_geo_apply(
+    net: *const PioMulticonductorNetwork,
     layer: *const c_char,
     name_hint: *const c_char,
-    errbuf: *mut c_char,
-    errlen: usize,
-) -> *mut PioDistNetwork {
+    error: *mut *mut v6::PioError,
+) -> *mut PioMulticonductorNetwork {
     unsafe {
-        finish_handle(errbuf, errlen, "panic while applying geo layer", || {
+        finish_multiconductor_v6(error, || {
             let c = net
                 .as_ref()
                 .ok_or_else(|| null_handle("distribution network handle"))?;
@@ -2186,7 +1672,7 @@ pub unsafe extern "C" fn pio_dist_geo_apply(
             warnings.extend(parsed.warnings);
             warnings.push(geo_apply_summary(&report));
             warnings.extend(report.notes);
-            Ok(PioDistNetwork::from_network(out, warnings))
+            Ok(PioMulticonductorNetwork::from_network(out, warnings))
         })
     }
 }
@@ -2205,42 +1691,17 @@ fn geo_apply_summary(report: &powerio::GeoApplyReport) -> String {
 
 // ---------------------------------------------------------------------------
 // Distribution API (`dist` feature). The multiconductor model behind its own
-// opaque `PioDistNetwork` handle and the `pio_dist_*` entry points. It is gated
+// opaque `PioMulticonductorNetwork` handle and the `pio_dist_*` entry points. It is gated
 // on the `dist` feature / `PIO_DIST` define, exactly like `arrow`/`gridfm`; a
 // runtime consumer probes it with `pio_has_feature("dist")`, then checks
 // `pio_dist_abi_version()`. The API is EXPERIMENTAL while the IEEE BMOPF
 // schema is a draft: C signature changes bump `PIO_DIST_ABI_VERSION`. BMOPF
-// JSON carries its own meta.version; the model JSON of `pio_dist_to_json` is
+// JSON carries its own meta.version; the model JSON of `pio_multiconductor_network_to_json` is
 // covered by the `.pio.json` `schema_version` in powerio-pkg.
 // ---------------------------------------------------------------------------
 
-/// Finish a handle-returning entry point: run `f` (the handle payload or an
-/// error message) under the panic guard and box the payload into an owned handle,
-/// or write the error (`panic_msg` if `f` panicked) into `errbuf` and return NULL.
-#[cfg(any(feature = "dist", feature = "prob"))]
-unsafe fn finish_handle<H>(
-    errbuf: *mut c_char,
-    errlen: usize,
-    panic_msg: &str,
-    f: impl FnOnce() -> Result<H, String>,
-) -> *mut H {
-    unsafe {
-        match catch_unwind(AssertUnwindSafe(f)) {
-            Ok(Ok(h)) => Box::into_raw(Box::new(h)),
-            Ok(Err(msg)) => {
-                copy_to_buf(errbuf, errlen, &msg);
-                std::ptr::null_mut()
-            }
-            Err(_) => {
-                copy_to_buf(errbuf, errlen, &coded(&codes::BIND_CAPI_PANIC, panic_msg));
-                std::ptr::null_mut()
-            }
-        }
-    }
-}
-
 /// Opaque parsed distribution network handle (the multiconductor wire coordinate
-/// model). Distinct from [`PioNetwork`] (the positive sequence transmission
+/// model). Distinct from [`PioBalancedNetwork`] (the positive sequence transmission
 /// model); none of the `pio_n_*`/extractor functions accept it. Only built with
 /// the `dist` cargo feature.
 #[cfg(feature = "dist")]
@@ -2264,12 +1725,12 @@ impl DistNetworkState {
 #[cfg(feature = "dist")]
 crate::v6::arc_handle!(
     /// The opaque multiconductor network handle (ABI v6 lifecycle).
-    PioDistNetwork,
+    PioMulticonductorNetwork,
     DistNetworkState
 );
 
 #[cfg(feature = "dist")]
-impl PioDistNetwork {
+impl PioMulticonductorNetwork {
     /// A parsed handle boxed raw, for the C constructors.
     pub(crate) fn from_module_raw(
         module: powerio_core::PioModule<powerio_dist::MulticonductorNetwork>,
@@ -2280,13 +1741,6 @@ impl PioDistNetwork {
         })
     }
 
-    /// A parsed handle: warnings rendered from the module's findings.
-    fn from_module(module: powerio_core::PioModule<powerio_dist::MulticonductorNetwork>) -> Self {
-        Self::wrap(DistNetworkState {
-            warnings: powerio_dist::diagnostics::render_diagnostics(module.diagnostics()),
-            module,
-        })
-    }
 
     /// A derived handle: no retained source, so writes are canonical; the
     /// warning lines come from the deriving surface.
@@ -2298,178 +1752,45 @@ impl PioDistNetwork {
     }
 }
 
-/// A distribution source selected by path, with `from` as the declared
-/// format when given.
-#[cfg(feature = "dist")]
-fn dist_source_from_path(
-    path: &std::path::Path,
-    from: Option<&str>,
-) -> Result<powerio_core::Source, String> {
-    let mut source = powerio_core::Source::open(path).map_err(|e| core_err_line(&e))?;
-    if let Some(token) = from {
-        source = source.with_format(
-            powerio_core::FormatId::new(token.to_ascii_lowercase().replace('_', "-"))
-                .map_err(|e| core_err_line(&e))?,
-        );
-    }
-    Ok(source)
-}
-
-/// An in-memory distribution source of the declared `from` format.
-#[cfg(feature = "dist")]
-fn dist_source_from_bytes(bytes: &[u8], from: &str) -> Result<powerio_core::Source, String> {
-    Ok(powerio_core::Source::from_bytes("<memory>", bytes.to_vec())
-        .map_err(|e| core_err_line(&e))?
-        .with_format(
-            powerio_core::FormatId::new(from.to_ascii_lowercase().replace('_', "-"))
-                .map_err(|e| core_err_line(&e))?,
-        ))
-}
-
-/// Parse a distribution source selected by path, with `from` as the declared
-/// format when given.
-#[cfg(feature = "dist")]
-fn parse_dist_module_from_path(
-    path: &std::path::Path,
-    from: Option<&str>,
-) -> Result<powerio_core::PioModule<powerio_dist::MulticonductorNetwork>, String> {
-    powerio_dist::parse(dist_source_from_path(path, from)?).map_err(|e| core_err_line(&e))
-}
-
-/// Parse an in-memory distribution source of the declared `from` format.
-#[cfg(feature = "dist")]
-fn parse_dist_module_from_bytes(
-    bytes: &[u8],
-    from: &str,
-) -> Result<powerio_core::PioModule<powerio_dist::MulticonductorNetwork>, String> {
-    powerio_dist::parse(dist_source_from_bytes(bytes, from)?).map_err(|e| core_err_line(&e))
-}
-
-// Same cross-thread read guarantee as `PioNetwork` (see that assertion): pin
+// Same cross-thread read guarantee as `PioBalancedNetwork` (see that assertion): pin
 // `Send + Sync` so a future non-`Sync` field fails the build.
 #[cfg(feature = "dist")]
 const _: fn() = || {
     fn assert_send_sync<T: Send + Sync>() {}
-    assert_send_sync::<PioDistNetwork>();
+    assert_send_sync::<PioMulticonductorNetwork>();
 };
-
-/// Parse a distribution case file into a [`PioDistNetwork`] handle. The format
-/// comes from `from` if non-NULL (`dss`, `pmd`, or `bmopf`), else from the file
-/// itself: `.dss` is OpenDSS, and `.json` holding the ENGINEERING `data_model`
-/// key is PMD JSON, otherwise BMOPF JSON. Returns `NULL` on error and writes the
-/// message into `errbuf`. Free the handle with [`pio_dist_network_free`].
-#[cfg(feature = "dist")]
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn pio_dist_parse_file(
-    path: *const c_char,
-    from: *const c_char,
-    errbuf: *mut c_char,
-    errlen: usize,
-) -> *mut PioDistNetwork {
-    unsafe {
-        finish_handle(errbuf, errlen, "panic while parsing", || {
-            let path = required_cstr(path, "path")?;
-            let from = optional_cstr(from, "from")?;
-            parse_dist_module_from_path(std::path::Path::new(path), from)
-                .map(PioDistNetwork::from_module)
-        })
-    }
-}
-
-/// Parse in-memory distribution case `text` of the named `format` (`dss`, `pmd`,
-/// or `bmopf`; required, since there is no path to infer from). An OpenDSS
-/// `Redirect`/`Compile`/`Buscoords` in `text` reads no files: an in-memory
-/// source grants no filesystem access, and each include is refused loudly.
-/// Returns `NULL` on error and writes the message into `errbuf`. Free the handle
-/// with [`pio_dist_network_free`].
-#[cfg(feature = "dist")]
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn pio_dist_parse_str(
-    text: *const c_char,
-    format: *const c_char,
-    errbuf: *mut c_char,
-    errlen: usize,
-) -> *mut PioDistNetwork {
-    unsafe {
-        finish_handle(errbuf, errlen, "panic while parsing", || {
-            let text = required_cstr(text, "text")?;
-            let format = required_cstr(format, "format")?;
-            parse_dist_module_from_bytes(text.as_bytes(), format).map(PioDistNetwork::from_module)
-        })
-    }
-}
-
-/// Free a distribution network handle from [`pio_dist_parse_file`] or
-/// [`pio_dist_parse_str`]. NULL is a no-op; free exactly once.
-#[cfg(feature = "dist")]
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn pio_dist_network_free(net: *mut PioDistNetwork) {
-    unsafe {
-        // Same rationale as `pio_network_free`: the boundary catches panics so a
-        // Drop on the `serde_json::Value` extras can't unwind across the ABI.
-        guard((), || PioDistNetwork::release_raw(net));
-    }
-}
 
 /// Mint an independent handle to the same multiconductor network. NULL stays
 /// NULL.
 #[cfg(feature = "dist")]
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn pio_dist_network_retain(
-    net: *const PioDistNetwork,
-) -> *mut PioDistNetwork {
-    unsafe { guard(std::ptr::null_mut(), || PioDistNetwork::retain_raw(net)) }
+pub unsafe extern "C" fn pio_multiconductor_network_retain(
+    net: *const PioMulticonductorNetwork,
+) -> *mut PioMulticonductorNetwork {
+    unsafe { guard(std::ptr::null_mut(), || PioMulticonductorNetwork::retain_raw(net)) }
 }
 
 /// Release one multiconductor network handle: identical to
 /// `pio_dist_network_free`, spelled with the ABI v6 lifecycle name.
 #[cfg(feature = "dist")]
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn pio_dist_network_release(net: *mut PioDistNetwork) {
+pub unsafe extern "C" fn pio_multiconductor_network_release(net: *mut PioMulticonductorNetwork) {
     unsafe {
-        guard((), || PioDistNetwork::release_raw(net));
-    }
-}
-
-/// Parse warnings retained on the handle (everything the reader could not
-/// represent or had to assume), `\n`-joined and written into the caller `warnbuf`
-/// (truncated to fit, always NUL-terminated). Returns the total byte length of
-/// the joined message; call with `NULL`/0 to size first, then fill — the same
-/// idiom as [`pio_warnings`]. Each line reads `CODE: message`. Returns 0 for a
-/// NULL handle.
-#[cfg(feature = "dist")]
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn pio_dist_warnings(
-    net: *const PioDistNetwork,
-    warnbuf: *mut c_char,
-    warnlen: usize,
-) -> usize {
-    unsafe {
-        guard(0, || {
-            let Some(c) = net.as_ref() else { return 0 };
-            let msg = c.warnings.join("\n");
-            copy_to_buf(warnbuf, warnlen, &msg);
-            msg.len()
-        })
+        guard((), || PioMulticonductorNetwork::release_raw(net));
     }
 }
 
 /// Serialize a compact summary of a distribution handle as JSON. This lets
 /// bindings answer display and scalar queries without forcing
-/// [`pio_dist_to_json`]'s full model payload.
+/// [`pio_multiconductor_network_to_json`]'s full model payload.
 #[cfg(feature = "dist")]
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn pio_dist_summary_json(
-    net: *const PioDistNetwork,
-    errbuf: *mut c_char,
-    errlen: usize,
+pub unsafe extern "C" fn pio_multiconductor_network_summary_json(
+    net: *const PioMulticonductorNetwork,
+    error: *mut *mut v6::PioError,
 ) -> *mut c_char {
     unsafe {
-        finish_string(
-            errbuf,
-            errlen,
-            "panic while serializing summary JSON",
-            || {
+        finish_string_v6(error, || {
                 let net = net
                     .as_ref()
                     .ok_or_else(|| null_handle("distribution network handle"))?;
@@ -2508,16 +1829,15 @@ pub unsafe extern "C" fn pio_dist_summary_json(
 /// document. This is the bindings' data transport, not a case format: the
 /// converter, CLI, and format inference do not know it; distribution cases
 /// exchanged with other tools are BMOPF JSON ([`pio_dist_to_format`]).
-/// Returns an owned C string (free with [`pio_string_free`]), `NULL` on error.
+/// Returns an owned C string (free with [`pio_string_release`]), `NULL` on error.
 #[cfg(feature = "dist")]
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn pio_dist_to_json(
-    net: *const PioDistNetwork,
-    errbuf: *mut c_char,
-    errlen: usize,
+pub unsafe extern "C" fn pio_multiconductor_network_to_json(
+    net: *const PioMulticonductorNetwork,
+    error: *mut *mut v6::PioError,
 ) -> *mut c_char {
     unsafe {
-        finish_string(errbuf, errlen, "panic while serializing model JSON", || {
+        finish_string_v6(error, || {
             let net = net
                 .as_ref()
                 .ok_or_else(|| null_handle("distribution network handle"))?;
@@ -2536,16 +1856,15 @@ pub unsafe extern "C" fn pio_dist_to_json(
 
 /// Serialize the collapsed bus and terminal graph projection for `net` as JSON.
 /// The returned string is owned by the library; free it with
-/// [`pio_string_free`].
+/// [`pio_string_release`].
 #[cfg(feature = "dist")]
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn pio_dist_graph_json(
-    net: *const PioDistNetwork,
-    errbuf: *mut c_char,
-    errlen: usize,
+pub unsafe extern "C" fn pio_multiconductor_network_graph_json(
+    net: *const PioMulticonductorNetwork,
+    error: *mut *mut v6::PioError,
 ) -> *mut c_char {
     unsafe {
-        finish_string(errbuf, errlen, "panic while serializing graph JSON", || {
+        finish_string_v6(error, || {
             let net = net
                 .as_ref()
                 .ok_or_else(|| null_handle("distribution network handle"))?;
@@ -2555,21 +1874,20 @@ pub unsafe extern "C" fn pio_dist_graph_json(
     }
 }
 
-/// Parse model JSON produced by [`pio_dist_to_json`] (or lifted from a
+/// Parse model JSON produced by [`pio_multiconductor_network_to_json`] (or lifted from a
 /// `.pio.json` document's `model.multiconductor_network`) back into an owned
-/// handle: the inverse of [`pio_dist_to_json`]. The rebuilt handle retains
+/// handle: the inverse of [`pio_multiconductor_network_to_json`]. The rebuilt handle retains
 /// no source text, so a same format write is a fresh serialization. The handle
 /// retains the model JSON `warnings`. Returns `NULL` on error. Free with
 /// [`pio_dist_network_free`].
 #[cfg(feature = "dist")]
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn pio_dist_from_json(
+pub unsafe extern "C" fn pio_multiconductor_network_from_json(
     text: *const c_char,
-    errbuf: *mut c_char,
-    errlen: usize,
-) -> *mut PioDistNetwork {
+    error: *mut *mut v6::PioError,
+) -> *mut PioMulticonductorNetwork {
     unsafe {
-        finish_handle(errbuf, errlen, "panic while parsing model JSON", || {
+        finish_multiconductor_v6(error, || {
             let text = required_cstr(text, "text")?;
             let net =
                 serde_json::from_str::<powerio_dist::MulticonductorNetwork>(text).map_err(|e| {
@@ -2587,155 +1905,9 @@ pub unsafe extern "C" fn pio_dist_from_json(
                     serde_json::from_value::<Vec<String>>(value.get("warnings")?.clone()).ok()
                 })
                 .unwrap_or_default();
-            Ok(PioDistNetwork::from_network(net, warnings))
+            Ok(PioMulticonductorNetwork::from_network(net, warnings))
         })
     }
-}
-
-/// Append a finding for each companion file the writer produced. The text-only
-/// C entry points cannot return these files, so the case text can refer to a
-/// file the caller does not have. The finding names it.
-#[cfg(feature = "dist")]
-fn warn_dropped_sidecars(
-    mut diagnostics: Vec<Diagnostic>,
-    sidecars: &[powerio_dist::ConversionSidecar],
-) -> Vec<Diagnostic> {
-    for sidecar in sidecars {
-        diagnostics.push(sidecar.dropped_diagnostic(
-            "this entry point returns the case text only, and that text refers to the file; \
-             write it beside the case before loading",
-        ));
-    }
-    diagnostics
-}
-
-/// Serialize `net` to distribution format `to` (`dss`, `pmd`, or `bmopf`).
-/// Writing back to the format the handle was parsed from echoes the source text
-/// byte for byte. Returns the text as an owned C string (free with
-/// [`pio_string_free`]), `NULL` on error. A cross format write's fidelity
-/// losses are published through `out_diagnostics_json` as one owned JSON array
-/// of diagnostic records (free it with [`pio_string_free`]), NULL when there
-/// are none. Pass NULL to discard them. `out_diagnostics_json` is written on
-/// every return path and is NULL whenever this returns NULL, so an error return
-/// leaves nothing to free.
-#[cfg(feature = "dist")]
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn pio_dist_to_format(
-    net: *const PioDistNetwork,
-    to: *const c_char,
-    out_diagnostics_json: *mut *mut c_char,
-    errbuf: *mut c_char,
-    errlen: usize,
-) -> *mut c_char {
-    unsafe {
-        finish_conversion(
-            out_diagnostics_json,
-            errbuf,
-            errlen,
-            "panic while converting",
-            || {
-                let c = net.as_ref().ok_or_else(|| null_handle("network handle"))?;
-                let target = dist_target_from_c(to)?;
-                let conv = powerio_dist::write_as(&c.module, target);
-                Ok((
-                    conv.text,
-                    warn_dropped_sidecars(conv.diagnostics, &conv.sidecars),
-                ))
-            },
-        )
-    }
-}
-
-/// Convert distribution case `path` from optional source format `from` to format
-/// `to`; see [`pio_dist_parse_file`] for the inference rules. Returns the
-/// converted text as an owned C string (free with [`pio_string_free`]), `NULL` on
-/// error. The records published through `out_diagnostics_json` carry both the
-/// parse findings and the writer's fidelity losses (there is no handle to query
-/// them), as one owned JSON array (free it with [`pio_string_free`]), NULL when
-/// there are none. Pass NULL to discard them. `out_diagnostics_json` is written
-/// on every return path and is NULL whenever this returns NULL, so an error
-/// return leaves nothing to free.
-#[cfg(feature = "dist")]
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn pio_dist_convert_file(
-    path: *const c_char,
-    from: *const c_char,
-    to: *const c_char,
-    out_diagnostics_json: *mut *mut c_char,
-    errbuf: *mut c_char,
-    errlen: usize,
-) -> *mut c_char {
-    unsafe {
-        finish_conversion(
-            out_diagnostics_json,
-            errbuf,
-            errlen,
-            "panic while converting",
-            || {
-                let path = required_cstr(path, "path")?;
-                let from = optional_cstr(from, "from")?;
-                let to = dist_target_from_c(to)?;
-                let source = dist_source_from_path(std::path::Path::new(path), from)?;
-                let conv =
-                    powerio_dist::convert_source(source, to).map_err(|e| core_err_line(&e))?;
-                Ok((
-                    conv.text,
-                    warn_dropped_sidecars(conv.diagnostics, &conv.sidecars),
-                ))
-            },
-        )
-    }
-}
-
-/// Convert in-memory distribution case `text` of format `from` to format `to`
-/// (both required; `dss`, `pmd`, or `bmopf`). The parameter order is input,
-/// source, target, matching [`pio_dist_convert_file`]. Returns the converted text
-/// as an owned C string (free with [`pio_string_free`]), `NULL` on error. The
-/// records published through `out_diagnostics_json` carry both the parse
-/// findings and the writer's fidelity losses (there is no handle to query them),
-/// as one owned JSON array (free it with [`pio_string_free`]), NULL when there
-/// are none. Pass NULL to discard them. `out_diagnostics_json` is written on
-/// every return path and is NULL whenever this returns NULL, so an error return
-/// leaves nothing to free.
-#[cfg(feature = "dist")]
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn pio_dist_convert_str(
-    text: *const c_char,
-    from: *const c_char,
-    to: *const c_char,
-    out_diagnostics_json: *mut *mut c_char,
-    errbuf: *mut c_char,
-    errlen: usize,
-) -> *mut c_char {
-    unsafe {
-        finish_conversion(
-            out_diagnostics_json,
-            errbuf,
-            errlen,
-            "panic while converting",
-            || {
-                let text = required_cstr(text, "text")?;
-                let to = dist_target_from_c(to)?;
-                let from = required_cstr(from, "from")?;
-                let source = dist_source_from_bytes(text.as_bytes(), from)?;
-                let conv =
-                    powerio_dist::convert_source(source, to).map_err(|e| core_err_line(&e))?;
-                Ok((
-                    conv.text,
-                    warn_dropped_sidecars(conv.diagnostics, &conv.sidecars),
-                ))
-            },
-        )
-    }
-}
-
-#[cfg(feature = "dist")]
-fn dist_target_from_c(to: *const c_char) -> Result<powerio_dist::DistTargetFormat, String> {
-    let to = required_cstr(to, "to")?;
-    // The message comes from the real error so it can't drift from what the
-    // powerio-dist dispatchers report for the same mistake.
-    to.parse::<powerio_dist::DistTargetFormat>()
-        .map_err(err_line)
 }
 
 #[cfg(test)]
@@ -2850,7 +2022,7 @@ mod tests {
                 "pwb bytes: {}",
                 CStr::from_ptr(err.as_ptr()).to_str().unwrap()
             );
-            assert_eq!(pio_n_buses(net), 200);
+            assert_eq!(pio_balanced_network_n_buses(net), 200);
             pio_network_free(net);
 
             // A text format agrees with the path parse of the same file.
@@ -2865,8 +2037,8 @@ mod tests {
             );
             assert!(!from_bytes.is_null());
             let from_path = case9();
-            assert_eq!(pio_n_buses(from_bytes), pio_n_buses(from_path));
-            assert_eq!(pio_n_branches(from_bytes), pio_n_branches(from_path));
+            assert_eq!(pio_balanced_network_n_buses(from_bytes), pio_balanced_network_n_buses(from_path));
+            assert_eq!(pio_balanced_network_n_branches(from_bytes), pio_balanced_network_n_branches(from_path));
             pio_network_free(from_bytes);
             pio_network_free(from_path);
 
@@ -2902,7 +2074,7 @@ mod tests {
         }
     }
 
-    fn case9() -> *mut PioNetwork {
+    fn case9() -> *mut PioBalancedNetwork {
         let path = data_path("case9.m");
         let mut err = [0 as c_char; 256];
         let c =
@@ -2911,7 +2083,7 @@ mod tests {
         c
     }
 
-    fn angle_bounds_case() -> *mut PioNetwork {
+    fn angle_bounds_case() -> *mut PioBalancedNetwork {
         let path = data_path("angle_bounds_clamp.m");
         let mut err = [0 as c_char; 256];
         let c =
@@ -2920,7 +2092,7 @@ mod tests {
         c
     }
 
-    fn terminal_projection_case() -> *mut PioNetwork {
+    fn terminal_projection_case() -> *mut PioBalancedNetwork {
         use powerio::{Branch, BranchCharging, Bus, BusId, BusType};
 
         let mut branch = Branch::new(BusId(1), BusId(2), 0.01, 0.1);
@@ -2937,7 +2109,7 @@ mod tests {
         );
         let text = CString::new(net.to_json().unwrap()).unwrap();
         let mut err = [0 as c_char; 256];
-        let c = unsafe { pio_from_json(text.as_ptr(), err.as_mut_ptr(), err.len()) };
+        let c = unsafe { pio_balanced_network_from_json(text.as_ptr(), err.as_mut_ptr(), err.len()) };
         assert!(
             !c.is_null(),
             "parse returned null: {}",
@@ -2947,7 +2119,7 @@ mod tests {
     }
 
     /// `pio_to_format` with a Rust-side format name, asserting success.
-    unsafe fn to_format(net: *const PioNetwork, to: &str) -> String {
+    unsafe fn to_format(net: *const PioBalancedNetwork, to: &str) -> String {
         let to = CString::new(to).unwrap();
         let mut diag_out: *mut c_char = std::ptr::null_mut();
         let mut err = [0 as c_char; 256];
@@ -2966,27 +2138,27 @@ mod tests {
                 CStr::from_ptr(err.as_ptr()).to_str().unwrap()
             );
             let text = CStr::from_ptr(s).to_str().unwrap().to_owned();
-            pio_string_free(s);
+            pio_string_release(s);
             text
         }
     }
 
-    unsafe fn network_json(net: *const PioNetwork) -> serde_json::Value {
+    unsafe fn network_json(net: *const PioBalancedNetwork) -> serde_json::Value {
         let mut err = [0 as c_char; PIO_ERRBUF_MIN];
         unsafe {
-            let s = pio_to_json(net, err.as_mut_ptr(), err.len());
+            let s = pio_balanced_network_to_json(net, err.as_mut_ptr(), err.len());
             assert!(
                 !s.is_null(),
                 "to_json failed: {}",
                 CStr::from_ptr(err.as_ptr()).to_str().unwrap()
             );
             let text = CStr::from_ptr(s).to_str().unwrap().to_owned();
-            pio_string_free(s);
+            pio_string_release(s);
             serde_json::from_str(&text).unwrap()
         }
     }
 
-    unsafe fn warning_text(net: *const PioNetwork) -> String {
+    unsafe fn warning_text(net: *const PioBalancedNetwork) -> String {
         let n = unsafe { pio_warnings(net, std::ptr::null_mut(), 0) };
         let mut buf = vec![0 as c_char; n + 1];
         unsafe {
@@ -3010,13 +2182,13 @@ mod tests {
         );
 
         unsafe {
-            assert_eq!(pio_n_buses(net), 14);
-            assert_eq!(pio_n_branches(net), 20);
-            assert_eq!(pio_n_gens(net), 5);
-            close(pio_base_mva(net), 100.0);
+            assert_eq!(pio_balanced_network_n_buses(net), 14);
+            assert_eq!(pio_balanced_network_n_branches(net), 20);
+            assert_eq!(pio_balanced_network_n_gens(net), 5);
+            close(pio_balanced_network_base_mva(net), 100.0);
 
             let mut source_format = [0 as c_char; 64];
-            let len = pio_source_format(net, source_format.as_mut_ptr(), source_format.len());
+            let len = pio_balanced_network_source_format(net, source_format.as_mut_ptr(), source_format.len());
             assert_eq!(
                 CStr::from_ptr(source_format.as_ptr()).to_str().unwrap(),
                 "opfdata-json"
@@ -3032,8 +2204,8 @@ mod tests {
     fn every_extractor_reports_the_star_lowered_space() {
         // A 3-winding transformer star-lowers into one bus plus three branches
         // before the dense extractors run. Through v4 the bus and branch
-        // tables reported the unexpanded network while pio_bus_demand and
-        // pio_n_islands reported the expansion, so a caller sizing from them
+        // tables reported the unexpanded network while pio_balanced_network_bus_demand and
+        // pio_balanced_network_n_islands reported the expansion, so a caller sizing from them
         // read short. Both halves have to move together: 10 buses against 9
         // branches leaves the star point an isolated row and the transformer
         // contributing nothing.
@@ -3041,39 +2213,39 @@ mod tests {
         let text = CString::new(case).unwrap();
         let mut err = [0 as c_char; PIO_ERRBUF_MIN];
         unsafe {
-            let net = pio_from_json(text.as_ptr(), err.as_mut_ptr(), err.len());
+            let net = pio_balanced_network_from_json(text.as_ptr(), err.as_mut_ptr(), err.len());
             assert!(
                 !net.is_null(),
                 "from_json failed: {}",
                 CStr::from_ptr(err.as_ptr()).to_str().unwrap()
             );
 
-            let n = pio_n_buses(net);
-            let demand = pio_bus_demand(net, std::ptr::null_mut(), std::ptr::null_mut(), 0);
-            let shunt = pio_bus_shunt(net, std::ptr::null_mut(), std::ptr::null_mut(), 0);
-            let ids = pio_bus_ids(net, std::ptr::null_mut(), 0);
+            let n = pio_balanced_network_n_buses(net);
+            let demand = pio_balanced_network_bus_demand(net, std::ptr::null_mut(), std::ptr::null_mut(), 0);
+            let shunt = pio_balanced_network_bus_shunt(net, std::ptr::null_mut(), std::ptr::null_mut(), 0);
+            let ids = pio_balanced_network_bus_ids(net, std::ptr::null_mut(), 0);
 
             assert_eq!(n, 10, "9 buses plus one star point");
-            assert_eq!(demand, n, "pio_bus_demand must agree with pio_n_buses");
-            assert_eq!(shunt, n, "pio_bus_shunt must agree with pio_n_buses");
-            assert_eq!(ids, n, "pio_bus_ids must agree with pio_n_buses");
+            assert_eq!(demand, n, "pio_balanced_network_bus_demand must agree with pio_balanced_network_n_buses");
+            assert_eq!(shunt, n, "pio_balanced_network_bus_shunt must agree with pio_balanced_network_n_buses");
+            assert_eq!(ids, n, "pio_balanced_network_bus_ids must agree with pio_balanced_network_n_buses");
 
-            let m = pio_n_branches(net);
+            let m = pio_balanced_network_n_branches(net);
             let (ni, nf, nb) = (
                 std::ptr::null_mut::<i64>(),
                 std::ptr::null_mut::<f64>(),
                 std::ptr::null_mut::<u8>(),
             );
-            let rows = pio_branches(net, ni, ni, nf, nf, nf, nf, nf, nb, 0);
-            let charging = pio_branch_charging(net, nf, nf, nf, nf, 0);
+            let rows = pio_balanced_network_branches(net, ni, ni, nf, nf, nf, nf, nf, nb, 0);
+            let charging = pio_balanced_network_branch_charging(net, nf, nf, nf, nf, 0);
             assert_eq!(m, 12, "9 branches plus three star legs");
-            assert_eq!(rows, m, "pio_branches must agree with pio_n_branches");
-            assert_eq!(charging, m, "pio_branch_charging must agree too");
+            assert_eq!(rows, m, "pio_balanced_network_branches must agree with pio_balanced_network_n_branches");
+            assert_eq!(charging, m, "pio_balanced_network_branch_charging must agree too");
 
             // Every index a per-bus column addresses has an id, the star point
-            // included: sizing from pio_n_buses is now sufficient.
+            // included: sizing from pio_balanced_network_n_buses is now sufficient.
             let mut buf = vec![-1i64; n];
-            assert_eq!(pio_bus_ids(net, buf.as_mut_ptr(), buf.len()), n);
+            assert_eq!(pio_balanced_network_bus_ids(net, buf.as_mut_ptr(), buf.len()), n);
             assert!(
                 buf.iter().all(|&id| id > 0),
                 "every dense index carries an id, got {buf:?}"
@@ -3085,7 +2257,7 @@ mod tests {
             let mut from = vec![-1i64; m];
             let mut to = vec![-1i64; m];
             assert_eq!(
-                pio_branches(
+                pio_balanced_network_branches(
                     net,
                     from.as_mut_ptr(),
                     to.as_mut_ptr(),
@@ -3102,7 +2274,7 @@ mod tests {
             for id in from.iter().chain(&to) {
                 assert!(
                     buf.contains(id),
-                    "branch endpoint {id} is not in pio_bus_ids"
+                    "branch endpoint {id} is not in pio_balanced_network_bus_ids"
                 );
             }
             for id in &buf {
@@ -3115,11 +2287,11 @@ mod tests {
             // The summary carries both spaces and says which is which: counts
             // is the case file's inventory, so the transformer is one row
             // there, and topology is the space the extractors report.
-            let raw = pio_summary_json(net, err.as_mut_ptr(), err.len());
+            let raw = pio_balanced_network_summary_json(net, err.as_mut_ptr(), err.len());
             assert!(!raw.is_null());
             let summary: serde_json::Value =
                 serde_json::from_str(CStr::from_ptr(raw).to_str().unwrap()).unwrap();
-            pio_string_free(raw);
+            pio_string_release(raw);
             assert_eq!(summary["counts"]["buses"], 9);
             assert_eq!(summary["counts"]["branches"], 9);
             assert_eq!(summary["counts"]["transformers_3w"], 1);
@@ -3137,10 +2309,10 @@ mod tests {
         let net = case9();
         let mut doc: serde_json::Value = unsafe {
             let mut err = [0 as c_char; PIO_ERRBUF_MIN];
-            let raw = pio_to_json(net, err.as_mut_ptr(), err.len());
+            let raw = pio_balanced_network_to_json(net, err.as_mut_ptr(), err.len());
             assert!(!raw.is_null());
             let text = CStr::from_ptr(raw).to_str().unwrap().to_owned();
-            pio_string_free(raw);
+            pio_string_release(raw);
             pio_network_free(net);
             serde_json::from_str(&text).unwrap()
         };
@@ -3166,7 +2338,7 @@ mod tests {
         assert!(!raw.is_null());
         let doc: serde_json::Value =
             serde_json::from_str(unsafe { CStr::from_ptr(raw) }.to_str().unwrap()).unwrap();
-        unsafe { pio_string_free(raw) };
+        unsafe { pio_string_release(raw) };
 
         assert_eq!(doc["abi"], serde_json::json!(PIO_ABI_VERSION));
         assert_eq!(
@@ -3203,7 +2375,7 @@ mod tests {
         let schema: serde_json::Value = {
             let p = pio_schema_versions_json();
             let text = unsafe { CStr::from_ptr(p) }.to_str().unwrap().to_owned();
-            unsafe { pio_string_free(p) };
+            unsafe { pio_string_release(p) };
             serde_json::from_str(&text).unwrap()
         };
         assert_eq!(schema["powerio_version"], doc["powerio_version"]);
@@ -3386,11 +2558,11 @@ mod tests {
     fn c_header_abi_manifest_is_pinned() {
         let actual = c_header_abi_manifest(include_str!("../include/powerio.h"));
         let expected = [
-            "typedef struct PioNetwork PioNetwork;",
+            "typedef struct PioBalancedNetwork PioBalancedNetwork;",
             "typedef struct PioError PioError;",
-            "typedef struct PioModuleHandle PioModuleHandle;",
+            "typedef struct PioModule PioModule;",
             "typedef struct PioDcData PioDcData;",
-            "typedef struct PioDistNetwork PioDistNetwork;",
+            "typedef struct PioMulticonductorNetwork PioMulticonductorNetwork;",
             "#define PIO_ABI_VERSION 6",
             "#define PIO_DIST_ABI_VERSION 1",
             "#define PIO_ERRBUF_MIN 256",
@@ -3419,61 +2591,61 @@ mod tests {
             "int32_t pio_matrix_available(void);",
             "int32_t pio_has_feature(const char *feature);",
             "const char *pio_version(void);",
-            "PioNetwork *pio_parse_file(const char *path, const char *from, char *errbuf, size_t errlen);",
-            "PioNetwork *pio_parse_str(const char *text, const char *format, char *errbuf, size_t errlen);",
-            "PioNetwork *pio_parse_bytes(const uint8_t *bytes, size_t len, const char *format, char *errbuf, size_t errlen);",
+            "PioBalancedNetwork *pio_parse_file(const char *path, const char *from, char *errbuf, size_t errlen);",
+            "PioBalancedNetwork *pio_parse_str(const char *text, const char *format, char *errbuf, size_t errlen);",
+            "PioBalancedNetwork *pio_parse_bytes(const uint8_t *bytes, size_t len, const char *format, char *errbuf, size_t errlen);",
             "size_t pio_classify_str(const char *text, char *outbuf, size_t outlen);",
-            "char *pio_to_json(const PioNetwork *net, char *errbuf, size_t errlen);",
-            "PioNetwork *pio_from_json(const char *text, char *errbuf, size_t errlen);",
-            "PioNetwork *pio_read_dir(const char *dir, const char *from, int64_t scenario, char *errbuf, size_t errlen);",
+            "char *pio_balanced_network_to_json(const PioBalancedNetwork *net, char *errbuf, size_t errlen);",
+            "PioBalancedNetwork *pio_balanced_network_from_json(const char *text, char *errbuf, size_t errlen);",
+            "PioBalancedNetwork *pio_read_dir(const char *dir, const char *from, int64_t scenario, char *errbuf, size_t errlen);",
             "ptrdiff_t pio_scenario_ids(const char *dir, const char *from, int64_t *out, size_t cap, char *errbuf, size_t errlen);",
-            "size_t pio_warnings(const PioNetwork *net, char *warnbuf, size_t warnlen);",
-            "void pio_network_free(PioNetwork *net);",
-            "PioNetwork *pio_network_retain(const PioNetwork *net);",
-            "void pio_network_release(PioNetwork *net);",
-            "PioNetwork *pio_normalize(const PioNetwork *net, const PioNormalizeOptions *opts, char *errbuf, size_t errlen);",
-            "size_t pio_n_buses(const PioNetwork *net);",
-            "size_t pio_n_branches(const PioNetwork *net);",
-            "size_t pio_n_switches(const PioNetwork *net);",
-            "size_t pio_n_gens(const PioNetwork *net);",
-            "double pio_base_mva(const PioNetwork *net);",
-            "size_t pio_network_name(const PioNetwork *net, char *out, size_t cap);",
-            "size_t pio_source_format(const PioNetwork *net, char *out, size_t cap);",
-            "char *pio_summary_json(const PioNetwork *net, char *errbuf, size_t errlen);",
-            "int64_t pio_ref_bus_index(const PioNetwork *net);",
-            "size_t pio_ref_bus_indices(const PioNetwork *net, int64_t *out, size_t cap);",
-            "size_t pio_n_islands(const PioNetwork *net);",
-            "int32_t pio_is_radial(const PioNetwork *net);",
-            "char *pio_to_format(const PioNetwork *net, const char *to, const PioWriteOptions *opts, char **out_diagnostics_json, char *errbuf, size_t errlen);",
+            "size_t pio_warnings(const PioBalancedNetwork *net, char *warnbuf, size_t warnlen);",
+            "void pio_network_free(PioBalancedNetwork *net);",
+            "PioBalancedNetwork *pio_balanced_network_retain(const PioBalancedNetwork *net);",
+            "void pio_balanced_network_release(PioBalancedNetwork *net);",
+            "PioBalancedNetwork *pio_balanced_network_normalize(const PioBalancedNetwork *net, const PioNormalizeOptions *opts, char *errbuf, size_t errlen);",
+            "size_t pio_balanced_network_n_buses(const PioBalancedNetwork *net);",
+            "size_t pio_balanced_network_n_branches(const PioBalancedNetwork *net);",
+            "size_t pio_balanced_network_n_switches(const PioBalancedNetwork *net);",
+            "size_t pio_balanced_network_n_gens(const PioBalancedNetwork *net);",
+            "double pio_balanced_network_base_mva(const PioBalancedNetwork *net);",
+            "size_t pio_balanced_network_name(const PioBalancedNetwork *net, char *out, size_t cap);",
+            "size_t pio_balanced_network_source_format(const PioBalancedNetwork *net, char *out, size_t cap);",
+            "char *pio_balanced_network_summary_json(const PioBalancedNetwork *net, char *errbuf, size_t errlen);",
+            "int64_t pio_balanced_network_ref_bus_index(const PioBalancedNetwork *net);",
+            "size_t pio_balanced_network_ref_bus_indices(const PioBalancedNetwork *net, int64_t *out, size_t cap);",
+            "size_t pio_balanced_network_n_islands(const PioBalancedNetwork *net);",
+            "int32_t pio_balanced_network_is_radial(const PioBalancedNetwork *net);",
+            "char *pio_to_format(const PioBalancedNetwork *net, const char *to, const PioWriteOptions *opts, char **out_diagnostics_json, char *errbuf, size_t errlen);",
             "char *pio_convert_file(const char *path, const char *from, const char *to, const PioWriteOptions *opts, char **out_diagnostics_json, char *errbuf, size_t errlen);",
             "char *pio_convert_str(const char *text, const char *from, const char *to, const PioWriteOptions *opts, char **out_diagnostics_json, char *errbuf, size_t errlen);",
-            "int32_t pio_write_dir(const PioNetwork *net, const char *to, const char *out_dir, const PioWriteOptions *opts, char **out_diagnostics_json, char *errbuf, size_t errlen);",
-            "void pio_string_free(char *s);",
-            "size_t pio_bus_ids(const PioNetwork *net, int64_t *out, size_t cap);",
-            "size_t pio_branches(const PioNetwork *net, int64_t *from, int64_t *to, double *r, double *x, double *b, double *tap, double *shift, uint8_t *in_service, size_t cap);",
-            "size_t pio_branch_charging(const PioNetwork *net, double *g_fr, double *b_fr, double *g_to, double *b_to, size_t cap);",
-            "size_t pio_switches(const PioNetwork *net, int64_t *from, int64_t *to, uint8_t *closed, double *thermal_rating, double *current_rating, double *pf, double *qf, double *pt, double *qt, size_t cap);",
-            "size_t pio_gens(const PioNetwork *net, int64_t *bus, double *pg, double *pmax, double *pmin, uint8_t *in_service, size_t cap);",
-            "size_t pio_bus_demand(const PioNetwork *net, double *pd, double *qd, size_t cap);",
-            "size_t pio_bus_shunt(const PioNetwork *net, double *gs, double *bs, size_t cap);",
-            "int32_t pio_to_arrow(const PioNetwork *net, int32_t table, struct ArrowArray *out_array, struct ArrowSchema *out_schema, char *errbuf, size_t errlen);",
+            "int32_t pio_write_dir(const PioBalancedNetwork *net, const char *to, const char *out_dir, const PioWriteOptions *opts, char **out_diagnostics_json, char *errbuf, size_t errlen);",
+            "void pio_string_release(char *s);",
+            "size_t pio_balanced_network_bus_ids(const PioBalancedNetwork *net, int64_t *out, size_t cap);",
+            "size_t pio_balanced_network_branches(const PioBalancedNetwork *net, int64_t *from, int64_t *to, double *r, double *x, double *b, double *tap, double *shift, uint8_t *in_service, size_t cap);",
+            "size_t pio_balanced_network_branch_charging(const PioBalancedNetwork *net, double *g_fr, double *b_fr, double *g_to, double *b_to, size_t cap);",
+            "size_t pio_balanced_network_switches(const PioBalancedNetwork *net, int64_t *from, int64_t *to, uint8_t *closed, double *thermal_rating, double *current_rating, double *pf, double *qf, double *pt, double *qt, size_t cap);",
+            "size_t pio_balanced_network_gens(const PioBalancedNetwork *net, int64_t *bus, double *pg, double *pmax, double *pmin, uint8_t *in_service, size_t cap);",
+            "size_t pio_balanced_network_bus_demand(const PioBalancedNetwork *net, double *pd, double *qd, size_t cap);",
+            "size_t pio_balanced_network_bus_shunt(const PioBalancedNetwork *net, double *gs, double *bs, size_t cap);",
+            "int32_t pio_balanced_network_to_arrow(const PioBalancedNetwork *net, int32_t table, struct ArrowArray *out_array, struct ArrowSchema *out_schema, char *errbuf, size_t errlen);",
             "char *pio_arrow_catalog_json(char *errbuf, size_t errlen);",
             "char *pio_geo_parse(const char *text, const char *name_hint, char **out_diagnostics_json, char *errbuf, size_t errlen);",
-            "char *pio_geo_extract(const PioNetwork *net, char *errbuf, size_t errlen);",
-            "PioNetwork *pio_geo_apply(const PioNetwork *net, const char *layer, const char *name_hint, char *errbuf, size_t errlen);",
-            "char *pio_dist_geo_extract(const PioDistNetwork *net, char *errbuf, size_t errlen);",
-            "PioDistNetwork *pio_dist_geo_apply(const PioDistNetwork *net, const char *layer, const char *name_hint, char *errbuf, size_t errlen);",
-            "PioDistNetwork *pio_dist_parse_file(const char *path, const char *from, char *errbuf, size_t errlen);",
-            "PioDistNetwork *pio_dist_parse_str(const char *text, const char *format, char *errbuf, size_t errlen);",
-            "void pio_dist_network_free(PioDistNetwork *net);",
-            "PioDistNetwork *pio_dist_network_retain(const PioDistNetwork *net);",
-            "void pio_dist_network_release(PioDistNetwork *net);",
-            "size_t pio_dist_warnings(const PioDistNetwork *net, char *warnbuf, size_t warnlen);",
-            "char *pio_dist_summary_json(const PioDistNetwork *net, char *errbuf, size_t errlen);",
-            "char *pio_dist_to_json(const PioDistNetwork *net, char *errbuf, size_t errlen);",
-            "char *pio_dist_graph_json(const PioDistNetwork *net, char *errbuf, size_t errlen);",
-            "PioDistNetwork *pio_dist_from_json(const char *text, char *errbuf, size_t errlen);",
-            "char *pio_dist_to_format(const PioDistNetwork *net, const char *to, char **out_diagnostics_json, char *errbuf, size_t errlen);",
+            "char *pio_balanced_network_geo_extract(const PioBalancedNetwork *net, char *errbuf, size_t errlen);",
+            "PioBalancedNetwork *pio_balanced_network_geo_apply(const PioBalancedNetwork *net, const char *layer, const char *name_hint, char *errbuf, size_t errlen);",
+            "char *pio_multiconductor_network_geo_extract(const PioMulticonductorNetwork *net, char *errbuf, size_t errlen);",
+            "PioMulticonductorNetwork *pio_multiconductor_network_geo_apply(const PioMulticonductorNetwork *net, const char *layer, const char *name_hint, char *errbuf, size_t errlen);",
+            "PioMulticonductorNetwork *pio_dist_parse_file(const char *path, const char *from, char *errbuf, size_t errlen);",
+            "PioMulticonductorNetwork *pio_dist_parse_str(const char *text, const char *format, char *errbuf, size_t errlen);",
+            "void pio_dist_network_free(PioMulticonductorNetwork *net);",
+            "PioMulticonductorNetwork *pio_multiconductor_network_retain(const PioMulticonductorNetwork *net);",
+            "void pio_multiconductor_network_release(PioMulticonductorNetwork *net);",
+            "size_t pio_dist_warnings(const PioMulticonductorNetwork *net, char *warnbuf, size_t warnlen);",
+            "char *pio_multiconductor_network_summary_json(const PioMulticonductorNetwork *net, char *errbuf, size_t errlen);",
+            "char *pio_multiconductor_network_to_json(const PioMulticonductorNetwork *net, char *errbuf, size_t errlen);",
+            "char *pio_multiconductor_network_graph_json(const PioMulticonductorNetwork *net, char *errbuf, size_t errlen);",
+            "PioMulticonductorNetwork *pio_multiconductor_network_from_json(const char *text, char *errbuf, size_t errlen);",
+            "char *pio_dist_to_format(const PioMulticonductorNetwork *net, const char *to, char **out_diagnostics_json, char *errbuf, size_t errlen);",
             "char *pio_dist_convert_file(const char *path, const char *from, const char *to, char **out_diagnostics_json, char *errbuf, size_t errlen);",
             "char *pio_dist_convert_str(const char *text, const char *from, const char *to, char **out_diagnostics_json, char *errbuf, size_t errlen);",
             "const char *pio_error_code(const PioError *error);",
@@ -3481,23 +2653,23 @@ mod tests {
             "const char *pio_error_diagnostics_json(const PioError *error);",
             "PioError *pio_error_retain(const PioError *error);",
             "void pio_error_release(PioError *error);",
-            "PioModuleHandle *pio_module_read_json(const char *text, PioError **error);",
-            "PioModuleHandle *pio_module_parse_file(const char *path, const char *format, PioError **error);",
-            "PioModuleHandle *pio_module_parse_str(const char *text, const char *format, PioError **error);",
-            "PioModuleHandle *pio_module_parse_bytes(const uint8_t *data, size_t len, const char *format, PioError **error);",
-            "PioNetwork *pio_module_as_network(const PioModuleHandle *module, PioError **error);",
-            "PioDistNetwork *pio_module_as_dist_network(const PioModuleHandle *module, PioError **error);",
-            "char *pio_module_write_json(const PioModuleHandle *module, PioError **error);",
-            "char *pio_module_diagnostics_json(const PioModuleHandle *module, PioError **error);",
-            "const char *pio_module_kind(const PioModuleHandle *module);",
-            "char *pio_module_inspect_json(const PioModuleHandle *module, PioError **error);",
-            "char *pio_module_state_inventory_json(const PioModuleHandle *module, PioError **error);",
-            "PioModuleHandle *pio_module_export_state(const PioModuleHandle *module, int64_t time_position, const char *scenario, PioError **error);",
-            "char *pio_module_lowering_readiness_json(const PioModuleHandle *module, double base_mva, PioError **error);",
-            "PioModuleHandle *pio_module_lower_to_balanced(const PioModuleHandle *module, double base_mva, PioError **error);",
-            "PioModuleHandle *pio_module_retain(const PioModuleHandle *module);",
-            "void pio_module_release(PioModuleHandle *module);",
-            "PioDcData *pio_dc_data_build(const PioModuleHandle *module, const char *formula, PioError **error);",
+            "PioModule *pio_module_read_json(const char *text, PioError **error);",
+            "PioModule *pio_module_parse_file(const char *path, const char *format, PioError **error);",
+            "PioModule *pio_module_parse_str(const char *text, const char *format, PioError **error);",
+            "PioModule *pio_module_parse_bytes(const uint8_t *data, size_t len, const char *format, PioError **error);",
+            "PioBalancedNetwork *pio_module_balanced_network(const PioModule *module, PioError **error);",
+            "PioMulticonductorNetwork *pio_module_multiconductor_network(const PioModule *module, PioError **error);",
+            "char *pio_module_write_json(const PioModule *module, PioError **error);",
+            "char *pio_module_diagnostics_json(const PioModule *module, PioError **error);",
+            "const char *pio_module_kind(const PioModule *module);",
+            "char *pio_module_inspect_json(const PioModule *module, PioError **error);",
+            "char *pio_module_state_inventory_json(const PioModule *module, PioError **error);",
+            "PioModule *pio_module_export_state(const PioModule *module, int64_t time_position, const char *scenario, PioError **error);",
+            "char *pio_module_lowering_readiness_json(const PioModule *module, double base_mva, PioError **error);",
+            "PioModule *pio_module_lower_to_balanced(const PioModule *module, double base_mva, PioError **error);",
+            "PioModule *pio_module_retain(const PioModule *module);",
+            "void pio_module_release(PioModule *module);",
+            "PioDcData *pio_dc_data_build(const PioModule *module, const char *formula, PioError **error);",
             "size_t pio_dc_data_n_rows(const PioDcData *data);",
             "size_t pio_dc_data_n_buses(const PioDcData *data);",
             "const int64_t *pio_dc_data_from_indices(const PioDcData *data);",
@@ -3534,23 +2706,23 @@ mod tests {
     fn parse_query_free() {
         let c = case9();
         unsafe {
-            assert_eq!(pio_n_buses(c), 9);
-            assert_eq!(pio_n_branches(c), 9);
-            assert_eq!(pio_n_gens(c), 3);
-            assert_eq!(pio_base_mva(c), 100.0);
+            assert_eq!(pio_balanced_network_n_buses(c), 9);
+            assert_eq!(pio_balanced_network_n_branches(c), 9);
+            assert_eq!(pio_balanced_network_n_gens(c), 3);
+            assert_eq!(pio_balanced_network_base_mva(c), 100.0);
             let mut name = [0 as c_char; 64];
-            let name_len = pio_network_name(c, name.as_mut_ptr(), name.len());
+            let name_len = pio_balanced_network_name(c, name.as_mut_ptr(), name.len());
             assert_eq!(CStr::from_ptr(name.as_ptr()).to_str().unwrap(), "case9");
             assert_eq!(name_len, 5);
             let mut source_format = [0 as c_char; 64];
-            let fmt_len = pio_source_format(c, source_format.as_mut_ptr(), source_format.len());
+            let fmt_len = pio_balanced_network_source_format(c, source_format.as_mut_ptr(), source_format.len());
             assert_eq!(
                 CStr::from_ptr(source_format.as_ptr()).to_str().unwrap(),
                 "matpower"
             );
             assert_eq!(fmt_len, 8);
             let mut err = [0 as c_char; 256];
-            let summary = pio_summary_json(c, err.as_mut_ptr(), err.len());
+            let summary = pio_balanced_network_summary_json(c, err.as_mut_ptr(), err.len());
             assert!(
                 !summary.is_null(),
                 "summary json failed: {}",
@@ -3570,9 +2742,9 @@ mod tests {
             );
             assert_eq!(summary_value["topology"]["n_components"], 1);
             assert_eq!(summary_value["topology"]["is_radial"], false);
-            pio_string_free(summary);
-            assert_eq!(pio_n_islands(c), 1);
-            assert!(pio_ref_bus_index(c) >= 0);
+            pio_string_release(summary);
+            assert_eq!(pio_balanced_network_n_islands(c), 1);
+            assert!(pio_balanced_network_ref_bus_index(c) >= 0);
             // The MATPOWER reader is total: no warnings, zero bytes.
             assert_eq!(pio_warnings(c, std::ptr::null_mut(), 0), 0);
             pio_network_free(c);
@@ -3645,7 +2817,7 @@ mod tests {
         let c = case9();
         unsafe {
             // All-NULL is the count query.
-            let nb = pio_branches(
+            let nb = pio_balanced_network_branches(
                 c,
                 std::ptr::null_mut(),
                 std::ptr::null_mut(),
@@ -3657,10 +2829,10 @@ mod tests {
                 std::ptr::null_mut(),
                 0,
             );
-            assert_eq!(nb, pio_n_branches(c));
+            assert_eq!(nb, pio_balanced_network_n_branches(c));
             let mut from = vec![0i64; nb];
             let mut x = vec![0f64; nb];
-            let total = pio_branches(
+            let total = pio_balanced_network_branches(
                 c,
                 from.as_mut_ptr(),
                 std::ptr::null_mut(),
@@ -3674,7 +2846,7 @@ mod tests {
             );
             assert_eq!(total, nb);
             // `from` carries the 1-based bus ids (case9 buses are 1..=9), the
-            // same id space as pio_bus_ids, not dense indices.
+            // same id space as pio_balanced_network_bus_ids, not dense indices.
             assert!(from.iter().all(|&f| f >= 1));
             assert!(x.iter().all(|&xx| xx > 0.0));
             pio_network_free(c);
@@ -3686,7 +2858,7 @@ mod tests {
         let c = terminal_projection_case();
         unsafe {
             let mut b = [0.0];
-            let nb = pio_branches(
+            let nb = pio_balanced_network_branches(
                 c,
                 std::ptr::null_mut(),
                 std::ptr::null_mut(),
@@ -3705,7 +2877,7 @@ mod tests {
             let mut b_fr = [0.0];
             let mut g_to = [0.0];
             let mut b_to = [0.0];
-            let nb = pio_branch_charging(
+            let nb = pio_balanced_network_branch_charging(
                 c,
                 g_fr.as_mut_ptr(),
                 b_fr.as_mut_ptr(),
@@ -3726,12 +2898,12 @@ mod tests {
     fn cap_clamps_the_write_and_returns_the_total() {
         let c = case9();
         unsafe {
-            let total = pio_bus_ids(c, std::ptr::null_mut(), 0);
+            let total = pio_balanced_network_bus_ids(c, std::ptr::null_mut(), 0);
             assert_eq!(total, 9);
             // A two-slot buffer gets exactly two ids; the total still comes back,
             // so a short read is detectable.
             let mut ids = [-1i64; 2];
-            assert_eq!(pio_bus_ids(c, ids.as_mut_ptr(), ids.len()), 9);
+            assert_eq!(pio_balanced_network_bus_ids(c, ids.as_mut_ptr(), ids.len()), 9);
             assert!(ids.iter().all(|&id| id >= 1));
             pio_network_free(c);
         }
@@ -3807,7 +2979,7 @@ mod tests {
             )
             .unwrap();
             assert_eq!(got, src);
-            pio_string_free(s);
+            pio_string_release(s);
         }
     }
 
@@ -3867,7 +3039,7 @@ mod tests {
             );
             let out = CStr::from_ptr(s).to_str().unwrap();
             assert!(out.contains("\"bus\""));
-            pio_string_free(s);
+            pio_string_release(s);
         }
     }
 
@@ -3966,21 +3138,21 @@ mod tests {
     fn extract_gen_and_bus_aggregate_tables() {
         // case30 carries generators, loads, and shunts: cross-check the table
         // extractors against known counts and aggregate signs (a column swap in
-        // pio_gens/pio_bus_* would otherwise ship silently).
+        // pio_balanced_network_gens/pio_bus_* would otherwise ship silently).
         let path = data_path("case30.m");
         let mut err = [0 as c_char; 256];
         let c =
             unsafe { pio_parse_file(path.as_ptr(), std::ptr::null(), err.as_mut_ptr(), err.len()) };
         assert!(!c.is_null());
         unsafe {
-            let nb = pio_n_buses(c);
-            let ng = pio_n_gens(c);
+            let nb = pio_balanced_network_n_buses(c);
+            let ng = pio_balanced_network_n_gens(c);
             assert_eq!(nb, 30);
             assert!(ng > 0);
 
             let mut gbus = vec![-9i64; ng];
             let mut pmax = vec![0f64; ng];
-            let total = pio_gens(
+            let total = pio_balanced_network_gens(
                 c,
                 gbus.as_mut_ptr(),
                 std::ptr::null_mut(),
@@ -3995,17 +3167,17 @@ mod tests {
             assert!(pmax.iter().any(|&p| p > 0.0));
 
             let mut ids = vec![0i64; nb];
-            assert_eq!(pio_bus_ids(c, ids.as_mut_ptr(), nb), nb);
+            assert_eq!(pio_balanced_network_bus_ids(c, ids.as_mut_ptr(), nb), nb);
             assert!(ids.iter().all(|&id| id >= 1)); // MATPOWER bus ids are 1-based
 
             let mut pd = vec![0f64; nb];
             let mut qd = vec![0f64; nb];
-            assert_eq!(pio_bus_demand(c, pd.as_mut_ptr(), qd.as_mut_ptr(), nb), nb);
+            assert_eq!(pio_balanced_network_bus_demand(c, pd.as_mut_ptr(), qd.as_mut_ptr(), nb), nb);
             assert!(pd.iter().sum::<f64>() > 0.0, "case30 has active demand");
 
             let mut gs = vec![0f64; nb];
             let mut bs = vec![0f64; nb];
-            assert_eq!(pio_bus_shunt(c, gs.as_mut_ptr(), bs.as_mut_ptr(), nb), nb);
+            assert_eq!(pio_balanced_network_bus_shunt(c, gs.as_mut_ptr(), bs.as_mut_ptr(), nb), nb);
             assert!(gs.iter().chain(bs.iter()).all(|x| x.is_finite()));
 
             pio_network_free(c);
@@ -4017,22 +3189,22 @@ mod tests {
         // Every query tolerates a NULL handle (the documented safe default), and
         // a NULL output pointer on a valid case is a count query, not a deref.
         unsafe {
-            let nil: *const PioNetwork = std::ptr::null();
-            assert_eq!(pio_n_buses(nil), 0);
-            assert_eq!(pio_n_branches(nil), 0);
-            assert_eq!(pio_n_gens(nil), 0);
-            assert_eq!(pio_base_mva(nil), 0.0);
-            assert_eq!(pio_ref_bus_index(nil), -1);
-            assert_eq!(pio_ref_bus_indices(nil, std::ptr::null_mut(), 0), 0);
-            assert_eq!(pio_is_radial(nil), 0);
-            assert_eq!(pio_n_islands(nil), 0);
+            let nil: *const PioBalancedNetwork = std::ptr::null();
+            assert_eq!(pio_balanced_network_n_buses(nil), 0);
+            assert_eq!(pio_balanced_network_n_branches(nil), 0);
+            assert_eq!(pio_balanced_network_n_gens(nil), 0);
+            assert_eq!(pio_balanced_network_base_mva(nil), 0.0);
+            assert_eq!(pio_balanced_network_ref_bus_index(nil), -1);
+            assert_eq!(pio_balanced_network_ref_bus_indices(nil, std::ptr::null_mut(), 0), 0);
+            assert_eq!(pio_balanced_network_is_radial(nil), 0);
+            assert_eq!(pio_balanced_network_n_islands(nil), 0);
 
             // The two FFI constructors reject a NULL input rather than crash.
             let mut err = [0 as c_char; 128];
-            assert!(pio_normalize(nil, std::ptr::null(), err.as_mut_ptr(), err.len()).is_null());
+            assert!(pio_balanced_network_normalize(nil, std::ptr::null(), err.as_mut_ptr(), err.len()).is_null());
             let mut opts = normalize_opts();
             opts.clamp_angle_bounds = 1;
-            assert!(pio_normalize(nil, &opts, err.as_mut_ptr(), err.len()).is_null());
+            assert!(pio_balanced_network_normalize(nil, &opts, err.as_mut_ptr(), err.len()).is_null());
             let fmt = CString::new("matpower").unwrap();
             assert!(
                 pio_parse_str(std::ptr::null(), fmt.as_ptr(), err.as_mut_ptr(), err.len())
@@ -4040,10 +3212,10 @@ mod tests {
             );
 
             let c = case9();
-            assert_eq!(pio_bus_ids(c, std::ptr::null_mut(), 0), 9);
-            pio_ref_bus_indices(c, std::ptr::null_mut(), 0);
-            pio_bus_demand(c, std::ptr::null_mut(), std::ptr::null_mut(), 0);
-            pio_gens(
+            assert_eq!(pio_balanced_network_bus_ids(c, std::ptr::null_mut(), 0), 9);
+            pio_balanced_network_ref_bus_indices(c, std::ptr::null_mut(), 0);
+            pio_balanced_network_bus_demand(c, std::ptr::null_mut(), std::ptr::null_mut(), 0);
+            pio_balanced_network_gens(
                 c,
                 std::ptr::null_mut(),
                 std::ptr::null_mut(),
@@ -4059,7 +3231,7 @@ mod tests {
     #[test]
     fn normalized_multi_ref_is_legible() {
         // A two-slack case (both gen-backed file REF buses) normalizes to a
-        // handle that keeps both references. `pio_ref_bus_index` can't name a
+        // handle that keeps both references. `pio_balanced_network_ref_bus_index` can't name a
         // single slack (returns -1), but the reference-set extractor does, so a
         // C consumer can tell "two slacks, you pick" from "no slack, broken".
         let src = "\
@@ -4086,15 +3258,15 @@ mpc.branch = [
         unsafe {
             let cs = pio_parse_str(text.as_ptr(), fmt.as_ptr(), err.as_mut_ptr(), err.len());
             assert!(!cs.is_null(), "parse_str returned null");
-            let cn = pio_normalize(cs, std::ptr::null(), err.as_mut_ptr(), err.len());
+            let cn = pio_balanced_network_normalize(cs, std::ptr::null(), err.as_mut_ptr(), err.len());
             assert!(!cn.is_null(), "normalize returned null");
 
             // Count via NULL out, then fill.
-            assert_eq!(pio_ref_bus_indices(cn, std::ptr::null_mut(), 0), 2);
+            assert_eq!(pio_balanced_network_ref_bus_indices(cn, std::ptr::null_mut(), 0), 2);
             // Multiple references: the single-slack query reports -1, by design.
-            assert_eq!(pio_ref_bus_index(cn), -1);
+            assert_eq!(pio_balanced_network_ref_bus_index(cn), -1);
             let mut refs = [-1i64; 2];
-            assert_eq!(pio_ref_bus_indices(cn, refs.as_mut_ptr(), refs.len()), 2);
+            assert_eq!(pio_balanced_network_ref_bus_indices(cn, refs.as_mut_ptr(), refs.len()), 2);
             assert_eq!(refs, [0, 1]);
 
             pio_network_free(cn);
@@ -4131,16 +3303,16 @@ mpc.branch = [
         unsafe {
             let cs = pio_parse_str(text.as_ptr(), fmt.as_ptr(), err.as_mut_ptr(), err.len());
             assert!(!cs.is_null(), "parse_str returned null");
-            let cn = pio_normalize(cs, std::ptr::null(), err.as_mut_ptr(), err.len());
+            let cn = pio_balanced_network_normalize(cs, std::ptr::null(), err.as_mut_ptr(), err.len());
             assert!(!cn.is_null(), "normalize returned null");
 
-            let mut ids = vec![0i64; pio_n_buses(cn)];
-            pio_bus_ids(cn, ids.as_mut_ptr(), ids.len());
+            let mut ids = vec![0i64; pio_balanced_network_n_buses(cn)];
+            pio_balanced_network_bus_ids(cn, ids.as_mut_ptr(), ids.len());
             assert_eq!(ids, vec![1, 2, 3, 4, 10]);
 
-            let mut from = vec![0i64; pio_n_branches(cn)];
-            let mut to = vec![0i64; pio_n_branches(cn)];
-            pio_branches(
+            let mut from = vec![0i64; pio_balanced_network_n_branches(cn)];
+            let mut to = vec![0i64; pio_balanced_network_n_branches(cn)];
+            pio_balanced_network_branches(
                 cn,
                 from.as_mut_ptr(),
                 to.as_mut_ptr(),
@@ -4170,15 +3342,15 @@ mpc.branch = [
         }
     }
 
-    /// `pio_normalize` with the given options, returning the handle or the
+    /// `pio_balanced_network_normalize` with the given options, returning the handle or the
     /// errbuf.
     unsafe fn normalize_with(
-        net: *const PioNetwork,
+        net: *const PioBalancedNetwork,
         opts: *const PioNormalizeOptions,
-    ) -> Result<*mut PioNetwork, String> {
+    ) -> Result<*mut PioBalancedNetwork, String> {
         let mut err = [0 as c_char; PIO_ERRBUF_MIN];
         unsafe {
-            let cn = pio_normalize(net, opts, err.as_mut_ptr(), err.len());
+            let cn = pio_balanced_network_normalize(net, opts, err.as_mut_ptr(), err.len());
             if cn.is_null() {
                 return Err(CStr::from_ptr(err.as_ptr()).to_str().unwrap().to_owned());
             }
@@ -4188,7 +3360,7 @@ mpc.branch = [
 
     /// The normalized handle's model JSON, freeing the handle.
     unsafe fn normalized_json(
-        net: *const PioNetwork,
+        net: *const PioBalancedNetwork,
         opts: *const PioNormalizeOptions,
     ) -> Result<serde_json::Value, String> {
         unsafe {
@@ -4207,7 +3379,7 @@ mpc.branch = [
             let mut opts = normalize_opts();
             opts.clamp_angle_bounds = 1;
             opts.angle_bound_pad = POWER_MODELS_ANGLE_BOUND_PAD;
-            let cn = pio_normalize(c, &opts, err.as_mut_ptr(), err.len());
+            let cn = pio_balanced_network_normalize(c, &opts, err.as_mut_ptr(), err.len());
             assert!(
                 !cn.is_null(),
                 "normalize with options returned null: {}",
@@ -4418,14 +3590,14 @@ mpc.branch = [
                 hit.severity(),
                 powerio::diagnostics::DiagnosticSeverity::Warning
             );
-            pio_string_free(diag_out);
-            pio_string_free(s);
+            pio_string_release(diag_out);
+            pio_string_release(s);
         }
     }
 
     #[test]
     fn model_json_round_trip_preserves_structure() {
-        // pio_to_json -> pio_from_json must reproduce the structured tables.
+        // pio_balanced_network_to_json -> pio_balanced_network_from_json must reproduce the structured tables.
         // case30 carries loads, shunts, and gen costs, so a dropped field
         // shows up.
         let path = data_path("case30.m");
@@ -4434,14 +3606,14 @@ mpc.branch = [
             unsafe { pio_parse_file(path.as_ptr(), std::ptr::null(), err.as_mut_ptr(), err.len()) };
         assert!(!c.is_null());
         unsafe {
-            let json = pio_to_json(c, err.as_mut_ptr(), err.len());
+            let json = pio_balanced_network_to_json(c, err.as_mut_ptr(), err.len());
             assert!(!json.is_null());
             let text = CStr::from_ptr(json).to_str().unwrap().to_owned();
-            pio_string_free(json);
+            pio_string_release(json);
             assert!(text.contains("\"buses\""));
 
             let c_text = CString::new(text).unwrap();
-            let back = pio_from_json(c_text.as_ptr(), err.as_mut_ptr(), err.len());
+            let back = pio_balanced_network_from_json(c_text.as_ptr(), err.as_mut_ptr(), err.len());
             assert!(
                 !back.is_null(),
                 "model JSON parse failed: {}",
@@ -4450,11 +3622,11 @@ mpc.branch = [
             // Model JSON is lossless: no fidelity warnings on the way back.
             assert_eq!(pio_warnings(back, std::ptr::null_mut(), 0), 0);
             // Counts and base survive the round trip.
-            assert_eq!(pio_n_buses(back), pio_n_buses(c));
-            assert_eq!(pio_n_branches(back), pio_n_branches(c));
-            assert_eq!(pio_n_gens(back), pio_n_gens(c));
-            assert_eq!(pio_base_mva(back), pio_base_mva(c));
-            assert_eq!(pio_ref_bus_index(back), pio_ref_bus_index(c));
+            assert_eq!(pio_balanced_network_n_buses(back), pio_balanced_network_n_buses(c));
+            assert_eq!(pio_balanced_network_n_branches(back), pio_balanced_network_n_branches(c));
+            assert_eq!(pio_balanced_network_n_gens(back), pio_balanced_network_n_gens(c));
+            assert_eq!(pio_balanced_network_base_mva(back), pio_balanced_network_base_mva(c));
+            assert_eq!(pio_balanced_network_ref_bus_index(back), pio_balanced_network_ref_bus_index(c));
 
             pio_network_free(back);
             pio_network_free(c);
@@ -4465,7 +3637,7 @@ mpc.branch = [
     fn model_json_rejects_garbage() {
         let bad = CString::new("{ not json").unwrap();
         let mut err = [0 as c_char; 256];
-        let h = unsafe { pio_from_json(bad.as_ptr(), err.as_mut_ptr(), err.len()) };
+        let h = unsafe { pio_balanced_network_from_json(bad.as_ptr(), err.as_mut_ptr(), err.len()) };
         assert!(h.is_null());
         let msg = unsafe { CStr::from_ptr(err.as_ptr()) }.to_str().unwrap();
         assert!(!msg.is_empty(), "expected a JSON parse error message");
@@ -4514,7 +3686,7 @@ mpc.branch = [
         let mut err = [0 as c_char; PIO_ERRBUF_MIN];
         unsafe {
             // No coordinates yet: extract refuses.
-            let empty = pio_geo_extract(net, err.as_mut_ptr(), err.len());
+            let empty = pio_balanced_network_geo_extract(net, err.as_mut_ptr(), err.len());
             assert!(empty.is_null());
 
             let mut diagnostics: *mut c_char = std::ptr::null_mut();
@@ -4537,7 +3709,7 @@ mpc.branch = [
             assert_eq!(v["type"], "FeatureCollection");
             assert_eq!(v["powerio_geo"]["space"], "geographic");
 
-            let placed = pio_geo_apply(
+            let placed = pio_balanced_network_geo_apply(
                 net,
                 coords.as_ptr(),
                 std::ptr::null(),
@@ -4546,10 +3718,10 @@ mpc.branch = [
             );
             assert!(
                 !placed.is_null(),
-                "pio_geo_apply failed: {}",
+                "pio_balanced_network_geo_apply failed: {}",
                 CStr::from_ptr(err.as_ptr()).to_str().unwrap()
             );
-            let layer = pio_geo_extract(placed, err.as_mut_ptr(), err.len());
+            let layer = pio_balanced_network_geo_extract(placed, err.as_mut_ptr(), err.len());
             assert!(!layer.is_null());
             let v: serde_json::Value =
                 serde_json::from_str(CStr::from_ptr(layer).to_str().unwrap()).unwrap();
@@ -4559,8 +3731,8 @@ mpc.branch = [
             let count = pio_warnings(placed, std::ptr::null_mut(), 0);
             assert!(count > 0);
 
-            pio_string_free(layer);
-            pio_string_free(canonical);
+            pio_string_release(layer);
+            pio_string_release(canonical);
             pio_network_free(placed);
             pio_network_free(net);
 
@@ -4608,8 +3780,8 @@ mpc.branch = [
             assert_eq!(records.len(), 1);
             assert_eq!(records[0]["code"], "READ.GEO.SOURCE_MALFORMED");
             assert_eq!(records[0]["severity"], "warning");
-            pio_string_free(diagnostics);
-            pio_string_free(canonical);
+            pio_string_release(diagnostics);
+            pio_string_release(canonical);
 
             // NULL for the parameter itself discards the findings.
             let discarded = pio_geo_parse(
@@ -4620,7 +3792,7 @@ mpc.branch = [
                 err.len(),
             );
             assert!(!discarded.is_null());
-            pio_string_free(discarded);
+            pio_string_release(discarded);
         }
     }
 
@@ -4631,7 +3803,7 @@ mpc.branch = [
         let c = case9();
         let mut err = [0 as c_char; 256];
         let rc = unsafe {
-            pio_to_arrow(
+            pio_balanced_network_to_arrow(
                 c,
                 PIO_ARROW_TABLE_BUS,
                 std::ptr::null_mut(),
@@ -4657,7 +3829,7 @@ mpc.branch = [
             unsafe { CStr::from_ptr(err.as_ptr()) }.to_str().unwrap()
         );
         let text = unsafe { CStr::from_ptr(ptr) }.to_str().unwrap().to_owned();
-        unsafe { pio_string_free(ptr) };
+        unsafe { pio_string_release(ptr) };
         let catalog: serde_json::Value = serde_json::from_str(&text).unwrap();
         assert_eq!(catalog[powerio::version::VERSION_KEY], powerio::VERSION);
         assert!(catalog["tables"].as_array().unwrap().iter().any(|table| {
@@ -4690,7 +3862,7 @@ mpc.branch = [
                 "read failed: {}",
                 CStr::from_ptr(err.as_ptr()).to_str().unwrap()
             );
-            assert_eq!(pio_n_buses(h), 14);
+            assert_eq!(pio_balanced_network_n_buses(h), 14);
             // The lossy read's fidelity warnings attach to the handle, like
             // every other constructor's.
             assert!(
@@ -4785,7 +3957,7 @@ mpc.branch = [
                 err.fill(0);
                 let mut array = std::mem::zeroed::<arrow::ffi::FFI_ArrowArray>();
                 let mut schema = std::mem::zeroed::<arrow::ffi::FFI_ArrowSchema>();
-                let rc = pio_to_arrow(
+                let rc = pio_balanced_network_to_arrow(
                     c,
                     9999,
                     &mut array,
@@ -4839,7 +4011,7 @@ mpc.branch = [
                     .all(|d| powerio::diagnostics::code_is_well_formed(d.code())),
                 "{json}"
             );
-            pio_string_free(diag_out);
+            pio_string_release(diag_out);
             pio_network_free(c);
         }
     }
@@ -4919,7 +4091,7 @@ mpc.branch = [
 
     /// `pio_to_format` with the given options, returning the text or the errbuf.
     unsafe fn to_format_with(
-        net: *const PioNetwork,
+        net: *const PioBalancedNetwork,
         to: &str,
         opts: *const PioWriteOptions,
     ) -> Result<String, String> {
@@ -4938,14 +4110,14 @@ mpc.branch = [
                 return Err(CStr::from_ptr(err.as_ptr()).to_str().unwrap().to_owned());
             }
             let text = CStr::from_ptr(s).to_str().unwrap().to_owned();
-            pio_string_free(s);
+            pio_string_release(s);
             Ok(text)
         }
     }
 
     /// A PSS/E case whose generators carry no cost row, so every policy is
     /// visible in the output.
-    fn costless_case() -> *mut PioNetwork {
+    fn costless_case() -> *mut PioBalancedNetwork {
         let path = data_path("psse/case14.raw");
         let mut err = [0 as c_char; PIO_ERRBUF_MIN];
         let c =
@@ -5234,7 +4406,7 @@ mpc.branch = [
                 records.iter().any(|d| d.code().contains("GEN_COST")),
                 "{json}"
             );
-            pio_string_free(diag_out);
+            pio_string_release(diag_out);
             pio_network_free(c);
         }
     }
@@ -5270,7 +4442,7 @@ mpc.branch = [
             let raw = pio_schema_versions_json();
             assert!(!raw.is_null());
             let text = unsafe { CStr::from_ptr(raw) }.to_str().unwrap().to_owned();
-            unsafe { pio_string_free(raw) };
+            unsafe { pio_string_release(raw) };
             let doc: serde_json::Value = serde_json::from_str(&text).unwrap();
 
             // One key for every document powerio authors, and the C handshake
@@ -5303,7 +4475,7 @@ mpc.branch = [
             let ptr = pio_dist_capabilities_json();
             assert!(!ptr.is_null(), "dist capabilities JSON returned NULL");
             let text = unsafe { CStr::from_ptr(ptr) }.to_str().unwrap().to_owned();
-            unsafe { pio_string_free(ptr) };
+            unsafe { pio_string_release(ptr) };
 
             let caps: serde_json::Value = serde_json::from_str(&text).unwrap();
             // Whole-document equality: each addition must be a deliberate
@@ -5351,7 +4523,7 @@ mpc.branch = [
             assert!(!s.is_null());
             let text = unsafe { CStr::from_ptr(s) }.to_str().unwrap();
             assert!(text.contains("\"bus\""));
-            unsafe { pio_string_free(s) };
+            unsafe { pio_string_release(s) };
 
             // Same format write echoes the retained source byte for byte.
             let to = CString::new("dss").unwrap();
@@ -5363,7 +4535,7 @@ mpc.branch = [
             let source = std::fs::read_to_string(fourwire()).unwrap();
             assert_eq!(echoed, source);
             assert!(diag_out.is_null(), "a byte exact echo loses nothing");
-            unsafe { pio_string_free(s) };
+            unsafe { pio_string_release(s) };
 
             unsafe { pio_dist_network_free(net) };
         }
@@ -5381,7 +4553,7 @@ mpc.branch = [
                 unsafe { CStr::from_ptr(err.as_ptr()) }.to_str().unwrap()
             );
 
-            let graph = unsafe { pio_dist_graph_json(net, err.as_mut_ptr(), err.len()) };
+            let graph = unsafe { pio_multiconductor_network_graph_json(net, err.as_mut_ptr(), err.len()) };
             assert!(
                 !graph.is_null(),
                 "graph json failed: {}",
@@ -5406,7 +4578,7 @@ mpc.branch = [
             }));
 
             unsafe {
-                pio_string_free(graph);
+                pio_string_release(graph);
                 pio_dist_network_free(net);
             }
         }
@@ -5424,7 +4596,7 @@ mpc.branch = [
                 unsafe { CStr::from_ptr(err.as_ptr()) }.to_str().unwrap()
             );
 
-            let summary = unsafe { pio_dist_summary_json(net, err.as_mut_ptr(), err.len()) };
+            let summary = unsafe { pio_multiconductor_network_summary_json(net, err.as_mut_ptr(), err.len()) };
             assert!(
                 !summary.is_null(),
                 "summary json failed: {}",
@@ -5443,7 +4615,7 @@ mpc.branch = [
             assert_eq!(value["counts"]["loads"], serde_json::json!(3));
 
             unsafe {
-                pio_string_free(summary);
+                pio_string_release(summary);
                 pio_dist_network_free(net);
             }
         }
@@ -5513,7 +4685,7 @@ mpc.branch = [
             );
             let pmd = unsafe { CStr::from_ptr(s) }.to_str().unwrap();
             assert!(pmd.contains("\"data_model\": \"ENGINEERING\""));
-            unsafe { pio_string_free(s) };
+            unsafe { pio_string_release(s) };
         }
 
         #[test]
@@ -5521,7 +4693,7 @@ mpc.branch = [
             let raw = pio_dist_capabilities_json();
             assert!(!raw.is_null());
             let text = unsafe { CStr::from_ptr(raw) }.to_str().unwrap().to_owned();
-            unsafe { pio_string_free(raw) };
+            unsafe { pio_string_release(raw) };
             let caps: serde_json::Value = serde_json::from_str(&text).unwrap();
 
             // The vendored schema file's own `version` field must agree
@@ -5571,7 +4743,7 @@ New Line.l1 bus1=a bus2=b phases=3
                 .to_str()
                 .unwrap()
                 .to_owned();
-            unsafe { pio_string_free(as_bmopf) };
+            unsafe { pio_string_release(as_bmopf) };
 
             // Give the document coordinates so the dss writer produces a sidecar.
             let mut doc: serde_json::Value = serde_json::from_str(&bmopf_text).unwrap();
@@ -5600,13 +4772,13 @@ New Line.l1 bus1=a bus2=b phases=3
                 unsafe { CStr::from_ptr(err.as_ptr()) }.to_str().unwrap()
             );
             let dss = unsafe { CStr::from_ptr(s) }.to_str().unwrap().to_owned();
-            unsafe { pio_string_free(s) };
+            unsafe { pio_string_release(s) };
             assert!(!warn2_out.is_null(), "expected a dropped sidecar warning");
             let warnings = unsafe { CStr::from_ptr(warn2_out) }
                 .to_str()
                 .unwrap()
                 .to_owned();
-            unsafe { pio_string_free(warn2_out) };
+            unsafe { pio_string_release(warn2_out) };
 
             // Guard the premise: the writer must emit the directive, or the
             // warning assertion below proves nothing.
@@ -5701,7 +4873,7 @@ New Line.l1 bus1=a bus2=b phases=3
             );
             let text = unsafe { CStr::from_ptr(s) }.to_str().unwrap();
             assert!(text.contains("\"bus\""));
-            unsafe { pio_string_free(s) };
+            unsafe { pio_string_release(s) };
         }
 
         #[test]
@@ -5757,18 +4929,18 @@ New Line.l1 bus1=a bus2=b phases=3
     fn balanced_model_json_round_trips() {
         let net = case9();
         let mut err = [0 as c_char; PIO_ERRBUF_MIN];
-        let json = unsafe { pio_to_json(net, err.as_mut_ptr(), err.len()) };
+        let json = unsafe { pio_balanced_network_to_json(net, err.as_mut_ptr(), err.len()) };
         assert!(!json.is_null());
         let text = unsafe { CStr::from_ptr(json) }.to_str().unwrap().to_owned();
-        unsafe { pio_string_free(json) };
+        unsafe { pio_string_release(json) };
         assert!(text.starts_with('{') && text.contains("\"buses\""));
 
         let c = CString::new(text).unwrap();
-        let back = unsafe { pio_from_json(c.as_ptr(), err.as_mut_ptr(), err.len()) };
+        let back = unsafe { pio_balanced_network_from_json(c.as_ptr(), err.as_mut_ptr(), err.len()) };
         assert!(!back.is_null());
         unsafe {
-            assert_eq!(pio_n_buses(back), pio_n_buses(net));
-            close(pio_base_mva(back), pio_base_mva(net));
+            assert_eq!(pio_balanced_network_n_buses(back), pio_balanced_network_n_buses(net));
+            close(pio_balanced_network_base_mva(back), pio_balanced_network_base_mva(net));
             pio_network_free(back);
             pio_network_free(net);
         }
