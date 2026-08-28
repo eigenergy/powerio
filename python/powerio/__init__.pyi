@@ -23,38 +23,9 @@ class PowerIOParseError(PowerIOError):
 class PowerIODataError(PowerIOError):
     """A well-formed case cannot satisfy a requested operation."""
 
-class SourceSpan:
-    """One source byte range a diagnostic points at (frozen)."""
-
-    @property
-    def source(self) -> str: ...
-    @property
-    def byte_start(self) -> int: ...
-    @property
-    def byte_end(self) -> int: ...
-
-class Diagnostic:
-    """One coded, user facing finding from a parse, read, transform, or
-    write pass (frozen)."""
-
-    @property
-    def code(self) -> str: ...
-    @property
-    def severity(self) -> Literal["error", "warning", "remark", "note"]: ...
-    @property
-    def message(self) -> str: ...
-    @property
-    def id(self) -> Optional[str]: ...
-    @property
-    def target(self) -> Optional[str]: ...
-    @property
-    def suggested_action(self) -> Optional[str]: ...
-    @property
-    def related(self) -> List[str]: ...
-    @property
-    def spans(self) -> List[SourceSpan]: ...
-    @property
-    def details(self) -> Optional[Dict[str, Any]]: ...
+# The runtime re-exports the native record classes; the stub does the same so
+# a `_powerio.Diagnostic` and a `powerio.Diagnostic` are one type to a checker.
+from ._powerio import Diagnostic as Diagnostic, SourceSpan as SourceSpan
 
 class GenCost(TypedDict):
     model: int
