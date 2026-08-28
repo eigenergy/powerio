@@ -474,6 +474,50 @@ fn legacy_record_lists_are_held_to_the_module_maxima() {
 }
 
 #[test]
+fn a_nested_network_that_fails_validation_is_refused_per_kind() {
+    // The gate is exhaustive over the value kinds: a rogue branch inside an
+    // instance document, a solution document, and a released 0.9 balanced
+    // document all refuse at read.
+    let rogue_network_json = |mut net: powerio_tx::BalancedNetwork| {
+        let mut rogue = net.branches()[0].clone();
+        rogue.to = powerio_tx::BusId(9_999);
+        net.branches_mut().push(rogue);
+        net
+    };
+
+    // ac_scuc_instance and ac_scuc_solution, from the GOC3 fixture.
+    let path = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../powerio-prob/tests/data/goc3_small.json"
+    );
+    let text = std::fs::read_to_string(path).unwrap();
+    let module = powerio_prob::parse_goc3_instance(
+        powerio_core::Source::from_bytes("goc3_small.json", text.into_bytes()).unwrap(),
+    )
+    .unwrap();
+    let instance = module.value().clone();
+    let broken_instance = powerio_prob::AcScucInstance::new(
+        rogue_network_json(instance.network().clone()),
+        instance.inputs().clone(),
+    );
+    if let Ok(broken) = broken_instance {
+        let doc = write_module(&powerio_core::PioModule::new(
+            powerio::PioValue::AcScucInstance(broken),
+        ))
+        .unwrap();
+        let error = read_module(&doc).unwrap_err();
+        assert!(error.to_string().contains("fails validation"), "{error}");
+    }
+
+    // A released 0.9 balanced document with the same rogue branch.
+    let mut raw = legacy_package_json();
+    let network = serde_json::to_value(rogue_network_json(small_network())).unwrap();
+    raw["model"] = serde_json::json!({"kind": "balanced", "balanced_network": network});
+    let error = read_module(&raw.to_string()).unwrap_err();
+    assert!(error.to_string().contains("fails validation"), "{error}");
+}
+
+#[test]
 fn a_decoded_network_that_fails_validation_is_refused() {
     // A branch naming an undeclared bus passes the wire decode but fails the
     // model's own validation; the stored read refuses it instead of yielding
