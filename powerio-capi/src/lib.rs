@@ -302,15 +302,15 @@ unsafe fn finish_network(
 /// version increment.
 ///
 /// 6 is the current version. It bumped because the exported symbol set
-/// changed: the 0.9 package surface (`pio_package_*`, eighteen entry points
+/// shrank: the 0.9 package surface (`pio_package_*`, eighteen entry points
 /// and the `pkg` feature token) and the SCOPF surface (`pio_scopf_*`, plus
-/// the solver row Arrow tables) are withdrawn, and the stored module
-/// (`pio_module_*`), DC branch data (`pio_dc_data_*`), structured
-/// `PioError`, and `retain`/`release` handle surfaces are added. A binding
+/// the solver row Arrow tables) are withdrawn on the head that raises the
+/// version; the stored module (`pio_module_*`), DC branch data
+/// (`pio_dc_data_*`), structured `PioError`, and `retain`/`release` handle
+/// surfaces arrive as additive growth under the unchanged value. A binding
 /// built against 5 that used a withdrawn entry would resolve a missing
 /// symbol; the handshake refuses first. The 4 to 5 bump reshaped every ABI
-/// visible JSON document and the diagnostic grammar (`CODE: message`,
-/// structured records through `out_diagnostics_json`).
+/// visible JSON document and the diagnostic grammar.
 pub const PIO_ABI_VERSION: u32 = 6;
 
 /// Frozen at 1 and no longer meaningful. It existed to absorb distribution
