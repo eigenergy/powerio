@@ -309,13 +309,13 @@ jobs:
       run: |
         rm -rf /tmp/pio-gridfm-smoke
         cargo run -p powerio-cli -- gridfm tests/data/case9.m -o /tmp/pio-gridfm-smoke
-        cc -DPIO_ARROW -DPIO_MATRIX -DPIO_GRIDFM -DPIO_DIST -DPIO_PKG -DPIO_PROB \
+        cc -DPIO_ARROW -DPIO_MATRIX -DPIO_GRIDFM -DPIO_DIST -DPIO_PROB \
            -I powerio-capi/include powerio-capi/examples/smoke.c \
            -L target/release -lpowerio_capi -o pio_smoke_gridfm
         LD_LIBRARY_PATH=target/release ./pio_smoke_gridfm tests/data/case9.m /tmp/pio-gridfm-smoke/case9/raw
     - name: Compile and run the C++ header sanity check (release features)
       run: |
-        c++ -std=c++17 -DPIO_ARROW -DPIO_MATRIX -DPIO_GRIDFM -DPIO_DIST -DPIO_PKG -DPIO_PROB \
+        c++ -std=c++17 -DPIO_ARROW -DPIO_MATRIX -DPIO_GRIDFM -DPIO_DIST -DPIO_PROB \
            -I powerio-capi/include powerio-capi/examples/header_cpp.cpp \
            -L target/release -lpowerio_capi -o pio_header_cpp_release
         LD_LIBRARY_PATH=target/release ./pio_header_cpp_release

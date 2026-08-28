@@ -33,7 +33,7 @@ static long smoke_pid(void) { return (long)getpid(); }
 static void smoke_rmdir(const char *path) { rmdir(path); }
 #endif
 
-#if PIO_ABI_VERSION != 5
+#if PIO_ABI_VERSION != 6
 #error "PIO_ABI_VERSION changed without updating the C ABI smoke test"
 #endif
 
