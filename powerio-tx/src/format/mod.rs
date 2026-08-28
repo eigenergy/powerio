@@ -1951,7 +1951,7 @@ mpc.branch = [
         for token in ["dss", "pmd", "bmopf"] {
             let err = parse_str("anything", token).unwrap_err();
             assert!(
-                err.to_string().contains("distribution surface"),
+                err.to_string().contains("one module family"),
                 "{token}: {err}"
             );
         }
