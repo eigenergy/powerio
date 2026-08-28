@@ -16,7 +16,6 @@ members = [
 default-members = [
     "powerio",
     "powerio-tx",
-    "powerio-tx",
     "powerio-core",
     "powerio-matrix",
     "powerio-prob",
