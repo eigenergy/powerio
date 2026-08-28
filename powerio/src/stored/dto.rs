@@ -437,8 +437,7 @@ pub struct McAcOpfInstanceV1 {
 pub struct AcScucInstanceV1 {
     pub network: Box<BalancedNetwork>,
     /// The complete SCUC inputs, in the calculation crate's own
-    /// `powerio.scopf` serialization (that document carries its own schema).
-    #[cfg_attr(feature = "schema", schemars(with = "serde_json::Value"))]
+    /// serialization, typed through this document's schema.
     pub inputs: Box<powerio_prob::ScucInputs>,
 }
 

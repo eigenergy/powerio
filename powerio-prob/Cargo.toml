@@ -17,7 +17,7 @@ all-features = true
 [features]
 default = []
 # JSON Schema derives for the types the stored module document embeds.
-schema = ["dep:schemars"]
+schema = ["dep:schemars", "powerio-tx/schema"]
 
 [lib]
 name = "powerio_prob"
