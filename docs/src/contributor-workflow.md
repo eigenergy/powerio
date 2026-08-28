@@ -7,23 +7,21 @@ expanding the README into a second manual.
 
 ## Baseline checks
 
-These commands cover the Rust workspace, the Python extension build, the Python
-binding tests, and the book:
+`scripts/ci-mirror.sh` runs everything `rust.yml` runs, in the same feature combinations: format, clippy, the terminology and symbol gates, header parity, every crate's tests in each gated feature set, the C smoke and header programs, schema generation, packaging checks, and the docs build. Run it before pushing. A hand assembled subset misses the feature gated suites: `cargo test --workspace` builds powerio-capi with default features only and skips every test behind `arrow`, `gridfm`, `matrix`, or `prob`.
+
+Point `POWERIO_JL` at a PowerIO.jl checkout to include the Julia binding suite against the freshly built library, or set `POWERIO_JL_OPTIONAL=1` to run without one.
+
+The Python binding tests need a wheel built into a virtual environment:
 
 ```sh
-cargo fmt --all --check
-bash scripts/ci-clippy.sh
-cargo test
-cargo test -p powerio-cli --test cli
-cargo test -p powerio-capi
-cargo build -p powerio-py
-python3.12 -m venv .venv
-.venv/bin/python -m pip install --upgrade pip maturin -r evals/validation/requirements.txt
-env VIRTUAL_ENV=$PWD/.venv .venv/bin/maturin develop --release
-.venv/bin/pytest python/tests
-mdbook build docs
-mdbook test docs
+python3 -m venv .venv && source .venv/bin/activate
+pip install maturin pytest
+(cd powerio-py && maturin build -o ../dist)
+pip install dist/*.whl
+python -m pytest python/tests
 ```
+
+Install the built wheel; an editable install (`maturin develop`) is shadowed by the repo root `powerio/` crate directory.
 
 ## Route changes
 
@@ -79,7 +77,7 @@ PowerModels.jl, ExaPowerIO.jl, egret, pandapower, and the full legacy reader to
 writer matrix; `run_rich_validation.sh` covers fields outside the MATPOWER row
 shape (branch terminal admittance, switches, current ratings, solution values,
 HVDC costs, load voltage models). GOC3 and Surge have no external oracle in
-this harness; the Rust parser, writer, routing, package, and round trip tests
+this harness; the Rust parser, writer, routing, stored module, and round trip tests
 cover them. What the oracle legs prove, per format, is in the
 [format fidelity chapter](https://eigenergy.github.io/powerio/guide/format-fidelity.html).
 
