@@ -51,7 +51,9 @@ fi
 # readers can run in a browser. Skipped rather than failing when the target
 # is not installed (rustup target add wasm32-unknown-unknown).
 if rustup target list --installed 2>/dev/null | grep -qx wasm32-unknown-unknown; then
-  run cargo check --target wasm32-unknown-unknown -p powerio -p powerio-tx -p powerio-dist
+  run cargo check --target wasm32-unknown-unknown -p powerio -p powerio-tx -p powerio-dist \
+      -p powerio-core -p powerio-prob -p powerio-matrix
+  run cargo check --target wasm32-unknown-unknown -p powerio --features matrix
 else
   echo "=== skipped: wasm32-unknown-unknown target not installed ==="
 fi

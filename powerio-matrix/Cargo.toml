@@ -36,8 +36,10 @@ faer.workspace = true
 num-complex.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-rand = "0.9"
-rand_chacha = "0.9"
+# Deterministic seeded generation only: default features off keeps the OS
+# randomness backend out, so the crate builds on wasm32 targets.
+rand = { version = "0.9", default-features = false, features = ["std"] }
+rand_chacha = { version = "0.9", default-features = false, features = ["std"] }
 walkdir = "2"
 rayon = "1"
 sha2 = "0.10"
