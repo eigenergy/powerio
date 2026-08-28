@@ -25,7 +25,8 @@ class PowerIODataError(PowerIOError):
 
 # The runtime re-exports the native record classes; the stub does the same so
 # a `_powerio.Diagnostic` and a `powerio.Diagnostic` are one type to a checker.
-from ._powerio import Diagnostic as Diagnostic, SourceSpan as SourceSpan
+from ._powerio import Diagnostic as Diagnostic
+from ._powerio import SourceSpan as SourceSpan
 
 class GenCost(TypedDict):
     model: int
