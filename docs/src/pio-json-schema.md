@@ -18,7 +18,7 @@ lowered to a balanced one. The metadata records that work next to the model, so
 a downstream tool can audit a conversion instead of trusting it.
 
 The `.pio.json` document is also the handoff object between PowerIO consumers:
-one artifact whose model kind is explicit, with provenance intact.
+one artifact whose value kind is explicit, carrying its sources, findings, and history.
 
 ## `.pio.json` is not a case format {#not-a-case-format}
 
@@ -29,8 +29,8 @@ PowerIO's compiled artifact: the model plus the record of how that model was
 produced.
 
 Pick a case format by what the receiving tool reads. Use `.pio.json` when the
-receiving consumer is PowerIO or a binding that wants provenance, diagnostics,
-operating points, and the explicit model kind. Use BMOPF, OpenDSS, PMD JSON, or
+receiving consumer is PowerIO or a binding that wants the source record,
+diagnostics, operating points, and the explicit value kind. Use BMOPF, OpenDSS, PMD JSON, or
 another supported case format when the next tool expects that format.
 
 Model JSON is bare balanced `BalancedNetwork` JSON, without package metadata or
@@ -44,7 +44,7 @@ A bare `.json` file holding this document classifies as `model-json`.
 
 PowerIO 1.0 stores `PioModule<PioValue>` as one versioned document. The header is `"schema": "powerio.module"` with an integer `"version": 1`, and the reader dispatches on that header before decoding the exact typed shape: unknown semantic fields, unknown versions, and the pre 0.9 lineage are refused with their stated identity, and released 0.9.x packages upgrade one way on read.
 
-The document carries `producer`, the typed `value` (`kind` and `data`: `balanced_network`, `multiconductor_network`, `balanced_network_time_series`, `balanced_operating_point_time_series`, or `balanced_network_scenario_set`), and the optional common records `sources`, `source_map`, `diagnostics`, `history`, and namespaced `extensions`, omitted when empty. Typed float positions spell nonfinite values `"Infinity"`, `"-Infinity"`, and `"NaN"` and refuse `null`.
+The document carries `producer`, the typed `value` (`kind` and `data`, over the complete built in registry: both network families, the three operating point and network series kinds, the scenario set, the seven calculation instances, and the seven solutions), and the optional common records `sources`, `source_map`, `diagnostics`, `history`, and namespaced `extensions`, omitted when empty. Typed float positions spell nonfinite values `"Infinity"`, `"-Infinity"`, and `"NaN"` and refuse `null`.
 
 The generated JSON Schema for the version 1 document is served at `https://powerio.dev/schema/pio-module/1/schema.json`; the `$id` names that location.
 
@@ -230,8 +230,8 @@ document with `origin.kind = "derived"` and
 `study` stores ordered cumulative edits to a balanced model payload.
 Materializing commit `k` applies commits 0 through `k`, clears the study and
 operating point blocks, and returns a static package. Study commits differ from
-operating points, which are independent overlays. See [Study blocks](study-block.md) for edit kinds,
-identity resolution, materialization, and language APIs.
+operating points, which are independent overlays. The 0.9 migration command materializes one selected commit; the version 1
+reader refuses a nonempty study with that instruction.
 
 ## Derived metadata
 

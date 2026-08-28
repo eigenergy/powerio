@@ -1,0 +1,30 @@
+// The parse-to-write data flow: acquisition, parse, the typed module, the
+// explicit transformations, and writing. Nodes here are operations and data,
+// not crates, so the checker validates only its syntax and generation.
+digraph powerio_dataflow {
+    rankdir = LR;
+    bgcolor = "transparent";
+    node [shape = box, style = "rounded,filled", fillcolor = "#f4f6f8",
+          color = "#4a5568", fontname = "Helvetica", fontsize = 11,
+          fontcolor = "#1a202c"];
+    edge [color = "#4a5568", fontname = "Helvetica", fontsize = 9,
+          fontcolor = "#2d3748"];
+
+    source [label = "Source\nnamed immutable bytes\n(file, directory, memory)"];
+    parse [label = "parse\nformat + kind detection"];
+    module [label = "PioModule<T>\nvalue + source + diagnostics\n+ history"];
+    select [label = "state selection\n(time point, scenario)"];
+    lower [label = "lowering\nmulticonductor → balanced\n(explicit, lossy, reported)"];
+    matrices [label = "matrix data\nwith element mappings"];
+    write [label = "write\nsame format: byte exact echo\ncross format: reported losses"];
+    stored [label = ".pio.json\nstored module, schema 1"];
+
+    source -> parse -> module;
+    module -> select [label = "series and sets"];
+    select -> module [style = dashed];
+    module -> lower [label = "multiconductor"];
+    lower -> module [style = dashed];
+    module -> matrices;
+    module -> write;
+    module -> stored [dir = both];
+}

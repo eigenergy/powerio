@@ -3,7 +3,7 @@
 Each directory is a schema identifier path, named for the powerio lineage that
 serves it: `0.9` while the major is 0, `1` afterwards. The current one is the
 only document
-`cargo run -p powerio-pkg --example generate_schemas --features schema -- docs/schema`
+`cargo run -p powerio --example generate_schemas --features schema -- docs/schema`
 emits; `rust.yml` regenerates it on every pull request and fails on a diff. The
 path moves when and only when a document stops loading, which is the same rule
 the reader applies to `powerio_version`.
@@ -27,7 +27,7 @@ against the URL the file declares depends on that URL staying served. The
 reader can retire a lineage; the published document stays.
 
 The generator never removes files. Keep these documents byte for byte; do
-not regenerate or reformat them. The `frozen_schemas` test in powerio-pkg
+not regenerate or reformat them. The `frozen_schemas` test in the powerio facade
 pins them.
 
 ## Recognizing a document
