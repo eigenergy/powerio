@@ -45,7 +45,7 @@ func main() {
 
 	// Parse into a module handle; a failure is a structured error handle.
 	var cerr *C.PioError
-	module := C.pio_module_parse_file(path, nil, &cerr)
+	module := C.pio_parse_file(path, nil, &cerr)
 	if module == nil {
 		fail("parse", cerr)
 	}
@@ -59,7 +59,7 @@ func main() {
 		fail("write", cerr)
 	}
 	reread := C.pio_module_read_json(doc, &cerr)
-	C.pio_string_free(doc)
+	C.pio_string_release(doc)
 	if reread == nil {
 		fail("reread", cerr)
 	}
@@ -133,19 +133,24 @@ func main() {
 	C.pio_module_release(nil)
 	C.pio_error_release(nil)
 
-	// The v5 network handle carries the same lifecycle.
-	errbuf := make([]byte, C.PIO_ERRBUF_MIN)
-	net := C.pio_parse_file(path, nil, (*C.char)(unsafe.Pointer(&errbuf[0])), C.size_t(len(errbuf)))
-	if net == nil {
-		fail(string(errbuf), nil)
+	// The typed network handle carries the same lifecycle, independently
+	// owned once taken from its module.
+	again := C.pio_parse_file(path, nil, &cerr)
+	if again == nil {
+		fail("reparse", cerr)
 	}
-	keptNet := C.pio_network_retain(net)
-	C.pio_network_free(net)
-	if C.pio_n_buses(keptNet) == 0 {
+	net := C.pio_module_balanced_network(again, &cerr)
+	if net == nil {
+		fail("network", cerr)
+	}
+	C.pio_module_release(again)
+	keptNet := C.pio_balanced_network_retain(net)
+	C.pio_balanced_network_release(net)
+	if C.pio_balanced_network_n_buses(keptNet) == 0 {
 		fail("retained network lost its buses", nil)
 	}
-	C.pio_network_release(keptNet)
-	C.pio_network_release(nil)
+	C.pio_balanced_network_release(keptNet)
+	C.pio_balanced_network_release(nil)
 
 	fmt.Println("go client OK")
 }
