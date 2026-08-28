@@ -285,3 +285,27 @@ fn an_unnamespaced_extension_is_refused() {
     let error = read_module(&raw.to_string()).unwrap_err().to_string();
     assert!(error.contains("not namespaced"), "{error}");
 }
+
+#[test]
+fn suggested_action_survives_the_stored_round_trip() {
+    let mut module = powerio_core::PioModule::new(PioValue::BalancedNetwork(small_network()));
+    let diagnostic = powerio_core::Diagnostic::of(
+        &powerio::write::codes::REQUEST_WRITE_UNKNOWN_FORMAT,
+        "a finding with an action",
+    )
+    .with_suggested_action("rerun with --strict");
+    module
+        .add_diagnostic(diagnostic)
+        .expect("diagnostic attaches");
+    let text = powerio::stored::write_module(&module).expect("writes");
+    assert!(
+        text.contains("\"suggested_action\"") && text.contains("rerun with --strict"),
+        "the stored document carries the action: {text}"
+    );
+    let reread = powerio::stored::read_module(&text).expect("reads back");
+    assert_eq!(
+        reread.diagnostics()[0].suggested_action(),
+        Some("rerun with --strict"),
+        "the action survives the round trip"
+    );
+}
