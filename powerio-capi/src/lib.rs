@@ -323,9 +323,6 @@ pub const PIO_DIST_ABI_VERSION: u32 = 1;
 /// `errbuf`/`warnbuf` parameter and a message always fits without truncation.
 pub const PIO_ERRBUF_MIN: usize = 256;
 
-/// Keep SCOPF document ordinals 0-based.
-#[cfg(feature = "prob")]
-
 /// The category tokens ABI v5 publishes.
 ///
 /// Rust renamed `UnknownFormat` to `Request` for 1.0, but `pio_build_info` is
