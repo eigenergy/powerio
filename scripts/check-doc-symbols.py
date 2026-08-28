@@ -97,6 +97,61 @@ for page in sorted(DOCS.glob("*.md")):
                 and f"class {attr}" not in python_init and f"{attr} =" not in python_init:
             fail(page, f"names python attribute powerio.{attr}, absent from the package")
 
+# The cross language operation table: every cell of languages.md must name
+# live symbols in its column's surface. The global passes above already cover
+# the C column and `powerio.<attr>`; this pass reads the other columns.
+rust_items: set[str] = set()
+for crate in ("powerio", "powerio-core", "powerio-tx", "powerio-dist",
+              "powerio-matrix", "powerio-prob"):
+    for path in (ROOT / crate / "src").rglob("*.rs"):
+        text = path.read_text()
+        rust_items |= set(re.findall(
+            r"pub(?:\([^)]*\))? (?:async )?(?:unsafe )?fn ([A-Za-z_][A-Za-z0-9_]*)", text))
+        rust_items |= set(re.findall(
+            r"pub(?:\([^)]*\))? (?:struct|enum|trait|mod|type) ([A-Za-z_][A-Za-z0-9_]*)", text))
+
+python_defs = python_init + (ROOT / "python/powerio/__init__.pyi").read_text() \
+    + (ROOT / "python/powerio/_powerio.pyi").read_text() \
+    + (ROOT / "python/powerio/dist.py").read_text()
+
+lang_page = DOCS / "languages.md"
+RECEIVERS = {"module", "m", "net", "case", "path", "bytes", "name", "fmt",
+             "T", "self", "stored", "transform", "select", "time",
+             "Err", "NULL", "Cargo"}
+
+def cell_fragments(cell: str) -> list[str]:
+    return re.findall(r"`([^`]+)`", cell)
+
+for line in lang_page.read_text().splitlines():
+    if not line.startswith("|") or line.startswith("|---") or "| Concept |" in line:
+        continue
+    cells = [c.strip() for c in line.strip("|").split("|")]
+    if len(cells) != 5:
+        continue
+    concept, rust_cell, python_cell, julia_cell, _c_cell = cells
+    for fragment in cell_fragments(rust_cell):
+        names = set(re.findall(r"([A-Za-z_][A-Za-z0-9_]*)\s*(?:::|\()", fragment))
+        names |= set(re.findall(r"\b([A-Z][A-Za-z0-9_]+)\b", fragment))
+        for token in names - RECEIVERS:
+            if token not in rust_items:
+                fail(lang_page, f"operation table ({concept}): Rust names `{token}`, not a public item")
+    for fragment in cell_fragments(python_cell):
+        names = set(re.findall(r"\.([a-z_][a-z0-9_]*)\s*\(", fragment))
+        if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", fragment):
+            names.add(fragment)
+        for token in names - RECEIVERS:
+            if (f"def {token}" not in python_defs and f"class {token}" not in python_defs
+                    and f"{token} =" not in python_defs and f'"{token}"' not in python_defs):
+                fail(lang_page, f"operation table ({concept}): Python names `{token}`, absent from the package")
+    if julia_exports:
+        for fragment in cell_fragments(julia_cell):
+            names = set(re.findall(r"(?<![.\w])([a-z][a-z0-9_]*!?)\s*\(", fragment))
+            if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_!]*", fragment):
+                names.add(fragment.rstrip("!"))
+            for token in names - RECEIVERS:
+                if token not in julia_exports:
+                    fail(lang_page, f"operation table ({concept}): Julia names `{token}`, not exported by PowerIO.jl")
+
 if failed:
     sys.exit(1)
 print("documentation symbols OK")

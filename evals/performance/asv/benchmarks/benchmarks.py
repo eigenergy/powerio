@@ -27,7 +27,7 @@ class Parse:
 
 class Matrices:
     def setup(self):
-        self.case = powerio.parse(CASE, value_type=powerio.BalancedNetwork)
+        self.case = powerio.parse(CASE, value_type=powerio.BalancedNetwork).value
 
     def time_ybus(self):
         self.case.ybus()
