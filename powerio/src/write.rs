@@ -76,6 +76,10 @@ fn unknown_format(format: &str) -> Error {
 /// [`codes::REQUEST_WRITE_UNKNOWN_FORMAT`] for a format name nothing
 /// recognizes, [`codes::REQUEST_WRITE_UNSUPPORTED_VALUE_KIND`] for a kind the
 /// named format cannot state, and the family writer's own failure otherwise.
+///
+/// # Panics
+/// Never on external input: the stored document's fixed artifact name is
+/// valid by construction.
 pub fn write_module_as(
     module: &PioModule<PioValue>,
     format: &str,
