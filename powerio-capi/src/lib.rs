@@ -301,15 +301,16 @@ unsafe fn finish_network(
 /// specific JSON schemas. Existing signatures do not change without an ABI
 /// version increment.
 ///
-/// 5 is the current version. It bumped because every ABI visible JSON document
-/// changed shape: `pio_schema_versions_json` dropped four keys,
-/// `pio_dist_capabilities_json` renamed `schema_version` to `powerio_version`,
-/// and the Arrow metadata key became `powerio.version`. A binding built against
-/// 4 would pass a handshake it should fail and read `null` for keys it mirrors.
-/// The same bump carries the diagnostic grammar: every errbuf message and
-/// warning line reads `CODE: message`, and the seven conversion entry points
-/// publish structured records through `out_diagnostics_json` in place of the
-/// text `out_warnings` channel.
+/// 6 is the current version. It bumped because the exported symbol set
+/// changed: the 0.9 package surface (`pio_package_*`, eighteen entry points
+/// and the `pkg` feature token) and the SCOPF surface (`pio_scopf_*`, plus
+/// the solver row Arrow tables) are withdrawn, and the stored module
+/// (`pio_module_*`), DC branch data (`pio_dc_data_*`), structured
+/// `PioError`, and `retain`/`release` handle surfaces are added. A binding
+/// built against 5 that used a withdrawn entry would resolve a missing
+/// symbol; the handshake refuses first. The 4 to 5 bump reshaped every ABI
+/// visible JSON document and the diagnostic grammar (`CODE: message`,
+/// structured records through `out_diagnostics_json`).
 pub const PIO_ABI_VERSION: u32 = 6;
 
 /// Frozen at 1 and no longer meaningful. It existed to absorb distribution
@@ -329,12 +330,12 @@ pub const PIO_DIST_ABI_VERSION: u32 = 1;
 /// `errbuf`/`warnbuf` parameter and a message always fits without truncation.
 pub const PIO_ERRBUF_MIN: usize = 256;
 
-/// The category tokens ABI v5 publishes.
+/// The category tokens `pio_build_info` publishes, unchanged from ABI v5
+/// into v6.
 ///
-/// Rust renamed `UnknownFormat` to `Request` for 1.0, but `pio_build_info` is
-/// an ABI v5 response and PowerIO.jl asserts this exact tuple
-/// (`test/test_public_api.jl`). The v5 spelling holds until the ABI v6 branch
-/// changes both sides together. `abi_v5_error_category_token` is exhaustive
+/// Rust renamed `UnknownFormat` to `Request` for 1.0, but PowerIO.jl asserts
+/// this exact tuple (`test/test_public_api.jl`), so the published spelling
+/// holds across the v6 bump. `abi_v5_error_category_token` is exhaustive
 /// over `ErrorCategory`, so adding a category forces a decision here.
 const ABI_V5_ERROR_CATEGORY_TOKENS: [&str; 5] = [
     abi_v5_error_category_token(powerio::ErrorCategory::Io),
@@ -2743,6 +2744,19 @@ fn dist_target_from_c(to: *const c_char) -> Result<powerio_dist::DistTargetForma
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn the_abi_constant_documents_its_own_value() {
+        // The doc comment names the current version; this pins the prose to
+        // the constant so the two cannot drift on the next bump.
+        let source = include_str!("lib.rs");
+        let needle = format!("/// {} is the current version.", crate::PIO_ABI_VERSION);
+        assert!(
+            source.contains(&needle),
+            "the PIO_ABI_VERSION doc comment must state the value {}",
+            crate::PIO_ABI_VERSION
+        );
+    }
+
     struct TestParsed {
         network: powerio::BalancedNetwork,
     }
