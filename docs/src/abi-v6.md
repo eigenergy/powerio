@@ -21,15 +21,57 @@ The ABI 4 break worth remembering is the one that did not fail loudly: `pio_conv
 
 ## Migrating to ABI 6
 
-ABI v6 is the 1.0 handle model. Every opaque handle is an independently
-owned reference with a `retain`/`release` pair, failures cross as structured
-`PioError` handles, and the stored module and DC branch data surfaces are
-new. The surviving v5 entry points keep their signatures, but the 0.9
-package and SCOPF surfaces are removed. The list below is the exact set of
-symbols declared in the v0.9.0 header and absent from the v6 header
-(`scripts/capi-removed-surface.sh` holds it to that set difference):
+ABI 6 is the replacement surface, not v5 plus a second API. One parse
+family returns module handles, typed accessors return independently owned
+network handles named for their value, every fallible entry point reports
+through a structured `PioError`, diagnostics cross as structured row
+handles, and every handle type carries a `retain`/`release` pair. Of the
+103 symbols the v0.9.0 header declared, 6 survive unchanged
+(`pio_abi_version`, `pio_version`, `pio_has_feature`, `pio_build_info`,
+`pio_schema_versions_json`, `pio_classify_str`), 7 keep their names with
+new structured error signatures (`pio_arrow_catalog_json`, `pio_convert_file`, `pio_convert_str`, `pio_geo_parse`, `pio_parse_bytes`, `pio_parse_file`, `pio_parse_str`),
+and the rest are withdrawn or renamed. `scripts/abi-delta.py` derives this
+classification mechanically and gates the ABI number on it. The list below
+is the exact set of symbols declared in the v0.9.0 header and absent from
+the v6 header (`scripts/capi-removed-surface.sh` holds it to that set
+difference):
 
 <!-- removed-c-surface:begin -->
+`pio_base_mva`,
+`pio_branch_charging`,
+`pio_branches`,
+`pio_bus_demand`,
+`pio_bus_ids`,
+`pio_bus_shunt`,
+`pio_dist_abi_version`,
+`pio_dist_capabilities_json`,
+`pio_dist_convert_file`,
+`pio_dist_convert_str`,
+`pio_dist_from_json`,
+`pio_dist_geo_apply`,
+`pio_dist_geo_extract`,
+`pio_dist_graph_json`,
+`pio_dist_network_free`,
+`pio_dist_parse_file`,
+`pio_dist_parse_str`,
+`pio_dist_summary_json`,
+`pio_dist_to_format`,
+`pio_dist_to_json`,
+`pio_dist_warnings`,
+`pio_from_json`,
+`pio_gens`,
+`pio_geo_apply`,
+`pio_geo_extract`,
+`pio_is_radial`,
+`pio_matrix_available`,
+`pio_n_branches`,
+`pio_n_buses`,
+`pio_n_gens`,
+`pio_n_islands`,
+`pio_n_switches`,
+`pio_network_free`,
+`pio_network_name`,
+`pio_normalize`,
 `pio_package_diagnostics_json`,
 `pio_package_free`,
 `pio_package_from_balanced_network`,
@@ -48,22 +90,42 @@ symbols declared in the v0.9.0 header and absent from the v6 header
 `pio_package_to_multiconductor_network`,
 `pio_package_validate`,
 `pio_package_validation_json`,
+`pio_read_dir`,
+`pio_ref_bus_index`,
+`pio_ref_bus_indices`,
+`pio_scenario_ids`,
 `pio_scopf_instance_free`,
 `pio_scopf_parse_str`,
 `pio_scopf_to_json`,
-`pio_scopf_to_json_with_index_base`
+`pio_scopf_to_json_with_index_base`,
+`pio_source_format`,
+`pio_string_free`,
+`pio_summary_json`,
+`pio_switches`,
+`pio_to_arrow`,
+`pio_to_format`,
+`pio_to_json`,
+`pio_warnings`,
+`pio_write_dir`
 <!-- removed-c-surface:end -->
 
-A v5 caller of the package group ports to the module surface: parse with
-`pio_module_parse_file` / `pio_module_parse_str` / `pio_module_parse_bytes`,
-take networks out with `pio_module_as_network` /
-`pio_module_as_dist_network`, lower with `pio_module_lower_to_balanced`,
-read findings with `pio_module_diagnostics_json`, and serialize with
-`pio_module_write_json`. A v5 caller of the SCOPF group parses the same way
-and reads the instance as JSON through `pio_module_inspect_json` or
-`pio_module_write_json`; the module's release call replaces the freed
-handle. A caller of the surviving network surface recompiles without
-edits. `PIO_ABI_VERSION` is 6.
+How a v5 caller ports, group by group:
+
+| v5 | v6 |
+|---|---|
+| `pio_parse_file`/`_str`/`_bytes` (network out, errbuf) | the same names return `PioModule *` with a `PioError **`; `pio_module_balanced_network` takes the typed network out |
+| `pio_dist_parse_file`/`_str` | the one parse family plus `pio_module_multiconductor_network` |
+| `pio_package_*` | the module surface: parse, `pio_module_write_json`, `pio_module_diagnostics`, `pio_module_export_state`, `pio_module_lower_to_balanced` |
+| `pio_scopf_*` | parse (an `ac_scuc_instance` module) plus `pio_module_inspect_json` / `pio_module_write_json` |
+| `pio_n_buses`, `pio_bus_ids`, the extractors, `pio_network_retain`/`_release`/`_free`, `pio_normalize`, `pio_to_json`/`pio_from_json`, `pio_to_arrow`, geo | the same operations under the `pio_balanced_network_` prefix, structured errors, no `free` verb |
+| `pio_dist_summary_json`, `pio_dist_to_json`, `pio_dist_from_json`, `pio_dist_graph_json`, dist geo | the `pio_multiconductor_network_` prefix |
+| `pio_to_format`, `pio_write_dir`, `pio_dist_to_format` | `pio_module_write_str` / `pio_module_write_file` (wrap a bare network with `pio_module_of_balanced_network` / `_of_multiconductor_network`) |
+| `pio_warnings`, `pio_dist_warnings` | `pio_module_diagnostics` structured rows |
+| `pio_read_dir`, `pio_scenario_ids` | parse the dataset directory (a scenario set module), `pio_module_state_inventory_json`, `pio_module_export_state` |
+| `pio_dist_abi_version`, `pio_dist_capabilities_json`, `pio_matrix_available`, `PIO_ERRBUF_MIN`, `PIO_DIST_ABI_VERSION` | one handshake plus `pio_has_feature` and `pio_build_info` |
+| `pio_string_free` | `pio_string_release` |
+
+`PIO_ABI_VERSION` is 6.
 
 ## The handle lifecycle
 
@@ -71,25 +133,22 @@ edits. `PIO_ABI_VERSION` is 6.
   `pio_*_release` drops one handle; `release(NULL)` is a no-op.
 - Releasing a parent never invalidates a retained child. A DC data result
   built from a module stays valid after the module's release.
-- `pio_network_free` and `pio_dist_network_free` remain as the release
-  spelling existing callers link; the `_release` names are the same
-  operation.
 - Concurrent immutable calls on one handle are allowed. Releasing a raw
   handle concurrently with a call on that same raw handle is caller error.
 
 ## Structured errors
 
-New v6 entry points take a `PioError**` out parameter (NULL to ignore)
-instead of a character buffer. On failure they return NULL (or false) and
+Every fallible entry point takes a `PioError**` out parameter (NULL to
+ignore) instead of a character buffer. On failure they return NULL (or false) and
 store a handle whose `pio_error_code`, `pio_error_message`, and
-`pio_error_diagnostics_json` spans stay valid until `pio_error_release`.
+`pio_error_diagnostics` rows stay valid until `pio_error_release`.
 Panics never unwind across the boundary; they become `BIND.CAPI.PANIC`
 errors.
 
 ## The stored module surface
 
 `pio_module_read_json` reads stored `.pio.json` (version 1, or a released
-0.9 package upgraded one way), `pio_module_parse_file`/`_parse_str` compile
+0.9 document upgraded one way), `pio_parse_file`/`pio_parse_str`/`pio_parse_bytes` compile
 any case family, `pio_module_write_json` writes the stored document, and
 `pio_module_inspect_json`, `pio_module_state_inventory_json`,
 `pio_module_export_state`, `pio_module_lowering_readiness_json`, and

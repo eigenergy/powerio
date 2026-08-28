@@ -70,7 +70,7 @@ existing `powerio.dist.MulticonductorNetwork` handle name. The old
 the collapsed bus and terminal graph as Python data.
 
 `parse(source, from_=None, include_root=..., value_type=...)` reads a case
-path or in-memory bytes into a `StoredModule` of whichever family claims it
+path or in-memory bytes into a `PioModule` of whichever family claims it
 (inferred from the extension and content, or forced with `from_`);
 `value_type` narrows to `BalancedNetwork` or `dist.MulticonductorNetwork` in
 the same call. When `include_root` is omitted, a file's referenced includes
@@ -98,7 +98,7 @@ print(first.number, first.name, first.x, first.y)
 A source that defines a calculation parses to that calculation's typed value:
 GO Challenge 3 JSON to an AC SCUC instance, BMOPF JSON to a multiconductor
 AC OPF instance, and OPFData JSON to a solved AC OPF. `parse` returns the
-`StoredModule` carrying it; `module.inspect()` names the operations the value
+`PioModule` carrying it; `module.inspect()` names the operations the value
 supports, and `BalancedNetwork.dc_data(formula)` serves the DC branch data
 every language reads under the same names.
 
@@ -158,9 +158,9 @@ Use `powerio[pandas]` only for downstream code that expects pandas DataFrames.
 
 ## `.pio.json` documents
 
-`powerio.StoredModule` is the handle for `.pio.json` documents.
-`StoredModule.from_json` reads stored text (a released 0.9 package upgrades
-one way on read), `StoredModule.from_file` / `from_str` / `from_bytes` parse
+`powerio.PioModule` is the handle for `.pio.json` documents.
+`PioModule.from_json` reads stored text (a released 0.9 document upgrades
+one way on read), `PioModule.from_file` / `from_str` / `from_bytes` parse
 case input into a module, and `powerio.parse` is the same universal entry
 with `value_type` narrowing. `module.kind` names the typed value;
 `as_balanced_network()` / `as_multiconductor_network()` hand back typed
@@ -179,7 +179,7 @@ Multiconductor values lower through `module.to_balanced_inspect()` and
 module = pio.parse("goc3_case.json")           # ac_scuc_instance
 module.inspect()                               # names the supported operations
 
-series = pio.StoredModule.from_json(stored_series_text)
+series = pio.PioModule.from_json(stored_series_text)
 inventory = series.state_inventory()           # typed time points or scenarios
 static_module = series.export_state(time_position=0)
 net = static_module.as_balanced_network()
