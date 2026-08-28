@@ -63,7 +63,6 @@ ROWS = [
         "dcopf_grounded_laplacian_case118",
     ),
     row("DC OPF flow map", "case118", 118, 186, "dcopf_flow_map_case118"),
-    row("DC OPF instance", "case118", 118, 186, "dcopf_instance_case118"),
     row("PTDF + LODF", "case118", 118, 186, "sensitivity_ptdf_lodf_case118"),
     row(
         "pipeline Y_bus pair",
