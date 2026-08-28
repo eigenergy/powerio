@@ -1605,9 +1605,10 @@ mod tests {
                 Ok(text)
             }
         }
+        use std::fmt::Write as _;
         let mut script = String::new();
         for index in 0..512 {
-            script.push_str(&format!("Redirect inc{index}.dss\n"));
+            let _ = writeln!(script, "Redirect inc{index}.dss");
         }
         let raw = parse_raw_with(&script, "test.dss", &mut Repeat);
         assert!(raw.commands.len() <= MAX_TOTAL_PRESERVED);
