@@ -1360,6 +1360,7 @@ fn encode_diagnostic(index: usize, diagnostic: &Diagnostic) -> DiagnosticV1 {
             .map(|id| DiagnosticIdV1(id.as_str().to_string()))
             .collect(),
         details: diagnostic.details().clone().into_iter().collect(),
+        suggested_action: diagnostic.suggested_action().map(str::to_string),
     }
 }
 
@@ -1390,6 +1391,9 @@ fn decode_diagnostic(diagnostic: DiagnosticV1) -> Result<Diagnostic> {
         decoded = decoded
             .with_details(diagnostic.details.into_iter().collect())
             .map_err(|error| invalid(error.to_string()))?;
+    }
+    if let Some(action) = diagnostic.suggested_action {
+        decoded = decoded.with_suggested_action(action);
     }
     Ok(decoded)
 }
