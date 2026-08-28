@@ -1,4 +1,25 @@
-# Migrating to ABI 6
+# ABI history and symbol replacement
+
+One row per break, append only; a row lands in the same change that increments the macro.
+
+One row per break, append only. Add a row in the same change that increments the macro.
+
+| ABI | breaking change |
+|---|---|
+| 1 | First versioned surface: opaque handles, typed extractors, JSON transport ([#54](https://github.com/eigenergy/powerio/pull/54)). |
+| 2 | `pio_parse` → `pio_parse_file`, `pio_convert` → `pio_convert_file`, `pio_write_matpower` → `pio_to_matpower` with an `errbuf` ([#69](https://github.com/eigenergy/powerio/pull/69)). |
+| 3 | `pio_case_free` → `pio_network_free`; `PioCase` → `PioNetwork`, an opaque typedef ([#77](https://github.com/eigenergy/powerio/pull/77)). |
+| 4 | The naming grammar and the bus/node/branch vocabulary rule. Case formats take `pio_to_format`/`pio_parse_str`, directory formats take `pio_write_dir`/`pio_read_dir`, and the extractors, warning queries, reference bus and island queries and conversion entry points take fixed signatures. |
+| 5 | Seven conversion signatures move to a warnings out-pointer, five extractors move to the star-lowered space, three `pio_acopf_*` symbols are removed, and six JSON documents change shape ([#323](https://github.com/eigenergy/powerio/pull/323)). [Guide](abi-v5.md). |
+| 6 | The 1.0 handle model: every opaque handle gains a `retain`/`release` pair, new entry points return structured `PioError` handles, and the stored module (`pio_module_*`) and DC branch data (`pio_dc_data_*`) surfaces are added. The 0.9 package and SCOPF entry points (`pio_package_*`, `pio_scopf_*`) are removed; the surviving v5 network surface keeps its signatures. [Guide](abi-v6.md). |
+
+The ABI 4 break worth remembering is the one that did not fail loudly: `pio_convert_file` kept its symbol, its arity and its parameter types while arguments 2 and 3 swapped from `(path, to, from)` to `(path, from, to)`. Every other ABI 4 change renamed a symbol or changed an arity, so a stale caller failed at link or load. That one linked and read the formats reversed. It is why the `pio_abi_version()` handshake is not optional, and why `scripts/capi-header-regen.sh` diffs the whole generated header rather than comparing symbol names.
+
+A version gets a migration guide when it has a consumer to migrate. ABI 5 has one; the earlier bumps predate any binding outside this repository.
+
+The ABI 4 break worth remembering is the one that did not fail loudly: `pio_convert_file` kept its symbol, its arity, and its parameter types while arguments 2 and 3 swapped from `(path, to, from)` to `(path, from, to)`. Every other ABI 4 change renamed a symbol or changed an arity, so a stale caller failed at link or load. That one linked and read the formats reversed. It is why the `pio_abi_version()` handshake is not optional, and why `scripts/capi-header-regen.sh` diffs the whole generated header rather than comparing symbol names.
+
+## Migrating to ABI 6
 
 ABI v6 is the 1.0 handle model. Every opaque handle is an independently
 owned reference with a `retain`/`release` pair, failures cross as structured
