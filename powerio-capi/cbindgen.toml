@@ -11,139 +11,86 @@ usize_is_size_t = true
 # File preamble. cbindgen generates the rest from the Rust source, so the only
 # hand-written prose lives here; per-symbol docs come from the Rust doc comments.
 header = """
-/* powerio C ABI, version 5. Parse, query, and convert networks through opaque
- * handles. Extractors return numeric tables for matrix assembly. Check
- * pio_abi_version() against PIO_ABI_VERSION at load; the integer is the
- * compatibility check, the version string is informational.
+/* powerio C ABI, version 6. Parse power system sources into module handles,
+ * inspect and transform them through typed accessors, and write supported
+ * formats. Check pio_abi_version() against PIO_ABI_VERSION at load; the
+ * integer is the compatibility check, the version string is informational.
+ *
+ * The surface in one paragraph: pio_parse_file / pio_parse_str /
+ * pio_parse_bytes compile one source into a PioModule of whichever built in
+ * value family claims it. pio_module_kind names the value; the typed
+ * accessors (pio_module_balanced_network, pio_module_multiconductor_network)
+ * hand back independently owned network handles; pio_module_diagnostics is
+ * the structured findings list; pio_module_write_str / pio_module_write_file
+ * write a supported target, echoing the retained source bytes exactly for an
+ * unchanged same format write; and pio_module_read_json / write_json carry
+ * the stored .pio.json document.
  *
  * Naming grammar:
- * - Verb-led names are operations and the verb fixes the return family:
- *   parse/read/normalize return a new handle, write has a filesystem effect,
- *   convert transcodes without keeping a handle, free destroys.
- * - to_ marks a representation change of the same network. The target is a
- *   format string unless the output type differs:
- *   pio_to_format returns text for every named format, pio_to_arrow fills
- *   Arrow C Data Interface structs.
- * - Noun phrases are queries (no get_); n_ prefixes counts, is_ predicates.
+ * - pio_<handle noun>_<operation or field>: module, balanced_network,
+ *   multiconductor_network, diagnostics/diagnostic, dc_data, error. Verb-led
+ *   tails are operations; noun tails are queries; n_ prefixes counts, is_
+ *   predicates.
  * - Case format names never appear in symbols. Formats are strings
  *   ("matpower", "psse", ...), so a new format never changes this ABI.
- *   pio_to_json and pio_from_json carry balanced model JSON.
+ * - bus: a named connection point, any number of phases. node: one
+ *   conductor's point at a bus (OpenDSS bus.1.2.3), reserved for the
+ *   multiconductor API. branch: any two-terminal series element, lines and
+ *   transformers alike.
  *
- * Vocabulary (one meaning per word, transmission and distribution alike):
- * - bus: a named connection point, any number of phases. This API is bus
- *   granular (pio_n_buses, pio_bus_ids, pio_bus_demand, ...).
- * - node: one conductor's point at a bus (OpenDSS bus.1.2.3). Reserved for
- *   the multiconductor API; never a synonym for bus here.
- * - branch: any two-terminal series element, lines and transformers alike
- *   (circuit theory; MATPOWER mpc.branch; the Branch Flow Model). "line" is
- *   the transformer-excluding subset and never names the umbrella table.
- *
- * Conventions:
- * - Array extractors write up to `cap` values per output array and return the
- *   total available. NULL out or cap 0 is a count query. No extractor writes
- *   more than cap entries to an output array.
- * - Every element extractor reports the star-lowered space. A case with an
- *   in-service 3-winding transformer lowers before the dense extractors run,
- *   adding one star bus and three branches per such transformer, and
- *   pio_n_buses, pio_bus_ids, pio_bus_demand, pio_bus_shunt, pio_n_islands,
- *   pio_n_branches, pio_branches and pio_branch_charging all count them.
- *   Through v4 the bus and branch tables reported the unexpanded network
- *   instead, so a buffer sized from them read short, its trailing entries had
- *   no id, and a matrix built from the pair left the star point isolated.
- *   The raw Arrow tables (PIO_ARROW_TABLE_BUS, _BRANCH) are the case file's
- *   own rows and stay unexpanded; the matrix tables (_MATRIX_BUS,
- *   _MATRIX_BRANCH) are the lowered space these extractors agree with.
- * - Bus ids are int64 in the range 1..2^63-1 (a v4 invariant). pio_bus_ids and
- *   every per-bus column keyed to its ordering are int64; a source whose ids are
- *   strings or exceed 2^63-1 has no representation in this API and is mapped
- *   to dense int64 at read (with a warning) or routed through the multiconductor
- *   API. Never hand a raw oversized id to this API.
- * - errbuf/errlen caller buffers (the libpcap/curl idiom: allocation-free
- *   across the boundary, no thread-local state). NULL or length 0 discards
- *   the message; a long message truncates on a UTF-8 character boundary and
- *   is always NUL-terminated. PIO_ERRBUF_MIN is the recommended size.
- * - Every errbuf message and every warning line reads "CODE: message". The
- *   code is a dotted diagnostic identity (EMIT.PSSE.FIELD_DROPPED,
- *   BIND.CAPI.NULL_HANDLE); split at the first ": " to recover it, since a
- *   code contains no colon and a message may contain any number. Branch on
- *   the code, never on the prose: a message is not covered by any stability
- *   promise. pio_build_info reports diagnostic_namespaces, the first segments
- *   powerio emits, and error_categories, the coarse projection.
- * - Options structs (PioNormalizeOptions, PioWriteOptions) are extensible, in
- *   the Linux syscall convention of openat2/clone3: size_t struct_size is the
- *   first field, the caller zero fills the struct and sets struct_size to
- *   sizeof, and NULL for the parameter means every default. The library reads
- *   only the first min(struct_size, its own sizeof) bytes, so a caller built
- *   against an older header is read correctly, and a newer caller is too as
- *   long as the fields past the library's own size are zero. A nonzero field
- *   beyond that point fails the call: the caller asked for something this build
- *   does not implement, and honoring the rest would drop the request in
- *   silence. Fields are appended, never reordered or removed; a field named
- *   reserved is padding made explicit and must be zero.
- * - Read warnings attach to the network handle; query them with pio_warnings,
- *   which returns the byte length needed (call with NULL/0 to size).
- * - Conversion findings come back through a char **out_diagnostics_json
- *   out-param on the functions that return no handle (pio_to_format,
- *   pio_convert_*, pio_write_dir, and the pio_dist_* twins). NULL means the
- *   conversion lost nothing; any other value is an owned JSON array of
- *   diagnostic records to free with pio_string_free. Each record carries code,
- *   severity and message, and where known element_path, source_ref, details
- *   and suggested_action. Pass NULL for the parameter itself to discard them.
- *   The call writes it before doing any work, so a value left from an earlier
- *   call is never read as this one's. A warning is a record with severity
- *   "warning", so this one channel replaces the v5 out_warnings rather than
- *   sitting beside it.
- * - Strings returned by pio_to_format / pio_convert_file / pio_convert_str
- *   are owned by the library; free them with pio_string_free. Handles from
- *   pio_parse_file / pio_parse_str / pio_parse_bytes / pio_read_dir /
- *   pio_normalize are freed
- *   with pio_network_free. Distribution handles use pio_dist_network_free,
- *   and module, error, and DC data handles use their pio_*_release entry
- *   points. Arrow buffers are freed through their own release callbacks.
+ * Ownership grammar (one rule set for every handle):
+ * - Every handle type has a retain/release pair. retain mints an independent
+ *   handle over the same immutable value; release drops one handle;
+ *   release(NULL) is a no-op. Releasing a parent never invalidates a child
+ *   or a retained sibling.
+ * - Accessors on a handle return borrowed pointers and spans valid until
+ *   that handle's last release. Owned strings (type char *) are released
+ *   with pio_string_release. Caller-fill buffer functions exist only where
+ *   the caller's layout, subset, or unit view differs from the stored data
+ *   (the dense element extractors); each writes at most `cap` entries and
+ *   returns the total available, so NULL/0 is a count query.
  * - A handle is immutable after construction: concurrent reads from any
- *   number of threads are safe; the free and release functions need
- *   exclusive access, and free exactly once.
- * - Every entry point catches Rust panics at the boundary and returns the
- *   documented failure value (NULL, 0, -1, 0.0) rather than unwinding across
- *   the ABI (requires the default panic = "unwind"; a panic = "abort" build
- *   aborts the process instead).
+ *   number of threads are safe; releasing the same raw handle concurrently
+ *   with any call on it is caller error.
  *
- * Compatibility policy: changing an existing signature or documented behavior
- * requires a PIO_ABI_VERSION increment. New data uses new symbols or versioned
- * Arrow, `.pio.json`, and format-specific JSON schemas. The dense extractors
- * remain the balanced positive sequence projection. Arrow tables are append
- * only: existing PIO_ARROW_TABLE_* ids and column order do not change. A new
- * table takes the next id, new columns append at the end, and a consumer
- * addresses columns by name, never by position.
- * Removing a supported format token or changing its documented C behavior
- * requires a PIO_ABI_VERSION bump.
+ * Error grammar (one channel):
+ * - Every fallible entry point takes a PioError **error out parameter (NULL
+ *   to ignore) and returns NULL, -1, or false on failure with a new error
+ *   handle stored for the caller to release. pio_error_code is the stable
+ *   dotted diagnostic identity, pio_error_message the rendered text, and
+ *   pio_error_diagnostics the structured findings behind the failure. Branch
+ *   on the code, never on the prose.
+ * - Every entry point catches Rust panics at the boundary and reports
+ *   BIND.CAPI.PANIC rather than unwinding across the ABI (requires the
+ *   default panic = "unwind"; a panic = "abort" build aborts the process).
  *
- * Diagnostic codes: a published code keeps its identity forever and is never
- * reused for a different finding. A code may be retired, which stops it being
- * emitted but never reassigns it, and refinement adds narrower codes rather
- * than redefining a family. The namespace set grows only by addition, and a
- * default severity may move in a minor release, so a consumer that needs a
- * fixed policy pins by code. An unknown code is data, never a failure.
+ * Diagnostics: pio_module_diagnostics and pio_error_diagnostics return a
+ * PioDiagnostics list handle whose rows expose code, severity name, message,
+ * optional identity, target, suggested action, details JSON, byte spans into
+ * the named source, and related record identities. The *_json twins remain
+ * as explicit serialization helpers. A published code keeps its identity
+ * forever and is never reused; an unknown code is data, never a failure.
  *
- * Optional: build with `--features arrow` for pio_to_arrow (guarded by
- * PIO_ARROW), add `--features matrix` for the balanced matrix Arrow tables,
- * `--features gridfm` for pio_read_dir / pio_scenario_ids
- * (guarded by PIO_GRIDFM), `--features dist` for the pio_dist_* entry
- * points (guarded by PIO_DIST): multiconductor distribution cases (OpenDSS,
- * PMD ENGINEERING JSON, BMOPF JSON) behind their own PioMulticonductorNetwork handle,
- * freed with pio_dist_network_free, string outputs freed with pio_string_free,
- * and `--features prob` (guarded by PIO_PROB) for the problem data the
- * module surface serves. Each symbol's own #if states what it needs; a
- * runtime loader probes pio_has_feature per name.
- * The dist C signatures follow PIO_ABI_VERSION like every other symbol.
- * PIO_DIST_ABI_VERSION is frozen at 1 and carries no meaning: it existed to
- * absorb IEEE BMOPF schema drift, and a schema revision changes a reader, a
- * writer and an emitted token but no C signature. The symbol stays so a
- * binding that gates distribution calls on resolving it keeps working. Read
- * the foreign schema versions from pio_build_info instead; the JSON payloads
- * (bmopf-json, powerio-dist-json) also carry their own meta.version.
- * Probe optional features at runtime with
- * pio_has_feature("arrow"|"matrix"|"gridfm"|"dist"|"prob").
+ * Options structs (PioNormalizeOptions, PioWriteOptions) are extensible, in
+ * the Linux syscall convention of openat2/clone3: size_t struct_size is the
+ * first field, the caller zero fills the struct and sets struct_size to
+ * sizeof, and NULL for the parameter means every default. A nonzero field
+ * beyond the library's own size fails the call. Fields are appended, never
+ * reordered or removed.
+ *
+ * Compatibility policy: changing an existing signature or documented
+ * behavior requires a PIO_ABI_VERSION increment. New data uses new symbols
+ * or versioned Arrow, `.pio.json`, and format-specific JSON schemas. Arrow
+ * tables are append only: existing PIO_ARROW_TABLE_* ids and column order do
+ * not change; a consumer addresses columns by name, never by position.
+ *
+ * Optional features, probed at runtime with pio_has_feature("arrow" |
+ * "matrix" | "gridfm" | "dist" | "prob"): `arrow` adds
+ * pio_balanced_network_to_arrow (guarded by PIO_ARROW), `matrix` the
+ * balanced matrix Arrow tables, `gridfm` the GridFM Parquet parse routing
+ * (guarded by PIO_GRIDFM), `dist` the multiconductor value family (guarded
+ * by PIO_DIST), and `prob` the problem instance and solution families
+ * (guarded by PIO_PROB). Each symbol's own #if states what it needs.
  *
  * Checked in and generated; regenerate from the Rust source with
  *   cbindgen --config cbindgen.toml --crate powerio-capi --output include/powerio.h
@@ -167,6 +114,7 @@ after_includes = """
 typedef struct PioBalancedNetwork PioBalancedNetwork;
 typedef struct PioError PioError;
 typedef struct PioModule PioModule;
+typedef struct PioDiagnostics PioDiagnostics;
 typedef struct PioDcData PioDcData;
 #if defined(PIO_DIST)
 typedef struct PioMulticonductorNetwork PioMulticonductorNetwork;
@@ -178,7 +126,7 @@ struct ArrowSchema;
 
 [export]
 prefix = ""
-include = ["PioBalancedNetwork", "PioMulticonductorNetwork", "PioError", "PioModule", "PioDcData"]
+include = ["PioBalancedNetwork", "PioMulticonductorNetwork", "PioError", "PioModule", "PioDiagnostics", "PioDcData"]
 
 [export.rename]
 "FFI_ArrowArray" = "struct ArrowArray"

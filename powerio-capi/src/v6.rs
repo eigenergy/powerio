@@ -325,9 +325,7 @@ unsafe fn optional_str<'a>(
     unsafe { required_str(raw, what) }.map(Some)
 }
 
-unsafe fn required_module<'a>(
-    raw: *const PioModule,
-) -> Result<&'a ModuleInner, *mut PioError> {
+unsafe fn required_module<'a>(raw: *const PioModule) -> Result<&'a ModuleInner, *mut PioError> {
     unsafe { PioModule::get(raw) }.ok_or_else(|| {
         error_from_parts(
             codes::BIND_CAPI_NULL_HANDLE.code,
@@ -364,7 +362,7 @@ fn parse_source(
         .map_err(|error| error_from_core(&error))
 }
 
-/// Read stored `.pio.json` text: version 1, or a released 0.9 package
+/// Read stored `.pio.json` text: version 1, or a released 0.9 document
 /// upgraded one way. Returns a new module handle, or NULL with `error` set.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_module_read_json(
@@ -400,18 +398,21 @@ pub unsafe extern "C" fn pio_parse_file(
     }
 }
 
-/// Parse in-memory case text into a module.
+/// Parse in-memory case text into a module. `name` labels the buffer for
+/// diagnostics and format detection; NULL uses `<memory>`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_parse_str(
+    name: *const c_char,
     text: *const c_char,
     format: *const c_char,
     error: *mut *mut PioError,
 ) -> *mut PioModule {
     unsafe {
         v6_entry(error, std::ptr::null_mut(), || {
+            let name = optional_str(name, "name")?.unwrap_or("<memory>");
             let text = required_str(text, "text")?;
             let format = optional_str(format, "format")?;
-            let source = powerio_core::Source::from_bytes("<memory>", text.as_bytes().to_vec())
+            let source = powerio_core::Source::from_bytes(name, text.as_bytes().to_vec())
                 .map_err(|error| error_from_core(&error))?;
             parse_source(source, format)
         })
@@ -419,9 +420,11 @@ pub unsafe extern "C" fn pio_parse_str(
 }
 
 /// Parse in-memory case bytes into a module: the only in-memory way to read
-/// a binary format. Text formats must be UTF-8.
+/// a binary format. Text formats must be UTF-8. `name` labels the buffer for
+/// diagnostics and format detection; NULL uses `<memory>`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_parse_bytes(
+    name: *const c_char,
     data: *const u8,
     len: usize,
     format: *const c_char,
@@ -429,6 +432,7 @@ pub unsafe extern "C" fn pio_parse_bytes(
 ) -> *mut PioModule {
     unsafe {
         v6_entry(error, std::ptr::null_mut(), || {
+            let name = optional_str(name, "name")?.unwrap_or("<memory>");
             if data.is_null() {
                 return Err(error_from_parts(
                     codes::BIND_CAPI_NULL_ARGUMENT.code,
@@ -438,7 +442,7 @@ pub unsafe extern "C" fn pio_parse_bytes(
             }
             let bytes = std::slice::from_raw_parts(data, len).to_vec();
             let format = optional_str(format, "format")?;
-            let source = powerio_core::Source::from_bytes("<memory>", bytes)
+            let source = powerio_core::Source::from_bytes(name, bytes)
                 .map_err(|error| error_from_core(&error))?;
             parse_source(source, format)
         })
@@ -518,10 +522,111 @@ pub unsafe extern "C" fn pio_module_multiconductor_network(
                     "[]",
                 ));
             };
-            Ok(crate::PioMulticonductorNetwork::from_module_raw(provenanced(
+            Ok(crate::PioMulticonductorNetwork::from_module_raw(
+                provenanced(&inner.module, network.clone())?,
+            ))
+        })
+    }
+}
+
+/// A module over one balanced network handle's value, sharing that handle's
+/// records: the wrap for semantic writing of a network built in memory (for
+/// example through `pio_balanced_network_from_json`).
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pio_module_of_balanced_network(
+    network: *const crate::PioBalancedNetwork,
+    error: *mut *mut PioError,
+) -> *mut PioModule {
+    unsafe {
+        v6_entry(error, std::ptr::null_mut(), || {
+            let module =
+                crate::balanced_network_module(network).map_err(|line| error_from_line(&line))?;
+            Ok(module_handle(
+                module.map_value(powerio::PioValue::BalancedNetwork),
+            ))
+        })
+    }
+}
+
+/// A module over one multiconductor network handle's value, sharing that
+/// handle's records: the wrap for semantic writing.
+#[cfg(feature = "dist")]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pio_module_of_multiconductor_network(
+    network: *const crate::PioMulticonductorNetwork,
+    error: *mut *mut PioError,
+) -> *mut PioModule {
+    unsafe {
+        v6_entry(error, std::ptr::null_mut(), || {
+            let module = crate::multiconductor_network_module(network)
+                .map_err(|line| error_from_line(&line))?;
+            Ok(module_handle(
+                module.map_value(powerio::PioValue::MulticonductorNetwork),
+            ))
+        })
+    }
+}
+
+/// Write the module as the named target format and return the text: the one
+/// write operation over the C surface. Writing an unchanged parsed module
+/// back to its source format returns the retained bytes exactly; any other
+/// target serializes the typed value. The writer's findings cross through
+/// `out_diagnostics` as a structured handle (NULL discards them). Free the
+/// text with `pio_string_release`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pio_module_write_str(
+    module: *const PioModule,
+    format: *const c_char,
+    out_diagnostics: *mut *mut PioDiagnostics,
+    error: *mut *mut PioError,
+) -> *mut c_char {
+    unsafe {
+        if !out_diagnostics.is_null() {
+            *out_diagnostics = std::ptr::null_mut();
+        }
+        v6_entry(error, std::ptr::null_mut(), || {
+            let inner = required_module(module)?;
+            let format = required_str(format, "format")?;
+            let (text, diagnostics) = powerio::write_module_str(&inner.module, format)
+                .map_err(|error| error_from_core(&error))?;
+            let out = owned_string(text)?;
+            if !out_diagnostics.is_null() {
+                *out_diagnostics = diagnostics_handle(&diagnostics);
+            }
+            Ok(out)
+        })
+    }
+}
+
+/// Write the module as the named target format into `path`: the filesystem
+/// form of [`pio_module_write_str`], covering the directory targets (PyPSA
+/// CSV) a single text cannot state. The destination must not already exist.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pio_module_write_file(
+    module: *const PioModule,
+    format: *const c_char,
+    path: *const c_char,
+    out_diagnostics: *mut *mut PioDiagnostics,
+    error: *mut *mut PioError,
+) -> i32 {
+    unsafe {
+        if !out_diagnostics.is_null() {
+            *out_diagnostics = std::ptr::null_mut();
+        }
+        v6_entry(error, -1, || {
+            let inner = required_module(module)?;
+            let format = required_str(format, "format")?;
+            let path = required_str(path, "path")?;
+            let result = powerio::write_module_as(
                 &inner.module,
-                network.clone(),
-            )?))
+                format,
+                powerio_core::Destination::path(path),
+            )
+            .map_err(|error| error_from_core(&error))?;
+            if !out_diagnostics.is_null() {
+                *out_diagnostics = diagnostics_handle(result.diagnostics());
+            }
+            Ok(0)
         })
     }
 }
@@ -961,7 +1066,11 @@ pub unsafe extern "C" fn pio_diagnostics_len(diagnostics: *const PioDiagnostics)
 pub unsafe extern "C" fn pio_diagnostics_retain(
     diagnostics: *const PioDiagnostics,
 ) -> *mut PioDiagnostics {
-    unsafe { crate::guard(std::ptr::null_mut(), || PioDiagnostics::retain_raw(diagnostics)) }
+    unsafe {
+        crate::guard(std::ptr::null_mut(), || {
+            PioDiagnostics::retain_raw(diagnostics)
+        })
+    }
 }
 
 /// Release one list handle. NULL is a no-op.
@@ -970,71 +1079,114 @@ pub unsafe extern "C" fn pio_diagnostics_release(diagnostics: *mut PioDiagnostic
     unsafe { crate::guard((), || PioDiagnostics::release_raw(diagnostics)) }
 }
 
-/// A row string accessor: NULL handle or index out of range yields NULL.
-macro_rules! diagnostic_string_accessor {
-    ($(#[$doc:meta])* $name:ident, $field:ident, required) => {
-        $(#[$doc])*
-        #[unsafe(no_mangle)]
-        pub unsafe extern "C" fn $name(
-            diagnostics: *const PioDiagnostics,
-            index: usize,
-        ) -> *const c_char {
-            unsafe {
-                crate::guard(std::ptr::null(), || {
-                    PioDiagnostics::get(diagnostics)
-                        .and_then(|inner| inner.row(index))
-                        .map_or(std::ptr::null(), |row| row.$field.as_ptr())
-                })
-            }
-        }
-    };
-    ($(#[$doc:meta])* $name:ident, $field:ident, optional) => {
-        $(#[$doc])*
-        #[unsafe(no_mangle)]
-        pub unsafe extern "C" fn $name(
-            diagnostics: *const PioDiagnostics,
-            index: usize,
-        ) -> *const c_char {
-            unsafe {
-                crate::guard(std::ptr::null(), || {
-                    PioDiagnostics::get(diagnostics)
-                        .and_then(|inner| inner.row(index))
-                        .and_then(|row| row.$field.as_ref())
-                        .map_or(std::ptr::null(), |value| value.as_ptr())
-                })
-            }
-        }
-    };
+/// The row's stable diagnostic code. NULL handle or an out of range index yields NULL.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pio_diagnostic_code(
+    diagnostics: *const PioDiagnostics,
+    index: usize,
+) -> *const c_char {
+    unsafe {
+        crate::guard(std::ptr::null(), || {
+            PioDiagnostics::get(diagnostics)
+                .and_then(|inner| inner.row(index))
+                .map_or(std::ptr::null(), |row| row.code.as_ptr())
+        })
+    }
 }
 
-diagnostic_string_accessor!(
-    /// The row's stable diagnostic code.
-    pio_diagnostic_code, code, required
-);
-diagnostic_string_accessor!(
-    /// The row's severity name: `error`, `warning`, `remark`, or `note`.
-    pio_diagnostic_severity, severity, required
-);
-diagnostic_string_accessor!(
-    /// The row's rendered message. Explanatory text, not a stable identifier.
-    pio_diagnostic_message, message, required
-);
-diagnostic_string_accessor!(
-    /// The row's identifier when one was assigned, else NULL.
-    pio_diagnostic_id, id, optional
-);
-diagnostic_string_accessor!(
-    /// The row's target locator when one exists, else NULL.
-    pio_diagnostic_target, target, optional
-);
-diagnostic_string_accessor!(
-    /// The row's suggested action when one exists, else NULL.
-    pio_diagnostic_suggested_action, suggested_action, optional
-);
-diagnostic_string_accessor!(
-    /// The row's details as one JSON object, or NULL when it has none.
-    pio_diagnostic_details_json, details_json, optional
-);
+/// The row's severity name: `error`, `warning`, `remark`, or `note`. NULL handle or an out of range index yields NULL.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pio_diagnostic_severity(
+    diagnostics: *const PioDiagnostics,
+    index: usize,
+) -> *const c_char {
+    unsafe {
+        crate::guard(std::ptr::null(), || {
+            PioDiagnostics::get(diagnostics)
+                .and_then(|inner| inner.row(index))
+                .map_or(std::ptr::null(), |row| row.severity.as_ptr())
+        })
+    }
+}
+
+/// The row's rendered message. Explanatory text, not a stable identifier. NULL handle or an out of range index yields NULL.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pio_diagnostic_message(
+    diagnostics: *const PioDiagnostics,
+    index: usize,
+) -> *const c_char {
+    unsafe {
+        crate::guard(std::ptr::null(), || {
+            PioDiagnostics::get(diagnostics)
+                .and_then(|inner| inner.row(index))
+                .map_or(std::ptr::null(), |row| row.message.as_ptr())
+        })
+    }
+}
+
+/// The row's identifier when one was assigned, else NULL. NULL handle or an out of range index yields NULL.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pio_diagnostic_id(
+    diagnostics: *const PioDiagnostics,
+    index: usize,
+) -> *const c_char {
+    unsafe {
+        crate::guard(std::ptr::null(), || {
+            PioDiagnostics::get(diagnostics)
+                .and_then(|inner| inner.row(index))
+                .and_then(|row| row.id.as_ref())
+                .map_or(std::ptr::null(), |value| value.as_ptr())
+        })
+    }
+}
+
+/// The row's target locator when one exists, else NULL. NULL handle or an out of range index yields NULL.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pio_diagnostic_target(
+    diagnostics: *const PioDiagnostics,
+    index: usize,
+) -> *const c_char {
+    unsafe {
+        crate::guard(std::ptr::null(), || {
+            PioDiagnostics::get(diagnostics)
+                .and_then(|inner| inner.row(index))
+                .and_then(|row| row.target.as_ref())
+                .map_or(std::ptr::null(), |value| value.as_ptr())
+        })
+    }
+}
+
+/// The row's suggested action when one exists, else NULL. NULL handle or an out of range index yields NULL.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pio_diagnostic_suggested_action(
+    diagnostics: *const PioDiagnostics,
+    index: usize,
+) -> *const c_char {
+    unsafe {
+        crate::guard(std::ptr::null(), || {
+            PioDiagnostics::get(diagnostics)
+                .and_then(|inner| inner.row(index))
+                .and_then(|row| row.suggested_action.as_ref())
+                .map_or(std::ptr::null(), |value| value.as_ptr())
+        })
+    }
+}
+
+/// The row's details as one JSON object, or NULL when it has none. NULL handle or an out of range index yields NULL.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pio_diagnostic_details_json(
+    diagnostics: *const PioDiagnostics,
+    index: usize,
+) -> *const c_char {
+    unsafe {
+        crate::guard(std::ptr::null(), || {
+            PioDiagnostics::get(diagnostics)
+                .and_then(|inner| inner.row(index))
+                .and_then(|row| row.details_json.as_ref())
+                .map_or(std::ptr::null(), |value| value.as_ptr())
+        })
+    }
+}
 
 /// The number of source spans on one row. NULL or out of range yields 0.
 #[unsafe(no_mangle)]
@@ -1504,6 +1656,7 @@ mod tests {
             let text = case_text();
             let bytes = text.as_bytes();
             let module = pio_parse_bytes(
+                std::ptr::null(),
                 bytes.as_ptr(),
                 bytes.len(),
                 matpower.as_ptr(),
@@ -1516,8 +1669,13 @@ mod tests {
             );
             pio_module_release(module);
 
-            let module =
-                pio_parse_bytes(std::ptr::null(), 0, matpower.as_ptr(), &raw mut error);
+            let module = pio_parse_bytes(
+                std::ptr::null(),
+                std::ptr::null(),
+                0,
+                matpower.as_ptr(),
+                &raw mut error,
+            );
             assert!(module.is_null());
             assert!(!error.is_null());
             assert_eq!(
@@ -1533,33 +1691,33 @@ mod tests {
         unsafe {
             let mut error = std::ptr::null_mut();
             let matpower = CString::new("matpower").unwrap();
-            let module =
-                pio_parse_str(case_text().as_ptr(), matpower.as_ptr(), &raw mut error);
+            let module = pio_parse_str(
+                std::ptr::null(),
+                case_text().as_ptr(),
+                matpower.as_ptr(),
+                &raw mut error,
+            );
             assert!(error.is_null());
             let net = pio_module_balanced_network(module, &raw mut error);
             assert!(error.is_null());
             assert!(!net.is_null());
-            // The retained source threads through: a same format write echoes
-            // the exact source bytes.
+            // The retained source threads through: wrapping the network back
+            // into a module and writing the same format echoes the exact
+            // source bytes.
+            let net_module = pio_module_of_balanced_network(net, &raw mut error);
+            assert!(error.is_null());
             let to = CString::new("matpower").unwrap();
-            let mut diag: *mut c_char = std::ptr::null_mut();
-            let mut err = [0 as c_char; crate::PIO_ERRBUF_MIN];
-            let text = crate::pio_to_format(
-                net,
-                to.as_ptr(),
-                std::ptr::null(),
-                &raw mut diag,
-                err.as_mut_ptr(),
-                err.len(),
-            );
+            let mut diag: *mut PioDiagnostics = std::ptr::null_mut();
+            let text = pio_module_write_str(net_module, to.as_ptr(), &raw mut diag, &raw mut error);
             assert!(!text.is_null());
             let echoed = CStr::from_ptr(text).to_str().unwrap().to_owned();
             assert_eq!(echoed, case_text().to_str().unwrap());
             crate::pio_string_release(text);
             if !diag.is_null() {
-                crate::pio_string_release(diag);
+                pio_diagnostics_release(diag);
             }
-            crate::pio_network_free(net);
+            pio_module_release(net_module);
+            crate::pio_balanced_network_release(net);
 
             #[cfg(feature = "dist")]
             {
@@ -1581,8 +1739,12 @@ mod tests {
         unsafe {
             let mut error = std::ptr::null_mut();
             let matpower = CString::new("matpower").unwrap();
-            let module =
-                pio_parse_str(case_text().as_ptr(), matpower.as_ptr(), &raw mut error);
+            let module = pio_parse_str(
+                std::ptr::null(),
+                case_text().as_ptr(),
+                matpower.as_ptr(),
+                &raw mut error,
+            );
             assert!(
                 error.is_null(),
                 "{:?}",
@@ -1617,8 +1779,12 @@ mod tests {
         unsafe {
             let mut error = std::ptr::null_mut();
             let matpower = CString::new("matpower").unwrap();
-            let module =
-                pio_parse_str(case_text().as_ptr(), matpower.as_ptr(), &raw mut error);
+            let module = pio_parse_str(
+                std::ptr::null(),
+                case_text().as_ptr(),
+                matpower.as_ptr(),
+                &raw mut error,
+            );
             assert!(error.is_null());
             let formula = CString::new("series_susceptance").unwrap();
             let data = pio_dc_data_build(module, formula.as_ptr(), &raw mut error);
@@ -1705,6 +1871,7 @@ mod tests {
             let mut error = std::ptr::null_mut();
             let matpower = CString::new("matpower").unwrap();
             let module = pio_parse_str(
+                std::ptr::null(),
                 shifted_case_text().as_ptr(),
                 matpower.as_ptr(),
                 &raw mut error,
@@ -1864,8 +2031,12 @@ mod tests {
 
             let matpower = CString::new("matpower").unwrap();
             let mut error = std::ptr::null_mut();
-            let module =
-                pio_parse_str(case_text().as_ptr(), matpower.as_ptr(), &raw mut error);
+            let module = pio_parse_str(
+                std::ptr::null(),
+                case_text().as_ptr(),
+                matpower.as_ptr(),
+                &raw mut error,
+            );
             assert!(error.is_null());
 
             // An unrecognized formula string.
@@ -1902,7 +2073,12 @@ mod tests {
             )
             .unwrap();
             let mut error = std::ptr::null_mut();
-            let mc = pio_parse_str(circuit.as_ptr(), dss.as_ptr(), &raw mut error);
+            let mc = pio_parse_str(
+                std::ptr::null(),
+                circuit.as_ptr(),
+                dss.as_ptr(),
+                &raw mut error,
+            );
             assert!(error.is_null(), "dss parse failed");
             let formula = CString::new("series_susceptance").unwrap();
             let mut error = std::ptr::null_mut();
@@ -1963,6 +2139,103 @@ mod tests {
             }
             let handle = handle_new(PanicOnDrop);
             crate::guard((), || handle_release(handle));
+        }
+    }
+
+    /// `pio_diagnostics_*` and `pio_diagnostic_*`: NULL handles and
+    /// out-of-range indices fall back safely everywhere, and a row's
+    /// required fields (code, severity, message) are always readable while
+    /// its optional fields (id, target, suggested_action, details_json) are
+    /// NULL when the finding carries none.
+    #[test]
+    fn diagnostics_accessors_fall_back_on_null_and_out_of_range() {
+        unsafe {
+            // A NULL diagnostics handle: every accessor reports the safe
+            // empty default rather than dereferencing.
+            let nil: *const PioDiagnostics = std::ptr::null();
+            assert_eq!(pio_diagnostics_len(nil), 0);
+            assert!(pio_diagnostics_retain(nil).is_null());
+            assert!(pio_diagnostic_code(nil, 0).is_null());
+            assert!(pio_diagnostic_severity(nil, 0).is_null());
+            assert!(pio_diagnostic_message(nil, 0).is_null());
+            assert!(pio_diagnostic_id(nil, 0).is_null());
+            assert!(pio_diagnostic_target(nil, 0).is_null());
+            assert!(pio_diagnostic_suggested_action(nil, 0).is_null());
+            assert!(pio_diagnostic_details_json(nil, 0).is_null());
+            assert_eq!(pio_diagnostic_n_spans(nil, 0), 0);
+            assert!(
+                pio_diagnostic_span(nil, 0, 0, std::ptr::null_mut(), std::ptr::null_mut())
+                    .is_null()
+            );
+            assert_eq!(pio_diagnostic_n_related(nil, 0), 0);
+            assert!(pio_diagnostic_related(nil, 0, 0).is_null());
+            pio_diagnostics_release(std::ptr::null_mut());
+
+            // A real list with at least one row: index 0 is live, an
+            // out-of-range index falls back the same way NULL does. The
+            // pandapower fixture carries switches the model ignores, so its
+            // module has findings to index (see
+            // module_diagnostics_expose_every_finding_untruncated in lib.rs,
+            // which reads the same fixture's findings by message content).
+            let mut error = std::ptr::null_mut();
+            let path = CString::new(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../tests/data/pandapower/example.json"
+            ))
+            .unwrap();
+            let module = pio_parse_file(path.as_ptr(), std::ptr::null(), &raw mut error);
+            assert!(
+                error.is_null(),
+                "{:?}",
+                CStr::from_ptr(pio_error_message(error))
+            );
+            let list = pio_module_diagnostics(module, &raw mut error);
+            assert!(error.is_null());
+            let n = pio_diagnostics_len(list);
+            assert!(
+                n >= 1,
+                "the pandapower fixture's ignored switches are findings"
+            );
+
+            // Required fields never return NULL for a live row.
+            assert!(!pio_diagnostic_code(list, 0).is_null());
+            assert!(!pio_diagnostic_severity(list, 0).is_null());
+            assert!(!pio_diagnostic_message(list, 0).is_null());
+            let code = CStr::from_ptr(pio_diagnostic_code(list, 0))
+                .to_str()
+                .unwrap();
+            assert!(code.contains('.'), "{code}");
+
+            // Out of range on a live handle matches the NULL-handle fallback.
+            assert!(pio_diagnostic_code(list, n).is_null());
+            assert!(pio_diagnostic_severity(list, n).is_null());
+            assert!(pio_diagnostic_message(list, n).is_null());
+            assert!(pio_diagnostic_id(list, n).is_null());
+            assert!(pio_diagnostic_target(list, n).is_null());
+            assert!(pio_diagnostic_suggested_action(list, n).is_null());
+            assert!(pio_diagnostic_details_json(list, n).is_null());
+            assert_eq!(pio_diagnostic_n_spans(list, n), 0);
+            assert!(
+                pio_diagnostic_span(list, n, 0, std::ptr::null_mut(), std::ptr::null_mut())
+                    .is_null()
+            );
+            assert_eq!(pio_diagnostic_n_related(list, n), 0);
+            assert!(pio_diagnostic_related(list, n, 0).is_null());
+            // A span index out of range on a live row is NULL too, whether or
+            // not the row itself carries any spans.
+            let spans = pio_diagnostic_n_spans(list, 0);
+            assert!(
+                pio_diagnostic_span(list, 0, spans, std::ptr::null_mut(), std::ptr::null_mut())
+                    .is_null()
+            );
+
+            // Retaining a live list mints an independent handle the parent's
+            // release does not invalidate.
+            let retained = pio_diagnostics_retain(list);
+            pio_diagnostics_release(list);
+            assert_eq!(pio_diagnostics_len(retained), n);
+            pio_diagnostics_release(retained);
+            pio_module_release(module);
         }
     }
 
@@ -2029,7 +2302,12 @@ mod tests {
         unsafe {
             let mut error = std::ptr::null_mut();
             let bad = CString::new("not a case at all").unwrap();
-            let module = pio_parse_str(bad.as_ptr(), std::ptr::null(), &raw mut error);
+            let module = pio_parse_str(
+                std::ptr::null(),
+                bad.as_ptr(),
+                std::ptr::null(),
+                &raw mut error,
+            );
             assert!(module.is_null());
             assert!(!error.is_null());
             let code = CStr::from_ptr(pio_error_code(error)).to_str().unwrap();
