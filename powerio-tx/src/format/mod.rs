@@ -773,16 +773,16 @@ fn sniff_json(text: &str) -> Result<TargetFormat> {
 /// JSON never reaches this from `parse`, which decodes it directly.
 fn json_target_from_class(class: JsonClass) -> Result<TargetFormat> {
     match class {
-        JsonClass::Package => Err(Error::UnknownFormat(
-            "JSON is a .pio.json package; read it with the package entry points \
-             (pio_package_parse_str in C, powerio.Package.from_json in Python, \
-             read_package in Julia)"
+        JsonClass::Module => Err(Error::UnknownFormat(
+            "JSON is a .pio.json stored module; read it with the module surface \
+             (powerio::parse in Rust, pio_parse_str in C, powerio.parse in \
+             Python, parse_bytes in Julia)"
                 .into(),
         )),
         JsonClass::ModelJson => Err(Error::UnknownFormat(
             "JSON is bare powerio model JSON, which is not a case format; read it with \
-             BalancedNetwork::from_json (pio_from_json in C, powerio.from_json in Python, \
-             from_json in Julia)"
+             BalancedNetwork::from_json (pio_balanced_network_from_json in C, \
+             powerio.from_json in Python, from_json in Julia)"
                 .into(),
         )),
         JsonClass::Case(Detection::Known(DetectedFormat::Transmission(format))) => {
