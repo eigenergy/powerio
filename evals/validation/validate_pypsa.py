@@ -28,7 +28,7 @@ RTOL = 1e-6
 
 
 def check_case(path: Path) -> str:
-    case = powerio.parse(path, value_type=powerio.BalancedNetwork)
+    case = powerio.parse(path, value_type=powerio.BalancedNetwork).value
     # The folder writer refuses an existing target, so the output is a fresh
     # child of the temporary directory.
     tmp = Path(tempfile.mkdtemp(prefix=f"powerio-pypsa-{path.stem}-")) / "pypsa"
