@@ -9,15 +9,23 @@
   >
 </p>
 
-PowerIO parses power system data into typed Rust models. Readers cover balanced
-transmission cases, multiconductor distribution cases, display files, and
-directory datasets. Writers, matrix builders, package tools, and problem
-instance builders consume those models.
+PowerIO 0.10 is the public beta of the 1.0 API. API corrections may land before 1.0.0 as downstream integrations exercise the new design.
 
-Writing a case back to the format it was read from returns the original file
-bytes whenever the reader kept them. Converting to a different format writes
-what the target format can hold and reports every dropped field in
-`Conversion::warnings`.
+PowerIO parses power system data into typed values, converts between supported
+formats, and builds sparse matrices and graph data for solvers and analysis
+code. One parse reads any supported source and returns a module: the typed
+value (a network, a time series, a scenario set, a calculation instance, or a
+solution, depending on what the source declares) beside the retained source,
+the reader's findings, and the operations that produced it.
+
+```rust,ignore
+let module = powerio::parse(Source::open("case9.m")?)?;   // PioModule<PioValue>
+let case: PioModule<BalancedNetwork> = powerio::try_into_typed(module)?;
+```
+
+Writing an unchanged module back to the format it was read from returns the
+original file bytes. Converting to a different format writes what the target
+format can hold and reports every dropped field as a coded finding.
 
 `.pio.json` stores one typed value together with the record of how it was
 produced: [the version 1 module document](https://powerio.dev/guide/pio-json-schema.html)
