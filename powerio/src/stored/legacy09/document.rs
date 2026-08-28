@@ -707,9 +707,12 @@ impl NetworkPackage {
         let pkg: Self =
             serde_json::from_str(text.trim_start_matches('\u{feff}')).map_err(Error::Malformed)?;
         if !version_is_frozen_lineage(&pkg.powerio_version) {
-            return Err(Error::UnsupportedVersion(crate::version::reject(
+            // The frozen decoder names the lineage it reads; the live
+            // build's label moves with the crate version.
+            return Err(Error::UnsupportedVersion(crate::version::reject_as(
                 ".pio.json",
                 &pkg.powerio_version,
+                "0.9.x",
             )));
         }
         if !pkg.kind_is_consistent() {
@@ -2335,7 +2338,8 @@ mod tests {
             .unwrap_err()
             .to_string();
         assert!(err.contains("9.9.9"), "{err}");
-        assert!(err.contains(&crate::version::lineage_label()), "{err}");
+        // The frozen decoder names its own lineage, not the live label.
+        assert!(err.contains("0.9.x"), "{err}");
         // Diagnosis only: the remedy is the consumer's to state (#375).
         assert!(!err.contains("regenerate"), "{err}");
     }

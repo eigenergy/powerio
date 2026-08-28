@@ -14,11 +14,13 @@ pub const VERSION_KEY: &str = "powerio_version";
 
 /// The 0.x lineage a 1.x build also reads.
 ///
-/// 0.9.0 shipped the documents 1.0 freezes, on purpose: its formats are what
-/// 1.0.0 publishes, and 1.0.0 removes deprecated items rather than changing
-/// what is written. A gate that refused `0.9.0` at 1.0.0 would make every
-/// consumer regenerate an archive whose bytes did not change.
-const FROZEN_LINEAGE: (u64, u64) = (0, 9);
+/// 0.10.0 ships the documents 1.0 freezes, on purpose: it is the public beta
+/// of the 1.0 API, and 1.0.0 publishes its formats rather than changing what
+/// is written. A gate that refused `0.10.0` at 1.0.0 would make every
+/// consumer regenerate an archive whose bytes did not change. The earlier
+/// released 0.9 stored lineage does not cross here: `.pio.json` documents it
+/// wrote upgrade one way through the frozen 0.9 decoder.
+const FROZEN_LINEAGE: (u64, u64) = (0, 10);
 
 /// Whether this build reads a document stamped `version`.
 ///
@@ -59,13 +61,21 @@ fn reads(build: (u64, u64), document: (u64, u64)) -> bool {
 /// document that states none, which every release before 0.9.0 wrote.
 #[must_use]
 pub fn reject(document: &str, version: &str) -> String {
+    reject_as(document, version, &lineage_label())
+}
+
+/// [`reject`] with the readable lineage named by the caller. The frozen 0.9
+/// decoder states the lineage it reads; the live build's label moves with the
+/// crate version and would misname it.
+#[must_use]
+pub fn reject_as(document: &str, version: &str, lineage: &str) -> String {
     let version = bounded_version(version);
     let states = if version.is_empty() {
         format!("{document} states no `{VERSION_KEY}`, so it was written before powerio 0.9.0")
     } else {
         format!("{document} states `{VERSION_KEY}` {version}")
     };
-    format!("{states}; this build reads {}", lineage_label())
+    format!("{states}; this build reads {lineage}")
 }
 
 /// The rejection message is one bounded line whatever the document states:
@@ -220,8 +230,11 @@ mod tests {
     #[test]
     fn this_build_reads_its_own_version_and_the_frozen_lineage() {
         assert!(supports(VERSION));
-        assert!(supports("0.9.0"));
-        assert!(supports("0.9.99"));
+        assert!(supports("0.10.0"));
+        assert!(supports("0.10.99"));
+        // The released 0.9 stored lineage loads through the one way
+        // `.pio.json` upgrade, never through this gate.
+        assert!(!supports("0.9.0"));
         assert!(!supports("0.8.0"));
         assert!(!supports("2.0.0"));
     }
