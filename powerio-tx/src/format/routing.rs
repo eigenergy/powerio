@@ -169,7 +169,7 @@ pub enum JsonClass {
     /// A `.pio.json` package. A package is not a converter boundary
     /// format, so it stays out of [`SourceFormat`]; callers route it to the
     /// package reader instead of a case parser.
-    Package,
+    Module,
     /// Bare [`BalancedNetwork`](crate::BalancedNetwork) model JSON: the object
     /// a package carries under `model.balanced_network`, written by
     /// `to_json` and read by `from_json`. powerio authors it, so it is not a
@@ -191,7 +191,7 @@ pub enum JsonClass {
 pub const JSON_CLASSES: [&str; 6] = [
     "transmission",
     "distribution",
-    "package",
+    "module",
     "model-json",
     "ambiguous",
     "unknown",
@@ -203,7 +203,7 @@ impl JsonClass {
     #[must_use]
     pub fn family(self) -> &'static str {
         match self {
-            Self::Package => "package",
+            Self::Module => "module",
             Self::ModelJson => "model-json",
             Self::Case(Detection::Known(format)) => match format.domain() {
                 Domain::Transmission => "transmission",
@@ -215,7 +215,7 @@ impl JsonClass {
     }
 }
 
-/// Classify a JSON document: a `.pio.json` package, bare model JSON, or a case
+/// Classify a JSON document: a `.pio.json` stored module, bare model JSON, or a case
 /// document across the transmission and distribution domains.
 ///
 /// A package is recognized by a top level `model_kind` of `"balanced"` or
@@ -239,11 +239,11 @@ pub fn classify_json_text(text: &str) -> JsonClass {
         Some("balanced" | "multiconductor")
     ) && shape.has("model")
     {
-        return JsonClass::Package;
+        return JsonClass::Module;
     }
     // The version 1 stored module names itself in its header.
     if shape.string("schema") == Some("powerio.module") {
-        return JsonClass::Package;
+        return JsonClass::Module;
     }
     shape.classify()
 }
@@ -411,11 +411,11 @@ mod tests {
             classify_json_text(
                 r#"{"model_kind":"multiconductor","model":{"kind":"multiconductor"}}"#
             ),
-            JsonClass::Package
+            JsonClass::Module
         );
         assert_eq!(
             classify_json_text(r#"{"model_kind":"balanced","model":{}}"#),
-            JsonClass::Package
+            JsonClass::Module
         );
         // A payload alone is not a package, and neither is a case document,
         // even one that carries the package key names with case-file values.
@@ -495,7 +495,7 @@ mod tests {
     #[test]
     fn every_family_is_in_the_closed_set() {
         for class in [
-            JsonClass::Package,
+            JsonClass::Module,
             JsonClass::ModelJson,
             JsonClass::Case(Detection::Ambiguous),
             JsonClass::Case(Detection::Unknown),

@@ -80,10 +80,10 @@ c++ -std=c++17 -DPIO_DIST -I powerio-capi/include powerio-capi/examples/header_c
 run env "$lib_path_var=target/release" "$smoke_dir/header_cpp_dist"
 
 run cargo build -q -p powerio-capi --release --features arrow,matrix,gridfm,dist,prob
-cc -DPIO_ARROW -DPIO_MATRIX -DPIO_GRIDFM -DPIO_DIST -DPIO_PKG -DPIO_PROB \
+cc -DPIO_ARROW -DPIO_MATRIX -DPIO_GRIDFM -DPIO_DIST -DPIO_PROB \
    -I powerio-capi/include powerio-capi/examples/smoke.c \
    -L target/release -lpowerio_capi -o "$smoke_dir/smoke_release"
-c++ -std=c++17 -DPIO_ARROW -DPIO_MATRIX -DPIO_GRIDFM -DPIO_DIST -DPIO_PKG -DPIO_PROB \
+c++ -std=c++17 -DPIO_ARROW -DPIO_MATRIX -DPIO_GRIDFM -DPIO_DIST -DPIO_PROB \
    -I powerio-capi/include powerio-capi/examples/header_cpp.cpp \
    -L target/release -lpowerio_capi -o "$smoke_dir/header_cpp_release"
 run env "$lib_path_var=target/release" "$smoke_dir/header_cpp_release"

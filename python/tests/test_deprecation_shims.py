@@ -20,3 +20,10 @@ def test_the_08_dist_alias_is_gone():
 def test_an_unknown_name_still_raises():
     with pytest.raises(AttributeError, match="no_such_name"):
         _ = powerio.no_such_name
+
+
+def test_the_stored_module_name_is_gone():
+    # StoredModule was the pre-0.10 name for PioModule; the rename carries no
+    # alias.
+    with pytest.raises(AttributeError, match="StoredModule"):
+        _ = powerio.StoredModule
