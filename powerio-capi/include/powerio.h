@@ -504,15 +504,16 @@ int32_t pio_balanced_network_is_radial(const PioBalancedNetwork *net);
 /**
  * Convert the case file at `path` from format `from` (NULL to infer from the
  * path, as [`pio_parse_file`](v6::pio_parse_file)) to format `to`, without keeping a handle.
- * `opts` carries the write-time cost policies (NULL for every default); see
- * [`PioWriteOptions`].
+ * `to` names any balanced or multiconductor text format; `opts` carries the
+ * balanced write-time cost policies (NULL for every default, ignored by a
+ * multiconductor target); see [`PioWriteOptions`].
  * Returns the converted text as an owned C string (free with
  * [`pio_string_release`]), `NULL` on error. The findings, read side first, are
- * published through `out_diagnostics_json` as one owned JSON array of
- * diagnostic records (free it with [`pio_string_release`]), NULL when there are
- * none. Pass NULL to discard them. `out_diagnostics_json` is written on every
- * return path and is NULL whenever this returns NULL, so an error return
- * leaves nothing to free.
+ * published through `out_diagnostics` as an owned [`v6::PioDiagnostics`] list
+ * (release it with `pio_diagnostics_release`); the list is empty, never NULL,
+ * when there is nothing to report. Pass NULL to discard them.
+ * `out_diagnostics` is written on every return path and is NULL whenever this
+ * returns NULL, so an error return leaves nothing to release.
  */
 char *pio_convert_file(const char *path,
                        const char *from,
@@ -523,15 +524,17 @@ char *pio_convert_file(const char *path,
 
 /**
  * Convert in-memory case `text` from format `from` (required; there is no
- * path to infer from) to format `to` without keeping a handle. `opts` carries
- * the write-time cost policies (NULL for every default); see
- * [`PioWriteOptions`]. Returns the converted text as an owned C
- * string (free with [`pio_string_release`]), `NULL` on error. The findings, read
- * side first, are published through `out_diagnostics_json` as one owned JSON
- * array of diagnostic records (free it with [`pio_string_release`]), NULL when
- * there are none. Pass NULL to discard them. `out_diagnostics_json` is written
+ * path to infer from) to format `to` without keeping a handle. `to` names any
+ * balanced or multiconductor text format; `opts` carries the balanced
+ * write-time cost policies (NULL for every default, ignored by a
+ * multiconductor target); see [`PioWriteOptions`]. Returns the converted text
+ * as an owned C string (free with [`pio_string_release`]), `NULL` on error.
+ * The findings, read side first, are published through `out_diagnostics` as
+ * an owned [`v6::PioDiagnostics`] list (release it with
+ * `pio_diagnostics_release`); the list is empty, never NULL, when there is
+ * nothing to report. Pass NULL to discard them. `out_diagnostics` is written
  * on every return path and is NULL whenever this returns NULL, so an error
- * return leaves nothing to free.
+ * return leaves nothing to release.
  */
 char *pio_convert_str(const char *text,
                       const char *from,

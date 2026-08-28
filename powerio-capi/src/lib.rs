@@ -1,4 +1,4 @@
-//! C ABI for `powerio`: ABI v5.
+//! C ABI for `powerio`: ABI v6.
 //!
 //! Functions parse, query, and convert networks through opaque handles. Feature
 //! gates add Arrow tables, directory datasets, distribution networks,
@@ -1095,15 +1095,16 @@ unsafe fn write_options_from_c(opts: *const PioWriteOptions) -> Result<WriteOpti
 
 /// Convert the case file at `path` from format `from` (NULL to infer from the
 /// path, as [`pio_parse_file`](v6::pio_parse_file)) to format `to`, without keeping a handle.
-/// `opts` carries the write-time cost policies (NULL for every default); see
-/// [`PioWriteOptions`].
+/// `to` names any balanced or multiconductor text format; `opts` carries the
+/// balanced write-time cost policies (NULL for every default, ignored by a
+/// multiconductor target); see [`PioWriteOptions`].
 /// Returns the converted text as an owned C string (free with
 /// [`pio_string_release`]), `NULL` on error. The findings, read side first, are
-/// published through `out_diagnostics_json` as one owned JSON array of
-/// diagnostic records (free it with [`pio_string_release`]), NULL when there are
-/// none. Pass NULL to discard them. `out_diagnostics_json` is written on every
-/// return path and is NULL whenever this returns NULL, so an error return
-/// leaves nothing to free.
+/// published through `out_diagnostics` as an owned [`v6::PioDiagnostics`] list
+/// (release it with `pio_diagnostics_release`); the list is empty, never NULL,
+/// when there is nothing to report. Pass NULL to discard them.
+/// `out_diagnostics` is written on every return path and is NULL whenever this
+/// returns NULL, so an error return leaves nothing to release.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_convert_file(
     path: *const c_char,
@@ -1117,8 +1118,15 @@ pub unsafe extern "C" fn pio_convert_file(
         finish_conversion_v6(out_diagnostics, error, || {
             let path = required_cstr(path, "path")?;
             let from = optional_cstr(from, "from")?;
-            let target = target_format_from_c(to)?;
             let options = write_options_from_c(opts)?;
+            if let Some(conv) = convert_multiconductor_target(to, || {
+                let source = powerio_core::Source::open(std::path::Path::new(path))
+                    .map_err(|e| core_err_line(&e))?;
+                declared_source(source, from)
+            })? {
+                return Ok(conv);
+            }
+            let target = target_format_from_c(to)?;
             let conv = powerio::convert_file_with_options(
                 std::path::Path::new(path),
                 target,
@@ -1131,16 +1139,64 @@ pub unsafe extern "C" fn pio_convert_file(
     }
 }
 
+/// The multiconductor leg of the one conversion family: when `to` names a
+/// distribution format, parse the source and write it through the
+/// distribution writer, folding a dropped sidecar into the findings. Returns
+/// `Ok(None)` when `to` is not a distribution format name.
+#[cfg(feature = "dist")]
+unsafe fn convert_multiconductor_target(
+    to: *const c_char,
+    source: impl FnOnce() -> Result<powerio_core::Source, String>,
+) -> Result<Option<(String, Vec<powerio_core::Diagnostic>)>, String> {
+    let to = required_cstr(to, "to")?;
+    if powerio_dist::dist_target_from_name(to).is_none() {
+        return Ok(None);
+    }
+    let target = powerio_dist::dist_target_from_name(to).expect("checked above");
+    let conv = powerio_dist::convert_source(source()?, target).map_err(|e| core_err_line(&e))?;
+    let mut diagnostics = conv.diagnostics;
+    for sidecar in &conv.sidecars {
+        diagnostics.push(sidecar.dropped_diagnostic("the text form carries one file"));
+    }
+    Ok(Some((conv.text, diagnostics)))
+}
+
+#[cfg(not(feature = "dist"))]
+unsafe fn convert_multiconductor_target(
+    _to: *const c_char,
+    _source: impl FnOnce() -> Result<powerio_core::Source, String>,
+) -> Result<Option<(String, Vec<powerio_core::Diagnostic>)>, String> {
+    Ok(None)
+}
+
+/// `source` with the caller's declared format applied, spelled the way the
+/// balanced conversion path spells it.
+fn declared_source(
+    source: powerio_core::Source,
+    from: Option<&str>,
+) -> Result<powerio_core::Source, String> {
+    match from {
+        None => Ok(source),
+        Some(name) => {
+            let id = powerio_core::FormatId::new(name.to_ascii_lowercase().replace('_', "-"))
+                .map_err(|e| core_err_line(&e))?;
+            Ok(source.with_format(id))
+        }
+    }
+}
+
 /// Convert in-memory case `text` from format `from` (required; there is no
-/// path to infer from) to format `to` without keeping a handle. `opts` carries
-/// the write-time cost policies (NULL for every default); see
-/// [`PioWriteOptions`]. Returns the converted text as an owned C
-/// string (free with [`pio_string_release`]), `NULL` on error. The findings, read
-/// side first, are published through `out_diagnostics_json` as one owned JSON
-/// array of diagnostic records (free it with [`pio_string_release`]), NULL when
-/// there are none. Pass NULL to discard them. `out_diagnostics_json` is written
+/// path to infer from) to format `to` without keeping a handle. `to` names any
+/// balanced or multiconductor text format; `opts` carries the balanced
+/// write-time cost policies (NULL for every default, ignored by a
+/// multiconductor target); see [`PioWriteOptions`]. Returns the converted text
+/// as an owned C string (free with [`pio_string_release`]), `NULL` on error.
+/// The findings, read side first, are published through `out_diagnostics` as
+/// an owned [`v6::PioDiagnostics`] list (release it with
+/// `pio_diagnostics_release`); the list is empty, never NULL, when there is
+/// nothing to report. Pass NULL to discard them. `out_diagnostics` is written
 /// on every return path and is NULL whenever this returns NULL, so an error
-/// return leaves nothing to free.
+/// return leaves nothing to release.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_convert_str(
     text: *const c_char,
@@ -1154,8 +1210,15 @@ pub unsafe extern "C" fn pio_convert_str(
         finish_conversion_v6(out_diagnostics, error, || {
             let text = required_cstr(text, "text")?;
             let from = required_cstr(from, "from")?;
-            let target = target_format_from_c(to)?;
             let options = write_options_from_c(opts)?;
+            if let Some(conv) = convert_multiconductor_target(to, || {
+                let source = powerio_core::Source::from_bytes("<memory>", text.as_bytes().to_vec())
+                    .map_err(|e| core_err_line(&e))?;
+                declared_source(source, Some(from))
+            })? {
+                return Ok(conv);
+            }
+            let target = target_format_from_c(to)?;
             let conv = powerio::convert_str_with_options(text, target, from, &options)
                 .map_err(|e| core_err_line(&e))?;
             Ok((conv.text, conv.diagnostics))
@@ -1167,7 +1230,7 @@ pub unsafe extern "C" fn pio_convert_str(
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_string_release(s: *mut c_char) {
     unsafe {
-        // Same rationale as `pio_network_free`: the boundary catches panics.
+        // Same rationale as the handle release functions: the boundary catches panics.
         guard((), || {
             if !s.is_null() {
                 drop(CString::from_raw(s));
@@ -1722,13 +1785,12 @@ fn geo_apply_summary(report: &powerio::GeoApplyReport) -> String {
 
 // ---------------------------------------------------------------------------
 // Distribution API (`dist` feature). The multiconductor model behind its own
-// opaque `PioMulticonductorNetwork` handle and the `pio_dist_*` entry points. It is gated
-// on the `dist` feature / `PIO_DIST` define, exactly like `arrow`/`gridfm`; a
-// runtime consumer probes it with `pio_has_feature("dist")`, then checks
-// `pio_dist_abi_version()`. The API is EXPERIMENTAL while the IEEE BMOPF
-// schema is a draft: C signature changes bump `PIO_DIST_ABI_VERSION`. BMOPF
-// JSON carries its own meta.version; the model JSON of `pio_multiconductor_network_to_json` is
-// covered by the `.pio.json` `schema_version` in powerio-pkg.
+// opaque `PioMulticonductorNetwork` handle, gated on the `dist` feature /
+// `PIO_DIST` define exactly like `arrow`/`gridfm`; a runtime consumer probes
+// it with `pio_has_feature("dist")`. Parsing and conversion go through the
+// one module family (`pio_parse_*`, `pio_convert_*`); the accessors below
+// read the typed handle. BMOPF JSON carries its own meta.version, reported by
+// `pio_schema_versions_json`.
 // ---------------------------------------------------------------------------
 
 /// Opaque parsed distribution network handle (the multiconductor wire coordinate
@@ -1930,9 +1992,9 @@ pub unsafe extern "C" fn pio_multiconductor_network_from_json(
                         format!("model JSON: {e}"),
                     )
                 })?;
-            // The model deserialize ignores the `warnings` array the v5 JSON
-            // carries; lift it back onto the handle so the round trip keeps
-            // it readable through `pio_dist_warnings`.
+            // The model deserialize ignores the `warnings` array the model
+            // JSON carries; lift it back onto the handle so the round trip
+            // keeps the findings readable through the module diagnostics.
             let warnings = serde_json::from_str::<serde_json::Value>(text)
                 .ok()
                 .and_then(|value| {
@@ -4858,6 +4920,52 @@ mpc.branch = [
                     "an error return left a diagnostics allocation the caller never frees"
                 );
                 pio_module_release(module);
+            }
+        }
+
+        #[test]
+        fn convert_routes_distribution_targets_with_sidecar_findings() {
+            // The one conversion family covers multiconductor targets: a DSS
+            // source converts to BMOPF JSON, a same format conversion echoes,
+            // and the text form reports a dropped buscoords sidecar as a
+            // finding instead of refusing.
+            let source = std::fs::read_to_string(fourwire()).unwrap();
+            let text = CString::new(source.clone()).unwrap();
+            let from = CString::new("dss").unwrap();
+            unsafe {
+                let mut error: *mut PioError = std::ptr::null_mut();
+                let mut diags: *mut PioDiagnostics = std::ptr::null_mut();
+
+                let to = CString::new("bmopf").unwrap();
+                let out = pio_convert_str(
+                    text.as_ptr(),
+                    from.as_ptr(),
+                    to.as_ptr(),
+                    std::ptr::null(),
+                    &raw mut diags,
+                    &raw mut error,
+                );
+                assert!(!out.is_null(), "{}", error_text(error));
+                let json = CStr::from_ptr(out).to_str().unwrap();
+                assert!(json.contains("\"bus\""), "BMOPF document expected");
+                pio_string_release(out);
+                assert!(!diags.is_null(), "the findings list is empty, never NULL");
+                v6::pio_diagnostics_release(diags);
+                diags = std::ptr::null_mut();
+
+                let to = CString::new("dss").unwrap();
+                let echo = pio_convert_str(
+                    text.as_ptr(),
+                    from.as_ptr(),
+                    to.as_ptr(),
+                    std::ptr::null(),
+                    &raw mut diags,
+                    &raw mut error,
+                );
+                assert!(!echo.is_null(), "{}", error_text(error));
+                assert_eq!(CStr::from_ptr(echo).to_str().unwrap(), source);
+                pio_string_release(echo);
+                v6::pio_diagnostics_release(diags);
             }
         }
 
