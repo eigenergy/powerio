@@ -39,7 +39,7 @@ pub mod gridfm;
 pub mod package;
 pub mod stored;
 pub mod write;
-pub use write::{write_module_as, write_module_str};
+pub use write::{write_module_as, write_module_str, write_module_str_with_options};
 mod value;
 pub use value::{FromPioValue, PioValue, PioValueKind, ValueKindMismatch, try_into_typed};
 
