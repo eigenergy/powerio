@@ -2,14 +2,8 @@
 # stubs and the runtime module. Typing-only names (TypedDicts, aliases) have
 # no runtime object; BalancedNetwork delegates several methods to the compiled handle
 # through __getattr__, so stubtest cannot see them; the extension classes
-# carry PyO3 constructor signatures stubtest cannot introspect; the two
-# `__all__` entries are PyO3's/the package's own list of exported names,
-# which stubtest wants mirrored verbatim as a literal in the stub rather than
-# just typed as `list[str]` — not worth hand-duplicating a list that already
-# drifts on every class or function added.
+# carry PyO3 constructor signatures stubtest cannot introspect.
 # Anything NOT listed here that drifts fails CI (python.yml).
-powerio.__all__
-powerio._powerio.__all__
 powerio.Branch
 powerio.BranchRatingSet
 powerio.Bus
@@ -23,11 +17,9 @@ powerio.BalancedNetwork.connectivity_report
 powerio.BalancedNetwork.reference_bus_index
 powerio.BalancedNetwork.reference_bus_indices
 powerio.BalancedNetwork.write_dcopf_bundle
-powerio.Diagnostic
 powerio.Scheme
 powerio.SensitivitySolver
 powerio.Shunt
-powerio.SourceSpan
 powerio.Switch
 powerio.Units
 powerio._powerio._BalancedNetwork
