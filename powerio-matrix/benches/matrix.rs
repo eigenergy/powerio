@@ -119,12 +119,16 @@ fn bench_pipeline_paths(c: &mut Criterion) {
     };
 
     c.bench_function("pipeline_ybus_pair_case2869pegase", |b| {
+        // The writer reserves its destination exclusively, so each iteration
+        // writes into a fresh subdirectory of the tempdir.
+        let mut iteration = 0u64;
         b.iter(|| {
-            let outputs = pipeline
-                .run(black_box(&net), black_box(out.path()))
-                .unwrap();
+            iteration += 1;
+            let dir = out.path().join(iteration.to_string());
+            std::fs::create_dir(&dir).unwrap();
+            let outputs = pipeline.run(black_box(&net), black_box(&dir)).unwrap();
             black_box(outputs.files.len())
-        });
+        })
     });
 }
 
