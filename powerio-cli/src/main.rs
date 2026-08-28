@@ -2,7 +2,7 @@
 //!
 //! Subcommands: `batch` (matrix families), `gen` (synthetic cases), `verify`,
 //! `dcopf` (DC OPF bundle), `sensitivities` (PTDF/LODF), `gridfm` (gridfm-datakit
-//! Parquet), `package` (`.pio.json`), and `convert`. With no subcommand it launches the TUI. Run
+//! Parquet), `module` (`.pio.json`), and `convert`. With no subcommand it launches the TUI. Run
 //! `powerio --help` for the full surface.
 
 use std::path::{Path, PathBuf};
@@ -155,8 +155,7 @@ enum Command {
         scenario: i64,
     },
     /// Emit the stored `.pio.json` module for one input.
-    #[command(visible_alias = "pkg")]
-    Package {
+    Module {
         /// Input case file, PyPSA CSV folder, or gridfm dataset directory.
         input: PathBuf,
         /// Output file; `-` or omitted writes to stdout.
@@ -748,12 +747,12 @@ fn main() -> anyhow::Result<()> {
             scenario,
         } => run_summary(&input, from, scenario),
         Command::Corpus { action } => run_corpus(action),
-        Command::Package {
+        Command::Module {
             input,
             output,
             from,
             scenario,
-        } => run_package(&input, output.as_deref(), from, scenario),
+        } => run_module(&input, output.as_deref(), from, scenario),
         Command::Gridfm {
             inputs,
             output,
@@ -1263,13 +1262,13 @@ fn run_summary(input: &Path, from: Option<FormatArg>, scenario: i64) -> anyhow::
     Ok(())
 }
 
-fn run_package(
+fn run_module(
     input: &Path,
     output: Option<&Path>,
     from: Option<FormatArg>,
     scenario: Option<i64>,
 ) -> anyhow::Result<()> {
-    let (text, parse_errors) = package_text(input, from, scenario)?;
+    let (text, parse_errors) = module_text(input, from, scenario)?;
     match output {
         Some(p) if p.as_os_str() != "-" => {
             commit_output_file(p, text.clone().into_bytes())
@@ -1285,7 +1284,7 @@ fn run_package(
 }
 
 /// The stored module JSON and the `Error`-or-worse findings it carries.
-fn package_text(
+fn module_text(
     input: &Path,
     from: Option<FormatArg>,
     scenario: Option<i64>,
@@ -1859,7 +1858,7 @@ enum FamilyCase {
 /// `--from`, a `.json` is read and DOM-classified once and the same text feeds
 /// the typed parser — the read-once rule #260 established for `batch` and the
 /// TUI, extended here to the single-file routes. Warnings stay on the returned
-/// value: the callers differ in where they surface them (summary JSON, package
+/// value: the callers differ in where they surface them (summary JSON, module
 /// diagnostics, stderr).
 /// One balanced network from any single case input (a stored `.pio.json`
 /// included), for the matrix commands. A distribution input is refused with
@@ -1949,7 +1948,7 @@ fn stored_family_case(input: &Path) -> anyhow::Result<FamilyCase> {
             )))
         }
         other => anyhow::bail!(
-            "{} stores a {} value; export one static item first (`powerio package` with \
+            "{} stores a {} value; export one static item first (`powerio module` with \
              --scenario writes one from a scenario set, and the bindings' export_state \
              selects by time position or scenario)",
             input.display(),
@@ -2061,7 +2060,7 @@ mod tests {
     use super::cases::looks_like_distribution_input;
     use super::{
         Cli, Command, FamilyCase, FormatArg, GenCostCliOptions, distribution_summary_json,
-        infer_input_family, package_text, parse_family_case, run_convert, run_package,
+        infer_input_family, module_text, parse_family_case, run_convert, run_module,
         transmission_summary_json,
     };
     use clap::Parser;
@@ -2208,7 +2207,7 @@ mod tests {
             .unwrap()
             .as_nanos();
         let path = std::env::temp_dir().join(format!("powerio-cli-stored-{stamp}.pio.json"));
-        let (text, _) = package_text(&data("case9.m"), None, None).unwrap();
+        let (text, _) = module_text(&data("case9.m"), None, None).unwrap();
         std::fs::write(&path, text).unwrap();
 
         match super::stored_family_case(&path).unwrap() {
@@ -2223,18 +2222,18 @@ mod tests {
     }
 
     #[test]
-    fn package_visible_alias_parses() {
-        let cli = Cli::try_parse_from(["powerio", "pkg", "case9.m"]).unwrap();
+    fn module_command_parses() {
+        let cli = Cli::try_parse_from(["powerio", "module", "case9.m"]).unwrap();
         match cli.command.unwrap() {
-            Command::Package { input, .. } => assert_eq!(input, Path::new("case9.m")),
-            other => panic!("expected package command, got {other:?}"),
+            Command::Module { input, .. } => assert_eq!(input, Path::new("case9.m")),
+            other => panic!("expected module command, got {other:?}"),
         }
     }
 
     #[test]
     fn package_text_matches_module_shape_and_provenance() {
         let input = data("case9.m");
-        let (text, _) = package_text(&input, None, None).unwrap();
+        let (text, _) = module_text(&input, None, None).unwrap();
         let doc: serde_json::Value = serde_json::from_str(&text).unwrap();
         assert_eq!(doc["schema"], "powerio.module");
         assert_eq!(doc["version"], 1);
@@ -2264,7 +2263,7 @@ mod tests {
             .as_nanos();
         let output = std::env::temp_dir().join(format!("powerio-package-{stamp}.pio.json"));
 
-        run_package(&data("case9.m"), Some(&output), None, None).unwrap();
+        run_module(&data("case9.m"), Some(&output), None, None).unwrap();
         let text = std::fs::read_to_string(&output).unwrap();
         let module = powerio::stored::read_module(&text).unwrap();
         assert_eq!(
@@ -2277,7 +2276,7 @@ mod tests {
 
     #[test]
     fn package_helper_returns_stdout_text() {
-        let (text, _) = package_text(&data("case9.m"), None, None).unwrap();
+        let (text, _) = module_text(&data("case9.m"), None, None).unwrap();
         let doc: serde_json::Value = serde_json::from_str(&text).unwrap();
         assert_eq!(doc["producer"]["name"], "powerio");
         assert_eq!(doc["value"]["data"]["buses"].as_array().unwrap().len(), 9);
@@ -2285,7 +2284,7 @@ mod tests {
 
     #[test]
     fn package_text_round_trips_through_the_stored_reader() {
-        let (text, _) = package_text(&data("case9.m"), None, None).unwrap();
+        let (text, _) = module_text(&data("case9.m"), None, None).unwrap();
         let module = powerio::stored::read_module(&text).unwrap();
         let again = powerio::stored::write_module(&module).unwrap();
         assert_eq!(text, again, "the stored document is write stable");
@@ -2294,7 +2293,7 @@ mod tests {
     #[test]
     fn package_distribution_fixture_stores_the_multiconductor_value() {
         let input = data("dist/micro/xfmr_single_phase.dss");
-        let (text, _) = package_text(&input, None, None).unwrap();
+        let (text, _) = module_text(&input, None, None).unwrap();
         let doc: serde_json::Value = serde_json::from_str(&text).unwrap();
         assert_eq!(doc["value"]["kind"], "multiconductor_network");
         let sources = doc["sources"].as_array().unwrap();
@@ -2334,7 +2333,7 @@ mpc.branch = [
         )
         .unwrap();
 
-        run_package(&input, Some(&output), None, None).unwrap();
+        run_module(&input, Some(&output), None, None).unwrap();
         let text = std::fs::read_to_string(&output).unwrap();
         assert!(text.contains("\"angmin\": \"NaN\""), "{text}");
         assert!(text.contains("\"angmax\": \"Infinity\""), "{text}");

@@ -32,7 +32,7 @@ def test_parse_geo_rejects_input_without_coordinates():
 
 
 def test_network_apply_and_extract_round_trip():
-    net = pio.parse(DATA / "case9.m", value_type=pio.BalancedNetwork)
+    net = pio.parse(DATA / "case9.m", value_type=pio.BalancedNetwork).value
     with pytest.raises(ValueError):
         net.geo_layer()
 
