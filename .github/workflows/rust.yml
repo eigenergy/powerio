@@ -248,6 +248,8 @@ jobs:
       run: python3 scripts/abi-delta.py
     - name: Value kind parity
       run: bash scripts/check-value-kinds.sh
+    - name: Diagnostic parity
+      run: bash scripts/check-diagnostic-parity.sh
     # A declared entry point may leave the header only on a head that raises
     # PIO_ABI_VERSION. This job has no PowerIO.jl checkout; the companion
     # clause runs in julia-binding.yml, which has both trees.

@@ -18,6 +18,7 @@ run ./scripts/capi-header-parity.sh
 run bash scripts/capi-removed-surface.sh
 run python3 scripts/abi-delta.py
 run bash scripts/check-value-kinds.sh
+run bash scripts/check-diagnostic-parity.sh
 run bash scripts/capi-export-monotonicity.sh
 run ./scripts/capi-header-regen.sh
 
