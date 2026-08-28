@@ -85,3 +85,42 @@ fn retired_schema_documents_stay_published_byte_for_byte() {
         );
     }
 }
+
+/// Every property of every value kind in the current module document carries
+/// a type, a `$ref`, or a composed schema. A field serialized through an
+/// opaque `serde_json::Value` leaves a property whose only key is its
+/// `description`, and a consumer generating types from the document gets a
+/// hole where the data is.
+#[test]
+fn every_module_document_property_is_typed() {
+    fn walk(node: &serde_json::Value, path: &str, bad: &mut Vec<String>) {
+        match node {
+            serde_json::Value::Object(map) => {
+                if let Some(serde_json::Value::Object(props)) = map.get("properties") {
+                    for (name, prop) in props {
+                        if let serde_json::Value::Object(keys) = prop {
+                            if keys.keys().all(|k| k == "description") {
+                                bad.push(format!("{path}.{name}"));
+                            }
+                        }
+                    }
+                }
+                for (key, value) in map {
+                    walk(value, &format!("{path}.{key}"), bad);
+                }
+            }
+            serde_json::Value::Array(items) => {
+                for (index, value) in items.iter().enumerate() {
+                    walk(value, &format!("{path}[{index}]"), bad);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    let text = std::fs::read_to_string("../docs/schema/pio-module/1/schema.json").unwrap();
+    let schema: serde_json::Value = serde_json::from_str(&text).unwrap();
+    let mut bad = Vec::new();
+    walk(&schema, "$", &mut bad);
+    assert!(bad.is_empty(), "untyped properties: {bad:?}");
+}
