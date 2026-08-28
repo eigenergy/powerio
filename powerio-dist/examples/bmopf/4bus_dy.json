@@ -226,7 +226,7 @@
     "$schema": "https://raw.githubusercontent.com/frederikgeth/bmopf-report/main/draft_schema_and_networks/draft_bmopf_schema.json",
     "case_study_generator": {
       "tool": "powerio",
-      "version": "1.0.0"
+      "version": "0.10.0"
     },
     "frequency": 60.0
   },
