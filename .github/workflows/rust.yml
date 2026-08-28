@@ -241,6 +241,8 @@ jobs:
     # header set difference; this job's full-history checkout has the tag.
     - name: Removed surface enumeration
       run: bash scripts/capi-removed-surface.sh
+    - name: ABI delta and necessity
+      run: python3 scripts/abi-delta.py
     # A declared entry point may leave the header only on a head that raises
     # PIO_ABI_VERSION. This job has no PowerIO.jl checkout; the companion
     # clause runs in julia-binding.yml, which has both trees.
