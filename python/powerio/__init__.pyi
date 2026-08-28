@@ -292,7 +292,7 @@ class BalancedNetwork:
 
 class Conversion(NamedTuple):
     text: str
-    warnings: List[str]
+    warnings: List[Diagnostic]
 
 # Any reader/writer name or alias the Rust hub accepts (e.g. "matpower"/"m",
 # "psse"/"raw"). Kept as `str` so aliases type-check; the binding validates it.
