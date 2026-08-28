@@ -405,6 +405,11 @@ def _diagnostic_message(item: Dict[str, Any]) -> Optional[str]:
     return None
 
 
+# A module's native severities are error/warning/remark/note; only the first
+# two are surfaced as warnings.
+_MODULE_WARNING_SEVERITIES = frozenset({"warning", "error"})
+
+
 def _module_diagnostic_records(module: "powerio.PioModule") -> "list[Dict[str, Any]]":
     """A module's native diagnostics as records, kept to warning and error
     severity. `module.diagnostics()` returns `_powerio.Diagnostic` objects,
