@@ -214,8 +214,11 @@ jobs:
       with:
         targets: wasm32-unknown-unknown
     - uses: Swatinem/rust-cache@v2
-    - name: Check wasm32 parser crates
-      run: cargo check --target wasm32-unknown-unknown -p powerio -p powerio-dist
+    - name: Check wasm32 component crates
+      run: |
+        cargo check --target wasm32-unknown-unknown -p powerio -p powerio-tx -p powerio-dist \
+          -p powerio-core -p powerio-prob -p powerio-matrix
+        cargo check --target wasm32-unknown-unknown -p powerio --features matrix
 
   c-abi:
     name: C ABI (core no-default + C smoke test)
