@@ -63,17 +63,17 @@ def test_the_json_transport_round_trips_over_stdio():
     assert _run(steps)["elements"]["buses"] == 9
 
 
-def test_the_package_transport_round_trips_over_stdio():
+def test_the_module_transport_round_trips_over_stdio():
     async def steps(session):
         parsed = _payload(
             await session.call_tool(
-                "parse", {"path": str(DATA / "case9.m"), "transport": "package"}
+                "parse", {"path": str(DATA / "case9.m"), "transport": "module"}
             )
         )
-        package = parsed["package_json"]
-        diag = _payload(await session.call_tool("diagnostics", {"package_json": package}))
+        module = parsed["module_json"]
+        diag = _payload(await session.call_tool("diagnostics", {"module_json": module}))
         assert diag["schema"] == "powerio.diagnostics"
-        return _payload(await session.call_tool("summary", {"package_json": package}))
+        return _payload(await session.call_tool("summary", {"module_json": module}))
 
     assert _run(steps)["elements"]["buses"] == 9
 
