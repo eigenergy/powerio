@@ -229,6 +229,10 @@ jobs:
     # of sync with include/powerio.h.
     - name: Header symbol parity
       run: bash scripts/capi-header-parity.sh
+    # The abi-v6 removed-surface enumeration must equal the v0.9.0 -> current
+    # header set difference; this job's full-history checkout has the tag.
+    - name: Removed surface enumeration
+      run: bash scripts/capi-removed-surface.sh
     # A declared entry point may leave the header only on a head that raises
     # PIO_ABI_VERSION. This job has no PowerIO.jl checkout; the companion
     # clause runs in julia-binding.yml, which has both trees.
