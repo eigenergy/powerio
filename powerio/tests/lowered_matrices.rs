@@ -1,10 +1,5 @@
-//! The lowered balanced model feeds the matrix builders: the facade owns the
-//! lowering and, under the `matrix` feature, the builders, so the round trip
-//! lives here rather than as a matrix crate dependency on the facade.
-#![cfg(feature = "matrix")]
-
-use powerio::matrix::{BuildOptions, IndexedNetwork, build_bprime, build_ybus};
 use powerio::package::{MulticonductorToBalancedOptions, lower_multiconductor_to_balanced};
+use powerio_matrix::{BuildOptions, IndexedNetwork, build_bprime, build_ybus};
 
 const FOUR_WIRE_DSS: &str = r"! Four wire line with an explicit neutral conductor (no Kron reduction).
 Clear

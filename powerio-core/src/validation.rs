@@ -1,21 +1,21 @@
-pub(crate) const MAX_IDENTIFIER_BYTES: usize = 65_536;
-pub(crate) const MAX_DIAGNOSTIC_MESSAGE_BYTES: usize = 16_384;
+pub const MAX_IDENTIFIER_BYTES: usize = 65_536;
+pub const MAX_DIAGNOSTIC_MESSAGE_BYTES: usize = 16_384;
 /// Raw bytes retained for one message while decoding, before sanitization.
 /// Every writer sanitizes at construction, so a stored message near this bound
 /// was not produced by PowerIO; past it the raw text is truncated, and the
-/// result still passes through [`sanitize_message`].
-pub(crate) const MAX_DIAGNOSTIC_MESSAGE_DECODE_BYTES: usize = 4 * MAX_DIAGNOSTIC_MESSAGE_BYTES;
+/// result is still sanitized to one bounded line.
+pub const MAX_DIAGNOSTIC_MESSAGE_DECODE_BYTES: usize = 4 * MAX_DIAGNOSTIC_MESSAGE_BYTES;
 pub(crate) const MAX_ARTIFACT_PATH_BYTES: usize = 4_096;
 pub(crate) const MAX_ARTIFACT_SEGMENT_BYTES: usize = 255;
 pub(crate) const MAX_FORMAT_ID_BYTES: usize = 127;
-pub(crate) const MAX_DIAGNOSTIC_CODE_BYTES: usize = 255;
-pub(crate) const MAX_DIAGNOSTIC_TARGET_BYTES: usize = 8_192;
-pub(crate) const MAX_DIAGNOSTIC_SPANS: usize = 256;
-pub(crate) const MAX_DIAGNOSTIC_RELATED: usize = 256;
-pub(crate) const MAX_DIAGNOSTIC_DETAIL_KEYS: usize = 256;
-pub(crate) const MAX_SOURCE_MAP_SPANS: usize = 256;
-pub(crate) const MAX_HISTORY_PARAMETERS: usize = 256;
-pub(crate) const MAX_HISTORY_NOTES: usize = 256;
+pub const MAX_DIAGNOSTIC_CODE_BYTES: usize = 255;
+pub const MAX_DIAGNOSTIC_TARGET_BYTES: usize = 8_192;
+pub const MAX_DIAGNOSTIC_SPANS: usize = 256;
+pub const MAX_DIAGNOSTIC_RELATED: usize = 256;
+pub const MAX_DIAGNOSTIC_DETAIL_KEYS: usize = 256;
+pub const MAX_SOURCE_MAP_SPANS: usize = 256;
+pub const MAX_HISTORY_PARAMETERS: usize = 256;
+pub const MAX_HISTORY_NOTES: usize = 256;
 /// Module level record counts. Each stored module list is refused at its
 /// count while it is decoded, so a small hostile document cannot declare its
 /// way into an unbounded record allocation.
@@ -23,6 +23,7 @@ pub const MAX_MODULE_SOURCES: usize = 262_144;
 pub const MAX_MODULE_SOURCE_MAP_ENTRIES: usize = 262_144;
 pub const MAX_MODULE_DIAGNOSTICS: usize = 262_144;
 pub const MAX_MODULE_HISTORY_ENTRIES: usize = 65_536;
+pub const MAX_MODULE_EXTENSION_KEYS: usize = 4_096;
 
 /// A locator identifies an element, so it is bounded but never shortened: a
 /// truncated RFC 6901 pointer names a different element, or none.

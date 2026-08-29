@@ -65,6 +65,39 @@ pub struct ScucDeviceOutputs {
     pub q_res_down: Vec<Vec<f64>>,
 }
 
+/// Every stored series of [`ScucNetworkOutputs`], one name per field. The
+/// stored wire and this list stay in agreement through the exhaustive
+/// destructure test below: adding a field breaks the build until the name
+/// lands here and on the wire.
+pub const SCUC_NETWORK_OUTPUT_SERIES: [&str; 10] = [
+    "bus_vm",
+    "bus_va",
+    "shunt_step",
+    "ac_line_on_status",
+    "transformer_tm",
+    "transformer_ta",
+    "transformer_on_status",
+    "dc_line_pdc_fr",
+    "dc_line_qdc_fr",
+    "dc_line_qdc_to",
+];
+
+/// Every stored series of [`ScucDeviceOutputs`], as
+/// [`SCUC_NETWORK_OUTPUT_SERIES`].
+pub const SCUC_DEVICE_OUTPUT_SERIES: [&str; 11] = [
+    "on_status",
+    "p_on",
+    "q",
+    "p_reg_res_up",
+    "p_reg_res_down",
+    "p_syn_res",
+    "p_nsyn_res",
+    "p_ramp_res_up_online",
+    "p_ramp_res_down_online",
+    "q_res_up",
+    "q_res_down",
+];
+
 /// The AC security constrained unit commitment solution over the shared
 /// instance.
 #[derive(Clone, Debug)]
@@ -207,5 +240,44 @@ impl AcScucSolution {
     #[must_use]
     pub const fn objective(&self) -> Option<f64> {
         self.objective
+    }
+}
+
+#[cfg(test)]
+mod series_vocabulary_tests {
+    use super::*;
+
+    /// Exhaustive destructures with no rest binding: a field added to either
+    /// struct fails this build until its name joins the series constant.
+    #[test]
+    fn every_output_field_is_named_in_the_series_constants() {
+        let ScucNetworkOutputs {
+            bus_vm: _,
+            bus_va: _,
+            shunt_step: _,
+            ac_line_on_status: _,
+            transformer_tm: _,
+            transformer_ta: _,
+            transformer_on_status: _,
+            dc_line_pdc_fr: _,
+            dc_line_qdc_fr: _,
+            dc_line_qdc_to: _,
+        } = ScucNetworkOutputs::default();
+        assert_eq!(SCUC_NETWORK_OUTPUT_SERIES.len(), 10);
+
+        let ScucDeviceOutputs {
+            on_status: _,
+            p_on: _,
+            q: _,
+            p_reg_res_up: _,
+            p_reg_res_down: _,
+            p_syn_res: _,
+            p_nsyn_res: _,
+            p_ramp_res_up_online: _,
+            p_ramp_res_down_online: _,
+            q_res_up: _,
+            q_res_down: _,
+        } = ScucDeviceOutputs::default();
+        assert_eq!(SCUC_DEVICE_OUTPUT_SERIES.len(), 11);
     }
 }

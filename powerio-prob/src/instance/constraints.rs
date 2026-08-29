@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 /// Which elements of one constraint family are active, by stable element
 /// identity (the payload `uid`, else `{table}:{row}`; buses by their id).
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "snake_case", tag = "select", content = "identities")]
 #[non_exhaustive]
 pub enum ConstraintSelection {
@@ -36,6 +37,7 @@ impl ConstraintSelection {
 
 /// The active constraint families of a balanced OPF instance.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[non_exhaustive]
 pub struct ActiveConstraints {
     /// Generator capability bounds (active and reactive limits).
@@ -50,6 +52,7 @@ pub struct ActiveConstraints {
 
 /// The active constraint families of a multiconductor OPF instance.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[non_exhaustive]
 pub struct MulticonductorActiveConstraints {
     /// Terminal voltage magnitude bounds.

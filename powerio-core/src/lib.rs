@@ -34,6 +34,25 @@ pub use scenario::{SCENARIO_PROBABILITY_TOLERANCE, Scenario, ScenarioId, Scenari
 pub use source::{FormatId, Source, SourceBuffer};
 pub use time_series::{TimePoint, TimeSeries};
 
+/// Decode time record limits, shared by every PowerIO wire.
+///
+/// The stored `.pio.json` record wire and the core record wire must refuse the
+/// same hostile inputs: every sequence, map, and string is bounded while it is
+/// decoded, before the full collection has been retained. The helpers here run
+/// inside serde visitors (`#[serde(deserialize_with = ...)]`), so the only
+/// transient allocation is the JSON scanner's own token buffer.
+pub mod limits {
+    pub use crate::bounded::{BoundedStr, TruncatedStr, bounded_json_map, bounded_vec};
+    pub use crate::validation::{
+        MAX_DIAGNOSTIC_CODE_BYTES, MAX_DIAGNOSTIC_DETAIL_KEYS, MAX_DIAGNOSTIC_MESSAGE_BYTES,
+        MAX_DIAGNOSTIC_MESSAGE_DECODE_BYTES, MAX_DIAGNOSTIC_RELATED, MAX_DIAGNOSTIC_SPANS,
+        MAX_DIAGNOSTIC_TARGET_BYTES, MAX_HISTORY_NOTES, MAX_HISTORY_PARAMETERS,
+        MAX_IDENTIFIER_BYTES, MAX_MODULE_DIAGNOSTICS, MAX_MODULE_EXTENSION_KEYS,
+        MAX_MODULE_HISTORY_ENTRIES, MAX_MODULE_SOURCE_MAP_ENTRIES, MAX_MODULE_SOURCES,
+        MAX_SOURCE_MAP_SPANS,
+    };
+}
+
 /// Cross-crate implementation support.
 ///
 /// Audit outcome for every `#[doc(hidden)]` `pub` item this crate exposes:

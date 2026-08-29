@@ -19,12 +19,16 @@ mod scuc;
 
 pub use balanced::{AcOpfSolution, AcPfSolution, DcOpfSolution, DcPfSolution, GeneratorDispatch};
 pub use multiconductor::{McAcOpfSolution, McAcPfSolution};
-pub use scuc::{AcScucSolution, ScucDeviceOutputs, ScucNetworkOutputs};
+pub use scuc::{
+    AcScucSolution, SCUC_DEVICE_OUTPUT_SERIES, SCUC_NETWORK_OUTPUT_SERIES, ScucDeviceOutputs,
+    ScucNetworkOutputs,
+};
 
 use serde::{Deserialize, Serialize};
 
 /// How the producing calculation ended.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "snake_case", tag = "kind")]
 #[non_exhaustive]
 pub enum Termination {
@@ -43,6 +47,7 @@ pub enum Termination {
 /// Numerical residuals of the solved equations, in the problem's power unit.
 /// A field is `None` when the producer did not report it.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[non_exhaustive]
 pub struct Residuals {
     /// Largest absolute active power balance mismatch, MW.

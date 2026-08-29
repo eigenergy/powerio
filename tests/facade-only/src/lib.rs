@@ -21,7 +21,7 @@ mod names_resolve_through_the_facade {
     type _ScenarioSet = powerio::ScenarioSet<f64>;
     type _TimePoint = powerio::TimePoint;
     type _SourceSpan = powerio::SourceSpan;
-    type _OperatingPoint = powerio::OperatingPoint;
+    type _OperatingPoint = powerio::OperatingPoint<powerio::BalancedNetwork>;
     type _AcOpfInstance = powerio::AcOpfInstance;
     type _MulticonductorNetwork = powerio::MulticonductorNetwork;
     type _BalancedNetwork = powerio::BalancedNetwork;

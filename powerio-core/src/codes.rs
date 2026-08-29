@@ -19,6 +19,8 @@ crate::diagnostic_codes! {
         "an extension key is not namespaced", category = Request;
     REQUEST_RECORD_TOO_LARGE = "REQUEST.RECORD.TOO_LARGE", Error,
         "a stored record exceeds a bound the constructors enforce", category = Request;
+    REQUEST_RECORD_ALLOCATION_REFUSED = "REQUEST.RECORD.ALLOCATION_REFUSED", Error,
+        "the record identity index cannot reserve memory for the stated count", category = Request;
 
     REQUEST_FORMAT_INVALID_ID = "REQUEST.FORMAT.INVALID_ID", Error,
         "a format identifier does not match the stable format grammar", category = Request;

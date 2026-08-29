@@ -2462,6 +2462,7 @@ dependencies = [
  "powerio-core",
  "powerio-dist",
  "powerio-tx",
+ "schemars",
  "serde",
  "serde_json",
  "tempfile",

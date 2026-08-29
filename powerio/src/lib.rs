@@ -63,9 +63,14 @@ mod collect;
 pub mod gridfm;
 
 pub mod package;
-/// The package layer's replayable operating state, named at the crate root
-/// beside the other module types.
-pub use package::OperatingPoint;
+pub mod stored;
+pub mod write;
+pub use write::{write_module_as, write_module_str, write_module_str_with_options};
+
+/// The replayable operating state, named at the crate root beside the other
+/// module types. From this layer up the 1.0 state type in powerio-prob is the
+/// one the module surface stores and selects.
+pub use powerio_prob::OperatingPoint;
 mod value;
 pub use value::{FromPioValue, PioValue, PioValueKind, ValueKindMismatch, try_into_typed};
 
@@ -90,12 +95,13 @@ pub use value::{FromPioValue, PioValue, PioValueKind, ValueKindMismatch, try_int
 /// the balanced network hub, whose own detection and refusals apply.
 ///
 /// Bare model JSON, the network serialization, decodes to
-/// [`PioValue::BalancedNetwork`] like any other balanced source.
+/// [`PioValue::BalancedNetwork`] like any other balanced source, and a
+/// `.pio.json` document loads through the stored reader, including its one
+/// way 0.9 upgrade, retaining the file as the module's runtime source.
 ///
 /// # Errors
 /// The routed family's failure, carrying its findings and the retained
-/// source; a `.pio.json` package is refused with the surface that reads it
-/// named.
+/// source.
 pub fn parse(
     source: powerio_core::Source,
 ) -> std::result::Result<powerio_core::PioModule<PioValue>, powerio_core::Error> {
@@ -113,10 +119,10 @@ pub fn parse(
         RoutedFamily::PypsaDirectory => parse_pypsa(source),
         #[cfg(feature = "gridfm")]
         RoutedFamily::Gridfm => parse_gridfm(source),
+        RoutedFamily::Stored => parse_stored(source),
         RoutedFamily::Egret => parse_egret(source),
-        RoutedFamily::Balanced => {
-            format::parse(source).map(|module| module.map_value(PioValue::from))
-        }
+        RoutedFamily::Balanced(json_class) => format::parse_with_json_class(source, json_class)
+            .map(|module| module.map_value(PioValue::from)),
     }
 }
 
@@ -183,6 +189,33 @@ fn parse_gridfm(
     }
 }
 
+/// `.pio.json` dispatch: the versioned stored serialization of
+/// `PioModule<PioValue>` loads through the stored reader, including the one
+/// way 0.9 upgrade. The loaded module retains the `.pio.json` file as its
+/// runtime source, so a same format write echoes it and diagnostics can
+/// reference it.
+fn parse_stored(
+    source: powerio_core::Source,
+) -> std::result::Result<powerio_core::PioModule<PioValue>, powerio_core::Error> {
+    let loaded = {
+        let buffer = source.primary_buffer()?;
+        match std::str::from_utf8(buffer.content_bytes()) {
+            Ok(text) => stored::read_module(text),
+            Err(error) => {
+                let cause = powerio_tx::Error::FormatRead {
+                    format: "stored module",
+                    message: format!("not valid UTF-8: {error}"),
+                };
+                Err(powerio_core::Error::new(cause.code(), cause.to_string()))
+            }
+        }
+    };
+    match loaded {
+        Ok(module) => Ok(module.with_source(source)),
+        Err(error) => Err(error.with_source(source)),
+    }
+}
+
 /// Egret dispatch: a document declaring `system.time_keys` routes to the
 /// sequence reader and produces a balanced network time series; a scalar
 /// document routes through the balanced hub.
@@ -225,9 +258,13 @@ fn parse_egret(
 }
 
 /// The family a source routes to. The balanced hub is the default: it owns
-/// the guidance for unknown names and refused shapes.
+/// the guidance for unknown names and refused shapes. `Balanced` carries the
+/// JSON classification when routing here was itself the result of one (so
+/// the balanced hub does not classify the same text a second time); `None`
+/// when the source routed here by extension, by a declared token, or by a
+/// directory shape, none of which run a JSON classification at all.
 enum RoutedFamily {
-    Balanced,
+    Balanced(Option<format::routing::JsonClass>),
     Distribution,
     Goc3,
     Bmopf,
@@ -236,6 +273,7 @@ enum RoutedFamily {
     Egret,
     #[cfg(feature = "gridfm")]
     Gridfm,
+    Stored,
 }
 
 fn routed_family(
@@ -263,7 +301,7 @@ fn routed_family(
         {
             return Ok(RoutedFamily::Gridfm);
         }
-        return Ok(RoutedFamily::Balanced);
+        return Ok(RoutedFamily::Balanced(None));
     }
     let extension = std::path::Path::new(source.name())
         .extension()
@@ -277,7 +315,7 @@ fn routed_family(
         // else (a nameless in-memory source above all) can still carry a
         // JSON document, so content that opens one routes by classification,
         // mirroring the balanced hub's own sniff.
-        "m" | "raw" | "aux" | "epc" | "pwb" | "pwd" => Ok(RoutedFamily::Balanced),
+        "m" | "raw" | "aux" | "epc" | "pwb" | "pwd" => Ok(RoutedFamily::Balanced(None)),
         _ => {
             let jsonish = source.primary_buffer().is_ok_and(|buffer| {
                 std::str::from_utf8(buffer.content_bytes()).is_ok_and(|text| {
@@ -292,7 +330,7 @@ fn routed_family(
             if jsonish {
                 json_family(source)
             } else {
-                Ok(RoutedFamily::Balanced)
+                Ok(RoutedFamily::Balanced(None))
             }
         }
     }
@@ -306,11 +344,13 @@ fn json_family(
 
     let buffer = source.primary_buffer()?;
     // Family routing needs decoded text; a non-UTF-8 `.json` fails in
-    // the balanced hub with its own wording.
+    // the balanced hub with its own wording. Classification never ran, so
+    // the balanced hub gets no hint and classifies it itself.
     let Ok(text) = std::str::from_utf8(buffer.content_bytes()) else {
-        return Ok(RoutedFamily::Balanced);
+        return Ok(RoutedFamily::Balanced(None));
     };
-    match format::routing::classify_json_text(text) {
+    let class = format::routing::classify_json_text(text);
+    match class {
         JsonClass::Case(Detection::Known(SourceFormat::Transmission(
             TransmissionFormat::Goc3Json,
         ))) => Ok(RoutedFamily::Goc3),
@@ -326,12 +366,13 @@ fn json_family(
                 _ => RoutedFamily::Distribution,
             })
         }
+        JsonClass::Module => Ok(RoutedFamily::Stored),
         // The balanced hub's own JSON detection carries the refusal
-        // wording for packages and unrecognized or ambiguous
-        // documents, and decodes bare model JSON itself.
+        // wording for unrecognized or ambiguous documents, and decodes bare
+        // model JSON itself; it gets this classification so it never
+        // re-derives it from the same bytes.
         JsonClass::Case(Detection::Known(_) | Detection::Ambiguous | Detection::Unknown)
-        | JsonClass::Module
-        | JsonClass::ModelJson => Ok(RoutedFamily::Balanced),
+        | JsonClass::ModelJson => Ok(RoutedFamily::Balanced(Some(class))),
     }
 }
 
@@ -358,7 +399,7 @@ fn family_of_token(token: &str) -> RoutedFamily {
         Some(TargetFormat::Goc3Json) => RoutedFamily::Goc3,
         Some(TargetFormat::DeepMindOpfDataJson) => RoutedFamily::OpfData,
         Some(TargetFormat::EgretJson) => RoutedFamily::Egret,
-        _ => RoutedFamily::Balanced,
+        _ => RoutedFamily::Balanced(None),
     }
 }
 
@@ -636,6 +677,26 @@ mod tests {
             module.value().kind(),
             PioValueKind::BalancedNetworkTimeSeries
         );
+    }
+
+    #[cfg(feature = "gridfm")]
+    #[test]
+    fn a_stored_module_parses_back_through_the_universal_parse() {
+        use powerio_tx::{Bus, BusId, BusType};
+        let network = powerio_tx::BalancedNetwork::in_memory(
+            "stored",
+            100.0,
+            vec![Bus::new(BusId(1), BusType::Ref, 230.0)],
+            vec![],
+        );
+        let text = stored::write_module(&powerio_core::PioModule::new(PioValue::BalancedNetwork(
+            network,
+        )))
+        .expect("module writes");
+        let module = parse(memory("case.pio.json", &text)).expect("stored module parses");
+        assert_eq!(module.value().kind(), PioValueKind::BalancedNetwork);
+        // The `.pio.json` file is the loaded module's runtime source.
+        assert!(module.source().is_some());
     }
 
     #[cfg(feature = "gridfm")]

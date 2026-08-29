@@ -458,8 +458,30 @@ fn is_pslf_name(name: &str) -> bool {
 pub fn parse(
     source: powerio_core::Source,
 ) -> std::result::Result<PioModule<BalancedNetwork>, powerio_core::Error> {
+    parse_with_json_class(source, None)
+}
+
+/// [`parse`], given a JSON classification the caller already computed on the
+/// same bytes. The `powerio` facade routes a source by its own call to
+/// [`routing::classify_json_text`] before it ever reaches this crate; when
+/// that routing lands on the balanced hub, passing the result here skips the
+/// second classification [`parse`] would otherwise run over the identical
+/// text. `None` reproduces [`parse`] exactly, classifying inline only if and
+/// when [`parse_to_network`] needs to.
+///
+/// Not part of this crate's public reading surface — the facade is the one
+/// caller with a classification already in hand — so this stays out of the
+/// rendered docs.
+///
+/// # Errors
+/// Same as [`parse`].
+#[doc(hidden)]
+pub fn parse_with_json_class(
+    source: powerio_core::Source,
+    json_class: Option<routing::JsonClass>,
+) -> std::result::Result<PioModule<BalancedNetwork>, powerio_core::Error> {
     let mut warnings = Diagnostics::new();
-    match parse_to_network(&source, &mut warnings) {
+    match parse_to_network(&source, &mut warnings, json_class) {
         Ok(network) => {
             let format = network.source_format();
             let mut module = PioModule::new(network);
@@ -506,10 +528,14 @@ pub fn parse(
 }
 
 /// The format dispatch behind [`parse`]: name and content detection, then the
-/// one reader map.
+/// one reader map. `json_class` is a classification the caller already
+/// computed on this source's own text ([`parse_with_json_class`]); when it is
+/// `None`, this classifies inline at the point a `.json` source needs it,
+/// exactly as [`parse`] always has.
 fn parse_to_network(
     source: &powerio_core::Source,
     warnings: &mut Diagnostics,
+    json_class: Option<routing::JsonClass>,
 ) -> Result<BalancedNetwork> {
     let from = source.format().map(powerio_core::FormatId::as_str);
     let path = std::path::Path::new(source.name());
@@ -631,7 +657,12 @@ fn parse_to_network(
     let text = source_text(&buffer)?;
     let fmt = match fmt_hint {
         Some(fmt) => fmt,
-        None => match routing::classify_json_text(text) {
+        // A caller ahead of this (the `powerio` facade's own routing) may
+        // already have classified this exact text; trust that answer instead
+        // of running the same classification a second time. `unwrap_or_else`
+        // only classifies here when nothing did yet, so a caller with no
+        // hint (every direct `parse` caller) behaves exactly as before.
+        None => match json_class.unwrap_or_else(|| routing::classify_json_text(text)) {
             // The network serialization is not a case format, but it parses:
             // a bare model JSON document decodes through `from_json` and
             // routes to `BalancedNetwork` like any other balanced source.

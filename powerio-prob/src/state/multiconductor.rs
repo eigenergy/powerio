@@ -176,6 +176,35 @@ impl MulticonductorStateBuilder {
         self
     }
 
+    /// The identity order the network resolves for a quantity: the exact
+    /// sequence a dense column binds to, so a stored document's stated
+    /// identity list can be checked before its values are accepted.
+    ///
+    /// # Errors
+    /// A name outside the multiconductor state vocabulary.
+    pub fn identity_order(&self, quantity: &str) -> Result<Vec<String>, Error> {
+        let quantity = match quantity {
+            "terminal_voltage_magnitude" => TERMINAL_VOLTAGE_MAGNITUDE,
+            "terminal_voltage_angle" => TERMINAL_VOLTAGE_ANGLE,
+            "load_active_power" => LOAD_ACTIVE_POWER,
+            "load_reactive_power" => LOAD_REACTIVE_POWER,
+            "switch_closed" => SWITCH_CLOSED,
+            "transformer_tap" => TRANSFORMER_TAP,
+            "capacitor_steps" => CAPACITOR_STEPS,
+            other => {
+                return Err(Error::new(
+                    &codes::BUILD_STATE_SHAPE_MISMATCH,
+                    format!("`{other}` is not a multiconductor state quantity"),
+                ));
+            }
+        };
+        Ok(self
+            .layout_for(quantity)?
+            .order()
+            .map(str::to_string)
+            .collect())
+    }
+
     fn layout_for(&self, quantity: &'static str) -> Result<QuantityLayout, Error> {
         let network = &self.network;
         match quantity {

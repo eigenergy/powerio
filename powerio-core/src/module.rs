@@ -1,12 +1,12 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, TryReserveError};
 use std::fmt;
 
 use serde_json::Value;
 
 use crate::validation::valid_nonempty_text;
 use crate::{
-    Diagnostic, DiagnosticId, Error, HistoryEntry, Producer, Source, SourceDescriptor,
-    SourceMapEntry, SourceSpan,
+    Diagnostic, DiagnosticId, Error, HistoryEntry, HistoryId, Producer, Source, SourceDescriptor,
+    SourceId, SourceMapEntry, SourceSpan,
 };
 
 #[derive(Debug)]
@@ -18,6 +18,13 @@ struct ModuleRecords {
     history: Vec<HistoryEntry>,
     extensions: BTreeMap<String, Value>,
     retained_source: Option<Source>,
+    /// Identity indexes maintained by the `add_*` methods, the only mutation
+    /// paths. Duplicate detection and span source resolution consult these
+    /// instead of scanning previously inserted records, so populating a module
+    /// with N records costs O(N) expected rather than O(N^2).
+    source_positions: HashMap<SourceId, usize>,
+    diagnostic_ids: HashSet<DiagnosticId>,
+    history_ids: HashSet<HistoryId>,
 }
 
 impl Default for ModuleRecords {
@@ -30,8 +37,19 @@ impl Default for ModuleRecords {
             history: Vec::new(),
             extensions: BTreeMap::new(),
             retained_source: None,
+            source_positions: HashMap::new(),
+            diagnostic_ids: HashSet::new(),
+            history_ids: HashSet::new(),
         }
     }
+}
+
+fn allocation_refused(cause: TryReserveError) -> Error {
+    Error::new(
+        &crate::codes::REQUEST_RECORD_ALLOCATION_REFUSED,
+        "cannot reserve the record identity index",
+    )
+    .with_cause(cause)
 }
 
 /// One typed PowerIO compiler unit.
@@ -131,17 +149,19 @@ impl<T> PioModule<T> {
         if self.records.sources.len() >= crate::validation::MAX_MODULE_SOURCES {
             return Err(record_cap("sources", crate::validation::MAX_MODULE_SOURCES));
         }
-        if self
-            .records
-            .sources
-            .iter()
-            .any(|existing| existing.id() == source.id())
-        {
+        if self.records.source_positions.contains_key(source.id()) {
             return Err(Error::new(
                 &crate::codes::REQUEST_RECORD_DUPLICATE_ID,
                 format!("duplicate source ID `{}`", source.id()),
             ));
         }
+        self.records
+            .source_positions
+            .try_reserve(1)
+            .map_err(allocation_refused)?;
+        self.records
+            .source_positions
+            .insert(source.id().clone(), self.records.sources.len());
         self.records.sources.push(source);
         Ok(())
     }
@@ -154,7 +174,7 @@ impl<T> PioModule<T> {
             ));
         }
         for span in entry.spans() {
-            validate_span(span, &self.records.sources)?;
+            validate_span(span, &self.records.sources, &self.records.source_positions)?;
         }
         self.records.source_map.push(entry);
         Ok(())
@@ -168,12 +188,7 @@ impl<T> PioModule<T> {
             ));
         }
         if let Some(id) = diagnostic.id()
-            && self
-                .records
-                .diagnostics
-                .iter()
-                .filter_map(Diagnostic::id)
-                .any(|existing| existing == id)
+            && self.records.diagnostic_ids.contains(id)
         {
             return Err(Error::new(
                 &crate::codes::REQUEST_RECORD_DUPLICATE_ID,
@@ -181,7 +196,14 @@ impl<T> PioModule<T> {
             ));
         }
         for span in diagnostic.spans() {
-            validate_span(span, &self.records.sources)?;
+            validate_span(span, &self.records.sources, &self.records.source_positions)?;
+        }
+        if let Some(id) = diagnostic.id() {
+            self.records
+                .diagnostic_ids
+                .try_reserve(1)
+                .map_err(allocation_refused)?;
+            self.records.diagnostic_ids.insert(id.clone());
         }
         self.records.diagnostics.push(diagnostic);
         Ok(())
@@ -194,17 +216,17 @@ impl<T> PioModule<T> {
                 crate::validation::MAX_MODULE_HISTORY_ENTRIES,
             ));
         }
-        if self
-            .records
-            .history
-            .iter()
-            .any(|existing| existing.id() == entry.id())
-        {
+        if self.records.history_ids.contains(entry.id()) {
             return Err(Error::new(
                 &crate::codes::REQUEST_RECORD_DUPLICATE_ID,
                 format!("duplicate history ID `{}`", entry.id()),
             ));
         }
+        self.records
+            .history_ids
+            .try_reserve(1)
+            .map_err(allocation_refused)?;
+        self.records.history_ids.insert(entry.id().clone());
         self.records.history.push(entry);
         Ok(())
     }
@@ -219,6 +241,17 @@ impl<T> PioModule<T> {
             return Err(Error::new(
                 &crate::codes::REQUEST_RECORD_INVALID_EXTENSION,
                 "extension keys must be bounded namespaced strings",
+            ));
+        }
+        if self.records.extensions.len() >= crate::validation::MAX_MODULE_EXTENSION_KEYS
+            && !self.records.extensions.contains_key(&namespace)
+        {
+            return Err(Error::new(
+                &crate::codes::REQUEST_RECORD_TOO_LARGE,
+                format!(
+                    "a module carries at most {} extension keys",
+                    crate::validation::MAX_MODULE_EXTENSION_KEYS
+                ),
             ));
         }
         Ok(self.records.extensions.insert(namespace, value))
@@ -240,7 +273,7 @@ impl<T> PioModule<T> {
         }
         for entry in &self.records.source_map {
             for span in entry.spans() {
-                validate_span(span, &self.records.sources)?;
+                validate_span(span, &self.records.sources, &self.records.source_positions)?;
             }
         }
 
@@ -265,7 +298,7 @@ impl<T> PioModule<T> {
         }
         for diagnostic in &self.records.diagnostics {
             for span in diagnostic.spans() {
-                validate_span(span, &self.records.sources)?;
+                validate_span(span, &self.records.sources, &self.records.source_positions)?;
             }
             for related in diagnostic.related() {
                 if !diagnostic_ids.contains(related) {
@@ -296,6 +329,20 @@ impl<T> PioModule<T> {
             ));
         }
         Ok(())
+    }
+
+    /// Drop the value shaped provenance: the operation that calls this
+    /// replaced the value with one of a different kind, so RFC 6901 targets
+    /// into the old value no longer identify anything. Every diagnostic
+    /// keeps its code, message, severity, and spans but loses its target,
+    /// and the source map (whose entries are keyed by such targets) is
+    /// cleared. Pair this with [`PioModule::map_value`] in a kind changing
+    /// transform so the module still serializes.
+    pub fn sever_value_targets(&mut self) {
+        for diagnostic in &mut self.records.diagnostics {
+            diagnostic.clear_target();
+        }
+        self.records.source_map.clear();
     }
 
     /// Move the value and every module record into another typed module.
@@ -395,8 +442,15 @@ fn record_cap(what: &str, max: usize) -> Error {
     )
 }
 
-fn validate_span(span: &SourceSpan, sources: &[SourceDescriptor]) -> Result<(), Error> {
-    let Some(source) = sources.iter().find(|source| source.id() == span.source()) else {
+fn validate_span(
+    span: &SourceSpan,
+    sources: &[SourceDescriptor],
+    positions: &HashMap<SourceId, usize>,
+) -> Result<(), Error> {
+    let Some(source) = positions
+        .get(span.source())
+        .and_then(|position| sources.get(*position))
+    else {
         return Err(Error::new(
             &crate::codes::REQUEST_RECORD_INVALID_SPAN,
             format!("source span refers to unknown source `{}`", span.source()),
@@ -430,9 +484,7 @@ mod tests {
     use std::sync::Arc;
 
     use super::*;
-    use crate::{
-        DiagnosticId, DiagnosticSeverity, HistoryId, HistoryKind, SourceId, SourceRelation,
-    };
+    use crate::{DiagnosticSeverity, HistoryKind, SourceRelation};
 
     #[test]
     fn modules_accept_unregistered_application_values() {

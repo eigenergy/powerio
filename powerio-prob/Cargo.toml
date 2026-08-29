@@ -14,6 +14,11 @@ categories = ["science", "mathematics"]
 [package.metadata.docs.rs]
 all-features = true
 
+[features]
+default = []
+# JSON Schema derives for the types the stored module document embeds.
+schema = ["dep:schemars", "powerio-tx/schema"]
+
 [lib]
 name = "powerio_prob"
 path = "src/lib.rs"
@@ -23,6 +28,7 @@ powerio-core = { workspace = true }
 powerio-dist.workspace = true
 powerio-tx.workspace = true
 thiserror = "2"
+schemars = { workspace = true, optional = true }
 serde.workspace = true
 serde_json.workspace = true
 

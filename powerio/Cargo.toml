@@ -20,7 +20,7 @@ matrix = ["dep:powerio-matrix"]
 # The gridfm-datakit Parquet reader. Off by default so the facade pulls no
 # Arrow or Parquet into consumers that never read datasets.
 gridfm = ["dep:arrow", "dep:parquet", "dep:bytes"]
-schema = ["dep:schemars", "powerio-tx/schema", "powerio-core/schema", "powerio-dist/schema"]
+schema = ["dep:schemars", "powerio-tx/schema", "powerio-core/schema", "powerio-dist/schema", "powerio-prob/schema"]
 
 [dependencies]
 num-complex = { workspace = true }
