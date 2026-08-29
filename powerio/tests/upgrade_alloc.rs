@@ -40,6 +40,8 @@ unsafe impl GlobalAlloc for CountingAlloc {
 #[global_allocator]
 static ALLOCATOR: CountingAlloc = CountingAlloc;
 
+static MEASURE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 fn measure_allocated(work: impl FnOnce()) -> usize {
     let before = TOTAL_BYTES.load(Ordering::Relaxed);
     work();
@@ -89,6 +91,7 @@ fn legacy_text_carrying(periods: usize) -> String {
 
 #[test]
 fn an_inflated_declared_period_count_does_not_inflate_allocation() {
+    let _serial = MEASURE_LOCK.lock().unwrap();
     let declared_text = legacy_text_declaring(131_072);
     assert!(
         declared_text.len() < 8192,
@@ -128,6 +131,7 @@ fn an_inflated_declared_period_count_does_not_inflate_allocation() {
 
 #[test]
 fn a_document_genuinely_carrying_n_periods_still_decodes() {
+    let _serial = MEASURE_LOCK.lock().unwrap();
     let text = legacy_text_carrying(500);
     let module = read_module(&text).unwrap();
     let PioValue::BalancedOperatingPointTimeSeries(series) = module.value() else {
