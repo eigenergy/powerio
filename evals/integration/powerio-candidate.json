@@ -1,7 +1,7 @@
 {
   "receipt": "powerio-producer/1",
-  "subject_commit": "20b59a80de5934e02827404d7889891e1195c1ff",
-  "powerio_jl_commit": "3d5fbd7155d02421184c03f79733921e0bd916f5",
+  "subject_commit": "7f671c496f227147c7c82d24dcde48719bf0c7c0",
+  "powerio_jl_commit": "68bd5d8a33f096bb3d186bd1948dd51934e42bb1",
   "versions": {
     "powerio": "0.10.0",
     "c_abi": 6,
