@@ -131,6 +131,8 @@ jobs:
       run: bash scripts/ci-clippy.sh workspace
     - name: Documentation symbols
       run: python3 scripts/check-doc-symbols.py
+    - name: Architecture map
+      run: python3 scripts/check-architecture-map.py
     # Bare `cargo test` only covers the default-members; name the C ABI crate
     # explicitly so its end-to-end ABI tests run in CI too.
     - name: Run tests

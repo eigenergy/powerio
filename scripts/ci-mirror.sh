@@ -18,6 +18,7 @@ run bash scripts/capi-removed-surface.sh
 run python3 scripts/capi-doc-integrity.py
 run bash scripts/capi-export-monotonicity.sh
 run python3 scripts/check-doc-symbols.py
+run python3 scripts/check-architecture-map.py
 run ./scripts/capi-header-regen.sh
 
 # A Windows editor has twice corrupted text in a PR: a UTF-8 BOM, and UTF-8

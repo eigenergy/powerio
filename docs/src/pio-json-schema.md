@@ -49,6 +49,8 @@ The document carries `producer`, the typed `value` (`kind` and `data`, over the 
 
 The generated JSON Schema for the version 1 document is served at `https://powerio.dev/schema/pio-module/1/schema.json`; the `$id` names that location.
 
+Spans, source digests, and `source_map` entries are reserved fields the version 1 document validates when present, but 0.10 producers do not yet emit any of the three; the reader and the decoder handle them end to end so an upgraded or hand written document with real values loads correctly. Diagnostic ids are assigned at write time (`d0`, `d1`, ...) for any record that reaches the writer without one, so a parse then write round trip is not identity on ids.
+
 ## The 0.9 package and its versioning {#pio-package}
 
 Everything from here down describes the released 0.9 `NetworkPackage`

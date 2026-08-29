@@ -6,13 +6,13 @@ PowerIO's design borrows from LLVM and MLIR where their problems genuinely overl
 
 **A small shared foundation under acyclic higher layers.** LLVM's library layering puts Support under IR under the producers. PowerIO's `powerio-core` owns sources, diagnostics, errors, the module, and the generic containers; the network crates, the calculation crate, and the matrix crate stack over it in one direction, and CI asserts the edges from `cargo metadata` ([Crate graph](crate-graph.md)).
 
-**Source ownership that survives parsing.** MLIR's source manager keeps buffers alive so locations mean something after parsing. A `PioModule` retains its source; diagnostics carry a source identifier plus a byte range into those exact bytes, and the byte exact same format echo reads them back.
+**Source ownership that survives parsing.** MLIR's source manager keeps buffers alive so locations mean something after parsing. A `PioModule` retains its source, and the byte exact same format echo reads it back; the diagnostic wire form carries a source identifier plus a byte range into those exact bytes end to end, though 0.10 parsers do not yet emit a span on any diagnostic.
 
 **Structured diagnostics with stable severities and attached context.** The four severities (`error`, `warning`, `remark`, `note`) are MLIR's, with the same meanings: a remark reports on success, a note attaches context to another finding. PowerIO adds the stable dotted code as the identity a consumer branches on, plus targets, related records, and suggested actions.
 
 **Typed representations at more than one abstraction level.** The value families span reusable networks, calculation instances, and solutions the way a compiler holds IR at several levels; nothing forces the richer levels through the poorer ones.
 
-**Explicit transformations with testable boundaries.** Every transformation names its input and output types, returns diagnostics, and refuses what it cannot state (the balanced lowering's readiness report is the preflight MLIR's dialect conversion legality check suggests). Nothing rewrites as a side effect.
+**Explicit transformations with testable boundaries.** Every transformation names its input and output types, returns diagnostics, and refuses what it cannot state (the balanced lowering's readiness report is the preflight MLIR's dialect conversion legality check suggests). Nothing rewrites as a side effect. A writer has no matching legality preflight yet; a format's losses surface in the write result itself rather than in a check a caller can run beforehand.
 
 **Verification at representation boundaries.** Parsers and transformations verify what they produce and report findings rather than repairing silently; repairs are explicit operations that leave history records.
 
