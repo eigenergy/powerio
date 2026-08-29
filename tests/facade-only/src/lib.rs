@@ -8,9 +8,6 @@
 /// `powerio::` path alone. A type alias is enough: it only needs the name to
 /// resolve, not a value to construct.
 ///
-/// `AcOpfSolution` is not in this list: `powerio-prob` builds problem
-/// instances only and has no solution type today, so there is nothing to
-/// name.
 #[allow(dead_code)]
 mod names_resolve_through_the_facade {
     type _Source = powerio::Source;
