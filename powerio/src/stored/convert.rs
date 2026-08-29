@@ -16,7 +16,7 @@ use super::dto::{
     SourceMapEntryV1, SourceRelationV1, SourceSpanV1, StoredF64, StoredModuleV1, StoredQuantityV1,
     StoredValueV1, TimePointV1,
 };
-use crate::package::diagnostics::codes;
+use crate::codes;
 use crate::value::PioValue;
 
 type Result<T> = std::result::Result<T, powerio_core::Error>;
@@ -791,6 +791,7 @@ fn encode_ac_scuc_solution(solution: &powerio_prob::AcScucSolution) -> dto::AcSc
 
 fn decode_stored(stored: StoredModuleV1) -> Result<PioModule<PioValue>> {
     let value = decode_value(stored.value)?;
+    validate_decoded_networks(&value)?;
     let mut module = PioModule::new(value).with_producer(
         Producer::new(stored.producer.name, stored.producer.version)
             .map_err(|error| invalid(error.to_string()))?,
@@ -826,6 +827,56 @@ fn decode_stored(stored: StoredModuleV1) -> Result<PioModule<PioValue>> {
 // One arm per stored kind: the length is the enum's, and splitting the arms
 // into twenty single-use functions would hide the exhaustiveness this match
 // enforces.
+#[allow(clippy::too_many_lines)]
+/// Every network a decoded value embeds is held to its own model's rule: a
+/// balanced network passes the structural validation its readers enforce,
+/// so a stored document cannot smuggle a network they would refuse. The
+/// multiconductor unresolved reference walk is warning level in its reader
+/// (a refused include legitimately leaves dangling references beside the
+/// recorded findings), so it stays out of the decode gate.
+pub(super) fn validate_decoded_networks(value: &PioValue) -> Result<()> {
+    let balanced = |network: &powerio_tx::BalancedNetwork| -> Result<()> {
+        network
+            .validate()
+            .map_err(|error| invalid(format!("decoded network fails validation: {error}")))
+    };
+    let multiconductor = |_network: &powerio_dist::MulticonductorNetwork| -> Result<()> { Ok(()) };
+    match value {
+        PioValue::BalancedNetwork(network) => balanced(network),
+        PioValue::MulticonductorNetwork(network) => multiconductor(network),
+        PioValue::BalancedNetworkTimeSeries(series) => {
+            series.values().iter().try_for_each(balanced)
+        }
+        PioValue::BalancedOperatingPointTimeSeries(series) => series
+            .values()
+            .first()
+            .map_or(Ok(()), |point| balanced(point.network())),
+        PioValue::MulticonductorOperatingPointTimeSeries(series) => series
+            .values()
+            .first()
+            .map_or(Ok(()), |point| multiconductor(point.network())),
+        PioValue::BalancedNetworkScenarioSet(set) => set
+            .iter()
+            .try_for_each(|scenario| balanced(scenario.value())),
+        PioValue::DcPfInstance(instance) => balanced(instance.network()),
+        PioValue::AcPfInstance(instance) => balanced(instance.network()),
+        PioValue::DcOpfInstance(instance) => balanced(instance.network()),
+        PioValue::AcOpfInstance(instance) => balanced(instance.network()),
+        PioValue::AcScucInstance(instance) => balanced(instance.network()),
+        PioValue::McAcPfInstance(instance) => multiconductor(instance.network()),
+        PioValue::McAcOpfInstance(instance) => multiconductor(instance.network()),
+        PioValue::DcPfSolution(solution) => balanced(solution.network()),
+        PioValue::AcPfSolution(solution) => balanced(solution.network()),
+        PioValue::DcOpfSolution(solution) => balanced(solution.network()),
+        PioValue::AcOpfSolution(solution) => balanced(solution.network()),
+        PioValue::McAcPfSolution(solution) => multiconductor(solution.network()),
+        PioValue::McAcOpfSolution(solution) => multiconductor(solution.network()),
+        PioValue::AcScucSolution(solution) => balanced(solution.instance().network()),
+    }
+}
+
+// One arm per stored value kind; splitting the match would scatter the
+// kind-to-decoder table this function is.
 #[allow(clippy::too_many_lines)]
 fn decode_value(value: StoredValueV1) -> Result<PioValue> {
     Ok(match value {

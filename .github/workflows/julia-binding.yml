@@ -17,7 +17,7 @@ name: Julia binding
 # keeps both green, and a stacked PR inherits the parent's companion rather
 # than testing the new surface against the old expectations on main.
 # The paths cover every crate the full-feature capi build below pulls in
-# (--features arrow,matrix,gridfm,dist,pkg,prob), so a change in any of them
+# (--features arrow,matrix,gridfm,dist,prob), so a change in any of them
 # reruns the compatibility suite.
 on:
   push:
@@ -79,11 +79,11 @@ jobs:
       if: steps.powerio-jl.outputs.available == 'true'
     - name: Build powerio-capi
       if: steps.powerio-jl.outputs.available == 'true'
-      # --features arrow,matrix,gridfm,dist,pkg,prob so PowerIO.jl's Arrow export,
+      # --features arrow,matrix,gridfm,dist,prob so PowerIO.jl's Arrow export,
       # matrix Arrow export, gridfm reader, distribution surface, and package
       # surface bind against real symbols rather than skipping behind feature
       # probes.
-      run: cargo build -p powerio-capi --release --features arrow,matrix,gridfm,dist,pkg,prob
+      run: cargo build -p powerio-capi --release --features arrow,matrix,gridfm,dist,prob
     - name: Resolve PowerIO.jl companion branch
       id: powerio-jl-ref
       if: steps.powerio-jl.outputs.available == 'true'
@@ -172,6 +172,11 @@ jobs:
         version: '1'
     - uses: julia-actions/cache@v3
       if: steps.powerio-jl.outputs.available == 'true'
+    # Every pio_* symbol the paired binding names must be exported by this
+    # head; the same script's monotonicity clause runs in rust.yml.
+    - name: Companion symbol coverage
+      if: steps.powerio-jl.outputs.available == 'true'
+      run: POWERIO_JL=PowerIO.jl bash scripts/capi-export-monotonicity.sh
     # PowerIO.jl's ccall tests skip themselves when the cdylib is absent.
     # POWERIO_CAPI points them at the library just built.
     - name: Test PowerIO.jl against the built library

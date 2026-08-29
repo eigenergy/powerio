@@ -1,18 +1,86 @@
 //! Serde round-trip and invariant tests for the `.pio.json` compiler package.
-mod helpers;
-#[allow(unused_imports)]
-use helpers::*;
+#![allow(clippy::field_reassign_with_default)] // frozen 0.9 construction spellings
+#![allow(clippy::needless_pass_by_value)]
 
 use std::collections::BTreeMap;
 
-use powerio::package::{
+use crate::stored::legacy09::{
     Confidence, DiagnosticCode, DiagnosticSeverity, DiagnosticStage, ElementRef, ElementUpdate,
-    MappingKind, ModelKind, MulticonductorToBalancedOptions, MulticonductorToBalancedReadiness,
-    NetworkPackage, OperatingPoint, OperatingPointSeries, Origin, SequenceTransformConvention,
+    MappingKind, ModelKind, NetworkPackage, OperatingPoint, OperatingPointSeries, Origin,
     SourceDescriptor, SourceMapEntry, SourceRef, StructuredDiagnostic, StudyBlock, StudyCommit,
-    StudyEdit, TimeAxis, ValidationStatus, check_multiconductor_to_balanced_lowering,
-    ensure_payload_uids, lower_multiconductor_to_balanced,
+    StudyEdit, TimeAxis, ValidationStatus, ensure_payload_uids,
 };
+use crate::transform::{
+    MulticonductorToBalancedOptions, MulticonductorToBalancedReadiness,
+    SequenceTransformConvention, check_multiconductor_to_balanced_lowering,
+    lower_multiconductor_to_balanced,
+};
+
+use powerio_core::{FormatId, Source};
+
+/// The old parse output shape the 0.9 package builders consumed.
+#[derive(Debug)]
+struct Parsed {
+    network: crate::BalancedNetwork,
+    diagnostics: Vec<powerio_core::Diagnostic>,
+    document: Option<std::sync::Arc<powerio_tx::format::goc3::Goc3Document>>,
+}
+
+fn tx_error_to_core(error: powerio_tx::Error) -> powerio_core::Error {
+    powerio_core::Error::new(error.code(), error.to_string())
+}
+
+fn module_to_parsed(module: powerio_core::PioModule<crate::BalancedNetwork>) -> Parsed {
+    Parsed {
+        diagnostics: module.diagnostics().to_vec(),
+        network: module.into_value(),
+        document: None,
+    }
+}
+
+fn parse_str(text: &str, from: &str) -> Result<Parsed, powerio_core::Error> {
+    if from.eq_ignore_ascii_case("goc3-json") {
+        let (network, diagnostics, document) =
+            powerio_tx::parse_goc3_json(text).map_err(tx_error_to_core)?;
+        return Ok(Parsed {
+            network,
+            diagnostics,
+            document: Some(document),
+        });
+    }
+    let source = Source::from_bytes("<memory>", text.as_bytes().to_vec())?
+        .with_format(FormatId::new(from.to_ascii_lowercase().replace('_', "-"))?);
+    powerio_tx::format::parse(source).map(module_to_parsed)
+}
+
+mod helpers {
+    /// Parse distribution text and hand back the bare network.
+    pub fn dist_parse_str(text: &str, from: &str) -> powerio_dist::MulticonductorNetwork {
+        dist_parse_module(text, from).into_value()
+    }
+
+    /// Parse distribution text into the compiled module.
+    pub fn dist_parse_module(
+        text: &str,
+        from: &str,
+    ) -> powerio_core::PioModule<powerio_dist::MulticonductorNetwork> {
+        let source = powerio_core::Source::from_bytes("<memory>", text.as_bytes().to_vec())
+            .expect("memory source")
+            .with_format(powerio_core::FormatId::new(from).expect("format id"));
+        powerio_dist::parse(source).expect("distribution text parses")
+    }
+}
+
+fn pkg_from_parsed(parsed: &Parsed) -> NetworkPackage {
+    let mut package = NetworkPackage::from_balanced_with_read_diagnostics(
+        parsed.network.clone(),
+        parsed.diagnostics.iter().cloned().map(Into::into),
+    );
+    if let Some(document) = &parsed.document {
+        package.attach_goc3_operating_points(document);
+    }
+    package
+}
 
 const FOUR_WIRE_DSS: &str = r"! Four wire line with an explicit neutral conductor (no Kron reduction).
 Clear
@@ -265,11 +333,17 @@ fn has_diagnostic_code(diagnostics: &[StructuredDiagnostic], code: &str) -> bool
         .any(|d| d.code == DiagnosticCode::new(code))
 }
 
+/// The 1.0 record counterpart of [`has_diagnostic_code`]: `MulticonductorToBalancedError`
+/// carries module records, not the legacy `StructuredDiagnostic` list.
+fn has_diagnostic_code_1_0(diagnostics: &[powerio_core::Diagnostic], code: &str) -> bool {
+    diagnostics.iter().any(|d| d.code() == code)
+}
+
 fn assert_lowering_rejects(net: &powerio_dist::MulticonductorNetwork, code: &str) {
     let err = lower_multiconductor_to_balanced(net, MulticonductorToBalancedOptions::default())
         .expect_err("lowering must reject unsupported input");
     assert!(
-        has_diagnostic_code(&err.diagnostics, code),
+        has_diagnostic_code_1_0(&err.diagnostics, code),
         "missing {code}: {:?}",
         err.diagnostics
     );
@@ -287,7 +361,7 @@ fn assert_json_roundtrips(pkg: &NetworkPackage) {
 #[test]
 fn powerio_version_is_present_and_required() {
     let pkg = balanced_package();
-    assert_eq!(pkg.powerio_version, powerio::VERSION);
+    assert_eq!(pkg.powerio_version, crate::VERSION);
 
     // A document without the field is refused. Defaulting it to the current
     // version would let a package from an older lineage skip the gate by
@@ -323,7 +397,7 @@ fn from_json_bytes_tolerates_a_byte_order_mark_and_refuses_non_utf8() {
 fn version_gate_rejects_other_lineages_with_the_diagnosis() {
     let pkg = balanced_package();
     let mut v = serde_json::to_value(&pkg).unwrap();
-    let (major, minor) = lineage(powerio::VERSION);
+    let (major, minor) = lineage(crate::VERSION);
     assert_eq!(major, 0, "update this test at 1.0.0");
 
     // A file from the previous minor is rejected with an error naming the
@@ -354,7 +428,7 @@ fn version_gate_rejects_other_lineages_with_the_diagnosis() {
     // Fields an older lineage wrote are ignored as unknown, as any unknown top
     // level field from another producer is; the version gate is the only
     // arbiter.
-    v["powerio_version"] = serde_json::json!(powerio::VERSION);
+    v["powerio_version"] = serde_json::json!(crate::VERSION);
     v["schema_version"] = serde_json::json!("0.2.1");
     v["payload_schema"] = serde_json::json!("https://powerio.dev/schema/pio-payload-balanced/1");
     v["payload_schema_version"] = serde_json::json!("1.1.0");
@@ -493,7 +567,7 @@ fn goc3_operating_points_follow_parser_row_assignment() {
     assert_close(balanced.generators()[1].pmax, 80.0);
     assert_eq!(materialized.package_id, None);
     match &materialized.origin {
-        powerio::package::Origin::Derived {
+        crate::stored::legacy09::Origin::Derived {
             parent_package_id, ..
         } => assert_eq!(parent_package_id.as_deref(), Some("parent")),
         other => panic!("expected derived origin, got {other:?}"),
@@ -847,7 +921,7 @@ fn diagnostics_roundtrip() {
         .with_source_ref(SourceRef::new("src0").with_field("angmin").with_line(88))
         .with_suggested_action("Use MATPOWER if branch angle limits are required."),
     );
-    pkg.validation = powerio::package::ValidationSummary::from_diagnostics(&pkg.diagnostics);
+    pkg.validation = crate::stored::legacy09::ValidationSummary::from_diagnostics(&pkg.diagnostics);
 
     assert_json_roundtrips(&pkg);
 
@@ -869,7 +943,7 @@ fn diagnostics_roundtrip() {
     );
     assert_eq!(
         back.validation.status,
-        powerio::package::ValidationStatus::Warning
+        crate::stored::legacy09::ValidationStatus::Warning
     );
     assert_eq!(back.validation.counts.warning, 1);
 }
@@ -1047,7 +1121,7 @@ mpc.branch = [
 
 #[test]
 fn origin_distinguishes_in_memory_from_file() {
-    let in_mem = NetworkPackage::from_balanced(powerio::BalancedNetwork::in_memory(
+    let in_mem = NetworkPackage::from_balanced(crate::BalancedNetwork::in_memory(
         "t",
         100.0,
         vec![],
@@ -1065,17 +1139,17 @@ fn balanced_origin_matches_source_artifact_kind() {
         .expect("parse matpower")
         .network;
 
-    *net.source_format_mut() = powerio::SourceFormat::Gridfm;
+    *net.source_format_mut() = crate::SourceFormat::Gridfm;
     let gridfm = NetworkPackage::from_balanced(net.clone());
     assert!(matches!(gridfm.origin, Origin::Folder { .. }));
     assert_eq!(gridfm.sources[0].kind, "folder");
 
-    *net.source_format_mut() = powerio::SourceFormat::PypsaCsv;
+    *net.source_format_mut() = crate::SourceFormat::PypsaCsv;
     let pypsa = NetworkPackage::from_balanced(net.clone());
     assert!(matches!(pypsa.origin, Origin::Folder { .. }));
     assert_eq!(pypsa.sources[0].kind, "folder");
 
-    *net.source_format_mut() = powerio::SourceFormat::PowerWorldBinary;
+    *net.source_format_mut() = crate::SourceFormat::PowerWorldBinary;
     let pwb = NetworkPackage::from_balanced(net);
     assert!(matches!(pwb.origin, Origin::BinaryFile { .. }));
     assert_eq!(pwb.sources[0].kind, "binary_file");
@@ -1102,7 +1176,7 @@ fn unknown_future_fields_are_tolerated() {
 fn a_future_patch_of_this_lineage_is_tolerated() {
     // A newer patch in the reader's lineage with a field this reader does not
     // know: both are additive, so the document loads.
-    let (_, minor) = lineage(powerio::VERSION);
+    let (_, minor) = lineage(crate::VERSION);
     let future = format!("0.{minor}.99");
     let pkg = balanced_package();
     let mut v = serde_json::to_value(&pkg).unwrap();
@@ -1121,7 +1195,7 @@ fn a_future_patch_of_this_lineage_is_tolerated() {
 
 #[test]
 fn a_prerelease_or_build_tag_of_this_lineage_is_tolerated() {
-    let (_, minor) = lineage(powerio::VERSION);
+    let (_, minor) = lineage(crate::VERSION);
     for suffix in ["-rc.1", "+build.5", "-alpha.2+exp"] {
         let version = format!("0.{minor}.0{suffix}");
         let pkg = balanced_package();
@@ -1151,7 +1225,7 @@ fn normalized_solver_table_metadata_records_dense_identities() {
         .normalized_solver_tables
         .as_ref()
         .expect("metadata attached");
-    assert_eq!(meta.pass, powerio::NORMALIZED_SOLVER_TABLES_PASS);
+    assert_eq!(meta.pass, crate::NORMALIZED_SOLVER_TABLES_PASS);
     assert_eq!(meta.units.power, "per_unit");
     assert_eq!(meta.units.angle, "radian");
     assert_eq!(meta.row_counts.buses, 2);
@@ -1159,7 +1233,7 @@ fn normalized_solver_table_metadata_records_dense_identities() {
     assert_eq!(meta.row_counts.branches, 1);
     assert_eq!(meta.row_counts.arcs, 2);
     assert_eq!(meta.row_counts.generators, 1);
-    assert_eq!(meta.bus_ids, vec![powerio::BusId(1), powerio::BusId(2)]);
+    assert_eq!(meta.bus_ids, vec![crate::BusId(1), crate::BusId(2)]);
     assert_eq!(meta.reference_bus_indices, vec![0]);
     assert_eq!(meta.branch_from_arc_indices, vec![0]);
     assert_eq!(meta.branch_to_arc_indices, vec![1]);
@@ -1342,7 +1416,7 @@ fn lowering_preflight_accepts_three_phase_without_neutral() {
     let net = preflight_network(&["1", "2", "3"], &[]);
     let report = check_multiconductor_to_balanced_lowering(
         &net,
-        powerio::package::MulticonductorToBalancedOptions::default(),
+        crate::transform::MulticonductorToBalancedOptions::default(),
     );
 
     assert_eq!(
@@ -1359,7 +1433,7 @@ fn lowering_preflight_records_kron_reduction_for_neutral() {
     let net = preflight_network(&["1", "2", "3", "4"], &["4"]);
     let report = check_multiconductor_to_balanced_lowering(
         &net,
-        powerio::package::MulticonductorToBalancedOptions::default(),
+        crate::transform::MulticonductorToBalancedOptions::default(),
     );
 
     assert_eq!(report.status, ValidationStatus::Info);
@@ -1383,7 +1457,7 @@ fn lowering_preflight_accepts_source_grounded_four_wire_fixture() {
     let net = helpers::dist_parse_str(FOUR_WIRE_DSS, "dss");
     let report = check_multiconductor_to_balanced_lowering(
         &net,
-        powerio::package::MulticonductorToBalancedOptions::default(),
+        crate::transform::MulticonductorToBalancedOptions::default(),
     );
 
     assert_eq!(report.status, ValidationStatus::Info);
@@ -1407,7 +1481,7 @@ fn lowering_preflight_rejects_one_phase_input() {
     let net = preflight_network(&["1"], &[]);
     let report = check_multiconductor_to_balanced_lowering(
         &net,
-        powerio::package::MulticonductorToBalancedOptions::default(),
+        crate::transform::MulticonductorToBalancedOptions::default(),
     );
 
     assert_eq!(report.status, ValidationStatus::Error);
@@ -1423,7 +1497,7 @@ fn lowering_preflight_rejects_two_wire_input() {
     let net = preflight_network(&["1", "2"], &[]);
     let report = check_multiconductor_to_balanced_lowering(
         &net,
-        powerio::package::MulticonductorToBalancedOptions::default(),
+        crate::transform::MulticonductorToBalancedOptions::default(),
     );
 
     assert_eq!(report.status, ValidationStatus::Error);
@@ -1443,7 +1517,7 @@ fn lowering_preflight_rejects_untyped_objects() {
         .push(UntypedObject::new("regcontrol", "r1", Vec::new()));
     let report = check_multiconductor_to_balanced_lowering(
         &net,
-        powerio::package::MulticonductorToBalancedOptions::default(),
+        crate::transform::MulticonductorToBalancedOptions::default(),
     );
 
     assert_eq!(report.status, ValidationStatus::Error);
@@ -1459,7 +1533,7 @@ fn lowering_preflight_rejects_missing_phase_reference() {
     net.sources_mut().clear();
     let report = check_multiconductor_to_balanced_lowering(
         &net,
-        powerio::package::MulticonductorToBalancedOptions::default(),
+        crate::transform::MulticonductorToBalancedOptions::default(),
     );
 
     assert_eq!(report.status, ValidationStatus::Error);
@@ -1478,7 +1552,7 @@ fn lowering_preflight_rejects_transformers() {
         .push(DistTransformer::new("t1", Vec::new(), Vec::new(), 3));
     let report = check_multiconductor_to_balanced_lowering(
         &net,
-        powerio::package::MulticonductorToBalancedOptions::default(),
+        crate::transform::MulticonductorToBalancedOptions::default(),
     );
 
     assert_eq!(report.status, ValidationStatus::Error);
@@ -1517,10 +1591,10 @@ fn lowering_produces_balanced_three_phase_without_neutral() {
     assert_eq!(balanced.buses().len(), 2);
     assert_eq!(balanced.branches().len(), 1);
     assert_eq!(balanced.loads().len(), 0);
-    assert_eq!(balanced.buses()[0].kind, powerio::BusType::Ref);
-    assert_eq!(balanced.buses()[1].kind, powerio::BusType::Pq);
+    assert_eq!(balanced.buses()[0].kind, crate::BusType::Ref);
+    assert_eq!(balanced.buses()[1].kind, crate::BusType::Pq);
     assert!(balanced.branches()[0].x > 0.0);
-    assert_eq!(balanced.source_format(), powerio::SourceFormat::InMemory);
+    assert_eq!(balanced.source_format(), crate::SourceFormat::InMemory);
     assert_eq!(lowered.record.input_kind, ModelKind::Multiconductor);
     assert_eq!(lowered.record.output_kind, ModelKind::Balanced);
     assert_eq!(lowered.record.validation_status, ValidationStatus::Ok);
@@ -1871,7 +1945,7 @@ fn lowering_preserves_single_phase_shunt_total() {
 fn package_lowering_returns_derived_balanced_package() {
     let mut parent =
         NetworkPackage::from_multiconductor(preflight_network(&["1", "2", "3", "4"], &["4"]));
-    parent.push_lowering(powerio::package::LoweringRecord::new(
+    parent.push_lowering(crate::transform::LoweringRecord::new(
         "previous-pass",
         ModelKind::Multiconductor,
         ModelKind::Multiconductor,
@@ -1929,7 +2003,7 @@ fn package_lowering_rejects_balanced_package() {
     let err = balanced_package()
         .lower_multiconductor_to_balanced(MulticonductorToBalancedOptions::default())
         .expect_err("balanced package is not accepted");
-    assert!(has_diagnostic_code(
+    assert!(has_diagnostic_code_1_0(
         &err.diagnostics,
         "TRANSFORM.MULTI_TO_BALANCED.WRONG_MODEL_KIND"
     ));
@@ -1937,7 +2011,7 @@ fn package_lowering_rejects_balanced_package() {
 
 #[test]
 fn lowering_record_roundtrips() {
-    use powerio::package::LoweringRecord;
+    use crate::transform::LoweringRecord;
     let mut pkg = balanced_package();
     let mut rec = LoweringRecord::new(
         "multiconductor-to-balanced",
@@ -2026,7 +2100,7 @@ fn package_synthesizes_row_identity() {
     assert_eq!(net.branches()[0].uid.as_deref(), Some("branches:0"));
 
     let v = serde_json::to_value(&pkg).unwrap();
-    assert_eq!(v["powerio_version"], serde_json::json!(powerio::VERSION));
+    assert_eq!(v["powerio_version"], serde_json::json!(crate::VERSION));
     assert_eq!(
         v["model"]["balanced_network"]["buses"][0]["uid"],
         serde_json::json!("buses:0")
@@ -2084,10 +2158,10 @@ fn duplicate_payload_uid_is_diagnosed_without_operating_points() {
 
 #[test]
 fn geo_types_share_the_same_json_shape() {
-    let balanced_location = powerio::Location {
+    let balanced_location = crate::Location {
         x: -80.0,
         y: 35.0,
-        kind: Some(powerio::CoordsKind::Manual),
+        kind: Some(crate::CoordsKind::Manual),
     };
     let dist_location = powerio_dist::DistLocation {
         x: -80.0,
@@ -2099,9 +2173,9 @@ fn geo_types_share_the_same_json_shape() {
         serde_json::to_value(dist_location).unwrap()
     );
 
-    let balanced_geo = powerio::GeoMeta {
-        space: powerio::CoordinateSpace::Geographic { crs: None },
-        kind: Some(powerio::CoordsKind::Source),
+    let balanced_geo = crate::GeoMeta {
+        space: crate::CoordinateSpace::Geographic { crs: None },
+        kind: Some(crate::CoordsKind::Source),
     };
     let dist_geo = powerio_dist::DistGeoMeta {
         space: powerio_dist::CoordinateSpace::Geographic { crs: None },
@@ -2356,8 +2430,8 @@ fn package_balanced_reader_findings_keep_their_own_code() {
     // The reader codes its own findings, so the package records them as they
     // are rather than wrapping them under one code of its own.
     let parsed = parse_str(MATPOWER_SRC, "matpower").expect("parse matpower");
-    let finding: powerio::package::StructuredDiagnostic = powerio::Diagnostic::of(
-        &powerio::diagnostics::codes::READ_PSSE_SECTION_UNSUPPORTED,
+    let finding: crate::stored::legacy09::StructuredDiagnostic = crate::Diagnostic::of(
+        &powerio_tx::diagnostics::codes::READ_PSSE_SECTION_UNSUPPORTED,
         "ignored source table",
     )
     .into();
@@ -2455,7 +2529,7 @@ fn study_demand_delta_distributes_over_existing_loads() {
         .expect("parse matpower")
         .network;
     net.loads_mut()[0].uid = Some("load_1".to_owned());
-    let mut extra_load = powerio::Load::new(powerio::BusId(2), 30.0, 15.0);
+    let mut extra_load = crate::Load::new(crate::BusId(2), 30.0, 15.0);
     extra_load.uid = Some("load_2".to_owned());
     net.loads_mut().push(extra_load);
 
@@ -2495,7 +2569,7 @@ fn study_demand_delta_appends_synthetic_load_for_empty_bus() {
     let net = materialized.as_balanced().expect("balanced output");
 
     assert_eq!(net.loads().len(), 1);
-    assert_eq!(net.loads()[0].bus, powerio::BusId(2));
+    assert_eq!(net.loads()[0].bus, crate::BusId(2));
     assert_close(net.loads()[0].p, 12.0);
     assert_close(net.loads()[0].q, 3.0);
     assert_eq!(net.loads()[0].uid.as_deref(), Some("study:load:buses:1"));
@@ -2600,7 +2674,7 @@ fn study_set_fields_wrong_type_is_the_document_s_fault() {
         .with_study(study)
         .materialize_study_commit(0)
         .expect_err("a string where a number belongs should not materialize");
-    assert_eq!(err.category(), powerio::ErrorCategory::Data, "{err}");
+    assert_eq!(err.category(), crate::ErrorCategory::Data, "{err}");
     assert!(
         !err.to_string().contains("serializing"),
         "the document's type error read as our serialization failure: {err}"
@@ -2816,7 +2890,7 @@ fn multiconductor_nonfinite_ratings_and_scalars_roundtrip() {
 fn refused_include_lifts_as_an_error_diagnostic() {
     // #275: a typed parse finding keeps its severity in the document, and
     // its warning twin does not appear a second time.
-    use powerio::package::{DiagnosticSeverity, ValidationStatus};
+    use crate::stored::legacy09::{DiagnosticSeverity, ValidationStatus};
 
     let net = helpers::dist_parse_str("New Circuit.c1", "dss");
     let message = "redirect ../shared.dss: refused; include escapes the case directory";

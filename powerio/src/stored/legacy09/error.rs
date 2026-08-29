@@ -8,7 +8,7 @@
 
 use thiserror::Error as ThisError;
 
-use crate::package::diagnostics::codes;
+use crate::codes;
 
 /// A `.pio.json` failure.
 #[derive(Debug, ThisError)]
@@ -71,12 +71,12 @@ impl Error {
         match self {
             Error::Core(inner) => inner.code().code,
             Error::Multiconductor(inner) => inner.code().code,
-            Error::Malformed(_) => codes::PARSE_PACKAGE_MALFORMED.code,
-            Error::UnsupportedVersion(_) => codes::PARSE_PACKAGE_UNSUPPORTED_VERSION.code,
-            Error::ModelKindMismatch => codes::VALIDATE_PACKAGE_MODEL_KIND_MISMATCH.code,
-            Error::NoSuchIndex(_) => codes::REQUEST_PACKAGE_NO_SUCH_INDEX.code,
-            Error::Payload(_) => codes::BUILD_PACKAGE_PAYLOAD_FAILED.code,
-            Error::Serialize(_) => codes::EMIT_PACKAGE_SERIALIZE_FAILED.code,
+            Error::Malformed(_) => codes::PARSE_MODULE_MALFORMED.code,
+            Error::UnsupportedVersion(_) => codes::PARSE_MODULE_UNSUPPORTED_VERSION.code,
+            Error::ModelKindMismatch => codes::VALIDATE_MODULE_MODEL_KIND_MISMATCH.code,
+            Error::NoSuchIndex(_) => codes::REQUEST_MODULE_NO_SUCH_INDEX.code,
+            Error::Payload(_) => codes::BUILD_MODULE_PAYLOAD_FAILED.code,
+            Error::Serialize(_) => codes::EMIT_MODULE_SERIALIZE_FAILED.code,
         }
     }
 

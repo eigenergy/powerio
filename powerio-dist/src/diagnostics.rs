@@ -25,7 +25,7 @@ pub mod codes {
         /// reader decodes a mark free slice, so nothing is removed from the
         /// bytes and a same format echo returns them exactly.
         PARSE_DSS_BOM_STRIPPED = "PARSE.DSS.BOM_STRIPPED", Remark,
-            "a leading UTF-8 byte order mark was removed before the reader ran", retired = "1.0.0";
+            "a leading UTF-8 byte order mark was removed before the reader ran", retired = "0.10.0";
         PARSE_DSS_SOURCE_MALFORMED = "PARSE.DSS.SOURCE_MALFORMED", Warning,
             "a dss command, object spec, or property assignment does not parse";
         PARSE_DIST_MALFORMED = "PARSE.DIST.MALFORMED", Error,

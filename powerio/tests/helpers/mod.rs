@@ -20,17 +20,6 @@ pub struct Parsed {
     pub document: Option<std::sync::Arc<powerio::format::goc3::Goc3Document>>,
 }
 
-pub fn pkg_from_parsed(parsed: &Parsed) -> powerio::package::NetworkPackage {
-    let mut package = powerio::package::NetworkPackage::from_balanced_with_read_diagnostics(
-        parsed.network.clone(),
-        parsed.diagnostics.iter().cloned().map(Into::into),
-    );
-    if let Some(document) = &parsed.document {
-        package.attach_goc3_operating_points(document);
-    }
-    package
-}
-
 impl Parsed {
     pub fn rendered_diagnostics(&self) -> Vec<String> {
         powerio::diagnostics::render_diagnostics(&self.diagnostics)

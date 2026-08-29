@@ -7,6 +7,7 @@
 
 mod convert;
 mod dto;
+pub(crate) mod legacy09;
 mod upgrade;
 
 pub use convert::{read_module, write_module};

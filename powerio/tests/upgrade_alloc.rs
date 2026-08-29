@@ -10,7 +10,6 @@
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use powerio::package::{NetworkPackage, OperatingPoint, OperatingPointSeries, TimeAxis};
 use powerio::stored::read_module;
 use powerio::{BalancedNetwork, PioValue};
 use powerio_tx::{Bus, BusId, BusType};
@@ -64,29 +63,47 @@ fn small_network() -> BalancedNetwork {
 /// scalar) while its labels and durations stay empty and it carries exactly
 /// one operating point: the shape of a document lying about its period
 /// count, at negligible cost to the document's own size.
+fn legacy_envelope(operating_points: &serde_json::Value) -> String {
+    serde_json::json!({
+        "powerio_version": "0.9.0",
+        "producer": {"tool": "powerio", "version": "0.9.0"},
+        "model_kind": "balanced",
+        "origin": {"kind": "in_memory"},
+        "validation": {"status": "ok", "counts": {"fatal": 0, "error": 0, "warning": 0, "info": 0, "debug": 0}},
+        "model": {
+            "kind": "balanced",
+            "balanced_network": serde_json::to_value(small_network()).unwrap(),
+        },
+        "operating_points": operating_points,
+    })
+    .to_string()
+}
+
+/// A legacy 0.9 package declaring `declared_periods` on its time axis while
+/// carrying one real point: a ~2 KB document whatever it declares.
 fn legacy_text_declaring(declared_periods: usize) -> String {
-    let mut package = NetworkPackage::from_balanced(small_network());
-    let axis = TimeAxis::new(declared_periods);
-    package.operating_points = Some(OperatingPointSeries::new(
-        axis,
-        vec![OperatingPoint::new(0)],
-    ));
-    package.to_json().unwrap()
+    legacy_envelope(&serde_json::json!({
+        "time_axis": {"periods": declared_periods, "duration_hours": [], "labels": []},
+        "points": [{"index": 0}],
+    }))
 }
 
 /// A legacy 0.9 package genuinely carrying `periods` periods: labels and
 /// durations both sized to match, so the document's own byte size scales
 /// with `periods` the way a real producer's output would.
 fn legacy_text_carrying(periods: usize) -> String {
-    let mut package = NetworkPackage::from_balanced(small_network());
-    let mut axis = TimeAxis::new(periods);
-    axis.labels = (0..periods).map(|i| format!("h{i}")).collect();
-    axis.duration_hours = vec![1.0; periods];
-    package.operating_points = Some(OperatingPointSeries::new(
-        axis,
-        (0..periods).map(OperatingPoint::new).collect(),
-    ));
-    package.to_json().unwrap()
+    let labels: Vec<String> = (0..periods).map(|i| format!("h{i}")).collect();
+    let points: Vec<serde_json::Value> = (0..periods)
+        .map(|i| serde_json::json!({"index": i}))
+        .collect();
+    legacy_envelope(&serde_json::json!({
+        "time_axis": {
+            "periods": periods,
+            "duration_hours": vec![1.0; periods],
+            "labels": labels,
+        },
+        "points": points,
+    }))
 }
 
 #[test]

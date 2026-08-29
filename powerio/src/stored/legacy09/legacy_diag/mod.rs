@@ -18,6 +18,5 @@ pub mod record;
 pub mod render;
 
 pub use code::{DiagnosticCode, DiagnosticStage};
-pub use collect::Diagnostics;
 pub use record::{DiagnosticSeverity, SourceRef, StructuredDiagnostic};
-pub use render::{render_line, render_lines};
+pub use render::render_lines;

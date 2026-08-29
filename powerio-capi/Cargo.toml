@@ -18,7 +18,7 @@ crate-type = ["cdylib", "staticlib", "rlib"]
 # Distribution and package support are first class: every default powerio build
 # ships the pio_dist_* and pio_package_* surfaces. Opt out with
 # --no-default-features for a transmission-only library.
-default = ["dist", "pkg"]
+default = ["dist"]
 # Zero-copy raw network export over the Arrow C Data Interface (`pio_to_arrow`).
 # Off by default so the base ABI pulls in nothing but `powerio`.
 arrow = ["dep:arrow"]
@@ -33,7 +33,6 @@ dist = ["dep:powerio-dist"]
 # in powerio-matrix (arrow + parquet) for the reader.
 gridfm = ["dep:powerio-matrix", "powerio-matrix/gridfm", "powerio/gridfm"]
 # `.pio.json` document API (`pio_package_*`). On by default.
-pkg = []
 # Numerical problem instances (`pio_scopf_*`).
 prob = ["dep:powerio-prob"]
 

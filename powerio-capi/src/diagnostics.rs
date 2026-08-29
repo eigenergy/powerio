@@ -55,12 +55,6 @@ pub(crate) fn coded(info: &'static DiagnosticInfo, message: impl std::fmt::Displ
     format!("{}: {message}", info.code)
 }
 
-/// The same line from a code string, for a registry this crate does not share.
-#[cfg(feature = "pkg")]
-pub(crate) fn coded_str(code: &str, message: impl std::fmt::Display) -> String {
-    format!("{code}: {message}")
-}
-
 /// A library error that knows its own registry entry. The five error types are
 /// the only ones with a code of their own; a failure raised at the boundary
 /// itself takes a `BIND.CAPI.*` entry through [`coded`].
@@ -111,13 +105,6 @@ impl CodedError for powerio_dist::Error {
     }
 }
 
-#[cfg(feature = "pkg")]
-impl CodedError for powerio::package::Error {
-    fn code_str(&self) -> &'static str {
-        self.code()
-    }
-}
-
 #[cfg(feature = "prob")]
 impl CodedError for powerio_prob::Error {
     fn code_str(&self) -> &'static str {
@@ -141,23 +128,14 @@ pub fn registry() -> Vec<&'static DiagnosticInfo> {
 // The workspace gate. This crate is the only one that depends on all five
 // library crates at once, and the release features CI job builds it with every
 // feature on, so it is the one place a code shared by two crates shows up.
-#[cfg(all(
-    test,
-    feature = "dist",
-    feature = "pkg",
-    feature = "prob",
-    feature = "matrix"
-))]
+#[cfg(all(test, feature = "dist", feature = "prob", feature = "matrix"))]
 mod workspace {
     use super::*;
 
     fn registries() -> Vec<(&'static str, Vec<&'static DiagnosticInfo>)> {
         vec![
             ("powerio", powerio::diagnostics::registry()),
-            (
-                "powerio (stored document)",
-                powerio::package::diagnostics::registry(),
-            ),
+            ("powerio (stored + transform)", powerio::codes::registry()),
             #[cfg(feature = "gridfm")]
             (
                 "powerio (gridfm reader)",

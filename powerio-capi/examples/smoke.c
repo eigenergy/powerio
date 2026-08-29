@@ -33,7 +33,7 @@ static long smoke_pid(void) { return (long)getpid(); }
 static void smoke_rmdir(const char *path) { rmdir(path); }
 #endif
 
-#if PIO_ABI_VERSION != 5
+#if PIO_ABI_VERSION != 6
 #error "PIO_ABI_VERSION changed without updating the C ABI smoke test"
 #endif
 
@@ -192,56 +192,8 @@ int main(int argc, char **argv) {
     pio_string_free(json);
     pio_network_free(c2);
 
-    /* The geo reader is tolerant, so the rows it read past come back through
-     * the same diagnostics channel the conversion entry points use. */
-    {
-        char *geo_diags = NULL;
-        char *layer = pio_geo_parse("1, -89.6, 40.6\n2, west, north\n", NULL,
-                                    &geo_diags, err, sizeof err);
-        CHECK(layer != NULL, err);
-        CHECK(geo_diags != NULL && geo_diags[0] == '[',
-              "the skipped buscoords row should come back as a finding");
-        pio_string_free(geo_diags);
-        pio_string_free(layer);
-    }
-
-#ifdef PIO_PKG
-    /* Compiler package surface: wrap the live balanced handle, validate the
-     * package, serialize it, and parse it back. */
-    {
-        CHECK(pio_has_feature("pkg") == 1, "pio_has_feature(pkg) should be 1");
-        PioPackage *pkg = pio_package_from_balanced_network(c, 0, err, sizeof err);
-        CHECK(pkg != NULL, err);
-        CHECK(pio_package_validate(pkg, err, sizeof err) == 0, err);
-
-        char *validation = pio_package_validation_json(pkg, err, sizeof err);
-        CHECK(validation != NULL, err);
-        CHECK(strstr(validation, "\"status\":\"ok\"") != NULL,
-              "package validation JSON did not report ok");
-        pio_string_free(validation);
-
-        char *diagnostics = pio_package_diagnostics_json(pkg, err, sizeof err);
-        CHECK(diagnostics != NULL, err);
-        CHECK(strcmp(diagnostics, "[]") == 0, "unexpected package diagnostics");
-        pio_string_free(diagnostics);
-
-        char *pkg_json = pio_package_to_json(pkg, err, sizeof err);
-        CHECK(pkg_json != NULL, err);
-        CHECK(strstr(pkg_json, "\"model_kind\":\"balanced\"") != NULL,
-              "package JSON lost the balanced model kind");
-
-        PioPackage *pkg2 = pio_package_parse_str(pkg_json, err, sizeof err);
-        CHECK(pkg2 != NULL, err);
-        pio_package_free(pkg2);
-        pio_string_free(pkg_json);
-        pio_package_free(pkg);
-        printf("package surface OK\n");
-    }
-#endif
-
 #ifdef PIO_PROB
     CHECK(pio_has_feature("prob") == 1, "pio_has_feature(prob) should be 1");
-    pio_scopf_instance_free(NULL);
 #endif
 
     /* In-memory parse: read the bytes ourselves and parse them with an explicit

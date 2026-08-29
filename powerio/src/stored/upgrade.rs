@@ -7,12 +7,11 @@
 use std::collections::BTreeMap;
 
 use powerio_core::{
-    Diagnostic, DiagnosticCode, DiagnosticSeverity, HistoryEntry, HistoryId, HistoryKind,
-    PioModule, Producer, TimePoint,
+    Diagnostic, HistoryEntry, HistoryId, HistoryKind, PioModule, Producer, TimePoint,
 };
 
-use crate::package::diagnostics::codes;
-use crate::package::{ModelPayload, NetworkPackage, OperatingPointSeries};
+use crate::codes;
+use crate::stored::legacy09::{ModelPayload, NetworkPackage, OperatingPointSeries};
 use crate::value::PioValue;
 
 type Result<T> = std::result::Result<T, powerio_core::Error>;
@@ -55,39 +54,12 @@ pub(super) fn upgrade_legacy(
         ));
     }
 
-    let series = legacy
-        .operating_points
-        .clone()
-        .filter(|series| !series.points.is_empty());
-    let value = match (&legacy.model, series) {
-        (ModelPayload::Balanced { balanced_network }, Some(series)) => {
-            upgrade_series(balanced_network, &series)?
-        }
-        (ModelPayload::Balanced { balanced_network }, None) => {
-            PioValue::BalancedNetwork((**balanced_network).clone())
-        }
-        (
-            ModelPayload::Multiconductor {
-                multiconductor_network,
-            },
-            Some(_),
-        ) => {
-            return Err(refused(
-                &codes::READ_MODULE_INVALID,
-                format!(
-                    "a 0.9 multiconductor package with operating points has no upgrade; the \
-                     0.9 shape never produced one ({} buses)",
-                    multiconductor_network.buses().len()
-                ),
-            ));
-        }
-        (
-            ModelPayload::Multiconductor {
-                multiconductor_network,
-            },
-            None,
-        ) => PioValue::MulticonductorNetwork((**multiconductor_network).clone()),
-    };
+    let value = upgrade_value(&legacy)?;
+    // The upgraded value is held to the same network gate the version 1
+    // decode applies, so both schema paths refuse a document whose balanced
+    // network fails the model's own validation.
+    crate::stored::convert::validate_decoded_networks(&value)
+        .map_err(|error| refused(&codes::READ_MODULE_INVALID, error.to_string()))?;
 
     let producer = Producer::new(
         legacy.producer.tool.clone(),
@@ -96,10 +68,19 @@ pub(super) fn upgrade_legacy(
     .unwrap_or_else(|_| {
         Producer::new("powerio", crate::VERSION).expect("static producer is valid")
     });
+    let legacy_kind = match &legacy.model {
+        ModelPayload::Balanced { .. } => "balanced_network",
+        ModelPayload::Multiconductor { .. } => "multiconductor_network",
+    };
+    // A series value nests the network under `network` in value.data.
+    let rebase = match &value {
+        PioValue::BalancedOperatingPointTimeSeries(_) => "/network",
+        _ => "",
+    };
     let mut module = PioModule::new(value).with_producer(producer);
     for diagnostic in &legacy.diagnostics {
         module
-            .add_diagnostic(upgrade_diagnostic(diagnostic))
+            .add_diagnostic(upgrade_diagnostic(diagnostic, legacy_kind, rebase))
             .map_err(|error| refused(&codes::READ_MODULE_INVALID, error.to_string()))?;
     }
     let upgrade_note = HistoryEntry::new(
@@ -127,6 +108,44 @@ pub(super) fn upgrade_legacy(
         ))
         .map_err(|error| refused(&codes::READ_MODULE_INVALID, error.to_string()))?;
     Ok(module)
+}
+
+/// The upgraded typed value: legacy operating points become the primary
+/// series value; a multiconductor package with them never shipped.
+fn upgrade_value(legacy: &NetworkPackage) -> Result<PioValue> {
+    let series = legacy
+        .operating_points
+        .clone()
+        .filter(|series| !series.points.is_empty());
+    match (&legacy.model, series) {
+        (ModelPayload::Balanced { balanced_network }, Some(series)) => {
+            upgrade_series(balanced_network, &series)
+        }
+        (ModelPayload::Balanced { balanced_network }, None) => {
+            Ok(PioValue::BalancedNetwork((**balanced_network).clone()))
+        }
+        (
+            ModelPayload::Multiconductor {
+                multiconductor_network,
+            },
+            Some(_),
+        ) => Err(refused(
+            &codes::READ_MODULE_INVALID,
+            format!(
+                "a 0.9 multiconductor package with operating points has no upgrade; the \
+                 0.9 shape never produced one ({} buses)",
+                multiconductor_network.buses().len()
+            ),
+        )),
+        (
+            ModelPayload::Multiconductor {
+                multiconductor_network,
+            },
+            None,
+        ) => Ok(PioValue::MulticonductorNetwork(
+            (**multiconductor_network).clone(),
+        )),
+    }
 }
 
 fn version_is_09(version: &str) -> bool {
@@ -304,7 +323,7 @@ fn upgrade_series(
 /// spelling the payload mints for a row without one.
 fn legacy_identity(
     network: &crate::BalancedNetwork,
-    element: &crate::package::ElementRef,
+    element: &crate::stored::legacy09::ElementRef,
 ) -> String {
     if element.table == "buses" {
         let by_row = element
@@ -378,19 +397,306 @@ fn base_row(network: &crate::BalancedNetwork, quantity: &str) -> Result<Vec<f64>
     Ok(row)
 }
 
-fn upgrade_diagnostic(legacy: &crate::package::StructuredDiagnostic) -> Diagnostic {
-    let code = DiagnosticCode::new(legacy.code.as_str())
-        .unwrap_or_else(|_| DiagnosticCode::new("LEGACY.UNKNOWN").expect("static code is valid"));
-    let severity = match legacy.severity {
-        crate::package::DiagnosticSeverity::Error => DiagnosticSeverity::Error,
-        crate::package::DiagnosticSeverity::Warning => DiagnosticSeverity::Warning,
-        _ => DiagnosticSeverity::Note,
-    };
-    let mut diagnostic = Diagnostic::new(code, severity, legacy.message.clone());
-    if let Some(target) = &legacy.element_path
-        && let Ok(with) = diagnostic.clone().with_target(target.clone())
-    {
-        diagnostic = with;
+/// A legacy diagnostic with its element path translated into the value's own
+/// pointer grammar; a path outside the current value drops its target.
+fn upgrade_diagnostic(
+    legacy: &crate::stored::legacy09::StructuredDiagnostic,
+    kind: &str,
+    rebase: &str,
+) -> Diagnostic {
+    let target = crate::stored::legacy09::diagnostics::translate_legacy_target(
+        legacy.element_path.as_deref(),
+        kind,
+    )
+    .map(|rest| format!("{rebase}{rest}"));
+    crate::stored::legacy09::diagnostics::to_module_diagnostic(legacy, target)
+}
+
+#[cfg(test)]
+mod upgrade_tests {
+    use std::collections::BTreeMap;
+
+    use crate::stored::{read_module, write_module};
+    use crate::value::PioValue;
+    use powerio_core::HistoryKind;
+    use powerio_tx::{BalancedNetwork, Bus, BusId, BusType, Load};
+
+    fn small_network() -> BalancedNetwork {
+        let mut bus1 = Bus::new(BusId(1), BusType::Ref, 345.0);
+        bus1.vm = 1.02;
+        let mut bus2 = Bus::new(BusId(2), BusType::Pq, 345.0);
+        bus2.vmax = f64::INFINITY;
+        bus2.va = 12.0;
+        let mut network = BalancedNetwork::in_memory(
+            "stored-roundtrip",
+            100.0,
+            vec![bus1, bus2],
+            vec![powerio_tx::Branch::new(BusId(1), BusId(2), 0.01, 0.1)],
+        );
+        network.loads_mut().push(Load::new(BusId(2), 40.0, 10.0));
+        network
     }
-    diagnostic
+
+    // ---- the one way 0.9 upgrade ------------------------------------------------
+
+    fn legacy_package_text(with_series: bool, with_study: bool) -> String {
+        use crate::stored::legacy09::{
+            ElementRef, ElementUpdate, NetworkPackage, OperatingPoint, OperatingPointSeries,
+            TimeAxis,
+        };
+        let mut package = NetworkPackage::from_balanced(small_network());
+        if with_series {
+            let mut update_fields = BTreeMap::new();
+            update_fields.insert("p".to_string(), serde_json::json!(75.0));
+            let mut axis = TimeAxis::new(2);
+            axis.duration_hours = vec![1.0, 1.0];
+            axis.labels = vec!["h0".into(), "h1".into()];
+            let mut angle_fields = BTreeMap::new();
+            angle_fields.insert("va".to_string(), serde_json::json!(30.0));
+            let mut second = OperatingPoint::new(1);
+            second.updates = vec![
+                ElementUpdate::new(ElementRef::new("loads", 0), update_fields),
+                ElementUpdate::new(ElementRef::new("buses", 1), angle_fields),
+            ];
+            package.operating_points = Some(OperatingPointSeries::new(
+                axis,
+                vec![OperatingPoint::new(0), second],
+            ));
+        }
+        let mut text = package.to_json().unwrap();
+        if with_study {
+            // Inject the study block at the JSON level: the runtime constructors
+            // are additive-only, and the upgrade must refuse the stored shape
+            // regardless of how it was produced.
+            let mut raw: serde_json::Value = serde_json::from_str(&text).unwrap();
+            raw["study"] = serde_json::json!({
+                "label": "scenario a",
+                "commits": [{"id": "c1"}]
+            });
+            text = raw.to_string();
+        }
+        text
+    }
+
+    #[test]
+    fn a_released_09_package_upgrades_one_way() {
+        let text = legacy_package_text(false, false);
+        let module = read_module(&text).unwrap();
+        assert!(matches!(module.value(), PioValue::BalancedNetwork(_)));
+        assert!(
+            module
+                .diagnostics()
+                .iter()
+                .any(|d| d.code() == "READ.MODULE.UPGRADED"),
+            "{:?}",
+            module.diagnostics()
+        );
+        assert!(
+            module
+                .history()
+                .iter()
+                .any(|entry| entry.kind() == HistoryKind::Upgrade)
+        );
+    }
+
+    /// A 0.9 diagnostic's `code` is never validated at decode time (the
+    /// legacy `DiagnosticCode` accepts any string), so an attacker
+    /// controlled `.pio.json` can carry one that fails the 1.0 grammar. The
+    /// upgrade must fall back to a stand-in code for such a record, not
+    /// panic reaching for the fallback itself.
+    #[test]
+    fn a_malformed_legacy_diagnostic_code_upgrades_to_the_fallback_instead_of_panicking() {
+        for bad_code in ["bad", "", "TWO.SEGMENTS", "READ..EMPTY", "1LEADING.DIGIT.X"] {
+            let mut raw: serde_json::Value =
+                serde_json::from_str(&legacy_package_text(false, false)).unwrap();
+            raw["diagnostics"] = serde_json::json!([
+                {"code": bad_code, "severity": "warning", "message": "malformed code"}
+            ]);
+            let module = read_module(&raw.to_string())
+                .unwrap_or_else(|e| panic!("code {bad_code:?} refused the whole document: {e}"));
+            assert!(
+                module
+                    .diagnostics()
+                    .iter()
+                    .any(|d| d.code() == "PARTNER.LEGACY.UNCODED"),
+                "code {bad_code:?}: {:?}",
+                module.diagnostics()
+            );
+        }
+    }
+
+    #[test]
+    fn legacy_operating_points_become_the_primary_series_value() {
+        let text = legacy_package_text(true, false);
+        let module = read_module(&text).unwrap();
+        let PioValue::BalancedOperatingPointTimeSeries(series) = module.value() else {
+            panic!("expected the series value, got {:?}", module.value().kind());
+        };
+        assert_eq!(series.len(), 2);
+        // Point 0 keeps the static payload's load; point 1 carries the update.
+        assert_eq!(series.values()[0].load_active_power("loads:0"), Some(40.0));
+        assert_eq!(series.values()[1].load_active_power("loads:0"), Some(75.0));
+        // Legacy angles were degrees; the state vocabulary stores radians. The
+        // base row carries the static payload's angle, the update its own.
+        let base = series.values()[0].bus_voltage_angle(BusId(2)).unwrap();
+        assert!((base - 12.0_f64.to_radians()).abs() < 1e-12, "{base}");
+        let updated = series.values()[1].bus_voltage_angle(BusId(2)).unwrap();
+        assert!((updated - 30.0_f64.to_radians()).abs() < 1e-12, "{updated}");
+    }
+
+    #[test]
+    fn a_nonempty_legacy_study_is_refused_with_direction() {
+        let text = legacy_package_text(false, true);
+        let error = read_module(&text).unwrap_err().to_string();
+        assert!(error.contains("materialize"), "{error}");
+    }
+    #[test]
+    #[ignore = "fixture generator"]
+    fn generate_frozen_fixtures() {
+        let base = concat!(env!("CARGO_MANIFEST_DIR"), "/../tests/data/package");
+        std::fs::write(
+            format!("{base}/frozen-0.9-series.pio.json"),
+            legacy_package_text(true, false),
+        )
+        .unwrap();
+        std::fs::write(
+            format!("{base}/frozen-0.9-balanced.pio.json"),
+            legacy_package_text(false, false),
+        )
+        .unwrap();
+        let mut network = powerio_dist::MulticonductorNetwork::named("frozen-mc");
+        network.buses_mut().push(powerio_dist::DistBus::new(
+            "b1",
+            vec!["1".into(), "2".into()],
+        ));
+        let package = crate::stored::legacy09::NetworkPackage::from_multiconductor(network);
+        std::fs::write(
+            format!("{base}/frozen-0.9-multiconductor.pio.json"),
+            package.to_json().unwrap(),
+        )
+        .unwrap();
+    }
+
+    /// Legacy element paths translate into the value's own pointer grammar so an
+    /// upgraded module writes cleanly; a path outside the value drops its target.
+    #[test]
+    fn legacy_diagnostic_targets_translate_and_write() {
+        let mut raw: serde_json::Value =
+            serde_json::from_str(&legacy_package_text(true, false)).unwrap();
+        raw["diagnostics"] = serde_json::json!([{
+            "code": "VALIDATE.BALANCED.VALUE_DOMAIN",
+            "severity": "warning",
+            "message": "bus 2 voltage magnitude is outside its domain",
+            "element_path": "/model/balanced_network/buses/1/vm"
+        }]);
+        let module = read_module(&raw.to_string()).unwrap();
+        let upgraded = module
+            .diagnostics()
+            .iter()
+            .find(|d| d.code() == "VALIDATE.BALANCED.VALUE_DOMAIN")
+            .expect("the legacy finding survives");
+        assert_eq!(upgraded.target(), Some("/network/buses/1/vm"));
+        // The rewritten document passes its own reference validation.
+        write_module(&module).unwrap();
+    }
+}
+
+#[cfg(test)]
+mod limit_upgrade_tests {
+    use crate::stored::read_module;
+    use crate::value::PioValue;
+    use powerio_tx::{BalancedNetwork, Bus, BusId, BusType, Generator, Load};
+
+    fn small_network() -> BalancedNetwork {
+        let mut network = BalancedNetwork::in_memory(
+            "stored-roundtrip",
+            100.0,
+            vec![
+                Bus::new(BusId(1), BusType::Ref, 345.0),
+                Bus::new(BusId(2), BusType::Pq, 345.0),
+            ],
+            vec![powerio_tx::Branch::new(BusId(1), BusId(2), 0.01, 0.1)],
+        );
+        network.loads_mut().push(Load::new(BusId(2), 40.0, 10.0));
+        network.generators_mut().push(Generator::new(BusId(1)));
+        network
+    }
+
+    fn legacy_series_text() -> serde_json::Value {
+        use std::collections::BTreeMap;
+
+        use crate::stored::legacy09::{
+            ElementRef, ElementUpdate, NetworkPackage, OperatingPoint, OperatingPointSeries,
+            TimeAxis,
+        };
+        let mut package = NetworkPackage::from_balanced(small_network());
+        let mut update_fields = BTreeMap::new();
+        update_fields.insert("p".to_string(), serde_json::json!(75.0));
+        let mut axis = TimeAxis::new(2);
+        axis.duration_hours = vec![1.0, 1.0];
+        axis.labels = vec!["h0".into(), "h1".into()];
+        let mut second = OperatingPoint::new(1);
+        second.updates = vec![ElementUpdate::new(
+            ElementRef::new("loads", 0),
+            update_fields,
+        )];
+        package.operating_points = Some(OperatingPointSeries::new(
+            axis,
+            vec![OperatingPoint::new(0), second],
+        ));
+        serde_json::from_str(&package.to_json().unwrap()).unwrap()
+    }
+
+    #[test]
+    fn a_declared_period_count_no_longer_sizes_the_series() {
+        // The declared scalar costs nothing to inflate, so the series is
+        // sized from the carried labels, durations, and points alone; an
+        // inflated or understated declaration changes nothing.
+        for declared in [3_usize, 10_000_000] {
+            let mut raw = legacy_series_text();
+            raw["operating_points"]["time_axis"]["periods"] = serde_json::json!(declared);
+            let module = read_module(&raw.to_string()).unwrap();
+            let PioValue::BalancedOperatingPointTimeSeries(series) = module.value() else {
+                panic!("wrong kind");
+            };
+            assert_eq!(series.len(), 2, "declared {declared}");
+            assert_eq!(series.values()[1].load_active_power("loads:0"), Some(75.0));
+        }
+
+        // Past the maximum in what the document actually carries.
+        let mut raw = legacy_series_text();
+        let labels: Vec<String> = (0..=131_072).map(|i| format!("h{i}")).collect();
+        raw["operating_points"]["time_axis"]["labels"] = serde_json::json!(labels);
+        let error = read_module(&raw.to_string()).unwrap_err();
+        assert_eq!(
+            error.info().map(|info| info.code),
+            Some("READ.MODULE.INVALID")
+        );
+        assert!(error.to_string().contains("131072"), "{error}");
+    }
+
+    #[test]
+    fn a_stated_duration_outside_the_finite_range_is_refused() {
+        for hours in ["1.0e300", "1.7e308"] {
+            let mut raw = legacy_series_text();
+            raw["operating_points"]["time_axis"]["duration_hours"] =
+                serde_json::from_str(&format!("[{hours}, 1.0]")).unwrap();
+            let error = read_module(&raw.to_string()).unwrap_err();
+            assert_eq!(
+                error.info().map(|info| info.code),
+                Some("READ.MODULE.INVALID"),
+                "hours {hours}"
+            );
+            assert!(error.to_string().contains("period 0"), "{error}");
+        }
+        // The unmodified document still upgrades with its stated hour durations.
+        let module = read_module(&legacy_series_text().to_string()).unwrap();
+        let PioValue::BalancedOperatingPointTimeSeries(series) = module.value() else {
+            panic!("wrong kind");
+        };
+        assert_eq!(
+            series.time_points()[0].duration(),
+            Some(std::time::Duration::from_secs(3600))
+        );
+    }
 }

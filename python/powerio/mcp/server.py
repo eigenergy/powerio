@@ -8,8 +8,8 @@ The advertised MCP surface is semantic and format neutral:
 The tools route balanced transmission models, multiconductor distribution
 models, PyPSA CSV folders, and gridfm datasets through the lower level powerio
 APIs. Transmission parses serialize through the ``model-json`` transport.
-Distribution parses serialize through canonical ``bmopf-json``. Package
-transport serializes either family through the ``.pio.json`` compiler package.
+Distribution parses serialize through canonical ``bmopf-json``. The stored
+module transport serializes either family through `.pio.json`.
 
 The filesystem containment policy for ``path`` and ``out_path`` lives in
 ``powerio.mcp.sandbox``, which imports no MCP SDK; the private helpers here
@@ -119,9 +119,15 @@ _TARGET_FORMAT_HELP = (
 
 @dataclass
 class _Loaded:
+    """One network loaded through any transport. `warnings` is always a list
+    of dicts (`_diagnostic_records`'s shape: `code`, `severity`, `message`,
+    `target`, the last two `None` when the finding carries none), whichever
+    transport produced it: `parse`, `summary`, `convert`, `save`,
+    `normalize`, `matrix`, and `diagnostics` all publish this same shape."""
+
     domain: str
     network: Any
-    warnings: list[str]
+    warnings: list[Dict[str, Any]]
     json_format: str
     scenario: Optional[int] = None
     package_json: Optional[str] = None
@@ -142,11 +148,19 @@ def _one_input(path: Optional[str], content: Optional[str]) -> None:
 
 def _coded_error(prefix: str, exc: Exception) -> ValueError:
     """Lead with the diagnostic code when the failure carries one, so a
-    consumer that splits on the first colon reads a code, never prose."""
+    consumer that splits on the first colon reads a code, never prose.
+
+    The Rust-side message already renders as `CODE: message`, so `str(exc)`
+    starting with `code` means it is already there; prefixing again would
+    double it. The `prefix` fallback (no `.code` on `exc`) is unconditional,
+    as before."""
     code = getattr(exc, "code", None)
+    text = str(exc)
     if code:
-        return ValueError(f"{code}: {exc}")
-    return ValueError(f"{prefix}: {exc}")
+        if text.startswith(f"{code}: "):
+            return ValueError(text)
+        return ValueError(f"{code}: {text}")
+    return ValueError(f"{prefix}: {text}")
 
 
 def _required(value: Optional[str], name: str) -> str:
@@ -221,8 +235,8 @@ def _package_value(text: str) -> Optional[Dict[str, Any]]:
 
     Deliberately does not test `powerio_version`: a package written before
     0.9.0 states none, and it has to be recognized before it can be rejected
-    with a message that says so. `powerio.Package.from_json` owns the version
-    gate.
+    with a message that says so. `powerio.StoredModule.from_json` owns the
+    version gate.
     """
     try:
         value = jsonlib.loads(text)
@@ -241,7 +255,8 @@ def _package_value(text: str) -> Optional[Dict[str, Any]]:
 
 
 def _looks_like_package_json(text: str) -> bool:
-    return _package_value(text) is not None
+    """Both stored generations: the version 1 module and the legacy 0.9 package."""
+    return _module_header(text) or _package_value(text) is not None
 
 
 def _package_model_kind(value: Dict[str, Any]) -> str:
@@ -328,8 +343,13 @@ def _header(schema: str) -> Dict[str, Any]:
     return {"schema": schema, _VERSION_KEY: powerio.__version__}
 
 
+# The 0.9 package severities plus the stored module's remark/note; one count
+# table serves both generations.
+_SEVERITY_KEYS = ("fatal", "error", "warning", "remark", "note", "info", "debug")
+
+
 def _severity_counts(diagnostics: list[Dict[str, Any]]) -> Dict[str, int]:
-    counts = {key: 0 for key in ("fatal", "error", "warning", "info", "debug")}
+    counts = {key: 0 for key in _SEVERITY_KEYS}
     for item in diagnostics:
         severity = item.get("severity")
         if severity in counts:
@@ -337,34 +357,65 @@ def _severity_counts(diagnostics: list[Dict[str, Any]]) -> Dict[str, int]:
     return counts
 
 
-def _package_diagnostic_messages(value: Dict[str, Any]) -> list[str]:
-    messages = []
-    for item in value.get("diagnostics", []):
-        if not isinstance(item, dict):
-            continue
-        if item.get("severity") not in ("warning", "error", "fatal"):
-            continue
-        code = item.get("code")
-        message = item.get("message")
-        if code and message:
-            messages.append(f"{code}: {message}")
-        elif message:
-            messages.append(str(message))
-    return messages
+# A `DiagnosticV1` severity is `error`, `warning`, `remark`, or `note`; only
+# the first two are surfaced in `_Loaded.warnings` (the `diagnostics` tool is
+# the unfiltered view of every severity).
+_WARNING_SEVERITIES = frozenset({"warning", "error"})
+
+
+def _diagnostic_record(item: Dict[str, Any]) -> Dict[str, Any]:
+    """One diagnostic dict normalized to the published shape: `code`,
+    `severity`, `message`, `target`, the last `None` when the finding
+    carries none."""
+    return {key: item.get(key) for key in ("code", "severity", "message", "target")}
+
+
+def _diagnostic_records(
+    diagnostics: list[Any], keep_severities: frozenset[str]
+) -> list[Dict[str, Any]]:
+    """Every diagnostic dict (as `module.diagnostics()` or a parsed network's
+    `.diagnostics()` return) at or above the kept severities, normalized to
+    one shape."""
+    return [
+        _diagnostic_record(item)
+        for item in diagnostics
+        if isinstance(item, dict) and item.get("severity") in keep_severities
+    ]
+
+
+def _wrap_plain_warnings(messages: list[str]) -> list[Dict[str, Any]]:
+    """A rendered `CODE: message` or bare message list (an emit-time
+    `Conversion.warnings`, with no structured form of its own) in the same
+    shape `_diagnostic_records` publishes, so a tool that appends emit
+    warnings to `_Loaded.warnings` still returns one list of dicts."""
+    return [
+        {"code": None, "severity": None, "message": message, "target": None}
+        for message in messages
+    ]
 
 
 def _diagnostics_payload(package_json: str, verbose: bool = False) -> Dict[str, Any]:
     value = _json_object(package_json, purpose="package_json")
-    if _package_value(package_json) is None:
-        raise ValueError("package_json is not a .pio.json package")
-    kind = _package_model_kind(value)
-    # Validate with the Rust package reader so schema version and payload
-    # consistency checks stay in one place.
-    powerio.Package.from_json(package_json)
+    if _module_header(package_json):
+        raw_value = value.get("value")
+        payload_kind = raw_value.get("kind") if isinstance(raw_value, dict) else None
+        if not isinstance(payload_kind, str):
+            raise ValueError("the stored module document has no `value.kind`")
+        kind = {
+            "balanced_network": "balanced",
+            "multiconductor_network": "multiconductor",
+        }.get(payload_kind, payload_kind)
+    elif _package_value(package_json) is not None:
+        kind = _package_model_kind(value)
+    else:
+        raise ValueError("package_json is not a stored .pio.json document")
+    # Validate with the stored reader (which upgrades a released 0.9
+    # package) so schema version and consistency checks stay in one place.
+    powerio.StoredModule.from_json(package_json)
     raw = value.get("diagnostics", [])
     diagnostics = [item for item in raw if isinstance(item, dict)]
     if not verbose:
-        keep = {"code", "severity", "stage", "message", "element_path"}
+        keep = {"code", "severity", "stage", "message", "element_path", "target"}
         diagnostics = [{k: v for k, v in item.items() if k in keep} for item in diagnostics]
     raw_validation = value.get("validation")
     validation = raw_validation if isinstance(raw_validation, dict) else {}
@@ -385,13 +436,13 @@ def _diagnostics_payload(package_json: str, verbose: bool = False) -> Dict[str, 
         if counts.get("info", 0)
         else "ok"
     )
-    total = sum(int(counts.get(key, 0)) for key in ("fatal", "error", "warning", "info", "debug"))
+    total = sum(int(counts.get(key, 0)) for key in _SEVERITY_KEYS)
     if total == 0:
         text = "ok: no diagnostics"
     else:
         parts = [
             f"{key}={int(counts.get(key, 0))}"
-            for key in ("fatal", "error", "warning", "info", "debug")
+            for key in _SEVERITY_KEYS
             if int(counts.get(key, 0))
         ]
         text = f"{status}: " + ", ".join(parts)
@@ -407,76 +458,43 @@ def _diagnostics_payload(package_json: str, verbose: bool = False) -> Dict[str, 
     }
 
 
-def _load_package(package_json: str) -> _Loaded:
-    value = _json_object(package_json, purpose="package_json")
-    if _package_value(package_json) is None:
-        raise ValueError("package_json is not a .pio.json package")
-    kind = _package_model_kind(value)
+def _module_header(text: str) -> bool:
+    """Whether the text is a stored version 1 module document."""
+    if not _jsonish(text):
+        return False
     try:
-        pkg = powerio.Package.from_json(package_json)
-        if kind == "multiconductor":
-            return _Loaded(
-                "distribution",
-                pkg.as_multiconductor(),
-                _package_diagnostic_messages(value),
-                "bmopf-json",
-                package_json=package_json,
-            )
-        net = pkg.as_balanced()
+        value = jsonlib.loads(text)
+    except ValueError:
+        return False
+    return isinstance(value, dict) and value.get("schema") == "powerio.module"
+
+
+def _load_module(module_json: str) -> _Loaded:
+    """Load a stored module's static network value as a network handle."""
+    try:
+        module = powerio.StoredModule.from_json(module_json)
+    except ValueError as exc:
+        raise _coded_error("module input", exc) from exc
+    kind = module.kind
+    warnings = _diagnostic_records(module.diagnostics(), _WARNING_SEVERITIES)
+    if kind == "balanced_network":
         return _Loaded(
-            "transmission",
-            net,
-            _package_diagnostic_messages(value),
-            "model-json",
-            package_json=package_json,
+            domain="transmission",
+            network=powerio.BalancedNetwork(module._inner.as_balanced_network()),
+            warnings=warnings,
+            json_format="module",
         )
-    except powerio.PowerIOError as exc:
-        raise _coded_error("parse failed", exc) from exc
-    except (ValueError, KeyError, TypeError) as exc:
-        raise ValueError(f"parse failed: {exc}") from exc
-
-
-def _package_json_from_input(
-    path: Optional[str],
-    content: Optional[str],
-    from_format: Optional[str],
-    options: Optional[Dict[str, Any]] = None,
-) -> str:
-    _one_input(path, content)
-    opts = _opts(options)
-    from_l = _fmt(from_format)
-    try:
-        if path is not None:
-            path = _local_path(path, purpose="path")
-            if from_l in _PACKAGE_JSON_FORMATS or Path(path).suffix.lower() == ".json":
-                try:
-                    text = Path(path).read_text(encoding="utf-8")
-                except OSError as exc:
-                    raise ValueError(f"cannot read input: {exc}") from exc
-                if not _looks_like_package_json(text):
-                    if from_l in _PACKAGE_JSON_FORMATS:
-                        raise ValueError("input is not a .pio.json package")
-                else:
-                    powerio.Package.from_json(text)
-                    return text
-            return powerio.Package.from_file(
-                path, from_format, int(opts.get("scenario", 0))
-            ).to_json()
-        text = _required(content, "content")
-        if _looks_like_package_json(text):
-            powerio.Package.from_json(text)
-            return text
-        if from_l in _PACKAGE_JSON_FORMATS:
-            raise ValueError("content is not a .pio.json package")
-        return powerio.Package.from_str(text, from_format).to_json()
-    except powerio.PowerIOError as exc:
-        raise _coded_error("parse failed", exc) from exc
-    except FileNotFoundError as exc:
-        raise ValueError(f"file not found: {exc}") from exc
-    except ImportError as exc:
-        raise ValueError(str(exc)) from exc
-    except OSError as exc:
-        raise ValueError(f"cannot read input: {exc}") from exc
+    if kind == "multiconductor_network":
+        return _Loaded(
+            domain="distribution",
+            network=dist.MulticonductorNetwork(module._inner.as_multiconductor_network()),
+            warnings=warnings,
+            json_format="module",
+        )
+    raise ValueError(
+        f"the module carries a {kind} value; select and export one static item "
+        "with export_state first"
+    )
 
 
 def _parse_transmission(
@@ -494,7 +512,7 @@ def _parse_transmission(
             return _Loaded(
                 "transmission",
                 result.network,
-                list(result.warnings),
+                _diagnostic_records(result.network.diagnostics(), _WARNING_SEVERITIES),
                 "model-json",
                 int(result.scenario),
             )
@@ -512,7 +530,9 @@ def _parse_transmission(
         raise ValueError(str(exc)) from exc
     except OSError as exc:
         raise ValueError(f"cannot read input: {exc}") from exc
-    return _Loaded("transmission", net, list(net.read_warnings), "model-json")
+    return _Loaded(
+        "transmission", net, _diagnostic_records(net.diagnostics(), _WARNING_SEVERITIES), "model-json"
+    )
 
 
 def _parse_distribution(
@@ -543,7 +563,9 @@ def _parse_distribution(
         raise ValueError(f"file not found: {exc}") from exc
     except OSError as exc:
         raise ValueError(f"cannot read input: {exc}") from exc
-    return _Loaded("distribution", net, list(net.warnings), "bmopf-json")
+    return _Loaded(
+        "distribution", net, _diagnostic_records(net.diagnostics(), _WARNING_SEVERITIES), "bmopf-json"
+    )
 
 
 def _parse_any(
@@ -569,8 +591,8 @@ def _parse_any(
                 text = Path(path).read_text(encoding="utf-8")
             except OSError as exc:
                 raise ValueError(f"cannot read input: {exc}") from exc
-            return _load_package(text)
-        return _load_package(_required(content, "content"))
+            return _load_module(text)
+        return _load_module(_required(content, "content"))
     if _is_gridfm_format(format):
         return _parse_transmission(path, content, format, options)
     if _is_dist_format(format):
@@ -588,7 +610,7 @@ def _parse_any(
             except OSError as exc:
                 raise ValueError(f"cannot read input: {exc}") from exc
             if _looks_like_package_json(text):
-                return _load_package(text)
+                return _load_module(text)
             domain, inferred = _format_from_json_class(*_json_path_class(path), path=path)
             if domain == "distribution":
                 return _parse_distribution(path, content, inferred, include_root)
@@ -597,7 +619,7 @@ def _parse_any(
         text = _required(content, "content")
         if format is None and _jsonish(text):
             if _looks_like_package_json(text):
-                return _load_package(text)
+                return _load_module(text)
             domain, inferred = _format_from_json_class(*_json_class(text))
             if domain == "distribution":
                 return _parse_distribution(path, text, inferred)
@@ -608,7 +630,7 @@ def _parse_any(
 def _load_transport(text: str, json_format: Optional[str]) -> _Loaded:
     kind = _transport_kind(text, json_format)
     if kind == "package":
-        return _load_package(text)
+        return _load_module(text)
     if kind in _BMOPF_JSON_FORMATS or kind in {"pmd-json", "pmd_json", "pmd", "engineering"}:
         return _parse_distribution(None, text, kind)
     try:
@@ -617,7 +639,9 @@ def _load_transport(text: str, json_format: Optional[str]) -> _Loaded:
         raise _coded_error("parse failed", exc) from exc
     except (ValueError, KeyError, TypeError) as exc:
         raise ValueError(f"parse failed: {exc}") from exc
-    return _Loaded("transmission", net, list(net.read_warnings), "model-json")
+    return _Loaded(
+        "transmission", net, _diagnostic_records(net.diagnostics(), _WARNING_SEVERITIES), "model-json"
+    )
 
 
 def _load_any(
@@ -635,7 +659,9 @@ def _load_any(
     content, transport, package_json = content or None, transport or None, package_json or None
     _one_network_input(path, content, transport, package_json)
     if package_json is not None:
-        return _load_package(package_json)
+        # The stored reader upgrades a released 0.9 package one way, so both
+        # document generations load through the module path.
+        return _load_module(package_json)
     if transport is not None:
         return _load_transport(transport, json_format)
     return _parse_any(path, content, format, options)
@@ -709,13 +735,18 @@ def _summary(loaded: _Loaded) -> Dict[str, Any]:
     return summary
 
 
-def _dist_json(net: "dist.MulticonductorNetwork") -> tuple[str, list[str]]:
+def _dist_json(
+    net: "dist.MulticonductorNetwork", warnings: list[Dict[str, Any]]
+) -> tuple[str, list[Dict[str, Any]]]:
+    """Re-serialize to bmopf-json, folding in this reserialization's own
+    emit-time findings (`Conversion.warnings` has no structured form of its
+    own, so it is wrapped) after the caller's already-loaded `warnings`."""
     conv = net.to_format("bmopf-json")
-    return conv.text, list(net.warnings) + list(conv.warnings)
+    return conv.text, warnings + _wrap_plain_warnings(list(conv.warnings))
 
 
 def _write_text(
-    out_path: str, text: str, warnings: list[str], overwrite: bool
+    out_path: str, text: str, warnings: list[Dict[str, Any]], overwrite: bool
 ) -> Dict[str, Any]:
     try:
         mode = "w" if overwrite else "x"
@@ -820,14 +851,14 @@ def _convert_impl(
                     "no conversion path between transmission and distribution formats"
                 )
             conv = loaded.network.to_format(to_format)
-            warnings = loaded.warnings + list(conv.warnings)
+            warnings = loaded.warnings + _wrap_plain_warnings(list(conv.warnings))
         else:
             if loaded.domain != "transmission":
                 raise ValueError(
                     "no conversion path between distribution and transmission formats"
                 )
             conv = loaded.network.to_format(to_format)
-            warnings = loaded.warnings + list(conv.warnings)
+            warnings = loaded.warnings + _wrap_plain_warnings(list(conv.warnings))
     except powerio.PowerIOError as exc:
         raise _coded_error("conversion failed", exc) from exc
     return {"text": conv.text, "warnings": warnings}
@@ -893,7 +924,7 @@ def _save_impl(
         return {
             "dir": result.get("dir", out_path),
             "files": list(result.get("files", [])),
-            "warnings": loaded.warnings + list(result.get("warnings", [])),
+            "warnings": loaded.warnings + _wrap_plain_warnings(list(result.get("warnings", []))),
         }
 
     if _is_dist_format(to_l):
@@ -903,7 +934,8 @@ def _save_impl(
             conv = loaded.network.to_format(target)
         except powerio.PowerIOError as exc:
             raise _coded_error("conversion failed", exc) from exc
-        return _write_text(out_path, conv.text, loaded.warnings + list(conv.warnings), overwrite)
+        warnings = loaded.warnings + _wrap_plain_warnings(list(conv.warnings))
+        return _write_text(out_path, conv.text, warnings, overwrite)
 
     if loaded.domain != "transmission":
         raise ValueError("target is a transmission format but source is distribution")
@@ -911,7 +943,8 @@ def _save_impl(
         conv = loaded.network.to_format(target)
     except powerio.PowerIOError as exc:
         raise _coded_error("conversion failed", exc) from exc
-    return _write_text(out_path, conv.text, loaded.warnings + list(conv.warnings), overwrite)
+    warnings = loaded.warnings + _wrap_plain_warnings(list(conv.warnings))
+    return _write_text(out_path, conv.text, warnings, overwrite)
 
 
 def _summary_impl(
@@ -939,8 +972,9 @@ def _parse_impl(
     content = content or None
     transport_l = _fmt(transport or "json")
     if transport_l in _PACKAGE_JSON_FORMATS:
-        package_json = _package_json_from_input(path, content, from_format, options)
-        loaded = _load_package(package_json)
+        module = _stored_module(path=path, content=content, from_format=from_format)
+        package_json = module.to_json()
+        loaded = _load_module(package_json)
         summary = _summary(loaded)
         diag = _diagnostics_payload(package_json, verbose=True)
         return {
@@ -960,7 +994,7 @@ def _parse_impl(
         raise ValueError("`transport` must be `json` or `package`")
     loaded = _parse_any(path, content, from_format, options)
     if loaded.domain == "distribution":
-        text, warnings = _dist_json(loaded.network)
+        text, warnings = _dist_json(loaded.network, loaded.warnings)
     else:
         text, warnings = loaded.network.to_json(), loaded.warnings
     summary = _summary(loaded)
@@ -994,7 +1028,8 @@ def _normalize_impl(
         norm = loaded.network.to_normalized()
     except powerio.PowerIOError as exc:
         raise _coded_error("normalization failed", exc) from exc
-    normalized = _Loaded("transmission", norm, list(norm.read_warnings), "model-json")
+    norm_warnings = _diagnostic_records(norm.diagnostics(), _WARNING_SEVERITIES)
+    normalized = _Loaded("transmission", norm, norm_warnings, "model-json")
     summary = _summary(normalized)
     return {
         **_header("powerio.normalize"),
@@ -1004,7 +1039,7 @@ def _normalize_impl(
         "json_format": "model-json",
         "json": norm.to_json(),
         "summary": summary,
-        "warnings": list(norm.read_warnings),
+        "warnings": norm_warnings,
     }
 
 
@@ -1261,6 +1296,176 @@ def _diagnostics_tool(package_json: str, verbose: bool = False) -> dict:
 def _display_tool(path: str, from_format: Optional[str] = None) -> dict:
     """Parse a display artifact and return canonical display JSON."""
     return _display_impl(path, from_format)
+
+
+def _stored_module(
+    module_json: Optional[str] = None,
+    path: Optional[str] = None,
+    content: Optional[str] = None,
+    from_format: Optional[str] = None,
+) -> "powerio.StoredModule":
+    """One module input: stored `.pio.json` text, a case path, or case text."""
+    supplied = [value for value in (module_json, path, content) if value]
+    if len(supplied) != 1:
+        raise ValueError("pass exactly one of module_json, path, and content")
+    try:
+        if module_json:
+            return powerio.StoredModule.from_json(module_json)
+        if path is not None:
+            return powerio.StoredModule.from_file(
+                _local_path(path, purpose="module input"), _fmt(from_format)
+            )
+        return powerio.StoredModule.from_str(content or "", _fmt(from_format))
+    except ValueError as exc:
+        raise _coded_error("module input", exc) from exc
+
+
+def _selected_args(
+    time_position: Optional[int], scenario: Optional[str]
+) -> Dict[str, Any]:
+    if (time_position is None) == (scenario is None):
+        raise ValueError("pass exactly one of time_position and scenario")
+    return {"time_position": time_position, "scenario": scenario}
+
+
+_MODULE_INPUT_HELP = (
+    "Input is exactly one of `module_json` (stored `.pio.json` text; a "
+    "released 0.9 package upgrades one way on read), `path`, or `content` "
+    "(case data parsed into a module; `from_format` selects the reader)."
+)
+
+
+@mcp.tool(
+    name="inspect",
+    description="Inspect a module's typed value and discover the operations "
+    "that apply to it. " + _MODULE_INPUT_HELP,
+)
+def _inspect_tool(
+    module_json: Optional[str] = None,
+    path: Optional[str] = None,
+    content: Optional[str] = None,
+    from_format: Optional[str] = None,
+) -> dict:
+    module = _stored_module(module_json, path, content, from_format)
+    return {**_header("powerio.inspect"), **module.inspect()}
+
+
+@mcp.tool(
+    name="state_inventory",
+    description="List the exact typed time point labels or scenario IDs a "
+    "stored module's value can select. " + _MODULE_INPUT_HELP,
+)
+def _state_inventory_tool(
+    module_json: Optional[str] = None,
+    path: Optional[str] = None,
+    content: Optional[str] = None,
+    from_format: Optional[str] = None,
+) -> dict:
+    module = _stored_module(module_json, path, content, from_format)
+    try:
+        inventory = module.state_inventory()
+    except ValueError as exc:
+        raise _coded_error("state inventory", exc) from exc
+    return {**_header("powerio.state_inventory"), "kind": module.kind, **inventory}
+
+
+@mcp.tool(
+    name="select_state",
+    description="Select one existing typed item by time position or scenario "
+    "ID and describe it. Selection never clones the collection or "
+    "serializes it; `export_state` is the separate materialization. "
+    + _MODULE_INPUT_HELP,
+)
+def _select_state_tool(
+    module_json: Optional[str] = None,
+    path: Optional[str] = None,
+    content: Optional[str] = None,
+    from_format: Optional[str] = None,
+    time_position: Optional[int] = None,
+    scenario: Optional[str] = None,
+) -> dict:
+    module = _stored_module(module_json, path, content, from_format)
+    keys = _selected_args(time_position, scenario)
+    try:
+        selected = module.select_state(**keys)
+    except ValueError as exc:
+        raise _coded_error("state selection", exc) from exc
+    return {**_header("powerio.select_state"), **keys, "selected": selected}
+
+
+@mcp.tool(
+    name="export_state",
+    description="Export one selected time point or scenario as an "
+    "independent static module document, with the selection stated in its "
+    "history. " + _MODULE_INPUT_HELP,
+)
+def _export_state_tool(
+    module_json: Optional[str] = None,
+    path: Optional[str] = None,
+    content: Optional[str] = None,
+    from_format: Optional[str] = None,
+    time_position: Optional[int] = None,
+    scenario: Optional[str] = None,
+) -> dict:
+    module = _stored_module(module_json, path, content, from_format)
+    keys = _selected_args(time_position, scenario)
+    try:
+        exported = module.export_state(**keys)
+    except ValueError as exc:
+        raise _coded_error("state export", exc) from exc
+    return {
+        **_header("powerio.export_state"),
+        **keys,
+        "kind": exported.kind,
+        "module_json": exported.to_json(),
+    }
+
+
+@mcp.tool(
+    name="to_balanced_inspect",
+    description="Inspect whether a multiconductor module can lower to a "
+    "balanced network: blockers, assumptions, approximations, and "
+    "unrepresentable fields. " + _MODULE_INPUT_HELP,
+)
+def _to_balanced_inspect_tool(
+    module_json: Optional[str] = None,
+    path: Optional[str] = None,
+    content: Optional[str] = None,
+    from_format: Optional[str] = None,
+    base_mva: float = 100.0,
+) -> dict:
+    module = _stored_module(module_json, path, content, from_format)
+    try:
+        readiness = module.to_balanced_inspect(base_mva)
+    except ValueError as exc:
+        raise _coded_error("lowering inspection", exc) from exc
+    return {**_header("powerio.to_balanced_inspect"), **readiness}
+
+
+@mcp.tool(
+    name="to_balanced",
+    description="Explicitly lower a multiconductor module to a balanced "
+    "module document. Records and source ownership carry over; the pass "
+    "appends its findings and a Transform history entry. "
+    + _MODULE_INPUT_HELP,
+)
+def _to_balanced_tool(
+    module_json: Optional[str] = None,
+    path: Optional[str] = None,
+    content: Optional[str] = None,
+    from_format: Optional[str] = None,
+    base_mva: float = 100.0,
+) -> dict:
+    module = _stored_module(module_json, path, content, from_format)
+    try:
+        lowered = module.to_balanced(base_mva)
+    except ValueError as exc:
+        raise _coded_error("balanced lowering", exc) from exc
+    return {
+        **_header("powerio.to_balanced"),
+        "kind": lowered.kind,
+        "module_json": lowered.to_json(),
+    }
 
 
 # Non-advertised compatibility callables for direct Python imports.

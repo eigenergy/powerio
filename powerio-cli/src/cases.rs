@@ -4,7 +4,7 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::Context;
-use powerio::package::{MulticonductorToBalancedOptions, lower_multiconductor_to_balanced};
+use powerio::transform::{MulticonductorToBalancedOptions, lower_multiconductor_to_balanced};
 use powerio_matrix::format::routing::{Detection, JsonClass, SourceFormat as DetectedFormat};
 use powerio_matrix::network::BalancedNetwork;
 
@@ -98,7 +98,7 @@ fn classify_case_json(text: &str, path: &Path) -> anyhow::Result<DetectedFormat>
         JsonClass::ModelJson => anyhow::bail!(
             "{} is bare powerio model JSON, which is not a case format; read it with \
              the bindings' from_json (powerio.from_json in Python, from_json in Julia, \
-             pio_from_json in C)",
+             pio_balanced_network_from_json in C)",
             path.display()
         ),
         JsonClass::Case(Detection::Ambiguous) => anyhow::bail!(
@@ -247,7 +247,7 @@ fn lower_to_balanced(
                 let diagnostics = e
                     .diagnostics
                     .iter()
-                    .map(|d| d.message.as_str())
+                    .map(powerio_core::Diagnostic::message)
                     .collect::<Vec<_>>()
                     .join("; ");
                 if diagnostics.is_empty() {
@@ -263,10 +263,10 @@ fn lower_to_balanced(
         (lowered.record.approximations.iter())
             .chain(&lowered.record.dropped_fields)
             .map(|s| {
-                powerio::package::diagnostics::render_line(&powerio::package::StructuredDiagnostic::of(
-                    &powerio::package::diagnostics::codes::TRANSFORM_MULTI_TO_BALANCED_UNSUPPORTED_OBJECT,
-                    format!("lowering: {s}"),
-                ))
+                format!(
+                    "{}: lowering: {s}",
+                    powerio::codes::TRANSFORM_MULTI_TO_BALANCED_UNSUPPORTED_OBJECT.code
+                )
             }),
     );
     Ok(LoadedCase {

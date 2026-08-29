@@ -349,6 +349,37 @@ def test_read_warnings_surface():
     assert powerio.parse_file(DATA / "case9.m").read_warnings == []
 
 
+def test_stored_module_multiconductor_accessor_keeps_every_diagnostic():
+    """A stored module's diagnostics, including one whose span references the
+    module's own declared source, survive `as_multiconductor_network` in
+    source order. Regression: the accessor used to build the network handle
+    with no sources carried over, so a span validated against an empty source
+    list and the first span-bearing diagnostic silently dropped itself and
+    every diagnostic after it."""
+    path = DATA / "dist" / "micro" / "xfmr_single_phase.dss"
+    module = powerio.StoredModule.from_file(path)
+    doc = json.loads(module.to_json())
+    source_id = doc["sources"][0]["id"]
+    doc["diagnostics"] = [
+        {"id": "d0", "severity": "warning", "code": "A.B.C", "message": "no span here"},
+        {
+            "id": "d1",
+            "severity": "error",
+            "code": "D.E.F",
+            "message": "in range span",
+            "spans": [{"source": source_id, "byte_start": 0, "byte_end": 10}],
+        },
+        {"id": "d2", "severity": "error", "code": "G.H.I", "message": "trailing error"},
+    ]
+    reloaded = powerio.StoredModule.from_json(json.dumps(doc))
+    net = reloaded._inner.as_multiconductor_network()
+    assert net.warnings() == [
+        "A.B.C: no span here",
+        "D.E.F: in range span",
+        "G.H.I: trailing error",
+    ]
+
+
 def test_json_roundtrip_and_parsed_conversion():
     c = powerio.parse_file(DATA / "case9.m")
     back = powerio.from_json(c.to_json())

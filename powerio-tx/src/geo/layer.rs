@@ -932,7 +932,7 @@ pub trait GeoApplyTarget {
 /// One apply pass over a layer's features. The model-specific lookups and
 /// placements come from the [`GeoApplyTarget`]; the feature dispatch, match
 /// counting, and substation bookkeeping live here, so the balanced network
-/// and the multiconductor glue in `powerio-pkg` report identically.
+/// and the multiconductor glue in `powerio` report identically.
 pub fn apply_geo_features(layer: &GeoLayer, target: &mut impl GeoApplyTarget) -> GeoApplyReport {
     let mut report = GeoApplyReport::default();
     let mut substations = 0usize;
@@ -1147,8 +1147,8 @@ impl BalancedBranchIndex {
 }
 
 /// The payload row uid (`buses:3`), preferring the element's own uid. The same
-/// identity `powerio-pkg` stamps on payload rows, so a layer written from a
-/// package round-trips.
+/// identity `powerio`'s stored layer stamps on payload rows, so a written
+/// layer round-trips.
 fn payload_uid(table: &str, row: usize, uid: Option<&str>) -> String {
     uid.map_or_else(|| format!("{table}:{row}"), str::to_owned)
 }

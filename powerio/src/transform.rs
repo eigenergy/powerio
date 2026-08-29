@@ -2,8 +2,8 @@
 //!
 //! Lowering is where PowerIO is a compiler rather than a parser: every pass that
 //! transforms one model into another (normalization, multiconductor to balanced,
-//! emission to a target format) appends a [`LoweringRecord`] to the package's
-//! `lowering_history`, so the transformation is auditable. The most consequential
+//! emission to a target format) appends a [`LoweringRecord`] to the module's
+//! `history`, so the transformation is auditable. The most consequential
 //! case, multiconductor to balanced, must be an explicit pass with diagnostics,
 //! never a silent positive sequence projection.
 
@@ -21,9 +21,9 @@ use powerio_dist::{
     DistBus, DistLine, DistLineCode, DistLoadVoltageModel, Mat, MulticonductorNetwork,
 };
 
-use crate::package::diagnostics::{DiagnosticSeverity, StructuredDiagnostic, codes};
-use crate::package::model::ModelKind;
-use crate::package::validation::ValidationStatus;
+use crate::stored::legacy09::diagnostics::{DiagnosticSeverity, StructuredDiagnostic, codes};
+use crate::stored::legacy09::model::ModelKind;
+use crate::stored::legacy09::validation::ValidationStatus;
 
 /// One lowering/normalization/emission pass and what it changed.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -128,6 +128,17 @@ impl MulticonductorToBalancedReadiness {
     pub fn is_ready(&self) -> bool {
         self.status <= ValidationStatus::Info
     }
+
+    /// This report's findings as 1.0 module records, `target` rebased onto
+    /// the multiconductor value's own pointer grammar instead of the retired
+    /// `/model/multiconductor_network/...` element path. `diagnostics` itself
+    /// stays the legacy shape for the internal preflight checks that build
+    /// it; a caller that publishes this report (a binding, an MCP tool)
+    /// should publish this instead.
+    #[must_use]
+    pub fn diagnostics_as_module_records(&self) -> Vec<powerio_core::Diagnostic> {
+        multiconductor_diagnostics_to_module_records(&self.diagnostics)
+    }
 }
 
 /// A successful raw multiconductor to balanced lowering result.
@@ -146,24 +157,34 @@ pub struct MulticonductorToBalancedLowering {
 }
 
 /// Structured failure from the raw multiconductor to balanced lowering pass.
+///
+/// `diagnostics` are 1.0 module records: the same codes and severities the
+/// preflight computed, with `target` rebased from the retired
+/// `/model/multiconductor_network/...` element path onto the multiconductor
+/// value's own pointer grammar (e.g. `/sources/0/bus`), since a refusal never
+/// changes the module's value kind.
+///
+/// No `JsonSchema` derive: `powerio_core::Diagnostic` is the runtime record,
+/// not a schema DTO (the stored document schema mirrors it separately as
+/// `DiagnosticV1`, per `powerio::stored::dto`), and this type is not part of
+/// any generated schema family.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct MulticonductorToBalancedError {
     pub options: MulticonductorToBalancedOptions,
     pub status: ValidationStatus,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub diagnostics: Vec<StructuredDiagnostic>,
+    pub diagnostics: Vec<powerio_core::Diagnostic>,
 }
 
 impl MulticonductorToBalancedError {
     pub fn new(
         options: MulticonductorToBalancedOptions,
-        diagnostics: Vec<StructuredDiagnostic>,
+        diagnostics: &[StructuredDiagnostic],
     ) -> Self {
         Self {
             options,
-            status: status_from_diagnostics(&diagnostics),
-            diagnostics,
+            status: status_from_diagnostics(diagnostics),
+            diagnostics: multiconductor_diagnostics_to_module_records(diagnostics),
         }
     }
 }
@@ -171,7 +192,7 @@ impl MulticonductorToBalancedError {
 impl std::fmt::Display for MulticonductorToBalancedError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self.diagnostics.first() {
-            Some(diagnostic) => write!(f, "{}", diagnostic.message),
+            Some(diagnostic) => write!(f, "{}", diagnostic.message()),
             None => f.write_str("multiconductor to balanced lowering failed"),
         }
     }
@@ -179,11 +200,31 @@ impl std::fmt::Display for MulticonductorToBalancedError {
 
 impl std::error::Error for MulticonductorToBalancedError {}
 
+/// Convert legacy preflight findings, whose `element_path` (when present)
+/// reads `/model/multiconductor_network/...`, into 1.0 module records whose
+/// `target` is that same locator rebased onto the multiconductor value's own
+/// pointer grammar. Used by both [`MulticonductorToBalancedError`] and
+/// [`MulticonductorToBalancedReadiness::diagnostics_as_module_records`].
+fn multiconductor_diagnostics_to_module_records(
+    diagnostics: &[StructuredDiagnostic],
+) -> Vec<powerio_core::Diagnostic> {
+    diagnostics
+        .iter()
+        .map(|diagnostic| {
+            let target = crate::stored::legacy09::diagnostics::translate_legacy_target(
+                diagnostic.element_path.as_deref(),
+                "multiconductor_network",
+            );
+            crate::stored::legacy09::diagnostics::to_module_diagnostic(diagnostic, target)
+        })
+        .collect()
+}
+
 /// Check whether a multiconductor package is ready for the lowering pass.
 ///
 /// This is a preflight only: it reports the assumptions and blockers that the
 /// lowering would need to account for, but it does not produce a balanced model
-/// and does not append to `lowering_history`.
+/// and does not append to `history`.
 #[must_use]
 pub fn check_multiconductor_to_balanced_lowering(
     net: &MulticonductorNetwork,
@@ -218,7 +259,7 @@ pub fn check_multiconductor_to_balanced_lowering(
 ///
 /// The pass is explicit. It does not run from readers, writers, matrix builders,
 /// bindings, or package deserialization. Unsupported inputs return structured
-/// `LOWER.MULTI_TO_BALANCED.*` diagnostics in [`MulticonductorToBalancedError`].
+/// `TRANSFORM.MULTI_TO_BALANCED.*` diagnostics in [`MulticonductorToBalancedError`].
 pub fn lower_multiconductor_to_balanced(
     net: &MulticonductorNetwork,
     options: MulticonductorToBalancedOptions,
@@ -227,12 +268,227 @@ pub fn lower_multiconductor_to_balanced(
     if !readiness.is_ready() {
         return Err(MulticonductorToBalancedError::new(
             options,
-            readiness.diagnostics,
+            &readiness.diagnostics,
         ));
     }
 
     let mut state = LoweringState::new(net, options, readiness);
     state.lower()
+}
+
+/// Readiness of one module's value for the balanced lowering: the #398
+/// inspect operation. The value must be a multiconductor network.
+///
+/// # Errors
+/// A value of any other kind, named.
+pub fn check_module_lowering(
+    module: &powerio_core::PioModule<crate::PioValue>,
+    options: MulticonductorToBalancedOptions,
+) -> Result<MulticonductorToBalancedReadiness, powerio_core::Error> {
+    let crate::PioValue::MulticonductorNetwork(net) = module.value() else {
+        return Err(wrong_kind_error(module.value()));
+    };
+    Ok(check_multiconductor_to_balanced_lowering(net, options))
+}
+
+/// Lower a multiconductor module to a balanced module: the #398 transform
+/// operation. The module's common records and runtime source ownership carry
+/// over unchanged; the pass appends its structured findings as module
+/// diagnostics and one Transform history entry stating the chosen base
+/// power, every assumption and approximation, the dropped fields, and the
+/// removed bus and switch identities.
+///
+/// # Errors
+/// A value of any other kind (the module comes back untouched), or the
+/// lowering's structured refusal.
+///
+/// # Panics
+/// Only on a broken internal invariant: the pass's diagnostics carry no
+/// identity and no span, the note lists are capped, and the history id is
+/// minted unused, so every record append succeeds.
+#[allow(clippy::result_large_err)]
+pub fn lower_module_to_balanced(
+    module: powerio_core::PioModule<crate::PioValue>,
+    options: MulticonductorToBalancedOptions,
+) -> Result<
+    powerio_core::PioModule<crate::PioValue>,
+    (
+        powerio_core::PioModule<crate::PioValue>,
+        Box<MulticonductorToBalancedError>,
+    ),
+> {
+    use powerio_core::{HistoryEntry, HistoryKind};
+
+    let crate::PioValue::MulticonductorNetwork(net) = module.value() else {
+        let error = MulticonductorToBalancedError::new(
+            options,
+            &[StructuredDiagnostic::of(
+                &codes::TRANSFORM_MULTI_TO_BALANCED_WRONG_MODEL_KIND,
+                format!(
+                    "the module carries a {} value; the balanced lowering takes a \
+                     multiconductor network",
+                    module.value().kind().as_str()
+                ),
+            )],
+        );
+        return Err((module, Box::new(error)));
+    };
+    let lowering = match lower_multiconductor_to_balanced(net, options) {
+        Ok(lowering) => lowering,
+        Err(error) => return Err((module, Box::new(error))),
+    };
+    let MulticonductorToBalancedLowering {
+        network,
+        record,
+        merged_buses,
+        removed_switches,
+    } = lowering;
+    // Room for the pass's own records is checked against the module maxima
+    // before the value is consumed, so the additions below hold by
+    // construction and a cap-edge input is refused with its module intact.
+    let diagnostics_room =
+        powerio_core::limits::MAX_MODULE_DIAGNOSTICS.saturating_sub(module.diagnostics().len());
+    let history_room =
+        powerio_core::limits::MAX_MODULE_HISTORY_ENTRIES.saturating_sub(module.history().len());
+    if record.diagnostics.len() > diagnostics_room || history_room == 0 {
+        let error = MulticonductorToBalancedError::new(
+            options,
+            &[StructuredDiagnostic::of(
+                &codes::TRANSFORM_MULTI_TO_BALANCED_RECORD_CAP,
+                "the module cannot hold the lowering's findings and history entry; export a \
+                 fresh module before lowering"
+                    .to_string(),
+            )],
+        );
+        return Err((module, Box::new(error)));
+    }
+    let mut module = module.map_value(|_| crate::PioValue::BalancedNetwork(network));
+    // The value's kind changed, so no RFC 6901 target survives the
+    // transform: pre-existing diagnostic targets and the source map pointed
+    // into the consumed multiconductor value and are severed here; the
+    // pass's own findings are emitted with no target for the same reason.
+    module.sever_value_targets();
+    for diagnostic in &record.diagnostics {
+        module
+            .add_diagnostic(crate::stored::legacy09::diagnostics::to_module_diagnostic(
+                diagnostic, None,
+            ))
+            .expect("room was checked; pass diagnostics carry no identity and no span");
+    }
+    let mut entry = HistoryEntry::new(
+        unused_history_id(&module, "multiconductor-to-balanced"),
+        HistoryKind::Transform,
+        "lower_multiconductor_to_balanced",
+    )
+    .expect("static name is valid");
+    let mut notes = vec![format!("balanced power base: {} MVA", options.base_mva)];
+    notes.extend(record.assumptions.iter().cloned());
+    notes.extend(record.approximations.iter().cloned());
+    notes.extend(
+        merged_buses
+            .iter()
+            .map(|(removed, kept)| format!("bus {removed} merged into bus {kept}")),
+    );
+    notes.extend(
+        removed_switches
+            .iter()
+            .map(|switch| format!("switch {switch} removed by its bus merge")),
+    );
+    for note in capped_history_notes(notes, "assumptions") {
+        entry = entry
+            .with_assumption(note)
+            .expect("the note list is under the history cap by construction");
+    }
+    for loss in capped_history_notes(record.dropped_fields.clone(), "dropped fields") {
+        entry = entry
+            .with_loss(loss)
+            .expect("the loss list is under the history cap by construction");
+    }
+    module
+        .add_history_entry(entry)
+        .expect("room was checked and the history id is unique by construction");
+    Ok(module)
+}
+
+/// Cap a history note list at the record limit, replacing the overflow with
+/// one note stating how many entries were elided, and normalize every kept
+/// note to the record layer's requirements: NUL replaced, never empty, and
+/// truncated at a character boundary within the identifier bound with a
+/// visible marker. Truncation and elision are always visible, never silent.
+fn capped_history_notes(notes: Vec<String>, what: &str) -> Vec<String> {
+    let cap = powerio_core::limits::MAX_HISTORY_NOTES;
+    if notes.len() <= cap {
+        return notes.into_iter().map(normalized_note).collect();
+    }
+    let elided = notes.len() - (cap - 1);
+    let mut kept: Vec<String> = notes
+        .into_iter()
+        .take(cap - 1)
+        .map(normalized_note)
+        .collect();
+    kept.push(format!("{elided} more {what} elided"));
+    kept
+}
+
+/// One history note made valid for the record layer, whatever the source
+/// element names carried: nonempty, free of NUL, within the identifier
+/// bound.
+fn normalized_note(note: String) -> String {
+    let mut note = if note.contains('\0') {
+        note.replace('\0', "\u{fffd}")
+    } else {
+        note
+    };
+    let bound = powerio_core::limits::MAX_IDENTIFIER_BYTES;
+    if note.len() > bound {
+        let marker = " [truncated]";
+        let mut end = bound - marker.len();
+        while !note.is_char_boundary(end) {
+            end -= 1;
+        }
+        note.truncate(end);
+        note.push_str(marker);
+    }
+    if note.is_empty() {
+        note.push_str("(an empty note was elided)");
+    }
+    note
+}
+
+/// A history id unused by the module: the stable name, then a numbered
+/// spelling when a prior lowering already recorded one.
+fn unused_history_id(
+    module: &powerio_core::PioModule<crate::PioValue>,
+    base: &str,
+) -> powerio_core::HistoryId {
+    use powerio_core::HistoryId;
+    let taken: std::collections::BTreeSet<&str> = module
+        .history()
+        .iter()
+        .map(|entry| entry.id().as_str())
+        .collect();
+    if !taken.contains(base) {
+        return HistoryId::new(base).expect("static id is valid");
+    }
+    let mut counter = 2usize;
+    loop {
+        let candidate = format!("{base}-{counter}");
+        if !taken.contains(candidate.as_str()) {
+            return HistoryId::new(candidate).expect("numbered id is valid");
+        }
+        counter += 1;
+    }
+}
+
+fn wrong_kind_error(value: &crate::PioValue) -> powerio_core::Error {
+    powerio_core::Error::new(
+        &codes::TRANSFORM_MULTI_TO_BALANCED_WRONG_MODEL_KIND,
+        format!(
+            "the module carries a {} value; the balanced lowering takes a multiconductor \
+             network",
+            value.kind().as_str()
+        ),
+    )
 }
 
 struct LoweringState<'a> {
@@ -358,7 +614,7 @@ impl<'a> LoweringState<'a> {
         let Some(base) = self.voltage_base()? else {
             return Err(MulticonductorToBalancedError::new(
                 self.options,
-                self.record.diagnostics.clone(),
+                &self.record.diagnostics,
             ));
         };
 
@@ -393,7 +649,7 @@ impl<'a> LoweringState<'a> {
             ));
             return Err(MulticonductorToBalancedError::new(
                 self.options,
-                self.record.diagnostics.clone(),
+                &self.record.diagnostics,
             ));
         }
         for finding in network.validate_values() {
@@ -591,7 +847,7 @@ format!(
         {
             return Err(MulticonductorToBalancedError::new(
                 self.options,
-                self.record.diagnostics.clone(),
+                &self.record.diagnostics,
             ));
         }
         self.record.diagnostics.push(StructuredDiagnostic::of(
@@ -915,7 +1171,7 @@ format!("line {line_idx} has no finite length ({length}), so its impedance canno
         );
         Err(MulticonductorToBalancedError::new(
             self.options,
-            diagnostics,
+            &diagnostics,
         ))
     }
 
@@ -936,7 +1192,7 @@ format!("line {line_idx} has no finite length ({length}), so its impedance canno
                 "/model/multiconductor_network/lines/{line_idx}/linecode"
             )),
         );
-        MulticonductorToBalancedError::new(self.options, diagnostics)
+        MulticonductorToBalancedError::new(self.options, &diagnostics)
     }
 
     /// Supported transformers lower into balanced branches: series impedance
@@ -962,7 +1218,10 @@ format!("line {line_idx} has no finite length ({length}), so its impedance canno
             let tap = (high.v_ref * high.tap / base_from) / (low.v_ref * low.tap / base_to);
             let z_scale = (self.options.base_mva * 1_000_000.0 / high.s_rating)
                 * (high.v_ref / base_from).powi(2);
-            let r = ((high.r_pct + low.r_pct) / 100.0) * z_scale;
+            // Each winding states %R on its own power rating; the low winding
+            // figure converts onto the high winding base before the sum.
+            let low_rating_scale = high.s_rating / low.s_rating;
+            let r = ((high.r_pct + low.r_pct * low_rating_scale) / 100.0) * z_scale;
             let x = (transformer.xsc_pct[0] / 100.0) * z_scale;
             let shift = if high.v_ref >= low.v_ref { 30.0 } else { -30.0 };
             let rate = high.s_rating / 1_000_000.0;
@@ -971,6 +1230,15 @@ format!("line {line_idx} has no finite length ({length}), so its impedance canno
                  {shift} degree connection shift (high voltage side leads)",
                 transformer.name
             ));
+            if (low_rating_scale - 1.0).abs() > 1e-9 {
+                self.record.assumptions.push(format!(
+                    "transformer {}: the low winding resistance was converted from its own \
+                     {:.3} kVA base onto the high winding {:.3} kVA base",
+                    transformer.name,
+                    low.s_rating / 1_000.0,
+                    high.s_rating / 1_000.0
+                ));
+            }
             if high.r_neutral.is_some()
                 || high.x_neutral.is_some()
                 || low.r_neutral.is_some()
@@ -1087,7 +1355,7 @@ format!(
             )
             .with_element_path(format!("/model/multiconductor_network/shunts/{shunt_idx}")),
         );
-        MulticonductorToBalancedError::new(self.options, diagnostics)
+        MulticonductorToBalancedError::new(self.options, &diagnostics)
     }
 
     fn lower_generators(&mut self, buses: &[Bus]) -> Vec<Generator> {
@@ -1185,7 +1453,7 @@ format!(
         {
             Err(MulticonductorToBalancedError::new(
                 self.options,
-                self.record.diagnostics.clone(),
+                &self.record.diagnostics,
             ))
         } else {
             Ok(())
@@ -2038,6 +2306,9 @@ fn classify_transformer<'net>(
     if !(high.s_rating.is_finite() && high.s_rating > 0.0) {
         return Err("has no finite positive power rating".to_owned());
     }
+    if !(low.s_rating.is_finite() && low.s_rating > 0.0) {
+        return Err("has no finite positive low winding power rating".to_owned());
+    }
     match transformer.xsc_pct.first() {
         Some(x) if x.is_finite() && *x >= 0.0 => {}
         _ => return Err("states no finite short circuit reactance".to_owned()),
@@ -2059,6 +2330,51 @@ fn check_untyped_objects(
                 ),
             )
             .with_element_path(format!("/model/multiconductor_network/untyped/{i}")),
+        );
+    }
+}
+
+#[cfg(test)]
+mod history_record_tests {
+    use super::{capped_history_notes, unused_history_id};
+
+    #[test]
+    fn note_overflow_is_stated_within_the_cap() {
+        let cap = powerio_core::limits::MAX_HISTORY_NOTES;
+        let notes: Vec<String> = (0..cap + 40).map(|index| format!("note {index}")).collect();
+        let kept = capped_history_notes(notes, "assumptions");
+        assert_eq!(kept.len(), cap);
+        assert_eq!(kept.last().unwrap(), "41 more assumptions elided");
+
+        let short: Vec<String> = (0..3).map(|index| format!("note {index}")).collect();
+        assert_eq!(capped_history_notes(short.clone(), "assumptions"), short);
+    }
+
+    #[test]
+    fn the_history_id_is_minted_unused() {
+        use powerio_core::{HistoryEntry, HistoryId, HistoryKind, PioModule};
+        let mut module = PioModule::new(crate::PioValue::BalancedNetwork(
+            crate::BalancedNetwork::in_memory("t", 100.0, Vec::new(), Vec::new()),
+        ));
+        assert_eq!(
+            unused_history_id(&module, "multiconductor-to-balanced").as_str(),
+            "multiconductor-to-balanced"
+        );
+        for id in ["multiconductor-to-balanced", "multiconductor-to-balanced-2"] {
+            module
+                .add_history_entry(
+                    HistoryEntry::new(
+                        HistoryId::new(id).unwrap(),
+                        HistoryKind::Transform,
+                        "lower_multiconductor_to_balanced",
+                    )
+                    .unwrap(),
+                )
+                .unwrap();
+        }
+        assert_eq!(
+            unused_history_id(&module, "multiconductor-to-balanced").as_str(),
+            "multiconductor-to-balanced-3"
         );
     }
 }

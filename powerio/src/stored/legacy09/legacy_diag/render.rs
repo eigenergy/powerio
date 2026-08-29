@@ -1,6 +1,6 @@
 //! The one renderer behind every text warning channel.
 
-use crate::package::legacy_diag::StructuredDiagnostic;
+use crate::stored::legacy09::legacy_diag::StructuredDiagnostic;
 
 /// Render a finding as one `CODE: message` line.
 ///
@@ -31,7 +31,7 @@ pub fn render_lines(diagnostics: &[StructuredDiagnostic]) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::package::legacy_diag::DiagnosticSeverity;
+    use crate::stored::legacy09::legacy_diag::DiagnosticSeverity;
 
     fn diagnostic(code: &str, message: &str) -> StructuredDiagnostic {
         StructuredDiagnostic::new(code, DiagnosticSeverity::Warning, message)

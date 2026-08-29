@@ -13,6 +13,7 @@ run() { echo "=== $* ==="; "$@"; }
 run cargo fmt --all --check
 run ./scripts/ci-clippy.sh
 run ./scripts/capi-header-parity.sh
+run bash scripts/capi-export-monotonicity.sh
 run ./scripts/capi-header-regen.sh
 
 # A Windows editor has twice corrupted text in a PR: a UTF-8 BOM, and UTF-8
@@ -60,7 +61,7 @@ run cargo test -p powerio-matrix --features gridfm
 run cargo test -p powerio-capi --no-default-features
 run cargo test -p powerio-capi --features arrow
 run cargo test -p powerio-capi --features dist
-run cargo test -p powerio-capi --features arrow,matrix,gridfm,dist,pkg,prob
+run cargo test -p powerio-capi --features arrow,matrix,gridfm,dist,prob
 
 # The C smoke test and the C++ header check, in the two configurations that
 # exercise the most surface. `cargo test` compiles neither, so a stale
@@ -78,11 +79,11 @@ c++ -std=c++17 -DPIO_DIST -I powerio-capi/include powerio-capi/examples/header_c
    -L target/release -lpowerio_capi -o "$smoke_dir/header_cpp_dist"
 run env "$lib_path_var=target/release" "$smoke_dir/header_cpp_dist"
 
-run cargo build -q -p powerio-capi --release --features arrow,matrix,gridfm,dist,pkg,prob
-cc -DPIO_ARROW -DPIO_MATRIX -DPIO_GRIDFM -DPIO_DIST -DPIO_PKG -DPIO_PROB \
+run cargo build -q -p powerio-capi --release --features arrow,matrix,gridfm,dist,prob
+cc -DPIO_ARROW -DPIO_MATRIX -DPIO_GRIDFM -DPIO_DIST -DPIO_PROB \
    -I powerio-capi/include powerio-capi/examples/smoke.c \
    -L target/release -lpowerio_capi -o "$smoke_dir/smoke_release"
-c++ -std=c++17 -DPIO_ARROW -DPIO_MATRIX -DPIO_GRIDFM -DPIO_DIST -DPIO_PKG -DPIO_PROB \
+c++ -std=c++17 -DPIO_ARROW -DPIO_MATRIX -DPIO_GRIDFM -DPIO_DIST -DPIO_PROB \
    -I powerio-capi/include powerio-capi/examples/header_cpp.cpp \
    -L target/release -lpowerio_capi -o "$smoke_dir/header_cpp_release"
 run env "$lib_path_var=target/release" "$smoke_dir/header_cpp_release"

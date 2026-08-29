@@ -13,12 +13,10 @@ powerio.Gen
 powerio.GenCost
 powerio.GridfmOutputs
 powerio.Load
-powerio.BalancedNetwork.__init__
 powerio.BalancedNetwork.connectivity_report
 powerio.BalancedNetwork.reference_bus_index
 powerio.BalancedNetwork.reference_bus_indices
 powerio.BalancedNetwork.write_dcopf_bundle
-powerio.Package.__init__
 powerio.Scheme
 powerio.SensitivitySolver
 powerio.Shunt
@@ -26,4 +24,4 @@ powerio.Switch
 powerio.Units
 powerio._powerio._BalancedNetwork
 powerio._powerio._MulticonductorNetwork
-powerio._powerio._Package
+powerio._powerio._StoredModule

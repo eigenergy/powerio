@@ -16,6 +16,7 @@ import powerio
 DATA = Path(__file__).resolve().parents[2] / "tests" / "data"
 DSS = DATA / "dist" / "micro" / "xfmr_single_phase.dss"
 BMOPF = DATA / "dist" / "bmopf" / "example_ieee13.json"
+PSSE_CASE5 = DATA / "psse" / "case5.raw"
 PMD = DATA / "dist" / "pmd" / "ieee13.json"
 PWD = DATA / "powerworld" / "ACTIVSg200.pwd"
 MINIMAL_BMOPF = '{"bus":{"a":{"terminal_names":["1"]}}}'
@@ -38,6 +39,12 @@ def test_tool_surface_is_semantic():
         "matrix",
         "diagnostics",
         "display",
+        "inspect",
+        "state_inventory",
+        "select_state",
+        "export_state",
+        "to_balanced_inspect",
+        "to_balanced",
     }
     for name in ("parse", "summary", "normalize", "matrix", "display"):
         props = tools[name].input_schema["properties"]
@@ -168,10 +175,9 @@ def test_package_transport_flows_through_summary_matrix_and_save(tmp_path):
     assert parsed["model"] == "balanced"
     assert "package_json" in parsed
     package = json.loads(parsed["package_json"])
-    # The reader accepts the 0.2 lineage; do not pin the patch version.
-    assert package["powerio_version"] == powerio.__version__
-    assert package["model_kind"] == "balanced"
-    assert package["model"]["kind"] == "balanced"
+    assert package["schema"] == "powerio.module"
+    assert package["producer"]["version"] == powerio.__version__
+    assert package["value"]["kind"] == "balanced_network"
 
     package_json = parsed["package_json"]
     assert server.summary(json=package_json)["elements"]["buses"] == 9
@@ -199,8 +205,8 @@ def test_package_transport_flows_through_summary_matrix_and_save(tmp_path):
 def test_package_transport_routes_distribution_by_model_kind():
     parsed = server.parse(path=str(DSS), transport="package")
     package = json.loads(parsed["package_json"])
-    assert package["model_kind"] == "multiconductor"
-    assert package["model"]["kind"] == "multiconductor"
+    assert package["schema"] == "powerio.module"
+    assert package["value"]["kind"] == "multiconductor_network"
 
     summary = server.summary(json=parsed["package_json"])
     assert summary["domain"] == "distribution"
@@ -223,15 +229,21 @@ def test_package_diagnostics():
 
 def test_pre_0_9_package_is_recognized_and_rejected_by_version():
     """A package written before 0.9.0 states `schema_version`, so it has to be
-    recognized as a package before the version gate can name the problem."""
-    parsed = server.parse(path=str(DATA / "case9.m"), transport="package")
-    old = parsed["package_json"].replace('"powerio_version"', '"schema_version"', 1)
+    recognized as a stored document before the version gate can name the
+    problem: the pre 0.9 lineage is refused, never silently misread."""
+    old = json.dumps(
+        {
+            "schema_version": "0.2.1",
+            "model_kind": "balanced",
+            "model": {"kind": "balanced"},
+        }
+    )
     assert server._looks_like_package_json(old)
     with pytest.raises(ValueError) as excinfo:
         server.diagnostics(old)
     message = str(excinfo.value)
     assert "powerio_version" in message
-    assert "0.9.0" in message
+    assert "0.9" in message
 
 def test_minimal_bmopf_json_routes_without_format(tmp_path):
     parsed = server.parse(content=MINIMAL_BMOPF)
@@ -257,7 +269,7 @@ def test_powermodels_json_still_routes_as_transmission():
 
     packaged = server.parse(content=pm, transport="package")
     assert packaged["domain"] == "transmission"
-    assert json.loads(packaged["package_json"])["model_kind"] == "balanced"
+    assert json.loads(packaged["package_json"])["value"]["kind"] == "balanced_network"
     assert packaged["summary"]["elements"]["buses"] == 9
 
 
@@ -342,7 +354,22 @@ def test_parse_failures_carry_the_code_and_the_tools_lead_with_it():
     assert native.value.code == "PARSE.MATPOWER.MALFORMED"
     with pytest.raises(ValueError) as mapped:
         server.summary(content="mpc.bus = [", from_format="matpower")
-    assert str(mapped.value).startswith("PARSE.MATPOWER.MALFORMED: ")
+    text = str(mapped.value)
+    assert text.startswith("PARSE.MATPOWER.MALFORMED: ")
+    # The Rust message already leads with the code; the tool wrapper must not
+    # prefix it a second time.
+    assert text.count("PARSE.MATPOWER.MALFORMED") == 1
+
+
+def test_unknown_format_code_is_not_doubled():
+    with pytest.raises(powerio.PowerIOError) as native:
+        powerio.parse_file(str(DATA / "case9.m"), "not-a-real-format")
+    assert native.value.code == "REQUEST.FORMAT.UNKNOWN"
+    with pytest.raises(ValueError) as mapped:
+        server.summary(path=str(DATA / "case9.m"), from_format="not-a-real-format")
+    text = str(mapped.value)
+    assert text.startswith("REQUEST.FORMAT.UNKNOWN: ")
+    assert text.count("REQUEST.FORMAT.UNKNOWN") == 1
 
 
 def test_empty_transport_text_means_unset():
@@ -612,15 +639,24 @@ def _split_dss_case(tmp_path):
     return root
 
 
+def _warning_texts(warnings: list) -> "list[str]":
+    """Each structured warning record (`code`/`severity`/`message`/`target`)
+    as one searchable string, for tests that check substrings a rendered
+    `CODE: message` line used to carry directly."""
+    return [
+        ": ".join(part for part in (item.get("code"), item.get("message")) if part)
+        for item in warnings
+    ]
+
+
 def test_mcp_parse_widens_dss_includes_to_the_allowed_root(monkeypatch, tmp_path):
     root = _split_dss_case(tmp_path)
     monkeypatch.setenv("POWERIO_MCP_ALLOWED_ROOTS", str(root))
 
     parsed = server.parse(path=str(root / "feeder" / "f.dss"))
     assert parsed["domain"] == "distribution"
-    assert not any("INCLUDE_REFUSED" in w for w in parsed["warnings"]), parsed[
-        "warnings"
-    ]
+    texts = _warning_texts(parsed["warnings"])
+    assert not any("INCLUDE_REFUSED" in text for text in texts), texts
     assert parsed["summary"]["elements"]["lines"] == 1
 
 
@@ -636,8 +672,294 @@ def test_mcp_parse_still_refuses_includes_outside_the_allowed_root(
     monkeypatch.setenv("POWERIO_MCP_ALLOWED_ROOTS", str(root))
 
     parsed = server.parse(path=str(deck))
-    assert any("escapes the include root" in w for w in parsed["warnings"]), parsed[
-        "warnings"
-    ]
+    texts = _warning_texts(parsed["warnings"])
+    assert any("escapes the include root" in text for text in texts), texts
     doc = json.loads(parsed["json"])
     assert "leaked" not in json.dumps(doc)
+
+
+# ---- typed state selection and the balanced lowering over MCP ----------------
+
+LOWERABLE_DSS = """! Three phase feeder the balanced lowering supports.
+Clear
+Set DefaultBaseFrequency=60
+New Circuit.feeder basekv=0.416 pu=1.0 phases=3 bus1=sourcebus MVAsc3=2000 MVAsc1=2100
+New Linecode.lc3 nphases=3 basefreq=60 units=km
+~ rmatrix = (0.211 | 0.049 0.211 | 0.049 0.049 0.211)
+~ xmatrix = (0.747 | 0.673 0.747 | 0.651 0.673 0.747)
+~ cmatrix = (10.0 | 0.0 10.0 | 0.0 0.0 10.0)
+~ normamps=185
+New Line.l1 bus1=sourcebus.1.2.3 bus2=loadbus.1.2.3 phases=3 linecode=lc3 length=0.4 units=km
+New Load.la bus1=loadbus.1.2.3 phases=3 conn=wye kv=0.416 kw=24 pf=0.95 model=1
+"""
+
+
+def _legacy_package_doc(**extra) -> dict:
+    """A released 0.9 package document, the lineage the stored reader upgrades."""
+    network = json.loads(powerio.parse_file(str(DATA / "case9.m")).to_json())
+    return {
+        "powerio_version": "0.9.0",
+        "producer": {"tool": "powerio", "version": "0.9.0"},
+        "model_kind": "balanced",
+        "model": {"kind": "balanced", "balanced_network": network},
+        "origin": {"kind": "in_memory"},
+        "validation": {"status": "ok", "counts": {}},
+        **extra,
+    }
+
+
+def _series_module_json() -> str:
+    legacy = _legacy_package_doc(
+        operating_points={
+            "time_axis": {
+                "periods": 2,
+                "duration_hours": [1.0, 1.0],
+                "labels": ["h0", "h1"],
+            },
+            "points": [
+                {"index": 0, "updates": []},
+                {
+                    "index": 1,
+                    "updates": [
+                        {
+                            "element": {
+                                "table": "generators",
+                                "source_uid": "generators:0",
+                            },
+                            "fields": {"pg": 95.0},
+                        }
+                    ],
+                },
+            ],
+        }
+    )
+    return powerio.StoredModule.from_json(json.dumps(legacy)).to_json()
+
+
+def test_state_inventory_selection_and_export():
+    module_json = _series_module_json()
+
+    inventory = server._state_inventory_tool(module_json=module_json)
+    assert inventory["kind"] == "balanced_operating_point_time_series"
+    assert inventory["keyed_by"] == "time_position"
+    assert [p["label"] for p in inventory["time_points"]] == ["h0", "h1"]
+
+    selected = server._select_state_tool(module_json=module_json, time_position=1)
+    assert selected["selected"]["item"] == "balanced_operating_point"
+    assert "generator_active_power" in selected["selected"]["stated_quantities"]
+
+    exported = server._export_state_tool(module_json=module_json, time_position=1)
+    assert exported["kind"] == "balanced_network"
+    doc = json.loads(exported["module_json"])
+    assert doc["schema"] == "powerio.module" and doc["version"] == 1
+    # The exported static module is accepted by summary, matrix, conversion,
+    # and diagnostics operations.
+    summary = server._summary_tool(package_json=exported["module_json"])
+    assert summary["domain"] == "transmission"
+    assert summary["elements"]["buses"] == 9
+    matrix = server._matrix_tool("ybus_real", package_json=exported["module_json"])
+    assert matrix["shape"] == [9, 9]
+    converted = server.convert(to="matpower", package_json=exported["module_json"])
+    assert "mpc.baseMVA" in converted["text"]
+    inspected = server._inspect_tool(module_json=exported["module_json"])
+    assert inspected["kind"] == "balanced_network"
+    assert "select_state" not in inspected["operations"]
+
+
+def test_selection_refusals_carry_codes():
+    module_json = _series_module_json()
+    with pytest.raises(ValueError, match="REQUEST.STATE.OUT_OF_RANGE"):
+        server._select_state_tool(module_json=module_json, time_position=9)
+    with pytest.raises(ValueError, match="REQUEST.STATE.WRONG_SELECTOR"):
+        server._select_state_tool(module_json=module_json, scenario="base")
+    static_module = powerio.StoredModule.from_file(DATA / "case9.m").to_json()
+    with pytest.raises(ValueError, match="REQUEST.STATE.NOT_A_COLLECTION"):
+        server._state_inventory_tool(module_json=static_module)
+    with pytest.raises(ValueError, match="exactly one of time_position"):
+        server._select_state_tool(module_json=module_json)
+
+
+def test_inspect_discovers_operations():
+    inspected = server._inspect_tool(content=LOWERABLE_DSS, from_format="dss")
+    assert inspected["kind"] == "multiconductor_network"
+    assert "to_balanced" in inspected["operations"]
+    series = server._inspect_tool(module_json=_series_module_json())
+    assert "select_state" in series["operations"]
+    assert "export_state" in series["operations"]
+
+
+def test_to_balanced_inspect_and_transform():
+    readiness = server._to_balanced_inspect_tool(
+        content=LOWERABLE_DSS, from_format="dss"
+    )
+    assert readiness["status"] in ("ok", "info")
+
+    lowered = server._to_balanced_tool(content=LOWERABLE_DSS, from_format="dss")
+    assert lowered["kind"] == "balanced_network"
+    doc = json.loads(lowered["module_json"])
+    assert doc["schema"] == "powerio.module"
+    history = doc.get("history", [])
+    assert any(
+        entry["name"] == "lower_multiconductor_to_balanced"
+        and entry["kind"] == "transform"
+        for entry in history
+    )
+    # The returned module is accepted by summary and matrix operations.
+    summary = server._summary_tool(package_json=lowered["module_json"])
+    assert summary["domain"] == "transmission"
+    matrix = server._matrix_tool("ybus_real", package_json=lowered["module_json"])
+    assert matrix["shape"][0] == summary["elements"]["buses"]
+
+
+def test_to_balanced_refuses_unsupported_input_structured():
+    with pytest.raises(ValueError) as excinfo:
+        server._to_balanced_tool(path=str(DSS))
+    message = str(excinfo.value)
+    assert "TRANSFORM.MULTI_TO_BALANCED" in message
+    # The structured diagnostics ride along as JSON.
+    assert "[" in message and "code" in message
+
+
+TRANSFORMER_DSS = """! Two winding transformer feeder for name normalization.
+Clear
+Set DefaultBaseFrequency=60
+New Circuit.tiny basekv=12.47 pu=1.0 phases=3 bus1=src MVAsc3=2000 MVAsc1=2100
+New Transformer.t1 phases=3 windings=2 buses=(src, sec) conns=(delta, wye) kvs=(12.47, 0.416) kvas=(500, 300) %Rs=(0.5, 0.5) xhl=6
+New Load.l1 bus1=sec phases=3 conn=wye kv=0.416 kw=90 pf=0.95 model=1
+Set VoltageBases=[12.47, 0.416]
+"""
+
+
+def test_hostile_element_names_lower_with_normalized_history(tmp_path):
+    """A module whose transformer name carries a NUL byte and overflows the
+    identifier bound still lowers through the tool; the recorded history
+    notes are normalized rather than dropped or crashing the pass."""
+    feeder = tmp_path / "tiny.dss"
+    feeder.write_text(TRANSFORMER_DSS)
+    module = powerio.StoredModule.from_file(feeder, "dss")
+    doc = json.loads(module.to_json())
+    hostile = "t\u0000evil" + "x" * (70_000)
+    doc["value"]["data"]["transformers"][0]["name"] = hostile
+    lowered = server._to_balanced_tool(module_json=json.dumps(doc))
+    assert lowered["kind"] == "balanced_network"
+    history = json.loads(lowered["module_json"]).get("history", [])
+    entry = next(
+        e for e in history if e["name"] == "lower_multiconductor_to_balanced"
+    )
+    for note in entry.get("assumptions", []) + entry.get("losses", []):
+        assert note
+        assert "\u0000" not in note and "\x00" not in note
+        assert len(note.encode()) <= 65_536
+    assert any(
+        "[truncated]" in note for note in entry.get("assumptions", [])
+    )
+
+
+def test_wrong_kind_lowering_is_refused_by_name():
+    with pytest.raises(ValueError, match="WRONG_MODEL_KIND"):
+        server._to_balanced_tool(path=str(DATA / "case9.m"))
+
+
+# ---- module diagnostics reach the MCP warnings -------------------------------
+
+
+def _balanced_module_with_diagnostics(diagnostics: list) -> str:
+    """A static `balanced_network` module document (exported from the time
+    series fixture) with the given diagnostics injected onto it."""
+    module = powerio.StoredModule.from_json(_series_module_json())
+    exported = module.export_state(time_position=1)
+    doc = json.loads(exported.to_json())
+    doc["diagnostics"] = diagnostics
+    return json.dumps(doc)
+
+
+def test_module_diagnostics_reach_summary_and_convert_warnings():
+    error = {
+        "id": "d-error",
+        "severity": "error",
+        "code": "M.E.1",
+        "message": "an error finding",
+    }
+    note = {
+        "id": "d-note",
+        "severity": "note",
+        "code": "M.N.1",
+        "message": "a note finding",
+    }
+
+    module_doc = _balanced_module_with_diagnostics([error, note])
+    summary = server._summary_tool(package_json=module_doc)
+    # Only the error survives the warning/error filter; the note does not.
+    assert summary["warnings"] == [
+        {"code": "M.E.1", "severity": "error", "message": "an error finding", "target": None}
+    ]
+
+    converted = server.convert(to="matpower", package_json=module_doc)
+    texts = _warning_texts(converted["warnings"])
+    assert "M.E.1: an error finding" in texts
+    assert not any("M.N.1" in text for text in texts)
+
+    note_only_doc = _balanced_module_with_diagnostics([note])
+    assert server._summary_tool(package_json=note_only_doc)["warnings"] == []
+
+    # The same finding, carried by the older released package transport,
+    # upgrades to the identical structured record: the two input forms agree.
+    package = _legacy_package_doc(
+        diagnostics=[
+            {"code": error["code"], "severity": error["severity"], "message": error["message"]}
+        ]
+    )
+    package_summary = server._summary_tool(package_json=json.dumps(package))
+    assert package_summary["warnings"] == [
+        {"code": "M.E.1", "severity": "error", "message": "an error finding", "target": None}
+    ]
+
+
+def test_multiconductor_module_diagnostics_survive_in_order():
+    """Diagnostics carried by a stored multiconductor module reach the MCP
+    warnings in source order, including one whose span references the
+    module's own declared source and a trailing entry after it."""
+    module = powerio.StoredModule.from_str(LOWERABLE_DSS, "dss")
+    doc = json.loads(module.to_json())
+    source_id = doc["sources"][0]["id"]
+    doc["diagnostics"] = [
+        {"id": "d0", "severity": "warning", "code": "A.B.C", "message": "no span here"},
+        {
+            "id": "d1",
+            "severity": "error",
+            "code": "D.E.F",
+            "message": "in range span",
+            "spans": [{"source": source_id, "byte_start": 0, "byte_end": 10}],
+        },
+        {"id": "d2", "severity": "error", "code": "G.H.I", "message": "trailing error"},
+    ]
+    module_doc = json.dumps(doc)
+
+    summary = server._summary_tool(package_json=module_doc)
+    assert summary["warnings"] == [
+        {"code": "A.B.C", "severity": "warning", "message": "no span here", "target": None},
+        {"code": "D.E.F", "severity": "error", "message": "in range span", "target": None},
+        {"code": "G.H.I", "severity": "error", "message": "trailing error", "target": None},
+    ]
+
+
+def test_parse_warnings_are_structured_records_on_every_transport():
+    """A PSS/E read reports six findings. The path transport used to publish
+    them as six plain rendered strings with no way back to code/severity/
+    target, while the package transport (which reads back through a stored
+    module) already published six dicts. Both now publish the identical
+    structured list."""
+    via_path = server.parse(path=str(PSSE_CASE5))
+    via_package = server.parse(path=str(PSSE_CASE5), transport="package")
+
+    for parsed in (via_path, via_package):
+        warnings = parsed["warnings"]
+        assert len(warnings) == 6, warnings
+        for record in warnings:
+            assert isinstance(record, dict), warnings
+            assert record.keys() >= {"code", "severity", "message"}
+            assert record["code"]
+            assert record["severity"] in ("error", "warning", "remark", "note")
+            assert record["message"]
+
+    assert via_path["warnings"] == via_package["warnings"]

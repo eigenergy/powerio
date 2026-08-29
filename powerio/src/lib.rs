@@ -46,9 +46,9 @@ pub type Result<T> = std::result::Result<T, powerio_core::Error>;
 /// The distribution network type; [`powerio_dist::parse`] routes to it.
 pub use powerio_dist::MulticonductorNetwork;
 
-/// A problem instance builder. `powerio-prob` builds problem instances only;
-/// it has no solution type to re-export alongside this one.
-pub use powerio_prob::AcOpfInstance;
+/// The headline problem instance and solution types. The full families live
+/// in [`powerio_prob`]; these two anchor the ontology at the crate root.
+pub use powerio_prob::{AcOpfInstance, AcOpfSolution};
 
 /// Matrix and graph data, re-exported from `powerio-matrix` under the
 /// `matrix` feature. Matrix construction is never a parse result, so the
@@ -57,16 +57,17 @@ pub use powerio_prob::AcOpfInstance;
 #[cfg(feature = "matrix")]
 pub use powerio_matrix as matrix;
 
+pub mod codes;
 #[cfg(feature = "gridfm")]
 mod collect;
+pub mod dist_geo;
 #[cfg(feature = "gridfm")]
 pub mod gridfm;
-
-pub mod package;
 pub mod select;
 pub mod stored;
 pub mod write;
 pub use write::{write_module_as, write_module_str, write_module_str_with_options};
+pub mod transform;
 
 /// The replayable operating state, named at the crate root beside the other
 /// module types. From this layer up the 1.0 state type in powerio-prob is the

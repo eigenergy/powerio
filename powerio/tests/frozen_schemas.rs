@@ -16,23 +16,23 @@ fn fnv1a(bytes: &[u8]) -> u64 {
     hash
 }
 
-/// The document for this build's lineage has to be committed, not merely
-/// generatable. The CI gate regenerates it and diffs `docs/schema`, and a
-/// version bump that moves the lineage writes a NEW directory, which a diff of
+/// The document for this build's stored module version has to be committed,
+/// not merely generatable. The CI gate regenerates it and diffs
+/// `docs/schema`, and a version bump writes a NEW directory, which a diff of
 /// tracked files does not see. This fails under plain `cargo test` the moment
 /// the version moves without the document following it.
 #[test]
-fn the_current_lineage_document_is_committed() {
-    let lineage = powerio::version::lineage_path();
-    let path = format!("../docs/schema/pio-package/{lineage}/schema.json");
+fn the_current_module_document_is_committed() {
+    let version = powerio::stored::SCHEMA_VERSION;
+    let path = format!("../docs/schema/pio-module/{version}/schema.json");
     let text = std::fs::read_to_string(&path).unwrap_or_else(|e| {
         panic!(
             "{path} is the schema document this build serves. Generate it with \
-             `cargo run -p powerio-pkg --example generate_schemas --features schema -- \
+             `cargo run -p powerio --example generate_schemas --features schema -- \
              docs/schema` and commit it: {e}"
         )
     });
-    let id = format!("https://powerio.dev/schema/pio-package/{lineage}");
+    let id = format!("https://powerio.dev/schema/pio-module/{version}/schema.json");
     assert!(
         text.contains(&id),
         "{path} does not declare `$id` {id}; regenerate it"
@@ -41,7 +41,12 @@ fn the_current_lineage_document_is_committed() {
 
 #[test]
 fn retired_schema_documents_stay_published_byte_for_byte() {
-    let frozen: [(&str, usize, u64); 4] = [
+    let frozen: [(&str, usize, u64); 5] = [
+        (
+            "../docs/schema/pio-package/0.9/schema.json",
+            187_720,
+            0x0635_616a_e88c_cfbe,
+        ),
         (
             "../docs/schema/pio-package/0.1/schema.json",
             125_750,
