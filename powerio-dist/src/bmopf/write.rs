@@ -970,7 +970,7 @@ impl Writer {
             if value.is_object() {
                 o.insert(key.clone(), value.clone());
             } else {
-                self.warn(&C::EMIT_BMOPF_RETAINED_SOURCE_ONLY, format!(
+                self.warn(&C::EMIT_BMOPF_FIELD_DROPPED, format!(
                     "control_profile {}: extra `{key}` is not an object; dropped from the output",
                     profile.name
                 ));
@@ -1081,7 +1081,7 @@ impl Writer {
             if IBR_EXTRA_FIELDS.contains(&key.as_str()) {
                 o.insert(key.clone(), value.clone());
             } else {
-                self.warn(&C::EMIT_BMOPF_RETAINED_SOURCE_ONLY, format!(
+                self.warn(&C::EMIT_BMOPF_FIELD_DROPPED, format!(
                     "ibr {}: extra `{key}` has no place in the BMOPF schema; dropped from the output",
                     ibr.name
                 ));
@@ -3015,8 +3015,72 @@ fn json_enum<T: serde::Serialize>(value: T) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::DistLoadVoltageModel;
+    use crate::model::{DistLoadVoltageModel, IbrPrimeMover, IbrTopology};
     use crate::testkit::parse_bmopf_str;
+
+    /// A dropped field's diagnostic code must never claim the field was
+    /// kept, and a kept-under-extras diagnostic must never claim the field
+    /// was dropped. Exercises the writer's own field-dropped and
+    /// retained-source-only call sites directly, since the two only differ
+    /// by which paths trigger each one.
+    #[test]
+    fn dropped_and_retained_bmopf_diagnostics_do_not_contradict_their_own_message() {
+        let mut w = Writer {
+            options: BmopfWriteOptions::default(),
+            warnings: crate::diagnostics::Diagnostics::new(),
+            grounded: BTreeMap::new(),
+            transformer_overflow: Map::new(),
+            dropped_extras: BTreeMap::new(),
+        };
+
+        // A non-object control_profile extra and an ibr extra outside the
+        // allowed set both take the field-dropped path.
+        let mut profile = DistControlProfile::new("cp1");
+        profile.extras.insert("weird".into(), json!(42));
+        w.control_profile(&profile);
+
+        let mut ibr = DistIbr::new(
+            "pv1",
+            "b1",
+            vec!["1".into(), "2".into(), "3".into()],
+            IbrTopology::ThreeLeg,
+            IbrPrimeMover::Pv,
+            vec![1.0, 1.0, 1.0],
+        );
+        ibr.extras.insert("not_a_schema_field".into(), json!(1));
+        w.ibr(&ibr);
+
+        // A moved transformer field takes the retained-under-extras path.
+        let mut by_subtype = Map::new();
+        by_subtype.insert("single_phase".into(), json!({ "t1": { "tap": 1.05 } }));
+        w.split_transformer_overflow(&mut by_subtype);
+
+        let records = w.warnings.records();
+        let dropped: Vec<_> = records
+            .iter()
+            .filter(|d| d.code() == "EMIT.BMOPF.FIELD_DROPPED")
+            .collect();
+        let retained: Vec<_> = records
+            .iter()
+            .filter(|d| d.code() == "EMIT.BMOPF.RETAINED_SOURCE_ONLY")
+            .collect();
+        assert!(!dropped.is_empty(), "{records:?}");
+        assert!(!retained.is_empty(), "{records:?}");
+        for d in dropped {
+            assert!(
+                !d.message().contains("kept under extras"),
+                "FIELD_DROPPED message claims the field was kept: {}",
+                d.message()
+            );
+        }
+        for d in retained {
+            assert!(
+                !d.message().contains("dropped"),
+                "RETAINED_SOURCE_ONLY message claims the field was dropped: {}",
+                d.message()
+            );
+        }
+    }
 
     #[test]
     fn load_voltage_models_round_trip_through_bmopf() {
