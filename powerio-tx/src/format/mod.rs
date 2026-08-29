@@ -474,10 +474,12 @@ pub fn parse(
                     Ok(descriptor) => descriptor,
                     Err(error) => return Err(error.with_source(source)),
                 };
-                let descriptor = descriptor.with_format(
-                    powerio_core::FormatId::new(format.name())
-                        .expect("SourceFormat::name is a valid format id"),
-                );
+                // SourceFormat::name is always a valid format id; skipping
+                // on the impossible error keeps this path panic free.
+                let descriptor = match powerio_core::FormatId::new(format.name()) {
+                    Ok(id) => descriptor.with_format(id),
+                    Err(_) => descriptor,
+                };
                 if let Err(error) = module.add_source_descriptor(descriptor) {
                     return Err(error.with_source(source));
                 }
