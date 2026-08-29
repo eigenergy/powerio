@@ -26,6 +26,10 @@ pub const NORMALIZED_SOLVER_TABLES_PASS: &str = "balanced-to-normalized-solver-t
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[non_exhaustive]
+// Frozen 0.9 reader plumbing: the legacy09 upgrade in the powerio crate is
+// the one remaining consumer, so the type stays reachable but leaves the
+// documented surface. It goes when legacy09 retires.
+#[doc(hidden)]
 pub struct NormalizedSolverTables {
     pub pass: String,
     pub network_name: String,
@@ -95,6 +99,10 @@ pub struct SolverTableIndex {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[non_exhaustive]
+// Frozen 0.9 reader plumbing: the legacy09 upgrade in the powerio crate is
+// the one remaining consumer, so the type stays reachable but leaves the
+// documented surface. It goes when legacy09 retires.
+#[doc(hidden)]
 pub struct SolverBusRow {
     pub index: usize,
     pub bus_id: BusId,
@@ -118,6 +126,10 @@ pub struct SolverBusRow {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[non_exhaustive]
+// Frozen 0.9 reader plumbing: the legacy09 upgrade in the powerio crate is
+// the one remaining consumer, so the type stays reachable but leaves the
+// documented surface. It goes when legacy09 retires.
+#[doc(hidden)]
 pub struct SolverLoadRow {
     pub index: usize,
     pub source_row: Option<usize>,
@@ -130,6 +142,10 @@ pub struct SolverLoadRow {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[non_exhaustive]
+// Frozen 0.9 reader plumbing: the legacy09 upgrade in the powerio crate is
+// the one remaining consumer, so the type stays reachable but leaves the
+// documented surface. It goes when legacy09 retires.
+#[doc(hidden)]
 pub struct SolverShuntRow {
     pub index: usize,
     pub source_row: Option<usize>,
@@ -141,6 +157,10 @@ pub struct SolverShuntRow {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[non_exhaustive]
+// Frozen 0.9 reader plumbing: the legacy09 upgrade in the powerio crate is
+// the one remaining consumer, so the type stays reachable but leaves the
+// documented surface. It goes when legacy09 retires.
+#[doc(hidden)]
 pub struct SolverBranchRow {
     pub index: usize,
     pub source_row: Option<usize>,
@@ -167,6 +187,10 @@ pub struct SolverBranchRow {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[non_exhaustive]
+// Frozen 0.9 reader plumbing: the legacy09 upgrade in the powerio crate is
+// the one remaining consumer, so the type stays reachable but leaves the
+// documented surface. It goes when legacy09 retires.
+#[doc(hidden)]
 pub struct SolverSwitchRow {
     pub index: usize,
     pub source_row: Option<usize>,
@@ -192,6 +216,10 @@ pub enum SolverArcTerminal {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[non_exhaustive]
+// Frozen 0.9 reader plumbing: the legacy09 upgrade in the powerio crate is
+// the one remaining consumer, so the type stays reachable but leaves the
+// documented surface. It goes when legacy09 retires.
+#[doc(hidden)]
 pub struct SolverArcRow {
     pub index: usize,
     pub branch_index: usize,
@@ -208,6 +236,10 @@ pub struct SolverArcRow {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[non_exhaustive]
+// Frozen 0.9 reader plumbing: the legacy09 upgrade in the powerio crate is
+// the one remaining consumer, so the type stays reachable but leaves the
+// documented surface. It goes when legacy09 retires.
+#[doc(hidden)]
 pub struct SolverGeneratorRow {
     pub index: usize,
     pub source_row: Option<usize>,
@@ -228,6 +260,10 @@ pub struct SolverGeneratorRow {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[non_exhaustive]
+// Frozen 0.9 reader plumbing: the legacy09 upgrade in the powerio crate is
+// the one remaining consumer, so the type stays reachable but leaves the
+// documented surface. It goes when legacy09 retires.
+#[doc(hidden)]
 pub struct SolverStorageRow {
     pub index: usize,
     pub source_row: Option<usize>,
@@ -253,6 +289,10 @@ pub struct SolverStorageRow {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[non_exhaustive]
+// Frozen 0.9 reader plumbing: the legacy09 upgrade in the powerio crate is
+// the one remaining consumer, so the type stays reachable but leaves the
+// documented surface. It goes when legacy09 retires.
+#[doc(hidden)]
 pub struct SolverHvdcRow {
     pub index: usize,
     pub source_row: Option<usize>,
@@ -278,6 +318,10 @@ pub struct SolverHvdcRow {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[non_exhaustive]
+// Frozen 0.9 reader plumbing: the legacy09 upgrade in the powerio crate is
+// the one remaining consumer, so the type stays reachable but leaves the
+// documented surface. It goes when legacy09 retires.
+#[doc(hidden)]
 pub struct SolverCostRow {
     pub model: u8,
     pub startup: f64,

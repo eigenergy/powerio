@@ -772,7 +772,29 @@ pub unsafe extern "C" fn pio_module_lowering_readiness_json(
                 },
             )
             .map_err(|error| error_from_core(&error))?;
-            let text = serde_json::to_string(&readiness).map_err(|error| {
+            // Publish the 1.0 record shape: the readiness struct's own
+            // diagnostics field is the frozen 0.9 form its internal checks
+            // build, so the report swaps it for the module records.
+            let mut value = serde_json::to_value(&readiness).map_err(|error| {
+                error_from_parts(codes::EMIT_CAPI_SERIALIZE_FAILED.code, &error.to_string())
+            })?;
+            let records = readiness.diagnostics_as_module_records();
+            if let serde_json::Value::Object(map) = &mut value {
+                if records.is_empty() {
+                    map.remove("diagnostics");
+                } else {
+                    map.insert(
+                        "diagnostics".to_owned(),
+                        serde_json::to_value(&records).map_err(|error| {
+                            error_from_parts(
+                                codes::EMIT_CAPI_SERIALIZE_FAILED.code,
+                                &error.to_string(),
+                            )
+                        })?,
+                    );
+                }
+            }
+            let text = serde_json::to_string(&value).map_err(|error| {
                 error_from_parts(codes::EMIT_CAPI_SERIALIZE_FAILED.code, &error.to_string())
             })?;
             owned_string(text)
@@ -2485,5 +2507,39 @@ mod tests {
             pio_error_release(retained);
             pio_error_release(std::ptr::null_mut());
         }
+    }
+
+    /// The readiness report publishes the 1.0 record shape: `target` keys,
+    /// the four 1.0 severities, and no legacy `element_path`.
+    #[cfg(feature = "dist")]
+    #[test]
+    fn lowering_readiness_reports_module_records() {
+        let path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../tests/data/dist/opendss/ieee13/IEEE13Nodeckt.dss"
+        );
+        let c_path = std::ffi::CString::new(path).unwrap();
+        let mut error: *mut PioError = std::ptr::null_mut();
+        let module = unsafe { pio_parse_file(c_path.as_ptr(), std::ptr::null(), &raw mut error) };
+        assert!(!module.is_null());
+        let text = unsafe { pio_module_lowering_readiness_json(module, 100.0, &raw mut error) };
+        assert!(!text.is_null());
+        let json = unsafe { std::ffi::CStr::from_ptr(text) }.to_str().unwrap();
+        let value: serde_json::Value = serde_json::from_str(json).unwrap();
+        let records = value["diagnostics"].as_array().expect("records");
+        assert!(!records.is_empty());
+        for record in records {
+            assert!(record.get("element_path").is_none(), "{record}");
+            let severity = record["severity"].as_str().unwrap();
+            assert!(
+                ["error", "warning", "remark", "note"].contains(&severity),
+                "{severity}"
+            );
+            if let Some(target) = record.get("target").and_then(|t| t.as_str()) {
+                assert!(target.starts_with('/'), "{target}");
+            }
+        }
+        unsafe { crate::pio_string_release(text) };
+        unsafe { pio_module_release(module) };
     }
 }
