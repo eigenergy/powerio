@@ -26,12 +26,34 @@
 pub use powerio_tx::*;
 
 /// Core types a consumer needs to name a module: the generic module wrapper,
-/// the source it was parsed from, a byte span into a source, and the two
-/// repeated-value containers. `Error` and `Diagnostic` already arrive through
-/// [`powerio_tx`]'s own re-export.
-pub use powerio_core::{PioModule, ScenarioSet, Source, SourceSpan, TimePoint, TimeSeries};
+/// the source it was parsed from, a byte span into a source, the output
+/// destination a write commits to, and the two repeated-value containers.
+/// `Diagnostic` already arrives through [`powerio_tx`]'s own re-export, since
+/// that one is itself `powerio_core::Diagnostic`.
+pub use powerio_core::{
+    Destination, PioModule, ScenarioSet, Source, SourceSpan, TimePoint, TimeSeries,
+};
+
+/// `powerio_tx::*` above already re-exports an `Error`/`Result` pair, but
+/// those are powerio-tx's own 0.9 enum and its alias over it, tied to its
+/// text format readers, not what [`parse`] and the source layer return. An
+/// explicit `use` of a name shadows a glob import of the same name, so these
+/// two items are what make `powerio::Error`/`powerio::Result` name the type
+/// the facade's own functions actually use.
+pub use powerio_core::Error;
+pub type Result<T> = std::result::Result<T, powerio_core::Error>;
+
+/// The distribution network type; [`powerio_dist::parse`] routes to it.
+pub use powerio_dist::MulticonductorNetwork;
+
+/// A problem instance builder. `powerio-prob` builds problem instances only;
+/// it has no solution type to re-export alongside this one.
+pub use powerio_prob::AcOpfInstance;
 
 pub mod package;
+/// The package layer's replayable operating state, named at the crate root
+/// beside the other module types.
+pub use package::OperatingPoint;
 mod value;
 pub use value::{FromPioValue, PioValue, PioValueKind, ValueKindMismatch, try_into_typed};
 

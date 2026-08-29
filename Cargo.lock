@@ -2010,6 +2010,7 @@ dependencies = [
  "num-complex",
  "powerio-core",
  "powerio-dist",
+ "powerio-prob",
  "powerio-tx",
  "schemars",
  "serde",
