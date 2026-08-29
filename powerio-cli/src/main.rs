@@ -104,9 +104,10 @@ enum Command {
         #[arg(short, long)]
         output: PathBuf,
         /// DC susceptance convention. 0.8 defaulted to `paper-pure`, now
-        /// spelled `reactance-only`; the default is `series`, a different
-        /// formula, so an unqualified run changes numbers against 0.8.
-        #[arg(long, value_enum, default_value = "series")]
+        /// spelled `reactance-only`; the default is `series-susceptance`, a
+        /// different formula, so an unqualified run changes numbers against
+        /// 0.8. The 0.9 spellings stay as aliases.
+        #[arg(long, value_enum, default_value = "series-susceptance")]
         convention: DcConvArg,
         /// Unit system for power/cost quantities.
         #[arg(long, value_enum, default_value = "per-unit")]
@@ -132,9 +133,10 @@ enum Command {
         #[arg(short, long)]
         output: PathBuf,
         /// DC susceptance convention. 0.8 defaulted to `paper-pure`, now
-        /// spelled `reactance-only`; the default is `series`, a different
-        /// formula, so an unqualified run changes numbers against 0.8.
-        #[arg(long, value_enum, default_value = "series")]
+        /// spelled `reactance-only`; the default is `series-susceptance`, a
+        /// different formula, so an unqualified run changes numbers against
+        /// 0.8. The 0.9 spellings stay as aliases.
+        #[arg(long, value_enum, default_value = "series-susceptance")]
         convention: DcConvArg,
         /// Sensitivity solve path.
         #[arg(long, value_enum, default_value = "auto")]
@@ -597,11 +599,16 @@ impl From<SchemeArg> for Scheme {
 enum DcConvArg {
     /// The whole series impedance: `imag(inv(r + jx))`, with phase shift
     /// injections.
-    #[value(name = "series", alias = "series-impedance")]
+    #[value(
+        name = "series-susceptance",
+        alias = "series",
+        alias = "series-impedance"
+    )]
     SeriesSusceptance,
     /// `-1/(x tau)`, with phase shift injections, matching MATPOWER
     /// `makeBdc`.
-    Matpower,
+    #[value(name = "tap-adjusted-reactance", alias = "matpower")]
+    TapAdjustedReactance,
     /// `-1/x`, ignoring resistance, taps, and shifts: the textbook DC
     /// linearization a published result reproduces.
     #[value(name = "reactance-only")]
@@ -612,7 +619,7 @@ impl From<DcConvArg> for DcConvention {
     fn from(value: DcConvArg) -> Self {
         match value {
             DcConvArg::SeriesSusceptance => Self::SeriesSusceptance,
-            DcConvArg::Matpower => Self::TapAdjustedReactance,
+            DcConvArg::TapAdjustedReactance => Self::TapAdjustedReactance,
             DcConvArg::ReactanceOnly => Self::ReactanceOnly,
         }
     }
@@ -2059,9 +2066,9 @@ fn read_network(
 mod tests {
     use super::cases::looks_like_distribution_input;
     use super::{
-        Cli, Command, FamilyCase, FormatArg, GenCostCliOptions, distribution_summary_json,
-        infer_input_family, module_text, parse_family_case, run_convert, run_module,
-        transmission_summary_json,
+        Cli, Command, DcConvArg, FamilyCase, FormatArg, GenCostCliOptions,
+        distribution_summary_json, infer_input_family, module_text, parse_family_case,
+        run_convert, run_module, transmission_summary_json,
     };
     use clap::Parser;
     use std::path::Path;
@@ -2495,6 +2502,26 @@ mpc.branch = [
             assert!(
                 super::is_relative_component_path(good),
                 "{good:?} was rejected as a sidecar path"
+            );
+        }
+    }
+
+    /// The primary --convention tokens are the 1.0 formula names; the 0.9
+    /// spellings survive only as aliases.
+    #[test]
+    fn convention_tokens_are_the_formula_names() {
+        use clap::ValueEnum;
+        use powerio_matrix::matrix::DcConvention;
+        for arg in DcConvArg::value_variants() {
+            let primary = arg.to_possible_value().unwrap().get_name().to_string();
+            let parsed = DcConvention::from_formula_name(&primary.replace('-', "_"))
+                .unwrap_or_else(|| panic!("{primary} is not a formula name"));
+            assert_eq!(parsed, DcConvention::from(*arg));
+        }
+        for alias in ["series", "series-impedance", "matpower"] {
+            assert!(
+                DcConvArg::from_str(alias, false).is_ok(),
+                "{alias} must stay accepted as an alias"
             );
         }
     }

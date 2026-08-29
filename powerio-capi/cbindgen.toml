@@ -85,12 +85,12 @@ header = """
  * not change; a consumer addresses columns by name, never by position.
  *
  * Optional features, probed at runtime with pio_has_feature("arrow" |
- * "matrix" | "gridfm" | "dist" | "prob"): `arrow` adds
- * pio_balanced_network_to_arrow (guarded by PIO_ARROW), `matrix` the
- * balanced matrix Arrow tables, `gridfm` the GridFM Parquet parse routing
- * (guarded by PIO_GRIDFM), `dist` the multiconductor value family (guarded
- * by PIO_DIST), and `prob` the problem instance and solution families
- * (guarded by PIO_PROB). Each symbol's own #if states what it needs.
+ * "matrix" | "gridfm" | "dist" | "prob"). Only `arrow` and `dist` gate
+ * symbols (PIO_ARROW, PIO_DIST; each gated symbol's own #if states what it
+ * needs). `matrix` adds the balanced matrix Arrow tables, `gridfm` the
+ * GridFM Parquet parse routing, and `prob` the problem instance and
+ * solution parse routing behind symbols that always link; probe the
+ * feature, never the symbol, for those three.
  *
  * Checked in and generated; regenerate from the Rust source with
  *   cbindgen --config cbindgen.toml --crate powerio-capi --output include/powerio.h

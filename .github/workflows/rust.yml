@@ -229,6 +229,10 @@ jobs:
     # of sync with include/powerio.h.
     - name: Header symbol parity
       run: bash scripts/capi-header-parity.sh
+    # Doc comments render verbatim into powerio.h; check they agree with the
+    # signatures, table ids, and ownership verbs they describe.
+    - name: Doc comment integrity
+      run: python3 scripts/capi-doc-integrity.py
     # A declared entry point may leave the header only on a head that raises
     # PIO_ABI_VERSION. This job has no PowerIO.jl checkout; the companion
     # clause runs in julia-binding.yml, which has both trees.
