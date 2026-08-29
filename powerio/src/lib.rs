@@ -90,9 +90,8 @@ pub fn parse(
         RoutedFamily::Gridfm => parse_gridfm(source),
         RoutedFamily::Stored => parse_stored(source),
         RoutedFamily::Egret => parse_egret(source),
-        RoutedFamily::Balanced => {
-            format::parse(source).map(|module| module.map_value(PioValue::from))
-        }
+        RoutedFamily::Balanced(json_class) => format::parse_with_json_class(source, json_class)
+            .map(|module| module.map_value(PioValue::from)),
     }
 }
 
@@ -224,9 +223,13 @@ fn parse_egret(
 }
 
 /// The family a source routes to. The balanced hub is the default: it owns
-/// the guidance for unknown names and refused shapes.
+/// the guidance for unknown names and refused shapes. `Balanced` carries the
+/// JSON classification when routing here was itself the result of one (so
+/// the balanced hub does not classify the same text a second time); `None`
+/// when the source routed here by extension, by a declared token, or by a
+/// directory shape, none of which run a JSON classification at all.
 enum RoutedFamily {
-    Balanced,
+    Balanced(Option<format::routing::JsonClass>),
     Distribution,
     Goc3,
     Bmopf,
@@ -263,7 +266,7 @@ fn routed_family(
         {
             return Ok(RoutedFamily::Gridfm);
         }
-        return Ok(RoutedFamily::Balanced);
+        return Ok(RoutedFamily::Balanced(None));
     }
     let extension = std::path::Path::new(source.name())
         .extension()
@@ -277,7 +280,7 @@ fn routed_family(
         // else (a nameless in-memory source above all) can still carry a
         // JSON document, so content that opens one routes by classification,
         // mirroring the balanced hub's own sniff.
-        "m" | "raw" | "aux" | "epc" | "pwb" | "pwd" => Ok(RoutedFamily::Balanced),
+        "m" | "raw" | "aux" | "epc" | "pwb" | "pwd" => Ok(RoutedFamily::Balanced(None)),
         _ => {
             let jsonish = source.primary_buffer().is_ok_and(|buffer| {
                 std::str::from_utf8(buffer.content_bytes()).is_ok_and(|text| {
@@ -292,7 +295,7 @@ fn routed_family(
             if jsonish {
                 json_family(source)
             } else {
-                Ok(RoutedFamily::Balanced)
+                Ok(RoutedFamily::Balanced(None))
             }
         }
     }
@@ -306,11 +309,13 @@ fn json_family(
 
     let buffer = source.primary_buffer()?;
     // Family routing needs decoded text; a non-UTF-8 `.json` fails in
-    // the balanced hub with its own wording.
+    // the balanced hub with its own wording. Classification never ran, so
+    // the balanced hub gets no hint and classifies it itself.
     let Ok(text) = std::str::from_utf8(buffer.content_bytes()) else {
-        return Ok(RoutedFamily::Balanced);
+        return Ok(RoutedFamily::Balanced(None));
     };
-    match format::routing::classify_json_text(text) {
+    let class = format::routing::classify_json_text(text);
+    match class {
         JsonClass::Case(Detection::Known(SourceFormat::Transmission(
             TransmissionFormat::Goc3Json,
         ))) => Ok(RoutedFamily::Goc3),
@@ -328,10 +333,11 @@ fn json_family(
         }
         JsonClass::Module => Ok(RoutedFamily::Stored),
         // The balanced hub's own JSON detection carries the refusal
-        // wording for unrecognized or ambiguous documents, and decodes
-        // bare model JSON itself.
+        // wording for unrecognized or ambiguous documents, and decodes bare
+        // model JSON itself; it gets this classification so it never
+        // re-derives it from the same bytes.
         JsonClass::Case(Detection::Known(_) | Detection::Ambiguous | Detection::Unknown)
-        | JsonClass::ModelJson => Ok(RoutedFamily::Balanced),
+        | JsonClass::ModelJson => Ok(RoutedFamily::Balanced(Some(class))),
     }
 }
 
@@ -358,7 +364,7 @@ fn family_of_token(token: &str) -> RoutedFamily {
         Some(TargetFormat::Goc3Json) => RoutedFamily::Goc3,
         Some(TargetFormat::DeepMindOpfDataJson) => RoutedFamily::OpfData,
         Some(TargetFormat::EgretJson) => RoutedFamily::Egret,
-        _ => RoutedFamily::Balanced,
+        _ => RoutedFamily::Balanced(None),
     }
 }
 
