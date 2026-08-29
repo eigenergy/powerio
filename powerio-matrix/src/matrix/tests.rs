@@ -621,7 +621,10 @@ fn incidence_rejects_a_reactance_and_tap_whose_product_overflows() {
 fn zero_impedance_policy_is_shared_across_matrix_builders() {
     let net = zero_impedance_bus_pair();
     let view = IndexedNetwork::new(&net);
-    let opts = BuildOptions::default();
+    let opts = BuildOptions {
+        skip_zero_impedance: true,
+        ..Default::default()
+    };
 
     let bprime = build_bprime(&view, &opts).unwrap();
     let bprime_stats = matrix_stats_for_kind(&bprime, &view, MatrixKind::BPrime, &opts);
@@ -662,6 +665,36 @@ fn zero_impedance_policy_can_error_instead_of_skipping() {
         inc,
         crate::Error::Core(powerio_tx::Error::ZeroImpedance { row: 0 })
     ));
+}
+
+#[test]
+fn zero_impedance_errors_by_default_across_every_build_options_builder() {
+    // #440: BuildOptions::default() used to skip a zero impedance branch
+    // silently (Ok, with the branch just gone); every builder that reads
+    // skip_zero_impedance must now refuse by default and only skip when a
+    // caller explicitly opts in.
+    let net = zero_impedance_bus_pair();
+    let view = IndexedNetwork::new(&net);
+    let default_opts = BuildOptions::default();
+    let lenient = BuildOptions {
+        skip_zero_impedance: true,
+        ..Default::default()
+    };
+
+    assert!(build_ybus(&view, &default_opts).is_err());
+    assert!(build_ybus(&view, &lenient).is_ok());
+
+    assert!(build_bprime(&view, &default_opts).is_err());
+    assert!(build_bprime(&view, &lenient).is_ok());
+
+    assert!(build_bdoubleprime(&view, &default_opts).is_err());
+    assert!(build_bdoubleprime(&view, &lenient).is_ok());
+
+    assert!(build_lacpf(&view, &default_opts).is_err());
+    assert!(build_lacpf(&view, &lenient).is_ok());
+
+    assert!(build_incidence(&view, DcConvention::ReactanceOnly, &default_opts).is_err());
+    assert!(build_incidence(&view, DcConvention::ReactanceOnly, &lenient).is_ok());
 }
 
 #[test]
@@ -741,8 +774,11 @@ fn a_reactance_below_the_divisible_bound_is_zero_impedance() {
     );
     let view = IndexedNetwork::new(&net);
 
-    let inc =
-        build_incidence(&view, DcConvention::ReactanceOnly, &BuildOptions::default()).unwrap();
+    let lenient = BuildOptions {
+        skip_zero_impedance: true,
+        ..Default::default()
+    };
+    let inc = build_incidence(&view, DcConvention::ReactanceOnly, &lenient).unwrap();
     assert_eq!(inc.skipped_zero_impedance.count, 1);
     assert_eq!(inc.skipped_zero_impedance.branch_indices, vec![0]);
 

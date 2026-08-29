@@ -82,6 +82,13 @@ impl<'a> Scanner<'a> {
         s
     }
 
+    /// The var table this scanner substitutes `@name` tokens against, if
+    /// any. Lets a caller that recurses mid line (a `Redirect`) reinstall
+    /// the same ambient table for the nested text to see and extend.
+    pub(crate) fn vars(&self) -> Option<&'a VarMap> {
+        self.vars
+    }
+
     fn skip_whitespace(&mut self) {
         while self.pos < self.buf.len() && matches!(self.buf[self.pos], b' ' | b'\t') {
             self.pos += 1;

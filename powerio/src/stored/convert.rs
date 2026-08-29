@@ -2,7 +2,7 @@
 //! encode a `PioModule<PioValue>` to `.pio.json`, decode version 1 back, and
 //! upgrade released 0.9.x `NetworkPackage` documents one way.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 
 use powerio_core::{
     Diagnostic, DiagnosticCode, DiagnosticId, DiagnosticSeverity, Digest, HistoryEntry, HistoryId,
@@ -44,14 +44,17 @@ pub fn write_module(module: &PioModule<PioValue>) -> Result<String> {
         },
         value: encode_value(module.value())?,
         sources: module.sources().iter().map(encode_source).collect(),
-        source_map: module.source_map().iter().map(encode_map_entry).collect(),
-        diagnostics: module
-            .diagnostics()
+        source_map: module
+            .source_map()
             .iter()
-            .enumerate()
-            .map(|(index, diagnostic)| encode_diagnostic(index, diagnostic))
-            .collect(),
-        history: module.history().iter().map(encode_history).collect(),
+            .map(encode_map_entry)
+            .collect::<Result<_>>()?,
+        diagnostics: encode_diagnostics(module.diagnostics()),
+        history: module
+            .history()
+            .iter()
+            .map(encode_history)
+            .collect::<Result<_>>()?,
         extensions: module.extensions().clone(),
     };
     dto::validate(&stored).map_err(invalid)?;
@@ -124,22 +127,22 @@ fn encode_value(value: &PioValue) -> Result<StoredValueV1> {
             )?)
         }
         PioValue::DcPfInstance(instance) => {
-            StoredValueV1::DcPfInstance(encode_dc_pf_instance(instance))
+            StoredValueV1::DcPfInstance(encode_dc_pf_instance(instance)?)
         }
         PioValue::AcPfInstance(instance) => {
             StoredValueV1::AcPfInstance(encode_ac_pf_instance(instance))
         }
         PioValue::DcOpfInstance(instance) => {
-            StoredValueV1::DcOpfInstance(encode_dc_opf_instance(instance))
+            StoredValueV1::DcOpfInstance(encode_dc_opf_instance(instance)?)
         }
         PioValue::AcOpfInstance(instance) => {
-            StoredValueV1::AcOpfInstance(encode_ac_opf_instance(instance))
+            StoredValueV1::AcOpfInstance(encode_ac_opf_instance(instance)?)
         }
         PioValue::McAcPfInstance(instance) => {
             StoredValueV1::McAcPfInstance(encode_mc_ac_pf_instance(instance))
         }
         PioValue::McAcOpfInstance(instance) => {
-            StoredValueV1::McAcOpfInstance(encode_mc_ac_opf_instance(instance))
+            StoredValueV1::McAcOpfInstance(encode_mc_ac_opf_instance(instance)?)
         }
         PioValue::AcScucInstance(instance) => {
             StoredValueV1::AcScucInstance(dto::AcScucInstanceV1 {
@@ -148,22 +151,22 @@ fn encode_value(value: &PioValue) -> Result<StoredValueV1> {
             })
         }
         PioValue::DcPfSolution(solution) => {
-            StoredValueV1::DcPfSolution(Box::new(encode_dc_pf_solution(solution)))
+            StoredValueV1::DcPfSolution(Box::new(encode_dc_pf_solution(solution)?))
         }
         PioValue::AcPfSolution(solution) => {
             StoredValueV1::AcPfSolution(Box::new(encode_ac_pf_solution(solution)))
         }
         PioValue::DcOpfSolution(solution) => {
-            StoredValueV1::DcOpfSolution(Box::new(encode_dc_opf_solution(solution)))
+            StoredValueV1::DcOpfSolution(Box::new(encode_dc_opf_solution(solution)?))
         }
         PioValue::AcOpfSolution(solution) => {
-            StoredValueV1::AcOpfSolution(Box::new(encode_ac_opf_solution(solution)))
+            StoredValueV1::AcOpfSolution(Box::new(encode_ac_opf_solution(solution)?))
         }
         PioValue::McAcPfSolution(solution) => {
             StoredValueV1::McAcPfSolution(Box::new(encode_mc_ac_pf_solution(solution)))
         }
         PioValue::McAcOpfSolution(solution) => {
-            StoredValueV1::McAcOpfSolution(Box::new(encode_mc_ac_opf_solution(solution)))
+            StoredValueV1::McAcOpfSolution(Box::new(encode_mc_ac_opf_solution(solution)?))
         }
         PioValue::AcScucSolution(solution) => {
             StoredValueV1::AcScucSolution(Box::new(encode_ac_scuc_solution(solution)))
@@ -185,14 +188,15 @@ const MULTICONDUCTOR_QUANTITIES: [&str; 7] = [
 
 /// The stable cross language DC formula names, spelled locally because this
 /// branch precedes the shared helper.
-fn dc_formula_name(convention: crate::DcConvention) -> &'static str {
-    match convention {
+fn dc_formula_name(convention: crate::DcConvention) -> Result<&'static str> {
+    Ok(match convention {
         crate::DcConvention::TapAdjustedReactance => "tap_adjusted_reactance",
         crate::DcConvention::ReactanceOnly => "reactance_only",
-        // The default series formula, and the spelling any future variant
-        // must replace deliberately.
-        _ => "series_susceptance",
-    }
+        crate::DcConvention::SeriesSusceptance => "series_susceptance",
+        // The runtime enum is non_exhaustive for additive growth; a new
+        // convention must gain a stored spelling before it can be written.
+        _ => return Err(invalid("unmapped DC convention")),
+    })
 }
 
 fn dc_formula_from_name(name: &str) -> Result<crate::DcConvention> {
@@ -353,14 +357,14 @@ fn encode_mc_operating_points(
     })
 }
 
-fn encode_dc_pf_instance(instance: &powerio_prob::DcPfInstance) -> dto::DcPfInstanceV1 {
-    dto::DcPfInstanceV1 {
+fn encode_dc_pf_instance(instance: &powerio_prob::DcPfInstance) -> Result<dto::DcPfInstanceV1> {
+    Ok(dto::DcPfInstanceV1 {
         network: Box::new(instance.network().clone()),
-        approximation: dc_formula_name(instance.approximation()).to_string(),
+        approximation: dc_formula_name(instance.approximation())?.to_string(),
         initial_state: instance
             .initial_state()
             .map(|point| encode_point(point, &BALANCED_STATE_QUANTITIES)),
-    }
+    })
 }
 
 fn encode_ac_pf_instance(instance: &powerio_prob::AcPfInstance) -> dto::AcPfInstanceV1 {
@@ -372,27 +376,27 @@ fn encode_ac_pf_instance(instance: &powerio_prob::AcPfInstance) -> dto::AcPfInst
     }
 }
 
-fn encode_dc_opf_instance(instance: &powerio_prob::DcOpfInstance) -> dto::DcOpfInstanceV1 {
-    dto::DcOpfInstanceV1 {
+fn encode_dc_opf_instance(instance: &powerio_prob::DcOpfInstance) -> Result<dto::DcOpfInstanceV1> {
+    Ok(dto::DcOpfInstanceV1 {
         network: Box::new(instance.network().clone()),
-        approximation: dc_formula_name(instance.approximation()).to_string(),
-        objective: instance.objective().clone(),
+        approximation: dc_formula_name(instance.approximation())?.to_string(),
+        objective: encode_objective(instance.objective())?,
         constraints: instance.constraints().clone(),
         initial_state: instance
             .initial_state()
             .map(|point| encode_point(point, &BALANCED_STATE_QUANTITIES)),
-    }
+    })
 }
 
-fn encode_ac_opf_instance(instance: &powerio_prob::AcOpfInstance) -> dto::AcOpfInstanceV1 {
-    dto::AcOpfInstanceV1 {
+fn encode_ac_opf_instance(instance: &powerio_prob::AcOpfInstance) -> Result<dto::AcOpfInstanceV1> {
+    Ok(dto::AcOpfInstanceV1 {
         network: Box::new(instance.network().clone()),
-        objective: instance.objective().clone(),
+        objective: encode_objective(instance.objective())?,
         constraints: instance.constraints().clone(),
         initial_state: instance
             .initial_state()
             .map(|point| encode_point(point, &BALANCED_STATE_QUANTITIES)),
-    }
+    })
 }
 
 fn encode_mc_ac_pf_instance(instance: &powerio_prob::McAcPfInstance) -> dto::McAcPfInstanceV1 {
@@ -404,14 +408,70 @@ fn encode_mc_ac_pf_instance(instance: &powerio_prob::McAcPfInstance) -> dto::McA
     }
 }
 
-fn encode_mc_ac_opf_instance(instance: &powerio_prob::McAcOpfInstance) -> dto::McAcOpfInstanceV1 {
-    dto::McAcOpfInstanceV1 {
+fn encode_mc_ac_opf_instance(
+    instance: &powerio_prob::McAcOpfInstance,
+) -> Result<dto::McAcOpfInstanceV1> {
+    Ok(dto::McAcOpfInstanceV1 {
         network: Box::new(instance.network().clone()),
-        objective: instance.objective().clone(),
+        objective: encode_objective(instance.objective())?,
         constraints: instance.constraints().clone(),
         initial_state: instance
             .initial_state()
             .map(|point| encode_point(point, &MULTICONDUCTOR_QUANTITIES)),
+    })
+}
+
+/// The typed objective, mirroring [`powerio_prob::Objective`] with each
+/// term's own weight wrapped for the nonfinite spelling (see
+/// [`dto::ObjectiveTermV1`] for why this can't just be the runtime type).
+fn encode_objective(objective: &powerio_prob::Objective) -> Result<dto::ObjectiveV1> {
+    Ok(dto::ObjectiveV1 {
+        terms: objective
+            .terms()
+            .iter()
+            .map(encode_objective_term)
+            .collect::<Result<_>>()?,
+    })
+}
+
+fn encode_objective_term(term: &powerio_prob::ObjectiveTerm) -> Result<dto::ObjectiveTermV1> {
+    Ok(match term {
+        powerio_prob::ObjectiveTerm::NetworkGeneratorCost => {
+            dto::ObjectiveTermV1::NetworkGeneratorCost
+        }
+        powerio_prob::ObjectiveTerm::NetworkPerPhaseCost => {
+            dto::ObjectiveTermV1::NetworkPerPhaseCost
+        }
+        powerio_prob::ObjectiveTerm::DifferentiabilityRegularization { weight } => {
+            dto::ObjectiveTermV1::DifferentiabilityRegularization {
+                weight: StoredF64(*weight),
+            }
+        }
+        // The runtime enum is non_exhaustive for additive growth; a new term
+        // must gain a stored spelling before it can be written.
+        _ => return Err(invalid("unmapped objective term")),
+    })
+}
+
+fn decode_objective(objective: dto::ObjectiveV1) -> powerio_prob::Objective {
+    let mut decoded = powerio_prob::Objective::default();
+    for term in objective.terms {
+        decoded = decoded.with_term(decode_objective_term(term));
+    }
+    decoded
+}
+
+fn decode_objective_term(term: dto::ObjectiveTermV1) -> powerio_prob::ObjectiveTerm {
+    match term {
+        dto::ObjectiveTermV1::NetworkGeneratorCost => {
+            powerio_prob::ObjectiveTerm::NetworkGeneratorCost
+        }
+        dto::ObjectiveTermV1::NetworkPerPhaseCost => {
+            powerio_prob::ObjectiveTerm::NetworkPerPhaseCost
+        }
+        dto::ObjectiveTermV1::DifferentiabilityRegularization { weight } => {
+            powerio_prob::ObjectiveTerm::DifferentiabilityRegularization { weight: weight.0 }
+        }
     }
 }
 
@@ -524,10 +584,10 @@ fn encode_dispatch(
     })
 }
 
-fn encode_dc_pf_solution(solution: &powerio_prob::DcPfSolution) -> dto::DcPfSolutionV1 {
+fn encode_dc_pf_solution(solution: &powerio_prob::DcPfSolution) -> Result<dto::DcPfSolutionV1> {
     let network = solution.network();
-    dto::DcPfSolutionV1 {
-        instance: encode_dc_pf_instance(solution.instance()),
+    Ok(dto::DcPfSolutionV1 {
+        instance: encode_dc_pf_instance(solution.instance())?,
         termination: solution.termination().clone(),
         residuals: *solution.residuals(),
         producer: solution.producer().map(str::to_string),
@@ -536,7 +596,7 @@ fn encode_dc_pf_solution(solution: &powerio_prob::DcPfSolution) -> dto::DcPfSolu
         branch_from_active_flow: branch_column(network, |id| solution.branch_from_active_flow(id)),
         branch_to_active_flow: branch_column(network, |id| solution.branch_to_active_flow(id)),
         generator_dispatch: encode_dispatch(solution.generator_dispatch()),
-    }
+    })
 }
 
 fn encode_ac_pf_solution(solution: &powerio_prob::AcPfSolution) -> dto::AcPfSolutionV1 {
@@ -560,10 +620,10 @@ fn encode_ac_pf_solution(solution: &powerio_prob::AcPfSolution) -> dto::AcPfSolu
     }
 }
 
-fn encode_dc_opf_solution(solution: &powerio_prob::DcOpfSolution) -> dto::DcOpfSolutionV1 {
+fn encode_dc_opf_solution(solution: &powerio_prob::DcOpfSolution) -> Result<dto::DcOpfSolutionV1> {
     let network = solution.network();
-    dto::DcOpfSolutionV1 {
-        instance: encode_dc_opf_instance(solution.instance()),
+    Ok(dto::DcOpfSolutionV1 {
+        instance: encode_dc_opf_instance(solution.instance())?,
         termination: solution.termination().clone(),
         residuals: *solution.residuals(),
         producer: solution.producer().map(str::to_string),
@@ -573,13 +633,13 @@ fn encode_dc_opf_solution(solution: &powerio_prob::DcOpfSolution) -> dto::DcOpfS
         branch_to_active_flow: branch_column(network, |id| solution.branch_to_active_flow(id)),
         generator_active_power: generator_column(network, |id| solution.generator_active_power(id)),
         objective: StoredF64(solution.objective()),
-    }
+    })
 }
 
-fn encode_ac_opf_solution(solution: &powerio_prob::AcOpfSolution) -> dto::AcOpfSolutionV1 {
+fn encode_ac_opf_solution(solution: &powerio_prob::AcOpfSolution) -> Result<dto::AcOpfSolutionV1> {
     let network = solution.network();
-    dto::AcOpfSolutionV1 {
-        instance: encode_ac_opf_instance(solution.instance()),
+    Ok(dto::AcOpfSolutionV1 {
+        instance: encode_ac_opf_instance(solution.instance())?,
         termination: solution.termination().clone(),
         residuals: *solution.residuals(),
         producer: solution.producer().map(str::to_string),
@@ -598,7 +658,7 @@ fn encode_ac_opf_solution(solution: &powerio_prob::AcOpfSolution) -> dto::AcOpfS
             solution.generator_reactive_power(id)
         }),
         objective: StoredF64(solution.objective()),
-    }
+    })
 }
 
 /// Every terminal of every bus, in bus table order with each bus's stated
@@ -660,10 +720,12 @@ fn encode_mc_ac_pf_solution(solution: &powerio_prob::McAcPfSolution) -> dto::McA
     }
 }
 
-fn encode_mc_ac_opf_solution(solution: &powerio_prob::McAcOpfSolution) -> dto::McAcOpfSolutionV1 {
+fn encode_mc_ac_opf_solution(
+    solution: &powerio_prob::McAcOpfSolution,
+) -> Result<dto::McAcOpfSolutionV1> {
     let network = solution.network();
-    dto::McAcOpfSolutionV1 {
-        instance: encode_mc_ac_opf_instance(solution.instance()),
+    Ok(dto::McAcOpfSolutionV1 {
+        instance: encode_mc_ac_opf_instance(solution.instance())?,
         termination: solution.termination().clone(),
         residuals: *solution.residuals(),
         producer: solution.producer().map(str::to_string),
@@ -682,7 +744,7 @@ fn encode_mc_ac_opf_solution(solution: &powerio_prob::McAcOpfSolution) -> dto::M
         source_active_injection: stored_row(solution.source_active_injections()),
         generator_active_power: stored_row(solution.generator_active_powers()),
         objective: StoredF64(solution.objective()),
-    }
+    })
 }
 
 fn encode_ac_scuc_solution(solution: &powerio_prob::AcScucSolution) -> dto::AcScucSolutionV1 {
@@ -1168,7 +1230,7 @@ fn decode_dc_opf_instance(instance: dto::DcOpfInstanceV1) -> Result<powerio_prob
     let mut decoded = powerio_prob::DcOpfInstance::from_network(*instance.network)
         .map_err(|error| invalid(error.to_string()))?
         .with_approximation(dc_formula_from_name(&instance.approximation)?)
-        .with_objective(instance.objective)
+        .with_objective(decode_objective(instance.objective))
         .with_constraints(instance.constraints);
     if let Some(stored) = instance.initial_state {
         let point = decode_balanced_point(decoded.network(), stored)?;
@@ -1180,7 +1242,7 @@ fn decode_dc_opf_instance(instance: dto::DcOpfInstanceV1) -> Result<powerio_prob
 fn decode_ac_opf_instance(instance: dto::AcOpfInstanceV1) -> Result<powerio_prob::AcOpfInstance> {
     let mut decoded = powerio_prob::AcOpfInstance::from_network(*instance.network)
         .map_err(|error| invalid(error.to_string()))?
-        .with_objective(instance.objective)
+        .with_objective(decode_objective(instance.objective))
         .with_constraints(instance.constraints);
     if let Some(stored) = instance.initial_state {
         let point = decode_balanced_point(decoded.network(), stored)?;
@@ -1206,7 +1268,7 @@ fn decode_mc_ac_opf_instance(
 ) -> Result<powerio_prob::McAcOpfInstance> {
     let mut decoded = powerio_prob::McAcOpfInstance::from_network(*instance.network)
         .map_err(|error| invalid(error.to_string()))?
-        .with_objective(instance.objective)
+        .with_objective(decode_objective(instance.objective))
         .with_constraints(instance.constraints);
     if let Some(stored) = instance.initial_state {
         let point = decode_mc_point(decoded.network(), stored)?;
@@ -1275,8 +1337,8 @@ fn decode_span(span: SourceSpanV1) -> Result<SourceSpan> {
         .map_err(|error| invalid(error.to_string()))
 }
 
-fn encode_relation(relation: SourceRelation) -> SourceRelationV1 {
-    match relation {
+fn encode_relation(relation: SourceRelation) -> Result<SourceRelationV1> {
+    Ok(match relation {
         SourceRelation::Exact => SourceRelationV1::Exact,
         SourceRelation::Defaulted => SourceRelationV1::Defaulted,
         SourceRelation::Inferred => SourceRelationV1::Inferred,
@@ -1288,8 +1350,8 @@ fn encode_relation(relation: SourceRelation) -> SourceRelationV1 {
         SourceRelation::RetainedExtra => SourceRelationV1::RetainedExtra,
         // The runtime enum is non_exhaustive for additive growth; a new
         // relation must gain a stored spelling before it can be written.
-        _ => unreachable!("unmapped source relation"),
-    }
+        _ => return Err(invalid("unmapped source relation")),
+    })
 }
 
 fn decode_relation(relation: SourceRelationV1) -> SourceRelation {
@@ -1306,12 +1368,12 @@ fn decode_relation(relation: SourceRelationV1) -> SourceRelation {
     }
 }
 
-fn encode_map_entry(entry: &SourceMapEntry) -> SourceMapEntryV1 {
-    SourceMapEntryV1 {
+fn encode_map_entry(entry: &SourceMapEntry) -> Result<SourceMapEntryV1> {
+    Ok(SourceMapEntryV1 {
         target: entry.target().to_string(),
-        relation: encode_relation(entry.relation()),
+        relation: encode_relation(entry.relation())?,
         spans: entry.spans().iter().map(encode_span).collect(),
-    }
+    })
 }
 
 fn decode_map_entry(entry: SourceMapEntryV1) -> Result<SourceMapEntry> {
@@ -1342,13 +1404,47 @@ fn decode_severity(severity: SeverityV1) -> DiagnosticSeverity {
     }
 }
 
-fn encode_diagnostic(index: usize, diagnostic: &Diagnostic) -> DiagnosticV1 {
+/// Every diagnostic's stored form, each given an identifier: the one its
+/// runtime record already carries, or the lowest `d{n}` not already claimed
+/// by another diagnostic in this same list. Checked against every existing
+/// id (explicit or synthesized earlier in this pass) rather than derived
+/// from list position, so a diagnostic appended with no id of its own can
+/// never collide with one an external document set explicitly, and
+/// reordering the list can't make a collision appear later either.
+fn encode_diagnostics(diagnostics: &[Diagnostic]) -> Vec<DiagnosticV1> {
+    let mut used: HashSet<String> = diagnostics
+        .iter()
+        .filter_map(|diagnostic| diagnostic.id().map(|id| id.as_str().to_owned()))
+        .collect();
+    diagnostics
+        .iter()
+        .map(|diagnostic| {
+            let id = if let Some(id) = diagnostic.id() {
+                id.as_str().to_owned()
+            } else {
+                let minted = unused_id("d", &used);
+                used.insert(minted.clone());
+                minted
+            };
+            encode_diagnostic(id, diagnostic)
+        })
+        .collect()
+}
+
+/// The lowest `{prefix}{n}` (n = 0, 1, 2, ...) not already in `used`. Always
+/// found within `used.len() + 1` tries: a finite set can only rule out that
+/// many distinct candidates, so the search below always terminates.
+#[allow(clippy::maybe_infinite_iter)]
+fn unused_id(prefix: &str, used: &HashSet<String>) -> String {
+    (0..)
+        .map(|n| format!("{prefix}{n}"))
+        .find(|candidate| !used.contains(candidate))
+        .expect("a finite used set cannot rule out every candidate")
+}
+
+fn encode_diagnostic(id: String, diagnostic: &Diagnostic) -> DiagnosticV1 {
     DiagnosticV1 {
-        id: DiagnosticIdV1(
-            diagnostic
-                .id()
-                .map_or_else(|| format!("d{index}"), |id| id.as_str().to_string()),
-        ),
+        id: DiagnosticIdV1(id),
         severity: encode_severity(diagnostic.severity()),
         code: diagnostic.code().to_string(),
         message: diagnostic.message().to_string(),
@@ -1398,16 +1494,16 @@ fn decode_diagnostic(diagnostic: DiagnosticV1) -> Result<Diagnostic> {
     Ok(decoded)
 }
 
-fn encode_history_kind(kind: HistoryKind) -> HistoryKindV1 {
-    match kind {
+fn encode_history_kind(kind: HistoryKind) -> Result<HistoryKindV1> {
+    Ok(match kind {
         HistoryKind::Parse => HistoryKindV1::Parse,
         HistoryKind::Upgrade => HistoryKindV1::Upgrade,
         HistoryKind::Transform => HistoryKindV1::Transform,
         HistoryKind::Edit => HistoryKindV1::Edit,
         HistoryKind::Repair => HistoryKindV1::Repair,
         // As with relations: a new history kind gains a stored spelling first.
-        _ => unreachable!("unmapped history kind"),
-    }
+        _ => return Err(invalid("unmapped history kind")),
+    })
 }
 
 fn decode_history_kind(kind: HistoryKindV1) -> HistoryKind {
@@ -1420,17 +1516,17 @@ fn decode_history_kind(kind: HistoryKindV1) -> HistoryKind {
     }
 }
 
-fn encode_history(entry: &HistoryEntry) -> HistoryEntryV1 {
-    HistoryEntryV1 {
+fn encode_history(entry: &HistoryEntry) -> Result<HistoryEntryV1> {
+    Ok(HistoryEntryV1 {
         id: HistoryIdV1(entry.id().as_str().to_string()),
-        kind: encode_history_kind(entry.kind()),
+        kind: encode_history_kind(entry.kind())?,
         name: entry.name().to_string(),
         input_kind: entry.input_kind().map(str::to_string),
         output_kind: entry.output_kind().map(str::to_string),
         parameters: entry.parameters().clone(),
         assumptions: entry.assumptions().to_vec(),
         losses: entry.losses().to_vec(),
-    }
+    })
 }
 
 fn decode_history(entry: HistoryEntryV1) -> Result<HistoryEntry> {

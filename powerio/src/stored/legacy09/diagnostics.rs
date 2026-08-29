@@ -16,8 +16,9 @@ pub(crate) fn to_module_diagnostic(
     target: Option<String>,
 ) -> powerio_core::Diagnostic {
     use powerio_core::{Diagnostic, DiagnosticCode};
-    let code = DiagnosticCode::new(legacy.code.as_str())
-        .unwrap_or_else(|_| DiagnosticCode::new("LEGACY.UNKNOWN").expect("static code is valid"));
+    let code = DiagnosticCode::new(legacy.code.as_str()).unwrap_or_else(|_| {
+        DiagnosticCode::new("PARTNER.LEGACY.UNCODED").expect("static code is valid")
+    });
     let severity = match legacy.severity {
         DiagnosticSeverity::Error => powerio_core::DiagnosticSeverity::Error,
         DiagnosticSeverity::Warning => powerio_core::DiagnosticSeverity::Warning,
@@ -42,4 +43,28 @@ pub(crate) fn translate_legacy_target(element_path: Option<&str>, kind: &str) ->
         return None;
     }
     rest.starts_with('/').then(|| rest.to_owned())
+}
+
+#[cfg(test)]
+mod tests {
+    /// Every `DiagnosticCode::new(LITERAL).expect(...)` / `.unwrap()` site in
+    /// this crate that hardcodes a fallback or sentinel code, so one of them
+    /// can never again pass review malformed and panic instead of falling
+    /// back. This file's own fallback did exactly that until now:
+    /// `LEGACY.UNKNOWN` has two segments, one short of the three the grammar
+    /// requires, so a legacy diagnostic whose own code failed validation
+    /// panicked reaching for the fallback rather than using it.
+    #[test]
+    fn every_hardcoded_diagnostic_code_literal_is_well_formed() {
+        for code in [
+            "PARTNER.LEGACY.UNCODED", // this file, and legacy_diag/record.rs
+            "READ.TEST.NOTE",         // powerio/tests/stored_module.rs
+            "READ.CASE.FILLER",       // powerio/tests/module_lowering.rs
+        ] {
+            assert!(
+                powerio_core::code_is_well_formed(code),
+                "{code} would panic its DiagnosticCode::new(...).expect(...) site"
+            );
+        }
+    }
 }
