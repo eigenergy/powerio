@@ -1729,7 +1729,7 @@ fn run_geo_apply(
     )
     .with_context(|| format!("parsing layer {}", layer_path.display()))?;
     for w in &parsed.warnings {
-        eprintln!("layer: {w}");
+        eprintln!("{w}");
     }
     let (text, sidecars, warnings) = match parse_family_case(input, from)? {
         FamilyCase::Distribution(net) => {
@@ -1836,7 +1836,7 @@ fn run_geo_convert(
     )
     .with_context(|| format!("parsing {}", input.display()))?;
     for w in &parsed.warnings {
-        eprintln!("layer: {w}");
+        eprintln!("{w}");
     }
     write_conversion_output(&parsed.layer.to_geojson(), &[], output)
 }
