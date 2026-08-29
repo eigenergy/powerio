@@ -70,7 +70,7 @@ pub(crate) fn parse_file(
 }
 
 fn invalid_text(path: &Path) -> powerio_core::Error {
-    tx_error_to_core(powerio::Error::FormatRead {
+    tx_error_to_core(powerio::error::Error::FormatRead {
         format: "case text",
         message: format!("{} is not valid UTF-8", path.display()),
     })
@@ -87,7 +87,7 @@ fn goc3_parsed(text: &str) -> Result<ParsedCase, powerio_core::Error> {
     })
 }
 
-pub(crate) fn tx_error_to_core(error: powerio::Error) -> powerio_core::Error {
+pub(crate) fn tx_error_to_core(error: powerio::error::Error) -> powerio_core::Error {
     powerio_core::Error::new(error.code(), error.to_string()).with_cause(error)
 }
 

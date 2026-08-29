@@ -13,8 +13,8 @@
 //! type narrows the module:
 //!
 //! ```no_run
-//! let module = powerio::parse(powerio_core::Source::open("case9.m")?)?;
-//! let module: powerio_core::PioModule<powerio::BalancedNetwork> =
+//! let module = powerio::parse(powerio::Source::open("case9.m")?)?;
+//! let module: powerio::PioModule<powerio::BalancedNetwork> =
 //!     powerio::try_into_typed(module)?;
 //! # Ok::<(), Box<dyn std::error::Error>>(())
 //! ```
@@ -24,6 +24,31 @@
 //! [`powerio_dist::parse`] for multiconductor ones.
 
 pub use powerio_tx::*;
+
+/// Core types a consumer needs to name a module: the generic module wrapper,
+/// the source it was parsed from, a byte span into a source, the output
+/// destination a write commits to, and the two repeated-value containers.
+/// `Diagnostic` already arrives through [`powerio_tx`]'s own re-export, since
+/// that one is itself `powerio_core::Diagnostic`.
+pub use powerio_core::{
+    Destination, PioModule, ScenarioSet, Source, SourceSpan, TimePoint, TimeSeries,
+};
+
+/// `powerio_tx::*` above already re-exports an `Error`/`Result` pair, but
+/// those are powerio-tx's own 0.9 enum and its alias over it, tied to its
+/// text format readers, not what [`parse`] and the source layer return. An
+/// explicit `use` of a name shadows a glob import of the same name, so these
+/// two items are what make `powerio::Error`/`powerio::Result` name the type
+/// the facade's own functions actually use.
+pub use powerio_core::Error;
+pub type Result<T> = std::result::Result<T, powerio_core::Error>;
+
+/// The distribution network type; [`powerio_dist::parse`] routes to it.
+pub use powerio_dist::MulticonductorNetwork;
+
+/// A problem instance builder. `powerio-prob` builds problem instances only;
+/// it has no solution type to re-export alongside this one.
+pub use powerio_prob::AcOpfInstance;
 
 /// Matrix and graph data, re-exported from `powerio-matrix` under the
 /// `matrix` feature. Matrix construction is never a parse result, so the
@@ -36,10 +61,16 @@ pub use powerio_matrix as matrix;
 mod collect;
 #[cfg(feature = "gridfm")]
 pub mod gridfm;
+
 pub mod package;
 pub mod stored;
 pub mod write;
 pub use write::{write_module_as, write_module_str, write_module_str_with_options};
+
+/// The replayable operating state, named at the crate root beside the other
+/// module types. From this layer up the 1.0 state type in powerio-prob is the
+/// one the module surface stores and selects.
+pub use powerio_prob::OperatingPoint;
 mod value;
 pub use value::{FromPioValue, PioValue, PioValueKind, ValueKindMismatch, try_into_typed};
 
