@@ -218,7 +218,7 @@ pub fn check_multiconductor_to_balanced_lowering(
 ///
 /// The pass is explicit. It does not run from readers, writers, matrix builders,
 /// bindings, or package deserialization. Unsupported inputs return structured
-/// `LOWER.MULTI_TO_BALANCED.*` diagnostics in [`MulticonductorToBalancedError`].
+/// `TRANSFORM.MULTI_TO_BALANCED.*` diagnostics in [`MulticonductorToBalancedError`].
 pub fn lower_multiconductor_to_balanced(
     net: &MulticonductorNetwork,
     options: MulticonductorToBalancedOptions,
