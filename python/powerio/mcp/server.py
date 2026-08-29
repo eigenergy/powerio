@@ -409,6 +409,34 @@ def _as_diagnostic_dict(item: Any) -> Dict[str, Any]:
     return out
 
 
+def _as_diagnostic_dict(item: Any) -> Dict[str, Any]:
+    """One diagnostic as a plain dict. The network wrappers already return
+    dicts; the module channel returns native `Diagnostic` objects, which
+    read the same fields through attributes."""
+    if isinstance(item, dict):
+        return item
+    out: Dict[str, Any] = {
+        "code": item.code,
+        "severity": item.severity,
+        "message": item.message,
+        "target": getattr(item, "target", None),
+    }
+    identity = getattr(item, "id", None)
+    if identity:
+        out["id"] = identity
+    spans = getattr(item, "spans", None)
+    if spans:
+        out["spans"] = [
+            {
+                "source": span.source,
+                "byte_start": span.byte_start,
+                "byte_end": span.byte_end,
+            }
+            for span in spans
+        ]
+    return out
+
+
 def _diagnostic_records(
     diagnostics: list[Any], keep_severities: frozenset[str]
 ) -> list[Dict[str, Any]]:
