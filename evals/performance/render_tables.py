@@ -82,7 +82,6 @@ MATRIX_ROWS = [
     ("DC OPF weighted Laplacian", "case118"),
     ("DC OPF grounded Laplacian", "case118"),
     ("DC OPF flow map", "case118"),
-    ("DC OPF instance", "case118"),
     ("PTDF + LODF", "case118"),
     ("pipeline Y_bus pair", "case2869pegase"),
 ]
