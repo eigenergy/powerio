@@ -48,7 +48,7 @@ def test_main_names_the_python_requirement_below_3_10(monkeypatch):
 
     monkeypatch.setattr(sys, "version_info", (3, 9, 0))
     with pytest.raises(ImportError, match="Python 3.10"):
-        mcp_pkg.main
+        _ = mcp_pkg.main
 
 
 def test_allowed_roots_splits_on_pathsep(monkeypatch, tmp_path):

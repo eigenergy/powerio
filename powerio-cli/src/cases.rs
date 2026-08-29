@@ -247,7 +247,7 @@ fn lower_to_balanced(
                 let diagnostics = e
                     .diagnostics
                     .iter()
-                    .map(|d| d.message())
+                    .map(powerio_core::Diagnostic::message)
                     .collect::<Vec<_>>()
                     .join("; ");
                 if diagnostics.is_empty() {
