@@ -1689,6 +1689,9 @@ impl Reader<'_> {
     /// the object, series impedance in referred ohms converted on the bus
     /// stated voltage band, regulation as the to side tap.
     #[allow(clippy::too_many_lines)]
+    // The bus index rides beside seven established parameters; bundling
+    // them into a struct for one private helper buys nothing.
+    #[allow(clippy::too_many_arguments)]
     fn regulator_rows(
         &mut self,
         name: &str,
