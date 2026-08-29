@@ -6,9 +6,10 @@ use crate::Result;
 use powerio_matrix::SparseMatrix;
 use serde::Serialize;
 
-use crate::{DcOpfInstance, Units};
+use crate::Units;
+use crate::prep::DcOpfPreparation;
 
-use super::build_dc_opf_matrices;
+use super::{DcOpfAssemblyOptions, matrices_from_preparation};
 
 const DCOPF_SCHEMA: &str = "powerio.dcopf";
 
@@ -31,6 +32,8 @@ impl Default for DcOpfBundleMetadata {
 /// Options that affect bundle output without changing the instance.
 #[derive(Debug, Clone, Default)]
 pub struct DcOpfBundleOptions {
+    /// The assembly choices behind the written arrays.
+    pub assembly: DcOpfAssemblyOptions,
     pub metadata: DcOpfBundleMetadata,
 }
 
@@ -121,17 +124,35 @@ struct OperatorMeta {
     units: &'static str,
 }
 
-/// Write matrix projections for an assembled DC OPF instance.
+/// Write matrix projections for a DC OPF instance.
 ///
-/// The writer reads all costs, bounds, mappings, units, and conventions from
-/// `instance`. It does not retain or read a source network.
-#[allow(clippy::too_many_lines)]
+/// The writer derives every cost, bound, mapping, and array privately from
+/// the instance's typed network under `options.assembly`, then writes the
+/// bundle directory.
+///
+/// # Errors
+/// A network the selected approximation cannot assemble, or a filesystem
+/// refusal from the no-clobber output rules.
 pub fn write_dcopf_bundle(
-    instance: &DcOpfInstance,
+    instance: &crate::DcOpfInstance,
     out_dir: impl AsRef<Path>,
     options: &DcOpfBundleOptions,
 ) -> Result<DcOpfOutputs> {
-    let matrices = build_dc_opf_matrices(instance);
+    write_prepared(
+        &super::prepare(instance, options.assembly)?,
+        out_dir,
+        options,
+    )
+}
+
+/// The writer body over the private preparation arrays.
+#[allow(clippy::too_many_lines)]
+fn write_prepared(
+    instance: &DcOpfPreparation,
+    out_dir: impl AsRef<Path>,
+    options: &DcOpfBundleOptions,
+) -> Result<DcOpfOutputs> {
+    let matrices = matrices_from_preparation(instance);
     let nodal = instance.nodal_generator_data();
     let fixed_withdrawal = instance.fixed_nodal_withdrawal();
     let flow_offset = instance.branch_flow_offset();

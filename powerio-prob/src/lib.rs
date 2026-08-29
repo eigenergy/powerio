@@ -5,35 +5,55 @@
 //! OPF and SCOPF instances and has no workspace dependency beyond `powerio`.
 //! Enable `matrix` to derive sparse DC OPF operators from an assembled instance.
 
-mod ac;
 mod dc;
+#[cfg(test)]
+mod dcopf_tests;
+pub mod instance;
+#[cfg(any(test, feature = "matrix"))]
 mod limits;
+#[cfg(any(test, feature = "matrix"))]
 mod nodal;
 mod reference;
 pub mod scopf;
+pub mod solution;
 pub mod state;
 
 #[cfg(feature = "matrix")]
 pub mod matrix;
 
-pub use ac::{
-    AcBranchData, AcBusData, AcGeneratorData, AcOpfInstance, AcOpfOptions, NodalAcGeneratorData,
-    build_ac_opf_instance,
-};
-pub use dc::{
-    DcBranchData, DcGeneratorData, DcOpfInstance, DcOpfOptions, NodalGeneratorData, Units,
-    build_dc_opf_instance,
-};
+/// Solver preparation data: the contiguous dense arrays a matrix builder or
+/// export assembles from a network. These arrays are never public instance
+/// fields — the public instances share the typed network — and the builders
+/// that consume them derive them privately from an instance.
+#[cfg(any(test, feature = "matrix"))]
+pub(crate) mod prep {
+    #[cfg(feature = "matrix")]
+    pub(crate) use crate::dc::DcOpfPreparation;
+    pub(crate) use crate::dc::{DcOpfOptions, build_dc_opf_preparation};
+}
+pub use dc::Units;
 pub use powerio_tx::DcConvention;
 
 pub mod diagnostics;
 pub mod error;
 pub use error::{Error, Result};
+pub use instance::{
+    AcBusSpecification, AcOpfInstance, AcPfInstance, AcScucInstance, ActiveConstraints,
+    ActiveControlMode, ConstraintSelection, DcBusSpecification, DcOpfInstance, DcPfInstance,
+    McAcOpfInstance, McAcPfInstance, MulticonductorActiveConstraints, Objective, ObjectiveTerm,
+    PrescribedSourceVoltage, PrescribedTerminalPower, ZeroImpedanceMerge,
+    merge_zero_impedance_buses,
+};
 pub use reference::ReferenceBuses;
 #[allow(deprecated)]
 pub use scopf::build_scopf_instance_from_str;
 pub use scopf::{
-    IndexBase, ScopfDeviceClassLayout, ScopfError, ScopfInstance, ScopfResult, parse_scopf_str,
+    IndexBase, ScopfDeviceClassLayout, ScopfError, ScopfResult, ScucInputs, parse_scopf_str,
+};
+pub use solution::{
+    AcOpfSolution, AcPfSolution, AcScucSolution, DcOpfSolution, DcPfSolution, GeneratorDispatch,
+    McAcOpfSolution, McAcPfSolution, Producer, Residuals, ScucDeviceOutputs, ScucNetworkOutputs,
+    Termination,
 };
 pub use state::{
     BalancedOperatingPoints, BalancedStateBuilder, MulticonductorOperatingPoints,

@@ -24,7 +24,7 @@ use super::types::{
     ScopfReactiveReserveSetRow, ScopfShuntRow, ScopfStaticData, ScopfTransformerRow,
     ScopfTransformerSurvivorRow, ScopfVariablePhaseRow, ScopfVariableRatioRow, ScopfViolationCost,
 };
-use super::{ScopfInstance, ScopfResult};
+use super::{ScopfResult, ScucInputs};
 
 pub const SCOPF_SCHEMA: &str = "powerio.scopf";
 
@@ -286,17 +286,17 @@ serialized_fields!(ScopfDcContingencyFlowRow {
 });
 
 /// Convert an internal instance to the default 0-based SCOPF document.
-pub fn to_json_value(instance: &ScopfInstance) -> ScopfResult<Value> {
+pub fn to_json_value(instance: &ScucInputs) -> ScopfResult<Value> {
     to_json_value_with_index_base(instance, IndexBase::Zero)
 }
 
 /// Convert an internal instance to a SCOPF document with the requested index
 /// convention.
 pub fn to_json_value_with_index_base(
-    instance: &ScopfInstance,
+    instance: &ScucInputs,
     index_base: IndexBase,
 ) -> ScopfResult<Value> {
-    let ScopfInstance {
+    let ScucInputs {
         static_data,
         lengths,
         energy_windows,
@@ -347,13 +347,13 @@ pub fn to_json_value_with_index_base(
 }
 
 /// Serialize an internal instance as the default 0-based SCOPF document.
-pub fn to_json(instance: &ScopfInstance) -> ScopfResult<String> {
+pub fn to_json(instance: &ScucInputs) -> ScopfResult<String> {
     to_json_with_index_base(instance, IndexBase::Zero)
 }
 
 /// Serialize an internal instance with the requested index convention.
 pub fn to_json_with_index_base(
-    instance: &ScopfInstance,
+    instance: &ScucInputs,
     index_base: IndexBase,
 ) -> ScopfResult<String> {
     Ok(serde_json::to_string(&to_json_value_with_index_base(
@@ -560,7 +560,7 @@ mod tests {
 
     const SMALL: &str = include_str!("../../tests/data/goc3_small.json");
 
-    fn instance_with_every_row_collection() -> ScopfInstance {
+    fn instance_with_every_row_collection() -> ScucInputs {
         let mut source: Value = serde_json::from_str(SMALL).expect("parse fixture JSON");
 
         // Keep the fixture's fixed phase/ratio transformer and add one variable
@@ -644,7 +644,7 @@ mod tests {
     #[test]
     fn every_row_field_obeys_the_selected_index_base() {
         let instance = instance_with_every_row_collection();
-        let ScopfInstance {
+        let ScucInputs {
             static_data,
             lengths,
             energy_windows,

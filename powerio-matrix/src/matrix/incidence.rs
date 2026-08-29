@@ -164,7 +164,7 @@ pub fn susceptance_diag(b: &[f64]) -> CsMat<f64> {
 /// The angle dependent flow map `B Aᵀ`, shape `m × n`.
 ///
 /// A complete affine branch flow also adds `-b * shift`; problem instances
-/// expose that term through `DcOpfInstance::branch_flow_offset`.
+/// expose that term through `DcOpfPreparation::branch_flow_offset`.
 pub fn build_flow_map(a: &CsMat<f64>, b: &[f64]) -> CsMat<f64> {
     let d = susceptance_diag(b);
     let at = a.transpose_view().to_csr();

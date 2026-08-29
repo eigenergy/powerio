@@ -22,6 +22,25 @@ pub mod codes {
             category = Data;
         BUILD_INSTANCE_NO_GENERATORS = "BUILD.INSTANCE.NO_GENERATORS", Error,
             "the case has no generator for the problem to dispatch", category = Data;
+        BUILD_INSTANCE_NO_REFERENCE_BUS = "BUILD.INSTANCE.NO_REFERENCE_BUS", Error,
+            "the network states no reference (slack) bus", category = Data;
+        BUILD_INSTANCE_VOLTAGE_CONTROL_CONFLICT = "BUILD.INSTANCE.VOLTAGE_CONTROL_CONFLICT", Error,
+            "in service generators at one bus state conflicting voltage setpoints",
+            category = Data;
+        BUILD_INSTANCE_SHAPE_MISMATCH = "BUILD.INSTANCE.SHAPE_MISMATCH", Error,
+            "a calculation input disagrees with the network's element tables",
+            category = Data;
+        BUILD_SOLUTION_SHAPE_MISMATCH = "BUILD.SOLUTION.SHAPE_MISMATCH", Error,
+            "a solution column disagrees with the instance's element tables",
+            category = Data;
+        TRANSFORM_INSTANCE_DATA_DISCARDED = "TRANSFORM.INSTANCE.DATA_DISCARDED", Warning,
+            "the derived calculation does not carry part of the source instance";
+        TRANSFORM_INSTANCE_ASSUMPTION = "TRANSFORM.INSTANCE.ASSUMPTION", Warning,
+            "the derived calculation rests on a stated modeling assumption";
+        CANONICALIZE_MERGE_ZERO_IMPEDANCE = "CANONICALIZE.MERGE.ZERO_IMPEDANCE", Warning,
+            "a zero impedance branch was merged and its flow is no longer recoverable";
+        CANONICALIZE_MERGE_ATTRIBUTE_CONFLICT = "CANONICALIZE.MERGE.ATTRIBUTE_CONFLICT", Warning,
+            "merged buses stated different attributes; the surviving bus's values were kept";
         BUILD_INSTANCE_UNSUPPORTED_COST_MODEL = "BUILD.INSTANCE.UNSUPPORTED_COST_MODEL", Error,
             "a generator cost model the instance builder cannot state", category = Data;
         BUILD_INSTANCE_CONCAVE_COST = "BUILD.INSTANCE.CONCAVE_COST", Error,

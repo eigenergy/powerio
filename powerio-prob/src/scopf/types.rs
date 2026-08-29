@@ -467,7 +467,7 @@ pub struct ScopfViolationCost {
 /// them. Source UIDs and external bus IDs remain separate fields.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[non_exhaustive]
-pub struct ScopfInstance {
+pub struct ScucInputs {
     /// Buses, branches, devices, controls, reserves, and memberships.
     pub static_data: ScopfStaticData,
     pub lengths: ScopfLengths,

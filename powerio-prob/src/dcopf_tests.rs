@@ -1,10 +1,19 @@
-mod helpers;
-#[allow(unused_imports)]
-use helpers::*;
-use powerio_prob::{DcOpfOptions, Error, Units, build_dc_opf_instance};
+//! The DC OPF preparation assembly, over the crate private arrays the
+//! matrix and bundle builders derive from an instance.
+
+use crate::prep::{DcOpfOptions, build_dc_opf_preparation};
+use crate::{Error, Units};
 use powerio_tx::{
     BalancedNetwork, Branch, Bus, BusId, BusType, DcConvention, GenCost, Generator, IndexedNetwork,
 };
+
+fn parse_matpower_file(
+    path: impl AsRef<std::path::Path>,
+) -> Result<BalancedNetwork, powerio_core::Error> {
+    let source = powerio_core::Source::open(path.as_ref())?
+        .with_format(powerio_core::FormatId::new("matpower")?);
+    powerio_tx::parse(source).map(powerio_core::PioModule::into_value)
+}
 
 fn case9() -> BalancedNetwork {
     parse_matpower_file("../tests/data/case9.m").expect("parse case9")
@@ -90,7 +99,7 @@ fn two_island_network() -> BalancedNetwork {
 fn instance_is_complete_and_indexed() {
     let net = case9();
     let view = IndexedNetwork::new(&net);
-    let problem = build_dc_opf_instance(&view, &DcOpfOptions::default()).expect("build");
+    let problem = build_dc_opf_preparation(&view, DcOpfOptions::default()).expect("build");
 
     assert_eq!(problem.name, "case9");
     assert_eq!(problem.n_buses, 9);
@@ -128,7 +137,7 @@ fn several_generators_at_one_bus_keep_separate_costs_and_aggregate() {
     net.generators_mut().push(extra);
 
     let view = IndexedNetwork::new(&net);
-    let problem = build_dc_opf_instance(&view, &DcOpfOptions::default()).expect("build");
+    let problem = build_dc_opf_preparation(&view, DcOpfOptions::default()).expect("build");
     assert_eq!(problem.n_generators(), 4);
     let shared = problem.generators.bus_of_gen[0];
     assert_eq!(shared, problem.generators.bus_of_gen[3]);
@@ -172,23 +181,23 @@ fn an_unrated_branch_takes_a_synthesized_limit_on_request() {
         ..DcOpfOptions::default()
     };
 
-    let unlimited = build_dc_opf_instance(&view, &DcOpfOptions::default()).expect("default");
+    let unlimited = build_dc_opf_preparation(&view, DcOpfOptions::default()).expect("default");
     assert_close(unlimited.branches.f_max[0], 0.0);
     assert!(!unlimited.synthesize_unrated_limits);
 
     // The bus voltage ceilings are 1.1, the reactance is 0.2, and the window
     // is ±30°.
     let window = 30.0_f64.to_radians();
-    let synthesized = build_dc_opf_instance(&view, &options).expect("synthesized");
+    let synthesized = build_dc_opf_preparation(&view, options).expect("synthesized");
     assert!(synthesized.synthesize_unrated_limits);
     assert_close(
         synthesized.branches.f_max[0],
         1.1 * (2.42 - 2.42 * window.cos()).sqrt() / 0.2,
     );
 
-    let native = build_dc_opf_instance(
+    let native = build_dc_opf_preparation(
         &view,
-        &DcOpfOptions {
+        DcOpfOptions {
             units: Units::Native,
             ..options
         },
@@ -204,7 +213,7 @@ fn an_unrated_branch_takes_a_synthesized_limit_on_request() {
     // same one.
     let normalized = net.to_normalized().expect("normalize");
     let derived =
-        build_dc_opf_instance(&IndexedNetwork::new(&normalized), &options).expect("normalized");
+        build_dc_opf_preparation(&IndexedNetwork::new(&normalized), options).expect("normalized");
     assert_close(derived.branches.f_max[0], synthesized.branches.f_max[0]);
 
     // Bounds that run past the half turn state no window, so the bound falls
@@ -212,7 +221,7 @@ fn an_unrated_branch_takes_a_synthesized_limit_on_request() {
     let mut wide = net.clone();
     wide.branches_mut()[0].angmin = -360.0;
     wide.branches_mut()[0].angmax = 360.0;
-    let wide = build_dc_opf_instance(&IndexedNetwork::new(&wide), &options).expect("wide bounds");
+    let wide = build_dc_opf_preparation(&IndexedNetwork::new(&wide), options).expect("wide bounds");
     assert_close(wide.branches.f_max[0], 1.1 * 2.2 / 0.2);
 
     // `0/0` is the MATPOWER spelling of the same unconstrained branch, so it
@@ -221,20 +230,21 @@ fn an_unrated_branch_takes_a_synthesized_limit_on_request() {
     let mut zero = net.clone();
     zero.branches_mut()[0].angmin = 0.0;
     zero.branches_mut()[0].angmax = 0.0;
-    let zero = build_dc_opf_instance(&IndexedNetwork::new(&zero), &options).expect("zero bounds");
+    let zero = build_dc_opf_preparation(&IndexedNetwork::new(&zero), options).expect("zero bounds");
     assert_close(zero.branches.f_max[0], 1.1 * 2.2 / 0.2);
 
     let mut rated = net.clone();
     rated.branches_mut()[0].rate_a = 50.0;
-    let kept = build_dc_opf_instance(&IndexedNetwork::new(&rated), &options).expect("rated branch");
+    let kept =
+        build_dc_opf_preparation(&IndexedNetwork::new(&rated), options).expect("rated branch");
     assert_close(kept.branches.f_max[0], 0.5);
 }
 
 #[test]
 fn a_network_of_two_islands_grounds_a_bus_in_each() {
     let net = two_island_network();
-    let problem =
-        build_dc_opf_instance(&IndexedNetwork::new(&net), &DcOpfOptions::default()).expect("build");
+    let problem = build_dc_opf_preparation(&IndexedNetwork::new(&net), DcOpfOptions::default())
+        .expect("build");
 
     assert_eq!(problem.reference_buses.len(), 2);
     assert!(!problem.reference_buses.is_empty());
@@ -244,18 +254,19 @@ fn a_network_of_two_islands_grounds_a_bus_in_each() {
     );
     assert!(matches!(
         problem.reference_buses.single(),
-        Err(powerio_prob::Error::Core(
-            powerio_tx::Error::ReferenceBusCount { found: 2, .. }
-        ))
+        Err(crate::Error::Core(powerio_tx::Error::ReferenceBusCount {
+            found: 2,
+            ..
+        }))
     ));
 
     // The set serializes as a plain array of dense bus indices.
     let json = serde_json::to_value(&problem).expect("serialize");
     assert_eq!(json["reference_buses"], serde_json::json!([0, 2]));
 
-    let one_island = build_dc_opf_instance(
+    let one_island = build_dc_opf_preparation(
         &IndexedNetwork::new(&small_network()),
-        &DcOpfOptions::default(),
+        DcOpfOptions::default(),
     )
     .expect("build");
     assert_eq!(one_island.reference_buses.single().expect("one bus"), 0);
@@ -265,15 +276,15 @@ fn a_network_of_two_islands_grounds_a_bus_in_each() {
 fn per_unit_and_native_units_scale_all_power_coefficients() {
     let net = small_network();
     let view = IndexedNetwork::new(&net);
-    let native = build_dc_opf_instance(
+    let native = build_dc_opf_preparation(
         &view,
-        &DcOpfOptions {
+        DcOpfOptions {
             units: Units::Native,
             ..DcOpfOptions::default()
         },
     )
     .expect("native");
-    let per_unit = build_dc_opf_instance(&view, &DcOpfOptions::default()).expect("per unit");
+    let per_unit = build_dc_opf_preparation(&view, DcOpfOptions::default()).expect("per unit");
     let base = view.base_mva();
 
     assert_eq!(native.units, Units::Native);
@@ -296,8 +307,8 @@ fn per_unit_and_native_units_scale_all_power_coefficients() {
 #[test]
 fn cost_constant_term_is_kept() {
     let net = small_network();
-    let problem =
-        build_dc_opf_instance(&IndexedNetwork::new(&net), &DcOpfOptions::default()).expect("build");
+    let problem = build_dc_opf_preparation(&IndexedNetwork::new(&net), DcOpfOptions::default())
+        .expect("build");
     assert_close(problem.generators.c0[0], 5.0);
     let nodal = problem.nodal_generator_data();
     assert_close(nodal.c0[problem.generators.bus_of_gen[0]], 5.0);
@@ -314,14 +325,14 @@ fn bus_shunt_conductance_reaches_the_instance() {
     let view = IndexedNetwork::new(&net);
     let base = view.base_mva();
 
-    let per_unit = build_dc_opf_instance(&view, &DcOpfOptions::default()).expect("per unit");
+    let per_unit = build_dc_opf_preparation(&view, DcOpfOptions::default()).expect("per unit");
     assert_eq!(per_unit.g_s.len(), per_unit.n_buses);
     assert_close(per_unit.g_s[1], 5.0 / base);
     assert_close(per_unit.g_s[0], 0.0);
 
-    let native = build_dc_opf_instance(
+    let native = build_dc_opf_preparation(
         &view,
-        &DcOpfOptions {
+        DcOpfOptions {
             units: Units::Native,
             ..DcOpfOptions::default()
         },
@@ -334,8 +345,8 @@ fn bus_shunt_conductance_reaches_the_instance() {
 #[test]
 fn a_shuntless_case_carries_zero_conductance() {
     let net = case9();
-    let problem =
-        build_dc_opf_instance(&IndexedNetwork::new(&net), &DcOpfOptions::default()).expect("build");
+    let problem = build_dc_opf_preparation(&IndexedNetwork::new(&net), DcOpfOptions::default())
+        .expect("build");
     assert_eq!(problem.g_s.len(), problem.n_buses);
     assert!(problem.g_s.iter().all(|value| value.abs() < 1e-12));
 }
@@ -369,9 +380,9 @@ fn a_non_finite_susceptance_is_refused_under_every_convention() {
             if x.is_finite() && convention != DcConvention::Matpower {
                 continue;
             }
-            let got = build_dc_opf_instance(
+            let got = build_dc_opf_preparation(
                 &view,
-                &DcOpfOptions {
+                DcOpfOptions {
                     convention,
                     ..DcOpfOptions::default()
                 },
@@ -397,10 +408,10 @@ fn matpower_convention_applies_tap_and_phase_shift() {
     net.branches_mut()[0].tap = 1.25;
     net.branches_mut()[0].shift = 10.0;
     let view = IndexedNetwork::new(&net);
-    let series = build_dc_opf_instance(&view, &DcOpfOptions::default()).expect("series");
-    let matpower = build_dc_opf_instance(
+    let series = build_dc_opf_preparation(&view, DcOpfOptions::default()).expect("series");
+    let matpower = build_dc_opf_preparation(
         &view,
-        &DcOpfOptions {
+        DcOpfOptions {
             convention: DcConvention::Matpower,
             ..DcOpfOptions::default()
         },
@@ -428,9 +439,9 @@ fn phase_shift_and_shunt_complete_the_dc_balance_and_flow_equations() {
         .push(powerio_tx::Load::new(BusId(30), 20.0, 0.0));
     net.shunts_mut()
         .push(powerio_tx::Shunt::new(BusId(30), 5.0, 0.0));
-    let problem = build_dc_opf_instance(
+    let problem = build_dc_opf_preparation(
         &IndexedNetwork::new(&net),
-        &DcOpfOptions {
+        DcOpfOptions {
             convention: DcConvention::Matpower,
             ..DcOpfOptions::default()
         },
@@ -467,7 +478,7 @@ fn source_maps_exclude_out_of_service_elements() {
     net.generators_mut()[1].in_service = false;
     net.branches_mut()[2].in_service = false;
     let view = IndexedNetwork::new(&net);
-    let problem = build_dc_opf_instance(&view, &DcOpfOptions::default()).expect("build");
+    let problem = build_dc_opf_preparation(&view, DcOpfOptions::default()).expect("build");
 
     assert_eq!(problem.n_generators(), 2);
     assert!(!problem.generators.source_rows.contains(&1));
@@ -481,7 +492,7 @@ fn source_maps_exclude_out_of_service_elements() {
 fn missing_and_unsupported_costs_are_distinct() {
     let mut missing = small_network();
     missing.generators_mut()[0].cost = None;
-    let error = build_dc_opf_instance(&IndexedNetwork::new(&missing), &DcOpfOptions::default())
+    let error = build_dc_opf_preparation(&IndexedNetwork::new(&missing), DcOpfOptions::default())
         .expect_err("missing cost");
     assert!(matches!(
         error,
@@ -496,7 +507,7 @@ fn missing_and_unsupported_costs_are_distinct() {
         2,
         vec![0.0, 0.0, 1.0, 1.0],
     ));
-    let error = build_dc_opf_instance(&IndexedNetwork::new(&piecewise), &DcOpfOptions::default())
+    let error = build_dc_opf_preparation(&IndexedNetwork::new(&piecewise), DcOpfOptions::default())
         .expect_err("unsupported cost");
     assert!(matches!(
         error,
@@ -513,18 +524,20 @@ fn zero_reactance_can_be_skipped_or_rejected() {
     let mut net = small_network();
     net.branches_mut().insert(0, branch(10, 30, 0.0));
     let view = IndexedNetwork::new(&net);
-    let skipped = build_dc_opf_instance(&view, &DcOpfOptions::default()).expect("skip");
-    assert_eq!(skipped.branches.skipped_zero_impedance, vec![0]);
-    assert_eq!(skipped.branches.source_rows, vec![1]);
-
-    let error = build_dc_opf_instance(
+    // Skipping is an explicit opt-in now: the default preserves the branch
+    // and refuses assembly.
+    let skipped = build_dc_opf_preparation(
         &view,
-        &DcOpfOptions {
-            skip_zero_impedance: false,
+        DcOpfOptions {
+            skip_zero_impedance: true,
             ..DcOpfOptions::default()
         },
     )
-    .expect_err("reject");
+    .expect("skip");
+    assert_eq!(skipped.branches.skipped_zero_impedance, vec![0]);
+    assert_eq!(skipped.branches.source_rows, vec![1]);
+
+    let error = build_dc_opf_preparation(&view, DcOpfOptions::default()).expect_err("reject");
     assert!(matches!(
         error,
         Error::Core(powerio_tx::Error::ZeroImpedance { row: 0 })
@@ -538,17 +551,19 @@ fn a_reactance_the_instance_cannot_divide_by_reads_as_zero_impedance() {
     let mut net = small_network();
     net.branches_mut().insert(0, branch(10, 30, 1e-300));
     let view = IndexedNetwork::new(&net);
-    let skipped = build_dc_opf_instance(&view, &DcOpfOptions::default()).expect("skip");
-    assert_eq!(skipped.branches.skipped_zero_impedance, vec![0]);
-
-    let error = build_dc_opf_instance(
+    // Skipping is an explicit opt-in now: the default preserves the branch
+    // and refuses assembly.
+    let skipped = build_dc_opf_preparation(
         &view,
-        &DcOpfOptions {
-            skip_zero_impedance: false,
+        DcOpfOptions {
+            skip_zero_impedance: true,
             ..DcOpfOptions::default()
         },
     )
-    .expect_err("reject");
+    .expect("skip");
+    assert_eq!(skipped.branches.skipped_zero_impedance, vec![0]);
+
+    let error = build_dc_opf_preparation(&view, DcOpfOptions::default()).expect_err("reject");
     assert!(matches!(
         error,
         Error::Core(powerio_tx::Error::ZeroImpedance { row: 0 })
@@ -560,9 +575,9 @@ fn a_tap_the_instance_cannot_divide_by_is_refused() {
     for tap in [1e-200, f64::NAN, f64::INFINITY] {
         let mut net = small_network();
         net.branches_mut()[0].tap = tap;
-        let error = build_dc_opf_instance(
+        let error = build_dc_opf_preparation(
             &IndexedNetwork::new(&net),
-            &DcOpfOptions {
+            DcOpfOptions {
                 convention: DcConvention::Matpower,
                 ..DcOpfOptions::default()
             },
@@ -585,8 +600,8 @@ fn a_cost_rounding_artifact_reaches_neither_space() {
     // two ways gave two curves.
     let mut net = small_network();
     net.generators_mut()[0].cost = Some(GenCost::new(2, 0.0, 0.0, vec![1e-17, 2.0, 5.0]));
-    let problem =
-        build_dc_opf_instance(&IndexedNetwork::new(&net), &DcOpfOptions::default()).expect("build");
+    let problem = build_dc_opf_preparation(&IndexedNetwork::new(&net), DcOpfOptions::default())
+        .expect("build");
     assert_eq!(problem.generators.q[0].to_bits(), 0.0_f64.to_bits());
     assert_eq!(
         problem.nodal_generator_data().q[0].to_bits(),
@@ -600,7 +615,7 @@ fn a_cost_rounding_artifact_reaches_neither_space() {
 #[test]
 fn a_concave_cost_row_is_refused_however_many_generators_share_the_bus() {
     let lone = case_from_text(&[(-0.5, 5.0)]);
-    let error = build_dc_opf_instance(&IndexedNetwork::new(&lone), &DcOpfOptions::default())
+    let error = build_dc_opf_preparation(&IndexedNetwork::new(&lone), DcOpfOptions::default())
         .expect_err("a lone concave row");
     assert!(
         matches!(error, Error::ConcaveCost { gen_index: 0, c2 } if c2.to_bits() == (-0.5f64).to_bits()),
@@ -609,7 +624,7 @@ fn a_concave_cost_row_is_refused_however_many_generators_share_the_bus() {
     assert_eq!(error.code().code, "BUILD.INSTANCE.CONCAVE_COST");
 
     let shared = case_from_text(&[(0.04, 20.0), (-0.5, 5.0)]);
-    let error = build_dc_opf_instance(&IndexedNetwork::new(&shared), &DcOpfOptions::default())
+    let error = build_dc_opf_preparation(&IndexedNetwork::new(&shared), DcOpfOptions::default())
         .expect_err("a concave row in a merge");
     assert!(
         matches!(error, Error::ConcaveCost { gen_index: 1, c2 } if c2.to_bits() == (-0.5f64).to_bits()),
@@ -623,8 +638,8 @@ fn a_flat_row_and_a_convex_row_still_build() {
     // `c2 == 0` keeps the deliberate flat arm: the flat rate is the bus
     // marginal. Coefficients are per unit scaled, `c` by base.
     let flat = case_from_text(&[(2.0, 1.0), (0.0, 3.0)]);
-    let problem =
-        build_dc_opf_instance(&IndexedNetwork::new(&flat), &DcOpfOptions::default()).expect("flat");
+    let problem = build_dc_opf_preparation(&IndexedNetwork::new(&flat), DcOpfOptions::default())
+        .expect("flat");
     let nodal = problem.nodal_generator_data();
     let bus = problem.generators.bus_of_gen[0];
     assert_eq!(nodal.q[bus].to_bits(), 0.0_f64.to_bits());
@@ -632,7 +647,7 @@ fn a_flat_row_and_a_convex_row_still_build() {
 
     // A convex row keeps its curve, `q = 2 c2` scaled by base².
     let convex = case_from_text(&[(0.11, 5.0)]);
-    let problem = build_dc_opf_instance(&IndexedNetwork::new(&convex), &DcOpfOptions::default())
+    let problem = build_dc_opf_preparation(&IndexedNetwork::new(&convex), DcOpfOptions::default())
         .expect("convex");
     assert_close(problem.generators.q[0], 2.0 * 0.11 * 100.0 * 100.0);
 }
@@ -641,7 +656,7 @@ fn a_flat_row_and_a_convex_row_still_build() {
 fn zero_base_mva_is_rejected() {
     let mut net = small_network();
     *net.base_mva_mut() = 0.0;
-    let error = build_dc_opf_instance(&IndexedNetwork::new(&net), &DcOpfOptions::default())
+    let error = build_dc_opf_preparation(&IndexedNetwork::new(&net), DcOpfOptions::default())
         .expect_err("zero base");
     assert!(matches!(
         error,
@@ -649,58 +664,12 @@ fn zero_base_mva_is_rejected() {
     ));
 }
 
-#[test]
-fn serde_round_trip() {
-    let net = case9();
-    let view = IndexedNetwork::new(&net);
-    let problem = build_dc_opf_instance(&view, &DcOpfOptions::default()).expect("build");
-    let json = serde_json::to_string(&problem).expect("serialize");
-    let back: powerio_prob::DcOpfInstance = serde_json::from_str(&json).expect("deserialize");
-    assert_eq!(back.name, problem.name);
-    assert_eq!(back.bus_ids, problem.bus_ids);
-    assert_eq!(back.generators.source_rows, problem.generators.source_rows);
-    assert_eq!(back.branches.source_rows, problem.branches.source_rows);
-    assert_eq!(
-        back.synthesize_unrated_limits,
-        problem.synthesize_unrated_limits
-    );
-    for (left, right) in back.branches.b.iter().zip(&problem.branches.b) {
-        assert!((left - right).abs() < 1e-12);
-    }
-}
-
-#[test]
-fn instance_deserializes_without_synthesize_unrated_limits() {
-    let net = case9();
-    let problem =
-        build_dc_opf_instance(&IndexedNetwork::new(&net), &DcOpfOptions::default()).expect("build");
-    let mut value = serde_json::to_value(problem).expect("serialize");
-    value
-        .as_object_mut()
-        .expect("instance object")
-        .remove("synthesize_unrated_limits");
-    let back: powerio_prob::DcOpfInstance =
-        serde_json::from_value(value).expect("read earlier instance");
-    assert!(!back.synthesize_unrated_limits);
-}
-
-#[test]
-fn options_deserialize_without_synthesize_unrated_limits() {
-    // A document written before the field existed carries the other three
-    // fields only; it must deserialize to the field's default (off).
-    let json = r#"{
-        "convention": "Matpower",
-        "units": "PerUnit",
-        "skip_zero_impedance": true
-    }"#;
-    let options: DcOpfOptions = serde_json::from_str(json).expect("deserialize");
-    assert!(!options.synthesize_unrated_limits);
-}
-
 #[cfg(feature = "matrix")]
 mod matrix_tests {
-    use powerio_prob::matrix::{
-        DcOpfBundleMetadata, DcOpfBundleOptions, build_dc_opf_matrices, write_dcopf_bundle,
+    use crate::DcOpfInstance;
+    use crate::matrix::{
+        DcOpfAssemblyOptions, DcOpfBundleMetadata, DcOpfBundleOptions, build_dc_opf_matrices,
+        write_dcopf_bundle,
     };
     use powerio_tx::{GenCostPolicyReport, MissingGenCostPolicy};
 
@@ -710,8 +679,10 @@ mod matrix_tests {
     fn optional_matrices_match_generic_matrix_builders() {
         let net = case9();
         let view = IndexedNetwork::new(&net);
-        let problem = build_dc_opf_instance(&view, &DcOpfOptions::default()).expect("build");
-        let matrices = build_dc_opf_matrices(&problem);
+        let problem = build_dc_opf_preparation(&view, DcOpfOptions::default()).expect("build");
+        let instance = DcOpfInstance::from_network(net.clone()).expect("instance");
+        let matrices = build_dc_opf_matrices(&instance, &DcOpfAssemblyOptions::default())
+            .expect("matrices from the instance");
         assert_eq!(matrices.incidence.rows(), problem.n_buses);
         assert_eq!(matrices.incidence.cols(), problem.n_branches());
         assert_eq!(matrices.generator_bus.cols(), problem.n_generators());
@@ -730,9 +701,7 @@ mod matrix_tests {
 
     #[test]
     fn a_bundle_write_never_replaces_an_existing_bundle_directory() {
-        let net = case9();
-        let problem = build_dc_opf_instance(&IndexedNetwork::new(&net), &DcOpfOptions::default())
-            .expect("build");
+        let instance = DcOpfInstance::from_network(case9()).expect("instance");
 
         // A regular file at a produced name inside the bundle directory: the
         // write refuses and the file keeps its bytes.
@@ -740,7 +709,7 @@ mod matrix_tests {
         let bundle_dir = output.path().join("case9_dcopf");
         std::fs::create_dir_all(&bundle_dir).unwrap();
         std::fs::write(bundle_dir.join("A.mtx"), b"precious").unwrap();
-        let error = write_dcopf_bundle(&problem, output.path(), &DcOpfBundleOptions::default())
+        let error = write_dcopf_bundle(&instance, output.path(), &DcOpfBundleOptions::default())
             .unwrap_err();
         assert!(error.to_string().contains("already exists"), "{error}");
         assert_eq!(
@@ -757,8 +726,9 @@ mod matrix_tests {
             std::fs::write(designated.path().join("keep.txt"), b"kept").unwrap();
             std::os::unix::fs::symlink(designated.path(), linked.path().join("case9_dcopf"))
                 .unwrap();
-            let error = write_dcopf_bundle(&problem, linked.path(), &DcOpfBundleOptions::default())
-                .unwrap_err();
+            let error =
+                write_dcopf_bundle(&instance, linked.path(), &DcOpfBundleOptions::default())
+                    .unwrap_err();
             assert!(error.to_string().contains("already exists"), "{error}");
             assert!(
                 std::fs::symlink_metadata(linked.path().join("case9_dcopf"))
@@ -775,7 +745,7 @@ mod matrix_tests {
         // The same write into a fresh output directory still produces the
         // complete inventory the metadata names.
         let fresh = tempfile::tempdir().expect("tempdir");
-        let bundle = write_dcopf_bundle(&problem, fresh.path(), &DcOpfBundleOptions::default())
+        let bundle = write_dcopf_bundle(&instance, fresh.path(), &DcOpfBundleOptions::default())
             .expect("bundle");
         for file in &bundle.files {
             assert!(file.is_file(), "{file:?}");
@@ -785,13 +755,18 @@ mod matrix_tests {
 
     #[test]
     fn bundle_directory_name_is_confined_to_the_output_directory() {
-        let net = case9();
-        let mut problem =
-            build_dc_opf_instance(&IndexedNetwork::new(&net), &DcOpfOptions::default())
-                .expect("build");
-        problem.name = "../escape/../../attempt".to_owned();
+        // The case name comes from source content, so a hostile spelling must
+        // not steer the bundle outside the output directory.
+        let mut net = BalancedNetwork::in_memory(
+            "../escape/../../attempt",
+            100.0,
+            vec![bus(1, BusType::Ref), bus(2, BusType::Pq)],
+            vec![branch(1, 2, 0.2)],
+        );
+        net.generators_mut().push(generator(1, 1.0, 2.0));
+        let instance = DcOpfInstance::from_network(net).expect("instance");
         let output = tempfile::tempdir().expect("tempdir");
-        let bundle = write_dcopf_bundle(&problem, output.path(), &DcOpfBundleOptions::default())
+        let bundle = write_dcopf_bundle(&instance, output.path(), &DcOpfBundleOptions::default())
             .expect("bundle");
         let canonical = bundle.dir.canonicalize().expect("canonical bundle dir");
         let root = output.path().canonicalize().expect("canonical out dir");
@@ -810,16 +785,18 @@ mod matrix_tests {
         let shunt_bus = net.buses()[1].id;
         net.shunts_mut()
             .push(powerio_tx::Shunt::new(shunt_bus, 5.0, 0.0));
-        let problem = build_dc_opf_instance(
-            &IndexedNetwork::new(&net),
-            &DcOpfOptions {
-                synthesize_unrated_limits: true,
-                ..DcOpfOptions::default()
-            },
-        )
-        .expect("build");
+        let assembly = DcOpfAssemblyOptions {
+            synthesize_unrated_limits: true,
+            skip_zero_impedance: true,
+            ..DcOpfAssemblyOptions::default()
+        };
+        let instance = DcOpfInstance::from_network(net).expect("instance");
+        // The private preparation the public writer derives, for the row
+        // level expectations below.
+        let problem = crate::matrix::prepare(&instance, assembly).expect("prepare");
         let output = tempfile::tempdir().expect("tempdir");
         let options = DcOpfBundleOptions {
+            assembly,
             metadata: DcOpfBundleMetadata {
                 cost_policy: MissingGenCostPolicy::Require,
                 cost_report: GenCostPolicyReport {
@@ -828,11 +805,14 @@ mod matrix_tests {
                 },
             },
         };
-        let bundle = write_dcopf_bundle(&problem, output.path(), &options).expect("bundle");
+        let bundle = write_dcopf_bundle(&instance, output.path(), &options).expect("bundle");
 
         let incidence = powerio_matrix::io::read_mtx(bundle.dir.join("A.mtx")).expect("A");
         let branch_b = powerio_matrix::io::read_vector_mtx(bundle.dir.join("b.mtx")).expect("b");
-        assert_eq!(incidence, build_dc_opf_matrices(&problem).incidence);
+        assert_eq!(
+            incidence,
+            crate::matrix::matrices_from_preparation(&problem).incidence
+        );
         assert_eq!(branch_b, problem.branches.b);
         let manifest: serde_json::Value = serde_json::from_str(
             &std::fs::read_to_string(bundle.dir.join("dcopf_meta.json")).expect("manifest"),
@@ -893,5 +873,29 @@ mod matrix_tests {
             "duplicate operator metadata"
         );
         assert_eq!(operator_set, emitted_set);
+    }
+
+    #[test]
+    fn zero_impedance_is_refused_by_default_and_projects_after_the_merge() {
+        let mut net = case9();
+        let mut tie = net.branches()[0].clone();
+        tie.from = BusId(5);
+        tie.to = BusId(6);
+        tie.r = 0.0;
+        tie.x = 0.0;
+        tie.uid = Some("tie-5-6".to_owned());
+        net.branches_mut().push(tie);
+
+        // The default preserves the branch and refuses the finite projection
+        // rather than skipping.
+        let instance = DcOpfInstance::from_network(net.clone()).expect("instance");
+        let refused = build_dc_opf_matrices(&instance, &DcOpfAssemblyOptions::default());
+        assert!(refused.is_err(), "the default preserves and refuses");
+
+        // The explicit merge resolves it, and the merged network projects.
+        let (merged, _, _) = crate::merge_zero_impedance_buses(&net).expect("merge");
+        let merged_instance = DcOpfInstance::from_network(merged).expect("merged instance");
+        build_dc_opf_matrices(&merged_instance, &DcOpfAssemblyOptions::default())
+            .expect("the merged network projects without skipping");
     }
 }

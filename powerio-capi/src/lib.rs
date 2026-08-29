@@ -2754,7 +2754,7 @@ fn geo_apply_summary(report: &powerio::GeoApplyReport) -> String {
 /// Opaque matrix free SCOPF instance.
 #[cfg(feature = "prob")]
 pub struct PioScopfInstance {
-    instance: powerio_prob::ScopfInstance,
+    instance: powerio_prob::ScucInputs,
 }
 
 #[cfg(feature = "prob")]
