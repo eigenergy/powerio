@@ -180,7 +180,7 @@ pub(in crate::format) fn parse_powerworld_source(
 ///
 /// # Errors
 /// As [`parse_aux`], on retained source text that no longer parses.
-pub fn aux_sections(source_text: &str) -> Result<AuxFile> {
+pub fn aux_sections(source_text: &str) -> Result<AuxFile<'_>> {
     parse_aux(source_text)
 }
 
@@ -235,7 +235,7 @@ impl<'a> Merge<'a> {
                         .map(|aliases| {
                             aliases
                                 .iter()
-                                .filter_map(|i| row.values.get(*i).map(|v| v.as_str().trim()))
+                                .filter_map(|i| row.values.get(*i).map(|v| v.as_ref().trim()))
                                 .find(|v| !v.is_empty())
                                 .unwrap_or("")
                         })
@@ -253,7 +253,7 @@ impl<'a> Merge<'a> {
             };
             let entry = &mut self.merged[slot];
             for (f, v) in blk.fields.iter().zip(&row.values) {
-                entry.insert(f.as_str(), v.as_str());
+                entry.insert(f.as_str(), v.as_ref());
             }
         }
     }

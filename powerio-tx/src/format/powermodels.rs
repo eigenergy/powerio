@@ -13,9 +13,21 @@
 //! follows PowerModels' rule (raw tap `≠ 0`). `hvdc` maps onto `dcline` field
 //! for field; `storage` is mapped to the closest PowerModels block and emits a
 //! warning when present.
+//!
+//! The typed reader treats an explicit JSON `null` (or a value the lenient
+//! decoders cannot read) exactly like an absent key, uniformly: `bus_i: null`
+//! falls back to `index` the way a missing `bus_i` does, a null cost `model`
+//! drops the cost block, all-null ratings or solution fields read as unstated,
+//! and a null switch `state` falls through to `status`. The 0.9 tree walk was
+//! sensitive to key presence at those spots; one rule replaces the four
+//! special cases.
 
 use serde_json::{Map, Value};
 
+use super::decode::{
+    lenient_bool, lenient_f64, lenient_flag, lenient_i64, lenient_string, lenient_table,
+    lenient_u64, sorted_rows,
+};
 use super::{Conversion, finish, jnum, warn_extra_branch_rating_sets};
 use crate::diagnostics::codes::EMIT_POWERMODELS as F;
 use crate::diagnostics::{Diagnostics, codes};
@@ -440,36 +452,27 @@ pub(crate) fn parse_powermodels_json_source(
     name_hint: Option<&str>,
     warnings: &mut Diagnostics,
 ) -> Result<BalancedNetwork> {
-    let content: &str = source;
-    let root: Value = serde_json::from_str(content).map_err(|e| Error::FormatRead {
+    // Typed decoding, no generic JSON tree: every known field lands in its
+    // struct slot and only the unknown remainder of each element is retained
+    // as extras, so peak memory is the model plus per-element leftovers
+    // rather than a full DOM beside the source (#293).
+    let document: Document = serde_json::from_str(source).map_err(|e| Error::FormatRead {
         format: FMT,
         message: e.to_string(),
-    })?;
-    let root = root.as_object().ok_or_else(|| Error::FormatRead {
-        format: FMT,
-        message: "top level is not a JSON object".into(),
     })?;
 
     // `baseMVA` is every per-unit divisor here; zero, negative, or non-finite
     // would silently poison the scaled quantities with NaN/Inf or flipped
     // signs, so reject it at the door.
-    let base_mva = root
-        .get("baseMVA")
-        .and_then(Value::as_f64)
+    let base_mva = document
+        .base_mva
         .filter(|b| b.is_finite() && *b > 0.0)
         .ok_or_else(|| Error::FormatRead {
             format: FMT,
             message: "missing, nonpositive, or non-finite numeric `baseMVA`".into(),
         })?;
-    let per_unit = root
-        .get("per_unit")
-        .and_then(Value::as_bool)
-        .unwrap_or(false);
-    if root
-        .get("multinetwork")
-        .and_then(Value::as_bool)
-        .unwrap_or(false)
-    {
+    let per_unit = document.per_unit.unwrap_or(false);
+    if document.multinetwork.unwrap_or(false) {
         warnings.push(
             &codes::READ_POWERMODELS_RECORD_DROPPED,
             "multinetwork=true: only the top-level single snapshot was read",
@@ -477,9 +480,9 @@ pub(crate) fn parse_powermodels_json_source(
     }
     let pscale = if per_unit { base_mva } else { 1.0 };
     let ascale = if per_unit { normalize::RAD_TO_DEG } else { 1.0 };
-    let name = root
-        .get("name")
-        .and_then(Value::as_str)
+    let name = document
+        .name
+        .as_deref()
         .or(name_hint)
         .unwrap_or("case")
         .to_string();
@@ -489,40 +492,40 @@ pub(crate) fn parse_powermodels_json_source(
         base_mva,
         base_frequency: crate::network::DEFAULT_BASE_FREQUENCY,
         geo: None,
-        buses: sorted(root, "bus", "index")
-            .iter()
-            .map(|v| read_bus(v, ascale))
+        buses: sorted_rows(document.bus, |row| row.index)
+            .into_iter()
+            .map(|(_, row)| read_bus(row, ascale))
             .collect::<Result<Vec<_>>>()?
             .into(),
-        loads: sorted(root, "load", "index")
-            .iter()
-            .map(|v| read_load(v, pscale))
+        loads: sorted_rows(document.load, |row| row.index)
+            .into_iter()
+            .map(|(_, row)| read_load(row, pscale))
             .collect::<Vec<_>>()
             .into(),
-        shunts: sorted(root, "shunt", "index")
-            .iter()
-            .map(|v| read_shunt(v, pscale))
+        shunts: sorted_rows(document.shunt, |row| row.index)
+            .into_iter()
+            .map(|(_, row)| read_shunt(row, pscale))
             .collect::<Vec<_>>()
             .into(),
-        branches: read_branches(root, pscale, ascale, warnings).into(),
-        switches: sorted(root, "switch", "index")
-            .iter()
-            .map(|v| read_switch(v, pscale))
+        branches: read_branches(document.branch, pscale, ascale, warnings).into(),
+        switches: sorted_rows(document.switch, |row| row.index)
+            .into_iter()
+            .map(|(_, row)| read_switch(row, pscale))
             .collect::<Vec<_>>()
             .into(),
-        generators: sorted(root, "gen", "index")
-            .iter()
-            .map(|v| read_gen(v, pscale, base_mva, per_unit))
+        generators: sorted_rows(document.generators, |row| row.index)
+            .into_iter()
+            .map(|(_, row)| read_gen(&row, pscale, base_mva, per_unit))
             .collect::<Vec<_>>()
             .into(),
-        storage: sorted(root, "storage", "index")
-            .iter()
-            .map(|v| read_storage(v, pscale))
+        storage: sorted_rows(document.storage, |row| row.index)
+            .into_iter()
+            .map(|(_, row)| read_storage(row, pscale))
             .collect::<Vec<_>>()
             .into(),
-        hvdc: sorted(root, "dcline", "index")
-            .iter()
-            .map(|v| read_hvdc(v, pscale, base_mva, per_unit))
+        hvdc: sorted_rows(document.dcline, |row| row.index)
+            .into_iter()
+            .map(|(_, row)| read_hvdc(row, pscale, base_mva, per_unit))
             .collect::<Vec<_>>()
             .into(),
         transformers_3w: Vec::new().into(),
@@ -534,50 +537,35 @@ pub(crate) fn parse_powermodels_json_source(
     Ok(net)
 }
 
-/// Elements of a top-level section, ordered by their integer `idx_key` so a
-/// re-emitted file assigns the same running keys.
-fn sorted<'a>(root: &'a Map<String, Value>, section: &str, idx_key: &str) -> Vec<&'a Value> {
-    sorted_keyed(root, section, idx_key)
-        .into_iter()
-        .map(|(_, v)| v)
-        .collect()
-}
-
-/// [`sorted`] keeping each entry's map key. Only PowerModels.jl written files
-/// repeat the key in an inner `index`, so the key is the identity a
-/// diagnostic can always name.
-fn sorted_keyed<'a>(
-    root: &'a Map<String, Value>,
-    section: &str,
-    idx_key: &str,
-) -> Vec<(&'a str, &'a Value)> {
-    let Some(obj) = root.get(section).and_then(Value::as_object) else {
-        return Vec::new();
-    };
-    let mut items: Vec<(&str, &Value)> = obj.iter().map(|(k, v)| (k.as_str(), v)).collect();
-    items.sort_by_key(|(_, v)| v.get(idx_key).and_then(Value::as_i64).unwrap_or(0));
-    items
-}
-
-fn f(v: &Value, key: &str) -> f64 {
-    v.get(key).and_then(Value::as_f64).unwrap_or(0.0)
-}
-fn f_or(v: &Value, key: &str, default: f64) -> f64 {
-    v.get(key).and_then(Value::as_f64).unwrap_or(default)
-}
-fn uid(v: &Value, key: &str) -> usize {
-    v.get(key).and_then(Value::as_u64).unwrap_or(0) as usize
-}
-/// A 0/1 status field; absent ⇒ in service. Some producers write a JSON
-/// boolean instead of the MATPOWER 0/1 number; `as_f64` returns `None` for a
-/// bool, so without the explicit arm a `false` here would read back as in
-/// service.
-fn flag(v: &Value, key: &str) -> bool {
-    match v.get(key) {
-        Some(Value::Bool(b)) => *b,
-        Some(value) => value.as_f64() != Some(0.0),
-        None => true,
-    }
+/// The typed document. Unknown top-level sections are ignored, as the tree
+/// walk before it ignored them; unknown element fields land in each row's
+/// flattened extras.
+#[derive(Default, serde::Deserialize)]
+struct Document {
+    #[serde(rename = "baseMVA", default, deserialize_with = "lenient_f64")]
+    base_mva: Option<f64>,
+    #[serde(default, deserialize_with = "lenient_bool")]
+    per_unit: Option<bool>,
+    #[serde(default, deserialize_with = "lenient_bool")]
+    multinetwork: Option<bool>,
+    #[serde(default, deserialize_with = "lenient_string")]
+    name: Option<String>,
+    #[serde(default, deserialize_with = "lenient_table")]
+    bus: Vec<(String, BusRow)>,
+    #[serde(default, deserialize_with = "lenient_table")]
+    load: Vec<(String, LoadRow)>,
+    #[serde(default, deserialize_with = "lenient_table")]
+    shunt: Vec<(String, ShuntRow)>,
+    #[serde(default, deserialize_with = "lenient_table")]
+    branch: Vec<(String, BranchRow)>,
+    #[serde(default, deserialize_with = "lenient_table")]
+    switch: Vec<(String, SwitchRow)>,
+    #[serde(rename = "gen", default, deserialize_with = "lenient_table")]
+    generators: Vec<(String, GenRow)>,
+    #[serde(default, deserialize_with = "lenient_table")]
+    storage: Vec<(String, StorageRow)>,
+    #[serde(default, deserialize_with = "lenient_table")]
+    dcline: Vec<(String, DclineRow)>,
 }
 
 fn bustype(code: i64) -> BusType {
@@ -589,86 +577,179 @@ fn bustype(code: i64) -> BusType {
     }
 }
 
-/// Element keys the neutral model names directly are dropped here; whatever's left
-/// is preserved as extras for round trips and cross format conversion.
-fn extras_excluding(v: &Value, known: &[&str]) -> crate::network::Extras {
-    v.as_object().map_or_else(Default::default, |obj| {
-        obj.iter()
-            .filter(|(k, _)| !known.contains(&k.as_str()))
-            .map(|(k, val)| (k.clone(), val.clone()))
-            .collect()
-    })
+#[derive(Default, serde::Deserialize)]
+struct BusRow {
+    #[serde(default, deserialize_with = "lenient_u64")]
+    bus_i: Option<u64>,
+    #[serde(default, deserialize_with = "lenient_i64")]
+    index: Option<i64>,
+    #[serde(default, deserialize_with = "lenient_i64")]
+    bus_type: Option<i64>,
+    #[serde(default, deserialize_with = "lenient_f64")]
+    vm: Option<f64>,
+    #[serde(default, deserialize_with = "lenient_f64")]
+    va: Option<f64>,
+    #[serde(default, deserialize_with = "lenient_f64")]
+    base_kv: Option<f64>,
+    #[serde(default, deserialize_with = "lenient_f64")]
+    vmax: Option<f64>,
+    #[serde(default, deserialize_with = "lenient_f64")]
+    vmin: Option<f64>,
+    #[serde(default, deserialize_with = "lenient_u64")]
+    area: Option<u64>,
+    #[serde(default, deserialize_with = "lenient_u64")]
+    zone: Option<u64>,
+    #[serde(default, deserialize_with = "lenient_string")]
+    name: Option<String>,
+    #[serde(rename = "source_id", default)]
+    _source_id: Option<serde::de::IgnoredAny>,
+    #[serde(flatten)]
+    extras: crate::network::Extras,
 }
 
-fn read_bus(v: &Value, ascale: f64) -> Result<Bus> {
-    let id = v
-        .get("bus_i")
-        .or_else(|| v.get("index"))
-        .and_then(Value::as_u64)
+fn read_bus(row: BusRow, ascale: f64) -> Result<Bus> {
+    let id = row
+        .bus_i
+        .or_else(|| row.index.and_then(|i| u64::try_from(i).ok()))
         .ok_or_else(|| Error::FormatRead {
             format: FMT,
             message: "bus record missing integer `bus_i`".into(),
         })? as usize;
     Ok(Bus {
         id: BusId(id),
-        kind: bustype(v.get("bus_type").and_then(Value::as_i64).unwrap_or(1)),
-        vm: f_or(v, "vm", 1.0),
-        va: f(v, "va") * ascale,
-        base_kv: f(v, "base_kv"),
-        vmax: f(v, "vmax"),
-        vmin: f(v, "vmin"),
+        kind: bustype(row.bus_type.unwrap_or(1)),
+        vm: row.vm.unwrap_or(1.0),
+        va: row.va.unwrap_or(0.0) * ascale,
+        base_kv: row.base_kv.unwrap_or(0.0),
+        vmax: row.vmax.unwrap_or(0.0),
+        vmin: row.vmin.unwrap_or(0.0),
         evhi: None,
         evlo: None,
-        area: uid(v, "area"),
-        zone: uid(v, "zone"),
-        name: v.get("name").and_then(Value::as_str).map(str::to_string),
+        area: row.area.unwrap_or(0) as usize,
+        zone: row.zone.unwrap_or(0) as usize,
+        name: row.name,
         uid: None,
         location: None,
-        extras: extras_excluding(
-            v,
-            &[
-                "bus_i",
-                "index",
-                "bus_type",
-                "vm",
-                "va",
-                "vmax",
-                "vmin",
-                "base_kv",
-                "area",
-                "zone",
-                "name",
-                "source_id",
-            ],
-        ),
+        extras: row.extras,
     })
 }
 
-fn read_load(v: &Value, pscale: f64) -> Load {
+#[derive(Default, serde::Deserialize)]
+struct LoadRow {
+    #[serde(default, deserialize_with = "lenient_u64")]
+    load_bus: Option<u64>,
+    #[serde(default, deserialize_with = "lenient_i64")]
+    index: Option<i64>,
+    #[serde(default, deserialize_with = "lenient_f64")]
+    pd: Option<f64>,
+    #[serde(default, deserialize_with = "lenient_f64")]
+    qd: Option<f64>,
+    #[serde(default, deserialize_with = "lenient_flag")]
+    status: Option<bool>,
+    #[serde(rename = "source_id", default)]
+    _source_id: Option<serde::de::IgnoredAny>,
+    #[serde(flatten)]
+    extras: crate::network::Extras,
+}
+
+fn read_load(row: LoadRow, pscale: f64) -> Load {
     Load {
-        bus: BusId(uid(v, "load_bus")),
-        p: f(v, "pd") * pscale,
-        q: f(v, "qd") * pscale,
+        bus: BusId(row.load_bus.unwrap_or(0) as usize),
+        p: row.pd.unwrap_or(0.0) * pscale,
+        q: row.qd.unwrap_or(0.0) * pscale,
         voltage_model: None,
-        in_service: flag(v, "status"),
+        in_service: row.status.unwrap_or(true),
         uid: None,
-        extras: extras_excluding(v, &["load_bus", "pd", "qd", "status", "index", "source_id"]),
+        extras: row.extras,
     }
 }
 
-fn read_shunt(v: &Value, pscale: f64) -> Shunt {
+#[derive(Default, serde::Deserialize)]
+struct ShuntRow {
+    #[serde(default, deserialize_with = "lenient_u64")]
+    shunt_bus: Option<u64>,
+    #[serde(default, deserialize_with = "lenient_i64")]
+    index: Option<i64>,
+    #[serde(default, deserialize_with = "lenient_f64")]
+    gs: Option<f64>,
+    #[serde(default, deserialize_with = "lenient_f64")]
+    bs: Option<f64>,
+    #[serde(default, deserialize_with = "lenient_flag")]
+    status: Option<bool>,
+    #[serde(rename = "source_id", default)]
+    _source_id: Option<serde::de::IgnoredAny>,
+    #[serde(flatten)]
+    extras: crate::network::Extras,
+}
+
+fn read_shunt(row: ShuntRow, pscale: f64) -> Shunt {
     Shunt {
-        bus: BusId(uid(v, "shunt_bus")),
-        g: f(v, "gs") * pscale,
-        b: f(v, "bs") * pscale,
-        in_service: flag(v, "status"),
+        bus: BusId(row.shunt_bus.unwrap_or(0) as usize),
+        g: row.gs.unwrap_or(0.0) * pscale,
+        b: row.bs.unwrap_or(0.0) * pscale,
+        in_service: row.status.unwrap_or(true),
         control: None,
         uid: None,
-        extras: extras_excluding(
-            v,
-            &["shunt_bus", "gs", "bs", "status", "index", "source_id"],
-        ),
+        extras: row.extras,
     }
+}
+
+#[derive(Default, serde::Deserialize)]
+struct BranchRow {
+    #[serde(default, deserialize_with = "lenient_u64")]
+    f_bus: Option<u64>,
+    #[serde(default, deserialize_with = "lenient_u64")]
+    t_bus: Option<u64>,
+    #[serde(default, deserialize_with = "lenient_i64")]
+    index: Option<i64>,
+    #[serde(default, deserialize_with = "lenient_f64")]
+    br_r: Option<f64>,
+    #[serde(default, deserialize_with = "lenient_f64")]
+    br_x: Option<f64>,
+    #[serde(default, deserialize_with = "lenient_f64")]
+    b_fr: Option<f64>,
+    #[serde(default, deserialize_with = "lenient_f64")]
+    b_to: Option<f64>,
+    #[serde(default, deserialize_with = "lenient_f64")]
+    g_fr: Option<f64>,
+    #[serde(default, deserialize_with = "lenient_f64")]
+    g_to: Option<f64>,
+    #[serde(default, deserialize_with = "lenient_f64")]
+    rate_a: Option<f64>,
+    #[serde(default, deserialize_with = "lenient_f64")]
+    rate_b: Option<f64>,
+    #[serde(default, deserialize_with = "lenient_f64")]
+    rate_c: Option<f64>,
+    #[serde(default, deserialize_with = "lenient_f64")]
+    c_rating_a: Option<f64>,
+    #[serde(default, deserialize_with = "lenient_f64")]
+    c_rating_b: Option<f64>,
+    #[serde(default, deserialize_with = "lenient_f64")]
+    c_rating_c: Option<f64>,
+    #[serde(default, deserialize_with = "lenient_f64")]
+    tap: Option<f64>,
+    #[serde(default, deserialize_with = "lenient_f64")]
+    shift: Option<f64>,
+    #[serde(default, deserialize_with = "lenient_bool")]
+    transformer: Option<bool>,
+    #[serde(default, deserialize_with = "lenient_flag")]
+    br_status: Option<bool>,
+    #[serde(default, deserialize_with = "lenient_f64")]
+    angmin: Option<f64>,
+    #[serde(default, deserialize_with = "lenient_f64")]
+    angmax: Option<f64>,
+    #[serde(default, deserialize_with = "lenient_f64")]
+    pf: Option<f64>,
+    #[serde(default, deserialize_with = "lenient_f64")]
+    qf: Option<f64>,
+    #[serde(default, deserialize_with = "lenient_f64")]
+    pt: Option<f64>,
+    #[serde(default, deserialize_with = "lenient_f64")]
+    qt: Option<f64>,
+    #[serde(rename = "source_id", default)]
+    _source_id: Option<serde::de::IgnoredAny>,
+    #[serde(flatten)]
+    extras: crate::network::Extras,
 }
 
 /// Read the branch table, reporting the taps the `transformer` flag makes
@@ -676,16 +757,16 @@ fn read_shunt(v: &Value, pscale: f64) -> Shunt {
 /// and the total: a producer that never sets the flag would otherwise emit
 /// one line per transformer.
 fn read_branches(
-    root: &Map<String, Value>,
+    rows: Vec<(String, BranchRow)>,
     pscale: f64,
     ascale: f64,
     warnings: &mut Diagnostics,
 ) -> Vec<Branch> {
     const NAMED: usize = 3;
     let mut discarded: Vec<String> = Vec::new();
-    let branches = sorted_keyed(root, "branch", "index")
-        .iter()
-        .map(|(key, v)| read_branch(v, pscale, ascale, key, &mut discarded))
+    let branches = sorted_rows(rows, |row| row.index)
+        .into_iter()
+        .map(|(key, row)| read_branch(row, pscale, ascale, &key, &mut discarded))
         .collect();
     if !discarded.is_empty() {
         let head = discarded
@@ -716,7 +797,7 @@ fn read_branches(
 // An epsilon compare would silence the warning for real near-unit taps.
 #[allow(clippy::float_cmp)]
 fn read_branch(
-    v: &Value,
+    row: BranchRow,
     pscale: f64,
     ascale: f64,
     key: &str,
@@ -725,146 +806,150 @@ fn read_branch(
     // PowerModels stores the effective tap (1.0 for a line); the `transformer`
     // flag disambiguates an explicit-tap transformer from a line, which is what
     // the neutral raw-tap convention (0 = line) needs.
-    let transformer = v
-        .get("transformer")
-        .and_then(Value::as_bool)
-        .unwrap_or(false);
+    let transformer = row.transformer.unwrap_or(false);
     let tap = if transformer {
-        f_or(v, "tap", 1.0)
+        row.tap.unwrap_or(1.0)
     } else {
         // The `transformer` flag decides the type, so this rule drops a
         // non-unit tap on an untagged branch. Warn about the drop. Taps of
         // 1 and 0 both mean no off-nominal ratio and stay quiet.
-        if let Some(raw) = v.get("tap").and_then(Value::as_f64) {
+        if let Some(raw) = row.tap {
             if raw != 0.0 && raw != 1.0 {
                 discarded.push(format!(
                     "`{key}` ({} -> {}) tap {raw}",
-                    uid(v, "f_bus"),
-                    uid(v, "t_bus"),
+                    row.f_bus.unwrap_or(0),
+                    row.t_bus.unwrap_or(0),
                 ));
             }
         }
         0.0
     };
+    let b_fr = row.b_fr.unwrap_or(0.0);
+    let b_to = row.b_to.unwrap_or(0.0);
     Branch {
-        from: BusId(uid(v, "f_bus")),
-        to: BusId(uid(v, "t_bus")),
-        r: f(v, "br_r"),
-        x: f(v, "br_x"),
-        b: f(v, "b_fr") + f(v, "b_to"),
+        from: BusId(row.f_bus.unwrap_or(0) as usize),
+        to: BusId(row.t_bus.unwrap_or(0) as usize),
+        r: row.br_r.unwrap_or(0.0),
+        x: row.br_x.unwrap_or(0.0),
+        b: b_fr + b_to,
         charging: Some(BranchCharging {
-            g_fr: f(v, "g_fr"),
-            b_fr: f(v, "b_fr"),
-            g_to: f(v, "g_to"),
-            b_to: f(v, "b_to"),
+            g_fr: row.g_fr.unwrap_or(0.0),
+            b_fr,
+            g_to: row.g_to.unwrap_or(0.0),
+            b_to,
         }),
-        rate_a: f(v, "rate_a") * pscale,
-        rate_b: f(v, "rate_b") * pscale,
-        rate_c: f(v, "rate_c") * pscale,
+        rate_a: row.rate_a.unwrap_or(0.0) * pscale,
+        rate_b: row.rate_b.unwrap_or(0.0) * pscale,
+        rate_c: row.rate_c.unwrap_or(0.0) * pscale,
         rating_sets: Vec::new(),
-        current_ratings: has_any(v, &["c_rating_a", "c_rating_b", "c_rating_c"]).then_some(
-            BranchCurrentRatings {
-                c_rating_a: f(v, "c_rating_a"),
-                c_rating_b: f(v, "c_rating_b"),
-                c_rating_c: f(v, "c_rating_c"),
-            },
-        ),
-        tap,
-        shift: f(v, "shift") * ascale,
-        in_service: flag(v, "br_status"),
-        angmin: f(v, "angmin") * ascale,
-        angmax: f(v, "angmax") * ascale,
-        control: None,
-        solution: has_any(v, &["pf", "qf", "pt", "qt"]).then_some(BranchSolution {
-            pf: f(v, "pf") * pscale,
-            qf: f(v, "qf") * pscale,
-            pt: f(v, "pt") * pscale,
-            qt: f(v, "qt") * pscale,
+        current_ratings: (row.c_rating_a.is_some()
+            || row.c_rating_b.is_some()
+            || row.c_rating_c.is_some())
+        .then_some(BranchCurrentRatings {
+            c_rating_a: row.c_rating_a.unwrap_or(0.0),
+            c_rating_b: row.c_rating_b.unwrap_or(0.0),
+            c_rating_c: row.c_rating_c.unwrap_or(0.0),
         }),
+        tap,
+        shift: row.shift.unwrap_or(0.0) * ascale,
+        in_service: row.br_status.unwrap_or(true),
+        angmin: row.angmin.unwrap_or(0.0) * ascale,
+        angmax: row.angmax.unwrap_or(0.0) * ascale,
+        control: None,
+        solution: (row.pf.is_some() || row.qf.is_some() || row.pt.is_some() || row.qt.is_some())
+            .then_some(BranchSolution {
+                pf: row.pf.unwrap_or(0.0) * pscale,
+                qf: row.qf.unwrap_or(0.0) * pscale,
+                pt: row.pt.unwrap_or(0.0) * pscale,
+                qt: row.qt.unwrap_or(0.0) * pscale,
+            }),
         uid: None,
         route: None,
-        extras: extras_excluding(
-            v,
-            &[
-                "f_bus",
-                "t_bus",
-                "br_r",
-                "br_x",
-                "b_fr",
-                "b_to",
-                "g_fr",
-                "g_to",
-                "tap",
-                "shift",
-                "br_status",
-                "angmin",
-                "angmax",
-                "transformer",
-                "rate_a",
-                "rate_b",
-                "rate_c",
-                "c_rating_a",
-                "c_rating_b",
-                "c_rating_c",
-                "pf",
-                "qf",
-                "pt",
-                "qt",
-                "index",
-                "source_id",
-            ],
-        ),
+        extras: row.extras,
     }
 }
 
-fn has_any(v: &Value, keys: &[&str]) -> bool {
-    keys.iter().any(|key| v.get(*key).is_some())
+#[derive(Default, serde::Deserialize)]
+struct SwitchRow {
+    #[serde(default, deserialize_with = "lenient_u64")]
+    f_bus: Option<u64>,
+    #[serde(default, deserialize_with = "lenient_u64")]
+    t_bus: Option<u64>,
+    #[serde(default, deserialize_with = "lenient_i64")]
+    index: Option<i64>,
+    #[serde(default, deserialize_with = "lenient_flag")]
+    state: Option<bool>,
+    #[serde(default, deserialize_with = "lenient_flag")]
+    status: Option<bool>,
+    #[serde(default, deserialize_with = "lenient_f64")]
+    thermal_rating: Option<f64>,
+    #[serde(default, deserialize_with = "lenient_f64")]
+    current_rating: Option<f64>,
+    #[serde(default, deserialize_with = "lenient_f64")]
+    pf: Option<f64>,
+    #[serde(default, deserialize_with = "lenient_f64")]
+    qf: Option<f64>,
+    #[serde(default, deserialize_with = "lenient_f64")]
+    pt: Option<f64>,
+    #[serde(default, deserialize_with = "lenient_f64")]
+    qt: Option<f64>,
+    #[serde(rename = "source_id", default)]
+    _source_id: Option<serde::de::IgnoredAny>,
+    #[serde(flatten)]
+    extras: crate::network::Extras,
 }
 
-fn read_switch(v: &Value, pscale: f64) -> Switch {
-    let closed = if v.get("state").is_some() {
-        flag(v, "state")
-    } else {
-        flag(v, "status")
-    };
+fn read_switch(row: SwitchRow, pscale: f64) -> Switch {
+    let closed = row.state.or(row.status).unwrap_or(true);
     Switch {
-        from: BusId(uid(v, "f_bus")),
-        to: BusId(uid(v, "t_bus")),
+        from: BusId(row.f_bus.unwrap_or(0) as usize),
+        to: BusId(row.t_bus.unwrap_or(0) as usize),
         closed,
-        thermal_rating: v
-            .get("thermal_rating")
-            .and_then(Value::as_f64)
-            .map(|x| x * pscale),
-        current_rating: v.get("current_rating").and_then(Value::as_f64),
-        pf: v.get("pf").and_then(Value::as_f64).map(|x| x * pscale),
-        qf: v.get("qf").and_then(Value::as_f64).map(|x| x * pscale),
-        pt: v.get("pt").and_then(Value::as_f64).map(|x| x * pscale),
-        qt: v.get("qt").and_then(Value::as_f64).map(|x| x * pscale),
+        thermal_rating: row.thermal_rating.map(|x| x * pscale),
+        current_rating: row.current_rating,
+        pf: row.pf.map(|x| x * pscale),
+        qf: row.qf.map(|x| x * pscale),
+        pt: row.pt.map(|x| x * pscale),
+        qt: row.qt.map(|x| x * pscale),
         uid: None,
-        extras: extras_excluding(
-            v,
-            &[
-                "f_bus",
-                "t_bus",
-                "state",
-                "status",
-                "thermal_rating",
-                "current_rating",
-                "pf",
-                "qf",
-                "pt",
-                "qt",
-                "index",
-                "source_id",
-            ],
-        ),
+        extras: row.extras,
     }
 }
 
-fn read_gen(v: &Value, pscale: f64, base_mva: f64, per_unit: bool) -> Generator {
+#[derive(Default, serde::Deserialize)]
+struct GenRow {
+    #[serde(default, deserialize_with = "lenient_u64")]
+    gen_bus: Option<u64>,
+    #[serde(default, deserialize_with = "lenient_i64")]
+    index: Option<i64>,
+    #[serde(default, deserialize_with = "lenient_f64")]
+    pg: Option<f64>,
+    #[serde(default, deserialize_with = "lenient_f64")]
+    qg: Option<f64>,
+    #[serde(default, deserialize_with = "lenient_f64")]
+    pmax: Option<f64>,
+    #[serde(default, deserialize_with = "lenient_f64")]
+    pmin: Option<f64>,
+    #[serde(default, deserialize_with = "lenient_f64")]
+    qmax: Option<f64>,
+    #[serde(default, deserialize_with = "lenient_f64")]
+    qmin: Option<f64>,
+    #[serde(default, deserialize_with = "lenient_f64")]
+    vg: Option<f64>,
+    #[serde(default, deserialize_with = "lenient_f64")]
+    mbase: Option<f64>,
+    #[serde(default, deserialize_with = "lenient_flag")]
+    gen_status: Option<bool>,
+    #[serde(flatten)]
+    cost: CostFields,
+    #[serde(flatten)]
+    extras: crate::network::Extras,
+}
+
+fn read_gen(row: &GenRow, pscale: f64, base_mva: f64, per_unit: bool) -> Generator {
     let mut caps: crate::network::GenCaps = [None; GEN_EXTRA_KEYS.len()];
     for (i, key) in GEN_EXTRA_KEYS.iter().enumerate() {
-        if let Some(val) = v.get(*key).and_then(Value::as_f64) {
+        if let Some(val) = row.extras.get(*key).and_then(Value::as_f64) {
             // Only the ramp rates are per-unit; the PQ curve points and apf are raw.
             caps[i] = Some(if GEN_PU_KEYS.contains(key) {
                 val * pscale
@@ -873,20 +958,20 @@ fn read_gen(v: &Value, pscale: f64, base_mva: f64, per_unit: bool) -> Generator 
             });
         }
     }
-    let cost = v.get("model").map(|_| read_cost(v, base_mva, per_unit));
+    let cost = row.cost.read(base_mva, per_unit);
     Generator {
-        bus: BusId(uid(v, "gen_bus")),
-        pg: f(v, "pg") * pscale,
-        qg: f(v, "qg") * pscale,
+        bus: BusId(row.gen_bus.unwrap_or(0) as usize),
+        pg: row.pg.unwrap_or(0.0) * pscale,
+        qg: row.qg.unwrap_or(0.0) * pscale,
         // The writer emits an unbounded limit (±Inf) as JSON null; read a missing
         // limit back as unbounded, not as a binding 0.0. (±Inf · pscale stays ±Inf.)
-        pmax: f_or(v, "pmax", f64::INFINITY) * pscale,
-        pmin: f_or(v, "pmin", f64::NEG_INFINITY) * pscale,
-        qmax: f_or(v, "qmax", f64::INFINITY) * pscale,
-        qmin: f_or(v, "qmin", f64::NEG_INFINITY) * pscale,
-        vg: f_or(v, "vg", 1.0),
-        mbase: f_or(v, "mbase", base_mva),
-        in_service: flag(v, "gen_status"),
+        pmax: row.pmax.unwrap_or(f64::INFINITY) * pscale,
+        pmin: row.pmin.unwrap_or(f64::NEG_INFINITY) * pscale,
+        qmax: row.qmax.unwrap_or(f64::INFINITY) * pscale,
+        qmin: row.qmin.unwrap_or(f64::NEG_INFINITY) * pscale,
+        vg: row.vg.unwrap_or(1.0),
+        mbase: row.mbase.unwrap_or(base_mva),
+        in_service: row.gen_status.unwrap_or(true),
         cost,
         caps,
         regulated_bus: None,
@@ -894,179 +979,245 @@ fn read_gen(v: &Value, pscale: f64, base_mva: f64, per_unit: bool) -> Generator 
     }
 }
 
-fn read_cost(v: &Value, base_mva: f64, per_unit: bool) -> GenCost {
-    // Keep non-numeric entries as NaN rather than dropping them: silently filtering
-    // would shift every later coefficient's polynomial degree.
-    let mut coeffs_raw: Vec<f64> = v
-        .get("cost")
-        .and_then(Value::as_array)
-        .map(|a| a.iter().map(|c| c.as_f64().unwrap_or(f64::NAN)).collect())
-        .unwrap_or_default();
-    // An out-of-range model number must not wrap into 1/2 (`as u8` turns 257
-    // into Piecewise and rescales coefficients that were never per-unit);
-    // saturate into the unknown-model passthrough instead.
-    let model = v
-        .get("model")
-        .and_then(Value::as_u64)
-        .map_or(2, |m| u8::try_from(m).unwrap_or(u8::MAX));
-    // MATPOWER pads gencost rows to the matrix width with trailing zeros, and
-    // third-party JSON can retain that padding. Trim to the declared ncost
-    // before the per-unit unscale, as `cost_to_pu` does on the way out, so
-    // padding can't read as a higher-degree polynomial and mis-scale every
-    // coefficient.
-    // Fallible conversion: an ncost beyond usize (32-bit targets) reads as
-    // undeclared instead of truncating into a small in-range value.
-    let declared_ncost = v
-        .get("ncost")
-        .and_then(Value::as_u64)
-        .and_then(|n| usize::try_from(n).ok());
-    if let Some(n) = declared_ncost {
-        let keep = if model == 1 { n.saturating_mul(2) } else { n };
-        if keep < coeffs_raw.len() {
-            coeffs_raw.truncate(keep);
+/// The MATPOWER cost columns generators and dclines share. `model`'s
+/// presence decides whether a cost exists at all, so it stays a raw slot.
+#[derive(Default, serde::Deserialize)]
+struct CostFields {
+    #[serde(default)]
+    model: Option<Value>,
+    #[serde(default, deserialize_with = "lenient_u64")]
+    ncost: Option<u64>,
+    #[serde(default, deserialize_with = "lenient_f64")]
+    startup: Option<f64>,
+    #[serde(default, deserialize_with = "lenient_f64")]
+    shutdown: Option<f64>,
+    #[serde(default)]
+    cost: Option<Value>,
+}
+
+impl CostFields {
+    fn read(&self, base_mva: f64, per_unit: bool) -> Option<GenCost> {
+        let model_slot = self.model.as_ref()?;
+        // Keep non-numeric entries as NaN rather than dropping them: silently
+        // filtering would shift every later coefficient's polynomial degree.
+        let mut coeffs_raw: Vec<f64> = self
+            .cost
+            .as_ref()
+            .and_then(Value::as_array)
+            .map(|a| a.iter().map(|c| c.as_f64().unwrap_or(f64::NAN)).collect())
+            .unwrap_or_default();
+        // An out-of-range model number must not wrap into 1/2 (`as u8` turns
+        // 257 into Piecewise and rescales coefficients that were never
+        // per-unit); saturate into the unknown-model passthrough instead.
+        let model = model_slot
+            .as_u64()
+            .map_or(2, |m| u8::try_from(m).unwrap_or(u8::MAX));
+        // MATPOWER pads gencost rows to the matrix width with trailing zeros,
+        // and third-party JSON can retain that padding. Trim to the declared
+        // ncost before the per-unit unscale, as `cost_to_pu` does on the way
+        // out, so padding can't read as a higher-degree polynomial and
+        // mis-scale every coefficient.
+        // Fallible conversion: an ncost beyond usize (32-bit targets) reads
+        // as undeclared instead of truncating into a small in-range value.
+        let declared_ncost = self.ncost.and_then(|n| usize::try_from(n).ok());
+        if let Some(n) = declared_ncost {
+            let keep = if model == 1 { n.saturating_mul(2) } else { n };
+            if keep < coeffs_raw.len() {
+                coeffs_raw.truncate(keep);
+            }
         }
-    }
-    let k = coeffs_raw.len();
-    // Undo PowerModels' per-unit cost scaling for the neutral MW basis (the
-    // inverse of the writer's per-unit rescale); a non-per-unit source is read
-    // as-is.
-    let coeffs = if per_unit {
-        normalize::cost_from_pu(&coeffs_raw, model, base_mva)
-    } else {
-        coeffs_raw
-    };
-    // A polynomial's ncost is its coefficient count; a piecewise curve stores
-    // 2·ncost values ((mw, cost) pairs).
-    let default_ncost = if model == 1 { k / 2 } else { k };
-    GenCost {
-        model,
-        startup: f(v, "startup"),
-        shutdown: f(v, "shutdown"),
-        // Clamp to what the coefficients can back: an ncost declared beyond
-        // the vector length would make the GenCost internally inconsistent.
-        ncost: declared_ncost.map_or(default_ncost, |n| n.min(default_ncost)),
-        coeffs,
+        let k = coeffs_raw.len();
+        // Undo PowerModels' per-unit cost scaling for the neutral MW basis
+        // (the inverse of the writer's per-unit rescale); a non-per-unit
+        // source is read as-is.
+        let coeffs = if per_unit {
+            normalize::cost_from_pu(&coeffs_raw, model, base_mva)
+        } else {
+            coeffs_raw
+        };
+        // A polynomial's ncost is its coefficient count; a piecewise curve
+        // stores 2·ncost values ((mw, cost) pairs).
+        let default_ncost = if model == 1 { k / 2 } else { k };
+        Some(GenCost {
+            model,
+            startup: self.startup.unwrap_or(0.0),
+            shutdown: self.shutdown.unwrap_or(0.0),
+            // Clamp to what the coefficients can back: an ncost declared
+            // beyond the vector length would make the GenCost internally
+            // inconsistent.
+            ncost: declared_ncost.map_or(default_ncost, |n| n.min(default_ncost)),
+            coeffs,
+        })
     }
 }
 
-fn read_hvdc(v: &Value, pscale: f64, base_mva: f64, per_unit: bool) -> Hvdc {
-    // Aggregate bounds come from PowerModels' raw originals (mp_pmin/mp_pmax); fall
-    // back to the from-end per-unit bounds for input that lacks them.
-    let pmin = v
-        .get("mp_pmin")
-        .and_then(Value::as_f64)
-        .unwrap_or_else(|| f(v, "pminf") * pscale);
-    let pmax = v
-        .get("mp_pmax")
-        .and_then(Value::as_f64)
-        .unwrap_or_else(|| f(v, "pmaxf") * pscale);
+#[derive(Default, serde::Deserialize)]
+struct DclineRow {
+    #[serde(default, deserialize_with = "lenient_u64")]
+    f_bus: Option<u64>,
+    #[serde(default, deserialize_with = "lenient_u64")]
+    t_bus: Option<u64>,
+    #[serde(default, deserialize_with = "lenient_i64")]
+    index: Option<i64>,
+    #[serde(default, deserialize_with = "lenient_flag")]
+    br_status: Option<bool>,
+    #[serde(default, deserialize_with = "lenient_f64")]
+    pf: Option<f64>,
+    #[serde(default, deserialize_with = "lenient_f64")]
+    pt: Option<f64>,
+    #[serde(default, deserialize_with = "lenient_f64")]
+    qf: Option<f64>,
+    #[serde(default, deserialize_with = "lenient_f64")]
+    qt: Option<f64>,
+    #[serde(default, deserialize_with = "lenient_f64")]
+    vf: Option<f64>,
+    #[serde(default, deserialize_with = "lenient_f64")]
+    vt: Option<f64>,
+    /// Absorbed so it stays out of extras; the read uses the raw originals.
+    #[serde(rename = "pmin", default, deserialize_with = "lenient_f64")]
+    _pmin: Option<f64>,
+    /// Absorbed so it stays out of extras; the read uses the raw originals.
+    #[serde(rename = "pmax", default, deserialize_with = "lenient_f64")]
+    _pmax: Option<f64>,
+    #[serde(default, deserialize_with = "lenient_f64")]
+    mp_pmin: Option<f64>,
+    #[serde(default, deserialize_with = "lenient_f64")]
+    mp_pmax: Option<f64>,
+    #[serde(default, deserialize_with = "lenient_f64")]
+    pminf: Option<f64>,
+    #[serde(default, deserialize_with = "lenient_f64")]
+    pmaxf: Option<f64>,
+    /// Absorbed so it stays out of extras; the read uses the raw originals.
+    #[serde(rename = "pmint", default, deserialize_with = "lenient_f64")]
+    _pmint: Option<f64>,
+    /// Absorbed so it stays out of extras; the read uses the raw originals.
+    #[serde(rename = "pmaxt", default, deserialize_with = "lenient_f64")]
+    _pmaxt: Option<f64>,
+    #[serde(default, deserialize_with = "lenient_f64")]
+    qminf: Option<f64>,
+    #[serde(default, deserialize_with = "lenient_f64")]
+    qmaxf: Option<f64>,
+    #[serde(default, deserialize_with = "lenient_f64")]
+    qmint: Option<f64>,
+    #[serde(default, deserialize_with = "lenient_f64")]
+    qmaxt: Option<f64>,
+    #[serde(default, deserialize_with = "lenient_f64")]
+    loss0: Option<f64>,
+    #[serde(default, deserialize_with = "lenient_f64")]
+    loss1: Option<f64>,
+    #[serde(flatten)]
+    cost: CostFields,
+    #[serde(rename = "source_id", default)]
+    _source_id: Option<serde::de::IgnoredAny>,
+    #[serde(flatten)]
+    extras: crate::network::Extras,
+}
+
+fn read_hvdc(row: DclineRow, pscale: f64, base_mva: f64, per_unit: bool) -> Hvdc {
+    // Aggregate bounds come from PowerModels' raw originals (mp_pmin/mp_pmax);
+    // fall back to the from-end per-unit bounds for input that lacks them.
+    let pmin = row
+        .mp_pmin
+        .unwrap_or_else(|| row.pminf.unwrap_or(0.0) * pscale);
+    let pmax = row
+        .mp_pmax
+        .unwrap_or_else(|| row.pmaxf.unwrap_or(0.0) * pscale);
+    let cost = row.cost.read(base_mva, per_unit);
     Hvdc {
-        from: BusId(uid(v, "f_bus")),
-        to: BusId(uid(v, "t_bus")),
-        in_service: flag(v, "br_status"),
-        pf: f(v, "pf") * pscale,
+        from: BusId(row.f_bus.unwrap_or(0) as usize),
+        to: BusId(row.t_bus.unwrap_or(0) as usize),
+        in_service: row.br_status.unwrap_or(true),
+        pf: row.pf.unwrap_or(0.0) * pscale,
         // PowerModels flips Pt/Qf/Qt vs MATPOWER; undo it for the neutral model.
-        pt: -f(v, "pt") * pscale,
-        qf: -f(v, "qf") * pscale,
-        qt: -f(v, "qt") * pscale,
-        vf: f_or(v, "vf", 1.0),
-        vt: f_or(v, "vt", 1.0),
+        pt: -row.pt.unwrap_or(0.0) * pscale,
+        qf: -row.qf.unwrap_or(0.0) * pscale,
+        qt: -row.qt.unwrap_or(0.0) * pscale,
+        vf: row.vf.unwrap_or(1.0),
+        vt: row.vt.unwrap_or(1.0),
         pmin,
         pmax,
         // Unbounded reactive limits (±Inf) write as null; read them back unbounded.
-        qminf: f_or(v, "qminf", f64::NEG_INFINITY) * pscale,
-        qmaxf: f_or(v, "qmaxf", f64::INFINITY) * pscale,
-        qmint: f_or(v, "qmint", f64::NEG_INFINITY) * pscale,
-        qmaxt: f_or(v, "qmaxt", f64::INFINITY) * pscale,
-        loss0: f(v, "loss0") * pscale,
-        loss1: f(v, "loss1"),
-        cost: v.get("model").map(|_| read_cost(v, base_mva, per_unit)),
+        qminf: row.qminf.unwrap_or(f64::NEG_INFINITY) * pscale,
+        qmaxf: row.qmaxf.unwrap_or(f64::INFINITY) * pscale,
+        qmint: row.qmint.unwrap_or(f64::NEG_INFINITY) * pscale,
+        qmaxt: row.qmaxt.unwrap_or(f64::INFINITY) * pscale,
+        loss0: row.loss0.unwrap_or(0.0) * pscale,
+        loss1: row.loss1.unwrap_or(0.0),
+        cost,
         uid: None,
-        extras: extras_excluding(
-            v,
-            &[
-                "f_bus",
-                "t_bus",
-                "br_status",
-                "pf",
-                "pt",
-                "qf",
-                "qt",
-                "vf",
-                "vt",
-                "pmin",
-                "pmax",
-                "mp_pmin",
-                "mp_pmax",
-                "pminf",
-                "pmaxf",
-                "pmint",
-                "pmaxt",
-                "qminf",
-                "qmaxf",
-                "qmint",
-                "qmaxt",
-                "loss0",
-                "loss1",
-                "model",
-                "ncost",
-                "startup",
-                "shutdown",
-                "cost",
-                "index",
-                "source_id",
-            ],
-        ),
+        extras: row.extras,
     }
 }
 
-fn read_storage(v: &Value, pscale: f64) -> Storage {
+#[derive(Default, serde::Deserialize)]
+struct StorageRow {
+    #[serde(default, deserialize_with = "lenient_u64")]
+    storage_bus: Option<u64>,
+    #[serde(default, deserialize_with = "lenient_i64")]
+    index: Option<i64>,
+    #[serde(default, deserialize_with = "lenient_f64")]
+    ps: Option<f64>,
+    #[serde(default, deserialize_with = "lenient_f64")]
+    qs: Option<f64>,
+    #[serde(default, deserialize_with = "lenient_f64")]
+    energy: Option<f64>,
+    #[serde(default, deserialize_with = "lenient_f64")]
+    energy_rating: Option<f64>,
+    #[serde(default, deserialize_with = "lenient_f64")]
+    charge_rating: Option<f64>,
+    #[serde(default, deserialize_with = "lenient_f64")]
+    discharge_rating: Option<f64>,
+    #[serde(default, deserialize_with = "lenient_f64")]
+    charge_efficiency: Option<f64>,
+    #[serde(default, deserialize_with = "lenient_f64")]
+    discharge_efficiency: Option<f64>,
+    #[serde(default, deserialize_with = "lenient_f64")]
+    thermal_rating: Option<f64>,
+    #[serde(default, deserialize_with = "lenient_f64")]
+    current_rating: Option<f64>,
+    #[serde(default, deserialize_with = "lenient_f64")]
+    qmin: Option<f64>,
+    #[serde(default, deserialize_with = "lenient_f64")]
+    qmax: Option<f64>,
+    #[serde(default, deserialize_with = "lenient_f64")]
+    r: Option<f64>,
+    #[serde(default, deserialize_with = "lenient_f64")]
+    x: Option<f64>,
+    #[serde(default, deserialize_with = "lenient_f64")]
+    p_loss: Option<f64>,
+    #[serde(default, deserialize_with = "lenient_f64")]
+    q_loss: Option<f64>,
+    #[serde(default, deserialize_with = "lenient_flag")]
+    status: Option<bool>,
+    #[serde(rename = "source_id", default)]
+    _source_id: Option<serde::de::IgnoredAny>,
+    #[serde(flatten)]
+    extras: crate::network::Extras,
+}
+
+fn read_storage(row: StorageRow, pscale: f64) -> Storage {
     Storage {
-        bus: BusId(uid(v, "storage_bus")),
-        ps: f(v, "ps"),
-        qs: f(v, "qs"),
-        energy: f(v, "energy") * pscale,
-        energy_rating: f(v, "energy_rating") * pscale,
-        charge_rating: f(v, "charge_rating") * pscale,
-        discharge_rating: f(v, "discharge_rating") * pscale,
-        charge_efficiency: f_or(v, "charge_efficiency", 1.0),
-        discharge_efficiency: f_or(v, "discharge_efficiency", 1.0),
-        thermal_rating: f(v, "thermal_rating") * pscale,
-        current_rating: v.get("current_rating").and_then(Value::as_f64),
+        bus: BusId(row.storage_bus.unwrap_or(0) as usize),
+        ps: row.ps.unwrap_or(0.0),
+        qs: row.qs.unwrap_or(0.0),
+        energy: row.energy.unwrap_or(0.0) * pscale,
+        energy_rating: row.energy_rating.unwrap_or(0.0) * pscale,
+        charge_rating: row.charge_rating.unwrap_or(0.0) * pscale,
+        discharge_rating: row.discharge_rating.unwrap_or(0.0) * pscale,
+        charge_efficiency: row.charge_efficiency.unwrap_or(1.0),
+        discharge_efficiency: row.discharge_efficiency.unwrap_or(1.0),
+        thermal_rating: row.thermal_rating.unwrap_or(0.0) * pscale,
+        current_rating: row.current_rating,
         // Unbounded reactive limits (±Inf) write as null; read them back unbounded.
-        qmin: f_or(v, "qmin", f64::NEG_INFINITY) * pscale,
-        qmax: f_or(v, "qmax", f64::INFINITY) * pscale,
-        r: f(v, "r"),
-        x: f(v, "x"),
-        p_loss: f(v, "p_loss") * pscale,
-        q_loss: f(v, "q_loss") * pscale,
-        in_service: flag(v, "status"),
+        qmin: row.qmin.unwrap_or(f64::NEG_INFINITY) * pscale,
+        qmax: row.qmax.unwrap_or(f64::INFINITY) * pscale,
+        r: row.r.unwrap_or(0.0),
+        x: row.x.unwrap_or(0.0),
+        p_loss: row.p_loss.unwrap_or(0.0) * pscale,
+        q_loss: row.q_loss.unwrap_or(0.0) * pscale,
+        in_service: row.status.unwrap_or(true),
         uid: None,
-        extras: extras_excluding(
-            v,
-            &[
-                "storage_bus",
-                "ps",
-                "qs",
-                "energy",
-                "energy_rating",
-                "charge_rating",
-                "discharge_rating",
-                "charge_efficiency",
-                "discharge_efficiency",
-                "thermal_rating",
-                "current_rating",
-                "qmin",
-                "qmax",
-                "r",
-                "x",
-                "p_loss",
-                "q_loss",
-                "status",
-                "index",
-                "source_id",
-            ],
-        ),
+        extras: row.extras,
     }
 }
 
@@ -1147,11 +1298,12 @@ mod tests {
         // here is padding, and ncost declares the real quadratic. Untrimmed,
         // the per-unit unscale would treat the row as cubic and divide every
         // coefficient by an extra factor of base.
-        let v: Value = serde_json::json!({
-            "gen_bus": 1, "model": 2, "ncost": 3,
+        let fields: CostFields = serde_json::from_value(serde_json::json!({
+            "model": 2, "ncost": 3,
             "cost": [1.0, 1.0, 1.0, 0.0]
-        });
-        let cost = read_cost(&v, 100.0, true);
+        }))
+        .unwrap();
+        let cost = fields.read(100.0, true).unwrap();
         assert_eq!(cost.ncost, 3);
         assert_eq!(cost.coeffs.len(), 3);
         assert!(approx(cost.coeffs[0], 1e-4));
@@ -1164,11 +1316,12 @@ mod tests {
         // 257 as u8 would wrap to 1 (piecewise) and rescale coefficients that
         // were never per-unit; it must saturate into the unknown-model
         // passthrough instead.
-        let v: Value = serde_json::json!({
-            "gen_bus": 1, "model": 257,
+        let fields: CostFields = serde_json::from_value(serde_json::json!({
+            "model": 257,
             "cost": [10.0, 5.0]
-        });
-        let cost = read_cost(&v, 100.0, true);
+        }))
+        .unwrap();
+        let cost = fields.read(100.0, true).unwrap();
         assert_eq!(cost.coeffs, vec![10.0, 5.0]);
     }
 

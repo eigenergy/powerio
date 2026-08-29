@@ -42,6 +42,7 @@ use crate::network::{BalancedNetwork, Branch, BranchRatingSet, Bus, BusId, BusTy
 use crate::{Error, Result};
 use routing::{Detection, JsonClass, SourceFormat as DetectedFormat, TransmissionFormat};
 
+mod decode;
 mod egret;
 #[doc(hidden)]
 pub mod goc3;

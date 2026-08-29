@@ -16,6 +16,7 @@
 //! source's whitespace or comments; the byte exact same format round trip
 //! comes from the retained source (see [`crate::write_as`]).
 
+use std::borrow::Cow;
 use std::fmt::Write as _;
 
 use crate::{Error, Result};
@@ -24,13 +25,13 @@ const FMT: &str = "PowerWorld .aux";
 
 /// A parsed auxiliary file: the ordered `DATA` and `SCRIPT` sections.
 #[derive(Debug, Clone, PartialEq)]
-pub struct AuxFile {
-    pub sections: Vec<AuxSection>,
+pub struct AuxFile<'a> {
+    pub sections: Vec<AuxSection<'a>>,
 }
 
-impl AuxFile {
+impl<'a> AuxFile<'a> {
     /// The `DATA` sections, in file order.
-    pub fn data(&self) -> impl Iterator<Item = &AuxObject> {
+    pub fn data(&self) -> impl Iterator<Item = &AuxObject<'a>> {
         self.sections.iter().filter_map(|s| match s {
             AuxSection::Data(d) => Some(d),
             AuxSection::Script(_) => None,
@@ -40,7 +41,7 @@ impl AuxFile {
     /// The `DATA` sections for one object type (a type may appear more than
     /// once with different field lists; ACTIVSg exports carry two `Branch`
     /// blocks, lines and transformers).
-    pub fn data_of<'a>(&'a self, object_type: &'a str) -> impl Iterator<Item = &'a AuxObject> {
+    pub fn data_of<'s>(&'s self, object_type: &'s str) -> impl Iterator<Item = &'s AuxObject<'a>> {
         self.data()
             .filter(move |d| d.object_type.eq_ignore_ascii_case(object_type))
     }
@@ -48,22 +49,23 @@ impl AuxFile {
 
 /// One section of an auxiliary file.
 #[derive(Debug, Clone, PartialEq)]
-pub enum AuxSection {
-    Data(AuxObject),
-    Script(AuxScript),
+pub enum AuxSection<'a> {
+    Data(AuxObject<'a>),
+    Script(AuxScript<'a>),
 }
 
 /// A `SCRIPT` section, retained verbatim: powerio executes nothing.
 #[derive(Debug, Clone, PartialEq)]
-pub struct AuxScript {
+pub struct AuxScript<'a> {
     pub name: Option<String>,
-    /// Body lines between the braces, byte for byte.
-    pub lines: Vec<String>,
+    /// Body lines between the braces, byte for byte, borrowed from the
+    /// source text.
+    pub lines: Vec<&'a str>,
 }
 
 /// One `DATA` section: an object type, its declared field list, and the rows.
 #[derive(Debug, Clone, PartialEq)]
-pub struct AuxObject {
+pub struct AuxObject<'a> {
     pub object_type: String,
     /// Optional section name (callable from `LoadData` scripts).
     pub data_name: Option<String>,
@@ -72,10 +74,10 @@ pub struct AuxObject {
     /// `CREATE_IF_NOT_FOUND` argument when the header carried one
     /// (`YES`/`NO`/`PROMPT`).
     pub create_if_not_found: Option<String>,
-    pub rows: Vec<AuxRow>,
+    pub rows: Vec<AuxRow<'a>>,
 }
 
-impl AuxObject {
+impl AuxObject<'_> {
     /// Position of `field` in the declared field list (case insensitive).
     #[must_use]
     pub fn field_index(&self, field: &str) -> Option<usize> {
@@ -87,19 +89,21 @@ impl AuxObject {
 
 /// One value row of a `DATA` section, with any `SUBDATA` blocks that follow it.
 #[derive(Debug, Clone, PartialEq, Default)]
-pub struct AuxRow {
-    /// One value per declared field, quotes removed.
-    pub values: Vec<String>,
-    pub subdata: Vec<AuxSubData>,
+pub struct AuxRow<'a> {
+    /// One value per declared field, quotes removed. A bare or fully quoted
+    /// value borrows the source text; only a value spliced from several
+    /// quoted runs is owned.
+    pub values: Vec<Cow<'a, str>>,
+    pub subdata: Vec<AuxSubData<'a>>,
 }
 
 /// A `<SUBDATA Type> ... </SUBDATA>` block. The interior format is fixed per
 /// subobject type (some are free text, some are per line records), so the
 /// lines are kept verbatim.
 #[derive(Debug, Clone, PartialEq)]
-pub struct AuxSubData {
-    pub name: String,
-    pub lines: Vec<String>,
+pub struct AuxSubData<'a> {
+    pub name: &'a str,
+    pub lines: Vec<&'a str>,
 }
 
 // ---- Parser -----------------------------------------------------------------
@@ -111,7 +115,7 @@ pub struct AuxSubData {
 /// unterminated section, a row with more values than declared fields, a row cut
 /// short at the closing brace, `SUBDATA` with no owning row, or an unknown
 /// file type specifier.
-pub fn parse_aux(text: &str) -> Result<AuxFile> {
+pub fn parse_aux(text: &str) -> Result<AuxFile<'_>> {
     Parser {
         lines: text.lines().collect(),
         pos: 0,
@@ -125,7 +129,7 @@ struct Parser<'a> {
 }
 
 impl<'a> Parser<'a> {
-    fn parse(mut self) -> Result<AuxFile> {
+    fn parse(mut self) -> Result<AuxFile<'a>> {
         let mut sections = Vec::new();
         while let Some(line) = self.peek_content() {
             if first_word_is(line, "SCRIPT") {
@@ -162,7 +166,7 @@ impl<'a> Parser<'a> {
     }
 
     /// Consume a `SCRIPT Name { ... }` section, body verbatim.
-    fn script(&mut self) -> Result<AuxScript> {
+    fn script(&mut self) -> Result<AuxScript<'a>> {
         let header = strip_comment(self.lines[self.pos]).trim().to_string();
         self.pos += 1;
         let mut rest = header["SCRIPT".len()..].trim();
@@ -193,7 +197,7 @@ impl<'a> Parser<'a> {
             if line.trim() == "}" {
                 return Ok(AuxScript { name, lines });
             }
-            lines.push(line.to_string());
+            lines.push(line);
         }
     }
 
@@ -206,7 +210,7 @@ impl<'a> Parser<'a> {
     }
 
     /// Consume a `DATA` section, legacy or concise header.
-    fn data(&mut self) -> Result<AuxObject> {
+    fn data(&mut self) -> Result<AuxObject<'a>> {
         let header = self.header_text()?;
         let close = header
             .rfind(')')
@@ -365,9 +369,9 @@ impl<'a> Parser<'a> {
     /// Parse the value rows between the braces. A row may span lines; it is
     /// complete when it has one value per declared field. `SUBDATA` blocks
     /// attach to the row above them.
-    fn body(&mut self, fields: &[String], csv: bool) -> Result<Vec<AuxRow>> {
-        let mut rows: Vec<AuxRow> = Vec::new();
-        let mut pending: Vec<String> = Vec::new();
+    fn body(&mut self, fields: &[String], csv: bool) -> Result<Vec<AuxRow<'a>>> {
+        let mut rows: Vec<AuxRow<'a>> = Vec::new();
+        let mut pending: Vec<Cow<'a, str>> = Vec::new();
         loop {
             let Some(line) = self.next_line() else {
                 return Err(self.err("unterminated DATA section (no closing `}`)"));
@@ -420,19 +424,16 @@ impl<'a> Parser<'a> {
     }
 
     /// Collect a `<SUBDATA name>` block's interior verbatim.
-    fn subdata(&mut self, name: &str) -> Result<AuxSubData> {
+    fn subdata(&mut self, name: &'a str) -> Result<AuxSubData<'a>> {
         let mut lines = Vec::new();
         loop {
             let Some(line) = self.next_line() else {
                 return Err(self.err(format!("unterminated SUBDATA {name}")));
             };
             if line.trim().eq_ignore_ascii_case("</SUBDATA>") {
-                return Ok(AuxSubData {
-                    name: name.to_string(),
-                    lines,
-                });
+                return Ok(AuxSubData { name, lines });
             }
-            lines.push(line.to_string());
+            lines.push(line);
         }
     }
 }
@@ -484,8 +485,10 @@ fn split_fields(text: &str) -> Vec<String> {
 
 /// Append the values on one line to `out`. Space delimited unless `csv`;
 /// quoted strings keep their interior (including embedded spaces and commas)
-/// and an empty quoted token (`""`) is preserved as an empty value.
-fn split_values_into(line: &str, csv: bool, out: &mut Vec<String>) {
+/// and an empty quoted token (`""`) is preserved as an empty value. A bare or
+/// fully quoted token borrows `line`; only a token spliced from several
+/// quoted runs allocates.
+fn split_values_into<'a>(line: &'a str, csv: bool, out: &mut Vec<Cow<'a, str>>) {
     if csv {
         // Split on top-level commas, then unquote each piece. Whitespace
         // around a piece is insignificant; the quoted interior is verbatim.
@@ -500,7 +503,7 @@ fn split_values_into(line: &str, csv: bool, out: &mut Vec<String>) {
                     .strip_prefix('"')
                     .and_then(|p| p.strip_suffix('"'))
                     .unwrap_or(piece);
-                out.push(value.to_string());
+                out.push(Cow::Borrowed(value));
                 start = i + 1;
             } else if bytes[i] == b'"' {
                 in_quote = !in_quote;
@@ -508,34 +511,41 @@ fn split_values_into(line: &str, csv: bool, out: &mut Vec<String>) {
         }
         return;
     }
-    // Keep `cur`'s capacity across tokens. Taking the buffer handed it away,
-    // so every token regrew from empty through the 8/16/32 realloc chain;
-    // cloning costs one exact-size allocation and leaves the scratch buffer
-    // sized for the next token.
-    let mut cur = String::with_capacity(32);
-    let mut in_quote = false;
-    let mut started = false; // a token has begun, including an empty quoted one
-    for c in line.chars() {
-        match c {
-            '"' => {
-                in_quote = !in_quote;
-                started = true;
-            }
-            c if c.is_whitespace() && !in_quote => {
-                if started {
-                    out.push(cur.clone());
-                    cur.clear();
-                    started = false;
+    let mut chars = line.char_indices().peekable();
+    while let Some(&(start, first)) = chars.peek() {
+        if first.is_whitespace() {
+            chars.next();
+            continue;
+        }
+        // One token: quote characters toggle quoting and are removed; the
+        // token ends at whitespace outside quotes. `owned` starts on the
+        // first quote, so the common bare token stays a borrow.
+        let mut owned: Option<String> = None;
+        let mut segment_start = start;
+        let mut in_quote = false;
+        let mut end = line.len();
+        for (i, c) in chars.by_ref() {
+            match c {
+                '"' => {
+                    let joined = owned.get_or_insert_with(String::new);
+                    joined.push_str(&line[segment_start..i]);
+                    segment_start = i + 1;
+                    in_quote = !in_quote;
                 }
-            }
-            c => {
-                cur.push(c);
-                started = true;
+                c if c.is_whitespace() && !in_quote => {
+                    end = i;
+                    break;
+                }
+                _ => {}
             }
         }
-    }
-    if started {
-        out.push(cur);
+        match owned {
+            Some(mut joined) => {
+                joined.push_str(&line[segment_start..end]);
+                out.push(Cow::Owned(joined));
+            }
+            None => out.push(Cow::Borrowed(&line[start..end])),
+        }
     }
 }
 

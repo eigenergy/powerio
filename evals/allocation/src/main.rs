@@ -251,6 +251,55 @@ fn main() {
         }
     }
 
+    // #293: the big-case JSON and token readers, on the same case2869pegase
+    // every number in the issue used, via in-process conversions so no
+    // fixture is duplicated. The input buffer is handed to the source inside
+    // the measurement, so peak includes exactly what a real parse holds.
+    let big = root().join("tests/data/case2869pegase.m");
+    if big.exists() {
+        let module = powerio_core::Source::open(&big)
+            .map_err(|e| e.to_string())
+            .and_then(|s| powerio::format::parse(s).map_err(|e| e.to_string()))
+            .expect("case2869pegase parses");
+        for (op, token) in [
+            ("parse_powermodels_2869", "powermodels-json"),
+            ("parse_egret_2869", "egret-json"),
+            ("parse_pandapower_2869", "pandapower-json"),
+            ("parse_psse_2869", "psse"),
+            ("parse_aux_2869", "aux"),
+        ] {
+            let Some(target) = powerio::format::target_format_from_name(token) else {
+                eprintln!("unknown target {token}");
+                continue;
+            };
+            let text = match powerio::format::write_as(&module, target) {
+                Ok(conversion) => conversion.text,
+                Err(e) => {
+                    eprintln!("write failed {token}: {e}");
+                    continue;
+                }
+            };
+            let len = text.len() as u64;
+            let bytes = text.into_bytes();
+            let (r, s) = measure(move || {
+                powerio_core::Source::from_bytes("case2869", bytes)
+                    .map_err(|e| e.to_string())
+                    .and_then(|source| {
+                        let source = source.with_format(
+                            powerio_core::FormatId::new(token).map_err(|e| e.to_string())?,
+                        );
+                        powerio::format::parse(source)
+                            .map(powerio_core::PioModule::into_value)
+                            .map_err(|e| e.to_string())
+                    })
+            });
+            match r {
+                Ok(_) => row(op, "parse", len, s),
+                Err(e) => eprintln!("parse failed {op}: {e}"),
+            }
+        }
+    }
+
     // Multiconductor: OpenDSS and BMOPF.
     for (name, rel, from) in [
         (

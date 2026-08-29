@@ -4,7 +4,7 @@
 use super::auxiliary::{AuxSection, parse_aux, write_aux};
 use crate::Error;
 
-fn one_object(text: &str) -> super::AuxObject {
+fn one_object(text: &str) -> super::AuxObject<'_> {
     let file = parse_aux(text).unwrap();
     assert_eq!(file.sections.len(), 1, "expected one section");
     match file.sections.into_iter().next().unwrap() {

@@ -23,7 +23,8 @@ use powerio_tx::{DisplayData, PwdDisplay, PwdSubstation, parse_display_bytes, pa
 /// (number, name, latitude, longitude) per aux Substation row. Handles both
 /// naming vocabularies (classic SubNum/SubName, 2022 Number/Name).
 fn aux_substations(path: &Path) -> Vec<(u32, String, f64, f64)> {
-    let aux = parse_aux(&fs::read_to_string(path).unwrap()).unwrap();
+    let text = fs::read_to_string(path).unwrap();
+    let aux = parse_aux(&text).unwrap();
     let sub = aux
         .data_of("Substation")
         .next()
@@ -41,7 +42,7 @@ fn aux_substations(path: &Path) -> Vec<(u32, String, f64, f64)> {
         .map(|r| {
             (
                 r.values[num].parse().unwrap(),
-                r.values[name].clone(),
+                r.values[name].to_string(),
                 r.values[lat].parse().unwrap(),
                 r.values[lon].parse().unwrap(),
             )
