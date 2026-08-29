@@ -322,6 +322,24 @@ fn serialize_pyerr(e: serde_json::Error) -> PyErr {
     )
 }
 
+/// One list of 1.0 diagnostic records as the JSON array every diagnostics
+/// surface (a stored module, a parsed network, the balanced lowering
+/// readiness report) publishes: code, severity, message, and target, the
+/// last `null` when the finding carries none.
+fn diagnostics_json_array(diagnostics: &[powerio_core::Diagnostic]) -> Vec<serde_json::Value> {
+    diagnostics
+        .iter()
+        .map(|diagnostic| {
+            serde_json::json!({
+                "code": diagnostic.code(),
+                "severity": format!("{:?}", diagnostic.severity()).to_lowercase(),
+                "message": diagnostic.message(),
+                "target": diagnostic.target(),
+            })
+        })
+        .collect()
+}
+
 /// Package a GO Challenge 3 document: the balanced snapshot plus the operating
 /// point series the document carries.
 fn normalize(s: &str) -> String {
@@ -549,6 +567,13 @@ impl PyBalancedNetwork {
     #[getter]
     fn read_warnings(&self) -> Vec<String> {
         self.warnings.clone()
+    }
+
+    /// The same read fidelity findings as `read_warnings`, structured: one
+    /// JSON array of code/severity/message/target records.
+    fn diagnostics_json(&self) -> PyResult<String> {
+        let diagnostics = diagnostics_json_array(self.diagnostics());
+        serde_json::to_string(&diagnostics).map_err(serialize_pyerr)
     }
 
     #[getter]
@@ -1458,6 +1483,13 @@ impl PyMulticonductorNetwork {
         self.rendered_warnings.clone()
     }
 
+    /// The same read fidelity findings as `warnings`, structured: one JSON
+    /// array of code/severity/message/target records.
+    fn diagnostics_json(&self) -> PyResult<String> {
+        let diagnostics = diagnostics_json_array(self.module.diagnostics());
+        serde_json::to_string(&diagnostics).map_err(serialize_pyerr)
+    }
+
     /// This network's coordinates as the canonical GeoJSON layer. Raises when
     /// the network carries none.
     fn geo_layer_json(&self) -> PyResult<String> {
@@ -1804,19 +1836,7 @@ impl PyStoredModule {
 
     /// The module's diagnostics as a JSON array.
     fn diagnostics_json(&self) -> PyResult<String> {
-        let diagnostics: Vec<serde_json::Value> = self
-            .module()?
-            .diagnostics()
-            .iter()
-            .map(|diagnostic| {
-                serde_json::json!({
-                    "code": diagnostic.code(),
-                    "severity": format!("{:?}", diagnostic.severity()).to_lowercase(),
-                    "message": diagnostic.message(),
-                    "target": diagnostic.target(),
-                })
-            })
-            .collect();
+        let diagnostics = diagnostics_json_array(self.module()?.diagnostics());
         serde_json::to_string(&diagnostics).map_err(serialize_pyerr)
     }
 
@@ -1918,7 +1938,18 @@ impl PyStoredModule {
             },
         )
         .map_err(|error| core_error_pyerr(&error))?;
-        serde_json::to_string(&readiness).map_err(serialize_pyerr)
+        // `readiness.diagnostics` is the legacy preflight shape internally;
+        // publish the 1.0 module records instead, same as `diagnostics_json`.
+        let diagnostics = diagnostics_json_array(&readiness.diagnostics_as_module_records());
+        let payload = serde_json::json!({
+            "convention": readiness.convention,
+            "base_mva": readiness.base_mva,
+            "status": readiness.status,
+            "assumptions": readiness.assumptions,
+            "approximations": readiness.approximations,
+            "diagnostics": diagnostics,
+        });
+        serde_json::to_string(&payload).map_err(serialize_pyerr)
     }
 
     /// Lower the multiconductor value to a balanced module. Common records
