@@ -24,16 +24,16 @@ def main() -> None:
     assert powerio.__version__ == versions["powerio_version"], versions
     assert versions["module_schema"] == {"name": "powerio.module", "version": 1}, versions
 
-    net = powerio.parse(CASE.encode(), "matpower", value_type=powerio.BalancedNetwork)
+    module = powerio.parse(CASE.encode(), "matpower", value_type=powerio.BalancedNetwork)
+    assert module.kind == "balanced_network", module.kind
+    net = module.value
     assert net.n_buses == 3 and net.n_branches == 3, (net.n_buses, net.n_branches)
 
-    module = powerio.StoredModule.from_str(CASE, "matpower")
-    assert module.kind == "balanced_network", module.kind
     document = module.to_json()
     decoded = json.loads(document)
     assert decoded["schema"] == "powerio.module" and decoded["version"] == 1
     # Deterministic release: the stored document is byte stable.
-    assert powerio.StoredModule.from_json(document).to_json() == document
+    assert powerio.PioModule.from_json(document).to_json() == document
 
     data = net.dc_data()
     assert data["formula"] == "series_susceptance"
