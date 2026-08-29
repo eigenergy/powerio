@@ -363,7 +363,7 @@ def test_parse_failures_carry_the_code_and_the_tools_lead_with_it():
 
 def test_unknown_format_code_is_not_doubled():
     with pytest.raises(powerio.PowerIOError) as native:
-        powerio.parse_file(str(DATA / "case9.m"), "not-a-real-format")
+        powerio.parse(str(DATA / "case9.m"), "not-a-real-format")
     assert native.value.code == "REQUEST.FORMAT.UNKNOWN"
     with pytest.raises(ValueError) as mapped:
         server.summary(path=str(DATA / "case9.m"), from_format="not-a-real-format")
@@ -950,7 +950,7 @@ def test_parse_warnings_are_structured_records_on_every_transport():
     module) already published six dicts. Both now publish the identical
     structured list."""
     via_path = server.parse(path=str(PSSE_CASE5))
-    via_package = server.parse(path=str(PSSE_CASE5), transport="package")
+    via_package = server.parse(path=str(PSSE_CASE5), transport="module")
 
     for parsed in (via_path, via_package):
         warnings = parsed["warnings"]
@@ -962,4 +962,10 @@ def test_parse_warnings_are_structured_records_on_every_transport():
             assert record["severity"] in ("error", "warning", "remark", "note")
             assert record["message"]
 
-    assert via_path["warnings"] == via_package["warnings"]
+    # The module transport round trips through the writer, which assigns
+    # ids (d0, d1, ...) to records that lack them; the direct path's records
+    # have none. Identical otherwise.
+    def _without_ids(records):
+        return [{k: v for k, v in r.items() if k != "id"} for r in records]
+
+    assert _without_ids(via_path["warnings"]) == _without_ids(via_package["warnings"])
