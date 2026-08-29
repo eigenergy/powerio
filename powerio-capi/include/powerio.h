@@ -132,10 +132,15 @@ struct ArrowSchema;
  * and one module surface remains: `pio_parse_*` produce module handles,
  * typed accessors hand back independently owned network handles, every
  * fallible entry point reports through a structured `PioError`, and every
- * handle type carries a `retain`/`release` pair. A binding built against 5
- * would resolve missing symbols; the handshake refuses first. The 4 to 5
- * bump reshaped every ABI visible JSON document and the diagnostic
- * grammar.
+ * handle type carries a `retain`/`release` pair. Thirteen exported symbol
+ * names are common to the 0.9 and this header; seven of them
+ * (`pio_parse_file`, `pio_parse_str`, `pio_parse_bytes`, `pio_convert_file`,
+ * `pio_convert_str`, `pio_geo_parse`, `pio_arrow_catalog_json`) carry a
+ * different signature under the same name. A binding built against 5 would
+ * resolve every one of those thirteen symbols rather than failing to link,
+ * so the version handshake above is what actually catches the mismatch.
+ * The 4 to 5 bump reshaped every ABI visible JSON document and the
+ * diagnostic grammar.
  */
 #define PIO_ABI_VERSION 6
 
@@ -382,9 +387,10 @@ const char *pio_version(void);
 size_t pio_classify_str(const char *text, char *outbuf, size_t outlen);
 
 /**
- * Serialize `net` to its model JSON: the network serialization the stored
- * carries under `model.balanced_network`, without the surrounding document.
- * This is the bindings' data transport and the only route to it: model JSON
+ * Serialize `net` to its model JSON: the network serialization a `.pio.json`
+ * document carries as `value.data` when its `value.kind` is
+ * `balanced_network`, without the surrounding document. This is the
+ * bindings' data transport and the only route to it: model JSON
  * is powerio's own document rather than a case format, so it has no format
  * token. Returns an owned C string (free with [`pio_string_release`]), `NULL` on
  * error.
@@ -393,12 +399,13 @@ char *pio_balanced_network_to_json(const PioBalancedNetwork *net, PioError **err
 
 /**
  * Parse model JSON produced by [`pio_balanced_network_to_json`] (or lifted from a `.pio.json`
- * document's `model.balanced_network`) back into an owned handle, the inverse
- * of [`pio_balanced_network_to_json`]. A bare `.json` file holding this document classifies as
+ * document's `value.data` when its `value.kind` is `balanced_network`) back into an owned
+ * handle, the inverse of [`pio_balanced_network_to_json`]. A bare `.json` file holding this document classifies as
  * `model-json` through [`pio_classify_str`]. Returns `NULL` on error. Free
  * with [`pio_balanced_network_release`].
  */
-PioBalancedNetwork *pio_balanced_network_from_json(const char *text, PioError **error);
+PioBalancedNetwork *pio_balanced_network_from_json(const char *text,
+                                                   PioError **error);
 
 /**
  * Mint an independent handle to the same network. NULL stays NULL.
@@ -725,8 +732,8 @@ char *pio_balanced_network_geo_extract(const PioBalancedNetwork *net, PioError *
  * matched branch routes in `Branch.route`. The returned handle drops the
  * retained source text, so a same-format write re-serializes the placed case
  * instead of echoing the original. The reader's notes and an apply summary
- * (`geo apply: N bus point(s), ...`) are appended to the handle's warnings
- * on the returned handle's findings. Returns `NULL` on error.
+ * (`geo apply: N bus point(s), ...`) are appended to the returned handle's
+ * findings. Returns `NULL` on error.
  */
 PioBalancedNetwork *pio_balanced_network_geo_apply(const PioBalancedNetwork *net,
                                                    const char *layer,
@@ -787,9 +794,10 @@ char *pio_multiconductor_network_summary_json(const PioMulticonductorNetwork *ne
 
 #if defined(PIO_DIST)
 /**
- * Serialize `net` to its model JSON: the network serialization the stored
- * carries under `model.multiconductor_network`, without the surrounding
- * document. This is the bindings' data transport, not a case format: the
+ * Serialize `net` to its model JSON: the network serialization a `.pio.json`
+ * document carries as `value.data` when its `value.kind` is
+ * `multiconductor_network`, without the surrounding document. This is the
+ * bindings' data transport, not a case format: the
  * converter, CLI, and format inference do not know it; a distribution case
  * other tools read is BMOPF JSON, written through
  * `pio_module_write_str`.
@@ -810,8 +818,9 @@ char *pio_multiconductor_network_graph_json(const PioMulticonductorNetwork *net,
 #if defined(PIO_DIST)
 /**
  * Parse model JSON produced by [`pio_multiconductor_network_to_json`] (or lifted from a
- * `.pio.json` document's `model.multiconductor_network`) back into an owned
- * handle: the inverse of [`pio_multiconductor_network_to_json`]. The rebuilt handle retains
+ * `.pio.json` document's `value.data` when its `value.kind` is
+ * `multiconductor_network`) back into an owned handle: the inverse of
+ * [`pio_multiconductor_network_to_json`]. The rebuilt handle retains
  * no source text, so a same format write is a fresh serialization. The handle
  * retains the model JSON `warnings`. Returns `NULL` on error. Free with
  * [`pio_multiconductor_network_release`].
@@ -935,8 +944,10 @@ int32_t pio_module_write_file(const PioModule *module,
 char *pio_module_write_json(const PioModule *module, PioError **error);
 
 /**
- * The module's diagnostics as a JSON array (stable code, severity, message,
- * optional identity and target per entry). Free with `pio_string_release`.
+ * The module's diagnostics as a JSON array, each entry `Diagnostic`'s own
+ * serde form (code, severity, message, and, when carried, id, target,
+ * spans, related, details, and suggested_action). Free with
+ * `pio_string_release`.
  */
 char *pio_module_diagnostics_json(const PioModule *module, PioError **error);
 

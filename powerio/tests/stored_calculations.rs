@@ -4,13 +4,15 @@
 
 use std::sync::Arc;
 
+use powerio::DcConvention;
 use powerio::stored::{read_module, write_module};
 use powerio::{BalancedNetwork, PioValue};
 use powerio_core::{PioModule, TimePoint};
 use powerio_prob::{
     AcOpfInstance, AcOpfSolution, AcPfInstance, AcPfSolution, AcScucSolution, DcOpfInstance,
     DcOpfSolution, DcPfInstance, DcPfSolution, McAcOpfInstance, McAcOpfSolution, McAcPfInstance,
-    McAcPfSolution, Objective, ObjectiveTerm, ScucDeviceOutputs, ScucNetworkOutputs, Termination,
+    McAcPfSolution, Objective, ObjectiveTerm, Residuals, ScucDeviceOutputs, ScucNetworkOutputs,
+    Termination,
 };
 use powerio_tx::{Branch, Bus, BusId, BusType, GenCost, Generator, Load};
 
@@ -236,6 +238,124 @@ fn every_solution_kind_round_trips() {
             .unwrap(),
         ),
         "mc_ac_opf_solution",
+    );
+}
+
+/// SEC-9: the writer used to fold the default DC convention
+/// (`SeriesSusceptance`) and a genuinely unmapped future variant into the
+/// same wildcard arm, so every explicitly requested convention must still
+/// round trip under its own name now that the arms are split.
+#[test]
+fn every_dc_convention_round_trips_under_its_own_name() {
+    for convention in [
+        DcConvention::SeriesSusceptance,
+        DcConvention::TapAdjustedReactance,
+        DcConvention::ReactanceOnly,
+    ] {
+        let instance = DcOpfInstance::from_network(network())
+            .unwrap()
+            .with_approximation(convention);
+        let text = round_trip(PioValue::DcOpfInstance(instance), "dc_opf_instance");
+        let raw: serde_json::Value = serde_json::from_str(&text).unwrap();
+        let back = read_module(&text).unwrap();
+        let PioValue::DcOpfInstance(back) = back.value() else {
+            panic!("expected the dc_opf_instance kind");
+        };
+        assert_eq!(
+            back.approximation(),
+            convention,
+            "{}",
+            raw["value"]["data"]["approximation"]
+        );
+    }
+}
+
+/// SEC-8: `Residuals` and `ObjectiveTerm::DifferentiabilityRegularization`'s
+/// `weight` are `powerio-prob` types plugged directly into the stored
+/// document, with no `StoredF64` wrapping of their own; before routing
+/// `StoredModuleV1` through the same nonfinite adapter every other stored
+/// type uses, a NaN or infinite value here reached `serde_json` as a plain
+/// `f64`, which serializes non-finite floats as `null` and cannot tell
+/// `Some(NAN)` apart from `None` on the way back.
+#[test]
+fn residuals_and_objective_weight_round_trip_every_nonfinite_value() {
+    let net = network();
+    let dc_opf = Arc::new(DcOpfInstance::from_network(net).unwrap().with_objective(
+        Objective::default().with_term(ObjectiveTerm::DifferentiabilityRegularization {
+            weight: f64::NEG_INFINITY,
+        }),
+    ));
+    let solution = DcOpfSolution::new(
+        dc_opf,
+        Termination::Converged,
+        vec![0.0, -0.02],
+        vec![40.0, -40.0],
+        vec![40.0],
+        vec![-40.0],
+        vec![40.0],
+        412.5,
+    )
+    .unwrap()
+    .with_residuals({
+        let mut residuals = Residuals::default();
+        residuals.max_active_power_mismatch = Some(f64::NAN);
+        residuals.max_reactive_power_mismatch = Some(f64::INFINITY);
+        residuals
+    });
+
+    let module = PioModule::new(PioValue::DcOpfSolution(solution));
+    let text = write_module(&module).unwrap();
+    let back = read_module(&text).unwrap();
+    let PioValue::DcOpfSolution(back) = back.value() else {
+        panic!("expected the dc_opf_solution kind");
+    };
+
+    assert!(back.residuals().max_active_power_mismatch.unwrap().is_nan());
+    assert_eq!(
+        back.residuals().max_reactive_power_mismatch,
+        Some(f64::INFINITY)
+    );
+    let ObjectiveTerm::DifferentiabilityRegularization { weight } =
+        back.instance().objective().terms()[0]
+    else {
+        panic!("expected the regularization term");
+    };
+    #[allow(clippy::float_cmp)] // exact infinity, not a computed value
+    {
+        assert_eq!(weight, f64::NEG_INFINITY);
+    }
+
+    // Some(NAN) is distinct from None: a second solution with the mismatch
+    // unstated must read back unstated, not as a smuggled-in NaN.
+    let dc_opf = Arc::new(DcOpfInstance::from_network(network()).unwrap());
+    let unstated = DcOpfSolution::new(
+        dc_opf,
+        Termination::Converged,
+        vec![0.0, -0.02],
+        vec![40.0, -40.0],
+        vec![40.0],
+        vec![-40.0],
+        vec![40.0],
+        412.5,
+    )
+    .unwrap()
+    .with_residuals({
+        let mut residuals = Residuals::default();
+        residuals.max_reactive_power_mismatch = Some(f64::NAN);
+        residuals
+    });
+    let module = PioModule::new(PioValue::DcOpfSolution(unstated));
+    let text = write_module(&module).unwrap();
+    let back = read_module(&text).unwrap();
+    let PioValue::DcOpfSolution(back) = back.value() else {
+        panic!("expected the dc_opf_solution kind");
+    };
+    assert_eq!(back.residuals().max_active_power_mismatch, None);
+    assert!(
+        back.residuals()
+            .max_reactive_power_mismatch
+            .unwrap()
+            .is_nan()
     );
 }
 

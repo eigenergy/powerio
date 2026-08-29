@@ -8,6 +8,8 @@
 //! to volts, watts, and radians. Fields the model does not type ride in
 //! `extras` so the PMD writer can reproduce them.
 
+use std::collections::BTreeSet;
+
 use serde_json::{Map, Value};
 
 use crate::diagnostics::codes as C;
@@ -529,6 +531,16 @@ impl Reader<'_> {
     }
 
     fn lines(&mut self, items: &Map<String, Value>) {
+        // Carried across the loop rather than probed with net.linecode()
+        // (a linear scan) on every candidate name: a document with many
+        // colliding inline-impedance lines would otherwise make the
+        // collision search itself quadratic in the line count.
+        let mut linecode_names: BTreeSet<String> = self
+            .net
+            .linecodes()
+            .iter()
+            .map(|c| c.name.to_ascii_lowercase())
+            .collect();
         for (name, v) in items {
             let Value::Object(o) = v else { continue };
             let mut known = vec![
@@ -554,10 +566,11 @@ impl Reader<'_> {
                 extras = take_extras(o, &known);
                 let mut lc_name = format!("{name}_z");
                 let mut k = 2;
-                while self.net.linecode(&lc_name).is_some() {
+                while linecode_names.contains(&lc_name.to_ascii_lowercase()) {
                     lc_name = format!("{name}_z{k}");
                     k += 1;
                 }
+                linecode_names.insert(lc_name.to_ascii_lowercase());
                 let lc = linecode_from(
                     &lc_name,
                     o,

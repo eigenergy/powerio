@@ -13,8 +13,8 @@
 //! type narrows the module:
 //!
 //! ```no_run
-//! let module = powerio::parse(powerio_core::Source::open("case9.m")?)?;
-//! let module: powerio_core::PioModule<powerio::BalancedNetwork> =
+//! let module = powerio::parse(powerio::Source::open("case9.m")?)?;
+//! let module: powerio::PioModule<powerio::BalancedNetwork> =
 //!     powerio::try_into_typed(module)?;
 //! # Ok::<(), Box<dyn std::error::Error>>(())
 //! ```
@@ -24,6 +24,31 @@
 //! [`powerio_dist::parse`] for multiconductor ones.
 
 pub use powerio_tx::*;
+
+/// Core types a consumer needs to name a module: the generic module wrapper,
+/// the source it was parsed from, a byte span into a source, the output
+/// destination a write commits to, and the two repeated-value containers.
+/// `Diagnostic` already arrives through [`powerio_tx`]'s own re-export, since
+/// that one is itself `powerio_core::Diagnostic`.
+pub use powerio_core::{
+    Destination, PioModule, ScenarioSet, Source, SourceSpan, TimePoint, TimeSeries,
+};
+
+/// `powerio_tx::*` above already re-exports an `Error`/`Result` pair, but
+/// those are powerio-tx's own 0.9 enum and its alias over it, tied to its
+/// text format readers, not what [`parse`] and the source layer return. An
+/// explicit `use` of a name shadows a glob import of the same name, so these
+/// two items are what make `powerio::Error`/`powerio::Result` name the type
+/// the facade's own functions actually use.
+pub use powerio_core::Error;
+pub type Result<T> = std::result::Result<T, powerio_core::Error>;
+
+/// The distribution network type; [`powerio_dist::parse`] routes to it.
+pub use powerio_dist::MulticonductorNetwork;
+
+/// The headline problem instance and solution types. The full families live
+/// in [`powerio_prob`]; these two anchor the ontology at the crate root.
+pub use powerio_prob::{AcOpfInstance, AcOpfSolution};
 
 /// Matrix and graph data, re-exported from `powerio-matrix` under the
 /// `matrix` feature. Matrix construction is never a parse result, so the
@@ -43,6 +68,11 @@ pub mod stored;
 pub mod write;
 pub use write::{write_module_as, write_module_str, write_module_str_with_options};
 pub mod transform;
+
+/// The replayable operating state, named at the crate root beside the other
+/// module types. From this layer up the 1.0 state type in powerio-prob is the
+/// one the module surface stores and selects.
+pub use powerio_prob::OperatingPoint;
 mod value;
 pub use value::{FromPioValue, PioValue, PioValueKind, ValueKindMismatch, try_into_typed};
 
@@ -93,9 +123,8 @@ pub fn parse(
         RoutedFamily::Gridfm => parse_gridfm(source),
         RoutedFamily::Stored => parse_stored(source),
         RoutedFamily::Egret => parse_egret(source),
-        RoutedFamily::Balanced => {
-            format::parse(source).map(|module| module.map_value(PioValue::from))
-        }
+        RoutedFamily::Balanced(json_class) => format::parse_with_json_class(source, json_class)
+            .map(|module| module.map_value(PioValue::from)),
     }
 }
 
@@ -227,9 +256,13 @@ fn parse_egret(
 }
 
 /// The family a source routes to. The balanced hub is the default: it owns
-/// the guidance for unknown names and refused shapes.
+/// the guidance for unknown names and refused shapes. `Balanced` carries the
+/// JSON classification when routing here was itself the result of one (so
+/// the balanced hub does not classify the same text a second time); `None`
+/// when the source routed here by extension, by a declared token, or by a
+/// directory shape, none of which run a JSON classification at all.
 enum RoutedFamily {
-    Balanced,
+    Balanced(Option<format::routing::JsonClass>),
     Distribution,
     Goc3,
     Bmopf,
@@ -266,7 +299,7 @@ fn routed_family(
         {
             return Ok(RoutedFamily::Gridfm);
         }
-        return Ok(RoutedFamily::Balanced);
+        return Ok(RoutedFamily::Balanced(None));
     }
     let extension = std::path::Path::new(source.name())
         .extension()
@@ -280,7 +313,7 @@ fn routed_family(
         // else (a nameless in-memory source above all) can still carry a
         // JSON document, so content that opens one routes by classification,
         // mirroring the balanced hub's own sniff.
-        "m" | "raw" | "aux" | "epc" | "pwb" | "pwd" => Ok(RoutedFamily::Balanced),
+        "m" | "raw" | "aux" | "epc" | "pwb" | "pwd" => Ok(RoutedFamily::Balanced(None)),
         _ => {
             let jsonish = source.primary_buffer().is_ok_and(|buffer| {
                 std::str::from_utf8(buffer.content_bytes()).is_ok_and(|text| {
@@ -295,7 +328,7 @@ fn routed_family(
             if jsonish {
                 json_family(source)
             } else {
-                Ok(RoutedFamily::Balanced)
+                Ok(RoutedFamily::Balanced(None))
             }
         }
     }
@@ -309,11 +342,13 @@ fn json_family(
 
     let buffer = source.primary_buffer()?;
     // Family routing needs decoded text; a non-UTF-8 `.json` fails in
-    // the balanced hub with its own wording.
+    // the balanced hub with its own wording. Classification never ran, so
+    // the balanced hub gets no hint and classifies it itself.
     let Ok(text) = std::str::from_utf8(buffer.content_bytes()) else {
-        return Ok(RoutedFamily::Balanced);
+        return Ok(RoutedFamily::Balanced(None));
     };
-    match format::routing::classify_json_text(text) {
+    let class = format::routing::classify_json_text(text);
+    match class {
         JsonClass::Case(Detection::Known(SourceFormat::Transmission(
             TransmissionFormat::Goc3Json,
         ))) => Ok(RoutedFamily::Goc3),
@@ -331,10 +366,11 @@ fn json_family(
         }
         JsonClass::Module => Ok(RoutedFamily::Stored),
         // The balanced hub's own JSON detection carries the refusal
-        // wording for unrecognized or ambiguous documents, and decodes
-        // bare model JSON itself.
+        // wording for unrecognized or ambiguous documents, and decodes bare
+        // model JSON itself; it gets this classification so it never
+        // re-derives it from the same bytes.
         JsonClass::Case(Detection::Known(_) | Detection::Ambiguous | Detection::Unknown)
-        | JsonClass::ModelJson => Ok(RoutedFamily::Balanced),
+        | JsonClass::ModelJson => Ok(RoutedFamily::Balanced(Some(class))),
     }
 }
 
@@ -361,7 +397,7 @@ fn family_of_token(token: &str) -> RoutedFamily {
         Some(TargetFormat::Goc3Json) => RoutedFamily::Goc3,
         Some(TargetFormat::DeepMindOpfDataJson) => RoutedFamily::OpfData,
         Some(TargetFormat::EgretJson) => RoutedFamily::Egret,
-        _ => RoutedFamily::Balanced,
+        _ => RoutedFamily::Balanced(None),
     }
 }
 

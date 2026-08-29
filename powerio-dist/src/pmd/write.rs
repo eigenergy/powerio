@@ -98,6 +98,26 @@ fn renamed_terminals(net: &MulticonductorNetwork) -> BTreeMap<String, i64> {
     out
 }
 
+/// Linecode lookup by name, built once rather than searched per line:
+/// `net.linecode()` is a linear scan, and a line runs it once each.
+fn linecodes_by_name(net: &MulticonductorNetwork) -> BTreeMap<String, &DistLineCode> {
+    let mut by_name = BTreeMap::new();
+    for c in net.linecodes() {
+        by_name.entry(c.name.to_ascii_lowercase()).or_insert(c);
+    }
+    by_name
+}
+
+/// Bus lookup by id, built once rather than searched per load: `net.bus()`
+/// is a linear scan, and a single phase load runs it once each.
+fn buses_by_id(net: &MulticonductorNetwork) -> BTreeMap<String, &DistBus> {
+    let mut by_id = BTreeMap::new();
+    for b in net.buses() {
+        by_id.entry(b.id.to_ascii_lowercase()).or_insert(b);
+    }
+    by_id
+}
+
 impl Writer {
     /// Terminal names as PMD integer connections. A name that is not numeric
     /// takes the id [`renamed_terminals`] gave it, so the same name is the
@@ -513,6 +533,7 @@ impl Writer {
     fn branches(&mut self, net: &MulticonductorNetwork, doc: &mut Map<String, Value>) {
         if !net.lines().is_empty() {
             let mut lines = Map::new();
+            let linecodes_by_name = linecodes_by_name(net);
             for l in net.lines() {
                 let mut o = Map::new();
                 o.insert("f_bus".into(), json!(l.bus_from.to_lowercase()));
@@ -531,7 +552,8 @@ impl Writer {
                 // its impedance, the dss2eng shape for rmatrix defined
                 // lines: matrices on the line, no linecode key.
                 let inline = l.extras.get("pmd_inline").and_then(Value::as_bool) == Some(true);
-                match net.linecode(&l.linecode) {
+                let lc = linecodes_by_name.get(l.linecode.to_ascii_lowercase().as_str());
+                match lc.copied() {
                     Some(c) if inline => {
                         insert_impedance_matrices(&mut o, c, net.base_frequency());
                         if let Some(i_max) = &c.i_max {
@@ -624,6 +646,7 @@ impl Writer {
     fn loads(&mut self, net: &MulticonductorNetwork, doc: &mut Map<String, Value>) {
         if !net.loads().is_empty() {
             let mut loads = Map::new();
+            let buses_by_id = buses_by_id(net);
             for l in net.loads() {
                 let mut o = Map::new();
                 let what = format!("load {}", l.name);
@@ -637,7 +660,11 @@ impl Writer {
                         let grounded_return = l
                             .terminal_map
                             .last()
-                            .zip(net.bus(&l.bus))
+                            .zip(
+                                buses_by_id
+                                    .get(l.bus.to_ascii_lowercase().as_str())
+                                    .copied(),
+                            )
                             .is_some_and(|(t, b)| b.grounded.contains(t));
                         if grounded_return { "WYE" } else { "DELTA" }
                     }

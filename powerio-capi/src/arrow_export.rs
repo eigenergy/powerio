@@ -862,7 +862,11 @@ mod tests {
             ],
             vec![
                 Branch::new(BusId(1), BusId(1), 0.0, 0.1),
-                Branch::new(BusId(1), BusId(2), 0.0, 0.0),
+                {
+                    let mut out = Branch::new(BusId(1), BusId(2), 0.0, 0.15);
+                    out.in_service = false;
+                    out
+                },
                 Branch::new(BusId(2), BusId(3), 0.0, 0.2),
             ],
         )

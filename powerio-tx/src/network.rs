@@ -1865,6 +1865,14 @@ pub(crate) const GEN_EXTRA_KEYS: [&str; 11] = [
 pub(crate) struct ValueFinding {
     /// Human-readable element locator, e.g. `"bus 3"` or `"generator at bus 5"`.
     pub element: String,
+    /// The top level JSON field the element serializes under, e.g.
+    /// `"buses"`. Paired with `index`, this names the finding's RFC 6901
+    /// target, so it must match [`BalancedNetwork`]'s own field name (the
+    /// stored module writes this network under `value.data`, unchanged).
+    pub table: &'static str,
+    /// The element's position in `table`, for the target — the array index,
+    /// never the element's id, since an id can differ from its position.
+    pub index: usize,
     pub field: &'static str,
     pub old: f64,
     pub new: f64,
@@ -1872,8 +1880,9 @@ pub(crate) struct ValueFinding {
 }
 
 impl ValueFinding {
-    /// The finding as the coded record: target names the element, details
-    /// carry the machine readable pieces, the message stays prose.
+    /// The finding as the coded record: target is an RFC 6901 pointer to the
+    /// field within the stored document's `value.data`, details carry the
+    /// other machine readable pieces, and the message stays prose.
     pub(crate) fn into_diagnostic(self) -> crate::Diagnostic {
         let mut details = serde_json::Map::new();
         details.insert("element".to_owned(), serde_json::json!(self.element));
@@ -1888,7 +1897,7 @@ impl ValueFinding {
                 self.element, self.field, self.old, self.reason, self.new
             ),
         )
-        .with_target(format!("{}#{}", self.element.replace(' ', "_"), self.field))
+        .with_target(format!("/{}/{}/{}", self.table, self.index, self.field))
         .expect("scan-built targets are nonempty and bounded")
         .with_details(details)
         .expect("scan-built details stay within the record bounds")
@@ -2202,10 +2211,12 @@ impl BalancedNetwork {
 
     pub(crate) fn value_findings(&self) -> Vec<ValueFinding> {
         let mut out = Vec::new();
-        for b in self.buses() {
+        for (index, b) in self.buses().iter().enumerate() {
             if let Some(new) = repair_vm(b.vm) {
                 out.push(ValueFinding {
                     element: format!("bus {}", b.id),
+                    table: "buses",
+                    index,
                     field: "vm",
                     old: b.vm,
                     new,
@@ -2215,6 +2226,8 @@ impl BalancedNetwork {
             if let Some(new) = repair_va(b.va) {
                 out.push(ValueFinding {
                     element: format!("bus {}", b.id),
+                    table: "buses",
+                    index,
                     field: "va",
                     old: b.va,
                     new,
@@ -2222,10 +2235,12 @@ impl BalancedNetwork {
                 });
             }
         }
-        for g in self.generators() {
+        for (index, g) in self.generators().iter().enumerate() {
             if let Some(new) = repair_mbase(g.mbase, self.base_mva()) {
                 out.push(ValueFinding {
                     element: format!("generator at bus {}", g.bus),
+                    table: "generators",
+                    index,
                     field: "mbase",
                     old: g.mbase,
                     new,
@@ -2235,6 +2250,8 @@ impl BalancedNetwork {
             if let Some(new) = repair_vg(g.vg) {
                 out.push(ValueFinding {
                     element: format!("generator at bus {}", g.bus),
+                    table: "generators",
+                    index,
                     field: "vg",
                     old: g.vg,
                     new,
