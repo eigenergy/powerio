@@ -1439,6 +1439,9 @@ fn looks_like_gridfm_dir(input: &Path) -> bool {
         })
 }
 
+// One conversion pipeline stage per block; splitting it would scatter the
+// stage order this function exists to show.
+#[allow(clippy::too_many_lines)]
 fn run_convert(
     input: &std::path::Path,
     to: FormatArg,
