@@ -63,7 +63,7 @@ fn small_network() -> BalancedNetwork {
 /// scalar) while its labels and durations stay empty and it carries exactly
 /// one operating point: the shape of a document lying about its period
 /// count, at negligible cost to the document's own size.
-fn legacy_envelope(operating_points: serde_json::Value) -> String {
+fn legacy_envelope(operating_points: &serde_json::Value) -> String {
     serde_json::json!({
         "powerio_version": "0.9.0",
         "producer": {"tool": "powerio", "version": "0.9.0"},
@@ -82,7 +82,7 @@ fn legacy_envelope(operating_points: serde_json::Value) -> String {
 /// A legacy 0.9 package declaring `declared_periods` on its time axis while
 /// carrying one real point: a ~2 KB document whatever it declares.
 fn legacy_text_declaring(declared_periods: usize) -> String {
-    legacy_envelope(serde_json::json!({
+    legacy_envelope(&serde_json::json!({
         "time_axis": {"periods": declared_periods, "duration_hours": [], "labels": []},
         "points": [{"index": 0}],
     }))
@@ -96,7 +96,7 @@ fn legacy_text_carrying(periods: usize) -> String {
     let points: Vec<serde_json::Value> = (0..periods)
         .map(|i| serde_json::json!({"index": i}))
         .collect();
-    legacy_envelope(serde_json::json!({
+    legacy_envelope(&serde_json::json!({
         "time_axis": {
             "periods": periods,
             "duration_hours": vec![1.0; periods],
