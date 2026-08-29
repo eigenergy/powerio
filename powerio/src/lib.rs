@@ -50,6 +50,13 @@ pub use powerio_dist::MulticonductorNetwork;
 /// it has no solution type to re-export alongside this one.
 pub use powerio_prob::AcOpfInstance;
 
+/// Matrix and graph data, re-exported from `powerio-matrix` under the
+/// `matrix` feature. Matrix construction is never a parse result, so the
+/// facade's automatic parsing and [`PioValue`] do not change with this
+/// feature.
+#[cfg(feature = "matrix")]
+pub use powerio_matrix as matrix;
+
 pub mod package;
 /// The package layer's replayable operating state, named at the crate root
 /// beside the other module types.

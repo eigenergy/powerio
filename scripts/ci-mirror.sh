@@ -31,14 +31,15 @@ fi
 # doc comment behind arrow, gridfm, matrix or prob is unreachable without it.
 RUSTDOCFLAGS="-D warnings" run cargo doc --workspace --no-deps --all-features
 
-# powerio-prob must not reach the matrix or dist crates through its default
-# features, and powerio-matrix must not reach powerio-prob at all. A cargo
-# check passes either way; only the dependency tree shows it.
+# powerio-prob sits below the matrix crate: it may reach the model crates
+# (crate_graph.rs states and tests the whole layout) but never powerio-matrix.
+# Spelled as if/exit because a `!`-prefixed pipeline never trips errexit,
+# which left the old spelling decorative.
 echo "=== dependency boundaries ==="
 cargo check -q -p powerio-prob --no-default-features
-! cargo tree -p powerio-prob --no-default-features --edges normal | grep -q powerio-matrix
-! cargo tree -p powerio-prob --no-default-features --edges normal | grep -q powerio-dist
-! cargo tree -p powerio-matrix --edges normal | grep -q powerio-prob
+if cargo tree -p powerio-prob --no-default-features --edges normal | grep -q powerio-matrix; then
+  echo "error: powerio-prob reaches powerio-matrix" >&2; exit 1
+fi
 
 # The parser crates have to stay free of anything that needs an OS, so the
 # readers can run in a browser. Skipped rather than failing when the target
@@ -51,7 +52,7 @@ fi
 
 run cargo test -p powerio -p powerio-tx -p powerio-core -p powerio-matrix -p powerio-prob -p powerio-cli \
     -p powerio-capi -p powerio-dist
-run cargo test -p powerio-prob --features matrix
+run cargo test -p powerio --features matrix
 run cargo test -p powerio-matrix --features gridfm
 
 # The four powerio-capi combinations rust.yml builds.

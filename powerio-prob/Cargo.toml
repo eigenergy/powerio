@@ -14,10 +14,6 @@ categories = ["science", "mathematics"]
 [package.metadata.docs.rs]
 all-features = true
 
-[features]
-default = []
-matrix = ["dep:powerio-matrix"]
-
 [lib]
 name = "powerio_prob"
 path = "src/lib.rs"
@@ -27,7 +23,6 @@ powerio-core = { workspace = true }
 powerio-dist.workspace = true
 powerio-tx.workspace = true
 thiserror = "2"
-powerio-matrix = { workspace = true, optional = true }
 serde.workspace = true
 serde_json.workspace = true
 

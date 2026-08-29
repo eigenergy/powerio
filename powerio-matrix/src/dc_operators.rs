@@ -22,13 +22,18 @@
 //! dependent matrices are built once and an operating point update never
 //! reconstructs them.
 
+use crate::SparseMatrix;
 use powerio_core::Error;
-use powerio_matrix::SparseMatrix;
 use powerio_tx::{BusId, DcConvention};
 
-use crate::diagnostics::codes;
-use crate::instance::{DcBusSpecification, DcPfInstance};
-use crate::state::row_identity;
+use powerio_prob::diagnostics::codes;
+use powerio_prob::{DcBusSpecification, DcPfInstance};
+
+/// The stable row identity a mapping row reports: the element uid when one
+/// exists, else `table:row`.
+fn row_identity(uid: Option<&str>, table: &str, row: usize) -> String {
+    uid.map_or_else(|| format!("{table}:{row}"), str::to_owned)
+}
 
 /// The reference constrained linear system: the positive definite matrix a
 /// sparse solver factors, its right hand side, and the mapping from reduced
@@ -72,7 +77,7 @@ impl DcOperators {
     /// Build the operators. Zero impedance branches are preserved by the
     /// instance and have no finite DC row, so they refuse the build until
     /// resolved explicitly with
-    /// [`merge_zero_impedance_buses`](crate::merge_zero_impedance_buses); no
+    /// [`merge_zero_impedance_buses`](powerio_prob::merge_zero_impedance_buses); no
     /// branch is ever skipped silently. Out of service branches and self
     /// loops carry no operator column.
     ///
@@ -167,7 +172,7 @@ impl DcOperators {
         }
 
         let mut incidence =
-            powerio_matrix::matrix::triplet::CooBuilder::new_rect(bus_ids.len(), endpoints.len());
+            crate::matrix::triplet::CooBuilder::new_rect(bus_ids.len(), endpoints.len());
         for (column, &(from, to)) in endpoints.iter().enumerate() {
             incidence.add(from, column, 1.0);
             incidence.add(to, column, -1.0);
@@ -335,7 +340,7 @@ impl DcOperators {
             }
         }
 
-        let mut matrix = powerio_matrix::matrix::triplet::CooBuilder::new(retained_rows.len());
+        let mut matrix = crate::matrix::triplet::CooBuilder::new(retained_rows.len());
         for (column, &(from, to)) in self.endpoint_table().iter().enumerate() {
             // The positive factor weight is the negated public susceptance.
             let weight = -self.branch_susceptance[column];

@@ -16,12 +16,14 @@ categories = ["science", "parsing"]
 all-features = true
 
 [features]
+matrix = ["dep:powerio-matrix"]
 schema = ["dep:schemars", "powerio-tx/schema", "powerio-core/schema", "powerio-dist/schema"]
 
 [dependencies]
 num-complex = { workspace = true }
 powerio-core = { workspace = true }
 powerio-dist = { workspace = true }
+powerio-matrix = { workspace = true, optional = true }
 powerio-prob = { workspace = true }
 powerio-tx = { workspace = true }
 schemars = { workspace = true, optional = true }

@@ -3,12 +3,10 @@ use std::path::{Path, PathBuf};
 use powerio_tx::{GenCostPolicyReport, MissingGenCostPolicy};
 
 use crate::Result;
-use powerio_matrix::SparseMatrix;
+use crate::SparseMatrix;
 use serde::Serialize;
 
-use crate::Units;
-use crate::prep::DcOpfPreparation;
-
+use super::prep::{DcOpfPreparation, Units};
 use super::{DcOpfAssemblyOptions, matrices_from_preparation};
 
 const DCOPF_SCHEMA: &str = "powerio.dcopf";
@@ -134,7 +132,7 @@ struct OperatorMeta {
 /// A network the selected approximation cannot assemble, or a filesystem
 /// refusal from the no-clobber output rules.
 pub fn write_dcopf_bundle(
-    instance: &crate::DcOpfInstance,
+    instance: &powerio_prob::DcOpfInstance,
     out_dir: impl AsRef<Path>,
     options: &DcOpfBundleOptions,
 ) -> Result<DcOpfOutputs> {
@@ -160,10 +158,9 @@ fn write_prepared(
     // output path. `sanitize_stem` reduces it to one safe component and
     // disambiguates names that would otherwise sanitize alike, so a batch
     // export cannot be steered into overwriting an earlier bundle.
-    let bundle_root = out_dir.as_ref().join(format!(
-        "{}_dcopf",
-        powerio_matrix::sanitize_stem(&instance.name)
-    ));
+    let bundle_root = out_dir
+        .as_ref()
+        .join(format!("{}_dcopf", crate::sanitize_stem(&instance.name)));
 
     let mut inventory: Vec<(&'static str, Vec<u8>)> = Vec::new();
     put_mat(&mut inventory, "A.mtx", &matrices.incidence)?;
@@ -271,7 +268,7 @@ fn write_prepared(
         powerio_version: powerio_tx::VERSION,
     };
     let json = serde_json::to_string_pretty(&meta)
-        .map_err(|error| powerio_matrix::Error::Mtx(error.to_string()))?;
+        .map_err(|error| crate::Error::Mtx(error.to_string()))?;
     inventory.push(("dcopf_meta.json", json.into_bytes()));
 
     // The complete bundle commits at once through the no-replace destination:
@@ -285,10 +282,10 @@ fn write_prepared(
             ))
         })
         .collect::<std::result::Result<Vec<_>, powerio_core::Error>>()
-        .map_err(powerio_matrix::Error::from)?;
+        .map_err(crate::Error::from)?;
     let committed = powerio_core::Destination::path(&bundle_root)
         .__commit_artifacts(true, artifacts, Vec::new())
-        .map_err(powerio_matrix::Error::from)?;
+        .map_err(crate::Error::from)?;
     let powerio_core::WrittenOutput::Path { root, artifacts } = committed.into_output() else {
         unreachable!("a path destination returns a path output")
     };
@@ -563,7 +560,7 @@ fn put_mat(
     name: &'static str,
     matrix: &SparseMatrix,
 ) -> Result<()> {
-    inventory.push((name, powerio_matrix::io::mtx_bytes(matrix)?));
+    inventory.push((name, crate::io::mtx_bytes(matrix)?));
     Ok(())
 }
 
@@ -572,6 +569,6 @@ fn put_vec(
     name: &'static str,
     values: &[f64],
 ) -> Result<()> {
-    inventory.push((name, powerio_matrix::io::vector_mtx_bytes(values)?));
+    inventory.push((name, crate::io::vector_mtx_bytes(values)?));
     Ok(())
 }

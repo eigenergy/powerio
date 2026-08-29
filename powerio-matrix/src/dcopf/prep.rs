@@ -1,13 +1,11 @@
 use serde::{Deserialize, Serialize};
 
-#[cfg(any(test, feature = "matrix"))]
 use powerio_tx::{BusId, DcConvention, IndexedNetwork};
 
-#[cfg(any(test, feature = "matrix"))]
 use crate::{Error, Result};
+use powerio_prob::ReferenceBuses;
 
-#[cfg(any(test, feature = "matrix"))]
-use crate::{ReferenceBuses, limits, nodal};
+use super::{limits, nodal};
 
 /// Unit system for power and generator cost data.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -40,7 +38,6 @@ impl Units {
     /// `(power, admittance)` multipliers for source data on `base` MVA. MW
     /// valued quantities (demand, bounds, limits, MW valued shunts) scale by
     /// the first; per unit admittances and susceptances by the second.
-    #[cfg(any(test, feature = "matrix"))]
     pub(crate) fn power_scales(self, base: f64) -> (f64, f64) {
         match self {
             Self::PerUnit => (1.0 / base, 1.0),
@@ -50,7 +47,6 @@ impl Units {
 
     /// `(quadratic, linear)` generator cost coefficient multipliers for the
     /// same unit selection. The constant term never scales.
-    #[cfg(any(test, feature = "matrix"))]
     pub(crate) fn cost_scales(self, base: f64) -> (f64, f64) {
         match self {
             Self::PerUnit => (base * base, base),
@@ -61,7 +57,6 @@ impl Units {
 
 /// Options for DC OPF instance assembly.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg(any(test, feature = "matrix"))]
 pub struct DcOpfOptions {
     pub convention: DcConvention,
     pub units: Units,
@@ -69,7 +64,7 @@ pub struct DcOpfOptions {
     /// zero impedance branches are preserved in networks and instances, so
     /// assembly refuses them with [`powerio_tx::Error::ZeroImpedance`] until
     /// the caller resolves them explicitly
-    /// ([`crate::merge_zero_impedance_buses`]) or opts into skipping.
+    /// ([`powerio_prob::merge_zero_impedance_buses`]) or opts into skipping.
     pub skip_zero_impedance: bool,
     /// Give a branch with no thermal rating the bound
     /// [`Branch::synthesize_rate_a`](powerio_tx::Branch::synthesize_rate_a)
@@ -83,7 +78,6 @@ pub struct DcOpfOptions {
 /// Generator data in generator column order.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[non_exhaustive]
-#[cfg(any(test, feature = "matrix"))]
 pub struct DcGeneratorData {
     /// Generator column to dense bus index.
     pub bus_of_gen: Vec<usize>,
@@ -104,7 +98,6 @@ pub struct DcGeneratorData {
 /// Branch data in active branch column order.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[non_exhaustive]
-#[cfg(any(test, feature = "matrix"))]
 pub struct DcBranchData {
     pub from_bus: Vec<usize>,
     pub to_bus: Vec<usize>,
@@ -129,7 +122,6 @@ pub struct DcBranchData {
 /// bus. See [`DcOpfPreparation::nodal_generator_data`].
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[non_exhaustive]
-#[cfg(any(test, feature = "matrix"))]
 pub struct NodalGeneratorData {
     pub q: Vec<f64>,
     pub c: Vec<f64>,
@@ -148,7 +140,6 @@ pub struct NodalGeneratorData {
 /// formulation, and a solution.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[non_exhaustive]
-#[cfg(any(test, feature = "matrix"))]
 pub struct DcOpfPreparation {
     pub name: String,
     pub n_buses: usize,
@@ -185,7 +176,6 @@ pub struct DcOpfPreparation {
     pub branches: DcBranchData,
 }
 
-#[cfg(any(test, feature = "matrix"))]
 impl DcOpfPreparation {
     #[must_use]
     pub fn n_generators(&self) -> usize {
@@ -254,7 +244,6 @@ impl DcOpfPreparation {
 
 /// Build a matrix free DC OPF instance from an indexed network.
 #[allow(clippy::too_many_lines)]
-#[cfg(any(test, feature = "matrix"))]
 pub fn build_dc_opf_preparation(
     case: &IndexedNetwork,
     options: DcOpfOptions,

@@ -18,13 +18,13 @@
 //! [`PowerFlowJacobian::update`] refreshes the numerical values in place
 //! across operating points with unchanged topology.
 
+use crate::{IndexedNetwork, SparseMatrix};
 use powerio_core::Error;
-use powerio_matrix::{IndexedNetwork, SparseMatrix};
 use powerio_tx::BusId;
 
-use crate::OperatingPoint;
-use crate::diagnostics::codes;
-use crate::instance::AcPfInstance;
+use powerio_prob::AcPfInstance;
+use powerio_prob::OperatingPoint;
+use powerio_prob::diagnostics::codes;
 
 /// The voltage coordinate selection, the one option of the calculation.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -132,9 +132,9 @@ pub fn calc_power_flow_jacobian(
     let bus_ids: Vec<BusId> = (0..view.n()).map(|idx| view.bus_id(idx)).collect();
     let voltages = point_voltages(instance, point, &bus_ids, &view)?;
 
-    let parts = powerio_matrix::build_ybus(
+    let parts = crate::build_ybus(
         &view,
-        &powerio_matrix::BuildOptions {
+        &crate::BuildOptions {
             skip_zero_impedance: false,
             ..Default::default()
         },
@@ -152,7 +152,7 @@ pub fn calc_power_flow_jacobian(
     // The structure comes from the admittance pattern once: each admittance
     // entry contributes to all four blocks, and every diagonal position is
     // present for the current terms.
-    let mut pattern = powerio_matrix::matrix::triplet::CooBuilder::new(2 * n);
+    let mut pattern = crate::matrix::triplet::CooBuilder::new(2 * n);
     for (row, row_vec) in parts.g.outer_iterator().enumerate() {
         for (column, _) in row_vec.iter() {
             pattern.add(row, column, 1.0);

@@ -57,11 +57,25 @@ pub use powerio_tx::Error as CoreError;
 /// Compressed sparse row matrix used by the projection builders.
 pub type SparseMatrix = sprs::CsMat<f64>;
 
+mod ac_jacobian;
+mod dc_operators;
+mod dcopf;
 pub mod io;
 pub mod matrix;
 pub mod pipeline;
 pub mod synth;
 
+pub use ac_jacobian::{PowerFlowJacobian, VoltageCoordinates, calc_power_flow_jacobian};
+pub use dc_operators::{DcOperators, ReferenceConstrainedSystem};
+pub use dcopf::{
+    DcOpfAssemblyOptions, DcOpfBundleMetadata, DcOpfBundleOptions, DcOpfMatrices, DcOpfOutputs,
+    Units, build_dc_opf_matrices, write_dcopf_bundle,
+};
+
+pub use matrix::multiconductor::{
+    AugmentedSystem, DistNode, MulticonductorAdmittance, MulticonductorNodeIndex, NodeRef,
+    build_multiconductor_admittance,
+};
 pub use matrix::{
     BuildOptions, DcConvention, GroundedIndexMap, IncidenceParts, MatrixStats, Scheme,
     SensitivityMatrices, SensitivityMatrixMetadata, SensitivityMetadata, SensitivityOptions,
