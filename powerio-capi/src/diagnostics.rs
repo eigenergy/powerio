@@ -41,9 +41,18 @@ pub mod codes {
             category = Data;
         REQUEST_CAPI_ARROW_TABLE_UNKNOWN = "REQUEST.CAPI.ARROW_TABLE_UNKNOWN", Error,
             "the caller asked for an Arrow table id this surface does not have",
-            category = Data;
+            category = Request;
         REQUEST_CAPI_FEATURE_DISABLED = "REQUEST.CAPI.FEATURE_DISABLED", Error,
-            "the build lacks the cargo feature the request needs", category = Data;
+            "the build lacks the cargo feature the request needs", category = Request;
+        REQUEST_CAPI_UNKNOWN_FORMULA = "REQUEST.CAPI.UNKNOWN_FORMULA", Error,
+            "the caller named a branch susceptance formula this surface does not have",
+            category = Request;
+        REQUEST_CAPI_SELECTOR_CONFLICT = "REQUEST.CAPI.SELECTOR_CONFLICT", Error,
+            "the state selection keys conflict; pass exactly one of time position or scenario",
+            category = Request;
+        REQUEST_CAPI_NOT_A_BALANCED_NETWORK = "REQUEST.CAPI.NOT_A_BALANCED_NETWORK", Error,
+            "the module value kind does not support this operation; it takes a balanced network",
+            category = Request;
     }
 }
 
@@ -112,13 +121,6 @@ impl CodedError for powerio_prob::Error {
     }
 }
 
-#[cfg(feature = "prob")]
-impl CodedError for powerio_prob::ScopfError {
-    fn code_str(&self) -> &'static str {
-        self.code().code
-    }
-}
-
 /// Every code this crate declares.
 #[must_use]
 pub fn registry() -> Vec<&'static DiagnosticInfo> {
@@ -167,6 +169,38 @@ mod workspace {
             .collect();
         let problems = check_scope_ownership(&borrowed);
         assert!(problems.is_empty(), "{problems:#?}");
+    }
+
+    /// Every stable code string the v6 module spells inline resolves to a
+    /// registered entry in some workspace registry, so a bare unregistered
+    /// literal cannot reach a `PioError`. The module's own test block may
+    /// fabricate codes and is excluded.
+    #[test]
+    fn every_code_string_v6_emits_is_registered() {
+        let source = include_str!("v6.rs")
+            .split("#[cfg(test)]")
+            .next()
+            .expect("split yields the leading source");
+        let registered: std::collections::BTreeSet<&str> = registries()
+            .into_iter()
+            .flat_map(|(_, entries)| entries)
+            .map(|entry| entry.code)
+            .collect();
+        let mut checked = 0usize;
+        for piece in source.split('"').skip(1).step_by(2) {
+            let dotted = piece.split('.').count() >= 3
+                && piece.split('.').all(|segment| {
+                    !segment.is_empty()
+                        && segment.bytes().all(|byte| {
+                            byte.is_ascii_uppercase() || byte.is_ascii_digit() || byte == b'_'
+                        })
+                });
+            if dotted {
+                checked += 1;
+                assert!(registered.contains(piece), "`{piece}` is not registered");
+            }
+        }
+        assert!(checked > 0, "the sweep matched no code literals");
     }
 
     // The three catch-alls this release retires exist only because the strings

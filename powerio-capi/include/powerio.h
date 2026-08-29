@@ -1,139 +1,83 @@
-/* powerio C ABI, version 5. Parse, query, and convert networks through opaque
- * handles. Extractors return numeric tables for matrix assembly. Check
- * pio_abi_version() against PIO_ABI_VERSION at load; the integer is the
- * compatibility check, the version string is informational.
+/* powerio C ABI, version 6. Parse power system sources into module handles,
+ * inspect and transform them through typed accessors, and write supported
+ * formats. Check pio_abi_version() against PIO_ABI_VERSION at load; the
+ * integer is the compatibility check, the version string is informational.
+ *
+ * The surface in one paragraph: pio_parse_file / pio_parse_str /
+ * pio_parse_bytes compile one source into a PioModule of whichever built in
+ * value family claims it. pio_module_kind names the value; the typed
+ * accessors (pio_module_balanced_network, pio_module_multiconductor_network)
+ * hand back independently owned network handles; pio_module_diagnostics is
+ * the structured findings list; pio_module_write_str / pio_module_write_file
+ * write a supported target, echoing the retained source bytes exactly for an
+ * unchanged same format write; and pio_module_read_json / write_json carry
+ * the stored .pio.json document.
  *
  * Naming grammar:
- * - Verb-led names are operations and the verb fixes the return family:
- *   parse/read/normalize return a new handle, write has a filesystem effect,
- *   convert transcodes without keeping a handle, free destroys.
- * - to_ marks a representation change of the same network. The target is a
- *   format string unless the output type differs:
- *   pio_to_format returns text for every named format, pio_to_arrow fills
- *   Arrow C Data Interface structs.
- * - Noun phrases are queries (no get_); n_ prefixes counts, is_ predicates.
+ * - pio_<handle noun>_<operation or field>: module, balanced_network,
+ *   multiconductor_network, diagnostics/diagnostic, dc_data, error. Verb-led
+ *   tails are operations; noun tails are queries; n_ prefixes counts, is_
+ *   predicates.
  * - Case format names never appear in symbols. Formats are strings
  *   ("matpower", "psse", ...), so a new format never changes this ABI.
- *   pio_to_json and pio_from_json carry balanced model JSON.
+ * - bus: a named connection point, any number of phases. node: one
+ *   conductor's point at a bus (OpenDSS bus.1.2.3), reserved for the
+ *   multiconductor API. branch: any two-terminal series element, lines and
+ *   transformers alike.
  *
- * Vocabulary (one meaning per word, transmission and distribution alike):
- * - bus: a named connection point, any number of phases. This API is bus
- *   granular (pio_n_buses, pio_bus_ids, pio_bus_demand, ...).
- * - node: one conductor's point at a bus (OpenDSS bus.1.2.3). Reserved for
- *   the multiconductor API; never a synonym for bus here.
- * - branch: any two-terminal series element, lines and transformers alike
- *   (circuit theory; MATPOWER mpc.branch; the Branch Flow Model). "line" is
- *   the transformer-excluding subset and never names the umbrella table.
+ * Ownership grammar (one rule set for every handle):
+ * - Every handle type has a retain/release pair. retain mints an independent
+ *   handle over the same immutable value; release drops one handle;
+ *   release(NULL) is a no-op. Releasing a parent never invalidates a child
+ *   or a retained sibling.
+ * - Accessors on a handle return borrowed pointers and spans valid until
+ *   that handle's last release. Owned strings (type char *) are released
+ *   with pio_string_release. Caller-fill buffer functions exist only where
+ *   the caller's layout, subset, or unit view differs from the stored data
+ *   (the dense element extractors); each writes at most `cap` entries and
+ *   returns the total available, so NULL/0 is a count query.
+ * - A handle is immutable after construction: concurrent reads from any
+ *   number of threads are safe; releasing the same raw handle concurrently
+ *   with any call on it is caller error.
  *
- * Conventions:
- * - Array extractors write up to `cap` values per output array and return the
- *   total available. NULL out or cap 0 is a count query. No extractor writes
- *   more than cap entries to an output array.
- * - Every element extractor reports the star-lowered space. A case with an
- *   in-service 3-winding transformer lowers before the dense extractors run,
- *   adding one star bus and three branches per such transformer, and
- *   pio_n_buses, pio_bus_ids, pio_bus_demand, pio_bus_shunt, pio_n_islands,
- *   pio_n_branches, pio_branches and pio_branch_charging all count them.
- *   Through v4 the bus and branch tables reported the unexpanded network
- *   instead, so a buffer sized from them read short, its trailing entries had
- *   no id, and a matrix built from the pair left the star point isolated.
- *   The raw Arrow tables (PIO_ARROW_TABLE_BUS, _BRANCH) are the case file's
- *   own rows and stay unexpanded; the matrix tables (_MATRIX_BUS,
- *   _MATRIX_BRANCH) are the lowered space these extractors agree with.
- * - Bus ids are int64 in the range 1..2^63-1 (a v4 invariant). pio_bus_ids and
- *   every per-bus column keyed to its ordering are int64; a source whose ids are
- *   strings or exceed 2^63-1 has no representation in this API and is mapped
- *   to dense int64 at read (with a warning) or routed through the multiconductor
- *   API. Never hand a raw oversized id to this API.
- * - errbuf/errlen caller buffers (the libpcap/curl idiom: allocation-free
- *   across the boundary, no thread-local state). NULL or length 0 discards
- *   the message; a long message truncates on a UTF-8 character boundary and
- *   is always NUL-terminated. PIO_ERRBUF_MIN is the recommended size.
- * - Every errbuf message and every warning line reads "CODE: message". The
- *   code is a dotted diagnostic identity (EMIT.PSSE.FIELD_DROPPED,
- *   BIND.CAPI.NULL_HANDLE); split at the first ": " to recover it, since a
- *   code contains no colon and a message may contain any number. Branch on
- *   the code, never on the prose: a message is not covered by any stability
- *   promise. pio_build_info reports diagnostic_namespaces, the first segments
- *   powerio emits, and error_categories, the coarse projection.
- * - Options structs (PioNormalizeOptions, PioWriteOptions) are extensible, in
- *   the Linux syscall convention of openat2/clone3: size_t struct_size is the
- *   first field, the caller zero fills the struct and sets struct_size to
- *   sizeof, and NULL for the parameter means every default. The library reads
- *   only the first min(struct_size, its own sizeof) bytes, so a caller built
- *   against an older header is read correctly, and a newer caller is too as
- *   long as the fields past the library's own size are zero. A nonzero field
- *   beyond that point fails the call: the caller asked for something this build
- *   does not implement, and honoring the rest would drop the request in
- *   silence. Fields are appended, never reordered or removed; a field named
- *   reserved is padding made explicit and must be zero.
- * - Read warnings attach to the network handle; query them with pio_warnings,
- *   which returns the byte length needed (call with NULL/0 to size).
- * - Conversion findings come back through a char **out_diagnostics_json
- *   out-param on the functions that return no handle (pio_to_format,
- *   pio_convert_*, pio_write_dir, and the pio_dist_* twins). NULL means the
- *   conversion lost nothing; any other value is an owned JSON array of
- *   diagnostic records to free with pio_string_free. Each record carries code,
- *   severity and message, and where known element_path, source_ref, details
- *   and suggested_action. Pass NULL for the parameter itself to discard them.
- *   The call writes it before doing any work, so a value left from an earlier
- *   call is never read as this one's. A warning is a record with severity
- *   "warning", so this one channel replaces the v5 out_warnings rather than
- *   sitting beside it.
- * - Strings returned by pio_to_format / pio_convert_file / pio_convert_str
- *   are owned by the library; free them with pio_string_free. Handles from
- *   pio_parse_file / pio_parse_str / pio_parse_bytes / pio_read_dir /
- *   pio_normalize are freed
- *   with pio_network_free; distribution handles use pio_dist_network_free.
- *   Arrow buffers are freed through their own release callbacks.
- * - A handle is immutable after construction unless a function takes it
- *   non-const: concurrent reads from any number of threads are safe; a
- *   non-const entry point, and the free functions, need exclusive access, and
- *   free exactly once.
- * - Every entry point catches Rust panics at the boundary and returns the
- *   documented failure value (NULL, 0, -1, 0.0) rather than unwinding across
- *   the ABI (requires the default panic = "unwind"; a panic = "abort" build
- *   aborts the process instead).
+ * Error grammar (one channel):
+ * - Every fallible entry point takes a PioError **error out parameter (NULL
+ *   to ignore) and returns NULL, -1, or false on failure with a new error
+ *   handle stored for the caller to release. pio_error_code is the stable
+ *   dotted diagnostic identity, pio_error_message the rendered text, and
+ *   pio_error_diagnostics the structured findings behind the failure. Branch
+ *   on the code, never on the prose.
+ * - Every entry point catches Rust panics at the boundary and reports
+ *   BIND.CAPI.PANIC rather than unwinding across the ABI (requires the
+ *   default panic = "unwind"; a panic = "abort" build aborts the process).
  *
- * Compatibility policy: changing an existing signature or documented behavior
- * requires a PIO_ABI_VERSION increment. New data uses new symbols or versioned
- * Arrow, `.pio.json`, and format-specific JSON schemas. The dense extractors
- * remain the balanced positive sequence projection. Arrow tables are append
- * only: existing PIO_ARROW_TABLE_* ids and column order do not change. A new
- * table takes the next id, new columns append at the end, and a consumer
- * addresses columns by name, never by position.
- * Removing a supported format token or changing its documented C behavior
- * requires a PIO_ABI_VERSION bump.
+ * Diagnostics: pio_module_diagnostics and pio_error_diagnostics return a
+ * PioDiagnostics list handle whose rows expose code, severity name, message,
+ * optional identity, target, suggested action, details JSON, byte spans into
+ * the named source, and related record identities. The *_json twins remain
+ * as explicit serialization helpers. A published code keeps its identity
+ * forever and is never reused; an unknown code is data, never a failure.
  *
- * Diagnostic codes: a published code keeps its identity forever and is never
- * reused for a different finding. A code may be retired, which stops it being
- * emitted but never reassigns it, and refinement adds narrower codes rather
- * than redefining a family. The namespace set grows only by addition, and a
- * default severity may move in a minor release, so a consumer that needs a
- * fixed policy pins by code. An unknown code is data, never a failure.
+ * Options structs (PioNormalizeOptions, PioWriteOptions) are extensible, in
+ * the Linux syscall convention of openat2/clone3: size_t struct_size is the
+ * first field, the caller zero fills the struct and sets struct_size to
+ * sizeof, and NULL for the parameter means every default. A nonzero field
+ * beyond the library's own size fails the call. Fields are appended, never
+ * reordered or removed.
  *
- * Optional: build with `--features arrow` for pio_to_arrow (guarded by
- * PIO_ARROW), add `--features matrix` for the balanced matrix Arrow tables,
- * `--features gridfm` for pio_read_dir / pio_scenario_ids
- * (guarded by PIO_GRIDFM), `--features dist` for the pio_dist_* entry
- * points (guarded by PIO_DIST): multiconductor distribution cases (OpenDSS,
- * PMD ENGINEERING JSON, BMOPF JSON) behind their own PioDistNetwork handle,
- * freed with pio_dist_network_free, string outputs freed with pio_string_free,
- * `--features prob` for the problem data entry points (guarded by
- * PIO_PROB). Two entry points need a pair of features:
- * pio_dist_geo_extract and pio_dist_geo_apply take a distribution handle but
- * read the geo layer through the facade, so they are built only when
- * dist is on (it is on by default). Each symbol's own #if
- * states what it needs; a runtime loader probes pio_has_feature per name.
- * The dist C signatures follow PIO_ABI_VERSION like every other symbol.
- * PIO_DIST_ABI_VERSION is frozen at 1 and carries no meaning: it existed to
- * absorb IEEE BMOPF schema drift, and a schema revision changes a reader, a
- * writer and an emitted token but no C signature. The symbol stays so a
- * binding that gates distribution calls on resolving it keeps working. Read
- * the foreign schema versions from pio_build_info instead; the JSON payloads
- * (bmopf-json, powerio-dist-json) also carry their own meta.version.
- * Probe optional features at runtime with
- * pio_has_feature("arrow"|"matrix"|"gridfm"|"dist"|"pkg"|"prob").
+ * Compatibility policy: changing an existing signature or documented
+ * behavior requires a PIO_ABI_VERSION increment. New data uses new symbols
+ * or versioned Arrow, `.pio.json`, and format-specific JSON schemas. Arrow
+ * tables are append only: existing PIO_ARROW_TABLE_* ids and column order do
+ * not change; a consumer addresses columns by name, never by position.
+ *
+ * Optional features, probed at runtime with pio_has_feature("arrow" |
+ * "matrix" | "gridfm" | "dist" | "prob"). Only `arrow` and `dist` gate
+ * symbols (PIO_ARROW, PIO_DIST; each gated symbol's own #if states what it
+ * needs). `matrix` adds the balanced matrix Arrow tables, `gridfm` the
+ * GridFM Parquet parse routing, and `prob` the problem instance and
+ * solution parse routing behind symbols that always link; probe the
+ * feature, never the symbol, for those three.
  *
  * Checked in and generated; regenerate from the Rust source with
  *   cbindgen --config cbindgen.toml --crate powerio-capi --output include/powerio.h
@@ -147,6 +91,23 @@
 #include <stddef.h>
 #include <stdint.h>
 #include <stdlib.h>
+/*
+ * ABI v6 opaque handle types. Declared here because their Rust definitions
+ * come from the shared handle macro cbindgen cannot expand. Every one is an
+ * independently owned reference with a retain/release pair; release(NULL) is
+ * a no-op; releasing a parent never invalidates a retained child; accessors
+ * return spans valid until the handle's last release. Concurrent immutable
+ * calls on one handle are allowed; releasing a raw handle concurrently with
+ * any call on that same raw handle is caller error.
+ */
+typedef struct PioBalancedNetwork PioBalancedNetwork;
+typedef struct PioError PioError;
+typedef struct PioModule PioModule;
+typedef struct PioDiagnostics PioDiagnostics;
+typedef struct PioDcData PioDcData;
+#if defined(PIO_DIST)
+typedef struct PioMulticonductorNetwork PioMulticonductorNetwork;
+#endif
 #if defined(PIO_ARROW)
 struct ArrowArray;
 struct ArrowSchema;
@@ -164,38 +125,24 @@ struct ArrowSchema;
  * specific JSON schemas. Existing signatures do not change without an ABI
  * version increment.
  *
- * 6 is the current version. It bumped because the exported symbol set
- * shrank: the 0.9 package surface (`pio_package_*`, eighteen entry points
- * and the `pkg` feature token) and the SCOPF surface are withdrawn; a
- * binding built against 5 that used a withdrawn entry would resolve a
- * missing symbol, so the handshake refuses first. The version raises on
- * the same head the set shrinks; later heads add the 1.0 module surfaces
- * as additive growth under the unchanged value. The 4 to 5 bump reshaped
- * every ABI visible JSON document and the diagnostic grammar.
+ * 6 is the current version: the replacement surface. The 0.9 package
+ * (`pio_package_*` and the `pkg` feature token) and SCOPF (`pio_scopf_*`,
+ * plus the solver row Arrow tables) entry points are withdrawn, the
+ * network returning parse family and its caller error buffers are gone,
+ * and one module surface remains: `pio_parse_*` produce module handles,
+ * typed accessors hand back independently owned network handles, every
+ * fallible entry point reports through a structured `PioError`, and every
+ * handle type carries a `retain`/`release` pair. Thirteen exported symbol
+ * names are common to the 0.9 and this header; seven of them
+ * (`pio_parse_file`, `pio_parse_str`, `pio_parse_bytes`, `pio_convert_file`,
+ * `pio_convert_str`, `pio_geo_parse`, `pio_arrow_catalog_json`) carry a
+ * different signature under the same name. A binding built against 5 would
+ * resolve every one of those thirteen symbols rather than failing to link,
+ * so the version handshake above is what actually catches the mismatch.
+ * The 4 to 5 bump reshaped every ABI visible JSON document and the
+ * diagnostic grammar.
  */
 #define PIO_ABI_VERSION 6
-
-#if defined(PIO_DIST)
-/**
- * Frozen at 1 and no longer meaningful. It existed to absorb distribution
- * volatility, but that volatility lives in the BMOPF schema, which changes a
- * reader, a writer and an emitted token, and no C signature. One shared object
- * carrying two compatibility promises is a thing no mature C library does.
- *
- * The symbol stays because PowerIO.jl gates twelve distribution call sites on
- * resolving it, and removing it would break every distribution call on a
- * library that fully supports distribution. Foreign schema drift is reported at
- * runtime by [`pio_build_info`] instead, which can express "BMOPF 0.2 but not
- * 0.3"; an integer checked once at load cannot.
- */
-#define PIO_DIST_ABI_VERSION 1
-#endif
-
-/**
- * Recommended error buffer size: pass a `char[PIO_ERRBUF_MIN]` to any
- * `errbuf`/`warnbuf` parameter and a message always fits without truncation.
- */
-#define PIO_ERRBUF_MIN 256
 
 /**
  * `PioWriteOptions.missing_gen_cost_mode`: leave a missing cost row absent.
@@ -216,7 +163,7 @@ struct ArrowSchema;
 
 #if defined(PIO_ARROW)
 /**
- * Table selectors for [`pio_to_arrow`](crate::pio_to_arrow); the C
+ * Table selectors for `pio_balanced_network_to_arrow`; the C
  * header mirrors these as `PIO_ARROW_TABLE_*`.
  */
 #define PIO_ARROW_TABLE_BUS 0
@@ -243,42 +190,6 @@ struct ArrowSchema;
 #endif
 
 #if defined(PIO_ARROW)
-#define PIO_ARROW_TABLE_SOLVER_BUS 6
-#endif
-
-#if defined(PIO_ARROW)
-#define PIO_ARROW_TABLE_SOLVER_LOAD 7
-#endif
-
-#if defined(PIO_ARROW)
-#define PIO_ARROW_TABLE_SOLVER_SHUNT 8
-#endif
-
-#if defined(PIO_ARROW)
-#define PIO_ARROW_TABLE_SOLVER_BRANCH 9
-#endif
-
-#if defined(PIO_ARROW)
-#define PIO_ARROW_TABLE_SOLVER_SWITCH 10
-#endif
-
-#if defined(PIO_ARROW)
-#define PIO_ARROW_TABLE_SOLVER_ARC 11
-#endif
-
-#if defined(PIO_ARROW)
-#define PIO_ARROW_TABLE_SOLVER_GEN 12
-#endif
-
-#if defined(PIO_ARROW)
-#define PIO_ARROW_TABLE_SOLVER_STORAGE 13
-#endif
-
-#if defined(PIO_ARROW)
-#define PIO_ARROW_TABLE_SOLVER_HVDC 14
-#endif
-
-#if defined(PIO_ARROW)
 #define PIO_ARROW_TABLE_YBUS 15
 #endif
 
@@ -302,34 +213,8 @@ struct ArrowSchema;
 #define PIO_ARROW_TABLE_MATRIX_BRANCH 20
 #endif
 
-#if defined(PIO_ARROW)
-#define PIO_ARROW_TABLE_SOLVER_GEN_COST 21
-#endif
-
-#if defined(PIO_ARROW)
-#define PIO_ARROW_TABLE_SOLVER_GEN_COST_COEFF 22
-#endif
-
-#if defined(PIO_DIST)
 /**
- * Opaque parsed distribution network handle (the multiconductor wire coordinate
- * model). Distinct from [`PioNetwork`] (the positive sequence transmission
- * model); none of the `pio_n_*`/extractor functions accept it. Only built with
- * the `dist` cargo feature.
- */
-typedef struct PioDistNetwork PioDistNetwork;
-#endif
-
-/**
- * Opaque parsed network handle. Carries the parsed [`BalancedNetwork`], the
- * [`IndexCore`] derived from it once at parse time (so every indexed query
- * reuses the same bus-id map and per-bus aggregates instead of rebuilding
- * them), and the reader's fidelity warnings ([`pio_warnings`]).
- */
-typedef struct PioNetwork PioNetwork;
-
-/**
- * Solver preparation repairs for [`pio_normalize`], in the extensible options
+ * Solver preparation repairs for [`pio_balanced_network_normalize`], in the extensible options
  * struct convention this header states once. Zero the struct, set
  * `struct_size` to `sizeof(PioNormalizeOptions)`, fill what you need; NULL is
  * every default, which is the plain per unit pass with no repair.
@@ -423,30 +308,9 @@ extern "C" {
  */
 uint32_t pio_abi_version(void);
 
-#if defined(PIO_DIST)
-/**
- * The ABI version of the optional `pio_dist_*` C API. Only linked when the
- * `dist` feature is compiled in; probe that first with `pio_has_feature("dist")`
- * if loading dynamically.
- */
-uint32_t pio_dist_abi_version(void);
-#endif
-
-#if defined(PIO_DIST)
-/**
- * Return distribution capability flags as owned JSON. Free the returned string
- * with [`pio_string_free`]. Only linked when the `dist` feature is compiled in;
- * runtime loaders can either check `pio_has_feature("dist")` or probe for this
- * symbol directly. The JSON schema is versioned separately from
- * [`PIO_DIST_ABI_VERSION`] so new additive flags do not force a C signature
- * change.
- */
-char *pio_dist_capabilities_json(void);
-#endif
-
 /**
  * Report the schema version of each document format in this library, as
- * owned JSON. Free the returned string with [`pio_string_free`]. Infallible.
+ * owned JSON. Free the returned string with [`pio_string_release`]. Infallible.
  *
  * [`PIO_ABI_VERSION`] does not cover these versions. A binding that
  * mirrors one of them must read it from here and refuse a library it does
@@ -459,15 +323,14 @@ char *pio_schema_versions_json(void);
 
 /**
  * Everything a loader needs to decide what this library can do, as one owned
- * JSON document. Free the returned string with [`pio_string_free`]. Infallible.
+ * JSON document. Free the returned string with [`pio_string_release`]. Infallible.
  *
  * `curl_version_info` is the shape: one call, one report, and new keys arrive
  * without a new symbol. Keys are only added. A caller with no JSON parser
  * keeps using [`pio_has_feature`] and [`pio_abi_version`], which say the same
  * things one answer at a time.
  *
- * Every `errbuf` message and every warning line reads `CODE: message`, where
- * the code is a dotted diagnostic identity such as
+ * Every error and diagnostic carries a stable dotted code identity such as
  * `EMIT.PSSE.FIELD_DROPPED`. `diagnostic_namespaces` lists the first segments
  * powerio emits, so a consumer that merges reports from several producers can
  * tell powerio's findings from its own. `error_categories` lists the coarse
@@ -482,19 +345,12 @@ char *pio_schema_versions_json(void);
 char *pio_build_info(void);
 
 /**
- * Whether the matrix Arrow table API is usable in this build. Returns 1
- * only when both `arrow` and `matrix` are compiled in. Matrix tables use
- * `pio_to_arrow`. Infallible.
- */
-int32_t pio_matrix_available(void);
-
-/**
  * Whether an optional build feature is compiled in: pass `"arrow"`, `"matrix"`,
  * `"gridfm"`, `"dist"`, or `"prob"`. Returns 1 if present, 0 otherwise (and 0
- * for a NULL or unknown name). The optional entry points (`pio_to_arrow`, the
- * matrix Arrow tables, the `pio_read_dir`/gridfm path, the `pio_dist_*` block,
- * so a consumer that loaded the library at runtime probes for them here
- * instead of resolving symbols blind. Feature names are strings like format
+ * for a NULL or unknown name). The optional features (`arrow`, `matrix`,
+ * `gridfm`, `dist`, `prob`) change what the library can do, so a consumer
+ * that loaded the library at runtime probes for them here instead of
+ * resolving symbols blind. Feature names are strings like format
  * names, so a new feature never changes this signature. Infallible.
  */
 int32_t pio_has_feature(const char *feature);
@@ -507,67 +363,19 @@ int32_t pio_has_feature(const char *feature);
 const char *pio_version(void);
 
 /**
- * Parse `path` (format from extension, or `from` if non-NULL) into a network
- * handle. `from` accepts the [`pio_parse_str`] format names plus
- * `pypsa-csv`/`pypsa`, `goc3-json`/`goc3`, `surge-json`/`surge`, and `pwb`;
- * that includes `pslf`/`epc`, and `.epc` is inferred by extension. A PyPSA CSV folder is a directory, so it can only
- * enter through this function, with `from = "pypsa-csv"` (or NULL when the
- * directory holds a `network.csv`). Read fidelity warnings attach to the
- * handle ([`pio_warnings`]). Returns `NULL` on error and writes the message
- * into `errbuf`. Free the handle with [`pio_network_free`].
- */
-PioNetwork *pio_parse_file(const char *path,
-                           const char *from,
-                           char *errbuf,
-                           size_t errlen);
-
-/**
- * Parse in-memory case `text` of the named `format` into a network handle.
- * Unlike [`pio_parse_file`] there is no path to infer from, so `format` is
- * required: one of `matpower`/`m`, `powermodels`/`pm`, `egret`,
- * `pandapower-json`/`pandapower`/`pp`, `psse`/`raw`, `psse34`, `psse35`,
- * `powerworld`/`aux`, `pslf`/`epc`, `goc3-json`/`goc3`, `surge-json`/`surge`,
- * or `opfdata-json`/`opfdata`. PyPSA CSV folders are
- * directories, not text; parse them with [`pio_parse_file`] and
- * `from = "pypsa-csv"`. Read fidelity warnings attach to the handle
- * ([`pio_warnings`]). Returns `NULL` on error and writes the message into
- * `errbuf`. Free the handle with [`pio_network_free`]. Balanced model JSON is
- * not a case format and has no token here: read it with [`pio_from_json`].
- */
-PioNetwork *pio_parse_str(const char *text, const char *format, char *errbuf, size_t errlen);
-
-/**
- * Parse `len` bytes of in-memory case data of the named `format` into a
- * network handle. Accepts every [`pio_parse_str`] format name plus `pwb`:
- * PowerWorld binary has no text form, so before this call the only way to
- * reach that reader was [`pio_parse_file`], which means staging a temporary
- * file. `bytes` need not be NUL-terminated and may contain interior NULs;
- * text formats are decoded as UTF-8 and fail with a message if they are not.
- *
- * Read fidelity warnings attach to the handle ([`pio_warnings`]). Returns
- * `NULL` on error and writes the message into `errbuf`. Free the handle with
- * [`pio_network_free`].
- */
-PioNetwork *pio_parse_bytes(const uint8_t *bytes,
-                            size_t len,
-                            const char *format,
-                            char *errbuf,
-                            size_t errlen);
-
-/**
  * Classify in-memory JSON case `text` by its top level markers, without
  * parsing the case. Writes one of
  *
  * - `transmission:<format>` (e.g. `transmission:powermodels-json`)
  * - `distribution:<format>` (e.g. `distribution:pmd-json`)
- * - `package` (a `.pio.json` package; read it with the package entry points)
- * - `model-json` (bare balanced model JSON; read it with [`pio_from_json`])
+ * - `module` (a `.pio.json` stored module; read it with `pio_parse_str`)
+ * - `model-json` (bare balanced model JSON; read it with [`pio_balanced_network_from_json`])
  * - `ambiguous` (strong markers from both domains; pass an explicit format)
  * - `unknown` (no recognized marker, or not a JSON object)
  *
  * into the caller `outbuf` (truncated to fit, always NUL-terminated) and
  * returns the total byte length of the classification string (the
- * size-then-fill idiom of [`pio_warnings`]). Returns 0 for NULL `text`. The
+ * size-then-fill idiom of the name queries). Returns 0 for NULL `text`. The
  * markers are the same ones the transmission parser's `.json` sniffing uses,
  * so a binding can route a bare `.json` before choosing a parser.
  *
@@ -579,260 +387,173 @@ PioNetwork *pio_parse_bytes(const uint8_t *bytes,
 size_t pio_classify_str(const char *text, char *outbuf, size_t outlen);
 
 /**
- * Serialize `net` to its model JSON: the same object a `.pio.json` package
- * carries under `model.balanced_network`, without the surrounding document.
- * This is the bindings' data transport and the only route to it: model JSON
+ * Serialize `net` to its model JSON: the network serialization a `.pio.json`
+ * document carries as `value.data` when its `value.kind` is
+ * `balanced_network`, without the surrounding document. This is the
+ * bindings' data transport and the only route to it: model JSON
  * is powerio's own document rather than a case format, so it has no format
- * token. Returns an owned C string (free with [`pio_string_free`]), `NULL` on
+ * token. Returns an owned C string (free with [`pio_string_release`]), `NULL` on
  * error.
  */
-char *pio_to_json(const PioNetwork *net, char *errbuf, size_t errlen);
+char *pio_balanced_network_to_json(const PioBalancedNetwork *net, PioError **error);
 
 /**
- * Parse model JSON produced by [`pio_to_json`] (or lifted from a `.pio.json`
- * document's `model.balanced_network`) back into an owned handle, the inverse
- * of [`pio_to_json`]. A bare `.json` file holding this document classifies as
+ * Parse model JSON produced by [`pio_balanced_network_to_json`] (or lifted from a `.pio.json`
+ * document's `value.data` when its `value.kind` is `balanced_network`) back into an owned
+ * handle, the inverse of [`pio_balanced_network_to_json`]. A bare `.json` file holding this document classifies as
  * `model-json` through [`pio_classify_str`]. Returns `NULL` on error. Free
- * with [`pio_network_free`].
+ * with [`pio_balanced_network_release`].
  */
-PioNetwork *pio_from_json(const char *text, char *errbuf, size_t errlen);
-
-#if defined(PIO_GRIDFM)
-/**
- * Read one scenario of a dataset directory in the named `from` format into a
- * network handle. `gridfm` (the
- * gridfm-datakit Parquet layout; `dir` resolves leniently: the `raw/` leaf,
- * a `<case>/` directory with a `raw/` child, or a parent holding exactly one
- * such case) is the currently supported dataset format. `scenario` selects within a
- * multi-scenario dataset ([`pio_scenario_ids`] enumerates them); formats
- * without scenarios take `0`. Read fidelity warnings attach to the handle
- * ([`pio_warnings`]). Returns `NULL` on error and writes the message into
- * `errbuf`. Free the handle with [`pio_network_free`]. Built
- * `--features gridfm`.
- */
-PioNetwork *pio_read_dir(const char *dir,
-                         const char *from,
-                         int64_t scenario,
-                         char *errbuf,
-                         size_t errlen);
-#endif
-
-#if defined(PIO_GRIDFM)
-/**
- * Write the distinct scenario ids (ascending) of the dataset directory `dir`
- * in the named `from` format into `out`, up to `cap` entries, and return the
- * total count: the cap/count convention of [`pio_bus_ids`]. `gridfm` is the
- * currently supported dataset format. Returns `-1` on error and writes the message into
- * `errbuf` (unlike the handle extractors, this reads the filesystem and can
- * fail). Built `--features gridfm`.
- */
-ptrdiff_t pio_scenario_ids(const char *dir,
-                           const char *from,
-                           int64_t *out,
-                           size_t cap,
-                           char *errbuf,
-                           size_t errlen);
-#endif
+PioBalancedNetwork *pio_balanced_network_from_json(const char *text,
+                                                   PioError **error);
 
 /**
- * The fidelity warnings attached to the handle at construction (by whichever
- * of [`pio_parse_file`], [`pio_parse_str`], `pio_read_dir`, or
- * [`pio_normalize`] built it), `\n`-joined into `warnbuf` (truncated to fit
- * on a UTF-8 boundary; NULL/0 to skip). Returns the byte length of the full
- * joined text, excluding the NUL; call once with `(NULL, 0)` to size, then
- * pass a `char[len + 1]`. `0` means no warnings (or a NULL handle); readers
- * that are total attach none. Each line reads `CODE: message`; split at the
- * first `": "` to recover the code.
+ * Mint an independent handle to the same network. NULL stays NULL.
  */
-size_t pio_warnings(const PioNetwork *net, char *warnbuf, size_t warnlen);
+PioBalancedNetwork *pio_balanced_network_retain(const PioBalancedNetwork *net);
 
 /**
- * Free a network handle from [`pio_parse_file`], [`pio_parse_str`],
- * `pio_read_dir`, or [`pio_normalize`].
+ * Release one network handle: the drop half of the retain/release pair, with
+ * the ABI v6 lifecycle name. NULL is a no-op.
  */
-void pio_network_free(PioNetwork *net);
+void pio_balanced_network_release(PioBalancedNetwork *net);
 
 /**
  * Normalize `net` into a NEW network handle: per unit, radians, out of service
  * filtered, source bus ids preserved, bus types canonicalized (see
  * `BalancedNetwork::to_normalized`). A value transform, not a serialization, hence
  * the verb, while the `to_*` family re-encodes unchanged data. The result is
- * independent of `net`; free both with [`pio_network_free`]. Every extractor
+ * independent of `net`; release both when done. Every extractor
  * and serializer works on it unchanged (the handle is per unit, not MW).
  *
  * `opts` turns on the solver preparation repairs; see [`PioNormalizeOptions`].
- * NULL is every default and is the plain pass. The read warnings already on
- * `net` and any repair warnings are attached to the returned handle and can be
- * read with [`pio_warnings`].
+ * NULL is every default and is the plain pass. The findings already on
+ * `net` and any repair findings carry over onto the returned handle.
  *
  * Returns `NULL` on error (no reference bus can be chosen, a non-positive base
- * MVA, or an options struct this build cannot honor) and writes the message
- * into `errbuf`.
+ * MVA, or an options struct this build cannot honor) and stores a
+ * structured error.
  */
-PioNetwork *pio_normalize(const PioNetwork *net,
-                          const PioNormalizeOptions *opts,
-                          char *errbuf,
-                          size_t errlen);
+PioBalancedNetwork *pio_balanced_network_normalize(const PioBalancedNetwork *net,
+                                                   const PioNormalizeOptions *opts,
+                                                   PioError **error);
 
-size_t pio_n_buses(const PioNetwork *net);
+size_t pio_balanced_network_n_buses(const PioBalancedNetwork *net);
 
-size_t pio_n_branches(const PioNetwork *net);
+size_t pio_balanced_network_n_branches(const PioBalancedNetwork *net);
 
-size_t pio_n_switches(const PioNetwork *net);
+size_t pio_balanced_network_n_switches(const PioBalancedNetwork *net);
 
-size_t pio_n_gens(const PioNetwork *net);
+size_t pio_balanced_network_n_gens(const PioBalancedNetwork *net);
 
-double pio_base_mva(const PioNetwork *net);
+double pio_balanced_network_base_mva(const PioBalancedNetwork *net);
 
 /**
  * Case name. Writes UTF-8 bytes into `out`, up to `cap`, NUL-terminates when
  * possible, and returns the byte length needed excluding the NUL. `NULL` or
  * `cap == 0` is a size query.
  */
-size_t pio_network_name(const PioNetwork *net, char *out, size_t cap);
+size_t pio_balanced_network_name(const PioBalancedNetwork *net, char *out, size_t cap);
 
 /**
  * Source format token used by the JSON snapshot and accepted by every
  * `from` parameter, for example `matpower`, `powermodels-json`, or
  * `normalized`. Uses the same cap/count string convention as
- * [`pio_network_name`].
+ * [`pio_balanced_network_name`].
  */
-size_t pio_source_format(const PioNetwork *net, char *out, size_t cap);
+size_t pio_balanced_network_source_format(const PioBalancedNetwork *net, char *out, size_t cap);
 
 /**
  * Serialize a compact balanced network summary as JSON for display and scalar
- * queries without serializing [`pio_to_json`]'s full payload.
+ * queries without serializing [`pio_balanced_network_to_json`]'s full payload.
  *
  * `counts` is the case file's own inventory, so it counts a 3-winding
  * transformer once under `transformers_3w` rather than as the star bus and
  * three branches it lowers to. `topology.n_buses` and `topology.n_branches`
- * are that lowered space, the one [`pio_n_buses`] and [`pio_branches`]
- * report and the one the rest of `topology` is computed over. The two differ
+ * are that lowered space, the one [`pio_balanced_network_n_buses`] and
+ * [`pio_balanced_network_n_branches`] report and the one the rest of `topology` is computed over. The two differ
  * only for a case with an in-service 3-winding transformer.
  */
-char *pio_summary_json(const PioNetwork *net, char *errbuf, size_t errlen);
+char *pio_balanced_network_summary_json(const PioBalancedNetwork *net,
+                                        PioError **error);
 
 /**
  * Dense `[0, n)` index of the single reference (slack) bus, or `-1` if not
- * exactly one. An INDEX into the [`pio_bus_ids`] ordering, not a bus id;
- * `pio_branches` from/to carry ids, so the unit is in the name. A network may
+ * exactly one. An INDEX into the [`pio_balanced_network_bus_ids`] ordering, not a bus id;
+ * `pio_balanced_network_branches` from/to carry ids, so the unit is in the name. A network may
  * carry several references (one per island, or a normalized case that kept
- * the file's multiple `REF` buses); [`pio_ref_bus_indices`] reads them all,
+ * the file's multiple `REF` buses); [`pio_balanced_network_ref_bus_indices`] reads them all,
  * and its count (`NULL` out) tells zero from many.
  */
-int64_t pio_ref_bus_index(const PioNetwork *net);
+int64_t pio_balanced_network_ref_bus_index(const PioBalancedNetwork *net);
 
 /**
  * Write the dense `[0, n)` indices of the reference (slack) buses, ascending,
  * into `out`, up to `cap` entries, and return the total count: the cap/count
- * convention of [`pio_bus_ids`]. `0` means none; `> 1` means one reference
+ * convention of [`pio_balanced_network_bus_ids`]. `0` means none; `> 1` means one reference
  * per island or several fixed references in one island (a normalized case
  * always reports `>= 1`).
  */
-size_t pio_ref_bus_indices(const PioNetwork *net, int64_t *out, size_t cap);
+size_t pio_balanced_network_ref_bus_indices(const PioBalancedNetwork *net,
+                                            int64_t *out,
+                                            size_t cap);
 
 /**
  * Number of islands: connected components of the in-service topology.
  */
-size_t pio_n_islands(const PioNetwork *net);
+size_t pio_balanced_network_n_islands(const PioBalancedNetwork *net);
 
 /**
  * `1` if the in-service topology is radial (every island a tree), else `0`.
  */
-int32_t pio_is_radial(const PioNetwork *net);
-
-/**
- * Serialize `net` to the named format `to`: the one text serializer; every
- * format is named by a string. Accepts the [`pio_parse_str`] names:
- * `matpower` is a byte-exact echo when the handle was parsed from MATPOWER.
- * Model JSON is not a case format and has no token here: write it with
- * [`pio_to_json`].
- *
- * `opts` carries the write-time cost policies (NULL for every default); see
- * [`PioWriteOptions`]. A non-default policy works on a copy, so the handle is
- * unchanged, and the policy's own findings lead `out_diagnostics_json`.
- *
- * Returns the text as an owned C string (free with [`pio_string_free`]),
- * `NULL` on error (message into `errbuf`). The writer's findings, if any, are
- * published through `out_diagnostics_json` as one owned JSON array of
- * diagnostic records (free it with [`pio_string_free`]), or NULL when there
- * are none; a returned string has no handle to attach them to. Pass NULL to
- * discard them. `out_diagnostics_json` is written on every return path and is
- * NULL whenever this returns NULL, so an error return leaves nothing to free.
- */
-char *pio_to_format(const PioNetwork *net,
-                    const char *to,
-                    const PioWriteOptions *opts,
-                    char **out_diagnostics_json,
-                    char *errbuf,
-                    size_t errlen);
+int32_t pio_balanced_network_is_radial(const PioBalancedNetwork *net);
 
 /**
  * Convert the case file at `path` from format `from` (NULL to infer from the
- * path, as [`pio_parse_file`]) to format `to`, without keeping a handle.
- * `opts` carries the write-time cost policies (NULL for every default); see
- * [`PioWriteOptions`].
+ * path, as `pio_parse_file`) to format `to`, without keeping a handle.
+ * `to` names any balanced or multiconductor text format; `opts` carries the
+ * balanced write-time cost policies (NULL for every default, ignored by a
+ * multiconductor target); see [`PioWriteOptions`].
  * Returns the converted text as an owned C string (free with
- * [`pio_string_free`]), `NULL` on error. The findings, read side first, are
- * published through `out_diagnostics_json` as one owned JSON array of
- * diagnostic records (free it with [`pio_string_free`]), NULL when there are
- * none. Pass NULL to discard them. `out_diagnostics_json` is written on every
- * return path and is NULL whenever this returns NULL, so an error return
- * leaves nothing to free.
+ * [`pio_string_release`]), `NULL` on error. The findings, read side first, are
+ * published through `out_diagnostics` as an owned `PioDiagnostics` list
+ * (release it with `pio_diagnostics_release`); the list is empty, never NULL,
+ * when there is nothing to report. Pass NULL to discard them.
+ * `out_diagnostics` is written on every return path and is NULL whenever this
+ * returns NULL, so an error return leaves nothing to release.
  */
 char *pio_convert_file(const char *path,
                        const char *from,
                        const char *to,
                        const PioWriteOptions *opts,
-                       char **out_diagnostics_json,
-                       char *errbuf,
-                       size_t errlen);
+                       PioDiagnostics **out_diagnostics,
+                       PioError **error);
 
 /**
  * Convert in-memory case `text` from format `from` (required; there is no
- * path to infer from) to format `to` without keeping a handle. `opts` carries
- * the write-time cost policies (NULL for every default); see
- * [`PioWriteOptions`]. Returns the converted text as an owned C
- * string (free with [`pio_string_free`]), `NULL` on error. The findings, read
- * side first, are published through `out_diagnostics_json` as one owned JSON
- * array of diagnostic records (free it with [`pio_string_free`]), NULL when
- * there are none. Pass NULL to discard them. `out_diagnostics_json` is written
+ * path to infer from) to format `to` without keeping a handle. `to` names any
+ * balanced or multiconductor text format; `opts` carries the balanced
+ * write-time cost policies (NULL for every default, ignored by a
+ * multiconductor target); see [`PioWriteOptions`]. Returns the converted text
+ * as an owned C string (free with [`pio_string_release`]), `NULL` on error.
+ * The findings, read side first, are published through `out_diagnostics` as
+ * an owned `PioDiagnostics` list (release it with
+ * `pio_diagnostics_release`); the list is empty, never NULL, when there is
+ * nothing to report. Pass NULL to discard them. `out_diagnostics` is written
  * on every return path and is NULL whenever this returns NULL, so an error
- * return leaves nothing to free.
+ * return leaves nothing to release.
  */
 char *pio_convert_str(const char *text,
                       const char *from,
                       const char *to,
                       const PioWriteOptions *opts,
-                      char **out_diagnostics_json,
-                      char *errbuf,
-                      size_t errlen);
-
-/**
- * Write `net` into `out_dir` as the named directory format `to`. PyPSA CSV
- * (`pypsa-csv`/`pypsa`) is the currently supported directory format; a text format name is
- * an error pointing back at [`pio_to_format`]. `opts` carries the write-time
- * cost policies (NULL for every default); see [`PioWriteOptions`].
- * Returns `0` on success and
- * `-1` on error (message into `errbuf`). The writer's findings, if any, are
- * published through `out_diagnostics_json` as one owned JSON array of
- * diagnostic records (free it with [`pio_string_free`]), NULL when there are
- * none. Pass NULL to discard them. `out_diagnostics_json` is written on every
- * return path and is NULL whenever this returns `-1`, so an error return
- * leaves nothing to free.
- */
-int32_t pio_write_dir(const PioNetwork *net,
-                      const char *to,
-                      const char *out_dir,
-                      const PioWriteOptions *opts,
-                      char **out_diagnostics_json,
-                      char *errbuf,
-                      size_t errlen);
+                      PioDiagnostics **out_diagnostics,
+                      PioError **error);
 
 /**
  * Free any owned C string returned by this API.
  */
-void pio_string_free(char *s);
+void pio_string_release(char *s);
 
 /**
  * Write the 1-based external bus ids, in dense order, into `out`, up to `cap`
@@ -843,119 +564,116 @@ void pio_string_free(char *s);
  * keeps the source name, and a numeric id past that range is refused at the
  * read boundary rather than passed through.
  */
-size_t pio_bus_ids(const PioNetwork *net, int64_t *out, size_t cap);
+size_t pio_balanced_network_bus_ids(const PioBalancedNetwork *net, int64_t *out, size_t cap);
 
 /**
  * Write the branch table as parallel arrays, each up to `cap` entries, and
  * return the total branch count. A branch is any two-terminal series element
  * lines and transformers alike (a transformer has `tap != 0`). `from`/`to`
- * are 1-based bus IDS (the [`pio_bus_ids`] id space, not dense indices); map
- * them to dense matrix rows with the [`pio_bus_ids`] ordering. Any output
+ * are 1-based bus IDS (the [`pio_balanced_network_bus_ids`] id space, not dense indices); map
+ * them to dense matrix rows with the [`pio_balanced_network_bus_ids`] ordering. Any output
  * pointer may be NULL to skip that column; all NULL is the count query.
  */
-size_t pio_branches(const PioNetwork *net,
-                    int64_t *from,
-                    int64_t *to,
-                    double *r,
-                    double *x,
-                    double *b,
-                    double *tap,
-                    double *shift,
-                    uint8_t *in_service,
-                    size_t cap);
+size_t pio_balanced_network_branches(const PioBalancedNetwork *net,
+                                     int64_t *from,
+                                     int64_t *to,
+                                     double *r,
+                                     double *x,
+                                     double *b,
+                                     double *tap,
+                                     double *shift,
+                                     uint8_t *in_service,
+                                     size_t cap);
 
 /**
  * Write the branch terminal charging table as parallel arrays, each up to
  * `cap` entries, and return the total branch count. Columns are p.u.
  */
-size_t pio_branch_charging(const PioNetwork *net,
-                           double *g_fr,
-                           double *b_fr,
-                           double *g_to,
-                           double *b_to,
-                           size_t cap);
+size_t pio_balanced_network_branch_charging(const PioBalancedNetwork *net,
+                                            double *g_fr,
+                                            double *b_fr,
+                                            double *g_to,
+                                            double *b_to,
+                                            size_t cap);
 
 /**
  * Write the switch table as parallel arrays, each up to `cap` entries, and
  * return the total switch count. `from`/`to` are external bus ids.
  */
-size_t pio_switches(const PioNetwork *net,
-                    int64_t *from,
-                    int64_t *to,
-                    uint8_t *closed,
-                    double *thermal_rating,
-                    double *current_rating,
-                    double *pf,
-                    double *qf,
-                    double *pt,
-                    double *qt,
-                    size_t cap);
+size_t pio_balanced_network_switches(const PioBalancedNetwork *net,
+                                     int64_t *from,
+                                     int64_t *to,
+                                     uint8_t *closed,
+                                     double *thermal_rating,
+                                     double *current_rating,
+                                     double *pf,
+                                     double *qf,
+                                     double *pt,
+                                     double *qt,
+                                     size_t cap);
 
 /**
  * Write the generator table as parallel arrays, each up to `cap` entries, and
  * return the total generator count. `bus` is the 1-based bus id (the
- * [`pio_bus_ids`] id space). Any output pointer may be NULL to skip.
+ * [`pio_balanced_network_bus_ids`] id space). Any output pointer may be NULL to skip.
  */
-size_t pio_gens(const PioNetwork *net,
-                int64_t *bus,
-                double *pg,
-                double *pmax,
-                double *pmin,
-                uint8_t *in_service,
-                size_t cap);
+size_t pio_balanced_network_gens(const PioBalancedNetwork *net,
+                                 int64_t *bus,
+                                 double *pg,
+                                 double *pmax,
+                                 double *pmin,
+                                 uint8_t *in_service,
+                                 size_t cap);
 
 /**
  * Write the per-bus demand aggregates (active `pd`, reactive `qd`, summed
- * over each bus's loads, dense [`pio_bus_ids`] order), each up to `cap`
+ * over each bus's loads, dense [`pio_balanced_network_bus_ids`] order), each up to `cap`
  * entries, and return the total bus count. Either pointer may be NULL.
  */
-size_t pio_bus_demand(const PioNetwork *net, double *pd, double *qd, size_t cap);
+size_t pio_balanced_network_bus_demand(const PioBalancedNetwork *net,
+                                       double *pd,
+                                       double *qd,
+                                       size_t cap);
 
 /**
  * Write the per-bus shunt aggregates (conductance `gs`, susceptance `bs`,
- * dense [`pio_bus_ids`] order), each up to `cap` entries, and return the
+ * dense [`pio_balanced_network_bus_ids`] order), each up to `cap` entries, and return the
  * total bus count. Either pointer may be NULL.
  */
-size_t pio_bus_shunt(const PioNetwork *net, double *gs, double *bs, size_t cap);
+size_t pio_balanced_network_bus_shunt(const PioBalancedNetwork *net,
+                                      double *gs,
+                                      double *bs,
+                                      size_t cap);
 
 #if defined(PIO_ARROW)
 /**
  * Export one network table over the Arrow C Data Interface: the `to_`
  * conversion whose output type is Arrow structs rather than a string, and the
  * bulk table surface of this ABI. Tables 0..5 are raw network tables; tables
- * 6..14 are normalized solver tables with per unit/radian values and dense
- * zero based row ids; tables 15..18 carry COO triplets in that dense index
- * space with dimensions in schema metadata; tables 19 and 20 are the axis maps
- * naming what each row and column of those triplets is (`matrix_bus` carries
- * the bus id, source row, reference flag and island per index, `matrix_branch`
- * the source row and endpoint ids). Tables 21 and 22 carry normalized
- * generator cost: one header row per solver generator, in `solver_gen` order,
- * slicing `[coeff_offset, coeff_offset + coeff_count)` of the flattened
- * coefficient table. `model` 2 reads position `i` of a `coeff_count` long
- * slice as the coefficient of `p^(coeff_count - 1 - i)`; `model` 1 reads even
- * positions as per unit active power at a breakpoint and odd positions as the
- * curve value there; `model` 0 means the generator carries no cost row, and
- * its `coeff_offset` is `-1`. Every table entry in
- * [`pio_arrow_catalog_json`] states which of the three it is under `format`.
- * New columns extend the Arrow schema without changing an existing C
- * signature.
+ * 15..18 carry sparse matrix COO triplets in the dense index space with
+ * dimensions in schema metadata; tables 19 and 20 are the axis maps naming
+ * what each row and column of those triplets is (`matrix_bus` carries the
+ * bus id, source row, reference flag and island per index, `matrix_branch`
+ * the source row and endpoint ids). The 0.9 solver row ids (6..14, 21, 22)
+ * are burned: they are never reassigned and this function refuses them.
+ * [`pio_arrow_catalog_json`] lists exactly the live ids. New columns extend
+ * an Arrow schema without changing an existing C signature.
  *
  * `table` is one of the `PIO_ARROW_TABLE_*` selectors. Raw table columns use
- * EXTERNAL bus ids (the `pio_bus_ids` id space), not the gridfm schema. On
+ * EXTERNAL bus ids (the `pio_balanced_network_bus_ids` id space), not the gridfm schema. On
  * success (returns `0`),
  * `out_array` and `out_schema` are populated with owned C Data Interface
  * structs: ownership of the Arrow buffers transfers to the caller, both
  * `release` callbacks are non-NULL, and the caller MUST invoke each exactly
- * once when done (skipping one leaks; the structs outlive `pio_network_free`).
- * On error (returns `-1`) the message is written into `errbuf` and the
+ * once when done (skipping one leaks; the structs outlive the handle's release).
+ * On error (returns `-1`) a structured error is stored and the
  * out-params are left untouched. Only built with the `arrow` cargo feature.
  */
-int32_t pio_to_arrow(const PioNetwork *net,
-                     int32_t table,
-                     struct ArrowArray *out_array,
-                     struct ArrowSchema *out_schema,
-                     char *errbuf,
-                     size_t errlen);
+int32_t pio_balanced_network_to_arrow(const PioBalancedNetwork *net,
+                                      int32_t table,
+                                      struct ArrowArray *out_array,
+                                      struct ArrowSchema *out_schema,
+                                      PioError **error);
 #endif
 
 #if defined(PIO_ARROW)
@@ -971,11 +689,11 @@ int32_t pio_to_arrow(const PioNetwork *net,
  * `schema_version`; one release version now covers every document powerio
  * authors, so the top level names it and the per-table copy is gone.
  *
- * Free the returned string with [`pio_string_free`]. On error this returns
- * NULL and writes the message into `errbuf`. Only built with the `arrow` cargo
+ * Free the returned string with [`pio_string_release`]. On error this returns
+ * NULL and stores a structured error. Only built with the `arrow` cargo
  * feature.
  */
-char *pio_arrow_catalog_json(char *errbuf, size_t errlen);
+char *pio_arrow_catalog_json(PioError **error);
 #endif
 
 /**
@@ -983,225 +701,502 @@ char *pio_arrow_catalog_json(char *errbuf, size_t errlen);
  * CSV/JSON records, GeoJSON Point/LineString) to the canonical GeoJSON form.
  * `name_hint` (a file name, nullable) picks CSV against JSON when given;
  * otherwise the content is sniffed. Free the returned string with
- * [`pio_string_free`]. Returns `NULL` on input that carries no usable
- * coordinates and writes the message into `errbuf`.
+ * [`pio_string_release`]. Returns `NULL` on input that carries no usable
+ * coordinates and stores a structured error.
  *
  * The tolerant reader's notes, one per record it read past, are published
- * through `out_diagnostics_json` as one owned JSON array of diagnostic
- * records (free it with [`pio_string_free`]), or NULL when the reader used
- * every record. Pass NULL to discard them. `out_diagnostics_json` is written
- * on every return path and is NULL whenever this returns NULL, so an error
- * return leaves nothing to free.
+ * through `out_diagnostics` as an owned `PioDiagnostics` list (release
+ * it with `pio_diagnostics_release`); the list is empty, never NULL, when the
+ * reader used every record. Pass NULL to discard them. `out_diagnostics` is
+ * written on every return path and is NULL whenever this returns NULL, so an
+ * error return leaves nothing to release.
  */
 char *pio_geo_parse(const char *text,
                     const char *name_hint,
-                    char **out_diagnostics_json,
-                    char *errbuf,
-                    size_t errlen);
+                    PioDiagnostics **out_diagnostics,
+                    PioError **error);
 
 /**
  * Extract a network's coordinates as the canonical GeoJSON layer: one point
  * per located bus, one route per routed branch. Free the returned string
- * with `pio_string_free`. Returns `NULL` (with a message) when the network
+ * with `pio_string_release`. Returns `NULL` (with a message) when the network
  * carries no coordinates.
  */
-char *pio_geo_extract(const PioNetwork *net, char *errbuf, size_t errlen);
+char *pio_balanced_network_geo_extract(const PioBalancedNetwork *net, PioError **error);
 
 /**
  * Apply a geographic sidecar (any form [`pio_geo_parse`] accepts) onto a NEW
  * network handle; the input handle is unchanged and both are freed with
- * `pio_network_free`. `name_hint` (a file name, nullable) picks CSV against
+ * [`pio_balanced_network_release`]. `name_hint` (a file name, nullable) picks CSV against
  * JSON as in [`pio_geo_parse`]. Matched bus points land in `Bus.location`,
  * matched branch routes in `Branch.route`. The returned handle drops the
  * retained source text, so a same-format write re-serializes the placed case
  * instead of echoing the original. The reader's notes and an apply summary
- * (`geo apply: N bus point(s), ...`) are appended to the handle's warnings
- * ([`pio_warnings`]). Returns `NULL` on error.
+ * (`geo apply: N bus point(s), ...`) are appended to the returned handle's
+ * findings. Returns `NULL` on error.
  */
-PioNetwork *pio_geo_apply(const PioNetwork *net,
-                          const char *layer,
-                          const char *name_hint,
-                          char *errbuf,
-                          size_t errlen);
+PioBalancedNetwork *pio_balanced_network_geo_apply(const PioBalancedNetwork *net,
+                                                   const char *layer,
+                                                   const char *name_hint,
+                                                   PioError **error);
 
 #if defined(PIO_DIST)
 /**
- * One-line apply summary lifted into the returned handle's warnings.
  * Extract a multiconductor network's coordinates as the canonical GeoJSON
  * layer, keyed by the string bus and line names. Free the returned string
- * with `pio_string_free`. Returns `NULL` (with a message) when the network
+ * with `pio_string_release`. Returns `NULL` (with a message) when the network
  * carries no coordinates.
  */
-char *pio_dist_geo_extract(const PioDistNetwork *net, char *errbuf, size_t errlen);
+char *pio_multiconductor_network_geo_extract(const PioMulticonductorNetwork *net, PioError **error);
 #endif
 
 #if defined(PIO_DIST)
 /**
  * Apply a geographic sidecar (any form [`pio_geo_parse`] accepts) onto a NEW
  * distribution network handle; the input handle is unchanged and both are
- * freed with `pio_dist_network_free`. `name_hint` (a file name, nullable)
+ * released with [`pio_multiconductor_network_release`]. `name_hint` (a file name, nullable)
  * picks CSV against JSON as in [`pio_geo_parse`]. The returned handle drops
  * the retained source text, so a same-format write re-serializes the placed
- * case. The reader's notes and an apply summary are appended to the handle's
- * warnings ([`pio_dist_warnings`]). Returns `NULL` on error.
+ * case. The reader's notes and a one-line apply summary are appended to the
+ * returned handle's findings. Returns `NULL` on error.
  */
-PioDistNetwork *pio_dist_geo_apply(const PioDistNetwork *net,
-                                   const char *layer,
-                                   const char *name_hint,
-                                   char *errbuf,
-                                   size_t errlen);
+PioMulticonductorNetwork *pio_multiconductor_network_geo_apply(const PioMulticonductorNetwork *net,
+                                                               const char *layer,
+                                                               const char *name_hint,
+                                                               PioError **error);
 #endif
 
 #if defined(PIO_DIST)
 /**
- * Parse a distribution case file into a [`PioDistNetwork`] handle. The format
- * comes from `from` if non-NULL (`dss`, `pmd`, or `bmopf`), else from the file
- * itself: `.dss` is OpenDSS, and `.json` holding the ENGINEERING `data_model`
- * key is PMD JSON, otherwise BMOPF JSON. Returns `NULL` on error and writes the
- * message into `errbuf`. Free the handle with [`pio_dist_network_free`].
+ * Mint an independent handle to the same multiconductor network. NULL stays
+ * NULL.
  */
-PioDistNetwork *pio_dist_parse_file(const char *path,
-                                    const char *from,
-                                    char *errbuf,
-                                    size_t errlen);
+PioMulticonductorNetwork *pio_multiconductor_network_retain(const PioMulticonductorNetwork *net);
 #endif
 
 #if defined(PIO_DIST)
 /**
- * Parse in-memory distribution case `text` of the named `format` (`dss`, `pmd`,
- * or `bmopf`; required, since there is no path to infer from). An OpenDSS
- * `Redirect`/`Compile`/`Buscoords` in `text` reads no files: an in-memory
- * source grants no filesystem access, and each include is refused loudly.
- * Returns `NULL` on error and writes the message into `errbuf`. Free the handle
- * with [`pio_dist_network_free`].
+ * Release one multiconductor network handle: the drop half of the
+ * multiconductor retain/release pair.
  */
-PioDistNetwork *pio_dist_parse_str(const char *text,
-                                   const char *format,
-                                   char *errbuf,
-                                   size_t errlen);
-#endif
-
-#if defined(PIO_DIST)
-/**
- * Free a distribution network handle from [`pio_dist_parse_file`] or
- * [`pio_dist_parse_str`]. NULL is a no-op; free exactly once.
- */
-void pio_dist_network_free(PioDistNetwork *net);
-#endif
-
-#if defined(PIO_DIST)
-/**
- * Parse warnings retained on the handle (everything the reader could not
- * represent or had to assume), `\n`-joined and written into the caller `warnbuf`
- * (truncated to fit, always NUL-terminated). Returns the total byte length of
- * the joined message; call with `NULL`/0 to size first, then fill — the same
- * idiom as [`pio_warnings`]. Each line reads `CODE: message`. Returns 0 for a
- * NULL handle.
- */
-size_t pio_dist_warnings(const PioDistNetwork *net, char *warnbuf, size_t warnlen);
+void pio_multiconductor_network_release(PioMulticonductorNetwork *net);
 #endif
 
 #if defined(PIO_DIST)
 /**
  * Serialize a compact summary of a distribution handle as JSON. This lets
  * bindings answer display and scalar queries without forcing
- * [`pio_dist_to_json`]'s full model payload.
+ * [`pio_multiconductor_network_to_json`]'s full model payload.
  */
-char *pio_dist_summary_json(const PioDistNetwork *net, char *errbuf, size_t errlen);
+char *pio_multiconductor_network_summary_json(const PioMulticonductorNetwork *net,
+                                              PioError **error);
 #endif
 
 #if defined(PIO_DIST)
 /**
- * Serialize `net` to its model JSON: the same object a `.pio.json` package
- * carries under `model.multiconductor_network`, without the surrounding
- * document. This is the bindings' data transport, not a case format: the
- * converter, CLI, and format inference do not know it; distribution cases
- * exchanged with other tools are BMOPF JSON ([`pio_dist_to_format`]).
- * Returns an owned C string (free with [`pio_string_free`]), `NULL` on error.
+ * Serialize `net` to its model JSON: the network serialization a `.pio.json`
+ * document carries as `value.data` when its `value.kind` is
+ * `multiconductor_network`, without the surrounding document. This is the
+ * bindings' data transport, not a case format: the
+ * converter, CLI, and format inference do not know it; a distribution case
+ * other tools read is BMOPF JSON, written through
+ * `pio_module_write_str`.
+ * Returns an owned C string (free with [`pio_string_release`]), `NULL` on error.
  */
-char *pio_dist_to_json(const PioDistNetwork *net, char *errbuf, size_t errlen);
+char *pio_multiconductor_network_to_json(const PioMulticonductorNetwork *net, PioError **error);
 #endif
 
 #if defined(PIO_DIST)
 /**
  * Serialize the collapsed bus and terminal graph projection for `net` as JSON.
  * The returned string is owned by the library; free it with
- * [`pio_string_free`].
+ * [`pio_string_release`].
  */
-char *pio_dist_graph_json(const PioDistNetwork *net, char *errbuf, size_t errlen);
+char *pio_multiconductor_network_graph_json(const PioMulticonductorNetwork *net, PioError **error);
 #endif
 
 #if defined(PIO_DIST)
 /**
- * Parse model JSON produced by [`pio_dist_to_json`] (or lifted from a
- * `.pio.json` document's `model.multiconductor_network`) back into an owned
- * handle: the inverse of [`pio_dist_to_json`]. The rebuilt handle retains
+ * Parse model JSON produced by [`pio_multiconductor_network_to_json`] (or lifted from a
+ * `.pio.json` document's `value.data` when its `value.kind` is
+ * `multiconductor_network`) back into an owned handle: the inverse of
+ * [`pio_multiconductor_network_to_json`]. The rebuilt handle retains
  * no source text, so a same format write is a fresh serialization. The handle
  * retains the model JSON `warnings`. Returns `NULL` on error. Free with
- * [`pio_dist_network_free`].
+ * [`pio_multiconductor_network_release`].
  */
-PioDistNetwork *pio_dist_from_json(const char *text, char *errbuf, size_t errlen);
+PioMulticonductorNetwork *pio_multiconductor_network_from_json(const char *text, PioError **error);
 #endif
+
+/**
+ * The failure's stable diagnostic code, valid until the handle's release.
+ */
+const char *pio_error_code(const PioError *error);
+
+/**
+ * The rendered failure message, valid until the handle's release.
+ */
+const char *pio_error_message(const PioError *error);
+
+/**
+ * The structured diagnostics as a JSON array, valid until the handle's
+ * release.
+ */
+const char *pio_error_diagnostics_json(const PioError *error);
+
+/**
+ * Mint an independent handle to the same error. NULL stays NULL.
+ */
+PioError *pio_error_retain(const PioError *error);
+
+/**
+ * Release one error handle. NULL is a no-op.
+ */
+void pio_error_release(PioError *error);
+
+/**
+ * Read stored `.pio.json` text: version 1, or a released 0.9 document
+ * upgraded one way. Returns a new module handle, or NULL with `error` set.
+ */
+PioModule *pio_module_read_json(const char *text, PioError **error);
+
+/**
+ * Parse a case file into a module of whichever family claims it. `format`
+ * may be NULL for detection by name and content.
+ */
+PioModule *pio_parse_file(const char *path, const char *format, PioError **error);
+
+/**
+ * Parse in-memory case text into a module. `name` labels the buffer for
+ * diagnostics and format detection; NULL uses `<memory>`.
+ */
+PioModule *pio_parse_str(const char *name, const char *text, const char *format, PioError **error);
+
+/**
+ * Parse in-memory case bytes into a module: the only in-memory way to read
+ * a binary format. Text formats must be UTF-8. `name` labels the buffer for
+ * diagnostics and format detection; NULL uses `<memory>`.
+ */
+PioModule *pio_parse_bytes(const char *name,
+                           const uint8_t *data,
+                           size_t len,
+                           const char *format,
+                           PioError **error);
+
+/**
+ * The module's balanced network value as an owned network handle, provenance
+ * included. Any other value kind is refused with the kind named.
+ */
+PioBalancedNetwork *pio_module_balanced_network(const PioModule *module, PioError **error);
 
 #if defined(PIO_DIST)
 /**
- * Serialize `net` to distribution format `to` (`dss`, `pmd`, or `bmopf`).
- * Writing back to the format the handle was parsed from echoes the source text
- * byte for byte. Returns the text as an owned C string (free with
- * [`pio_string_free`]), `NULL` on error. A cross format write's fidelity
- * losses are published through `out_diagnostics_json` as one owned JSON array
- * of diagnostic records (free it with [`pio_string_free`]), NULL when there
- * are none. Pass NULL to discard them. `out_diagnostics_json` is written on
- * every return path and is NULL whenever this returns NULL, so an error return
- * leaves nothing to free.
+ * The module's multiconductor network value as an owned distribution
+ * handle, provenance included. Any other value kind is refused.
  */
-char *pio_dist_to_format(const PioDistNetwork *net,
-                         const char *to,
-                         char **out_diagnostics_json,
-                         char *errbuf,
-                         size_t errlen);
+PioMulticonductorNetwork *pio_module_multiconductor_network(const PioModule *module,
+                                                            PioError **error);
 #endif
+
+/**
+ * A module over one balanced network handle's value, sharing that handle's
+ * records: the wrap for semantic writing of a network built in memory (for
+ * example through `pio_balanced_network_from_json`).
+ */
+PioModule *pio_module_of_balanced_network(const PioBalancedNetwork *network, PioError **error);
 
 #if defined(PIO_DIST)
 /**
- * Convert distribution case `path` from optional source format `from` to format
- * `to`; see [`pio_dist_parse_file`] for the inference rules. Returns the
- * converted text as an owned C string (free with [`pio_string_free`]), `NULL` on
- * error. The records published through `out_diagnostics_json` carry both the
- * parse findings and the writer's fidelity losses (there is no handle to query
- * them), as one owned JSON array (free it with [`pio_string_free`]), NULL when
- * there are none. Pass NULL to discard them. `out_diagnostics_json` is written
- * on every return path and is NULL whenever this returns NULL, so an error
- * return leaves nothing to free.
+ * A module over one multiconductor network handle's value, sharing that
+ * handle's records: the wrap for semantic writing.
  */
-char *pio_dist_convert_file(const char *path,
-                            const char *from,
-                            const char *to,
-                            char **out_diagnostics_json,
-                            char *errbuf,
-                            size_t errlen);
+PioModule *pio_module_of_multiconductor_network(const PioMulticonductorNetwork *network,
+                                                PioError **error);
 #endif
 
-#if defined(PIO_DIST)
 /**
- * Convert in-memory distribution case `text` of format `from` to format `to`
- * (both required; `dss`, `pmd`, or `bmopf`). The parameter order is input,
- * source, target, matching [`pio_dist_convert_file`]. Returns the converted text
- * as an owned C string (free with [`pio_string_free`]), `NULL` on error. The
- * records published through `out_diagnostics_json` carry both the parse
- * findings and the writer's fidelity losses (there is no handle to query them),
- * as one owned JSON array (free it with [`pio_string_free`]), NULL when there
- * are none. Pass NULL to discard them. `out_diagnostics_json` is written on
- * every return path and is NULL whenever this returns NULL, so an error return
- * leaves nothing to free.
+ * Write the module as the named target format and return the text: the one
+ * write operation over the C surface. Writing an unchanged parsed module
+ * back to its source format returns the retained bytes exactly; any other
+ * target serializes the typed value. The writer's findings cross through
+ * `out_diagnostics` as a structured handle (NULL discards them). Free the
+ * text with `pio_string_release`.
  */
-char *pio_dist_convert_str(const char *text,
-                           const char *from,
-                           const char *to,
-                           char **out_diagnostics_json,
-                           char *errbuf,
-                           size_t errlen);
-#endif
+char *pio_module_write_str(const PioModule *module,
+                           const char *format,
+                           PioDiagnostics **out_diagnostics,
+                           PioError **error);
+
+/**
+ * Write the module as the named target format into `path`: the filesystem
+ * form of [`pio_module_write_str`], covering the directory targets (PyPSA
+ * CSV) a single text cannot state. The destination must not already exist.
+ */
+int32_t pio_module_write_file(const PioModule *module,
+                              const char *format,
+                              const char *path,
+                              PioDiagnostics **out_diagnostics,
+                              PioError **error);
+
+/**
+ * The stored version 1 document. Free with `pio_string_release`.
+ */
+char *pio_module_write_json(const PioModule *module, PioError **error);
+
+/**
+ * The module's diagnostics as a JSON array, each entry `Diagnostic`'s own
+ * serde form (code, severity, message, and, when carried, id, target,
+ * spans, related, details, and suggested_action). Free with
+ * `pio_string_release`.
+ */
+char *pio_module_diagnostics_json(const PioModule *module, PioError **error);
+
+/**
+ * The value's permanent kind identifier, valid until the handle's release.
+ */
+const char *pio_module_kind(const PioModule *module);
+
+/**
+ * Value inspection and supported operation discovery, as JSON. Free with
+ * `pio_string_release`.
+ */
+char *pio_module_inspect_json(const PioModule *module, PioError **error);
+
+/**
+ * The typed time or scenario inventory as JSON. Free with `pio_string_release`.
+ */
+char *pio_module_state_inventory_json(const PioModule *module, PioError **error);
+
+/**
+ * Export one selected time point or scenario as an independent static
+ * module. `time_position >= 0` selects by position (scenario must be NULL);
+ * `scenario` non NULL selects by ID (time_position must be negative).
+ */
+PioModule *pio_module_export_state(const PioModule *module,
+                                   int64_t time_position,
+                                   const char *scenario,
+                                   PioError **error);
+
+/**
+ * Readiness of the multiconductor value for the balanced lowering, as JSON.
+ * Free with `pio_string_release`.
+ */
+char *pio_module_lowering_readiness_json(const PioModule *module,
+                                         double base_mva,
+                                         PioError **error);
+
+/**
+ * Explicitly lower the multiconductor value to a balanced module. Records
+ * and source ownership carry over; the pass appends its findings and one
+ * Transform history entry.
+ */
+PioModule *pio_module_lower_to_balanced(const PioModule *module, double base_mva, PioError **error);
+
+/**
+ * Mint an independent handle to the same module. NULL stays NULL.
+ */
+PioModule *pio_module_retain(const PioModule *module);
+
+/**
+ * Release one module handle. NULL is a no-op.
+ */
+void pio_module_release(PioModule *module);
+
+/**
+ * The module's diagnostics as a structured list handle. This is the binding
+ * inspection path; [`pio_module_diagnostics_json`] stays as the explicit
+ * serialization helper.
+ */
+PioDiagnostics *pio_module_diagnostics(const PioModule *module, PioError **error);
+
+/**
+ * The failure's diagnostics as a structured list handle. NULL error yields
+ * an empty list.
+ */
+PioDiagnostics *pio_error_diagnostics(const PioError *error);
+
+/**
+ * The number of rows in the list. NULL yields 0.
+ */
+size_t pio_diagnostics_len(const PioDiagnostics *diagnostics);
+
+/**
+ * Mint an independent handle to the same list. NULL stays NULL.
+ */
+PioDiagnostics *pio_diagnostics_retain(const PioDiagnostics *diagnostics);
+
+/**
+ * Release one list handle. NULL is a no-op.
+ */
+void pio_diagnostics_release(PioDiagnostics *diagnostics);
+
+/**
+ * The row's stable diagnostic code. NULL handle or an out of range index yields NULL.
+ */
+const char *pio_diagnostic_code(const PioDiagnostics *diagnostics, size_t index);
+
+/**
+ * The row's severity name: `error`, `warning`, `remark`, or `note`. NULL handle or an out of range index yields NULL.
+ */
+const char *pio_diagnostic_severity(const PioDiagnostics *diagnostics,
+                                    size_t index);
+
+/**
+ * The row's rendered message. Explanatory text, not a stable identifier. NULL handle or an out of range index yields NULL.
+ */
+const char *pio_diagnostic_message(const PioDiagnostics *diagnostics,
+                                   size_t index);
+
+/**
+ * The row's identifier when one was assigned, else NULL. NULL handle or an out of range index yields NULL.
+ */
+const char *pio_diagnostic_id(const PioDiagnostics *diagnostics,
+                              size_t index);
+
+/**
+ * The row's target locator when one exists, else NULL. NULL handle or an out of range index yields NULL.
+ */
+const char *pio_diagnostic_target(const PioDiagnostics *diagnostics,
+                                  size_t index);
+
+/**
+ * The row's suggested action when one exists, else NULL. NULL handle or an out of range index yields NULL.
+ */
+const char *pio_diagnostic_suggested_action(const PioDiagnostics *diagnostics,
+                                            size_t index);
+
+/**
+ * The row's details as one JSON object, or NULL when it has none. NULL handle or an out of range index yields NULL.
+ */
+const char *pio_diagnostic_details_json(const PioDiagnostics *diagnostics,
+                                        size_t index);
+
+/**
+ * The number of source spans on one row. NULL or out of range yields 0.
+ */
+size_t pio_diagnostic_n_spans(const PioDiagnostics *diagnostics, size_t index);
+
+/**
+ * One source span: writes the byte range and returns the span's source
+ * identifier. NULL handle or an out of range index yields NULL and leaves
+ * the out parameters unwritten.
+ */
+const char *pio_diagnostic_span(const PioDiagnostics *diagnostics,
+                                size_t index,
+                                size_t span,
+                                uint64_t *byte_start,
+                                uint64_t *byte_end);
+
+/**
+ * The number of related diagnostic identifiers on one row.
+ */
+size_t pio_diagnostic_n_related(const PioDiagnostics *diagnostics, size_t index);
+
+/**
+ * One related diagnostic identifier. NULL or out of range yields NULL.
+ */
+const char *pio_diagnostic_related(const PioDiagnostics *diagnostics, size_t index, size_t related);
+
+/**
+ * Build the DC branch data of a module's balanced network value under the
+ * named branch susceptance formula (`series_susceptance`,
+ * `tap_adjusted_reactance`, or `reactance_only`). The result is an
+ * independently owned handle: releasing the module never invalidates it.
+ */
+PioDcData *pio_dc_data_build(const PioModule *module, const char *formula, PioError **error);
+
+/**
+ * Included incidence row count (`m`).
+ */
+size_t pio_dc_data_n_rows(const PioDcData *data);
+
+/**
+ * Incidence column count (`n`, the bus count).
+ */
+size_t pio_dc_data_n_buses(const PioDcData *data);
+
+/**
+ * From bus column per included row (`A[e, from] = +1`), length `n_rows`.
+ */
+const int64_t *pio_dc_data_from_indices(const PioDcData *data);
+
+/**
+ * To bus column per included row (`A[e, to] = -1`), length `n_rows`.
+ */
+const int64_t *pio_dc_data_to_indices(const PioDcData *data);
+
+/**
+ * Branch susceptance per included row, PowerModels sign, length `n_rows`.
+ */
+const double *pio_dc_data_susceptance(const PioDcData *data);
+
+/**
+ * Phase shift angle per included row, radians, length `n_rows`. `0` for an
+ * unshifted branch or a formula that excludes shifts.
+ */
+const double *pio_dc_data_shift(const PioDcData *data);
+
+/**
+ * Phase shift bus injection `p_shift = A' * (b .* shift)` (the MATPOWER
+ * `makeBdc` sign), length `n_buses`.
+ */
+const double *pio_dc_data_shift_injection(const PioDcData *data);
+
+/**
+ * Stable module element ID per included row, length `n_rows`. Both the
+ * table and the strings stay valid until the handle's release.
+ */
+const char *const *pio_dc_data_row_ids(const PioDcData *data);
+
+/**
+ * Stable bus element ID per incidence column, length `n_buses`.
+ */
+const char *const *pio_dc_data_bus_ids(const PioDcData *data);
+
+/**
+ * Count of branches the selected formula cannot represent.
+ */
+size_t pio_dc_data_n_omitted(const PioDcData *data);
+
+/**
+ * Stable element IDs of the omitted branches, length `n_omitted`.
+ */
+const char *const *pio_dc_data_omitted_ids(const PioDcData *data);
+
+/**
+ * Diagnostic reason per omitted branch, length `n_omitted`.
+ */
+const char *const *pio_dc_data_omitted_reasons(const PioDcData *data);
+
+/**
+ * The selected branch susceptance formula's stable name.
+ */
+const char *pio_dc_data_formula(const PioDcData *data);
+
+/**
+ * Fill `out` with the complete affine branch flow
+ * `p_branch = -b .* (va_from - va_to) + b .* shift`: given bus voltage
+ * angles `va` (radians, length `n_buses`), writes
+ * `-b[e] * (va[from] - va[to]) + b[e] * shift[e]` per included row into
+ * `out` (length `n_rows`), so `A' * p_branch` equals the bus injection
+ * including `shift_injection`. Returns false on a NULL argument or a length
+ * mismatch. No temporary vector is allocated.
+ */
+bool pio_dc_data_fill_branch_flow(const PioDcData *data,
+                                  const double *va,
+                                  size_t va_len,
+                                  double *out,
+                                  size_t out_len);
+
+/**
+ * Mint an independent handle to the same DC data. NULL stays NULL.
+ */
+PioDcData *pio_dc_data_retain(const PioDcData *data);
+
+/**
+ * Release one DC data handle. NULL is a no-op.
+ */
+void pio_dc_data_release(PioDcData *data);
 
 #ifdef __cplusplus
 }  // extern "C"

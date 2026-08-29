@@ -10,7 +10,7 @@ cd "$(dirname "$0")/.."
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 
-grep -oE 'extern "C" fn pio_[a-z0-9_]+' powerio-capi/src/lib.rs \
+grep -ohE 'extern "C" fn pio_[a-z0-9_]+' powerio-capi/src/lib.rs powerio-capi/src/v6.rs \
     | grep -oE 'pio_[a-z0-9_]+' \
     | sort -u >"$tmp/rs_syms"
 

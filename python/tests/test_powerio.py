@@ -18,13 +18,6 @@ import scipy.sparse as sp
 import powerio
 
 DATA = Path(__file__).resolve().parents[2] / "tests" / "data"
-SCOPF_SMALL = (
-    Path(__file__).resolve().parents[2]
-    / "powerio-prob"
-    / "tests"
-    / "data"
-    / "goc3_small.json"
-)
 SMALL = ["case9", "case30"]
 
 # A 3-bus case authored inline so tests can reach paths the vendored fixtures
@@ -96,41 +89,6 @@ def test_parse_metadata(case9):
     assert case9.base_mva == 100.0
     assert not case9.is_radial  # case9 is meshed
     assert case9.n_connected_components == 1
-
-
-def test_parse_scopf_uses_public_versioned_json_document():
-    instance = powerio.parse_scopf(SCOPF_SMALL.read_text())
-    assert instance["schema"] == "powerio.scopf"
-    assert instance["powerio_version"] == powerio.__version__
-    assert instance["index_base"] == 0
-    body = instance["instance"]
-    static = body["static"]
-    assert body["lengths"]["I"] == 2
-    assert body["dt"] == [1.0, 1.0]
-    assert static["acl_branch"][0]["j_ln"] == 0
-    assert [row["u_0"] for row in static["acl_branch"]] == [1, 0]
-    assert static["acx_branch"][0]["u_0"] == 1
-    assert (static["prod"][0]["j_dev"], static["prod"][0]["j_sdd"]) == (0, 0)
-    assert (static["cons"][0]["j_dev"], static["cons"][0]["j_sdd"]) == (0, 1)
-    assert static["prod"][0]["u_0"] == 1
-    assert static["active_reserve_set_pr"][0]["j_dev"] == 0
-    assert static["active_reserve_set_pr"][0]["j_sdd"] == 0
-
-    one_based = powerio.parse_scopf(SCOPF_SMALL.read_text(), index_base=1)
-    assert one_based["index_base"] == 1
-    assert one_based["instance"]["static"]["acl_branch"][0]["j_ln"] == 1
-    assert one_based["instance"]["static"]["bus"][0]["i"] == static["bus"][0]["i"]
-    assert one_based["instance"]["static"]["acl_branch"][0]["u_0"] == 1
-    assert "parse_scopf" in powerio.__all__
-
-
-def test_parse_scopf_rejects_bad_input_and_unknown_format():
-    with pytest.raises(powerio.PowerIOParseError):
-        powerio.parse_scopf("not json")
-    with pytest.raises(ValueError, match="unsupported SCOPF source format"):
-        powerio.parse_scopf(SCOPF_SMALL.read_text(), from_="matpower")
-    with pytest.raises(ValueError, match="index_base must be 0 or 1"):
-        powerio.parse_scopf(SCOPF_SMALL.read_text(), index_base=2)
 
 
 def test_public_type_is_balanced_network(case9):
@@ -1015,18 +973,80 @@ def test_from_ppc_names_the_table_and_row_for_malformed_input(case9):
         powerio.from_ppc(lettered)
 
 
-def test_convention_aliases(case9):
-    # Documented spellings all parse; separator/case-insensitive.
-    for conv in ["reactance-only", "REACTANCE_ONLY", "series", "matpower", "mp"]:
+# Every valid convention spelling, grouped by the formula it selects: the
+# 1.0 stable name (what a caller matching the diagnostic and CLI vocabulary
+# would use) first, then every 0.9-era alias PowerIO still accepts.
+CONVENTION_ALIASES = {
+    "series_susceptance": ["series", "series-impedance", "SERIES_SUSCEPTANCE"],
+    "tap_adjusted_reactance": ["matpower", "mp", "TAP_ADJUSTED_REACTANCE"],
+    "reactance_only": ["reactance-only", "REACTANCE_ONLY"],
+}
+
+
+@pytest.mark.parametrize("canonical", CONVENTION_ALIASES)
+def test_convention_aliases(case9, canonical):
+    # Every spelling in the group resolves on every convention-taking
+    # method, and produces the identical matrix its 1.0 name does.
+    names = [canonical, *CONVENTION_ALIASES[canonical]]
+    base = case9.ptdf(canonical).toarray()
+    for conv in names:
         assert sp.issparse(case9.ptdf(conv))
+        assert sp.issparse(case9.lodf(conv))
+        assert sp.issparse(case9.weighted_laplacian(conv))
+        assert sp.issparse(case9.incidence(conv).A)
+        assert np.allclose(case9.ptdf(conv).toarray(), base)
+
+
+def test_convention_paper_pure_is_refused(case9):
     # 0.8's default spelling. The nearest-looking survivor, "series", is a
     # different formula, so the error has to name the successor or a caller
     # who guesses gets numbers instead of a failure.
     for old in ["paper-pure", "paper", "PAPER_PURE"]:
         with pytest.raises(ValueError, match="reactance-only"):
             case9.ptdf(old)
+
+
+def test_scheme_aliases(case9):
     for scheme in ["bx", "XB"]:
         assert sp.issparse(case9.bprime(scheme))
+
+
+# Every matrix builder that threads a skip_zero_impedance keyword through to
+# BuildOptions. Only the acceptance half is pinned here: on this vintage
+# BuildOptions::default() still silently skips a zero impedance branch, so a
+# case with none (case9) is unaffected by either value, and asserting the
+# refusal-by-default behavior has to wait for the lower branch's default flip
+# to cascade in.
+SKIP_ZERO_IMPEDANCE_METHODS = [
+    "bprime",
+    "bdoubleprime",
+    "lacpf",
+    "ybus_parts",
+    "ybus",
+    "weighted_laplacian",
+    "incidence",
+]
+
+
+@pytest.mark.parametrize("method", SKIP_ZERO_IMPEDANCE_METHODS)
+def test_skip_zero_impedance_kwarg_is_accepted(case9, method):
+    def matrices(result):
+        if method == "incidence":
+            return [result.A]
+        if method == "ybus_parts":
+            return [result.g, result.b]
+        if method == "ybus":
+            return [result]
+        return [result]
+
+    call = getattr(case9, method)
+    default = matrices(call())
+    explicit_false = matrices(call(skip_zero_impedance=False))
+    explicit_true = matrices(call(skip_zero_impedance=True))
+    for a, b in zip(default, explicit_false):
+        assert np.allclose(a.toarray(), b.toarray())
+    for a, b in zip(default, explicit_true):
+        assert np.allclose(a.toarray(), b.toarray())
 
 
 def test_sensitivity_solver_kwarg(case9):

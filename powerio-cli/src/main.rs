@@ -98,9 +98,10 @@ enum Command {
         #[arg(short, long)]
         output: PathBuf,
         /// DC susceptance convention. 0.8 defaulted to `paper-pure`, now
-        /// spelled `reactance-only`; the default is `series`, a different
-        /// formula, so an unqualified run changes numbers against 0.8.
-        #[arg(long, value_enum, default_value = "series")]
+        /// spelled `reactance-only`; the default is `series-susceptance`, a
+        /// different formula, so an unqualified run changes numbers against
+        /// 0.8. The 0.9 spellings stay as aliases.
+        #[arg(long, value_enum, default_value = "series-susceptance")]
         convention: DcConvArg,
         /// Unit system for power/cost quantities.
         #[arg(long, value_enum, default_value = "per-unit")]
@@ -123,9 +124,10 @@ enum Command {
         #[arg(short, long)]
         output: PathBuf,
         /// DC susceptance convention. 0.8 defaulted to `paper-pure`, now
-        /// spelled `reactance-only`; the default is `series`, a different
-        /// formula, so an unqualified run changes numbers against 0.8.
-        #[arg(long, value_enum, default_value = "series")]
+        /// spelled `reactance-only`; the default is `series-susceptance`, a
+        /// different formula, so an unqualified run changes numbers against
+        /// 0.8. The 0.9 spellings stay as aliases.
+        #[arg(long, value_enum, default_value = "series-susceptance")]
         convention: DcConvArg,
         /// Sensitivity solve path.
         #[arg(long, value_enum, default_value = "auto")]
@@ -589,11 +591,16 @@ impl From<SchemeArg> for Scheme {
 enum DcConvArg {
     /// The whole series impedance: `imag(inv(r + jx))`, with phase shift
     /// injections.
-    #[value(name = "series", alias = "series-impedance")]
+    #[value(
+        name = "series-susceptance",
+        alias = "series",
+        alias = "series-impedance"
+    )]
     SeriesSusceptance,
     /// `-1/(x tau)`, with phase shift injections, matching MATPOWER
     /// `makeBdc`.
-    Matpower,
+    #[value(name = "tap-adjusted-reactance", alias = "matpower")]
+    TapAdjustedReactance,
     /// `-1/x`, ignoring resistance, taps, and shifts: the textbook DC
     /// linearization a published result reproduces.
     #[value(name = "reactance-only")]
@@ -604,7 +611,7 @@ impl From<DcConvArg> for DcConvention {
     fn from(value: DcConvArg) -> Self {
         match value {
             DcConvArg::SeriesSusceptance => Self::SeriesSusceptance,
-            DcConvArg::Matpower => Self::TapAdjustedReactance,
+            DcConvArg::TapAdjustedReactance => Self::TapAdjustedReactance,
             DcConvArg::ReactanceOnly => Self::ReactanceOnly,
         }
     }
@@ -678,10 +685,10 @@ impl From<TopologyArg> for Topology {
 
 // A flat dispatch: one arm per subcommand, each delegating immediately.
 #[expect(clippy::too_many_lines)]
-fn main() -> anyhow::Result<()> {
+fn main() -> std::process::ExitCode {
     install_tracing();
     let cli = Cli::parse();
-    match cli.command.unwrap_or_else(default_command) {
+    let result: anyhow::Result<()> = match cli.command.unwrap_or_else(default_command) {
         Command::Tui { data_dir, out_dir } => tui::run(tui::TuiOptions { data_dir, out_dir }),
         Command::Batch {
             input,
@@ -780,6 +787,37 @@ fn main() -> anyhow::Result<()> {
             ),
         ),
         Command::Geo { command } => run_geo(command),
+    };
+    match result {
+        Ok(()) => std::process::ExitCode::SUCCESS,
+        Err(error) => {
+            print_error_chain(&error);
+            std::process::ExitCode::FAILURE
+        }
+    }
+}
+
+/// Render an error to stderr as `Error: {top}`, then each distinct cause
+/// beneath it as `Caused by: {cause}`. A `with_context` frame built over a
+/// `powerio_core::Error` retains that error's own cause for
+/// `std::error::Error::source`, and that cause's `Display` repeats the same
+/// text the wrapping `powerio_core::Error` already renders with its code
+/// prefixed, so the default `{:?}` chain print shows the one finding twice.
+/// A cause whose text is already a suffix of the frame above it is dropped
+/// instead of reprinted.
+fn print_error_chain(error: &anyhow::Error) {
+    let mut previous: Option<String> = None;
+    let mut prefix = "Error";
+    for cause in error.chain() {
+        let text = cause.to_string();
+        let repeats_the_frame_above = previous
+            .as_deref()
+            .is_some_and(|above| above.ends_with(&text));
+        if !repeats_the_frame_above {
+            eprintln!("{prefix}: {text}");
+            prefix = "Caused by";
+        }
+        previous = Some(text);
     }
 }
 
@@ -1447,7 +1485,7 @@ fn run_convert(
             let read = powerio::gridfm::read_gridfm_dataset(input, scenario)
                 .with_context(|| format!("reading gridfm dataset {}", input.display()))?;
             for w in &read.warnings {
-                eprintln!("fidelity: {w}");
+                eprintln!("{w}");
             }
             powerio_matrix::write_as_with_options(
                 &powerio_core::PioModule::new(read.network),
@@ -1457,11 +1495,25 @@ fn run_convert(
             .with_context(|| format!("serializing to {target}"))?
         } else if let Some(case) = &classified {
             // The classified text feeds the one-call conversion, so a same
-            // format target still echoes the source bytes exactly.
+            // format target still echoes the source bytes exactly. Parse it
+            // once more first only to give a failure there its own context;
+            // `convert_str_with_options` below reparses either way, and a
+            // parse failure it reports would otherwise land under
+            // "serializing to {target}".
+            compat::parse_str_with_name(
+                &case.text,
+                case.format.name(),
+                input.file_stem().and_then(|s| s.to_str()),
+            )
+            .with_context(|| format!("parsing {}", input.display()))?;
             powerio::convert_str_with_options(&case.text, target, case.format.name(), &options)
                 .with_context(|| format!("serializing to {target}"))?
         } else {
             reject_nontransmission_from(from)?;
+            // Same reasoning as the classified branch above: a cheap extra
+            // parse so a parse failure is not blamed on serialization.
+            compat::parse_module(input, from.map(FormatArg::name))
+                .with_context(|| format!("parsing {}", input.display()))?;
             powerio::convert_file_with_options(input, target, from.map(FormatArg::name), &options)
                 .with_context(|| format!("serializing to {target}"))?
         };
@@ -1480,7 +1532,7 @@ fn run_convert(
                 .with_context(|| format!("reading {}", input.display()))?
         };
         for w in &net.warnings {
-            eprintln!("parse: {w}");
+            eprintln!("{w}");
         }
         let target = to
             .distribution()
@@ -1500,7 +1552,7 @@ fn run_convert(
         )
     };
     for w in &warnings {
-        eprintln!("fidelity: {w}");
+        eprintln!("{w}");
     }
     write_conversion_output(&text, &sidecars, output)?;
     fail_on_parse_errors(&parse_errors)
@@ -1641,13 +1693,13 @@ fn run_geo_extract(
     let layer = match parse_family_case(input, from)? {
         FamilyCase::Distribution(net) => {
             for w in &net.warnings {
-                eprintln!("parse: {w}");
+                eprintln!("{w}");
             }
             powerio::dist_geo::dist_geo_layer(&net.network)
         }
         FamilyCase::Transmission(parsed) => {
             for w in &parsed.rendered_diagnostics() {
-                eprintln!("fidelity: {w}");
+                eprintln!("{w}");
             }
             parsed.network.geo_layer()
         }
@@ -1677,12 +1729,12 @@ fn run_geo_apply(
     )
     .with_context(|| format!("parsing layer {}", layer_path.display()))?;
     for w in &parsed.warnings {
-        eprintln!("layer: {w}");
+        eprintln!("{w}");
     }
     let (text, sidecars, warnings) = match parse_family_case(input, from)? {
         FamilyCase::Distribution(net) => {
             for w in &net.warnings {
-                eprintln!("parse: {w}");
+                eprintln!("{w}");
             }
             let mut network = net.network;
             report_geo_apply(&powerio::dist_geo::apply_dist_geo_layer(
@@ -1713,7 +1765,7 @@ fn run_geo_apply(
         }
         FamilyCase::Transmission(case) => {
             for w in &case.rendered_diagnostics() {
-                eprintln!("fidelity: {w}");
+                eprintln!("{w}");
             }
             let mut net = case.network;
             report_geo_apply(&net.apply_geo_layer(&parsed.layer));
@@ -1743,7 +1795,7 @@ fn run_geo_apply(
         }
     };
     for w in &warnings {
-        eprintln!("fidelity: {w}");
+        eprintln!("{w}");
     }
     write_conversion_output(&text, &sidecars, output)
 }
@@ -1784,7 +1836,7 @@ fn run_geo_convert(
     )
     .with_context(|| format!("parsing {}", input.display()))?;
     for w in &parsed.warnings {
-        eprintln!("layer: {w}");
+        eprintln!("{w}");
     }
     write_conversion_output(&parsed.layer.to_geojson(), &[], output)
 }
@@ -1809,7 +1861,7 @@ fn convert_to_pypsa_folder(
         let read = powerio::gridfm::read_gridfm_dataset(input, scenario)
             .with_context(|| format!("reading gridfm dataset {}", input.display()))?;
         for w in &read.warnings {
-            eprintln!("fidelity: {w}");
+            eprintln!("{w}");
         }
         read.network
     } else {
@@ -1821,7 +1873,7 @@ fn convert_to_pypsa_folder(
     let diagnostics = powerio_matrix::write_dir_with_options(&net, "pypsa-csv", out_dir, &options)
         .with_context(|| format!("writing PyPSA CSV folder {}", out_dir.display()))?;
     for w in powerio_matrix::diagnostics::render_diagnostics(&diagnostics) {
-        eprintln!("fidelity: {w}");
+        eprintln!("{w}");
     }
     eprintln!("wrote {}", out_dir.display());
     Ok(())
@@ -1935,7 +1987,7 @@ fn read_network(
     let parsed = compat::parse_file(input, from.map(FormatArg::name))
         .with_context(|| format!("reading {}", input.display()))?;
     for w in &parsed.rendered_diagnostics() {
-        eprintln!("fidelity: {w}");
+        eprintln!("{w}");
     }
     Ok(parsed.network)
 }
@@ -1944,9 +1996,9 @@ fn read_network(
 mod tests {
     use super::cases::looks_like_distribution_input;
     use super::{
-        Cli, Command, FamilyCase, FormatArg, GenCostCliOptions, distribution_summary_json,
-        infer_input_family, package_text, parse_family_case, run_convert, run_package,
-        transmission_summary_json,
+        Cli, Command, DcConvArg, FamilyCase, FormatArg, GenCostCliOptions,
+        distribution_summary_json, infer_input_family, package_text, parse_family_case,
+        run_convert, run_package, transmission_summary_json,
     };
     use clap::Parser;
     use std::path::Path;
@@ -2359,6 +2411,26 @@ mpc.branch = [
             assert!(
                 super::is_relative_component_path(good),
                 "{good:?} was rejected as a sidecar path"
+            );
+        }
+    }
+
+    /// The primary --convention tokens are the 1.0 formula names; the 0.9
+    /// spellings survive only as aliases.
+    #[test]
+    fn convention_tokens_are_the_formula_names() {
+        use clap::ValueEnum;
+        use powerio_matrix::matrix::DcConvention;
+        for arg in DcConvArg::value_variants() {
+            let primary = arg.to_possible_value().unwrap().get_name().to_string();
+            let parsed = DcConvention::from_formula_name(&primary.replace('-', "_"))
+                .unwrap_or_else(|| panic!("{primary} is not a formula name"));
+            assert_eq!(parsed, DcConvention::from(*arg));
+        }
+        for alias in ["series", "series-impedance", "matpower"] {
+            assert!(
+                DcConvArg::from_str(alias, false).is_ok(),
+                "{alias} must stay accepted as an alias"
             );
         }
     }

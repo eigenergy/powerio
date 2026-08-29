@@ -59,6 +59,10 @@ impl Default for NormalizeOptions {
 
 /// Output of [`BalancedNetwork::to_normalized_with_options`].
 #[derive(Clone, Debug)]
+// Frozen 0.9 reader plumbing: the legacy09 upgrade in the powerio crate is
+// the one remaining consumer, so the type stays reachable but leaves the
+// documented surface. It goes when legacy09 retires.
+#[doc(hidden)]
 pub struct NormalizedNetwork {
     pub network: BalancedNetwork,
     /// The pass's findings as structured records.
@@ -686,6 +690,7 @@ impl BalancedNetwork {
     /// # Ok(())
     /// # }
     /// ```
+    #[doc(hidden)]
     pub fn to_normalized_with_source_rows(
         &self,
         options: &NormalizeOptions,

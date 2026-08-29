@@ -190,7 +190,7 @@ pub fn read_gridfm_scenarios(dir: impl AsRef<Path>) -> Result<Vec<GridfmRead>> {
 /// The distinct scenario ids in a gridfm dataset, ascending — the keys
 /// [`read_gridfm_scenarios`] rebuilds a [`BalancedNetwork`] for. Reads only `bus_data`'s
 /// scenario column, so it enumerates a dataset's scenarios without rebuilding
-/// every network; the C ABI's `pio_scenario_ids` is a thin wrapper over it.
+/// every network.
 ///
 /// # Errors
 /// Propagates the directory resolution and `bus_data.parquet` read errors.
@@ -719,8 +719,8 @@ fn f64_col(batches: &[RecordBatch], name: &str) -> Result<Vec<f64>> {
 }
 
 /// Read one scenario from a dataset directory in the named `from` format.
-/// This function dispatches dataset format names; the C ABI's `pio_read_dir`
-/// wraps it. `gridfm` is the currently supported dataset format; `scenario`
+/// This function dispatches dataset format names. `gridfm` is the currently
+/// supported dataset format; `scenario`
 /// selects within it. PyPSA CSV directories are case inputs rather than
 /// datasets and parse through the ordinary parse.
 ///
@@ -737,8 +737,7 @@ pub fn read_dataset_dir(
 }
 
 /// Return the distinct scenario IDs in ascending order for dataset directory
-/// `dir` in the named `from` format. The C ABI exposes the same query through
-/// `pio_scenario_ids`.
+/// `dir` in the named `from` format.
 ///
 /// # Errors
 /// As [`read_dataset_dir`].

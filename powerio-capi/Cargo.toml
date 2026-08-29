@@ -15,25 +15,28 @@ name = "powerio_capi"
 crate-type = ["cdylib", "staticlib", "rlib"]
 
 [features]
-# Distribution and package support are first class: every default powerio build
-# ships the pio_dist_* and pio_package_* surfaces. Opt out with
-# --no-default-features for a transmission-only library.
+# Distribution support is first class: every default powerio build parses
+# multiconductor sources. Opt out with --no-default-features for a
+# transmission-only library.
 default = ["dist"]
-# Zero-copy raw network export over the Arrow C Data Interface (`pio_to_arrow`).
-# Off by default so the base ABI pulls in nothing but `powerio`.
+# Zero-copy raw network export over the Arrow C Data Interface
+# (`pio_balanced_network_to_arrow`). Off by default so the base ABI pulls in
+# nothing but `powerio`.
 arrow = ["dep:arrow"]
-# Sparse balanced matrix tables over `pio_to_arrow`. Enable with `arrow` for
-# the export symbol itself; `pio_matrix_available()` reports whether both are on.
+# Sparse balanced matrix tables over the Arrow export. Enable with `arrow`
+# for the export symbol itself; `pio_has_feature("matrix")` reports whether
+# both are on.
 matrix = ["dep:powerio-matrix"]
-# Multiconductor distribution formats (OpenDSS, PMD ENGINEERING JSON, BMOPF
-# JSON): the pio_dist_* entry points. On by default (see `default` above).
+# Multiconductor distribution formats (OpenDSS, PMD engineering JSON, BMOPF
+# JSON) behind the one parse family. On by default (see `default` above).
 dist = ["dep:powerio-dist"]
-# gridfm-datakit Parquet reader (`pio_read_dir` / `pio_scenario_ids`).
-# Off by default so the base ABI pulls in nothing but `powerio`; enabling it pulls
-# in powerio-matrix (arrow + parquet) for the reader.
+# gridfm-datakit Parquet reader behind `pio_parse_file`. Off by default so
+# the base ABI pulls in nothing but `powerio`; enabling it pulls in
+# powerio-matrix (arrow + parquet) for the reader.
 gridfm = ["dep:powerio-matrix", "powerio-matrix/gridfm", "powerio/gridfm"]
-# `.pio.json` document API (`pio_package_*`). On by default.
-# Numerical problem instances (`pio_scopf_*`).
+# Problem instance and solution parse routing behind the module surface;
+# gates no symbol (`pio_dc_data_*` always links). Probe with
+# `pio_has_feature("prob")`.
 prob = ["dep:powerio-prob"]
 
 [dependencies]

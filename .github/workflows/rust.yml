@@ -229,6 +229,10 @@ jobs:
     # of sync with include/powerio.h.
     - name: Header symbol parity
       run: bash scripts/capi-header-parity.sh
+    # Doc comments render verbatim into powerio.h; check they agree with the
+    # signatures, table ids, and ownership verbs they describe.
+    - name: Doc comment integrity
+      run: python3 scripts/capi-doc-integrity.py
     # A declared entry point may leave the header only on a head that raises
     # PIO_ABI_VERSION. This job has no PowerIO.jl checkout; the companion
     # clause runs in julia-binding.yml, which has both trees.
@@ -250,6 +254,28 @@ jobs:
         cc -I powerio-capi/include powerio-capi/examples/smoke.c \
            -L target/release -lpowerio_capi -o pio_smoke
         LD_LIBRARY_PATH=target/release ./pio_smoke tests/data/case9.m
+    # The same smoke under address and undefined behavior sanitizers: the ABI
+    # v6 ownership paths (retain/release orders, spans after parent release)
+    # must be clean, not merely not crash.
+    - name: C smoke test under ASan and UBSan
+      run: |
+        clang -fsanitize=address,undefined -fno-sanitize-recover=all \
+           -I powerio-capi/include powerio-capi/examples/smoke.c \
+           -L target/release -lpowerio_capi -o pio_smoke_san
+        LD_LIBRARY_PATH=target/release ./pio_smoke_san tests/data/case9.m
+    # A small Go client drives the same ownership paths through cgo, so the
+    # handle rules hold from a third runtime.
+    - uses: actions/setup-go@v5
+      with:
+        go-version: stable
+    - name: Go client exercises the ABI ownership paths
+      run: |
+        cd powerio-capi/examples/go-client
+        CGO_CFLAGS="-I $GITHUB_WORKSPACE/powerio-capi/include" \
+        CGO_LDFLAGS="-L $GITHUB_WORKSPACE/target/release -lpowerio_capi" \
+        go run . "$GITHUB_WORKSPACE/tests/data/case9.m"
+      env:
+        LD_LIBRARY_PATH: ${{ github.workspace }}/target/release
     - name: Compile and run the C++ header sanity check
       run: |
         c++ -std=c++17 -I powerio-capi/include powerio-capi/examples/header_cpp.cpp \
@@ -259,6 +285,20 @@ jobs:
       run: |
         cargo test -p powerio-capi --no-default-features --verbose
         bash scripts/ci-clippy.sh capi-no-default
+
+  capi-miri:
+    name: Miri (C ABI handle core)
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v6
+    - uses: dtolnay/rust-toolchain@nightly
+      with:
+        components: miri
+    - uses: Swatinem/rust-cache@v2
+    # The unsafe ownership helpers behind every ABI v6 handle, under Miri.
+    # FFI entry points cannot run under Miri; the pure handle core can.
+    - name: Miri over the handle lifecycle
+      run: cargo +nightly miri test -p powerio-capi handle_lifecycle_is_sound
 
   c-abi-arrow:
     name: C ABI (arrow feature)
