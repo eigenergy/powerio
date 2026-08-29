@@ -10,6 +10,7 @@
 *.so
 *.pyd
 /dist/
+/dist-*/
 /build/
 wheelhouse/
 *.egg-info/
