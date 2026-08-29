@@ -70,6 +70,10 @@ pub struct DcOperators {
     /// Net per unit injection at each bus from the instance specifications.
     net_injection: Vec<f64>,
     reference_rows: Vec<usize>,
+    /// The stated reference angle, radians, dense over every bus row.
+    /// Meaningful only at a row listed in `reference_rows`; every other row
+    /// holds zero and is never read.
+    reference_va_radians: Vec<f64>,
     approximation: DcConvention,
 }
 
@@ -187,6 +191,7 @@ impl DcOperators {
             endpoints,
             net_injection: Vec::new(),
             reference_rows: Vec::new(),
+            reference_va_radians: Vec::new(),
             approximation,
         };
         operators.refresh_injections(instance, base)?;
@@ -216,18 +221,23 @@ impl DcOperators {
             ));
         }
         let mut net_injection = vec![0.0; self.bus_ids.len()];
+        let mut reference_va_radians = vec![0.0; self.bus_ids.len()];
         let mut reference_rows = Vec::new();
         for (row, specification) in instance.specifications().iter().enumerate() {
             match *specification {
                 DcBusSpecification::NetActivePower { p_mw } => {
                     net_injection[row] = p_mw / base;
                 }
-                DcBusSpecification::Reference { .. } => reference_rows.push(row),
+                DcBusSpecification::Reference { va_degrees } => {
+                    reference_rows.push(row);
+                    reference_va_radians[row] = va_degrees.to_radians();
+                }
                 _ => {}
             }
         }
         self.net_injection = net_injection;
         self.reference_rows = reference_rows;
+        self.reference_va_radians = reference_va_radians;
         Ok(())
     }
 
@@ -312,10 +322,12 @@ impl DcOperators {
     /// The reference constrained linear system over the internal positive
     /// factor weights: the reference grounded positive semidefinite matrix
     /// `L = -B` with reference rows and columns removed, and the right hand
-    /// side `p - p_shift` at the retained buses (from `p = -B va + p_shift`),
-    /// so `L_grounded va = rhs` solves the stated problem with the reference
-    /// angles held. Sign conversion from the public susceptances is confined
-    /// to this fill.
+    /// side at the retained buses is `p - p_shift` (from `p = -B va +
+    /// p_shift`) plus the coupling carried in from every eliminated
+    /// reference bus's stated angle, radians, so `L_grounded va = rhs`
+    /// solves the stated problem with each reference bus fixed at the angle
+    /// it states rather than at zero. Sign conversion from the public
+    /// susceptances is confined to this fill.
     ///
     /// # Errors
     /// An instance with no reference row.
@@ -341,6 +353,11 @@ impl DcOperators {
         }
 
         let mut matrix = crate::matrix::triplet::CooBuilder::new(retained_rows.len());
+        // A branch to an eliminated reference bus still carries an
+        // off-diagonal Laplacian entry; since its column is gone, that
+        // entry's contribution moves to the retained row's right hand side
+        // instead, carrying the reference bus's stated angle in.
+        let mut reference_coupling = vec![0.0; retained_rows.len()];
         for (column, &(from, to)) in self.endpoint_table().iter().enumerate() {
             // The positive factor weight is the negated public susceptance.
             let weight = -self.branch_susceptance[column];
@@ -351,15 +368,23 @@ impl DcOperators {
             if rt != usize::MAX {
                 matrix.add(rt, rt, weight);
             }
-            if rf != usize::MAX && rt != usize::MAX {
-                matrix.add(rf, rt, -weight);
-                matrix.add(rt, rf, -weight);
+            match (rf != usize::MAX, rt != usize::MAX) {
+                (true, true) => {
+                    matrix.add(rf, rt, -weight);
+                    matrix.add(rt, rf, -weight);
+                }
+                (true, false) => reference_coupling[rf] += weight * self.reference_va_radians[to],
+                (false, true) => {
+                    reference_coupling[rt] += weight * self.reference_va_radians[from];
+                }
+                (false, false) => {}
             }
         }
         let shift_injection = self.phase_shift_injection();
         let rhs = retained_rows
             .iter()
-            .map(|&row| self.net_injection[row] - shift_injection[row])
+            .zip(reference_coupling.iter())
+            .map(|(&row, &coupling)| self.net_injection[row] - shift_injection[row] + coupling)
             .collect();
         Ok(ReferenceConstrainedSystem {
             matrix: matrix.finish_csr(),
