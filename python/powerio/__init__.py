@@ -84,6 +84,7 @@ __all__ = [
     "convert_file",
     "convert_str",
     "dist",
+    "features",
     "from_json",
     "from_ppc",
     "parse",
@@ -265,6 +266,11 @@ class BalancedNetwork:
         """Serialize to the JSON transport."""
         return self._inner.to_json()
 
+    def diagnostics(self) -> Any:
+        """The same findings as ``read_warnings``, structured: a list of
+        dicts carrying ``code``, ``severity``, ``message``, and ``target``."""
+        return _json.loads(self._inner.diagnostics_json())
+
     def geo_layer(self) -> dict[str, Any]:
         """This case's coordinates as a canonical GeoJSON FeatureCollection.
 
@@ -339,9 +345,15 @@ class BalancedNetwork:
 
     # --- matrix builders (scipy.sparse) ---------------------------------
 
-    def bprime(self, scheme: str = "bx"):
-        """MATPOWER FDPF Bp matrix. ``scheme`` is ``"bx"`` or ``"xb"``."""
-        return _to_csr(self._inner.bprime(scheme))
+    def bprime(self, scheme: str = "bx", *, skip_zero_impedance: bool = False):
+        """MATPOWER FDPF Bp matrix. ``scheme`` is ``"bx"`` or ``"xb"``.
+
+        ``skip_zero_impedance=False`` refuses a zero impedance branch
+        (``r`` and ``x`` both zero); pass ``True`` to drop it instead.
+        """
+        return _to_csr(
+            self._inner.bprime(scheme, skip_zero_impedance=skip_zero_impedance)
+        )
 
     def dc_data(self, formula: str = "series_susceptance"):
         """DC branch data under one named susceptance formula.
@@ -354,37 +366,72 @@ class BalancedNetwork:
         """
         return self._inner.dc_data(formula)
 
-    def bdoubleprime(self, scheme: str = "bx"):
-        """MATPOWER FDPF Bpp matrix. ``scheme`` is ``"bx"`` or ``"xb"``."""
-        return _to_csr(self._inner.bdoubleprime(scheme))
-
-    def lacpf(self, *, include_taps: bool = True, include_shifts: bool = True):
-        """LACPF 2n×2n block ``[[G, -B], [-B, -G]]``."""
+    def bdoubleprime(self, scheme: str = "bx", *, skip_zero_impedance: bool = False):
+        """MATPOWER FDPF Bpp matrix. ``scheme`` is ``"bx"`` or ``"xb"``.
+        ``skip_zero_impedance`` as in :meth:`bprime`.
+        """
         return _to_csr(
-            self._inner.lacpf(include_taps=include_taps, include_shifts=include_shifts)
+            self._inner.bdoubleprime(scheme, skip_zero_impedance=skip_zero_impedance)
+        )
+
+    def lacpf(
+        self,
+        *,
+        include_taps: bool = True,
+        include_shifts: bool = True,
+        skip_zero_impedance: bool = False,
+    ):
+        """LACPF 2n×2n block ``[[G, -B], [-B, -G]]``. ``skip_zero_impedance``
+        as in :meth:`bprime`."""
+        return _to_csr(
+            self._inner.lacpf(
+                include_taps=include_taps,
+                include_shifts=include_shifts,
+                skip_zero_impedance=skip_zero_impedance,
+            )
         )
 
     def adjacency(self):
         """0/1 bus adjacency matrix."""
         return _to_csr(self._inner.adjacency())
 
-    def ybus_parts(self, *, include_taps: bool = True, include_shifts: bool = True):
+    def ybus_parts(
+        self,
+        *,
+        include_taps: bool = True,
+        include_shifts: bool = True,
+        skip_zero_impedance: bool = False,
+    ):
         """:class:`YbusParts` ``(g, b)`` = ``(Re(Y_bus), Im(Y_bus))``, two real
-        csr_matrix."""
+        csr_matrix. ``skip_zero_impedance`` as in :meth:`bprime`."""
         g, b = self._inner.ybus_parts(
-            include_taps=include_taps, include_shifts=include_shifts
+            include_taps=include_taps,
+            include_shifts=include_shifts,
+            skip_zero_impedance=skip_zero_impedance,
         )
         return YbusParts(g=_to_csr(g), b=_to_csr(b))
 
-    def ybus(self, *, include_taps: bool = True, include_shifts: bool = True):
-        """``Y_bus = G + jB`` as a complex csr_matrix."""
+    def ybus(
+        self,
+        *,
+        include_taps: bool = True,
+        include_shifts: bool = True,
+        skip_zero_impedance: bool = False,
+    ):
+        """``Y_bus = G + jB`` as a complex csr_matrix. ``skip_zero_impedance``
+        as in :meth:`bprime`."""
         g, b = self.ybus_parts(
-            include_taps=include_taps, include_shifts=include_shifts
+            include_taps=include_taps,
+            include_shifts=include_shifts,
+            skip_zero_impedance=skip_zero_impedance,
         )
         return (g + 1j * b).tocsr()
 
     def ptdf(self, convention: str = "series", solver: str = "auto"):
-        """DC PTDF (m×n). ``convention`` is ``"series"`` or ``"matpower"``.
+        """DC PTDF (m×n). ``convention`` is ``"series_susceptance"``,
+        ``"tap_adjusted_reactance"``, or ``"reactance_only"`` (aliases
+        ``"series"``, ``"matpower"``, ``"series-impedance"``, ``"mp"`` also
+        accepted; case- and separator-insensitive).
 
         ``solver`` is ``"auto"``, ``"dense"``, or ``"sparse"``. ``"auto"``
         uses the dense factorization on small cases and the sparse Cholesky
@@ -393,17 +440,30 @@ class BalancedNetwork:
         return _to_csr(self._inner.ptdf(convention, solver))
 
     def lodf(self, convention: str = "series", solver: str = "auto"):
-        """DC LODF (m×m). ``solver`` as in :meth:`ptdf`."""
+        """DC LODF (m×m). ``convention`` and ``solver`` as in :meth:`ptdf`."""
         return _to_csr(self._inner.lodf(convention, solver))
 
-    def weighted_laplacian(self, convention: str = "series"):
-        """Weighted Laplacian ``L = A diag(b) Aᵀ``."""
-        return _to_csr(self._inner.weighted_laplacian(convention))
+    def weighted_laplacian(
+        self, convention: str = "series", *, skip_zero_impedance: bool = False
+    ):
+        """Weighted Laplacian ``L = A diag(b) Aᵀ``. ``convention`` as in
+        :meth:`ptdf`; ``skip_zero_impedance`` as in :meth:`bprime`."""
+        return _to_csr(
+            self._inner.weighted_laplacian(
+                convention, skip_zero_impedance=skip_zero_impedance
+            )
+        )
 
-    def incidence(self, convention: str = "series") -> "Incidence":
-        """Signed incidence factorization as an :data:`Incidence` tuple."""
+    def incidence(
+        self, convention: str = "series", *, skip_zero_impedance: bool = False
+    ) -> "Incidence":
+        """Signed incidence factorization as an :data:`Incidence` tuple.
+        ``convention`` as in :meth:`ptdf`; ``skip_zero_impedance`` as in
+        :meth:`bprime`."""
         np = _require("numpy", "matrix")
-        a, b, p_shift, branch_of_col = self._inner.incidence(convention)
+        a, b, p_shift, branch_of_col = self._inner.incidence(
+            convention, skip_zero_impedance=skip_zero_impedance
+        )
         return Incidence(
             A=_to_csr(a),
             b=np.asarray(b, dtype=float),
@@ -1068,10 +1128,18 @@ class PioModule:
         return cls(_powerio._PioModule.from_str(text, from_))
 
     @classmethod
-    def from_bytes(cls, data: bytes, from_: Optional[str] = None) -> "PioModule":
+    def from_bytes(
+        cls, data: bytes, from_: Optional[str] = None, *, name: Optional[str] = None
+    ) -> "PioModule":
         """Parse in-memory case bytes into a module. The only in-memory way
-        to read a binary format; text formats must be UTF-8."""
-        return cls(_powerio._PioModule.from_bytes(data, from_))
+        to read a binary format; text formats must be UTF-8.
+
+        ``name`` identifies the buffer for diagnostics and extension-based
+        format detection (e.g. ``name="case.raw"`` lets PSS/E detection see
+        the ``.raw`` extension when ``from_`` is not given); it defaults to
+        ``"<memory>"``.
+        """
+        return cls(_powerio._PioModule.from_bytes(data, from_, name))
 
     @property
     def value(self) -> Any:
@@ -1159,7 +1227,13 @@ class PioModule:
         return _json.loads(self._inner.lowering_readiness_json(base_mva))
 
     def to_balanced(self, base_mva: float = 100.0) -> "PioModule":
-        """Lower the multiconductor value to a balanced module."""
+        """Lower the multiconductor value to a balanced module.
+
+        On refusal, raises :class:`PowerIODataError` with the refusal's
+        diagnostic code as ``.code`` and its structured findings as
+        ``.diagnostics`` (a list of dicts with ``code``, ``severity``,
+        ``message``, and ``target``).
+        """
         return PioModule(self._inner.lower_to_balanced(base_mva))
 
     def __repr__(self) -> str:
@@ -1172,12 +1246,16 @@ def parse(
     *,
     include_root: Optional[Any] = None,
     value_type: Optional[type] = None,
+    name: Optional[str] = None,
 ) -> "PioModule":
     """Parse one source into a module of whichever family claims it.
 
     ``source`` is a filesystem path (``str`` or path-like) or in-memory
-    ``bytes`` (the only way to read a binary format without a file). The
-    result is always a :class:`PioModule` carrying the source's typed value;
+    ``bytes`` (the only way to read a binary format without a file). ``name``
+    identifies in-memory ``bytes`` for diagnostics and extension-based format
+    detection (a path source already has a name, so ``name`` is ignored for
+    those); it defaults to ``"<memory>"`` when not given. The result is
+    always a :class:`PioModule` carrying the source's typed value;
     ``module.kind`` names it, and ``module.value`` reads the typed value
     (a calculation defining source produces that calculation rather than a
     bare network).
@@ -1192,7 +1270,7 @@ def parse(
     reference sibling files.
     """
     if isinstance(source, (bytes, bytearray, memoryview)):
-        module = PioModule.from_bytes(bytes(source), from_)
+        module = PioModule.from_bytes(bytes(source), from_, name=name)
     else:
         module = PioModule.from_file(source, from_, include_root=include_root)
     if value_type is None or value_type is PioModule:
@@ -1212,6 +1290,27 @@ def parse(
             f"{value_type.__name__} asserts {expected!r}"
         )
     return module
+
+
+def features() -> dict[str, bool]:
+    """Optional build-time features compiled into this powerio installation.
+
+    ``matrix``, ``dist``, and ``prob`` are unconditional dependencies of the
+    extension and are always ``True``. ``gridfm`` reflects whether the
+    gridfm Parquet writer (``Network.write_gridfm``, ``write_gridfm_batch``,
+    ``read_gridfm``) was compiled in; the published wheel always includes it,
+    but a custom source build can omit it (see :func:`write_gridfm_batch`).
+    ``arrow`` is always ``False``: unlike the C ABI and the Julia binding,
+    this binding calls into the Rust core directly and does not expose the
+    Arrow C Data Interface.
+    """
+    return {
+        "arrow": False,
+        "matrix": True,
+        "gridfm": bool(getattr(_powerio, "_has_gridfm", False)),
+        "dist": True,
+        "prob": True,
+    }
 
 
 

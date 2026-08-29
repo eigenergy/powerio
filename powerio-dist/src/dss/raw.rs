@@ -237,6 +237,10 @@ pub struct RawDss {
     pub commands: Vec<RawCommand>,
     pub buscoords: Vec<BusCoord>,
     pub vars: VarMap,
+    /// Bumped by `clear`, so `run_command` can tell whether a `Clear` ran
+    /// during the command it just dispatched and, if so, skip restoring the
+    /// pre-command var snapshot over the empty table `clear` installed.
+    vars_generation: u64,
     /// The reader's findings as `CODE: message` lines, rendered from
     /// `diagnostics` so the text and the structure cannot disagree.
     pub warnings: Vec<String>,
@@ -330,13 +334,15 @@ impl RawDss {
         // the caller wrote, and no later command un-writes it — dropping them
         // here returned a network that had refused an include, or skipped one
         // that escaped the case directory, with an empty `warnings` and nothing
-        // for `powerio package` to lift into a finding.
+        // for `powerio module` to lift into a finding.
         let (warnings, diagnostics) = (
             std::mem::take(&mut self.warnings),
             std::mem::take(&mut self.diagnostics),
         );
         let (total_diagnostics, halted) = (self.total_diagnostics, self.halted);
+        let vars_generation = self.vars_generation.wrapping_add(1);
         *self = RawDss {
+            vars_generation,
             warnings,
             diagnostics,
             total_diagnostics,
@@ -387,6 +393,16 @@ const MAX_TOTAL_PRESERVED: usize = 1 << 20;
 /// costing about what a single case file of this size costs. The root file is
 /// not charged against it, so a case without includes is never truncated.
 const MAX_TOTAL_INCLUDE_BYTES: usize = 64 << 20;
+
+/// Parser variables (`var @name=value`) a single parse may define, on the
+/// same amplification concern as includes: a script that redirects into
+/// itself while defining one each time would otherwise grow the table
+/// without bound. The largest legitimate feeders define a handful.
+const MAX_TOTAL_VARS: usize = 4096;
+
+/// Bytes stored across every var name and value together, on the same rule
+/// as the include byte budget.
+const MAX_TOTAL_VAR_BYTES: usize = 1 << 20;
 
 /// Cap on the accumulated property assignments a single object may hold.
 /// `like=` splices the source object's whole prop list, so a self-referencing
@@ -442,6 +458,13 @@ struct Executor<'l, L: Loader> {
     includes: usize,
     include_bytes: usize,
     budget_spent: bool,
+    /// Vars defined and bytes of their names and values stored, against
+    /// [`MAX_TOTAL_VARS`] and [`MAX_TOTAL_VAR_BYTES`]. Lives here rather than
+    /// on `RawDss`, which `Clear` resets, so a budget already spent stays
+    /// spent across a `Clear`, on the same rule as the include budget.
+    var_count: usize,
+    var_bytes: usize,
+    var_budget_spent: bool,
 }
 
 /// Collapses `.` and `..` lexically, without touching the filesystem. A
@@ -501,8 +524,13 @@ impl<L: Loader> Executor<'_, L> {
         // live table stays free for mutation: `var` inserts into it directly
         // and redirected files both see and extend it. The snapshot only
         // diverges for a self referencing `var` line, which OpenDSS scripts
-        // do not write.
-        let vars = self.raw.vars.clone();
+        // do not write. Taking the table rather than cloning it avoids
+        // copying it on every command; `do_var` inserts land in the now
+        // empty live table and are merged back onto the snapshot afterward.
+        // A `Clear` during dispatch replaces the table outright, so the
+        // restore is skipped when `vars_generation` shows one ran.
+        let vars = std::mem::take(&mut self.raw.vars);
+        let generation = self.raw.vars_generation;
         let mut scan = Scanner::new(line, Some(&vars));
         let ctx = |msg: String| format!("{file}:{line_no}: {msg}");
         match scan.next_param() {
@@ -518,6 +546,10 @@ impl<L: Loader> Executor<'_, L> {
                 }
             }
         }
+        if self.raw.vars_generation == generation {
+            let added = std::mem::replace(&mut self.raw.vars, vars);
+            self.raw.vars.extend(added);
+        }
     }
 
     fn dispatch(&mut self, verb: String, scan: &mut Scanner, ctx: &dyn Fn(String) -> String) {
@@ -531,7 +563,7 @@ impl<L: Loader> Executor<'_, L> {
             Some("compile") => self.do_redirect(scan, true, ctx),
             Some("buscoords") => self.do_buscoords(scan, ctx),
             Some("setbusxy") => self.do_setbusxy(scan, ctx),
-            Some("var") => self.do_var(scan),
+            Some("var") => self.do_var(scan, ctx),
             Some("clear" | "clearall") => self.raw.clear(),
             Some("//") => {}
             Some(canonical) => {
@@ -561,7 +593,7 @@ impl<L: Loader> Executor<'_, L> {
     /// stores every value brace wrapped unless it begins with `@`;
     /// CheckforVar unwraps the braces into a quoted token, so a definition
     /// like `var @z=(8 1000 /)` still evaluates as RPN where it is used.
-    fn do_var(&mut self, scan: &mut Scanner) {
+    fn do_var(&mut self, scan: &mut Scanner, ctx: &dyn Fn(String) -> String) {
         while let Some(p) = scan.next_param() {
             if p.value.text.is_empty() && p.name.is_none() {
                 break;
@@ -572,9 +604,38 @@ impl<L: Loader> Executor<'_, L> {
                 } else {
                     format!("{{{}}}", p.value.text)
                 };
-                self.raw.vars.insert(name.to_ascii_lowercase(), stored);
+                let key = name.to_ascii_lowercase();
+                if self.charge_var(&key, &stored, ctx) {
+                    self.raw.vars.insert(key, stored);
+                }
             }
         }
+    }
+
+    /// Charges one var definition against the budgets, returning whether to
+    /// store it. Charged at the attempt, so a definition right at either cap
+    /// is refused before insertion, on the same rule as [`Self::charge_include`].
+    fn charge_var(&mut self, name: &str, stored: &str, ctx: &dyn Fn(String) -> String) -> bool {
+        let bytes = name.len() + stored.len();
+        let over_budget = self.var_budget_spent
+            || self.var_count >= MAX_TOTAL_VARS
+            || self.var_bytes.saturating_add(bytes) > MAX_TOTAL_VAR_BYTES;
+        if !over_budget {
+            self.var_count += 1;
+            self.var_bytes += bytes;
+            return true;
+        }
+        if !self.var_budget_spent {
+            self.var_budget_spent = true;
+            let message = ctx(format!(
+                "var {name}: refused; the case exceeded the variable budget of {MAX_TOTAL_VARS} \
+                 entries and {} KiB, so further variables were not stored",
+                MAX_TOTAL_VAR_BYTES >> 10,
+            ));
+            self.raw
+                .warn(&crate::diagnostics::codes::READ_DSS_VALUE_CLAMPED, message);
+        }
+        false
     }
 
     /// A leading `name=value` parameter is a property reference
@@ -917,7 +978,23 @@ impl<L: Loader> Executor<'_, L> {
                 self.include_bytes += text.len();
                 let dir = path.parent().map(Path::to_path_buf).unwrap_or_default();
                 self.dirs.push(dir.clone());
+                // `run_command` took the live var table out for `scan` to
+                // borrow, so it reads empty here; reinstall the ambient
+                // table (one copy, bounded by the include budget rather than
+                // paid per command) so the include's own commands see and
+                // can extend it, exactly like a directly nested command
+                // would. A `Clear` inside the include bumps the generation
+                // and installs its own empty table, which the check below
+                // leaves alone instead of overwriting with the pre-redirect
+                // snapshot.
+                let ambient = scan.vars().cloned().unwrap_or_default();
+                let outer = std::mem::replace(&mut self.raw.vars, ambient);
+                let generation = self.raw.vars_generation;
                 self.run_script(&text, &path.display().to_string());
+                if self.raw.vars_generation == generation {
+                    let added = std::mem::replace(&mut self.raw.vars, outer);
+                    self.raw.vars.extend(added);
+                }
                 self.dirs.pop();
                 // The engine keeps one current directory: Redirect restores
                 // the caller's on return (SetCurrentDir(SaveDir)), Compile
@@ -1457,6 +1534,9 @@ fn run_executor(
         includes: 0,
         include_bytes: 0,
         budget_spent: false,
+        var_count: 0,
+        var_bytes: 0,
+        var_budget_spent: false,
     };
     exec.run_script(text, path);
     exec.raw
@@ -2130,6 +2210,74 @@ mod tests {
         assert_eq!(
             raw.find("load", "outer").unwrap().get("kw").unwrap().text,
             "42"
+        );
+    }
+
+    #[test]
+    fn var_defined_after_clear_does_not_see_the_pre_clear_table() {
+        // Without the generation guard, `run_command`'s restore after
+        // dispatching `Clear` would resurrect the pre-`Clear` var snapshot
+        // over the empty table `clear` just installed.
+        let raw = parse("var @a=1\nClear\nvar @b=2\nNew Load.ld kv=@a kw=@b");
+        let ld = raw.find("load", "ld").unwrap();
+        assert_eq!(ld.get("kw").unwrap().text, "2", "post-clear var resolves");
+        assert_eq!(
+            ld.get("kv").unwrap().text,
+            "@a",
+            "pre-clear var does not survive Clear"
+        );
+    }
+
+    #[test]
+    fn the_maximum_permitted_var_count_parses() {
+        use std::fmt::Write as _;
+        let mut script = String::new();
+        for i in 0..MAX_TOTAL_VARS {
+            let _ = writeln!(script, "var @v{i}={i}");
+        }
+        script.push_str("New Load.ld kv=@v0\n");
+        let raw = parse(&script);
+        assert_eq!(raw.warnings, Vec::<String>::new());
+        assert_eq!(raw.find("load", "ld").unwrap().get("kv").unwrap().text, "0");
+    }
+
+    #[test]
+    fn one_var_past_the_count_cap_is_refused() {
+        use std::fmt::Write as _;
+        let mut script = String::new();
+        for i in 0..=MAX_TOTAL_VARS {
+            let _ = writeln!(script, "var @v{i}={i}");
+        }
+        let _ = writeln!(script, "New Load.ld kv=@v{MAX_TOTAL_VARS}");
+        let raw = parse(&script);
+        assert_eq!(
+            raw.diagnostics
+                .iter()
+                .filter(|d| d.code() == crate::diagnostics::codes::READ_DSS_VALUE_CLAMPED.code)
+                .count(),
+            1,
+            "one refusal, however many follow"
+        );
+        // The var one past the cap was refused, so it never resolves.
+        assert_eq!(
+            raw.find("load", "ld").unwrap().get("kv").unwrap().text,
+            format!("@v{MAX_TOTAL_VARS}")
+        );
+    }
+
+    #[test]
+    fn one_byte_past_the_var_byte_cap_is_refused() {
+        // One var sized to fill the byte budget, then one more small var
+        // that must be refused for lack of budget rather than count.
+        let filler = "x".repeat(MAX_TOTAL_VAR_BYTES);
+        let raw = parse(&format!("var @big={filler}\nvar @small=1\n"));
+        assert_eq!(
+            raw.diagnostics
+                .iter()
+                .filter(|d| d.code() == crate::diagnostics::codes::READ_DSS_VALUE_CLAMPED.code)
+                .count(),
+            1,
+            "one refusal, however many follow"
         );
     }
 

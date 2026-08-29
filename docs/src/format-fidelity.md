@@ -13,19 +13,19 @@ implementations and the matching powerio code:
 | Quantity | Convention | Reference | powerio |
 | --- | --- | --- | --- |
 | Bus type codes | \\(1 = \mathrm{PQ}\\), \\(2 = \mathrm{PV}\\), \\(3 = \mathrm{ref}\\), \\(4 = \mathrm{isolated}\\) | MATPOWER `idx_bus` | `network::BusType` |
-| Impedance, susceptance | per unit on `baseMVA`, never rescaled | MATPOWER `idx_brch` (`BR_B` already per unit) | `format::matpower` |
+| Impedance, susceptance | per unit on `baseMVA`, never rescaled | MATPOWER `idx_brch` (`BR_B` already per unit) | `matpower` |
 | Branch terminal admittance | MATPOWER `BR_B` splits half to each end; richer sources use canonical `g_fr`/`b_fr`/`g_to`/`b_to`; one-value targets receive the total susceptance projection | PowerModels `matpower.jl`; MATPOWER `idx_brch` | `network::BranchCharging`, `Branch::terminal_charging` |
 | Tap ratio | `0` means a line (treated as `1`); nonzero is a transformer | MATPOWER `idx_brch` `TAP` | `Branch::effective_tap` |
-| Phase shift, angle | degrees in the model; PowerModels JSON carries radians | PowerModels `make_per_unit!` | `format::powermodels` |
+| Phase shift, angle | degrees in the model; PowerModels JSON carries radians | PowerModels `make_per_unit!` | `powermodels-json` |
 | Angle limits | `angmin`/`angmax` default ±360 (unconstrained) | MATPOWER `idx_brch` `ANGMIN`/`ANGMAX` | `Branch::has_angle_limits` |
-| pandapower/PyPSA impedance | line `r/x` are converted between per unit and ohms with \\(Z_{\mathrm{base}} = V_{\mathrm{kV}}^2 / \mathrm{baseMVA}\\); pandapower line charging is capacitance per km (`c_nf_per_km`, converted via \\(2\pi f \ell Z_{\mathrm{base}}\\)); PyPSA line `b` is siemens | pandapower PPC conversion, PyPSA static components | `format::pandapower`, `format::pypsa` |
-| dcline `Pt`/`Qf`/`Qt` | sign flips vs MATPOWER | PowerModels `matpower.jl` | `format::powermodels` |
+| pandapower/PyPSA impedance | line `r/x` are converted between per unit and ohms with \\(Z_{\mathrm{base}} = V_{\mathrm{kV}}^2 / \mathrm{baseMVA}\\); pandapower line charging is capacitance per km (`c_nf_per_km`, converted via \\(2\pi f \ell Z_{\mathrm{base}}\\)); PyPSA line `b` is siemens | pandapower PPC conversion, PyPSA static components | `pandapower-json`, `pypsa-csv` |
+| dcline `Pt`/`Qf`/`Qt` | sign flips vs MATPOWER | PowerModels `matpower.jl` | `powermodels-json` |
 | Generator cost | \\(c_2 p^2 + c_1 p\\) maps to \\(q = 2c_2\\), \\(c = c_1\\); coefficients high order first | MATPOWER `idx_cost`, egret `matpower_parser` | `GenCost::quadratic` |
-| `source_id` | `["bus", id]` for bus-tied elements | PowerModels `matpower.jl` | `format::powermodels` |
-| PSLF shunts | EPC `pu_mw`/`pu_mvar` are per unit on `sbase`; `Network::Shunt` stores MW/MVAr at \\(V = 1\\) | paired EPC/RAW case checks | `format::pslf` |
+| `source_id` | `["bus", id]` for bus-tied elements | PowerModels `matpower.jl` | `powermodels-json` |
+| PSLF shunts | EPC `pu_mw`/`pu_mvar` are per unit on `sbase`; `Network::Shunt` stores MW/MVAr at \\(V = 1\\) | paired EPC/RAW case checks | `pslf` |
 | DOE GO Challenge 3 | parses to `AcScucInstance`: the complete scheduling horizon (time points, commitment, reserves, contingencies) beside the balanced network it shares | Rust GOC3 instance tests | `powerio_prob::parse_goc3_instance` |
-| Surge angles | Surge JSON carries voltage angles, phase shifts, and angle limits in radians; `BalancedNetwork` stores degrees | Rust Surge round trip tests | `format::surge` |
-| DeepMind OPFData JSON | DeepMind OPFData carries p.u. powers and radian angles; `BalancedNetwork` stores the solved snapshot in MW/MVAr and degrees, with zero based links mapped to one based bus IDs | Paper Appendix A, the PyG loader, the smallest complete official fixture, and size independent FullTop and N-1 property tests | `format::opfdata` |
+| Surge angles | Surge JSON carries voltage angles, phase shifts, and angle limits in radians; `BalancedNetwork` stores degrees | Rust Surge round trip tests | `surge-json` |
+| DeepMind OPFData JSON | DeepMind OPFData carries p.u. powers and radian angles; `BalancedNetwork` stores the solved snapshot in MW/MVAr and degrees, with zero based links mapped to one based bus IDs | Paper Appendix A, the PyG loader, the smallest complete official fixture, and size independent FullTop and N-1 property tests | `opfdata-json` |
 
 egret's own MATPOWER parser uses the same reductions (bus type as
 `matpower_bustype`, polynomial coefficients reversed to a `{degree: coefficient}`
@@ -124,7 +124,7 @@ findings carry `READ.TRANSMISSION.PARSE_WARNING`, GridFM reads
   exists, so that writer is validated by powerio's own read back plus a
   PowerModels JSON bridge. The `.pwb` layouts are reverse engineered; the decode
   evidence and coverage matrix are maintainer notes at
-  [`powerio/src/format/powerworld/FORMAT.md`](https://github.com/eigenergy/powerio/blob/main/powerio/src/format/powerworld/FORMAT.md).
+  [`powerio-tx/src/format/powerworld/FORMAT.md`](https://github.com/eigenergy/powerio/blob/main/powerio-tx/src/format/powerworld/FORMAT.md).
 - **PSLF** `.epc` is read and written. The reader maps the static power flow core:
   buses, lines, two- and three-winding transformers, generators, loads, fixed
   shunts, controlled shunts at initial `g/b`, and limited two-terminal DC records.
@@ -182,7 +182,7 @@ findings carry `READ.TRANSMISSION.PARSE_WARNING`, GridFM reads
   and warns about source sections that stay only in the retained document. The
   writer emits a canonical Surge network body for the supported power flow core;
   richer MATPOWER generator capability or ramp columns and unsupported cost
-  shapes are reported in `Conversion::warnings`. An HVDC link carries the
+  shapes are reported in `Conversion::diagnostics`. An HVDC link carries the
   terminal voltage setpoints, the reactive limits, and the loss model on its
   converter terminals; a Surge link states no terminal reactive flow, no cost
   curve, and no received power (the reader derives it from the setpoint and the

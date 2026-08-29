@@ -28,7 +28,7 @@ import powerio as pio
 case = pio.parse("case9.m")          # PioModule, kind "balanced_network"
 net = case.value                     # BalancedNetwork
 case.diagnostics()                   # the reader's findings, typed records
-feeder = pio.parse("feeder.dss")     # kind "multiconductor_network"
+feeder = pio.parse("IEEE13Nodeckt.dss")  # kind "multiconductor_network"
 instance = pio.parse("goc3_case.json")  # kind "ac_scuc_instance"
 instance.inspect()                   # the operations the value supports
 ```

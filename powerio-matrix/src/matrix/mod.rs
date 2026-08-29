@@ -80,7 +80,12 @@ impl Default for BuildOptions {
             scheme: Scheme::Bx,
             include_taps: true,
             include_shifts: true,
-            skip_zero_impedance: true,
+            // Zero impedance branches are preserved in networks and
+            // instances, so a builder refuses one until the caller resolves
+            // it explicitly (merge_zero_impedance_buses) or opts into
+            // skipping, matching DcOpfAssemblyOptions::skip_zero_impedance's
+            // own default in the dcopf module.
+            skip_zero_impedance: false,
         }
     }
 }

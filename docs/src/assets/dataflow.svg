@@ -5,6 +5,7 @@
  viewBox="0.00 0.00 745.00 278.00" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">
 <g id="graph0" class="graph" transform="scale(1 1) rotate(0) translate(4 274)">
 <title>powerio_dataflow</title>
+<polygon fill="#f4f6f8" stroke="none" points="-4,4 -4,-274 740.5,-274 740.5,4 -4,4"/>
 <g id="node1" class="node">
 <title>source</title>
 <path fill="#f4f6f8" stroke="#4a5568" d="M118,-182C118,-182 12,-182 12,-182 6,-182 0,-176 0,-170 0,-170 0,-150 0,-150 0,-144 6,-138 12,-138 12,-138 118,-138 118,-138 124,-138 130,-144 130,-150 130,-150 130,-170 130,-170 130,-176 124,-182 118,-182"/>

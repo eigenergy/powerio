@@ -127,7 +127,7 @@ std::fs::write("case14.json", conv.text)?;
 import powerio as pio
 
 case = pio.parse("case9.m", value_type=pio.BalancedNetwork)
-bprime = case.bprime()            # MATPOWER Bp, scipy.sparse, needs powerio[matrix]
+bprime = case.value.bprime()      # MATPOWER Bp, scipy.sparse, needs powerio[matrix]
 display = pio.parse_display_file("case.pwd")
 raw, warnings = pio.convert_file("case9.m", "psse")
 ```
@@ -151,8 +151,8 @@ powerio convert case.epc --from pslf --to matpower -o case.m
 powerio convert case.surge.json --from surge-json --to matpower -o case.m
 powerio convert goc3_case.json --from goc3-json --to matpower -o case.m
 powerio convert example_0.json --from opfdata-json --to matpower -o solved_case.m
-powerio package tests/data/case14.m -o case14.pio.json
-powerio package goc3_case.json --from goc3-json -o goc3_case.pio.json
+powerio module tests/data/case14.m -o case14.pio.json
+powerio module goc3_case.json --from goc3-json -o goc3_case.pio.json
 powerio verify tests/data/case30.m --kind bdoubleprime
 powerio dcopf tests/data/case30.m -o out
 powerio sensitivities tests/data/case30.m -o out --solver auto --drop-tolerance 1e-10
@@ -187,7 +187,7 @@ PowerWorld `.pwd` carries display data rather than a network case, so it is
 outside this conversion table and uses `parse_display_file` /
 `parse_display_bytes`. The
 decoded vintages and per field evidence are maintainer notes at
-[`powerio/src/format/powerworld/FORMAT.md`](powerio/src/format/powerworld/FORMAT.md).
+[`powerio-tx/src/format/powerworld/FORMAT.md`](powerio-tx/src/format/powerworld/FORMAT.md).
 
 The distribution matrix (dss, PMD JSON, BMOPF JSON, per fixture) is generated
 under `powerio-dist/docs/`. Vendored test data keeps its own licenses next to
@@ -210,14 +210,16 @@ Known limits for every format are documented in the
 - Adjacency matrix and `petgraph` graph output
 
 `powerio-prob` builds matrix free problem instances: DC OPF and AC OPF input
-data plus the GO Challenge 3 AC SCUC instance. Its optional `matrix` feature
-adds sparse projections and DC OPF Matrix Market bundles.
+data plus the GO Challenge 3 AC SCUC instance, and never reaches `powerio-matrix`
+(a `cargo tree` gate enforces it). `powerio-matrix` depends on `powerio-prob`
+and adds the sparse projections and DC OPF Matrix Market bundles over those
+instances.
 
 Current conventions for signs, taps, phase shifts, per unit scaling, reference buses, and line parameters are documented in the [matrices guide](https://eigenergy.github.io/powerio/guide/matrices.html).
 
 ### Normalized Form
 
-`Network::to_normalized` returns a derived solver view:
+`BalancedNetwork::to_normalized` returns a derived solver view:
 
 - powers use per unit;
 - voltage phase angles use radians;
@@ -259,16 +261,16 @@ powerio-mcp
 
 `python -m powerio.mcp` and the `powerio-mcp` console script are consumer entry points and do not move without a version bump.
 
-MCP clients can keep a case in `.pio.json` document JSON through the `package`
+MCP clients can keep a case in `.pio.json` document JSON through the `module`
 transport:
 
 ```python
-parsed = parse(path="case9.m", transport="package")
-pkg = parsed["package_json"]
-summary(package_json=pkg)
-matrix("bprime", package_json=pkg)
-save(out_path="case9.raw", to_format="psse", package_json=pkg)
-diagnostics(pkg)
+parsed = parse(path="case9.m", transport="module")
+stored = parsed["module_json"]
+summary(module_json=stored)
+matrix("bprime", module_json=stored)
+save(out_path="case9.raw", to_format="psse", module_json=stored)
+diagnostics(stored)
 ```
 
 [PowerMCP](https://github.com/Power-Agent/PowerMCP) bundles these tools with
@@ -286,7 +288,7 @@ series, and `export_state` materializes one static item from it.
 Rust reads and writes the document with `powerio::stored::read_module` and
 `write_module`, Python with `powerio.PioModule` (and `powerio.parse`,
 which loads either stored generation), the C ABI with `pio_module_*`, and
-the CLI writes documents with `powerio package`.
+the CLI writes documents with `powerio module`.
 
 ### GridFM
 
@@ -302,7 +304,7 @@ The command writes the tables consumed by
 [gridfm-graphkit](https://github.com/gridfm/gridfm-graphkit) under
 `<dir>/<case>/raw/`. Compatible cases can be stacked by scenario ID.
 
-`read_gridfm_dataset` in `powerio-matrix` and `pio.read_gridfm` in Python
+`read_gridfm_dataset` in `powerio` and `pio.read_gridfm` in Python
 reconstruct a `BalancedNetwork` from a dataset. The reconstructed network can be
 written to any supported balanced case format:
 

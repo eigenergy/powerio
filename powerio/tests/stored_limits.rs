@@ -22,6 +22,71 @@ fn small_network() -> BalancedNetwork {
     network
 }
 
+/// A raw legacy 0.9 package document carrying a two period series with one
+/// load update, hand built on the frozen 0.9 wire shape (the package API that
+/// produced it is gone from this layer up; the upgrade reader still accepts
+/// the document).
+fn legacy_series_text() -> serde_json::Value {
+    serde_json::json!({
+        "powerio_version": "0.9.0",
+        "producer": {"tool": "powerio", "version": "0.9.0"},
+        "model_kind": "balanced",
+        "origin": {"kind": "in_memory"},
+        "validation": {"status": "ok", "counts": {"fatal": 0, "error": 0, "warning": 0, "info": 0, "debug": 0}},
+        "model": {
+            "kind": "balanced",
+            "balanced_network": serde_json::to_value(small_network()).unwrap(),
+        },
+        "operating_points": {
+            "time_axis": {
+                "periods": 2,
+                "duration_hours": [1.0, 1.0],
+                "labels": ["h0", "h1"],
+            },
+            "points": [
+                {"index": 0},
+                {"index": 1, "updates": [
+                    {"element": {"table": "loads", "row": 0},
+                     "fields": {"p": 75.0}}
+                ]},
+            ],
+        },
+    })
+}
+
+#[test]
+fn a_declared_period_count_no_longer_drives_sizing_or_refusal() {
+    // SEC-6: the declared `time_axis.periods` scalar costs nothing to
+    // inflate, so it no longer sizes anything or triggers the maximum by
+    // itself. Whether it understates or wildly overstates the two periods
+    // this document actually carries (two labels, two durations, two
+    // points), the decoded series is sized from those arrays alone.
+    for declared in [1_usize, 10_000_000] {
+        let mut raw = legacy_series_text();
+        raw["operating_points"]["time_axis"]["periods"] = serde_json::json!(declared);
+        let module = read_module(&raw.to_string()).unwrap();
+        let PioValue::BalancedOperatingPointTimeSeries(series) = module.value() else {
+            panic!("wrong kind");
+        };
+        assert_eq!(series.len(), 2, "declared {declared}");
+        assert_eq!(series.values()[1].load_active_power("loads:0"), Some(75.0));
+    }
+}
+
+#[test]
+fn genuinely_carrying_more_than_the_maximum_periods_is_refused() {
+    // Past the maximum in what the document actually carries (real labels,
+    // one past the bound), not merely in what it declares.
+    let mut raw = legacy_series_text();
+    let labels: Vec<String> = (0..=131_072).map(|i| format!("h{i}")).collect();
+    raw["operating_points"]["time_axis"]["labels"] = serde_json::json!(labels);
+    let error = read_module(&raw.to_string()).unwrap_err();
+    assert_eq!(
+        error.info().map(|info| info.code),
+        Some("READ.MODULE.INVALID")
+    );
+    assert!(error.to_string().contains("131072"), "{error}");
+}
 /// DESER-003: six figure record counts decode through the identity indexes.
 /// Every diagnostic's span names the last declared source, so a linear source
 /// scan per span would be quadratic and blow far past the ceiling.

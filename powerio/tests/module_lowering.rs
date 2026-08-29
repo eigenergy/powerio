@@ -194,7 +194,7 @@ fn a_module_at_a_record_cap_is_refused_intact() {
         error
             .diagnostics
             .iter()
-            .any(|d| d.code.as_str() == "TRANSFORM.MULTI_TO_BALANCED.RECORD_CAP"),
+            .any(|d| d.code() == "TRANSFORM.MULTI_TO_BALANCED.RECORD_CAP"),
         "{error:?}"
     );
     assert_eq!(returned.diagnostics().len(), before, "module unchanged");
@@ -226,8 +226,48 @@ fn a_module_at_a_record_cap_is_refused_intact() {
         error
             .diagnostics
             .iter()
-            .any(|d| d.code.as_str() == "TRANSFORM.MULTI_TO_BALANCED.RECORD_CAP"),
+            .any(|d| d.code() == "TRANSFORM.MULTI_TO_BALANCED.RECORD_CAP"),
         "{error:?}"
     );
     assert_eq!(returned.history().len(), before, "module unchanged");
+}
+
+/// A refused lowering reports 1.0 records, not the retired 0.9 document
+/// shape: every severity is the four level spelling (error/warning/remark/note,
+/// never fatal/info/debug), no record carries the retired `element_path` key,
+/// and any `target` it does carry is a pointer, not a `/model/...` path.
+#[test]
+fn refused_lowering_reports_1_0_severities_and_targets() {
+    let text = std::fs::read_to_string(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../tests/data/dist/opendss/ieee13/IEEE13Nodeckt.dss"
+    ))
+    .expect("fixture reads");
+    let module = parse_mc_module(&text);
+    let (_, error) = lower_module_to_balanced(module, MulticonductorToBalancedOptions::default())
+        .expect_err(
+            "the IEEE13 feeder mixes single, two, and three phase laterals and is not \
+                 balanced-lowerable",
+        );
+    assert!(
+        !error.diagnostics.is_empty(),
+        "a refusal must carry findings"
+    );
+
+    let json = serde_json::to_value(&error.diagnostics).expect("diagnostics serialize");
+    let records = json.as_array().expect("diagnostics is a JSON array");
+    for record in records {
+        let severity = record["severity"].as_str().expect("severity is a string");
+        assert!(
+            matches!(severity, "error" | "warning" | "remark" | "note"),
+            "retired 0.9 severity spelling: {severity}"
+        );
+        assert!(
+            record.get("element_path").is_none(),
+            "retired locator key survived: {record}"
+        );
+        if let Some(target) = record.get("target").and_then(|t| t.as_str()) {
+            assert!(target.starts_with('/'), "target is not a pointer: {target}");
+        }
+    }
 }

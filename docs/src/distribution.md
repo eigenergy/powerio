@@ -4,7 +4,7 @@ A multiconductor network is the conductor level distribution model. OpenDSS and 
 
 ```julia
 using PowerIO
-feeder = parse_file("feeder.dss")   # PioModule{MulticonductorNetwork}
+feeder = parse_file("IEEE13Nodeckt.dss")   # PioModule{MulticonductorNetwork}
 net = feeder.value
 net.data.lines[1]                   # terminal maps, linecode reference
 net.data.linecodes[1]               # per length impedance matrices, SI units
@@ -27,4 +27,4 @@ report = lowering_readiness(feeder)         # the losses, before transforming
 low = lower_to_balanced(feeder)             # PioModule{BalancedNetwork}
 ```
 
-Multiconductor admittance matrices build directly from the multiconductor network, without lowering: [Matrices and Graphs](matrices.md).
+Multiconductor admittance matrices build directly from the multiconductor network, without lowering, through `powerio_matrix::build_multiconductor_admittance`. This entry point is Rust only in 0.10: there is no C ABI entry point yet, so no Python or Julia binding exists either.

@@ -34,6 +34,19 @@ def fail(page: Path, message: str) -> None:
 
 failed = False
 
+def fenced_blocks(text: str):
+    """Yield (tag, content) for each opening code fence in document order.
+
+    A bare closing fence (```` ``` ````, no tag) is text-identical to a bare
+    opening fence, so a regex matching either in isolation pairs a fence's own
+    close with the next block's open and drifts for the rest of the page.
+    Splitting on every fence marker and taking them in strict open/close
+    alternation avoids that: even-indexed markers open, odd-indexed close.
+    """
+    parts = re.split(r"```([^\n]*)\n", text)
+    for k in range(0, (len(parts) - 1) // 2, 2):
+        yield parts[2 * k + 1], parts[2 * k + 2]
+
 header = (ROOT / "powerio-capi/include/powerio.h").read_text()
 c_symbols = set(re.findall(r"\b(pio_[a-z0-9_]+)\s*\(", header))
 c_symbols |= set(re.findall(r"#define (PIO_[A-Z0-9_]+)", header))
@@ -76,9 +89,12 @@ for page in PAGES:
     for symbol in set(re.findall(r"\bpio_[a-z0-9_]*[a-z0-9](?!\*)\b", text)):
         if symbol not in c_symbols and not is_history:
             fail(page, f"names C symbol {symbol}, absent from powerio.h")
-    # CLI subcommands in sh fences.
+    # CLI subcommands in sh fences, and in unlabeled fences (README.md's CLI
+    # blocks carry no language tag).
     if not is_history:
-        for fence in re.findall(r"```sh\n(.*?)```", text, re.S):
+        for tag, fence in fenced_blocks(text):
+            if tag not in ("", "sh"):
+                continue
             for line in fence.splitlines():
                 match = re.match(r"\s*powerio\s+([a-z-]+)", line)
                 if match and match.group(1) not in cli_commands:

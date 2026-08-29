@@ -87,7 +87,7 @@ member, suggested extension `.geo.json`:
 ```json
 {
   "type": "FeatureCollection",
-  "powerio_geo": { "powerio_version": "0.8.3", "space": "geographic", "kind": "source" },
+  "powerio_geo": { "powerio_version": "0.10.0", "space": "geographic", "kind": "source" },
   "features": [
     { "type": "Feature",
       "geometry": { "type": "Point", "coordinates": [-80.05, 34.20] },
@@ -115,7 +115,7 @@ alias and never written; the durable identity is the payload `uid`. A branch
 key never reads from a bare `id` property, because GIS exports and RFC 7946
 tooling put a feature row counter there.
 
-`Network::geo_layer()` extracts, and `Network::apply_geo_layer(&layer)`
+`BalancedNetwork::geo_layer()` extracts, and `BalancedNetwork::apply_geo_layer(&layer)`
 applies and returns a `GeoApplyReport` with the matched and unmatched feature
 counts plus `unlocated_buses` and `unlocated_branches`, the elements that
 carry no geometry when the pass ends. The two together tell a layer that
@@ -168,7 +168,7 @@ survives.
 
 The C ABI exposes the document as strings: `pio_geo_parse` normalizes a
 tolerant sidecar to the canonical form and returns the reader's notes through
-`out_diagnostics_json`, `pio_balanced_network_geo_extract` and `pio_balanced_network_geo_apply`
+its `PioDiagnostics **out_diagnostics` out parameter, `pio_balanced_network_geo_extract` and `pio_balanced_network_geo_apply`
 work on a parsed network handle (apply returns a new handle whose warnings
 carry the match report), and `pio_multiconductor_network_geo_extract`/`pio_multiconductor_network_geo_apply` are
 the multiconductor equivalents. Python mirrors the surface with `parse_geo`

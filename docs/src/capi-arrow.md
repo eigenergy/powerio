@@ -1,5 +1,7 @@
 # C ABI Arrow policy
 
+This page predates ABI 6. `pio_arrow_catalog_json` now takes a `PioError **` out parameter, `char *pio_arrow_catalog_json(PioError **error)`, replacing the `errbuf`/`errlen` form documented below; see [ABI 6](abi-v6.md) for the current surface.
+
 The C ABI stays handle based. Every source parses to a `PioModule`; balanced
 transmission networks read through `PioBalancedNetwork` and multiconductor
 distribution networks through `PioMulticonductorNetwork`. Callers get full

@@ -17,16 +17,26 @@ RESULTS.md stay written by hand; correctness is a boolean gated in CI
 
 A region whose JSON is missing any of its canonical cases is left UNCHANGED with a
 warning (run `bash evals/validation/fetch_cases.sh` and re-bench), so a partial run never
-silently shrinks a published table. Stdlib only; does not import powerio.
+silently shrinks a published table.
+
+Independent of the tables: every `-p <package> --bench <name>` pair recorded in
+RESULTS.md is checked against `cargo metadata --no-deps`, so a renamed or moved
+Criterion bench cannot leave a provenance command that no longer runs. This runs
+even when no benchmark JSON is present. Stdlib only aside from the `cargo`
+subprocess call; does not import powerio.
 """
 
 import json
 import re
+import subprocess
 import sys
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent.parent
 RESULTS_DIR = REPO / "evals" / "performance" / "results"
+RESULTS_MD = REPO / "evals" / "performance" / "RESULTS.md"
+
+BENCH_COMMAND_RE = re.compile(r"-p\s+([A-Za-z0-9_-]+)\s+--bench\s+([A-Za-z0-9_-]+)")
 
 METADATA_HEADER = (
     "| suite | performed at (UTC) | commit | command |\n"
@@ -208,6 +218,33 @@ def load(name):
     return json.loads(path.read_text())
 
 
+def cargo_bench_targets():
+    """{package name: {bench target names}}, read from `cargo metadata --no-deps`."""
+    proc = subprocess.run(
+        ["cargo", "metadata", "--no-deps", "--format-version", "1"],
+        cwd=REPO,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    data = json.loads(proc.stdout)
+    targets = {}
+    for pkg in data["packages"]:
+        benches = {t["name"] for t in pkg["targets"] if "bench" in t["kind"]}
+        if benches:
+            targets[pkg["name"]] = benches
+    return targets
+
+
+def check_bench_commands(text, targets):
+    """Every `-p <pkg> --bench <name>` pair in `text` must name a real bench target."""
+    problems = []
+    for pkg, name in BENCH_COMMAND_RE.findall(text):
+        if name not in targets.get(pkg, set()):
+            problems.append(f"-p {pkg} --bench {name}")
+    return problems
+
+
 def splice(text, region_id, body):
     pat = re.compile(
         rf"(<!-- BENCH:{re.escape(region_id)} START -->\n).*?(\n<!-- BENCH:{re.escape(region_id)} END -->)",
@@ -224,6 +261,12 @@ def main():
     speed_python = load("speed_python.json")
     speed_powerworld = load("speed_powerworld.json")
     speed_matrix = load("speed_matrix.json")
+
+    problems = check_bench_commands(RESULTS_MD.read_text(), cargo_bench_targets())
+    if problems:
+        print("provenance commands reference bench targets that do not exist:")
+        for p in problems:
+            print(f"  {p}")
 
     # (region id, target file, table body or None, list of missing cases)
     plan = []
@@ -254,6 +297,11 @@ def main():
         plan.append(("matrix", "evals/performance/RESULTS.md", MATRIX_HEADER, body, missing))
 
     if not plan:
+        if problems:
+            return 1
+        if check:
+            print(f"no JSON in {RESULTS_DIR}; nothing to check there. Provenance commands verified against cargo metadata.")
+            return 0
         raise SystemExit(f"error: no JSON in {RESULTS_DIR} — run the bench scripts with --json first")
 
     edits = {}  # file -> (original text, edited text); each file is read once
@@ -275,11 +323,14 @@ def main():
                 (REPO / target).write_text(new_text)
 
     if check:
-        if changed:
-            print("out of date: " + ", ".join(changed))
+        if changed or problems:
+            if changed:
+                print("out of date: " + ", ".join(changed))
             return 1
-        print("benchmark tables up to date")
+        print("benchmark tables up to date; provenance commands verified against cargo metadata")
         return 0
+    if problems:
+        return 1
     print("updated: " + (", ".join(changed) if changed else "nothing (already current)"))
     return 0
 

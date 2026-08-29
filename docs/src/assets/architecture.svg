@@ -5,9 +5,10 @@
  viewBox="0.00 0.00 640.00 467.00" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">
 <g id="graph0" class="graph" transform="scale(1 1) rotate(0) translate(4 463)">
 <title>powerio_architecture</title>
+<polygon fill="#f4f6f8" stroke="none" points="-4,4 -4,-463 636.38,-463 636.38,4 -4,4"/>
 <g id="clust1" class="cluster">
 <title>cluster_consumers</title>
-<polygon fill="none" stroke="#a0aec0" points="8,-63 8,-142.25 286,-142.25 286,-63 8,-63"/>
+<polygon fill="#f4f6f8" stroke="#a0aec0" points="8,-63 8,-142.25 286,-142.25 286,-63 8,-63"/>
 <text xml:space="preserve" text-anchor="middle" x="147" y="-68.75" font-family="Helvetica,sans-Serif" font-size="10.00" fill="#4a5568">representative consumers</text>
 </g>
 <g id="node1" class="node">
