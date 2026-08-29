@@ -35,9 +35,10 @@ another supported case format when the next tool expects that format.
 
 Model JSON is bare balanced `BalancedNetwork` JSON, without package metadata or
 source maps. It is powerio's own document rather than a case format, so it has
-no format token: use `Network::to_json` and `Network::from_json`, which the C
-ABI exposes as `pio_to_json` and `pio_from_json`. ABI 4 accepted a
-`powerio-json` token in `pio_parse_str` and `pio_to_format`; ABI 5 removed it.
+no format token: use `BalancedNetwork::to_json` and `BalancedNetwork::from_json`,
+which the C ABI exposes as `pio_balanced_network_to_json` and
+`pio_balanced_network_from_json`. ABI 4 accepted a
+`powerio-json` format token; ABI 5 removed it.
 A bare `.json` file holding this document classifies as `model-json`.
 
 ## The version 1 stored module {#pio-module}

@@ -68,7 +68,7 @@ It also returns `NaN` for a denominator that is not finite, which `SeriesImpedan
 On the other surfaces:
 
 ```sh
-powerio matrices --convention series          # was --convention paper-pure
+powerio matrices --convention series-susceptance   # was --convention paper-pure
 ```
 
 ```python

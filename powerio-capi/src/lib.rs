@@ -178,7 +178,7 @@ unsafe fn finish_multiconductor_v6(
 }
 
 /// v6 shell for a conversion: the findings cross as a structured
-/// [`v6::PioDiagnostics`] handle (NULL for the parameter discards them), and
+/// `PioDiagnostics` handle (NULL for the parameter discards them), and
 /// the converted text is an owned C string.
 unsafe fn finish_conversion_v6(
     out_diagnostics: *mut *mut v6::PioDiagnostics,
@@ -401,10 +401,10 @@ fn build_info_ptr() -> *mut c_char {
 
 /// Whether an optional build feature is compiled in: pass `"arrow"`, `"matrix"`,
 /// `"gridfm"`, `"dist"`, or `"prob"`. Returns 1 if present, 0 otherwise (and 0
-/// for a NULL or unknown name). The optional entry points (`pio_balanced_network_to_arrow`, the
-/// matrix Arrow tables, the gridfm parse routing, the multiconductor block,
-/// so a consumer that loaded the library at runtime probes for them here
-/// instead of resolving symbols blind. Feature names are strings like format
+/// for a NULL or unknown name). The optional features (`arrow`, `matrix`,
+/// `gridfm`, `dist`, `prob`) change what the library can do, so a consumer
+/// that loaded the library at runtime probes for them here instead of
+/// resolving symbols blind. Feature names are strings like format
 /// names, so a new feature never changes this signature. Infallible.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_has_feature(feature: *const c_char) -> i32 {
@@ -486,7 +486,7 @@ fn null_handle(what: &str) -> String {
 ///
 /// - `transmission:<format>` (e.g. `transmission:powermodels-json`)
 /// - `distribution:<format>` (e.g. `distribution:pmd-json`)
-/// - `module` (a `.pio.json` stored module; read it with [`pio_parse_str`](v6::pio_parse_str))
+/// - `module` (a `.pio.json` stored module; read it with `pio_parse_str`)
 /// - `model-json` (bare balanced model JSON; read it with [`pio_balanced_network_from_json`])
 /// - `ambiguous` (strong markers from both domains; pass an explicit format)
 /// - `unknown` (no recognized marker, or not a JSON object)
@@ -820,8 +820,8 @@ pub unsafe extern "C" fn pio_balanced_network_source_format(
 /// `counts` is the case file's own inventory, so it counts a 3-winding
 /// transformer once under `transformers_3w` rather than as the star bus and
 /// three branches it lowers to. `topology.n_buses` and `topology.n_branches`
-/// are that lowered space, the one [`pio_balanced_network_n_buses`] and [`pio_balanced_network_branches`]
-/// report and the one the rest of `topology` is computed over. The two differ
+/// are that lowered space, the one [`pio_balanced_network_n_buses`] and
+/// [`pio_balanced_network_n_branches`] report and the one the rest of `topology` is computed over. The two differ
 /// only for a case with an in-service 3-winding transformer.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_balanced_network_summary_json(
@@ -1098,13 +1098,13 @@ unsafe fn write_options_from_c(opts: *const PioWriteOptions) -> Result<WriteOpti
 }
 
 /// Convert the case file at `path` from format `from` (NULL to infer from the
-/// path, as [`pio_parse_file`](v6::pio_parse_file)) to format `to`, without keeping a handle.
+/// path, as `pio_parse_file`) to format `to`, without keeping a handle.
 /// `to` names any balanced or multiconductor text format; `opts` carries the
 /// balanced write-time cost policies (NULL for every default, ignored by a
 /// multiconductor target); see [`PioWriteOptions`].
 /// Returns the converted text as an owned C string (free with
 /// [`pio_string_release`]), `NULL` on error. The findings, read side first, are
-/// published through `out_diagnostics` as an owned [`v6::PioDiagnostics`] list
+/// published through `out_diagnostics` as an owned `PioDiagnostics` list
 /// (release it with `pio_diagnostics_release`); the list is empty, never NULL,
 /// when there is nothing to report. Pass NULL to discard them.
 /// `out_diagnostics` is written on every return path and is NULL whenever this
@@ -1196,7 +1196,7 @@ fn declared_source(
 /// multiconductor target); see [`PioWriteOptions`]. Returns the converted text
 /// as an owned C string (free with [`pio_string_release`]), `NULL` on error.
 /// The findings, read side first, are published through `out_diagnostics` as
-/// an owned [`v6::PioDiagnostics`] list (release it with
+/// an owned `PioDiagnostics` list (release it with
 /// `pio_diagnostics_release`); the list is empty, never NULL, when there is
 /// nothing to report. Pass NULL to discard them. `out_diagnostics` is written
 /// on every return path and is NULL whenever this returns NULL, so an error
@@ -1543,22 +1543,14 @@ pub unsafe extern "C" fn pio_balanced_network_bus_shunt(
 /// Export one network table over the Arrow C Data Interface: the `to_`
 /// conversion whose output type is Arrow structs rather than a string, and the
 /// bulk table surface of this ABI. Tables 0..5 are raw network tables; tables
-/// 6..14 are normalized solver tables with per unit/radian values and dense
-/// zero based row ids; tables 15..18 carry COO triplets in that dense index
-/// space with dimensions in schema metadata; tables 19 and 20 are the axis maps
-/// naming what each row and column of those triplets is (`matrix_bus` carries
-/// the bus id, source row, reference flag and island per index, `matrix_branch`
-/// the source row and endpoint ids). Tables 21 and 22 carry normalized
-/// generator cost: one header row per solver generator, in `solver_gen` order,
-/// slicing `[coeff_offset, coeff_offset + coeff_count)` of the flattened
-/// coefficient table. `model` 2 reads position `i` of a `coeff_count` long
-/// slice as the coefficient of `p^(coeff_count - 1 - i)`; `model` 1 reads even
-/// positions as per unit active power at a breakpoint and odd positions as the
-/// curve value there; `model` 0 means the generator carries no cost row, and
-/// its `coeff_offset` is `-1`. Every table entry in
-/// [`pio_arrow_catalog_json`] states which of the three it is under `format`.
-/// New columns extend the Arrow schema without changing an existing C
-/// signature.
+/// 15..18 carry sparse matrix COO triplets in the dense index space with
+/// dimensions in schema metadata; tables 19 and 20 are the axis maps naming
+/// what each row and column of those triplets is (`matrix_bus` carries the
+/// bus id, source row, reference flag and island per index, `matrix_branch`
+/// the source row and endpoint ids). The 0.9 solver row ids (6..14, 21, 22)
+/// are burned: they are never reassigned and this function refuses them.
+/// [`pio_arrow_catalog_json`] lists exactly the live ids. New columns extend
+/// an Arrow schema without changing an existing C signature.
 ///
 /// `table` is one of the `PIO_ARROW_TABLE_*` selectors. Raw table columns use
 /// EXTERNAL bus ids (the `pio_balanced_network_bus_ids` id space), not the gridfm schema. On
@@ -1635,11 +1627,11 @@ pub unsafe extern "C" fn pio_arrow_catalog_json(error: *mut *mut v6::PioError) -
 /// coordinates and stores a structured error.
 ///
 /// The tolerant reader's notes, one per record it read past, are published
-/// through `out_diagnostics_json` as one owned JSON array of diagnostic
-/// records (free it with [`pio_string_release`]), or NULL when the reader used
-/// every record. Pass NULL to discard them. `out_diagnostics_json` is written
-/// on every return path and is NULL whenever this returns NULL, so an error
-/// return leaves nothing to free.
+/// through `out_diagnostics` as an owned `PioDiagnostics` list (release
+/// it with `pio_diagnostics_release`); the list is empty, never NULL, when the
+/// reader used every record. Pass NULL to discard them. `out_diagnostics` is
+/// written on every return path and is NULL whenever this returns NULL, so an
+/// error return leaves nothing to release.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_geo_parse(
     text: *const c_char,
@@ -1717,7 +1709,6 @@ pub unsafe extern "C" fn pio_balanced_network_geo_apply(
     }
 }
 
-/// One-line apply summary lifted into the returned handle's warnings.
 /// Extract a multiconductor network's coordinates as the canonical GeoJSON
 /// layer, keyed by the string bus and line names. Free the returned string
 /// with `pio_string_release`. Returns `NULL` (with a message) when the network
@@ -1744,8 +1735,8 @@ pub unsafe extern "C" fn pio_multiconductor_network_geo_extract(
 /// released with [`pio_multiconductor_network_release`]. `name_hint` (a file name, nullable)
 /// picks CSV against JSON as in [`pio_geo_parse`]. The returned handle drops
 /// the retained source text, so a same-format write re-serializes the placed
-/// case. The reader's notes and an apply summary are appended to the handle's
-/// the handle's findings. Returns `NULL` on error.
+/// case. The reader's notes and a one-line apply summary are appended to the
+/// returned handle's findings. Returns `NULL` on error.
 #[cfg(feature = "dist")]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_multiconductor_network_geo_apply(
@@ -1870,8 +1861,8 @@ pub unsafe extern "C" fn pio_multiconductor_network_retain(
     }
 }
 
-/// Release one multiconductor network handle: identical to
-/// the drop half of the multiconductor retain/release pair.
+/// Release one multiconductor network handle: the drop half of the
+/// multiconductor retain/release pair.
 #[cfg(feature = "dist")]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_multiconductor_network_release(net: *mut PioMulticonductorNetwork) {
@@ -1928,7 +1919,7 @@ pub unsafe extern "C" fn pio_multiconductor_network_summary_json(
 /// document. This is the bindings' data transport, not a case format: the
 /// converter, CLI, and format inference do not know it; a distribution case
 /// other tools read is BMOPF JSON, written through
-/// [`pio_module_write_str`](v6::pio_module_write_str).
+/// `pio_module_write_str`.
 /// Returns an owned C string (free with [`pio_string_release`]), `NULL` on error.
 #[cfg(feature = "dist")]
 #[unsafe(no_mangle)]

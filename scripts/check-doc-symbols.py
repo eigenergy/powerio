@@ -20,7 +20,11 @@ DOCS = ROOT / "docs" / "src"
 HISTORY_PAGES = {
     "abi-v5.md", "abi-v6.md", "capi-arrow.md", "migration.md", "migration-v1.md",
     "migration-v0.9.md", "migration-v0.7.md", "retired-names.md", "developer.md",
-    "pio-json-schema.md",
+}
+# Pages whose lower half narrates retired surfaces: everything above the
+# heading is live prose, checked like any other page.
+HISTORY_BELOW = {
+    "pio-json-schema.md": "## The 0.9 package",
 }
 
 def fail(page: Path, message: str) -> None:
@@ -59,8 +63,12 @@ if julia_root and (julia_root / "src/PowerIO.jl").exists():
             if name != "export":
                 julia_exports.add(name)
 
-for page in sorted(DOCS.glob("*.md")):
+PAGES = sorted(DOCS.glob("*.md")) + [ROOT / "README.md"]
+
+for page in PAGES:
     text = page.read_text()
+    if page.name in HISTORY_BELOW:
+        text = text.split(HISTORY_BELOW[page.name])[0]
     is_history = page.name in HISTORY_PAGES
     # C symbols anywhere in the page's prose or code. A family shorthand
     # (`pio_dc_data_*`) is prose, not a symbol; the star and the trailing
@@ -130,7 +138,10 @@ for line in lang_page.read_text().splitlines():
         continue
     concept, rust_cell, python_cell, julia_cell, _c_cell = cells
     for fragment in cell_fragments(rust_cell):
-        names = set(re.findall(r"([A-Za-z_][A-Za-z0-9_]*)\s*(?:::|\()", fragment))
+        # A path names its final item; crate and module prefixes are not
+        # themselves the taught symbol.
+        fragment = re.sub(r"(?:[A-Za-z_][A-Za-z0-9_]*::)+", "", fragment)
+        names = set(re.findall(r"([A-Za-z_][A-Za-z0-9_]*)\s*\(", fragment))
         names |= set(re.findall(r"\b([A-Z][A-Za-z0-9_]+)\b", fragment))
         for token in names - RECEIVERS:
             if token not in rust_items:

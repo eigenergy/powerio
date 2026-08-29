@@ -228,7 +228,7 @@ Current conventions for signs, taps, phase shifts, per unit scaling, reference b
 
 The normalized copy carries no retained source text, so writing it emits the derived model rather than the original file.
 
-Python exposes the normalized form as `case.to_normalized()`, the C ABI as `pio_normalize`,
+Python exposes the normalized form as `case.to_normalized()`, the C ABI as `pio_balanced_network_normalize`,
 and Julia as `to_normalized(case)`.
 
 
@@ -238,7 +238,7 @@ and Julia as `to_normalized(case)`.
 `.pio.json` document handles, and numeric table extraction through `pio_*`
 functions. The public header is
 [powerio-capi/include/powerio.h](https://github.com/eigenergy/powerio/blob/main/powerio-capi/include/powerio.h).
-Build with `--features arrow` to enable `pio_to_arrow` over the
+Build with `--features arrow` to enable `pio_balanced_network_to_arrow` over the
 [Arrow C Data Interface](https://arrow.apache.org/docs/format/CDataInterface.html),
 and add `--features matrix` for sparse matrix COO tables. Matrix Arrow ABI v1
 is COO plus explicit `matrix_bus` and `matrix_branch` axis map tables; language
@@ -284,7 +284,7 @@ extensions. Released 0.9 packages upgrade one way on read; a 0.9 GO Challenge
 series, and `export_state` materializes one static item from it.
 
 Rust reads and writes the document with `powerio::stored::read_module` and
-`write_module`, Python with `powerio.StoredModule` (and `powerio.parse`,
+`write_module`, Python with `powerio.PioModule` (and `powerio.parse`,
 which loads either stored generation), the C ABI with `pio_module_*`, and
 the CLI writes documents with `powerio package`.
 
