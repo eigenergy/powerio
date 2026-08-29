@@ -85,6 +85,23 @@ def main() -> int:
     # The necessity gate: the recorded ABI number must follow from the
     # classified compatibility changes.
     breaking = bool(removed or changed)
+    # The migration guide's arithmetic must match this classification: the
+    # page states how many symbols the baseline header declared and how many
+    # survive unchanged, and a hand edited number drifts.
+    guide = ROOT / "docs" / "src" / "abi-v6.md"
+    if guide.exists():
+        import re as _re
+        m = _re.search(r"Of the\s+(\d+) symbols the v0\.9\.0 header declared, (\d+) survive unchanged",
+                       guide.read_text())
+        if m:
+            stated_total, stated_unchanged = int(m.group(1)), int(m.group(2))
+            actual_total = len(old)
+            if stated_total != actual_total or stated_unchanged != len(unchanged):
+                print(f"error: abi-v6.md states {stated_total} baseline symbols with "
+                      f"{stated_unchanged} unchanged; the header delta gives "
+                      f"{actual_total} with {len(unchanged)}", file=sys.stderr)
+                return 1
+
     if breaking and new_abi <= old_abi:
         print(f"error: the delta removes or re-signatures symbols but the ABI "
               f"stayed at {new_abi}", file=sys.stderr)
