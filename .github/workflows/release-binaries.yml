@@ -1,6 +1,6 @@
 name: Release binaries
 
-# Build the powerio-capi cdylib (with arrow, matrix, gridfm, dist, pkg, and prob
+# Build the powerio-capi cdylib (with arrow, matrix, gridfm, dist, and prob
 # features) for the five platforms PowerIO.jl's Artifacts.toml covers, package
 # each as the artifact tarball that file references (lib/ or bin/ layout, Julia
 # platform triplet in the name), and attach them to the GitHub release on a

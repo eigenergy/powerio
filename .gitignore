@@ -42,3 +42,8 @@ private/
 # Playwright MCP browser session artifacts
 .playwright-mcp/
 .venv*/
+
+# Local wheel staging directories; never track built binaries.
+/dist-validate/
+/dist-mcp/
+*.whl

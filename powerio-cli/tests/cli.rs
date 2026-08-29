@@ -167,7 +167,7 @@ fn package_refuses_an_existing_output_file() {
     // An existing entry at the output is refused and keeps its bytes; a
     // fresh path commits.
     let out = run(&[
-        "package",
+        "module",
         case.to_str().unwrap(),
         "-o",
         out_path.to_str().unwrap(),
@@ -179,7 +179,7 @@ fn package_refuses_an_existing_output_file() {
 
     let fresh = std::env::temp_dir().join(format!("powerio-cli-package-fresh-{stamp}.pio.json"));
     let out = run(&[
-        "package",
+        "module",
         case.to_str().unwrap(),
         "-o",
         fresh.to_str().unwrap(),
@@ -580,7 +580,7 @@ fn convert_exits_nonzero_on_an_include_refused_through_a_symbolic_link() {
 #[test]
 fn package_exits_nonzero_on_a_refused_include() {
     // The package carries the same `Error` finding convert fails on,
-    // so the package subcommand has to fail with it too — otherwise a script
+    // so the module subcommand has to fail with it too — otherwise a script
     // gating on the exit code accepts a package built from a truncated network.
     let tmp = tempfile::tempdir().unwrap();
     let dir = tmp.path();
@@ -600,7 +600,7 @@ fn package_exits_nonzero_on_a_refused_include() {
     let out_path = dir.join("out.pio.json");
 
     let out = run(&[
-        "package",
+        "module",
         master.to_str().unwrap(),
         "-o",
         out_path.to_str().unwrap(),
