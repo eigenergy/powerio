@@ -123,6 +123,19 @@ fn read_round_trips_power_flow_fingerprint() {
     assert_fingerprint_close(&read.network, &net);
     // The reconstruction is structurally valid (validate() already ran inside).
     read.network.validate().unwrap();
+
+    // The facade route stamps the format on the stored source descriptor.
+    let module =
+        powerio::parse(powerio_core::Source::open(dir.path().join("case14").join("raw")).unwrap())
+            .unwrap();
+    assert_eq!(
+        module
+            .sources()
+            .first()
+            .and_then(|s| s.format())
+            .map(powerio_core::FormatId::as_str),
+        Some("gridfm")
+    );
 }
 
 #[test]
