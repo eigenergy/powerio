@@ -177,6 +177,10 @@ fn parse_gridfm(
         // A file claiming the gridfm token gets the hub's own refusal wording.
         return format::parse(source).map(|module| module.map_value(PioValue::from));
     }
+    let source = match source.format() {
+        Some(_) => source,
+        None => source.with_format(powerio_core::FormatId::new("gridfm")?),
+    };
     match gridfm::parse_gridfm_source(&source) {
         Ok((set, diagnostics)) => powerio_core::PioModule::parsed(
             PioValue::BalancedNetworkScenarioSet(set),
