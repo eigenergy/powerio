@@ -133,12 +133,12 @@ mod tests {
         let start = source
             .find("pub mod __implementation {")
             .expect("the __implementation module must exist");
-        let mut depth = 0i32;
+        let mut depth = 0i64;
         let mut direct_items = Vec::new();
         for (index, line) in source[start..].lines().enumerate() {
             if index == 0 {
-                depth += line.matches('{').count() as i32;
-                depth -= line.matches('}').count() as i32;
+                depth += i64::try_from(line.matches('{').count()).unwrap();
+                depth -= i64::try_from(line.matches('}').count()).unwrap();
                 continue;
             }
             if depth == 1 {
@@ -147,8 +147,8 @@ mod tests {
                     direct_items.push(trimmed.to_owned());
                 }
             }
-            depth += line.matches('{').count() as i32;
-            depth -= line.matches('}').count() as i32;
+            depth += i64::try_from(line.matches('{').count()).unwrap();
+            depth -= i64::try_from(line.matches('}').count()).unwrap();
             if depth <= 0 {
                 break;
             }
