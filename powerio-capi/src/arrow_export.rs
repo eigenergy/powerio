@@ -27,7 +27,7 @@ use arrow::record_batch::RecordBatch;
 use powerio::IndexedNetwork;
 use powerio::{BalancedNetwork, BusId, IndexCore};
 
-/// Table selectors for [`pio_balanced_network_to_arrow`](crate::pio_balanced_network_to_arrow); the C
+/// Table selectors for `pio_balanced_network_to_arrow`; the C
 /// header mirrors these as `PIO_ARROW_TABLE_*`.
 pub const PIO_ARROW_TABLE_BUS: i32 = 0;
 pub const PIO_ARROW_TABLE_BRANCH: i32 = 1;

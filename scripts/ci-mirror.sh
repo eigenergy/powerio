@@ -15,6 +15,7 @@ run ./scripts/ci-clippy.sh
 run bash scripts/terminology-gate.sh
 run ./scripts/capi-header-parity.sh
 run bash scripts/capi-removed-surface.sh
+run python3 scripts/capi-doc-integrity.py
 run bash scripts/capi-export-monotonicity.sh
 run python3 scripts/check-doc-symbols.py
 run ./scripts/capi-header-regen.sh
