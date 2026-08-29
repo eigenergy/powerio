@@ -120,7 +120,10 @@ impl CoordinateMtxWriter {
         // The complete staged matrix moves onto the target through the
         // no-replace commit: an entry at the target refuses the write and the
         // staged file is removed, leaving the caller's filesystem as it was.
-        powerio_core::__commit_staged_file(&self.final_tmp_path, &self.target_path)?;
+        powerio_core::__implementation::__commit_staged_file(
+            &self.final_tmp_path,
+            &self.target_path,
+        )?;
         let _ = std::fs::remove_file(&self.body_path);
         Ok(())
     }

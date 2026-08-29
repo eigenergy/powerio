@@ -945,6 +945,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "facade-only"
+version = "0.9.0"
+dependencies = [
+ "powerio",
+]
+
+[[package]]
 name = "faer"
 version = "0.24.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2347,6 +2354,7 @@ dependencies = [
  "powerio-core",
  "powerio-dist",
  "powerio-matrix",
+ "powerio-prob",
  "powerio-tx",
  "schemars",
  "serde",
