@@ -42,9 +42,19 @@ def cargo_workspace() -> tuple[set[str], set[tuple[str, str]]]:
     return members, edges
 
 def diagram_edges(text: str) -> set[tuple[str, str]]:
+    """Every drawn edge, including each hop of a chained a -> b -> c line."""
     edges = set()
-    for match in re.finditer(r'^\s*"?([A-Za-z0-9_-]+)"?\s*->\s*"?([A-Za-z0-9_-]+)"?', text, re.M):
-        edges.add((match.group(1), match.group(2)))
+    for line in text.splitlines():
+        for stmt in line.split("//")[0].split(";"):
+            if "->" not in stmt:
+                continue
+            names = []
+            for part in stmt.split("->"):
+                m = re.search(r'"?([A-Za-z0-9_-]+)"?', part)
+                if m:
+                    names.append(m.group(1))
+            for a, b in zip(names, names[1:]):
+                edges.add((a, b))
     return edges
 
 def diagram_nodes(text: str) -> set[str]:
