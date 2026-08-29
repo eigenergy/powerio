@@ -184,3 +184,10 @@ jobs:
       env:
         POWERIO_CAPI: ${{ github.workspace }}/target/release/libpowerio_capi.so
       run: julia --project=PowerIO.jl -e 'using Pkg; Pkg.instantiate(); Pkg.test()'
+    - name: Probe PowerIO.jl against a library without prob
+      if: steps.powerio-jl.outputs.available == 'true'
+      run: |
+        cargo build -p powerio-capi --release --no-default-features --features dist --target-dir target/no-prob
+        POWERIO_CAPI="${{ github.workspace }}/target/no-prob/release/libpowerio_capi.so" \
+          julia --project=PowerIO.jl -e \
+          'using PowerIO; @assert !has_feature("prob"); @assert !prob_available(); @assert !features().prob'

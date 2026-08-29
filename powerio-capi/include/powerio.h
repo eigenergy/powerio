@@ -884,15 +884,15 @@ PioModule *pio_parse_bytes(const char *name,
                            PioError **error);
 
 /**
- * The module's balanced network value as an owned network handle, provenance
- * included. Any other value kind is refused with the kind named.
+ * The module's balanced network value as an owned network handle with its
+ * retained source and records. Any other value kind is refused with the kind named.
  */
 PioBalancedNetwork *pio_module_balanced_network(const PioModule *module, PioError **error);
 
 #if defined(PIO_DIST)
 /**
  * The module's multiconductor network value as an owned distribution
- * handle, provenance included. Any other value kind is refused.
+ * handle with its retained source and records. Any other value kind is refused.
  */
 PioMulticonductorNetwork *pio_module_multiconductor_network(const PioModule *module,
                                                             PioError **error);

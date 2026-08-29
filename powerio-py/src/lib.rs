@@ -2297,10 +2297,10 @@ impl PyPioModule {
                 module.value().kind().as_str()
             )));
         };
-        // Thread the module's provenance onto the handle so the byte exact
-        // same format echo survives the universal parse. Sources carry over
-        // first: a diagnostic's span validates against the sources on the
-        // module it is being added to.
+        // Copy the module's source descriptors, diagnostics, and retained
+        // source onto the handle so the byte exact same format echo survives
+        // the universal parse. Sources come first because diagnostic spans
+        // validate against them.
         let mut out = powerio_core::PioModule::new(network.clone());
         for descriptor in module.sources() {
             out.add_source_descriptor(descriptor.clone())

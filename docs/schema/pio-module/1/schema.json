@@ -1484,7 +1484,7 @@
       "type": "string"
     },
     "CoordsKind": {
-      "description": "Coordinate provenance.",
+      "description": "Coordinate origin.",
       "enum": [
         "source",
         "synthetic",
@@ -2195,7 +2195,7 @@
       "type": "object"
     },
     "DistCoordsKind": {
-      "description": "Coordinate provenance.",
+      "description": "Coordinate origin.",
       "enum": [
         "source",
         "synthetic",
@@ -2543,7 +2543,7 @@
               "type": "null"
             }
           ],
-          "description": "Default provenance for points without their own `kind`."
+          "description": "Default origin for points without their own `kind`."
         }
       },
       "type": "object"
@@ -3078,7 +3078,7 @@
           ]
         },
         "source": {
-          "description": "Provenance of the impedance matrices (BMOPF `source`, e.g. \"fem\",\n\"datasheet\", \"import\").",
+          "description": "Origin of the impedance matrices (BMOPF `source`, e.g. \"fem\",\n\"datasheet\", \"import\").",
           "type": [
             "string",
             "null"
@@ -3538,7 +3538,7 @@
               "type": "null"
             }
           ],
-          "description": "Per point provenance when it differs from the network default."
+          "description": "Point origin when it differs from the network default."
         },
         "x": {
           "anyOf": [
@@ -4344,7 +4344,7 @@
               "type": "null"
             }
           ],
-          "description": "Default provenance for points without their own `kind`."
+          "description": "Default origin for points without their own `kind`."
         }
       },
       "type": "object"
@@ -5145,7 +5145,7 @@
               "type": "null"
             }
           ],
-          "description": "Per point provenance when it differs from the network default."
+          "description": "Point origin when it differs from the network default."
         },
         "x": {
           "anyOf": [
@@ -9414,7 +9414,7 @@
         },
         {
           "const": "goc3-json",
-          "description": "Read from an ARPA-E GO Challenge 3 JSON input document. The source is a\nunit commitment data set; the neutral transmission model keeps a static\nfirst interval network and retains the source text for the full data.",
+          "description": "Read from a DOE GO Challenge 3 JSON input document. The source is a\nunit commitment data set; the neutral transmission model keeps a static\nfirst interval network and retains the source text for the full data.",
           "type": "string"
         },
         {

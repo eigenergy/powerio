@@ -1,7 +1,7 @@
 {
   "receipt": "powerio-producer/1",
-  "subject_commit": "fc0ea58706b83c4f1639dd99682c26796270437e",
-  "powerio_jl_commit": "a0f603cb6ea58f861e2bbd98d7e5df9c1bcdd7a7",
+  "subject_commit": "20e55ab0d0159ae33a466ac05ab53cbbeec38ffc",
+  "powerio_jl_commit": "8d935d690bbd5f8dbfccd4c82820d6d080dd93af",
   "versions": {
     "powerio": "0.10.0",
     "c_abi": 6,
@@ -27,7 +27,7 @@
     "smoke": "powerio/examples/wasm_smoke.rs: named in-memory bytes parse, typed narrowing, byte exact echo"
   },
   "schema_digests": {
-    "docs/schema/pio-module/1/schema.json": "3c3aab80b0ba904a0c7c93b96aa8caa13c8c468faa81adf71cd3e9d8365f17c6",
+    "docs/schema/pio-module/1/schema.json": "052d99b03b17afdb0c87999723e6d9fdd783378c1bd28d4a53969b83c578581a",
     "docs/schema/pio-package/0.1/schema.json": "1e3a6c3300a5afd82798436fcf79a82c3c21fbcb52bc3459d553607242239f23",
     "docs/schema/pio-package/0.2/schema.json": "39f463f408064fe5e316a6ba57b13d89668949750bbf7691753b2a04f9230aff",
     "docs/schema/pio-package/0.9/schema.json": "e6321c5b6827ea4f439b37ecd2232dd5a7253469242a420b0cc1623cf94b61b4",

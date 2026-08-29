@@ -33,7 +33,7 @@ instance = pio.parse("goc3_case.json")  # kind "ac_scuc_instance"
 instance.inspect()                   # the operations the value supports
 ```
 
-Balanced network formats accepted by `parse` and the `convert_*` functions include `matpower`, `psse`, `powerworld`, `pslf`, `powermodels-json`, `egret-json`, `pandapower-json`, `goc3-json`, `surge-json`, and `opfdata-json`, plus their documented aliases. Multiconductor sources are OpenDSS (`dss`) and PMD engineering JSON. Balanced model JSON is the bindings' data transport rather than a case format and has no name here: read and write it with `powerio.from_json` and `BalancedNetwork.to_json`. `opfdata-json` reads one extracted JSON document from a DeepMind OPFData FullTop or N-1 release without PyTorch and parses to its solved calculation. PyPSA CSV folders and GridFM Parquet datasets are directory formats: `parse` takes the folder path, and `BalancedNetwork.write_pypsa_csv_folder`, `read_gridfm`, and `BalancedNetwork.write_gridfm` write and read them.
+Balanced network formats accepted by `parse` and the `convert_*` functions include `matpower`, `psse`, `powerworld`, `pslf`, `powermodels-json`, `egret-json`, `pandapower-json`, and `surge-json`, plus their documented aliases. Multiconductor sources are OpenDSS (`dss`) and PMD engineering JSON. DOE GO Challenge 3 (`goc3-json`), BMOPF, and DeepMind OPFData (`opfdata-json`) produce calculation instances or solutions. Balanced model JSON is the bindings' data transport rather than a case format and has no name here: read and write it with `powerio.from_json` and `BalancedNetwork.to_json`. `opfdata-json` reads one extracted JSON document from a DeepMind OPFData FullTop or N-1 release without PyTorch and parses to its solved calculation. PyPSA CSV folders and GridFM Parquet datasets are directory formats: `parse` takes the folder path, and `BalancedNetwork.write_pypsa_csv_folder`, `read_gridfm`, and `BalancedNetwork.write_gridfm` write and read them.
 
 When `include_root` is omitted, a file's referenced includes resolve only beneath its own containing directory; passing `include_root` widens that boundary to the named ancestor directory, and with it the set of files the parse may read.
 
@@ -44,11 +44,11 @@ When `include_root` is omitted, a file's referenced includes resolve only beneat
 ```python
 module = pio.parse("case9.m")
 module.kind                        # "balanced_network"
-net = module.as_balanced_network() # typed handle, provenance threaded on
+net = module.as_balanced_network() # typed handle with retained source and diagnostics
 text = module.to_json()            # the .pio.json stored document
 ```
 
-`as_balanced_network()` and `as_multiconductor_network()` assert the kind and hand back the typed network with the module's retained source and findings threaded on, so a same format write still echoes the source bytes. `PioModule.from_json` reads stored `.pio.json` text (a released 0.9 document upgrades one way on read); `PioModule.from_file`, `from_str`, and `from_bytes` parse case input, equivalent to `powerio.parse`.
+`as_balanced_network()` and `as_multiconductor_network()` assert the kind and return the typed network with the module's retained source and diagnostics, so a same format write still echoes the source bytes. `PioModule.from_json` reads stored `.pio.json` text (a released 0.9 document upgrades one way on read); `PioModule.from_file`, `from_str`, and `from_bytes` parse case input, equivalent to `powerio.parse`.
 
 ## Findings are records
 
@@ -100,7 +100,7 @@ print(first.number, first.name, first.x, first.y)
 
 ## Problem data
 
-A source that defines a calculation parses to that calculation's typed value: GO Challenge 3 JSON to an AC SCUC instance, BMOPF JSON to a multiconductor AC OPF instance, and OPFData JSON to a solved AC OPF. `module.inspect()` names the operations the value supports, and `BalancedNetwork.dc_data(formula)` serves the DC branch data every language reads under the same names.
+A source that defines a calculation parses to that calculation's typed value: DOE GO Challenge 3 JSON to an AC SCUC instance, BMOPF JSON to a multiconductor AC OPF instance, and OPFData JSON to a solved AC OPF. `module.inspect()` names the operations the value supports, and `BalancedNetwork.dc_data(formula)` serves the DC branch data every language reads under the same names.
 
 ## Collections and state selection
 

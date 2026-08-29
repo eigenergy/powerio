@@ -292,7 +292,7 @@ pub enum SourceFormat {
     /// single retained text document, so same-format writes are canonicalized.
     #[serde(rename = "pypsa-csv", alias = "PypsaCsv")]
     PypsaCsv,
-    /// Read from an ARPA-E GO Challenge 3 JSON input document. The source is a
+    /// Read from a DOE GO Challenge 3 JSON input document. The source is a
     /// unit commitment data set; the neutral transmission model keeps a static
     /// first interval network and retains the source text for the full data.
     #[serde(rename = "goc3-json", alias = "Goc3Json")]
@@ -309,8 +309,8 @@ pub enum SourceFormat {
 }
 
 impl SourceFormat {
-    /// Stable lowercase token for provenance and reporting (package origin,
-    /// CLI summaries, Python bindings). The match is exhaustive here so a new
+    /// Stable lowercase token for the source format in module records, CLI
+    /// summaries, and language bindings. The match is exhaustive here so a new
     /// variant fails compilation at the one mapping instead of silently
     /// reporting "unknown" from a downstream wildcard copy.
     #[must_use]

@@ -1,4 +1,4 @@
-//! Read ARPA-E GO Challenge 3 JSON input data into the transmission `BalancedNetwork`.
+//! Read DOE GO Challenge 3 JSON input data into the transmission `BalancedNetwork`.
 //!
 //! GO Challenge 3 is a unit commitment data model. `BalancedNetwork` is a static power
 //! flow model, so this reader maps the first time interval into static generator

@@ -331,7 +331,7 @@ impl<T> PioModule<T> {
         Ok(())
     }
 
-    /// Drop the value shaped provenance: the operation that calls this
+    /// Drop records that address the old value: the operation that calls this
     /// replaced the value with one of a different kind, so RFC 6901 targets
     /// into the old value no longer identify anything. Every diagnostic
     /// keeps its code, message, severity, and spans but loses its target,

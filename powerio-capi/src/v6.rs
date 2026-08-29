@@ -457,11 +457,10 @@ pub unsafe extern "C" fn pio_parse_bytes(
     }
 }
 
-/// Rebuild a typed module around one value with the source module's
-/// provenance threaded on: sources first (a diagnostic's span validates
-/// against them), then the findings, then the retained source, so the byte
-/// exact same format echo survives the module surface.
-fn provenanced<T>(
+/// Rebuild a typed module around one value with the source descriptors,
+/// diagnostics, and retained source from the dynamic module. Sources are
+/// added first because diagnostic spans validate against them.
+fn with_module_records<T>(
     module: &powerio_core::PioModule<powerio::PioValue>,
     value: T,
 ) -> Result<powerio_core::PioModule<T>, *mut PioError> {
@@ -480,8 +479,8 @@ fn provenanced<T>(
     })
 }
 
-/// The module's balanced network value as an owned network handle, provenance
-/// included. Any other value kind is refused with the kind named.
+/// The module's balanced network value as an owned network handle with its
+/// retained source and records. Any other value kind is refused with the kind named.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_module_balanced_network(
     module: *const PioModule,
@@ -500,7 +499,7 @@ pub unsafe extern "C" fn pio_module_balanced_network(
                     ),
                 ));
             };
-            Ok(crate::make_network_module(provenanced(
+            Ok(crate::make_network_module(with_module_records(
                 &inner.module,
                 network.clone(),
             )?))
@@ -509,7 +508,7 @@ pub unsafe extern "C" fn pio_module_balanced_network(
 }
 
 /// The module's multiconductor network value as an owned distribution
-/// handle, provenance included. Any other value kind is refused.
+/// handle with its retained source and records. Any other value kind is refused.
 #[cfg(feature = "dist")]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_module_multiconductor_network(
@@ -530,7 +529,7 @@ pub unsafe extern "C" fn pio_module_multiconductor_network(
                 ));
             };
             Ok(crate::PioMulticonductorNetwork::from_module_raw(
-                provenanced(&inner.module, network.clone())?,
+                with_module_records(&inner.module, network.clone())?,
             ))
         })
     }
@@ -2383,7 +2382,7 @@ mod tests {
     /// `source_format` through the full C ABI surface, and it survives a
     /// `.pio.json` save and reload — the exact round trip a script doing
     /// `m = parse_file(...); write_json(m, "case.pio.json")`, later reopened
-    /// with `PowerIO.parse_file("case.pio.json")`, then `write_file(m2,
+    /// with `parse_file("case.pio.json")` after `using PowerIO`, then `write_file(m2,
     /// "out.m")` with no format, depends on.
     #[test]
     fn source_format_reaches_pio_parse_file_and_survives_a_pio_json_round_trip() {

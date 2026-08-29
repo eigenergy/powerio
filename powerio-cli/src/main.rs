@@ -433,7 +433,7 @@ enum FormatArg {
     /// GE PSLF .epc case (read and write).
     #[value(name = "pslf", alias = "epc")]
     Pslf,
-    /// ARPA-E GO Challenge 3 JSON input data (read only).
+    /// DOE GO Challenge 3 JSON input data (read only).
     #[value(name = "goc3-json", alias = "goc3", alias = "go3", alias = "c3")]
     Goc3Json,
     /// Surge native JSON network document.
