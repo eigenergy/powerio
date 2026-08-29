@@ -342,8 +342,8 @@ impl SourceFormat {
 /// allocation. Reads go through the per field accessors; the `*_mut`
 /// accessors copy the shared tables once on first write to a shared handle
 /// (copy on write), so no other handle ever observes a mutation. The choice
-/// of whole value sharing is private and settled by the allocation
-/// benchmarks in `evals/allocation`.
+/// of whole value sharing is private: clone stays zero allocation because
+/// the handle wraps its tables in one `Arc`.
 #[derive(Debug, Clone)]
 pub struct BalancedNetwork {
     tables: std::sync::Arc<BalancedNetworkTables>,
