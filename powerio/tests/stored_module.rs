@@ -6,9 +6,9 @@ use std::collections::BTreeMap;
 use powerio::stored::{read_module, write_module};
 use powerio::{BalancedNetwork, PioValue};
 use powerio_core::{
-    Diagnostic, DiagnosticCode, DiagnosticSeverity, HistoryEntry, HistoryId, HistoryKind,
-    PioModule, Producer, SourceDescriptor, SourceId, SourceMapEntry, SourceRelation, SourceSpan,
-    TimePoint,
+    Diagnostic, DiagnosticCode, DiagnosticId, DiagnosticSeverity, HistoryEntry, HistoryId,
+    HistoryKind, PioModule, Producer, SourceDescriptor, SourceId, SourceMapEntry, SourceRelation,
+    SourceSpan, TimePoint,
 };
 use powerio_tx::{Bus, BusId, BusType, Generator, Load, repair_values};
 
@@ -134,6 +134,160 @@ fn a_repair_finding_target_is_a_pointer_the_writer_accepts() {
     // read_module runs the same target validation the write did; a round
     // trip through the reader is one more proof the target is accepted.
     read_module(&text).unwrap();
+}
+
+/// Build a module carrying the diagnostics `d0` and `d1` (`d1` referencing
+/// `d0`), inserted in `order`, so the position based id this test guards
+/// against depends only on order, never content.
+fn module_with_d0_and_d1(order: [&str; 2]) -> PioModule<PioValue> {
+    let mut module = PioModule::new(PioValue::BalancedNetwork(small_network()));
+    let d0 = Diagnostic::new(
+        DiagnosticCode::new("READ.TEST.NOTE").unwrap(),
+        DiagnosticSeverity::Note,
+        "first",
+    )
+    .with_id(DiagnosticId::new("d0").unwrap());
+    let d1 = Diagnostic::new(
+        DiagnosticCode::new("READ.TEST.NOTE").unwrap(),
+        DiagnosticSeverity::Note,
+        "second",
+    )
+    .with_id(DiagnosticId::new("d1").unwrap())
+    .with_related(DiagnosticId::new("d0").unwrap())
+    .unwrap();
+    for name in order {
+        module
+            .add_diagnostic(if name == "d0" { d0.clone() } else { d1.clone() })
+            .unwrap();
+    }
+    module
+}
+
+/// After a write/read round trip, `d1`'s `related` still names `d0`, and the
+/// diagnostic actually holding id `d0` is the one whose message is `"first"`
+/// (not some other record that ended up sharing the id).
+fn assert_d1_still_resolves_to_d0(module: &PioModule<PioValue>) {
+    let d1 = module
+        .diagnostics()
+        .iter()
+        .find(|d| d.id().is_some_and(|id| id.as_str() == "d1"))
+        .expect("d1 present");
+    assert_eq!(d1.related().first().map(DiagnosticId::as_str), Some("d0"));
+    let d0 = module
+        .diagnostics()
+        .iter()
+        .find(|d| d.id().is_some_and(|id| id.as_str() == "d0"))
+        .expect("d0 present");
+    assert_eq!(d0.message(), "first");
+}
+
+/// A diagnostic appended with no explicit id (as a repair pass does, e.g.
+/// `powerio_tx::network::ValueFinding::into_diagnostic`) must not collide
+/// with an id an external document already claimed explicitly, and the
+/// module must still write successfully. Checked at two different
+/// insertion orders for `d0`/`d1`, since a position derived id is exactly
+/// what a reorder would have broken.
+#[test]
+fn an_id_synthesized_for_an_unlabeled_diagnostic_never_collides_with_an_explicit_one() {
+    for order in [["d0", "d1"], ["d1", "d0"]] {
+        // "a .pio.json ... reads": round trip through real stored text first,
+        // the same as any external document would arrive.
+        let starting_text = write_module(&module_with_d0_and_d1(order)).unwrap();
+        let mut module = read_module(&starting_text).unwrap();
+
+        // Appended with no id of its own, matching the repair pass shape.
+        module
+            .add_diagnostic(Diagnostic::new(
+                DiagnosticCode::new("READ.TEST.NOTE").unwrap(),
+                DiagnosticSeverity::Note,
+                "appended without an id",
+            ))
+            .unwrap();
+
+        let text = write_module(&module).unwrap();
+        let back = read_module(&text).unwrap();
+
+        assert_eq!(back.diagnostics().len(), 3, "order {order:?}");
+        let ids: std::collections::HashSet<&str> = back
+            .diagnostics()
+            .iter()
+            .map(|d| d.id().unwrap().as_str())
+            .collect();
+        assert_eq!(ids.len(), 3, "order {order:?}: a synthesized id collided");
+        assert_d1_still_resolves_to_d0(&back);
+    }
+}
+
+/// SEC-9: the writer used to panic on an unmapped `SourceRelation` or
+/// `HistoryKind`, folding that case together with every currently known
+/// variant into one wildcard arm it could never actually prove reachable.
+/// Splitting them apart must not disturb the known variants: every one
+/// still has to round trip under its own stored spelling.
+#[test]
+fn every_source_relation_and_history_kind_round_trips() {
+    let relations = [
+        SourceRelation::Exact,
+        SourceRelation::Defaulted,
+        SourceRelation::Inferred,
+        SourceRelation::ConvertedUnits,
+        SourceRelation::Aggregated,
+        SourceRelation::Split,
+        SourceRelation::Synthetic,
+        SourceRelation::Transformed,
+        SourceRelation::RetainedExtra,
+    ];
+    let mut module = PioModule::new(PioValue::BalancedNetwork(small_network()));
+    module
+        .add_source_descriptor(
+            SourceDescriptor::new(SourceId::new("s1").unwrap(), "case.m", 64).unwrap(),
+        )
+        .unwrap();
+    for relation in relations {
+        let span = SourceSpan::new(SourceId::new("s1").unwrap(), 0, 1).unwrap();
+        module
+            .add_source_map_entry(SourceMapEntry::new("/buses/0/vm", relation, vec![span]).unwrap())
+            .unwrap();
+    }
+    for (index, kind) in [
+        HistoryKind::Parse,
+        HistoryKind::Upgrade,
+        HistoryKind::Transform,
+        HistoryKind::Edit,
+        HistoryKind::Repair,
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        module
+            .add_history_entry(
+                HistoryEntry::new(HistoryId::new(format!("h{index}")).unwrap(), kind, "op")
+                    .unwrap(),
+            )
+            .unwrap();
+    }
+
+    let text = write_module(&module).unwrap();
+    let back = read_module(&text).unwrap();
+    assert_eq!(
+        back.source_map()
+            .iter()
+            .map(SourceMapEntry::relation)
+            .collect::<Vec<_>>(),
+        relations
+    );
+    assert_eq!(
+        back.history()
+            .iter()
+            .map(HistoryEntry::kind)
+            .collect::<Vec<_>>(),
+        [
+            HistoryKind::Parse,
+            HistoryKind::Upgrade,
+            HistoryKind::Transform,
+            HistoryKind::Edit,
+            HistoryKind::Repair,
+        ]
+    );
 }
 
 #[test]
