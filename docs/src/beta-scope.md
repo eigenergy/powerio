@@ -7,7 +7,7 @@ PowerIO 0.10 is the public beta of the 1.0 API. API corrections may land before 
 - One parse for every supported source, returning the typed module; twenty built in value kinds across networks, series, scenario sets, instances, and solutions.
 - Byte exact same format writing, diagnosed cross format conversion, and the explicit multiconductor to balanced lowering.
 - Structured diagnostics with stable codes and native record access in every language; the wire form carries span fields end to end, though 0.10 parsers do not yet emit them.
-- Balanced matrices (Y bus, FDPF B' and B'', LACPF, incidence, DC operators, AC power flow Jacobians, PTDF and LODF) and direct multiconductor admittance, all carrying element mappings.
+- Balanced matrices (Y bus, FDPF B' and B'', LACPF, incidence, DC operators, AC power flow Jacobians, PTDF and LODF), all carrying element mappings; direct multiconductor admittance assembles in Rust only this release (see Known limits).
 - The stored `.pio.json` document, version 1, with the one way upgrade from released 0.9 documents.
 - C ABI 6, the Python package, PowerIO.jl, the `powerio` command line tool, and the MCP server over one set of names.
 

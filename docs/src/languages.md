@@ -16,7 +16,7 @@ One set of operations, one set of stable strings, four idioms. The table maps ea
 | state selection | `select` module ops | `module.export_state(...)` (zero based) | `select_state(m; time=…)` (one based) | `pio_module_export_state` (zero based) |
 | balanced lowering | `transform::lower_module_to_balanced` | `module.to_balanced()` | `lower_to_balanced(m)` | `pio_module_lower_to_balanced` |
 | DC branch data | `powerio_tx::dc_network_data()` | `net.dc_data()` | `dc_data` + `BorrowedVector` views | `pio_dc_data_*` spans |
-| feature probe | Cargo features | `powerio.versions()` (no feature flags; a feature probe is planned) | `has_feature`, `features()` | `pio_has_feature`, `pio_build_info` |
+| feature probe | Cargo features | `powerio.features()` | `has_feature`, `features()` | `pio_has_feature`, `pio_build_info` |
 
 The differences are deliberate, and small:
 
