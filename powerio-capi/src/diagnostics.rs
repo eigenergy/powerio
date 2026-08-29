@@ -41,18 +41,18 @@ pub mod codes {
             category = Data;
         REQUEST_CAPI_ARROW_TABLE_UNKNOWN = "REQUEST.CAPI.ARROW_TABLE_UNKNOWN", Error,
             "the caller asked for an Arrow table id this surface does not have",
-            category = Data;
+            category = Request;
         REQUEST_CAPI_FEATURE_DISABLED = "REQUEST.CAPI.FEATURE_DISABLED", Error,
-            "the build lacks the cargo feature the request needs", category = Data;
+            "the build lacks the cargo feature the request needs", category = Request;
         REQUEST_CAPI_UNKNOWN_FORMULA = "REQUEST.CAPI.UNKNOWN_FORMULA", Error,
             "the caller named a branch susceptance formula this surface does not have",
-            category = Data;
+            category = Request;
         REQUEST_CAPI_SELECTOR_CONFLICT = "REQUEST.CAPI.SELECTOR_CONFLICT", Error,
             "the state selection keys conflict; pass exactly one of time position or scenario",
-            category = Data;
+            category = Request;
         REQUEST_CAPI_NOT_A_BALANCED_NETWORK = "REQUEST.CAPI.NOT_A_BALANCED_NETWORK", Error,
             "the module value kind does not support this operation; it takes a balanced network",
-            category = Data;
+            category = Request;
     }
 }
 

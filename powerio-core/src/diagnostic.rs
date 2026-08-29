@@ -547,6 +547,21 @@ where
                 entry.severity.as_str()
             ));
         }
+        // The REQUEST namespace states, by construction, that the caller
+        // asked for something the library refuses; a code registered there
+        // cannot declare any other category. Namespace/category consistency
+        // is checked only where it holds across the whole workspace today
+        // (survey before adding another namespace here).
+        if !retired
+            && entry.namespace() == "REQUEST"
+            && let Some(category) = entry.category
+            && category != ErrorCategory::Request
+        {
+            problems.push(format!(
+                "{}: REQUEST namespace declares category {category:?}, not Request",
+                entry.code
+            ));
+        }
         if !seen.insert(entry.code) {
             problems.push(format!("{}: registered twice", entry.code));
         }
