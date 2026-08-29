@@ -856,6 +856,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "facade-only"
+version = "0.9.0"
+dependencies = [
+ "powerio",
+]
+
+[[package]]
 name = "fancy-regex"
 version = "0.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2003,6 +2010,7 @@ dependencies = [
  "num-complex",
  "powerio-core",
  "powerio-dist",
+ "powerio-prob",
  "powerio-tx",
  "schemars",
  "serde",
