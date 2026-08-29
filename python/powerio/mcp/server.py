@@ -381,28 +381,61 @@ def _diagnostic_record(item: Dict[str, Any]) -> Dict[str, Any]:
     return out
 
 
+def _as_diagnostic_dict(item: Any) -> Dict[str, Any]:
+    """One diagnostic as a plain dict. The network wrappers already return
+    dicts; the module channel returns native `Diagnostic` objects, which
+    read the same fields through attributes."""
+    if isinstance(item, dict):
+        return item
+    out: Dict[str, Any] = {
+        "code": item.code,
+        "severity": item.severity,
+        "message": item.message,
+        "target": getattr(item, "target", None),
+    }
+    identity = getattr(item, "id", None)
+    if identity:
+        out["id"] = identity
+    spans = getattr(item, "spans", None)
+    if spans:
+        out["spans"] = [
+            {
+                "source": span.source,
+                "byte_start": span.byte_start,
+                "byte_end": span.byte_end,
+            }
+            for span in spans
+        ]
+    return out
+
+
 def _diagnostic_records(
     diagnostics: list[Any], keep_severities: frozenset[str]
 ) -> list[Dict[str, Any]]:
-    """Every diagnostic dict (as `module.diagnostics()` or a parsed network's
-    `.diagnostics()` return) at or above the kept severities, normalized to
-    one shape."""
+    """Every diagnostic (dict or native record) at or above the kept
+    severities, normalized to one shape."""
+    records = [_as_diagnostic_dict(item) for item in diagnostics]
     return [
         _diagnostic_record(item)
-        for item in diagnostics
-        if isinstance(item, dict) and item.get("severity") in keep_severities
+        for item in records
+        if item.get("severity") in keep_severities
     ]
 
 
-def _wrap_plain_warnings(messages: list[str]) -> list[Dict[str, Any]]:
-    """A rendered `CODE: message` or bare message list (an emit-time
-    `Conversion.warnings`, with no structured form of its own) in the same
-    shape `_diagnostic_records` publishes, so a tool that appends emit
-    warnings to `_Loaded.warnings` still returns one list of dicts."""
-    return [
-        {"code": None, "severity": None, "message": message, "target": None}
-        for message in messages
-    ]
+def _wrap_plain_warnings(messages: list[Any]) -> list[Dict[str, Any]]:
+    """Emit-time `Conversion.warnings` in the same shape
+    `_diagnostic_records` publishes, so a tool that appends emit warnings to
+    `_Loaded.warnings` still returns one list of dicts. A native diagnostic
+    record keeps its fields; a plain rendered string rides in `message`."""
+    out: list[Dict[str, Any]] = []
+    for message in messages:
+        if isinstance(message, str):
+            out.append(
+                {"code": None, "severity": None, "message": message, "target": None}
+            )
+        else:
+            out.append(_diagnostic_record(_as_diagnostic_dict(message)))
+    return out
 
 
 def _v1_diagnostic_record(item: Dict[str, Any]) -> Dict[str, Any]:
@@ -1037,7 +1070,7 @@ def _parse_impl(
             "diagnostics_summary": diag["summary"],
             "warnings": loaded.warnings,
         }
-    if transport_l not in {"json", "legacy"}:
+    if transport_l != "json":
         raise ValueError("`transport` must be `json` or `module`")
     loaded = _parse_any(path, content, from_format, options)
     if loaded.domain == "distribution":
