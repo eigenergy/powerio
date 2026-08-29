@@ -211,9 +211,13 @@ impl DcOpfPreparation {
 
     /// Fixed branch flow offset in active branch column order.
     ///
-    /// The complete branch flow is
-    /// `f = diag(b) A^T theta + branch_flow_offset`, where the offset is
-    /// `-b * shift` elementwise.
+    /// The complete branch flow over this preparation's internal positive
+    /// weights is `f = diag(b) A^T theta + branch_flow_offset`, where the
+    /// offset is `-b * shift` elementwise. In the public PowerModels sign
+    /// spelling the same flow is `p_branch = -Bf va + b .* shift` with the
+    /// negated susceptances ([`crate::matrix::DcOperators`] emits that
+    /// form); the two agree term for term because this `b` is the negation
+    /// of the public one.
     #[must_use]
     pub fn branch_flow_offset(&self) -> Vec<f64> {
         (0..self.n_branches())
@@ -343,11 +347,16 @@ pub fn build_dc_opf_preparation(
             }
             return Err(powerio_tx::Error::ZeroImpedance { row: source_row }.into());
         }
-        let branch_b = options.convention.branch_susceptance(
-            branch.r,
-            branch.x,
-            branch.divisible_tap(source_row)?,
-        ) * b_scale;
+        // Only the tap-reading formula can be bounded by a tap (#324).
+        let tap = if options.convention.reads_tap() {
+            branch.divisible_tap(source_row)?
+        } else {
+            1.0
+        };
+        let branch_b = options
+            .convention
+            .solver_edge_weight(branch.r, branch.x, tap)
+            * b_scale;
         if !branch_b.is_finite() {
             return Err(powerio_tx::Error::NonFiniteSusceptance { row: source_row }.into());
         }

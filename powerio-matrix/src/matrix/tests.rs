@@ -568,8 +568,8 @@ fn incidence_rejects_a_non_finite_reactance_under_every_convention() {
         );
         for conv in [
             DcConvention::ReactanceOnly,
-            DcConvention::Matpower,
-            DcConvention::SeriesImpedance,
+            DcConvention::TapAdjustedReactance,
+            DcConvention::SeriesSusceptance,
         ] {
             let got = build_incidence(&view, conv, &BuildOptions::default());
             assert!(
@@ -600,7 +600,11 @@ fn incidence_rejects_a_reactance_and_tap_whose_product_overflows() {
         vec![branch],
     );
     let view = IndexedNetwork::new(&net);
-    let got = build_incidence(&view, DcConvention::Matpower, &BuildOptions::default());
+    let got = build_incidence(
+        &view,
+        DcConvention::TapAdjustedReactance,
+        &BuildOptions::default(),
+    );
     assert!(
         matches!(
             got,
@@ -809,8 +813,12 @@ fn a_tap_ratio_the_builders_cannot_divide_by_is_refused() {
             ),
             "Ybus, tap {tap}: {err}"
         );
-        let err =
-            build_incidence(&view, DcConvention::Matpower, &BuildOptions::default()).unwrap_err();
+        let err = build_incidence(
+            &view,
+            DcConvention::TapAdjustedReactance,
+            &BuildOptions::default(),
+        )
+        .unwrap_err();
         assert!(
             matches!(
                 err,
@@ -837,8 +845,12 @@ fn an_ordinary_tap_still_builds() {
         let view = IndexedNetwork::new(&net);
         build_ybus(&view, &BuildOptions::default())
             .unwrap_or_else(|e| panic!("Ybus, tap {tap}: {e}"));
-        build_incidence(&view, DcConvention::Matpower, &BuildOptions::default())
-            .unwrap_or_else(|e| panic!("incidence, tap {tap}: {e}"));
+        build_incidence(
+            &view,
+            DcConvention::TapAdjustedReactance,
+            &BuildOptions::default(),
+        )
+        .unwrap_or_else(|e| panic!("incidence, tap {tap}: {e}"));
     }
 }
 

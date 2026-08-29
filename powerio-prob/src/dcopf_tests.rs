@@ -371,13 +371,13 @@ fn a_non_finite_susceptance_is_refused_under_every_convention() {
         let view = IndexedNetwork::new(&net);
         for convention in [
             DcConvention::ReactanceOnly,
-            DcConvention::Matpower,
-            DcConvention::SeriesImpedance,
+            DcConvention::TapAdjustedReactance,
+            DcConvention::SeriesSusceptance,
         ] {
             // Only Matpower divides by the tap, so a reactance that is finite
             // on its own binds that convention alone; the others read a
             // perfectly good `1/x` and must keep building.
-            if x.is_finite() && convention != DcConvention::Matpower {
+            if x.is_finite() && convention != DcConvention::TapAdjustedReactance {
                 continue;
             }
             let got = build_dc_opf_preparation(
@@ -412,7 +412,7 @@ fn matpower_convention_applies_tap_and_phase_shift() {
     let matpower = build_dc_opf_preparation(
         &view,
         DcOpfOptions {
-            convention: DcConvention::Matpower,
+            convention: DcConvention::TapAdjustedReactance,
             ..DcOpfOptions::default()
         },
     )
@@ -442,7 +442,7 @@ fn phase_shift_and_shunt_complete_the_dc_balance_and_flow_equations() {
     let problem = build_dc_opf_preparation(
         &IndexedNetwork::new(&net),
         DcOpfOptions {
-            convention: DcConvention::Matpower,
+            convention: DcConvention::TapAdjustedReactance,
             ..DcOpfOptions::default()
         },
     )
@@ -578,7 +578,7 @@ fn a_tap_the_instance_cannot_divide_by_is_refused() {
         let error = build_dc_opf_preparation(
             &IndexedNetwork::new(&net),
             DcOpfOptions {
-                convention: DcConvention::Matpower,
+                convention: DcConvention::TapAdjustedReactance,
                 ..DcOpfOptions::default()
             },
         )

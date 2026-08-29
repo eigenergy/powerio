@@ -1,6 +1,7 @@
 //! Sparse projections and bundle output for problem instances.
 
 mod bundle;
+mod dc_operators;
 
 use powerio_matrix::matrix::incidence::diagonal;
 use powerio_matrix::matrix::triplet::CooBuilder;
@@ -13,6 +14,7 @@ use crate::prep::{DcOpfOptions, DcOpfPreparation, build_dc_opf_preparation};
 use crate::{DcOpfInstance, Result, Units};
 
 pub use bundle::{DcOpfBundleMetadata, DcOpfBundleOptions, DcOpfOutputs, write_dcopf_bundle};
+pub use dc_operators::{DcOperators, ReferenceConstrainedSystem};
 
 /// Assembly choices that select the numerical content derived from an
 /// instance without changing the instance itself.

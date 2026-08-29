@@ -2539,6 +2539,14 @@ fn model_json_file_parses_to_the_network_it_serializes() {
 }
 
 #[test]
+fn the_retired_powerio_json_token_gets_guidance() {
+    let err = parse_str("x", "powerio-json").unwrap_err();
+    let msg = err.to_string();
+    assert!(msg.contains("retired in 0.9.0"), "{msg}");
+    assert!(msg.contains("model-json"), "{msg}");
+}
+
+#[test]
 fn nameless_json_text_sniffs_like_a_json_file() {
     // An in-memory source has no extension to state, so a JSON document is
     // sniffed from the content: model JSON and a known case format both
