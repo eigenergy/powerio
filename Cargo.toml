@@ -9,10 +9,14 @@ members = [
     "powerio-py",
     "powerio-capi",
     "powerio-dist",
+    "tests/facade-only",
 ]
 # Bare `cargo build`/`test`/`clippy` touch only the library + CLI crates, so the
 # toolchain never compiles the PyO3 extension (which needs libpython). Build the
-# binding explicitly with `-p powerio-py`.
+# binding explicitly with `-p powerio-py`. `tests/facade-only` has no such cost
+# and stays in the default set: it is a regression crate proving the facade
+# alone is a complete compiler, so a plain `cargo build`/`test` should catch a
+# missing re-export as readily as CI does.
 default-members = [
     "powerio",
     "powerio-tx",
@@ -21,6 +25,7 @@ default-members = [
     "powerio-prob",
     "powerio-cli",
     "powerio-dist",
+    "tests/facade-only",
 ]
 # The fuzz harnesses need nightly + cargo-fuzz; they build on their own (see
 # fuzz/README.md), never as part of the workspace.
