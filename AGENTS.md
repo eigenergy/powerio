@@ -148,7 +148,7 @@ PowerIO releases are tag driven.
 5. That workflow creates or updates a **draft** GitHub release and attaches the
    five binary assets. Do not expect a draft release to exist before the tag
    workflow runs.
-6. A human inspects and publishes the draft release.
+6. A human inspects and publishes the draft release. Publishing also fires the crates.io publish workflow; `powerio-core` and `powerio-tx` are first publishes there, and trusted publishing cannot bootstrap a crate that does not exist yet, so their first upload needs a one time token before the trusted publisher configuration takes over (the same bootstrap `powerio-dist`, `powerio-prob`, and `powerio-diag` needed).
 7. Publishing the release triggers `.github/workflows/notify-powerio-jl.yml`.
    If `POWERIO_JL_DISPATCH_TOKEN` is configured, it sends a
    `powerio-release` repository dispatch to `eigenergy/PowerIO.jl`. If the
