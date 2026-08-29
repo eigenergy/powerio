@@ -7173,7 +7173,7 @@ New Line.l1 bus1=a bus2=b phases=3
         );
         assert_eq!(
             classify(r#"{"model_kind": "balanced", "model": {}}"#),
-            "package"
+            "module"
         );
         assert_eq!(
             classify(r#"{"base_mva": 100.0, "buses": [], "branches": []}"#),
