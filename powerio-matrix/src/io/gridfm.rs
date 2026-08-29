@@ -117,12 +117,16 @@ impl Default for GridfmOptions {
 
 impl GridfmOptions {
     /// The Y_bus build flags these options select (only taps and shifts matter
-    /// for the gridfm admittances; the Bp/Bpp scheme and zero-impedance policy
-    /// don't apply).
+    /// for the gridfm admittances; the Bp/Bpp scheme doesn't apply). A zero
+    /// impedance branch is always zeroed and counted, never a build error:
+    /// the dataset export has its own reporting for it
+    /// (`GridfmOutputs::dropped_zero_impedance`), matching every branch's
+    /// row appearing in the columnar table regardless.
     fn build_options(&self) -> BuildOptions {
         BuildOptions {
             include_taps: self.include_taps,
             include_shifts: self.include_shifts,
+            skip_zero_impedance: true,
             ..Default::default()
         }
     }
@@ -811,10 +815,13 @@ fn branch_batch(snaps: &[SnapshotView], opts: &GridfmOptions) -> Result<RecordBa
 
     // Same flags the Y_bus builder derives, so the branch admittance columns and
     // y_bus_data come from one kernel. The taps/shifts flags are batch-wide (from
-    // `opts`); the admittances themselves are recomputed per snapshot.
+    // `opts`); the admittances themselves are recomputed per snapshot. Every
+    // branch gets a row regardless of impedance, so a zero impedance branch
+    // is zeroed here rather than erroring; the caller counts the drop.
     let flags = YbusFlags {
         unity_taps: !opts.include_taps,
         zero_shifts: !opts.include_shifts,
+        skip_zero_impedance: true,
         ..Default::default()
     };
 

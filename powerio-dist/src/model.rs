@@ -891,11 +891,18 @@ impl UntypedObject {
     }
 }
 
-/// A multiconductor distribution network.
+/// A multiconductor distribution network: an immutable cheap to clone owning
+/// handle over private shared tables.
 ///
-/// `source` retains the original text for the byte exact echo tier;
-/// `defaulted` records, per element (`"class.name"` key), the fields the
-/// reader materialized from format defaults rather than the source text.
+/// Cloning the handle bumps one reference count and clones no table
+/// allocation. Reads go through the per field accessors; the `*_mut`
+/// accessors copy the shared tables once on first write to a shared handle
+/// (copy on write), so no other handle ever observes a mutation. Per element
+/// (`"class.name"` key), the tables also record which fields the reader
+/// materialized from a format default rather than the source text. The
+/// original source text for the byte exact echo tier is not carried here; it
+/// lives on the [`PioModule`](powerio_core::PioModule) a parse returns,
+/// alongside this network.
 #[derive(Debug, Clone)]
 pub struct MulticonductorNetwork {
     tables: std::sync::Arc<MulticonductorNetworkTables>,

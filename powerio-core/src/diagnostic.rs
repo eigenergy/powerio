@@ -118,7 +118,7 @@ pub enum DiagnosticStage {
 }
 
 impl DiagnosticStage {
-    pub const ALL: [Self; 10] = [
+    pub const ALL: &'static [Self] = &[
         Self::Parse,
         Self::Read,
         Self::Canonicalize,
@@ -131,7 +131,7 @@ impl DiagnosticStage {
         Self::Request,
     ];
 
-    pub const NAMESPACES: [&'static str; 10] = [
+    pub const NAMESPACES: &'static [&'static str] = &[
         "PARSE",
         "READ",
         "CANONICALIZE",
@@ -163,7 +163,8 @@ impl DiagnosticStage {
     #[must_use]
     pub fn from_namespace(namespace: &str) -> Option<Self> {
         Self::ALL
-            .into_iter()
+            .iter()
+            .copied()
             .find(|stage| stage.namespace() == namespace)
     }
 }
