@@ -25,9 +25,7 @@ pub use diagnostic::{
 };
 pub use error::Error;
 pub use module::PioModule;
-pub use output::{
-    __commit_staged_file, ArtifactPath, Destination, MemoryArtifact, WriteResult, WrittenOutput,
-};
+pub use output::{ArtifactPath, Destination, MemoryArtifact, WriteResult, WrittenOutput};
 pub use records::{
     DiagnosticId, Digest, DigestAlgorithm, HistoryEntry, HistoryId, HistoryKind, Producer,
     SourceDescriptor, SourceId, SourceMapEntry, SourceRelation, SourceSpan,
@@ -38,21 +36,29 @@ pub use time_series::{TimePoint, TimeSeries};
 
 /// Cross-crate implementation support.
 ///
-/// Audit outcome for every hidden item this crate exposes: the mutable
-/// diagnostic collector and the checked dimension helper are crate private;
-/// each emitting sibling crate carries its own byte identical crate-private
-/// collector copy instead of importing one through a hidden path. What remains
-/// here is the nonfinite serde adapter pair, which wraps a whole serializer or
-/// deserializer inside the network types' serde trait impls. Duplicating that
-/// machinery per crate would let the one shared float spelling diverge, so it
-/// stays a single hidden seam: unstable, never re-exported by the facade, and
-/// not accepted or returned by any public PowerIO operation.
+/// Audit outcome for every `#[doc(hidden)]` `pub` item this crate exposes:
+/// the mutable diagnostic collector and the checked dimension helper are
+/// crate private; each emitting sibling crate carries its own byte identical
+/// crate-private collector copy instead of importing one through a hidden
+/// path. Two items remain, both re-exported here. The nonfinite serde
+/// adapter pair wraps a whole serializer or deserializer inside the network
+/// types' serde trait impls; duplicating that machinery per crate would let
+/// the one shared float spelling diverge. `__commit_staged_file` commits a
+/// file a streaming writer outside this crate already staged itself, for a
+/// writer whose artifact must never be materialized in memory; every other
+/// commit goes through [`Destination`]. Both stay a single hidden seam:
+/// unstable, never re-exported by the facade, and not accepted or returned
+/// by any public PowerIO operation.
 #[doc(hidden)]
 pub mod __implementation {
     /// The serde adapters that spell nonfinite floats for JSON.
     pub mod nonfinite {
         pub use crate::nonfinite::*;
     }
+
+    /// Commit an already staged file onto its destination without
+    /// materializing the artifact in memory first.
+    pub use crate::output::__commit_staged_file;
 }
 
 /// Declare one crate's diagnostic registry.
@@ -81,4 +87,61 @@ macro_rules! diagnostic_codes {
         /// Every code declared by this registry.
         pub const ALL: &[&$crate::DiagnosticInfo] = &[$(&$name),*];
     };
+}
+
+#[cfg(test)]
+mod tests {
+    /// The doc comment on [`__implementation`] claims to enumerate every
+    /// `#[doc(hidden)]` `pub` item this crate re-exports from its root. A
+    /// future edit that adds another one, or that adds an item inside
+    /// `__implementation` the comment does not name, would go unnoticed
+    /// without this: `__implementation` must be the crate's only top level
+    /// `#[doc(hidden)]` item, and its own direct items must be exactly the
+    /// two the comment names.
+    #[test]
+    fn hidden_root_items_match_the_implementation_module_note() {
+        let source = include_str!("lib.rs");
+
+        let top_level_hidden = source
+            .lines()
+            .filter(|line| line.trim() == "#[doc(hidden)]")
+            .count();
+        assert_eq!(
+            top_level_hidden, 1,
+            "exactly one #[doc(hidden)] item is expected at the crate root: __implementation"
+        );
+
+        let start = source
+            .find("pub mod __implementation {")
+            .expect("the __implementation module must exist");
+        let mut depth = 0i32;
+        let mut direct_items = Vec::new();
+        for (index, line) in source[start..].lines().enumerate() {
+            if index == 0 {
+                depth += line.matches('{').count() as i32;
+                depth -= line.matches('}').count() as i32;
+                continue;
+            }
+            if depth == 1 {
+                let trimmed = line.trim();
+                if trimmed.starts_with("pub mod ") || trimmed.starts_with("pub use ") {
+                    direct_items.push(trimmed.to_owned());
+                }
+            }
+            depth += line.matches('{').count() as i32;
+            depth -= line.matches('}').count() as i32;
+            if depth <= 0 {
+                break;
+            }
+        }
+
+        assert_eq!(
+            direct_items,
+            vec![
+                "pub mod nonfinite {".to_owned(),
+                "pub use crate::output::__commit_staged_file;".to_owned(),
+            ],
+            "__implementation's direct items no longer match the audit note above it"
+        );
+    }
 }

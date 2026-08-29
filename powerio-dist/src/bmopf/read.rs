@@ -671,13 +671,18 @@ impl Reader<'_> {
             "control_profile",
             "voltage_aggregation",
         ];
+        let mut taken: std::collections::BTreeSet<String> = self
+            .net
+            .ibrs()
+            .iter()
+            .map(|x| x.name.to_ascii_lowercase())
+            .collect();
         for (name, v) in items {
             let Value::Object(o) = v else { continue };
-            if self.reject_duplicate("ibr", name, |net| {
-                net.ibrs().iter().any(|x| x.name.eq_ignore_ascii_case(name))
-            }) {
+            if self.reject_duplicate("ibr", name, &taken) {
                 continue;
             }
+            taken.insert(name.to_ascii_lowercase());
             let topology = enum_field::<IbrTopology>(
                 o.get("topology"),
                 &format!("ibr {name} topology"),
@@ -723,7 +728,7 @@ impl Reader<'_> {
         }
     }
 
-    /// True when an element of this class and name is already read. Schema
+    /// True when `name` (case-insensitive) is already in `taken`. Schema
     /// 0.1.0 moved the IBR and control profile tables under `extras`, and the
     /// reader accepts both places, so a part-migrated document can declare
     /// the same name twice. Two elements of one name double every count and
@@ -733,9 +738,9 @@ impl Reader<'_> {
         &mut self,
         class: &str,
         name: &str,
-        seen: impl Fn(&MulticonductorNetwork) -> bool,
+        taken: &std::collections::BTreeSet<String>,
     ) -> bool {
-        if !seen(self.net) {
+        if !taken.contains(&name.to_ascii_lowercase()) {
             return false;
         }
         self.diagnostics.push(
@@ -749,15 +754,18 @@ impl Reader<'_> {
     }
 
     fn control_profiles(&mut self, items: &Map<String, Value>) {
+        let mut taken: std::collections::BTreeSet<String> = self
+            .net
+            .control_profiles()
+            .iter()
+            .map(|x| x.name.to_ascii_lowercase())
+            .collect();
         for (name, v) in items {
             let Value::Object(o) = v else { continue };
-            if self.reject_duplicate("control_profile", name, |net| {
-                net.control_profiles()
-                    .iter()
-                    .any(|x| x.name.eq_ignore_ascii_case(name))
-            }) {
+            if self.reject_duplicate("control_profile", name, &taken) {
                 continue;
             }
+            taken.insert(name.to_ascii_lowercase());
             let mut profile = DistControlProfile::new(name.clone());
             if let Some(Value::Object(pf)) = o.get("power_factor") {
                 profile.power_factor =
@@ -1338,6 +1346,17 @@ impl Reader<'_> {
     }
 
     fn transformers(&mut self, subtypes: &Map<String, Value>) {
+        // Every regulator and center tap winding resolves its voltage base
+        // from a bus by id; buses are fully read before `transformers` runs
+        // (see `document`), so one index built here replaces a bus table
+        // scan per winding with a lookup.
+        let bus_index: std::collections::BTreeMap<String, usize> = self
+            .net
+            .buses()
+            .iter()
+            .enumerate()
+            .map(|(row, bus)| (bus.id.clone(), row))
+            .collect();
         for (subtype, group) in subtypes {
             let Value::Object(items) = group else {
                 continue;
@@ -1350,16 +1369,16 @@ impl Reader<'_> {
                         self.net.transformers_mut().push(t);
                     }
                     "single_phase_autotransformer" => {
-                        let t = self.autotransformer_regulator(name, o);
+                        let t = self.autotransformer_regulator(name, o, &bus_index);
                         self.net.transformers_mut().push(t);
                     }
                     "open_delta_regulator" => {
-                        for t in self.open_delta_regulator(name, o) {
+                        for t in self.open_delta_regulator(name, o, &bus_index) {
                             self.net.transformers_mut().push(t);
                         }
                     }
                     _ => {
-                        let t = self.transformer(subtype, name, o);
+                        let t = self.transformer(subtype, name, o, &bus_index);
                         self.net.transformers_mut().push(t);
                     }
                 }
@@ -1373,6 +1392,7 @@ impl Reader<'_> {
         subtype: &str,
         name: &str,
         o: &Map<String, Value>,
+        bus_index: &std::collections::BTreeMap<String, usize>,
     ) -> DistTransformer {
         let known = [
             "bus_from",
@@ -1503,7 +1523,7 @@ impl Reader<'_> {
         expand_center_tap_windings(subtype, &mut windings, self.net.buses());
         if subtype == "center_tap"
             && let Some(w) = windings.get(1)
-            && let Some(band) = phase_to_neutral_midpoint(w, self.net.buses())
+            && let Some(band) = phase_to_neutral_midpoint(w, self.net.buses(), bus_index)
             && (w.v_ref - band).abs() > (w.v_ref / 2.0 - band).abs() * 4.0
         {
             self.diagnostics.push(
@@ -1569,7 +1589,12 @@ impl Reader<'_> {
     /// object states no voltage base, so the connected buses' stated voltage
     /// bands supply one; without a band the impedances read as zero, the
     /// same rule as a missing `v_nom` on the general shapes.
-    fn autotransformer_regulator(&mut self, name: &str, o: &Map<String, Value>) -> DistTransformer {
+    fn autotransformer_regulator(
+        &mut self,
+        name: &str,
+        o: &Map<String, Value>,
+        bus_index: &std::collections::BTreeMap<String, usize>,
+    ) -> DistTransformer {
         let tm_from = strings(o.get("terminal_map_from"));
         let tm_to = strings(o.get("terminal_map_to"));
         let ratio = first_float(o.get("tap_ratio")).unwrap_or(1.0);
@@ -1580,6 +1605,7 @@ impl Reader<'_> {
             tm_from,
             tm_to,
             ratio,
+            bus_index,
         )
     }
 
@@ -1589,7 +1615,12 @@ impl Reader<'_> {
     /// object reads as its two legs; the second gets a synthesized name, so
     /// writing back merges the pair into one object under the first name
     /// again.
-    fn open_delta_regulator(&mut self, name: &str, o: &Map<String, Value>) -> Vec<DistTransformer> {
+    fn open_delta_regulator(
+        &mut self,
+        name: &str,
+        o: &Map<String, Value>,
+        bus_index: &std::collections::BTreeMap<String, usize>,
+    ) -> Vec<DistTransformer> {
         let connection = o.get("connection").and_then(Value::as_str).unwrap_or("");
         let Some((first_pair, second_pair)) = open_delta_pairs_of(connection) else {
             self.diagnostics.push(
@@ -1609,6 +1640,7 @@ impl Reader<'_> {
                 tm_from,
                 tm_to,
                 ratio,
+                bus_index,
             )];
         };
         let ratios = match o.get("tap_ratio") {
@@ -1639,6 +1671,7 @@ impl Reader<'_> {
                 leg_terminals(first_pair),
                 leg_terminals(first_pair),
                 ratios[0],
+                bus_index,
             ),
             self.regulator_rows(
                 &second_name,
@@ -1647,6 +1680,7 @@ impl Reader<'_> {
                 leg_terminals(second_pair),
                 leg_terminals(second_pair),
                 ratios[1],
+                bus_index,
             ),
         ]
     }
@@ -1663,6 +1697,7 @@ impl Reader<'_> {
         tm_from: Vec<String>,
         tm_to: Vec<String>,
         ratio: f64,
+        bus_index: &std::collections::BTreeMap<String, usize>,
     ) -> DistTransformer {
         let known = [
             "bus_from",
@@ -1702,8 +1737,8 @@ impl Reader<'_> {
         // the winding percent and back, so any consistently reused positive
         // value reproduces the document exactly; 1.0 is the last resort and
         // is reported.
-        let v_from = regulator_voltage(self.net, &bus_from, &tm_from);
-        let v_to = regulator_voltage(self.net, &bus_to, &tm_to);
+        let v_from = regulator_voltage(self.net, &bus_from, &tm_from, bus_index);
+        let v_to = regulator_voltage(self.net, &bus_to, &tm_to, bus_index);
         let (v_from, v_to) = match (v_from, v_to) {
             (Some(a), Some(b)) => (a, b),
             (Some(a), None) => (a, a),
@@ -1901,8 +1936,12 @@ impl Reader<'_> {
 /// one. A center tapped winding's `v_nom_to` is the per leg voltage, so the
 /// two agree; a source that states the full span across both legs lands at
 /// twice this.
-fn phase_to_neutral_midpoint(w: &DistWinding, buses: &[DistBus]) -> Option<f64> {
-    let bus = buses.iter().find(|b| b.id == w.bus)?;
+fn phase_to_neutral_midpoint(
+    w: &DistWinding,
+    buses: &[DistBus],
+    index: &std::collections::BTreeMap<String, usize>,
+) -> Option<f64> {
+    let bus = &buses[*index.get(&w.bus)?];
     let lo = bus.vpn_min.as_ref()?.first()?;
     let hi = bus.vpn_max.as_ref()?.first()?;
     let mid = (lo + hi) / 2.0;
@@ -1918,8 +1957,9 @@ fn regulator_voltage(
     net: &crate::model::MulticonductorNetwork,
     bus: &str,
     terminal_map: &[String],
+    index: &std::collections::BTreeMap<String, usize>,
 ) -> Option<f64> {
-    let record = net.buses().iter().find(|b| b.id == bus)?;
+    let record = &net.buses()[*index.get(bus)?];
     let phase = |term: &String| term.parse::<u8>().ok().filter(|n| (1..=3).contains(n));
     let line_to_line = matches!(
         terminal_map,
