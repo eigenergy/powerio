@@ -10,7 +10,7 @@ use powerio_core::{
     PioModule, Producer, SourceDescriptor, SourceId, SourceMapEntry, SourceRelation, SourceSpan,
     TimePoint,
 };
-use powerio_tx::{Bus, BusId, BusType, Generator, Load};
+use powerio_tx::{Bus, BusId, BusType, Generator, Load, repair_values};
 
 fn small_network() -> BalancedNetwork {
     let mut bus1 = Bus::new(BusId(1), BusType::Ref, 345.0);
@@ -96,6 +96,44 @@ fn version_one_round_trips_with_records_and_nonfinite_bounds() {
 
     // Writing again reproduces the document byte for byte.
     assert_eq!(write_module(&back).unwrap(), text);
+}
+
+/// A repair finding's target is an RFC 6901 pointer into `value.data`, not
+/// the `element#field` locator the writer refuses (READ.MODULE.INVALID: the
+/// stored document target grammar allows only a leading `/`).
+#[test]
+fn a_repair_finding_target_is_a_pointer_the_writer_accepts() {
+    let mut network = small_network();
+    // small_network's generator otherwise leaves the constructor's default
+    // `mbase: 0.0`, which is itself out of domain and would add a second,
+    // unrelated finding; give it a valid base so only the bus repair below
+    // fires.
+    network.generators_mut()[0].mbase = 100.0;
+    network.buses_mut()[1].vm = 0.0; // outside [0, 2] p.u.: triggers a repair
+    let module = PioModule::new(network);
+    let module = repair_values(module).unwrap();
+    assert_eq!(module.diagnostics().len(), 1);
+    let diagnostic = &module.diagnostics()[0];
+    assert!(
+        diagnostic.target_is_pointer(),
+        "not an RFC 6901 pointer: {:?}",
+        diagnostic.target()
+    );
+    let target = diagnostic.target().unwrap().to_owned();
+
+    let module = module.map_value(PioValue::BalancedNetwork);
+    let text = write_module(&module).unwrap();
+
+    let raw: serde_json::Value = serde_json::from_str(&text).unwrap();
+    assert_eq!(
+        raw["value"].pointer(&format!("/data{target}")),
+        Some(&serde_json::json!(1.0)),
+        "target `{target}` does not resolve to the repaired bus's stored vm"
+    );
+
+    // read_module runs the same target validation the write did; a round
+    // trip through the reader is one more proof the target is accepted.
+    read_module(&text).unwrap();
 }
 
 #[test]
