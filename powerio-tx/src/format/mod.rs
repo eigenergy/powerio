@@ -456,6 +456,7 @@ pub fn parse(
     let mut warnings = Diagnostics::new();
     match parse_to_network(&source, &mut warnings) {
         Ok(network) => {
+            let format = network.source_format();
             let mut module = PioModule::new(network);
             for buffer in source.acquired_buffers() {
                 // A stored descriptor is a display name, not a filesystem
@@ -473,6 +474,10 @@ pub fn parse(
                     Ok(descriptor) => descriptor,
                     Err(error) => return Err(error.with_source(source)),
                 };
+                let descriptor = descriptor.with_format(
+                    powerio_core::FormatId::new(format.name())
+                        .expect("SourceFormat::name is a valid format id"),
+                );
                 if let Err(error) = module.add_source_descriptor(descriptor) {
                     return Err(error.with_source(source));
                 }

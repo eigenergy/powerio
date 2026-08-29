@@ -1,6 +1,7 @@
 //! A stored source descriptor's name is a display name, not a filesystem
 //! path: parsing a file at a path with a directory component must not leave
-//! that directory in the descriptor the module retains.
+//! that directory in the descriptor the module retains. The descriptor also
+//! carries the format the parser resolved.
 use std::path::PathBuf;
 
 mod helpers;
@@ -13,7 +14,7 @@ fn fixture(rel: &str) -> PathBuf {
 }
 
 #[test]
-fn source_descriptor_name_drops_the_directory() {
+fn source_descriptor_name_drops_the_directory_and_carries_the_format() {
     let parsed = parse_dss_file(fixture("micro/switch.dss")).expect("fixture parses");
     let sources = parsed.module.sources();
     assert!(
@@ -28,4 +29,8 @@ fn source_descriptor_name_drops_the_directory() {
         );
     }
     assert_eq!(sources[0].name(), "switch.dss");
+    assert_eq!(
+        sources[0].format().map(powerio_core::FormatId::as_str),
+        Some("dss")
+    );
 }
