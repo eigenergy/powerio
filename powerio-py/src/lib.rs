@@ -370,12 +370,17 @@ fn coo_triplets<'py>(py: Python<'py>, m: &CsMat<f64>) -> PyResult<Bound<'py, PyA
     Ok((data, rows, cols, shape).into_pyobject(py)?.into_any())
 }
 
-fn build_options(scheme: Scheme, include_taps: bool, include_shifts: bool) -> BuildOptions {
+fn build_options(
+    scheme: Scheme,
+    include_taps: bool,
+    include_shifts: bool,
+    skip_zero_impedance: bool,
+) -> BuildOptions {
     BuildOptions {
         scheme,
         include_taps,
         include_shifts,
-        ..BuildOptions::default()
+        skip_zero_impedance,
     }
 }
 
@@ -889,11 +894,19 @@ impl PyBalancedNetwork {
 
     // --- matrix builders: each returns a COO tuple ----------------------
 
-    /// MATPOWER FDPF Bp matrix.
-    #[pyo3(signature = (scheme=None))]
-    fn bprime<'py>(&self, py: Python<'py>, scheme: Option<&str>) -> PyResult<Bound<'py, PyAny>> {
+    /// MATPOWER FDPF Bp matrix. `skip_zero_impedance=False` refuses a zero
+    /// impedance branch (`r` and `x` both zero); pass `True` to drop it
+    /// instead.
+    #[pyo3(signature = (scheme=None, *, skip_zero_impedance=false))]
+    fn bprime<'py>(
+        &self,
+        py: Python<'py>,
+        scheme: Option<&str>,
+        skip_zero_impedance: bool,
+    ) -> PyResult<Bound<'py, PyAny>> {
         let opts = BuildOptions {
             scheme: parse_scheme(scheme.unwrap_or("bx"))?,
+            skip_zero_impedance,
             ..BuildOptions::default()
         };
         let view = IndexedNetwork::with_core(self.inner(), &self.core);
@@ -901,15 +914,17 @@ impl PyBalancedNetwork {
         coo_triplets(py, &m)
     }
 
-    /// MATPOWER FDPF Bpp matrix.
-    #[pyo3(signature = (scheme=None))]
+    /// MATPOWER FDPF Bpp matrix. `skip_zero_impedance` as in `bprime`.
+    #[pyo3(signature = (scheme=None, *, skip_zero_impedance=false))]
     fn bdoubleprime<'py>(
         &self,
         py: Python<'py>,
         scheme: Option<&str>,
+        skip_zero_impedance: bool,
     ) -> PyResult<Bound<'py, PyAny>> {
         let opts = BuildOptions {
             scheme: parse_scheme(scheme.unwrap_or("bx"))?,
+            skip_zero_impedance,
             ..BuildOptions::default()
         };
         let view = IndexedNetwork::with_core(self.inner(), &self.core);
@@ -917,14 +932,21 @@ impl PyBalancedNetwork {
         coo_triplets(py, &m)
     }
 
-    #[pyo3(signature = (*, include_taps=true, include_shifts=true))]
+    /// `skip_zero_impedance` as in `bprime`.
+    #[pyo3(signature = (*, include_taps=true, include_shifts=true, skip_zero_impedance=false))]
     fn lacpf<'py>(
         &self,
         py: Python<'py>,
         include_taps: bool,
         include_shifts: bool,
+        skip_zero_impedance: bool,
     ) -> PyResult<Bound<'py, PyAny>> {
-        let opts = build_options(Scheme::Bx, include_taps, include_shifts);
+        let opts = build_options(
+            Scheme::Bx,
+            include_taps,
+            include_shifts,
+            skip_zero_impedance,
+        );
         let view = IndexedNetwork::with_core(self.inner(), &self.core);
         let m = build_lacpf(&view, &opts).map_err(to_pyerr)?;
         coo_triplets(py, &m)
@@ -936,15 +958,22 @@ impl PyBalancedNetwork {
         coo_triplets(py, &m)
     }
 
-    /// `(Re(Y_bus), Im(Y_bus))` as two COO tuples.
-    #[pyo3(signature = (*, include_taps=true, include_shifts=true))]
+    /// `(Re(Y_bus), Im(Y_bus))` as two COO tuples. `skip_zero_impedance` as
+    /// in `bprime`.
+    #[pyo3(signature = (*, include_taps=true, include_shifts=true, skip_zero_impedance=false))]
     fn ybus_parts<'py>(
         &self,
         py: Python<'py>,
         include_taps: bool,
         include_shifts: bool,
+        skip_zero_impedance: bool,
     ) -> PyResult<Bound<'py, PyAny>> {
-        let opts = build_options(Scheme::Bx, include_taps, include_shifts);
+        let opts = build_options(
+            Scheme::Bx,
+            include_taps,
+            include_shifts,
+            skip_zero_impedance,
+        );
         let view = IndexedNetwork::with_core(self.inner(), &self.core);
         let yb = build_ybus(&view, &opts).map_err(to_pyerr)?;
         let g = coo_triplets(py, &yb.g)?;
@@ -981,15 +1010,21 @@ impl PyBalancedNetwork {
     /// `(A_coo, b, p_shift, branch_of_col)`: signed incidence as a COO tuple,
     /// then the branch susceptances, phase-shift injection, and column→branch
     /// map as plain lists (the wrapper turns them into 1-D numpy arrays).
-    #[pyo3(signature = (convention=None))]
+    /// `skip_zero_impedance` as in `bprime`.
+    #[pyo3(signature = (convention=None, *, skip_zero_impedance=false))]
     fn incidence<'py>(
         &self,
         py: Python<'py>,
         convention: Option<&str>,
+        skip_zero_impedance: bool,
     ) -> PyResult<Bound<'py, PyAny>> {
         let conv = parse_convention(convention.unwrap_or("series"))?;
+        let opts = BuildOptions {
+            skip_zero_impedance,
+            ..BuildOptions::default()
+        };
         let view = IndexedNetwork::with_core(self.inner(), &self.core);
-        let parts = build_incidence(&view, conv, &BuildOptions::default()).map_err(to_pyerr)?;
+        let parts = build_incidence(&view, conv, &opts).map_err(to_pyerr)?;
         let a = coo_triplets(py, &parts.a)?;
         let b = parts.b;
         let p_shift = parts.p_shift;
@@ -998,15 +1033,21 @@ impl PyBalancedNetwork {
     }
 
     /// Weighted Laplacian `L = A diag(b) Aᵀ` for the chosen DC convention.
-    #[pyo3(signature = (convention=None))]
+    /// `skip_zero_impedance` as in `bprime`.
+    #[pyo3(signature = (convention=None, *, skip_zero_impedance=false))]
     fn weighted_laplacian<'py>(
         &self,
         py: Python<'py>,
         convention: Option<&str>,
+        skip_zero_impedance: bool,
     ) -> PyResult<Bound<'py, PyAny>> {
         let conv = parse_convention(convention.unwrap_or("series"))?;
+        let opts = BuildOptions {
+            skip_zero_impedance,
+            ..BuildOptions::default()
+        };
         let view = IndexedNetwork::with_core(self.inner(), &self.core);
-        let parts = build_incidence(&view, conv, &BuildOptions::default()).map_err(to_pyerr)?;
+        let parts = build_incidence(&view, conv, &opts).map_err(to_pyerr)?;
         let l = build_weighted_laplacian(&parts.a, &parts.b);
         coo_triplets(py, &l)
     }

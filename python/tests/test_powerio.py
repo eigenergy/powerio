@@ -1011,6 +1011,44 @@ def test_scheme_aliases(case9):
         assert sp.issparse(case9.bprime(scheme))
 
 
+# Every matrix builder that threads a skip_zero_impedance keyword through to
+# BuildOptions. Only the acceptance half is pinned here: on this vintage
+# BuildOptions::default() still silently skips a zero impedance branch, so a
+# case with none (case9) is unaffected by either value, and asserting the
+# refusal-by-default behavior has to wait for the lower branch's default flip
+# to cascade in.
+SKIP_ZERO_IMPEDANCE_METHODS = [
+    "bprime",
+    "bdoubleprime",
+    "lacpf",
+    "ybus_parts",
+    "ybus",
+    "weighted_laplacian",
+    "incidence",
+]
+
+
+@pytest.mark.parametrize("method", SKIP_ZERO_IMPEDANCE_METHODS)
+def test_skip_zero_impedance_kwarg_is_accepted(case9, method):
+    def matrices(result):
+        if method == "incidence":
+            return [result.A]
+        if method == "ybus_parts":
+            return [result.g, result.b]
+        if method == "ybus":
+            return [result]
+        return [result]
+
+    call = getattr(case9, method)
+    default = matrices(call())
+    explicit_false = matrices(call(skip_zero_impedance=False))
+    explicit_true = matrices(call(skip_zero_impedance=True))
+    for a, b in zip(default, explicit_false):
+        assert np.allclose(a.toarray(), b.toarray())
+    for a, b in zip(default, explicit_true):
+        assert np.allclose(a.toarray(), b.toarray())
+
+
 def test_sensitivity_solver_kwarg(case9):
     # On a small case the auto policy picks the dense path, so the explicit
     # spellings must agree with the default. The sparse path agrees only
