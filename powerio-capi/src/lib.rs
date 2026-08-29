@@ -532,9 +532,10 @@ fn classify_label(text: &str) -> String {
     }
 }
 
-/// Serialize `net` to its model JSON: the network serialization the stored
-/// carries under `model.balanced_network`, without the surrounding document.
-/// This is the bindings' data transport and the only route to it: model JSON
+/// Serialize `net` to its model JSON: the network serialization a `.pio.json`
+/// document carries as `value.data` when its `value.kind` is
+/// `balanced_network`, without the surrounding document. This is the
+/// bindings' data transport and the only route to it: model JSON
 /// is powerio's own document rather than a case format, so it has no format
 /// token. Returns an owned C string (free with [`pio_string_release`]), `NULL` on
 /// error.
@@ -552,8 +553,8 @@ pub unsafe extern "C" fn pio_balanced_network_to_json(
 }
 
 /// Parse model JSON produced by [`pio_balanced_network_to_json`] (or lifted from a `.pio.json`
-/// document's `model.balanced_network`) back into an owned handle, the inverse
-/// of [`pio_balanced_network_to_json`]. A bare `.json` file holding this document classifies as
+/// document's `value.data` when its `value.kind` is `balanced_network`) back into an owned
+/// handle, the inverse of [`pio_balanced_network_to_json`]. A bare `.json` file holding this document classifies as
 /// `model-json` through [`pio_classify_str`]. Returns `NULL` on error. Free
 /// with [`pio_balanced_network_release`].
 #[unsafe(no_mangle)]
@@ -1670,8 +1671,8 @@ pub unsafe extern "C" fn pio_balanced_network_geo_extract(
 /// matched branch routes in `Branch.route`. The returned handle drops the
 /// retained source text, so a same-format write re-serializes the placed case
 /// instead of echoing the original. The reader's notes and an apply summary
-/// (`geo apply: N bus point(s), ...`) are appended to the handle's warnings
-/// on the returned handle's findings. Returns `NULL` on error.
+/// (`geo apply: N bus point(s), ...`) are appended to the returned handle's
+/// findings. Returns `NULL` on error.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_balanced_network_geo_apply(
     net: *const PioBalancedNetwork,
@@ -1910,9 +1911,10 @@ pub unsafe extern "C" fn pio_multiconductor_network_summary_json(
     }
 }
 
-/// Serialize `net` to its model JSON: the network serialization the stored
-/// carries under `model.multiconductor_network`, without the surrounding
-/// document. This is the bindings' data transport, not a case format: the
+/// Serialize `net` to its model JSON: the network serialization a `.pio.json`
+/// document carries as `value.data` when its `value.kind` is
+/// `multiconductor_network`, without the surrounding document. This is the
+/// bindings' data transport, not a case format: the
 /// converter, CLI, and format inference do not know it; a distribution case
 /// other tools read is BMOPF JSON, written through
 /// `pio_module_write_str`.
@@ -1962,8 +1964,9 @@ pub unsafe extern "C" fn pio_multiconductor_network_graph_json(
 }
 
 /// Parse model JSON produced by [`pio_multiconductor_network_to_json`] (or lifted from a
-/// `.pio.json` document's `model.multiconductor_network`) back into an owned
-/// handle: the inverse of [`pio_multiconductor_network_to_json`]. The rebuilt handle retains
+/// `.pio.json` document's `value.data` when its `value.kind` is
+/// `multiconductor_network`) back into an owned handle: the inverse of
+/// [`pio_multiconductor_network_to_json`]. The rebuilt handle retains
 /// no source text, so a same format write is a fresh serialization. The handle
 /// retains the model JSON `warnings`. Returns `NULL` on error. Free with
 /// [`pio_multiconductor_network_release`].
