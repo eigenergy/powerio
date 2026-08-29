@@ -530,6 +530,9 @@ impl Writer {
         }
     }
 
+    // Two lines over the pedantic ceiling after the index lookup landed;
+    // the function is one linear pass and splitting it hides the flow.
+    #[allow(clippy::too_many_lines)]
     fn branches(&mut self, net: &MulticonductorNetwork, doc: &mut Map<String, Value>) {
         if !net.lines().is_empty() {
             let mut lines = Map::new();
