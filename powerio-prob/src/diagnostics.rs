@@ -14,6 +14,12 @@ pub mod codes {
         /// GO Challenge 3 lift belongs to the calculation crate at 1.0.
         READ_GOC3_OPERATING_POINTS_DROPPED = "READ.GOC3.OPERATING_POINTS_DROPPED", Warning,
             "a GO Challenge 3 time series could not be lifted", retired = "0.9.0";
+        BUILD_STATE_SHAPE_MISMATCH = "BUILD.STATE.SHAPE_MISMATCH", Error,
+            "an operating point column disagrees with the resolved identity layout",
+            category = Data;
+        BUILD_STATE_IDENTITY_UNKNOWN = "BUILD.STATE.IDENTITY_UNKNOWN", Error,
+            "an operating point names an element identity the network does not declare",
+            category = Data;
         BUILD_INSTANCE_NO_GENERATORS = "BUILD.INSTANCE.NO_GENERATORS", Error,
             "the case has no generator for the problem to dispatch", category = Data;
         BUILD_INSTANCE_UNSUPPORTED_COST_MODEL = "BUILD.INSTANCE.UNSUPPORTED_COST_MODEL", Error,
