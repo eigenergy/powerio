@@ -238,7 +238,7 @@ jobs:
             -DevCmdArguments '-arch=x64 -host_arch=x64'
           $metadata = cargo metadata --no-deps --format-version 1 | ConvertFrom-Json
           $version = ($metadata.packages | Where-Object { $_.name -eq 'powerio-capi' }).version
-          $defines = @('/DPIO_ARROW', '/DPIO_MATRIX', '/DPIO_GRIDFM', '/DPIO_DIST', 'DPIO_PROB')
+          $defines = @('/DPIO_ARROW', '/DPIO_MATRIX', '/DPIO_GRIDFM', '/DPIO_DIST', '/DPIO_PROB')
           $importLib = Get-ChildItem target/${{ matrix.rust_target }}/release -Filter '*powerio_capi*.dll.lib' |
             Select-Object -First 1 -ExpandProperty FullName
           if (-not $importLib) { throw 'powerio-capi import library is missing' }

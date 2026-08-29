@@ -41,4 +41,47 @@ for retired in powerio-pkg powerio-diag; do
     fi
 done
 
+# crates.yml hardcodes the publishable set (a gate) and the publish order (a
+# loop) as literal strings; both drift silently when a crate is added, so
+# check each against the workspace directly rather than trusting the file.
+gate_string=$(grep -oE 'actual" != "[^"]*"' .github/workflows/crates.yml \
+    | sed -E 's/^actual" != "//; s/"$//')
+gate_sorted=$(printf '%s\n' "$gate_string" | tr ' ' '\n' | sort | tr '\n' ' ' | sed 's/ $//')
+publishable_line=$(printf '%s\n' "$publishable" | tr '\n' ' ' | sed 's/ $//')
+if [ "$gate_sorted" != "$publishable_line" ]; then
+    echo "crates.yml's publish gate (\"$gate_string\") does not match the actual publishable set (\"$publishable_line\")" >&2
+    exit 1
+fi
+
+loop_order=$(grep -oE 'for crate in [^;]+; do' .github/workflows/crates.yml \
+    | sed -E 's/^for crate in //; s/; do$//')
+PIO_LOOP_ORDER="$loop_order" python3 -c '
+import json, os, subprocess, sys
+
+order = os.environ["PIO_LOOP_ORDER"].split()
+meta = json.loads(subprocess.run(
+    ["cargo", "metadata", "--no-deps", "--format-version", "1"],
+    check=True, capture_output=True, text=True,
+).stdout)
+publishable = {p["name"] for p in meta["packages"] if p.get("publish") != []}
+if set(order) != publishable:
+    order_str = " ".join(order)
+    pub_str = " ".join(sorted(publishable))
+    sys.exit("crates.yml publish loop (" + order_str + ") does not name exactly the publishable set (" + pub_str + ")")
+deps = {}
+for pkg in meta["packages"]:
+    if pkg["name"] not in publishable:
+        continue
+    deps[pkg["name"]] = {
+        d["name"] for d in pkg["dependencies"]
+        if d.get("kind") in (None, "build") and d["name"] in publishable
+    }
+position = {name: i for i, name in enumerate(order)}
+for name, index in position.items():
+    for dep in deps[name]:
+        if position[dep] > index:
+            sys.exit("crates.yml publishes " + name + " before its dependency " + dep + "; fix the loop order")
+print("publish loop order:", " ".join(order))
+'
+
 echo "=== release preflight OK: v$version decision paths hold ==="

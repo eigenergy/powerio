@@ -18,9 +18,11 @@ One model of the work: every parse compiles one source into a typed module, one 
 
 **The DC phase shift carries the correct sign.** The shared assembly publishes `p_shift = A' (b .* shift)` per bus (with the PowerModels negative susceptance, the fixed term MATPOWER's `makeBdc` states) and the complete affine branch flow `p_branch = -b (va_from - va_to) + b shift`. The 0.9 releases and the first v6 draft negated the shift term; a flat start pin on a shifted fixture now asserts the MATPOWER value through Rust and C, and the KCL identity `A' p_branch = -B va + p_shift` holds by test.
 
+**DC sensitivities move off the iterative solver.** `SensitivitySolver::Iterative` is renamed `Sparse` and `SensitivitySolverPath::IterativeCg` is renamed `SparseCholesky` (serde aliases on both keep a stored document loading under its old name); `cg_tolerance`, `cg_max_iterations`, and the `BUILD.SENSITIVITY.NO_CONVERGENCE` diagnostic are retired, since a sparse direct factorization through `faer` either succeeds or reports singularity rather than running out of iterations. The `Auto` crossover between the dense and sparse paths returns to a reduced dimension of 512, reversing the 0.8.1 change to 8192, now measured against a direct factorization rather than the conjugate gradient solve that justified the higher number.
+
 **One Python entry.** `powerio.parse(source, from_, include_root=..., value_type=...)` reads a path or in memory bytes into a `PioModule`; `value_type` narrows to `BalancedNetwork` or `dist.MulticonductorNetwork` in the same call, and the typed accessors carry the module's retained source and findings, so a same format write still echoes the source bytes. `parse_file`, `parse_str`, `parse_bytes`, `read_pypsa_csv_folder`, `parse_scopf`, `to_dense` with the `Dense*` rows, the `Package` class, and the 0.8 renamed alias hooks are gone. The MCP server loads both stored generations through the same path.
 
-**The CLI reads what it writes.** `powerio package` emits the stored module for any input (`--scenario` exports one scenario of a set), and `summary`, `convert`, `verify`, `dcopf`, and `sensitivities` read a stored `.pio.json` directly; a module storing a collection or calculation names the export step. The matrix commands accept every case format, dropping their MATPOWER only loader.
+**The CLI reads what it writes.** `powerio module` emits the stored module for any input (`--scenario` exports one scenario of a set), and `summary`, `convert`, `verify`, `dcopf`, and `sensitivities` read a stored `.pio.json` directly; a module storing a collection or calculation names the export step. The matrix commands accept every case format, dropping their MATPOWER only loader.
 
 **No deprecated names.** `scripts/deprecated-inventory.sh --assert-empty` runs in CI and passes: the 0.8 aliases, the SCOPF projection with its index base selection, and the renamed hooks were removed rather than carried. A terminology gate holds the docs and public sources to the 1.0 controlled vocabulary.
 
@@ -186,7 +188,9 @@ records. Upgrade if you write text formats from names you do not control.
   because a dense solve is faster than conjugate gradient well past 512
   buses. Set `SensitivityOptions::auto_dense_threshold` to keep the old
   value. PTDF and LODF results are unchanged: both paths were verified
-  bit-identical on case30.
+  bit-identical on case30. [0.10.0 returns the default to 512, measured
+  against a sparse direct factorization instead of conjugate gradient;
+  see the 0.10.0 entry above.]
 - The psse field splitter, the powerworld auxiliary token splitter, and
   the pandapower split-frame reader reuse their buffers and move rows
   instead of copying them. Reader output is unchanged.
