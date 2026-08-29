@@ -830,8 +830,6 @@ pub unsafe extern "C" fn pio_module_lower_to_balanced(
             )
             .map(module_handle)
             .map_err(|(_, boxed)| {
-                // Best effort projection of the 0.9 legacy diagnostic list
-                // this failure still carries on this vintage onto the 1.0
                 // The error's records are already 1.0 `Diagnostic` rows, so
                 // both channels carry them whole: targets, ids, spans, and
                 // details all survive instead of being projected away.
