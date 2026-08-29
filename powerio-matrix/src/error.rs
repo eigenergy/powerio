@@ -50,14 +50,6 @@ pub enum Error {
     #[error("invalid DC sensitivity option: {reason}")]
     InvalidSensitivityOptions { reason: String },
 
-    #[error(
-        "DC sensitivity iterative solve did not converge after {iterations} iterations (relative residual {relative_residual:.3e})"
-    )]
-    SensitivitySolveDidNotConverge {
-        iterations: usize,
-        relative_residual: f64,
-    },
-
     #[error("case has no generators; DC-OPF requires an `mpc.gen` block")]
     NoGenerators,
 
@@ -136,9 +128,6 @@ impl Error {
             }
             Error::SingularNetwork => &codes::BUILD_SENSITIVITY_SINGULAR,
             Error::InvalidSensitivityOptions { .. } => &codes::BUILD_SENSITIVITY_INVALID_OPTION,
-            Error::SensitivitySolveDidNotConverge { .. } => {
-                &codes::BUILD_SENSITIVITY_NO_CONVERGENCE
-            }
             Error::EmptyScenarioBatch => &codes::BUILD_GRIDFM_EMPTY_BATCH,
             Error::ScenarioIdOverflow { .. } => &codes::BUILD_GRIDFM_SCENARIO_ID_OVERFLOW,
             Error::NormalizedGridfmSnapshot { .. } => &codes::BUILD_GRIDFM_NORMALIZED_SNAPSHOT,
@@ -172,7 +161,6 @@ impl Error {
             | Error::ShapeMismatch { .. }
             | Error::SingularNetwork
             | Error::InvalidSensitivityOptions { .. }
-            | Error::SensitivitySolveDidNotConverge { .. }
             | Error::EmptyScenarioBatch
             | Error::ScenarioIdOverflow { .. }
             | Error::NormalizedGridfmSnapshot { .. }
@@ -271,10 +259,6 @@ mod tests {
             Error::SingularNetwork,
             Error::InvalidSensitivityOptions {
                 reason: "tol".into(),
-            },
-            Error::SensitivitySolveDidNotConverge {
-                iterations: 10,
-                relative_residual: 1.0,
             },
             Error::EmptyScenarioBatch,
             Error::ScenarioIdOverflow { base: 1, index: 0 },

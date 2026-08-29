@@ -615,7 +615,7 @@ impl From<DcConvArg> for DcConvention {
 enum SensitivitySolverArg {
     Auto,
     Dense,
-    Iterative,
+    Sparse,
 }
 
 impl From<SensitivitySolverArg> for SensitivitySolver {
@@ -623,7 +623,7 @@ impl From<SensitivitySolverArg> for SensitivitySolver {
         match value {
             SensitivitySolverArg::Auto => Self::Auto,
             SensitivitySolverArg::Dense => Self::Dense,
-            SensitivitySolverArg::Iterative => Self::Iterative,
+            SensitivitySolverArg::Sparse => Self::Sparse,
         }
     }
 }

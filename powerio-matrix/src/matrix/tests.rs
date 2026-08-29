@@ -696,7 +696,7 @@ fn a_radial_tie_gets_a_structurally_zero_lodf_column() {
 
     for solver in [
         crate::matrix::SensitivitySolver::Dense,
-        crate::matrix::SensitivitySolver::Iterative,
+        crate::matrix::SensitivitySolver::Sparse,
     ] {
         let out = crate::matrix::build_ptdf_lodf_with_options(
             &view,

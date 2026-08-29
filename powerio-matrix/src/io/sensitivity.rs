@@ -11,7 +11,7 @@ use crate::matrix::sensitivity::for_each_ptdf_lodf_entry;
 use crate::matrix::{SensitivityMetadata, SensitivityOptions};
 
 /// Write PTDF and LODF Matrix Market files from the option based sensitivity
-/// path and return the metadata for the same entries. The iterative solver path
+/// path and return the metadata for the same entries. The sparse solver path
 /// streams retained coordinates through temp files, so it does not keep the
 /// full sparse output in memory.
 pub fn write_sensitivity_mtx_with_options(

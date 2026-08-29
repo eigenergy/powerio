@@ -181,10 +181,10 @@ fn parse_convention(s: &str) -> PyResult<DcConvention> {
 }
 
 /// PTDF/LODF options from the Python keywords. The solver defaults to `auto`,
-/// which is dense below the reduced-dimension threshold and the iterative
-/// conjugate gradient path above it — the same policy the CLI `sensitivities`
-/// command applies, so a very large case cannot force the dense n×n
-/// factorization from Python.
+/// which is dense below the reduced-dimension threshold and the sparse
+/// Cholesky path above it — the same policy the CLI `sensitivities` command
+/// applies, so a very large case cannot force the dense n×n factorization
+/// from Python.
 fn sensitivity_options(
     convention: Option<&str>,
     solver: Option<&str>,
@@ -193,10 +193,10 @@ fn sensitivity_options(
     let solver = match normalize(solver.unwrap_or("auto")).as_str() {
         "auto" => SensitivitySolver::Auto,
         "dense" => SensitivitySolver::Dense,
-        "iterative" | "cg" => SensitivitySolver::Iterative,
+        "sparse" => SensitivitySolver::Sparse,
         other => {
             return Err(PyValueError::new_err(format!(
-                "unknown solver {other:?}; expected 'auto', 'dense', or 'iterative'"
+                "unknown solver {other:?}; expected 'auto', 'dense', or 'sparse'"
             )));
         }
     };
