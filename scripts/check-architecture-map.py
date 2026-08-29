@@ -88,22 +88,46 @@ def main() -> int:
         print(f"cargo metadata has component edges architecture.dot does not draw: {sorted(undrawn)}",
               file=sys.stderr)
         return 1
-    # 2) generated SVGs current.
+    # 2) committed SVGs depict the current graphs. Byte equality with a fresh
+    # render does not hold across graphviz releases (layout and font metrics
+    # move), so the check reads the <title> elements graphviz emits per node
+    # and edge — stable across versions — and holds them to the .dot sources.
     ASSETS.mkdir(parents=True, exist_ok=True)
     for name in SOURCES:
-        svg = subprocess.run(["dot", "-Tsvg", str(DIAGRAMS / name)],
-                             check=True, capture_output=True, text=True).stdout
-        # Strip the generator comment lines dot stamps with its version, so
-        # the check is deterministic across graphviz releases.
-        svg = re.sub(r'<!--.*?-->\n?', "", svg, flags=re.S)
+        dot_text = (DIAGRAMS / name).read_text()
         out = ASSETS / (name.removesuffix(".dot") + ".svg")
         if render:
+            svg = subprocess.run(["dot", "-Tsvg", str(DIAGRAMS / name)],
+                                 check=True, capture_output=True, text=True).stdout
+            svg = re.sub(r'<!--.*?-->\n?', "", svg, flags=re.S)
             out.write_text(svg)
-        elif not out.exists() or out.read_text() != svg:
-            print(f"{out} is stale; run scripts/check-architecture-map.py --render",
+        if not out.exists():
+            print(f"{out} is missing; run scripts/check-architecture-map.py --render",
                   file=sys.stderr)
             return 1
-    print("architecture map OK: crate edges agree and the SVGs are current")
+        titles = [re.sub(r"&#45;|&#8209;", "-", t).replace("&gt;", ">").replace("&lt;", "<")
+                  for t in re.findall(r"<title>(.*?)</title>", out.read_text())]
+        svg_edges = set()
+        svg_nodes = set()
+        for t in titles[1:]:  # titles[0] is the graph's own title
+            if "->" in t:
+                a, _, b = t.partition("->")
+                svg_edges.add((a, b))
+            elif not t.startswith("cluster"):
+                svg_nodes.add(t)
+        want_edges = diagram_edges(dot_text)
+        if svg_edges != want_edges:
+            gone = sorted(want_edges - svg_edges)
+            extra = sorted(svg_edges - want_edges)
+            print(f"{out} is stale (edges missing {gone}, extra {extra}); "
+                  "run scripts/check-architecture-map.py --render", file=sys.stderr)
+            return 1
+        want_nodes = diagram_nodes(dot_text)
+        if not want_nodes <= svg_nodes:
+            print(f"{out} is stale (nodes missing {sorted(want_nodes - svg_nodes)}); "
+                  "run scripts/check-architecture-map.py --render", file=sys.stderr)
+            return 1
+    print("architecture map OK: crate edges agree and the SVGs depict them")
     return 0
 
 if __name__ == "__main__":
