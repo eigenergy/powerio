@@ -159,23 +159,29 @@ fn parse_scheme(s: &str) -> PyResult<Scheme> {
     }
 }
 
-/// Accepts `series`/`series-impedance`, `matpower`/`mp`, and
-/// `reactance-only` (case- and separator-insensitive).
+/// Accepts the 1.0 formula names (`series_susceptance`, `tap_adjusted_reactance`,
+/// `reactance_only`), their storage aliases (`series`, `matpower`), and two
+/// Python-only 0.9 aliases (`series-impedance`, `mp`); case- and
+/// separator-insensitive (`-` and `_` are interchangeable).
 fn parse_convention(s: &str) -> PyResult<DcConvention> {
-    match normalize(s).as_str() {
-        "series" | "seriesimpedance" => Ok(DcConvention::SeriesSusceptance),
-        "matpower" | "mp" => Ok(DcConvention::TapAdjustedReactance),
-        "reactanceonly" => Ok(DcConvention::ReactanceOnly),
+    let normalized = s.to_ascii_lowercase().replace('-', "_");
+    if let Some(convention) = DcConvention::from_formula_name(&normalized) {
+        return Ok(convention);
+    }
+    match normalized.as_str() {
+        "series_impedance" => Ok(DcConvention::SeriesSusceptance),
+        "mp" => Ok(DcConvention::TapAdjustedReactance),
         // 0.8 spelled b = 1/x "paper"/"paper-pure" and made it the default.
         // Name its successor: the nearest-looking option, "series", is a
         // different formula, so a caller who guesses gets numbers instead of
         // an error.
-        "paper" | "paperpure" | "pure" => Err(PyValueError::new_err(
+        "paper" | "paper_pure" | "pure" => Err(PyValueError::new_err(
             "convention 'paper-pure' is now 'reactance-only'; it is no longer \
              the default, and 'series' is a different formula (b = x/(r²+x²))",
         )),
         other => Err(PyValueError::new_err(format!(
-            "unknown convention {other:?}; expected 'series', 'matpower', or 'reactance-only'"
+            "unknown convention {other:?}; expected 'series_susceptance', \
+             'tap_adjusted_reactance', or 'reactance_only'"
         ))),
     }
 }
@@ -322,6 +328,24 @@ fn serialize_pyerr(e: serde_json::Error) -> PyErr {
     )
 }
 
+/// One list of 1.0 diagnostic records as the JSON array every diagnostics
+/// surface (a stored module, a parsed network, the balanced lowering
+/// readiness report) publishes: code, severity, message, and target, the
+/// last `null` when the finding carries none.
+fn diagnostics_json_array(diagnostics: &[powerio_core::Diagnostic]) -> Vec<serde_json::Value> {
+    diagnostics
+        .iter()
+        .map(|diagnostic| {
+            serde_json::json!({
+                "code": diagnostic.code(),
+                "severity": format!("{:?}", diagnostic.severity()).to_lowercase(),
+                "message": diagnostic.message(),
+                "target": diagnostic.target(),
+            })
+        })
+        .collect()
+}
+
 /// Package a GO Challenge 3 document: the balanced snapshot plus the operating
 /// point series the document carries.
 fn normalize(s: &str) -> String {
@@ -364,12 +388,17 @@ fn coo_triplets<'py>(py: Python<'py>, m: &CsMat<f64>) -> PyResult<Bound<'py, PyA
     Ok((data, rows, cols, shape).into_pyobject(py)?.into_any())
 }
 
-fn build_options(scheme: Scheme, include_taps: bool, include_shifts: bool) -> BuildOptions {
+fn build_options(
+    scheme: Scheme,
+    include_taps: bool,
+    include_shifts: bool,
+    skip_zero_impedance: bool,
+) -> BuildOptions {
     BuildOptions {
         scheme,
         include_taps,
         include_shifts,
-        ..BuildOptions::default()
+        skip_zero_impedance,
     }
 }
 
@@ -519,6 +548,13 @@ impl PyBalancedNetwork {
     #[getter]
     fn read_warnings(&self) -> Vec<String> {
         self.warnings.clone()
+    }
+
+    /// The same read fidelity findings as `read_warnings`, structured: one
+    /// JSON array of code/severity/message/target records.
+    fn diagnostics_json(&self) -> PyResult<String> {
+        let diagnostics = diagnostics_json_array(self.diagnostics());
+        serde_json::to_string(&diagnostics).map_err(serialize_pyerr)
     }
 
     #[getter]
@@ -853,11 +889,19 @@ impl PyBalancedNetwork {
 
     // --- matrix builders: each returns a COO tuple ----------------------
 
-    /// MATPOWER FDPF Bp matrix.
-    #[pyo3(signature = (scheme=None))]
-    fn bprime<'py>(&self, py: Python<'py>, scheme: Option<&str>) -> PyResult<Bound<'py, PyAny>> {
+    /// MATPOWER FDPF Bp matrix. `skip_zero_impedance=False` refuses a zero
+    /// impedance branch (`r` and `x` both zero); pass `True` to drop it
+    /// instead.
+    #[pyo3(signature = (scheme=None, *, skip_zero_impedance=false))]
+    fn bprime<'py>(
+        &self,
+        py: Python<'py>,
+        scheme: Option<&str>,
+        skip_zero_impedance: bool,
+    ) -> PyResult<Bound<'py, PyAny>> {
         let opts = BuildOptions {
             scheme: parse_scheme(scheme.unwrap_or("bx"))?,
+            skip_zero_impedance,
             ..BuildOptions::default()
         };
         let view = IndexedNetwork::with_core(self.inner(), &self.core);
@@ -897,15 +941,18 @@ impl PyBalancedNetwork {
         Ok(out)
     }
 
-    /// MATPOWER FDPF Bpp matrix.
-    #[pyo3(signature = (scheme=None))]
+    /// MATPOWER FDPF Bpp matrix. `skip_zero_impedance` as in `bprime`.
+    #[pyo3(signature = (scheme=None, *, skip_zero_impedance=false))]
+
     fn bdoubleprime<'py>(
         &self,
         py: Python<'py>,
         scheme: Option<&str>,
+        skip_zero_impedance: bool,
     ) -> PyResult<Bound<'py, PyAny>> {
         let opts = BuildOptions {
             scheme: parse_scheme(scheme.unwrap_or("bx"))?,
+            skip_zero_impedance,
             ..BuildOptions::default()
         };
         let view = IndexedNetwork::with_core(self.inner(), &self.core);
@@ -913,14 +960,21 @@ impl PyBalancedNetwork {
         coo_triplets(py, &m)
     }
 
-    #[pyo3(signature = (*, include_taps=true, include_shifts=true))]
+    /// `skip_zero_impedance` as in `bprime`.
+    #[pyo3(signature = (*, include_taps=true, include_shifts=true, skip_zero_impedance=false))]
     fn lacpf<'py>(
         &self,
         py: Python<'py>,
         include_taps: bool,
         include_shifts: bool,
+        skip_zero_impedance: bool,
     ) -> PyResult<Bound<'py, PyAny>> {
-        let opts = build_options(Scheme::Bx, include_taps, include_shifts);
+        let opts = build_options(
+            Scheme::Bx,
+            include_taps,
+            include_shifts,
+            skip_zero_impedance,
+        );
         let view = IndexedNetwork::with_core(self.inner(), &self.core);
         let m = build_lacpf(&view, &opts).map_err(to_pyerr)?;
         coo_triplets(py, &m)
@@ -932,15 +986,22 @@ impl PyBalancedNetwork {
         coo_triplets(py, &m)
     }
 
-    /// `(Re(Y_bus), Im(Y_bus))` as two COO tuples.
-    #[pyo3(signature = (*, include_taps=true, include_shifts=true))]
+    /// `(Re(Y_bus), Im(Y_bus))` as two COO tuples. `skip_zero_impedance` as
+    /// in `bprime`.
+    #[pyo3(signature = (*, include_taps=true, include_shifts=true, skip_zero_impedance=false))]
     fn ybus_parts<'py>(
         &self,
         py: Python<'py>,
         include_taps: bool,
         include_shifts: bool,
+        skip_zero_impedance: bool,
     ) -> PyResult<Bound<'py, PyAny>> {
-        let opts = build_options(Scheme::Bx, include_taps, include_shifts);
+        let opts = build_options(
+            Scheme::Bx,
+            include_taps,
+            include_shifts,
+            skip_zero_impedance,
+        );
         let view = IndexedNetwork::with_core(self.inner(), &self.core);
         let yb = build_ybus(&view, &opts).map_err(to_pyerr)?;
         let g = coo_triplets(py, &yb.g)?;
@@ -977,15 +1038,21 @@ impl PyBalancedNetwork {
     /// `(A_coo, b, p_shift, branch_of_col)`: signed incidence as a COO tuple,
     /// then the branch susceptances, phase-shift injection, and column→branch
     /// map as plain lists (the wrapper turns them into 1-D numpy arrays).
-    #[pyo3(signature = (convention=None))]
+    /// `skip_zero_impedance` as in `bprime`.
+    #[pyo3(signature = (convention=None, *, skip_zero_impedance=false))]
     fn incidence<'py>(
         &self,
         py: Python<'py>,
         convention: Option<&str>,
+        skip_zero_impedance: bool,
     ) -> PyResult<Bound<'py, PyAny>> {
         let conv = parse_convention(convention.unwrap_or("series"))?;
+        let opts = BuildOptions {
+            skip_zero_impedance,
+            ..BuildOptions::default()
+        };
         let view = IndexedNetwork::with_core(self.inner(), &self.core);
-        let parts = build_incidence(&view, conv, &BuildOptions::default()).map_err(to_pyerr)?;
+        let parts = build_incidence(&view, conv, &opts).map_err(to_pyerr)?;
         let a = coo_triplets(py, &parts.a)?;
         let b = parts.b;
         let p_shift = parts.p_shift;
@@ -994,15 +1061,21 @@ impl PyBalancedNetwork {
     }
 
     /// Weighted Laplacian `L = A diag(b) Aᵀ` for the chosen DC convention.
-    #[pyo3(signature = (convention=None))]
+    /// `skip_zero_impedance` as in `bprime`.
+    #[pyo3(signature = (convention=None, *, skip_zero_impedance=false))]
     fn weighted_laplacian<'py>(
         &self,
         py: Python<'py>,
         convention: Option<&str>,
+        skip_zero_impedance: bool,
     ) -> PyResult<Bound<'py, PyAny>> {
         let conv = parse_convention(convention.unwrap_or("series"))?;
+        let opts = BuildOptions {
+            skip_zero_impedance,
+            ..BuildOptions::default()
+        };
         let view = IndexedNetwork::with_core(self.inner(), &self.core);
-        let parts = build_incidence(&view, conv, &BuildOptions::default()).map_err(to_pyerr)?;
+        let parts = build_incidence(&view, conv, &opts).map_err(to_pyerr)?;
         let l = build_weighted_laplacian(&parts.a, &parts.b);
         coo_triplets(py, &l)
     }
@@ -1424,6 +1497,13 @@ impl PyMulticonductorNetwork {
     /// assume.
     fn warnings(&self) -> Vec<String> {
         self.rendered_warnings.clone()
+    }
+
+    /// The same read fidelity findings as `warnings`, structured: one JSON
+    /// array of code/severity/message/target records.
+    fn diagnostics_json(&self) -> PyResult<String> {
+        let diagnostics = diagnostics_json_array(self.module.diagnostics());
+        serde_json::to_string(&diagnostics).map_err(serialize_pyerr)
     }
 
     /// This network's coordinates as the canonical GeoJSON layer. Raises when
@@ -2015,19 +2095,7 @@ impl PyPioModule {
 
     /// The module's diagnostics as a JSON array.
     fn diagnostics_json(&self) -> PyResult<String> {
-        let diagnostics: Vec<serde_json::Value> = self
-            .module()?
-            .diagnostics()
-            .iter()
-            .map(|diagnostic| {
-                serde_json::json!({
-                    "code": diagnostic.code(),
-                    "severity": format!("{:?}", diagnostic.severity()).to_lowercase(),
-                    "message": diagnostic.message(),
-                    "target": diagnostic.target(),
-                })
-            })
-            .collect();
+        let diagnostics = diagnostics_json_array(self.module()?.diagnostics());
         serde_json::to_string(&diagnostics).map_err(serialize_pyerr)
     }
 
@@ -2141,7 +2209,18 @@ impl PyPioModule {
             },
         )
         .map_err(|error| core_error_pyerr(&error))?;
-        serde_json::to_string(&readiness).map_err(serialize_pyerr)
+        // `readiness.diagnostics` is the legacy preflight shape internally;
+        // publish the 1.0 module records instead, same as `diagnostics_json`.
+        let diagnostics = diagnostics_json_array(&readiness.diagnostics_as_module_records());
+        let payload = serde_json::json!({
+            "convention": readiness.convention,
+            "base_mva": readiness.base_mva,
+            "status": readiness.status,
+            "assumptions": readiness.assumptions,
+            "approximations": readiness.approximations,
+            "diagnostics": diagnostics,
+        });
+        serde_json::to_string(&payload).map_err(serialize_pyerr)
     }
 
     /// Lower the multiconductor value to a balanced module. Common records
@@ -2169,19 +2248,16 @@ impl PyPioModule {
             Err((module, error)) => {
                 self.module = Some(module);
                 let err = PowerIODataError::new_err(error.to_string());
-                let code = error
-                    .diagnostics
-                    .first()
-                    .map(|d| d.code.as_str().to_owned());
+                let code = error.diagnostics.first().map(|d| d.code().to_owned());
                 let diagnostics: Vec<serde_json::Value> = error
                     .diagnostics
                     .iter()
                     .map(|d| {
                         serde_json::json!({
-                            "code": d.code.as_str(),
-                            "severity": format!("{:?}", d.severity).to_lowercase(),
-                            "message": d.message,
-                            "target": d.element_path,
+                            "code": d.code(),
+                            "severity": d.severity().as_str(),
+                            "message": d.message(),
+                            "target": d.target(),
                         })
                     })
                     .collect();

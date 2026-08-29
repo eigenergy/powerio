@@ -143,7 +143,6 @@ unsafe fn finish_string_v6(
                 v6::error_from_parts(
                     codes::BIND_CAPI_INTERIOR_NUL.code,
                     "the produced text holds an interior NUL and cannot cross as a C string",
-                    "[]",
                 )
             })
         })
@@ -195,7 +194,6 @@ unsafe fn finish_conversion_v6(
                 v6::error_from_parts(
                     codes::BIND_CAPI_INTERIOR_NUL.code,
                     "the produced text holds an interior NUL and cannot cross as a C string",
-                    "[]",
                 )
             })?;
             if !out_diagnostics.is_null() {
@@ -262,10 +260,15 @@ fn make_network(net: BalancedNetwork, diagnostics: Vec<Diagnostic>) -> *mut PioB
 /// and one module surface remains: `pio_parse_*` produce module handles,
 /// typed accessors hand back independently owned network handles, every
 /// fallible entry point reports through a structured `PioError`, and every
-/// handle type carries a `retain`/`release` pair. A binding built against 5
-/// would resolve missing symbols; the handshake refuses first. The 4 to 5
-/// bump reshaped every ABI visible JSON document and the diagnostic
-/// grammar.
+/// handle type carries a `retain`/`release` pair. Thirteen exported symbol
+/// names are common to the 0.9 and this header; seven of them
+/// (`pio_parse_file`, `pio_parse_str`, `pio_parse_bytes`, `pio_convert_file`,
+/// `pio_convert_str`, `pio_geo_parse`, `pio_arrow_catalog_json`) carry a
+/// different signature under the same name. A binding built against 5 would
+/// resolve every one of those thirteen symbols rather than failing to link,
+/// so the version handshake above is what actually catches the mismatch.
+/// The 4 to 5 bump reshaped every ABI visible JSON document and the
+/// diagnostic grammar.
 pub const PIO_ABI_VERSION: u32 = 6;
 
 /// Frozen at 1 and no longer meaningful. It existed to absorb distribution
@@ -532,9 +535,10 @@ fn classify_label(text: &str) -> String {
     }
 }
 
-/// Serialize `net` to its model JSON: the network serialization the stored
-/// carries under `model.balanced_network`, without the surrounding document.
-/// This is the bindings' data transport and the only route to it: model JSON
+/// Serialize `net` to its model JSON: the network serialization a `.pio.json`
+/// document carries as `value.data` when its `value.kind` is
+/// `balanced_network`, without the surrounding document. This is the
+/// bindings' data transport and the only route to it: model JSON
 /// is powerio's own document rather than a case format, so it has no format
 /// token. Returns an owned C string (free with [`pio_string_release`]), `NULL` on
 /// error.
@@ -552,8 +556,8 @@ pub unsafe extern "C" fn pio_balanced_network_to_json(
 }
 
 /// Parse model JSON produced by [`pio_balanced_network_to_json`] (or lifted from a `.pio.json`
-/// document's `model.balanced_network`) back into an owned handle, the inverse
-/// of [`pio_balanced_network_to_json`]. A bare `.json` file holding this document classifies as
+/// document's `value.data` when its `value.kind` is `balanced_network`) back into an owned
+/// handle, the inverse of [`pio_balanced_network_to_json`]. A bare `.json` file holding this document classifies as
 /// `model-json` through [`pio_classify_str`]. Returns `NULL` on error. Free
 /// with [`pio_balanced_network_release`].
 #[unsafe(no_mangle)]
@@ -969,6 +973,16 @@ pub struct PioWriteOptions {
     pub gen_cost_csv: *const c_char,
 }
 
+/// The largest `struct_size` any options struct this library implements can
+/// legitimately declare. `declared` names how many bytes the tail check below
+/// reads past this build's own layout, so an unbounded caller-supplied value
+/// (a corrupted pointer, or a hostile one crossing an FFI boundary meant for a
+/// trusted binding but reachable from less trusted code) would turn that read
+/// into an out-of-bounds read of an attacker-chosen length. No options struct
+/// in this library is anywhere near this size; the bound exists to cap the
+/// read, not to accommodate a real one.
+const MAX_OPTIONS_STRUCT_SIZE: usize = 4096;
+
 /// Copy a caller's extensible options struct into a zero filled local of this
 /// build's layout, or `None` when `opts` is NULL and every default applies.
 ///
@@ -987,7 +1001,7 @@ unsafe fn options_from_c<T: Copy>(opts: *const T, name: &str) -> Result<Option<T
     }
     let own = size_of::<T>();
     let declared = unsafe { opts.cast::<usize>().read_unaligned() };
-    if declared < size_of::<usize>() {
+    if declared < size_of::<usize>() || declared > MAX_OPTIONS_STRUCT_SIZE {
         return Err(coded(
             &codes::BIND_CAPI_INVALID_OPTIONS,
             format!(
@@ -1670,8 +1684,8 @@ pub unsafe extern "C" fn pio_balanced_network_geo_extract(
 /// matched branch routes in `Branch.route`. The returned handle drops the
 /// retained source text, so a same-format write re-serializes the placed case
 /// instead of echoing the original. The reader's notes and an apply summary
-/// (`geo apply: N bus point(s), ...`) are appended to the handle's warnings
-/// on the returned handle's findings. Returns `NULL` on error.
+/// (`geo apply: N bus point(s), ...`) are appended to the returned handle's
+/// findings. Returns `NULL` on error.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_balanced_network_geo_apply(
     net: *const PioBalancedNetwork,
@@ -1910,9 +1924,10 @@ pub unsafe extern "C" fn pio_multiconductor_network_summary_json(
     }
 }
 
-/// Serialize `net` to its model JSON: the network serialization the stored
-/// carries under `model.multiconductor_network`, without the surrounding
-/// document. This is the bindings' data transport, not a case format: the
+/// Serialize `net` to its model JSON: the network serialization a `.pio.json`
+/// document carries as `value.data` when its `value.kind` is
+/// `multiconductor_network`, without the surrounding document. This is the
+/// bindings' data transport, not a case format: the
 /// converter, CLI, and format inference do not know it; a distribution case
 /// other tools read is BMOPF JSON, written through
 /// `pio_module_write_str`.
@@ -1962,8 +1977,9 @@ pub unsafe extern "C" fn pio_multiconductor_network_graph_json(
 }
 
 /// Parse model JSON produced by [`pio_multiconductor_network_to_json`] (or lifted from a
-/// `.pio.json` document's `model.multiconductor_network`) back into an owned
-/// handle: the inverse of [`pio_multiconductor_network_to_json`]. The rebuilt handle retains
+/// `.pio.json` document's `value.data` when its `value.kind` is
+/// `multiconductor_network`) back into an owned handle: the inverse of
+/// [`pio_multiconductor_network_to_json`]. The rebuilt handle retains
 /// no source text, so a same format write is a fresh serialization. The handle
 /// retains the model JSON `warnings`. Returns `NULL` on error. Free with
 /// [`pio_multiconductor_network_release`].
@@ -4235,7 +4251,10 @@ mpc.branch = [
                     CStr::from_ptr(pio_error_code(error)).to_str().unwrap(),
                     "REQUEST.CAPI.ARROW_TABLE_UNKNOWN"
                 );
-                assert_eq!(error_text(error), "unknown Arrow table id 9999");
+                assert_eq!(
+                    error_text(error),
+                    "REQUEST.CAPI.ARROW_TABLE_UNKNOWN: unknown Arrow table id 9999"
+                );
                 pio_error_release(error);
             }
 
@@ -4568,6 +4587,86 @@ mpc.branch = [
             reserved.reserved = 1;
             let err = convert_case9_with("matpower", &reserved).unwrap_err();
             assert!(err.starts_with("BIND.CAPI.INVALID_OPTIONS: "), "got: {err}");
+        }
+    }
+
+    #[test]
+    fn oversized_struct_size_is_refused_before_the_tail_read() {
+        // `struct_size` past this build's own layout drives a
+        // `slice::from_raw_parts` read of `declared - own` bytes in
+        // `options_from_c`'s tail check; an unbounded caller-supplied value
+        // there is an out-of-bounds read of an attacker-chosen length, not
+        // merely an oversized request. `usize::MAX` and a merely-too-generous
+        // 1 MiB both have to be refused before that read runs, on every
+        // entry point that accepts an extensible options struct.
+        let c = angle_bounds_case();
+        let case9_text = std::fs::read_to_string(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../tests/data/case9.m"),
+        )
+        .unwrap();
+        unsafe {
+            for oversized in [usize::MAX, 1 << 20] {
+                let mut nopts = normalize_opts();
+                nopts.struct_size = oversized;
+                let err = normalize_with(c, &nopts).unwrap_err();
+                assert_eq!(
+                    err.split(':').next().unwrap(),
+                    "BIND.CAPI.INVALID_OPTIONS",
+                    "pio_balanced_network_normalize, struct_size {oversized}: got {err}"
+                );
+
+                let mut wopts = write_opts();
+                wopts.struct_size = oversized;
+                let err = convert_case9_with("matpower", &wopts).unwrap_err();
+                assert_eq!(
+                    err.split(':').next().unwrap(),
+                    "BIND.CAPI.INVALID_OPTIONS",
+                    "pio_convert_file, struct_size {oversized}: got {err}"
+                );
+
+                let text = CString::new(case9_text.clone()).unwrap();
+                let from = CString::new("matpower").unwrap();
+                let to = CString::new("psse").unwrap();
+                let mut error: *mut PioError = std::ptr::null_mut();
+                let s = pio_convert_str(
+                    text.as_ptr(),
+                    from.as_ptr(),
+                    to.as_ptr(),
+                    &wopts,
+                    std::ptr::null_mut(),
+                    &raw mut error,
+                );
+                assert!(
+                    s.is_null(),
+                    "pio_convert_str accepted struct_size {oversized}"
+                );
+                assert_eq!(
+                    CStr::from_ptr(pio_error_code(error)).to_str().unwrap(),
+                    "BIND.CAPI.INVALID_OPTIONS",
+                    "pio_convert_str, struct_size {oversized}"
+                );
+                pio_error_release(error);
+            }
+
+            // The accepted boundary is unchanged: exactly this build's size,
+            // and a genuinely wider (zero-tailed) struct still both work.
+            assert!(normalize_with(c, &normalize_opts()).is_ok());
+            assert!(convert_case9_with("matpower", &write_opts()).is_ok());
+            let mut wide = WideNormalizeOptions {
+                head: normalize_opts(),
+                future: 0.0,
+            };
+            wide.head.struct_size = size_of::<WideNormalizeOptions>();
+            let opts: *const PioNormalizeOptions = std::ptr::from_ref(&wide).cast();
+            assert!(normalize_with(c, opts).is_ok());
+            let mut wide_write = WideWriteOptions {
+                head: write_opts(),
+                future: 0.0,
+            };
+            wide_write.head.struct_size = size_of::<WideWriteOptions>();
+            let opts: *const PioWriteOptions = std::ptr::from_ref(&wide_write).cast();
+            assert!(convert_case9_with("matpower", opts).is_ok());
+            pio_balanced_network_release(c);
         }
     }
 

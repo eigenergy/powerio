@@ -12,6 +12,7 @@ does not drag in the SDK.
 """
 
 import importlib
+import sys
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
@@ -20,6 +21,8 @@ if TYPE_CHECKING:
 
 __all__ = ["main", "sandbox"]
 
+_MIN_PYTHON = (3, 10)
+
 
 def __getattr__(name: str) -> Any:
     # `import_module` rather than `from . import sandbox`: the latter looks the
@@ -27,5 +30,13 @@ def __getattr__(name: str) -> Any:
     if name == "sandbox":
         return importlib.import_module(f"{__name__}.sandbox")
     if name == "main":
+        # server.py uses typing.TypeAlias (3.10+), and the mcp extra installs
+        # nothing on 3.9, so importing it there would fail on that syntax
+        # instead of saying why. Gate before the import runs.
+        if sys.version_info < _MIN_PYTHON:
+            raise ImportError(
+                "powerio.mcp requires Python 3.10+; the mcp extra installs "
+                "nothing on 3.9"
+            )
         return importlib.import_module(f"{__name__}.server").main
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

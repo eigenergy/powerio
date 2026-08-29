@@ -143,7 +143,7 @@ pub fn read_pypsa_csv_folder(path: impl AsRef<Path>) -> Result<Parsed, powerio_c
     parse_file(path, Some("pypsa-csv"))
 }
 
-fn tx_error_to_core(error: powerio::Error) -> powerio_core::Error {
+fn tx_error_to_core(error: powerio::error::Error) -> powerio_core::Error {
     powerio_core::Error::new(error.code(), error.to_string()).with_cause(error)
 }
 

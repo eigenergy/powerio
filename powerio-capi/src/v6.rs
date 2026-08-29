@@ -146,13 +146,50 @@ fn lossy_cstring(text: &str) -> CString {
     CString::new(text.replace('\0', "\u{fffd}")).expect("interior NULs replaced")
 }
 
-pub(crate) fn error_from_parts(code: &str, message: &str, diagnostics_json: &str) -> *mut PioError {
+/// Build an error handle from its structured findings. `records` becomes both
+/// `pio_error_diagnostics` (the typed channel) and `pio_error_diagnostics_json`
+/// (serialized through `Diagnostic`'s own serde form, the C ABI's documented
+/// JSON channel), so the two always agree; `code` is the first record's code,
+/// or the uncoded fallback when `records` is empty.
+fn error_from_diagnostics(message: &str, records: Vec<powerio_core::Diagnostic>) -> *mut PioError {
+    let code = records
+        .first()
+        .map_or(codes::BIND_CAPI_UNCODED_FAILURE.code, |diagnostic| {
+            diagnostic.code()
+        });
+    let diagnostics_json = serde_json::to_string(&records).unwrap_or_else(|_| "[]".to_owned());
     PioError::new_raw(ErrorInner {
         code: lossy_cstring(code),
         message: lossy_cstring(message),
-        diagnostics_json: lossy_cstring(diagnostics_json),
-        records: Vec::new(),
+        diagnostics_json: lossy_cstring(&diagnostics_json),
+        records,
     })
+}
+
+/// Build an error handle from a boundary-detected code and message, with no
+/// richer diagnostic behind it: builds the one `Diagnostic` record itself, so
+/// `pio_error_diagnostics`/`pio_error_diagnostics_json` carry the same finding
+/// `pio_error_message` renders instead of coming back empty. `pio_error_message`
+/// reads `CODE: message`, the shape [`error_from_core`] also reports. An `code`
+/// that fails the code grammar (never true of a registered constant, but not
+/// statically guaranteed) falls back to the uncoded failure code and folds the
+/// original code and message into the fallback's message text.
+pub(crate) fn error_from_parts(code: &str, message: &str) -> *mut PioError {
+    let diagnostic = match powerio_core::DiagnosticCode::new(code) {
+        Ok(diagnostic_code) => powerio_core::Diagnostic::new(
+            diagnostic_code,
+            powerio_core::DiagnosticSeverity::Error,
+            message,
+        ),
+        Err(_) => powerio_core::Diagnostic::new(
+            powerio_core::DiagnosticCode::new(codes::BIND_CAPI_UNCODED_FAILURE.code)
+                .expect("static code is well formed"),
+            powerio_core::DiagnosticSeverity::Error,
+            format!("{code}: {message}"),
+        ),
+    };
+    let rendered = powerio_core::render_diagnostic(&diagnostic);
+    error_from_diagnostics(&rendered, vec![diagnostic])
 }
 
 /// Build an error handle from one rendered `CODE: message` line, the shape
@@ -163,41 +200,17 @@ pub(crate) fn error_from_line(line: &str) -> *mut PioError {
         Some((code, message)) if powerio_core::code_is_well_formed(code) => (code, message),
         _ => ("BIND.CAPI.UNCODED_FAILURE", line),
     };
-    error_from_parts(code, message, "[]")
+    error_from_parts(code, message)
 }
 
 pub(crate) fn error_from_core(error: &powerio_core::Error) -> *mut PioError {
-    let code = error
-        .diagnostics()
-        .first()
-        .map_or("BIND.CAPI.UNCODED_FAILURE", |diagnostic| diagnostic.code());
-    let diagnostics: Vec<serde_json::Value> = error
-        .diagnostics()
-        .iter()
-        .map(|diagnostic| {
-            serde_json::json!({
-                "code": diagnostic.code(),
-                "severity": format!("{:?}", diagnostic.severity()).to_lowercase(),
-                "message": diagnostic.message(),
-                "target": diagnostic.target(),
-            })
-        })
-        .collect();
-    PioError::new_raw(ErrorInner {
-        code: lossy_cstring(code),
-        message: lossy_cstring(&error.to_string()),
-        diagnostics_json: lossy_cstring(
-            &serde_json::to_string(&diagnostics).unwrap_or_else(|_| "[]".to_owned()),
-        ),
-        records: error.diagnostics().to_vec(),
-    })
+    error_from_diagnostics(&error.to_string(), error.diagnostics().to_vec())
 }
 
 fn error_panic() -> *mut PioError {
     error_from_parts(
         codes::BIND_CAPI_PANIC.code,
-        "BIND.CAPI.PANIC: the operation panicked; the library state is unchanged",
-        "[]",
+        "the operation panicked; the library state is unchanged",
     )
 }
 
@@ -303,14 +316,12 @@ unsafe fn required_str<'a>(raw: *const c_char, what: &str) -> Result<&'a str, *m
         return Err(error_from_parts(
             codes::BIND_CAPI_NULL_ARGUMENT.code,
             &format!("{what} must not be NULL"),
-            "[]",
         ));
     }
     unsafe { CStr::from_ptr(raw) }.to_str().map_err(|_| {
         error_from_parts(
             codes::BIND_CAPI_INVALID_UTF8.code,
             &format!("{what} is not valid UTF-8"),
-            "[]",
         )
     })
 }
@@ -330,7 +341,6 @@ unsafe fn required_module<'a>(raw: *const PioModule) -> Result<&'a ModuleInner, 
         error_from_parts(
             codes::BIND_CAPI_NULL_HANDLE.code,
             "module handle must not be NULL",
-            "[]",
         )
     })
 }
@@ -340,7 +350,6 @@ fn owned_string(text: String) -> Result<*mut c_char, *mut PioError> {
         error_from_parts(
             codes::BIND_CAPI_INTERIOR_NUL.code,
             "output contained an interior NUL byte",
-            "[]",
         )
     })
 }
@@ -437,7 +446,6 @@ pub unsafe extern "C" fn pio_parse_bytes(
                 return Err(error_from_parts(
                     codes::BIND_CAPI_NULL_ARGUMENT.code,
                     "data must not be NULL",
-                    "[]",
                 ));
             }
             let bytes = std::slice::from_raw_parts(data, len).to_vec();
@@ -489,7 +497,6 @@ pub unsafe extern "C" fn pio_module_balanced_network(
                         "the module carries a {} value; as_network takes a balanced network",
                         inner.module.value().kind().as_str()
                     ),
-                    "[]",
                 ));
             };
             Ok(crate::make_network_module(provenanced(
@@ -519,7 +526,6 @@ pub unsafe extern "C" fn pio_module_multiconductor_network(
                          multiconductor network",
                         inner.module.value().kind().as_str()
                     ),
-                    "[]",
                 ));
             };
             Ok(crate::PioMulticonductorNetwork::from_module_raw(
@@ -647,8 +653,10 @@ pub unsafe extern "C" fn pio_module_write_json(
     }
 }
 
-/// The module's diagnostics as a JSON array (stable code, severity, message,
-/// optional identity and target per entry). Free with `pio_string_release`.
+/// The module's diagnostics as a JSON array, each entry `Diagnostic`'s own
+/// serde form (code, severity, message, and, when carried, id, target,
+/// spans, related, details, and suggested_action). Free with
+/// `pio_string_release`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_module_diagnostics_json(
     module: *const PioModule,
@@ -657,26 +665,8 @@ pub unsafe extern "C" fn pio_module_diagnostics_json(
     unsafe {
         v6_entry(error, std::ptr::null_mut(), || {
             let inner = required_module(module)?;
-            let diagnostics: Vec<serde_json::Value> = inner
-                .module
-                .diagnostics()
-                .iter()
-                .map(|diagnostic| {
-                    serde_json::json!({
-                        "id": diagnostic.id().map(ToString::to_string),
-                        "code": diagnostic.code(),
-                        "severity": format!("{:?}", diagnostic.severity()).to_lowercase(),
-                        "message": diagnostic.message(),
-                        "target": diagnostic.target(),
-                    })
-                })
-                .collect();
-            let text = serde_json::to_string(&diagnostics).map_err(|error| {
-                error_from_parts(
-                    codes::EMIT_CAPI_SERIALIZE_FAILED.code,
-                    &error.to_string(),
-                    "[]",
-                )
+            let text = serde_json::to_string(inner.module.diagnostics()).map_err(|error| {
+                error_from_parts(codes::EMIT_CAPI_SERIALIZE_FAILED.code, &error.to_string())
             })?;
             owned_string(text)
         })
@@ -738,7 +728,6 @@ unsafe fn selector<'a>(
             codes::REQUEST_CAPI_SELECTOR_CONFLICT.code,
             "pass exactly one key: time_position >= 0 with scenario NULL, or \
              time_position < 0 with scenario set",
-            "[]",
         )),
     }
 }
@@ -783,12 +772,30 @@ pub unsafe extern "C" fn pio_module_lowering_readiness_json(
                 },
             )
             .map_err(|error| error_from_core(&error))?;
-            let text = serde_json::to_string(&readiness).map_err(|error| {
-                error_from_parts(
-                    codes::EMIT_CAPI_SERIALIZE_FAILED.code,
-                    &error.to_string(),
-                    "[]",
-                )
+            // Publish the 1.0 record shape: the readiness struct's own
+            // diagnostics field is the frozen 0.9 form its internal checks
+            // build, so the report swaps it for the module records.
+            let mut value = serde_json::to_value(&readiness).map_err(|error| {
+                error_from_parts(codes::EMIT_CAPI_SERIALIZE_FAILED.code, &error.to_string())
+            })?;
+            let records = readiness.diagnostics_as_module_records();
+            if let serde_json::Value::Object(map) = &mut value {
+                if records.is_empty() {
+                    map.remove("diagnostics");
+                } else {
+                    map.insert(
+                        "diagnostics".to_owned(),
+                        serde_json::to_value(&records).map_err(|error| {
+                            error_from_parts(
+                                codes::EMIT_CAPI_SERIALIZE_FAILED.code,
+                                &error.to_string(),
+                            )
+                        })?,
+                    );
+                }
+            }
+            let text = serde_json::to_string(&value).map_err(|error| {
+                error_from_parts(codes::EMIT_CAPI_SERIALIZE_FAILED.code, &error.to_string())
             })?;
             owned_string(text)
         })
@@ -823,13 +830,39 @@ pub unsafe extern "C" fn pio_module_lower_to_balanced(
             )
             .map(module_handle)
             .map_err(|(_, boxed)| {
-                let diagnostics =
-                    serde_json::to_string(&boxed.diagnostics).unwrap_or_else(|_| "[]".to_owned());
-                let code = boxed.diagnostics.first().map_or(
-                    powerio::codes::TRANSFORM_MULTI_TO_BALANCED_WRONG_MODEL_KIND.code,
-                    |d| d.code.as_str(),
-                );
-                error_from_parts(code, &boxed.to_string(), &diagnostics)
+                // Best effort projection of the 0.9 legacy diagnostic list
+                // this failure still carries on this vintage onto the 1.0
+                // `Diagnostic` type, so the typed and JSON error channels
+                // agree in count instead of the JSON channel alone carrying
+                // the findings. Reads each entry through JSON rather than
+                // naming the legacy type, which is crate private to
+                // `powerio` (`stored::legacy09`) and so cannot be spelled
+                // here; an entry that fails to decode is dropped from both
+                // channels rather than only one. Severity collapses the same
+                // way the crate's own 0.9 upgrade path does: only `error`
+                // and `warning` keep their name, everything else becomes a
+                // note.
+                let records: Vec<powerio_core::Diagnostic> = boxed
+                    .diagnostics
+                    .iter()
+                    .filter_map(|entry| {
+                        let value = serde_json::to_value(entry).ok()?;
+                        let code = value.get("code")?.as_str()?;
+                        let message = value.get("message")?.as_str()?;
+                        let severity =
+                            match value.get("severity").and_then(serde_json::Value::as_str) {
+                                Some("error") => powerio_core::DiagnosticSeverity::Error,
+                                Some("warning") => powerio_core::DiagnosticSeverity::Warning,
+                                _ => powerio_core::DiagnosticSeverity::Note,
+                            };
+                        let code = powerio_core::DiagnosticCode::new(code).ok()?;
+                        Some(powerio_core::Diagnostic::new(code, severity, message))
+                    })
+                    .collect();
+                let message = records
+                    .first()
+                    .map_or_else(|| boxed.to_string(), powerio_core::render_diagnostic);
+                error_from_diagnostics(&message, records)
             })
         })
     }
@@ -890,7 +923,23 @@ fn inspect_json(module: &powerio_core::PioModule<powerio::PioValue>) -> String {
         ],
         _ => vec!["inspect", "diagnostics", "write"],
     };
-    serde_json::json!({
+    // The value's own source format when the value kind carries one
+    // (balanced and multiconductor networks always or optionally do); every
+    // other value kind has none of its own, so the first source descriptor's
+    // declared format stands in. Omitted entirely when neither is known, so
+    // PowerIO.jl's `source_format(m)` (`get(inspect(m), :source_format,
+    // nothing)`) and `write_file(m, path)` with no format see `nothing`
+    // rather than an empty string.
+    let source_format: Option<&str> = match value {
+        V::BalancedNetwork(network) => Some(network.source_format().name()),
+        V::MulticonductorNetwork(network) => network.source_format().map(|format| format.name()),
+        _ => module
+            .sources()
+            .first()
+            .and_then(|source| source.format())
+            .map(|format| format.as_str()),
+    };
+    let mut report = serde_json::json!({
         "kind": value.kind().as_str(),
         "value": summary,
         "records": {
@@ -901,8 +950,14 @@ fn inspect_json(module: &powerio_core::PioModule<powerio::PioValue>) -> String {
             "extensions": module.extensions().len(),
         },
         "operations": operations,
-    })
-    .to_string()
+    });
+    if let (Some(format), serde_json::Value::Object(map)) = (source_format, &mut report) {
+        map.insert(
+            "source_format".to_owned(),
+            serde_json::Value::String(format.to_owned()),
+        );
+    }
+    report.to_string()
 }
 
 fn inventory_json(inventory: &powerio::select::StateInventory) -> String {
@@ -1328,7 +1383,6 @@ fn dc_formula(name: &str) -> Result<DcConvention, *mut PioError> {
                 "unknown branch susceptance formula `{name}`; expected series_susceptance, \
                  tap_adjusted_reactance, or reactance_only"
             ),
-            "[]",
         )
     })
 }
@@ -1406,7 +1460,6 @@ pub unsafe extern "C" fn pio_dc_data_build(
                         "the module carries a {} value; DC data takes a balanced network",
                         inner.module.value().kind().as_str()
                     ),
-                    "[]",
                 ));
             };
             build_dc_data(network, formula).map(PioDcData::new_raw)
@@ -2297,6 +2350,114 @@ mod tests {
         }
     }
 
+    /// `inspect_json`'s `source_format` key: present with the parsed
+    /// source's token for a value kind that carries its own (balanced and
+    /// multiconductor networks), and absent for a kind that carries none of
+    /// its own and no source descriptor either. This is the field
+    /// `PowerIO.jl`'s `source_format(m)` (`get(inspect(m), :source_format,
+    /// nothing)`) reads, and that `write_file(m, path)` with no `format`
+    /// falls back to.
+    #[test]
+    fn inspect_json_carries_source_format_when_the_value_or_a_source_declares_one() {
+        let balanced = powerio::parse(
+            powerio_core::Source::from_bytes("case.m", case_text().into_bytes())
+                .unwrap()
+                .with_format(powerio_core::FormatId::new("matpower").unwrap()),
+        )
+        .unwrap();
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&inspect_json(&balanced)).unwrap()["source_format"],
+            "matpower"
+        );
+        let dss_module = powerio::parse(
+            powerio_core::Source::from_bytes(
+                "tiny.dss",
+                b"Clear\nNew Circuit.tiny basekv=12.47 bus1=src\nNew Line.l1 bus1=src bus2=a length=1\nSet VoltageBases=[12.47]\n".to_vec(),
+            )
+            .unwrap()
+            .with_format(powerio_core::FormatId::new("dss").unwrap()),
+        )
+        .unwrap();
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&inspect_json(&dss_module)).unwrap()["source_format"],
+            "dss"
+        );
+        // A value kind with no source_format accessor of its own, built with
+        // no source descriptor either (assembled in memory from an
+        // already-parsed network, not through a `Source`): the key is
+        // omitted rather than emitted as `null`.
+        let network = match balanced.value() {
+            powerio::PioValue::BalancedNetwork(network) => network.clone(),
+            _ => panic!("wrong kind"),
+        };
+        let series = powerio_core::TimeSeries::new(
+            vec![powerio_core::TimePoint::new("h0", None).unwrap()],
+            vec![network],
+        )
+        .unwrap();
+        let series_module =
+            powerio_core::PioModule::new(powerio::PioValue::BalancedNetworkTimeSeries(series));
+        let report: serde_json::Value =
+            serde_json::from_str(&inspect_json(&series_module)).unwrap();
+        assert!(report.get("source_format").is_none(), "{report}");
+    }
+
+    /// The end to end path Julia's `write_file(m, path)` with no `format`
+    /// depends on: `pio_parse_file` on a real MATPOWER file reports
+    /// `source_format` through the full C ABI surface, and it survives a
+    /// `.pio.json` save and reload — the exact round trip a script doing
+    /// `m = parse_file(...); write_json(m, "case.pio.json")`, later reopened
+    /// with `PowerIO.parse_file("case.pio.json")`, then `write_file(m2,
+    /// "out.m")` with no format, depends on.
+    #[test]
+    fn source_format_reaches_pio_parse_file_and_survives_a_pio_json_round_trip() {
+        unsafe {
+            let path = CString::new(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../tests/data/case9.m"
+            ))
+            .unwrap();
+            let mut error = std::ptr::null_mut();
+            let module = pio_parse_file(path.as_ptr(), std::ptr::null(), &raw mut error);
+            assert!(
+                error.is_null(),
+                "{:?}",
+                CStr::from_ptr(pio_error_message(error))
+            );
+            let report = pio_module_inspect_json(module, &raw mut error);
+            assert!(error.is_null());
+            let parsed: serde_json::Value =
+                serde_json::from_str(CStr::from_ptr(report).to_str().unwrap()).unwrap();
+            assert_eq!(parsed["source_format"], "matpower");
+            crate::pio_string_release(report);
+
+            let stored = pio_module_write_json(module, &raw mut error);
+            assert!(error.is_null());
+            let stored_text = CStr::from_ptr(stored).to_str().unwrap().to_owned();
+            crate::pio_string_release(stored);
+            pio_module_release(module);
+
+            let tmp = tempfile::tempdir().unwrap();
+            let saved_path = tmp.path().join("case.pio.json");
+            std::fs::write(&saved_path, &stored_text).unwrap();
+            let saved_path_c = CString::new(saved_path.to_str().unwrap()).unwrap();
+            let mut error = std::ptr::null_mut();
+            let reloaded = pio_parse_file(saved_path_c.as_ptr(), std::ptr::null(), &raw mut error);
+            assert!(
+                error.is_null(),
+                "{:?}",
+                CStr::from_ptr(pio_error_message(error))
+            );
+            let report = pio_module_inspect_json(reloaded, &raw mut error);
+            assert!(error.is_null());
+            let parsed: serde_json::Value =
+                serde_json::from_str(CStr::from_ptr(report).to_str().unwrap()).unwrap();
+            assert_eq!(parsed["source_format"], "matpower");
+            crate::pio_string_release(report);
+            pio_module_release(reloaded);
+        }
+    }
+
     #[test]
     fn a_failure_returns_a_structured_error_handle() {
         unsafe {
@@ -2318,26 +2479,67 @@ mod tests {
 
     #[test]
     fn error_handles_carry_code_message_and_diagnostics() {
-        let error = error_from_parts("READ.TEST.CODE", "message text", "[]");
+        let error = error_from_parts("READ.TEST.CODE", "message text");
         unsafe {
             assert_eq!(
                 CStr::from_ptr(pio_error_code(error)).to_str().unwrap(),
                 "READ.TEST.CODE"
             );
+            // `pio_error_message` reads `CODE: message`, the one shape both
+            // `error_from_parts` and `error_from_core` report.
             assert_eq!(
                 CStr::from_ptr(pio_error_message(error)).to_str().unwrap(),
-                "message text"
+                "READ.TEST.CODE: message text"
             );
             let retained = pio_error_retain(error);
             pio_error_release(error);
+            // The typed channel carries the same one finding the JSON channel
+            // does, in `Diagnostic`'s own serde form.
+            let diagnostics = pio_error_diagnostics(retained);
+            assert_eq!(pio_diagnostics_len(diagnostics), 1);
+            pio_diagnostics_release(diagnostics);
             assert_eq!(
                 CStr::from_ptr(pio_error_diagnostics_json(retained))
                     .to_str()
                     .unwrap(),
-                "[]"
+                r#"[{"code":"READ.TEST.CODE","severity":"error","message":"message text"}]"#
             );
             pio_error_release(retained);
             pio_error_release(std::ptr::null_mut());
         }
+    }
+
+    /// The readiness report publishes the 1.0 record shape: `target` keys,
+    /// the four 1.0 severities, and no legacy `element_path`.
+    #[cfg(feature = "dist")]
+    #[test]
+    fn lowering_readiness_reports_module_records() {
+        let path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../tests/data/dist/opendss/ieee13/IEEE13Nodeckt.dss"
+        );
+        let c_path = std::ffi::CString::new(path).unwrap();
+        let mut error: *mut PioError = std::ptr::null_mut();
+        let module = unsafe { pio_parse_file(c_path.as_ptr(), std::ptr::null(), &raw mut error) };
+        assert!(!module.is_null());
+        let text = unsafe { pio_module_lowering_readiness_json(module, 100.0, &raw mut error) };
+        assert!(!text.is_null());
+        let json = unsafe { std::ffi::CStr::from_ptr(text) }.to_str().unwrap();
+        let value: serde_json::Value = serde_json::from_str(json).unwrap();
+        let records = value["diagnostics"].as_array().expect("records");
+        assert!(!records.is_empty());
+        for record in records {
+            assert!(record.get("element_path").is_none(), "{record}");
+            let severity = record["severity"].as_str().unwrap();
+            assert!(
+                ["error", "warning", "remark", "note"].contains(&severity),
+                "{severity}"
+            );
+            if let Some(target) = record.get("target").and_then(|t| t.as_str()) {
+                assert!(target.starts_with('/'), "{target}");
+            }
+        }
+        unsafe { crate::pio_string_release(text) };
+        unsafe { pio_module_release(module) };
     }
 }

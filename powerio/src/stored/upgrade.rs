@@ -217,15 +217,23 @@ fn upgrade_series(
     network: &crate::BalancedNetwork,
     series: &OperatingPointSeries,
 ) -> Result<PioValue> {
-    let periods = series.time_axis.periods.max(series.points.len());
+    // Sized from what the document actually carries (labels, durations, and
+    // operating points), never from the declared `time_axis.periods` scalar
+    // alone: that number costs nothing to inflate, while these array lengths
+    // cost real bytes to carry, so an untrusted document can no longer claim
+    // far more periods than it actually states and force allocation at that
+    // inflated size.
+    let periods = series
+        .points
+        .len()
+        .max(series.time_axis.labels.len())
+        .max(series.time_axis.duration_hours.len());
     if periods > MAX_UPGRADE_PERIODS {
         return Err(refused(
             &codes::READ_MODULE_INVALID,
             format!(
-                "the time axis declares {} periods over {} operating points; at most \
-                 {MAX_UPGRADE_PERIODS} periods upgrade",
-                series.time_axis.periods,
-                series.points.len()
+                "the time axis carries {periods} periods across its labels, durations, and \
+                 operating points; at most {MAX_UPGRADE_PERIODS} periods upgrade"
             ),
         ));
     }
@@ -491,6 +499,32 @@ mod upgrade_tests {
         );
     }
 
+    /// A 0.9 diagnostic's `code` is never validated at decode time (the
+    /// legacy `DiagnosticCode` accepts any string), so an attacker
+    /// controlled `.pio.json` can carry one that fails the 1.0 grammar. The
+    /// upgrade must fall back to a stand-in code for such a record, not
+    /// panic reaching for the fallback itself.
+    #[test]
+    fn a_malformed_legacy_diagnostic_code_upgrades_to_the_fallback_instead_of_panicking() {
+        for bad_code in ["bad", "", "TWO.SEGMENTS", "READ..EMPTY", "1LEADING.DIGIT.X"] {
+            let mut raw: serde_json::Value =
+                serde_json::from_str(&legacy_package_text(false, false)).unwrap();
+            raw["diagnostics"] = serde_json::json!([
+                {"code": bad_code, "severity": "warning", "message": "malformed code"}
+            ]);
+            let module = read_module(&raw.to_string())
+                .unwrap_or_else(|e| panic!("code {bad_code:?} refused the whole document: {e}"));
+            assert!(
+                module
+                    .diagnostics()
+                    .iter()
+                    .any(|d| d.code() == "PARTNER.LEGACY.UNCODED"),
+                "code {bad_code:?}: {:?}",
+                module.diagnostics()
+            );
+        }
+    }
+
     #[test]
     fn legacy_operating_points_become_the_primary_series_value() {
         let text = legacy_package_text(true, false);
@@ -614,25 +648,31 @@ mod limit_upgrade_tests {
     }
 
     #[test]
-    fn a_declared_period_count_past_the_maximum_is_refused() {
+    fn a_declared_period_count_no_longer_sizes_the_series() {
+        // The declared scalar costs nothing to inflate, so the series is
+        // sized from the carried labels, durations, and points alone; an
+        // inflated or understated declaration changes nothing.
+        for declared in [3_usize, 10_000_000] {
+            let mut raw = legacy_series_text();
+            raw["operating_points"]["time_axis"]["periods"] = serde_json::json!(declared);
+            let module = read_module(&raw.to_string()).unwrap();
+            let PioValue::BalancedOperatingPointTimeSeries(series) = module.value() else {
+                panic!("wrong kind");
+            };
+            assert_eq!(series.len(), 2, "declared {declared}");
+            assert_eq!(series.values()[1].load_active_power("loads:0"), Some(75.0));
+        }
+
+        // Past the maximum in what the document actually carries.
         let mut raw = legacy_series_text();
-        raw["operating_points"]["time_axis"]["periods"] = serde_json::json!(10_000_000);
+        let labels: Vec<String> = (0..=131_072).map(|i| format!("h{i}")).collect();
+        raw["operating_points"]["time_axis"]["labels"] = serde_json::json!(labels);
         let error = read_module(&raw.to_string()).unwrap_err();
         assert_eq!(
             error.info().map(|info| info.code),
             Some("READ.MODULE.INVALID")
         );
         assert!(error.to_string().contains("131072"), "{error}");
-
-        // At the boundary shape the document still upgrades with its values.
-        let mut raw = legacy_series_text();
-        raw["operating_points"]["time_axis"]["periods"] = serde_json::json!(3);
-        let module = read_module(&raw.to_string()).unwrap();
-        let PioValue::BalancedOperatingPointTimeSeries(series) = module.value() else {
-            panic!("wrong kind");
-        };
-        assert_eq!(series.len(), 3);
-        assert_eq!(series.values()[1].load_active_power("loads:0"), Some(75.0));
     }
 
     #[test]

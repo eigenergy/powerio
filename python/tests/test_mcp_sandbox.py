@@ -39,6 +39,18 @@ def test_no_roots_configured_allows_any_path(tmp_path):
     assert sandbox.checked_path(str(tmp_path / "case9.m")) == str(tmp_path / "case9.m")
 
 
+def test_main_names_the_python_requirement_below_3_10(monkeypatch):
+    """`powerio.mcp.main` is resolved lazily so reaching `sandbox` never
+    imports the SDK; below 3.10 it must refuse before server.py's
+    typing.TypeAlias import runs, with a message naming the requirement,
+    rather than failing on that import with no explanation."""
+    import powerio.mcp as mcp_pkg
+
+    monkeypatch.setattr(sys, "version_info", (3, 9, 0))
+    with pytest.raises(ImportError, match="Python 3.10"):
+        _ = mcp_pkg.main
+
+
 def test_allowed_roots_splits_on_pathsep(monkeypatch, tmp_path):
     a = tmp_path / "a"
     b = tmp_path / "b"

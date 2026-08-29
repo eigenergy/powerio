@@ -333,11 +333,17 @@ fn has_diagnostic_code(diagnostics: &[StructuredDiagnostic], code: &str) -> bool
         .any(|d| d.code == DiagnosticCode::new(code))
 }
 
+/// The 1.0 record counterpart of [`has_diagnostic_code`]: `MulticonductorToBalancedError`
+/// carries module records, not the legacy `StructuredDiagnostic` list.
+fn has_diagnostic_code_1_0(diagnostics: &[powerio_core::Diagnostic], code: &str) -> bool {
+    diagnostics.iter().any(|d| d.code() == code)
+}
+
 fn assert_lowering_rejects(net: &powerio_dist::MulticonductorNetwork, code: &str) {
     let err = lower_multiconductor_to_balanced(net, MulticonductorToBalancedOptions::default())
         .expect_err("lowering must reject unsupported input");
     assert!(
-        has_diagnostic_code(&err.diagnostics, code),
+        has_diagnostic_code_1_0(&err.diagnostics, code),
         "missing {code}: {:?}",
         err.diagnostics
     );
@@ -1997,7 +2003,7 @@ fn package_lowering_rejects_balanced_package() {
     let err = balanced_package()
         .lower_multiconductor_to_balanced(MulticonductorToBalancedOptions::default())
         .expect_err("balanced package is not accepted");
-    assert!(has_diagnostic_code(
+    assert!(has_diagnostic_code_1_0(
         &err.diagnostics,
         "TRANSFORM.MULTI_TO_BALANCED.WRONG_MODEL_KIND"
     ));

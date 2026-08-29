@@ -117,23 +117,17 @@ _TARGET_FORMAT_HELP = (
 )
 
 
-def _warning_lines(findings) -> list:
-    """Render native findings to their `CODE: message` lines for the current
-    payload shape; strings pass through."""
-    lines = []
-    for finding in findings:
-        if isinstance(finding, str):
-            lines.append(finding)
-        else:
-            lines.append(f"{finding.code}: {finding.message}")
-    return lines
-
-
 @dataclass
 class _Loaded:
+    """One network loaded through any transport. `warnings` is always a list
+    of dicts (`_diagnostic_records`'s shape: `code`, `severity`, `message`,
+    `target`, the last two `None` when the finding carries none), whichever
+    transport produced it: `parse`, `summary`, `convert`, `save`,
+    `normalize`, `matrix`, and `diagnostics` all publish this same shape."""
+
     domain: str
     network: Any
-    warnings: list[str]
+    warnings: list[Dict[str, Any]]
     json_format: str
     scenario: Optional[int] = None
     package_json: Optional[str] = None
@@ -154,12 +148,19 @@ def _one_input(path: Optional[str], content: Optional[str]) -> None:
 
 def _coded_error(prefix: str, exc: Exception) -> ValueError:
     """Lead with the diagnostic code when the failure carries one, so a
-    consumer that splits on the first colon reads a code, never prose. A
-    refusal's structured findings (currently only a refused balanced
-    lowering sets `.diagnostics`) ride along as trailing JSON, since an MCP
-    tool has no attribute channel back to its caller."""
+    consumer that splits on the first colon reads a code, never prose.
+
+    The Rust-side message already renders as `CODE: message`, so `str(exc)`
+    starting with `code` means it is already there; prefixing again would
+    double it. A refusal's structured findings (currently only a refused
+    balanced lowering sets `.diagnostics`) ride along as trailing JSON,
+    since an MCP tool has no attribute channel back to its caller."""
     code = getattr(exc, "code", None)
-    message = f"{code}: {exc}" if code else f"{prefix}: {exc}"
+    text = str(exc)
+    if code:
+        message = text if text.startswith(f"{code}: ") else f"{code}: {text}"
+    else:
+        message = f"{prefix}: {text}"
     diagnostics = getattr(exc, "diagnostics", None)
     if diagnostics:
         message = f"{message} | {jsonlib.dumps(diagnostics)}"
@@ -360,53 +361,40 @@ def _severity_counts(diagnostics: list[Dict[str, Any]]) -> Dict[str, int]:
     return counts
 
 
-def _diagnostic_message(item: Dict[str, Any]) -> Optional[str]:
-    """Format one diagnostic dict as `code: message`, or `message` alone when
-    code is absent."""
-    code = item.get("code")
-    message = item.get("message")
-    if code and message:
-        return f"{code}: {message}"
-    if message:
-        return str(message)
-    return None
+# A `DiagnosticV1` severity is `error`, `warning`, `remark`, or `note`; only
+# the first two are surfaced in `_Loaded.warnings` (the `diagnostics` tool is
+# the unfiltered view of every severity).
+_WARNING_SEVERITIES = frozenset({"warning", "error"})
 
 
-def _diagnostic_messages(
+def _diagnostic_record(item: Dict[str, Any]) -> Dict[str, Any]:
+    """One diagnostic dict normalized to the published shape: `code`,
+    `severity`, `message`, `target`, the last `None` when the finding
+    carries none."""
+    return {key: item.get(key) for key in ("code", "severity", "message", "target")}
+
+
+def _diagnostic_records(
     diagnostics: list[Any], keep_severities: frozenset[str]
-) -> list[str]:
-    messages = []
-    for item in diagnostics:
-        if not isinstance(item, dict):
-            continue
-        if item.get("severity") not in keep_severities:
-            continue
-        formatted = _diagnostic_message(item)
-        if formatted is not None:
-            messages.append(formatted)
-    return messages
-
-
-# A package's diagnostics carry the older severity set, including `fatal`.
-_PACKAGE_WARNING_SEVERITIES = frozenset({"warning", "error", "fatal"})
-# A stored module's `DiagnosticV1` severity is `error`, `warning`, `remark`,
-# or `note`; only the first two are surfaced as warnings.
-_MODULE_WARNING_SEVERITIES = frozenset({"warning", "error"})
-
-
-def _package_diagnostic_messages(value: Dict[str, Any]) -> list[str]:
-    return _diagnostic_messages(value.get("diagnostics", []), _PACKAGE_WARNING_SEVERITIES)
-
-
-def _module_diagnostic_messages(module: "powerio.PioModule") -> list[str]:
-    """Format a module's native diagnostics as `code: message` lines, kept to
-    warning and error severity. `module.diagnostics()` returns
-    `_powerio.Diagnostic` objects, not the dicts `_diagnostic_messages` reads,
-    since code and message are never absent on a native diagnostic."""
+) -> list[Dict[str, Any]]:
+    """Every diagnostic dict (as `module.diagnostics()` or a parsed network's
+    `.diagnostics()` return) at or above the kept severities, normalized to
+    one shape."""
     return [
-        f"{d.code}: {d.message}"
-        for d in module.diagnostics()
-        if d.severity in _MODULE_WARNING_SEVERITIES
+        _diagnostic_record(item)
+        for item in diagnostics
+        if isinstance(item, dict) and item.get("severity") in keep_severities
+    ]
+
+
+def _wrap_plain_warnings(messages: list[str]) -> list[Dict[str, Any]]:
+    """A rendered `CODE: message` or bare message list (an emit-time
+    `Conversion.warnings`, with no structured form of its own) in the same
+    shape `_diagnostic_records` publishes, so a tool that appends emit
+    warnings to `_Loaded.warnings` still returns one list of dicts."""
+    return [
+        {"code": None, "severity": None, "message": message, "target": None}
+        for message in messages
     ]
 
 
@@ -492,7 +480,7 @@ def _load_module(module_json: str) -> _Loaded:
     except ValueError as exc:
         raise _coded_error("module input", exc) from exc
     kind = module.kind
-    warnings = _module_diagnostic_messages(module)
+    warnings = _diagnostic_records(module.diagnostics(), _WARNING_SEVERITIES)
     if kind == "balanced_network":
         return _Loaded(
             domain="transmission",
@@ -528,7 +516,7 @@ def _parse_transmission(
             return _Loaded(
                 "transmission",
                 result.network,
-                _warning_lines(result.warnings),
+                _diagnostic_records(result.network.diagnostics(), _WARNING_SEVERITIES),
                 "model-json",
                 int(result.scenario),
             )
@@ -548,7 +536,9 @@ def _parse_transmission(
         raise ValueError(str(exc)) from exc
     except OSError as exc:
         raise ValueError(f"cannot read input: {exc}") from exc
-    return _Loaded("transmission", net, list(net.read_warnings), "model-json")
+    return _Loaded(
+        "transmission", net, _diagnostic_records(net.diagnostics(), _WARNING_SEVERITIES), "model-json"
+    )
 
 
 def _parse_distribution(
@@ -579,7 +569,9 @@ def _parse_distribution(
         raise ValueError(f"file not found: {exc}") from exc
     except OSError as exc:
         raise ValueError(f"cannot read input: {exc}") from exc
-    return _Loaded("distribution", net, _warning_lines(net.warnings), "bmopf-json")
+    return _Loaded(
+        "distribution", net, _diagnostic_records(net.diagnostics(), _WARNING_SEVERITIES), "bmopf-json"
+    )
 
 
 def _parse_any(
@@ -653,7 +645,9 @@ def _load_transport(text: str, json_format: Optional[str]) -> _Loaded:
         raise _coded_error("parse failed", exc) from exc
     except (ValueError, KeyError, TypeError) as exc:
         raise ValueError(f"parse failed: {exc}") from exc
-    return _Loaded("transmission", net, list(net.read_warnings), "model-json")
+    return _Loaded(
+        "transmission", net, _diagnostic_records(net.diagnostics(), _WARNING_SEVERITIES), "model-json"
+    )
 
 
 def _load_any(
@@ -734,7 +728,7 @@ def _distribution_summary(net: "dist.MulticonductorNetwork") -> Dict[str, Any]:
             "reference_buses": None,
             "connectivity_report": None,
         },
-        "warnings": _warning_lines(net.warnings),
+        "warnings": list(net.warnings),
     }
 
 
@@ -743,17 +737,22 @@ def _summary(loaded: _Loaded) -> Dict[str, Any]:
         summary = _distribution_summary(loaded.network)
     else:
         summary = _transmission_summary(loaded.network)
-    summary["warnings"] = _warning_lines(loaded.warnings)
+    summary["warnings"] = list(loaded.warnings)
     return summary
 
 
-def _dist_json(net: "dist.MulticonductorNetwork") -> tuple[str, list[str]]:
+def _dist_json(
+    net: "dist.MulticonductorNetwork", warnings: list[Dict[str, Any]]
+) -> tuple[str, list[Dict[str, Any]]]:
+    """Re-serialize to bmopf-json, folding in this reserialization's own
+    emit-time findings (`Conversion.warnings` has no structured form of its
+    own, so it is wrapped) after the caller's already-loaded `warnings`."""
     conv = net.to_format("bmopf-json")
-    return conv.text, _warning_lines(net.warnings) + _warning_lines(conv.warnings)
+    return conv.text, warnings + _wrap_plain_warnings(list(conv.warnings))
 
 
 def _write_text(
-    out_path: str, text: str, warnings: list[str], overwrite: bool
+    out_path: str, text: str, warnings: list[Dict[str, Any]], overwrite: bool
 ) -> Dict[str, Any]:
     try:
         mode = "w" if overwrite else "x"
@@ -858,14 +857,14 @@ def _convert_impl(
                     "no conversion path between transmission and distribution formats"
                 )
             conv = loaded.network.to_format(to_format)
-            warnings = list(loaded.warnings) + _warning_lines(conv.warnings)
+            warnings = loaded.warnings + _wrap_plain_warnings(list(conv.warnings))
         else:
             if loaded.domain != "transmission":
                 raise ValueError(
                     "no conversion path between distribution and transmission formats"
                 )
             conv = loaded.network.to_format(to_format)
-            warnings = list(loaded.warnings) + _warning_lines(conv.warnings)
+            warnings = loaded.warnings + _wrap_plain_warnings(list(conv.warnings))
     except powerio.PowerIOError as exc:
         raise _coded_error("conversion failed", exc) from exc
     return {"text": conv.text, "warnings": warnings}
@@ -931,7 +930,7 @@ def _save_impl(
         return {
             "dir": result.get("dir", out_path),
             "files": list(result.get("files", [])),
-            "warnings": loaded.warnings + list(result.get("warnings", [])),
+            "warnings": loaded.warnings + _wrap_plain_warnings(list(result.get("warnings", []))),
         }
 
     if _is_dist_format(to_l):
@@ -941,7 +940,8 @@ def _save_impl(
             conv = loaded.network.to_format(target)
         except powerio.PowerIOError as exc:
             raise _coded_error("conversion failed", exc) from exc
-        return _write_text(out_path, conv.text, loaded.warnings + list(conv.warnings), overwrite)
+        warnings = loaded.warnings + _wrap_plain_warnings(list(conv.warnings))
+        return _write_text(out_path, conv.text, warnings, overwrite)
 
     if loaded.domain != "transmission":
         raise ValueError("target is a transmission format but source is distribution")
@@ -949,7 +949,8 @@ def _save_impl(
         conv = loaded.network.to_format(target)
     except powerio.PowerIOError as exc:
         raise _coded_error("conversion failed", exc) from exc
-    return _write_text(out_path, conv.text, loaded.warnings + list(conv.warnings), overwrite)
+    warnings = loaded.warnings + _wrap_plain_warnings(list(conv.warnings))
+    return _write_text(out_path, conv.text, warnings, overwrite)
 
 
 def _summary_impl(
@@ -999,7 +1000,7 @@ def _parse_impl(
         raise ValueError("`transport` must be `json` or `package`")
     loaded = _parse_any(path, content, from_format, options)
     if loaded.domain == "distribution":
-        text, warnings = _dist_json(loaded.network)
+        text, warnings = _dist_json(loaded.network, loaded.warnings)
     else:
         text, warnings = loaded.network.to_json(), loaded.warnings
     summary = _summary(loaded)
@@ -1033,7 +1034,8 @@ def _normalize_impl(
         norm = loaded.network.to_normalized()
     except powerio.PowerIOError as exc:
         raise _coded_error("normalization failed", exc) from exc
-    normalized = _Loaded("transmission", norm, list(norm.read_warnings), "model-json")
+    norm_warnings = _diagnostic_records(norm.diagnostics(), _WARNING_SEVERITIES)
+    normalized = _Loaded("transmission", norm, norm_warnings, "model-json")
     summary = _summary(normalized)
     return {
         **_header("powerio.normalize"),
@@ -1043,7 +1045,7 @@ def _normalize_impl(
         "json_format": "model-json",
         "json": norm.to_json(),
         "summary": summary,
-        "warnings": list(norm.read_warnings),
+        "warnings": norm_warnings,
     }
 
 

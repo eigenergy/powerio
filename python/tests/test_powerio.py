@@ -1047,18 +1047,80 @@ def test_from_ppc_names_the_table_and_row_for_malformed_input(case9):
         powerio.from_ppc(lettered)
 
 
-def test_convention_aliases(case9):
-    # Documented spellings all parse; separator/case-insensitive.
-    for conv in ["reactance-only", "REACTANCE_ONLY", "series", "matpower", "mp"]:
+# Every valid convention spelling, grouped by the formula it selects: the
+# 1.0 stable name (what a caller matching the diagnostic and CLI vocabulary
+# would use) first, then every 0.9-era alias PowerIO still accepts.
+CONVENTION_ALIASES = {
+    "series_susceptance": ["series", "series-impedance", "SERIES_SUSCEPTANCE"],
+    "tap_adjusted_reactance": ["matpower", "mp", "TAP_ADJUSTED_REACTANCE"],
+    "reactance_only": ["reactance-only", "REACTANCE_ONLY"],
+}
+
+
+@pytest.mark.parametrize("canonical", CONVENTION_ALIASES)
+def test_convention_aliases(case9, canonical):
+    # Every spelling in the group resolves on every convention-taking
+    # method, and produces the identical matrix its 1.0 name does.
+    names = [canonical, *CONVENTION_ALIASES[canonical]]
+    base = case9.ptdf(canonical).toarray()
+    for conv in names:
         assert sp.issparse(case9.ptdf(conv))
+        assert sp.issparse(case9.lodf(conv))
+        assert sp.issparse(case9.weighted_laplacian(conv))
+        assert sp.issparse(case9.incidence(conv).A)
+        assert np.allclose(case9.ptdf(conv).toarray(), base)
+
+
+def test_convention_paper_pure_is_refused(case9):
     # 0.8's default spelling. The nearest-looking survivor, "series", is a
     # different formula, so the error has to name the successor or a caller
     # who guesses gets numbers instead of a failure.
     for old in ["paper-pure", "paper", "PAPER_PURE"]:
         with pytest.raises(ValueError, match="reactance-only"):
             case9.ptdf(old)
+
+
+def test_scheme_aliases(case9):
     for scheme in ["bx", "XB"]:
         assert sp.issparse(case9.bprime(scheme))
+
+
+# Every matrix builder that threads a skip_zero_impedance keyword through to
+# BuildOptions. Only the acceptance half is pinned here: on this vintage
+# BuildOptions::default() still silently skips a zero impedance branch, so a
+# case with none (case9) is unaffected by either value, and asserting the
+# refusal-by-default behavior has to wait for the lower branch's default flip
+# to cascade in.
+SKIP_ZERO_IMPEDANCE_METHODS = [
+    "bprime",
+    "bdoubleprime",
+    "lacpf",
+    "ybus_parts",
+    "ybus",
+    "weighted_laplacian",
+    "incidence",
+]
+
+
+@pytest.mark.parametrize("method", SKIP_ZERO_IMPEDANCE_METHODS)
+def test_skip_zero_impedance_kwarg_is_accepted(case9, method):
+    def matrices(result):
+        if method == "incidence":
+            return [result.A]
+        if method == "ybus_parts":
+            return [result.g, result.b]
+        if method == "ybus":
+            return [result]
+        return [result]
+
+    call = getattr(case9, method)
+    default = matrices(call())
+    explicit_false = matrices(call(skip_zero_impedance=False))
+    explicit_true = matrices(call(skip_zero_impedance=True))
+    for a, b in zip(default, explicit_false):
+        assert np.allclose(a.toarray(), b.toarray())
+    for a, b in zip(default, explicit_true):
+        assert np.allclose(a.toarray(), b.toarray())
 
 
 def test_sensitivity_solver_kwarg(case9):
