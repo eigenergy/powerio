@@ -283,6 +283,57 @@ fn bmopf_dangling_bus_reference_warns() {
     );
 }
 
+/// An ibr or control profile declared twice under one class, differing only
+/// by case, is the schema 0.1.0 top level plus `extras` migration overlap:
+/// the second copy drops with a warning rather than doubling the count.
+#[test]
+fn an_ibr_declared_twice_differing_only_by_case_drops_the_second() {
+    let net = parse_bmopf_str(
+        r#"{
+        "bus": {"a": {"terminal_names": ["p1", "n"]}},
+        "ibr": {
+            "Gen1": {"bus": "a", "terminal_map": ["p1", "n"]},
+            "gen1": {"bus": "a", "terminal_map": ["p1", "n"]}
+        }
+    }"#,
+    )
+    .unwrap();
+    assert_eq!(net.ibrs().len(), 1, "{:?}", net.ibrs());
+    assert!(
+        net.warnings
+            .iter()
+            .any(|w| w.contains("ibr gen1") && w.contains("second copy is dropped")),
+        "{:?}",
+        net.warnings
+    );
+}
+
+#[test]
+fn a_control_profile_declared_twice_differing_only_by_case_drops_the_second() {
+    let net = parse_bmopf_str(
+        r#"{
+        "control_profile": {
+            "Cp1": {"power_factor": {"pf": 0.95}},
+            "cp1": {"power_factor": {"pf": 0.9}}
+        }
+    }"#,
+    )
+    .unwrap();
+    assert_eq!(
+        net.control_profiles().len(),
+        1,
+        "{:?}",
+        net.control_profiles()
+    );
+    assert!(
+        net.warnings
+            .iter()
+            .any(|w| w.contains("control_profile cp1") && w.contains("second copy is dropped")),
+        "{:?}",
+        net.warnings
+    );
+}
+
 /// PMD spells an unbounded phase as JSON null, which restores as Inf.
 /// BMOPF has no unbounded spelling: the rating field drops with a warning
 /// instead of the zero fallback turning "no limit" into a zero limit, and
