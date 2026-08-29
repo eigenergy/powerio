@@ -34,7 +34,7 @@ MATPOWER case taken through powerio to egret JSON matches egret's direct import.
 
 ## Validation
 
-The harness script `benchmarks/run_validation.sh` checks powerio against five independent
+The harness script `evals/validation/run_validation.sh` checks powerio against five independent
 tools. Every classic text reader and writer runs under an oracle: the conversion
 matrix covers MATPOWER, PSS/E, and egret sources against all five legacy text
 targets, every PowerWorld output is read back and bridged to PowerModels JSON,
@@ -66,7 +66,7 @@ on the Rust round trip suite.
 
 ### The conversion matrix
 
-`benchmarks/validate_matrix.py` converts each source to every legacy text target and checks
+`evals/validation/validate_matrix.py` converts each source to every legacy text target and checks
 the electrical core of the output (bus/branch/generator counts and the per unit
 demand, generation, and shunt totals) against the source's own core, read by an
 independent oracle. The diagonal is checked byte exact: writing back to the source
@@ -87,17 +87,17 @@ validators run alongside this matrix and are reported as separate legs.
 ```sh
 cargo build --release -p powerio-capi
 python3.12 -m venv .venv
-.venv/bin/python -m pip install --upgrade pip maturin -r benchmarks/requirements.txt
+.venv/bin/python -m pip install --upgrade pip maturin -r evals/validation/requirements.txt
 env VIRTUAL_ENV=$PWD/.venv .venv/bin/maturin develop --release
-julia --project=benchmarks -e 'using Pkg; Pkg.instantiate()'
-bash benchmarks/run_validation.sh
+julia --project=evals/validation -e 'using Pkg; Pkg.instantiate()'
+bash evals/validation/run_validation.sh
 ```
 
 The oracle tools (PowerModels.jl, egret, ExaPowerIO.jl, pandapower, PyPSA) are
-benchmark scoped: they are declared only in `benchmarks/Project.toml` and
-`benchmarks/requirements.txt`, and the powerio package itself has no
+benchmark scoped: they are declared only in `evals/validation/Project.toml` and
+`evals/validation/requirements.txt`, and the powerio package itself has no
 dependency on them.
-`benchmarks/run_validation.sh` requires the Python oracles to import in the
+`evals/validation/run_validation.sh` requires the Python oracles to import in the
 selected Python 3.11+ environment; a missing PyPSA, pandapower, or egret import
 is a setup failure.
 

@@ -262,7 +262,7 @@ python/tests/                # test_powerio.py, test_dist.py, test_geo.py,
 powerio-capi/                # C ABI (pio_*, include/powerio.h, examples/smoke.c)
 │                            #   src/arrow_export.rs: pio_to_arrow (feature = "arrow")
 tests/data/                  # shared fixtures (used by CLI examples)
-benchmarks/                  # parse benchmarks + Julia validation harnesses
+evals/                       # nonpublished evaluation workspace: validation harnesses, performance programs, allocation gates
 fuzz/                        # libFuzzer targets (detached workspace; see fuzz/README.md)
 ```
 
@@ -370,7 +370,7 @@ fuzz/                        # libFuzzer targets (detached workspace; see fuzz/R
 - **petgraph data.** `IndexedNetwork::to_petgraph()` currently returns
   `UnGraph<usize, usize>` where node weight = dense bus index and edge weight =
   branch index. Use it for connectivity and radial detection.
-- **Format validation needs Julia.** `benchmarks/validate_powermodels.jl` and `validate_psse.jl` check the writers and parsers against PowerModels.jl; they don't run in plain `cargo test` (the all-pairs `powerio/tests/roundtrip_formats.rs` does).
+- **Format validation needs Julia.** `evals/validation/validate_powermodels.jl` and `validate_psse.jl` check the writers and parsers against PowerModels.jl; they don't run in plain `cargo test` (the all-pairs `powerio/tests/roundtrip_formats.rs` does).
 
 ## Test fixtures
 

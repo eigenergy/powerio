@@ -1,0 +1,20 @@
+# Python oracle dependencies for the validation harness. These are benchmark-only
+# tools, NOT dependencies of the powerio package or wheel. Install them into the
+# same virtualenv that holds the powerio wheel:
+#
+#   .venv/bin/python -m pip install -r evals/validation/requirements.txt
+#
+# (The Julia oracle, PowerModels.jl, is likewise benchmark-scoped in
+# evals/validation/Project.toml, not in any crate.)
+# Use Python 3.12 or another Python >=3.11 for this oracle venv. Python 3.9 is
+# still supported by the package, but PyPSA 1.x and some oracle pins no longer
+# install there.
+# Keep this in sync with the `bench` optional dependency in pyproject.toml.
+pandapower==3.2.2      # validate_pandapower.py: parse + Y_bus cross-check (pinned; 3.4 needs the broken matpowercaseframes 2.x)
+matpowercaseframes<2   # pandapower's .m reader; 2.x's reader is broken (loadcase bug), 1.x works
+gridx-egret>=0.6       # validate_egret.py / validate_matrix.py: the egret oracle
+pypsa>=1.0             # validate_pypsa.py: PyPSA CSV folder import oracle
+opendssdirect.py>=0.9,<0.10  # validate_opendss.py: OpenDSS solve oracle
+jsonschema>=4.18       # validate_bmopf_schema.py: external BMOPF schema validator
+pillow>=12.2.0; python_version >= "3.10"
+pytest>=9.0.3; python_version >= "3.10"

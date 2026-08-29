@@ -46,6 +46,6 @@ Nothing is generated, so there is no seed. Identity is each file's SHA-256, list
 
 `tests/data/case{9,118}.m`, `case2869pegase.m`, and the OpenDSS, BMOPF, PSS/E, pandapower, and PyPSA inputs are committed fixtures the ordinary tests already use.
 
-`tests/data/large/` is gitignored and not in the repository. Fetch it with `bash benchmarks/fetch_cases.sh`, which pulls the MATPOWER cases from the MATPOWER repository and `case99k` from `goghino/opf_benchmarks`. The digests in `fixtures.sha256` pin the exact bytes measured; a run without those files simply omits the large rows and says so on stderr.
+`tests/data/large/` is gitignored and not in the repository. Fetch it with `bash evals/validation/fetch_cases.sh`, which pulls the MATPOWER cases from the MATPOWER repository and `case99k` from `goghino/opf_benchmarks`. The digests in `fixtures.sha256` pin the exact bytes measured; a run without those files simply omits the large rows and says so on stderr.
 
 The dense PTDF and LODF rows are limited to cases at or below 3000 buses, because the path is cubic and `case2869pegase` alone already takes about 20 seconds. That limit is in the harness, not a sampling decision, and it is why the larger cases have no `ptdf` row.
