@@ -76,6 +76,26 @@ fn reference_rows_radians(net: &BalancedNetwork) -> Vec<(usize, f64)> {
         .collect()
 }
 
+/// The grounded rhs at a retained bus row, oracle spelling: `p - p_shift -
+/// L(row, :) * va` restricted to the reference columns, with `L = -B` taken
+/// from the already validated public susceptance matrix rather than any
+/// state the reference coupling fix touches. Matches MATPOWER's dcpf.m
+/// `Pbus(pvpq) - B(pvpq,ref)*Va0(ref)`, generalized to any number of
+/// reference buses in one island.
+fn independent_grounded_rhs(
+    public_b: &[Vec<f64>],
+    p: &[f64],
+    shift: &[f64],
+    references: &[(usize, f64)],
+    row: usize,
+) -> f64 {
+    let coupling: f64 = references
+        .iter()
+        .map(|&(reference_row, va_ref)| -public_b[row][reference_row] * va_ref)
+        .sum();
+    p[row] - shift[row] - coupling
+}
+
 #[test]
 fn public_susceptances_carry_powermodels_signs() {
     let net = case9();
@@ -361,8 +381,7 @@ fn reference_angles_couple_into_the_grounded_rhs() {
     let p = operators.bus_power_injection().to_vec();
     let shift = operators.phase_shift_injection();
     for (reduced, &row) in system.retained_rows.iter().enumerate() {
-        let l_row_ref = -public_b[row][ref_row];
-        let expected = p[row] - shift[row] - l_row_ref * va_ref;
+        let expected = independent_grounded_rhs(&public_b, &p, &shift, &reference, row);
         assert!(
             (system.rhs[reduced] - expected).abs() < 1e-9,
             "row {row}: {} vs {expected}",
@@ -393,17 +412,20 @@ fn reference_angles_couple_into_the_grounded_rhs() {
 
 #[test]
 fn two_reference_buses_in_one_island_carry_a_nonzero_flow() {
-    // Two reference buses joined through a passthrough bus whose angle is
-    // unknown: both reference angles hold fixed and disagree by 20 degrees,
-    // so a nonzero flow must run through the passthrough bus even though it
-    // states no injection of its own. The old rhs pinned every reference
-    // angle to zero, so the two references agreed and no flow resulted.
-    let bus1 = Bus::new(BusId(1), BusType::Ref, 138.0);
-    let bus2 = Bus::new(BusId(2), BusType::Pq, 138.0);
-    let mut bus3 = Bus::new(BusId(3), BusType::Ref, 138.0);
+    // Two reference buses in one island, joined through a passthrough bus
+    // whose angle is unknown: both reference angles hold fixed and disagree
+    // by 20 degrees, so a nonzero flow must run through the passthrough bus
+    // even though it states no injection of its own. The old rhs pinned
+    // every reference angle to zero, so the two references agreed and no
+    // flow resulted. Nothing about this topology is exotic: MATPOWER's dcpf
+    // holds both angles the same way.
+    let mut bus1 = Bus::new(BusId(1), BusType::Ref, 230.0);
+    bus1.va = 0.0;
+    let bus2 = Bus::new(BusId(2), BusType::Pq, 230.0);
+    let mut bus3 = Bus::new(BusId(3), BusType::Ref, 230.0);
     bus3.va = 20.0;
 
-    let x = 0.2;
+    let x = 0.1;
     let branch_12 = Branch::new(BusId(1), BusId(2), 0.0, x);
     let branch_23 = Branch::new(BusId(2), BusId(3), 0.0, x);
     let net = BalancedNetwork::in_memory(
@@ -413,24 +435,39 @@ fn two_reference_buses_in_one_island_carry_a_nonzero_flow() {
         vec![branch_12, branch_23],
     );
 
-    let instance = DcPfInstance::from_network(net).unwrap();
+    let instance = DcPfInstance::from_network(net.clone()).unwrap();
     let operators = DcOperators::build(&instance).unwrap();
     let system = operators.reference_constrained_system().unwrap();
     assert_eq!(system.retained_rows.len(), 1, "only bus 2 is retained");
 
+    // Independent rhs, the same oracle spelling as the case118 test: p -
+    // p_shift - L(:, ref) * va_ref, with L = -B from the already validated
+    // public susceptance matrix, summed over both eliminated reference rows.
+    let reference = reference_rows_radians(&net);
+    assert_eq!(reference.len(), 2, "both bus 1 and bus 3 are reference");
+    let public_b = dense(&operators.bus_susceptance_matrix());
+    let p = operators.bus_power_injection().to_vec();
+    let shift = operators.phase_shift_injection();
+    let retained_row = system.retained_rows[0];
+    let expected_rhs = independent_grounded_rhs(&public_b, &p, &shift, &reference, retained_row);
+    assert!(
+        (system.rhs[0] - expected_rhs).abs() < 1e-9,
+        "{} vs {expected_rhs}",
+        system.rhs[0]
+    );
+
     let solved = solve_dense(&dense(&system.matrix), &system.rhs);
     let va2 = solved[0];
 
-    // Hand value: equal reactances split the 20 degree gap evenly, so bus 2
-    // sits at the midpoint of the two stated reference angles.
+    // Cross check by hand, independent of the Laplacian oracle above: equal
+    // reactances split the 20 degree gap evenly, so bus 2 sits at the
+    // midpoint of the two stated reference angles, and each branch carries
+    // the same nonzero flow.
     let weight = 1.0 / x;
     let va1 = 0.0_f64;
     let va3 = 20_f64.to_radians();
     let expected_va2 = (weight * va1 + weight * va3) / (weight + weight);
-    assert!(
-        (va2 - expected_va2).abs() < 1e-12,
-        "{va2} vs {expected_va2}"
-    );
+    assert!((va2 - expected_va2).abs() < 1e-9, "{va2} vs {expected_va2}");
 
     let b = operators.branch_susceptances();
     let flow_12 = -b[0] * (va1 - va2);
