@@ -182,7 +182,8 @@ jobs:
           /tmp/zerodep/bin/python - <<'PY'
           import tempfile
           import sys, powerio
-          c = powerio.parse_file("tests/data/case14.m")
+          m = powerio.parse("tests/data/case14.m")
+          c = m.as_balanced_network()
           assert c.to_matpower() == open("tests/data/case14.m").read()
           assert "numpy" not in sys.modules and "scipy" not in sys.modules
           assert not powerio._powerio._has_gridfm
@@ -306,7 +307,7 @@ jobs:
     # recovery path for a missed event. A prerelease still builds wheels and an
     # sdist as run artifacts, but never uploads them to PyPI.
     if: (github.event_name == 'release' && github.event.release.prerelease == false) || github.event_name == 'workflow_dispatch'
-    needs: [ release-preflight, lint, test, test-gridfm, wheels, sdist ]
+    needs: [ release-preflight, lint, quality, test, test-gridfm, wheels, sdist ]
     runs-on: ubuntu-latest
     # Deployment protection (required reviewers, tag rules) lives on the pypi
     # environment in the repo settings, not in this file.

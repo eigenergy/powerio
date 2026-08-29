@@ -468,36 +468,6 @@ fn core_open_pyerr(path: &std::path::Path, error: &powerio_core::Error) -> PyErr
     core_error_pyerr(error)
 }
 
-fn py_parse_module_path(
-    path: &std::path::Path,
-    from: Option<&str>,
-) -> PyResult<powerio_core::PioModule<powerio_matrix::BalancedNetwork>> {
-    let mut source = powerio_core::Source::open(path).map_err(|e| core_open_pyerr(path, &e))?;
-    if let Some(token) = from {
-        source = source.with_format(
-            powerio_core::FormatId::new(token.to_ascii_lowercase().replace('_', "-"))
-                .map_err(|e| core_error_pyerr(&e))?,
-        );
-    }
-    // The parse can hit the filesystem lazily (a directory source acquires
-    // member files on demand), so its failures get the same OSError
-    // unwrapping as the open.
-    powerio_matrix::parse(source).map_err(|e| core_open_pyerr(path, &e))
-}
-
-fn py_parse_module_bytes(
-    bytes: &[u8],
-    from: &str,
-) -> PyResult<powerio_core::PioModule<powerio_matrix::BalancedNetwork>> {
-    let source = powerio_core::Source::from_bytes("<memory>", bytes.to_vec())
-        .map_err(|e| core_error_pyerr(&e))?
-        .with_format(
-            powerio_core::FormatId::new(from.to_ascii_lowercase().replace('_', "-"))
-                .map_err(|e| core_error_pyerr(&e))?,
-        );
-    powerio_matrix::parse(source).map_err(|e| core_error_pyerr(&e))
-}
-
 /// Wrap a parsed module as a `PyBalancedNetwork`, building the index core once
 /// and keeping the reader's findings on the handle.
 fn case_from_module(module: powerio_core::PioModule<BalancedNetwork>) -> PyBalancedNetwork {
@@ -517,9 +487,9 @@ fn case_from_parts(
 ) -> PyBalancedNetwork {
     let mut module = powerio_core::PioModule::new(network);
     for diagnostic in diagnostics {
-        module
-            .add_diagnostic(diagnostic)
-            .expect("derived findings carry no identities or spans to collide");
+        // A refusal here can only be the record cap; the finding that does
+        // not fit is dropped rather than failing the handle it annotates.
+        let _ = module.add_diagnostic(diagnostic);
     }
     case_from_module(module)
 }
@@ -571,10 +541,10 @@ impl PyBalancedNetwork {
         self.inner().source_format().name().to_owned()
     }
 
-    /// Read fidelity warnings attached at parse time: tables and columns the
-    /// model cannot carry, reported instead of dropped silently. Empty for
-    /// readers that don't report read warnings (currently every format except
-    /// pandapower JSON and PyPSA CSV).
+    /// Fidelity findings rendered at read time: tables, columns, or values
+    /// the model cannot carry, reported instead of dropped silently. This is
+    /// the rendered text of the diagnostics the reader recorded, not a
+    /// per-format guarantee; the count varies by source and is often zero.
     #[getter]
     fn read_warnings(&self) -> Vec<String> {
         self.warnings.clone()
@@ -838,7 +808,7 @@ impl PyBalancedNetwork {
         missing_gen_cost: Option<&str>,
         default_gen_cost: Option<&str>,
         gen_cost_csv: Option<&str>,
-    ) -> PyResult<(String, Vec<String>)> {
+    ) -> PyResult<(String, Vec<PyDiagnostic>)> {
         let target = to
             .parse::<powerio_matrix::TargetFormat>()
             .map_err(core_pyerr)?;
@@ -850,13 +820,13 @@ impl PyBalancedNetwork {
         )?;
         let conv = powerio_matrix::write_as_with_options(&self.module, target, &opts)
             .map_err(|e| core_error_pyerr(&e))?;
-        let rendered = conv.rendered_diagnostics();
+        let rendered: Vec<PyDiagnostic> = conv.diagnostics.iter().map(PyDiagnostic::from).collect();
         Ok((conv.text, rendered))
     }
 
     /// Serialize this case to `to`, bypassing source echo for the same
     /// format. Returns `(text, warnings)`.
-    fn to_canonical_format(&self, to: &str) -> PyResult<(String, Vec<String>)> {
+    fn to_canonical_format(&self, to: &str) -> PyResult<(String, Vec<PyDiagnostic>)> {
         let target = to
             .parse::<powerio_matrix::TargetFormat>()
             .map_err(core_pyerr)?;
@@ -864,7 +834,7 @@ impl PyBalancedNetwork {
             .inner()
             .to_canonical_format(target)
             .map_err(core_pyerr)?;
-        let rendered = conv.rendered_diagnostics();
+        let rendered: Vec<PyDiagnostic> = conv.diagnostics.iter().map(PyDiagnostic::from).collect();
         Ok((conv.text, rendered))
     }
 
@@ -882,7 +852,7 @@ impl PyBalancedNetwork {
         missing_gen_cost: Option<&str>,
         default_gen_cost: Option<&str>,
         gen_cost_csv: Option<&str>,
-    ) -> PyResult<Vec<String>> {
+    ) -> PyResult<Vec<PyDiagnostic>> {
         let (text, warnings) =
             self.to_format(to, missing_gen_cost, default_gen_cost, gen_cost_csv)?;
         commit_text_file(std::path::Path::new(path), text.into_bytes())?;
@@ -939,8 +909,41 @@ impl PyBalancedNetwork {
         coo_triplets(py, &m)
     }
 
+    /// The DC branch data under one named susceptance formula: incidence
+    /// row endpoints, susceptance, phase shift injection, stable element
+    /// mappings for every included row and omitted branch, and the selected
+    /// formula. Key spellings match the C `pio_dc_data_*` accessors and the
+    /// Rust `DcNetworkData` fields, so every language reads the same names
+    /// in the same element order.
+    #[pyo3(signature = (formula="series_susceptance"))]
+    fn dc_data<'py>(&self, py: Python<'py>, formula: &str) -> PyResult<Bound<'py, PyDict>> {
+        let Some(convention) = powerio::DcConvention::from_formula_name(formula) else {
+            return Err(PyValueError::new_err(format!(
+                "unknown branch susceptance formula {formula:?}; expected \
+                 series_susceptance, tap_adjusted_reactance, or reactance_only"
+            )));
+        };
+        let view = IndexedNetwork::with_core(self.inner(), &self.core);
+        let data = powerio::dc_network_data(&view, convention);
+        let out = PyDict::new(py);
+        out.set_item("from_indices", data.from_indices)?;
+        out.set_item("to_indices", data.to_indices)?;
+        out.set_item("susceptance", data.susceptance)?;
+        out.set_item("shift", data.shift)?;
+        out.set_item("shift_injection", data.shift_injection)?;
+        out.set_item("row_ids", data.row_ids)?;
+        out.set_item("bus_ids", data.bus_ids)?;
+        let (omitted_ids, omitted_reasons): (Vec<String>, Vec<String>) =
+            data.omitted.into_iter().unzip();
+        out.set_item("omitted_ids", omitted_ids)?;
+        out.set_item("omitted_reasons", omitted_reasons)?;
+        out.set_item("formula", data.formula)?;
+        Ok(out)
+    }
+
     /// MATPOWER FDPF Bpp matrix. `skip_zero_impedance` as in `bprime`.
     #[pyo3(signature = (scheme=None, *, skip_zero_impedance=false))]
+
     fn bdoubleprime<'py>(
         &self,
         py: Python<'py>,
@@ -1212,34 +1215,6 @@ impl PyBalancedNetwork {
     }
 }
 
-/// Parse a case file from a path, inferring the format from the extension unless
-/// `from_` is given.
-#[pyfunction]
-#[pyo3(signature = (path, from_=None))]
-fn parse_file(path: &str, from_: Option<&str>) -> PyResult<PyBalancedNetwork> {
-    py_parse_module_path(std::path::Path::new(path), from_).map(case_from_module)
-}
-
-/// Parse a case from in-memory text in the named source format `from_`
-/// (`matpower`, `powermodels-json`, `egret-json`, `pandapower-json`, `psse`,
-/// `powerworld`, `pslf`, `goc3-json`, `surge-json`; aliases
-/// `m`/`pm`/`egret`/`pp`/`raw`/`aux`/`epc`/`goc3`/`surge`).
-#[pyfunction]
-#[pyo3(signature = (text, from_))]
-fn parse_str(text: &str, from_: &str) -> PyResult<PyBalancedNetwork> {
-    py_parse_module_bytes(text.as_bytes(), from_).map(case_from_module)
-}
-
-/// Parse a case from in-memory bytes in the named source format `from_`.
-/// Accepts every `parse_str` name plus `pwb`: PowerWorld binary has no text
-/// form, so this is the only in-memory way to read one. Text formats must be
-/// UTF-8.
-#[pyfunction]
-#[pyo3(signature = (data, from_))]
-fn parse_bytes(data: &[u8], from_: &str) -> PyResult<PyBalancedNetwork> {
-    py_parse_module_bytes(data, from_).map(case_from_module)
-}
-
 /// Parse a display file from a path, inferring the format from the extension
 /// unless `from_` is given. Returns `(kind, payload)`.
 #[pyfunction]
@@ -1274,12 +1249,6 @@ fn from_json(text: &str) -> PyResult<PyBalancedNetwork> {
     Ok(case_from_parts(inner, Vec::new()))
 }
 
-/// Read a PyPSA CSV folder into a case.
-#[pyfunction]
-fn read_pypsa_csv_folder(path: &str) -> PyResult<PyBalancedNetwork> {
-    py_parse_module_path(std::path::Path::new(path), Some("pypsa-csv")).map(case_from_module)
-}
-
 /// Convert a case file to another format through the network model. Returns
 /// `(text, warnings)`: the converted file text and the list of fidelity warnings
 /// (fields the target couldn't represent). The input format is the file
@@ -1297,7 +1266,7 @@ fn convert_file(
     default_gen_cost: Option<&str>,
     gen_cost_csv: Option<&str>,
     out: Option<&str>,
-) -> PyResult<(String, Vec<String>)> {
+) -> PyResult<(String, Vec<PyDiagnostic>)> {
     let target = to
         .parse::<powerio_matrix::TargetFormat>()
         .map_err(core_pyerr)?;
@@ -1313,7 +1282,7 @@ fn convert_file(
     if let Some(out) = out {
         commit_text_file(std::path::Path::new(out), conv.text.clone().into_bytes())?;
     }
-    let rendered = conv.rendered_diagnostics();
+    let rendered: Vec<PyDiagnostic> = conv.diagnostics.iter().map(PyDiagnostic::from).collect();
     Ok((conv.text, rendered))
 }
 
@@ -1329,7 +1298,7 @@ fn convert_str(
     missing_gen_cost: Option<&str>,
     default_gen_cost: Option<&str>,
     gen_cost_csv: Option<&str>,
-) -> PyResult<(String, Vec<String>)> {
+) -> PyResult<(String, Vec<PyDiagnostic>)> {
     let target = to
         .parse::<powerio_matrix::TargetFormat>()
         .map_err(core_pyerr)?;
@@ -1342,7 +1311,7 @@ fn convert_str(
     let conv =
         powerio_matrix::convert_str_with_options(text, target, from_.unwrap_or("matpower"), &opts)
             .map_err(|e| core_error_pyerr(&e))?;
-    let rendered = conv.rendered_diagnostics();
+    let rendered: Vec<PyDiagnostic> = conv.diagnostics.iter().map(PyDiagnostic::from).collect();
     Ok((conv.text, rendered))
 }
 
@@ -1600,25 +1569,27 @@ impl PyMulticonductorNetwork {
     /// Serialize to `to` (`dss`, `pmd-json`, `bmopf-json`). Returns
     /// `(text, warnings)`. Writing back to the source format echoes the
     /// retained source byte for byte.
-    fn to_format(&self, to: &str) -> PyResult<(String, Vec<String>)> {
+    fn to_format(&self, to: &str) -> PyResult<(String, Vec<PyDiagnostic>)> {
         let target = to
             .parse::<powerio_dist::DistTargetFormat>()
             .map_err(dist_to_pyerr)?;
         let conv = powerio_dist::write_as(&self.module, target);
         {
-            let rendered = conv.rendered_diagnostics();
+            let rendered: Vec<PyDiagnostic> =
+                conv.diagnostics.iter().map(PyDiagnostic::from).collect();
             Ok((conv.text, rendered))
         }
     }
 
     /// Serialize to `to`, bypassing source echo for the same format.
-    fn to_canonical_format(&self, to: &str) -> PyResult<(String, Vec<String>)> {
+    fn to_canonical_format(&self, to: &str) -> PyResult<(String, Vec<PyDiagnostic>)> {
         let target = to
             .parse::<powerio_dist::DistTargetFormat>()
             .map_err(dist_to_pyerr)?;
         let conv = powerio_dist::write_network(self.inner(), target);
         {
-            let rendered = conv.rendered_diagnostics();
+            let rendered: Vec<PyDiagnostic> =
+                conv.diagnostics.iter().map(PyDiagnostic::from).collect();
             Ok((conv.text, rendered))
         }
     }
@@ -1685,7 +1656,11 @@ fn dist_parse_str(text: &str, from_: &str) -> PyResult<PyMulticonductorNetwork> 
 /// warnings carry both the parse warnings and the writer's fidelity losses.
 #[pyfunction]
 #[pyo3(signature = (path, to, from_=None))]
-fn dist_convert_file(path: &str, to: &str, from_: Option<&str>) -> PyResult<(String, Vec<String>)> {
+fn dist_convert_file(
+    path: &str,
+    to: &str,
+    from_: Option<&str>,
+) -> PyResult<(String, Vec<PyDiagnostic>)> {
     let to = to
         .parse::<powerio_dist::DistTargetFormat>()
         .map_err(dist_to_pyerr)?;
@@ -1693,7 +1668,7 @@ fn dist_convert_file(path: &str, to: &str, from_: Option<&str>) -> PyResult<(Str
     let conv =
         powerio_dist::convert_source(source, to).map_err(|error| core_error_pyerr(&error))?;
     {
-        let rendered = conv.rendered_diagnostics();
+        let rendered: Vec<PyDiagnostic> = conv.diagnostics.iter().map(PyDiagnostic::from).collect();
         Ok((conv.text, rendered))
     }
 }
@@ -1703,7 +1678,7 @@ fn dist_convert_file(path: &str, to: &str, from_: Option<&str>) -> PyResult<(Str
 /// warnings and the writer's fidelity losses.
 #[pyfunction]
 #[pyo3(signature = (text, to, from_))]
-fn dist_convert_str(text: &str, to: &str, from_: &str) -> PyResult<(String, Vec<String>)> {
+fn dist_convert_str(text: &str, to: &str, from_: &str) -> PyResult<(String, Vec<PyDiagnostic>)> {
     let to = to
         .parse::<powerio_dist::DistTargetFormat>()
         .map_err(dist_to_pyerr)?;
@@ -1711,24 +1686,232 @@ fn dist_convert_str(text: &str, to: &str, from_: &str) -> PyResult<(String, Vec<
     let conv =
         powerio_dist::convert_source(source, to).map_err(|error| core_error_pyerr(&error))?;
     {
-        let rendered = conv.rendered_diagnostics();
+        let rendered: Vec<PyDiagnostic> = conv.diagnostics.iter().map(PyDiagnostic::from).collect();
         Ok((conv.text, rendered))
     }
 }
 
-/// Low level handle around a parsed `.pio.json` package. Parses the document
-/// once; the user facing `powerio.Package` wraps it. Not frozen: `validate`
+/// Convert a `serde_json::Value` to the equivalent Python object: an object
+/// becomes `dict`, an array becomes `list`, a number becomes `int` when it
+/// carries no fractional part and fits `i64`/`u64` and `float` otherwise, and
+/// the rest map onto `bool`/`str`/`None` directly. Used for a diagnostic's
+/// free form `details` map, the one place this binding hands back arbitrary
+/// JSON rather than a fixed shape.
+fn json_value_to_py<'py>(
+    py: Python<'py>,
+    value: &serde_json::Value,
+) -> PyResult<Bound<'py, PyAny>> {
+    use serde_json::Value as J;
+    Ok(match value {
+        J::Null => py.None().into_bound(py),
+        J::Bool(b) => b.into_pyobject(py)?.to_owned().into_any(),
+        J::Number(n) => {
+            if let Some(i) = n.as_i64() {
+                i.into_pyobject(py)?.into_any()
+            } else if let Some(u) = n.as_u64() {
+                u.into_pyobject(py)?.into_any()
+            } else {
+                n.as_f64().unwrap_or(f64::NAN).into_pyobject(py)?.into_any()
+            }
+        }
+        J::String(s) => s.into_pyobject(py)?.into_any(),
+        J::Array(items) => {
+            let mut out = Vec::with_capacity(items.len());
+            for item in items {
+                out.push(json_value_to_py(py, item)?);
+            }
+            PyList::new(py, out)?.into_any()
+        }
+        J::Object(map) => json_map_to_py(py, map)?.into_any(),
+    })
+}
+
+/// [`json_value_to_py`] for a JSON object, kept separate so a diagnostic's
+/// `details` getter can return `dict` directly instead of the wider `Any`.
+fn json_map_to_py<'py>(
+    py: Python<'py>,
+    map: &serde_json::Map<String, serde_json::Value>,
+) -> PyResult<Bound<'py, PyDict>> {
+    let dict = PyDict::new(py);
+    for (key, value) in map {
+        dict.set_item(key, json_value_to_py(py, value)?)?;
+    }
+    Ok(dict)
+}
+
+/// One source byte range a diagnostic points at: the Python mirror of
+/// `powerio_core::SourceSpan`. `source` is the source ID string, not the
+/// bytes themselves; a caller resolves it against the owning module's
+/// sources.
+#[pyclass(
+    name = "SourceSpan",
+    module = "powerio._powerio",
+    frozen,
+    eq,
+    skip_from_py_object
+)]
+#[derive(Clone, PartialEq)]
+struct PySourceSpan {
+    source: String,
+    byte_start: u64,
+    byte_end: u64,
+}
+
+#[pymethods]
+impl PySourceSpan {
+    #[getter]
+    fn source(&self) -> &str {
+        &self.source
+    }
+
+    #[getter]
+    fn byte_start(&self) -> u64 {
+        self.byte_start
+    }
+
+    #[getter]
+    fn byte_end(&self) -> u64 {
+        self.byte_end
+    }
+
+    fn __repr__(&self) -> String {
+        format!(
+            "SourceSpan(source={:?}, byte_start={}, byte_end={})",
+            self.source, self.byte_start, self.byte_end
+        )
+    }
+}
+
+impl From<&powerio_core::SourceSpan> for PySourceSpan {
+    fn from(span: &powerio_core::SourceSpan) -> Self {
+        Self {
+            source: span.source().as_str().to_owned(),
+            byte_start: span.byte_start(),
+            byte_end: span.byte_end(),
+        }
+    }
+}
+
+/// One coded, user facing finding from a parse, read, transform, or write
+/// pass: the Python mirror of `powerio_core::Diagnostic`. Every module
+/// carries a list of these; `PioModule.diagnostics()` returns them natively
+/// instead of the `diagnostics_json` string form.
+#[pyclass(name = "Diagnostic", module = "powerio._powerio", frozen, eq)]
+#[derive(PartialEq)]
+struct PyDiagnostic {
+    code: String,
+    severity: String,
+    message: String,
+    id: Option<String>,
+    target: Option<String>,
+    suggested_action: Option<String>,
+    related: Vec<String>,
+    spans: Vec<PySourceSpan>,
+    details: serde_json::Map<String, serde_json::Value>,
+}
+
+#[pymethods]
+impl PyDiagnostic {
+    #[getter]
+    fn code(&self) -> &str {
+        &self.code
+    }
+
+    /// `"error"`, `"warning"`, `"remark"`, or `"note"`.
+    #[getter]
+    fn severity(&self) -> &str {
+        &self.severity
+    }
+
+    #[getter]
+    fn message(&self) -> &str {
+        &self.message
+    }
+
+    #[getter]
+    fn id(&self) -> Option<&str> {
+        self.id.as_deref()
+    }
+
+    #[getter]
+    fn target(&self) -> Option<&str> {
+        self.target.as_deref()
+    }
+
+    #[getter]
+    fn suggested_action(&self) -> Option<&str> {
+        self.suggested_action.as_deref()
+    }
+
+    #[getter]
+    fn related(&self) -> Vec<String> {
+        self.related.clone()
+    }
+
+    #[getter]
+    fn spans(&self) -> Vec<PySourceSpan> {
+        self.spans.clone()
+    }
+
+    /// Free form structured detail, or `None` when the finding carries none.
+    #[getter]
+    fn details<'py>(&self, py: Python<'py>) -> PyResult<Option<Bound<'py, PyDict>>> {
+        if self.details.is_empty() {
+            return Ok(None);
+        }
+        Ok(Some(json_map_to_py(py, &self.details)?))
+    }
+
+    fn __repr__(&self) -> String {
+        format!(
+            "Diagnostic(code={:?}, severity={:?}, message={:?})",
+            self.code, self.severity, self.message
+        )
+    }
+
+    fn __str__(&self) -> String {
+        format!(
+            "{} {}: {}",
+            self.severity.to_ascii_uppercase(),
+            self.code,
+            self.message
+        )
+    }
+}
+
+impl From<&powerio_core::Diagnostic> for PyDiagnostic {
+    fn from(diagnostic: &powerio_core::Diagnostic) -> Self {
+        Self {
+            code: diagnostic.code().to_owned(),
+            severity: diagnostic.severity().as_str().to_owned(),
+            message: diagnostic.message().to_owned(),
+            id: diagnostic.id().map(|id| id.as_str().to_owned()),
+            target: diagnostic.target().map(str::to_owned),
+            suggested_action: diagnostic.suggested_action().map(str::to_owned),
+            related: diagnostic
+                .related()
+                .iter()
+                .map(|id| id.as_str().to_owned())
+                .collect(),
+            spans: diagnostic.spans().iter().map(PySourceSpan::from).collect(),
+            details: diagnostic.details().clone(),
+        }
+    }
+}
+
+/// Low level handle around a parsed module document. Parses the document
+/// once; the user facing `powerio.PioModule` wraps it. Not frozen: `validate`
 /// rewrites the handle's diagnostics in place, matching the Rust and C APIs.
 /// The runtime module handle: `PioModule<PioValue>` with its records. The
 /// stored form is `.pio.json` version 1 (released 0.9 packages upgrade one
 /// way on read). Methods that transform take the module out of the handle
 /// and put it back on failure, so a refused call leaves the handle usable.
-#[pyclass(name = "_StoredModule", module = "powerio._powerio")]
-struct PyStoredModule {
+#[pyclass(name = "_PioModule", module = "powerio._powerio")]
+struct PyPioModule {
     module: Option<powerio_core::PioModule<powerio::PioValue>>,
 }
 
-impl PyStoredModule {
+impl PyPioModule {
     fn module(&self) -> PyResult<&powerio_core::PioModule<powerio::PioValue>> {
         self.module
             .as_ref()
@@ -1804,7 +1987,7 @@ impl PyStoredModule {
 }
 
 #[pymethods]
-impl PyStoredModule {
+impl PyPioModule {
     /// Read stored `.pio.json` text: version 1, or a released 0.9 package
     /// upgraded one way.
     #[staticmethod]
@@ -1817,11 +2000,18 @@ impl PyStoredModule {
     }
 
     /// Parse a case file into a module of whichever family claims it.
+    /// `include_root` widens the acquisition root for formats whose includes
+    /// reference sibling files.
     #[staticmethod]
-    #[pyo3(signature = (path, from_=None))]
-    fn from_file(path: &str, from_: Option<&str>) -> PyResult<Self> {
+    #[pyo3(signature = (path, from_=None, include_root=None))]
+    fn from_file(path: &str, from_: Option<&str>, include_root: Option<&str>) -> PyResult<Self> {
         let mut source = powerio_core::Source::open(Path::new(path))
             .map_err(|error| core_open_pyerr(Path::new(path), &error))?;
+        if let Some(root) = include_root {
+            source = source
+                .with_acquisition_root(root)
+                .map_err(|error| core_error_pyerr(&error))?;
+        }
         if let Some(name) = from_ {
             let format =
                 powerio_core::FormatId::new(name).map_err(|error| core_error_pyerr(&error))?;
@@ -1843,6 +2033,28 @@ impl PyStoredModule {
         if let Some(name) = from_ {
             let format =
                 powerio_core::FormatId::new(name).map_err(|error| core_error_pyerr(&error))?;
+            source = source.with_format(format);
+        }
+        powerio::parse(source)
+            .map(|module| Self {
+                module: Some(module),
+            })
+            .map_err(|error| core_error_pyerr(&error))
+    }
+
+    /// Parse in-memory case bytes into a module. The only in-memory way to
+    /// read a binary format; text formats must be UTF-8. `name` identifies
+    /// the buffer for diagnostics and extension-based format detection;
+    /// defaults to `<memory>` when not given.
+    #[staticmethod]
+    #[pyo3(signature = (data, from_=None, name=None))]
+    fn from_bytes(data: &[u8], from_: Option<&str>, name: Option<&str>) -> PyResult<Self> {
+        let mut source =
+            powerio_core::Source::from_bytes(name.unwrap_or("<memory>"), data.to_vec())
+                .map_err(|error| core_error_pyerr(&error))?;
+        if let Some(format_name) = from_ {
+            let format = powerio_core::FormatId::new(format_name)
+                .map_err(|error| core_error_pyerr(&error))?;
             source = source.with_format(format);
         }
         powerio::parse(source)
@@ -1885,6 +2097,18 @@ impl PyStoredModule {
     fn diagnostics_json(&self) -> PyResult<String> {
         let diagnostics = diagnostics_json_array(self.module()?.diagnostics());
         serde_json::to_string(&diagnostics).map_err(serialize_pyerr)
+    }
+
+    /// The module's diagnostics as native `Diagnostic` objects, in encounter
+    /// order. `diagnostics_json` above stays as the explicit serialization
+    /// helper for a caller that wants the wire form directly.
+    fn diagnostics(&self) -> PyResult<Vec<PyDiagnostic>> {
+        Ok(self
+            .module()?
+            .diagnostics()
+            .iter()
+            .map(PyDiagnostic::from)
+            .collect())
     }
 
     /// The typed time or scenario inventory, as JSON.
@@ -2002,7 +2226,9 @@ impl PyStoredModule {
     /// Lower the multiconductor value to a balanced module. Common records
     /// and source ownership carry over; the pass appends its findings and one
     /// Transform history entry. On refusal the handle keeps its module and
-    /// the error carries the structured diagnostics as JSON.
+    /// the raised `PowerIODataError` carries the refusal's diagnostic code as
+    /// `.code` and its structured findings as `.diagnostics` (a list of
+    /// dicts with `code`/`severity`/`message`/`target`).
     #[pyo3(signature = (base_mva=100.0))]
     fn lower_to_balanced(&mut self, base_mva: f64) -> PyResult<Self> {
         let module = self
@@ -2021,9 +2247,29 @@ impl PyStoredModule {
             }),
             Err((module, error)) => {
                 self.module = Some(module);
-                let details =
-                    serde_json::to_string(&error.diagnostics).unwrap_or_else(|_| "[]".to_owned());
-                Err(PowerIODataError::new_err(format!("{error} | {details}")))
+                let err = PowerIODataError::new_err(error.to_string());
+                let code = error.diagnostics.first().map(|d| d.code().to_owned());
+                let diagnostics: Vec<serde_json::Value> = error
+                    .diagnostics
+                    .iter()
+                    .map(|d| {
+                        serde_json::json!({
+                            "code": d.code(),
+                            "severity": d.severity().as_str(),
+                            "message": d.message(),
+                            "target": d.target(),
+                        })
+                    })
+                    .collect();
+                Python::attach(|py| -> PyResult<()> {
+                    if let Some(code) = &code {
+                        err.value(py).setattr("code", code)?;
+                    }
+                    let list = json_value_to_py(py, &serde_json::Value::Array(diagnostics))?;
+                    err.value(py).setattr("diagnostics", list)?;
+                    Ok(())
+                })?;
+                Err(err)
             }
         }
     }
@@ -2037,10 +2283,41 @@ impl PyStoredModule {
                 module.value().kind().as_str()
             )));
         };
-        Ok(case_from_parts(
-            network.clone(),
-            module.diagnostics().to_vec(),
-        ))
+        // Thread the module's provenance onto the handle so the byte exact
+        // same format echo survives the universal parse. Sources carry over
+        // first: a diagnostic's span validates against the sources on the
+        // module it is being added to.
+        let mut out = powerio_core::PioModule::new(network.clone());
+        for descriptor in module.sources() {
+            out.add_source_descriptor(descriptor.clone())
+                .map_err(|error| {
+                    PowerIODataError::new_err(format!(
+                        "failed to carry source `{}` onto the network handle: {error}",
+                        descriptor.id()
+                    ))
+                })?;
+        }
+        // Every diagnostic is attempted, in order, even after a failure: a
+        // partial copy that stops early would return fewer diagnostics than
+        // the module carries with no error to say so.
+        let mut first_error = None;
+        for diagnostic in module.diagnostics() {
+            if let Err(error) = out.add_diagnostic(diagnostic.clone())
+                && first_error.is_none()
+            {
+                first_error = Some(error);
+            }
+        }
+        if let Some(error) = first_error {
+            return Err(PowerIODataError::new_err(format!(
+                "failed to carry every diagnostic onto the network handle: {error}"
+            )));
+        }
+        let out = match module.source() {
+            Some(source) => out.with_source(source.clone()),
+            None => out,
+        };
+        Ok(case_from_module(out))
     }
 
     /// The multiconductor network value as a network handle.
@@ -2081,18 +2358,22 @@ impl PyStoredModule {
                 "failed to carry every diagnostic onto the multiconductor network handle: {error}"
             )));
         }
+        let inner = match module.source() {
+            Some(source) => inner.with_source(source.clone()),
+            None => inner,
+        };
         Ok(PyMulticonductorNetwork::from_module(inner))
     }
 
     fn __repr__(&self) -> String {
         match &self.module {
             Some(module) => format!(
-                "StoredModule(kind={}, diagnostics={}, history={})",
+                "PioModule(kind={}, diagnostics={}, history={})",
                 module.value().kind().as_str(),
                 module.diagnostics().len(),
                 module.history().len()
             ),
-            None => "StoredModule(<consumed>)".to_owned(),
+            None => "PioModule(<consumed>)".to_owned(),
         }
     }
 }
@@ -2295,13 +2576,9 @@ fn _powerio(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add("PowerIOParseError", m.py().get_type::<PowerIOParseError>())?;
     m.add("PowerIODataError", m.py().get_type::<PowerIODataError>())?;
     m.add_class::<PyBalancedNetwork>()?;
-    m.add_function(wrap_pyfunction!(parse_file, m)?)?;
-    m.add_function(wrap_pyfunction!(parse_str, m)?)?;
-    m.add_function(wrap_pyfunction!(parse_bytes, m)?)?;
     m.add_function(wrap_pyfunction!(parse_display_file, m)?)?;
     m.add_function(wrap_pyfunction!(parse_display_bytes, m)?)?;
     m.add_function(wrap_pyfunction!(from_json, m)?)?;
-    m.add_function(wrap_pyfunction!(read_pypsa_csv_folder, m)?)?;
     m.add_function(wrap_pyfunction!(convert_file, m)?)?;
     m.add_function(wrap_pyfunction!(convert_str, m)?)?;
     m.add_class::<PyMulticonductorNetwork>()?;
@@ -2309,7 +2586,9 @@ fn _powerio(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(dist_parse_str, m)?)?;
     m.add_function(wrap_pyfunction!(dist_convert_file, m)?)?;
     m.add_function(wrap_pyfunction!(dist_convert_str, m)?)?;
-    m.add_class::<PyStoredModule>()?;
+    m.add_class::<PyPioModule>()?;
+    m.add_class::<PyDiagnostic>()?;
+    m.add_class::<PySourceSpan>()?;
     m.add_function(wrap_pyfunction!(classify_json_text, m)?)?;
     m.add_function(wrap_pyfunction!(json_classes, m)?)?;
     m.add_function(wrap_pyfunction!(parse_geo, m)?)?;

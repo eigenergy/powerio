@@ -24,4 +24,6 @@ powerio.Switch
 powerio.Units
 powerio._powerio._BalancedNetwork
 powerio._powerio._MulticonductorNetwork
-powerio._powerio._StoredModule
+powerio._powerio._PioModule
+powerio._powerio.Diagnostic
+powerio._powerio.SourceSpan

@@ -27,12 +27,7 @@ def test_multiconductor_is_the_only_model_name():
     assert "DistCase" not in dist.__all__
     # DistNetwork is the 0.8 bridge alias: same object, DeprecationWarning,
     # gone at 1.0.0. DistCase stays removed.
-    import warnings as _warnings
-
-    with _warnings.catch_warnings(record=True) as caught:
-        _warnings.simplefilter("always")
-        assert dist.DistNetwork is dist.MulticonductorNetwork
-    assert any(issubclass(w.category, DeprecationWarning) for w in caught)
+    assert not hasattr(dist, "DistNetwork")
     assert "DistNetwork" not in dist.__all__
     assert not hasattr(dist, "DistCase")
 
@@ -138,6 +133,28 @@ def test_dist_write_file_refuses_existing_case_and_sidecar_entries(tmp_path):
     assert not (nested / "case.dss").exists()
 
 
+def test_lower_to_balanced_refusal_carries_code_and_diagnostics():
+    # IEEE13Nodeckt is an unbalanced feeder (single- and two-phase laterals,
+    # single-phase regulators, a wye-wye substation transformer): the
+    # positive sequence projection refuses it outright rather than guess.
+    module = powerio.parse(DATA / "opendss" / "ieee13" / "IEEE13Nodeckt.dss")
+    with pytest.raises(powerio.PowerIODataError) as excinfo:
+        module.to_balanced(base_mva=100.0)
+    error = excinfo.value
+    assert error.code
+    assert error.diagnostics
+    assert error.diagnostics[0]["code"] == error.code
+    for diagnostic in error.diagnostics:
+        assert diagnostic.keys() == {"code", "severity", "message", "target"}
+        assert diagnostic["code"].startswith("TRANSFORM.")
+        # The lowering records are 1.0 diagnostics from the branch below;
+        # legacy severities never reach this surface any more.
+        assert diagnostic["severity"] in ("error", "warning", "remark", "note")
+        assert diagnostic["message"]
+    # The refusal leaves the handle usable, still carrying its module.
+    assert module.kind == "multiconductor_network"
+
+
 def test_dist_write_file_echoes_bytes(tmp_path):
     case = dist.parse_file(FOURWIRE)
     out = tmp_path / "echo.dss"
@@ -184,7 +201,7 @@ def test_one_shot_convert_carries_parse_warnings():
         "bmopf-json",
         "dss",
     )
-    assert any("furlong" in w for w in conv.warnings)
+    assert any("furlong" in w.message for w in conv.warnings)
 
 
 def test_bmopf_containing_data_model_string_routes_to_bmopf(tmp_path):

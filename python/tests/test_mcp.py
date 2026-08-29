@@ -146,7 +146,7 @@ def test_parse_transmission_transport_round_trip(tmp_path):
 
     out = tmp_path / "case9.m"
     server.save(out_path=str(out), json=parsed["json"], json_format=parsed["json_format"])
-    assert powerio.parse_file(out).n_buses == 9
+    assert powerio.parse(out, value_type=powerio.BalancedNetwork).value.n_buses == 9
 
 
 def test_parse_distribution_uses_bmopf_transport(tmp_path):
@@ -193,7 +193,7 @@ def test_package_transport_flows_through_summary_matrix_and_save(tmp_path):
 
     out = tmp_path / "case9.m"
     server.save(out_path=str(out), package_json=package_json)
-    assert powerio.parse_file(out).n_buses == 9
+    assert powerio.parse(out, value_type=powerio.BalancedNetwork).value.n_buses == 9
 
     package_path = tmp_path / "case9.pio.json"
     package_path.write_text(package_json)
@@ -261,7 +261,7 @@ def test_minimal_bmopf_json_routes_without_format(tmp_path):
 
 
 def test_powermodels_json_still_routes_as_transmission():
-    pm = powerio.parse_file(str(DATA / "case9.m")).to_format("powermodels-json").text
+    pm = powerio.parse(str(DATA / "case9.m"), value_type=powerio.BalancedNetwork).value.to_format("powermodels-json").text
     parsed = server.parse(content=pm)
     assert parsed["domain"] == "transmission"
     assert parsed["json_format"] == "model-json"
@@ -287,7 +287,7 @@ def test_normalize_payload_has_schema_marker():
 
 
 def test_parse_reads_pypsa_folder(tmp_path):
-    net = powerio.parse_file(str(DATA / "case9.m"))
+    net = powerio.parse(str(DATA / "case9.m"), value_type=powerio.BalancedNetwork).value
     folder = tmp_path / "case9-pypsa"
     net.write_pypsa_csv_folder(str(folder))
 
@@ -350,7 +350,7 @@ def test_bad_json_transport_leads_with_the_diagnostic_code():
 
 def test_parse_failures_carry_the_code_and_the_tools_lead_with_it():
     with pytest.raises(powerio.PowerIOError) as native:
-        powerio.parse_str("mpc.bus = [", "matpower")
+        powerio.parse(("mpc.bus = [").encode(), "matpower", value_type=powerio.BalancedNetwork)
     assert native.value.code == "PARSE.MATPOWER.MALFORMED"
     with pytest.raises(ValueError) as mapped:
         server.summary(content="mpc.bus = [", from_format="matpower")
@@ -363,7 +363,7 @@ def test_parse_failures_carry_the_code_and_the_tools_lead_with_it():
 
 def test_unknown_format_code_is_not_doubled():
     with pytest.raises(powerio.PowerIOError) as native:
-        powerio.parse_file(str(DATA / "case9.m"), "not-a-real-format")
+        powerio.parse(str(DATA / "case9.m"), "not-a-real-format")
     assert native.value.code == "REQUEST.FORMAT.UNKNOWN"
     with pytest.raises(ValueError) as mapped:
         server.summary(path=str(DATA / "case9.m"), from_format="not-a-real-format")
@@ -465,7 +465,7 @@ def test_mcp_refuses_pypsa_child_symlink_escape(monkeypatch, tmp_path):
     outside = tmp_path / "outside"
     root.mkdir()
     outside.mkdir()
-    powerio.parse_file(str(DATA / "case9.m")).write_pypsa_csv_folder(str(folder))
+    powerio.parse(str(DATA / "case9.m"), value_type=powerio.BalancedNetwork).value.write_pypsa_csv_folder(str(folder))
     escaped = outside / "buses.csv"
     escaped.write_text((folder / "buses.csv").read_text())
     (folder / "buses.csv").unlink()
@@ -696,7 +696,7 @@ New Load.la bus1=loadbus.1.2.3 phases=3 conn=wye kv=0.416 kw=24 pf=0.95 model=1
 
 def _legacy_package_doc(**extra) -> dict:
     """A released 0.9 package document, the lineage the stored reader upgrades."""
-    network = json.loads(powerio.parse_file(str(DATA / "case9.m")).to_json())
+    network = json.loads(powerio.parse(str(DATA / "case9.m"), value_type=powerio.BalancedNetwork).value.to_json())
     return {
         "powerio_version": "0.9.0",
         "producer": {"tool": "powerio", "version": "0.9.0"},
@@ -733,7 +733,7 @@ def _series_module_json() -> str:
             ],
         }
     )
-    return powerio.StoredModule.from_json(json.dumps(legacy)).to_json()
+    return powerio.PioModule.from_json(json.dumps(legacy)).to_json()
 
 
 def test_state_inventory_selection_and_export():
@@ -772,7 +772,7 @@ def test_selection_refusals_carry_codes():
         server._select_state_tool(module_json=module_json, time_position=9)
     with pytest.raises(ValueError, match="REQUEST.STATE.WRONG_SELECTOR"):
         server._select_state_tool(module_json=module_json, scenario="base")
-    static_module = powerio.StoredModule.from_file(DATA / "case9.m").to_json()
+    static_module = powerio.PioModule.from_file(DATA / "case9.m").to_json()
     with pytest.raises(ValueError, match="REQUEST.STATE.NOT_A_COLLECTION"):
         server._state_inventory_tool(module_json=static_module)
     with pytest.raises(ValueError, match="exactly one of time_position"):
@@ -836,7 +836,7 @@ def test_hostile_element_names_lower_with_normalized_history(tmp_path):
     notes are normalized rather than dropped or crashing the pass."""
     feeder = tmp_path / "tiny.dss"
     feeder.write_text(TRANSFORMER_DSS)
-    module = powerio.StoredModule.from_file(feeder, "dss")
+    module = powerio.PioModule.from_file(feeder, "dss")
     doc = json.loads(module.to_json())
     hostile = "t\u0000evil" + "x" * (70_000)
     doc["value"]["data"]["transformers"][0]["name"] = hostile
@@ -866,7 +866,7 @@ def test_wrong_kind_lowering_is_refused_by_name():
 def _balanced_module_with_diagnostics(diagnostics: list) -> str:
     """A static `balanced_network` module document (exported from the time
     series fixture) with the given diagnostics injected onto it."""
-    module = powerio.StoredModule.from_json(_series_module_json())
+    module = powerio.PioModule.from_json(_series_module_json())
     exported = module.export_state(time_position=1)
     doc = json.loads(exported.to_json())
     doc["diagnostics"] = diagnostics
@@ -919,7 +919,7 @@ def test_multiconductor_module_diagnostics_survive_in_order():
     """Diagnostics carried by a stored multiconductor module reach the MCP
     warnings in source order, including one whose span references the
     module's own declared source and a trailing entry after it."""
-    module = powerio.StoredModule.from_str(LOWERABLE_DSS, "dss")
+    module = powerio.PioModule.from_str(LOWERABLE_DSS, "dss")
     doc = json.loads(module.to_json())
     source_id = doc["sources"][0]["id"]
     doc["diagnostics"] = [
@@ -962,4 +962,10 @@ def test_parse_warnings_are_structured_records_on_every_transport():
             assert record["severity"] in ("error", "warning", "remark", "note")
             assert record["message"]
 
-    assert via_path["warnings"] == via_package["warnings"]
+    # The module transport round trips through the writer, which assigns
+    # ids (d0, d1, ...) to records that lack them; the direct path's records
+    # have none. Identical otherwise.
+    def _without_ids(records):
+        return [{k: v for k, v in r.items() if k != "id"} for r in records]
+
+    assert _without_ids(via_path["warnings"]) == _without_ids(via_package["warnings"])

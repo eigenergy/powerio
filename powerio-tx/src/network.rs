@@ -2519,13 +2519,6 @@ impl BalancedNetwork {
     }
 }
 
-/// The 0.8 spelling of [`BalancedNetwork`]. The alias goes away at 1.0.0.
-#[deprecated(
-    since = "0.9.0",
-    note = "renamed to BalancedNetwork in 0.9.0; the alias goes away at 1.0.0"
-)]
-pub type Network = BalancedNetwork;
-
 #[cfg(test)]
 mod tests {
     use super::*;

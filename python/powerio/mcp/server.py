@@ -152,15 +152,19 @@ def _coded_error(prefix: str, exc: Exception) -> ValueError:
 
     The Rust-side message already renders as `CODE: message`, so `str(exc)`
     starting with `code` means it is already there; prefixing again would
-    double it. The `prefix` fallback (no `.code` on `exc`) is unconditional,
-    as before."""
+    double it. A refusal's structured findings (currently only a refused
+    balanced lowering sets `.diagnostics`) ride along as trailing JSON,
+    since an MCP tool has no attribute channel back to its caller."""
     code = getattr(exc, "code", None)
     text = str(exc)
     if code:
-        if text.startswith(f"{code}: "):
-            return ValueError(text)
-        return ValueError(f"{code}: {text}")
-    return ValueError(f"{prefix}: {text}")
+        message = text if text.startswith(f"{code}: ") else f"{code}: {text}"
+    else:
+        message = f"{prefix}: {text}"
+    diagnostics = getattr(exc, "diagnostics", None)
+    if diagnostics:
+        message = f"{message} | {jsonlib.dumps(diagnostics)}"
+    return ValueError(message)
 
 
 def _required(value: Optional[str], name: str) -> str:
@@ -235,7 +239,7 @@ def _package_value(text: str) -> Optional[Dict[str, Any]]:
 
     Deliberately does not test `powerio_version`: a package written before
     0.9.0 states none, and it has to be recognized before it can be rejected
-    with a message that says so. `powerio.StoredModule.from_json` owns the
+    with a message that says so. `powerio.PioModule.from_json` owns the
     version gate.
     """
     try:
@@ -370,28 +374,61 @@ def _diagnostic_record(item: Dict[str, Any]) -> Dict[str, Any]:
     return {key: item.get(key) for key in ("code", "severity", "message", "target")}
 
 
+def _as_diagnostic_dict(item: Any) -> Dict[str, Any]:
+    """One diagnostic as a plain dict. The network wrappers already return
+    dicts; the module channel returns native `Diagnostic` objects, which
+    read the same fields through attributes."""
+    if isinstance(item, dict):
+        return item
+    out: Dict[str, Any] = {
+        "code": item.code,
+        "severity": item.severity,
+        "message": item.message,
+        "target": getattr(item, "target", None),
+    }
+    identity = getattr(item, "id", None)
+    if identity:
+        out["id"] = identity
+    spans = getattr(item, "spans", None)
+    if spans:
+        out["spans"] = [
+            {
+                "source": span.source,
+                "byte_start": span.byte_start,
+                "byte_end": span.byte_end,
+            }
+            for span in spans
+        ]
+    return out
+
+
 def _diagnostic_records(
     diagnostics: list[Any], keep_severities: frozenset[str]
 ) -> list[Dict[str, Any]]:
-    """Every diagnostic dict (as `module.diagnostics()` or a parsed network's
-    `.diagnostics()` return) at or above the kept severities, normalized to
-    one shape."""
+    """Every diagnostic (dict or native record) at or above the kept
+    severities, normalized to one shape."""
+    records = [_as_diagnostic_dict(item) for item in diagnostics]
     return [
         _diagnostic_record(item)
-        for item in diagnostics
-        if isinstance(item, dict) and item.get("severity") in keep_severities
+        for item in records
+        if item.get("severity") in keep_severities
     ]
 
 
-def _wrap_plain_warnings(messages: list[str]) -> list[Dict[str, Any]]:
-    """A rendered `CODE: message` or bare message list (an emit-time
-    `Conversion.warnings`, with no structured form of its own) in the same
-    shape `_diagnostic_records` publishes, so a tool that appends emit
-    warnings to `_Loaded.warnings` still returns one list of dicts."""
-    return [
-        {"code": None, "severity": None, "message": message, "target": None}
-        for message in messages
-    ]
+def _wrap_plain_warnings(messages: list[Any]) -> list[Dict[str, Any]]:
+    """Emit-time `Conversion.warnings` in the same shape
+    `_diagnostic_records` publishes, so a tool that appends emit warnings to
+    `_Loaded.warnings` still returns one list of dicts. A native diagnostic
+    record keeps its fields; a plain rendered string rides in `message`."""
+    out: list[Dict[str, Any]] = []
+    for message in messages:
+        if isinstance(message, str):
+            out.append(
+                {"code": None, "severity": None, "message": message, "target": None}
+            )
+        else:
+            out.append(_diagnostic_record(_as_diagnostic_dict(message)))
+    return out
 
 
 def _diagnostics_payload(package_json: str, verbose: bool = False) -> Dict[str, Any]:
@@ -411,7 +448,7 @@ def _diagnostics_payload(package_json: str, verbose: bool = False) -> Dict[str, 
         raise ValueError("package_json is not a stored .pio.json document")
     # Validate with the stored reader (which upgrades a released 0.9
     # package) so schema version and consistency checks stay in one place.
-    powerio.StoredModule.from_json(package_json)
+    powerio.PioModule.from_json(package_json)
     raw = value.get("diagnostics", [])
     diagnostics = [item for item in raw if isinstance(item, dict)]
     if not verbose:
@@ -472,7 +509,7 @@ def _module_header(text: str) -> bool:
 def _load_module(module_json: str) -> _Loaded:
     """Load a stored module's static network value as a network handle."""
     try:
-        module = powerio.StoredModule.from_json(module_json)
+        module = powerio.PioModule.from_json(module_json)
     except ValueError as exc:
         raise _coded_error("module input", exc) from exc
     kind = module.kind
@@ -480,14 +517,14 @@ def _load_module(module_json: str) -> _Loaded:
     if kind == "balanced_network":
         return _Loaded(
             domain="transmission",
-            network=powerio.BalancedNetwork(module._inner.as_balanced_network()),
+            network=module.as_balanced_network(),
             warnings=warnings,
             json_format="module",
         )
     if kind == "multiconductor_network":
         return _Loaded(
             domain="distribution",
-            network=dist.MulticonductorNetwork(module._inner.as_multiconductor_network()),
+            network=module.as_multiconductor_network(),
             warnings=warnings,
             json_format="module",
         )
@@ -517,11 +554,13 @@ def _parse_transmission(
                 int(result.scenario),
             )
         if path is not None:
-            net = powerio.parse_file(path, format)
+            net = powerio.parse(path, format, value_type=powerio.BalancedNetwork).value
         else:
-            net = powerio.parse_str(
-                _required(content, "content"), format or "matpower"
-            )
+            net = powerio.parse(
+                _required(content, "content").encode(),
+                format or "matpower",
+                value_type=powerio.BalancedNetwork,
+            ).value
     except powerio.PowerIOError as exc:
         raise _coded_error("parse failed", exc) from exc
     except FileNotFoundError as exc:
@@ -1303,19 +1342,19 @@ def _stored_module(
     path: Optional[str] = None,
     content: Optional[str] = None,
     from_format: Optional[str] = None,
-) -> "powerio.StoredModule":
+) -> "powerio.PioModule":
     """One module input: stored `.pio.json` text, a case path, or case text."""
     supplied = [value for value in (module_json, path, content) if value]
     if len(supplied) != 1:
         raise ValueError("pass exactly one of module_json, path, and content")
     try:
         if module_json:
-            return powerio.StoredModule.from_json(module_json)
+            return powerio.PioModule.from_json(module_json)
         if path is not None:
-            return powerio.StoredModule.from_file(
+            return powerio.PioModule.from_file(
                 _local_path(path, purpose="module input"), _fmt(from_format)
             )
-        return powerio.StoredModule.from_str(content or "", _fmt(from_format))
+        return powerio.PioModule.from_str(content or "", _fmt(from_format))
     except ValueError as exc:
         raise _coded_error("module input", exc) from exc
 

@@ -20,12 +20,12 @@ CASE = str(Path(__file__).resolve().parents[3] / "tests" / "data" / "case2869peg
 
 class Parse:
     def time_parse(self):
-        powerio.parse_file(CASE)
+        powerio.parse(CASE, value_type=powerio.BalancedNetwork)
 
 
 class Matrices:
     def setup(self):
-        self.case = powerio.parse_file(CASE)
+        self.case = powerio.parse(CASE, value_type=powerio.BalancedNetwork).value
 
     def time_ybus(self):
         self.case.ybus()
