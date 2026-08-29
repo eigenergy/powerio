@@ -491,6 +491,32 @@ mod upgrade_tests {
         );
     }
 
+    /// A 0.9 diagnostic's `code` is never validated at decode time (the
+    /// legacy `DiagnosticCode` accepts any string), so an attacker
+    /// controlled `.pio.json` can carry one that fails the 1.0 grammar. The
+    /// upgrade must fall back to a stand-in code for such a record, not
+    /// panic reaching for the fallback itself.
+    #[test]
+    fn a_malformed_legacy_diagnostic_code_upgrades_to_the_fallback_instead_of_panicking() {
+        for bad_code in ["bad", "", "TWO.SEGMENTS", "READ..EMPTY", "1LEADING.DIGIT.X"] {
+            let mut raw: serde_json::Value =
+                serde_json::from_str(&legacy_package_text(false, false)).unwrap();
+            raw["diagnostics"] = serde_json::json!([
+                {"code": bad_code, "severity": "warning", "message": "malformed code"}
+            ]);
+            let module = read_module(&raw.to_string())
+                .unwrap_or_else(|e| panic!("code {bad_code:?} refused the whole document: {e}"));
+            assert!(
+                module
+                    .diagnostics()
+                    .iter()
+                    .any(|d| d.code() == "PARTNER.LEGACY.UNCODED"),
+                "code {bad_code:?}: {:?}",
+                module.diagnostics()
+            );
+        }
+    }
+
     #[test]
     fn legacy_operating_points_become_the_primary_series_value() {
         let text = legacy_package_text(true, false);
