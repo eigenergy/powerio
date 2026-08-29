@@ -18,7 +18,7 @@ PowerIO's design borrows from LLVM and MLIR where their problems genuinely overl
 
 **Shared operations instead of per format switches.** The parse and write dispatchers route once, at the facade; matrix builders, writers, and inspectors consume the concrete typed values, so a new format adds one parser and one writer rather than a case in every consumer.
 
-**Private analysis caches.** Dense indexes, factorizations, and prepared solver arrays are derived data behind the public results, invalidated when their inputs change, the way pass manager analyses are.
+**Analysis caches.** Factorizations and prepared solver arrays are derived data behind the public results, invalidated when their inputs change, the way pass manager analyses are; `IndexedNetwork`, the derived index view, stays public in 0.10 because downstream consumers build matrices through it directly.
 
 **Registries checked mechanically where tables drift.** The twenty kind strings, the format tokens, the diagnostic codes, and the drawn architecture edges are each held to one source by a CI gate, which is the maintainable slice of MLIR's declarative dialect definitions.
 

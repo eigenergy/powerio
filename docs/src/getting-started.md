@@ -57,10 +57,10 @@ case.diagnostics()              # native records: code, severity, message, spans
 Rust:
 
 ```rust,ignore
-use powerio_core::Source;
+use powerio::Source;
 
 let module = powerio::parse(Source::open("case9.m")?)?;
-let case: powerio_core::PioModule<powerio::BalancedNetwork> =
+let case: powerio::PioModule<powerio::BalancedNetwork> =
     powerio::try_into_typed(module)?;
 let (text, findings) = powerio::write_module_str(
     &case.map_value(powerio::PioValue::from), "matpower")?;

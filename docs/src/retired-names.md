@@ -20,7 +20,7 @@ The old crates stay on crates.io at their final 0.x versions; nothing publishes 
 | `ScopfInstance` | `AcScucInstance` (DOE GO Challenge 3) and the settled instance families |
 | `OperatingPointSeries` | `TimeSeries<OperatingPoint<N>>` as a module value |
 | `parse_as`, type marker parse forms | one parse with automatic detection; a format name overrides detection only |
-| public solver row tables (`NormalizedSolverTables`, dense row arrays) | private builder data behind matrix results with element mappings |
+| public solver row tables (`NormalizedSolverTables`, dense row arrays) | hidden from the documented surface; the frozen 0.9 upgrade reader is the one remaining consumer, and the rows leave entirely when it retires |
 | `pio_package_*`, `pio_scopf_*` C entry points | the module surface: `pio_parse_*`, `pio_module_*` |
 | the network returning C parse family and its error buffers | module handles and structured `PioError` |
 | `pio_dist_abi_version`, `pio_dist_capabilities_json`, `pio_matrix_available` | one ABI handshake plus `pio_has_feature` |
