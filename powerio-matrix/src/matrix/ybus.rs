@@ -32,27 +32,17 @@ pub struct YbusParts {
 // Six independent on/off switches into one Y_bus kernel; an enum per pair
 // would just spread the same state across more types.
 #[allow(clippy::struct_excessive_bools)]
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Default)]
 pub(crate) struct YbusFlags {
     pub zero_resistance: bool,
     pub zero_charging: bool,
     pub unity_taps: bool,
     pub zero_shifts: bool,
     pub skip_bus_shunts: bool,
+    /// Matches `BuildOptions::default()`: false, so a zero impedance branch
+    /// (preserved in networks and instances) errors the physical admittances
+    /// unless a caller opts into skipping it.
     pub skip_zero_impedance: bool,
-}
-
-impl Default for YbusFlags {
-    fn default() -> Self {
-        Self {
-            zero_resistance: false,
-            zero_charging: false,
-            unity_taps: false,
-            zero_shifts: false,
-            skip_bus_shunts: false,
-            skip_zero_impedance: true,
-        }
-    }
 }
 
 pub fn build_ybus(case: &IndexedNetwork, opts: &super::BuildOptions) -> Result<YbusParts> {
