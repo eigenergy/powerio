@@ -353,7 +353,22 @@ def test_parse_failures_carry_the_code_and_the_tools_lead_with_it():
     assert native.value.code == "PARSE.MATPOWER.MALFORMED"
     with pytest.raises(ValueError) as mapped:
         server.summary(content="mpc.bus = [", from_format="matpower")
-    assert str(mapped.value).startswith("PARSE.MATPOWER.MALFORMED: ")
+    text = str(mapped.value)
+    assert text.startswith("PARSE.MATPOWER.MALFORMED: ")
+    # The Rust message already leads with the code; the tool wrapper must not
+    # prefix it a second time.
+    assert text.count("PARSE.MATPOWER.MALFORMED") == 1
+
+
+def test_unknown_format_code_is_not_doubled():
+    with pytest.raises(powerio.PowerIOError) as native:
+        powerio.parse_file(str(DATA / "case9.m"), "not-a-real-format")
+    assert native.value.code == "REQUEST.FORMAT.UNKNOWN"
+    with pytest.raises(ValueError) as mapped:
+        server.summary(path=str(DATA / "case9.m"), from_format="not-a-real-format")
+    text = str(mapped.value)
+    assert text.startswith("REQUEST.FORMAT.UNKNOWN: ")
+    assert text.count("REQUEST.FORMAT.UNKNOWN") == 1
 
 
 def test_empty_transport_text_means_unset():

@@ -142,11 +142,19 @@ def _one_input(path: Optional[str], content: Optional[str]) -> None:
 
 def _coded_error(prefix: str, exc: Exception) -> ValueError:
     """Lead with the diagnostic code when the failure carries one, so a
-    consumer that splits on the first colon reads a code, never prose."""
+    consumer that splits on the first colon reads a code, never prose.
+
+    The Rust-side message already renders as `CODE: message`, so `str(exc)`
+    starting with `code` means it is already there; prefixing again would
+    double it. The `prefix` fallback (no `.code` on `exc`) is unconditional,
+    as before."""
     code = getattr(exc, "code", None)
+    text = str(exc)
     if code:
-        return ValueError(f"{code}: {exc}")
-    return ValueError(f"{prefix}: {exc}")
+        if text.startswith(f"{code}: "):
+            return ValueError(text)
+        return ValueError(f"{code}: {text}")
+    return ValueError(f"{prefix}: {text}")
 
 
 def _required(value: Optional[str], name: str) -> str:
