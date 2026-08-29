@@ -3,7 +3,7 @@
 This tracks self-regression over commits (does a change make powerio slower than its
 past?), which the cross-tool snapshot in evals/performance/RESULTS.md does not: that compares
 powerio against ExaPowerIO/PowerModels/pandapower at one commit. The Rust hot path also
-has criterion coverage (powerio/benches/parse.rs); this watches the user-facing Python
+has criterion coverage (powerio-tx/benches/parse.rs); this watches the user-facing Python
 wheel.
 
 Run from evals/performance/asv/ — see README.md. asv builds the wheel with maturin per commit

@@ -1,0 +1,14 @@
+[package]
+name = "powerio-eval-mccheck"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+# Not a workspace member: `evals` is in the root manifest's `exclude`, so this
+# never enters `cargo test`, `cargo publish`, or the release archives. It links
+# the library crates by path, matching evals/allocation.
+
+[dependencies]
+powerio-core = { path = "../../../powerio-core" }
+powerio-dist = { path = "../../../powerio-dist" }
+powerio-matrix = { path = "../../../powerio-matrix" }

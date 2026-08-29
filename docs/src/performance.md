@@ -4,7 +4,7 @@ PowerIO has five benchmark tiers. Keep them separate when publishing numbers.
 
 | tier | command | what it answers |
 | --- | --- | --- |
-| Rust microbenchmarks | `cargo bench -p powerio --bench parse` | parser, writer, and PowerWorld reader timing inside one process |
+| Rust microbenchmarks | `cargo bench -p powerio-tx --bench parse` | parser, writer, and PowerWorld reader timing inside one process |
 | Matrix microbenchmarks | `cargo bench -p powerio-matrix --bench matrix` | sparse matrix, DC OPF component, and dense sensitivity builder timing after parse/indexing |
 | Cross tool parser and matrix comparison | `julia --project=evals/validation evals/performance/bench_julia.jl --json` | powerio through the C ABI against ExaPowerIO.jl and PowerModels.jl, including parse plus Y bus construction |
 | Python parser comparison | `.venv/bin/python evals/performance/bench_parse.py --json <cases>` | Python package parse and matrix path against pandapower reader paths |
@@ -41,7 +41,7 @@ Y bus assembled from its parsed branch admittance rows.
 
 PowerWorld `.pwb` and `.aux` parse timings are measured by the Rust Criterion
 benchmarks. Fetch the public fixtures, run
-`cargo bench -p powerio --bench parse -- "parse_aux_|parse_pwb_"`, then run
+`cargo bench -p powerio-tx --bench parse -- "parse_aux_|parse_pwb_"`, then run
 `python3 evals/performance/extract_powerworld_bench.py` before rendering the tables. If
 the Texas7k local row is published, pass its aux and pwb paths through
 `POWERIO_BENCH_AUX` and `POWERIO_BENCH_PWB` during the Criterion run.

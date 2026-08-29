@@ -10,8 +10,10 @@ Four checks, each born from a shipped defect:
 3. A doc that says to release something with pio_string_release must sit on
    a declaration that actually hands out a `char *`.
 4. Comment lint: unbalanced parentheses in a doc block, an immediately
-   repeated word, and a Rust module path (`](v6::`, `](crate::`) leaking
-   into text that renders verbatim into powerio.h.
+   repeated word or short phrase (up to three words, so "the handle's the
+   handle's" is caught the same way "the the" is), and a Rust module path
+   (`](v6::`, `](crate::`) leaking into text that renders verbatim into
+   powerio.h.
 """
 
 from __future__ import annotations
@@ -134,10 +136,10 @@ def _lint_block(block: list[str], line_no: int) -> None:
     prose = re.sub(r"`[^`]*`", "", text)
     if prose.count("(") != prose.count(")"):
         errors.append(f"powerio.h:{line_no}: unbalanced parentheses in comment block")
-    for m in re.finditer(r"\b([a-z][a-z']+) \1\b", prose):
+    for m in re.finditer(r"\b(\w[\w']*(?: \w[\w']*){0,2}) \1\b", prose):
         if m.group(1) not in {"had", "that"}:
             errors.append(
-                f"powerio.h:{line_no}: repeated word {m.group(1)!r} in comment block"
+                f"powerio.h:{line_no}: repeated phrase {m.group(1)!r} in comment block"
             )
 
 

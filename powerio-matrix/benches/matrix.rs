@@ -1,7 +1,7 @@
 //! Matrix builder throughput. Run with `cargo bench -p powerio-matrix --bench matrix`.
 //!
 //! These benches time derived matrix construction from an already parsed and
-//! indexed network. Parser throughput lives in `powerio/benches/parse.rs`; this
+//! indexed network. Parser throughput lives in `powerio-tx/benches/parse.rs`; this
 //! file answers whether the sparse builders themselves changed.
 //!
 //! The benches hold `b = 1/x` so a timing series stays comparable across the
