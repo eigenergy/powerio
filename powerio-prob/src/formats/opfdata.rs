@@ -21,6 +21,10 @@ use crate::state::BalancedStateBuilder;
 /// An invalid document, or solved columns whose shapes disagree with the
 /// network's tables; every failure retains the source.
 pub fn parse_opfdata_solution(source: Source) -> Result<PioModule<AcOpfSolution>, Error> {
+    let source = match source.format() {
+        Some(_) => source,
+        None => source.with_format(powerio_core::FormatId::new("opfdata-json")?),
+    };
     match parse_opfdata_text(&source) {
         Ok((solution, diagnostics)) => PioModule::parsed(solution, source, diagnostics),
         Err(error) => Err(error.with_source(source)),
