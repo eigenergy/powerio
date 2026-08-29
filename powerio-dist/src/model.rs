@@ -445,8 +445,11 @@ pub struct DistGenerator {
     #[serde(default, with = "crate::nonfinite::upper_bounds")]
     #[cfg_attr(feature = "schema", schemars(with = "Option<Vec<Option<f64>>>"))]
     pub q_max: Option<Vec<f64>>,
-    /// $/kWh; no OpenDSS equivalent, so it is None until a format supplies it.
-    pub cost: Option<f64>,
+    /// Generation cost, $/kWh per phase conductor, exactly as the source
+    /// states it: one entry per phase, or a single entry for a scalar
+    /// statement. No OpenDSS equivalent, so it is None until a format
+    /// supplies it.
+    pub cost: Option<Vec<f64>>,
     /// Per-conductor apparent power and current limits, VA and amps (BMOPF
     /// generator fields, alongside the p/q bounds).
     #[serde(

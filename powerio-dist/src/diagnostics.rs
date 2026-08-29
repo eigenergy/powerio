@@ -128,6 +128,8 @@ pub mod codes {
             "a BMOPF object or winding beyond the modeled set was dropped";
         READ_BMOPF_VALUE_COLLAPSED = "READ.BMOPF.VALUE_COLLAPSED", Warning,
             "a per phase or per terminal BMOPF value was collapsed to one entry";
+        READ_BMOPF_TRANSFORMER_OPEN_DELTA_SPLIT = "READ.BMOPF.TRANSFORMER_OPEN_DELTA_SPLIT", Warning,
+            "one open_delta_regulator object reads as its two regulating legs, the second under a synthesized name";
         READ_BMOPF_VALUE_DEFAULTED = "READ.BMOPF.VALUE_DEFAULTED", Warning,
             "a BMOPF value the model needs was absent or unusable and was defaulted";
         READ_BMOPF_VALUE_UNSUPPORTED = "READ.BMOPF.VALUE_UNSUPPORTED", Warning,

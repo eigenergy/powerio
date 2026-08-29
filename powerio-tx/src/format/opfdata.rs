@@ -180,6 +180,18 @@ impl GeneratorRow {
         self.0[6]
     }
 
+    fn initial_pg(&self) -> f64 {
+        self.0[1]
+    }
+
+    fn initial_qg(&self) -> f64 {
+        self.0[4]
+    }
+
+    fn initial_vg(&self) -> f64 {
+        self.0[7]
+    }
+
     fn cost_coefficients(&self) -> &[f64] {
         &self.0[8..11]
     }
@@ -659,12 +671,68 @@ fn validate_document(document: &Document, bus_count: usize) -> Result<NodeLinks>
     })
 }
 
-#[allow(clippy::too_many_lines)]
+/// The solved columns and stated objective of one OPFData document, in
+/// network units (per unit voltages, degrees, MW, MVAr), each vector in its
+/// network table's order. OPFData explicitly represents a solved AC OPF, so
+/// these columns exist for every valid document; the solver initial `pg`,
+/// `qg`, and `vg` the `grid` section supplies ride along for solve metadata.
+#[derive(Debug, Clone)]
+pub struct OpfDataSolution {
+    /// Solved bus voltage magnitude, per unit, bus order.
+    pub bus_voltage_magnitude: Vec<f64>,
+    /// Solved bus voltage angle, degrees, bus order.
+    pub bus_voltage_angle: Vec<f64>,
+    /// Solved from-side active flow, MW, branch order.
+    pub branch_from_active_flow: Vec<f64>,
+    /// Solved from-side reactive flow, MVAr, branch order.
+    pub branch_from_reactive_flow: Vec<f64>,
+    /// Solved to-side active flow, MW, branch order.
+    pub branch_to_active_flow: Vec<f64>,
+    /// Solved to-side reactive flow, MVAr, branch order.
+    pub branch_to_reactive_flow: Vec<f64>,
+    /// Solved generator active dispatch, MW, generator order.
+    pub generator_active_power: Vec<f64>,
+    /// Solved generator reactive dispatch, MVAr, generator order.
+    pub generator_reactive_power: Vec<f64>,
+    /// Solver initial generator active power, MW, generator order.
+    pub initial_generator_active_power: Vec<f64>,
+    /// Solver initial generator reactive power, MVAr, generator order.
+    pub initial_generator_reactive_power: Vec<f64>,
+    /// Solver initial generator voltage setpoint, per unit, generator order.
+    pub initial_generator_voltage_setpoint: Vec<f64>,
+    /// The stated solved objective, from `metadata.objective`.
+    pub objective: f64,
+}
+
+/// Parse one OPFData document into the solved network snapshot plus the
+/// solved columns a typed solution assembly reads directly, without scraping
+/// them back off the network.
+///
+/// # Errors
+/// An invalid document: a schema mismatch, a bad base MVA, or inconsistent
+/// table links.
+pub fn parse_opfdata_json(
+    content: &str,
+) -> Result<(BalancedNetwork, OpfDataSolution, Vec<super::Diagnostic>)> {
+    let mut warnings = Diagnostics::new();
+    let (network, solution) = parse_opfdata_document(content, None, &mut warnings)?;
+    Ok((network, solution, warnings.into_records()))
+}
+
 pub(crate) fn parse_opfdata_source(
     source: &str,
     name_hint: Option<&str>,
     warnings: &mut Diagnostics,
 ) -> Result<BalancedNetwork> {
+    parse_opfdata_document(source, name_hint, warnings).map(|(network, _)| network)
+}
+
+#[allow(clippy::too_many_lines)]
+fn parse_opfdata_document(
+    source: &str,
+    name_hint: Option<&str>,
+    warnings: &mut Diagnostics,
+) -> Result<(BalancedNetwork, OpfDataSolution)> {
     let document: Document = serde_json::from_str(source)
         .map_err(|error| bad(format!("invalid OPFData schema: {error}")))?;
     let base = base_mva(&document.grid.context)?;
@@ -693,7 +761,7 @@ pub(crate) fn parse_opfdata_source(
         })
         .collect::<Result<Vec<_>>>()?;
 
-    let generators = document
+    let generators: Vec<Generator> = document
         .grid
         .nodes
         .generator
@@ -788,7 +856,7 @@ pub(crate) fn parse_opfdata_source(
 
     if !document.grid.nodes.generator.is_empty() {
         warnings.push(&codes::READ_OPFDATA_RETAINED_SOURCE_ONLY,
-            "OPFData generator pg/qg/vg grid features are solver initial values; the canonical snapshot uses solved pg/qg and terminal-bus voltage, so initial values remain only in the retained source"
+            "OPFData generator pg/qg/vg grid features are solver initial values; the canonical snapshot uses solved pg/qg and terminal-bus voltage, so the initial values are carried in the parsed solution's initial generator columns instead of the network snapshot"
                 ,
         );
     }
@@ -800,6 +868,39 @@ pub(crate) fn parse_opfdata_source(
         warnings.push(&codes::READ_OPFDATA_FIELD_DROPPED, warning);
     }
 
+    let solved = OpfDataSolution {
+        bus_voltage_magnitude: buses.iter().map(|bus| bus.vm).collect(),
+        bus_voltage_angle: buses.iter().map(|bus| bus.va).collect(),
+        branch_from_active_flow: branch_solution_column(&branches, |s| s.pf),
+        branch_from_reactive_flow: branch_solution_column(&branches, |s| s.qf),
+        branch_to_active_flow: branch_solution_column(&branches, |s| s.pt),
+        branch_to_reactive_flow: branch_solution_column(&branches, |s| s.qt),
+        generator_active_power: generators.iter().map(|g| g.pg).collect(),
+        generator_reactive_power: generators.iter().map(|g| g.qg).collect(),
+        initial_generator_active_power: document
+            .grid
+            .nodes
+            .generator
+            .iter()
+            .map(|row| row.initial_pg() * base)
+            .collect(),
+        initial_generator_reactive_power: document
+            .grid
+            .nodes
+            .generator
+            .iter()
+            .map(|row| row.initial_qg() * base)
+            .collect(),
+        initial_generator_voltage_setpoint: document
+            .grid
+            .nodes
+            .generator
+            .iter()
+            .map(GeneratorRow::initial_vg)
+            .collect(),
+        objective: document.metadata.objective,
+    };
+
     let mut network = BalancedNetwork::new(name_hint.unwrap_or("opfdata"), base);
     *network.buses_mut() = buses;
     *network.loads_mut() = loads;
@@ -807,5 +908,12 @@ pub(crate) fn parse_opfdata_source(
     *network.branches_mut() = branches;
     *network.generators_mut() = generators;
     *network.source_format_mut() = SourceFormat::DeepMindOpfDataJson;
-    Ok(network)
+    Ok((network, solved))
+}
+
+fn branch_solution_column(branches: &[Branch], pick: fn(&BranchSolution) -> f64) -> Vec<f64> {
+    branches
+        .iter()
+        .map(|branch| branch.solution.as_ref().map_or(f64::NAN, pick))
+        .collect()
 }

@@ -505,7 +505,11 @@ impl Reader<'_> {
                 // could synthesize a linecode name, `ibr` and
                 // `control_profile` ahead of `extras`, `name` with the rest of
                 // the document header.
-                "linecode" | "name" | "ibr" | "control_profile" => {}
+                // `transformer` is also read after the loop: the regulator
+                // subtypes recover their voltage base from buses and voltage
+                // sources, which a document can state after its transformer
+                // section.
+                "linecode" | "name" | "ibr" | "control_profile" | "transformer" => {}
                 "line" => self.lines(items),
                 "switch" => self.switches(items),
                 "load" => self.loads(items),
@@ -513,25 +517,6 @@ impl Reader<'_> {
                 "capacitor" => self.capacitors(items),
                 "shunt" => self.shunts(items),
                 "voltage_source" => self.sources(items),
-                "transformer" => {
-                    // The writer relocates schema-less transformer fields
-                    // (taps, neutral impedance, no load admittance) to
-                    // `extras.transformer.<subtype>.<name>`; fold them back
-                    // onto the raw objects before parsing.
-                    let overlay = doc
-                        .get("extras")
-                        .and_then(Value::as_object)
-                        .and_then(|e| e.get("transformer"))
-                        .and_then(Value::as_object)
-                        .filter(|o| !o.is_empty());
-                    match overlay {
-                        Some(overlay) => {
-                            let merged = merge_transformer_overlay(items, overlay);
-                            self.transformers(&merged);
-                        }
-                        None => self.transformers(items),
-                    }
-                }
                 "extras" => self.extras_block(items),
                 // The phase/neutral label conventions block: no typed slot,
                 // stashed whole so a round trip keeps it (the meta pattern).
@@ -566,6 +551,26 @@ impl Reader<'_> {
                 }
             }
         }
+        if let Some(Value::Object(items)) = doc.get("transformer") {
+            // The writer relocates schema-less transformer fields (taps,
+            // neutral impedance, no load admittance) to
+            // `extras.transformer.<subtype>.<name>`; fold them back onto the
+            // raw objects before parsing.
+            let overlay = doc
+                .get("extras")
+                .and_then(Value::as_object)
+                .and_then(|e| e.get("transformer"))
+                .and_then(Value::as_object)
+                .filter(|o| !o.is_empty());
+            match overlay {
+                Some(overlay) => {
+                    let merged = merge_transformer_overlay(items, overlay);
+                    self.transformers(&merged);
+                }
+                None => self.transformers(items),
+            }
+        }
+
         self.warn_orphan_transformer_overlay(doc);
         if !self.frequency_stated {
             crate::model::warn_defaulted_frequency(self.net, "frequency", &mut self.diagnostics);
@@ -666,13 +671,18 @@ impl Reader<'_> {
             "control_profile",
             "voltage_aggregation",
         ];
+        let mut taken: std::collections::BTreeSet<String> = self
+            .net
+            .ibrs()
+            .iter()
+            .map(|x| x.name.to_ascii_lowercase())
+            .collect();
         for (name, v) in items {
             let Value::Object(o) = v else { continue };
-            if self.reject_duplicate("ibr", name, |net| {
-                net.ibrs().iter().any(|x| x.name.eq_ignore_ascii_case(name))
-            }) {
+            if self.reject_duplicate("ibr", name, &taken) {
                 continue;
             }
+            taken.insert(name.to_ascii_lowercase());
             let topology = enum_field::<IbrTopology>(
                 o.get("topology"),
                 &format!("ibr {name} topology"),
@@ -718,7 +728,7 @@ impl Reader<'_> {
         }
     }
 
-    /// True when an element of this class and name is already read. Schema
+    /// True when `name` (case-insensitive) is already in `taken`. Schema
     /// 0.1.0 moved the IBR and control profile tables under `extras`, and the
     /// reader accepts both places, so a part-migrated document can declare
     /// the same name twice. Two elements of one name double every count and
@@ -728,9 +738,9 @@ impl Reader<'_> {
         &mut self,
         class: &str,
         name: &str,
-        seen: impl Fn(&MulticonductorNetwork) -> bool,
+        taken: &std::collections::BTreeSet<String>,
     ) -> bool {
-        if !seen(self.net) {
+        if !taken.contains(&name.to_ascii_lowercase()) {
             return false;
         }
         self.diagnostics.push(
@@ -744,15 +754,18 @@ impl Reader<'_> {
     }
 
     fn control_profiles(&mut self, items: &Map<String, Value>) {
+        let mut taken: std::collections::BTreeSet<String> = self
+            .net
+            .control_profiles()
+            .iter()
+            .map(|x| x.name.to_ascii_lowercase())
+            .collect();
         for (name, v) in items {
             let Value::Object(o) = v else { continue };
-            if self.reject_duplicate("control_profile", name, |net| {
-                net.control_profiles()
-                    .iter()
-                    .any(|x| x.name.eq_ignore_ascii_case(name))
-            }) {
+            if self.reject_duplicate("control_profile", name, &taken) {
                 continue;
             }
+            taken.insert(name.to_ascii_lowercase());
             let mut profile = DistControlProfile::new(name.clone());
             if let Some(Value::Object(pf)) = o.get("power_factor") {
                 profile.power_factor =
@@ -1240,26 +1253,12 @@ impl Reader<'_> {
                 (Some(a), Some(b)) if a == b => a.clone(),
                 _ => Vec::new(),
             };
-            // Cost is a per-phase array in the schema; powerio's model holds one
-            // value, so take the first entry (warning if the phases disagree). A
-            // bare scalar is still accepted for documents written before v0.0.1.
+            // Cost is a per-phase array in the schema, kept exactly as
+            // stated. A bare scalar is still accepted for documents written
+            // before v0.0.1 and reads as a one-entry statement.
             let cost = match o.get("cost") {
-                Some(Value::Array(a)) => {
-                    let vals: Vec<f64> = a.iter().map(f).collect();
-                    // Bit comparison: detect any per-phase difference exactly
-                    // (broadcast entries are bit-identical), without a float_cmp.
-                    if vals.windows(2).any(|w| w[0].to_bits() != w[1].to_bits()) {
-                        self.diagnostics.push(
-                            &C::READ_BMOPF_VALUE_COLLAPSED,
-                            format!(
-                                "generator {name}: per-phase cost is non-uniform; \
-                             collapsed to the first entry"
-                            ),
-                        );
-                    }
-                    vals.first().copied()
-                }
-                Some(v) => Some(f(v)),
+                Some(Value::Array(a)) => Some(a.iter().map(f).collect::<Vec<f64>>()),
+                Some(v) => Some(vec![f(v)]),
                 None => None,
             };
             self.net.generators_mut().push(DistGenerator {
@@ -1347,6 +1346,17 @@ impl Reader<'_> {
     }
 
     fn transformers(&mut self, subtypes: &Map<String, Value>) {
+        // Every regulator and center tap winding resolves its voltage base
+        // from a bus by id; buses are fully read before `transformers` runs
+        // (see `document`), so one index built here replaces a bus table
+        // scan per winding with a lookup.
+        let bus_index: std::collections::BTreeMap<String, usize> = self
+            .net
+            .buses()
+            .iter()
+            .enumerate()
+            .map(|(row, bus)| (bus.id.clone(), row))
+            .collect();
         for (subtype, group) in subtypes {
             let Value::Object(items) = group else {
                 continue;
@@ -1358,18 +1368,17 @@ impl Reader<'_> {
                         let t = self.n_winding_transformer(name, o);
                         self.net.transformers_mut().push(t);
                     }
-                    "single_phase_autotransformer" | "open_delta_regulator" => {
-                        self.diagnostics.push(&C::READ_BMOPF_RETAINED_SOURCE_ONLY, format!(
-                            "transformer {name}: subtype `{subtype}` is not typed yet; kept untyped"
-                        ));
-                        self.net.untyped_mut().push(UntypedObject {
-                            class: format!("transformer.{subtype}"),
-                            name: name.clone(),
-                            props: vec![(None, v.to_string())],
-                        });
+                    "single_phase_autotransformer" => {
+                        let t = self.autotransformer_regulator(name, o, &bus_index);
+                        self.net.transformers_mut().push(t);
+                    }
+                    "open_delta_regulator" => {
+                        for t in self.open_delta_regulator(name, o, &bus_index) {
+                            self.net.transformers_mut().push(t);
+                        }
                     }
                     _ => {
-                        let t = self.transformer(subtype, name, o);
+                        let t = self.transformer(subtype, name, o, &bus_index);
                         self.net.transformers_mut().push(t);
                     }
                 }
@@ -1383,6 +1392,7 @@ impl Reader<'_> {
         subtype: &str,
         name: &str,
         o: &Map<String, Value>,
+        bus_index: &std::collections::BTreeMap<String, usize>,
     ) -> DistTransformer {
         let known = [
             "bus_from",
@@ -1513,7 +1523,7 @@ impl Reader<'_> {
         expand_center_tap_windings(subtype, &mut windings, self.net.buses());
         if subtype == "center_tap"
             && let Some(w) = windings.get(1)
-            && let Some(band) = phase_to_neutral_midpoint(w, self.net.buses())
+            && let Some(band) = phase_to_neutral_midpoint(w, self.net.buses(), bus_index)
             && (w.v_ref - band).abs() > (w.v_ref / 2.0 - band).abs() * 4.0
         {
             self.diagnostics.push(
@@ -1572,6 +1582,248 @@ impl Reader<'_> {
             );
         }
         &items[..items.len().min(MAX_WINDINGS)]
+    }
+
+    /// The `single_phase_autotransformer` shape of the BMOPFTools schema
+    /// extension: a step voltage regulator as series plus common winding. The
+    /// object states no voltage base, so the connected buses' stated voltage
+    /// bands supply one; without a band the impedances read as zero, the
+    /// same rule as a missing `v_nom` on the general shapes.
+    fn autotransformer_regulator(
+        &mut self,
+        name: &str,
+        o: &Map<String, Value>,
+        bus_index: &std::collections::BTreeMap<String, usize>,
+    ) -> DistTransformer {
+        let tm_from = strings(o.get("terminal_map_from"));
+        let tm_to = strings(o.get("terminal_map_to"));
+        let ratio = first_float(o.get("tap_ratio")).unwrap_or(1.0);
+        self.regulator_rows(
+            name,
+            o,
+            "single_phase_autotransformer",
+            tm_from,
+            tm_to,
+            ratio,
+            bus_index,
+        )
+    }
+
+    /// The `open_delta_regulator` shape of the BMOPFTools schema extension:
+    /// two identical line to line regulating legs stated once, the phase
+    /// pairing carried by `connection` and per leg `tap_ratio` entries. The
+    /// object reads as its two legs; the second gets a synthesized name, so
+    /// writing back merges the pair into one object under the first name
+    /// again.
+    fn open_delta_regulator(
+        &mut self,
+        name: &str,
+        o: &Map<String, Value>,
+        bus_index: &std::collections::BTreeMap<String, usize>,
+    ) -> Vec<DistTransformer> {
+        let connection = o.get("connection").and_then(Value::as_str).unwrap_or("");
+        let Some((first_pair, second_pair)) = open_delta_pairs_of(connection) else {
+            self.diagnostics.push(
+                &C::READ_BMOPF_VALUE_UNSUPPORTED,
+                format!(
+                    "transformer {name}: open delta connection `{connection}` is outside the \
+                     schema; read as one leg on the stated terminals"
+                ),
+            );
+            let tm_from = strings(o.get("terminal_map_from"));
+            let tm_to = strings(o.get("terminal_map_to"));
+            let ratio = first_float(o.get("tap_ratio")).unwrap_or(1.0);
+            return vec![self.regulator_rows(
+                name,
+                o,
+                "open_delta_regulator",
+                tm_from,
+                tm_to,
+                ratio,
+                bus_index,
+            )];
+        };
+        let ratios = match o.get("tap_ratio") {
+            Some(Value::Array(a)) => {
+                let vals: Vec<f64> = a.iter().map(f).collect();
+                [
+                    vals.first().copied().unwrap_or(1.0),
+                    vals.get(1).copied().unwrap_or(1.0),
+                ]
+            }
+            Some(v) => [f(v); 2],
+            None => [1.0; 2],
+        };
+        let second_name = format!("{name}:leg2");
+        self.diagnostics.push(
+            &C::READ_BMOPF_TRANSFORMER_OPEN_DELTA_SPLIT,
+            format!(
+                "transformer {name}: open_delta_regulator (connection {connection}) reads as \
+                 legs `{name}` and `{second_name}`"
+            ),
+        );
+        let leg_terminals = |(lead, lag): (u8, u8)| vec![lead.to_string(), lag.to_string()];
+        vec![
+            self.regulator_rows(
+                name,
+                o,
+                "open_delta_regulator",
+                leg_terminals(first_pair),
+                leg_terminals(first_pair),
+                ratios[0],
+                bus_index,
+            ),
+            self.regulator_rows(
+                &second_name,
+                o,
+                "open_delta_regulator",
+                leg_terminals(second_pair),
+                leg_terminals(second_pair),
+                ratios[1],
+                bus_index,
+            ),
+        ]
+    }
+
+    /// The two windings both regulator subtypes share: buses and rating from
+    /// the object, series impedance in referred ohms converted on the bus
+    /// stated voltage band, regulation as the to side tap.
+    #[allow(clippy::too_many_lines)]
+    // The bus index rides beside seven established parameters; bundling
+    // them into a struct for one private helper buys nothing.
+    #[allow(clippy::too_many_arguments)]
+    fn regulator_rows(
+        &mut self,
+        name: &str,
+        o: &Map<String, Value>,
+        subtype: &str,
+        tm_from: Vec<String>,
+        tm_to: Vec<String>,
+        ratio: f64,
+        bus_index: &std::collections::BTreeMap<String, usize>,
+    ) -> DistTransformer {
+        let known = [
+            "bus_from",
+            "bus_to",
+            "terminal_map_from",
+            "terminal_map_to",
+            "s_rating",
+            "r_series_from",
+            "r_series_to",
+            "x_series_from",
+            "x_series_to",
+            "g_no_load",
+            "b_no_load",
+            "tap_ratio",
+            "tap_ratio_min",
+            "tap_ratio_max",
+            "regulator_type",
+            "i_max_from",
+            "i_max_to",
+            "connection",
+        ];
+        let bus_from = string(o.get("bus_from"));
+        let bus_to = string(o.get("bus_to"));
+        let s = o.get("s_rating").map_or(f64::NAN, f);
+        if !(s.is_finite() && s > 0.0) {
+            self.diagnostics.push(
+                &C::READ_BMOPF_VALUE_DEFAULTED,
+                format!(
+                    "transformer {name}: s_rating missing or nonpositive; impedances read as zero"
+                ),
+            );
+        }
+        // The regulator objects state no voltage base. Recover one per side
+        // from the bus's stated voltage band, then from a voltage source at
+        // the bus; a regulator connects same-voltage buses, so one resolved
+        // side covers the other. The base only refers the stated ohms into
+        // the winding percent and back, so any consistently reused positive
+        // value reproduces the document exactly; 1.0 is the last resort and
+        // is reported.
+        let v_from = regulator_voltage(self.net, &bus_from, &tm_from, bus_index);
+        let v_to = regulator_voltage(self.net, &bus_to, &tm_to, bus_index);
+        let (v_from, v_to) = match (v_from, v_to) {
+            (Some(a), Some(b)) => (a, b),
+            (Some(a), None) => (a, a),
+            (None, Some(b)) => (b, b),
+            (None, None) => {
+                self.diagnostics.push(
+                    &C::READ_BMOPF_VALUE_DEFAULTED,
+                    format!(
+                        "transformer {name}: neither bus states a voltage band or source; \
+                         winding voltage bases read as 1"
+                    ),
+                );
+                (1.0, 1.0)
+            }
+        };
+        let pct = |x_ohm: f64, v: f64| {
+            if s > 0.0 && v > 0.0 {
+                x_ohm / (v * v / s) * 100.0
+            } else {
+                0.0
+            }
+        };
+        let r_from_pct = pct(o.get("r_series_from").map_or(0.0, f), v_from);
+        let r_to_pct = pct(o.get("r_series_to").map_or(0.0, f), v_to);
+        let x_from = pct(o.get("x_series_from").map_or(0.0, f), v_from);
+        let x_to = pct(o.get("x_series_to").map_or(0.0, f), v_to);
+        let windings = vec![
+            DistWinding {
+                bus: bus_from,
+                terminal_map: tm_from,
+                conn: DistWindingConn::Wye,
+                v_ref: v_from,
+                s_rating: s,
+                r_pct: r_from_pct,
+                tap: 1.0,
+                r_neutral: None,
+                x_neutral: None,
+            },
+            DistWinding {
+                bus: bus_to,
+                terminal_map: tm_to,
+                conn: DistWindingConn::Wye,
+                v_ref: v_to,
+                s_rating: s,
+                r_pct: r_to_pct,
+                tap: ratio,
+                r_neutral: None,
+                x_neutral: None,
+            },
+        ];
+        let mut extras = take_extras(
+            o,
+            &known,
+            &format!("transformer {name}"),
+            &mut self.diagnostics,
+            &[],
+        );
+        for key in [
+            "g_no_load",
+            "b_no_load",
+            "tap_ratio_min",
+            "tap_ratio_max",
+            "regulator_type",
+            "i_max_from",
+            "i_max_to",
+            "r_series_from",
+            "r_series_to",
+            "x_series_from",
+            "x_series_to",
+        ] {
+            if let Some(v) = o.get(key) {
+                extras.insert(key.into(), v.clone());
+            }
+        }
+        extras.insert("bmopf_subtype".into(), subtype.into());
+        DistTransformer {
+            name: name.to_string(),
+            windings,
+            xsc_pct: vec![x_from + x_to],
+            phases: 1,
+            extras,
+        }
     }
 
     // One block per object field; splitting it would scatter a list that
@@ -1687,12 +1939,69 @@ impl Reader<'_> {
 /// one. A center tapped winding's `v_nom_to` is the per leg voltage, so the
 /// two agree; a source that states the full span across both legs lands at
 /// twice this.
-fn phase_to_neutral_midpoint(w: &DistWinding, buses: &[DistBus]) -> Option<f64> {
-    let bus = buses.iter().find(|b| b.id == w.bus)?;
+fn phase_to_neutral_midpoint(
+    w: &DistWinding,
+    buses: &[DistBus],
+    index: &std::collections::BTreeMap<String, usize>,
+) -> Option<f64> {
+    let bus = &buses[*index.get(&w.bus)?];
     let lo = bus.vpn_min.as_ref()?.first()?;
     let hi = bus.vpn_max.as_ref()?.first()?;
     let mid = (lo + hi) / 2.0;
     (mid.is_finite() && mid > 0.0 && w.v_ref.is_finite()).then_some(mid)
+}
+
+/// The voltage base a regulator winding reads from its bus: the middle of
+/// the phase to phase band when the terminal map names two distinct phase
+/// conductors, else the phase to neutral band; a voltage source magnitude at
+/// the bus (times sqrt(3) for a line to line pair, assuming a balanced
+/// source) when the bus states no band.
+fn regulator_voltage(
+    net: &crate::model::MulticonductorNetwork,
+    bus: &str,
+    terminal_map: &[String],
+    index: &std::collections::BTreeMap<String, usize>,
+) -> Option<f64> {
+    let record = &net.buses()[*index.get(bus)?];
+    let phase = |term: &String| term.parse::<u8>().ok().filter(|n| (1..=3).contains(n));
+    let line_to_line = matches!(
+        terminal_map,
+        [a, b] if phase(a).is_some() && phase(b).is_some() && a != b
+    );
+    let band = |lo: Option<&Vec<f64>>, hi: Option<&Vec<f64>>| {
+        let mid = (lo?.first()? + hi?.first()?) / 2.0;
+        (mid.is_finite() && mid > 0.0).then_some(mid)
+    };
+    let from_band = if line_to_line {
+        band(record.vpp_min.as_ref(), record.vpp_max.as_ref())
+    } else {
+        band(record.vpn_min.as_ref(), record.vpn_max.as_ref())
+    };
+    if from_band.is_some() {
+        return from_band;
+    }
+    let magnitude = net
+        .sources()
+        .iter()
+        .filter(|source| source.bus == bus)
+        .flat_map(|source| source.v_magnitude.iter().copied())
+        .find(|v| v.is_finite() && *v > 0.0)?;
+    Some(if line_to_line {
+        magnitude * 3.0_f64.sqrt()
+    } else {
+        magnitude
+    })
+}
+
+/// The two ordered line to line phase pairs an open delta connection names,
+/// the inverse of [`crate::model::open_delta_connection`]'s unswapped rows.
+fn open_delta_pairs_of(connection: &str) -> Option<((u8, u8), (u8, u8))> {
+    match connection {
+        "ABBC" => Some(((1, 2), (2, 3))),
+        "BCAC" => Some(((2, 3), (1, 3))),
+        "CABA" => Some(((3, 1), (2, 1))),
+        _ => None,
+    }
 }
 
 fn expand_center_tap_windings(subtype: &str, windings: &mut Vec<DistWinding>, buses: &[DistBus]) {

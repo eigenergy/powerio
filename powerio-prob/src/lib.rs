@@ -6,6 +6,7 @@
 //! operators and the DC OPF bundle writer derived from these instances live
 //! in `powerio-matrix`, which depends on this crate.
 
+pub mod formats;
 pub mod instance;
 mod reference;
 pub mod scopf;
@@ -17,6 +18,7 @@ pub use powerio_tx::DcConvention;
 pub mod diagnostics;
 pub mod error;
 pub use error::{Error, Result};
+pub use formats::{parse_bmopf_instance, parse_goc3_instance, parse_opfdata_solution};
 pub use instance::{
     AcBusSpecification, AcOpfInstance, AcPfInstance, AcScucInstance, ActiveConstraints,
     ActiveControlMode, ConstraintSelection, DcBusSpecification, DcOpfInstance, DcPfInstance,

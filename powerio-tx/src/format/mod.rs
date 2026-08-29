@@ -59,6 +59,7 @@ mod surge;
 pub use egret::write_egret_json;
 pub use goc3::parse_goc3_json;
 pub use matpower::write_matpower;
+pub use opfdata::{OpfDataSolution, parse_opfdata_json};
 pub use pandapower::write_pandapower_json;
 pub use powermodels::write_powermodels_json;
 pub use powerworld::{PwdDisplay, PwdSubstation, write_powerworld};

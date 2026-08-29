@@ -21,6 +21,7 @@ const BUS_ACTIVE_INJECTION: &str = "bus_active_injection";
 const BUS_REACTIVE_INJECTION: &str = "bus_reactive_injection";
 const GENERATOR_ACTIVE_POWER: &str = "generator_active_power";
 const GENERATOR_REACTIVE_POWER: &str = "generator_reactive_power";
+const GENERATOR_VOLTAGE_SETPOINT: &str = "generator_voltage_setpoint";
 const GENERATOR_IN_SERVICE: &str = "generator_in_service";
 const LOAD_ACTIVE_POWER: &str = "load_active_power";
 const LOAD_REACTIVE_POWER: &str = "load_reactive_power";
@@ -65,6 +66,12 @@ impl OperatingPoint<BalancedNetwork> {
     #[must_use]
     pub fn generator_reactive_power(&self, identity: &str) -> Option<f64> {
         self.value(GENERATOR_REACTIVE_POWER, identity)
+    }
+
+    /// Generator voltage setpoint in per unit, by payload identity.
+    #[must_use]
+    pub fn generator_voltage_setpoint(&self, identity: &str) -> Option<f64> {
+        self.value(GENERATOR_VOLTAGE_SETPOINT, identity)
     }
 
     /// Whether the generator is in service at this point (a stated 0 is out,
@@ -124,6 +131,7 @@ impl OperatingPoint<BalancedNetwork> {
             BUS_REACTIVE_INJECTION => self.stated(BUS_REACTIVE_INJECTION),
             GENERATOR_ACTIVE_POWER => self.stated(GENERATOR_ACTIVE_POWER),
             GENERATOR_REACTIVE_POWER => self.stated(GENERATOR_REACTIVE_POWER),
+            GENERATOR_VOLTAGE_SETPOINT => self.stated(GENERATOR_VOLTAGE_SETPOINT),
             GENERATOR_IN_SERVICE => self.stated(GENERATOR_IN_SERVICE),
             LOAD_ACTIVE_POWER => self.stated(LOAD_ACTIVE_POWER),
             LOAD_REACTIVE_POWER => self.stated(LOAD_REACTIVE_POWER),
@@ -175,9 +183,10 @@ fn family_of(quantity: &'static str) -> KeyFamily {
         | BUS_VOLTAGE_ANGLE
         | BUS_ACTIVE_INJECTION
         | BUS_REACTIVE_INJECTION => KeyFamily::Bus,
-        GENERATOR_ACTIVE_POWER | GENERATOR_REACTIVE_POWER | GENERATOR_IN_SERVICE => {
-            KeyFamily::Generator
-        }
+        GENERATOR_ACTIVE_POWER
+        | GENERATOR_REACTIVE_POWER
+        | GENERATOR_VOLTAGE_SETPOINT
+        | GENERATOR_IN_SERVICE => KeyFamily::Generator,
         LOAD_ACTIVE_POWER | LOAD_REACTIVE_POWER => KeyFamily::Load,
         BRANCH_IN_SERVICE | BRANCH_TAP_RATIO | BRANCH_PHASE_SHIFT => KeyFamily::Branch,
         SWITCH_CLOSED => KeyFamily::Switch,
@@ -242,6 +251,11 @@ impl BalancedStateBuilder {
     #[must_use]
     pub fn generator_reactive_powers(self, values: Vec<f64>) -> Self {
         self.dense(GENERATOR_REACTIVE_POWER, values)
+    }
+
+    #[must_use]
+    pub fn generator_voltage_setpoints(self, values: Vec<f64>) -> Self {
+        self.dense(GENERATOR_VOLTAGE_SETPOINT, values)
     }
 
     #[must_use]

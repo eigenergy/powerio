@@ -283,6 +283,57 @@ fn bmopf_dangling_bus_reference_warns() {
     );
 }
 
+/// An ibr or control profile declared twice under one class, differing only
+/// by case, is the schema 0.1.0 top level plus `extras` migration overlap:
+/// the second copy drops with a warning rather than doubling the count.
+#[test]
+fn an_ibr_declared_twice_differing_only_by_case_drops_the_second() {
+    let net = parse_bmopf_str(
+        r#"{
+        "bus": {"a": {"terminal_names": ["p1", "n"]}},
+        "ibr": {
+            "Gen1": {"bus": "a", "terminal_map": ["p1", "n"]},
+            "gen1": {"bus": "a", "terminal_map": ["p1", "n"]}
+        }
+    }"#,
+    )
+    .unwrap();
+    assert_eq!(net.ibrs().len(), 1, "{:?}", net.ibrs());
+    assert!(
+        net.warnings
+            .iter()
+            .any(|w| w.contains("ibr gen1") && w.contains("second copy is dropped")),
+        "{:?}",
+        net.warnings
+    );
+}
+
+#[test]
+fn a_control_profile_declared_twice_differing_only_by_case_drops_the_second() {
+    let net = parse_bmopf_str(
+        r#"{
+        "control_profile": {
+            "Cp1": {"power_factor": {"pf": 0.95}},
+            "cp1": {"power_factor": {"pf": 0.9}}
+        }
+    }"#,
+    )
+    .unwrap();
+    assert_eq!(
+        net.control_profiles().len(),
+        1,
+        "{:?}",
+        net.control_profiles()
+    );
+    assert!(
+        net.warnings
+            .iter()
+            .any(|w| w.contains("control_profile cp1") && w.contains("second copy is dropped")),
+        "{:?}",
+        net.warnings
+    );
+}
+
 /// PMD spells an unbounded phase as JSON null, which restores as Inf.
 /// BMOPF has no unbounded spelling: the rating field drops with a warning
 /// instead of the zero fallback turning "no limit" into a zero limit, and
@@ -2879,8 +2930,8 @@ fn a_from_rating_that_is_not_positive_drops_the_reactance_instead_of_zeroing_it(
 /// The re-vendored example networks carry no generator `cost` and no bus
 /// `vpn_min`, so the assertions that used to cover both read paths went with
 /// the old fixtures. A synthetic document keeps the coverage: the per-phase
-/// cost array collapses to one value with a warning, and the phase to
-/// neutral bound arrays survive read and write.
+/// cost array is kept exactly as stated, and the phase to neutral bound
+/// arrays survive read and write.
 #[test]
 fn generator_cost_and_phase_neutral_bounds_survive_a_round_trip() {
     let text = r#"{
@@ -2903,17 +2954,17 @@ fn generator_cost_and_phase_neutral_bounds_survive_a_round_trip() {
         Some([260.0, 260.0, 260.0].as_slice())
     );
     let generator = &net.generators()[0];
-    assert_eq!(generator.cost.map(f64::to_bits), Some(0.12f64.to_bits()));
+    assert_eq!(
+        generator.cost.as_deref(),
+        Some([0.12, 0.12, 0.12].as_slice())
+    );
 
     // Both survive the write and read back.
     let out = write_bmopf_json(&net);
     assert_eq!(errors(&schema_validator(), &out.text), Vec::<String>::new());
     let again = parse_bmopf_str(&out.text).unwrap();
     assert_eq!(again.bus("a").unwrap().vpn_min, bus.vpn_min);
-    assert_eq!(
-        again.generators()[0].cost.map(f64::to_bits),
-        generator.cost.map(f64::to_bits)
-    );
+    assert_eq!(again.generators()[0].cost, generator.cost);
 }
 
 /// Schema 0.1.0 defines generator `s_max`/`i_max`, linecode `source`, and the
@@ -3505,16 +3556,28 @@ fn bmopf_regulator_subtypes_round_trip_verbatim() {
         }
     }"#;
     let net = parse_bmopf_str(text).unwrap();
-    assert!(
-        net.untyped()
+    // Typed reads: the autotransformer is one row, the open delta bank its
+    // two legs, none of them untyped.
+    assert!(net.untyped().is_empty());
+    let by_name = |name: &str| {
+        net.transformers()
             .iter()
-            .any(|u| u.class == "transformer.single_phase_autotransformer" && u.name == "svr")
+            .find(|t| t.name == name)
+            .unwrap_or_else(|| panic!("{name} missing"))
+    };
+    assert_eq!(net.transformers().len(), 3);
+    let svr = by_name("svr");
+    assert_eq!(
+        svr.extras.get("bmopf_subtype").and_then(|v| v.as_str()),
+        Some("single_phase_autotransformer")
     );
-    assert!(
-        net.untyped()
-            .iter()
-            .any(|u| u.class == "transformer.open_delta_regulator" && u.name == "odr")
-    );
+    // tap_ratio regulates the to side: to tap over from tap.
+    assert!((svr.windings[1].tap / svr.windings[0].tap - 1.05).abs() < 1e-12);
+    // The BCAC connection names legs on phases (2,3) and (1,3).
+    let odr = by_name("odr");
+    assert_eq!(odr.windings[0].terminal_map, ["2", "3"]);
+    assert_eq!(by_name("odr:leg2").windings[0].terminal_map, ["1", "3"]);
+    assert!((odr.windings[1].tap / odr.windings[0].tap - 1.03).abs() < 1e-12);
 
     let out = write_bmopf_json(&net);
     assert_eq!(errors(&v, &out.text), Vec::<String>::new());

@@ -65,17 +65,23 @@ mod value;
 pub use value::{FromPioValue, PioValue, PioValueKind, ValueKindMismatch, try_into_typed};
 
 /// Parse one source into a compiled module of whichever built in family
-/// claims it: balanced network formats produce
-/// [`PioValue::BalancedNetwork`], and distribution formats (OpenDSS `.dss`,
-/// PMD ENGINEERING JSON, BMOPF JSON) produce
-/// [`PioValue::MulticonductorNetwork`]. The reader's findings are the
-/// module's diagnostics and the source is retained for the byte exact echo
-/// tier of the family's `write_as`.
+/// claims it. Balanced network formats produce
+/// [`PioValue::BalancedNetwork`]; network only distribution formats (OpenDSS
+/// `.dss`, PMD ENGINEERING JSON) produce
+/// [`PioValue::MulticonductorNetwork`]. A source that defines a particular
+/// calculation produces that calculation's value: DOE GO Challenge 3 JSON
+/// produces [`PioValue::AcScucInstance`], BMOPF JSON produces
+/// [`PioValue::McAcOpfInstance`], and DeepMind OPFData JSON, which explicitly
+/// represents a solved AC OPF, produces [`PioValue::AcOpfSolution`]. The
+/// reader's findings are the module's diagnostics and the source is retained
+/// for the byte exact echo tier of the family's `write_as`.
 ///
 /// The family comes from the source's declared format when one was selected,
 /// and otherwise from the name and content: a `.dss` extension routes to the
 /// distribution reader, a `.json` document routes by its top level markers
-/// ([`format::routing::classify_json_text`]), and every other name routes to
+/// ([`format::routing::classify_json_text`]), a name with no recognized
+/// extension whose content opens a JSON document (an in-memory source has no
+/// extension to state) routes the same way, and every other name routes to
 /// the balanced network hub, whose own detection and refusals apply.
 ///
 /// Bare model JSON, the network serialization, decodes to
@@ -88,26 +94,43 @@ pub use value::{FromPioValue, PioValue, PioValueKind, ValueKindMismatch, try_int
 pub fn parse(
     source: powerio_core::Source,
 ) -> std::result::Result<powerio_core::PioModule<PioValue>, powerio_core::Error> {
-    if family_is_distribution(&source)? {
-        return powerio_dist::parse(source).map(|module| module.map_value(PioValue::from));
+    match routed_family(&source)? {
+        RoutedFamily::Goc3 => {
+            powerio_prob::parse_goc3_instance(source).map(|module| module.map_value(PioValue::from))
+        }
+        RoutedFamily::Bmopf => powerio_prob::parse_bmopf_instance(source)
+            .map(|module| module.map_value(PioValue::from)),
+        RoutedFamily::OpfData => powerio_prob::parse_opfdata_solution(source)
+            .map(|module| module.map_value(PioValue::from)),
+        RoutedFamily::Distribution => {
+            powerio_dist::parse(source).map(|module| module.map_value(PioValue::from))
+        }
+        RoutedFamily::Balanced => {
+            format::parse(source).map(|module| module.map_value(PioValue::from))
+        }
     }
-    format::parse(source).map(|module| module.map_value(PioValue::from))
 }
 
-/// Whether the source routes to the distribution family. The balanced hub is
-/// the default: it owns the guidance for unknown names and refused shapes.
-fn family_is_distribution(
-    source: &powerio_core::Source,
-) -> std::result::Result<bool, powerio_core::Error> {
-    use format::routing::{Detection, Domain, JsonClass};
+/// The family a source routes to. The balanced hub is the default: it owns
+/// the guidance for unknown names and refused shapes.
+enum RoutedFamily {
+    Balanced,
+    Distribution,
+    Goc3,
+    Bmopf,
+    OpfData,
+}
 
+fn routed_family(
+    source: &powerio_core::Source,
+) -> std::result::Result<RoutedFamily, powerio_core::Error> {
     if let Some(declared) = source.format() {
-        return Ok(powerio_dist::dist_target_from_name(declared.as_str()).is_some());
+        return Ok(family_of_token(declared.as_str()));
     }
     if source.is_directory() {
         // The only directory case format is a PyPSA CSV folder; the balanced
         // hub owns that dispatch and the refusal for anything else.
-        return Ok(false);
+        return Ok(RoutedFamily::Balanced);
     }
     let extension = std::path::Path::new(source.name())
         .extension()
@@ -115,27 +138,83 @@ fn family_is_distribution(
         .unwrap_or_default()
         .to_ascii_lowercase();
     match extension.as_str() {
-        "dss" => Ok(true),
-        "json" => {
-            let buffer = source.primary_buffer()?;
-            // Family routing needs decoded text; a non-UTF-8 `.json` fails in
-            // the balanced hub with its own wording.
-            let Ok(text) = std::str::from_utf8(buffer.content_bytes()) else {
-                return Ok(false);
-            };
-            match format::routing::classify_json_text(text) {
-                JsonClass::Case(Detection::Known(json_format)) => {
-                    Ok(json_format.domain() == Domain::Distribution)
-                }
-                // The balanced hub's own JSON detection carries the refusal
-                // wording for stored modules, model JSON, and unrecognized or
-                // ambiguous documents.
-                JsonClass::Module
-                | JsonClass::ModelJson
-                | JsonClass::Case(Detection::Ambiguous | Detection::Unknown) => Ok(false),
+        "dss" => Ok(RoutedFamily::Distribution),
+        "json" => json_family(source),
+        // Extensions with dedicated non-JSON readers keep them; anything
+        // else (a nameless in-memory source above all) can still carry a
+        // JSON document, so content that opens one routes by classification,
+        // mirroring the balanced hub's own sniff.
+        "m" | "raw" | "aux" | "epc" | "pwb" | "pwd" => Ok(RoutedFamily::Balanced),
+        _ => {
+            let jsonish = source.primary_buffer().is_ok_and(|buffer| {
+                std::str::from_utf8(buffer.content_bytes()).is_ok_and(|text| {
+                    // Strip a UTF-8 BOM the way the JSON classifier does, so
+                    // a BOM-prefixed nameless document routes the same as
+                    // the identical content saved with a .json name.
+                    text.trim_start_matches('\u{feff}')
+                        .trim_start()
+                        .starts_with(['{', '['])
+                })
+            });
+            if jsonish {
+                json_family(source)
+            } else {
+                Ok(RoutedFamily::Balanced)
             }
         }
-        _ => Ok(false),
+    }
+}
+
+/// The family a JSON document's content markers select.
+fn json_family(
+    source: &powerio_core::Source,
+) -> std::result::Result<RoutedFamily, powerio_core::Error> {
+    use format::routing::{Detection, JsonClass, SourceFormat, TransmissionFormat};
+
+    let buffer = source.primary_buffer()?;
+    // Family routing needs decoded text; a non-UTF-8 `.json` fails in
+    // the balanced hub with its own wording.
+    let Ok(text) = std::str::from_utf8(buffer.content_bytes()) else {
+        return Ok(RoutedFamily::Balanced);
+    };
+    match format::routing::classify_json_text(text) {
+        JsonClass::Case(Detection::Known(SourceFormat::Transmission(
+            TransmissionFormat::Goc3Json,
+        ))) => Ok(RoutedFamily::Goc3),
+        JsonClass::Case(Detection::Known(SourceFormat::Transmission(
+            TransmissionFormat::DeepMindOpfDataJson,
+        ))) => Ok(RoutedFamily::OpfData),
+        JsonClass::Case(Detection::Known(SourceFormat::Distribution(dist_format))) => {
+            Ok(match dist_format {
+                format::routing::DistributionFormat::BmopfJson => RoutedFamily::Bmopf,
+                _ => RoutedFamily::Distribution,
+            })
+        }
+        // The balanced hub's own JSON detection carries the refusal
+        // wording for packages and unrecognized or ambiguous
+        // documents, and decodes bare model JSON itself.
+        JsonClass::Case(Detection::Known(_) | Detection::Ambiguous | Detection::Unknown)
+        | JsonClass::Module
+        | JsonClass::ModelJson => Ok(RoutedFamily::Balanced),
+    }
+}
+
+/// The family a declared format token selects. Unknown tokens fall to the
+/// balanced hub, which owns the refusal wording and the accepted name list.
+fn family_of_token(token: &str) -> RoutedFamily {
+    use format::TargetFormat;
+    use powerio_dist::DistTargetFormat;
+
+    if let Some(dist_format) = powerio_dist::dist_target_from_name(token) {
+        return match dist_format {
+            DistTargetFormat::BmopfJson => RoutedFamily::Bmopf,
+            _ => RoutedFamily::Distribution,
+        };
+    }
+    match format::target_format_from_name(token) {
+        Some(TargetFormat::Goc3Json) => RoutedFamily::Goc3,
+        Some(TargetFormat::DeepMindOpfDataJson) => RoutedFamily::OpfData,
+        _ => RoutedFamily::Balanced,
     }
 }
 
@@ -213,6 +292,92 @@ mod tests {
     #[test]
     fn the_error_path_retains_the_source() {
         let error = parse(memory("case.m", "not matpower at all")).expect_err("malformed");
+        assert!(error.retained_source().is_some());
+    }
+
+    fn fixture(path: &str) -> String {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        std::fs::read_to_string(root.join(path)).unwrap()
+    }
+
+    #[test]
+    fn goc3_parses_to_the_scuc_instance_kind() {
+        // A calculation defining source produces its calculation's value,
+        // never the bare network its data could also build.
+        let text = fixture("../powerio-prob/tests/data/goc3_small.json");
+        let module = parse(memory("goc3_small.json", &text)).expect("goc3 parses");
+        assert_eq!(module.value().kind(), PioValueKind::AcScucInstance);
+        assert!(module.source().is_some());
+        let typed: powerio_core::PioModule<powerio_prob::AcScucInstance> =
+            try_into_typed(module).expect("narrows to the parsed kind");
+        assert_eq!(typed.value().network().buses().len(), 2);
+    }
+
+    #[test]
+    fn opfdata_parses_to_the_solved_ac_opf_kind() {
+        let text = fixture("../tests/data/opfdataset/example_0.json");
+        let module = parse(memory("example_0.json", &text)).expect("opfdata parses");
+        assert_eq!(module.value().kind(), PioValueKind::AcOpfSolution);
+        let typed: powerio_core::PioModule<powerio_prob::AcOpfSolution> =
+            try_into_typed(module).expect("narrows to the parsed kind");
+        assert_eq!(typed.value().instance().network().buses().len(), 14);
+    }
+
+    const BMOPF_TINY: &str = r#"{
+      "bus": {"a": {"terminal_names": ["1", "2", "3", "n"],
+        "perfectly_grounded_terminals": ["n"]}},
+      "voltage_source": {"s": {"bus": "a", "terminal_map": ["1", "2", "3"],
+        "v_magnitude": [240.0, 240.0, 240.0], "v_angle": [0.0, -2.0944, 2.0944]}}
+    }"#;
+
+    #[test]
+    fn bmopf_parses_to_the_multiconductor_opf_instance_kind() {
+        // BMOPF defines an optimization calculation, so it routes to the
+        // instance rather than to the bare multiconductor network, both
+        // sniffed and declared.
+        let module = parse(memory("feeder.json", BMOPF_TINY)).expect("sniffed bmopf parses");
+        assert_eq!(module.value().kind(), PioValueKind::McAcOpfInstance);
+
+        let module = parse(
+            memory("<memory>", BMOPF_TINY)
+                .with_format(powerio_core::FormatId::new("bmopf-json").unwrap()),
+        )
+        .expect("declared bmopf parses");
+        assert_eq!(module.value().kind(), PioValueKind::McAcOpfInstance);
+    }
+
+    #[test]
+    fn nameless_json_text_routes_by_content() {
+        use powerio_tx::{Bus, BusId, BusType};
+        // An in-memory source has no extension to state, so the family comes
+        // from the document's own markers: a calculation defining format, a
+        // distribution format, and bare model JSON all dispatch the same way
+        // they would from a `.json` file.
+        let goc3 = fixture("../powerio-prob/tests/data/goc3_small.json");
+        let module = parse(memory("<memory>", &goc3)).expect("nameless goc3 parses");
+        assert_eq!(module.value().kind(), PioValueKind::AcScucInstance);
+
+        let module = parse(memory("<memory>", BMOPF_TINY)).expect("nameless bmopf parses");
+        assert_eq!(module.value().kind(), PioValueKind::McAcOpfInstance);
+
+        let network = powerio_tx::BalancedNetwork::in_memory(
+            "transport",
+            100.0,
+            vec![Bus::new(BusId(1), BusType::Ref, 230.0)],
+            vec![],
+        );
+        let json = network.to_json().expect("network serializes");
+        let module = parse(memory("<memory>", &json)).expect("nameless model json parses");
+        assert_eq!(module.value().kind(), PioValueKind::BalancedNetwork);
+    }
+
+    #[test]
+    fn a_declared_problem_format_that_fails_retains_the_source() {
+        let error = parse(
+            memory("broken.json", "{\"network\": {}}")
+                .with_format(powerio_core::FormatId::new("goc3-json").unwrap()),
+        )
+        .expect_err("malformed goc3");
         assert!(error.retained_source().is_some());
     }
 }

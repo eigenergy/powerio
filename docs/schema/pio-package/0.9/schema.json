@@ -1556,24 +1556,27 @@
           "$ref": "#/$defs/Configuration"
         },
         "cost": {
-          "anyOf": [
-            {
-              "format": "double",
-              "type": [
-                "number",
-                "null"
-              ]
-            },
-            {
-              "enum": [
-                "Infinity",
-                "-Infinity",
-                "NaN"
-              ],
-              "type": "string"
-            }
-          ],
-          "description": "$/kWh; no OpenDSS equivalent, so it is None until a format supplies it."
+          "description": "Generation cost, $/kWh per phase conductor, exactly as the source\nstates it: one entry per phase, or a single entry for a scalar\nstatement. No OpenDSS equivalent, so it is None until a format\nsupplies it.",
+          "items": {
+            "anyOf": [
+              {
+                "format": "double",
+                "type": "number"
+              },
+              {
+                "enum": [
+                  "Infinity",
+                  "-Infinity",
+                  "NaN"
+                ],
+                "type": "string"
+              }
+            ]
+          },
+          "type": [
+            "array",
+            "null"
+          ]
         },
         "extras": {
           "additionalProperties": true,

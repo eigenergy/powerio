@@ -307,6 +307,59 @@ impl<T> PioModule<T> {
         }
     }
 
+    /// Move the value through a fallible conversion, keeping every module
+    /// record on success. On failure the conversion's error is returned and
+    /// the records are dropped with the consumed value; a caller that must
+    /// keep the source or findings on the failure route takes them off the
+    /// module first ([`PioModule::take_source`], [`PioModule::diagnostics`]).
+    pub fn try_map_value<U, E>(
+        self,
+        convert: impl FnOnce(T) -> Result<U, E>,
+    ) -> Result<PioModule<U>, E> {
+        let Self { value, records } = self;
+        Ok(PioModule {
+            value: convert(value)?,
+            records,
+        })
+    }
+
+    /// Take the retained source owner off the module, leaving descriptors,
+    /// diagnostics, and history in place. The module then reads as
+    /// constructed in memory until a source is reattached.
+    pub fn take_source(&mut self) -> Option<Source> {
+        self.records.retained_source.take()
+    }
+
+    /// Assemble the module a parser returns: the typed value, one descriptor
+    /// per acquired buffer of the retained source, and the reader's findings.
+    ///
+    /// # Errors
+    /// A duplicate acquired buffer identity, an invalid buffer name, or a
+    /// finding that fails the record checks of [`PioModule::add_diagnostic`].
+    pub fn parsed(value: T, source: Source, diagnostics: Vec<Diagnostic>) -> Result<Self, Error> {
+        let mut module = Self::new(value);
+        for buffer in source.acquired_buffers() {
+            // The stored descriptor names the file, never the local path,
+            // and carries the resolved format so a same format write can
+            // default to it.
+            let name = std::path::Path::new(buffer.name())
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or_else(|| buffer.name());
+            let mut descriptor =
+                SourceDescriptor::new(buffer.id().clone(), name, buffer.bytes().len() as u64)?;
+            if let Some(format) = source.format() {
+                descriptor = descriptor.with_format(format.clone());
+            }
+            module.add_source_descriptor(descriptor)?;
+        }
+        let mut module = module.with_source(source);
+        for record in diagnostics {
+            module.add_diagnostic(record)?;
+        }
+        Ok(module)
+    }
+
     /// Internal cross-crate support for recoverable consuming narrowing.
     #[doc(hidden)]
     // Boxing the failure would allocate and violate the recoverable no-copy
