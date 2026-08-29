@@ -386,11 +386,18 @@ impl<T> PioModule<T> {
     pub fn parsed(value: T, source: Source, diagnostics: Vec<Diagnostic>) -> Result<Self, Error> {
         let mut module = Self::new(value);
         for buffer in source.acquired_buffers() {
-            let descriptor = SourceDescriptor::new(
-                buffer.id().clone(),
-                buffer.name(),
-                buffer.bytes().len() as u64,
-            )?;
+            // The stored descriptor names the file, never the local path,
+            // and carries the resolved format so a same format write can
+            // default to it.
+            let name = std::path::Path::new(buffer.name())
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or_else(|| buffer.name());
+            let mut descriptor =
+                SourceDescriptor::new(buffer.id().clone(), name, buffer.bytes().len() as u64)?;
+            if let Some(format) = source.format() {
+                descriptor = descriptor.with_format(format.clone());
+            }
             module.add_source_descriptor(descriptor)?;
         }
         let mut module = module.with_source(source);
