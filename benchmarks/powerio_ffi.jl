@@ -14,23 +14,35 @@ const PIO_ARROW_TABLE_YBUS = Int32(15)
 
 isfile(LIBPOWERIO) || error("libpowerio_capi not found at $LIBPOWERIO — run `cargo build --release -p powerio-capi --features arrow,matrix`")
 
-# Parse `path` (format inferred from the extension); returns an opaque handle.
-# Free it with pio_free. Errors with the C message on failure.
+# One structured error read: code and message off the PioError handle, then
+# release it.
+function _take_error(err::Ptr{Cvoid})
+    code = unsafe_string(ccall((:pio_error_code, LIBPOWERIO), Cstring, (Ptr{Cvoid},), err))
+    message = unsafe_string(ccall((:pio_error_message, LIBPOWERIO), Cstring, (Ptr{Cvoid},), err))
+    ccall((:pio_error_release, LIBPOWERIO), Cvoid, (Ptr{Cvoid},), err)
+    return "$code: $message"
+end
+
+# Parse `path` into a balanced network handle through the module surface:
+# parse to the module, take the balanced network out, release the module.
 function pio_parse_file(path::AbstractString)
-    errbuf = Vector{UInt8}(undef, 256)
-    h = ccall((:pio_parse_file, LIBPOWERIO), Ptr{Cvoid},
-              (Cstring, Ptr{Cvoid}, Ptr{UInt8}, Csize_t),
-              path, C_NULL, errbuf, length(errbuf))
-    h == C_NULL && error("powerio parse failed for $path: " * unsafe_string(pointer(errbuf)))
+    err = Ref{Ptr{Cvoid}}(C_NULL)
+    m = ccall((:pio_parse_file, LIBPOWERIO), Ptr{Cvoid},
+              (Cstring, Cstring, Ref{Ptr{Cvoid}}), path, C_NULL, err)
+    m == C_NULL && error("powerio parse failed for $path: " * _take_error(err[]))
+    h = ccall((:pio_module_balanced_network, LIBPOWERIO), Ptr{Cvoid},
+              (Ptr{Cvoid}, Ref{Ptr{Cvoid}}), m, err)
+    ccall((:pio_module_release, LIBPOWERIO), Cvoid, (Ptr{Cvoid},), m)
+    h == C_NULL && error("powerio parse of $path holds no balanced network: " * _take_error(err[]))
     return h
 end
 
-pio_free(h::Ptr{Cvoid}) = ccall((:pio_network_free, LIBPOWERIO), Cvoid, (Ptr{Cvoid},), h)
+pio_free(h::Ptr{Cvoid}) = ccall((:pio_balanced_network_release, LIBPOWERIO), Cvoid, (Ptr{Cvoid},), h)
 
-pio_n_buses(h)    = Int(ccall((:pio_n_buses, LIBPOWERIO),    Csize_t, (Ptr{Cvoid},), h))
-pio_n_branches(h) = Int(ccall((:pio_n_branches, LIBPOWERIO), Csize_t, (Ptr{Cvoid},), h))
-pio_n_gens(h)     = Int(ccall((:pio_n_gens, LIBPOWERIO),     Csize_t, (Ptr{Cvoid},), h))
-pio_base_mva(h)   = ccall((:pio_base_mva, LIBPOWERIO),       Cdouble, (Ptr{Cvoid},), h)
+pio_n_buses(h)    = Int(ccall((:pio_balanced_network_n_buses, LIBPOWERIO),    Csize_t, (Ptr{Cvoid},), h))
+pio_n_branches(h) = Int(ccall((:pio_balanced_network_n_branches, LIBPOWERIO), Csize_t, (Ptr{Cvoid},), h))
+pio_n_gens(h)     = Int(ccall((:pio_balanced_network_n_gens, LIBPOWERIO),     Csize_t, (Ptr{Cvoid},), h))
+pio_base_mva(h)   = ccall((:pio_balanced_network_base_mva, LIBPOWERIO),       Cdouble, (Ptr{Cvoid},), h)
 
 mutable struct CArrowArray
     length::Int64
@@ -77,11 +89,11 @@ end
 function pio_export_ybus_arrow(h)
     arr = Ref(CArrowArray())
     sch = Ref(CArrowSchema())
-    errbuf = Vector{UInt8}(undef, 256)
-    code = ccall((:pio_to_arrow, LIBPOWERIO), Cint,
-                 (Ptr{Cvoid}, Cint, Ref{CArrowArray}, Ref{CArrowSchema}, Ptr{UInt8}, Csize_t),
-                 h, PIO_ARROW_TABLE_YBUS, arr, sch, errbuf, length(errbuf))
-    code == 0 || error("powerio Ybus Arrow export failed: " * unsafe_string(pointer(errbuf)))
+    err = Ref{Ptr{Cvoid}}(C_NULL)
+    code = ccall((:pio_balanced_network_to_arrow, LIBPOWERIO), Cint,
+                 (Ptr{Cvoid}, Cint, Ref{CArrowArray}, Ref{CArrowSchema}, Ref{Ptr{Cvoid}}),
+                 h, PIO_ARROW_TABLE_YBUS, arr, sch, err)
+    code == 0 || error("powerio Ybus Arrow export failed: " * _take_error(err[]))
     try
         return Int(arr[].length)
     finally
@@ -99,13 +111,13 @@ function powerio_parse_ybus_arrow(path::AbstractString)
     end
 end
 
-# ABI v4 extractors: every array call passes a cap and returns the total
+# Caller fill extractors: every array call passes a cap and returns the total
 # available (NULL out is the count query). The caps below come from the
 # matching pio_n_* call, so the returned totals always equal them.
 
 function pio_bus_ids(h, n)
     out = Vector{Int64}(undef, n)
-    ccall((:pio_bus_ids, LIBPOWERIO), Csize_t, (Ptr{Cvoid}, Ptr{Int64}, Csize_t), h, out, n)
+    ccall((:pio_balanced_network_bus_ids, LIBPOWERIO), Csize_t, (Ptr{Cvoid}, Ptr{Int64}, Csize_t), h, out, n)
     out
 end
 
@@ -114,7 +126,7 @@ function pio_branches(h, m)
     r     = Vector{Float64}(undef, m); x = Vector{Float64}(undef, m)
     b     = Vector{Float64}(undef, m); tap = Vector{Float64}(undef, m)
     shift = Vector{Float64}(undef, m); insvc = Vector{UInt8}(undef, m)
-    ccall((:pio_branches, LIBPOWERIO), Csize_t,
+    ccall((:pio_balanced_network_branches, LIBPOWERIO), Csize_t,
           (Ptr{Cvoid}, Ptr{Int64}, Ptr{Int64}, Ptr{Float64}, Ptr{Float64},
            Ptr{Float64}, Ptr{Float64}, Ptr{Float64}, Ptr{UInt8}, Csize_t),
           h, from, to, r, x, b, tap, shift, insvc, m)
@@ -125,7 +137,7 @@ function pio_gens(h, ng)
     bus  = Vector{Int64}(undef, ng); pg = Vector{Float64}(undef, ng)
     pmax = Vector{Float64}(undef, ng); pmin = Vector{Float64}(undef, ng)
     insvc = Vector{UInt8}(undef, ng)
-    ccall((:pio_gens, LIBPOWERIO), Csize_t,
+    ccall((:pio_balanced_network_gens, LIBPOWERIO), Csize_t,
           (Ptr{Cvoid}, Ptr{Int64}, Ptr{Float64}, Ptr{Float64}, Ptr{Float64}, Ptr{UInt8}, Csize_t),
           h, bus, pg, pmax, pmin, insvc, ng)
     (; bus, pg, pmax, pmin, in_service = insvc)
@@ -133,14 +145,14 @@ end
 
 function pio_bus_demand(h, n)
     pd = Vector{Float64}(undef, n); qd = Vector{Float64}(undef, n)
-    ccall((:pio_bus_demand, LIBPOWERIO), Csize_t,
+    ccall((:pio_balanced_network_bus_demand, LIBPOWERIO), Csize_t,
           (Ptr{Cvoid}, Ptr{Float64}, Ptr{Float64}, Csize_t), h, pd, qd, n)
     (; pd, qd)
 end
 
 function pio_bus_shunt(h, n)
     gs = Vector{Float64}(undef, n); bs = Vector{Float64}(undef, n)
-    ccall((:pio_bus_shunt, LIBPOWERIO), Csize_t,
+    ccall((:pio_balanced_network_bus_shunt, LIBPOWERIO), Csize_t,
           (Ptr{Cvoid}, Ptr{Float64}, Ptr{Float64}, Csize_t), h, gs, bs, n)
     (; gs, bs)
 end
