@@ -143,7 +143,6 @@ unsafe fn finish_string_v6(
                 v6::error_from_parts(
                     codes::BIND_CAPI_INTERIOR_NUL.code,
                     "the produced text holds an interior NUL and cannot cross as a C string",
-                    "[]",
                 )
             })
         })
@@ -195,7 +194,6 @@ unsafe fn finish_conversion_v6(
                 v6::error_from_parts(
                     codes::BIND_CAPI_INTERIOR_NUL.code,
                     "the produced text holds an interior NUL and cannot cross as a C string",
-                    "[]",
                 )
             })?;
             if !out_diagnostics.is_null() {
@@ -4238,7 +4236,10 @@ mpc.branch = [
                     CStr::from_ptr(pio_error_code(error)).to_str().unwrap(),
                     "REQUEST.CAPI.ARROW_TABLE_UNKNOWN"
                 );
-                assert_eq!(error_text(error), "unknown Arrow table id 9999");
+                assert_eq!(
+                    error_text(error),
+                    "REQUEST.CAPI.ARROW_TABLE_UNKNOWN: unknown Arrow table id 9999"
+                );
                 pio_error_release(error);
             }
 
