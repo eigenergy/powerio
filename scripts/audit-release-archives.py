@@ -33,6 +33,17 @@ def audit(path: str) -> list[str]:
     try:
         with tarfile.open(path, "r:*") as archive:
             members = [member for member in archive.getmembers() if member.isfile()]
+            # An unpublishable member (publish = false) never reaches
+            # crates.io; its archive is a cargo package side effect and
+            # carries no license files by design.
+            for member in members:
+                if PurePosixPath(member.name).name == "Cargo.toml" and len(
+                    PurePosixPath(member.name).parts
+                ) == 2:
+                    manifest = archive.extractfile(member)
+                    if manifest is not None and b"publish = false" in manifest.read():
+                        print(f"skipped unpublishable {path}")
+                        return []
     except (OSError, tarfile.TarError) as exc:
         return [f"cannot read tar archive: {exc}"]
 
