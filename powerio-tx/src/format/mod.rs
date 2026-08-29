@@ -458,9 +458,16 @@ pub fn parse(
         Ok(network) => {
             let mut module = PioModule::new(network);
             for buffer in source.acquired_buffers() {
+                // A stored descriptor is a display name, not a filesystem
+                // path; keep only the final component of a buffer name that
+                // came from Source::open.
+                let name = std::path::Path::new(buffer.name())
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .unwrap_or_else(|| buffer.name());
                 let descriptor = match SourceDescriptor::new(
                     buffer.id().clone(),
-                    buffer.name(),
+                    name,
                     buffer.bytes().len() as u64,
                 ) {
                     Ok(descriptor) => descriptor,
