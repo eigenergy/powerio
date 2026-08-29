@@ -111,8 +111,8 @@ julia -e 'using Pkg; Pkg.add(url="https://github.com/eigenergy/PowerIO.jl")'
 ```rust
 use powerio::{BalancedNetwork, TargetFormat, write_as};
 
-let module = powerio::parse(powerio_core::Source::open("case14.m")?)?;
-let module: powerio_core::PioModule<BalancedNetwork> = powerio::try_into_typed(module)?;
+let module = powerio::parse(powerio::Source::open("case14.m")?)?;
+let module: powerio::PioModule<powerio::BalancedNetwork> = powerio::try_into_typed(module)?;
 let conv = write_as(&module, TargetFormat::PowerModelsJson)?;
 
 for warning in conv.rendered_diagnostics() {

@@ -46,9 +46,7 @@ over the alternatives. Review them before changing a public name or meaning.
   (`python/powerio/`); hands back COO triplets that scipy assembles.
 - **`powerio-capi`**: C ABI over `powerio` (`pio_*`, header `powerio.h`) for C, C++, Julia, and other FFI users. The current ABI v5 feature and function names for `.pio.json` are replaced consistently in ABI v6. `--features arrow` adds `pio_to_arrow`, an Arrow C Data Interface export; `--features gridfm` adds `pio_read_dir` / `pio_scenario_ids` (the gridfm-datakit Parquet parser, pulling in `powerio-matrix`); `--features prob` adds the current problem instance functions, which ABI v6 replaces with the 1.0 names. Those v5 feature additions were additive. The 1.0 type and ownership changes ship together as ABI v6. The matrix Arrow tables are COO tables plus row and column mapping tables `matrix_bus` and `matrix_branch`, versioned append only with no separate number: a removed table's id is burned, never reused, and the Arrow catalog report is stamped with the package version.
 
-`BalancedNetwork` and `MulticonductorNetwork` are the two reusable electrical
-network types. `IndexedNetwork`, normalized tables, and dense row arrays are
-internal compiler data in 1.0, not public ontology types.
+`BalancedNetwork` and `MulticonductorNetwork` are the two reusable electrical network types. The normalized solver tables and dense row arrays are internal compiler data, hidden from the documented surface; `IndexedNetwork` stays a public derived index view in 0.10 because the matrix builders and downstream consumers take it directly.
 
 Formats. MATPOWER `.m`, PowerModels JSON, PSS/E `.raw` (v33/34/35),
 PowerWorld `.aux`, PSLF `.epc`, Egret JSON, pandapower JSON, PyPSA CSV directories,
