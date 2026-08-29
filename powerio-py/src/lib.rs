@@ -317,7 +317,7 @@ fn write_options(
 fn serialize_pyerr(e: serde_json::Error) -> PyErr {
     categorized_pyerr(
         powerio_matrix::ErrorCategory::Output,
-        powerio::codes::EMIT_PACKAGE_SERIALIZE_FAILED.code,
+        powerio::codes::EMIT_MODULE_SERIALIZE_FAILED.code,
         e.to_string(),
     )
 }

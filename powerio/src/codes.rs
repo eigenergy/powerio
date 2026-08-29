@@ -107,7 +107,7 @@ powerio_core::diagnostic_codes! {
     /// and the remaining closed switch shapes carry their own codes.
     TRANSFORM_MULTI_TO_BALANCED_UNSUPPORTED_CLOSED_SWITCH =
         "TRANSFORM.MULTI_TO_BALANCED.UNSUPPORTED_CLOSED_SWITCH", Error,
-        "a closed switch shape has no balanced spelling", retired = "1.0.0";
+        "a closed switch shape has no balanced spelling", retired = "0.10.0";
     TRANSFORM_MULTI_TO_BALANCED_RATED_CLOSED_SWITCH =
         "TRANSFORM.MULTI_TO_BALANCED.RATED_CLOSED_SWITCH", Error,
         "merging a rated closed switch would erase its flow limit";
@@ -132,24 +132,46 @@ powerio_core::diagnostic_codes! {
         category = Request;
     TRANSFORM_MULTI_TO_BALANCED_WRONG_MODEL_KIND =
         "TRANSFORM.MULTI_TO_BALANCED.WRONG_MODEL_KIND", Error,
-        "the package does not carry a multiconductor payload to lower";
+        "the module does not carry a multiconductor payload to lower";
 
     // Failures.
-    PARSE_PACKAGE_MALFORMED = "PARSE.PACKAGE.MALFORMED", Error,
+    PARSE_MODULE_MALFORMED = "PARSE.MODULE.MALFORMED", Error,
         "the document is not well formed .pio.json", category = Parse;
-    PARSE_PACKAGE_UNSUPPORTED_VERSION = "PARSE.PACKAGE.UNSUPPORTED_VERSION", Error,
+    /// Retired in 0.10.0 for the module vocabulary.
+    PARSE_PACKAGE_MALFORMED = "PARSE.PACKAGE.MALFORMED", Error,
+        "the document is not well formed .pio.json", category = Parse, retired = "0.10.0";
+    PARSE_MODULE_UNSUPPORTED_VERSION = "PARSE.MODULE.UNSUPPORTED_VERSION", Error,
         "the document comes from a lineage this build does not read", category = Parse;
-    VALIDATE_PACKAGE_MODEL_KIND_MISMATCH = "VALIDATE.PACKAGE.MODEL_KIND_MISMATCH", Error,
+    /// Retired in 0.10.0 for the module vocabulary.
+    PARSE_PACKAGE_UNSUPPORTED_VERSION = "PARSE.PACKAGE.UNSUPPORTED_VERSION", Error,
+        "the document comes from a lineage this build does not read", category = Parse, retired = "0.10.0";
+    VALIDATE_MODULE_MODEL_KIND_MISMATCH = "VALIDATE.MODULE.MODEL_KIND_MISMATCH", Error,
         "the document's model_kind disagrees with the payload it carries", category = Data;
-    REQUEST_PACKAGE_NO_SUCH_INDEX = "REQUEST.PACKAGE.NO_SUCH_INDEX", Error,
+    /// Retired in 0.10.0 for the module vocabulary.
+    VALIDATE_PACKAGE_MODEL_KIND_MISMATCH = "VALIDATE.PACKAGE.MODEL_KIND_MISMATCH", Error,
+        "the document's model_kind disagrees with the payload it carries", category = Data, retired = "0.10.0";
+    REQUEST_MODULE_NO_SUCH_INDEX = "REQUEST.MODULE.NO_SUCH_INDEX", Error,
         "the call names an operating point or study index the document does not carry",
         category = Request;
-    REQUEST_PACKAGE_WRONG_MODEL_KIND = "REQUEST.PACKAGE.WRONG_MODEL_KIND", Error,
+    /// Retired in 0.10.0 for the module vocabulary.
+    REQUEST_PACKAGE_NO_SUCH_INDEX = "REQUEST.PACKAGE.NO_SUCH_INDEX", Error,
+        "the call names an operating point or study index the document does not carry",
+        category = Request, retired = "0.10.0";
+    REQUEST_MODULE_WRONG_MODEL_KIND = "REQUEST.MODULE.WRONG_MODEL_KIND", Error,
         "the call asks for a model family the document does not carry", category = Request;
-    BUILD_PACKAGE_PAYLOAD_FAILED = "BUILD.PACKAGE.PAYLOAD_FAILED", Error,
+    /// Retired in 0.10.0 for the module vocabulary.
+    REQUEST_PACKAGE_WRONG_MODEL_KIND = "REQUEST.PACKAGE.WRONG_MODEL_KIND", Error,
+        "the call asks for a model family the document does not carry", category = Request, retired = "0.10.0";
+    BUILD_MODULE_PAYLOAD_FAILED = "BUILD.MODULE.PAYLOAD_FAILED", Error,
         "the payload could not be built, applied, or serialized", category = Data;
-    EMIT_PACKAGE_SERIALIZE_FAILED = "EMIT.PACKAGE.SERIALIZE_FAILED", Error,
+    /// Retired in 0.10.0 for the module vocabulary.
+    BUILD_PACKAGE_PAYLOAD_FAILED = "BUILD.PACKAGE.PAYLOAD_FAILED", Error,
+        "the payload could not be built, applied, or serialized", category = Data, retired = "0.10.0";
+    EMIT_MODULE_SERIALIZE_FAILED = "EMIT.MODULE.SERIALIZE_FAILED", Error,
         "serializing the stored document to JSON failed", category = Output;
+    /// Retired in 0.10.0 for the module vocabulary.
+    EMIT_PACKAGE_SERIALIZE_FAILED = "EMIT.PACKAGE.SERIALIZE_FAILED", Error,
+        "serializing the stored document to JSON failed", category = Output, retired = "0.10.0";
 }
 
 /// Every code this crate declares.
