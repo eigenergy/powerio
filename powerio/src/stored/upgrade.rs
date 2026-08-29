@@ -198,15 +198,23 @@ fn upgrade_series(
     network: &crate::BalancedNetwork,
     series: &OperatingPointSeries,
 ) -> Result<PioValue> {
-    let periods = series.time_axis.periods.max(series.points.len());
+    // Sized from what the document actually carries (labels, durations, and
+    // operating points), never from the declared `time_axis.periods` scalar
+    // alone: that number costs nothing to inflate, while these array lengths
+    // cost real bytes to carry, so an untrusted document can no longer claim
+    // far more periods than it actually states and force allocation at that
+    // inflated size.
+    let periods = series
+        .points
+        .len()
+        .max(series.time_axis.labels.len())
+        .max(series.time_axis.duration_hours.len());
     if periods > MAX_UPGRADE_PERIODS {
         return Err(refused(
             &codes::READ_MODULE_INVALID,
             format!(
-                "the time axis declares {} periods over {} operating points; at most \
-                 {MAX_UPGRADE_PERIODS} periods upgrade",
-                series.time_axis.periods,
-                series.points.len()
+                "the time axis carries {periods} periods across its labels, durations, and \
+                 operating points; at most {MAX_UPGRADE_PERIODS} periods upgrade"
             ),
         ));
     }
