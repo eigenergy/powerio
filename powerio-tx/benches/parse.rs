@@ -9,6 +9,10 @@
 //!   PowerWorld). One case is converted to each format once, then timed on the
 //!   way back in. This is regression coverage for the readers the owned-source
 //!   refactor touched.
+//! - `parse_sniffed_*`: the same PowerModels JSON text with no declared
+//!   format, routed by [`powerio_tx::format::routing::classify_json_text`]
+//!   instead of a stated token. Regression coverage for #440's double
+//!   classification.
 //!
 //! This is the micro-benchmark half. The cross-tool comparison against
 //! PowerModels.jl, ExaPowerIO.jl, and pandapower is a separate set of scripts
@@ -29,6 +33,13 @@ fn parse_named(text: &str, from: &str) -> powerio_tx::network::BalancedNetwork {
     let source = powerio_core::Source::from_bytes("case", text.as_bytes().to_vec())
         .unwrap()
         .with_format(powerio_core::FormatId::new(from).unwrap());
+    powerio_tx::parse(source).unwrap().into_value()
+}
+
+/// Parse with no declared format: a `.json` name, routed by the content
+/// classifier rather than a stated token.
+fn parse_sniffed(text: &str) -> powerio_tx::network::BalancedNetwork {
+    let source = powerio_core::Source::from_bytes("case.json", text.as_bytes().to_vec()).unwrap();
     powerio_tx::parse(source).unwrap().into_value()
 }
 
@@ -81,6 +92,22 @@ fn bench_parse_formats(c: &mut Criterion) {
             b.iter(|| parse_named(black_box(&text), name));
         });
     }
+}
+
+/// The sniffed JSON path (no declared format, routed by content
+/// classification): regression coverage for #440, which found the
+/// classifier materializing the whole document twice over before the
+/// reader's own parse ever ran.
+fn bench_parse_sniffed_json(c: &mut Criterion) {
+    let case = "case118";
+    let net = parse_case(&src(case));
+    let text = write_network(&net, TargetFormat::PowerModelsJson)
+        .unwrap()
+        .text;
+    let _ = parse_sniffed(&text);
+    c.bench_function(&format!("parse_sniffed_powermodels-json_{case}"), |b| {
+        b.iter(|| parse_sniffed(black_box(&text)));
+    });
 }
 
 /// PowerWorld aux against pwb on the same case at each scale the fixtures
@@ -151,6 +178,7 @@ criterion_group!(
     bench_parse,
     bench_roundtrip,
     bench_parse_formats,
+    bench_parse_sniffed_json,
     bench_powerworld_pwb,
     bench_powerworld_pwd
 );
