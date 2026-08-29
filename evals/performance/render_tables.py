@@ -318,9 +318,13 @@ def main():
 
     changed = []
     for target, (original, new_text) in edits.items():
+        # Validate what is about to be WRITTEN, not only the current file: a
+        # stale command inside a recorded JSON would otherwise be spliced
+        # back in silently, reverting a hand corrected provenance row.
+        problems.extend(check_bench_commands(new_text, cargo_bench_targets()))
         if original != new_text:
             changed.append(target)
-            if not check:
+            if not check and not problems:
                 (REPO / target).write_text(new_text)
 
     if check:

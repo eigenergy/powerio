@@ -15,8 +15,8 @@ The consumed 0.9 surface below was measured from an isolated read only clone of 
 
 | 0.9 symbol (sites) | 0.10 disposition |
 |---|---|
-| `powerio::parse_str` (64) | retired; `powerio::parse(Source::from_bytes(name, bytes)?)` returns `PioModule<PioValue>`; narrow with `try_into_typed::<BalancedNetwork>` or read `module.value()` |
-| `powerio::format::parse_file` (2) | retired test helper; `powerio::parse(Source::open(path)?)` |
+| `powerio::parse_str` (64) | retired; `powerio::parse(powerio::Source::from_bytes(name, bytes)?)` returns `PioModule<PioValue>`; narrow with `try_into_typed::<BalancedNetwork>` or read `module.value()` |
+| `powerio::format::parse_file` (2) | retired test helper; `powerio::parse(powerio::Source::open(path)?)` |
 | `powerio::parse_bytes` (3) | the geo layer's own entry where used; case parsing goes through `powerio::parse` |
 | `powerio::BalancedNetwork::{from_json, from_json_bytes, in_memory}` (5) | unchanged |
 | `powerio::BusId`, `BusType::Isolated`, `Winding::new`, `Transformer3W`, `Impedance::new`, `BranchCharging::new`, `Switch::new`, `Storage::new`, `Hvdc::new` (41) | unchanged model vocabulary |
