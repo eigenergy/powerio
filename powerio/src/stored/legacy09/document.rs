@@ -803,10 +803,7 @@ impl NetworkPackage {
                     self.model_kind
                 ),
             );
-            return Err(MulticonductorToBalancedError::new(
-                options,
-                vec![diagnostic],
-            ));
+            return Err(MulticonductorToBalancedError::new(options, &[diagnostic]));
         };
 
         let lowered = lower_multiconductor_to_balanced(net, options)?;

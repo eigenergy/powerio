@@ -179,12 +179,12 @@ pub struct MulticonductorToBalancedError {
 impl MulticonductorToBalancedError {
     pub fn new(
         options: MulticonductorToBalancedOptions,
-        diagnostics: Vec<StructuredDiagnostic>,
+        diagnostics: &[StructuredDiagnostic],
     ) -> Self {
         Self {
             options,
-            status: status_from_diagnostics(&diagnostics),
-            diagnostics: multiconductor_diagnostics_to_module_records(&diagnostics),
+            status: status_from_diagnostics(diagnostics),
+            diagnostics: multiconductor_diagnostics_to_module_records(diagnostics),
         }
     }
 }
@@ -268,7 +268,7 @@ pub fn lower_multiconductor_to_balanced(
     if !readiness.is_ready() {
         return Err(MulticonductorToBalancedError::new(
             options,
-            readiness.diagnostics,
+            &readiness.diagnostics,
         ));
     }
 
@@ -322,7 +322,7 @@ pub fn lower_module_to_balanced(
     let crate::PioValue::MulticonductorNetwork(net) = module.value() else {
         let error = MulticonductorToBalancedError::new(
             options,
-            vec![StructuredDiagnostic::of(
+            &[StructuredDiagnostic::of(
                 &codes::TRANSFORM_MULTI_TO_BALANCED_WRONG_MODEL_KIND,
                 format!(
                     "the module carries a {} value; the balanced lowering takes a \
@@ -353,7 +353,7 @@ pub fn lower_module_to_balanced(
     if record.diagnostics.len() > diagnostics_room || history_room == 0 {
         let error = MulticonductorToBalancedError::new(
             options,
-            vec![StructuredDiagnostic::of(
+            &[StructuredDiagnostic::of(
                 &codes::TRANSFORM_MULTI_TO_BALANCED_RECORD_CAP,
                 "the module cannot hold the lowering's findings and history entry; export a \
                  fresh module before lowering"
@@ -614,7 +614,7 @@ impl<'a> LoweringState<'a> {
         let Some(base) = self.voltage_base()? else {
             return Err(MulticonductorToBalancedError::new(
                 self.options,
-                self.record.diagnostics.clone(),
+                &self.record.diagnostics,
             ));
         };
 
@@ -649,7 +649,7 @@ impl<'a> LoweringState<'a> {
             ));
             return Err(MulticonductorToBalancedError::new(
                 self.options,
-                self.record.diagnostics.clone(),
+                &self.record.diagnostics,
             ));
         }
         for finding in network.validate_values() {
@@ -847,7 +847,7 @@ format!(
         {
             return Err(MulticonductorToBalancedError::new(
                 self.options,
-                self.record.diagnostics.clone(),
+                &self.record.diagnostics,
             ));
         }
         self.record.diagnostics.push(StructuredDiagnostic::of(
@@ -1171,7 +1171,7 @@ format!("line {line_idx} has no finite length ({length}), so its impedance canno
         );
         Err(MulticonductorToBalancedError::new(
             self.options,
-            diagnostics,
+            &diagnostics,
         ))
     }
 
@@ -1192,7 +1192,7 @@ format!("line {line_idx} has no finite length ({length}), so its impedance canno
                 "/model/multiconductor_network/lines/{line_idx}/linecode"
             )),
         );
-        MulticonductorToBalancedError::new(self.options, diagnostics)
+        MulticonductorToBalancedError::new(self.options, &diagnostics)
     }
 
     /// Supported transformers lower into balanced branches: series impedance
@@ -1355,7 +1355,7 @@ format!(
             )
             .with_element_path(format!("/model/multiconductor_network/shunts/{shunt_idx}")),
         );
-        MulticonductorToBalancedError::new(self.options, diagnostics)
+        MulticonductorToBalancedError::new(self.options, &diagnostics)
     }
 
     fn lower_generators(&mut self, buses: &[Bus]) -> Vec<Generator> {
@@ -1453,7 +1453,7 @@ format!(
         {
             Err(MulticonductorToBalancedError::new(
                 self.options,
-                self.record.diagnostics.clone(),
+                &self.record.diagnostics,
             ))
         } else {
             Ok(())
