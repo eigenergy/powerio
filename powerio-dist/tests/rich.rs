@@ -1,13 +1,15 @@
-use powerio_dist::{
-    DistLoadVoltageModel, parse_bmopf_str, parse_dss_str, parse_pmd_str, write_bmopf_json,
-    write_dss, write_pmd_json,
+use powerio_dist::DistLoadVoltageModel;
+
+mod helpers;
+use helpers::{
+    parse_bmopf_str, parse_dss_str, parse_pmd_str, write_bmopf_json, write_dss, write_pmd_json,
 };
 
 fn load_model<'a>(
     net: &'a powerio_dist::MulticonductorNetwork,
     name: &str,
 ) -> &'a DistLoadVoltageModel {
-    &net.loads
+    &net.loads()
         .iter()
         .find(|l| l.name.eq_ignore_ascii_case(name))
         .unwrap_or_else(|| panic!("missing load {name}"))
@@ -92,7 +94,7 @@ fn rich_bmopf_load_voltage_models_preserve_all_variants() {
     let out = write_bmopf_json(&net);
     assert!(out.warnings.is_empty(), "{:?}", out.warnings);
     let back = parse_bmopf_str(&out.text).unwrap();
-    assert_eq!(net.loads, back.loads);
+    assert_eq!(net.loads(), back.loads());
     let doc: serde_json::Value = serde_json::from_str(&out.text).unwrap();
     assert_eq!(
         doc["load"]["exp"]["gamma_p"],
@@ -169,8 +171,8 @@ fn rich_opendss_load_models_and_switches_round_trip() {
         New Load.cp3 bus1=b2.1.2.3 phases=3 conn=wye kv=12.47 kw=90 kvar=45 model=3\n\
         New Load.zip bus1=b2.1.2.3 phases=3 conn=wye kv=12.47 kw=90 kvar=45 model=8 zipv=[0.2,0.3,0.5,0.1,0.4,0.5,0.8]\n";
     let net = parse_dss_str(dss);
-    assert_eq!(net.switches.len(), 1);
-    assert!(net.switches[0].open);
+    assert_eq!(net.switches().len(), 1);
+    assert!(net.switches()[0].open);
     let dss_v_nom = 12_470.0 / 3f64.sqrt();
     assert!(matches!(
         load_model(&net, "ci"),
@@ -210,12 +212,12 @@ fn rich_opendss_load_models_and_switches_round_trip() {
     );
     assert_eq!(bmopf_doc["switch"]["sw"]["open_switch"], true);
     let from_bmopf = parse_bmopf_str(&bmopf.text).unwrap();
-    assert_eq!(from_bmopf.switches[0].open, net.switches[0].open);
+    assert_eq!(from_bmopf.switches()[0].open, net.switches()[0].open);
     assert_eq!(load_model(&from_bmopf, "zip"), load_model(&net, "zip"));
 
     let dss_back = write_dss(&from_bmopf);
     let reparsed = parse_dss_str(&dss_back.text);
-    assert_eq!(reparsed.switches[0].open, net.switches[0].open);
+    assert_eq!(reparsed.switches()[0].open, net.switches()[0].open);
     assert_eq!(load_model(&reparsed, "ci"), load_model(&net, "ci"));
     assert_eq!(load_model(&reparsed, "cz"), load_model(&net, "cz"));
     assert_eq!(load_model(&reparsed, "zip"), load_model(&net, "zip"));

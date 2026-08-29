@@ -244,18 +244,20 @@ fn build_vocabulary() -> BTreeSet<String> {
         collect_schema_words(&value, &mut out);
     }
     let mut net = BalancedNetwork::new("", 100.0);
-    net.buses.push(Bus::new(BusId(1), BusType::Ref, 1.0));
-    net.buses.push(Bus::new(BusId(2), BusType::Pv, 1.0));
-    net.buses.push(Bus::new(BusId(3), BusType::Pq, 1.0));
-    net.buses.push(Bus::new(BusId(4), BusType::Isolated, 1.0));
-    net.branches.push(Branch::new(BusId(1), BusId(2), 0.0, 1.0));
+    net.buses_mut().push(Bus::new(BusId(1), BusType::Ref, 1.0));
+    net.buses_mut().push(Bus::new(BusId(2), BusType::Pv, 1.0));
+    net.buses_mut().push(Bus::new(BusId(3), BusType::Pq, 1.0));
+    net.buses_mut()
+        .push(Bus::new(BusId(4), BusType::Isolated, 1.0));
+    net.branches_mut()
+        .push(Branch::new(BusId(1), BusId(2), 0.0, 1.0));
     // Filled so `caps_serde` writes its column names, which the schema
     // states as a plain string map.
     let mut generator = Generator::new(BusId(1));
     generator.caps.fill(Some(0.0));
-    net.generators.push(generator);
-    net.loads.push(Load::new(BusId(1), 0.0, 0.0));
-    net.shunts.push(Shunt::new(BusId(1), 0.0, 0.0));
+    net.generators_mut().push(generator);
+    net.loads_mut().push(Load::new(BusId(1), 0.0, 0.0));
+    net.shunts_mut().push(Shunt::new(BusId(1), 0.0, 0.0));
     if let Ok(value) = serde_json::to_value(&net) {
         collect_words(&value, &mut out);
     }

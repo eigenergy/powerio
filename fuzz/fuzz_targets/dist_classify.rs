@@ -14,9 +14,15 @@ fuzz_target!(|data: &[u8]| {
     let Ok(format) = powerio_dist::classify_distribution_json(text) else {
         return;
     };
-    let Ok(net) = powerio_dist::parse_str(text, format.name()) else {
+    let Ok(source) = powerio_core::Source::from_bytes("<fuzz>", data.to_vec()) else {
         return;
     };
-    let _ = powerio_dist::write_bmopf_json(&net);
-    let _ = powerio_dist::write_pmd_json(&net);
+    let Ok(id) = powerio_core::FormatId::new(format.name()) else {
+        return;
+    };
+    let Ok(module) = powerio_dist::parse(source.with_format(id)) else {
+        return;
+    };
+    let _ = powerio_dist::write_bmopf_json(module.value());
+    let _ = powerio_dist::write_pmd_json(module.value());
 });

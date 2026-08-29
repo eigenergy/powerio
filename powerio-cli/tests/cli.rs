@@ -65,7 +65,7 @@ fn convert_to_stdout_keeps_text_on_stdout() {
 }
 
 #[test]
-fn convert_overwrites_existing_text_output() {
+fn convert_refuses_an_existing_text_output() {
     let stamp = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap()
@@ -74,6 +74,8 @@ fn convert_overwrites_existing_text_output() {
     std::fs::write(&out_path, "sentinel").unwrap();
 
     let case = repo_file("tests/data/case9.m");
+    // An existing entry at the output is refused and keeps its bytes; a
+    // fresh path commits.
     let out = run(&[
         "convert",
         case.to_str().unwrap(),
@@ -82,11 +84,24 @@ fn convert_overwrites_existing_text_output() {
         "-o",
         out_path.to_str().unwrap(),
     ]);
-    assert_success(&out);
+    assert!(!out.status.success());
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("already exists"), "{stderr}");
+    assert_eq!(std::fs::read_to_string(&out_path).unwrap(), "sentinel");
 
-    let text = std::fs::read_to_string(&out_path).unwrap();
+    let fresh = std::env::temp_dir().join(format!("powerio-cli-convert-fresh-{stamp}.m"));
+    let out = run(&[
+        "convert",
+        case.to_str().unwrap(),
+        "--to",
+        "matpower",
+        "-o",
+        fresh.to_str().unwrap(),
+    ]);
+    assert_success(&out);
+    let text = std::fs::read_to_string(&fresh).unwrap();
     assert!(text.contains("mpc.bus = ["), "{text}");
-    assert!(!text.contains("sentinel"), "{text}");
+    let _ = std::fs::remove_file(&fresh);
 
     let _ = std::fs::remove_file(out_path);
 }
@@ -140,7 +155,7 @@ fn summary_routes_json_inputs_through_the_classifier() {
 }
 
 #[test]
-fn package_overwrites_existing_output_file() {
+fn package_refuses_an_existing_output_file() {
     let stamp = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap()
@@ -149,18 +164,31 @@ fn package_overwrites_existing_output_file() {
     std::fs::write(&out_path, "sentinel").unwrap();
 
     let case = repo_file("tests/data/case9.m");
+    // An existing entry at the output is refused and keeps its bytes; a
+    // fresh path commits.
     let out = run(&[
         "package",
         case.to_str().unwrap(),
         "-o",
         out_path.to_str().unwrap(),
     ]);
-    assert_success(&out);
+    assert!(!out.status.success());
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("already exists"), "{stderr}");
+    assert_eq!(std::fs::read_to_string(&out_path).unwrap(), "sentinel");
 
-    let text = std::fs::read_to_string(&out_path).unwrap();
+    let fresh = std::env::temp_dir().join(format!("powerio-cli-package-fresh-{stamp}.pio.json"));
+    let out = run(&[
+        "package",
+        case.to_str().unwrap(),
+        "-o",
+        fresh.to_str().unwrap(),
+    ]);
+    assert_success(&out);
+    let text = std::fs::read_to_string(&fresh).unwrap();
     let value: serde_json::Value = serde_json::from_str(&text).unwrap();
     assert_eq!(value[powerio::version::VERSION_KEY], powerio::VERSION);
-    assert!(!text.contains("sentinel"), "{text}");
+    let _ = std::fs::remove_file(&fresh);
 
     let _ = std::fs::remove_file(out_path);
 }

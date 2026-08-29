@@ -1,0 +1,174 @@
+//! The crate-private collector an emitting pass threads through its call tree.
+//!
+//! No public PowerIO operation accepts or returns this type, and the 1.0
+//! baseline keeps the mutable collector out of every public surface, so each
+//! emitting crate carries its own copy of this file. Keep the copies byte
+//! identical; the shared record types come from `powerio-core`.
+
+use powerio_core::{Diagnostic, DiagnosticInfo, DiagnosticSeverity, render_diagnostics};
+
+/// An ordered set of findings, built up as a reader, a lowering pass, or a
+/// writer runs.
+///
+/// A site names a registered [`DiagnosticInfo`] rather than a loose code, so
+/// every emitted code is registered by construction. The text lines a channel
+/// carries are rendered from the records by [`Diagnostics::lines`], never
+/// collected alongside them.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct Diagnostics(Vec<Diagnostic>);
+
+#[allow(
+    dead_code,
+    reason = "the collector copies stay identical across crates"
+)]
+impl Diagnostics {
+    #[must_use]
+    pub(crate) fn new() -> Self {
+        Self(Vec::new())
+    }
+
+    /// Record a finding at its registered default severity.
+    pub(crate) fn push(&mut self, info: &'static DiagnosticInfo, message: impl Into<String>) {
+        self.0.push(Diagnostic::of(info, message));
+    }
+
+    /// Record a finding at a severity this site raises or lowers.
+    pub(crate) fn push_at(
+        &mut self,
+        info: &'static DiagnosticInfo,
+        severity: DiagnosticSeverity,
+        message: impl Into<String>,
+    ) {
+        self.0
+            .push(Diagnostic::of(info, message).with_severity(severity));
+    }
+
+    /// Record a finding built with the record's own builders.
+    pub(crate) fn record(&mut self, diagnostic: Diagnostic) {
+        self.0.push(diagnostic);
+    }
+
+    /// Record every finding of another set, in order.
+    pub(crate) fn absorb(&mut self, other: impl IntoIterator<Item = Diagnostic>) {
+        self.0.extend(other);
+    }
+
+    /// Put `other`'s findings ahead of this set's, which is what a conversion
+    /// does with the read side.
+    pub(crate) fn prepend(&mut self, other: impl IntoIterator<Item = Diagnostic>) {
+        let mut front: Vec<_> = other.into_iter().collect();
+        front.append(&mut self.0);
+        self.0 = front;
+    }
+
+    #[must_use]
+    pub(crate) fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    #[must_use]
+    pub(crate) fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    #[must_use]
+    pub(crate) fn records(&self) -> &[Diagnostic] {
+        &self.0
+    }
+
+    #[must_use]
+    pub(crate) fn into_records(self) -> Vec<Diagnostic> {
+        self.0
+    }
+
+    /// The `CODE: message` lines for the text channels.
+    #[must_use]
+    pub(crate) fn lines(&self) -> Vec<String> {
+        render_diagnostics(&self.0)
+    }
+
+    /// The worst severity recorded, or `None` when nothing was.
+    #[must_use]
+    pub(crate) fn worst_severity(&self) -> Option<DiagnosticSeverity> {
+        self.0.iter().map(Diagnostic::severity).max()
+    }
+}
+
+impl From<Vec<Diagnostic>> for Diagnostics {
+    fn from(records: Vec<Diagnostic>) -> Self {
+        Self(records)
+    }
+}
+
+impl From<Diagnostics> for Vec<Diagnostic> {
+    fn from(diagnostics: Diagnostics) -> Self {
+        diagnostics.0
+    }
+}
+
+impl IntoIterator for Diagnostics {
+    type Item = Diagnostic;
+    type IntoIter = std::vec::IntoIter<Diagnostic>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.0.into_iter()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const DROPPED: DiagnosticInfo = DiagnosticInfo::new(
+        "EMIT.PSSE.FIELD_DROPPED",
+        DiagnosticSeverity::Warning,
+        "a field with no PSS/E record was dropped",
+    );
+    const REFUSED: DiagnosticInfo = DiagnosticInfo::new(
+        "READ.DSS.INCLUDE_REFUSED",
+        DiagnosticSeverity::Error,
+        "an include escaping the case directory was refused",
+    );
+
+    #[test]
+    fn a_site_takes_the_registered_severity_unless_it_names_one() {
+        let mut d = Diagnostics::new();
+        d.push(&DROPPED, "gencost dropped");
+        d.push_at(&DROPPED, DiagnosticSeverity::Remark, "areas dropped");
+        assert_eq!(d.records()[0].severity(), DiagnosticSeverity::Warning);
+        assert_eq!(d.records()[1].severity(), DiagnosticSeverity::Remark);
+        assert_eq!(d.worst_severity(), Some(DiagnosticSeverity::Warning));
+    }
+
+    #[test]
+    fn the_text_channel_is_rendered_from_the_records() {
+        let mut d = Diagnostics::new();
+        d.push(&DROPPED, "gencost dropped");
+        d.push(&REFUSED, "../shared.dss escapes the case directory");
+        assert_eq!(
+            d.lines(),
+            [
+                "EMIT.PSSE.FIELD_DROPPED: gencost dropped",
+                "READ.DSS.INCLUDE_REFUSED: ../shared.dss escapes the case directory",
+            ]
+        );
+    }
+
+    #[test]
+    fn the_read_side_goes_ahead_of_the_write_side() {
+        let mut write = Diagnostics::new();
+        write.push(&DROPPED, "write");
+        let mut read = Diagnostics::new();
+        read.push(&REFUSED, "read");
+        write.prepend(read);
+        assert_eq!(
+            write.lines(),
+            [
+                "READ.DSS.INCLUDE_REFUSED: read",
+                "EMIT.PSSE.FIELD_DROPPED: write",
+            ]
+        );
+        assert_eq!(write.len(), 2);
+        assert!(!write.is_empty());
+    }
+}

@@ -29,7 +29,7 @@
 //!
 //! The schema defines neither the `n_winding` subtype nor untyped
 //! `transformer.<subtype>` passthrough objects, so those keep every field in
-//! place and nothing moves. [`parse_bmopf_str`] folds the overlay back onto
+//! place and nothing moves. The BMOPF reader folds the overlay back onto
 //! the subtype objects, so a powerio round trip is lossless; on a key
 //! collision the field already in the subtype object wins.
 //!
@@ -73,10 +73,9 @@
 //! terminals; carried across a rename it sorts names no bus has any more, and
 //! nothing else in the document contradicts it.
 
-mod read;
+pub(crate) mod read;
 mod write;
 
-pub use read::{parse_bmopf_file, parse_bmopf_str};
 pub use write::{
     BMOPF_SCHEMA_ID, BMOPF_SCHEMA_VERSION, BmopfWriteOptions, write_bmopf_json,
     write_bmopf_json_with_options,

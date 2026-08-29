@@ -5,10 +5,8 @@
 
 use std::path::{Path, PathBuf};
 
-use powerio_dist::{
-    dss::{parse_dss_file, parse_dss_str},
-    parse_bmopf_str, write_bmopf_json, write_dss,
-};
+mod helpers;
+use helpers::{parse_bmopf_str, parse_dss_file, parse_dss_str, write_bmopf_json, write_dss};
 
 fn schema_validator() -> jsonschema::Validator {
     let schema_path = Path::new(env!("CARGO_MANIFEST_DIR"))

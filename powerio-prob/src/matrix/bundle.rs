@@ -1,10 +1,9 @@
 use std::path::{Path, PathBuf};
 
-use powerio::{GenCostPolicyReport, MissingGenCostPolicy};
+use powerio_tx::{GenCostPolicyReport, MissingGenCostPolicy};
 
 use crate::Result;
 use powerio_matrix::SparseMatrix;
-use powerio_matrix::io::{write_mtx, write_vector_mtx};
 use serde::Serialize;
 
 use crate::{DcOpfInstance, Units};
@@ -49,7 +48,7 @@ struct DcOpfMeta<'a> {
     base_mva: f64,
     dimensions: DcOpfDimensions,
     index_base: IndexBaseMeta,
-    dc_convention: powerio::DcConvention,
+    dc_convention: powerio_tx::DcConvention,
     build_options: BuildOptionsMeta,
     zero_impedance: ZeroImpedanceMeta<'a>,
     grounding: GroundingMeta<'a>,
@@ -58,7 +57,7 @@ struct DcOpfMeta<'a> {
     m: usize,
     n_gen: usize,
     reference_buses: &'a [usize],
-    convention: powerio::DcConvention,
+    convention: powerio_tx::DcConvention,
     units: Units,
     cost_policy: MissingGenCostPolicy,
     synthesized_gen_costs: usize,
@@ -140,56 +139,52 @@ pub fn write_dcopf_bundle(
     // output path. `sanitize_stem` reduces it to one safe component and
     // disambiguates names that would otherwise sanitize alike, so a batch
     // export cannot be steered into overwriting an earlier bundle.
-    let dir = out_dir.as_ref().join(format!(
+    let bundle_root = out_dir.as_ref().join(format!(
         "{}_dcopf",
         powerio_matrix::sanitize_stem(&instance.name)
     ));
-    std::fs::create_dir_all(&dir)?;
 
-    let mut files = Vec::new();
-    put_mat(&dir, "A.mtx", &matrices.incidence, &mut files)?;
-    put_mat(&dir, "L.mtx", &matrices.laplacian, &mut files)?;
+    let mut inventory: Vec<(&'static str, Vec<u8>)> = Vec::new();
+    put_mat(&mut inventory, "A.mtx", &matrices.incidence)?;
+    put_mat(&mut inventory, "L.mtx", &matrices.laplacian)?;
     put_mat(
-        &dir,
+        &mut inventory,
         "L_grounded.mtx",
         &matrices.grounded_laplacian,
-        &mut files,
     )?;
-    put_mat(&dir, "BAt.mtx", &matrices.flow_map, &mut files)?;
-    put_mat(&dir, "Cg.mtx", &matrices.generator_bus, &mut files)?;
+    put_mat(&mut inventory, "BAt.mtx", &matrices.flow_map)?;
+    put_mat(&mut inventory, "Cg.mtx", &matrices.generator_bus)?;
 
-    put_vec(&dir, "b.mtx", &instance.branches.b, &mut files)?;
-    put_vec(&dir, "shift.mtx", &instance.branches.shift, &mut files)?;
-    put_vec(&dir, "flow_offset.mtx", &flow_offset, &mut files)?;
-    put_vec(&dir, "p_shift.mtx", &instance.p_shift, &mut files)?;
-    put_vec(&dir, "fixed_withdrawal.mtx", &fixed_withdrawal, &mut files)?;
-    put_vec(&dir, "e_r.mtx", &matrices.reference_selector, &mut files)?;
-    put_vec(&dir, "q.mtx", &nodal.q, &mut files)?;
-    put_vec(&dir, "c.mtx", &nodal.c, &mut files)?;
-    put_vec(&dir, "c0.mtx", &nodal.c0, &mut files)?;
-    put_vec(&dir, "pmax.mtx", &nodal.pmax, &mut files)?;
-    put_vec(&dir, "pmin.mtx", &nodal.pmin, &mut files)?;
-    put_vec(&dir, "fmax.mtx", &instance.branches.f_max, &mut files)?;
-    put_vec(&dir, "pd.mtx", &instance.p_d, &mut files)?;
-    put_vec(&dir, "gs.mtx", &instance.g_s, &mut files)?;
+    put_vec(&mut inventory, "b.mtx", &instance.branches.b)?;
+    put_vec(&mut inventory, "shift.mtx", &instance.branches.shift)?;
+    put_vec(&mut inventory, "flow_offset.mtx", &flow_offset)?;
+    put_vec(&mut inventory, "p_shift.mtx", &instance.p_shift)?;
+    put_vec(&mut inventory, "fixed_withdrawal.mtx", &fixed_withdrawal)?;
+    put_vec(&mut inventory, "e_r.mtx", &matrices.reference_selector)?;
+    put_vec(&mut inventory, "q.mtx", &nodal.q)?;
+    put_vec(&mut inventory, "c.mtx", &nodal.c)?;
+    put_vec(&mut inventory, "c0.mtx", &nodal.c0)?;
+    put_vec(&mut inventory, "pmax.mtx", &nodal.pmax)?;
+    put_vec(&mut inventory, "pmin.mtx", &nodal.pmin)?;
+    put_vec(&mut inventory, "fmax.mtx", &instance.branches.f_max)?;
+    put_vec(&mut inventory, "pd.mtx", &instance.p_d)?;
+    put_vec(&mut inventory, "gs.mtx", &instance.g_s)?;
     put_vec(
-        &dir,
+        &mut inventory,
         "angle_min.mtx",
         &instance.branches.angle_min,
-        &mut files,
     )?;
     put_vec(
-        &dir,
+        &mut inventory,
         "angle_max.mtx",
         &instance.branches.angle_max,
-        &mut files,
     )?;
 
-    put_vec(&dir, "q_gen.mtx", &instance.generators.q, &mut files)?;
-    put_vec(&dir, "c_gen.mtx", &instance.generators.c, &mut files)?;
-    put_vec(&dir, "c0_gen.mtx", &instance.generators.c0, &mut files)?;
-    put_vec(&dir, "pmax_gen.mtx", &instance.generators.pmax, &mut files)?;
-    put_vec(&dir, "pmin_gen.mtx", &instance.generators.pmin, &mut files)?;
+    put_vec(&mut inventory, "q_gen.mtx", &instance.generators.q)?;
+    put_vec(&mut inventory, "c_gen.mtx", &instance.generators.c)?;
+    put_vec(&mut inventory, "c0_gen.mtx", &instance.generators.c0)?;
+    put_vec(&mut inventory, "pmax_gen.mtx", &instance.generators.pmax)?;
+    put_vec(&mut inventory, "pmin_gen.mtx", &instance.generators.pmin)?;
 
     let power_units = match instance.units {
         Units::PerUnit => "per_unit_power",
@@ -246,19 +241,41 @@ pub fn write_dcopf_bundle(
         cost_policy: options.metadata.cost_policy,
         synthesized_gen_costs: options.metadata.cost_report.synthesized,
         patched_gen_costs: options.metadata.cost_report.patched,
-        files: files
+        // The manifest lists the operator files it describes; it does not
+        // list itself, matching the wire form consumers already read.
+        files: inventory
             .iter()
-            .filter_map(|path| path.file_name()?.to_str().map(str::to_owned))
+            .map(|(name, _)| (*name).to_string())
             .collect(),
-        powerio_version: powerio::VERSION,
+        powerio_version: powerio_tx::VERSION,
     };
-    let meta_path = dir.join("dcopf_meta.json");
     let json = serde_json::to_string_pretty(&meta)
         .map_err(|error| powerio_matrix::Error::Mtx(error.to_string()))?;
-    std::fs::write(&meta_path, json)?;
-    files.push(meta_path);
+    inventory.push(("dcopf_meta.json", json.into_bytes()));
 
-    Ok(DcOpfOutputs { dir, files })
+    // The complete bundle commits at once through the no-replace destination:
+    // an existing bundle directory is refused rather than replaced.
+    let artifacts = inventory
+        .into_iter()
+        .map(|(name, bytes)| {
+            Ok(powerio_core::MemoryArtifact::new(
+                powerio_core::ArtifactPath::new(name)?,
+                bytes,
+            ))
+        })
+        .collect::<std::result::Result<Vec<_>, powerio_core::Error>>()
+        .map_err(powerio_matrix::Error::from)?;
+    let committed = powerio_core::Destination::path(&bundle_root)
+        .__commit_artifacts(true, artifacts, Vec::new())
+        .map_err(powerio_matrix::Error::from)?;
+    let powerio_core::WrittenOutput::Path { root, artifacts } = committed.into_output() else {
+        unreachable!("a path destination returns a path output")
+    };
+
+    Ok(DcOpfOutputs {
+        dir: root,
+        files: artifacts,
+    })
 }
 
 #[allow(clippy::too_many_lines)]
@@ -520,16 +537,20 @@ fn op(
     }
 }
 
-fn put_mat(dir: &Path, name: &str, matrix: &SparseMatrix, files: &mut Vec<PathBuf>) -> Result<()> {
-    let path = dir.join(name);
-    write_mtx(matrix, &path)?;
-    files.push(path);
+fn put_mat(
+    inventory: &mut Vec<(&'static str, Vec<u8>)>,
+    name: &'static str,
+    matrix: &SparseMatrix,
+) -> Result<()> {
+    inventory.push((name, powerio_matrix::io::mtx_bytes(matrix)?));
     Ok(())
 }
 
-fn put_vec(dir: &Path, name: &str, values: &[f64], files: &mut Vec<PathBuf>) -> Result<()> {
-    let path = dir.join(name);
-    write_vector_mtx(values, &path)?;
-    files.push(path);
+fn put_vec(
+    inventory: &mut Vec<(&'static str, Vec<u8>)>,
+    name: &'static str,
+    values: &[f64],
+) -> Result<()> {
+    inventory.push((name, powerio_matrix::io::vector_mtx_bytes(values)?));
     Ok(())
 }

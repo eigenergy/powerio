@@ -374,29 +374,29 @@ fn bucket(parsed: Vec<Parsed>) -> Vec<Bucket> {
 /// One parsed case, in whichever model claimed it.
 pub enum Case {
     Balanced(Box<BalancedNetwork>, Vec<String>),
-    Multiconductor(Box<powerio_dist::MulticonductorNetwork>),
+    Multiconductor(Box<powerio_dist::MulticonductorNetwork>, Vec<String>),
 }
 
 impl Case {
     fn domain(&self) -> Domain {
         match self {
             Self::Balanced(..) => Domain::Transmission,
-            Self::Multiconductor(_) => Domain::Distribution,
+            Self::Multiconductor(..) => Domain::Distribution,
         }
     }
 
     fn fingerprint(&self) -> Fingerprint {
         match self {
             Self::Balanced(net, _) => Fingerprint::of(net),
-            Self::Multiconductor(net) => Fingerprint::of_distribution(net),
+            Self::Multiconductor(net, _) => Fingerprint::of_distribution(net),
         }
     }
 
     fn format(&self) -> String {
         match self {
-            Self::Balanced(net, _) => net.source_format.name().to_string(),
-            Self::Multiconductor(net) => net
-                .source_format
+            Self::Balanced(net, _) => net.source_format().name().to_string(),
+            Self::Multiconductor(net, _) => net
+                .source_format()
                 .as_ref()
                 .map_or("dss", |f| f.name())
                 .to_string(),
@@ -405,8 +405,7 @@ impl Case {
 
     fn warnings(&self) -> Vec<String> {
         match self {
-            Self::Balanced(_, warnings) => warnings.clone(),
-            Self::Multiconductor(net) => net.warnings.clone(),
+            Self::Balanced(_, warnings) | Self::Multiconductor(_, warnings) => warnings.clone(),
         }
     }
 }
@@ -424,13 +423,19 @@ fn read_case(path: &Path) -> std::result::Result<Case, Unreadable> {
         error,
         panicked,
     };
-    let balanced_error = match catch_panic(|| powerio_matrix::parse_file(path, None)) {
-        Ok(Ok(parsed)) => return Ok(Case::Balanced(Box::new(parsed.network), parsed.warnings)),
+    let balanced_error = match catch_panic(|| crate::compat::parse_file(path, None)) {
+        Ok(Ok(parsed)) => {
+            let rendered = parsed.rendered_diagnostics();
+            return Ok(Case::Balanced(Box::new(parsed.network), rendered));
+        }
         Err(message) => return Err(unreadable(message, true)),
         Ok(Err(err)) => err.to_string(),
     };
-    match catch_panic(|| powerio_dist::parse_file(path, None)) {
-        Ok(Ok(net)) => Ok(Case::Multiconductor(Box::new(net))),
+    match catch_panic(|| crate::compat::dist_parse_file(path, None)) {
+        Ok(Ok(parsed)) => Ok(Case::Multiconductor(
+            Box::new(parsed.network),
+            parsed.warnings,
+        )),
         // A `.m` that failed the MATPOWER parse used to report "unknown
         // distribution format `m`": the fallback reader's refusal displaced
         // the diagnosis. When the distribution reader does not even claim the
@@ -438,7 +443,9 @@ fn read_case(path: &Path) -> std::result::Result<Case, Unreadable> {
         Ok(Err(err)) => {
             let message = err.to_string();
             Err(unreadable(
-                if message.starts_with("unknown distribution format") {
+                if message.contains("unknown distribution format")
+                    || message.contains("REQUEST.FORMAT.UNKNOWN")
+                {
                     balanced_error
                 } else {
                     message
@@ -462,7 +469,7 @@ fn balanced(path: &Path) -> Option<BalancedNetwork> {
 /// one.
 fn multiconductor(path: &Path) -> Option<powerio_dist::MulticonductorNetwork> {
     match read_case(path) {
-        Ok(Case::Multiconductor(net)) => Some(*net),
+        Ok(Case::Multiconductor(net, _)) => Some(*net),
         _ => None,
     }
 }
@@ -667,14 +674,14 @@ fn dist_convert_leg(
             to_ordinal: to.ordinal,
         },
     );
-    let written = match catch_panic(|| source.to_format(target)) {
+    let written = match catch_panic(|| powerio_dist::write_network(source, target)) {
         Ok(conversion) => conversion,
         Err(message) => {
             out.failure = Some(format!("write panicked: {message}"));
             return out;
         }
     };
-    out.warnings.extend(written.warnings.iter().cloned());
+    out.warnings.extend(written.rendered_diagnostics());
     let token = to.format.clone();
     let text = written.text;
     // A deck that pulls in other files cannot be read back from a string:
@@ -687,7 +694,7 @@ fn dist_convert_leg(
         out.unresolved_include = true;
         return out;
     }
-    let parsed = match catch_panic(|| powerio_dist::parse_str(&text, &token)) {
+    let parsed = match catch_panic(|| crate::compat::dist_parse_str(&text, &token)) {
         Ok(Ok(parsed)) => parsed,
         Ok(Err(err)) => {
             out.failure = Some(format!("readback: {err}"));
@@ -703,12 +710,11 @@ fn dist_convert_leg(
     // on re-parse was graded undeclared.
     out.warnings.extend(parsed.warnings.iter().cloned());
     let before = invariants::distribution_core(source);
-    let after = invariants::distribution_core(&parsed);
+    let after = invariants::distribution_core(&parsed.network);
     if before != after {
         out.core_changed = Some(dist_core_delta(&before, &after));
     }
-    let mut clean = parsed;
-    clean.warnings.clear();
+    let clean = parsed.network;
     let diffs = invariants::model_diffs(
         &invariants::distribution_value(source),
         &invariants::distribution_value(&clean),
@@ -798,7 +804,7 @@ fn convert_leg(
             to_ordinal: to.ordinal,
         },
     );
-    let written = match catch_panic(|| powerio_matrix::write_as(source, target)) {
+    let written = match catch_panic(|| powerio_matrix::write_network(source, target)) {
         Ok(Ok(conversion)) => conversion,
         Ok(Err(err)) => {
             out.failure = Some(format!("write: {err}"));
@@ -809,10 +815,10 @@ fn convert_leg(
             return out;
         }
     };
-    out.warnings.extend(written.warnings.iter().cloned());
+    out.warnings.extend(written.rendered_diagnostics());
     let token = to.format.clone();
     let text = written.text;
-    let parsed = match catch_panic(|| powerio_matrix::parse_str(&text, &token)) {
+    let parsed = match catch_panic(|| crate::compat::parse_str(&text, &token)) {
         Ok(Ok(parsed)) => parsed,
         Ok(Err(err)) => {
             out.failure = Some(format!("readback: {err}"));
@@ -823,7 +829,7 @@ fn convert_leg(
             return out;
         }
     };
-    out.warnings.extend(parsed.warnings.iter().cloned());
+    out.warnings.extend(parsed.rendered_diagnostics());
     fill_invariants(&mut out, source, &parsed.network);
     out
 }
@@ -1020,10 +1026,10 @@ pub fn report(work: &Path, findings_path: &Path, summary_path: Option<&Path>) ->
             sanitizer.learn_path(&member.path);
             match read_case(&member.path) {
                 Ok(Case::Balanced(net, _)) => {
-                    sanitizer.learn_buses(net.buses.iter().map(|b| b.id.0));
+                    sanitizer.learn_buses(net.buses().iter().map(|b| b.id.0));
                     sanitizer.learn_network(&serde_json::to_value(&*net)?);
                 }
-                Ok(Case::Multiconductor(net)) => {
+                Ok(Case::Multiconductor(net, _)) => {
                     sanitizer.learn_network(&serde_json::to_value(&net)?);
                 }
                 Err(_) => {}
@@ -1466,7 +1472,7 @@ mod tests {
             };
             let value = match case {
                 Case::Balanced(net, _) => serde_json::to_value(&*net),
-                Case::Multiconductor(net) => serde_json::to_value(&*net),
+                Case::Multiconductor(net, _) => serde_json::to_value(&*net),
             }
             .expect("a parsed fixture serializes");
             model_keys(&value, false, &mut keys);

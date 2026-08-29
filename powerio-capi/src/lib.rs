@@ -30,13 +30,15 @@ use std::ffi::{CStr, CString, c_char};
 use std::panic::{AssertUnwindSafe, catch_unwind};
 
 use powerio::{
-    BalancedNetwork, IndexCore, IndexedNetwork, MissingGenCostPolicy, NormalizeOptions,
-    POWER_MODELS_ANGLE_BOUND_PAD, StructuredDiagnostic, TargetFormat, WriteOptions,
+    BalancedNetwork, Diagnostic, IndexCore, IndexedNetwork, MissingGenCostPolicy, NormalizeOptions,
+    POWER_MODELS_ANGLE_BOUND_PAD, TargetFormat, WriteOptions,
 };
 
+#[cfg(feature = "pkg")]
+use crate::diagnostics::coded_str;
 use crate::diagnostics::{coded, codes, err_line};
 #[cfg(feature = "pkg")]
-use powerio_pkg::diagnostics::codes as pkg_codes;
+use powerio::package::diagnostics::codes as pkg_codes;
 
 #[cfg(feature = "arrow")]
 mod arrow_export;
@@ -58,12 +60,24 @@ pub use arrow_export::{
 /// reuses the same bus-id map and per-bus aggregates instead of rebuilding
 /// them), and the reader's fidelity warnings ([`pio_warnings`]).
 pub struct PioNetwork {
-    net: BalancedNetwork,
+    /// The parsed module: the typed network plus retained source and the
+    /// reader's findings. Same format writes echo the retained bytes exactly,
+    /// as ABI v5 promises; a handle built from a bare network carries no
+    /// source and writes canonically.
+    module: powerio_core::PioModule<BalancedNetwork>,
     core: IndexCore,
-    /// The reader's findings as structured records.
-    diagnostics: Vec<StructuredDiagnostic>,
-    /// The same findings as `CODE: message` lines.
+    /// The findings as `CODE: message` lines, rendered once at construction.
     warnings: Vec<String>,
+}
+
+impl PioNetwork {
+    fn net(&self) -> &BalancedNetwork {
+        self.module.value()
+    }
+
+    fn diagnostics(&self) -> &[Diagnostic] {
+        self.module.diagnostics()
+    }
 }
 
 // The handle is immutable after construction and the C ABI documents concurrent
@@ -167,16 +181,60 @@ unsafe fn guard<R>(fallback: R, f: impl FnOnce() -> R) -> R {
     catch_unwind(AssertUnwindSafe(f)).unwrap_or(fallback)
 }
 
-/// Box a `BalancedNetwork` into an owned network handle, building its [`IndexCore`] once so
-/// every indexed query reuses it. The one constructor for `*mut PioNetwork`.
-fn make_network(net: BalancedNetwork, diagnostics: Vec<StructuredDiagnostic>) -> *mut PioNetwork {
-    let core = IndexCore::build(&net);
+fn core_err_line(error: &powerio_core::Error) -> String {
+    // The common failure renders as `CODE: message` already.
+    error.to_string()
+}
+
+fn parse_module_from_path(
+    path: &std::path::Path,
+    from: Option<&str>,
+) -> Result<powerio_core::PioModule<BalancedNetwork>, String> {
+    let mut source = powerio_core::Source::open(path).map_err(|e| core_err_line(&e))?;
+    if let Some(token) = from {
+        source = source.with_format(
+            powerio_core::FormatId::new(token.to_ascii_lowercase().replace('_', "-"))
+                .map_err(|e| core_err_line(&e))?,
+        );
+    }
+    powerio::format::parse(source).map_err(|e| core_err_line(&e))
+}
+
+fn parse_module_from_bytes(
+    bytes: &[u8],
+    from: &str,
+) -> Result<powerio_core::PioModule<BalancedNetwork>, String> {
+    let source = powerio_core::Source::from_bytes("<memory>", bytes.to_vec())
+        .map_err(|e| core_err_line(&e))?
+        .with_format(
+            powerio_core::FormatId::new(from.to_ascii_lowercase().replace('_', "-"))
+                .map_err(|e| core_err_line(&e))?,
+        );
+    powerio::format::parse(source).map_err(|e| core_err_line(&e))
+}
+
+/// Box a parsed module into an owned network handle, building its
+/// [`IndexCore`] once so every indexed query reuses it. The one constructor
+/// for `*mut PioNetwork`.
+fn make_network_module(module: powerio_core::PioModule<BalancedNetwork>) -> *mut PioNetwork {
+    let core = IndexCore::build(module.value());
     Box::into_raw(Box::new(PioNetwork {
         core,
-        warnings: powerio::diagnostics::render_lines(&diagnostics),
-        diagnostics,
-        net,
+        warnings: powerio::diagnostics::render_diagnostics(module.diagnostics()),
+        module,
     }))
+}
+
+/// Box a bare network with findings: the constructor for derived handles,
+/// which carry no retained source and write canonically.
+fn make_network(net: BalancedNetwork, diagnostics: Vec<Diagnostic>) -> *mut PioNetwork {
+    let mut module = powerio_core::PioModule::new(net);
+    for diagnostic in diagnostics {
+        module
+            .add_diagnostic(diagnostic)
+            .expect("derived findings carry no identities or spans to collide");
+    }
+    make_network_module(module)
 }
 
 /// Finish a `*mut PioNetwork` entry point: run `f` (producing a `BalancedNetwork` with
@@ -184,11 +242,32 @@ fn make_network(net: BalancedNetwork, diagnostics: Vec<StructuredDiagnostic>) ->
 /// owned handle, or write the error, `panic_msg` if `f` panicked, into `errbuf`
 /// and return NULL. The shared tail of every handle-returning function
 /// (`pio_parse_file`, `pio_parse_str`, `pio_read_dir`, `pio_normalize`).
+unsafe fn finish_module(
+    errbuf: *mut c_char,
+    errlen: usize,
+    panic_msg: &str,
+    f: impl FnOnce() -> Result<powerio_core::PioModule<BalancedNetwork>, String>,
+) -> *mut PioNetwork {
+    unsafe {
+        match catch_unwind(AssertUnwindSafe(|| f().map(make_network_module))) {
+            Ok(Ok(handle)) => handle,
+            Ok(Err(msg)) => {
+                copy_to_buf(errbuf, errlen, &msg);
+                std::ptr::null_mut()
+            }
+            Err(_) => {
+                copy_to_buf(errbuf, errlen, panic_msg);
+                std::ptr::null_mut()
+            }
+        }
+    }
+}
+
 unsafe fn finish_network(
     errbuf: *mut c_char,
     errlen: usize,
     panic_msg: &str,
-    f: impl FnOnce() -> Result<(BalancedNetwork, Vec<StructuredDiagnostic>), String>,
+    f: impl FnOnce() -> Result<(BalancedNetwork, Vec<Diagnostic>), String>,
 ) -> *mut PioNetwork {
     unsafe {
         // make_network runs inside the guard: IndexCore::build is part of the
@@ -256,6 +335,31 @@ pub const PIO_SCOPF_INDEX_BASE_ZERO: i32 = 0;
 /// Renumber SCOPF document ordinals to 1-based.
 #[cfg(feature = "prob")]
 pub const PIO_SCOPF_INDEX_BASE_ONE: i32 = 1;
+
+/// The category tokens ABI v5 publishes.
+///
+/// Rust renamed `UnknownFormat` to `Request` for 1.0, but `pio_build_info` is
+/// an ABI v5 response and PowerIO.jl asserts this exact tuple
+/// (`test/test_public_api.jl`). The v5 spelling holds until the ABI v6 branch
+/// changes both sides together. `abi_v5_error_category_token` is exhaustive
+/// over `ErrorCategory`, so adding a category forces a decision here.
+const ABI_V5_ERROR_CATEGORY_TOKENS: [&str; 5] = [
+    abi_v5_error_category_token(powerio::ErrorCategory::Io),
+    abi_v5_error_category_token(powerio::ErrorCategory::Request),
+    abi_v5_error_category_token(powerio::ErrorCategory::Parse),
+    abi_v5_error_category_token(powerio::ErrorCategory::Data),
+    abi_v5_error_category_token(powerio::ErrorCategory::Output),
+];
+
+const fn abi_v5_error_category_token(category: powerio::ErrorCategory) -> &'static str {
+    match category {
+        powerio::ErrorCategory::Io => "io",
+        powerio::ErrorCategory::Request => "unknown_format",
+        powerio::ErrorCategory::Parse => "parse",
+        powerio::ErrorCategory::Data => "data",
+        powerio::ErrorCategory::Output => "output",
+    }
+}
 
 /// The ABI version the library was built with (see [`PIO_ABI_VERSION`]). Lets a
 /// consumer detect a stale or incompatible library at load time. Infallible.
@@ -401,7 +505,7 @@ fn build_info_ptr() -> *mut c_char {
         // owns the schema, which is why an integer checked once at load cannot
         // express it.
         "foreign_schemas": { "bmopf": bmopf_schema_version() },
-        "error_categories": powerio::ErrorCategory::TOKENS,
+        "error_categories": ABI_V5_ERROR_CATEGORY_TOKENS,
         "diagnostic_namespaces": powerio::diagnostics::DiagnosticStage::NAMESPACES,
         "json_classes": powerio::format::routing::JSON_CLASSES,
     });
@@ -504,10 +608,10 @@ fn null_handle(what: &str) -> String {
 /// coded record and the C surface carries one message, so take the first
 /// record's own line rather than inventing a code for it.
 #[cfg(feature = "pkg")]
-fn lowering_err_line(e: &powerio_pkg::MulticonductorToBalancedError) -> String {
+fn lowering_err_line(e: &powerio::package::MulticonductorToBalancedError) -> String {
     e.diagnostics.first().map_or_else(
         || coded(&codes::BIND_CAPI_UNCODED_FAILURE, e),
-        powerio::diagnostics::render_line,
+        powerio::package::diagnostics::render_line,
     )
 }
 
@@ -527,12 +631,10 @@ pub unsafe extern "C" fn pio_parse_file(
     errlen: usize,
 ) -> *mut PioNetwork {
     unsafe {
-        finish_network(errbuf, errlen, "panic while parsing", || {
+        finish_module(errbuf, errlen, "panic while parsing", || {
             let path = required_cstr(path, "path")?;
             let from = optional_cstr(from, "from")?;
-            powerio::parse_file(std::path::Path::new(path), from)
-                .map(|p| (p.network, p.diagnostics))
-                .map_err(err_line)
+            parse_module_from_path(std::path::Path::new(path), from)
         })
     }
 }
@@ -556,12 +658,10 @@ pub unsafe extern "C" fn pio_parse_str(
     errlen: usize,
 ) -> *mut PioNetwork {
     unsafe {
-        finish_network(errbuf, errlen, "panic while parsing", || {
+        finish_module(errbuf, errlen, "panic while parsing", || {
             let text = required_cstr(text, "text")?;
             let format = required_cstr(format, "format")?;
-            powerio::parse_str(text, format)
-                .map(|p| (p.network, p.diagnostics))
-                .map_err(err_line)
+            parse_module_from_bytes(text.as_bytes(), format)
         })
     }
 }
@@ -585,7 +685,7 @@ pub unsafe extern "C" fn pio_parse_bytes(
     errlen: usize,
 ) -> *mut PioNetwork {
     unsafe {
-        finish_network(errbuf, errlen, "panic while parsing", || {
+        finish_module(errbuf, errlen, "panic while parsing", || {
             let format = required_cstr(format, "format")?;
             // A zero length read is an empty case, and every reader rejects
             // one with its own message; a NULL pointer is a caller bug.
@@ -596,9 +696,7 @@ pub unsafe extern "C" fn pio_parse_bytes(
             } else {
                 std::slice::from_raw_parts(bytes, len)
             };
-            powerio::parse_bytes(slice, format)
-                .map(|p| (p.network, p.diagnostics))
-                .map_err(err_line)
+            parse_module_from_bytes(slice, format)
         })
     }
 }
@@ -673,7 +771,7 @@ pub unsafe extern "C" fn pio_to_json(
     unsafe {
         finish_string(errbuf, errlen, "panic while serializing model JSON", || {
             let net = net.as_ref().ok_or_else(|| null_handle("network handle"))?;
-            net.net.to_json().map_err(err_line)
+            net.net().to_json().map_err(err_line)
         })
     }
 }
@@ -825,7 +923,7 @@ unsafe fn network_ref<'a>(net: *const PioNetwork) -> Option<&'a PioNetwork> {
 unsafe fn view<'a>(net: *const PioNetwork) -> Option<IndexedNetwork<'a>> {
     unsafe {
         net.as_ref()
-            .map(|c| IndexedNetwork::with_core(&c.net, &c.core))
+            .map(|c| IndexedNetwork::with_core(c.net(), &c.core))
     }
 }
 
@@ -909,10 +1007,11 @@ pub unsafe extern "C" fn pio_normalize(
             let c = network_ref(net).ok_or_else(|| null_handle("network handle"))?;
             let options = normalize_options_from_c(opts)?;
             let out = c
-                .net
+                .net()
                 .to_normalized_with_options(&options)
                 .map_err(err_line)?;
-            let mut diagnostics = c.diagnostics.clone();
+            let diagnostics = c.diagnostics().to_vec();
+            let mut diagnostics = diagnostics.to_vec();
             diagnostics.extend(out.diagnostics);
             Ok((out.network, diagnostics))
         })
@@ -940,17 +1039,25 @@ pub unsafe extern "C" fn pio_n_branches(net: *const PioNetwork) -> usize {
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_n_switches(net: *const PioNetwork) -> usize {
-    unsafe { guard(0, || network_ref(net).map_or(0, |c| c.net.switches.len())) }
+    unsafe {
+        guard(0, || {
+            network_ref(net).map_or(0, |c| c.net().switches().len())
+        })
+    }
 }
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_n_gens(net: *const PioNetwork) -> usize {
-    unsafe { guard(0, || network_ref(net).map_or(0, |c| c.net.generators.len())) }
+    unsafe {
+        guard(0, || {
+            network_ref(net).map_or(0, |c| c.net().generators().len())
+        })
+    }
 }
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_base_mva(net: *const PioNetwork) -> f64 {
-    unsafe { guard(0.0, || network_ref(net).map_or(0.0, |c| c.net.base_mva)) }
+    unsafe { guard(0.0, || network_ref(net).map_or(0.0, |c| c.net().base_mva())) }
 }
 
 /// Case name. Writes UTF-8 bytes into `out`, up to `cap`, NUL-terminates when
@@ -965,8 +1072,8 @@ pub unsafe extern "C" fn pio_network_name(
     unsafe {
         guard(0, || {
             let Some(c) = network_ref(net) else { return 0 };
-            copy_to_buf(out, cap, &c.net.name);
-            c.net.name.len()
+            copy_to_buf(out, cap, c.net().name());
+            c.net().name().len()
         })
     }
 }
@@ -984,7 +1091,7 @@ pub unsafe extern "C" fn pio_source_format(
     unsafe {
         guard(0, || {
             let Some(c) = network_ref(net) else { return 0 };
-            let name = c.net.source_format.name().to_owned();
+            let name = c.net().source_format().name().to_owned();
             copy_to_buf(out, cap, &name);
             name.len()
         })
@@ -1013,7 +1120,7 @@ pub unsafe extern "C" fn pio_summary_json(
             "panic while serializing summary JSON",
             || {
                 let c = network_ref(net).ok_or_else(|| null_handle("network handle"))?;
-                let v = IndexedNetwork::with_core(&c.net, &c.core);
+                let v = IndexedNetwork::with_core(c.net(), &c.core);
                 let reference_bus_indices = v.reference_bus_indices();
                 let reference_bus_ids: Vec<usize> = reference_bus_indices
                     .iter()
@@ -1021,21 +1128,21 @@ pub unsafe extern "C" fn pio_summary_json(
                     .collect();
                 let summary = serde_json::json!({
                     powerio::version::VERSION_KEY: powerio::VERSION,
-                    "name": c.net.name,
-                    "source_format": c.net.source_format.name(),
-                    "base_mva": c.net.base_mva,
-                    "base_frequency": c.net.base_frequency,
+                    "name": c.net().name(),
+                    "source_format": c.net().source_format().name(),
+                    "base_mva": c.net().base_mva(),
+                    "base_frequency": c.net().base_frequency(),
                     "counts": {
-                        "buses": c.net.buses.len(),
-                        "loads": c.net.loads.len(),
-                        "shunts": c.net.shunts.len(),
-                        "branches": c.net.branches.len(),
-                        "switches": c.net.switches.len(),
-                        "generators": c.net.generators.len(),
-                        "storage": c.net.storage.len(),
-                        "hvdc": c.net.hvdc.len(),
-                        "transformers_3w": c.net.transformers_3w.len(),
-                        "areas": c.net.areas.len(),
+                        "buses": c.net().buses().len(),
+                        "loads": c.net().loads().len(),
+                        "shunts": c.net().shunts().len(),
+                        "branches": c.net().branches().len(),
+                        "switches": c.net().switches().len(),
+                        "generators": c.net().generators().len(),
+                        "storage": c.net().storage().len(),
+                        "hvdc": c.net().hvdc().len(),
+                        "transformers_3w": c.net().transformers_3w().len(),
+                        "areas": c.net().areas().len(),
                         "warnings": c.warnings.len(),
                     },
                     "topology": {
@@ -1316,10 +1423,11 @@ pub unsafe extern "C" fn pio_to_format(
                 let c = network_ref(net).ok_or_else(|| null_handle("network handle"))?;
                 let target = target_format_from_c(to)?;
                 let options = write_options_from_c(opts)?;
-                let conv = c
-                    .net
-                    .to_format_with_options(target, &options)
-                    .map_err(err_line)?;
+                // The module write: a same format target of an unchanged
+                // parsed handle echoes the retained source bytes exactly, as
+                // ABI v5 promises.
+                let conv = powerio::write_as_with_options(&c.module, target, &options)
+                    .map_err(|e| core_err_line(&e))?;
                 Ok((conv.text, conv.diagnostics))
             },
         )
@@ -1333,10 +1441,7 @@ pub unsafe extern "C" fn pio_to_format(
 /// message is not: one per lossy element, so a large case produces more than
 /// any fixed size a caller can guess. The errbuf idiom stays for errors, which
 /// are one message.
-unsafe fn set_out_diagnostics(
-    out_diagnostics_json: *mut *mut c_char,
-    diagnostics: &[StructuredDiagnostic],
-) {
+unsafe fn set_out_diagnostics(out_diagnostics_json: *mut *mut c_char, diagnostics: &[Diagnostic]) {
     unsafe {
         if out_diagnostics_json.is_null() {
             return;
@@ -1367,7 +1472,7 @@ unsafe fn finish_conversion(
     errbuf: *mut c_char,
     errlen: usize,
     panic_msg: &str,
-    f: impl FnOnce() -> Result<(String, Vec<StructuredDiagnostic>), String>,
+    f: impl FnOnce() -> Result<(String, Vec<Diagnostic>), String>,
 ) -> *mut c_char {
     unsafe {
         // Set before running f: a caller reads it on every return path, and a
@@ -1435,7 +1540,7 @@ pub unsafe extern "C" fn pio_convert_file(
                     from,
                     &options,
                 )
-                .map_err(err_line)?;
+                .map_err(|e| core_err_line(&e))?;
                 Ok((conv.text, conv.diagnostics))
             },
         )
@@ -1474,7 +1579,7 @@ pub unsafe extern "C" fn pio_convert_str(
                 let target = target_format_from_c(to)?;
                 let options = write_options_from_c(opts)?;
                 let conv = powerio::convert_str_with_options(text, target, from, &options)
-                    .map_err(err_line)?;
+                    .map_err(|e| core_err_line(&e))?;
                 Ok((conv.text, conv.diagnostics))
             },
         )
@@ -1509,8 +1614,8 @@ pub unsafe extern "C" fn pio_write_dir(
             let to = required_cstr(to, "to")?;
             let out_dir = required_cstr(out_dir, "out_dir")?;
             let options = write_options_from_c(opts)?;
-            powerio::write_dir_with_options(&c.net, to, std::path::Path::new(out_dir), &options)
-                .map_err(err_line)
+            powerio::write_dir_with_options(c.net(), to, std::path::Path::new(out_dir), &options)
+                .map_err(|error| core_err_line(&error))
         }));
         match r {
             Ok(Ok(warnings)) => {
@@ -1695,45 +1800,61 @@ pub unsafe extern "C" fn pio_switches(
     unsafe {
         guard(0, || {
             let Some(c) = network_ref(net) else { return 0 };
-            let net = &c.net;
+            let net = &c.net();
             fill(
                 from,
                 cap,
-                net.switches
+                net.switches()
                     .iter()
                     .map(|sw| i64::try_from(sw.from.0).unwrap_or(-1)),
             );
             fill(
                 to,
                 cap,
-                net.switches
+                net.switches()
                     .iter()
                     .map(|sw| i64::try_from(sw.to.0).unwrap_or(-1)),
             );
             fill(
                 closed,
                 cap,
-                net.switches.iter().map(|sw| u8::from(sw.closed)),
+                net.switches().iter().map(|sw| u8::from(sw.closed)),
             );
             fill(
                 thermal_rating,
                 cap,
-                net.switches
+                net.switches()
                     .iter()
                     .map(|sw| sw.thermal_rating.unwrap_or(0.0)),
             );
             fill(
                 current_rating,
                 cap,
-                net.switches
+                net.switches()
                     .iter()
                     .map(|sw| sw.current_rating.unwrap_or(0.0)),
             );
-            fill(pf, cap, net.switches.iter().map(|sw| sw.pf.unwrap_or(0.0)));
-            fill(qf, cap, net.switches.iter().map(|sw| sw.qf.unwrap_or(0.0)));
-            fill(pt, cap, net.switches.iter().map(|sw| sw.pt.unwrap_or(0.0)));
-            fill(qt, cap, net.switches.iter().map(|sw| sw.qt.unwrap_or(0.0)));
-            net.switches.len()
+            fill(
+                pf,
+                cap,
+                net.switches().iter().map(|sw| sw.pf.unwrap_or(0.0)),
+            );
+            fill(
+                qf,
+                cap,
+                net.switches().iter().map(|sw| sw.qf.unwrap_or(0.0)),
+            );
+            fill(
+                pt,
+                cap,
+                net.switches().iter().map(|sw| sw.pt.unwrap_or(0.0)),
+            );
+            fill(
+                qt,
+                cap,
+                net.switches().iter().map(|sw| sw.qt.unwrap_or(0.0)),
+            );
+            net.switches().len()
         })
     }
 }
@@ -1754,23 +1875,23 @@ pub unsafe extern "C" fn pio_gens(
     unsafe {
         guard(0, || {
             let Some(c) = network_ref(net) else { return 0 };
-            let net = &c.net;
+            let net = &c.net();
             fill(
                 bus,
                 cap,
-                net.generators
+                net.generators()
                     .iter()
                     .map(|g| i64::try_from(g.bus.0).unwrap_or(-1)),
             );
-            fill(pg, cap, net.generators.iter().map(|g| g.pg));
-            fill(pmax, cap, net.generators.iter().map(|g| g.pmax));
-            fill(pmin, cap, net.generators.iter().map(|g| g.pmin));
+            fill(pg, cap, net.generators().iter().map(|g| g.pg));
+            fill(pmax, cap, net.generators().iter().map(|g| g.pmax));
+            fill(pmin, cap, net.generators().iter().map(|g| g.pmin));
             fill(
                 in_service,
                 cap,
-                net.generators.iter().map(|g| u8::from(g.in_service)),
+                net.generators().iter().map(|g| u8::from(g.in_service)),
             );
-            net.generators.len()
+            net.generators().len()
         })
     }
 }
@@ -1868,7 +1989,7 @@ pub unsafe extern "C" fn pio_to_arrow(
                 ));
             }
             let c = network_ref(net).ok_or_else(|| null_handle("network handle"))?;
-            arrow_export::export(&c.net, &c.core, table)
+            arrow_export::export(c.net(), &c.core, table)
         }));
         match r {
             Ok(Ok((array, schema))) => {
@@ -1924,11 +2045,11 @@ pub unsafe extern "C" fn pio_arrow_catalog_json(errbuf: *mut c_char, errlen: usi
 // ---------------------------------------------------------------------------
 
 /// Opaque `.pio.json` compiler package handle. A package owns one
-/// [`powerio_pkg::NetworkPackage`], which wraps either a balanced
+/// [`powerio::package::NetworkPackage`], which wraps either a balanced
 /// [`PioNetwork`] payload or a multiconductor [`PioDistNetwork`] payload.
 #[cfg(feature = "pkg")]
 pub struct PioPackage {
-    package: powerio_pkg::NetworkPackage,
+    package: powerio::package::NetworkPackage,
 }
 
 #[cfg(feature = "pkg")]
@@ -1938,8 +2059,8 @@ const _: fn() = || {
 };
 
 #[cfg(feature = "pkg")]
-fn lowering_options(base_mva: f64) -> powerio_pkg::MulticonductorToBalancedOptions {
-    powerio_pkg::MulticonductorToBalancedOptions {
+fn lowering_options(base_mva: f64) -> powerio::package::MulticonductorToBalancedOptions {
+    powerio::package::MulticonductorToBalancedOptions {
         base_mva,
         ..Default::default()
     }
@@ -1950,7 +2071,7 @@ unsafe fn finish_package(
     errbuf: *mut c_char,
     errlen: usize,
     panic_msg: &str,
-    f: impl FnOnce() -> Result<powerio_pkg::NetworkPackage, String>,
+    f: impl FnOnce() -> Result<powerio::package::NetworkPackage, String>,
 ) -> *mut PioPackage {
     unsafe {
         match catch_unwind(AssertUnwindSafe(f)) {
@@ -1984,7 +2105,7 @@ pub unsafe extern "C" fn pio_package_parse_file(
             let path = required_cstr(path, "path")?;
             let text =
                 std::fs::read_to_string(path).map_err(|e| coded(&codes::READ_CAPI_IO_FAILED, e))?;
-            powerio_pkg::NetworkPackage::from_json(&text).map_err(err_line)
+            powerio::package::NetworkPackage::from_json(&text).map_err(err_line)
         })
     }
 }
@@ -2002,7 +2123,7 @@ pub unsafe extern "C" fn pio_package_parse_str(
     unsafe {
         finish_package(errbuf, errlen, "panic while parsing package", || {
             let text = required_cstr(text, "text")?;
-            powerio_pkg::NetworkPackage::from_json(text).map_err(err_line)
+            powerio::package::NetworkPackage::from_json(text).map_err(err_line)
         })
     }
 }
@@ -2080,10 +2201,11 @@ pub unsafe extern "C" fn pio_package_from_balanced_network(
             "panic while packaging balanced network",
             || {
                 let net = network_ref(net).ok_or_else(|| null_handle("network handle"))?;
-                let mut package = powerio_pkg::NetworkPackage::from_balanced_with_read_diagnostics(
-                    net.net.clone(),
-                    net.diagnostics.clone(),
-                );
+                let mut package =
+                    powerio::package::NetworkPackage::from_balanced_with_read_diagnostics(
+                        net.net().clone(),
+                        net.diagnostics().iter().cloned().map(Into::into),
+                    );
                 if include_solver_metadata != 0 {
                     package
                         .attach_normalized_solver_table_metadata()
@@ -2113,9 +2235,12 @@ pub unsafe extern "C" fn pio_package_from_multiconductor_network(
                 let net = net
                     .as_ref()
                     .ok_or_else(|| null_handle("distribution network handle"))?;
-                Ok(powerio_pkg::NetworkPackage::from_multiconductor(
-                    net.net.clone(),
-                ))
+                Ok(
+                    powerio::package::NetworkPackage::from_multiconductor_with_read_diagnostics(
+                        net.net().clone(),
+                        net.module.diagnostics().iter().cloned().map(Into::into),
+                    ),
+                )
             },
         )
     }
@@ -2150,14 +2275,13 @@ pub unsafe extern "C" fn pio_package_to_balanced_network(
                          extracting it needs a build with the `dist` feature \
                          (pio_package_to_multiconductor_network)"
                     };
-                    coded(&pkg_codes::REQUEST_PACKAGE_WRONG_MODEL_KIND, message)
+                    coded_str(pkg_codes::REQUEST_PACKAGE_WRONG_MODEL_KIND.code, message)
                 })?;
-                let mut net = net.clone();
+                let net = net.clone();
                 // An in-memory package still holds the payload's #[serde(skip)]
                 // source text; drop it so extraction behaves the same whether
                 // or not the package crossed JSON, and a same-format write is
                 // the promised fresh serialization.
-                net.source = None;
                 Ok((net, Vec::new()))
             },
         )
@@ -2168,8 +2292,8 @@ pub unsafe extern "C" fn pio_package_to_balanced_network(
 /// distribution network handle: the inverse of
 /// [`pio_package_from_multiconductor_network`]. Errors when the package holds
 /// a different model kind. The handle retains no source text, so a
-/// same format write is a fresh serialization. The handle retains the payload's
-/// parse warnings, readable through [`pio_dist_warnings`]. Free with
+/// same format write is a fresh serialization, and carries no warning lines:
+/// the package document owns the diagnostics. Free with
 /// [`pio_dist_network_free`].
 #[cfg(all(feature = "pkg", feature = "dist"))]
 #[unsafe(no_mangle)]
@@ -2186,19 +2310,19 @@ pub unsafe extern "C" fn pio_package_to_multiconductor_network(
             || {
                 let pkg = pkg.as_ref().ok_or_else(|| null_handle("package handle"))?;
                 let net = pkg.package.model.as_multiconductor().ok_or_else(|| {
-                    coded(
-                        &pkg_codes::REQUEST_PACKAGE_WRONG_MODEL_KIND,
+                    coded_str(
+                        pkg_codes::REQUEST_PACKAGE_WRONG_MODEL_KIND.code,
                         "package holds a balanced model where multiconductor was asked for; use \
                          pio_package_to_balanced_network",
                     )
                 })?;
                 let mut net = net.clone();
-                // Same in-memory strip as the balanced inverse: source and the
-                // defaulted provenance are #[serde(skip)], so dropping them
-                // here matches what a JSON crossing produces.
-                net.source = None;
-                net.defaulted = Default::default();
-                Ok(PioDistNetwork { net })
+                // Same in-memory strip as the balanced inverse: the defaulted
+                // provenance is #[serde(skip)], so dropping it here matches
+                // what a JSON crossing produces. The handle's warning lines
+                // are rendered from the package's diagnostics.
+                *net.defaulted_mut() = Default::default();
+                Ok(PioDistNetwork::from_network(net, Vec::new()))
             },
         )
     }
@@ -2329,7 +2453,7 @@ pub unsafe extern "C" fn pio_package_set_operating_points(
         let result = catch_unwind(AssertUnwindSafe(|| {
             let pkg = pkg.as_mut().ok_or_else(|| null_handle("package handle"))?;
             let json = required_cstr(json, "json")?;
-            let series: Option<powerio_pkg::OperatingPointSeries> = serde_json::from_str(json)
+            let series: Option<powerio::package::OperatingPointSeries> = serde_json::from_str(json)
                 .map_err(|e| coded(&codes::PARSE_CAPI_JSON_MALFORMED, e))?;
             match series {
                 Some(series) => pkg.package.set_operating_points(series),
@@ -2464,15 +2588,15 @@ pub unsafe extern "C" fn pio_package_multiconductor_to_balanced_preflight_json(
             || {
                 let pkg = pkg.as_ref().ok_or_else(|| null_handle("package handle"))?;
                 let net = pkg.package.as_multiconductor().ok_or_else(|| {
-                    coded(
-                        &pkg_codes::REQUEST_PACKAGE_WRONG_MODEL_KIND,
+                    coded_str(
+                        pkg_codes::REQUEST_PACKAGE_WRONG_MODEL_KIND.code,
                         format!(
                             "multiconductor preflight requires a multiconductor package, got {:?}",
                             pkg.package.model_kind()
                         ),
                     )
                 })?;
-                let report = powerio_pkg::check_multiconductor_to_balanced_lowering(
+                let report = powerio::package::check_multiconductor_to_balanced_lowering(
                     net,
                     lowering_options(base_mva),
                 );
@@ -2562,7 +2686,7 @@ pub unsafe extern "C" fn pio_geo_extract(
     unsafe {
         finish_string(errbuf, errlen, "panic while extracting geo layer", || {
             let c = network_ref(net).ok_or_else(|| null_handle("network handle"))?;
-            c.net.geo_layer().extracted_geojson().map_err(err_line)
+            c.net().geo_layer().extracted_geojson().map_err(err_line)
         })
     }
 }
@@ -2591,17 +2715,16 @@ pub unsafe extern "C" fn pio_geo_apply(
             let name_hint = optional_cstr(name_hint, "name_hint")?;
             let parsed =
                 powerio::GeoLayer::parse_bytes(layer.as_bytes(), name_hint).map_err(err_line)?;
-            let mut out = c.net.clone();
+            let mut out = c.net().clone();
             let report = out.apply_geo_layer(&parsed.layer);
-            out.source = None;
-            let mut diagnostics = c.diagnostics.clone();
+            let mut diagnostics = c.diagnostics().to_vec();
             diagnostics.extend(parsed.diagnostics);
-            diagnostics.push(StructuredDiagnostic::of(
+            diagnostics.push(Diagnostic::of(
                 &powerio::diagnostics::codes::BUILD_GEO_APPLY_SUMMARY,
                 geo_apply_summary(&report),
             ));
             for note in report.notes {
-                diagnostics.push(StructuredDiagnostic::of(
+                diagnostics.push(Diagnostic::of(
                     &powerio::diagnostics::codes::BUILD_GEO_UNMATCHED_FEATURE,
                     note,
                 ));
@@ -2784,7 +2907,84 @@ unsafe fn finish_handle<H>(
 /// the `dist` cargo feature.
 #[cfg(feature = "dist")]
 pub struct PioDistNetwork {
-    net: powerio_dist::MulticonductorNetwork,
+    /// The parsed module: the typed network plus retained source and the
+    /// reader's findings. Same format writes echo the retained bytes exactly,
+    /// as ABI v5 promises; a handle built from a bare network carries no
+    /// source and writes canonically.
+    module: powerio_core::PioModule<powerio_dist::MulticonductorNetwork>,
+    /// The findings as `CODE: message` lines, rendered once at construction.
+    warnings: Vec<String>,
+}
+
+#[cfg(feature = "dist")]
+impl PioDistNetwork {
+    fn net(&self) -> &powerio_dist::MulticonductorNetwork {
+        self.module.value()
+    }
+
+    /// A parsed handle: warnings rendered from the module's findings.
+    fn from_module(module: powerio_core::PioModule<powerio_dist::MulticonductorNetwork>) -> Self {
+        Self {
+            warnings: powerio_dist::diagnostics::render_diagnostics(module.diagnostics()),
+            module,
+        }
+    }
+
+    /// A derived handle: no retained source, so writes are canonical; the
+    /// warning lines come from the deriving surface.
+    fn from_network(net: powerio_dist::MulticonductorNetwork, warnings: Vec<String>) -> Self {
+        Self {
+            module: powerio_core::PioModule::new(net),
+            warnings,
+        }
+    }
+}
+
+/// A distribution source selected by path, with `from` as the declared
+/// format when given.
+#[cfg(feature = "dist")]
+fn dist_source_from_path(
+    path: &std::path::Path,
+    from: Option<&str>,
+) -> Result<powerio_core::Source, String> {
+    let mut source = powerio_core::Source::open(path).map_err(|e| core_err_line(&e))?;
+    if let Some(token) = from {
+        source = source.with_format(
+            powerio_core::FormatId::new(token.to_ascii_lowercase().replace('_', "-"))
+                .map_err(|e| core_err_line(&e))?,
+        );
+    }
+    Ok(source)
+}
+
+/// An in-memory distribution source of the declared `from` format.
+#[cfg(feature = "dist")]
+fn dist_source_from_bytes(bytes: &[u8], from: &str) -> Result<powerio_core::Source, String> {
+    Ok(powerio_core::Source::from_bytes("<memory>", bytes.to_vec())
+        .map_err(|e| core_err_line(&e))?
+        .with_format(
+            powerio_core::FormatId::new(from.to_ascii_lowercase().replace('_', "-"))
+                .map_err(|e| core_err_line(&e))?,
+        ))
+}
+
+/// Parse a distribution source selected by path, with `from` as the declared
+/// format when given.
+#[cfg(feature = "dist")]
+fn parse_dist_module_from_path(
+    path: &std::path::Path,
+    from: Option<&str>,
+) -> Result<powerio_core::PioModule<powerio_dist::MulticonductorNetwork>, String> {
+    powerio_dist::parse(dist_source_from_path(path, from)?).map_err(|e| core_err_line(&e))
+}
+
+/// Parse an in-memory distribution source of the declared `from` format.
+#[cfg(feature = "dist")]
+fn parse_dist_module_from_bytes(
+    bytes: &[u8],
+    from: &str,
+) -> Result<powerio_core::PioModule<powerio_dist::MulticonductorNetwork>, String> {
+    powerio_dist::parse(dist_source_from_bytes(bytes, from)?).map_err(|e| core_err_line(&e))
 }
 
 // Same cross-thread read guarantee as `PioNetwork` (see that assertion): pin
@@ -2812,16 +3012,16 @@ pub unsafe extern "C" fn pio_dist_parse_file(
         finish_handle(errbuf, errlen, "panic while parsing", || {
             let path = required_cstr(path, "path")?;
             let from = optional_cstr(from, "from")?;
-            powerio_dist::parse_file(std::path::Path::new(path), from)
-                .map(|net| PioDistNetwork { net })
-                .map_err(err_line)
+            parse_dist_module_from_path(std::path::Path::new(path), from)
+                .map(PioDistNetwork::from_module)
         })
     }
 }
 
 /// Parse in-memory distribution case `text` of the named `format` (`dss`, `pmd`,
 /// or `bmopf`; required, since there is no path to infer from). An OpenDSS
-/// `Redirect`/`Compile` in `text` resolves against the current working directory.
+/// `Redirect`/`Compile`/`Buscoords` in `text` reads no files: an in-memory
+/// source grants no filesystem access, and each include is refused loudly.
 /// Returns `NULL` on error and writes the message into `errbuf`. Free the handle
 /// with [`pio_dist_network_free`].
 #[cfg(feature = "dist")]
@@ -2836,9 +3036,7 @@ pub unsafe extern "C" fn pio_dist_parse_str(
         finish_handle(errbuf, errlen, "panic while parsing", || {
             let text = required_cstr(text, "text")?;
             let format = required_cstr(format, "format")?;
-            powerio_dist::parse_str(text, format)
-                .map(|net| PioDistNetwork { net })
-                .map_err(err_line)
+            parse_dist_module_from_bytes(text.as_bytes(), format).map(PioDistNetwork::from_module)
         })
     }
 }
@@ -2875,7 +3073,7 @@ pub unsafe extern "C" fn pio_dist_warnings(
     unsafe {
         guard(0, || {
             let Some(c) = net.as_ref() else { return 0 };
-            let msg = c.net.warnings.join("\n");
+            let msg = c.warnings.join("\n");
             copy_to_buf(warnbuf, warnlen, &msg);
             msg.len()
         })
@@ -2901,26 +3099,27 @@ pub unsafe extern "C" fn pio_dist_summary_json(
                 let net = net
                     .as_ref()
                     .ok_or_else(|| null_handle("distribution network handle"))?;
+                let n = net.net();
                 let summary = serde_json::json!({
                     powerio::version::VERSION_KEY: powerio::VERSION,
-                    "name": net.net.name.as_deref(),
-                    "source_format": net.net.source_format.map(|f| f.name()),
-                    "base_frequency": net.net.base_frequency,
+                    "name": n.name().as_deref(),
+                    "source_format": n.source_format().map(|f| f.name()),
+                    "base_frequency": n.base_frequency(),
                     "counts": {
-                        "buses": net.net.buses.len(),
-                        "linecodes": net.net.linecodes.len(),
-                        "lines": net.net.lines.len(),
-                        "switches": net.net.switches.len(),
-                        "transformers": net.net.transformers.len(),
-                        "loads": net.net.loads.len(),
-                        "generators": net.net.generators.len(),
-                        "ibrs": net.net.ibrs.len(),
-                        "control_profiles": net.net.control_profiles.len(),
-                        "shunts": net.net.shunts.len(),
-                        "capacitors": net.net.capacitors.len(),
-                        "sources": net.net.sources.len(),
-                        "untyped": net.net.untyped.len(),
-                        "warnings": net.net.warnings.len(),
+                        "buses": n.buses().len(),
+                        "linecodes": n.linecodes().len(),
+                        "lines": n.lines().len(),
+                        "switches": n.switches().len(),
+                        "transformers": n.transformers().len(),
+                        "loads": n.loads().len(),
+                        "generators": n.generators().len(),
+                        "ibrs": n.ibrs().len(),
+                        "control_profiles": n.control_profiles().len(),
+                        "shunts": n.shunts().len(),
+                        "capacitors": n.capacitors().len(),
+                        "sources": n.sources().len(),
+                        "untyped": n.untyped().len(),
+                        "warnings": net.warnings.len(),
                     },
                 });
                 serde_json::to_string(&summary)
@@ -2948,8 +3147,15 @@ pub unsafe extern "C" fn pio_dist_to_json(
             let net = net
                 .as_ref()
                 .ok_or_else(|| null_handle("distribution network handle"))?;
-            serde_json::to_string(&net.net)
-                .map_err(|e| coded(&codes::EMIT_CAPI_SERIALIZE_FAILED, e))
+            // ABI v5 model JSON carries the rendered warning lines beside the
+            // model fields; the typed model no longer stores them, so they
+            // are spliced in from the handle.
+            let mut value = serde_json::to_value(net.net())
+                .map_err(|e| coded(&codes::EMIT_CAPI_SERIALIZE_FAILED, e))?;
+            if let serde_json::Value::Object(map) = &mut value {
+                map.insert("warnings".into(), serde_json::json!(net.warnings));
+            }
+            serde_json::to_string(&value).map_err(|e| coded(&codes::EMIT_CAPI_SERIALIZE_FAILED, e))
         })
     }
 }
@@ -2969,7 +3175,7 @@ pub unsafe extern "C" fn pio_dist_graph_json(
             let net = net
                 .as_ref()
                 .ok_or_else(|| null_handle("distribution network handle"))?;
-            serde_json::to_string(&net.net.graph())
+            serde_json::to_string(&net.net().graph())
                 .map_err(|e| coded(&codes::EMIT_CAPI_SERIALIZE_FAILED, e))
         })
     }
@@ -2991,14 +3197,23 @@ pub unsafe extern "C" fn pio_dist_from_json(
     unsafe {
         finish_handle(errbuf, errlen, "panic while parsing model JSON", || {
             let text = required_cstr(text, "text")?;
-            serde_json::from_str::<powerio_dist::MulticonductorNetwork>(text)
-                .map(|net| PioDistNetwork { net })
-                .map_err(|e| {
+            let net =
+                serde_json::from_str::<powerio_dist::MulticonductorNetwork>(text).map_err(|e| {
                     coded(
                         &codes::PARSE_CAPI_JSON_MALFORMED,
                         format!("model JSON: {e}"),
                     )
+                })?;
+            // The model deserialize ignores the `warnings` array the v5 JSON
+            // carries; lift it back onto the handle so the round trip keeps
+            // it readable through `pio_dist_warnings`.
+            let warnings = serde_json::from_str::<serde_json::Value>(text)
+                .ok()
+                .and_then(|value| {
+                    serde_json::from_value::<Vec<String>>(value.get("warnings")?.clone()).ok()
                 })
+                .unwrap_or_default();
+            Ok(PioDistNetwork::from_network(net, warnings))
         })
     }
 }
@@ -3008,9 +3223,9 @@ pub unsafe extern "C" fn pio_dist_from_json(
 /// file the caller does not have. The finding names it.
 #[cfg(feature = "dist")]
 fn warn_dropped_sidecars(
-    mut diagnostics: Vec<StructuredDiagnostic>,
+    mut diagnostics: Vec<Diagnostic>,
     sidecars: &[powerio_dist::ConversionSidecar],
-) -> Vec<StructuredDiagnostic> {
+) -> Vec<Diagnostic> {
     for sidecar in sidecars {
         diagnostics.push(sidecar.dropped_diagnostic(
             "this entry point returns the case text only, and that text refers to the file; \
@@ -3047,7 +3262,7 @@ pub unsafe extern "C" fn pio_dist_to_format(
             || {
                 let c = net.as_ref().ok_or_else(|| null_handle("network handle"))?;
                 let target = dist_target_from_c(to)?;
-                let conv = c.net.to_format(target);
+                let conv = powerio_dist::write_as(&c.module, target);
                 Ok((
                     conv.text,
                     warn_dropped_sidecars(conv.diagnostics, &conv.sidecars),
@@ -3086,8 +3301,9 @@ pub unsafe extern "C" fn pio_dist_convert_file(
                 let path = required_cstr(path, "path")?;
                 let from = optional_cstr(from, "from")?;
                 let to = dist_target_from_c(to)?;
-                let conv = powerio_dist::convert_file(std::path::Path::new(path), to, from)
-                    .map_err(err_line)?;
+                let source = dist_source_from_path(std::path::Path::new(path), from)?;
+                let conv =
+                    powerio_dist::convert_source(source, to).map_err(|e| core_err_line(&e))?;
                 Ok((
                     conv.text,
                     warn_dropped_sidecars(conv.diagnostics, &conv.sidecars),
@@ -3127,7 +3343,9 @@ pub unsafe extern "C" fn pio_dist_convert_str(
                 let text = required_cstr(text, "text")?;
                 let to = dist_target_from_c(to)?;
                 let from = required_cstr(from, "from")?;
-                let conv = powerio_dist::convert_str(text, to, from).map_err(err_line)?;
+                let source = dist_source_from_bytes(text.as_bytes(), from)?;
+                let conv =
+                    powerio_dist::convert_source(source, to).map_err(|e| core_err_line(&e))?;
                 Ok((
                     conv.text,
                     warn_dropped_sidecars(conv.diagnostics, &conv.sidecars),
@@ -3162,7 +3380,7 @@ pub unsafe extern "C" fn pio_dist_geo_extract(
             let c = net
                 .as_ref()
                 .ok_or_else(|| null_handle("distribution network handle"))?;
-            powerio_pkg::dist_geo_layer(&c.net)
+            powerio::package::dist_geo_layer(c.net())
                 .extracted_geojson()
                 .map_err(err_line)
         })
@@ -3194,20 +3412,54 @@ pub unsafe extern "C" fn pio_dist_geo_apply(
             let name_hint = optional_cstr(name_hint, "name_hint")?;
             let parsed =
                 powerio::GeoLayer::parse_bytes(layer.as_bytes(), name_hint).map_err(err_line)?;
-            let mut out = c.net.clone();
-            let report = powerio_pkg::apply_dist_geo_layer(&mut out, &parsed.layer);
-            out.source = None;
-            out.source_format = None;
-            out.warnings.extend(parsed.warnings);
-            out.warnings.push(geo_apply_summary(&report));
-            out.warnings.extend(report.notes);
-            Ok(PioDistNetwork { net: out })
+            let mut out = c.net().clone();
+            let report = powerio::package::apply_dist_geo_layer(&mut out, &parsed.layer);
+            *out.source_format_mut() = None;
+            let mut warnings = c.warnings.clone();
+            warnings.extend(parsed.warnings);
+            warnings.push(geo_apply_summary(&report));
+            warnings.extend(report.notes);
+            Ok(PioDistNetwork::from_network(out, warnings))
         })
     }
 }
 
 #[cfg(test)]
 mod tests {
+    struct TestParsed {
+        network: powerio::BalancedNetwork,
+    }
+
+    fn parse_str(text: &str, from: &str) -> Result<TestParsed, powerio_core::Error> {
+        let source = powerio_core::Source::from_bytes("<memory>", text.as_bytes().to_vec())?
+            .with_format(powerio_core::FormatId::new(
+                from.to_ascii_lowercase().replace('_', "-"),
+            )?);
+        powerio::format::parse(source).map(|module| TestParsed {
+            network: module.into_value(),
+        })
+    }
+
+    fn parse_psse(text: &str) -> Result<powerio::BalancedNetwork, powerio_core::Error> {
+        parse_str(text, "psse").map(|parsed| parsed.network)
+    }
+
+    #[allow(dead_code)]
+    fn parse_file(
+        path: impl AsRef<std::path::Path>,
+        from: Option<&str>,
+    ) -> Result<TestParsed, powerio_core::Error> {
+        let mut source = powerio_core::Source::open(path.as_ref())?;
+        if let Some(token) = from {
+            source = source.with_format(powerio_core::FormatId::new(
+                token.to_ascii_lowercase().replace('_', "-"),
+            )?);
+        }
+        powerio::format::parse(source).map(|module| TestParsed {
+            network: module.into_value(),
+        })
+    }
+
     use super::*;
     use powerio::POWER_MODELS_ANGLE_BOUND_PAD;
     use std::ffi::CString;
@@ -3645,9 +3897,11 @@ mod tests {
                 "{name} disagrees between pio_build_info and pio_has_feature"
             );
         }
+        // ABI v5 spelling, asserted literally so the v6 branch has to change
+        // this test and PowerIO.jl together.
         assert_eq!(
             doc["error_categories"],
-            serde_json::json!(powerio::ErrorCategory::TOKENS)
+            serde_json::json!(["io", "unknown_format", "parse", "data", "output"])
         );
         assert_eq!(
             doc["diagnostic_namespaces"],
@@ -4862,14 +5116,14 @@ mpc.branch = [
             assert!(!s.is_null());
             assert!(!diag_out.is_null(), "expected the writer's findings");
             let json = CStr::from_ptr(diag_out).to_str().unwrap().to_owned();
-            let records: Vec<StructuredDiagnostic> = serde_json::from_str(&json).unwrap();
+            let records: Vec<Diagnostic> = serde_json::from_str(&json).unwrap();
             let hit = records
                 .iter()
-                .find(|d| d.message.contains("converter detail"))
+                .find(|d| d.message().contains("converter detail"))
                 .unwrap_or_else(|| panic!("no HVDC converter-detail finding in {json}"));
-            assert_eq!(hit.code.as_str(), "EMIT.PSSE.VALUE_DEFAULTED");
+            assert_eq!(hit.code(), "EMIT.PSSE.VALUE_DEFAULTED");
             assert_eq!(
-                hit.severity,
+                hit.severity(),
                 powerio::diagnostics::DiagnosticSeverity::Warning
             );
             pio_string_free(diag_out);
@@ -4974,7 +5228,7 @@ mpc.branch = [
     #[cfg(feature = "pkg")]
     #[test]
     fn package_materialize_reports_unknown_identity() {
-        use powerio_pkg::{
+        use powerio::package::{
             ElementRef, ElementUpdate, NetworkPackage, OperatingPoint, OperatingPointSeries,
             TimeAxis,
         };
@@ -4982,7 +5236,7 @@ mpc.branch = [
         let case = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../tests/data")
             .join("case9.m");
-        let net = powerio::parse_str(&std::fs::read_to_string(case).unwrap(), "matpower")
+        let net = parse_str(&std::fs::read_to_string(case).unwrap(), "matpower")
             .unwrap()
             .network;
         let mut point = OperatingPoint::new(0);
@@ -5018,12 +5272,12 @@ mpc.branch = [
     #[cfg(feature = "pkg")]
     #[test]
     fn package_set_operating_points_round_trips() {
-        use powerio_pkg::NetworkPackage;
+        use powerio::package::NetworkPackage;
 
         let case = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../tests/data")
             .join("case9.m");
-        let net = powerio::parse_str(&std::fs::read_to_string(case).unwrap(), "matpower")
+        let net = parse_str(&std::fs::read_to_string(case).unwrap(), "matpower")
             .unwrap()
             .network;
         let json = CString::new(NetworkPackage::from_balanced(net).to_json().unwrap()).unwrap();
@@ -5115,12 +5369,12 @@ mpc.branch = [
     #[cfg(feature = "pkg")]
     #[test]
     fn package_study_json_and_materialize_commit() {
-        use powerio_pkg::{ElementRef, NetworkPackage, StudyBlock, StudyCommit, StudyEdit};
+        use powerio::package::{ElementRef, NetworkPackage, StudyBlock, StudyCommit, StudyEdit};
 
         let case = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../tests/data")
             .join("case9.m");
-        let net = powerio::parse_str(&std::fs::read_to_string(case).unwrap(), "matpower")
+        let net = parse_str(&std::fs::read_to_string(case).unwrap(), "matpower")
             .unwrap()
             .network;
         let mut commit = StudyCommit::default();
@@ -5558,7 +5812,7 @@ mpc.branch = [
             for id in ["sourcebus", "loadbus"] {
                 let mut bus = DistBus::new(id, terminal_map.clone());
                 bus.grounded = strings(grounded);
-                net.buses.push(bus);
+                net.buses_mut().push(bus);
             }
             let mut linecode =
                 DistLineCode::new("lc", diagonal_matrix(n, 0.01), diagonal_matrix(n, 0.10));
@@ -5566,8 +5820,8 @@ mpc.branch = [
             linecode.b_from = zero_matrix(n);
             linecode.g_to = zero_matrix(n);
             linecode.b_to = zero_matrix(n);
-            net.linecodes.push(linecode);
-            net.lines.push(DistLine::new(
+            net.linecodes_mut().push(linecode);
+            net.lines_mut().push(DistLine::new(
                 "l1",
                 "sourcebus",
                 "loadbus",
@@ -5576,7 +5830,7 @@ mpc.branch = [
                 "lc",
                 1.0,
             ));
-            net.sources.push(VoltageSource::new(
+            net.sources_mut().push(VoltageSource::new(
                 "source",
                 "sourcebus",
                 terminal_map,
@@ -5588,9 +5842,8 @@ mpc.branch = [
 
         #[test]
         fn multiconductor_package_preflight_and_lowering() {
-            let dist = PioDistNetwork {
-                net: preflight_network(&["1", "2", "3"], &[]),
-            };
+            let dist =
+                PioDistNetwork::from_network(preflight_network(&["1", "2", "3"], &[]), Vec::new());
             let mut err = [0 as c_char; PIO_ERRBUF_MIN];
             unsafe {
                 let pkg =
@@ -5661,7 +5914,7 @@ mpc.branch = [
                         .as_array()
                         .unwrap()
                         .iter()
-                        .any(|d| d["code"] == "LOWER.MULTI_TO_BALANCED.INVALID_BASE_MVA")
+                        .any(|d| d["code"] == "TRANSFORM.MULTI_TO_BALANCED.INVALID_BASE_MVA")
                 );
                 pio_string_free(invalid_report);
 
@@ -5728,7 +5981,7 @@ mpc.branch = [
     fn read_dir_round_trips_and_enumerates_scenarios() {
         use powerio_matrix::{GridfmOptions, write_gridfm_dataset};
         // Write a one-scenario dataset, then read it back over the C ABI.
-        let net = powerio::parse_file(
+        let net = parse_file(
             std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../tests/data/case14.m"),
             None,
         )
@@ -5888,12 +6141,51 @@ mpc.branch = [
             assert_eq!(rc, 0, "{}", CStr::from_ptr(err.as_ptr()).to_str().unwrap());
             assert!(!diag_out.is_null(), "expected the writer's findings");
             let json = CStr::from_ptr(diag_out).to_str().unwrap().to_owned();
-            let records: Vec<StructuredDiagnostic> = serde_json::from_str(&json).unwrap();
+            let records: Vec<Diagnostic> = serde_json::from_str(&json).unwrap();
             assert!(!records.is_empty());
-            assert!(records.iter().all(|d| d.code.is_well_formed()), "{json}");
+            assert!(
+                records
+                    .iter()
+                    .all(|d| powerio::diagnostics::code_is_well_formed(d.code())),
+                "{json}"
+            );
             pio_string_free(diag_out);
             pio_network_free(c);
         }
+    }
+
+    #[test]
+    fn write_dir_never_replaces_an_existing_target() {
+        let path = data_path("case9.m");
+        let mut err = [0 as c_char; PIO_ERRBUF_MIN];
+        let tmp = tempfile::tempdir().unwrap();
+        let out_path = tmp.path().join("pypsa");
+        std::fs::create_dir(&out_path).unwrap();
+        std::fs::write(out_path.join("buses.csv"), b"precious").unwrap();
+        let out = CString::new(out_path.to_str().unwrap()).unwrap();
+        let to = CString::new("pypsa-csv").unwrap();
+        unsafe {
+            let c = pio_parse_file(path.as_ptr(), std::ptr::null(), err.as_mut_ptr(), err.len());
+            assert!(!c.is_null());
+            let mut diag_out = std::ptr::dangling_mut::<c_char>();
+            let rc = pio_write_dir(
+                c,
+                to.as_ptr(),
+                out.as_ptr(),
+                std::ptr::null(),
+                &mut diag_out,
+                err.as_mut_ptr(),
+                err.len(),
+            );
+            assert_eq!(rc, -1);
+            let msg = CStr::from_ptr(err.as_ptr()).to_str().unwrap();
+            assert!(msg.contains("REQUEST.OUTPUT"), "got: {msg}");
+            pio_network_free(c);
+        }
+        assert_eq!(
+            std::fs::read(out_path.join("buses.csv")).unwrap(),
+            b"precious"
+        );
     }
 
     #[test]
@@ -6016,9 +6308,9 @@ mpc.branch = [
                     .join("../tests/data/psse/case14.raw"),
             )
             .unwrap();
-            let net = powerio::parse_psse(&raw).unwrap();
+            let net = parse_psse(&raw).unwrap();
             let expected = powerio::write_as_with_options(
-                &net,
+                &powerio_core::PioModule::new(net),
                 TargetFormat::Matpower,
                 &WriteOptions {
                     missing_gen_cost: MissingGenCostPolicy::Fill {
@@ -6052,9 +6344,9 @@ mpc.branch = [
                     .join("../tests/data/psse/case14.raw"),
             )
             .unwrap();
-            let net = powerio::parse_psse(&raw).unwrap();
+            let net = parse_psse(&raw).unwrap();
             let expected = powerio::write_as_with_options(
-                &net,
+                &powerio_core::PioModule::new(net),
                 TargetFormat::Matpower,
                 &WriteOptions {
                     missing_gen_cost: MissingGenCostPolicy::Preserve,
@@ -6121,11 +6413,20 @@ mpc.branch = [
             // which is what an older caller's struct means. The mode is inside
             // the declared prefix and the NaN is past it, so reading the
             // caller's tail instead of zeroing it would trip the finite guard.
+            // The baseline for the short struct is the same FILL policy at
+            // full size: a non-default policy writes canonically, while the
+            // optionless call above echoes the retained source.
+            let mut fill_full = write_opts();
+            fill_full.missing_gen_cost_mode = PIO_MISSING_GEN_COST_FILL;
+            let fill_baseline = to_format_with(c, "matpower", &fill_full).unwrap();
             let mut short = write_opts();
             short.struct_size = size_of::<usize>() + 2 * size_of::<i32>();
             short.missing_gen_cost_mode = PIO_MISSING_GEN_COST_FILL;
             short.fill_c1 = f64::NAN;
-            assert_eq!(to_format_with(c, "matpower", &short).unwrap(), plain);
+            assert_eq!(
+                to_format_with(c, "matpower", &short).unwrap(),
+                fill_baseline
+            );
 
             // Longer than sizeof with a zero tail: a newer caller this build
             // can still serve.
@@ -6238,9 +6539,9 @@ mpc.branch = [
             );
             assert_eq!(rc, 0, "{}", CStr::from_ptr(err.as_ptr()).to_str().unwrap());
             let json = CStr::from_ptr(diag_out).to_str().unwrap().to_owned();
-            let records: Vec<StructuredDiagnostic> = serde_json::from_str(&json).unwrap();
+            let records: Vec<Diagnostic> = serde_json::from_str(&json).unwrap();
             assert!(
-                records.iter().any(|d| d.code.as_str().contains("GEN_COST")),
+                records.iter().any(|d| d.code().contains("GEN_COST")),
                 "{json}"
             );
             pio_string_free(diag_out);
@@ -6872,7 +7173,7 @@ New Line.l1 bus1=a bus2=b phases=3
         );
         assert_eq!(
             classify(r#"{"model_kind": "balanced", "model": {}}"#),
-            "package"
+            "module"
         );
         assert_eq!(
             classify(r#"{"base_mva": 100.0, "buses": [], "branches": []}"#),
@@ -6939,7 +7240,6 @@ New Line.l1 bus1=a bus2=b phases=3
             unsafe {
                 let mem = pio_package_to_balanced_network(pkg, err.as_mut_ptr(), err.len());
                 assert!(!mem.is_null());
-                assert!((*mem).net.source.is_none());
                 pio_network_free(mem);
             }
 
@@ -6992,7 +7292,9 @@ New Line.l1 bus1=a bus2=b phases=3
             unsafe { assert_eq!(bmopf(back), bmopf(net)) };
 
             // The model JSON is the same object the .pio.json document carries
-            // under model.multiconductor_network.
+            // under model.multiconductor_network, plus the ABI v5 `warnings`
+            // array the handle splices in (the payload carries none: package
+            // diagnostics own the findings).
             let pkg = unsafe {
                 pio_package_from_multiconductor_network(net, err.as_mut_ptr(), err.len())
             };
@@ -7002,7 +7304,9 @@ New Line.l1 bus1=a bus2=b phases=3
             let doc: serde_json::Value =
                 serde_json::from_str(unsafe { CStr::from_ptr(pkg_json) }.to_str().unwrap())
                     .unwrap();
-            let direct: serde_json::Value = serde_json::from_str(&text).unwrap();
+            let mut direct: serde_json::Value = serde_json::from_str(&text).unwrap();
+            let spliced = direct.as_object_mut().unwrap().remove("warnings");
+            assert_eq!(spliced, Some(serde_json::json!([])));
             assert_eq!(doc["model"]["multiconductor_network"], direct);
 
             unsafe {
@@ -7031,9 +7335,8 @@ New Line.l1 bus1=a bus2=b phases=3
             // defaulted provenance never survive extraction.
             unsafe {
                 let mem = pio_package_to_multiconductor_network(pkg, err.as_mut_ptr(), err.len());
-                assert!(!mem.is_null());
-                assert!((*mem).net.source.is_none());
-                assert!((*mem).net.defaulted.is_empty());
+                let mem_ref = mem.as_ref().expect("in-memory extraction returned null");
+                assert!(mem_ref.net().defaulted().is_empty());
                 pio_dist_network_free(mem);
             }
 

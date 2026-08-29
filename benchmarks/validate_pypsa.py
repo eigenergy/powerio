@@ -29,7 +29,9 @@ RTOL = 1e-6
 
 def check_case(path: Path) -> str:
     case = powerio.parse_file(path)
-    tmp = Path(tempfile.mkdtemp(prefix=f"powerio-pypsa-{path.stem}-"))
+    # The folder writer refuses an existing target, so the output is a fresh
+    # child of the temporary directory.
+    tmp = Path(tempfile.mkdtemp(prefix=f"powerio-pypsa-{path.stem}-")) / "pypsa"
     problems = []
     try:
         case.write_pypsa_csv_folder(tmp)
@@ -117,7 +119,7 @@ def check_case(path: Path) -> str:
     except Exception as exc:  # noqa: BLE001
         problems.append(f"PyPSA import/check failed: {type(exc).__name__}: {exc}")
     finally:
-        shutil.rmtree(tmp, ignore_errors=True)
+        shutil.rmtree(tmp.parent, ignore_errors=True)
 
     if problems:
         print(f"MISMATCH: {path.name} PyPSA CSV")

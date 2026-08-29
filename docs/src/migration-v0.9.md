@@ -113,7 +113,7 @@ matches!(e, powerio_prob::Error::Core(powerio::Error::UnknownBus { .. })) // 0.9
 
 Each wraps the layer below with `#[error(transparent)]`, so a hub failure crossing the boundary keeps its `Display` text byte for byte. The C ABI reports errors as text and nothing else, so a wrapper that restated the message would change what every binding prints.
 
-`powerio-pkg` gets a real error type. `from_json` returned one opaque `serde_json::Error` for malformed JSON, an unreadable lineage, and a `model_kind` contradicting its payload; those are `Malformed`, `UnsupportedVersion` and `ModelKindMismatch`.
+The `.pio.json` document layer (`powerio::package`, `powerio-pkg` in 0.9) gets a real error type. `from_json` returned one opaque `serde_json::Error` for malformed JSON, an unreadable lineage, and a `model_kind` contradicting its payload; those are `Malformed`, `UnsupportedVersion` and `ModelKindMismatch`.
 
 In Python this fixes a hole rather than breaking anything: `package_pyerr` mapped every `.pio.json` failure to a bare `ValueError`, so `except powerio.PowerIOError` did not catch a package failure although it caught every other parse failure. It does now.
 

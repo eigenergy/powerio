@@ -856,6 +856,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "facade-only"
+version = "0.9.0"
+dependencies = [
+ "powerio",
+]
+
+[[package]]
 name = "fancy-regex"
 version = "0.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2000,11 +2007,11 @@ checksum = "439ee305def115ba05938db6eb1644ff94165c5ab5e9420d1c1bcedbba909391"
 name = "powerio"
 version = "0.9.0"
 dependencies = [
- "criterion",
- "lexical-core",
  "num-complex",
- "petgraph",
- "powerio-diag",
+ "powerio-core",
+ "powerio-dist",
+ "powerio-prob",
+ "powerio-tx",
  "schemars",
  "serde",
  "serde_json",
@@ -2017,10 +2024,9 @@ version = "0.9.0"
 dependencies = [
  "arrow",
  "powerio",
- "powerio-diag",
+ "powerio-core",
  "powerio-dist",
  "powerio-matrix",
- "powerio-pkg",
  "powerio-prob",
  "serde_json",
  "tempfile",
@@ -2034,9 +2040,9 @@ dependencies = [
  "clap",
  "crossterm",
  "powerio",
+ "powerio-core",
  "powerio-dist",
  "powerio-matrix",
- "powerio-pkg",
  "powerio-prob",
  "ratatui",
  "schemars",
@@ -2050,9 +2056,10 @@ dependencies = [
 ]
 
 [[package]]
-name = "powerio-diag"
+name = "powerio-core"
 version = "0.9.0"
 dependencies = [
+ "libc",
  "schemars",
  "serde",
  "serde_json",
@@ -2063,7 +2070,8 @@ name = "powerio-dist"
 version = "0.9.0"
 dependencies = [
  "jsonschema",
- "powerio-diag",
+ "libc",
+ "powerio-core",
  "schemars",
  "serde",
  "serde_json",
@@ -2081,9 +2089,9 @@ dependencies = [
  "num-complex",
  "parquet",
  "powerio",
- "powerio-diag",
+ "powerio-core",
  "powerio-dist",
- "powerio-pkg",
+ "powerio-tx",
  "rand 0.9.4",
  "rand_chacha",
  "rayon",
@@ -2098,27 +2106,14 @@ dependencies = [
 ]
 
 [[package]]
-name = "powerio-pkg"
-version = "0.9.0"
-dependencies = [
- "num-complex",
- "powerio",
- "powerio-diag",
- "powerio-dist",
- "schemars",
- "serde",
- "serde_json",
- "thiserror 2.0.18",
-]
-
-[[package]]
 name = "powerio-prob"
 version = "0.9.0"
 dependencies = [
  "num-complex",
- "powerio",
- "powerio-diag",
+ "powerio-core",
+ "powerio-dist",
  "powerio-matrix",
+ "powerio-tx",
  "serde",
  "serde_json",
  "tempfile",
@@ -2129,13 +2124,30 @@ dependencies = [
 name = "powerio-py"
 version = "0.9.0"
 dependencies = [
+ "powerio",
+ "powerio-core",
  "powerio-dist",
  "powerio-matrix",
- "powerio-pkg",
  "powerio-prob",
  "pyo3",
  "serde_json",
  "sprs",
+]
+
+[[package]]
+name = "powerio-tx"
+version = "0.9.0"
+dependencies = [
+ "criterion",
+ "lexical-core",
+ "num-complex",
+ "petgraph",
+ "powerio-core",
+ "schemars",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.18",
 ]
 
 [[package]]

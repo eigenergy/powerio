@@ -120,11 +120,11 @@ the distribution C conversion helpers.
 
 | Concept | Rust | Python | Julia | C ABI |
 |---|---|---|---|---|
-| Parse path | `powerio_dist::parse_file(path, from)` | `dist.parse_file(path, from_=None)` | `parse_file(MulticonductorNetwork, path; from=nothing)` | `pio_dist_parse_file` |
-| Parse text | `powerio_dist::parse_str(text, from)` | `dist.parse_str(text, from_)` | `parse_str(MulticonductorNetwork, text, format)` | `pio_dist_parse_str` |
-| File conversion | `powerio_dist::convert_file(path, to, from)` | `dist.convert_file(path, to, from_=None)` | `convert_file(MulticonductorNetwork, path, to; from=nothing)` | `pio_dist_convert_file(path, from, to, ...)` |
+| Parse path | `powerio_dist::parse(Source::open(path)?)` | `dist.parse_file(path, from_=None)` | `parse_file(MulticonductorNetwork, path; from=nothing)` | `pio_dist_parse_file` |
+| Parse text | `powerio_dist::parse(Source::from_bytes(...))` | `dist.parse_str(text, from_)` | `parse_str(MulticonductorNetwork, text, format)` | `pio_dist_parse_str` |
+| File conversion | `powerio_dist::convert_source(source, to)` | `dist.convert_file(path, to, from_=None)` | `convert_file(MulticonductorNetwork, path, to; from=nothing)` | `pio_dist_convert_file(path, from, to, ...)` |
 | Target format type | `DistTargetFormat` (`FromStr`, `name()`) | format name strings | `MulticonductorNetwork` plus format strings | format name strings |
-| Text conversion | `powerio_dist::convert_str(text, to, from)` | `dist.convert_str(text, to, from_)` | `convert_str(MulticonductorNetwork, text, to, format)` | `pio_dist_convert_str(text, from, to, ...)` |
-| Parsed conversion | `net.to_format(to)` | `case.to_format(to)` | `to_format(net, to)` | `pio_dist_to_format` |
-| Parse warnings | `net.warnings` | `case.warnings` | `warnings(net)` | `pio_dist_warnings` |
+| Text conversion | `powerio_dist::convert_source(source, to)` | `dist.convert_str(text, to, from_)` | `convert_str(MulticonductorNetwork, text, to, format)` | `pio_dist_convert_str(text, from, to, ...)` |
+| Parsed conversion | `powerio_dist::write_as(&module, to)` | `case.to_format(to)` | `to_format(net, to)` | `pio_dist_to_format` |
+| Parse warnings | `module.diagnostics()` | `case.warnings` | `warnings(net)` | `pio_dist_warnings` |
 | Graph projection | `net.graph()` | `case.graph()` | — | `pio_dist_graph_json` |

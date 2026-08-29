@@ -8,9 +8,6 @@
 //! back reproduces the same grouping for shapes the windings alone do not
 //! pin down (center tap reads as two windings).
 
-use std::path::Path;
-use std::sync::Arc;
-
 use serde::de::DeserializeOwned;
 use serde_json::{Map, Value};
 
@@ -22,21 +19,15 @@ use crate::model::{
     DistCapacitor, DistControlProfile, DistGenerator, DistIbr, DistLine, DistLineCode, DistLoad,
     DistLoadVoltageModel, DistShunt, DistSourceFormat, DistSwitch, DistTransformer, DistWinding,
     DistWindingConn, Extras, IbrPrimeMover, IbrTopology, IbrVoltageAggregation, Mat,
-    MulticonductorNetwork, PowerFactorControl, ReactivePowerReference, ReactivePowerUnit,
-    UntypedObject, VoltVarControl, VoltWattControl, VoltageSource, n_winding_impedance_base,
-    n_winding_phase_count, pair_keys,
+    MulticonductorNetwork, MulticonductorNetworkTables, PowerFactorControl, ReactivePowerReference,
+    ReactivePowerUnit, UntypedObject, VoltVarControl, VoltWattControl, VoltageSource,
+    n_winding_impedance_base, n_winding_phase_count, pair_keys,
 };
 
-pub fn parse_bmopf_file(path: impl AsRef<Path>) -> Result<MulticonductorNetwork> {
-    let path = path.as_ref();
-    let text = std::fs::read_to_string(path).map_err(|source| Error::Io {
-        path: path.display().to_string(),
-        source,
-    })?;
-    parse_bmopf_str(&text)
-}
-
-pub fn parse_bmopf_str(text: &str) -> Result<MulticonductorNetwork> {
+pub(crate) fn parse_bmopf_collecting(
+    text: &str,
+    diags: &mut crate::collect::Diagnostics,
+) -> Result<MulticonductorNetwork> {
     let doc: Value = serde_json::from_str(text).map_err(|e| Error::Json {
         format: "BMOPF",
         message: e.to_string(),
@@ -47,13 +38,12 @@ pub fn parse_bmopf_str(text: &str) -> Result<MulticonductorNetwork> {
             message: "top level is not an object".into(),
         });
     };
-    let mut net = MulticonductorNetwork {
-        source: Some(Arc::new(text.to_string())),
+    let mut net = MulticonductorNetwork::from_tables(MulticonductorNetworkTables {
         source_format: Some(DistSourceFormat::BmopfJson),
         base_frequency: 60.0,
-        ..MulticonductorNetwork::default()
-    };
-    report_non_numeric_fields(&doc, &mut net);
+        ..MulticonductorNetworkTables::default()
+    });
+    report_non_numeric_fields(&doc, diags);
     let mut rd = Reader {
         net: &mut net,
         diagnostics: crate::diagnostics::Diagnostics::new(),
@@ -61,10 +51,8 @@ pub fn parse_bmopf_str(text: &str) -> Result<MulticonductorNetwork> {
     };
     rd.document(&doc);
     let found = std::mem::take(&mut rd.diagnostics);
-    for diagnostic in found {
-        net.record(diagnostic);
-    }
-    crate::model::warn_unresolved_references(&mut net);
+    diags.absorb(found);
+    crate::model::warn_unresolved_references(&net, diags);
     Ok(net)
 }
 
@@ -158,7 +146,7 @@ fn is_numeric_field(key: &str) -> bool {
 ///
 /// `extras` is skipped, since it round trips arbitrary consumer JSON where
 /// these names carry no schema meaning.
-fn report_non_numeric_fields(doc: &Map<String, Value>, net: &mut MulticonductorNetwork) {
+fn report_non_numeric_fields(doc: &Map<String, Value>, diags: &mut crate::collect::Diagnostics) {
     /// What the value holds, or `None` when the schema allows it.
     fn not_numeric(v: &Value) -> Option<&'static str> {
         match v {
@@ -171,39 +159,38 @@ fn report_non_numeric_fields(doc: &Map<String, Value>, net: &mut MulticonductorN
             Value::Object(_) => Some("an object"),
         }
     }
-    fn report(net: &mut MulticonductorNetwork, pointer: String, what: &str) {
+    fn report(diags: &mut crate::collect::Diagnostics, pointer: String, what: &str) {
         let message = format!(
             "{pointer}: the schema types this field as a number and it holds {what}; \
              it reads as NaN and anything derived from it is undefined"
         );
-        net.record(
-            crate::diagnostics::StructuredDiagnostic::of(
-                &crate::diagnostics::codes::READ_BMOPF_FIELD_NOT_A_NUMBER,
-                message,
-            )
-            .with_element_path(pointer)
-            .with_suggested_action("state a number, or omit the field"),
-        );
+        let mut diagnostic = crate::diagnostics::Diagnostic::of(
+            &crate::diagnostics::codes::READ_BMOPF_FIELD_NOT_A_NUMBER,
+            message,
+        )
+        .with_suggested_action("state a number, or omit the field");
+        crate::diagnostics::attach_target(&mut diagnostic, pointer);
+        diags.record(diagnostic);
     }
     // A pointer costs an allocation, so it is built for a container the walk
     // descends into and for a field it reports, never for a sound leaf.
-    fn walk(obj: &Map<String, Value>, path: &str, net: &mut MulticonductorNetwork) {
+    fn walk(obj: &Map<String, Value>, path: &str, diags: &mut crate::collect::Diagnostics) {
         for (key, value) in obj {
             if key == "extras" {
                 continue;
             }
             if is_numeric_field(key) {
                 if let Some(what) = not_numeric(value) {
-                    report(net, format!("{path}/{key}"), what);
+                    report(diags, format!("{path}/{key}"), what);
                 }
                 continue;
             }
             match value {
-                Value::Object(o) => walk(o, &format!("{path}/{key}"), net),
+                Value::Object(o) => walk(o, &format!("{path}/{key}"), diags),
                 Value::Array(a) => {
                     for (i, e) in a.iter().enumerate() {
                         if let Value::Object(o) = e {
-                            walk(o, &format!("{path}/{key}/{i}"), net);
+                            walk(o, &format!("{path}/{key}/{i}"), diags);
                         }
                     }
                 }
@@ -211,7 +198,7 @@ fn report_non_numeric_fields(doc: &Map<String, Value>, net: &mut MulticonductorN
             }
         }
     }
-    walk(doc, "", net);
+    walk(doc, "", diags);
 }
 
 struct Reader<'a> {
@@ -468,7 +455,7 @@ fn take_extras(
 impl Reader<'_> {
     fn document(&mut self, doc: &Map<String, Value>) {
         if let Some(name) = doc.get("name").and_then(Value::as_str) {
-            self.net.name = Some(name.to_string());
+            *self.net.name_mut() = Some(name.to_string());
         }
         // Schema 0.1.0 carries the frequency in `meta`; the top-level
         // spellings are the pre-0.1.0 vintage.
@@ -482,7 +469,7 @@ impl Reader<'_> {
             && frequency.is_finite()
             && frequency > 0.0
         {
-            self.net.base_frequency = frequency;
+            *self.net.base_frequency_mut() = frequency;
             self.frequency_stated = true;
         }
         // `serde_json::Map` iterates in key order, so the loop below reaches
@@ -549,7 +536,7 @@ impl Reader<'_> {
                 // The phase/neutral label conventions block: no typed slot,
                 // stashed whole so a round trip keeps it (the meta pattern).
                 "terminal_conventions" => {
-                    self.net.extras.insert(
+                    self.net.extras_mut().insert(
                         "bmopf_terminal_conventions".into(),
                         Value::Object(items.clone()),
                     );
@@ -561,7 +548,7 @@ impl Reader<'_> {
                 // other schema fields back from this stash.
                 "meta" => {
                     self.net
-                        .extras
+                        .extras_mut()
                         .insert("bmopf_meta".into(), Value::Object(items.clone()));
                 }
                 other => {
@@ -570,7 +557,7 @@ impl Reader<'_> {
                         format!("top level `{other}` is outside the schema; kept untyped"),
                     );
                     for (name, v) in items {
-                        self.net.untyped.push(UntypedObject {
+                        self.net.untyped_mut().push(UntypedObject {
                             class: other.to_string(),
                             name: name.clone(),
                             props: vec![(None, v.to_string())],
@@ -581,7 +568,7 @@ impl Reader<'_> {
         }
         self.warn_orphan_transformer_overlay(doc);
         if !self.frequency_stated {
-            crate::model::warn_defaulted_frequency(self.net, "frequency");
+            crate::model::warn_defaulted_frequency(self.net, "frequency", &mut self.diagnostics);
         }
     }
 
@@ -597,7 +584,7 @@ impl Reader<'_> {
             .and_then(|e| e.get("transformer"))
             .and_then(Value::as_object)
             .filter(|o| !o.is_empty());
-        if overlay.is_some() && self.net.transformers.is_empty() {
+        if overlay.is_some() && self.net.transformers().is_empty() {
             self.diagnostics.push(
                 &C::READ_BMOPF_FIELD_DROPPED,
                 "`extras.transformer` carries fields for transformers the document does \
@@ -624,7 +611,7 @@ impl Reader<'_> {
         }
         if !stash.is_empty() {
             self.net
-                .extras
+                .extras_mut()
                 .insert("bmopf_extras".into(), Value::Object(stash));
         }
     }
@@ -635,12 +622,13 @@ impl Reader<'_> {
             let known = ["bus", "terminal_map", "configuration", "q_rated", "v_nom"];
             for (field, value) in [("q_rated", o.get("q_rated")), ("v_nom", o.get("v_nom"))] {
                 if value.is_none() {
-                    self.net
-                        .warnings
-                        .push(format!("capacitor {name}: `{field}` missing; read as NaN"));
+                    self.diagnostics.push(
+                        &C::READ_BMOPF_VALUE_DEFAULTED,
+                        format!("capacitor {name}: `{field}` missing; read as NaN"),
+                    );
                 }
             }
-            self.net.capacitors.push(DistCapacitor {
+            self.net.capacitors_mut().push(DistCapacitor {
                 name: name.clone(),
                 bus: string(o.get("bus")),
                 terminal_map: strings(o.get("terminal_map")),
@@ -681,7 +669,7 @@ impl Reader<'_> {
         for (name, v) in items {
             let Value::Object(o) = v else { continue };
             if self.reject_duplicate("ibr", name, |net| {
-                net.ibrs.iter().any(|x| x.name.eq_ignore_ascii_case(name))
+                net.ibrs().iter().any(|x| x.name.eq_ignore_ascii_case(name))
             }) {
                 continue;
             }
@@ -703,7 +691,7 @@ impl Reader<'_> {
                     extras.insert(key.clone(), value.clone());
                 }
             }
-            self.net.ibrs.push(DistIbr {
+            self.net.ibrs_mut().push(DistIbr {
                 name: name.clone(),
                 bus: string(o.get("bus")),
                 terminal_map: strings(o.get("terminal_map")),
@@ -759,7 +747,7 @@ impl Reader<'_> {
         for (name, v) in items {
             let Value::Object(o) = v else { continue };
             if self.reject_duplicate("control_profile", name, |net| {
-                net.control_profiles
+                net.control_profiles()
                     .iter()
                     .any(|x| x.name.eq_ignore_ascii_case(name))
             }) {
@@ -819,7 +807,7 @@ impl Reader<'_> {
                     profile.extras.insert(key.clone(), value.clone());
                 }
             }
-            self.net.control_profiles.push(profile);
+            self.net.control_profiles_mut().push(profile);
         }
     }
 
@@ -854,7 +842,7 @@ impl Reader<'_> {
             let has_lat = o.contains_key("latitude");
             let location = match (lon, lat) {
                 (Some(x), Some(y)) => {
-                    self.net.geo = Some(DistGeoMeta {
+                    *self.net.geo_mut() = Some(DistGeoMeta {
                         space: CoordinateSpace::Geographic { crs: None },
                         kind: Some(DistCoordsKind::Source),
                     });
@@ -910,7 +898,7 @@ impl Reader<'_> {
                     ),
                 );
             }
-            self.net.buses.push(DistBus {
+            self.net.buses_mut().push(DistBus {
                 id: id.clone(),
                 terminals: strings(o.get("terminal_names")),
                 grounded: strings(o.get("perfectly_grounded_terminals")),
@@ -974,7 +962,7 @@ impl Reader<'_> {
                     &["R_series", "X_series", "G_from", "G_to", "B_from", "B_to"],
                 ),
             };
-            self.net.linecodes.push(code);
+            self.net.linecodes_mut().push(code);
         }
     }
 
@@ -984,7 +972,7 @@ impl Reader<'_> {
         // declared linecode that differs only in case.
         let mut taken: std::collections::BTreeSet<String> = self
             .net
-            .linecodes
+            .linecodes()
             .iter()
             .map(|c| c.name.to_ascii_lowercase())
             .collect();
@@ -1038,7 +1026,7 @@ impl Reader<'_> {
                     ),
                 );
             }
-            self.net.lines.push(DistLine {
+            self.net.lines_mut().push(DistLine {
                 name: name.clone(),
                 bus_from: string(o.get("bus_from")),
                 bus_to: string(o.get("bus_to")),
@@ -1099,7 +1087,7 @@ impl Reader<'_> {
                 ),
             );
         }
-        self.net.linecodes.push(DistLineCode {
+        self.net.linecodes_mut().push(DistLineCode {
             name: name.clone(),
             n_conductors: n,
             r_series: r,
@@ -1127,7 +1115,7 @@ impl Reader<'_> {
                 "open_switch",
                 "i_max",
             ];
-            self.net.switches.push(DistSwitch {
+            self.net.switches_mut().push(DistSwitch {
                 name: name.clone(),
                 bus_from: string(o.get("bus_from")),
                 bus_to: string(o.get("bus_to")),
@@ -1204,7 +1192,7 @@ impl Reader<'_> {
             } else {
                 DistLoadVoltageModel::ConstantPower { v_nom }
             };
-            self.net.loads.push(DistLoad {
+            self.net.loads_mut().push(DistLoad {
                 name: name.clone(),
                 bus: string(o.get("bus")),
                 terminal_map: strings(o.get("terminal_map")),
@@ -1274,7 +1262,7 @@ impl Reader<'_> {
                 Some(v) => Some(f(v)),
                 None => None,
             };
-            self.net.generators.push(DistGenerator {
+            self.net.generators_mut().push(DistGenerator {
                 name: name.clone(),
                 bus: string(o.get("bus")),
                 terminal_map: strings(o.get("terminal_map")),
@@ -1320,7 +1308,7 @@ impl Reader<'_> {
                     ),
                 );
             }
-            self.net.shunts.push(DistShunt {
+            self.net.shunts_mut().push(DistShunt {
                 name: name.clone(),
                 bus: string(o.get("bus")),
                 terminal_map: strings(o.get("terminal_map")),
@@ -1341,7 +1329,7 @@ impl Reader<'_> {
         for (name, v) in items {
             let Value::Object(o) = v else { continue };
             let known = ["v_magnitude", "v_angle", "bus", "terminal_map"];
-            self.net.sources.push(VoltageSource {
+            self.net.sources_mut().push(VoltageSource {
                 name: name.clone(),
                 bus: string(o.get("bus")),
                 terminal_map: strings(o.get("terminal_map")),
@@ -1368,13 +1356,13 @@ impl Reader<'_> {
                 match subtype.as_str() {
                     "n_winding" => {
                         let t = self.n_winding_transformer(name, o);
-                        self.net.transformers.push(t);
+                        self.net.transformers_mut().push(t);
                     }
                     "single_phase_autotransformer" | "open_delta_regulator" => {
                         self.diagnostics.push(&C::READ_BMOPF_RETAINED_SOURCE_ONLY, format!(
                             "transformer {name}: subtype `{subtype}` is not typed yet; kept untyped"
                         ));
-                        self.net.untyped.push(UntypedObject {
+                        self.net.untyped_mut().push(UntypedObject {
                             class: format!("transformer.{subtype}"),
                             name: name.clone(),
                             props: vec![(None, v.to_string())],
@@ -1382,7 +1370,7 @@ impl Reader<'_> {
                     }
                     _ => {
                         let t = self.transformer(subtype, name, o);
-                        self.net.transformers.push(t);
+                        self.net.transformers_mut().push(t);
                     }
                 }
             }
@@ -1522,10 +1510,10 @@ impl Reader<'_> {
                 x_neutral: first_float(o.get("x_neutral_to")),
             },
         ];
-        expand_center_tap_windings(subtype, &mut windings, &self.net.buses);
+        expand_center_tap_windings(subtype, &mut windings, self.net.buses());
         if subtype == "center_tap"
             && let Some(w) = windings.get(1)
-            && let Some(band) = phase_to_neutral_midpoint(w, &self.net.buses)
+            && let Some(band) = phase_to_neutral_midpoint(w, self.net.buses())
             && (w.v_ref - band).abs() > (w.v_ref / 2.0 - band).abs() * 4.0
         {
             self.diagnostics.push(

@@ -11,13 +11,21 @@ fuzz_target!(|data: &[u8]| {
     let Ok(text) = std::str::from_utf8(data) else {
         return;
     };
+    let _ = text;
     for format in ["pmd-json", "bmopf-json"] {
-        let Ok(net) = powerio_dist::parse_str(text, format) else {
+        let Ok(source) = powerio_core::Source::from_bytes("<fuzz>", data.to_vec()) else {
             continue;
         };
-        let _ = powerio_dist::write_pmd_json(&net);
-        let _ = powerio_dist::write_bmopf_json(&net);
-        let _ = powerio_dist::write_dss(&net);
+        let Ok(id) = powerio_core::FormatId::new(format) else {
+            continue;
+        };
+        let Ok(module) = powerio_dist::parse(source.with_format(id)) else {
+            continue;
+        };
+        let net = module.value();
+        let _ = powerio_dist::write_pmd_json(net);
+        let _ = powerio_dist::write_bmopf_json(net);
+        let _ = powerio_dist::write_dss(net);
         let _ = net.graph();
     }
 });

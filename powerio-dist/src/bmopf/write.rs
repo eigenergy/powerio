@@ -13,7 +13,7 @@ use serde_json::{Map, Value, json};
 
 use crate::convert::Conversion;
 use crate::diagnostics::codes as C;
-use crate::diagnostics::{DiagnosticInfo, StructuredDiagnostic};
+use crate::diagnostics::{Diagnostic, DiagnosticInfo};
 use crate::geo::CoordinateSpace;
 use crate::model::{
     ActivePowerReference, ActivePowerUnit, Configuration, ControlVoltageReference,
@@ -162,13 +162,15 @@ pub fn write_bmopf_json_with_options(
         options: *options,
         warnings: crate::diagnostics::Diagnostics::new(),
         grounded: net
-            .buses
+            .buses()
             .iter()
             .map(|b| (b.id.to_ascii_lowercase(), b.grounded.clone()))
             .collect(),
         transformer_overflow: Map::new(),
+        dropped_extras: BTreeMap::new(),
     };
     let doc = w.document(net);
+    w.flush_dropped_extras();
     Conversion::new(
         serde_json::to_string_pretty(&doc).expect("maps and finite numbers") + "\n",
         Vec::new(),
@@ -184,6 +186,11 @@ struct Writer {
     /// (taps, neutral impedance, no load admittance), relocated to
     /// `extras.transformer.<subtype>.<name>` instead of dropped.
     transformer_overflow: Map<String, Value>,
+    /// Passthrough extras with no schema slot, keyed by field name with the
+    /// elements that carried them, flushed as one aggregated finding per
+    /// field: on a real feeder one warning per field per element buried
+    /// every finding a consumer would act on (#377).
+    dropped_extras: BTreeMap<String, Vec<String>>,
 }
 
 impl Writer {
@@ -198,11 +205,11 @@ impl Writer {
         message: impl Into<String>,
         details: Map<String, Value>,
     ) {
-        self.warnings.record(
-            StructuredDiagnostic::of(code, message)
-                .with_element_path(element_path)
-                .with_details(details),
-        );
+        let mut diagnostic = Diagnostic::of(code, message)
+            .with_details(details)
+            .expect("writer-built details stay within the record bounds");
+        crate::diagnostics::attach_target(&mut diagnostic, element_path.into());
+        self.warnings.record(diagnostic);
     }
 
     fn transformer_diagnostic(
@@ -260,12 +267,48 @@ impl Writer {
             if key == "bmopf_subtype" || key == "conn" {
                 continue;
             }
-            self.warn(
-                &C::EMIT_BMOPF_FIELD_DROPPED,
-                format!(
-                    "{what}: `{key}` has no place in the BMOPF schema; dropped from the output"
-                ),
+            self.dropped_extras
+                .entry(key.clone())
+                .or_default()
+                .push(what.to_owned());
+        }
+    }
+
+    /// The elements a details list names before it collapses to a count: the
+    /// record stays attributable without one details value growing with the
+    /// case.
+    const DROPPED_ELEMENT_LIST_CAP: usize = 100;
+
+    /// One aggregated finding per dropped field name, carrying the count and
+    /// the element list in details and, for a single element, the target.
+    fn flush_dropped_extras(&mut self) {
+        for (key, elements) in std::mem::take(&mut self.dropped_extras) {
+            let count = elements.len();
+            let mut details = Map::new();
+            details.insert("field".into(), json!(key));
+            details.insert("count".into(), json!(count));
+            details.insert(
+                "elements".into(),
+                json!(elements[..count.min(Self::DROPPED_ELEMENT_LIST_CAP)]),
             );
+            if count > Self::DROPPED_ELEMENT_LIST_CAP {
+                details.insert("elements_truncated".into(), json!(true));
+            }
+            let message = if count == 1 {
+                format!(
+                    "{}: `{key}` has no place in the BMOPF schema; dropped from the output",
+                    elements[0]
+                )
+            } else {
+                format!("`{key}` has no place in the BMOPF schema; dropped from {count} elements")
+            };
+            let mut diagnostic = Diagnostic::of(&C::EMIT_BMOPF_FIELD_DROPPED, message)
+                .with_details(details)
+                .expect("writer-built details stay within the record bounds");
+            if count == 1 {
+                crate::diagnostics::attach_target(&mut diagnostic, elements[0].clone());
+            }
+            self.warnings.record(diagnostic);
         }
     }
 
@@ -283,13 +326,13 @@ impl Writer {
         m.insert("$schema".into(), json!(BMOPF_SCHEMA_ID));
         m.insert(
             "frequency".into(),
-            self.num(net.base_frequency, "meta frequency"),
+            self.num(net.base_frequency(), "meta frequency"),
         );
         m.insert(
             "case_study_generator".into(),
             json!({"tool": "powerio", "version": env!("CARGO_PKG_VERSION")}),
         );
-        if let Some(Value::Object(stash)) = net.extras.get(BMOPF_META_STASH) {
+        if let Some(Value::Object(stash)) = net.extras().get(BMOPF_META_STASH) {
             for (key, value) in stash {
                 match key.as_str() {
                     // Writer-owned: this document is powerio's emission, at
@@ -311,12 +354,12 @@ impl Writer {
 
     fn document(&mut self, net: &MulticonductorNetwork) -> Value {
         let mut doc = Map::new();
-        if let Some(name) = &net.name {
+        if let Some(name) = &net.name() {
             doc.insert("name".into(), json!(name));
         }
         let meta = self.meta(net);
         doc.insert("meta".into(), meta);
-        if let Some(Value::Object(tc)) = net.extras.get(BMOPF_TERMINAL_CONVENTIONS_STASH) {
+        if let Some(Value::Object(tc)) = net.extras().get(BMOPF_TERMINAL_CONVENTIONS_STASH) {
             doc.insert("terminal_conventions".into(), Value::Object(tc.clone()));
         } else if let Some(tc) = authored_terminal_conventions(net) {
             doc.insert("terminal_conventions".into(), tc);
@@ -336,7 +379,7 @@ impl Writer {
         // Schema 0.1.0 dropped the IBR, control profile, DC, and time series
         // tables from the top level; `extras` is their sanctioned home.
         let mut extras = Map::new();
-        if let Some(Value::Object(stash)) = net.extras.get(BMOPF_EXTRAS_STASH) {
+        if let Some(Value::Object(stash)) = net.extras().get(BMOPF_EXTRAS_STASH) {
             extras.extend(stash.clone());
         }
         self.control_profiles(net, &mut extras);
@@ -356,7 +399,7 @@ impl Writer {
 
     fn buses(&mut self, net: &MulticonductorNetwork, doc: &mut Map<String, Value>) {
         let mut buses = Map::new();
-        for b in &net.buses {
+        for b in net.buses() {
             let mut o = Map::new();
             o.insert("terminal_names".into(), json!(b.terminals));
             if !b.grounded.is_empty() {
@@ -398,9 +441,9 @@ impl Writer {
     }
 
     fn linecodes(&mut self, net: &MulticonductorNetwork, doc: &mut Map<String, Value>) {
-        if !net.linecodes.is_empty() {
+        if !net.linecodes().is_empty() {
             let mut codes = Map::new();
-            for c in &net.linecodes {
+            for c in net.linecodes() {
                 let mut o = Map::new();
                 // The schema requires R_series_1_1 and X_series_1_1; an
                 // empty matrix would drop them and invalidate the output.
@@ -479,7 +522,7 @@ impl Writer {
             return;
         }
         if !matches!(
-            net.geo.as_ref().map(|geo| &geo.space),
+            net.geo().as_ref().map(|geo| &geo.space),
             Some(CoordinateSpace::Geographic { .. })
         ) {
             self.diagnostic(
@@ -524,7 +567,7 @@ impl Writer {
     }
 
     fn warn_unemitted_untyped(&mut self, net: &MulticonductorNetwork) {
-        for u in &net.untyped {
+        for u in net.untyped() {
             if Self::is_emitted_untyped(u) {
                 continue;
             }
@@ -562,7 +605,7 @@ impl Writer {
         extras: &mut Map<String, Value>,
     ) {
         self.clear_non_table_extras_slots(net, extras);
-        for u in &net.untyped {
+        for u in net.untyped() {
             let subtype = u.class.strip_prefix("transformer.");
             if subtype.is_none() && !RAW_BMOPF_EXTRAS_TABLES.contains(&u.class.as_str()) {
                 continue;
@@ -580,13 +623,15 @@ impl Writer {
                 continue;
             };
             for text in unplaced {
-                self.warn(
+                self.diagnostic(
                     &C::EMIT_BMOPF_FIELD_DROPPED,
+                    format!("{} {}", u.class, u.name),
                     format!(
                         "{} {}: the value `{text}` has no field name; dropped from the \
                      output, the named fields beside it are kept",
                         u.class, u.name
                     ),
+                    Map::new(),
                 );
             }
             // An untyped transformer subtype lands in the top-level
@@ -646,7 +691,7 @@ impl Writer {
         extras: &mut Map<String, Value>,
     ) {
         let classes: BTreeSet<&str> = net
-            .untyped
+            .untyped()
             .iter()
             .map(|u| u.class.as_str())
             .filter(|class| RAW_BMOPF_EXTRAS_TABLES.contains(class))
@@ -727,9 +772,9 @@ impl Writer {
 
     /// Lines and switches.
     fn branches(&mut self, net: &MulticonductorNetwork, doc: &mut Map<String, Value>) {
-        if !net.lines.is_empty() {
+        if !net.lines().is_empty() {
             let mut lines = Map::new();
-            for l in &net.lines {
+            for l in net.lines() {
                 let mut o = Map::new();
                 o.insert("length".into(), self.num(l.length, "line length"));
                 o.insert("linecode".into(), json!(l.linecode));
@@ -753,9 +798,9 @@ impl Writer {
             }
             doc.insert("line".into(), Value::Object(lines));
         }
-        if !net.switches.is_empty() {
+        if !net.switches().is_empty() {
             let mut switches = Map::new();
-            for s in &net.switches {
+            for s in net.switches() {
                 let mut o = Map::new();
                 o.insert("bus_from".into(), json!(s.bus_from));
                 o.insert("bus_to".into(), json!(s.bus_to));
@@ -777,11 +822,11 @@ impl Writer {
     /// Rated capacitor banks (schema 0.1.0 `capacitor`), distinct from the
     /// raw admittance `shunt` table.
     fn capacitors(&mut self, net: &MulticonductorNetwork, doc: &mut Map<String, Value>) {
-        if net.capacitors.is_empty() {
+        if net.capacitors().is_empty() {
             return;
         }
         let mut caps = Map::new();
-        for c in &net.capacitors {
+        for c in net.capacitors() {
             let mut o = Map::new();
             o.insert("bus".into(), json!(c.bus));
             o.insert("terminal_map".into(), json!(c.terminal_map));
@@ -797,7 +842,7 @@ impl Writer {
     /// Loads, generators, shunts, and the voltage sources.
     fn injections(&mut self, net: &MulticonductorNetwork, doc: &mut Map<String, Value>) {
         let mut loads = Map::new();
-        for l in &net.loads {
+        for l in net.loads() {
             let mut o = Map::new();
             o.insert("configuration".into(), json!(config_str(l.configuration)));
             o.insert("p_nom".into(), self.nums(&l.p_nom, "load p_nom"));
@@ -809,7 +854,7 @@ impl Writer {
             loads.insert(l.name.clone(), Value::Object(o));
         }
         let mut gens = Map::new();
-        for g in &net.generators {
+        for g in net.generators() {
             gens.insert(g.name.clone(), self.generator(g));
         }
         if !loads.is_empty() {
@@ -818,9 +863,9 @@ impl Writer {
         if !gens.is_empty() {
             doc.insert("generator".into(), Value::Object(gens));
         }
-        if !net.shunts.is_empty() {
+        if !net.shunts().is_empty() {
             let mut shunts = Map::new();
-            for s in &net.shunts {
+            for s in net.shunts() {
                 let mut o = Map::new();
                 o.insert("bus".into(), json!(s.bus));
                 o.insert("terminal_map".into(), json!(s.terminal_map));
@@ -897,11 +942,11 @@ impl Writer {
     }
 
     fn control_profiles(&mut self, net: &MulticonductorNetwork, doc: &mut Map<String, Value>) {
-        if net.control_profiles.is_empty() {
+        if net.control_profiles().is_empty() {
             return;
         }
         let mut profiles = Map::new();
-        for profile in &net.control_profiles {
+        for profile in net.control_profiles() {
             profiles.insert(profile.name.clone(), self.control_profile(profile));
         }
         doc.insert("control_profile".into(), Value::Object(profiles));
@@ -925,7 +970,7 @@ impl Writer {
             if value.is_object() {
                 o.insert(key.clone(), value.clone());
             } else {
-                self.warn(&C::EMIT_BMOPF_RETAINED_SOURCE_ONLY, format!(
+                self.warn(&C::EMIT_BMOPF_FIELD_DROPPED, format!(
                     "control_profile {}: extra `{key}` is not an object; dropped from the output",
                     profile.name
                 ));
@@ -991,11 +1036,11 @@ impl Writer {
     }
 
     fn ibrs(&mut self, net: &MulticonductorNetwork, doc: &mut Map<String, Value>) {
-        if net.ibrs.is_empty() {
+        if net.ibrs().is_empty() {
             return;
         }
         let mut ibrs = Map::new();
-        for ibr in &net.ibrs {
+        for ibr in net.ibrs() {
             ibrs.insert(ibr.name.clone(), self.ibr(ibr));
         }
         doc.insert("ibr".into(), Value::Object(ibrs));
@@ -1036,7 +1081,7 @@ impl Writer {
             if IBR_EXTRA_FIELDS.contains(&key.as_str()) {
                 o.insert(key.clone(), value.clone());
             } else {
-                self.warn(&C::EMIT_BMOPF_RETAINED_SOURCE_ONLY, format!(
+                self.warn(&C::EMIT_BMOPF_FIELD_DROPPED, format!(
                     "ibr {}: extra `{key}` has no place in the BMOPF schema; dropped from the output",
                     ibr.name
                 ));
@@ -1136,12 +1181,14 @@ impl Writer {
                 // differs from the bounds has nowhere to go.
                 let pinned = lo.as_deref() == Some(nom) && hi.as_deref() == Some(nom);
                 if !nom.is_empty() && !nom.iter().all(|&v| v == 0.0) && !pinned {
-                    self.warn(
+                    self.diagnostic(
                         &C::EMIT_BMOPF_FIELD_DROPPED,
+                        what.clone(),
                         format!(
                             "{what}: explicit {key_lo}/{key_hi} bounds win over the setpoint, \
                          which has no BMOPF field"
                         ),
+                        Map::new(),
                     );
                 }
                 if let Some(v) = lo
@@ -1216,7 +1263,7 @@ impl Writer {
                 .insert(name, v);
         };
         let merged = self.open_delta_pairs(net, &mut by_subtype);
-        for t in &net.transformers {
+        for t in net.transformers() {
             if merged.contains(&t.name) {
                 continue;
             }
@@ -1402,7 +1449,7 @@ impl Writer {
     ) -> BTreeSet<String> {
         let mut merged = BTreeSet::new();
         let mut groups: BTreeMap<(String, String), Vec<&DistTransformer>> = BTreeMap::new();
-        for t in &net.transformers {
+        for t in net.transformers() {
             if !matches!(classify(t), Kind::OpenDeltaLeg) {
                 continue;
             }
@@ -1726,13 +1773,15 @@ impl Writer {
             if w.s_rating > 0.0 && w.s_rating.is_finite() {
                 total += w.r_pct / w.s_rating;
             } else if w.r_pct != 0.0 {
-                self.warn(
+                self.diagnostic(
                     &C::EMIT_BMOPF_FIELD_DROPPED,
+                    format!("transformer {}", t.name),
                     format!(
                         "transformer {}: the `{side}` winding rating is not positive, so its \
                      resistance has no base to refer to; the term is dropped from r_series",
                         t.name
                     ),
+                    Map::new(),
                 );
             }
         }
@@ -1755,14 +1804,16 @@ impl Writer {
                 let value = self.num(pct / 100.0 * zb, key);
                 o.insert(key.into(), value);
             }
-            None => self.warn(
+            None => self.diagnostic(
                 &C::EMIT_BMOPF_FIELD_DROPPED,
+                format!("transformer {}", t.name),
                 format!(
                     "transformer {}: the `{side}` winding rating is not positive, so its \
                  percent impedance has no base to refer to; `{key}` is dropped from \
                  the output",
                     t.name
                 ),
+                Map::new(),
             ),
         }
     }
@@ -2467,9 +2518,9 @@ enum PhaseArrangement {
 }
 
 fn bmopf_voltage_sources(net: &MulticonductorNetwork) -> Vec<SourceEmit> {
-    let emitted: Vec<SourceEmit> = net.sources.iter().map(SourceEmit::from).collect();
+    let emitted: Vec<SourceEmit> = net.sources().iter().map(SourceEmit::from).collect();
     let bus_ids: BTreeMap<String, String> = net
-        .buses
+        .buses()
         .iter()
         .map(|bus| (bus.id.to_ascii_lowercase(), bus.id.clone()))
         .collect();
@@ -2919,7 +2970,7 @@ fn bmopf_delta_roll(t: &DistTransformer, idx: usize, w: &DistWinding) -> Option<
 fn authored_terminal_conventions(net: &MulticonductorNetwork) -> Option<Value> {
     let mut phase: Vec<&String> = Vec::new();
     let mut neutral: Vec<&String> = Vec::new();
-    for b in &net.buses {
+    for b in net.buses() {
         for term in &b.terminals {
             let labels = if term.eq_ignore_ascii_case("n") {
                 &mut neutral
@@ -2964,8 +3015,72 @@ fn json_enum<T: serde::Serialize>(value: T) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::bmopf::parse_bmopf_str;
-    use crate::model::DistLoadVoltageModel;
+    use crate::model::{DistLoadVoltageModel, IbrPrimeMover, IbrTopology};
+    use crate::testkit::parse_bmopf_str;
+
+    /// A dropped field's diagnostic code must never claim the field was
+    /// kept, and a kept-under-extras diagnostic must never claim the field
+    /// was dropped. Exercises the writer's own field-dropped and
+    /// retained-source-only call sites directly, since the two only differ
+    /// by which paths trigger each one.
+    #[test]
+    fn dropped_and_retained_bmopf_diagnostics_do_not_contradict_their_own_message() {
+        let mut w = Writer {
+            options: BmopfWriteOptions::default(),
+            warnings: crate::diagnostics::Diagnostics::new(),
+            grounded: BTreeMap::new(),
+            transformer_overflow: Map::new(),
+            dropped_extras: BTreeMap::new(),
+        };
+
+        // A non-object control_profile extra and an ibr extra outside the
+        // allowed set both take the field-dropped path.
+        let mut profile = DistControlProfile::new("cp1");
+        profile.extras.insert("weird".into(), json!(42));
+        w.control_profile(&profile);
+
+        let mut ibr = DistIbr::new(
+            "pv1",
+            "b1",
+            vec!["1".into(), "2".into(), "3".into()],
+            IbrTopology::ThreeLeg,
+            IbrPrimeMover::Pv,
+            vec![1.0, 1.0, 1.0],
+        );
+        ibr.extras.insert("not_a_schema_field".into(), json!(1));
+        w.ibr(&ibr);
+
+        // A moved transformer field takes the retained-under-extras path.
+        let mut by_subtype = Map::new();
+        by_subtype.insert("single_phase".into(), json!({ "t1": { "tap": 1.05 } }));
+        w.split_transformer_overflow(&mut by_subtype);
+
+        let records = w.warnings.records();
+        let dropped: Vec<_> = records
+            .iter()
+            .filter(|d| d.code() == "EMIT.BMOPF.FIELD_DROPPED")
+            .collect();
+        let retained: Vec<_> = records
+            .iter()
+            .filter(|d| d.code() == "EMIT.BMOPF.RETAINED_SOURCE_ONLY")
+            .collect();
+        assert!(!dropped.is_empty(), "{records:?}");
+        assert!(!retained.is_empty(), "{records:?}");
+        for d in dropped {
+            assert!(
+                !d.message().contains("kept under extras"),
+                "FIELD_DROPPED message claims the field was kept: {}",
+                d.message()
+            );
+        }
+        for d in retained {
+            assert!(
+                !d.message().contains("dropped"),
+                "RETAINED_SOURCE_ONLY message claims the field was dropped: {}",
+                d.message()
+            );
+        }
+    }
 
     #[test]
     fn load_voltage_models_round_trip_through_bmopf() {
@@ -2997,8 +3112,8 @@ mod tests {
             }
         }"#;
         let net = parse_bmopf_str(text).unwrap();
-        let zip = net.loads.iter().find(|l| l.name == "zip").unwrap();
-        let exp = net.loads.iter().find(|l| l.name == "exp").unwrap();
+        let zip = net.loads().iter().find(|l| l.name == "zip").unwrap();
+        let exp = net.loads().iter().find(|l| l.name == "exp").unwrap();
         assert!(matches!(
             &zip.voltage_model,
             DistLoadVoltageModel::Zip { alpha_z, .. } if alpha_z == &vec![0.2, 0.2, 0.2]
@@ -3009,7 +3124,11 @@ mod tests {
         ));
 
         let out = write_bmopf_json(&net);
-        assert!(out.warnings.is_empty(), "{:?}", out.warnings);
+        assert!(
+            out.rendered_diagnostics().is_empty(),
+            "{:?}",
+            out.rendered_diagnostics()
+        );
         let v: Value = serde_json::from_str(&out.text).unwrap();
         assert_eq!(
             v["load"]["zip"]["alpha_i"],
@@ -3035,9 +3154,9 @@ mod tests {
         // would materialize dim x dim zeros for X.
         let mut lc = DistLineCode::new("big", Vec::new(), Vec::new());
         lc.r_series = vec![Vec::new(); 100_000];
-        net.linecodes.push(lc);
+        net.linecodes_mut().push(lc);
         // Same shape for a shunt's G/B pair.
-        net.shunts.push(DistShunt::new(
+        net.shunts_mut().push(DistShunt::new(
             "big",
             "b",
             Vec::new(),
@@ -3046,7 +3165,7 @@ mod tests {
         ));
         // A winding count beyond the cap would expand to ~n²/2 x_sc pairs.
         let winding = DistWinding::new("b", Vec::new(), DistWindingConn::Wye, 1.0, 1.0);
-        net.transformers.push(DistTransformer::new(
+        net.transformers_mut().push(DistTransformer::new(
             "many",
             vec![winding; MAX_DIM + 6],
             Vec::new(),
@@ -3075,11 +3194,11 @@ mod tests {
             MAX_DIM * (MAX_DIM - 1) / 2
         );
         assert!(
-            out.warnings
+            out.rendered_diagnostics()
                 .iter()
                 .any(|w| w.contains("exceeds the supported maximum")),
             "{:?}",
-            out.warnings
+            out.rendered_diagnostics()
         );
     }
 }

@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, HashMap};
 
-use powerio::BusId;
-use powerio::format::goc3::{Goc3DeviceKind, Goc3Document, Goc3Record};
+use powerio_tx::BusId;
+use powerio_tx::format::goc3::{Goc3DeviceKind, Goc3Document, Goc3Record};
 use serde_json::{Map, Value};
 
 use super::error::{ScopfError, ScopfResult};
@@ -12,7 +12,7 @@ pub(super) fn json_error(message: impl Into<String>) -> ScopfError {
     ScopfError::invalid(message)
 }
 
-fn rd(err: &powerio::Error) -> ScopfError {
+fn rd(err: &powerio_tx::Error) -> ScopfError {
     json_error(err.to_string())
 }
 
@@ -163,7 +163,7 @@ fn require_nonempty<'a>(items: Vec<Goc3Record<'a>>, path: &str) -> Result<Vec<Go
 /// loads empty. `what` and `name` differ where the same section name is
 /// read from more than one parent object (e.g. `simple_dispatchable_device`
 /// under both `network` and `time_series_input`).
-fn load_section(items: powerio::Result<Vec<Goc3Record<'_>>>, what: &str) -> Result<Goc3Section> {
+fn load_section(items: powerio_tx::Result<Vec<Goc3Record<'_>>>, what: &str) -> Result<Goc3Section> {
     Goc3Section::from_items(items.map_err(|error| rd(&error))?, what)
 }
 

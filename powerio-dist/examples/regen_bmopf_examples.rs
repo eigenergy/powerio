@@ -12,6 +12,7 @@ fn root() -> PathBuf {
 }
 
 fn check_or_write(rel: &str, conv: &powerio_dist::Conversion, check: bool) -> bool {
+    let warning_count = conv.rendered_diagnostics().len();
     let path = root().join("examples/bmopf").join(rel);
     if check {
         let actual = std::fs::read_to_string(&path).unwrap();
@@ -23,7 +24,7 @@ fn check_or_write(rel: &str, conv: &powerio_dist::Conversion, check: bool) -> bo
             "checked {} ({} bytes, {} warnings)",
             path.display(),
             conv.text.len(),
-            conv.warnings.len()
+            warning_count
         );
     } else {
         std::fs::write(&path, &conv.text).unwrap();
@@ -31,7 +32,7 @@ fn check_or_write(rel: &str, conv: &powerio_dist::Conversion, check: bool) -> bo
             "wrote {} ({} bytes, {} warnings)",
             path.display(),
             conv.text.len(),
-            conv.warnings.len()
+            warning_count
         );
     }
     true
@@ -50,12 +51,22 @@ fn main() {
         ("opendss/ieee34/ieee34Mod1.dss", "ieee34.json"),
         ("opendss/ieee123/IEEE123Master.dss", "ieee123.json"),
     ] {
-        let net =
-            powerio_dist::parse_dss_file(root().join("../tests/data/dist").join(dss)).unwrap();
-        current &= check_or_write(out, &powerio_dist::write_bmopf_json(&net), check);
+        let source =
+            powerio_core::Source::open(root().join("../tests/data/dist").join(dss)).unwrap();
+        let module = powerio_dist::parse(source).unwrap();
+        current &= check_or_write(
+            out,
+            &powerio_dist::write_network(module.value(), powerio_dist::DistTargetFormat::BmopfJson),
+            check,
+        );
     }
-    let net = powerio_dist::parse_bmopf_file(root().join("examples/bmopf/4bus_dy.json")).unwrap();
-    current &= check_or_write("4bus_dy.json", &powerio_dist::write_bmopf_json(&net), check);
+    let source = powerio_core::Source::open(root().join("examples/bmopf/4bus_dy.json")).unwrap();
+    let module = powerio_dist::parse(source).unwrap();
+    current &= check_or_write(
+        "4bus_dy.json",
+        &powerio_dist::write_network(module.value(), powerio_dist::DistTargetFormat::BmopfJson),
+        check,
+    );
     if !current {
         std::process::exit(1);
     }

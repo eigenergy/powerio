@@ -2,14 +2,17 @@
 //! public example networks from frederikgeth/bmopf-report.
 
 use std::path::PathBuf;
-use std::sync::Arc;
 
-use powerio_dist::dss::{parse_dss_file, parse_dss_str};
 use powerio_dist::{
     BmopfWriteOptions, Configuration, CoordinateSpace, DiagnosticSeverity, DiagnosticStage,
     DistBus, DistCoordsKind, DistGeoMeta, DistLineCode, DistLocation, DistTransformer, DistWinding,
-    DistWindingConn, Extras, MulticonductorNetwork, VoltageSource, parse_bmopf_file,
-    parse_bmopf_str, parse_pmd_str, write_bmopf_json, write_bmopf_json_with_options, write_dss,
+    DistWindingConn, Extras, MulticonductorNetwork, VoltageSource,
+};
+
+mod helpers;
+use helpers::{
+    parse_bmopf_file, parse_bmopf_str, parse_dss_file, parse_dss_str, parse_pmd_str,
+    write_bmopf_json, write_bmopf_json_with_options, write_dss,
 };
 
 fn fixture(rel: &str) -> PathBuf {
@@ -50,10 +53,10 @@ fn bmopf_sideloaded_coordinates_promote_to_locations() {
     )
     .unwrap();
     assert!(net.warnings.is_empty(), "{:?}", net.warnings);
-    let geo = net.geo.as_ref().expect("geo metadata");
+    let geo = net.geo().as_ref().expect("geo metadata");
     assert_eq!(geo.space, CoordinateSpace::Geographic { crs: None });
     assert_eq!(geo.kind, Some(DistCoordsKind::Source));
-    let bus = &net.buses[0];
+    let bus = &net.buses()[0];
     assert_eq!(bus.location.unwrap().x.to_bits(), (-80.0f64).to_bits());
     assert_eq!(bus.location.unwrap().y.to_bits(), 35.0f64.to_bits());
     assert!(!bus.extras.contains_key("longitude"));
@@ -61,13 +64,13 @@ fn bmopf_sideloaded_coordinates_promote_to_locations() {
 }
 
 fn diagnostic<'a>(
-    conv: &'a powerio_dist::Conversion,
+    conv: &'a helpers::Conv,
     code: &str,
     element_path: &str,
-) -> &'a powerio_dist::StructuredDiagnostic {
+) -> &'a powerio_dist::Diagnostic {
     conv.diagnostics
         .iter()
-        .find(|d| d.code.as_str() == code && d.element_path.as_deref() == Some(element_path))
+        .find(|d| d.code() == code && d.target() == Some(element_path))
         .unwrap_or_else(|| panic!("missing diagnostic {code} for {element_path}: {conv:?}"))
 }
 
@@ -119,7 +122,7 @@ fn one_triangle_matrix_spelling_mirrors_on_read() {
         }"#,
     )
     .unwrap();
-    let lc = &net.linecodes[0];
+    let lc = &net.linecodes()[0];
     assert_eq!(lc.r_series[0][1].to_bits(), 0.25f64.to_bits());
     assert_eq!(lc.r_series[1][0].to_bits(), 0.25f64.to_bits());
     assert_eq!(lc.x_series[1][0].to_bits(), 0.5f64.to_bits());
@@ -128,22 +131,22 @@ fn one_triangle_matrix_spelling_mirrors_on_read() {
 #[test]
 fn parse_the_public_examples() {
     let net = parse_bmopf_file(fixture("bmopf/example_ieee13.json")).unwrap();
-    assert_eq!(net.buses.len(), 7);
-    assert_eq!(net.lines.len(), 4);
-    assert_eq!(net.loads.len(), 5);
-    assert_eq!(net.generators.len(), 1);
-    assert_eq!(net.transformers.len(), 2);
-    assert_eq!(net.sources.len(), 1);
+    assert_eq!(net.buses().len(), 7);
+    assert_eq!(net.lines().len(), 4);
+    assert_eq!(net.loads().len(), 5);
+    assert_eq!(net.generators().len(), 1);
+    assert_eq!(net.transformers().len(), 2);
+    assert_eq!(net.sources().len(), 1);
     assert!(net.warnings.is_empty(), "{:?}", net.warnings);
 
     let enwl = parse_bmopf_file(fixture("bmopf/example_enwl_n1_f2.json")).unwrap();
-    assert_eq!(enwl.buses.len(), 506);
-    assert_eq!(enwl.lines.len(), 505);
-    assert_eq!(enwl.loads.len(), 31);
-    assert_eq!(enwl.shunts.len(), 1);
+    assert_eq!(enwl.buses().len(), 506);
+    assert_eq!(enwl.lines().len(), 505);
+    assert_eq!(enwl.loads().len(), 31);
+    assert_eq!(enwl.shunts().len(), 1);
     // The ENWL example routes OpenDSS earth terminals to the bus neutral;
     // buses carry grounded terminals.
-    assert!(enwl.buses.iter().any(|b| !b.grounded.is_empty()));
+    assert!(enwl.buses().iter().any(|b| !b.grounded.is_empty()));
 }
 
 #[test]
@@ -195,22 +198,21 @@ fn enwl_round_trips() {
 fn assert_model_eq(a: &MulticonductorNetwork, b: &MulticonductorNetwork) {
     let strip = |n: &MulticonductorNetwork| {
         let mut n = n.clone();
-        n.source = Some(Arc::new(String::new()));
-        n.extras.remove("bmopf_meta");
+        n.extras_mut().remove("bmopf_meta");
         n
     };
     let (a, b) = (strip(a), strip(b));
-    assert_eq!(a.buses, b.buses);
-    assert_eq!(a.linecodes, b.linecodes);
-    assert_eq!(a.lines, b.lines);
-    assert_eq!(a.switches, b.switches);
-    assert_eq!(a.loads, b.loads);
-    assert_eq!(a.generators, b.generators);
-    assert_eq!(a.ibrs, b.ibrs);
-    assert_eq!(a.control_profiles, b.control_profiles);
-    assert_eq!(a.shunts, b.shunts);
-    assert_eq!(a.sources, b.sources);
-    assert_eq!(a.transformers, b.transformers);
+    assert_eq!(a.buses(), b.buses());
+    assert_eq!(a.linecodes(), b.linecodes());
+    assert_eq!(a.lines(), b.lines());
+    assert_eq!(a.switches(), b.switches());
+    assert_eq!(a.loads(), b.loads());
+    assert_eq!(a.generators(), b.generators());
+    assert_eq!(a.ibrs(), b.ibrs());
+    assert_eq!(a.control_profiles(), b.control_profiles());
+    assert_eq!(a.shunts(), b.shunts());
+    assert_eq!(a.sources(), b.sources());
+    assert_eq!(a.transformers(), b.transformers());
 }
 
 /// Every distribution case fixture, whatever its source format, emits a
@@ -243,7 +245,7 @@ fn every_dist_fixture_emits_valid_bmopf() {
         "bmopf/example_ieee13.json",
         "bmopf/example_enwl_n1_f2.json",
     ] {
-        let net = powerio_dist::parse_file(fixture(case), None).unwrap();
+        let net = helpers::parse_file(fixture(case), None).unwrap();
         let out = write_bmopf_json(&net);
         assert_eq!(errors(&v, &out.text), Vec::<String>::new(), "{case}");
         let again = parse_bmopf_str(&out.text).unwrap();
@@ -386,10 +388,10 @@ fn dss_delta_shunts_emit_bmopf_matrices() {
 fn single_phase_wye_delta_keeps_both_delta_terminals() {
     // Open wye / open delta: the delta is on the secondary, on .1.2 and .2.3.
     let net = parse_dss_file(fixture("micro/xfmr_open_wye_open_delta.dss")).unwrap();
-    let t1 = net.transformers.iter().find(|t| t.name == "t1").unwrap();
+    let t1 = net.transformers().iter().find(|t| t.name == "t1").unwrap();
     assert_eq!(t1.windings[1].conn, DistWindingConn::Delta);
     assert_eq!(t1.windings[1].terminal_map, vec!["1", "2"]);
-    let t2 = net.transformers.iter().find(|t| t.name == "t2").unwrap();
+    let t2 = net.transformers().iter().find(|t| t.name == "t2").unwrap();
     assert_eq!(t2.windings[1].terminal_map, vec!["2", "3"]);
 
     let out = write_bmopf_json(&net);
@@ -421,10 +423,10 @@ fn single_phase_wye_delta_keeps_both_delta_terminals() {
         "EMIT.BMOPF.TRANSFORMER_CONNECTION_LOSSY",
         "transformer t1",
     );
-    assert_eq!(diag.severity, DiagnosticSeverity::Warning);
+    assert_eq!(diag.severity(), DiagnosticSeverity::Warning);
     assert_eq!(diag.stage(), Some(DiagnosticStage::Emit));
-    assert_eq!(diag.details["transformer"], serde_json::json!("t1"));
-    assert_eq!(diag.details["connection"], serde_json::json!("wye/delta"));
+    assert_eq!(diag.details()["transformer"], serde_json::json!("t1"));
+    assert_eq!(diag.details()["connection"], serde_json::json!("wye/delta"));
     let doc: serde_json::Value = serde_json::from_str(&out.text).unwrap();
     let sp = &doc["transformer"]["single_phase"];
     assert_eq!(sp["t1"]["terminal_map_to"], serde_json::json!(["1", "2"]));
@@ -433,7 +435,7 @@ fn single_phase_wye_delta_keeps_both_delta_terminals() {
     // The other orientation: a delta primary (line to line, on .1.2) into a
     // grounded wye secondary keeps both primary terminals.
     let dw = parse_dss_file(fixture("micro/xfmr_1ph_delta_wye.dss")).unwrap();
-    let t = &dw.transformers[0];
+    let t = &dw.transformers()[0];
     assert_eq!(t.windings[0].conn, DistWindingConn::Delta);
     assert_eq!(t.windings[0].terminal_map, vec!["1", "2"]);
     let out = write_bmopf_json(&dw);
@@ -476,7 +478,7 @@ fn delta_wye_leakage_uses_each_winding_base() {
 
     let round_trip = parse_bmopf_str(&out.text).unwrap();
     let t = round_trip
-        .transformers
+        .transformers()
         .iter()
         .find(|t| t.name == "t1")
         .unwrap();
@@ -553,20 +555,32 @@ fn ieee13_conversion_warnings_name_every_loss() {
         out.warnings
     );
     let diag = diagnostic(&out, "EMIT.BMOPF.REGCONTROL_DROPPED", "regcontrol Reg1");
-    assert_eq!(diag.severity, DiagnosticSeverity::Warning);
+    assert_eq!(diag.severity(), DiagnosticSeverity::Warning);
     assert_eq!(diag.stage(), Some(DiagnosticStage::Emit));
-    assert_eq!(diag.details["class"], serde_json::json!("regcontrol"));
+    assert_eq!(diag.details()["class"], serde_json::json!("regcontrol"));
     // No silent extras: every message leads with a `class name:` element
-    // identifier ("load 671: ...", "voltage source source: ..."). The line the
-    // text channel carries leads with the code, so the check reads the record.
+    // identifier ("load 671: ...", "voltage source source: ..."), or is an
+    // aggregated per-field record naming its elements in details (#377). The
+    // line the text channel carries leads with the code, so the check reads
+    // the record.
     for d in &out.diagnostics {
-        let Some((head, _)) = d.message.split_once(": ") else {
-            panic!("warning has no `class name:` prefix: {}", d.message);
+        if let Some(elements) = d.details().get("elements") {
+            let elements = elements.as_array().expect("elements is a list");
+            assert!(
+                !elements.is_empty()
+                    && elements
+                        .iter()
+                        .all(|e| e.as_str().is_some_and(|e| e.contains(' '))),
+            );
+            continue;
+        }
+        let Some((head, _)) = d.message().split_once(": ") else {
+            panic!("warning has no `class name:` prefix: {}", d.message());
         };
         assert!(
             head.split_whitespace().count() >= 2,
             "warning does not name its element: {}",
-            d.message
+            d.message()
         );
     }
 }
@@ -602,9 +616,9 @@ fn dss_fixed_generator_emits_as_bmopf_generator() {
         out.warnings
     );
     assert!(
-        out.diagnostics
-            .iter()
-            .any(|d| d.message == "generator g1: no generation cost in the source; emitted cost 0"),
+        out.diagnostics.iter().any(
+            |d| d.message() == "generator g1: no generation cost in the source; emitted cost 0"
+        ),
         "missing zero cost warning: {:?}",
         out.warnings
     );
@@ -723,12 +737,12 @@ fn raw_ibr_and_control_profile_tables_round_trip() {
     )
     .unwrap();
 
-    assert_eq!(net.ibrs.len(), 1);
-    assert_eq!(net.control_profiles.len(), 1);
-    let ibr = &net.ibrs[0];
+    assert_eq!(net.ibrs().len(), 1);
+    assert_eq!(net.control_profiles().len(), 1);
+    let ibr = &net.ibrs()[0];
     assert_eq!(ibr.name, "pv");
     assert_eq!(ibr.control_profile.as_deref(), Some("cp"));
-    let cp = &net.control_profiles[0];
+    let cp = &net.control_profiles()[0];
     let vv = cp.volt_var.as_ref().expect("volt var typed");
     assert_eq!(vv.q_limits, vec![-0.44, 0.44]);
     assert_eq!(vv.p_min_for_q, Some(10.0));
@@ -911,9 +925,9 @@ fn split_source_network(sources: Vec<VoltageSource>) -> MulticonductorNetwork {
     );
     bus.grounded = vec!["4".into()];
     let mut net = MulticonductorNetwork::default();
-    net.name = Some("split".into());
-    net.buses = vec![bus];
-    net.sources = sources;
+    *net.name_mut() = Some("split".into());
+    *net.buses_mut() = vec![bus];
+    *net.sources_mut() = sources;
     net
 }
 
@@ -921,11 +935,11 @@ fn split_source_network(sources: Vec<VoltageSource>) -> MulticonductorNetwork {
 fn bmopf_coordinates_are_strict_by_default_and_opt_in_as_sideloads() {
     let mut net =
         split_source_network(vec![single_phase_source("source", "1", 0.0, Extras::new())]);
-    net.geo = Some(DistGeoMeta {
+    *net.geo_mut() = Some(DistGeoMeta {
         space: CoordinateSpace::Geographic { crs: None },
         kind: Some(DistCoordsKind::Source),
     });
-    net.buses[0].location = Some(DistLocation {
+    net.buses_mut()[0].location = Some(DistLocation {
         x: -80.0,
         y: 35.0,
         kind: None,
@@ -943,13 +957,13 @@ fn bmopf_coordinates_are_strict_by_default_and_opt_in_as_sideloads() {
         strict.warnings
     );
     assert_eq!(
-        diagnostic(&strict, "EMIT.BMOPF.BUS_LOCATION_DROPPED", "bus sourcebus").severity,
+        diagnostic(&strict, "EMIT.BMOPF.BUS_LOCATION_DROPPED", "bus sourcebus").severity(),
         DiagnosticSeverity::Warning
     );
 
     let mut options = BmopfWriteOptions::default();
     options.sideload_coordinates = true;
-    let sideloaded = write_bmopf_json_with_options(&net, &options);
+    let sideloaded = write_bmopf_json_with_options(&net, options);
     let doc: serde_json::Value = serde_json::from_str(&sideloaded.text).unwrap();
     assert_eq!(
         doc["bus"]["sourcebus"]["longitude"],
@@ -965,11 +979,11 @@ fn bmopf_coordinates_are_strict_by_default_and_opt_in_as_sideloads() {
         sideloaded.warnings
     );
 
-    net.geo = Some(DistGeoMeta {
+    *net.geo_mut() = Some(DistGeoMeta {
         space: CoordinateSpace::Unknown,
         kind: Some(DistCoordsKind::Source),
     });
-    let unknown = write_bmopf_json_with_options(&net, &options);
+    let unknown = write_bmopf_json_with_options(&net, options);
     let doc: serde_json::Value = serde_json::from_str(&unknown.text).unwrap();
     assert!(doc["bus"]["sourcebus"].get("longitude").is_none());
     assert!(
@@ -991,7 +1005,7 @@ fn opendss_split_voltage_sources_merge_in_bmopf() {
          New Vsource.phb phases=1 basekv=7.2 pu=1.0 angle=-120 bus1=sourcebus.2\n\
          New Vsource.phc phases=1 basekv=7.2 pu=1.0 angle=120 bus1=SOURCEBUS.3\n",
     );
-    assert_eq!(net.sources.len(), 3);
+    assert_eq!(net.sources().len(), 3);
 
     let out = write_bmopf_json(&net);
     assert_eq!(errors(&schema_validator(), &out.text), Vec::<String>::new());
@@ -1002,19 +1016,35 @@ fn opendss_split_voltage_sources_merge_in_bmopf() {
         "{:?}",
         out.warnings
     );
-    assert!(
-        out.warnings
+    // The per-field aggregation (#377) carries the elements in details.
+    let by_field = |field: &str| {
+        out.diagnostics
             .iter()
-            .any(|w| w.contains("voltage source phb: `angle`")),
+            .find(|d| {
+                d.code() == "EMIT.BMOPF.FIELD_DROPPED"
+                    && d.details().get("field") == Some(&serde_json::json!(field))
+            })
+            .unwrap_or_else(|| panic!("missing aggregated drop for {field}: {out:?}"))
+    };
+    let angle = by_field("angle");
+    assert!(
+        angle.details()["elements"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|e| e == "voltage source phb"),
         "{:?}",
-        out.warnings
+        angle.details()
     );
+    let basekv = by_field("basekv");
     assert!(
-        out.warnings
+        basekv.details()["elements"]
+            .as_array()
+            .unwrap()
             .iter()
-            .any(|w| w.contains("voltage source phc: `basekv`")),
+            .any(|e| e == "voltage source phc"),
         "{:?}",
-        out.warnings
+        basekv.details()
     );
     let doc: serde_json::Value = serde_json::from_str(&out.text).unwrap();
     assert!(doc["bus"].get("SourceBus").is_some(), "{}", out.text);
@@ -1049,7 +1079,7 @@ fn two_phase_split_voltage_sources_merge_in_bmopf() {
          New Circuit.split phases=1 basekv=7.2 pu=1.0 angle=0 bus1=sourcebus.1\n\
          New Vsource.phb phases=1 basekv=7.2 pu=1.0 angle=-120 bus1=sourcebus.2\n",
     );
-    assert_eq!(net.sources.len(), 2);
+    assert_eq!(net.sources().len(), 2);
 
     let out = write_bmopf_json(&net);
     assert_eq!(errors(&schema_validator(), &out.text), Vec::<String>::new());
@@ -1183,7 +1213,7 @@ fn transformer_tap_fields_round_trip_through_bmopf() {
     )
     .unwrap();
 
-    assert!((net.transformers[0].windings[0].tap - 1.05).abs() < 1e-12);
+    assert!((net.transformers()[0].windings[0].tap - 1.05).abs() < 1e-12);
     let out = write_bmopf_json(&net);
     assert_eq!(errors(&v, &out.text), Vec::<String>::new());
     let doc: serde_json::Value = serde_json::from_str(&out.text).unwrap();
@@ -1204,7 +1234,7 @@ fn dss_fixed_to_side_tap_emits_bmopf_ratio_without_bounds() {
          conns=(wye, wye) kvs=(7.2, 0.24) kvas=(25, 25) taps=(1.0, 1.05) \
          mintap=0.9 maxtap=1.1 numtaps=32 xhl=2.0 %Rs=(0.5, 0.5)\n",
     );
-    assert!((net.transformers[0].windings[1].tap - 1.05).abs() < 1e-12);
+    assert!((net.transformers()[0].windings[1].tap - 1.05).abs() < 1e-12);
 
     let out = write_bmopf_json(&net);
     assert_eq!(errors(&v, &out.text), Vec::<String>::new());
@@ -1253,7 +1283,7 @@ fn dss_center_tap_uses_first_secondary_tap_and_warns_if_halves_differ() {
         "transformer t1",
     );
     assert_eq!(
-        diag.details["secondary_taps"],
+        diag.details()["secondary_taps"],
         serde_json::json!([1.01, 1.03])
     );
 
@@ -1333,11 +1363,11 @@ fn pmd_nonuniform_per_phase_taps_warn_with_stable_code() {
         "EMIT.BMOPF.TRANSFORMER_PER_PHASE_TAP_COLLAPSED",
         "transformer reg",
     );
-    assert_eq!(diag.severity, DiagnosticSeverity::Warning);
+    assert_eq!(diag.severity(), DiagnosticSeverity::Warning);
     assert_eq!(diag.stage(), Some(DiagnosticStage::Emit));
-    assert_eq!(diag.details["winding"], serde_json::json!(2));
+    assert_eq!(diag.details()["winding"], serde_json::json!(2));
     assert_eq!(
-        diag.details["source_taps"],
+        diag.details()["source_taps"],
         serde_json::json!([1.05, 1.04, 1.05])
     );
 
@@ -1378,8 +1408,8 @@ fn n_winding_transformer_round_trips_through_bmopf() {
     )
     .unwrap();
 
-    assert_eq!(net.transformers[0].windings.len(), 3);
-    let model_t = &net.transformers[0];
+    assert_eq!(net.transformers()[0].windings.len(), 3);
+    let model_t = &net.transformers()[0];
     assert!((model_t.windings[1].v_ref - 100.0 * 3f64.sqrt()).abs() < 1e-12);
     assert!((model_t.windings[0].r_pct - 0.01 / 3.0 * 100.0).abs() < 1e-12);
     assert!((model_t.windings[1].r_pct - 0.02 / 3.0 * 100.0).abs() < 1e-12);
@@ -1452,7 +1482,7 @@ fn opendss_n_winding_delta_emits_delta_roll() {
          conns=(delta, wye, wye) kvs=(12.47, 4.16, 0.48) \
          kvas=(1000, 1000, 1000) %Rs=(0.5, 0.5, 0.5) xhl=5 xht=6 xlt=4\n",
     );
-    let t = &net.transformers[0];
+    let t = &net.transformers()[0];
     assert_eq!(t.windings.len(), 3);
     assert_eq!(t.windings[0].conn, DistWindingConn::Delta);
 
@@ -1596,7 +1626,7 @@ fn transformer_neutral_impedance_round_trips_dss_and_bmopf() {
          ~ wdg=1 rneut=5 xneut=6\n\
          ~ wdg=2 rneut=7 xneut=8\n",
     );
-    let t = &net.transformers[0];
+    let t = &net.transformers()[0];
     assert_eq!(t.windings[0].r_neutral, Some(5.0));
     assert_eq!(t.windings[0].x_neutral, Some(6.0));
     assert_eq!(t.windings[1].r_neutral, Some(7.0));
@@ -1618,7 +1648,7 @@ fn transformer_neutral_impedance_round_trips_dss_and_bmopf() {
     assert_eq!(t["x_neutral_to"], serde_json::json!(8.0));
 
     let reparsed = parse_bmopf_str(&out.text).unwrap();
-    let rt = &reparsed.transformers[0];
+    let rt = &reparsed.transformers()[0];
     assert_eq!(rt.windings[0].r_neutral, Some(5.0));
     assert_eq!(rt.windings[0].x_neutral, Some(6.0));
     assert_eq!(rt.windings[1].r_neutral, Some(7.0));
@@ -1693,7 +1723,7 @@ fn wye_wye_3_extras_drop_warns_once_not_per_phase() {
     t.extras
         .insert("unknown_key".into(), serde_json::json!("x"));
     let mut net = MulticonductorNetwork::default();
-    net.transformers.push(t);
+    net.transformers_mut().push(t);
 
     let out = write_bmopf_json(&net);
     let count = out
@@ -1768,11 +1798,11 @@ fn wye_wye_3_raw_no_load_splits_across_decomposition() {
         .insert("b_no_load".into(), serde_json::json!(-0.000_012));
 
     let mut net = MulticonductorNetwork::default();
-    net.buses = vec![
+    *net.buses_mut() = vec![
         DistBus::new("a", vec!["1".into(), "2".into(), "3".into(), "n".into()]),
         DistBus::new("b", vec!["1".into(), "2".into(), "3".into(), "n".into()]),
     ];
-    net.transformers.push(t);
+    net.transformers_mut().push(t);
 
     let out = write_bmopf_json(&net);
     assert_eq!(errors(&schema_validator(), &out.text), Vec::<String>::new());
@@ -1808,7 +1838,7 @@ fn bmopf_frequency_hint_reaches_dss() {
     )
     .unwrap();
 
-    assert!((net.base_frequency - 50.0).abs() < 1e-12);
+    assert!((net.base_frequency() - 50.0).abs() < 1e-12);
     let out = write_dss(&net);
     assert!(
         out.text.contains("Set DefaultBaseFrequency=50"),
@@ -1963,7 +1993,7 @@ fn shunt_size_mismatch_pads_the_smaller_matrix() {
             "B_1_1": 1.0, "B_1_2": -1.0, "B_2_1": -1.0, "B_2_2": 1.0}}"#,
     );
     let net = parse_bmopf_str(&text).unwrap();
-    let s = &net.shunts[0];
+    let s = &net.shunts()[0];
     // G grew to B's size; its entry survived the padding.
     assert_eq!(s.g, vec![vec![0.5, 0.0], vec![0.0, 0.0]]);
     assert_eq!(s.b, vec![vec![1.0, -1.0], vec![-1.0, 1.0]]);
@@ -2048,7 +2078,7 @@ fn bmopf_center_tap_canonical_order_rebuilds_dss_grounded_center() {
         }
     }"#;
     let net = parse_bmopf_str(text).unwrap();
-    assert_eq!(net.transformers[0].windings.len(), 3);
+    assert_eq!(net.transformers()[0].windings.len(), 3);
     let dss = write_dss(&net).text;
     assert!(dss.contains("lv.1.0"), "{dss}");
     assert!(dss.contains("lv.0.2"), "{dss}");
@@ -2210,7 +2240,7 @@ fn bmopf_center_tap_neutral_grounding_rebuilds_once() {
         }
     }"#;
     let net = parse_bmopf_str(text).unwrap();
-    let t = &net.transformers[0];
+    let t = &net.transformers()[0];
     assert_eq!(t.windings[1].r_neutral, Some(5.0));
     assert_eq!(t.windings[1].x_neutral, Some(6.0));
     assert_eq!(t.windings[2].r_neutral, None);
@@ -2269,9 +2299,12 @@ fn center_tap_negative_star_arm_warns_and_falls_back_schema_valid() {
         "EMIT.BMOPF.TRANSFORMER_CENTER_TAP_LEAKAGE_UNREPRESENTABLE",
         "transformer t1",
     );
-    assert_eq!(diag.details["xsc_pct"], serde_json::json!([2.0, 10.0, 2.0]));
     assert_eq!(
-        diag.details["emitted_percentages"],
+        diag.details()["xsc_pct"],
+        serde_json::json!([2.0, 10.0, 2.0])
+    );
+    assert_eq!(
+        diag.details()["emitted_percentages"],
         serde_json::json!([2.0, 0.0])
     );
 
@@ -2312,7 +2345,7 @@ fn linecode_constructor_sizes_x_only_matrix_from_x() {
     assert_eq!(lc.b_to, vec![vec![0.0]]);
 
     let mut net = MulticonductorNetwork::default();
-    net.linecodes.push(lc);
+    net.linecodes_mut().push(lc);
     let out = write_bmopf_json(&net);
     assert_eq!(errors(&schema_validator(), &out.text), Vec::<String>::new());
     let doc: serde_json::Value = serde_json::from_str(&out.text).unwrap();
@@ -2394,14 +2427,14 @@ fn synthesized_inline_linecode_never_shadows_a_declared_one() {
         }"#,
     );
     let net = parse_bmopf_str(&text).unwrap();
-    assert_eq!(net.linecodes.len(), 2);
+    assert_eq!(net.linecodes().len(), 2);
     let series = |name: &str| net.linecode(name).unwrap().r_series[0][0].to_bits();
     // The declared code keeps its name and its impedance.
     assert_eq!(series("LC"), 9.0f64.to_bits());
-    let user = net.lines.iter().find(|l| l.name == "user").unwrap();
+    let user = net.lines().iter().find(|l| l.name == "user").unwrap();
     assert_eq!(series(&user.linecode), 9.0f64.to_bits());
     // The inline line takes a suffixed name and keeps its own impedance.
-    let inline = net.lines.iter().find(|l| l.name == "lc").unwrap();
+    let inline = net.lines().iter().find(|l| l.name == "lc").unwrap();
     assert_eq!(inline.linecode, "lc_");
     assert_eq!(series(&inline.linecode), 1.0f64.to_bits());
     assert!(
@@ -2425,7 +2458,7 @@ fn malformed_matrix_keys_land_in_extras_with_warnings() {
     let lc = net.linecode("lc").unwrap();
     assert_eq!(lc.n_conductors, 1);
     assert!(lc.extras.contains_key("X_series_note"));
-    let s = &net.shunts[0];
+    let s = &net.shunts()[0];
     // Only well formed `_i_j` keys (1 based) count as matrix entries.
     assert_eq!(s.g, vec![vec![0.5]]);
     assert_eq!(s.b, vec![vec![1.0]]);
@@ -2461,17 +2494,17 @@ fn unrecognized_configuration_and_subtype_warn() {
     );
     let net = parse_bmopf_str(&text).unwrap();
     // A recognized value in the wrong case is tolerated without a warning.
-    assert_eq!(net.loads[0].configuration, Configuration::Delta);
+    assert_eq!(net.loads()[0].configuration, Configuration::Delta);
     assert!(!net.warnings.iter().any(|w| w.contains("load l1")));
     // A truly unknown one coerces to WYE, loudly.
-    assert_eq!(net.loads[1].configuration, Configuration::Wye);
+    assert_eq!(net.loads()[1].configuration, Configuration::Wye);
     assert!(
         net.warnings
             .iter()
             .any(|w| w.contains("load l2") && w.contains("zigzag"))
     );
     // An unknown transformer subtype group reads, with a warning.
-    assert_eq!(net.transformers.len(), 1);
+    assert_eq!(net.transformers().len(), 1);
     assert!(
         net.warnings
             .iter()
@@ -2504,7 +2537,7 @@ fn three_wire_wye_wye_is_unsupported_not_a_panic() {
         winding.r_pct = 0.5;
         winding
     };
-    net.transformers.push(DistTransformer::new(
+    net.transformers_mut().push(DistTransformer::new(
         "t3w",
         vec![winding(&["1", "2", "3"]), winding(&["1", "2"])],
         vec![2.0],
@@ -2531,10 +2564,10 @@ fn three_wire_wye_wye_is_unsupported_not_a_panic() {
         "EMIT.BMOPF.TRANSFORMER_UNSUPPORTED",
         "transformer t3w",
     );
-    assert_eq!(diag.severity, DiagnosticSeverity::Warning);
+    assert_eq!(diag.severity(), DiagnosticSeverity::Warning);
     assert_eq!(diag.stage(), Some(DiagnosticStage::Emit));
-    assert_eq!(diag.details["transformer"], serde_json::json!("t3w"));
-    assert_eq!(diag.details["phases"], serde_json::json!(3));
+    assert_eq!(diag.details()["transformer"], serde_json::json!("t3w"));
+    assert_eq!(diag.details()["phases"], serde_json::json!(3));
 }
 
 #[test]
@@ -2545,8 +2578,8 @@ fn dss_autotransformer_drop_has_stable_diagnostic() {
          New AutoTrans.at1 phases=1 windings=2 buses=(sourcebus.1.0, loadbus.1.0) \
          kvs=(7.2 0.24) kvas=(25 25) xhl=2\n",
     );
-    assert_eq!(net.untyped.len(), 1, "{:?}", net.untyped);
-    assert_eq!(net.untyped[0].class, "autotrans");
+    assert_eq!(net.untyped().len(), 1, "{:?}", net.untyped());
+    assert_eq!(net.untyped()[0].class, "autotrans");
 
     let out = write_bmopf_json(&net);
     assert!(
@@ -2557,10 +2590,10 @@ fn dss_autotransformer_drop_has_stable_diagnostic() {
         out.warnings
     );
     let diag = diagnostic(&out, "EMIT.BMOPF.AUTOTRANSFORMER_DROPPED", "autotrans at1");
-    assert_eq!(diag.severity, DiagnosticSeverity::Warning);
+    assert_eq!(diag.severity(), DiagnosticSeverity::Warning);
     assert_eq!(diag.stage(), Some(DiagnosticStage::Emit));
-    assert_eq!(diag.details["class"], serde_json::json!("autotrans"));
-    assert_eq!(diag.details["name"], serde_json::json!("at1"));
+    assert_eq!(diag.details()["class"], serde_json::json!("autotrans"));
+    assert_eq!(diag.details()["name"], serde_json::json!("at1"));
     assert!(
         !out.text.contains("at1"),
         "untyped AutoTrans must not silently enter BMOPF JSON: {}",
@@ -2580,7 +2613,7 @@ fn reader_is_liberal_where_the_writer_is_strict() {
     }"#;
     let net = parse_bmopf_str(text).unwrap();
     assert!(net.warnings.iter().any(|w| w.contains("note")));
-    assert!(net.buses[0].extras.contains_key("note"));
+    assert!(net.buses()[0].extras.contains_key("note"));
     let out = write_bmopf_json(&net);
     assert!(out.warnings.iter().any(|w| w.contains("note")));
     assert!(!out.text.contains("hand edited"));
@@ -2643,7 +2676,7 @@ fn oversized_matrix_key_is_bounded_and_warned() {
     // The largest matrix index seen sizes a dense allocation; an unbounded
     // key would demand gigabytes from a few bytes of JSON. Out-of-bounds
     // indices fall out of the matrix grammar and land in extras, warned.
-    let net = powerio_dist::parse_str(
+    let net = helpers::parse_str(
         r#"{"linecode":{"lc":{"R_series_100000_1":1.0}}}"#,
         "bmopf-json",
     )
@@ -2667,23 +2700,27 @@ fn winding_count_is_bounded() {
     let doc = serde_json::json!({
         "transformer": {"n_winding": {"t1": {"windings": windings, "s_rating": 1000.0}}}
     });
-    let net = powerio_dist::parse_str(&doc.to_string(), "bmopf-json").unwrap();
+    let net = helpers::parse_str(&doc.to_string(), "bmopf-json").unwrap();
     assert!(
         net.warnings.iter().any(|w| w.contains("supported maximum")),
         "warnings: {:?}",
         net.warnings
     );
-    assert_eq!(net.transformers.len(), 1);
+    assert_eq!(net.transformers().len(), 1);
 }
 
 #[test]
 fn meta_block_is_kept_in_extras() {
-    let net = powerio_dist::parse_str(
+    let net = helpers::parse_str(
         r#"{"bus":{"b1":{}},"meta":{"license":"CC-BY-4.0"}}"#,
         "bmopf-json",
     )
     .unwrap();
-    assert!(net.extras.contains_key("bmopf_meta"), "{:?}", net.extras);
+    assert!(
+        net.extras().contains_key("bmopf_meta"),
+        "{:?}",
+        net.extras()
+    );
 }
 
 /// Schema 0.1.0 calls `length` "purely descriptive" on the inline impedance
@@ -2697,7 +2734,7 @@ fn inline_impedance_is_not_scaled_by_a_descriptive_length() {
             "R_series_1_1": 1.0, "X_series_1_1": 2.0}}"#,
     );
     let net = parse_bmopf_str(&text).unwrap();
-    let line = &net.lines[0];
+    let line = &net.lines()[0];
     let code = net.linecode(&line.linecode).unwrap();
     assert_eq!(line.length.to_bits(), 1.0f64.to_bits());
     assert_eq!(
@@ -2725,8 +2762,8 @@ fn a_name_declared_at_the_top_level_and_under_extras_reads_once() {
         "extras": {{"ibr": {ibr}, "control_profile": {profile}}}"#
     ));
     let net = parse_bmopf_str(&text).unwrap();
-    assert_eq!(net.ibrs.len(), 1);
-    assert_eq!(net.control_profiles.len(), 1);
+    assert_eq!(net.ibrs().len(), 1);
+    assert_eq!(net.control_profiles().len(), 1);
     for class in ["ibr pv1", "control_profile cp1"] {
         assert!(
             net.warnings
@@ -2745,7 +2782,7 @@ fn a_name_declared_at_the_top_level_and_under_extras_reads_once() {
 fn an_orphan_transformer_overlay_warns() {
     let text = doc_with(r#", "extras": {"transformer": {"single_phase": {"t": {"tap": 1.05}}}}"#);
     let net = parse_bmopf_str(&text).unwrap();
-    assert!(net.transformers.is_empty());
+    assert!(net.transformers().is_empty());
     assert!(
         net.warnings
             .iter()
@@ -2764,7 +2801,7 @@ fn an_untyped_capacitor_re_emits_under_extras() {
         "New Circuit.c basekv=4.16\n\
          New Capacitor.cap bus1=b.1 phases=0 kv=7.2 kvar=300\n",
     );
-    assert!(net.untyped.iter().any(|u| u.class == "capacitor"));
+    assert!(net.untyped().iter().any(|u| u.class == "capacitor"));
     let out = write_bmopf_json(&net);
     let doc: serde_json::Value = serde_json::from_str(&out.text).unwrap();
     assert!(
@@ -2787,7 +2824,7 @@ fn a_winding_rating_that_is_not_positive_drops_only_its_own_resistance_term() {
     let mut to = DistWinding::new("a", names(), DistWindingConn::Wye, 240.0, 0.0);
     to.r_pct = 1.0;
     let mut net = MulticonductorNetwork::default();
-    net.transformers
+    net.transformers_mut()
         .push(DistTransformer::new("t", vec![from, to], vec![4.0], 3));
 
     let out = write_bmopf_json(&net);
@@ -2818,7 +2855,7 @@ fn a_from_rating_that_is_not_positive_drops_the_reactance_instead_of_zeroing_it(
     let from = DistWinding::new("a", names(), DistWindingConn::Delta, 416.0, 0.0);
     let to = DistWinding::new("a", names(), DistWindingConn::Wye, 240.0, 1000.0);
     let mut net = MulticonductorNetwork::default();
-    net.transformers
+    net.transformers_mut()
         .push(DistTransformer::new("t", vec![from, to], vec![4.0], 3));
 
     let out = write_bmopf_json(&net);
@@ -2865,7 +2902,7 @@ fn generator_cost_and_phase_neutral_bounds_survive_a_round_trip() {
         bus.vpn_max.as_deref(),
         Some([260.0, 260.0, 260.0].as_slice())
     );
-    let generator = &net.generators[0];
+    let generator = &net.generators()[0];
     assert_eq!(generator.cost.map(f64::to_bits), Some(0.12f64.to_bits()));
 
     // Both survive the write and read back.
@@ -2874,7 +2911,7 @@ fn generator_cost_and_phase_neutral_bounds_survive_a_round_trip() {
     let again = parse_bmopf_str(&out.text).unwrap();
     assert_eq!(again.bus("a").unwrap().vpn_min, bus.vpn_min);
     assert_eq!(
-        again.generators[0].cost.map(f64::to_bits),
+        again.generators()[0].cost.map(f64::to_bits),
         generator.cost.map(f64::to_bits)
     );
 }
@@ -2913,10 +2950,10 @@ fn schema_fields_survive_a_round_trip_without_wrong_warnings() {
         "schema fields must not warn as outside the schema: {:?}",
         net.warnings
     );
-    let generator = &net.generators[0];
+    let generator = &net.generators()[0];
     assert_eq!(generator.s_max.as_deref(), Some([5000.0; 3].as_slice()));
     assert_eq!(generator.i_max.as_deref(), Some([20.0; 3].as_slice()));
-    assert_eq!(net.linecodes[0].source.as_deref(), Some("datasheet"));
+    assert_eq!(net.linecodes()[0].source.as_deref(), Some("datasheet"));
 
     let out = write_bmopf_json(&net);
     assert_eq!(errors(&schema_validator(), &out.text), Vec::<String>::new());
@@ -3012,7 +3049,7 @@ fn bmopf_transformer_without_v_nom_never_writes_nan_kv() {
     );
     // The deck must read back, with the derived hv winding voltage.
     let reparsed = parse_dss_str(&out.text);
-    let rt = &reparsed.transformers[0];
+    let rt = &reparsed.transformers()[0];
     assert!((rt.windings[0].v_ref - expected_kv * 1e3).abs() < 1e-9);
 }
 
@@ -3116,10 +3153,10 @@ fn source_terminal_conventions_pass_through_verbatim() {
 fn an_inline_line_rating_is_not_repeated_on_its_synthetic_linecode() {
     let src = "New Circuit.c1\n\
                New Line.l1 bus1=a bus2=b phases=3 r1=0.1 x1=0.2 length=10 units=m emergamps=250\n";
-    let net = powerio_dist::parse_dss_str(src);
-    let line = &net.lines[0];
+    let net = parse_dss_str(src);
+    let line = &net.lines()[0];
     let code = net
-        .linecodes
+        .linecodes()
         .iter()
         .find(|c| c.name == line.linecode)
         .expect("synthetic linecode");
@@ -3159,22 +3196,18 @@ fn a_non_numeric_bmopf_field_is_refused_rather_than_read_as_nan() {
         );
         let net = parse_bmopf_str(&text).unwrap();
         let found: Vec<_> = net
-            .parse_diagnostics
+            .diagnostics
             .iter()
-            .filter(|d| d.code.as_str() == "READ.BMOPF.FIELD_NOT_A_NUMBER")
+            .filter(|d| d.code() == "READ.BMOPF.FIELD_NOT_A_NUMBER")
             .collect();
-        assert_eq!(found.len(), 1, "{spelling}: {:?}", net.parse_diagnostics);
-        assert_eq!(found[0].severity, DiagnosticSeverity::Error, "{spelling}");
+        assert_eq!(found.len(), 1, "{spelling}: {:?}", net.diagnostics);
+        assert_eq!(found[0].severity(), DiagnosticSeverity::Error, "{spelling}");
         assert_eq!(found[0].stage(), Some(DiagnosticStage::Read), "{spelling}");
-        assert_eq!(
-            found[0].element_path.as_deref(),
-            Some("/linecode/lc/i_max"),
-            "{spelling}"
-        );
+        assert_eq!(found[0].target(), Some("/linecode/lc/i_max"), "{spelling}");
         assert!(
-            found[0].message.contains(what),
+            found[0].message().contains(what),
             "{spelling}: {}",
-            found[0].message
+            found[0].message()
         );
     }
 }
@@ -3202,18 +3235,18 @@ fn reporting_a_malformed_field_does_not_disturb_the_read() {
     }"#;
     let net = parse_bmopf_str(text).unwrap();
     assert_eq!(
-        net.parse_diagnostics
+        net.diagnostics
             .iter()
-            .filter(|d| d.code.as_str() == "READ.BMOPF.FIELD_NOT_A_NUMBER")
+            .filter(|d| d.code() == "READ.BMOPF.FIELD_NOT_A_NUMBER")
             .count(),
         1,
         "{:?}",
-        net.parse_diagnostics
+        net.diagnostics
     );
     // The line keeps its inline matrices: one synthesized linecode, with the
     // sound entries intact and only the malformed cell undefined.
-    assert_eq!(net.linecodes.len(), 1, "{:?}", net.warnings);
-    let lc = &net.linecodes[0];
+    assert_eq!(net.linecodes().len(), 1, "{:?}", net.warnings);
+    let lc = &net.linecodes()[0];
     assert!(lc.r_series[0][0].is_nan(), "{:?}", lc.r_series);
     for (got, want) in [
         (lc.r_series[1][1], 0.3),
@@ -3240,11 +3273,7 @@ fn consumer_extras_are_not_read_as_schema_fields() {
         "extras": {"anything": {"cost": "free", "v_nom": null}}
     }"#;
     let net = parse_bmopf_str(text).unwrap();
-    assert!(
-        net.parse_diagnostics.is_empty(),
-        "{:?}",
-        net.parse_diagnostics
-    );
+    assert!(net.diagnostics.is_empty(), "{:?}", net.diagnostics);
 }
 
 // ----- regulator subtypes (BMOPFTools schema extension) -------------------
@@ -3259,7 +3288,7 @@ fn dss_single_phase_regulator_emits_the_autotransformer_subtype() {
          kvs=(2.4 2.4) kvas=(1666 1666) xhl=0.01 %loadloss=0.01 taps=(1.0 1.05)\n\
          New RegControl.cvreg transformer=vreg winding=2 vreg=122 band=2 ptratio=20",
     );
-    let t = &net.transformers[0];
+    let t = &net.transformers()[0];
     assert_eq!(
         t.extras.get("bmopf_subtype"),
         Some(&serde_json::json!("single_phase_autotransformer"))
@@ -3309,7 +3338,7 @@ fn dss_open_delta_regulator_pair_merges_into_one_object() {
          kvs=(4.16 4.16) kvas=(1000 1000) xhl=1 %loadloss=0.2 taps=(1.0 1.06)\n\
          New RegControl.cregb transformer=regb winding=2 vreg=120 band=2 ptratio=34.7",
     );
-    for t in &net.transformers {
+    for t in net.transformers() {
         assert_eq!(
             t.extras.get("bmopf_subtype"),
             Some(&serde_json::json!("open_delta_regulator")),
@@ -3340,7 +3369,7 @@ fn dss_open_delta_regulator_pair_merges_into_one_object() {
         "EMIT.BMOPF.TRANSFORMER_OPEN_DELTA_MERGED",
         "transformer rega",
     );
-    assert_eq!(merge.details["merged_leg"], serde_json::json!("regb"));
+    assert_eq!(merge.details()["merged_leg"], serde_json::json!("regb"));
 
     // The emitted document reads back untyped and re-emits byte identical.
     let again = parse_bmopf_str(&out.text).unwrap();
@@ -3357,7 +3386,7 @@ fn unregulated_and_mismatched_transformers_keep_their_subtype() {
          New Transformer.t1 phases=1 windings=2 buses=(650.1 651.1) \
          kvs=(2.4 2.4) kvas=(100 100) xhl=2",
     );
-    assert!(!plain.transformers[0].extras.contains_key("bmopf_subtype"));
+    assert!(!plain.transformers()[0].extras.contains_key("bmopf_subtype"));
     let doc: serde_json::Value = serde_json::from_str(&write_bmopf_json(&plain).text).unwrap();
     assert!(doc["transformer"]["single_phase"].get("t1").is_some());
     assert!(
@@ -3375,7 +3404,7 @@ fn unregulated_and_mismatched_transformers_keep_their_subtype() {
          kvs=(2.4 0.24) kvas=(100 100) xhl=2\n\
          New RegControl.ct2 transformer=t2 winding=2 vreg=122 band=2 ptratio=20",
     );
-    assert!(!ltc.transformers[0].extras.contains_key("bmopf_subtype"));
+    assert!(!ltc.transformers()[0].extras.contains_key("bmopf_subtype"));
     let doc: serde_json::Value = serde_json::from_str(&write_bmopf_json(&ltc).text).unwrap();
     assert!(doc["transformer"]["single_phase"].get("t2").is_some());
 }
@@ -3392,7 +3421,7 @@ fn open_delta_legs_with_different_impedance_stay_single_units() {
          kvs=(4.16 4.16) kvas=(1000 1000) xhl=2\n\
          New RegControl.cregb transformer=regb winding=2 vreg=120 band=2 ptratio=34.7",
     );
-    for t in &net.transformers {
+    for t in net.transformers() {
         assert_eq!(
             t.extras.get("bmopf_subtype"),
             Some(&serde_json::json!("single_phase_autotransformer")),
@@ -3420,7 +3449,7 @@ fn open_delta_leg_without_its_partner_falls_back_to_a_single_unit() {
          kvs=(4.16 4.16) kvas=(1000 1000) xhl=1\n\
          New RegControl.cregb transformer=regb winding=2 vreg=120 band=2 ptratio=34.7",
     );
-    net.transformers.retain(|t| t.name == "rega");
+    net.transformers_mut().retain(|t| t.name == "rega");
     let out = write_bmopf_json(&net);
     let doc: serde_json::Value = serde_json::from_str(&out.text).unwrap();
     assert!(
@@ -3477,12 +3506,12 @@ fn bmopf_regulator_subtypes_round_trip_verbatim() {
     }"#;
     let net = parse_bmopf_str(text).unwrap();
     assert!(
-        net.untyped
+        net.untyped()
             .iter()
             .any(|u| u.class == "transformer.single_phase_autotransformer" && u.name == "svr")
     );
     assert!(
-        net.untyped
+        net.untyped()
             .iter()
             .any(|u| u.class == "transformer.open_delta_regulator" && u.name == "odr")
     );
@@ -3518,7 +3547,7 @@ fn a_fixed_tap_open_delta_bank_emits_two_single_phase_units() {
          New Transformer.leg_bc phases=1 windings=2 buses=(sourcebus.2.3, loadbus.2.3) \
          conns=(delta delta) kvs=(12.47 12.47) kvas=(100 100) xhl=1\n",
     );
-    assert_eq!(net.transformers.len(), 2, "{:?}", net.transformers);
+    assert_eq!(net.transformers().len(), 2, "{:?}", net.transformers());
 
     let out = write_bmopf_json(&net);
     assert!(

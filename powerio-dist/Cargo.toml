@@ -16,10 +16,10 @@ categories = ["science", "parsing"]
 all-features = true
 
 [features]
-schema = ["dep:schemars", "powerio-diag/schema"]
+schema = ["dep:schemars"]
 
 [dependencies]
-powerio-diag = { workspace = true }
+powerio-core = { workspace = true }
 thiserror = "2"
 serde.workspace = true
 # float_roundtrip: the default float parser can be one ULP off the shortest
@@ -32,6 +32,10 @@ schemars = { workspace = true, optional = true }
 # Draft 2020-12 validation against the vendored BMOPF schema in tests.
 jsonschema = { version = "0.46", default-features = false }
 tempfile = "3"
+
+[target.'cfg(unix)'.dev-dependencies]
+# mkfifo for the non-regular-file refusal test.
+libc = "0.2"
 
 [lints]
 workspace = true

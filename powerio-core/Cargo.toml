@@ -1,0 +1,29 @@
+[package]
+name = "powerio-core"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description = "Shared source, diagnostic, module, collection, and output types for PowerIO."
+readme = "README.md"
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+documentation = "https://docs.rs/powerio-core"
+keywords = ["powerio", "power-systems", "diagnostics"]
+categories = ["science", "data-structures"]
+
+[features]
+schema = ["dep:schemars"]
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+schemars = { workspace = true, optional = true }
+
+# The no-replace output commit calls the platform rename that refuses an
+# existing entry; std does not expose one.
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[lints]
+workspace = true

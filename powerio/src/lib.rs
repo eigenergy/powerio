@@ -1,100 +1,211 @@
-//! Typed balanced network models, parsers, and writers.
+//! PowerIO: compiler infrastructure for power system data.
 //!
-//! Readers and writers cover MATPOWER `.m`, PowerModels JSON, PSS/E `.raw`,
-//! PowerWorld `.aux`, pandapower JSON, PyPSA CSV, egret JSON, PSLF `.epc`, GO
-//! Challenge 3 JSON, Surge JSON, and DeepMind OPFData JSON. PowerWorld `.pwb`
-//! case files are read only, and GO Challenge 3 and OPFData JSON have no
-//! canonical writer beyond same source echo; `.pwd` display files parse through
-//! [`parse_display_file`].
-//! Each reader produces a [`BalancedNetwork`]. [`BalancedNetwork::to_format`] returns the
-//! serialized target and warnings for fields the target cannot represent. See
-//! [`crate::format`] for format routing and fidelity rules.
+//! The short `powerio` name is the entry facade over the component crates:
+//! `powerio-core` (sources, diagnostics, errors, modules), `powerio-tx`
+//! (the balanced transmission model and its format parsers and writers),
+//! `powerio-dist` (the multiconductor distribution model), and `powerio-prob`
+//! (operating points, problem instances, and solutions). The facade owns the
+//! dynamic value boundary: [`PioValue`], [`PioValueKind`], the universal
+//! [`parse`], and [`try_into_typed`].
 //!
-//! A reader that retains source text can return those bytes when writing the
-//! same format. Matrix and problem instance builders live in separate crates.
+//! [`parse`] compiles one source into `PioModule<PioValue>`, routing to
+//! whichever built in family claims it. A caller that expects one concrete
+//! type narrows the module:
 //!
+//! ```no_run
+//! let module = powerio::parse(powerio::Source::open("case9.m")?)?;
+//! let module: powerio::PioModule<powerio::BalancedNetwork> =
+//!     powerio::try_into_typed(module)?;
+//! # Ok::<(), Box<dyn std::error::Error>>(())
 //! ```
-//! use powerio::{parse_str, TargetFormat};
 //!
-//! let src = "\
-//! function mpc = example
-//! mpc.version = '2';
-//! mpc.baseMVA = 100;
-//! mpc.bus = [
-//! \t1\t3\t0\t0\t0\t0\t1\t1\t0\t230\t1\t1.1\t0.9;
-//! \t2\t1\t0\t0\t0\t0\t1\t1\t0\t230\t1\t1.1\t0.9;
-//! ];
-//! mpc.branch = [
-//! \t1\t2\t0.01\t0.1\t0\t0\t0\t0\t0\t0\t1\t-360\t360;
-//! ];
-//! ";
-//! let net = parse_str(src, "matpower")?.network;
-//! assert_eq!(net.buses.len(), 2);
-//! assert_eq!(net.to_format(TargetFormat::Matpower)?.text, src);
-//! # Ok::<(), powerio::Error>(())
-//! ```
+//! The family entries stay available for callers that already know the
+//! family: [`format::parse`] for balanced network formats and
+//! [`powerio_dist::parse`] for multiconductor ones.
 
-/// The powerio crate version, for provenance fields written by downstream
-/// crates whose own version can drift from the core's.
-pub const VERSION: &str = env!("CARGO_PKG_VERSION");
+pub use powerio_tx::*;
 
-pub mod dc;
-pub mod diagnostics;
-pub mod error;
-pub mod format;
-pub mod gen_cost;
-pub mod geo;
-pub mod indexed;
-pub mod network;
-mod normalize;
-mod operations;
-pub mod solver_tables;
-pub mod version;
+/// Core types a consumer needs to name a module: the generic module wrapper,
+/// the source it was parsed from, a byte span into a source, the output
+/// destination a write commits to, and the two repeated-value containers.
+/// `Diagnostic` already arrives through [`powerio_tx`]'s own re-export, since
+/// that one is itself `powerio_core::Diagnostic`.
+pub use powerio_core::{
+    Destination, PioModule, ScenarioSet, Source, SourceSpan, TimePoint, TimeSeries,
+};
 
-pub use dc::DcConvention;
-pub use diagnostics::{
-    DiagnosticCode, DiagnosticSeverity, Diagnostics, EmitFamily, StructuredDiagnostic,
-};
-pub use error::{Error, ErrorCategory, Result};
-pub use format::routing::{
-    Detection, JSON_CLASSES, JsonClass, classify_json_bytes, classify_json_text,
-};
-pub use format::{
-    Conversion, DisplayData, DisplayFormat, Parsed, PwdDisplay, PwdSubstation, PypsaCsvOutputs,
-    SOURCE_FORMAT_NAMES, SourceDocument, TargetFormat, WriteOptions, convert_file,
-    convert_file_with_options, convert_str, convert_str_with_options, display_format_from_name,
-    parse_bytes, parse_bytes_with_name, parse_deepmind_opfdata_json, parse_display_bytes,
-    parse_display_file, parse_egret_json, parse_file, parse_goc3_json, parse_matpower,
-    parse_matpower_file, parse_pandapower_json, parse_powermodels_json, parse_powerworld,
-    parse_pslf, parse_psse, parse_str, parse_str_with_name, parse_surge_json,
-    read_pypsa_csv_folder, target_format_from_name, write_as, write_as_with_options, write_dir,
-    write_dir_with_options, write_egret_json, write_matpower, write_pandapower_json,
-    write_powermodels_json, write_powerworld, write_pslf, write_psse, write_psse_rev,
-    write_pypsa_csv_folder, write_surge_json,
-};
-pub use gen_cost::{GenCostPatch, GenCostPolicyReport, MissingGenCostPolicy, parse_gen_cost_csv};
-pub use geo::{
-    Canvas, CoordinateSpace, CoordsKind, ElementKey, GeoApplyReport, GeoFeature, GeoGeometry,
-    GeoLayer, GeoMeta, GeoParsed, GeoTarget, Location, apply_substation_points,
-    geo_layer_from_aux_substations, geo_layer_from_pwd, pwd_mercator_to_lonlat,
-};
-pub use indexed::{ConnectivityReport, IndexCore, IndexedNetwork};
-#[allow(deprecated)]
-pub use network::Network;
-pub use network::{
-    Area, BalancedNetwork, Branch, BranchCharging, BranchCurrentRatings, BranchRatingSet,
-    BranchSolution, Bus, BusId, BusType, DEFAULT_BASE_FREQUENCY, Diagnostic, Extras, GenCaps,
-    GenCost, Generator, Hvdc, Impedance, Load, LoadVoltageModel, Shunt, ShuntBlock, SolverParams,
-    SourceFormat, Storage, Switch, SwitchedShuntControl, SwitchedShuntMode, Transformer3W,
-    TransformerControl, TransformerControlMode, Winding, series_admittance_of,
-};
-pub use normalize::{
-    NormalizeOptions, NormalizeSourceRows, NormalizedNetwork, POWER_MODELS_ANGLE_BOUND_PAD,
-};
-pub use operations::Selector;
-pub use powerio_diag::nonfinite;
-pub use solver_tables::{
-    NORMALIZED_SOLVER_TABLES_PASS, NormalizedSolverTables, SolverArcRow, SolverArcTerminal,
-    SolverBranchRow, SolverBusRow, SolverCostRow, SolverGeneratorRow, SolverHvdcRow, SolverLoadRow,
-    SolverShuntRow, SolverStorageRow, SolverSwitchRow, SolverTableIndex, SolverTableUnits,
-};
+/// `powerio_tx::*` above already re-exports an `Error`/`Result` pair, but
+/// those are powerio-tx's own 0.9 enum and its alias over it, tied to its
+/// text format readers, not what [`parse`] and the source layer return. An
+/// explicit `use` of a name shadows a glob import of the same name, so these
+/// two items are what make `powerio::Error`/`powerio::Result` name the type
+/// the facade's own functions actually use.
+pub use powerio_core::Error;
+pub type Result<T> = std::result::Result<T, powerio_core::Error>;
+
+/// The distribution network type; [`powerio_dist::parse`] routes to it.
+pub use powerio_dist::MulticonductorNetwork;
+
+/// A problem instance builder. `powerio-prob` builds problem instances only;
+/// it has no solution type to re-export alongside this one.
+pub use powerio_prob::AcOpfInstance;
+
+pub mod package;
+/// The package layer's replayable operating state, named at the crate root
+/// beside the other module types.
+pub use package::OperatingPoint;
+mod value;
+pub use value::{FromPioValue, PioValue, PioValueKind, ValueKindMismatch, try_into_typed};
+
+/// Parse one source into a compiled module of whichever built in family
+/// claims it: balanced network formats produce
+/// [`PioValue::BalancedNetwork`], and distribution formats (OpenDSS `.dss`,
+/// PMD ENGINEERING JSON, BMOPF JSON) produce
+/// [`PioValue::MulticonductorNetwork`]. The reader's findings are the
+/// module's diagnostics and the source is retained for the byte exact echo
+/// tier of the family's `write_as`.
+///
+/// The family comes from the source's declared format when one was selected,
+/// and otherwise from the name and content: a `.dss` extension routes to the
+/// distribution reader, a `.json` document routes by its top level markers
+/// ([`format::routing::classify_json_text`]), and every other name routes to
+/// the balanced network hub, whose own detection and refusals apply.
+///
+/// Bare model JSON, the network serialization, decodes to
+/// [`PioValue::BalancedNetwork`] like any other balanced source.
+///
+/// # Errors
+/// The routed family's failure, carrying its findings and the retained
+/// source; a `.pio.json` package is refused with the surface that reads it
+/// named.
+pub fn parse(
+    source: powerio_core::Source,
+) -> std::result::Result<powerio_core::PioModule<PioValue>, powerio_core::Error> {
+    if family_is_distribution(&source)? {
+        return powerio_dist::parse(source).map(|module| module.map_value(PioValue::from));
+    }
+    format::parse(source).map(|module| module.map_value(PioValue::from))
+}
+
+/// Whether the source routes to the distribution family. The balanced hub is
+/// the default: it owns the guidance for unknown names and refused shapes.
+fn family_is_distribution(
+    source: &powerio_core::Source,
+) -> std::result::Result<bool, powerio_core::Error> {
+    use format::routing::{Detection, Domain, JsonClass};
+
+    if let Some(declared) = source.format() {
+        return Ok(powerio_dist::dist_target_from_name(declared.as_str()).is_some());
+    }
+    if source.is_directory() {
+        // The only directory case format is a PyPSA CSV folder; the balanced
+        // hub owns that dispatch and the refusal for anything else.
+        return Ok(false);
+    }
+    let extension = std::path::Path::new(source.name())
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    match extension.as_str() {
+        "dss" => Ok(true),
+        "json" => {
+            let buffer = source.primary_buffer()?;
+            // Family routing needs decoded text; a non-UTF-8 `.json` fails in
+            // the balanced hub with its own wording.
+            let Ok(text) = std::str::from_utf8(buffer.content_bytes()) else {
+                return Ok(false);
+            };
+            match format::routing::classify_json_text(text) {
+                JsonClass::Case(Detection::Known(json_format)) => {
+                    Ok(json_format.domain() == Domain::Distribution)
+                }
+                // The balanced hub's own JSON detection carries the refusal
+                // wording for stored modules, model JSON, and unrecognized or
+                // ambiguous documents.
+                JsonClass::Module
+                | JsonClass::ModelJson
+                | JsonClass::Case(Detection::Ambiguous | Detection::Unknown) => Ok(false),
+            }
+        }
+        _ => Ok(false),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn memory(name: &str, text: &str) -> powerio_core::Source {
+        powerio_core::Source::from_bytes(name, text.as_bytes().to_vec()).expect("memory source")
+    }
+
+    #[test]
+    fn a_matpower_source_parses_to_the_balanced_kind() {
+        let case = "function mpc = case\n\
+                    mpc.version = '2';\n\
+                    mpc.baseMVA = 100;\n\
+                    mpc.bus = [1 3 0 0 0 0 1 1 0 230 1 1.1 0.9;];\n\
+                    mpc.gen = [1 0 0 10 -10 1 100 1 10 0;];\n\
+                    mpc.branch = [];\n";
+        let module = parse(
+            memory("case.m", case).with_format(powerio_core::FormatId::new("matpower").unwrap()),
+        )
+        .expect("matpower parses");
+        assert_eq!(module.value().kind(), PioValueKind::BalancedNetwork);
+    }
+
+    #[test]
+    fn a_dss_source_parses_to_the_multiconductor_kind() {
+        let module = parse(memory(
+            "feeder.dss",
+            "New Circuit.c basekv=12.47 bus1=src\n",
+        ))
+        .expect("dss parses");
+        assert_eq!(module.value().kind(), PioValueKind::MulticonductorNetwork);
+        let typed: powerio_core::PioModule<powerio_dist::MulticonductorNetwork> =
+            try_into_typed(module).expect("narrows to the parsed kind");
+        assert_eq!(typed.value().name().as_deref(), Some("c"));
+    }
+
+    #[test]
+    fn a_declared_distribution_format_routes_without_an_extension() {
+        let module = parse(
+            memory("<memory>", "New Circuit.c basekv=12.47 bus1=src\n")
+                .with_format(powerio_core::FormatId::new("dss").unwrap()),
+        )
+        .expect("declared dss parses");
+        assert_eq!(module.value().kind(), PioValueKind::MulticonductorNetwork);
+    }
+
+    #[test]
+    fn json_routes_by_top_level_markers() {
+        // A PMD document carries `data_model`, which no balanced format does.
+        let module = parse(memory(
+            "feeder.json",
+            r#"{"data_model": "ENGINEERING", "bus": {}}"#,
+        ))
+        .expect("pmd parses");
+        assert_eq!(module.value().kind(), PioValueKind::MulticonductorNetwork);
+    }
+
+    #[test]
+    fn bare_model_json_parses_to_the_balanced_kind() {
+        use powerio_tx::{Bus, BusId, BusType};
+        let network = powerio_tx::BalancedNetwork::in_memory(
+            "transport",
+            100.0,
+            vec![Bus::new(BusId(1), BusType::Ref, 230.0)],
+            vec![],
+        );
+        let json = network.to_json().expect("network serializes");
+        let module = parse(memory("net.json", &json)).expect("model json parses");
+        assert_eq!(module.value().kind(), PioValueKind::BalancedNetwork);
+    }
+
+    #[test]
+    fn the_error_path_retains_the_source() {
+        let error = parse(memory("case.m", "not matpower at all")).expect_err("malformed");
+        assert!(error.retained_source().is_some());
+    }
+}

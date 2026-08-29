@@ -14,7 +14,9 @@ pub use gridfm::{
     read_gridfm_network, read_gridfm_scenarios, write_gridfm_batch, write_gridfm_dataset,
 };
 pub use meta::{CaseMetadata, MatrixMetadata, write_meta_json};
-pub use mtx::{read_mtx, read_vector_mtx, write_mtx, write_vector_mtx};
+pub use mtx::{
+    mtx_bytes, read_mtx, read_vector_mtx, vector_mtx_bytes, write_mtx, write_vector_mtx,
+};
 pub use sensitivity::write_sensitivity_mtx_with_options;
 
 /// Read one scenario from a dataset directory in the named `from` format.
@@ -25,7 +27,7 @@ pub use sensitivity::write_sensitivity_mtx_with_options;
 /// `parse_file`.
 ///
 /// # Errors
-/// [`powerio::Error::UnknownFormat`] for a non-dataset format name; otherwise
+/// [`powerio_tx::Error::UnknownFormat`] for a non-dataset format name; otherwise
 /// as [`read_gridfm_dataset`].
 #[cfg(feature = "gridfm")]
 pub fn read_dataset_dir(
@@ -53,11 +55,11 @@ pub fn dataset_scenario_ids(
 }
 
 #[cfg(feature = "gridfm")]
-fn require_dataset_format(from: &str) -> powerio::Result<()> {
+fn require_dataset_format(from: &str) -> powerio_tx::Result<()> {
     if from.eq_ignore_ascii_case("gridfm") {
         return Ok(());
     }
-    Err(powerio::Error::UnknownFormat(format!(
+    Err(powerio_tx::Error::UnknownFormat(format!(
         "{from} is not a dataset directory format (dataset formats: gridfm); \
          PyPSA CSV directories parse through parse_file"
     )))

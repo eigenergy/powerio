@@ -226,7 +226,10 @@ def test_read_tree_refuses_special_files(monkeypatch, tmp_path):
 
 
 def _write_tree(staging: str, files: dict[str, str]) -> dict:
+    # Real writers create their own target; the staging path handed to the
+    # callback does not exist yet.
     root = Path(staging)
+    root.mkdir(parents=True, exist_ok=True)
     paths = []
     for relative, text in files.items():
         path = root / relative
@@ -282,6 +285,7 @@ def test_staged_directory_write_refuses_generated_and_existing_links(tmp_path):
     out = tmp_path / "dataset"
 
     def linked_output(staging: str) -> dict:
+        Path(staging).mkdir(parents=True, exist_ok=True)
         os.symlink(outside, Path(staging) / "linked.csv")
         return {"dir": staging, "files": [str(Path(staging) / "linked.csv")]}
 

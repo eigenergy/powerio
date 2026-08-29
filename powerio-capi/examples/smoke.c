@@ -20,6 +20,19 @@
 #include <stdlib.h>
 #include <string.h>
 
+/* Process id and directory removal for the self-cleaning directory write
+ * smoke: POSIX and Windows spell both differently. */
+#ifdef _WIN32
+#include <direct.h>
+#include <process.h>
+static long smoke_pid(void) { return (long)_getpid(); }
+static void smoke_rmdir(const char *path) { _rmdir(path); }
+#else
+#include <unistd.h>
+static long smoke_pid(void) { return (long)getpid(); }
+static void smoke_rmdir(const char *path) { rmdir(path); }
+#endif
+
 #if PIO_ABI_VERSION != 5
 #error "PIO_ABI_VERSION changed without updating the C ABI smoke test"
 #endif
@@ -313,10 +326,13 @@ int main(int argc, char **argv) {
     }
 
     /* Directory writer: 0 on success, -1 on error (message in errbuf). The
-     * format is a string here too; pypsa-csv is the one directory format. */
+     * format is a string here too; pypsa-csv is the one directory format. The
+     * write refuses an existing target, so the smoke target carries the
+     * process id and is removed afterwards: a rerun never collides. */
     {
         char outdir[512];
-        snprintf(outdir, sizeof outdir, "%s-pypsa-smoke", argv[1]);
+        snprintf(outdir, sizeof outdir, "%s-pypsa-smoke-%ld", argv[1],
+                 (long)smoke_pid());
         char *dirdiags = (char *)0x1; /* a poison value the call must overwrite */
         int rc = pio_write_dir(c, "pypsa-csv", outdir, NULL, &dirdiags, err, sizeof err);
         CHECK(rc == 0, err);
@@ -330,6 +346,26 @@ int main(int argc, char **argv) {
         fclose(bf);
         rc = pio_write_dir(NULL, "pypsa-csv", outdir, NULL, NULL, err, sizeof err);
         CHECK(rc == -1, "NULL network handle should fail the directory write");
+        /* A second write onto the produced folder is a refused collision. */
+        rc = pio_write_dir(c, "pypsa-csv", outdir, NULL, NULL, err, sizeof err);
+        CHECK(rc == -1, "an existing target must refuse the directory write");
+        CHECK(strstr(err, "REQUEST.OUTPUT") != NULL, err);
+        /* Remove the known table inventory, then the folder itself. */
+        {
+            static const char *tables[] = {
+                "network.csv",   "snapshots.csv",        "buses.csv",
+                "loads.csv",     "shunt_impedances.csv", "generators.csv",
+                "lines.csv",     "transformers.csv",     "storage_units.csv",
+                "links.csv",     "stores.csv"};
+            char table_path[600];
+            size_t i;
+            for (i = 0; i < sizeof tables / sizeof tables[0]; i++) {
+                snprintf(table_path, sizeof table_path, "%s/%s", outdir,
+                         tables[i]);
+                remove(table_path);
+            }
+            smoke_rmdir(outdir);
+        }
         printf("pypsa csv directory write OK: %s\n", outdir);
     }
 

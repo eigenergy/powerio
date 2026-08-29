@@ -10,6 +10,7 @@
 *.so
 *.pyd
 /dist/
+/dist-*/
 /build/
 wheelhouse/
 *.egg-info/
@@ -40,3 +41,4 @@ private/
 
 # Playwright MCP browser session artifacts
 .playwright-mcp/
+.venv*/

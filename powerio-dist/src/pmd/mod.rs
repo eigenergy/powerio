@@ -8,8 +8,7 @@
 //! per unit transformer impedances, and integer terminals with grounding
 //! as `grounded` plus `rg`/`xg` on the bus.
 
-mod read;
+pub(crate) mod read;
 mod write;
 
-pub use read::{parse_pmd_file, parse_pmd_str};
 pub use write::write_pmd_json;

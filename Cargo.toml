@@ -1,30 +1,35 @@
 [workspace]
 members = [
     "powerio",
-    "powerio-diag",
+    "powerio-tx",
+    "powerio-core",
     "powerio-matrix",
     "powerio-prob",
     "powerio-cli",
     "powerio-py",
     "powerio-capi",
     "powerio-dist",
-    "powerio-pkg",
+    "tests/facade-only",
 ]
 # Bare `cargo build`/`test`/`clippy` touch only the library + CLI crates, so the
 # toolchain never compiles the PyO3 extension (which needs libpython). Build the
-# binding explicitly with `-p powerio-py`.
+# binding explicitly with `-p powerio-py`. `tests/facade-only` has no such cost
+# and stays in the default set: it is a regression crate proving the facade
+# alone is a complete compiler, so a plain `cargo build`/`test` should catch a
+# missing re-export as readily as CI does.
 default-members = [
     "powerio",
-    "powerio-diag",
+    "powerio-tx",
+    "powerio-core",
     "powerio-matrix",
     "powerio-prob",
     "powerio-cli",
     "powerio-dist",
-    "powerio-pkg",
+    "tests/facade-only",
 ]
 # The fuzz harnesses need nightly + cargo-fuzz; they build on their own (see
 # fuzz/README.md), never as part of the workspace.
-exclude = ["fuzz"]
+exclude = ["fuzz", "evals"]
 resolver = "2"
 
 # Single source for the release version and shared metadata; the crates inherit
@@ -42,11 +47,11 @@ homepage = "https://eigenergy.github.io/powerio/"
 # The intra-workspace deps carry the version pin `cargo publish` needs; keeping
 # them here means the pin moves with the [workspace.package] version.
 powerio = { path = "powerio", version = "0.9.0" }
-powerio-diag = { path = "powerio-diag", version = "0.9.0" }
+powerio-tx = { path = "powerio-tx", version = "0.9.0" }
+powerio-core = { path = "powerio-core", version = "0.9.0" }
 powerio-matrix = { path = "powerio-matrix", version = "0.9.0" }
 powerio-prob = { path = "powerio-prob", version = "0.9.0" }
 powerio-dist = { path = "powerio-dist", version = "0.9.0" }
-powerio-pkg = { path = "powerio-pkg", version = "0.9.0" }
 # Cross-crate type identity: `CsMat<f64>` (sprs) and the Arrow types cross crate
 # boundaries, so every crate must build against the same major.
 sprs = { version = "0.11", default-features = false }

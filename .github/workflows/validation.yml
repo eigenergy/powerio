@@ -13,10 +13,11 @@ on:
   pull_request:
     paths:
       - "powerio/**"
+      - "powerio-tx/**"
+      - "powerio-core/**"
       - "powerio-dist/**"
       - "powerio-matrix/**"
       - "powerio-capi/**"
-      - "powerio-pkg/**"
       - "powerio-prob/**"
       - "powerio-py/**"
       - "benchmarks/**"

@@ -10,6 +10,7 @@ cargo-fuzz = true
 [dependencies]
 libfuzzer-sys = "0.4"
 powerio = { path = "../powerio" }
+powerio-core = { path = "../powerio-core" }
 powerio-dist = { path = "../powerio-dist" }
 powerio-capi = { path = "../powerio-capi", default-features = false }
 

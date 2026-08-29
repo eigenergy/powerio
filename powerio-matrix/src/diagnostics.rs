@@ -1,43 +1,49 @@
 //! The codes this crate emits.
 //!
 //! The record, the code grammar, and the severity ladder live in
-//! `powerio-diag`; the entries here are the matrix, sensitivity, and dataset
+//! `powerio-core`; the entries here are the matrix, sensitivity, and dataset
 //! side of the workspace registry. A hub failure that arrives through
 //! [`crate::Error::Core`] keeps the hub's own code.
 
-pub use powerio_diag::{
-    DiagnosticInfo, DiagnosticSeverity, Diagnostics, StructuredDiagnostic, check_registry,
-    render_line, render_lines,
+// The collector is crate-private implementation support, not API: each
+// emitting crate carries its own copy (src/collect.rs) and never exports it.
+// Only the gridfm feature emits through it in this crate.
+#[cfg_attr(not(feature = "gridfm"), allow(unused_imports))]
+pub(crate) use crate::collect::Diagnostics;
+
+pub use powerio_core::{
+    Diagnostic, DiagnosticInfo, DiagnosticSeverity, check_registry, render_diagnostic,
+    render_diagnostics,
 };
 
 pub mod codes {
-    powerio_diag::diagnostic_codes! {
+    powerio_core::diagnostic_codes! {
         // BUILD: assembling a derived object from a network that already parsed.
-        BUILD_MATRIX_SHAPE_MISMATCH = "BUILD.MATRIX.SHAPE_MISMATCH", Fatal,
+        BUILD_MATRIX_SHAPE_MISMATCH = "BUILD.MATRIX.SHAPE_MISMATCH", Error,
             "an operand's length does not match the matrix it is used with", category = Data;
-        BUILD_SENSITIVITY_SINGULAR = "BUILD.SENSITIVITY.SINGULAR", Fatal,
+        BUILD_SENSITIVITY_SINGULAR = "BUILD.SENSITIVITY.SINGULAR", Error,
             "the reference grounded Laplacian is singular", category = Data;
-        BUILD_SENSITIVITY_INVALID_OPTION = "BUILD.SENSITIVITY.INVALID_OPTION", Fatal,
+        BUILD_SENSITIVITY_INVALID_OPTION = "BUILD.SENSITIVITY.INVALID_OPTION", Error,
             "a DC sensitivity option is outside the range it is defined on", category = Data;
-        BUILD_SENSITIVITY_NO_CONVERGENCE = "BUILD.SENSITIVITY.NO_CONVERGENCE", Fatal,
+        BUILD_SENSITIVITY_NO_CONVERGENCE = "BUILD.SENSITIVITY.NO_CONVERGENCE", Error,
             "the iterative DC sensitivity solve ran out of iterations", category = Data;
-        BUILD_GRIDFM_EMPTY_BATCH = "BUILD.GRIDFM.EMPTY_BATCH", Fatal,
+        BUILD_GRIDFM_EMPTY_BATCH = "BUILD.GRIDFM.EMPTY_BATCH", Error,
             "a gridfm scenario batch holds no snapshot", category = Data;
-        BUILD_GRIDFM_SCENARIO_ID_OVERFLOW = "BUILD.GRIDFM.SCENARIO_ID_OVERFLOW", Fatal,
+        BUILD_GRIDFM_SCENARIO_ID_OVERFLOW = "BUILD.GRIDFM.SCENARIO_ID_OVERFLOW", Error,
             "numbering a gridfm snapshot overflows the scenario id", category = Data;
-        BUILD_GRIDFM_NORMALIZED_SNAPSHOT = "BUILD.GRIDFM.NORMALIZED_SNAPSHOT", Fatal,
+        BUILD_GRIDFM_NORMALIZED_SNAPSHOT = "BUILD.GRIDFM.NORMALIZED_SNAPSHOT", Error,
             "a gridfm snapshot is normalized and the export expects raw units", category = Data;
-        BUILD_GRIDFM_NOT_A_NUMBER = "BUILD.GRIDFM.NOT_A_NUMBER", Fatal,
+        BUILD_GRIDFM_NOT_A_NUMBER = "BUILD.GRIDFM.NOT_A_NUMBER", Error,
             "a gridfm snapshot field is not finite", category = Data;
-        BUILD_GRIDFM_SCENARIO_SHAPE_MISMATCH = "BUILD.GRIDFM.SCENARIO_SHAPE_MISMATCH", Fatal,
+        BUILD_GRIDFM_SCENARIO_SHAPE_MISMATCH = "BUILD.GRIDFM.SCENARIO_SHAPE_MISMATCH", Error,
             "a gridfm snapshot does not share the batch's base element set", category = Data;
 
         // READ and EMIT: this crate's own file side.
-        READ_MATRIX_IO_FAILED = "READ.MATRIX.IO_FAILED", Fatal,
+        READ_MATRIX_IO_FAILED = "READ.MATRIX.IO_FAILED", Error,
             "a matrix or dataset file could not be read", category = Io;
-        EMIT_MTX_FAILED = "EMIT.MTX.FAILED", Fatal,
+        EMIT_MTX_FAILED = "EMIT.MTX.FAILED", Error,
             "a matrix-market write failed", category = Output;
-        EMIT_PARQUET_FAILED = "EMIT.PARQUET.FAILED", Fatal,
+        EMIT_PARQUET_FAILED = "EMIT.PARQUET.FAILED", Error,
             "a gridfm Parquet write failed", category = Output;
 
         // READ.GRIDFM: the dataset reader's fidelity notes. The scope lives

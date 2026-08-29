@@ -31,13 +31,13 @@ doc = false
 # `schema`: the corpus anonymizer derives its field name vocabulary from the
 # model's own JSON schema, so it stays complete without a hand-kept list.
 powerio = { workspace = true, features = ["schema"] }
+powerio-core = { workspace = true }
 powerio-matrix = { workspace = true, features = ["gridfm"] }
 powerio-prob = { workspace = true, features = ["matrix"] }
 # Unconditional: the CLI always ships the distribution surface (`convert
 # --to dss/pmd-json/bmopf-json`); only the C ABI gates it behind a feature.
 powerio-dist = { workspace = true, features = ["schema"] }
 schemars.workspace = true
-powerio-pkg.workspace = true
 sprs.workspace = true
 anyhow = "1"
 clap = { version = "4", features = ["derive"] }

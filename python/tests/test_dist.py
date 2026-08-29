@@ -106,6 +106,38 @@ def test_dist_write_file_writes_sidecars_beside_the_case(tmp_path):
         assert (tmp_path / name).read_text().strip(), f"{name} is empty"
 
 
+def test_dist_write_file_refuses_existing_case_and_sidecar_entries(tmp_path):
+    source = dist.parse_file(DATA / "opendss" / "ieee13" / "IEEE13Nodeckt.dss")
+    placed, _ = source.apply_geo_layer(json.dumps(source.geo_layer()))
+
+    # An existing entry at the case path refuses and keeps its bytes.
+    blocked = tmp_path / "blocked.dss"
+    blocked.write_text("precious")
+    with pytest.raises(Exception) as refusal:
+        placed.write_file(blocked, "dss")
+    assert "already exists" in str(refusal.value)
+    assert blocked.read_text() == "precious"
+
+    # An existing entry at a sidecar name refuses the whole write, keeps the
+    # sidecar's bytes, and removes the case file this call created.
+    ok = tmp_path / "ok.dss"
+    placed.write_file(ok, "dss")
+    sidecar_names = [
+        line.split()[1]
+        for line in ok.read_text().splitlines()
+        if line.lower().startswith("buscoords")
+    ]
+    assert sidecar_names
+    nested = tmp_path / "nested"
+    nested.mkdir()
+    (nested / sidecar_names[0]).write_text("precious sidecar")
+    with pytest.raises(Exception) as refusal:
+        placed.write_file(nested / "case.dss", "dss")
+    assert "already exists" in str(refusal.value)
+    assert (nested / sidecar_names[0]).read_text() == "precious sidecar"
+    assert not (nested / "case.dss").exists()
+
+
 def test_dist_write_file_echoes_bytes(tmp_path):
     case = dist.parse_file(FOURWIRE)
     out = tmp_path / "echo.dss"
@@ -210,5 +242,5 @@ def test_case_file_outside_the_include_root_is_refused(tmp_path):
     elsewhere = tmp_path / "elsewhere"
     elsewhere.mkdir()
     (elsewhere / "f.dss").write_text("New Circuit.out\n")
-    with pytest.raises(powerio.PowerIOError, match="outside the include root"):
+    with pytest.raises(powerio.PowerIOError, match="outside the requested acquisition root"):
         dist.parse_file(elsewhere / "f.dss", include_root=root)

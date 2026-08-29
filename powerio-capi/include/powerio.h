@@ -354,7 +354,7 @@ typedef struct PioNetwork PioNetwork;
 #if defined(PIO_PKG)
 /**
  * Opaque `.pio.json` compiler package handle. A package owns one
- * [`powerio_pkg::NetworkPackage`], which wraps either a balanced
+ * [`powerio::package::NetworkPackage`], which wraps either a balanced
  * [`PioNetwork`] payload or a multiconductor [`PioDistNetwork`] payload.
  */
 typedef struct PioPackage PioPackage;
@@ -1095,8 +1095,8 @@ PioNetwork *pio_package_to_balanced_network(const PioPackage *pkg, char *errbuf,
  * distribution network handle: the inverse of
  * [`pio_package_from_multiconductor_network`]. Errors when the package holds
  * a different model kind. The handle retains no source text, so a
- * same format write is a fresh serialization. The handle retains the payload's
- * parse warnings, readable through [`pio_dist_warnings`]. Free with
+ * same format write is a fresh serialization, and carries no warning lines:
+ * the package document owns the diagnostics. Free with
  * [`pio_dist_network_free`].
  */
 PioDistNetwork *pio_package_to_multiconductor_network(const PioPackage *pkg,
@@ -1324,7 +1324,8 @@ PioDistNetwork *pio_dist_parse_file(const char *path,
 /**
  * Parse in-memory distribution case `text` of the named `format` (`dss`, `pmd`,
  * or `bmopf`; required, since there is no path to infer from). An OpenDSS
- * `Redirect`/`Compile` in `text` resolves against the current working directory.
+ * `Redirect`/`Compile`/`Buscoords` in `text` reads no files: an in-memory
+ * source grants no filesystem access, and each include is refused loudly.
  * Returns `NULL` on error and writes the message into `errbuf`. Free the handle
  * with [`pio_dist_network_free`].
  */

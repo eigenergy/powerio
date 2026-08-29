@@ -366,7 +366,7 @@ fn solver_tables(net: &BalancedNetwork) -> Result<NormalizedSolverTables, String
 }
 
 fn bus_batch(net: &BalancedNetwork) -> Result<RecordBatch, ArrowError> {
-    let b = &net.buses;
+    let b = &net.buses();
     batch(vec![
         ("id", i64s(b.iter().map(|x| ext(x.id)).collect())),
         (
@@ -384,7 +384,7 @@ fn bus_batch(net: &BalancedNetwork) -> Result<RecordBatch, ArrowError> {
 }
 
 fn branch_batch(net: &BalancedNetwork) -> Result<RecordBatch, ArrowError> {
-    let br = &net.branches;
+    let br = &net.branches();
     batch(vec![
         ("from", i64s(br.iter().map(|x| ext(x.from)).collect())),
         ("to", i64s(br.iter().map(|x| ext(x.to)).collect())),
@@ -478,7 +478,7 @@ fn branch_batch(net: &BalancedNetwork) -> Result<RecordBatch, ArrowError> {
 }
 
 fn gen_batch(net: &BalancedNetwork) -> Result<RecordBatch, ArrowError> {
-    let g = &net.generators;
+    let g = &net.generators();
     batch(vec![
         ("bus", i64s(g.iter().map(|x| ext(x.bus)).collect())),
         ("pg", f64s(g.iter().map(|x| x.pg).collect())),
@@ -497,7 +497,7 @@ fn gen_batch(net: &BalancedNetwork) -> Result<RecordBatch, ArrowError> {
 }
 
 fn load_batch(net: &BalancedNetwork) -> Result<RecordBatch, ArrowError> {
-    let l = &net.loads;
+    let l = &net.loads();
     batch(vec![
         ("bus", i64s(l.iter().map(|x| ext(x.bus)).collect())),
         ("p", f64s(l.iter().map(|x| x.p).collect())),
@@ -510,7 +510,7 @@ fn load_batch(net: &BalancedNetwork) -> Result<RecordBatch, ArrowError> {
 }
 
 fn shunt_batch(net: &BalancedNetwork) -> Result<RecordBatch, ArrowError> {
-    let s = &net.shunts;
+    let s = &net.shunts();
     batch(vec![
         ("bus", i64s(s.iter().map(|x| ext(x.bus)).collect())),
         ("g", f64s(s.iter().map(|x| x.g).collect())),
@@ -523,7 +523,7 @@ fn shunt_batch(net: &BalancedNetwork) -> Result<RecordBatch, ArrowError> {
 }
 
 fn switch_batch(net: &BalancedNetwork) -> Result<RecordBatch, ArrowError> {
-    let s = &net.switches;
+    let s = &net.switches();
     batch(vec![
         ("from", i64s(s.iter().map(|x| ext(x.from)).collect())),
         ("to", i64s(s.iter().map(|x| ext(x.to)).collect())),
@@ -1015,13 +1015,13 @@ fn matrix_bus_batch(net: &BalancedNetwork, core: &IndexCore) -> Result<RecordBat
     let refs = view.reference_bus_indices();
     let components = view.connected_component_labels();
     let source_rows: HashMap<BusId, usize> = net
-        .buses
+        .buses()
         .iter()
         .enumerate()
         .map(|(idx, bus)| (bus.id, idx))
         .collect();
 
-    let buses = &view.network().buses;
+    let buses = &view.network().buses();
     batch_with_metadata(
         vec![
             ("index", i64s((0..buses.len()).map(usz).collect::<Vec<_>>())),
@@ -1080,7 +1080,7 @@ fn matrix_branch_batch(net: &BalancedNetwork, core: &IndexCore) -> Result<Record
             ))
         })?;
         index.push(usz(col));
-        source_row.push((idx < net.branches.len()).then_some(idx).map_or(-1, usz));
+        source_row.push((idx < net.branches().len()).then_some(idx).map_or(-1, usz));
         from_bus_id.push(ext(br.from));
         to_bus_id.push(ext(br.to));
     }
@@ -1420,7 +1420,10 @@ mod tests {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../tests/data")
             .join(name);
-        powerio::parse_file(&path, None).unwrap().network
+        {
+            let source = powerio_core::Source::open(&path).unwrap();
+            powerio::format::parse(source).unwrap().into_value()
+        }
     }
 
     fn terminal_projection_net() -> BalancedNetwork {
@@ -1720,7 +1723,7 @@ mod tests {
     fn bus_table_round_trips_with_external_ids() {
         let n = net("case9.m");
         let sa = round_trip(&n, PIO_ARROW_TABLE_BUS);
-        assert_eq!(sa.len(), n.buses.len());
+        assert_eq!(sa.len(), n.buses().len());
         let ids = sa
             .column_by_name("id")
             .unwrap()
@@ -1730,7 +1733,7 @@ mod tests {
         // The whole id column survives, in order (a reversed/offset column would
         // pass a single-cell check).
         let expected: Vec<i64> = n
-            .buses
+            .buses()
             .iter()
             .map(|b| i64::try_from(b.id.0).unwrap())
             .collect();
@@ -1742,7 +1745,7 @@ mod tests {
         // case9 has no shunts: a length-0 table must cross the C Data Interface
         // and import back without faulting (a common producer mishandling).
         let n = net("case9.m");
-        assert_eq!(n.shunts.len(), 0);
+        assert_eq!(n.shunts().len(), 0);
         assert_eq!(round_trip(&n, PIO_ARROW_TABLE_SHUNT).len(), 0);
     }
 
@@ -1750,17 +1753,20 @@ mod tests {
     fn every_table_has_the_expected_row_count() {
         // case30 carries buses, branches, gens, loads, and shunts.
         let n = net("case30.m");
-        assert_eq!(round_trip(&n, PIO_ARROW_TABLE_BUS).len(), n.buses.len());
+        assert_eq!(round_trip(&n, PIO_ARROW_TABLE_BUS).len(), n.buses().len());
         assert_eq!(
             round_trip(&n, PIO_ARROW_TABLE_BRANCH).len(),
-            n.branches.len()
+            n.branches().len()
         );
         assert_eq!(
             round_trip(&n, PIO_ARROW_TABLE_GEN).len(),
-            n.generators.len()
+            n.generators().len()
         );
-        assert_eq!(round_trip(&n, PIO_ARROW_TABLE_LOAD).len(), n.loads.len());
-        assert_eq!(round_trip(&n, PIO_ARROW_TABLE_SHUNT).len(), n.shunts.len());
+        assert_eq!(round_trip(&n, PIO_ARROW_TABLE_LOAD).len(), n.loads().len());
+        assert_eq!(
+            round_trip(&n, PIO_ARROW_TABLE_SHUNT).len(),
+            n.shunts().len()
+        );
     }
 
     #[test]
@@ -1961,7 +1967,7 @@ mod tests {
         let mut unknown = Generator::new(BusId(2));
         unknown.pmax = 100.0;
         unknown.cost = Some(GenCost::with_ncost(7, 0.0, 0.0, 2, vec![3.0, 4.0]));
-        net.generators = vec![plain, short, unknown];
+        *net.generators_mut() = vec![plain, short, unknown];
         net
     }
 
@@ -2166,8 +2172,7 @@ mod tests {
         );
         let mut generator = Generator::new(BusId(1));
         generator.pmax = 100.0;
-        net.generators = vec![generator];
-        // Every field distinct, so a column fed from the wrong field fails.
+        *net.generators_mut() = vec![generator]; // Every field distinct, so a column fed from the wrong field fails.
         let mut storage = Storage::new(BusId(2));
         storage.ps = 30.0;
         storage.qs = -10.0;
@@ -2184,7 +2189,7 @@ mod tests {
         storage.x = 0.02;
         storage.p_loss = 2.0;
         storage.q_loss = 1.0;
-        net.storage = vec![storage];
+        *net.storage_mut() = vec![storage];
         net
     }
 
@@ -2436,7 +2441,12 @@ COMMENT\n\
 0.95, 13.8, 30.0, 50.0, 0, 0, 0, 0, 1.1, 0.9, 1.1, 0.9, 33, 0, 0, 0, 0\n\
 0 / END OF TRANSFORMER DATA, BEGIN AREA DATA\n\
 Q\n";
-        powerio::parse_str(raw, "psse").unwrap().network
+        {
+            let source = powerio_core::Source::from_bytes("case.raw", raw.as_bytes().to_vec())
+                .unwrap()
+                .with_format(powerio_core::FormatId::new("psse").unwrap());
+            powerio::format::parse(source).unwrap().into_value()
+        }
     }
 
     // A 3-winding transformer star-lowers into an extra synthetic bus, so the
@@ -2449,14 +2459,14 @@ Q\n";
     #[test]
     fn matrix_bus_axis_covers_star_lowered_rows() {
         let n = transformer_3w_net();
-        assert_eq!(n.buses.len(), 3, "handle carries the three source buses");
-        assert!(n.branches.is_empty(), "a 3W is not folded into branches");
-        assert_eq!(n.transformers_3w.len(), 1);
+        assert_eq!(n.buses().len(), 3, "handle carries the three source buses");
+        assert!(n.branches().is_empty(), "a 3W is not folded into branches");
+        assert_eq!(n.transformers_3w().len(), 1);
 
         let bus = matrix_record_batch(&n, PIO_ARROW_TABLE_MATRIX_BUS);
         // The matrix bus axis exceeds the handle bus count: the star point is a
         // matrix row with no `pio_bus_ids` entry.
-        assert_eq!(bus.num_rows(), n.buses.len() + 1);
+        assert_eq!(bus.num_rows(), n.buses().len() + 1);
 
         let index = rb_i64_col(&bus, "index").values();
         let bus_id = rb_i64_col(&bus, "bus_id").values();
@@ -2471,7 +2481,7 @@ Q\n";
         // order; the trailing star row carries a synthetic id outside the
         // handle id space.
         assert_eq!(bus_id, &[1, 2, 3, 4]);
-        let handle_ids: Vec<i64> = n.buses.iter().map(|b| ext(b.id)).collect();
+        let handle_ids: Vec<i64> = n.buses().iter().map(|b| ext(b.id)).collect();
         assert!(
             !handle_ids.contains(&bus_id[bus.num_rows() - 1]),
             "star bus id must not collide with a handle bus id"

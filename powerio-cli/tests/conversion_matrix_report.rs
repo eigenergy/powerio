@@ -90,10 +90,7 @@ use powerio_cli::invariants::{
     injection_change, model_diffs, transmission_core, transmission_value, ybus_change,
 };
 use powerio_dist::{DistTargetFormat, MulticonductorNetwork};
-use powerio_matrix::{
-    BalancedNetwork, TargetFormat, parse_file as parse_transmission_file, parse_matpower_file,
-    parse_str as parse_transmission_str, write_as as write_transmission_as,
-};
+use powerio_matrix::{BalancedNetwork, TargetFormat, write_network as write_transmission_as};
 
 const REPORT_ENV: &str = "POWERIO_CONVERSION_MATRIX_REPORT";
 const DETAILS_ENV: &str = "POWERIO_CONVERSION_MATRIX_DETAILS";
@@ -749,9 +746,8 @@ fn transmission_payloads(format: TransmissionFormat) -> Result<Vec<TransmissionP
     TRANSMISSION_CASES
         .iter()
         .map(|(label, rel)| {
-            let mut base =
+            let base =
                 parse_matpower_file(data(rel)).map_err(|err| format!("parse {rel}: {err}"))?;
-            base.source = None;
             let rendered = write_transmission_as(&base, format.target)
                 .map_err(|err| format!("write {rel} as {}: {err}", format.name))?;
             let parsed = parse_transmission_str(&rendered.text, format.token)
@@ -774,7 +770,7 @@ fn validate_transmission_pair(
 ) {
     match write_transmission_as(&payload.network, target.target) {
         Ok(conversion) => {
-            cell.record_warnings(TARGET_WRITE, &conversion.warnings);
+            cell.record_warnings(TARGET_WRITE, &conversion.rendered_diagnostics());
             match parse_transmission_str(&conversion.text, target.token) {
                 Ok(parsed) => {
                     cell.record_warnings(TARGET_READBACK, &parsed.warnings);
@@ -898,7 +894,9 @@ const DISTRIBUTION_FORMATS: [DistributionFormat; 3] = [
 // typed voltage model carries those volts entry for entry, so the copy only
 // fed a token dss could not parse and BMOPF could only drop — −1 on both
 // cells of the PMD source row.
-const DISTRIBUTION_WARNING_BASELINE: [[usize; 3]; 3] = [[0, 140, 88], [20, 0, 15], [26, 56, 0]];
+// The dss→bmopf and pmd→bmopf cells dropped when the BMOPF writer began
+// aggregating its per-field extras drops into one finding per field (#377).
+const DISTRIBUTION_WARNING_BASELINE: [[usize; 3]; 3] = [[0, 66, 88], [20, 0, 15], [26, 42, 0]];
 
 const DISTRIBUTION_CASES: [(&str, &str, DistributionFormat); 7] = [
     (
@@ -941,6 +939,7 @@ const DISTRIBUTION_CASES: [(&str, &str, DistributionFormat); 7] = [
 struct DistributionPayload {
     label: &'static str,
     network: MulticonductorNetwork,
+    module: powerio_core::PioModule<MulticonductorNetwork>,
     parse_warnings: Vec<String>,
     core: DistributionCore,
 }
@@ -993,19 +992,18 @@ fn distribution_payloads(format: DistributionFormat) -> Result<Vec<DistributionP
     DISTRIBUTION_CASES
         .iter()
         .map(|(label, rel, native_format)| {
-            let mut base = powerio_dist::parse_file(data(rel), Some(native_format.token))
+            let mut base = dist_parse_file(data(rel), native_format.token)
                 .map_err(|err| format!("parse {rel}: {err}"))?;
-            base.source = None;
-            base.source_format = None;
-            let rendered = base.to_format(format.target);
-            let mut parsed = parse_distribution_text(&rendered.text, format)
+            *base.network.source_format_mut() = None;
+            let rendered = powerio_dist::write_network(&base.network, format.target);
+            let parsed = parse_distribution_text(&rendered.text, format)
                 .map_err(|err| format!("read generated {rel} as {}: {err}", format.name))?;
-            let warnings = std::mem::take(&mut parsed.warnings);
-            let core = distribution_core(&parsed);
+            let core = distribution_core(&parsed.network);
             Ok(DistributionPayload {
                 label,
-                network: parsed,
-                parse_warnings: warnings,
+                network: parsed.network,
+                module: parsed.module,
+                parse_warnings: parsed.warnings,
                 core,
             })
         })
@@ -1017,13 +1015,15 @@ fn validate_distribution_pair(
     target: DistributionFormat,
     cell: &mut Cell,
 ) {
-    let conversion = payload.network.to_format(target.target);
-    cell.record_warnings(TARGET_WRITE, &conversion.warnings);
+    // The diagonal echoes the retained source through the module, the same
+    // byte identity tier the library promises; off diagonal writes are
+    // canonical either way.
+    let conversion = powerio_dist::write_as(&payload.module, target.target);
+    cell.record_warnings(TARGET_WRITE, &conversion.rendered_diagnostics());
     match parse_distribution_text(&conversion.text, target) {
-        Ok(mut parsed) => {
+        Ok(parsed) => {
             cell.record_warnings(TARGET_READBACK, &parsed.warnings);
-            parsed.warnings.clear();
-            let actual = distribution_core(&parsed);
+            let actual = distribution_core(&parsed.network);
             if !core_survives(&payload.core, &actual, target.target) {
                 cell.failures.push(format!(
                     "{} core changed for {}: before {:?}, after {:?}",
@@ -1033,7 +1033,7 @@ fn validate_distribution_pair(
             record_model_diffs(
                 payload.label,
                 &distribution_value(&payload.network),
-                &distribution_value(&parsed),
+                &distribution_value(&parsed.network),
                 cell,
             );
         }
@@ -1044,12 +1044,40 @@ fn validate_distribution_pair(
     }
 }
 
+struct DistParsed {
+    network: MulticonductorNetwork,
+    warnings: Vec<String>,
+    module: powerio_core::PioModule<MulticonductorNetwork>,
+}
+
+fn dist_module_to_parsed(module: powerio_core::PioModule<MulticonductorNetwork>) -> DistParsed {
+    DistParsed {
+        warnings: powerio_dist::diagnostics::render_diagnostics(module.diagnostics()),
+        network: module.value().clone(),
+        module,
+    }
+}
+
+fn dist_parse_file(
+    path: impl AsRef<std::path::Path>,
+    from: &str,
+) -> Result<DistParsed, powerio_core::Error> {
+    let source = powerio_core::Source::open(path.as_ref())?.with_format(
+        powerio_core::FormatId::new(from.to_ascii_lowercase().replace('_', "-"))?,
+    );
+    powerio_dist::parse(source).map(dist_module_to_parsed)
+}
+
 fn parse_distribution_text(
     text: &str,
     format: DistributionFormat,
-) -> powerio_dist::Result<MulticonductorNetwork> {
+) -> Result<DistParsed, powerio_core::Error> {
     if format.target != DistTargetFormat::Dss {
-        return powerio_dist::parse_str(text, format.token);
+        let source = powerio_core::Source::from_bytes("<memory>", text.as_bytes().to_vec())?
+            .with_format(powerio_core::FormatId::new(
+                format.token.to_ascii_lowercase().replace('_', "-"),
+            )?);
+        return powerio_dist::parse(source).map(dist_module_to_parsed);
     }
 
     let dir = std::env::temp_dir().join("powerio-conversion-matrix");
@@ -1059,7 +1087,7 @@ fn parse_distribution_text(
         DSS_TEMP_COUNTER.fetch_add(1, Ordering::Relaxed)
     ));
     std::fs::write(&path, text).unwrap();
-    let parsed = powerio_dist::parse_file(&path, Some(format.token));
+    let parsed = dist_parse_file(&path, format.token);
     let _ = std::fs::remove_file(path);
     parsed
 }
@@ -1130,7 +1158,7 @@ fn every_fixture_echoes_through_a_package() {
             }
         };
         for payload in payloads {
-            let pkg = powerio_pkg::NetworkPackage::from_multiconductor(payload.network);
+            let pkg = powerio::package::NetworkPackage::from_multiconductor(payload.network);
             if let Err(err) = package_json_echoes(&pkg) {
                 failures.push(format!("{} as {}: {err}", payload.label, format.name));
             }
@@ -1158,7 +1186,7 @@ fn model_json_echoes(net: &BalancedNetwork) -> Result<(), String> {
 /// network: wrapping assigns row uids, which is the document doing its job,
 /// while anything the write and readback change is a defect.
 fn package_echoes(net: BalancedNetwork) -> Result<(), String> {
-    let pkg = powerio_pkg::NetworkPackage::from_balanced(net);
+    let pkg = powerio::package::NetworkPackage::from_balanced(net);
     let before = transmission_value(
         pkg.as_balanced()
             .ok_or("the package dropped its balanced payload")?,
@@ -1180,14 +1208,66 @@ fn package_echoes(net: BalancedNetwork) -> Result<(), String> {
 /// The document itself is round-trip stable: write, read, write again, and the
 /// two texts agree byte for byte.
 fn package_json_echoes(
-    pkg: &powerio_pkg::NetworkPackage,
-) -> Result<powerio_pkg::NetworkPackage, String> {
+    pkg: &powerio::package::NetworkPackage,
+) -> Result<powerio::package::NetworkPackage, String> {
     let first = pkg.to_json().map_err(|err| format!("write: {err}"))?;
-    let back =
-        powerio_pkg::NetworkPackage::from_json(&first).map_err(|err| format!("read: {err}"))?;
+    let back = powerio::package::NetworkPackage::from_json(&first)
+        .map_err(|err| format!("read: {err}"))?;
     let second = back.to_json().map_err(|err| format!("rewrite: {err}"))?;
     if first != second {
         return Err("the .pio.json document is not round-trip stable".to_owned());
     }
     Ok(back)
+}
+
+fn parse_matpower_file(
+    path: impl AsRef<std::path::Path>,
+) -> Result<powerio_matrix::BalancedNetwork, powerio_core::Error> {
+    let source = powerio_core::Source::open(path.as_ref())?
+        .with_format(powerio_core::FormatId::new("matpower")?);
+    powerio_matrix::parse(source).map(powerio_core::PioModule::into_value)
+}
+
+struct ParsedTransmission {
+    network: BalancedNetwork,
+    warnings: Vec<String>,
+}
+
+fn parse_module_from(
+    source: powerio_core::Source,
+) -> Result<ParsedTransmission, powerio_core::Error> {
+    let module = powerio_matrix::parse(source)?;
+    let warnings = module
+        .diagnostics()
+        .iter()
+        .map(|d| format!("{}: {}", d.code(), d.message()))
+        .collect();
+    Ok(ParsedTransmission {
+        warnings,
+        network: module.into_value(),
+    })
+}
+
+fn parse_transmission_file(
+    path: impl AsRef<std::path::Path>,
+    from: Option<&str>,
+) -> Result<ParsedTransmission, powerio_core::Error> {
+    let mut source = powerio_core::Source::open(path.as_ref())?;
+    if let Some(token) = from {
+        source = source.with_format(powerio_core::FormatId::new(
+            token.to_ascii_lowercase().replace('_', "-"),
+        )?);
+    }
+    parse_module_from(source)
+}
+
+fn parse_transmission_str(
+    text: &str,
+    from: &str,
+) -> Result<ParsedTransmission, powerio_core::Error> {
+    let source = powerio_core::Source::from_bytes("<memory>", text.as_bytes().to_vec())?
+        .with_format(powerio_core::FormatId::new(
+            from.to_ascii_lowercase().replace('_', "-"),
+        )?);
+    parse_module_from(source)
 }

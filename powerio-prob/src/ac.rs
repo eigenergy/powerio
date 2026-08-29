@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use powerio::{BusId, IndexedNetwork};
+use powerio_tx::{BusId, IndexedNetwork};
 
 use crate::{Error, Result};
 
@@ -14,10 +14,10 @@ use crate::{ReferenceBuses, Units, limits, nodal};
 pub struct AcOpfOptions {
     pub units: Units,
     /// Skip non-self-loop branches with `r² + x² = 0`. If false, assembly
-    /// returns [`powerio::Error::ZeroImpedance`].
+    /// returns [`powerio_tx::Error::ZeroImpedance`].
     pub skip_zero_impedance: bool,
     /// Give a branch with no thermal rating the bound
-    /// [`Branch::synthesize_rate_a`](powerio::Branch::synthesize_rate_a)
+    /// [`Branch::synthesize_rate_a`](powerio_tx::Branch::synthesize_rate_a)
     /// states. If false, `rate_a <= 0` reaches `s_max` as zero, which reads as
     /// unlimited.
     pub synthesize_unrated_limits: bool,
@@ -266,14 +266,14 @@ pub fn build_ac_opf_instance(
     for (source_row, generator) in case.in_service_gens() {
         let bus = case
             .bus_index(generator.bus)
-            .ok_or(powerio::Error::UnknownBus {
+            .ok_or(powerio_tx::Error::UnknownBus {
                 bus_id: generator.bus,
                 element_index: source_row,
             })?;
         let cost = generator
             .cost
             .as_ref()
-            .ok_or(powerio::Error::MissingGenCost {
+            .ok_or(powerio_tx::Error::MissingGenCost {
                 gen_index: source_row,
             })?;
         let (q_raw, c_raw, c0_raw) = nodal::quadratic_terms(cost, source_row)?;
@@ -319,13 +319,13 @@ pub fn build_ac_opf_instance(
     for (source_row, branch) in case.in_service_branches() {
         let from = case
             .bus_index(branch.from)
-            .ok_or(powerio::Error::UnknownBus {
+            .ok_or(powerio_tx::Error::UnknownBus {
                 bus_id: branch.from,
                 element_index: source_row,
             })?;
         let to = case
             .bus_index(branch.to)
-            .ok_or(powerio::Error::UnknownBus {
+            .ok_or(powerio_tx::Error::UnknownBus {
                 bus_id: branch.to,
                 element_index: source_row,
             })?;
@@ -334,7 +334,7 @@ pub fn build_ac_opf_instance(
                 skipped_zero_impedance.push(source_row);
                 continue;
             }
-            return Err(powerio::Error::ZeroImpedance { row: source_row }.into());
+            return Err(powerio_tx::Error::ZeroImpedance { row: source_row }.into());
         };
         let charging = branch.terminal_charging();
         if from == to {
@@ -365,7 +365,13 @@ pub fn build_ac_opf_instance(
         let amax = case.angle_radians(branch.angmax);
         tap.push(branch.divisible_tap(source_row)?);
         shift.push(case.angle_radians(branch.shift));
-        s_max.push(thermal.of(branch, amin, amax, &network.buses[from], &network.buses[to]));
+        s_max.push(thermal.of(
+            branch,
+            amin,
+            amax,
+            &network.buses()[from],
+            &network.buses()[to],
+        ));
         angle_min.push(amin);
         angle_max.push(amax);
         branch_rows.push(source_row);
@@ -374,7 +380,7 @@ pub fn build_ac_opf_instance(
     let mut vm_min = Vec::with_capacity(n_buses);
     let mut vm_max = Vec::with_capacity(n_buses);
     let mut vm = Vec::with_capacity(n_buses);
-    for bus in &network.buses {
+    for bus in network.buses() {
         vm_min.push(bus.vmin);
         vm_max.push(bus.vmax);
         vm.push(bus.vm);

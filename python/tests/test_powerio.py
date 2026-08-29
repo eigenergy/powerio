@@ -1202,6 +1202,49 @@ def test_convert_str_named_input_format():
     assert powerio.parse_str(back.text, "matpower").n_buses == 30
 
 
+def test_single_file_writes_never_replace_an_existing_entry(tmp_path):
+    case = powerio.parse_file(DATA / "case9.m")
+
+    # write_file: an existing entry keeps its bytes; a fresh path commits.
+    target = tmp_path / "case9.raw"
+    target.write_text("precious")
+    with pytest.raises(powerio.PowerIOError) as refusal:
+        case.write_file(str(target), "psse")
+    assert getattr(refusal.value, "code", "").startswith("REQUEST.OUTPUT")
+    assert target.read_text() == "precious"
+    fresh = tmp_path / "fresh.raw"
+    case.write_file(str(fresh), "psse")
+    assert fresh.read_text().strip()
+
+    # A symbolic link at the target is neither followed nor replaced.
+    designated = tmp_path / "designated.raw"
+    designated.write_text("designated")
+    linked = tmp_path / "linked.raw"
+    linked.symlink_to(designated)
+    with pytest.raises(powerio.PowerIOError):
+        case.write_file(str(linked), "psse")
+    assert linked.is_symlink()
+    assert designated.read_text() == "designated"
+
+    # convert_file's out target follows the same rule.
+    out = tmp_path / "converted.m"
+    out.write_text("precious")
+    with pytest.raises(powerio.PowerIOError):
+        powerio.convert_file(str(DATA / "case9.m"), "matpower", out=str(out))
+    assert out.read_text() == "precious"
+
+
+def test_pypsa_csv_folder_never_replaces_an_existing_target(tmp_path):
+    case = powerio.parse_file(DATA / "case9.m")
+    out = tmp_path / "pypsa"
+    out.mkdir()
+    (out / "buses.csv").write_text("precious")
+    with pytest.raises(powerio.PowerIOError) as refusal:
+        case.write_pypsa_csv_folder(out)
+    assert getattr(refusal.value, "code", "").startswith("REQUEST.OUTPUT")
+    assert (out / "buses.csv").read_text() == "precious"
+
+
 def test_pypsa_csv_folder_wrapper(tmp_path):
     case = powerio.parse_file(DATA / "case9.m")
     out = tmp_path / "pypsa"

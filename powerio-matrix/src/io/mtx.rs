@@ -6,7 +6,7 @@
 //! the symmetric writer. We delegate to `sprs` for general (non symmetric)
 //! output and for reading.
 
-use std::io::{BufWriter, Write};
+use std::io::Write;
 use std::path::Path;
 
 use sprs::CsMat;
@@ -14,17 +14,37 @@ use sprs::CsMat;
 use crate::{Error, Result};
 
 pub fn write_mtx(matrix: &CsMat<f64>, path: impl AsRef<Path>) -> Result<()> {
-    let path = path.as_ref();
+    commit_one_file(path.as_ref(), mtx_bytes(matrix)?)
+}
+
+/// The complete Matrix Market text for one matrix, symmetric when the header
+/// round trips exactly and general otherwise.
+pub fn mtx_bytes(matrix: &CsMat<f64>) -> Result<Vec<u8>> {
     if is_exactly_symmetric(matrix) {
-        write_symmetric_mtx(matrix, path)
+        symmetric_mtx_bytes(matrix)
     } else {
-        sprs::io::write_matrix_market(path, matrix.view()).map_err(|e| Error::Mtx(e.to_string()))
+        general_mtx_bytes(matrix)
     }
 }
 
-fn write_symmetric_mtx(matrix: &CsMat<f64>, path: &Path) -> Result<()> {
-    let f = std::fs::File::create(path)?;
-    let mut w = BufWriter::new(f);
+/// Commit one complete file through the no-replace destination: the bytes are
+/// staged and moved onto `path` only when no entry exists there, so a refused
+/// write leaves the caller's filesystem as it was.
+pub(crate) fn commit_one_file(path: &Path, bytes: Vec<u8>) -> Result<()> {
+    // A one file destination takes its target from the caller's path; the
+    // artifact name is a fixed placeholder, so the portability rule governs
+    // inventory names and never which operating system path a caller may
+    // choose.
+    let artifact = powerio_core::MemoryArtifact::new(
+        powerio_core::ArtifactPath::new("case").expect("static placeholder name"),
+        bytes,
+    );
+    powerio_core::Destination::path(path).__commit_artifacts(false, vec![artifact], Vec::new())?;
+    Ok(())
+}
+
+fn symmetric_mtx_bytes(matrix: &CsMat<f64>) -> Result<Vec<u8>> {
+    let mut w = Vec::new();
     writeln!(w, "%%MatrixMarket matrix coordinate real symmetric")?;
     writeln!(w, "% written by powerio")?;
 
@@ -42,7 +62,18 @@ fn write_symmetric_mtx(matrix: &CsMat<f64>, path: &Path) -> Result<()> {
         }
         writeln!(w, "{} {} {:.16e}", i + 1, j + 1, v)?;
     }
-    Ok(())
+    Ok(w)
+}
+
+fn general_mtx_bytes(matrix: &CsMat<f64>) -> Result<Vec<u8>> {
+    let mut w = Vec::new();
+    writeln!(w, "%%MatrixMarket matrix coordinate real general")?;
+    writeln!(w, "% written by powerio")?;
+    writeln!(w, "{} {} {}", matrix.rows(), matrix.cols(), matrix.nnz())?;
+    for (&v, (i, j)) in matrix {
+        writeln!(w, "{} {} {:.16e}", i + 1, j + 1, v)?;
+    }
+    Ok(w)
 }
 
 /// Read a Matrix Market file into a CSR matrix.
@@ -84,15 +115,19 @@ pub fn read_vector_mtx(path: impl AsRef<Path>) -> Result<Vec<f64>> {
 
 /// Write a dense vector as Matrix Market `array real general`.
 pub fn write_vector_mtx(values: &[f64], path: impl AsRef<Path>) -> Result<()> {
-    let f = std::fs::File::create(path)?;
-    let mut w = BufWriter::new(f);
+    commit_one_file(path.as_ref(), vector_mtx_bytes(values)?)
+}
+
+/// The complete Matrix Market `array real general` text for one vector.
+pub fn vector_mtx_bytes(values: &[f64]) -> Result<Vec<u8>> {
+    let mut w = Vec::new();
     writeln!(w, "%%MatrixMarket matrix array real general")?;
     writeln!(w, "% written by powerio")?;
     writeln!(w, "{} 1", values.len())?;
     for v in values {
         writeln!(w, "{v:.16e}")?;
     }
-    Ok(())
+    Ok(w)
 }
 
 /// Whether the `symmetric` header would round trip: every stored entry has a
@@ -123,6 +158,66 @@ mod tests {
     use sprs::TriMat;
 
     use super::write_mtx;
+
+    #[test]
+    fn single_file_writers_take_any_platform_legal_target_name() {
+        // The portability rule governs inventory names, never which
+        // operating system path a caller may choose: a name that is legal on
+        // the running platform commits.
+        let base = std::env::temp_dir().join(format!(
+            "powerio-mtx-target-names-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&base).unwrap();
+        #[cfg(unix)]
+        let nonportable = ["aux.mtx", "trailing.", "with space "];
+        #[cfg(not(unix))]
+        let nonportable = ["with space.mtx"];
+        for name in nonportable {
+            let target = base.join(name);
+            super::write_vector_mtx(&[3.0], &target).unwrap_or_else(|error| {
+                panic!("{name}: {error}");
+            });
+            assert_eq!(super::read_vector_mtx(&target).unwrap(), vec![3.0]);
+            // An existing entry at the same platform-legal name still refuses.
+            let error = super::write_vector_mtx(&[4.0], &target).unwrap_err();
+            assert!(matches!(error, crate::Error::Commit(_)), "{error:?}");
+            assert_eq!(super::read_vector_mtx(&target).unwrap(), vec![3.0]);
+        }
+        // A file name that is not valid UTF-8 is a legal path on Linux
+        // filesystems; APFS refuses the byte sequence itself, so the case is
+        // platform-legal only there.
+        #[cfg(target_os = "linux")]
+        {
+            use std::os::unix::ffi::OsStrExt;
+            let raw =
+                std::ffi::OsStr::from_bytes(&[b'r', b'a', b'w', 0xFF, b'.', b'm', b't', b'x']);
+            let target = base.join(raw);
+            super::write_vector_mtx(&[5.0], &target).unwrap();
+            assert_eq!(super::read_vector_mtx(&target).unwrap(), vec![5.0]);
+        }
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn single_file_writers_never_replace_an_existing_entry() {
+        let path = temp_path("no-clobber-single");
+        std::fs::write(&path, b"precious").unwrap();
+        let error = super::write_vector_mtx(&[1.0, 2.0], &path).unwrap_err();
+        assert!(matches!(error, crate::Error::Commit(_)), "{error:?}");
+        assert_eq!(std::fs::read(&path).unwrap(), b"precious");
+        let _ = std::fs::remove_file(&path);
+
+        // A fresh target commits and reads back.
+        let fresh = temp_path("no-clobber-single-fresh");
+        super::write_vector_mtx(&[1.0, 2.0], &fresh).unwrap();
+        assert_eq!(super::read_vector_mtx(&fresh).unwrap(), vec![1.0, 2.0]);
+        let _ = std::fs::remove_file(&fresh);
+    }
 
     #[test]
     fn value_asymmetric_matrix_writes_general_mtx() {

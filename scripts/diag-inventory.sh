@@ -13,7 +13,7 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
-crates="powerio powerio-dist powerio-pkg powerio-matrix powerio-prob powerio-capi powerio-cli powerio-py powerio-diag"
+crates="powerio powerio-core powerio-dist powerio-matrix powerio-prob powerio-capi powerio-cli powerio-py"
 
 sources() {
   for crate in $crates; do

@@ -5,7 +5,7 @@ use std::fmt;
 #[non_exhaustive]
 pub enum ScopfError {
     Json(serde_json::Error),
-    Source(powerio::Error),
+    Source(powerio_tx::Error),
     UnsupportedFormat(String),
     InvalidDocument(String),
 }
@@ -21,7 +21,7 @@ impl ScopfError {
     /// variant set, so a new variant must be coded here before it compiles.
     /// A wrapped hub failure keeps the hub's own code.
     #[must_use]
-    pub fn code(&self) -> &'static powerio_diag::DiagnosticInfo {
+    pub fn code(&self) -> &'static powerio_core::DiagnosticInfo {
         use crate::diagnostics::codes;
         match self {
             Self::Json(_) => &codes::PARSE_SCOPF_MALFORMED,
@@ -61,8 +61,8 @@ impl From<serde_json::Error> for ScopfError {
     }
 }
 
-impl From<powerio::Error> for ScopfError {
-    fn from(error: powerio::Error) -> Self {
+impl From<powerio_tx::Error> for ScopfError {
+    fn from(error: powerio_tx::Error) -> Self {
         Self::Source(error)
     }
 }

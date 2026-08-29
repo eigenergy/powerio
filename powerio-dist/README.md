@@ -14,10 +14,11 @@ fields. The generated [conversion matrix](docs/conversion-matrix.md) records
 behavior for each fixture.
 
 ```rust
-let net = powerio_dist::parse_file("feeder.dss", None)?;
-let pmd = net.to_format(powerio_dist::DistTargetFormat::PmdJson);
-for w in &pmd.warnings {
-    eprintln!("fidelity: {w}");
+let source = powerio_core::Source::open("feeder.dss")?;
+let module = powerio_dist::parse(source)?;
+let pmd = powerio_dist::write_as(&module, powerio_dist::DistTargetFormat::PmdJson);
+for line in pmd.rendered_diagnostics() {
+    eprintln!("fidelity: {line}");
 }
 ```
 

@@ -5,30 +5,32 @@ matrix projection, package construction, and problem instance assembly consume
 those models without changing parser dependencies.
 
 ```text
-powerio             powerio-dist
+powerio-tx          powerio-dist
    │                     │
    ├──────► powerio-matrix
    │
-   ├──────► powerio-pkg ◄──── powerio-dist
+   ├──────► powerio (facade) ◄──── powerio-dist
    │
    └──────► powerio-prob
                  │
                  └── optional "matrix" ──► powerio-matrix
 
-powerio-diag ◄──── powerio, powerio-dist, powerio-pkg
+powerio-core ◄──── powerio-tx, powerio-dist, powerio
 ```
 
-- `powerio-diag` owns the diagnostic record, the code grammar, the stage
+- `powerio-core` owns the diagnostic record, the code grammar, the stage
   namespaces, and the error categories. It is a leaf below both model crates so
   one finding type crosses all of them.
-- `powerio` owns the balanced network model, format routing, indexing,
-  normalization, and shared GOC3 document parsing.
+- `powerio-tx` owns the balanced network model, format routing, indexing,
+  normalization, and shared GOC3 document parsing. The `powerio` facade
+  re-exports it and adds the dynamic value boundary and universal parse.
 - `powerio-dist` owns the multiconductor network model and distribution
   formats.
 - `powerio-matrix` owns generic sparse matrix and graph projections from a
   balanced network. It does not depend on `powerio-prob`.
-- `powerio-pkg` owns `.pio.json` packages, operating points, study commits,
-  provenance, validation, and lowering between model families.
+- the `powerio` facade's `package` module owns `.pio.json` packages,
+  operating points, study commits, provenance, validation, and lowering
+  between model families.
 - `powerio-prob` owns complete numerical problem instances. Its default build
   depends on `powerio`; the optional `matrix` feature projects a DC OPF
   instance into sparse operators. It has no `powerio-dist` dependency because

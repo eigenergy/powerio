@@ -10,16 +10,17 @@ use std::path::{Path, PathBuf};
 
 use anyhow::Context;
 use clap::{Parser, Subcommand, ValueEnum};
+use powerio::package::{NetworkPackage, Origin, SourceDescriptor};
 use powerio_matrix::io::gridfm::{GridfmOptions, numbered_snapshots, write_gridfm_batch};
 use powerio_matrix::matrix::{BuildOptions, DcConvention, Scheme, sddm_check};
 use powerio_matrix::pipeline::{MatrixKind, Pipeline, RhsKind};
 use powerio_matrix::synth::{SynthSpec, Topology};
 use powerio_matrix::{MissingGenCostPolicy, SensitivityOptions, SensitivitySolver, WriteOptions};
-use powerio_pkg::{NetworkPackage, Origin, SourceDescriptor};
 use powerio_prob::matrix::{DcOpfBundleMetadata, DcOpfBundleOptions, write_dcopf_bundle};
 use powerio_prob::{DcOpfOptions, Units, build_dc_opf_instance};
 use serde_json::json;
 mod cases;
+mod compat;
 mod tui;
 
 use cases::infer_input_family;
@@ -937,8 +938,8 @@ fn run_sensitivities(
     solver: SensitivitySolverArg,
     drop_tolerance: f64,
 ) -> anyhow::Result<()> {
-    let mpc = powerio_matrix::parse_matpower_file(input)
-        .with_context(|| format!("parse {}", input.display()))?;
+    let mpc =
+        compat_parse_matpower_file(input).with_context(|| format!("parse {}", input.display()))?;
     std::fs::create_dir_all(output)?;
     let view = powerio_matrix::IndexedNetwork::new(&mpc);
     let options = SensitivityOptions {
@@ -966,7 +967,8 @@ fn run_sensitivities(
         },
         "sensitivity": &metadata
     });
-    serde_json::to_writer_pretty(std::fs::File::create(&meta_path)?, &meta)?;
+    commit_output_file(&meta_path, serde_json::to_vec_pretty(&meta)?)
+        .with_context(|| format!("writing {}", meta_path.display()))?;
     tracing::info!(
         case = %view.name(),
         ptdf = %ptdf_path.display(),
@@ -1059,8 +1061,8 @@ fn run_dcopf(
     default_gen_cost: Option<&str>,
     gen_cost_csv: Option<&Path>,
 ) -> anyhow::Result<()> {
-    let mpc = powerio_matrix::parse_matpower_file(input)
-        .with_context(|| format!("parse {}", input.display()))?;
+    let mpc =
+        compat_parse_matpower_file(input).with_context(|| format!("parse {}", input.display()))?;
     let cost_opts = write_options(missing_gen_cost, default_gen_cost, gen_cost_csv)?;
     let mut policy_network = mpc.clone();
     let cost_report = policy_network
@@ -1083,7 +1085,7 @@ fn run_dcopf(
     let outputs = write_dcopf_bundle(&instance, output, &bundle_options)
         .with_context(|| format!("export DC OPF bundle for {}", input.display()))?;
     tracing::info!(
-        case = %mpc.name,
+        case = %mpc.name(),
         dir = %outputs.dir.display(),
         files = outputs.files.len(),
         "wrote DC OPF bundle"
@@ -1138,7 +1140,7 @@ fn run_gridfm(
         );
     }
     tracing::info!(
-        case = %nets[0].name,
+        case = %nets[0].name(),
         scenarios = snapshots.len(),
         dir = %outputs.dir.display(),
         files = outputs.files.len(),
@@ -1148,7 +1150,7 @@ fn run_gridfm(
 }
 
 fn run_verify(input: &Path, kind: MatrixKind, scheme: Scheme) -> anyhow::Result<()> {
-    let mpc = powerio_matrix::parse_matpower_file(input)?;
+    let mpc = compat_parse_matpower_file(input)?;
     let opts = BuildOptions {
         scheme,
         ..Default::default()
@@ -1160,7 +1162,7 @@ fn run_verify(input: &Path, kind: MatrixKind, scheme: Scheme) -> anyhow::Result<
     println!(
         "{} ({}): n={} nnz={} min_diag={:.3e} max_diag={:.3e} dd_margin={:.3e} M-sign={} ‖A‖_F={:.3e} skipped_zero_impedance={} SDDM={}",
         kind.label(),
-        mpc.name,
+        mpc.name(),
         stats.n,
         stats.nnz,
         stats.min_diag,
@@ -1225,19 +1227,20 @@ fn run_corpus(action: CorpusCommand) -> anyhow::Result<()> {
 }
 
 fn run_summary(input: &Path, from: Option<FormatArg>, scenario: i64) -> anyhow::Result<()> {
-    let value =
-        if from == Some(FormatArg::Gridfm) || (from.is_none() && looks_like_gridfm_dir(input)) {
-            let read = powerio_matrix::read_gridfm_dataset(input, scenario)
-                .with_context(|| format!("reading gridfm dataset {}", input.display()))?;
-            transmission_summary_json(&read.network, &read.warnings)
-        } else {
-            match parse_family_case(input, from)? {
-                FamilyCase::Distribution(net) => distribution_summary_json(&net),
-                FamilyCase::Transmission(parsed) => {
-                    transmission_summary_json(&parsed.network, &parsed.warnings)
-                }
+    let value = if from == Some(FormatArg::Gridfm)
+        || (from.is_none() && looks_like_gridfm_dir(input))
+    {
+        let read = powerio_matrix::read_gridfm_dataset(input, scenario)
+            .with_context(|| format!("reading gridfm dataset {}", input.display()))?;
+        transmission_summary_json(&read.network, &read.warnings)
+    } else {
+        match parse_family_case(input, from)? {
+            FamilyCase::Distribution(net) => distribution_summary_json(&net.network, &net.warnings),
+            FamilyCase::Transmission(parsed) => {
+                transmission_summary_json(&parsed.network, &parsed.rendered_diagnostics())
             }
-        };
+        }
+    };
     println!("{}", serde_json::to_string_pretty(&value)?);
     Ok(())
 }
@@ -1251,7 +1254,8 @@ fn run_package(
     let (text, parse_errors) = package_text(input, from, scenario)?;
     match output {
         Some(p) if p.as_os_str() != "-" => {
-            std::fs::write(p, &text).with_context(|| format!("writing {}", p.display()))?;
+            commit_output_file(p, text.clone().into_bytes())
+                .with_context(|| format!("writing {}", p.display()))?;
             eprintln!("wrote {}", p.display());
         }
         _ => print!("{text}"),
@@ -1279,10 +1283,10 @@ fn package_text(
 
 /// [`parse_error_lines`] for the package's own diagnostic type: the dist and
 /// package crates carry twin diagnostic shapes without depending on each other.
-fn package_error_lines(diagnostics: &[powerio_pkg::StructuredDiagnostic]) -> Vec<String> {
+fn package_error_lines(diagnostics: &[powerio::package::StructuredDiagnostic]) -> Vec<String> {
     diagnostics
         .iter()
-        .filter(|d| d.severity >= powerio_pkg::DiagnosticSeverity::Error)
+        .filter(|d| d.severity >= powerio::package::DiagnosticSeverity::Error)
         .map(|d| format!("{}: {}", d.code, d.message))
         .collect()
 }
@@ -1295,8 +1299,10 @@ fn build_package(
     if from == Some(FormatArg::Gridfm) || (from.is_none() && looks_like_gridfm_dir(input)) {
         let read = powerio_matrix::read_gridfm_dataset(input, scenario)
             .with_context(|| format!("reading gridfm dataset {}", input.display()))?;
-        let mut pkg =
-            NetworkPackage::from_balanced_with_read_diagnostics(read.network, read.diagnostics);
+        let mut pkg = NetworkPackage::from_balanced_with_read_diagnostics(
+            read.network,
+            read.diagnostics.into_iter().map(Into::into),
+        );
         set_package_source(&mut pkg, input, PackageSourceKind::Folder, "gridfm", false);
         pkg.run_sane_validation();
         return Ok(pkg);
@@ -1305,25 +1311,33 @@ fn build_package(
     let (mut pkg, format, retained_source) = match parse_family_case(input, from)? {
         FamilyCase::Distribution(net) => {
             let format = net
-                .source_format
+                .network
+                .source_format()
                 .map(powerio_dist::DistSourceFormat::name)
                 .or_else(|| from.map(FormatArg::name))
                 .unwrap_or("unknown");
-            let retained_source = net.source.is_some();
+            let retained_source = net.retained_source;
+            let net = *net;
             (
-                NetworkPackage::from_multiconductor(net),
+                NetworkPackage::from_multiconductor_with_read_diagnostics(
+                    net.network,
+                    net.diagnostics.into_iter().map(Into::into),
+                ),
                 format,
                 retained_source,
             )
         }
         FamilyCase::Transmission(parsed) => {
-            let format = parsed.network.source_format.name();
-            let retained_source = parsed.network.source.is_some();
-            (
-                NetworkPackage::from_parsed_balanced(parsed),
-                format,
-                retained_source,
-            )
+            let format = parsed.network.source_format().name();
+            let retained_source = parsed.retained_source;
+            let mut package = NetworkPackage::from_balanced_with_read_diagnostics(
+                parsed.network,
+                parsed.diagnostics.into_iter().map(Into::into),
+            );
+            if let Some(document) = &parsed.document {
+                package.attach_goc3_operating_points(document);
+            }
+            (package, format, retained_source)
         }
     };
     set_package_source(
@@ -1410,16 +1424,16 @@ fn transmission_summary_json(
         powerio::version::VERSION_KEY: powerio::VERSION,
         "domain": "transmission",
         "model": "balanced",
-        "name": net.name,
-        "source_format": net.source_format.name(),
+        "name": net.name(),
+        "source_format": net.source_format().name(),
         "json_format": "model-json",
-        "base_mva": net.base_mva,
+        "base_mva": net.base_mva(),
         "elements": {
-            "buses": net.buses.len(),
-            "branches": net.branches.len(),
-            "generators": net.generators.len(),
-            "loads": net.loads.len(),
-            "shunts": net.shunts.len(),
+            "buses": net.buses().len(),
+            "branches": net.branches().len(),
+            "generators": net.generators().len(),
+            "loads": net.loads().len(),
+            "shunts": net.shunts().len(),
             "lines": serde_json::Value::Null,
             "transformers": serde_json::Value::Null,
             "sources": serde_json::Value::Null,
@@ -1434,25 +1448,28 @@ fn transmission_summary_json(
     })
 }
 
-fn distribution_summary_json(net: &powerio_dist::MulticonductorNetwork) -> serde_json::Value {
+fn distribution_summary_json(
+    net: &powerio_dist::MulticonductorNetwork,
+    warnings: &[String],
+) -> serde_json::Value {
     json!({
         "schema": "powerio.summary",
         powerio::version::VERSION_KEY: powerio::VERSION,
         "domain": "distribution",
         "model": "multiconductor",
-        "name": net.name,
-        "source_format": net.source_format.map(powerio_dist::DistSourceFormat::name),
+        "name": net.name(),
+        "source_format": net.source_format().map(powerio_dist::DistSourceFormat::name),
         "json_format": "bmopf-json",
         "base_mva": serde_json::Value::Null,
         "elements": {
-            "buses": net.buses.len(),
+            "buses": net.buses().len(),
             "branches": serde_json::Value::Null,
-            "generators": net.generators.len(),
-            "loads": net.loads.len(),
+            "generators": net.generators().len(),
+            "loads": net.loads().len(),
             "shunts": serde_json::Value::Null,
-            "lines": net.lines.len(),
-            "transformers": net.transformers.len(),
-            "sources": net.sources.len(),
+            "lines": net.lines().len(),
+            "transformers": net.transformers().len(),
+            "sources": net.sources().len(),
         },
         "topology": {
             "connected_components": serde_json::Value::Null,
@@ -1460,7 +1477,7 @@ fn distribution_summary_json(net: &powerio_dist::MulticonductorNetwork) -> serde
             "reference_buses": serde_json::Value::Null,
             "connectivity_report": serde_json::Value::Null,
         },
-        "warnings": net.warnings,
+        "warnings": warnings,
     })
 }
 
@@ -1537,41 +1554,40 @@ fn run_convert(
         // gridfm reads a Parquet dataset directory (the parquet-free
         // `parse_file` can't), so it routes through powerio-matrix's reader,
         // surfacing its fidelity notes.
-        let net = if matches!(from, Some(FormatArg::Gridfm)) {
+        let conv = if matches!(from, Some(FormatArg::Gridfm)) {
             let read = powerio_matrix::read_gridfm_dataset(input, scenario)
                 .with_context(|| format!("reading gridfm dataset {}", input.display()))?;
             for w in &read.warnings {
                 eprintln!("fidelity: {w}");
             }
-            read.network
+            powerio_matrix::write_as_with_options(
+                &powerio_core::PioModule::new(read.network),
+                target,
+                &options,
+            )
+            .with_context(|| format!("serializing to {target}"))?
         } else if let Some(case) = &classified {
-            match parse_classified_case(case, input)? {
-                FamilyCase::Transmission(parsed) => {
-                    for w in &parsed.warnings {
-                        eprintln!("fidelity: {w}");
-                    }
-                    parsed.network
-                }
-                FamilyCase::Distribution(_) => {
-                    unreachable!("the family check routed a distribution input here")
-                }
-            }
+            // The classified text feeds the one-call conversion, so a same
+            // format target still echoes the source bytes exactly.
+            powerio::convert_str_with_options(&case.text, target, case.format.name(), &options)
+                .with_context(|| format!("serializing to {target}"))?
         } else {
-            read_network(input, from)?
+            reject_nontransmission_from(from)?;
+            powerio::convert_file_with_options(input, target, from.map(FormatArg::name), &options)
+                .with_context(|| format!("serializing to {target}"))?
         };
-        let conv = powerio_matrix::write_as_with_options(&net, target, &options)
-            .with_context(|| format!("serializing to {target}"))?;
-        (conv.text, Vec::new(), conv.warnings, Vec::new())
+        let rendered = conv.rendered_diagnostics();
+        (conv.text, Vec::new(), rendered, Vec::new())
     } else {
         let net = if let Some(case) = &classified {
             match parse_classified_case(case, input)? {
-                FamilyCase::Distribution(net) => net,
+                FamilyCase::Distribution(net) => *net,
                 FamilyCase::Transmission(_) => {
                     unreachable!("the family check routed a transmission input here")
                 }
             }
         } else {
-            powerio_dist::parse_file(input, from.map(FormatArg::name))
+            compat::dist_parse_file(input, from.map(FormatArg::name))
                 .with_context(|| format!("reading {}", input.display()))?
         };
         for w in &net.warnings {
@@ -1584,12 +1600,13 @@ fn run_convert(
         // Both halves, as `convert.rs`'s own glue does: a writer emits its own
         // structured findings, and an `Error` from either side has to reach
         // the exit code.
-        let mut diagnostics = net.parse_diagnostics.clone();
-        diagnostics.extend(conv.diagnostics);
+        let mut diagnostics = net.diagnostics.clone();
+        diagnostics.extend(conv.diagnostics.iter().cloned());
+        let rendered = conv.rendered_diagnostics();
         (
             conv.text,
             conv.sidecars,
-            conv.warnings,
+            rendered,
             parse_error_lines(&diagnostics),
         )
     };
@@ -1601,11 +1618,11 @@ fn run_convert(
 }
 
 /// The `Error`-or-worse parse findings, formatted for stderr.
-fn parse_error_lines(diagnostics: &[powerio_dist::StructuredDiagnostic]) -> Vec<String> {
+fn parse_error_lines(diagnostics: &[powerio_dist::Diagnostic]) -> Vec<String> {
     diagnostics
         .iter()
-        .filter(|d| d.severity >= powerio_dist::DiagnosticSeverity::Error)
-        .map(|d| format!("{}: {}", d.code, d.message))
+        .filter(|d| d.severity() >= powerio_dist::DiagnosticSeverity::Error)
+        .map(|d| format!("{}: {}", d.code(), d.message()))
         .collect()
 }
 
@@ -1625,6 +1642,20 @@ fn fail_on_parse_errors(parse_errors: &[String]) -> anyhow::Result<()> {
     )
 }
 
+/// Commit one complete output file through the no-replace destination:
+/// staged beside the target and moved into place only when no entry exists
+/// there, so an existing entry is refused rather than replaced.
+fn commit_output_file(path: &std::path::Path, bytes: Vec<u8>) -> anyhow::Result<()> {
+    let artifact = powerio_core::MemoryArtifact::new(
+        powerio_core::ArtifactPath::new("case").expect("static placeholder name"),
+        bytes,
+    );
+    powerio_core::Destination::path(path)
+        .__commit_artifacts(false, vec![artifact], Vec::new())
+        .map(|_| ())
+        .map_err(|error| anyhow::anyhow!("{error}"))
+}
+
 /// Write conversion `text` to `output` (stdout on `-` or `None`), placing any
 /// `sidecars` next to it. Sidecars cannot follow text to stdout; they are
 /// reported instead.
@@ -1635,30 +1666,44 @@ fn write_conversion_output(
 ) -> anyhow::Result<()> {
     match output {
         Some(p) if p.as_os_str() != "-" => {
-            std::fs::write(p, text).with_context(|| format!("writing {}", p.display()))?;
-            eprintln!("wrote {}", p.display());
-            let base = p.parent().unwrap_or_else(|| std::path::Path::new("."));
-            for sidecar in sidecars {
-                // A sidecar path names a file the primary output refers to,
-                // so it must stay under the output directory. Today's writers
-                // emit a fixed name, but the field is a plain `String` on a
-                // public struct, and joining an absolute or `..` path here
-                // would write anywhere the process can reach.
-                if !is_relative_component_path(&sidecar.path) {
-                    anyhow::bail!(
-                        "sidecar `{}` is not a relative path under the output directory",
-                        sidecar.path
-                    );
+            // The case file and its sidecars land beside each other in the
+            // caller's directory, which may hold unrelated files, so each
+            // file commits individually with no replacement and a refusal
+            // removes the files this call created.
+            let mut committed: Vec<std::path::PathBuf> = Vec::new();
+            let result = (|| -> anyhow::Result<()> {
+                commit_output_file(p, text.as_bytes().to_vec())
+                    .with_context(|| format!("writing {}", p.display()))?;
+                committed.push(p.to_path_buf());
+                eprintln!("wrote {}", p.display());
+                let base = p.parent().unwrap_or_else(|| std::path::Path::new("."));
+                for sidecar in sidecars {
+                    // A sidecar path names a file the primary output refers
+                    // to, so it must stay under the output directory. Today's
+                    // writers emit a fixed name, but the field is a plain
+                    // `String` on a public struct, and joining an absolute or
+                    // `..` path here would write anywhere the process can
+                    // reach.
+                    if !is_relative_component_path(&sidecar.path) {
+                        anyhow::bail!(
+                            "sidecar `{}` is not a relative path under the output directory",
+                            sidecar.path
+                        );
+                    }
+                    let path = base.join(&sidecar.path);
+                    commit_output_file(&path, sidecar.text.clone().into_bytes())
+                        .with_context(|| format!("writing {}", path.display()))?;
+                    committed.push(path.clone());
+                    eprintln!("wrote {}", path.display());
                 }
-                let path = base.join(&sidecar.path);
-                if let Some(parent) = path.parent() {
-                    std::fs::create_dir_all(parent)
-                        .with_context(|| format!("creating {}", parent.display()))?;
+                Ok(())
+            })();
+            if result.is_err() {
+                for created in &committed {
+                    let _ = std::fs::remove_file(created);
                 }
-                std::fs::write(&path, &sidecar.text)
-                    .with_context(|| format!("writing {}", path.display()))?;
-                eprintln!("wrote {}", path.display());
             }
+            result?;
         }
         _ => {
             for sidecar in sidecars {
@@ -1709,10 +1754,10 @@ fn run_geo_extract(
             for w in &net.warnings {
                 eprintln!("parse: {w}");
             }
-            powerio_pkg::dist_geo_layer(&net)
+            powerio::package::dist_geo_layer(&net.network)
         }
         FamilyCase::Transmission(parsed) => {
-            for w in &parsed.warnings {
+            for w in &parsed.rendered_diagnostics() {
                 eprintln!("fidelity: {w}");
             }
             parsed.network.geo_layer()
@@ -1746,12 +1791,15 @@ fn run_geo_apply(
         eprintln!("layer: {w}");
     }
     let (text, sidecars, warnings) = match parse_family_case(input, from)? {
-        FamilyCase::Distribution(mut net) => {
+        FamilyCase::Distribution(net) => {
             for w in &net.warnings {
                 eprintln!("parse: {w}");
             }
-            report_geo_apply(&powerio_pkg::apply_dist_geo_layer(&mut net, &parsed.layer));
-            net.source = None;
+            let mut network = net.network;
+            report_geo_apply(&powerio::package::apply_dist_geo_layer(
+                &mut network,
+                &parsed.layer,
+            ));
             let target = match to {
                 Some(f) => f.distribution().ok_or_else(|| {
                     anyhow::anyhow!(
@@ -1760,24 +1808,26 @@ fn run_geo_apply(
                         f.name()
                     )
                 })?,
-                None => net
-                    .source_format
+                None => network
+                    .source_format()
                     .map(|f| f.name().parse())
                     .transpose()?
                     .ok_or_else(|| {
                         anyhow::anyhow!("the input carries no source format; pass --to")
                     })?,
             };
-            let conv = net.to_format(target);
-            (conv.text, conv.sidecars, conv.warnings)
+            // The layer edited the typed value; write from it, never the
+            // retained source echo.
+            let conv = powerio_dist::write_network(&network, target);
+            let rendered = conv.rendered_diagnostics();
+            (conv.text, conv.sidecars, rendered)
         }
         FamilyCase::Transmission(case) => {
-            for w in &case.warnings {
+            for w in &case.rendered_diagnostics() {
                 eprintln!("fidelity: {w}");
             }
             let mut net = case.network;
             report_geo_apply(&net.apply_geo_layer(&parsed.layer));
-            net.source = None;
             let target = match to {
                 Some(f) => f.transmission().ok_or_else(|| {
                     anyhow::anyhow!(
@@ -1787,19 +1837,20 @@ fn run_geo_apply(
                     )
                 })?,
                 None => {
-                    powerio_matrix::target_format_from_name(&format!("{:?}", net.source_format))
+                    powerio_matrix::target_format_from_name(&format!("{:?}", net.source_format()))
                         .ok_or_else(|| {
-                            anyhow::anyhow!(
-                                "`{:?}` has no write target; pass --to to choose one",
-                                net.source_format
-                            )
-                        })?
+                        anyhow::anyhow!(
+                            "`{:?}` has no write target; pass --to to choose one",
+                            net.source_format()
+                        )
+                    })?
                 }
             };
             let conv = net
                 .to_format(target)
                 .with_context(|| format!("serializing to {target}"))?;
-            (conv.text, Vec::new(), conv.warnings)
+            let rendered = conv.rendered_diagnostics();
+            (conv.text, Vec::new(), rendered)
         }
     };
     for w in &warnings {
@@ -1880,7 +1931,7 @@ fn convert_to_pypsa_folder(
     let options = gen_cost_options.write_options()?;
     let diagnostics = powerio_matrix::write_dir_with_options(&net, "pypsa-csv", out_dir, &options)
         .with_context(|| format!("writing PyPSA CSV folder {}", out_dir.display()))?;
-    for w in powerio_matrix::diagnostics::render_lines(&diagnostics) {
+    for w in powerio_matrix::diagnostics::render_diagnostics(&diagnostics) {
         eprintln!("fidelity: {w}");
     }
     eprintln!("wrote {}", out_dir.display());
@@ -1889,8 +1940,8 @@ fn convert_to_pypsa_folder(
 
 /// A single-file case input parsed to its own family model.
 enum FamilyCase {
-    Transmission(powerio_matrix::Parsed),
-    Distribution(powerio_dist::MulticonductorNetwork),
+    Transmission(Box<compat::ParsedCase>),
+    Distribution(Box<compat::ParsedDist>),
 }
 
 /// Parse a single-file case to whichever family model it belongs to. With no
@@ -1899,6 +1950,12 @@ enum FamilyCase {
 /// TUI, extended here to the single-file routes. Warnings stay on the returned
 /// value: the callers differ in where they surface them (summary JSON, package
 /// diagnostics, stderr).
+fn compat_parse_matpower_file(
+    path: impl AsRef<Path>,
+) -> Result<powerio_matrix::BalancedNetwork, powerio_core::Error> {
+    compat::parse_file(path, Some("matpower")).map(|parsed| parsed.network)
+}
+
 fn parse_family_case(input: &Path, from: Option<FormatArg>) -> anyhow::Result<FamilyCase> {
     if let Some(f) = from {
         if f == FormatArg::Gridfm {
@@ -1908,26 +1965,26 @@ fn parse_family_case(input: &Path, from: Option<FormatArg>) -> anyhow::Result<Fa
             );
         }
         return if f.distribution().is_some() {
-            let net = powerio_dist::parse_file(input, Some(f.name()))
+            let net = compat::dist_parse_file(input, Some(f.name()))
                 .with_context(|| format!("reading {}", input.display()))?;
-            Ok(FamilyCase::Distribution(net))
+            Ok(FamilyCase::Distribution(Box::new(net)))
         } else {
-            let parsed = powerio_matrix::parse_file(input, Some(f.name()))
+            let parsed = compat::parse_file(input, Some(f.name()))
                 .with_context(|| format!("reading {}", input.display()))?;
-            Ok(FamilyCase::Transmission(parsed))
+            Ok(FamilyCase::Transmission(Box::new(parsed)))
         };
     }
     if let Some(case) = cases::classified_json(input)? {
         return parse_classified_case(&case, input);
     }
     if cases::looks_like_distribution_input(input)? {
-        let net = powerio_dist::parse_file(input, None)
+        let net = compat::dist_parse_file(input, None)
             .with_context(|| format!("reading {}", input.display()))?;
-        Ok(FamilyCase::Distribution(net))
+        Ok(FamilyCase::Distribution(Box::new(net)))
     } else {
-        let parsed = powerio_matrix::parse_file(input, None)
+        let parsed = compat::parse_file(input, None)
             .with_context(|| format!("reading {}", input.display()))?;
-        Ok(FamilyCase::Transmission(parsed))
+        Ok(FamilyCase::Transmission(Box::new(parsed)))
     }
 }
 
@@ -1942,16 +1999,15 @@ fn parse_classified_case(case: &cases::ClassifiedCase, input: &Path) -> anyhow::
             // already read, as `powerio_dist::parse_file` does.
             let format = powerio_dist::classify_distribution_json(&case.text)
                 .with_context(|| format!("reading {}", input.display()))?;
-            let net = powerio_dist::parse_str(&case.text, format.name())
+            let net = compat::dist_parse_str(&case.text, format.name())
                 .with_context(|| format!("reading {}", input.display()))?;
-            Ok(FamilyCase::Distribution(net))
+            Ok(FamilyCase::Distribution(Box::new(net)))
         }
         DetectedFormat::Transmission(format) => {
             let stem = input.file_stem().and_then(|s| s.to_str());
-            let parsed =
-                powerio_matrix::format::parse_str_with_name(&case.text, format.name(), stem)
-                    .with_context(|| format!("reading {}", input.display()))?;
-            Ok(FamilyCase::Transmission(parsed))
+            let parsed = compat::parse_str_with_name(&case.text, format.name(), stem)
+                .with_context(|| format!("reading {}", input.display()))?;
+            Ok(FamilyCase::Transmission(Box::new(parsed)))
         }
         _ => unreachable!("classified_json returns transmission or distribution formats only"),
     }
@@ -1963,10 +2019,7 @@ fn parse_classified_case(case: &cases::ClassifiedCase, input: &Path) -> anyhow::
 /// formats are rejected up front: every caller of this function consumes the
 /// transmission model, and clap can't express the restriction on the shared
 /// `FormatArg`. Read fidelity warnings print to stderr like the write side's.
-fn read_network(
-    input: &std::path::Path,
-    from: Option<FormatArg>,
-) -> anyhow::Result<powerio_matrix::BalancedNetwork> {
+fn reject_nontransmission_from(from: Option<FormatArg>) -> anyhow::Result<()> {
     if let Some(f) = from {
         if matches!(f, FormatArg::Gridfm) {
             anyhow::bail!(
@@ -1982,9 +2035,17 @@ fn read_network(
             );
         }
     }
-    let parsed = powerio_matrix::parse_file(input, from.map(FormatArg::name))
+    Ok(())
+}
+
+fn read_network(
+    input: &std::path::Path,
+    from: Option<FormatArg>,
+) -> anyhow::Result<powerio_matrix::BalancedNetwork> {
+    reject_nontransmission_from(from)?;
+    let parsed = compat::parse_file(input, from.map(FormatArg::name))
         .with_context(|| format!("reading {}", input.display()))?;
-    for w in &parsed.warnings {
+    for w in &parsed.rendered_diagnostics() {
         eprintln!("fidelity: {w}");
     }
     Ok(parsed.network)
@@ -1999,7 +2060,7 @@ mod tests {
         run_convert, run_package, transmission_summary_json,
     };
     use clap::Parser;
-    use powerio_pkg::{MappingKind, NetworkPackage, Origin, ValidationStatus};
+    use powerio::package::{MappingKind, NetworkPackage, Origin, ValidationStatus};
     use std::path::Path;
     use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -2013,8 +2074,8 @@ mod tests {
 
     #[test]
     fn summary_json_matches_canonical_transmission_shape() {
-        let parsed = powerio_matrix::parse_file(data("case9.m"), None).unwrap();
-        let value = transmission_summary_json(&parsed.network, &parsed.warnings);
+        let parsed = crate::compat::parse_file(data("case9.m"), None).unwrap();
+        let value = transmission_summary_json(&parsed.network, &parsed.rendered_diagnostics());
         assert_eq!(value["schema"], "powerio.summary");
         assert_eq!(value[powerio::version::VERSION_KEY], powerio::VERSION);
         assert_eq!(value["domain"], "transmission");
@@ -2044,17 +2105,18 @@ mod tests {
             other => panic!("unexpected command: {other:?}"),
         }
 
-        let parsed = powerio_matrix::parse_file(data("opfdataset/example_0.json"), None).unwrap();
+        let parsed = crate::compat::parse_file(data("opfdataset/example_0.json"), None).unwrap();
         assert_eq!(
-            parsed.network.source_format,
+            parsed.network.source_format(),
             powerio_matrix::SourceFormat::DeepMindOpfDataJson
         );
     }
 
     #[test]
     fn summary_json_matches_canonical_distribution_shape() {
-        let net = powerio_dist::parse_file(data("dist/micro/xfmr_single_phase.dss"), None).unwrap();
-        let value = distribution_summary_json(&net);
+        let net = crate::compat::dist_parse_file(&data("dist/micro/xfmr_single_phase.dss"), None)
+            .unwrap();
+        let value = distribution_summary_json(&net.network, &net.warnings);
         assert_eq!(value["schema"], "powerio.summary");
         assert_eq!(value[powerio::version::VERSION_KEY], powerio::VERSION);
         assert_eq!(value["domain"], "distribution");
@@ -2098,8 +2160,8 @@ mod tests {
         .unwrap();
         match parse_family_case(&egret, None).unwrap() {
             FamilyCase::Transmission(parsed) => {
-                assert_eq!(parsed.network.buses.len(), 9);
-                assert_eq!(parsed.network.name, "myegret");
+                assert_eq!(parsed.network.buses().len(), 9);
+                assert_eq!(parsed.network.name(), "myegret");
             }
             FamilyCase::Distribution(_) => panic!("egret JSON classified as distribution"),
         }
@@ -2111,7 +2173,7 @@ mod tests {
         )
         .unwrap();
         match parse_family_case(&dist, None).unwrap() {
-            FamilyCase::Distribution(net) => assert_eq!(net.buses.len(), 1),
+            FamilyCase::Distribution(net) => assert_eq!(net.network.buses().len(), 1),
             FamilyCase::Transmission(_) => panic!("BMOPF JSON classified as transmission"),
         }
     }
@@ -2149,9 +2211,9 @@ mod tests {
         let input = data("case9.m");
         let (text, _) = package_text(&input, None, 0).unwrap();
         let pkg = NetworkPackage::from_json(&text).unwrap();
-        assert_eq!(pkg.model_kind, powerio_pkg::ModelKind::Balanced);
+        assert_eq!(pkg.model_kind, powerio::package::ModelKind::Balanced);
         assert!(pkg.kind_is_consistent());
-        assert_eq!(pkg.as_balanced().unwrap().buses.len(), 9);
+        assert_eq!(pkg.as_balanced().unwrap().buses().len(), 9);
         match &pkg.origin {
             Origin::File {
                 path,
@@ -2197,7 +2259,7 @@ mod tests {
         run_package(&data("case9.m"), Some(&output), None, 0).unwrap();
         let text = std::fs::read_to_string(&output).unwrap();
         let pkg = NetworkPackage::from_json(&text).unwrap();
-        assert_eq!(pkg.model_kind, powerio_pkg::ModelKind::Balanced);
+        assert_eq!(pkg.model_kind, powerio::package::ModelKind::Balanced);
         assert_eq!(pkg.sources[0].format.as_deref(), Some("matpower"));
 
         let _ = std::fs::remove_file(output);
@@ -2233,7 +2295,7 @@ mod tests {
     fn package_distribution_fixture_keeps_defaulted_source_maps() {
         let input = data("dist/micro/xfmr_single_phase.dss");
         let pkg = build_package(&input, None, 0).unwrap();
-        assert_eq!(pkg.model_kind, powerio_pkg::ModelKind::Multiconductor);
+        assert_eq!(pkg.model_kind, powerio::package::ModelKind::Multiconductor);
         match &pkg.origin {
             Origin::File { path, format, .. } => {
                 assert_eq!(path, &input.display().to_string());
@@ -2284,12 +2346,12 @@ mpc.branch = [
         let text = std::fs::read_to_string(&output).unwrap();
         assert!(text.contains("\"angmin\": \"NaN\""), "{text}");
         assert!(text.contains("\"angmax\": \"Infinity\""), "{text}");
-        let pkg = powerio_pkg::NetworkPackage::from_json(&text).unwrap();
-        let powerio_pkg::ModelPayload::Balanced { balanced_network } = &pkg.model else {
+        let pkg = powerio::package::NetworkPackage::from_json(&text).unwrap();
+        let powerio::package::ModelPayload::Balanced { balanced_network } = &pkg.model else {
             panic!("balanced payload expected");
         };
-        assert!(balanced_network.branches[0].angmin.is_nan());
-        assert_eq!(balanced_network.branches[0].angmax, f64::INFINITY);
+        assert!(balanced_network.branches()[0].angmin.is_nan());
+        assert_eq!(balanced_network.branches()[0].angmax, f64::INFINITY);
 
         let _ = std::fs::remove_file(input);
         let _ = std::fs::remove_file(output);
@@ -2303,8 +2365,8 @@ mpc.branch = [
             .as_nanos();
         let input = std::env::temp_dir().join(format!("powerio-convert-pm-{stamp}.json"));
         let output = std::env::temp_dir().join(format!("powerio-convert-pm-{stamp}.dss"));
-        let parsed = powerio_matrix::parse_file(data("case9.m"), None).unwrap();
-        let conv = powerio_matrix::write_as(
+        let parsed = crate::compat::parse_file(data("case9.m"), None).unwrap();
+        let conv = powerio_matrix::write_network(
             &parsed.network,
             powerio_matrix::TargetFormat::PowerModelsJson,
         )
@@ -2336,7 +2398,7 @@ mpc.branch = [
             .as_nanos();
         let input = std::env::temp_dir().join(format!("powerio-convert-pypsa-{stamp}"));
         let output = std::env::temp_dir().join(format!("powerio-convert-pypsa-{stamp}.m"));
-        let parsed = powerio_matrix::parse_file(data("case9.m"), None).unwrap();
+        let parsed = crate::compat::parse_file(data("case9.m"), None).unwrap();
         powerio_matrix::write_pypsa_csv_folder(&parsed.network, &input).unwrap();
 
         run_convert(
@@ -2374,12 +2436,12 @@ mpc.branch = [
             kind: None,
         });
         let mut net = powerio_dist::MulticonductorNetwork::default();
-        net.geo = Some(powerio_dist::DistGeoMeta {
+        *net.geo_mut() = Some(powerio_dist::DistGeoMeta {
             space: powerio_dist::CoordinateSpace::Geographic { crs: None },
             kind: Some(powerio_dist::DistCoordsKind::Source),
         });
-        net.buses = vec![bus];
-        net.sources.push(powerio_dist::VoltageSource::new(
+        *net.buses_mut() = vec![bus];
+        net.sources_mut().push(powerio_dist::VoltageSource::new(
             "source",
             "sourcebus",
             vec!["1".to_owned(), "4".to_owned()],

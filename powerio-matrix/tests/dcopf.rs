@@ -4,13 +4,16 @@
 //! These cases pin `b = 1/x`, so they name `DcConvention::ReactanceOnly`.
 //! `SeriesImpedance` gives a different weight for any branch that carries
 //! resistance.
+mod helpers;
+#[allow(unused_imports)]
+use helpers::*;
 
 use powerio_matrix::IndexedNetwork;
 use powerio_matrix::io::{read_mtx, write_sensitivity_mtx_with_options};
 use powerio_matrix::{
     BalancedNetwork, Branch, BuildOptions, Bus, BusId, BusType, DcConvention, Error, GenCost,
     Generator, Scheme, build_adjacency, build_bprime, build_flow_map, build_incidence, build_lodf,
-    build_ptdf, build_weighted_laplacian, build_ybus, ground_at, parse_matpower_file,
+    build_ptdf, build_weighted_laplacian, build_ybus, ground_at,
 };
 use powerio_matrix::{
     SensitivityOptions, SensitivitySolver, SensitivitySolverPath, build_ptdf_lodf,
@@ -42,7 +45,7 @@ fn net_with_gens(
     generators: Vec<Generator>,
 ) -> BalancedNetwork {
     let mut network = net(name, buses, branches);
-    network.generators = generators;
+    *network.generators_mut() = generators;
     network
 }
 
@@ -101,9 +104,9 @@ fn is_spd(a: &[Vec<f64>]) -> bool {
 #[test]
 fn parses_generators_and_costs() {
     let case = load("../tests/data/case9.m");
-    assert_eq!(case.generators.len(), 3);
+    assert_eq!(case.generators().len(), 3);
     let quads: Vec<(f64, f64)> = case
-        .generators
+        .generators()
         .iter()
         .map(|g| g.cost.as_ref().unwrap().quadratic().unwrap())
         .collect();
@@ -253,13 +256,13 @@ fn reference_bus_count_errors() {
     );
     assert!(matches!(
         IndexedNetwork::new(&two).reference_bus_index(),
-        Err(powerio::Error::ReferenceBusCount { found: 2, .. })
+        Err(powerio_tx::Error::ReferenceBusCount { found: 2, .. })
     ));
     // Zero reference buses.
     let zero = net("no_ref", vec![bus(1, BusType::Pq)], vec![]);
     assert!(matches!(
         IndexedNetwork::new(&zero).reference_bus_index(),
-        Err(powerio::Error::ReferenceBusCount { found: 0, .. })
+        Err(powerio_tx::Error::ReferenceBusCount { found: 0, .. })
     ));
 }
 
@@ -402,6 +405,77 @@ fn sensitivity_drop_tolerance_records_dropped_entries() {
     assert_eq!(pruned.metadata.ptdf.cols, pruned.ptdf.cols());
     assert_eq!(pruned.metadata.lodf.rows, pruned.lodf.rows());
     assert_eq!(pruned.metadata.lodf.cols, pruned.lodf.cols());
+}
+
+#[test]
+fn a_sensitivity_write_never_replaces_an_existing_entry() {
+    let case = load("../tests/data/case30.m");
+    let view = IndexedNetwork::new(&case);
+    let options = SensitivityOptions::default();
+
+    let residue_free = |dir: &std::path::Path| {
+        let tmp: Vec<String> = std::fs::read_dir(dir)
+            .unwrap()
+            .filter_map(std::result::Result::ok)
+            .map(|entry| entry.file_name().to_string_lossy().into_owned())
+            .filter(|name| name.contains("tmp") || name.contains("body") || name.contains("final"))
+            .collect();
+        assert!(tmp.is_empty(), "staging residue: {tmp:?}");
+    };
+
+    // Regular files at both targets: the write refuses and both keep their
+    // bytes, with no staging residue beside them.
+    let temp = tempfile::tempdir().unwrap();
+    let ptdf_path = temp.path().join("ptdf.mtx");
+    let lodf_path = temp.path().join("lodf.mtx");
+    std::fs::write(&ptdf_path, b"precious ptdf").unwrap();
+    std::fs::write(&lodf_path, b"precious lodf").unwrap();
+    let error =
+        write_sensitivity_mtx_with_options(&view, &options, &ptdf_path, &lodf_path).unwrap_err();
+    assert!(error.to_string().contains("already exists"), "{error}");
+    assert_eq!(std::fs::read(&ptdf_path).unwrap(), b"precious ptdf");
+    assert_eq!(std::fs::read(&lodf_path).unwrap(), b"precious lodf");
+    residue_free(temp.path());
+
+    // A symbolic link at one target: the link survives and the designated
+    // file keeps its bytes and its length.
+    #[cfg(unix)]
+    {
+        let temp = tempfile::tempdir().unwrap();
+        let designated = temp.path().join("designated.mtx");
+        std::fs::write(&designated, b"designated").unwrap();
+        let ptdf_path = temp.path().join("ptdf.mtx");
+        let lodf_path = temp.path().join("lodf.mtx");
+        std::os::unix::fs::symlink(&designated, &lodf_path).unwrap();
+        let error = write_sensitivity_mtx_with_options(&view, &options, &ptdf_path, &lodf_path)
+            .unwrap_err();
+        assert!(error.to_string().contains("already exists"), "{error}");
+        assert!(
+            std::fs::symlink_metadata(&lodf_path)
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+        assert_eq!(std::fs::read(&designated).unwrap(), b"designated");
+        assert_eq!(std::fs::metadata(&designated).unwrap().len(), 10);
+        residue_free(temp.path());
+    }
+
+    // Fresh paths still produce both matrices, and both read back; a second
+    // write to the same targets refuses, with no staging residue either way.
+    let temp = tempfile::tempdir().unwrap();
+    let ptdf_path = temp.path().join("ptdf.mtx");
+    let lodf_path = temp.path().join("lodf.mtx");
+    write_sensitivity_mtx_with_options(&view, &options, &ptdf_path, &lodf_path).unwrap();
+    let ptdf_first = std::fs::read(&ptdf_path).unwrap();
+    assert!(read_mtx(&ptdf_path).unwrap().nnz() > 0);
+    assert!(read_mtx(&lodf_path).unwrap().nnz() > 0);
+    residue_free(temp.path());
+    let error =
+        write_sensitivity_mtx_with_options(&view, &options, &ptdf_path, &lodf_path).unwrap_err();
+    assert!(error.to_string().contains("already exists"), "{error}");
+    assert_eq!(std::fs::read(&ptdf_path).unwrap(), ptdf_first);
+    residue_free(temp.path());
 }
 
 #[test]
@@ -725,7 +799,7 @@ fn ungrounded_island_errors() {
     assert!(
         matches!(
             p,
-            Error::Core(powerio::Error::UngroundedComponent { components: 1 })
+            Error::Core(powerio_tx::Error::UngroundedComponent { components: 1 })
         ),
         "ptdf: {p:?}"
     );
@@ -733,7 +807,7 @@ fn ungrounded_island_errors() {
     assert!(
         matches!(
             l,
-            Error::Core(powerio::Error::UngroundedComponent { components: 1 })
+            Error::Core(powerio_tx::Error::UngroundedComponent { components: 1 })
         ),
         "lodf: {l:?}"
     );

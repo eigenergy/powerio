@@ -6,7 +6,7 @@ it was produced. The `model` field contains the JSON representation of either
 `powerio_dist::MulticonductorNetwork` (multiconductor). The document metadata records
 provenance, source maps, structured diagnostics, validation results, lowering
 history, optional operating points, and optional study commits.
-`powerio_pkg::NetworkPackage` is the
+`powerio::package::NetworkPackage` is the
 implementation type; [Compiler model layers](compiler-ir.md) describes the
 payload types.
 

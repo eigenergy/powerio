@@ -7,7 +7,8 @@
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
-use powerio_dist::dss::{DssReadOptions, parse_dss_file, parse_dss_file_with_options, write_dss};
+mod helpers;
+use helpers::{parse_dss_file, parse_dss_file_with_root, write_dss};
 use powerio_dist::{
     Configuration, CoordinateSpace, DistCoordsKind, DistWindingConn, IbrPrimeMover, IbrTopology,
     MulticonductorNetwork, ReactivePowerReference, ReactivePowerUnit,
@@ -19,7 +20,7 @@ fn fixture(rel: &str) -> PathBuf {
         .join(rel)
 }
 
-fn parse(rel: &str) -> MulticonductorNetwork {
+fn parse(rel: &str) -> helpers::Parsed {
     parse_dss_file(fixture(rel)).expect("fixture parses")
 }
 
@@ -33,7 +34,7 @@ fn temp_case_dir(name: &str) -> PathBuf {
 /// Bus id (lowercased) → phase terminal names, excluding the materialized
 /// grounded neutral, matching what the engine reports as the bus's nodes.
 fn phase_terminals(net: &MulticonductorNetwork) -> BTreeMap<String, Vec<String>> {
-    net.buses
+    net.buses()
         .iter()
         .map(|b| {
             (
@@ -64,7 +65,7 @@ Buscoords coords.csv
     std::fs::write(dir.join("coords.csv"), "a,-80,35\nb,-80.5,35.25\n").unwrap();
 
     let net = parse_dss_file(dir.join("master.dss")).unwrap();
-    let geo = net.geo.as_ref().expect("geo metadata");
+    let geo = net.geo().as_ref().expect("geo metadata");
     assert_eq!(geo.space, CoordinateSpace::Unknown);
     assert_eq!(geo.kind, Some(DistCoordsKind::Source));
     assert!(
@@ -74,7 +75,7 @@ Buscoords coords.csv
         "{:?}",
         net.warnings
     );
-    let a = net.buses.iter().find(|b| b.id == "a").unwrap();
+    let a = net.buses().iter().find(|b| b.id == "a").unwrap();
     assert_eq!(a.location.unwrap().x.to_bits(), (-80.0f64).to_bits());
     assert_eq!(a.location.unwrap().y.to_bits(), 35.0f64.to_bits());
     assert!(!a.extras.contains_key("x"));
@@ -93,7 +94,7 @@ Buscoords coords.csv
         std::fs::write(out_dir.join(&sidecar.path), &sidecar.text).unwrap();
     }
     let reparsed = parse_dss_file(out_dir.join("master.dss")).unwrap();
-    let b = reparsed.buses.iter().find(|b| b.id == "b").unwrap();
+    let b = reparsed.buses().iter().find(|b| b.id == "b").unwrap();
     assert_eq!(b.location.unwrap().x.to_bits(), (-80.5f64).to_bits());
     assert_eq!(b.location.unwrap().y.to_bits(), 35.25f64.to_bits());
 }
@@ -125,16 +126,16 @@ fn ieee13_matches_the_engine_bus_map() {
     .collect();
     assert_eq!(phase_terminals(&net), expected);
 
-    assert_eq!(net.name.as_deref(), Some("IEEE13Nodeckt"));
-    assert_eq!(net.sources.len(), 1);
-    assert_eq!(net.transformers.len(), 5);
-    assert_eq!(net.loads.len(), 15);
-    assert_eq!(net.switches.len(), 1);
-    assert_eq!(net.shunts.len(), 2);
-    assert_eq!(net.lines.len(), 11); // 12 line objects minus the switch
+    assert_eq!(net.name().as_deref(), Some("IEEE13Nodeckt"));
+    assert_eq!(net.sources().len(), 1);
+    assert_eq!(net.transformers().len(), 5);
+    assert_eq!(net.loads().len(), 15);
+    assert_eq!(net.switches().len(), 1);
+    assert_eq!(net.shunts().len(), 2);
+    assert_eq!(net.lines().len(), 11); // 12 line objects minus the switch
 
     // Source: 115 kV, pu=1.0001, 30 degrees.
-    let vs = &net.sources[0];
+    let vs = &net.sources()[0];
     assert_eq!(vs.bus, "SourceBus");
     let vln = 115_000.0 / 3f64.sqrt() * 1.0001;
     assert!((vs.v_magnitude[0] - vln).abs() < 1e-6);
@@ -143,14 +144,14 @@ fn ieee13_matches_the_engine_bus_map() {
 
     // Line 650632: mtx601 (ohm per mile), 2000 ft. r11 = 0.3465/1609.344
     // ohm/m; length = 2000*0.3048 m. Product must match the engine.
-    let line = net.lines.iter().find(|l| l.name == "650632").unwrap();
+    let line = net.lines().iter().find(|l| l.name == "650632").unwrap();
     assert!((line.length - 2000.0 * 0.3048).abs() < 1e-9);
     let code = net.linecode(&line.linecode).unwrap();
     let r11_total = code.r_series[0][0] * line.length;
     assert!((r11_total - 0.3465 * 2000.0 / 5280.0).abs() < 1e-9);
 
     // The switch line 671692 carries its ampacity.
-    let sw = &net.switches[0];
+    let sw = &net.switches()[0];
     assert_eq!(sw.name, "671692");
     assert!(!sw.open);
 
@@ -161,14 +162,14 @@ fn ieee13_matches_the_engine_bus_map() {
     assert!(!b.extras.contains_key("y"));
 
     // Load 671 is 3 phase delta: 1155 kW total, 660 kvar.
-    let l671 = net.loads.iter().find(|l| l.name == "671").unwrap();
+    let l671 = net.loads().iter().find(|l| l.name == "671").unwrap();
     assert_eq!(l671.configuration, Configuration::Delta);
     assert_eq!(l671.terminal_map, vec!["1", "2", "3"]);
     let p: f64 = l671.p_nom.iter().sum();
     assert!((p - 1_155_000.0).abs() < 1e-6);
 
     // Load 611 is single phase wye on node 3 with grounded return.
-    let l611 = net.loads.iter().find(|l| l.name == "611").unwrap();
+    let l611 = net.loads().iter().find(|l| l.name == "611").unwrap();
     assert_eq!(l611.configuration, Configuration::SinglePhase);
     assert_eq!(l611.terminal_map, vec!["3", "4"]);
     let b611 = net.bus("611").unwrap();
@@ -176,7 +177,7 @@ fn ieee13_matches_the_engine_bus_map() {
 
     // Substation transformer: delta primary, wye secondary.
     let sub = net
-        .transformers
+        .transformers()
         .iter()
         .find(|t| t.name.eq_ignore_ascii_case("sub"))
         .unwrap();
@@ -190,19 +191,19 @@ fn ieee13_matches_the_engine_bus_map() {
 #[test]
 fn ieee34_and_ieee123_bus_counts_match_the_engine() {
     let net34 = parse("opendss/ieee34/ieee34Mod1.dss");
-    assert_eq!(net34.buses.len(), 37);
+    assert_eq!(net34.buses().len(), 37);
     let t34 = phase_terminals(&net34);
     assert_eq!(t34["810"], vec!["2"]);
     assert_eq!(t34["864"], vec!["1"]);
     assert_eq!(t34["890"], vec!["1", "2", "3"]);
 
     let net123 = parse("opendss/ieee123/IEEE123Master.dss");
-    assert_eq!(net123.buses.len(), 132);
+    assert_eq!(net123.buses().len(), 132);
     let t123 = phase_terminals(&net123);
     assert_eq!(t123["25r"], vec!["1", "3"]);
     assert_eq!(t123["36"], vec!["1", "2"]);
     assert_eq!(t123["94_open"], vec!["1"]);
-    assert_eq!(net123.loads.len(), 91);
+    assert_eq!(net123.loads().len(), 91);
 }
 
 #[test]
@@ -211,29 +212,29 @@ fn defaults_materialize_with_provenance() {
 
     // New Line.l_default bus1=sourcebus bus2=b2: every electrical value is
     // the constructor default, materialized and recorded.
-    let line = net.lines.iter().find(|l| l.name == "l_default").unwrap();
+    let line = net.lines().iter().find(|l| l.name == "l_default").unwrap();
     assert!((line.length - 1.0).abs() < 1e-12);
     let code = net.linecode(&line.linecode).unwrap();
     // Sequence defaults: diag (2*0.058 + 0.1784)/3, off diag (0.1784-0.058)/3.
     assert!((code.r_series[0][0] - 0.098_133_333_333_333_33).abs() < 1e-12);
     assert!((code.r_series[0][1] - 0.040_133_333_333_333_33).abs() < 1e-12);
     assert!((code.x_series[0][0] - 0.2153).abs() < 1e-12);
-    let d = &net.defaulted["line.l_default"];
+    let d = &net.defaulted()["line.l_default"];
     assert!(d.contains(&"length") && d.contains(&"r1"));
 
     // New Load.ld_default bus1=b2: kv, kw, pf all defaulted.
-    let load = net.loads.iter().find(|l| l.name == "ld_default").unwrap();
+    let load = net.loads().iter().find(|l| l.name == "ld_default").unwrap();
     let p: f64 = load.p_nom.iter().sum();
     let q: f64 = load.q_nom.iter().sum();
     assert!((p - 10_000.0).abs() < 1e-9);
     // q = kw * tan(acos(0.88))
     assert!((q - 10_000.0 * 0.88f64.acos().tan()).abs() < 1e-6);
-    let d = &net.defaulted["load.ld_default"];
+    let d = &net.defaulted()["load.ld_default"];
     assert!(d.contains(&"kv") && d.contains(&"kw") && d.contains(&"pf"));
 
     // New Transformer.t_default buses=(b2, b3): 12.47 kV / 1000 kVA wye-wye.
     let t = net
-        .transformers
+        .transformers()
         .iter()
         .find(|t| t.name == "t_default")
         .unwrap();
@@ -242,11 +243,11 @@ fn defaults_materialize_with_provenance() {
     assert!((t.windings[0].s_rating - 1_000_000.0).abs() < 1e-9);
     assert_eq!(t.windings[0].conn, DistWindingConn::Wye);
     assert!((t.xsc_pct[0] - 7.0).abs() < 1e-12);
-    let d = &net.defaulted["transformer.t_default"];
+    let d = &net.defaulted()["transformer.t_default"];
     assert!(d.contains(&"kv") && d.contains(&"kva") && d.contains(&"xhl"));
 
     // The default circuit source.
-    let vs = &net.sources[0];
+    let vs = &net.sources()[0];
     assert!((vs.v_magnitude[0] - 115_000.0 / 3f64.sqrt()).abs() < 1e-9);
     assert_eq!(vs.bus, "sourcebus");
 }
@@ -254,7 +255,7 @@ fn defaults_materialize_with_provenance() {
 #[test]
 fn micro_transformers_type_correctly() {
     let net = parse("micro/xfmr_center_tap.dss");
-    let t = net.transformers.iter().find(|t| t.name == "t1").unwrap();
+    let t = net.transformers().iter().find(|t| t.name == "t1").unwrap();
     assert_eq!(t.windings.len(), 3);
     assert_eq!(t.phases, 1);
     assert!((t.windings[0].v_ref - 7200.0).abs() < 1e-9);
@@ -265,7 +266,7 @@ fn micro_transformers_type_correctly() {
     assert_eq!(t.xsc_pct.len(), 3);
 
     let net = parse("micro/xfmr_wye_delta.dss");
-    let t = net.transformers.iter().find(|t| t.name == "t1").unwrap();
+    let t = net.transformers().iter().find(|t| t.name == "t1").unwrap();
     assert_eq!(t.windings[0].conn, DistWindingConn::Wye);
     assert_eq!(t.windings[1].conn, DistWindingConn::Delta);
     // Delta side lists only the phase conductors.
@@ -277,42 +278,46 @@ fn micro_transformers_type_correctly() {
 #[test]
 fn switch_states_follow_swtcontrol() {
     let net = parse("micro/switch.dss");
-    let closed = net.switches.iter().find(|s| s.name == "sw_closed").unwrap();
-    let open = net.switches.iter().find(|s| s.name == "sw_open").unwrap();
+    let closed = net
+        .switches()
+        .iter()
+        .find(|s| s.name == "sw_closed")
+        .unwrap();
+    let open = net.switches().iter().find(|s| s.name == "sw_open").unwrap();
     assert!(!closed.open);
     assert!(open.open);
 }
 
 #[test]
 fn swtcontrol_last_action_or_state_wins() {
-    use powerio_dist::parse_dss_str;
+    use crate::helpers::parse_dss_str;
     let base = "New Circuit.c basekv=12.47\nNew Line.sw bus1=sourcebus bus2=b2 switch=y\n";
     // The later `state` overrides the earlier `action`.
     let net = parse_dss_str(&format!(
         "{base}New SwtControl.s1 SwitchedObj=Line.sw action=close state=open"
     ));
-    assert!(net.switches[0].open);
+    assert!(net.switches()[0].open);
     // Source order reversed: `action` wins.
     let net = parse_dss_str(&format!(
         "{base}New SwtControl.s1 SwitchedObj=Line.sw state=open action=close"
     ));
-    assert!(!net.switches[0].open);
+    assert!(!net.switches()[0].open);
     // `normal` applies only when neither action nor state is written.
     let net = parse_dss_str(&format!(
         "{base}New SwtControl.s1 SwitchedObj=Line.sw normal=open"
     ));
-    assert!(net.switches[0].open);
+    assert!(net.switches()[0].open);
     let net = parse_dss_str(&format!(
         "{base}New SwtControl.s1 SwitchedObj=Line.sw normal=open action=close"
     ));
-    assert!(!net.switches[0].open);
+    assert!(!net.switches()[0].open);
 }
 
 #[test]
 #[allow(clippy::float_cmp)]
 fn four_wire_line_keeps_the_neutral() {
     let net = parse("micro/fourwire_linecode.dss");
-    let line = net.lines.iter().find(|l| l.name == "l1").unwrap();
+    let line = net.lines().iter().find(|l| l.name == "l1").unwrap();
     assert_eq!(line.terminal_map_from, vec!["1", "2", "3", "4"]);
     assert_eq!(line.terminal_map_to, vec!["1", "2", "3", "4"]);
     let code = net.linecode("lc4").unwrap();
@@ -321,7 +326,7 @@ fn four_wire_line_keeps_the_neutral() {
     assert!((code.r_series[0][0] - 0.211e-3).abs() < 1e-12);
     assert_eq!(code.i_max.as_ref().unwrap()[0], 240.0);
     // The load on phase 1 returns through terminal 4, not ground.
-    let la = net.loads.iter().find(|l| l.name == "la").unwrap();
+    let la = net.loads().iter().find(|l| l.name == "la").unwrap();
     assert_eq!(la.terminal_map, vec!["1", "4"]);
 }
 
@@ -330,7 +335,7 @@ fn four_wire_line_keeps_the_neutral() {
 /// list keeps the neutral and the map length matches the 4x4 matrices.
 #[test]
 fn line_conductor_count_follows_linecode() {
-    use powerio_dist::parse_dss_str;
+    use crate::helpers::parse_dss_str;
     let base = "Clear\n\
                 New Circuit.c basekv=0.4 pu=1.0 phases=3 bus1=src\n\
                 New Linecode.4w nphases=4 units=m\n\
@@ -339,40 +344,40 @@ fn line_conductor_count_follows_linecode() {
     let net = parse_dss_str(&format!(
         "{base}New Line.l1 bus1=src.1.2.3.4 bus2=lb.1.2.3.4 linecode=4w length=500 units=m\n"
     ));
-    let l = &net.lines[0];
+    let l = &net.lines()[0];
     assert_eq!(l.terminal_map_from, vec!["1", "2", "3", "4"]);
     assert_eq!(l.terminal_map_to, vec!["1", "2", "3", "4"]);
-    let lb = net.buses.iter().find(|b| b.id == "lb").unwrap();
+    let lb = net.buses().iter().find(|b| b.id == "lb").unwrap();
     assert_eq!(lb.terminals, vec!["1", "2", "3", "4"]);
 
     // No bus dot list: all four conductors default to nodes 1..=4.
     let net = parse_dss_str(&format!(
         "{base}New Line.l1 bus1=src bus2=lb linecode=4w length=500 units=m\n"
     ));
-    assert_eq!(net.lines[0].terminal_map_to, vec!["1", "2", "3", "4"]);
+    assert_eq!(net.lines()[0].terminal_map_to, vec!["1", "2", "3", "4"]);
 
     // Properties apply in order; the later of `phases=`/`linecode=` wins.
     let net = parse_dss_str(&format!(
         "{base}New Line.l1 bus1=src.1.2.3.4 bus2=lb.1.2.3.4 linecode=4w phases=3 length=500 units=m\n"
     ));
-    assert_eq!(net.lines[0].terminal_map_to, vec!["1", "2", "3"]);
+    assert_eq!(net.lines()[0].terminal_map_to, vec!["1", "2", "3"]);
     let net = parse_dss_str(&format!(
         "{base}New Line.l1 bus1=src.1.2.3.4 bus2=lb.1.2.3.4 phases=3 linecode=4w length=500 units=m\n"
     ));
-    assert_eq!(net.lines[0].terminal_map_to, vec!["1", "2", "3", "4"]);
+    assert_eq!(net.lines()[0].terminal_map_to, vec!["1", "2", "3", "4"]);
 
     // A switch's linecode is ignored for impedance yet still fixes the
     // conductor count.
     let net = parse_dss_str(&format!(
         "{base}New Line.s1 bus1=src.1.2.3.4 bus2=lb.1.2.3.4 linecode=4w switch=yes\n"
     ));
-    assert_eq!(net.switches[0].terminal_map_to, vec!["1", "2", "3", "4"]);
-    assert_eq!(net.switches[0].i_max.as_ref().unwrap().len(), 4);
+    assert_eq!(net.switches()[0].terminal_map_to, vec!["1", "2", "3", "4"]);
+    assert_eq!(net.switches()[0].i_max.as_ref().unwrap().len(), 4);
 }
 
 #[test]
 fn pvsystem_and_invcontrol_type_to_ibr_profile() {
-    use powerio_dist::parse_dss_str;
+    use crate::helpers::parse_dss_str;
     let net = parse_dss_str(
         "New Circuit.c basekv=0.416 phases=3 bus1=sourcebus\n\
          New PVSystem.pv1 bus1=loadbus.1.2.3.4 phases=3 conn=wye kv=0.416 kva=30 pmpp=24 \
@@ -383,9 +388,9 @@ fn pvsystem_and_invcontrol_type_to_ibr_profile() {
              RefReactivePower=VARMAX voltage_curvex_ref=rated monVoltageCalc=AVG\n",
     );
 
-    assert_eq!(net.ibrs.len(), 1, "{:?}", net.warnings);
-    assert_eq!(net.control_profiles.len(), 1);
-    let ibr = &net.ibrs[0];
+    assert_eq!(net.ibrs().len(), 1, "{:?}", net.warnings);
+    assert_eq!(net.control_profiles().len(), 1);
+    let ibr = &net.ibrs()[0];
     assert_eq!(ibr.name, "pv1");
     assert_eq!(ibr.bus, "loadbus");
     assert_eq!(ibr.terminal_map, vec!["1", "2", "3", "4"]);
@@ -403,7 +408,7 @@ fn pvsystem_and_invcontrol_type_to_ibr_profile() {
     assert!(!ibr.extras.contains_key("%pminnovars"));
     assert!(!ibr.extras.contains_key("%pminkvarmax"));
 
-    let profile = &net.control_profiles[0];
+    let profile = &net.control_profiles()[0];
     let vv = profile.volt_var.as_ref().expect("volt var profile");
     let base_v = 416.0 / 3f64.sqrt();
     let expected = [0.92, 0.98, 1.02, 1.08].map(|v| v * base_v);
@@ -416,11 +421,11 @@ fn pvsystem_and_invcontrol_type_to_ibr_profile() {
     assert_eq!(vv.p_min_for_q, Some(10.0));
     assert_eq!(vv.p_min_for_q_max, Some(50.0));
     assert!(
-        net.untyped
+        net.untyped()
             .iter()
             .all(|o| !matches!(o.class.as_str(), "pvsystem" | "xycurve" | "invcontrol")),
         "{:?}",
-        net.untyped
+        net.untyped()
     );
 }
 
@@ -431,20 +436,20 @@ fn ten_conductor_linecode_types() {
     assert_eq!(code.n_conductors, 10);
     assert_eq!(code.r_series.len(), 10);
     assert!((code.r_series[9][9] - 0.25e-3).abs() < 1e-12);
-    let line = net.lines.iter().find(|l| l.name == "l10").unwrap();
+    let line = net.lines().iter().find(|l| l.name == "l10").unwrap();
     assert_eq!(line.terminal_map_to.len(), 10);
 }
 
 #[test]
 #[allow(clippy::float_cmp)]
 fn grounding_reactor_types_as_an_inductive_shunt() {
-    use powerio_dist::parse_dss_str;
+    use crate::helpers::parse_dss_str;
     let net = parse_dss_str(
         "New Circuit.c basekv=4.16\n\
          New Reactor.rx bus1=b2 phases=3 kvar=900 kv=4.16\n",
     );
     let sh = net
-        .shunts
+        .shunts()
         .iter()
         .find(|s| s.name.eq_ignore_ascii_case("rx"))
         .expect("reactor typed as a shunt");
@@ -454,16 +459,20 @@ fn grounding_reactor_types_as_an_inductive_shunt() {
     assert!((sh.b[0][0] - expected).abs() < 1e-12, "{}", sh.b[0][0]);
     assert_eq!(sh.g[0][0], 0.0);
     // No silent loss: nothing falls through to the untyped layer.
-    assert!(net.untyped.is_empty(), "{:?}", net.untyped);
+    assert!(net.untyped().is_empty(), "{:?}", net.untyped());
 }
 
 #[test]
 fn reactor_defaults_are_materialized_and_recorded() {
-    use powerio_dist::parse_dss_str;
+    use crate::helpers::parse_dss_str;
     let net = parse_dss_str("New Circuit.c basekv=12.47\nNew Reactor.rd bus1=b2\n");
-    assert!(net.shunts.iter().any(|s| s.name.eq_ignore_ascii_case("rd")));
+    assert!(
+        net.shunts()
+            .iter()
+            .any(|s| s.name.eq_ignore_ascii_case("rd"))
+    );
     let recorded = net
-        .defaulted
+        .defaulted()
         .iter()
         .find(|(k, _)| k.eq_ignore_ascii_case("reactor.rd"))
         .map(|(_, v)| v)
@@ -475,21 +484,21 @@ fn reactor_defaults_are_materialized_and_recorded() {
 #[test]
 #[allow(clippy::float_cmp)]
 fn grounding_impedance_reactors_type_as_conductive_shunts() {
-    use powerio_dist::parse_dss_str;
+    use crate::helpers::parse_dss_str;
     let net = parse_dss_str(
         "New Circuit.c basekv=0.4\n\
          New Reactor.tx_busgrounding_B179 phases=1 bus1=B179.4 bus2=B179.0 r=0.3 x=0.0\n\
          New Reactor.loadbusgrounding_B3230 phases=1 bus1=B3230.4 bus2=B3230.0 r=10.0 x=0.0\n\
          New Reactor.loadbusgrounding_B2656 phases=1 bus1=B2656.4 bus2=B2656.0 r=10.0 x=0.0\n",
     );
-    assert_eq!(net.shunts.len(), 3, "{:?}", net.warnings);
+    assert_eq!(net.shunts().len(), 3, "{:?}", net.warnings);
     assert!(
-        net.untyped
+        net.untyped()
             .iter()
             .all(|o| !o.class.eq_ignore_ascii_case("reactor"))
     );
     let first = net
-        .shunts
+        .shunts()
         .iter()
         .find(|s| s.name == "tx_busgrounding_B179")
         .unwrap();
@@ -498,7 +507,7 @@ fn grounding_impedance_reactors_type_as_conductive_shunts() {
     assert_eq!(first.g[0][0], 1.0 / 0.3);
     assert_eq!(first.b[0][0], 0.0);
     let second = net
-        .shunts
+        .shunts()
         .iter()
         .find(|s| s.name == "loadbusgrounding_B3230")
         .unwrap();
@@ -509,24 +518,24 @@ fn grounding_impedance_reactors_type_as_conductive_shunts() {
 
 #[test]
 fn grounding_reactor_with_rx_uses_admittance_inverse() {
-    use powerio_dist::parse_dss_str;
+    use crate::helpers::parse_dss_str;
     let net = parse_dss_str(
         "New Circuit.c basekv=4.16\nNew Reactor.rz bus1=b2.1 bus2=b2.0 phases=1 r=3 x=4\n",
     );
-    let sh = net.shunts.iter().find(|s| s.name == "rz").unwrap();
+    let sh = net.shunts().iter().find(|s| s.name == "rz").unwrap();
     assert!((sh.g[0][0] - 0.12).abs() < 1e-12, "{}", sh.g[0][0]);
     assert!((sh.b[0][0] + 0.16).abs() < 1e-12, "{}", sh.b[0][0]);
 }
 
 #[test]
 fn grounding_reactor_bus2_uses_the_dss_fill_rule() {
-    use powerio_dist::parse_dss_str;
+    use crate::helpers::parse_dss_str;
     let net = parse_dss_str(
         "New Circuit.c basekv=4.16\n\
          New Reactor.rz bus1=b2.1.2.3 bus2=b2.0 phases=3 r=3 x=4\n",
     );
-    assert!(net.untyped.iter().any(|o| o.name == "rz"));
-    assert!(net.shunts.iter().all(|s| s.name != "rz"));
+    assert!(net.untyped().iter().any(|o| o.name == "rz"));
+    assert!(net.shunts().iter().all(|s| s.name != "rz"));
     assert!(
         net.warnings
             .iter()
@@ -537,7 +546,7 @@ fn grounding_reactor_bus2_uses_the_dss_fill_rule() {
         "New Circuit.c basekv=4.16\n\
          New Reactor.rz bus1=b2.1.2.3 bus2=b2.0.0.0 phases=3 r=3 x=4\n",
     );
-    let sh = net.shunts.iter().find(|s| s.name == "rz").unwrap();
+    let sh = net.shunts().iter().find(|s| s.name == "rz").unwrap();
     assert_eq!(sh.terminal_map, vec!["1", "2", "3"]);
 }
 
@@ -546,7 +555,7 @@ fn grounding_reactor_bus2_uses_the_dss_fill_rule() {
 fn default_phase_single_terminal_reactor_preserves_physical_neutral() {
     let net = parse("micro/neutral_grounding_reactor.dss");
     assert!(
-        net.untyped
+        net.untyped()
             .iter()
             .all(|o| !o.name.eq_ignore_ascii_case("source_neutral")),
         "{:?}",
@@ -554,21 +563,21 @@ fn default_phase_single_terminal_reactor_preserves_physical_neutral() {
     );
 
     let source = net
-        .buses
+        .buses()
         .iter()
         .find(|b| b.id.eq_ignore_ascii_case("sourcebus"))
         .unwrap();
     assert_eq!(source.terminals, vec!["1", "2", "3", "4", "5"]);
     assert_eq!(source.grounded, vec!["5"]);
 
-    let vs = &net.sources[0];
+    let vs = &net.sources()[0];
     assert_eq!(vs.terminal_map, vec!["1", "2", "3", "5"]);
 
-    let line = net.lines.iter().find(|l| l.name == "l1").unwrap();
+    let line = net.lines().iter().find(|l| l.name == "l1").unwrap();
     assert_eq!(line.terminal_map_from, vec!["1", "2", "3", "4"]);
 
     let sh = net
-        .shunts
+        .shunts()
         .iter()
         .find(|s| s.name == "source_neutral")
         .unwrap();
@@ -589,26 +598,26 @@ fn default_phase_single_terminal_reactor_preserves_physical_neutral() {
 
 #[test]
 fn zero_impedance_grounding_reactor_stays_untyped() {
-    use powerio_dist::parse_dss_str;
+    use crate::helpers::parse_dss_str;
     let net = parse_dss_str(
         "New Circuit.c basekv=4.16\nNew Reactor.rz bus1=b2.1 bus2=b2.0 phases=1 r=0 x=0\n",
     );
-    assert!(net.untyped.iter().any(|o| o.name == "rz"));
-    assert!(net.shunts.iter().all(|s| s.name != "rz"));
+    assert!(net.untyped().iter().any(|o| o.name == "rz"));
+    assert!(net.shunts().iter().all(|s| s.name != "rz"));
     assert!(net.warnings.iter().any(|w| w.contains("zero impedance")));
 }
 
 #[test]
 fn grounding_reactor_with_unparseable_rx_stays_untyped() {
-    use powerio_dist::parse_dss_str;
+    use crate::helpers::parse_dss_str;
     // A non-numeric `r` fails to evaluate; substituting 0 would emit a lossless
     // grounding reactor, so the object stays untyped with a warning instead.
     let net = parse_dss_str(
         "New Circuit.c basekv=4.16\n\
          New Reactor.rz bus1=b2.1 bus2=b2.0 phases=1 r=notanumber x=4\n",
     );
-    assert!(net.untyped.iter().any(|o| o.name == "rz"));
-    assert!(net.shunts.iter().all(|s| s.name != "rz"));
+    assert!(net.untyped().iter().any(|o| o.name == "rz"));
+    assert!(net.shunts().iter().all(|s| s.name != "rz"));
     assert!(
         net.warnings
             .iter()
@@ -618,37 +627,37 @@ fn grounding_reactor_with_unparseable_rx_stays_untyped() {
 
 #[test]
 fn delta_capacitor_and_reactor_type_as_shunt_matrices() {
-    use powerio_dist::parse_dss_str;
+    use crate::helpers::parse_dss_str;
     let net = parse_dss_str(
         "New Circuit.c basekv=4.16\n\
          New Capacitor.capd bus1=b2.1.2.3 phases=3 conn=delta kvar=900 kv=4.16\n\
          New Reactor.rxd bus1=b3.1.2.3 phases=3 conn=delta kvar=600 kv=4.16\n",
     );
-    assert_eq!(net.shunts.len(), 2, "{:?}", net.warnings);
+    assert_eq!(net.shunts().len(), 2, "{:?}", net.warnings);
     assert!(
-        net.untyped
+        net.untyped()
             .iter()
             .all(|o| o.name != "capd" && o.name != "rxd")
     );
-    let cap = net.shunts.iter().find(|s| s.name == "capd").unwrap();
+    let cap = net.shunts().iter().find(|s| s.name == "capd").unwrap();
     assert_eq!(cap.terminal_map, vec!["1", "2", "3"]);
     assert!(cap.b[0][0] > 0.0, "{:?}", cap.b);
     assert!(cap.b[0][1] < 0.0, "{:?}", cap.b);
     assert!((cap.b[0][0] + cap.b[0][1] + cap.b[0][2]).abs() < 1e-12);
-    let rx = net.shunts.iter().find(|s| s.name == "rxd").unwrap();
+    let rx = net.shunts().iter().find(|s| s.name == "rxd").unwrap();
     assert!(rx.b[0][0] < 0.0, "{:?}", rx.b);
     assert!(rx.b[0][1] > 0.0, "{:?}", rx.b);
 }
 
 #[test]
 fn series_and_non_ground_impedance_reactors_stay_untyped() {
-    use powerio_dist::parse_dss_str;
+    use crate::helpers::parse_dss_str;
     // Series reactor (bus2): deferred, like the series capacitor.
     let net = parse_dss_str(
         "New Circuit.c basekv=4.16\nNew Reactor.rs bus1=b2 bus2=b3 phases=3 kvar=900 kv=4.16\n",
     );
-    assert!(net.untyped.iter().any(|o| o.name == "rs"));
-    assert!(net.shunts.iter().all(|s| s.name != "rs"));
+    assert!(net.untyped().iter().any(|o| o.name == "rs"));
+    assert!(net.shunts().iter().all(|s| s.name != "rs"));
     assert!(
         net.warnings
             .iter()
@@ -657,7 +666,7 @@ fn series_and_non_ground_impedance_reactors_stay_untyped() {
     // Impedance form without an explicit ground return is not a shunt.
     let net =
         parse_dss_str("New Circuit.c basekv=4.16\nNew Reactor.rz bus1=b2 phases=3 r=0.1 x=5\n");
-    assert!(net.untyped.iter().any(|o| o.name == "rz"));
+    assert!(net.untyped().iter().any(|o| o.name == "rz"));
     assert!(
         net.warnings
             .iter()
@@ -669,8 +678,8 @@ fn series_and_non_ground_impedance_reactors_stay_untyped() {
         "New Circuit.c basekv=4.16\n\
          New Reactor.rmod bus1=b2 phases=3 kvar=900 kv=4.16 parallel=yes rp=1000\n",
     );
-    assert!(net.shunts.iter().any(|s| s.name == "rmod"));
-    assert!(net.untyped.iter().all(|o| o.name != "rmod"));
+    assert!(net.shunts().iter().any(|s| s.name == "rmod"));
+    assert!(net.untyped().iter().all(|o| o.name != "rmod"));
 }
 
 /// A case whose include redirects to itself twice expands into a binary tree
@@ -690,9 +699,9 @@ fn a_self_redirecting_case_file_returns() {
         net.warnings
     );
     assert_eq!(
-        net.parse_diagnostics
+        net.diagnostics
             .iter()
-            .filter(|d| d.code.as_str() == "READ.DSS.INCLUDE_BUDGET")
+            .filter(|d| d.code() == "READ.DSS.INCLUDE_BUDGET")
             .count(),
         1
     );
@@ -717,7 +726,7 @@ fn a_clear_after_the_include_budget_does_not_erase_the_refusal() {
 
     let net = parse_dss_file(dir.join("root.dss")).expect("the parse returns");
     assert!(
-        net.lines.iter().all(|l| l.name != "after"),
+        net.lines().iter().all(|l| l.name != "after"),
         "the budget is spent, so the include after the Clear is still refused"
     );
     assert!(
@@ -726,9 +735,9 @@ fn a_clear_after_the_include_budget_does_not_erase_the_refusal() {
         net.warnings
     );
     assert_eq!(
-        net.parse_diagnostics
+        net.diagnostics
             .iter()
-            .filter(|d| d.code.as_str() == "READ.DSS.INCLUDE_BUDGET")
+            .filter(|d| d.code() == "READ.DSS.INCLUDE_BUDGET")
             .count(),
         1,
         "restated once, not once per refused include"
@@ -743,12 +752,6 @@ New Line.l1 bus1=a.1.2.3 bus2=b.1.2.3 phases=3 linecode=lc1 length=1 units=km
 
 const SHARED_LINECODES: &str = "New Linecode.lc1 nphases=3 r1=0.1 x1=0.2\n";
 
-fn widened(root: &std::path::Path) -> DssReadOptions {
-    let mut options = DssReadOptions::default();
-    options.include_root = Some(root.to_path_buf());
-    options
-}
-
 /// A case split across a feeder directory and a shared component directory
 /// parses under an include root at their shared parent, and reads the same as
 /// the merged deck.
@@ -760,10 +763,10 @@ fn a_widened_include_root_admits_a_shared_sibling_include() {
     std::fs::write(root.join("feeder/f.dss"), FEEDER_DECK).unwrap();
     std::fs::write(root.join("shared/linecodes.dss"), SHARED_LINECODES).unwrap();
 
-    let net = parse_dss_file_with_options(root.join("feeder/f.dss"), &widened(&root)).unwrap();
+    let net = parse_dss_file_with_root(root.join("feeder/f.dss"), &root).unwrap();
     assert!(net.warnings.is_empty(), "{:?}", net.warnings);
 
-    let merged = powerio_dist::dss::parse_dss_str(&FEEDER_DECK.replace(
+    let merged = crate::helpers::parse_dss_str(&FEEDER_DECK.replace(
         "Redirect ../shared/linecodes.dss",
         SHARED_LINECODES.trim_end(),
     ));
@@ -790,8 +793,8 @@ fn a_widened_include_root_still_refuses_escapes_past_it() {
     )
     .unwrap();
 
-    let net = parse_dss_file_with_options(root.join("feeder/f.dss"), &widened(&root)).unwrap();
-    assert!(net.lines.iter().all(|l| l.name != "leaked"));
+    let net = parse_dss_file_with_root(root.join("feeder/f.dss"), &root).unwrap();
+    assert!(net.lines().iter().all(|l| l.name != "leaked"));
     assert!(
         net.warnings
             .iter()
@@ -800,9 +803,9 @@ fn a_widened_include_root_still_refuses_escapes_past_it() {
         net.warnings
     );
     assert_eq!(
-        net.parse_diagnostics
+        net.diagnostics
             .iter()
-            .filter(|d| d.code.as_str() == "READ.DSS.INCLUDE_REFUSED")
+            .filter(|d| d.code() == "READ.DSS.INCLUDE_REFUSED")
             .count(),
         1
     );
@@ -824,12 +827,10 @@ fn a_widened_include_root_still_refuses_symlink_escapes() {
     .unwrap();
     std::os::unix::fs::symlink(outer.join("secret.dss"), root.join("feeder/linked.dss")).unwrap();
 
-    let net = parse_dss_file_with_options(root.join("feeder/f.dss"), &widened(&root)).unwrap();
-    assert!(net.lines.iter().all(|l| l.name != "leaked"));
+    let net = parse_dss_file_with_root(root.join("feeder/f.dss"), &root).unwrap();
+    assert!(net.lines().iter().all(|l| l.name != "leaked"));
     assert!(
-        net.warnings
-            .iter()
-            .any(|w| w.contains("outside the include root")),
+        net.warnings.iter().any(|w| w.contains("symbolic link")),
         "{:?}",
         net.warnings
     );
@@ -844,10 +845,11 @@ fn a_case_file_outside_the_widened_root_is_refused() {
     std::fs::create_dir_all(outer.join("elsewhere")).unwrap();
     std::fs::write(outer.join("elsewhere/f.dss"), "New Circuit.out\n").unwrap();
 
-    let err = parse_dss_file_with_options(outer.join("elsewhere/f.dss"), &widened(&root))
+    let err = parse_dss_file_with_root(outer.join("elsewhere/f.dss"), &root)
         .expect_err("the case file is outside the include root");
     assert!(
-        err.to_string().contains("outside the include root"),
+        err.to_string()
+            .contains("outside the requested acquisition root"),
         "{err}"
     );
 }
@@ -861,7 +863,7 @@ fn regcontrol_warns_and_keeps_taps() {
             .any(|w| w.contains("regcontrol") && w.contains("Reg1"))
     );
     let reg1 = net
-        .transformers
+        .transformers()
         .iter()
         .find(|t| t.name.eq_ignore_ascii_case("reg1"))
         .unwrap();
@@ -877,11 +879,11 @@ New Load.ld bus1=b.1.2.3 phases=3 conn=wye kv=7.2 kw=10 kvar=1
 SetBusXY bus=a x=-80 y=35
 SetBusXY b -80.5 35.25
 ";
-    let net = powerio_dist::parse_str(text, "dss").unwrap();
-    let a = net.buses.iter().find(|b| b.id == "a").unwrap();
+    let net = helpers::parse_str(text, "dss").unwrap();
+    let a = net.buses().iter().find(|b| b.id == "a").unwrap();
     assert_eq!(a.location.unwrap().x.to_bits(), (-80.0f64).to_bits());
     assert_eq!(a.location.unwrap().y.to_bits(), 35.0f64.to_bits());
-    let b = net.buses.iter().find(|b| b.id == "b").unwrap();
+    let b = net.buses().iter().find(|b| b.id == "b").unwrap();
     assert_eq!(b.location.unwrap().x.to_bits(), (-80.5f64).to_bits());
     assert_eq!(b.location.unwrap().y.to_bits(), 35.25f64.to_bits());
 }
@@ -892,7 +894,7 @@ fn a_short_setbusxy_is_a_declared_malformation() {
 New Circuit.geo basekv=12.47 pu=1 phases=3 bus1=a
 SetBusXY bus=a x=-80
 ";
-    let net = powerio_dist::parse_str(text, "dss").unwrap();
+    let net = helpers::parse_str(text, "dss").unwrap();
     assert!(
         net.warnings
             .iter()

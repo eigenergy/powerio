@@ -14,7 +14,13 @@ use powerio_matrix::matrix::{
     ground_at_each,
 };
 use powerio_matrix::pipeline::{MatrixKind, Pipeline, RhsKind};
-use powerio_matrix::{IndexedNetwork, parse_matpower};
+use powerio_matrix::{BalancedNetwork, IndexedNetwork};
+
+fn parse_matpower(text: &str) -> Result<BalancedNetwork, powerio_core::Error> {
+    let source = powerio_core::Source::from_bytes("case.m", text.as_bytes().to_vec())?
+        .with_format(powerio_core::FormatId::new("matpower")?);
+    powerio_matrix::parse(source).map(powerio_core::PioModule::into_value)
+}
 use std::hint::black_box;
 use std::path::Path;
 

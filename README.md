@@ -61,12 +61,12 @@ specification or submit a reader or writer.
 Each workspace crate owns one layer:
 
 ```
-powerio-diag     # diagnostic codes, severities, stages, the text renderer
-powerio          # parser, Network model, source retaining writers, converters
+powerio-core     # Source, PioModule, diagnostics, errors, time series, destinations
+powerio          # entry facade: dynamic value, universal parse, .pio.json documents
+powerio-tx       # balanced transmission model, format parsers and writers
 powerio-matrix   # generic sparse matrices, sensitivity factors, graph projections
 powerio-prob     # complete problem instances; optional matrix projections
 powerio-dist     # multiconductor distribution model, dss/PMD/BMOPF converters
-powerio-pkg      # .pio.json document metadata and model JSON
 powerio-cli      # the `powerio` command and ratatui TUI
 powerio-py       # PyO3 extension for the Python `powerio` package
 powerio-capi     # C ABI for C, C++, Julia, and other foreign function interfaces
@@ -276,7 +276,7 @@ interval in `model` and the full replayable time series in `operating_points`;
 materializing one point returns a static document with the updates applied and
 the series cleared.
 
-Rust uses `powerio_pkg::NetworkPackage`, Python uses the `powerio.Package`
+Rust uses `powerio::package::NetworkPackage`, Python uses the `powerio.Package`
 class, the C ABI uses `pio_package_*`, and the CLI writes documents with
 `powerio package`.
 

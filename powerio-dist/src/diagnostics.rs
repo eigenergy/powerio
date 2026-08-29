@@ -1,6 +1,6 @@
 //! The codes this crate emits.
 //!
-//! The record itself lives in `powerio-diag`, below this crate and below the
+//! The record itself lives in `powerio-core`, below this crate and below the
 //! `.pio.json` document model, so a distribution finding reaches a package
 //! without a translation step. What lives here is the distribution side
 //! registry: one [`DiagnosticInfo`] per code, declared once, so an emission
@@ -9,21 +9,28 @@
 //! Codes are families, not one per site: what differs between two sites of a
 //! family is which object or property it was, which belongs in `details`.
 
-pub use powerio_diag::{
-    DiagnosticCode, DiagnosticInfo, DiagnosticSeverity, DiagnosticStage, Diagnostics, SourceRef,
-    StructuredDiagnostic, check_registry, render_line, render_lines,
+// The collector is crate-private implementation support, not API: each
+// emitting crate carries its own copy (src/collect.rs) and never exports it.
+pub(crate) use crate::collect::Diagnostics;
+
+pub use powerio_core::{
+    Diagnostic, DiagnosticCode, DiagnosticInfo, DiagnosticSeverity, DiagnosticStage,
+    check_registry, render_diagnostic, render_diagnostics,
 };
 
 pub mod codes {
-    powerio_diag::diagnostic_codes! {
+    powerio_core::diagnostic_codes! {
         // PARSE: the source text could not be decoded as given.
-        PARSE_DSS_BOM_STRIPPED = "PARSE.DSS.BOM_STRIPPED", Info,
-            "a leading UTF-8 byte order mark was removed before the reader ran";
+        /// Retired at 1.0: the mark is retained on the source buffer and the
+        /// reader decodes a mark free slice, so nothing is removed from the
+        /// bytes and a same format echo returns them exactly.
+        PARSE_DSS_BOM_STRIPPED = "PARSE.DSS.BOM_STRIPPED", Remark,
+            "a leading UTF-8 byte order mark was removed before the reader ran", retired = "1.0.0";
         PARSE_DSS_SOURCE_MALFORMED = "PARSE.DSS.SOURCE_MALFORMED", Warning,
             "a dss command, object spec, or property assignment does not parse";
-        PARSE_DIST_MALFORMED = "PARSE.DIST.MALFORMED", Fatal,
+        PARSE_DIST_MALFORMED = "PARSE.DIST.MALFORMED", Error,
             "a distribution document is not valid JSON for its format", category = Parse;
-        PARSE_DIST_SOURCE_MALFORMED = "PARSE.DIST.SOURCE_MALFORMED", Fatal,
+        PARSE_DIST_SOURCE_MALFORMED = "PARSE.DIST.SOURCE_MALFORMED", Error,
             "a distribution reader refused the source it was given", category = Parse;
 
         // READ.DSS: decoded, but not representable in the multiconductor model.
@@ -51,7 +58,7 @@ pub mod codes {
             "a control or element reference names an object the case does not declare";
         READ_DSS_RETAINED_SOURCE_ONLY = "READ.DSS.RETAINED_SOURCE_ONLY", Warning,
             "a field survives in extras or the retained source rather than in a typed field";
-        READ_DSS_COORDINATE_SPACE_UNKNOWN = "READ.DSS.COORDINATE_SPACE_UNKNOWN", Info,
+        READ_DSS_COORDINATE_SPACE_UNKNOWN = "READ.DSS.COORDINATE_SPACE_UNKNOWN", Remark,
             "buscoords declare no coordinate reference system";
         READ_DSS_INCLUDE_LOAD_FAILED = "READ.DSS.INCLUDE_LOAD_FAILED", Warning,
             "an include the case names could not be loaded";
@@ -94,7 +101,7 @@ pub mod codes {
             "a PMD value is not the shape its key declares";
         READ_PMD_RECORD_DROPPED = "READ.PMD.RECORD_DROPPED", Warning,
             "a PMD object beyond the modeled set was dropped";
-        READ_PMD_VALUE_INLINED = "READ.PMD.VALUE_INLINED", Info,
+        READ_PMD_VALUE_INLINED = "READ.PMD.VALUE_INLINED", Remark,
             "an inline PMD impedance was materialized as a named linecode";
 
         // EMIT.PMD.
@@ -207,21 +214,31 @@ pub mod codes {
         VALIDATE_MULTICONDUCTOR_REFERENCE_UNDEFINED =
             "VALIDATE.MULTICONDUCTOR.REFERENCE_UNDEFINED", Warning,
             "an element references a bus or linecode the document does not declare";
+        /// Emitted by the stored document's payload validation in the facade;
+        /// declared here because this crate owns the multiconductor model.
+        VALIDATE_MULTI_STRUCTURE = "VALIDATE.MULTI.STRUCTURE", Error,
+            "a multiconductor payload's referential integrity does not hold";
+        VALIDATE_MULTI_TERMINAL_MAP = "VALIDATE.MULTI.TERMINAL_MAP", Error,
+            "a multiconductor terminal map does not match the element it belongs to";
+        VALIDATE_MULTI_UNTYPED_OBJECT = "VALIDATE.MULTI.UNTYPED_OBJECT", Warning,
+            "a multiconductor object is carried untyped";
+        VALIDATE_MULTI_NO_VOLTAGE_SOURCE = "VALIDATE.MULTI.NO_VOLTAGE_SOURCE", Warning,
+            "a multiconductor payload declares no voltage source";
         EMIT_MULTICONDUCTOR_ROUTE_DROPPED = "EMIT.MULTICONDUCTOR.ROUTE_DROPPED", Warning,
             "a line polyline was dropped because the target has no polyline field";
         EMIT_MULTICONDUCTOR_SIDECAR_DROPPED = "EMIT.MULTICONDUCTOR.SIDECAR_DROPPED", Warning,
             "a companion file the case text refers to was not written";
 
         // Failures.
-        READ_DIST_IO_FAILED = "READ.DIST.IO_FAILED", Fatal,
+        READ_DIST_IO_FAILED = "READ.DIST.IO_FAILED", Error,
             "a distribution case file could not be read", category = Io;
         /// Retired in 0.9.0: every distribution read finding now carries its
         /// own code, so the package no longer wraps them under one catch-all.
         READ_DIST_PARSE_WARNING = "READ.DIST.PARSE_WARNING", Warning,
             "a distribution parse finding with no identity of its own", retired = "0.9.0";
-        REQUEST_DIST_FORMAT_UNKNOWN = "REQUEST.DIST_FORMAT.UNKNOWN", Fatal,
+        REQUEST_DIST_FORMAT_UNKNOWN = "REQUEST.DIST_FORMAT.UNKNOWN", Error,
             "the named distribution format is not one powerio reads",
-            category = UnknownFormat;
+            category = Request;
     }
 }
 
@@ -229,6 +246,19 @@ pub mod codes {
 #[must_use]
 pub fn registry() -> Vec<&'static DiagnosticInfo> {
     codes::ALL.to_vec()
+}
+
+/// Attach an input-derived locator, or record its loss on the finding when it
+/// cannot be stored. A locator is identity, so it is never shortened; when the
+/// input supplies one past the record bounds, the finding says a locator
+/// existed and how long it was instead of silently changing identity.
+pub(crate) fn attach_target(diagnostic: &mut Diagnostic, target: String) {
+    let byte_length = target.len();
+    if diagnostic.set_target(target).is_err() {
+        let marker =
+            diagnostic.insert_detail("dropped_target_bytes", serde_json::Value::from(byte_length));
+        debug_assert!(marker.is_ok(), "the drop marker fits an emitted finding");
+    }
 }
 
 #[cfg(test)]

@@ -23,7 +23,7 @@ implementations and the matching powerio code:
 | Generator cost | \\(c_2 p^2 + c_1 p\\) maps to \\(q = 2c_2\\), \\(c = c_1\\); coefficients high order first | MATPOWER `idx_cost`, egret `matpower_parser` | `GenCost::quadratic` |
 | `source_id` | `["bus", id]` for bus-tied elements | PowerModels `matpower.jl` | `format::powermodels` |
 | PSLF shunts | EPC `pu_mw`/`pu_mvar` are per unit on `sbase`; `Network::Shunt` stores MW/MVAr at \\(V = 1\\) | paired EPC/RAW case checks | `format::pslf` |
-| GO Challenge 3 time series | `BalancedNetwork` stores the first interval as a static case; `.pio.json` documents carry replayable later intervals in `operating_points` | Rust GOC3 package tests | `format::goc3`, `powerio_pkg::operating` |
+| GO Challenge 3 time series | `BalancedNetwork` stores the first interval as a static case; `.pio.json` documents carry replayable later intervals in `operating_points` | Rust GOC3 package tests | `format::goc3`, `powerio::package::operating` |
 | Surge angles | Surge JSON carries voltage angles, phase shifts, and angle limits in radians; `BalancedNetwork` stores degrees | Rust Surge round trip tests | `format::surge` |
 | DeepMind OPFData JSON | DeepMind OPFData carries p.u. powers and radian angles; `BalancedNetwork` stores the solved snapshot in MW/MVAr and degrees, with zero based links mapped to one based bus IDs | Paper Appendix A, the PyG loader, the smallest complete official fixture, and size independent FullTop and N-1 property tests | `format::opfdata` |
 
@@ -176,7 +176,7 @@ code `READ.TRANSMISSION.PARSE_WARNING`. GridFM package reads use
   the original JSON for byte exact source echo, and warns about scheduling data
   left in the retained source. There is no canonical GOC3 writer from an
   arbitrary `BalancedNetwork`; `TargetFormat::Goc3Json` only succeeds as a same format
-  source echo. When a GOC3 `BalancedNetwork` is wrapped in `.pio.json`, `powerio-pkg`
+  source echo. When a GOC3 `BalancedNetwork` is wrapped in `.pio.json`, `powerio::package`
   extracts the full input time axis into `operating_points`. Materializing one
   point applies those updates to the static model JSON and clears the series.
 - **Surge JSON** reads and writes the versioned `surge-json` network document.
