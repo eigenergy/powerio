@@ -305,7 +305,9 @@ impl Source {
         })
     }
 
-    /// Retain a caller-owned binary or text buffer without copying it.
+    /// Retain a caller-owned binary or text buffer. An `Arc<[u8]>` argument
+    /// is retained without copying; a `Vec<u8>` is copied once into the
+    /// shared buffer, since `Arc<[u8]>` needs its own allocation.
     pub fn from_bytes(name: impl Into<String>, bytes: impl Into<Arc<[u8]>>) -> Result<Self, Error> {
         let name = name.into();
         if !valid_nonempty_text(&name) {
