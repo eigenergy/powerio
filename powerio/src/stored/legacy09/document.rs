@@ -756,7 +756,7 @@ impl NetworkPackage {
     /// to validate external table artifacts.
     pub fn attach_normalized_solver_table_metadata(
         &mut self,
-    ) -> std::result::Result<bool, crate::Error> {
+    ) -> std::result::Result<bool, powerio_tx::Error> {
         let Some(net) = self.as_balanced() else {
             return Ok(false);
         };
@@ -768,7 +768,7 @@ impl NetworkPackage {
     /// Return a package with normalized solver table metadata attached.
     pub fn with_normalized_solver_table_metadata(
         mut self,
-    ) -> std::result::Result<Self, crate::Error> {
+    ) -> std::result::Result<Self, powerio_tx::Error> {
         self.attach_normalized_solver_table_metadata()?;
         Ok(self)
     }

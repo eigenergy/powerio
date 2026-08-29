@@ -71,6 +71,22 @@ pub(crate) fn err_line<E: CodedError>(e: E) -> String {
 
 impl CodedError for powerio::Error {
     fn code_str(&self) -> &'static str {
+        // Unlike powerio_tx::Error, powerio_core::Error can carry no
+        // registered finding (a cause wrapped with `with_cause` alone); the
+        // boundary's own uncoded entry covers that case.
+        self.info()
+            .map_or(codes::BIND_CAPI_UNCODED_FAILURE.code, |info| info.code)
+    }
+}
+
+/// `powerio::Error` above is `powerio_core::Error`, the type `powerio::parse`
+/// and the source layer return; the balanced network readers and writers
+/// still raise their own `powerio_tx::Error`, reached through the facade at
+/// its module path (`powerio::error::Error`, since this crate has no direct
+/// `powerio-tx` dependency) as e.g. `powerio::GeoLayer::parse_bytes`, so it
+/// needs its own impl.
+impl CodedError for powerio::error::Error {
+    fn code_str(&self) -> &'static str {
         self.code().code
     }
 }
@@ -163,11 +179,13 @@ mod workspace {
             .into_iter()
             .flat_map(|(_, entries)| entries)
             .collect();
-        for code in [
-            "READ.TRANSMISSION.PARSE_WARNING",
-            "READ.GRIDFM.FIDELITY_WARNING",
-            "READ.DIST.PARSE_WARNING",
-        ] {
+        let mut codes = vec!["READ.TRANSMISSION.PARSE_WARNING", "READ.DIST.PARSE_WARNING"];
+        // registries() only contributes the gridfm registry under this
+        // feature, so the expectation follows the same gate.
+        if cfg!(feature = "gridfm") {
+            codes.push("READ.GRIDFM.FIDELITY_WARNING");
+        }
+        for code in codes {
             let entry = all
                 .iter()
                 .find(|entry| entry.code == code)
