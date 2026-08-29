@@ -2,8 +2,8 @@
 //!
 //! Lowering is where PowerIO is a compiler rather than a parser: every pass that
 //! transforms one model into another (normalization, multiconductor to balanced,
-//! emission to a target format) appends a [`LoweringRecord`] to the package's
-//! `lowering_history`, so the transformation is auditable. The most consequential
+//! emission to a target format) appends a [`LoweringRecord`] to the module's
+//! `history`, so the transformation is auditable. The most consequential
 //! case, multiconductor to balanced, must be an explicit pass with diagnostics,
 //! never a silent positive sequence projection.
 
@@ -128,6 +128,17 @@ impl MulticonductorToBalancedReadiness {
     pub fn is_ready(&self) -> bool {
         self.status <= ValidationStatus::Info
     }
+
+    /// This report's findings as 1.0 module records, `target` rebased onto
+    /// the multiconductor value's own pointer grammar instead of the retired
+    /// `/model/multiconductor_network/...` element path. `diagnostics` itself
+    /// stays the legacy shape for the internal preflight checks that build
+    /// it; a caller that publishes this report (a binding, an MCP tool)
+    /// should publish this instead.
+    #[must_use]
+    pub fn diagnostics_as_module_records(&self) -> Vec<powerio_core::Diagnostic> {
+        multiconductor_diagnostics_to_module_records(&self.diagnostics)
+    }
 }
 
 /// A successful raw multiconductor to balanced lowering result.
@@ -146,13 +157,23 @@ pub struct MulticonductorToBalancedLowering {
 }
 
 /// Structured failure from the raw multiconductor to balanced lowering pass.
+///
+/// `diagnostics` are 1.0 module records: the same codes and severities the
+/// preflight computed, with `target` rebased from the retired
+/// `/model/multiconductor_network/...` element path onto the multiconductor
+/// value's own pointer grammar (e.g. `/sources/0/bus`), since a refusal never
+/// changes the module's value kind.
+///
+/// No `JsonSchema` derive: `powerio_core::Diagnostic` is the runtime record,
+/// not a schema DTO (the stored document schema mirrors it separately as
+/// `DiagnosticV1`, per `powerio::stored::dto`), and this type is not part of
+/// any generated schema family.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct MulticonductorToBalancedError {
     pub options: MulticonductorToBalancedOptions,
     pub status: ValidationStatus,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub diagnostics: Vec<StructuredDiagnostic>,
+    pub diagnostics: Vec<powerio_core::Diagnostic>,
 }
 
 impl MulticonductorToBalancedError {
@@ -163,7 +184,7 @@ impl MulticonductorToBalancedError {
         Self {
             options,
             status: status_from_diagnostics(&diagnostics),
-            diagnostics,
+            diagnostics: multiconductor_diagnostics_to_module_records(&diagnostics),
         }
     }
 }
@@ -171,7 +192,7 @@ impl MulticonductorToBalancedError {
 impl std::fmt::Display for MulticonductorToBalancedError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self.diagnostics.first() {
-            Some(diagnostic) => write!(f, "{}", diagnostic.message),
+            Some(diagnostic) => write!(f, "{}", diagnostic.message()),
             None => f.write_str("multiconductor to balanced lowering failed"),
         }
     }
@@ -179,11 +200,31 @@ impl std::fmt::Display for MulticonductorToBalancedError {
 
 impl std::error::Error for MulticonductorToBalancedError {}
 
+/// Convert legacy preflight findings, whose `element_path` (when present)
+/// reads `/model/multiconductor_network/...`, into 1.0 module records whose
+/// `target` is that same locator rebased onto the multiconductor value's own
+/// pointer grammar. Used by both [`MulticonductorToBalancedError`] and
+/// [`MulticonductorToBalancedReadiness::diagnostics_as_module_records`].
+fn multiconductor_diagnostics_to_module_records(
+    diagnostics: &[StructuredDiagnostic],
+) -> Vec<powerio_core::Diagnostic> {
+    diagnostics
+        .iter()
+        .map(|diagnostic| {
+            let target = crate::stored::legacy09::diagnostics::translate_legacy_target(
+                diagnostic.element_path.as_deref(),
+                "multiconductor_network",
+            );
+            crate::stored::legacy09::diagnostics::to_module_diagnostic(diagnostic, target)
+        })
+        .collect()
+}
+
 /// Check whether a multiconductor package is ready for the lowering pass.
 ///
 /// This is a preflight only: it reports the assumptions and blockers that the
 /// lowering would need to account for, but it does not produce a balanced model
-/// and does not append to `lowering_history`.
+/// and does not append to `history`.
 #[must_use]
 pub fn check_multiconductor_to_balanced_lowering(
     net: &MulticonductorNetwork,

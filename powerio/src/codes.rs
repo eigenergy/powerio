@@ -143,9 +143,9 @@ powerio_core::diagnostic_codes! {
         "the document's model_kind disagrees with the payload it carries", category = Data;
     REQUEST_PACKAGE_NO_SUCH_INDEX = "REQUEST.PACKAGE.NO_SUCH_INDEX", Error,
         "the call names an operating point or study index the document does not carry",
-        category = Data;
+        category = Request;
     REQUEST_PACKAGE_WRONG_MODEL_KIND = "REQUEST.PACKAGE.WRONG_MODEL_KIND", Error,
-        "the call asks for a model family the document does not carry", category = Data;
+        "the call asks for a model family the document does not carry", category = Request;
     BUILD_PACKAGE_PAYLOAD_FAILED = "BUILD.PACKAGE.PAYLOAD_FAILED", Error,
         "the payload could not be built, applied, or serialized", category = Data;
     EMIT_PACKAGE_SERIALIZE_FAILED = "EMIT.PACKAGE.SERIALIZE_FAILED", Error,

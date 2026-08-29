@@ -247,7 +247,7 @@ fn lower_to_balanced(
                 let diagnostics = e
                     .diagnostics
                     .iter()
-                    .map(|d| d.message.as_str())
+                    .map(|d| d.message())
                     .collect::<Vec<_>>()
                     .join("; ");
                 if diagnostics.is_empty() {
