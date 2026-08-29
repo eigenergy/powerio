@@ -42,4 +42,45 @@ if hits=$(grep -rn -E "$package" "${paths[@]}" 2>/dev/null | grep -vE "$package_
   echo "$hits"
   exit 1
 fi
+
+# Current user documentation names the object or field in question. These
+# generic words obscure whether the text means retained source, module
+# records, a calculation, or a stored document. Developer Guides and frozen
+# history remain outside this gate because they quote earlier releases.
+current_docs=(
+  README.md
+  docs/src/README.md
+  docs/src/getting-started.md
+  docs/src/concepts.md
+  docs/src/architecture.md
+  docs/src/transmission.md
+  docs/src/distribution.md
+  docs/src/time-series.md
+  docs/src/instances.md
+  docs/src/matrices.md
+  docs/src/format-fidelity.md
+  docs/src/geo-and-display.md
+  docs/src/languages.md
+  docs/src/python.md
+  docs/src/capi.md
+  docs/src/cli-mcp.md
+  docs/src/beta-scope.md
+)
+generic='\b(envelope|provenance|study)\b'
+if hits=$(grep -n -iE "$generic" "${current_docs[@]}" 2>/dev/null); then
+  echo "generic terminology in current user documentation:"
+  echo "$hits"
+  exit 1
+fi
+
+if hits=$(grep -n -F 'PowerIO.parse(' "${current_docs[@]}" 2>/dev/null); then
+  echo "Julia examples must use parse_file() after using PowerIO:"
+  echo "$hits"
+  exit 1
+fi
+
+# Keep the three ordinary language quickstarts executable and stable.
+grep -Fq 'let module: PioModule<BalancedNetwork> = powerio::try_into_typed(module)?;' README.md
+grep -Fq 'module = powerio.parse("case9.m")' README.md
+grep -Fq 'module_ = parse_file("case9.m")' README.md
 echo "terminology: clean"

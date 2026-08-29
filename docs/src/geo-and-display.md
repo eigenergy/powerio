@@ -18,7 +18,7 @@ pub struct Location {
     pub x: f64,
     /// Latitude for geographic coordinates.
     pub y: f64,
-    /// Point provenance when it differs from the network default.
+    /// Point origin when it differs from the network default.
     pub kind: Option<CoordsKind>,
 }
 
@@ -163,7 +163,7 @@ separate data.
 
 PowerIO stores and transports coordinates; it does not compute them. Synthetic
 layout of a coordinate free case is renderer math and stays in the consumer,
-which can write the result back with `kind = synthetic` so the provenance
+which can write the result back with `kind = synthetic` so the coordinate origin
 survives.
 
 The C ABI exposes the document as strings: `pio_geo_parse` normalizes a

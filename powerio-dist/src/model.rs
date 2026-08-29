@@ -128,7 +128,7 @@ pub struct DistLineCode {
     #[serde(default, with = "crate::nonfinite::upper_bounds")]
     #[cfg_attr(feature = "schema", schemars(with = "Option<Vec<Option<f64>>>"))]
     pub s_max: Option<Vec<f64>>,
-    /// Provenance of the impedance matrices (BMOPF `source`, e.g. "fem",
+    /// Origin of the impedance matrices (BMOPF `source`, e.g. "fem",
     /// "datasheet", "import").
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source: Option<String>,
@@ -966,9 +966,9 @@ pub(crate) struct MulticonductorNetworkTables {
     pub options: Vec<(String, String)>,
     /// Per-element record of which fields were materialized from a format
     /// default. Skipped in the `.pio.json` payload: the field holds
-    /// `&'static str` (no `Deserialize`), and this provenance belongs in the
-    /// compiler package's `source_maps` as `mapping_kind = defaulted`, not in
-    /// the raw IR payload. See
+    /// `&'static str` (no `Deserialize`), and these defaulted fields belong in
+    /// the module source map with `mapping_kind = defaulted`, not in the
+    /// network value. See
     /// <https://eigenergy.github.io/powerio/guide/pio-json-schema.html>.
     #[serde(skip)]
     pub defaulted: BTreeMap<String, Vec<&'static str>>,

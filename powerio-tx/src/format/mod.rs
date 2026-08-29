@@ -92,7 +92,7 @@ pub enum TargetFormat {
     Matpower,
     /// GE PSLF `.epc` (round-trip; byte-exact when the case kept its source).
     Pslf,
-    /// ARPA-E GO Challenge 3 JSON input data. This is read only except for
+    /// DOE GO Challenge 3 JSON input data. This is read only except for
     /// same format source echo when the parsed network still carries its source.
     Goc3Json,
     /// Surge native JSON network document.

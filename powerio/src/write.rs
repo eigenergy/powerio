@@ -31,10 +31,9 @@ fn is_pypsa_dir(format: &str) -> bool {
     matches!(format, "pypsa-csv" | "pypsa")
 }
 
-/// A typed sibling module over `value` carrying the dynamic module's
-/// provenance: source descriptors first (a diagnostic's span validates
-/// against them), then the findings, then the retained source, so the byte
-/// exact same format echo survives the dispatch.
+/// A typed sibling module over `value` carrying the dynamic module's source
+/// descriptors, diagnostics, and retained source. Source descriptors are
+/// added first because diagnostic spans validate against them.
 fn typed_sibling<T>(module: &PioModule<PioValue>, value: T) -> Result<PioModule<T>, Error> {
     let mut out = PioModule::new(value);
     for descriptor in module.sources() {

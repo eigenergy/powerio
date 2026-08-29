@@ -50,7 +50,7 @@ Python:
 import powerio
 case = powerio.parse("case9.m")
 case.kind                       # "balanced_network"
-net = case.value                # the typed network
+net = case.value                # BalancedNetwork
 case.diagnostics()              # native records: code, severity, message, spans
 ```
 

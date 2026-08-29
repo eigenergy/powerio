@@ -42,7 +42,7 @@ and the PMread leg covers the PowerModels JSON read side. pandapower JSON and
 PyPSA CSV folders have dedicated import validators because pandapower has its
 own JSON schema and PyPSA is a directory format; both validate the write
 direction only — the pandapower JSON and PyPSA readers have no external oracle.
-They, GO Challenge 3 JSON, Surge JSON, and the remaining source/target pairs
+They, DOE GO Challenge 3 JSON, Surge JSON, and the remaining source/target pairs
 (PowerModels JSON and PowerWorld sources into the non-PowerModels targets) rest
 on the Rust round trip suite.
 

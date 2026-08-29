@@ -24,12 +24,12 @@ pub struct Location {
     pub x: f64,
     /// Y coordinate. In geographic space this is latitude.
     pub y: f64,
-    /// Per point provenance when it differs from the network default.
+    /// Point origin when it differs from the network default.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub kind: Option<CoordsKind>,
 }
 
-/// Coordinate provenance.
+/// Coordinate origin.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "snake_case")]
@@ -48,7 +48,7 @@ pub struct GeoMeta {
     /// Coordinate space shared by every location on the network.
     #[serde(flatten)]
     pub space: CoordinateSpace,
-    /// Default provenance for points without their own `kind`.
+    /// Default origin for points without their own `kind`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub kind: Option<CoordsKind>,
 }

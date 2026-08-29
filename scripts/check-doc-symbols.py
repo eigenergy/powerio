@@ -101,7 +101,11 @@ for page in PAGES:
                     fail(page, f"teaches CLI subcommand `powerio {match.group(1)}`, absent from the binary")
     # Julia identifiers taught in julia fences: calls of exported-looking names.
     if julia_exports:
-        for fence in re.findall(r"```julia\n(.*?)```", text, re.S):
+        for tag, fence in fenced_blocks(text):
+            if tag != "julia":
+                continue
+            if "PowerIO." in fence and "import PowerIO" not in fence and not is_history:
+                fail(page, "julia example qualifies PowerIO names without `import PowerIO`")
             for name in set(re.findall(r"(?<![.\w])([a-z][a-z_0-9]*[a-z0-9]!?)\(", fence)):
                 if name in {"println", "print", "read", "readdir", "joinpath", "string",
                             "length", "first", "filter", "endswith", "typeof", "show",

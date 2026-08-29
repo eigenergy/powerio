@@ -2,7 +2,7 @@
 //!
 //! These are model-level transforms, distinct from the format readers/writers and
 //! from the per unit [`to_normalized`](BalancedNetwork::to_normalized) form.
-//! [`subset`](BalancedNetwork::subset) carves a study footprint out of a larger case;
+//! [`subset`](BalancedNetwork::subset) selects a subnetwork from a larger case;
 //! [`merge_bus`](BalancedNetwork::merge_bus) collapses two buses into one (re-homing the
 //! incident elements), and [`reduce_zero_impedance`](BalancedNetwork::reduce_zero_impedance)
 //! builds on it to remove jumper branches.

@@ -27,7 +27,7 @@ const FMT: &str = "geo layer";
 pub struct GeoLayer {
     /// Coordinate space of every feature.
     pub space: CoordinateSpace,
-    /// Default provenance, stamped into the `powerio_geo` member on write.
+    /// Default coordinate origin, stamped into the `powerio_geo` member on write.
     pub kind: Option<CoordsKind>,
     pub features: Vec<GeoFeature>,
 }
@@ -41,7 +41,7 @@ pub struct GeoFeature {
     /// Endpoint bus references for a branch, the unordered fallback identity.
     pub from: Option<String>,
     pub to: Option<String>,
-    /// Per feature provenance when it differs from the layer default.
+    /// Feature origin when it differs from the layer default.
     pub kind: Option<CoordsKind>,
 }
 
@@ -822,7 +822,7 @@ fn push_once(parsed: &mut GeoParsed, warning: String) {
 impl BalancedNetwork {
     /// Extract this network's coordinates as a standalone [`GeoLayer`]:
     /// one point per located bus, one route per routed branch. The layer
-    /// carries the network's coordinate space and default provenance.
+    /// carries the network's coordinate space and default origin.
     #[must_use]
     pub fn geo_layer(&self) -> GeoLayer {
         let mut features = Vec::new();
