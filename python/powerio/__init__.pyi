@@ -21,7 +21,15 @@ class PowerIOParseError(PowerIOError):
     """A case file is malformed or unparseable."""
 
 class PowerIODataError(PowerIOError):
-    """A well-formed case cannot satisfy a requested operation."""
+    """A well-formed case cannot satisfy a requested operation.
+
+    A refused pass (e.g. :meth:`PioModule.to_balanced`) additionally sets
+    ``diagnostics``: the pass's structured findings, each a dict with
+    ``code``, ``severity``, ``message``, and ``target``. Absent on a
+    ``PowerIODataError`` raised elsewhere.
+    """
+
+    diagnostics: List[Dict[str, Any]]
 
 # The runtime re-exports the native record classes; the stub does the same so
 # a `_powerio.Diagnostic` and a `powerio.Diagnostic` are one type to a checker.
@@ -343,7 +351,9 @@ class PioModule:
     @classmethod
     def from_str(cls, text: str, from_: Optional[str] = ...) -> PioModule: ...
     @classmethod
-    def from_bytes(cls, data: bytes, from_: Optional[str] = ...) -> PioModule: ...
+    def from_bytes(
+        cls, data: bytes, from_: Optional[str] = ..., *, name: Optional[str] = ...
+    ) -> PioModule: ...
     @property
     def value(self) -> Any: ...
     def as_balanced_network(self) -> BalancedNetwork: ...
@@ -369,6 +379,7 @@ def parse(
     *,
     include_root: Optional[Any] = ...,
     value_type: Optional[type] = ...,
+    name: Optional[str] = ...,
 ) -> PioModule: ...
 def write_gridfm_batch(
     networks: List[BalancedNetwork],
@@ -384,3 +395,4 @@ def write_gridfm_batch(
 ) -> GridfmOutputs: ...
 def read_gridfm(dir: Any, scenario: int = ...) -> GridfmRead: ...
 def read_gridfm_scenarios(dir: Any) -> List[GridfmRead]: ...
+def features() -> Dict[str, bool]: ...

@@ -154,11 +154,16 @@ def _one_input(path: Optional[str], content: Optional[str]) -> None:
 
 def _coded_error(prefix: str, exc: Exception) -> ValueError:
     """Lead with the diagnostic code when the failure carries one, so a
-    consumer that splits on the first colon reads a code, never prose."""
+    consumer that splits on the first colon reads a code, never prose. A
+    refusal's structured findings (currently only a refused balanced
+    lowering sets `.diagnostics`) ride along as trailing JSON, since an MCP
+    tool has no attribute channel back to its caller."""
     code = getattr(exc, "code", None)
-    if code:
-        return ValueError(f"{code}: {exc}")
-    return ValueError(f"{prefix}: {exc}")
+    message = f"{code}: {exc}" if code else f"{prefix}: {exc}"
+    diagnostics = getattr(exc, "diagnostics", None)
+    if diagnostics:
+        message = f"{message} | {jsonlib.dumps(diagnostics)}"
+    return ValueError(message)
 
 
 def _required(value: Optional[str], name: str) -> str:

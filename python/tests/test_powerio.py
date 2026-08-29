@@ -106,6 +106,19 @@ def test_public_type_is_balanced_network(case9):
     assert repr(case9).startswith("BalancedNetwork(")
 
 
+def test_features_reports_compiled_in_surface():
+    features = powerio.features()
+    assert features.keys() == {"arrow", "matrix", "gridfm", "dist", "prob"}
+    assert all(isinstance(v, bool) for v in features.values())
+    # matrix/dist/prob are unconditional dependencies of the extension; arrow
+    # has no Python binding surface at all.
+    assert features["matrix"] is True
+    assert features["dist"] is True
+    assert features["prob"] is True
+    assert features["arrow"] is False
+    assert "features" in powerio.__all__
+
+
 def test_parse_infers_format_from_extension():
     # parse_file dispatches on the extension; a .m file lands on MATPOWER.
     case = powerio.parse(DATA / "case9.m", value_type=powerio.BalancedNetwork).value
@@ -351,6 +364,23 @@ def test_parse_bytes_reaches_the_binary_reader():
     # Bytes a text format cannot decode raise, rather than blaming the case.
     with pytest.raises(powerio.PowerIOError, match="UTF-8"):
         powerio.parse(b"\xff\xfe\x00", "matpower", value_type=powerio.BalancedNetwork)
+
+
+def test_parse_bytes_name_reaches_detection_and_source_naming():
+    data = (DATA / "case9.m").read_bytes()
+
+    # A name with a recognized extension lets format detection run without an
+    # explicit from_, and the retained source records the given name.
+    named = powerio.parse(data, name="mycase.m")
+    assert named.kind == "balanced_network"
+    sources = json.loads(named.to_json())["sources"]
+    assert [s["name"] for s in sources] == ["mycase.m"]
+
+    # Without a name, in-memory bytes still get an explicit format and fall
+    # back to the placeholder name.
+    unnamed = powerio.parse(data, "matpower")
+    sources = json.loads(unnamed.to_json())["sources"]
+    assert [s["name"] for s in sources] == ["<memory>"]
 
 
 def test_read_warnings_surface():

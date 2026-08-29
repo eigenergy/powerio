@@ -512,10 +512,10 @@ impl PyBalancedNetwork {
         self.inner().source_format().name().to_owned()
     }
 
-    /// Read fidelity warnings attached at parse time: tables and columns the
-    /// model cannot carry, reported instead of dropped silently. Empty for
-    /// readers that don't report read warnings (currently every format except
-    /// pandapower JSON and PyPSA CSV).
+    /// Fidelity findings rendered at read time: tables, columns, or values
+    /// the model cannot carry, reported instead of dropped silently. This is
+    /// the rendered text of the diagnostics the reader recorded, not a
+    /// per-format guarantee; the count varies by source and is often zero.
     #[getter]
     fn read_warnings(&self) -> Vec<String> {
         self.warnings.clone()
@@ -1963,15 +1963,18 @@ impl PyPioModule {
     }
 
     /// Parse in-memory case bytes into a module. The only in-memory way to
-    /// read a binary format; text formats must be UTF-8.
+    /// read a binary format; text formats must be UTF-8. `name` identifies
+    /// the buffer for diagnostics and extension-based format detection;
+    /// defaults to `<memory>` when not given.
     #[staticmethod]
-    #[pyo3(signature = (data, from_=None))]
-    fn from_bytes(data: &[u8], from_: Option<&str>) -> PyResult<Self> {
-        let mut source = powerio_core::Source::from_bytes("<memory>", data.to_vec())
-            .map_err(|error| core_error_pyerr(&error))?;
-        if let Some(name) = from_ {
-            let format =
-                powerio_core::FormatId::new(name).map_err(|error| core_error_pyerr(&error))?;
+    #[pyo3(signature = (data, from_=None, name=None))]
+    fn from_bytes(data: &[u8], from_: Option<&str>, name: Option<&str>) -> PyResult<Self> {
+        let mut source =
+            powerio_core::Source::from_bytes(name.unwrap_or("<memory>"), data.to_vec())
+                .map_err(|error| core_error_pyerr(&error))?;
+        if let Some(format_name) = from_ {
+            let format = powerio_core::FormatId::new(format_name)
+                .map_err(|error| core_error_pyerr(&error))?;
             source = source.with_format(format);
         }
         powerio::parse(source)
@@ -2144,7 +2147,9 @@ impl PyPioModule {
     /// Lower the multiconductor value to a balanced module. Common records
     /// and source ownership carry over; the pass appends its findings and one
     /// Transform history entry. On refusal the handle keeps its module and
-    /// the error carries the structured diagnostics as JSON.
+    /// the raised `PowerIODataError` carries the refusal's diagnostic code as
+    /// `.code` and its structured findings as `.diagnostics` (a list of
+    /// dicts with `code`/`severity`/`message`/`target`).
     #[pyo3(signature = (base_mva=100.0))]
     fn lower_to_balanced(&mut self, base_mva: f64) -> PyResult<Self> {
         let module = self
@@ -2163,9 +2168,32 @@ impl PyPioModule {
             }),
             Err((module, error)) => {
                 self.module = Some(module);
-                let details =
-                    serde_json::to_string(&error.diagnostics).unwrap_or_else(|_| "[]".to_owned());
-                Err(PowerIODataError::new_err(format!("{error} | {details}")))
+                let err = PowerIODataError::new_err(error.to_string());
+                let code = error
+                    .diagnostics
+                    .first()
+                    .map(|d| d.code.as_str().to_owned());
+                let diagnostics: Vec<serde_json::Value> = error
+                    .diagnostics
+                    .iter()
+                    .map(|d| {
+                        serde_json::json!({
+                            "code": d.code.as_str(),
+                            "severity": format!("{:?}", d.severity).to_lowercase(),
+                            "message": d.message,
+                            "target": d.element_path,
+                        })
+                    })
+                    .collect();
+                Python::attach(|py| -> PyResult<()> {
+                    if let Some(code) = &code {
+                        err.value(py).setattr("code", code)?;
+                    }
+                    let list = json_value_to_py(py, &serde_json::Value::Array(diagnostics))?;
+                    err.value(py).setattr("diagnostics", list)?;
+                    Ok(())
+                })?;
+                Err(err)
             }
         }
     }

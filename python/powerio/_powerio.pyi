@@ -24,7 +24,15 @@ class PowerIOParseError(PowerIOError):
     """A case file is malformed or unparseable."""
 
 class PowerIODataError(PowerIOError):
-    """A well-formed case cannot satisfy a requested operation."""
+    """A well-formed case cannot satisfy a requested operation.
+
+    A refused pass (e.g. ``_PioModule.lower_to_balanced``) additionally sets
+    ``diagnostics``: the pass's structured findings, each a dict with
+    ``code``, ``severity``, ``message``, and ``target``. Absent on a
+    ``PowerIODataError`` raised elsewhere.
+    """
+
+    diagnostics: List[Dict[str, Any]]
 
 class _BalancedNetwork:
     @property
@@ -250,7 +258,9 @@ class _PioModule:
     @staticmethod
     def from_str(text: str, from_: Optional[str] = ...) -> "_PioModule": ...
     @staticmethod
-    def from_bytes(data: bytes, from_: Optional[str] = ...) -> "_PioModule": ...
+    def from_bytes(
+        data: bytes, from_: Optional[str] = ..., name: Optional[str] = ...
+    ) -> "_PioModule": ...
     def to_json(self) -> str: ...
     def kind(self) -> str: ...
     def inspect_json(self) -> str: ...
