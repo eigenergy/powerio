@@ -108,6 +108,10 @@ fn bench_dense_sensitivities(c: &mut Criterion) {
 }
 
 fn bench_pipeline_paths(c: &mut Criterion) {
+    // The writer reserves its destination exclusively, and criterion invokes
+    // the routine repeatedly across warmup and measurement, so every run
+    // writes into a fresh, process-uniquely named subdirectory.
+    static PIPELINE_RUN: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let net = network("case2869pegase");
     let out = tempfile::tempdir().expect("create benchmark output directory");
     let pipeline = Pipeline {
@@ -120,10 +124,11 @@ fn bench_pipeline_paths(c: &mut Criterion) {
 
     c.bench_function("pipeline_ybus_pair_case2869pegase", |b| {
         b.iter(|| {
-            let outputs = pipeline
-                .run(black_box(&net), black_box(out.path()))
-                .unwrap();
-            black_box(outputs.files.len())
+            let n = PIPELINE_RUN.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            let dir = out.path().join(n.to_string());
+            std::fs::create_dir(&dir).unwrap();
+            let outputs = pipeline.run(black_box(&net), black_box(&dir)).unwrap();
+            black_box(outputs.files.len());
         });
     });
 }

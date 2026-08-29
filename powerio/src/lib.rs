@@ -63,6 +63,7 @@ mod collect;
 pub mod gridfm;
 
 pub mod package;
+pub mod select;
 pub mod stored;
 pub mod write;
 pub use write::{write_module_as, write_module_str, write_module_str_with_options};

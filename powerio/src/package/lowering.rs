@@ -136,6 +136,13 @@ impl MulticonductorToBalancedReadiness {
 pub struct MulticonductorToBalancedLowering {
     pub network: BalancedNetwork,
     pub record: LoweringRecord,
+    /// Buses removed by closed switch merges: removed bus ID to the kept
+    /// bus ID, in the source's spelling.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub merged_buses: BTreeMap<String, String>,
+    /// Closed switches whose merge removed them from the balanced model.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub removed_switches: Vec<String>,
 }
 
 /// Structured failure from the raw multiconductor to balanced lowering pass.
@@ -232,7 +239,16 @@ struct LoweringState<'a> {
     net: &'a MulticonductorNetwork,
     options: MulticonductorToBalancedOptions,
     neutral_terminals: BTreeSet<String>,
+    /// Every multiconductor bus (lowercase) to its balanced bus: merged
+    /// members map to their canonical bus's ID.
     bus_ids: BTreeMap<String, BusId>,
+    /// Lowercase bus id to its canonical member's row index.
+    canonical_rows: BTreeMap<String, usize>,
+    /// Removed bus ID to kept bus ID, source spelling.
+    merged_buses: BTreeMap<String, String>,
+    removed_switches: Vec<String>,
+    /// Per bus (lowercase) line to line voltage base in volts.
+    bus_base: BTreeMap<String, f64>,
     record: LoweringRecord,
 }
 
@@ -274,11 +290,54 @@ impl<'a> LoweringState<'a> {
                 .push("open switches dropped from balanced model".to_owned());
         }
 
-        let bus_ids = net
+        // Union closed switch endpoints: preflight already refused every
+        // blocked merge, so a closed switch here merges its buses. The
+        // canonical member is the earliest bus row; merged rows disappear
+        // from the balanced model and the mapping is recorded.
+        let row_of: BTreeMap<String, usize> = net
             .buses()
             .iter()
             .enumerate()
-            .map(|(idx, bus)| (bus.id.to_ascii_lowercase(), BusId(idx + 1)))
+            .map(|(row, bus)| (bus.id.to_ascii_lowercase(), row))
+            .collect();
+        let mut union = UnionFind::new(net.buses().len());
+        let mut removed_switches = Vec::new();
+        for sw in net.switches().iter().filter(|sw| !sw.open) {
+            let (Some(&from), Some(&to)) = (
+                row_of.get(&sw.bus_from.to_ascii_lowercase()),
+                row_of.get(&sw.bus_to.to_ascii_lowercase()),
+            ) else {
+                continue;
+            };
+            union.join(from, to);
+            removed_switches.push(sw.name.clone());
+            record.assumptions.push(format!(
+                "closed switch {} merged bus {} into bus {} and was removed; no impedance \
+                 was invented for it",
+                sw.name, sw.bus_to, sw.bus_from
+            ));
+        }
+        let mut canonical_rows = BTreeMap::new();
+        let mut merged_buses = BTreeMap::new();
+        let mut number = BTreeMap::new();
+        for (row, bus) in net.buses().iter().enumerate() {
+            let root = union.root(row);
+            if root == row {
+                let id = BusId(number.len() + 1);
+                number.insert(row, id);
+            } else {
+                merged_buses.insert(bus.id.clone(), net.buses()[root].id.clone());
+            }
+            canonical_rows.insert(bus.id.to_ascii_lowercase(), root);
+        }
+        let bus_ids = net
+            .buses()
+            .iter()
+            .map(|bus| {
+                let key = bus.id.to_ascii_lowercase();
+                let root = union.root(row_of[&key]);
+                (key, number[&root])
+            })
             .collect();
 
         Self {
@@ -286,6 +345,10 @@ impl<'a> LoweringState<'a> {
             options,
             neutral_terminals: global_neutral_terminals(net),
             bus_ids,
+            canonical_rows,
+            merged_buses,
+            removed_switches,
+            bus_base: BTreeMap::new(),
             record,
         }
     }
@@ -299,10 +362,12 @@ impl<'a> LoweringState<'a> {
             ));
         };
 
+        self.assign_bus_bases(base);
         let buses = self.lower_buses(base);
-        let branches = self.lower_lines(base)?;
+        let mut branches = self.lower_lines()?;
+        branches.extend(self.lower_transformers());
         let loads = self.lower_loads();
-        let shunts = self.lower_shunts(base)?;
+        let shunts = self.lower_shunts()?;
         let generators = self.lower_generators(&buses);
         self.record_capacitor_drops();
         self.err_if_errors()?;
@@ -352,7 +417,115 @@ impl<'a> LoweringState<'a> {
         Ok(MulticonductorToBalancedLowering {
             network,
             record: self.record.clone(),
+            merged_buses: self.merged_buses.clone(),
+            removed_switches: self.removed_switches.clone(),
         })
+    }
+
+    /// Voltage bases by zone: buses joined by lines or merged switches share
+    /// one base; a zone with a source takes the source's positive sequence
+    /// magnitude; a supported transformer bases the zone across it with the
+    /// far winding's rated voltage; anything still unbased defaults to the
+    /// reference base with a note.
+    fn assign_bus_bases(&mut self, reference: VoltageBase) {
+        let row_of: BTreeMap<String, usize> = self
+            .net
+            .buses()
+            .iter()
+            .enumerate()
+            .map(|(row, bus)| (bus.id.to_ascii_lowercase(), row))
+            .collect();
+        let mut zones = UnionFind::new(self.net.buses().len());
+        for line in self.net.lines() {
+            if let (Some(&from), Some(&to)) = (
+                row_of.get(&line.bus_from.to_ascii_lowercase()),
+                row_of.get(&line.bus_to.to_ascii_lowercase()),
+            ) {
+                zones.join(from, to);
+            }
+        }
+        for sw in self.net.switches().iter().filter(|sw| !sw.open) {
+            if let (Some(&from), Some(&to)) = (
+                row_of.get(&sw.bus_from.to_ascii_lowercase()),
+                row_of.get(&sw.bus_to.to_ascii_lowercase()),
+            ) {
+                zones.join(from, to);
+            }
+        }
+
+        let mut zone_base: BTreeMap<usize, f64> = BTreeMap::new();
+        for source in self.net.sources() {
+            let Some(&row) = row_of.get(&source.bus.to_ascii_lowercase()) else {
+                continue;
+            };
+            let bus = self.net.bus(&source.bus);
+            let positions = active_positions(&source.terminal_map, bus, &self.neutral_terminals);
+            if positions.len() != 3 {
+                continue;
+            }
+            let Some(v1) = positive_sequence_voltage(source, &positions) else {
+                continue;
+            };
+            if v1.norm().is_finite() && v1.norm() > 0.0 {
+                zone_base.entry(zones.root(row)).or_insert(v1.norm());
+            }
+        }
+
+        let supported: Vec<(usize, usize, f64, f64)> = self
+            .net
+            .transformers()
+            .iter()
+            .filter_map(|transformer| {
+                let [high, low] =
+                    classify_transformer(self.net, transformer, &self.neutral_terminals).ok()?;
+                let high_row = *row_of.get(&high.bus.to_ascii_lowercase())?;
+                let low_row = *row_of.get(&low.bus.to_ascii_lowercase())?;
+                Some((high_row, low_row, high.v_ref, low.v_ref))
+            })
+            .collect();
+        loop {
+            let mut changed = false;
+            for &(high_row, low_row, high_v, low_v) in &supported {
+                let (high_zone, low_zone) = (zones.root(high_row), zones.root(low_row));
+                match (
+                    zone_base.contains_key(&high_zone),
+                    zone_base.contains_key(&low_zone),
+                ) {
+                    (true, false) => {
+                        zone_base.insert(low_zone, low_v);
+                        changed = true;
+                    }
+                    (false, true) => {
+                        zone_base.insert(high_zone, high_v);
+                        changed = true;
+                    }
+                    _ => {}
+                }
+            }
+            if !changed {
+                break;
+            }
+        }
+
+        for (row, bus) in self.net.buses().iter().enumerate() {
+            let zone = zones.root(row);
+            let base = zone_base.get(&zone).copied().unwrap_or_else(|| {
+                self.record.dropped_fields.push(format!(
+                    "bus {} voltage base defaulted to the reference base",
+                    bus.id
+                ));
+                reference.line_to_line_volts
+            });
+            self.bus_base.insert(bus.id.to_ascii_lowercase(), base);
+        }
+    }
+
+    /// The line to line voltage base of one bus, in volts.
+    fn base_volts(&self, bus: &str) -> f64 {
+        self.bus_base
+            .get(&bus.to_ascii_lowercase())
+            .copied()
+            .expect("every declared bus was based")
     }
 
     fn voltage_base(&mut self) -> Result<Option<VoltageBase>, MulticonductorToBalancedError> {
@@ -428,66 +601,81 @@ format!(
         Ok(None)
     }
 
-    fn lower_buses(&mut self, base: VoltageBase) -> Vec<Bus> {
-        self.net
-            .buses()
-            .iter()
-            .enumerate()
-            .map(|(idx, bus)| {
-                let source = self
-                    .net
+    fn lower_buses(&mut self, _reference: VoltageBase) -> Vec<Bus> {
+        // Canonical buses only: a merged member's data folds into its
+        // canonical bus, and its identity is recorded in `merged_buses`.
+        let mut members: BTreeMap<usize, Vec<&DistBus>> = BTreeMap::new();
+        for bus in self.net.buses() {
+            let root = self.canonical_rows[&bus.id.to_ascii_lowercase()];
+            members.entry(root).or_default().push(bus);
+        }
+        let mut balanced_buses = Vec::with_capacity(members.len());
+        for (&root, group) in &members {
+            let canonical = &self.net.buses()[root];
+            let base_volts = self.base_volts(&canonical.id);
+            let sourced = group.iter().find_map(|bus| {
+                self.net
                     .sources()
                     .iter()
-                    .find(|source| source.bus.eq_ignore_ascii_case(&bus.id));
-                let (vm, va) = source
-                    .and_then(|source| {
-                        let positions = active_positions(
-                            &source.terminal_map,
-                            Some(bus),
-                            &self.neutral_terminals,
-                        );
-                        positive_sequence_voltage(source, &positions)
-                    })
-                    .map_or((1.0, 0.0), |v| {
-                        (
-                            v.norm() / base.line_to_line_volts,
-                            radians_to_degrees(v.arg()),
-                        )
-                    });
-                if source.is_none() {
-                    self.record.dropped_fields.push(format!(
-                        "bus {} voltage magnitude and angle defaulted to 1.0 p.u. and 0 degrees",
-                        bus.id
-                    ));
+                    .find(|source| source.bus.eq_ignore_ascii_case(&bus.id))
+                    .map(|source| (*bus, source))
+            });
+            let (vm, va) = sourced
+                .and_then(|(bus, source)| {
+                    let positions =
+                        active_positions(&source.terminal_map, Some(bus), &self.neutral_terminals);
+                    positive_sequence_voltage(source, &positions)
+                })
+                .map_or((1.0, 0.0), |v| {
+                    (v.norm() / base_volts, radians_to_degrees(v.arg()))
+                });
+            if sourced.is_none() {
+                self.record.dropped_fields.push(format!(
+                    "bus {} voltage magnitude and angle defaulted to 1.0 p.u. and 0 degrees",
+                    canonical.id
+                ));
+            }
+            // Preflight refused conflicting stated bounds across a merge, so
+            // the first member stating both carries the group's bounds.
+            let stated = group.iter().find_map(|bus| match (bus.v_min, bus.v_max) {
+                (Some(vmin), Some(vmax)) if vmin.is_finite() && vmax.is_finite() => {
+                    Some((vmin / base_volts, vmax / base_volts))
                 }
-                let (vmin, vmax) = match (bus.v_min, bus.v_max) {
-                    (Some(vmin), Some(vmax)) if vmin.is_finite() && vmax.is_finite() => (
-                        vmin / base.line_to_line_volts,
-                        vmax / base.line_to_line_volts,
-                    ),
-                    _ => {
-                        self.record.dropped_fields.push(format!(
-                            "bus {} voltage bounds defaulted to 0.9/1.1 p.u.",
-                            bus.id
-                        ));
-                        (0.9, 1.1)
-                    }
-                };
+                _ => None,
+            });
+            let (vmin, vmax) = stated.unwrap_or_else(|| {
+                self.record.dropped_fields.push(format!(
+                    "bus {} voltage bounds defaulted to 0.9/1.1 p.u.",
+                    canonical.id
+                ));
+                (0.9, 1.1)
+            });
+            for bus in group {
                 self.record_bus_bound_drops(bus);
-                let mut balanced = Bus::new(
-                    BusId(idx + 1),
-                    self.bus_kind(&bus.id),
-                    base.line_to_line_volts / 1000.0,
-                );
-                balanced.vm = vm;
-                balanced.va = va;
-                balanced.vmax = vmax;
-                balanced.vmin = vmin;
-                balanced.name = Some(bus.id.clone());
-                balanced.extras = source_extra("multiconductor_bus_id", &bus.id);
-                balanced
-            })
-            .collect()
+            }
+            let kind = group
+                .iter()
+                .map(|bus| self.bus_kind(&bus.id))
+                .min_by_key(|kind| match kind {
+                    BusType::Ref => 0,
+                    BusType::Pv => 1,
+                    _ => 2,
+                })
+                .unwrap_or(BusType::Pq);
+            let mut balanced = Bus::new(
+                self.bus_ids[&canonical.id.to_ascii_lowercase()],
+                kind,
+                base_volts / 1000.0,
+            );
+            balanced.vm = vm;
+            balanced.va = va;
+            balanced.vmax = vmax;
+            balanced.vmin = vmin;
+            balanced.name = Some(canonical.id.clone());
+            balanced.extras = source_extra("multiconductor_bus_id", &canonical.id);
+            balanced_buses.push(balanced);
+        }
+        balanced_buses
     }
 
     /// A rated capacitor bank (BMOPF schema 0.1.0 `capacitor`) has no
@@ -543,10 +731,7 @@ format!(
     }
 
     #[allow(clippy::too_many_lines)]
-    fn lower_lines(
-        &mut self,
-        base: VoltageBase,
-    ) -> Result<Vec<Branch>, MulticonductorToBalancedError> {
+    fn lower_lines(&mut self) -> Result<Vec<Branch>, MulticonductorToBalancedError> {
         let mut branches = Vec::with_capacity(self.net.lines().len());
         for (idx, line) in self.net.lines().iter().enumerate() {
             let Some(code) = self.net.linecode(&line.linecode) else {
@@ -614,7 +799,8 @@ format!(
                 line.length,
                 ShuntSide::To,
             )?;
-            let z_base = base.z_base_ohm(self.options.base_mva);
+            let base_volts = self.base_volts(&line.bus_from);
+            let z_base = z_base_ohm_of(base_volts, self.options.base_mva);
             let y_scale = z_base;
             let charging = BranchCharging::new(
                 y_from.re * y_scale,
@@ -622,14 +808,13 @@ format!(
                 y_to.re * y_scale,
                 y_to.im * y_scale,
             );
-            let rate =
-                line_rate_mva(line, code, &active, base.line_to_line_volts).unwrap_or_else(|| {
-                    self.record.dropped_fields.push(format!(
-                        "line {} thermal rating defaulted to 0 MVA",
-                        line.name
-                    ));
-                    0.0
-                });
+            let rate = line_rate_mva(line, code, &active, base_volts).unwrap_or_else(|| {
+                self.record.dropped_fields.push(format!(
+                    "line {} thermal rating defaulted to 0 MVA",
+                    line.name
+                ));
+                0.0
+            });
             let mut branch = Branch::new(from, to, z_ohm.re / z_base, z_ohm.im / z_base);
             branch.b = charging.total_b();
             branch.charging = Some(charging);
@@ -754,6 +939,66 @@ format!("line {line_idx} has no finite length ({length}), so its impedance canno
         MulticonductorToBalancedError::new(self.options, diagnostics)
     }
 
+    /// Supported transformers lower into balanced branches: series impedance
+    /// from the winding resistances and the first short circuit reactance on
+    /// the transformer's own base converted to the system base, tap from the
+    /// rated winding voltages against the zone voltage bases, and the
+    /// representable ANSI thirty degree connection shift with the high
+    /// voltage side leading.
+    fn lower_transformers(&mut self) -> Vec<Branch> {
+        let mut branches = Vec::new();
+        for transformer in self.net.transformers() {
+            let Ok([high, low]) =
+                classify_transformer(self.net, transformer, &self.neutral_terminals)
+            else {
+                // Preflight refused the pass for unsupported transformers.
+                continue;
+            };
+            let (Some(from), Some(to)) = (self.bus_id(&high.bus), self.bus_id(&low.bus)) else {
+                continue;
+            };
+            let base_from = self.base_volts(&high.bus);
+            let base_to = self.base_volts(&low.bus);
+            let tap = (high.v_ref * high.tap / base_from) / (low.v_ref * low.tap / base_to);
+            let z_scale = (self.options.base_mva * 1_000_000.0 / high.s_rating)
+                * (high.v_ref / base_from).powi(2);
+            let r = ((high.r_pct + low.r_pct) / 100.0) * z_scale;
+            let x = (transformer.xsc_pct[0] / 100.0) * z_scale;
+            let shift = if high.v_ref >= low.v_ref { 30.0 } else { -30.0 };
+            let rate = high.s_rating / 1_000_000.0;
+            self.record.assumptions.push(format!(
+                "transformer {} lowered as a balanced branch with tap {tap:.6} and the ANSI \
+                 {shift} degree connection shift (high voltage side leads)",
+                transformer.name
+            ));
+            if high.r_neutral.is_some()
+                || high.x_neutral.is_some()
+                || low.r_neutral.is_some()
+                || low.x_neutral.is_some()
+            {
+                self.record.dropped_fields.push(format!(
+                    "transformer {} neutral grounding impedance dropped",
+                    transformer.name
+                ));
+            }
+            if transformer.xsc_pct.len() > 1 {
+                self.record.dropped_fields.push(format!(
+                    "transformer {} extra short circuit reactances dropped",
+                    transformer.name
+                ));
+            }
+            let mut branch = Branch::new(from, to, r, x);
+            branch.tap = tap;
+            branch.shift = shift;
+            branch.rate_a = rate;
+            branch.rate_b = rate;
+            branch.rate_c = rate;
+            branch.extras = source_extra("multiconductor_transformer", &transformer.name);
+            branches.push(branch);
+        }
+        branches
+    }
+
     fn lower_loads(&mut self) -> Vec<Load> {
         self.net
             .loads()
@@ -794,10 +1039,7 @@ format!(
             .collect()
     }
 
-    fn lower_shunts(
-        &mut self,
-        base: VoltageBase,
-    ) -> Result<Vec<Shunt>, MulticonductorToBalancedError> {
+    fn lower_shunts(&mut self) -> Result<Vec<Shunt>, MulticonductorToBalancedError> {
         let mut shunts = Vec::with_capacity(self.net.shunts().len());
         for (idx, shunt) in self.net.shunts().iter().enumerate() {
             let Some(bus) = self.bus_id(&shunt.bus) else {
@@ -821,7 +1063,8 @@ format!(
                 ));
                 partial_phase_admittance(&shunt.g, &shunt.b, &active)
             };
-            let scale = base.line_to_line_volts * base.line_to_line_volts / 1_000_000.0;
+            let base_volts = self.base_volts(&shunt.bus);
+            let scale = base_volts * base_volts / 1_000_000.0;
             let mut balanced = Shunt::new(bus, y.re * scale, y.im * scale);
             balanced.extras = source_extra("multiconductor_shunt", &shunt.name);
             shunts.push(balanced);
@@ -955,9 +1198,34 @@ struct VoltageBase {
     line_to_line_volts: f64,
 }
 
-impl VoltageBase {
-    fn z_base_ohm(self, base_mva: f64) -> f64 {
-        self.line_to_line_volts * self.line_to_line_volts / (base_mva * 1_000_000.0)
+fn z_base_ohm_of(line_to_line_volts: f64, base_mva: f64) -> f64 {
+    line_to_line_volts * line_to_line_volts / (base_mva * 1_000_000.0)
+}
+
+struct UnionFind {
+    parent: Vec<usize>,
+}
+
+impl UnionFind {
+    fn new(len: usize) -> Self {
+        Self {
+            parent: (0..len).collect(),
+        }
+    }
+
+    fn root(&mut self, mut node: usize) -> usize {
+        while self.parent[node] != node {
+            self.parent[node] = self.parent[self.parent[node]];
+            node = self.parent[node];
+        }
+        node
+    }
+
+    fn join(&mut self, a: usize, b: usize) {
+        let (a, b) = (self.root(a), self.root(b));
+        // The smaller row stays the root, so the canonical member is stable.
+        let (keep, fold) = if a <= b { (a, b) } else { (b, a) };
+        self.parent[fold] = keep;
     }
 }
 
@@ -1511,6 +1779,7 @@ fn square_matrix_shape(matrix: &Mat, n: usize) -> bool {
 }
 
 fn check_switches(net: &MulticonductorNetwork, report: &mut MulticonductorToBalancedReadiness) {
+    let neutral_terminals = global_neutral_terminals(net);
     for (i, sw) in net.switches().iter().enumerate() {
         if sw.open {
             report.diagnostics.push(
@@ -1524,18 +1793,120 @@ fn check_switches(net: &MulticonductorNetwork, report: &mut MulticonductorToBala
                 .with_element_path(format!("/model/multiconductor_network/switches/{i}")),
             );
         } else {
-            report.diagnostics.push(
+            report
+                .diagnostics
+                .extend(switch_merge_blockers(net, i, sw, &neutral_terminals));
+        }
+    }
+}
+
+/// Everything that stops a closed switch from merging its buses. An empty
+/// list means the switch merges: its endpoints collapse to one balanced bus
+/// and the switch identity is removed with the mapping recorded. Merging
+/// never invents an impedance.
+fn switch_merge_blockers(
+    net: &MulticonductorNetwork,
+    index: usize,
+    sw: &powerio_dist::DistSwitch,
+    neutral_terminals: &BTreeSet<String>,
+) -> Vec<StructuredDiagnostic> {
+    let path = format!("/model/multiconductor_network/switches/{index}");
+    let mut blockers = Vec::new();
+    if sw
+        .i_max
+        .as_ref()
+        .is_some_and(|limits| limits.iter().any(|limit| limit.is_finite()))
+    {
+        blockers.push(
+            StructuredDiagnostic::of(
+                &codes::TRANSFORM_MULTI_TO_BALANCED_RATED_CLOSED_SWITCH,
+                format!(
+                    "closed switch {} carries a finite ampacity; merging its buses would \
+                     remove the branch flow the limit constrains",
+                    sw.name
+                ),
+            )
+            .with_element_path(path.clone()),
+        );
+    }
+    let from_bus = net.bus(&sw.bus_from);
+    let to_bus = net.bus(&sw.bus_to);
+    if from_bus.is_none() || to_bus.is_none() {
+        let missing = if from_bus.is_none() {
+            &sw.bus_from
+        } else {
+            &sw.bus_to
+        };
+        blockers.push(
+            StructuredDiagnostic::of(
+                &codes::TRANSFORM_MULTI_TO_BALANCED_UNKNOWN_BUS,
+                format!("switch {} references unknown bus {missing}", sw.name),
+            )
+            .with_element_path(path.clone()),
+        );
+        return blockers;
+    }
+    if !same_active_phase_order(
+        from_bus,
+        &sw.terminal_map_from,
+        to_bus,
+        &sw.terminal_map_to,
+        neutral_terminals,
+    ) {
+        blockers.push(
+            StructuredDiagnostic::of(
+                &codes::TRANSFORM_MULTI_TO_BALANCED_SWITCH_TERMINAL_MISMATCH,
+                format!(
+                    "closed switch {} does not map identical conductors on both ends, so its \
+                     buses are not electrically identical",
+                    sw.name
+                ),
+            )
+            .with_element_path(path.clone()),
+        );
+    }
+    if !sw.bus_from.eq_ignore_ascii_case(&sw.bus_to) {
+        let sourced = |bus: &str| {
+            net.sources()
+                .iter()
+                .any(|source| source.bus.eq_ignore_ascii_case(bus))
+        };
+        if sourced(&sw.bus_from) && sourced(&sw.bus_to) {
+            blockers.push(
                 StructuredDiagnostic::of(
-                    &codes::TRANSFORM_MULTI_TO_BALANCED_UNSUPPORTED_CLOSED_SWITCH,
+                    &codes::TRANSFORM_MULTI_TO_BALANCED_SWITCH_MERGE_CONFLICT,
                     format!(
-                        "closed switch {} is not lowered into a zero impedance balanced branch",
+                        "closed switch {} joins two buses that both carry voltage source \
+                         references",
                         sw.name
                     ),
                 )
-                .with_element_path(format!("/model/multiconductor_network/switches/{i}")),
+                .with_element_path(path.clone()),
             );
         }
+        let (from_bus, to_bus) = (from_bus.expect("checked"), to_bus.expect("checked"));
+        for (label, a, b) in [
+            ("v_min", from_bus.v_min, to_bus.v_min),
+            ("v_max", from_bus.v_max, to_bus.v_max),
+        ] {
+            if let (Some(a), Some(b)) = (a, b)
+                && (a - b).abs() > f64::EPSILON * a.abs().max(b.abs()).max(1.0)
+            {
+                blockers.push(
+                    StructuredDiagnostic::of(
+                        &codes::TRANSFORM_MULTI_TO_BALANCED_SWITCH_MERGE_CONFLICT,
+                        format!(
+                            "closed switch {} joins buses stating different {label} bounds \
+                             ({a} and {b})",
+                            sw.name
+                        ),
+                    )
+                    .with_element_path(path.clone()),
+                );
+            }
+        }
     }
+    blockers
 }
 
 fn global_neutral_terminals(net: &MulticonductorNetwork) -> BTreeSet<String> {
@@ -1586,18 +1957,92 @@ fn check_phase_reference(
 }
 
 fn check_transformers(net: &MulticonductorNetwork, report: &mut MulticonductorToBalancedReadiness) {
+    let neutral_terminals = global_neutral_terminals(net);
     for (i, transformer) in net.transformers().iter().enumerate() {
-        report.diagnostics.push(
-            StructuredDiagnostic::of(
-                &codes::TRANSFORM_MULTI_TO_BALANCED_UNSUPPORTED_TRANSFORMER,
-                format!(
-                    "transformer {} is not supported by the multiconductor to balanced preflight",
-                    transformer.name
-                ),
-            )
-            .with_element_path(format!("/model/multiconductor_network/transformers/{i}")),
-        );
+        if let Err(reason) = classify_transformer(net, transformer, &neutral_terminals) {
+            report.diagnostics.push(
+                StructuredDiagnostic::of(
+                    &codes::TRANSFORM_MULTI_TO_BALANCED_UNSUPPORTED_TRANSFORMER,
+                    format!("transformer {} {reason}", transformer.name),
+                )
+                .with_element_path(format!("/model/multiconductor_network/transformers/{i}")),
+            );
+        }
     }
+}
+
+/// Why one transformer lowers or refuses. The supported shape is a three
+/// phase two winding `wye_delta` or `delta_wye` transformer with finite
+/// positive ratings and full three phase terminal maps.
+fn classify_transformer<'net>(
+    net: &'net MulticonductorNetwork,
+    transformer: &'net powerio_dist::DistTransformer,
+    neutral_terminals: &BTreeSet<String>,
+) -> Result<[&'net powerio_dist::DistWinding; 2], String> {
+    use powerio_dist::DistWindingConn;
+    if transformer.phases != 3 {
+        return Err(format!(
+            "has {} phases; only a three phase transformer lowers",
+            transformer.phases
+        ));
+    }
+    let [high, low] = transformer.windings.as_slice() else {
+        return Err(format!(
+            "has {} windings; only a two winding transformer lowers",
+            transformer.windings.len()
+        ));
+    };
+    if high.conn == low.conn {
+        return Err(format!(
+            "states a {:?}-{:?} connection; only wye_delta and delta_wye lower, with their \
+             representable thirty degree shift",
+            high.conn, low.conn
+        ));
+    }
+    debug_assert!(matches!(
+        (high.conn, low.conn),
+        (DistWindingConn::Wye, DistWindingConn::Delta)
+            | (DistWindingConn::Delta, DistWindingConn::Wye)
+    ));
+    for winding in [high, low] {
+        let Some(bus) = net.bus(&winding.bus) else {
+            return Err(format!("references unknown bus {}", winding.bus));
+        };
+        let active = active_terminal_count(&winding.terminal_map, Some(bus), neutral_terminals);
+        if active != 3 {
+            return Err(format!(
+                "winding on bus {} maps {active} active conductors; a full three phase map \
+                 is required",
+                winding.bus
+            ));
+        }
+        if !(winding.v_ref.is_finite() && winding.v_ref > 0.0) {
+            return Err(format!(
+                "winding on bus {} has no finite positive voltage rating",
+                winding.bus
+            ));
+        }
+        if !winding.r_pct.is_finite() || winding.r_pct < 0.0 {
+            return Err(format!(
+                "winding on bus {} has no finite nonnegative resistance",
+                winding.bus
+            ));
+        }
+        if !winding.tap.is_finite() || winding.tap <= 0.0 {
+            return Err(format!(
+                "winding on bus {} has no finite positive tap",
+                winding.bus
+            ));
+        }
+    }
+    if !(high.s_rating.is_finite() && high.s_rating > 0.0) {
+        return Err("has no finite positive power rating".to_owned());
+    }
+    match transformer.xsc_pct.first() {
+        Some(x) if x.is_finite() && *x >= 0.0 => {}
+        _ => return Err("states no finite short circuit reactance".to_owned()),
+    }
+    Ok([high, low])
 }
 
 fn check_untyped_objects(

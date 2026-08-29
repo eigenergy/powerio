@@ -1610,8 +1610,144 @@ fn lowering_rejects_untyped_object_input() {
     assert_lowering_rejects(&net, "TRANSFORM.MULTI_TO_BALANCED.UNSUPPORTED_OBJECT");
 }
 
+/// The #261 acceptance feeder: a supported `wye_delta` transformer and an
+/// unrated identity switch lower, buses merge with recorded mappings, and the
+/// balanced output builds matrix data.
+fn transformer_feeder() -> powerio_dist::MulticonductorNetwork {
+    use powerio_dist::{
+        DistBus, DistLoad, DistSwitch, DistTransformer, DistWinding, DistWindingConn,
+    };
+
+    let terminal_map = strings(&["1", "2", "3"]);
+    let mut net = preflight_network(&["1", "2", "3"], &[]);
+    for id in ["lvbus", "tiebus"] {
+        net.buses_mut().push(DistBus::new(id, terminal_map.clone()));
+    }
+    let high_v = 240.0 * 3.0_f64.sqrt();
+    net.transformers_mut().push(DistTransformer::new(
+        "t1",
+        vec![
+            DistWinding::new(
+                "loadbus",
+                terminal_map.clone(),
+                DistWindingConn::Wye,
+                high_v,
+                50_000.0,
+            ),
+            DistWinding::new(
+                "lvbus",
+                terminal_map.clone(),
+                DistWindingConn::Delta,
+                208.0,
+                50_000.0,
+            ),
+        ],
+        vec![5.0],
+        3,
+    ));
+    net.switches_mut().push(DistSwitch::new(
+        "sw1",
+        "lvbus",
+        "tiebus",
+        terminal_map.clone(),
+        terminal_map.clone(),
+        false,
+    ));
+    net.loads_mut().push(DistLoad::new(
+        "tieload",
+        "tiebus",
+        terminal_map,
+        powerio_dist::Configuration::Wye,
+        vec![4_000.0, 4_000.0, 4_000.0],
+        vec![1_000.0, 1_000.0, 1_000.0],
+    ));
+    net
+}
+
 #[test]
-fn lowering_rejects_closed_switch_input() {
+fn lowering_merges_an_unrated_identity_switch_and_lowers_a_transformer() {
+    let net = transformer_feeder();
+    let lowered =
+        lower_multiconductor_to_balanced(&net, MulticonductorToBalancedOptions::default())
+            .expect("the feeder lowers");
+
+    // The switch merged tiebus into lvbus, removed itself, and recorded both.
+    assert_eq!(
+        lowered.merged_buses,
+        std::collections::BTreeMap::from([("tiebus".to_owned(), "lvbus".to_owned())])
+    );
+    assert_eq!(lowered.removed_switches, vec!["sw1".to_owned()]);
+    assert!(
+        lowered
+            .record
+            .assumptions
+            .iter()
+            .any(|line| line.contains("switch sw1 merged bus tiebus into bus lvbus")),
+        "{:?}",
+        lowered.record.assumptions
+    );
+
+    let network = &lowered.network;
+    assert_eq!(network.buses().len(), 3);
+    // The transformer based the low side zone with its winding rating.
+    let lvbus = network
+        .buses()
+        .iter()
+        .find(|bus| bus.name.as_deref() == Some("lvbus"))
+        .expect("lvbus survives");
+    assert!((lvbus.base_kv - 0.208).abs() < 1e-9, "{}", lvbus.base_kv);
+
+    // The transformer branch: nominal tap, the ANSI +30 degree shift with
+    // the high side leading, and impedance on the transformer's own base
+    // converted to the system base (5% on 50 kVA at 100 MVA = 100 p.u.).
+    let branch = network
+        .branches()
+        .iter()
+        .find(|branch| branch.extras.contains_key("multiconductor_transformer"))
+        .expect("the transformer lowered to a branch");
+    assert!((branch.tap - 1.0).abs() < 1e-9, "{}", branch.tap);
+    assert!((branch.shift - 30.0).abs() < 1e-12, "{}", branch.shift);
+    assert!((branch.x - 100.0).abs() < 1e-9, "{}", branch.x);
+    assert!((branch.rate_a - 0.05).abs() < 1e-12, "{}", branch.rate_a);
+
+    // The merged load landed on the merged bus.
+    let load = &network.loads()[network.loads().len() - 1];
+    assert_eq!(load.bus, lvbus.id);
+    assert!((load.p - 0.012).abs() < 1e-12, "{}", load.p);
+
+    // No branch was invented for the switch: one line plus one transformer.
+    assert_eq!(network.branches().len(), 2);
+
+    // The balanced output builds matrix data.
+    let view = powerio_matrix::IndexedNetwork::new(network);
+    let ybus = powerio_matrix::build_ybus(&view, &powerio_matrix::BuildOptions::default())
+        .expect("Y bus builds");
+    assert_eq!(ybus.g.rows(), 3);
+    let bprime = powerio_matrix::build_bprime(&view, &powerio_matrix::BuildOptions::default())
+        .expect("B prime builds");
+    assert!(bprime.nnz() > 0);
+}
+
+#[test]
+fn lowering_rejects_a_rated_closed_switch() {
+    use powerio_dist::DistSwitch;
+
+    let mut net = preflight_network(&["1", "2", "3"], &[]);
+    let mut switch = DistSwitch::new(
+        "sw1",
+        "sourcebus",
+        "loadbus",
+        strings(&["1", "2", "3"]),
+        strings(&["1", "2", "3"]),
+        false,
+    );
+    switch.i_max = Some(vec![400.0, 400.0, 400.0]);
+    net.switches_mut().push(switch);
+    assert_lowering_rejects(&net, "TRANSFORM.MULTI_TO_BALANCED.RATED_CLOSED_SWITCH");
+}
+
+#[test]
+fn lowering_rejects_a_cross_phase_closed_switch() {
     use powerio_dist::DistSwitch;
 
     let mut net = preflight_network(&["1", "2", "3"], &[]);
@@ -1620,13 +1756,63 @@ fn lowering_rejects_closed_switch_input() {
         "sourcebus",
         "loadbus",
         strings(&["1", "2", "3"]),
+        strings(&["2", "1", "3"]),
+        false,
+    ));
+    assert_lowering_rejects(&net, "TRANSFORM.MULTI_TO_BALANCED.SWITCH_TERMINAL_MISMATCH");
+}
+
+#[test]
+fn lowering_rejects_a_merge_with_conflicting_bounds() {
+    use powerio_dist::DistSwitch;
+
+    let mut net = preflight_network(&["1", "2", "3"], &[]);
+    {
+        let buses = net.buses_mut();
+        buses[0].v_min = Some(380.0);
+        buses[0].v_max = Some(440.0);
+        buses[1].v_min = Some(390.0);
+        buses[1].v_max = Some(440.0);
+    }
+    net.switches_mut().push(DistSwitch::new(
+        "sw1",
+        "sourcebus",
+        "loadbus",
+        strings(&["1", "2", "3"]),
         strings(&["1", "2", "3"]),
         false,
     ));
-    assert_lowering_rejects(
-        &net,
-        "TRANSFORM.MULTI_TO_BALANCED.UNSUPPORTED_CLOSED_SWITCH",
-    );
+    assert_lowering_rejects(&net, "TRANSFORM.MULTI_TO_BALANCED.SWITCH_MERGE_CONFLICT");
+}
+
+#[test]
+fn lowering_rejects_an_unsupported_transformer_connection() {
+    use powerio_dist::{DistTransformer, DistWinding, DistWindingConn};
+
+    let terminal_map = strings(&["1", "2", "3"]);
+    let mut net = preflight_network(&["1", "2", "3"], &[]);
+    net.transformers_mut().push(DistTransformer::new(
+        "t1",
+        vec![
+            DistWinding::new(
+                "sourcebus",
+                terminal_map.clone(),
+                DistWindingConn::Wye,
+                416.0,
+                50_000.0,
+            ),
+            DistWinding::new(
+                "loadbus",
+                terminal_map,
+                DistWindingConn::Wye,
+                208.0,
+                50_000.0,
+            ),
+        ],
+        vec![5.0],
+        3,
+    ));
+    assert_lowering_rejects(&net, "TRANSFORM.MULTI_TO_BALANCED.UNSUPPORTED_TRANSFORMER");
 }
 
 #[test]

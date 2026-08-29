@@ -41,6 +41,9 @@ pub mod codes {
             "the derived calculation does not carry part of the source instance";
         TRANSFORM_INSTANCE_ASSUMPTION = "TRANSFORM.INSTANCE.ASSUMPTION", Warning,
             "the derived calculation rests on a stated modeling assumption";
+        TRANSFORM_STATE_UNREPRESENTED = "TRANSFORM.STATE.UNREPRESENTED", Error,
+            "an operating point states a quantity the static network cannot carry",
+            category = Data;
         CANONICALIZE_MERGE_ZERO_IMPEDANCE = "CANONICALIZE.MERGE.ZERO_IMPEDANCE", Warning,
             "a zero impedance branch was merged and its flow is no longer recoverable";
         CANONICALIZE_MERGE_ATTRIBUTE_CONFLICT = "CANONICALIZE.MERGE.ATTRIBUTE_CONFLICT", Warning,

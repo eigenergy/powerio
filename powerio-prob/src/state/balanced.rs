@@ -164,6 +164,131 @@ impl OperatingPoint<BalancedNetwork> {
     }
 }
 
+impl OperatingPoint<BalancedNetwork> {
+    /// Write this point's stated quantities into an independent static
+    /// network. Every write is typed: no JSON round trip, no update map, and
+    /// no wholesale network clone — the shared handle copies only the tables
+    /// a stated quantity touches. Angles convert from the vocabulary's
+    /// radians to the table's degrees.
+    ///
+    /// # Errors
+    /// A stated quantity the static tables cannot carry (net bus injections
+    /// have no bus field), or a column count that disagrees with the table.
+    pub fn materialize_network(&self) -> Result<BalancedNetwork, Error> {
+        let mut network = self.network.clone();
+        let mut names: Vec<&'static str> = self.columns.quantities.keys().copied().collect();
+        names.sort_unstable();
+        for name in names {
+            if name == BUS_ACTIVE_INJECTION || name == BUS_REACTIVE_INJECTION {
+                return Err(Error::new(
+                    &codes::TRANSFORM_STATE_UNREPRESENTED,
+                    format!(
+                        "`{name}` is instantaneous state with no static network field; \
+                         export cannot carry it"
+                    ),
+                ));
+            }
+            let Some(row) = self.quantity_values(name) else {
+                continue;
+            };
+            write_quantity(&mut network, name, &row)?;
+        }
+        Ok(network)
+    }
+}
+
+fn write_quantity(
+    network: &mut BalancedNetwork,
+    quantity: &'static str,
+    row: &[f64],
+) -> Result<(), Error> {
+    let expected = match family_of(quantity) {
+        KeyFamily::Bus => network.buses().len(),
+        KeyFamily::Generator => network.generators().len(),
+        KeyFamily::Load => network.loads().len(),
+        KeyFamily::Branch => network.branches().len(),
+        KeyFamily::Switch => network.switches().len(),
+    };
+    if row.len() != expected {
+        return Err(Error::new(
+            &codes::BUILD_STATE_SHAPE_MISMATCH,
+            format!(
+                "{quantity}: {} stated values for a {expected} row table",
+                row.len()
+            ),
+        ));
+    }
+    match quantity {
+        BUS_VOLTAGE_MAGNITUDE => {
+            for (bus, value) in network.buses_mut().iter_mut().zip(row) {
+                bus.vm = *value;
+            }
+        }
+        BUS_VOLTAGE_ANGLE => {
+            for (bus, value) in network.buses_mut().iter_mut().zip(row) {
+                bus.va = value.to_degrees();
+            }
+        }
+        GENERATOR_ACTIVE_POWER => {
+            for (generator, value) in network.generators_mut().iter_mut().zip(row) {
+                generator.pg = *value;
+            }
+        }
+        GENERATOR_REACTIVE_POWER => {
+            for (generator, value) in network.generators_mut().iter_mut().zip(row) {
+                generator.qg = *value;
+            }
+        }
+        GENERATOR_VOLTAGE_SETPOINT => {
+            for (generator, value) in network.generators_mut().iter_mut().zip(row) {
+                generator.vg = *value;
+            }
+        }
+        GENERATOR_IN_SERVICE => {
+            for (generator, value) in network.generators_mut().iter_mut().zip(row) {
+                generator.in_service = *value != 0.0;
+            }
+        }
+        LOAD_ACTIVE_POWER => {
+            for (load, value) in network.loads_mut().iter_mut().zip(row) {
+                load.p = *value;
+            }
+        }
+        LOAD_REACTIVE_POWER => {
+            for (load, value) in network.loads_mut().iter_mut().zip(row) {
+                load.q = *value;
+            }
+        }
+        BRANCH_IN_SERVICE => {
+            for (branch, value) in network.branches_mut().iter_mut().zip(row) {
+                branch.in_service = *value != 0.0;
+            }
+        }
+        BRANCH_TAP_RATIO => {
+            for (branch, value) in network.branches_mut().iter_mut().zip(row) {
+                branch.tap = *value;
+            }
+        }
+        BRANCH_PHASE_SHIFT => {
+            for (branch, value) in network.branches_mut().iter_mut().zip(row) {
+                branch.shift = *value;
+            }
+        }
+        SWITCH_CLOSED => {
+            for (switch, value) in network.switches_mut().iter_mut().zip(row) {
+                switch.closed = *value != 0.0;
+            }
+        }
+        other => {
+            return Err(Error::new(
+                &codes::TRANSFORM_STATE_UNREPRESENTED,
+                format!("`{other}` has no static network field"),
+            ));
+        }
+    }
+    Ok(())
+}
+
 /// The balanced series entry: alias for what the builder produces.
 pub type BalancedOperatingPoints = TimeSeries<OperatingPoint<BalancedNetwork>>;
 
