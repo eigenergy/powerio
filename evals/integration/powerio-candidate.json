@@ -1,7 +1,7 @@
 {
   "receipt": "powerio-producer/1",
-  "subject_commit": "ddb97c6964241d3c3e60b789d06bb14e22e35343",
-  "powerio_jl_commit": "68bd5d8a33f096bb3d186bd1948dd51934e42bb1",
+  "subject_commit": "2ab8ccddbf377597bfb34b01261c8c810743c96f",
+  "powerio_jl_commit": "a0f603cb6ea58f861e2bbd98d7e5df9c1bcdd7a7",
   "versions": {
     "powerio": "0.10.0",
     "c_abi": 6,
@@ -59,7 +59,7 @@
   "semantics": {
     "element_identity": "source element ids verbatim; uid row identity in stored documents",
     "index_spaces": "dense positions zero based at C and Python, one based in Julia select_state",
-    "dc_susceptance_sign": "branch_susceptance is a positive Laplacian edge weight; flow p_branch = -b*(va_f - va_t) + b*shift",
+    "dc_susceptance_sign": "branch_susceptance is the signed series susceptance, negative for an inductive branch; the positive Laplacian edge weight is solver_edge_weight; flow p_branch = -b*(va_f - va_t) + b*shift",
     "units": "raw source units on parse; per unit and radians after to_normalized",
     "diagnostics": "stable dotted codes; branch on code, never message text; spans are byte ranges into retained sources",
     "unsupported_capabilities": "writers report fidelity losses as diagnostics instead of dropping silently"
