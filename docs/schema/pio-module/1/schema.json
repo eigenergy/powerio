@@ -20,7 +20,7 @@
           "$ref": "#/$defs/BalancedNetwork"
         },
         "objective": {
-          "$ref": "#/$defs/Objective"
+          "$ref": "#/$defs/ObjectiveV1"
         }
       },
       "required": [
@@ -1516,7 +1516,7 @@
           "$ref": "#/$defs/BalancedNetwork"
         },
         "objective": {
-          "$ref": "#/$defs/Objective",
+          "$ref": "#/$defs/ObjectiveV1",
           "description": "The typed objective the instance states, in the calculation crate's\nown serialization."
         }
       },
@@ -5208,7 +5208,7 @@
           "$ref": "#/$defs/MulticonductorNetwork"
         },
         "objective": {
-          "$ref": "#/$defs/Objective"
+          "$ref": "#/$defs/ObjectiveV1"
         }
       },
       "required": [
@@ -5612,26 +5612,11 @@
       ],
       "type": "object"
     },
-    "Objective": {
-      "description": "The complete typed objective of one OPF instance: a sum of terms.",
-      "properties": {
-        "terms": {
-          "items": {
-            "$ref": "#/$defs/ObjectiveTerm"
-          },
-          "type": "array"
-        }
-      },
-      "required": [
-        "terms"
-      ],
-      "type": "object"
-    },
-    "ObjectiveTerm": {
-      "description": "One typed objective term.",
+    "ObjectiveTermV1": {
+      "description": "One typed objective term, mirroring `powerio_prob::ObjectiveTerm` with its\nweight wrapped for the nonfinite spelling: an internally tagged enum's\nderived `Deserialize` re-decodes its variant from a buffered generic\nvalue rather than the deserializer callers pass in, so wrapping the whole\ndocument's deserializer (as [`StoredModuleV1`] does for every plain\nstruct field) never reaches this `f64`.",
       "oneOf": [
         {
-          "description": "The generator cost curves the network states, summed over the in\nservice generators the instance dispatches.",
+          "additionalProperties": false,
           "properties": {
             "term": {
               "const": "network_generator_cost",
@@ -5644,7 +5629,7 @@
           "type": "object"
         },
         {
-          "description": "The per phase cost references a multiconductor calculation record\nstates (the BMOPF objective).",
+          "additionalProperties": false,
           "properties": {
             "term": {
               "const": "network_per_phase_cost",
@@ -5657,27 +5642,14 @@
           "type": "object"
         },
         {
-          "description": "A differentiability regularization with its stated nonnegative weight,\nthe term Tellegen adds explicitly rather than a solver adding it\nsilently.",
+          "additionalProperties": false,
           "properties": {
             "term": {
               "const": "differentiability_regularization",
               "type": "string"
             },
             "weight": {
-              "anyOf": [
-                {
-                  "format": "double",
-                  "type": "number"
-                },
-                {
-                  "enum": [
-                    "Infinity",
-                    "-Infinity",
-                    "NaN"
-                  ],
-                  "type": "string"
-                }
-              ]
+              "$ref": "#/$defs/StoredF64"
             }
           },
           "required": [
@@ -5687,6 +5659,19 @@
           "type": "object"
         }
       ]
+    },
+    "ObjectiveV1": {
+      "additionalProperties": false,
+      "description": "The complete typed objective, mirroring `powerio_prob::Objective`.",
+      "properties": {
+        "terms": {
+          "items": {
+            "$ref": "#/$defs/ObjectiveTermV1"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
     },
     "PowerFactorControl": {
       "properties": {
