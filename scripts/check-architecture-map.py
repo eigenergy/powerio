@@ -23,9 +23,19 @@ def cargo_workspace() -> tuple[set[str], set[tuple[str, str]]]:
     meta = json.loads(subprocess.run(
         ["cargo", "metadata", "--no-deps", "--format-version", "1"],
         cwd=ROOT, check=True, capture_output=True, text=True).stdout)
-    members = {p["name"] for p in meta["packages"]}
+    # The diagram maps the shipped crate graph; a workspace member living
+    # under tests/ is scaffolding, never an architecture node. (publish is
+    # not the discriminator: powerio-capi and powerio-py are unpublished to
+    # crates.io yet are real nodes.)
+    members = {
+        p["name"]
+        for p in meta["packages"]
+        if "/tests/" not in p["manifest_path"]
+    }
     edges = set()
     for package in meta["packages"]:
+        if package["name"] not in members:
+            continue
         for dep in package["dependencies"]:
             if dep["name"] in members and dep["kind"] is None:
                 edges.add((package["name"], dep["name"]))
