@@ -648,25 +648,31 @@ mod limit_upgrade_tests {
     }
 
     #[test]
-    fn a_declared_period_count_past_the_maximum_is_refused() {
+    fn a_declared_period_count_no_longer_sizes_the_series() {
+        // The declared scalar costs nothing to inflate, so the series is
+        // sized from the carried labels, durations, and points alone; an
+        // inflated or understated declaration changes nothing.
+        for declared in [3_usize, 10_000_000] {
+            let mut raw = legacy_series_text();
+            raw["operating_points"]["time_axis"]["periods"] = serde_json::json!(declared);
+            let module = read_module(&raw.to_string()).unwrap();
+            let PioValue::BalancedOperatingPointTimeSeries(series) = module.value() else {
+                panic!("wrong kind");
+            };
+            assert_eq!(series.len(), 2, "declared {declared}");
+            assert_eq!(series.values()[1].load_active_power("loads:0"), Some(75.0));
+        }
+
+        // Past the maximum in what the document actually carries.
         let mut raw = legacy_series_text();
-        raw["operating_points"]["time_axis"]["periods"] = serde_json::json!(10_000_000);
+        let labels: Vec<String> = (0..=131_072).map(|i| format!("h{i}")).collect();
+        raw["operating_points"]["time_axis"]["labels"] = serde_json::json!(labels);
         let error = read_module(&raw.to_string()).unwrap_err();
         assert_eq!(
             error.info().map(|info| info.code),
             Some("READ.MODULE.INVALID")
         );
         assert!(error.to_string().contains("131072"), "{error}");
-
-        // At the boundary shape the document still upgrades with its values.
-        let mut raw = legacy_series_text();
-        raw["operating_points"]["time_axis"]["periods"] = serde_json::json!(3);
-        let module = read_module(&raw.to_string()).unwrap();
-        let PioValue::BalancedOperatingPointTimeSeries(series) = module.value() else {
-            panic!("wrong kind");
-        };
-        assert_eq!(series.len(), 3);
-        assert_eq!(series.values()[1].load_active_power("loads:0"), Some(75.0));
     }
 
     #[test]
