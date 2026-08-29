@@ -504,7 +504,7 @@ fn looks_like_distribution_input(input: &Path) -> PyResult<bool> {
     })?;
     use powerio_matrix::format::routing::{Detection, Domain, JsonClass};
     match powerio_matrix::format::routing::classify_json_text(&text) {
-        JsonClass::Package => Err(PyValueError::new_err(format!(
+        JsonClass::Module => Err(PyValueError::new_err(format!(
             "{} is a .pio.json package; read it with powerio.Package.from_json",
             input.display()
         ))),
@@ -647,7 +647,7 @@ fn build_package_from_str(text: &str, from_: Option<&str>) -> PyResult<NetworkPa
     } else {
         use powerio_matrix::format::routing::{Detection, JsonClass};
         match powerio_matrix::format::routing::classify_json_text(text) {
-            JsonClass::Package => {
+            JsonClass::Module => {
                 return Err(PyValueError::new_err(
                     "text is a .pio.json package; read it with \
                      powerio.Package.from_json",
