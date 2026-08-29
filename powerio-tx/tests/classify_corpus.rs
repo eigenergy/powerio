@@ -78,11 +78,7 @@ const EXPECTED: &[(&str, &str, Option<&str>)] = &[
         None,
     ),
     ("package/frozen-0.9-balanced.pio.json", "module", None),
-    (
-        "package/frozen-0.9-multiconductor.pio.json",
-        "module",
-        None,
-    ),
+    ("package/frozen-0.9-multiconductor.pio.json", "module", None),
     ("package/frozen-0.9-series.pio.json", "module", None),
     // PyPSA sidecars: a coordinate reference system string and an empty
     // metadata object, both beside the CSV folder that carries the case.
