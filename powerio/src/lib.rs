@@ -57,7 +57,6 @@ pub use powerio_prob::AcOpfInstance;
 #[cfg(feature = "matrix")]
 pub use powerio_matrix as matrix;
 
-
 pub mod package;
 /// The package layer's replayable operating state, named at the crate root
 /// beside the other module types.
