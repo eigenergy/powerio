@@ -4,7 +4,7 @@ A multiconductor network is the conductor level distribution model. OpenDSS and 
 
 ```julia
 using PowerIO
-feeder = parse_file("feeder.dss")   # PioModule{MulticonductorNetwork}
+feeder = parse_file("IEEE13Nodeckt.dss")   # PioModule{MulticonductorNetwork}
 net = feeder.value
 net.data.lines[1]                   # terminal maps, linecode reference
 net.data.linecodes[1]               # per length impedance matrices, SI units

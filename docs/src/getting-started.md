@@ -21,9 +21,11 @@ Julia:
 using Pkg; Pkg.add("PowerIO")
 ```
 
-C and C++: build the shared library and use the installed header.
+C and C++: clone the repository, build the shared library, and use the installed header.
 
 ```sh
+git clone https://github.com/eigenergy/powerio
+cd powerio
 cargo build -p powerio-capi --release --features arrow,matrix,gridfm,dist,prob
 # → target/release/libpowerio_capi.{so,dylib}, header powerio-capi/include/powerio.h
 ```
@@ -68,7 +70,7 @@ Command line:
 
 ```sh
 powerio convert case9.m --to psse -o case9.raw
-powerio verify case9.m --kind bdoubleprime
+powerio summary case9.m               # the canonical network summary JSON
 ```
 
 ## Where next

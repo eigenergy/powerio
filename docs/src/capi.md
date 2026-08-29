@@ -40,14 +40,14 @@ The per-version history, the classified v5 to v6 delta, and the porting table li
 
 ## Optional surface
 
-Every optional entry point is behind a Cargo feature and a header guard, and is probed at runtime with `pio_has_feature`. A build missing a feature exports nothing for it, so `dlsym` fails rather than the call misbehaving.
+Every optional entry point is behind a Cargo feature and is probed at runtime with `pio_has_feature`. Only `arrow` and `dist` also gate a header guard: a build missing one of those two exports nothing for it, so `dlsym` fails rather than the call misbehaving. `matrix`, `gridfm`, and `prob` symbols always link regardless of build features (`pio_dc_data_*` among them); `pio_has_feature` is the only probe for those three.
 
 | feature | guard | adds |
 |---|---|---|
 | `arrow` | `PIO_ARROW` | `pio_balanced_network_to_arrow` and the Arrow catalog |
-| `matrix` | — | the balanced matrix Arrow tables |
-| `gridfm` | `PIO_GRIDFM` | GridFM Parquet dataset parsing through the one parse |
+| `matrix` | none | the balanced matrix Arrow tables |
+| `gridfm` | none | GridFM Parquet dataset parsing through the one parse |
 | `dist` | `PIO_DIST` | the multiconductor value family and its network handle |
-| `prob` | `PIO_PROB` | the calculation families and the DC branch data (`pio_dc_data_*`) |
+| `prob` | none | the calculation families and the DC branch data (`pio_dc_data_*`) |
 
 Released binaries carry all five. `pio_build_info` reports which ones a given library was built with, alongside its version, ABI integer, foreign schema versions, and error category tokens.

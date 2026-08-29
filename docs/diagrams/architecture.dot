@@ -5,7 +5,7 @@
 // workspace member names exactly.
 digraph powerio_architecture {
     rankdir = BT;
-    bgcolor = "transparent";
+    bgcolor = "#f4f6f8";
     node [shape = box, style = "rounded,filled", fillcolor = "#f4f6f8",
           color = "#4a5568", fontname = "Helvetica", fontsize = 11,
           fontcolor = "#1a202c"];

@@ -18,7 +18,8 @@ DIAGRAMS = ROOT / "docs" / "diagrams"
 ASSETS = ROOT / "docs" / "src" / "assets"
 SOURCES = ["architecture.dot", "dataflow.dot"]
 
-def cargo_edges() -> set[tuple[str, str]]:
+def cargo_workspace() -> tuple[set[str], set[tuple[str, str]]]:
+    """(workspace member names, intra-workspace dependency edges)."""
     meta = json.loads(subprocess.run(
         ["cargo", "metadata", "--no-deps", "--format-version", "1"],
         cwd=ROOT, check=True, capture_output=True, text=True).stdout)
@@ -28,7 +29,7 @@ def cargo_edges() -> set[tuple[str, str]]:
         for dep in package["dependencies"]:
             if dep["name"] in members and dep["kind"] is None:
                 edges.add((package["name"], dep["name"]))
-    return edges
+    return members, edges
 
 def diagram_edges(text: str) -> set[tuple[str, str]]:
     edges = set()
@@ -36,14 +37,38 @@ def diagram_edges(text: str) -> set[tuple[str, str]]:
         edges.add((match.group(1), match.group(2)))
     return edges
 
+def diagram_nodes(text: str) -> set[str]:
+    """Every node identifier the diagram declares or wires into an edge.
+
+    Structural extraction, not a substring search: "powerio" is a literal
+    prefix of every other crate's name (powerio-tx, powerio-matrix, ...), so
+    checking "is this name mentioned anywhere in the text" would count a
+    hyphenated crate's own node as a false sighting of the bare facade crate.
+    """
+    nodes: set[str] = set()
+    for a, b in diagram_edges(text):
+        nodes.add(a)
+        nodes.add(b)
+    nodes |= set(re.findall(r'"([A-Za-z0-9_-]+)"\s*\[', text))
+    nodes |= set(re.findall(r'^([A-Za-z0-9_]+)\s*\[', text, re.M))
+    return nodes
+
 def main() -> int:
     render = "--render" in sys.argv
-    # 1) crate edge agreement, for the diagram nodes that name crates.
+    members, cargo_edges = cargo_workspace()
     text = (DIAGRAMS / "architecture.dot").read_text()
-    crates = {name for name in re.findall(r'"(powerio[a-z-]*)"', text)} | {"powerio"}
-    drawn = {(a, b) for a, b in diagram_edges(text)
-             if (a in crates or a == "powerio") and (b in crates or b == "powerio")}
-    actual = {(a, b) for a, b in cargo_edges() if a in crates and b in crates}
+    # 0) every workspace crate is a node somewhere in the diagram. The crate
+    # universe comes from cargo metadata, not from the diagram's own text, so
+    # a new workspace member the diagram was never updated for is caught here
+    # instead of silently dropping out of every check below.
+    absent = members - diagram_nodes(text)
+    if absent:
+        print(f"workspace crates absent from architecture.dot: {sorted(absent)}",
+              file=sys.stderr)
+        return 1
+    # 1) crate edge agreement.
+    drawn = {(a, b) for a, b in diagram_edges(text) if a in members and b in members}
+    actual = {(a, b) for a, b in cargo_edges if a in members and b in members}
     # powerio-py and powerio-capi depend on more than the facade in their
     # manifests (direct component deps for feature wiring); the map shows the
     # facade edge alone. Require every drawn edge to be real, and every

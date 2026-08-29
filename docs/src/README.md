@@ -6,8 +6,8 @@ PowerIO parses power system data into typed values, converts between supported f
 
 ```julia
 using PowerIO
-case = parse_file("case9.m")       # PioModule{BalancedNetwork}
-feeder = parse_file("feeder.dss")  # PioModule{MulticonductorNetwork}
+case = parse_file("case9.m")               # PioModule{BalancedNetwork}
+feeder = parse_file("IEEE13Nodeckt.dss")   # PioModule{MulticonductorNetwork}
 ```
 
 ```rust,ignore
