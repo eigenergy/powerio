@@ -147,7 +147,9 @@ def test_lower_to_balanced_refusal_carries_code_and_diagnostics():
     for diagnostic in error.diagnostics:
         assert diagnostic.keys() == {"code", "severity", "message", "target"}
         assert diagnostic["code"].startswith("TRANSFORM.")
-        assert diagnostic["severity"] in ("debug", "info", "warning", "error", "fatal")
+        # The lowering records are 1.0 diagnostics from the branch below;
+        # legacy severities never reach this surface any more.
+        assert diagnostic["severity"] in ("error", "warning", "remark", "note")
         assert diagnostic["message"]
     # The refusal leaves the handle usable, still carrying its module.
     assert module.kind == "multiconductor_network"
