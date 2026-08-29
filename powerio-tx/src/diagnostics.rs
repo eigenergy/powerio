@@ -248,7 +248,7 @@ pub mod codes {
         READ_OPFDATA_VALUE_INFERRED = "READ.OPFDATA.VALUE_INFERRED", Warning,
             "OPFData carries no identity or frequency, so the reader synthesized them";
         READ_OPFDATA_RETAINED_SOURCE_ONLY = "READ.OPFDATA.RETAINED_SOURCE_ONLY", Warning,
-            "an OPFData grid feature survives in the retained source only";
+            "an OPFData generator's solver initial values are carried in the parsed solution instead of the network snapshot";
 
         READ_SURGE_RETAINED_SOURCE_ONLY = "READ.SURGE.RETAINED_SOURCE_ONLY", Warning,
             "a Surge section survives in the retained source only";
