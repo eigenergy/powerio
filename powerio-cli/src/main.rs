@@ -1532,7 +1532,7 @@ fn run_convert(
                 .with_context(|| format!("reading {}", input.display()))?
         };
         for w in &net.warnings {
-            eprintln!("parse: {w}");
+            eprintln!("{w}");
         }
         let target = to
             .distribution()
@@ -1693,7 +1693,7 @@ fn run_geo_extract(
     let layer = match parse_family_case(input, from)? {
         FamilyCase::Distribution(net) => {
             for w in &net.warnings {
-                eprintln!("parse: {w}");
+                eprintln!("{w}");
             }
             powerio::dist_geo::dist_geo_layer(&net.network)
         }
@@ -1734,7 +1734,7 @@ fn run_geo_apply(
     let (text, sidecars, warnings) = match parse_family_case(input, from)? {
         FamilyCase::Distribution(net) => {
             for w in &net.warnings {
-                eprintln!("parse: {w}");
+                eprintln!("{w}");
             }
             let mut network = net.network;
             report_geo_apply(&powerio::dist_geo::apply_dist_geo_layer(
