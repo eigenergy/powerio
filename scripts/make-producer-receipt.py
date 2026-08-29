@@ -101,7 +101,9 @@ def main() -> int:
         "semantics": {
             "element_identity": "source element ids verbatim; uid row identity in stored documents",
             "index_spaces": "dense positions zero based at C and Python, one based in Julia select_state",
-            "dc_susceptance_sign": "branch_susceptance is a positive Laplacian edge weight; "
+            "dc_susceptance_sign": "branch_susceptance is the signed series susceptance, "
+                                    "negative for an inductive branch; the positive Laplacian "
+                                    "edge weight is solver_edge_weight; "
                                     "flow p_branch = -b*(va_f - va_t) + b*shift",
             "units": "raw source units on parse; per unit and radians after to_normalized",
             "diagnostics": "stable dotted codes; branch on code, never message text; "

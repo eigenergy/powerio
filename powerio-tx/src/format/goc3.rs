@@ -24,7 +24,8 @@ const FMT: &str = "GO Challenge 3 JSON";
 
 /// GOC3 source document: the file parsed once and shared by the format's
 /// adapters (the balanced network reader here, the operating point extractor
-/// in `powerio-pkg`, and the SCOPF instance builder in `powerio-prob`), so
+/// in `powerio`'s stored layer, and the SCOPF instance builder in
+/// `powerio-prob`), so
 /// section order, uid, bus ID, and device row rules have one owner.
 #[derive(Clone, Debug)]
 pub struct Goc3Document {
@@ -140,7 +141,7 @@ impl Goc3BusMap {
 /// Parse a GO Challenge 3 JSON input file, returning the network, the
 /// reader's findings, and the typed document the parse went through.
 ///
-/// TEMPORARY: the stored operating point extraction in `powerio-pkg` consumes
+/// TEMPORARY: the stored operating point extraction in `powerio` consumes
 /// the document; this helper leaves with that crate when DOE GO Challenge 3
 /// parsing moves to the calculation instance types.
 pub fn parse_goc3_json(
@@ -625,8 +626,8 @@ pub struct Goc3DeviceRecord<'a> {
 
 /// Enumerate simple dispatchable devices with their generator/load row
 /// indices. Row assignment lives here and nowhere else: a consumer that
-/// addresses payload rows by index (the operating point extractor in
-/// `powerio-pkg`) must enumerate devices through this function so its indices
+/// addresses payload rows by index (the stored operating point extractor in
+/// `powerio`) must enumerate devices through this function so its indices
 /// match the parsed network, uid or no uid.
 fn device_rows(network: &Map<String, Value>) -> Result<Vec<Goc3DeviceRecord<'_>>> {
     let mut rows = Vec::new();

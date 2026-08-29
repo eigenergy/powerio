@@ -494,7 +494,8 @@ pub unsafe extern "C" fn pio_module_balanced_network(
                 return Err(error_from_parts(
                     powerio::codes::REQUEST_PACKAGE_WRONG_MODEL_KIND.code,
                     &format!(
-                        "the module carries a {} value; as_network takes a balanced network",
+                        "the module carries a {} value; pio_module_balanced_network takes a \
+                         balanced network",
                         inner.module.value().kind().as_str()
                     ),
                 ));
@@ -522,8 +523,8 @@ pub unsafe extern "C" fn pio_module_multiconductor_network(
                 return Err(error_from_parts(
                     powerio::codes::REQUEST_PACKAGE_WRONG_MODEL_KIND.code,
                     &format!(
-                        "the module carries a {} value; as_dist_network takes a \
-                         multiconductor network",
+                        "the module carries a {} value; pio_module_multiconductor_network takes \
+                         a multiconductor network",
                         inner.module.value().kind().as_str()
                     ),
                 ));

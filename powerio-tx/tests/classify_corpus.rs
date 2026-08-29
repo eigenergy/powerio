@@ -47,6 +47,7 @@ const EXPECTED: &[(&str, &str, Option<&str>)] = &[
         "transmission",
         Some("opfdata-json"),
     ),
+    ("goc3/goc3_small.json", "transmission", Some("goc3-json")),
     (
         "pandapower/example.json",
         "transmission",
@@ -132,7 +133,7 @@ fn every_json_fixture_classifies_as_stated() {
             .unwrap_or_else(|| {
                 panic!(
                     "{rel} has no expected class; add it to EXPECTED in \
-                     powerio/tests/classify_corpus.rs"
+                     powerio-tx/tests/classify_corpus.rs"
                 )
             });
         let text = std::fs::read_to_string(root.join(rel)).expect("fixture is readable");
