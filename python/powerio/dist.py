@@ -56,6 +56,11 @@ class MulticonductorNetwork:
         """Return source fields not represented and assumptions made while parsing."""
         return self._inner.warnings()
 
+    def diagnostics(self) -> Any:
+        """The same findings as ``warnings``, structured: a list of dicts
+        carrying ``code``, ``severity``, ``message``, and ``target``."""
+        return _json.loads(self._inner.diagnostics_json())
+
     @property
     def n_buses(self) -> int:
         return self._inner.n_buses()

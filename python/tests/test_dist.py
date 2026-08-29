@@ -133,6 +133,26 @@ def test_dist_write_file_refuses_existing_case_and_sidecar_entries(tmp_path):
     assert not (nested / "case.dss").exists()
 
 
+def test_lower_to_balanced_refusal_carries_code_and_diagnostics():
+    # IEEE13Nodeckt is an unbalanced feeder (single- and two-phase laterals,
+    # single-phase regulators, a wye-wye substation transformer): the
+    # positive sequence projection refuses it outright rather than guess.
+    module = powerio.parse(DATA / "opendss" / "ieee13" / "IEEE13Nodeckt.dss")
+    with pytest.raises(powerio.PowerIODataError) as excinfo:
+        module.to_balanced(base_mva=100.0)
+    error = excinfo.value
+    assert error.code
+    assert error.diagnostics
+    assert error.diagnostics[0]["code"] == error.code
+    for diagnostic in error.diagnostics:
+        assert diagnostic.keys() == {"code", "severity", "message", "target"}
+        assert diagnostic["code"].startswith("TRANSFORM.")
+        assert diagnostic["severity"] in ("debug", "info", "warning", "error", "fatal")
+        assert diagnostic["message"]
+    # The refusal leaves the handle usable, still carrying its module.
+    assert module.kind == "multiconductor_network"
+
+
 def test_dist_write_file_echoes_bytes(tmp_path):
     case = dist.parse_file(FOURWIRE)
     out = tmp_path / "echo.dss"

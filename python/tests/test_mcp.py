@@ -16,6 +16,7 @@ import powerio
 DATA = Path(__file__).resolve().parents[2] / "tests" / "data"
 DSS = DATA / "dist" / "micro" / "xfmr_single_phase.dss"
 BMOPF = DATA / "dist" / "bmopf" / "example_ieee13.json"
+PSSE_CASE5 = DATA / "psse" / "case5.raw"
 PMD = DATA / "dist" / "pmd" / "ieee13.json"
 PWD = DATA / "powerworld" / "ACTIVSg200.pwd"
 MINIMAL_BMOPF = '{"bus":{"a":{"terminal_names":["1"]}}}'
@@ -367,7 +368,22 @@ def test_parse_failures_carry_the_code_and_the_tools_lead_with_it():
     assert native.value.code == "PARSE.MATPOWER.MALFORMED"
     with pytest.raises(ValueError) as mapped:
         server.summary(content="mpc.bus = [", from_format="matpower")
-    assert str(mapped.value).startswith("PARSE.MATPOWER.MALFORMED: ")
+    text = str(mapped.value)
+    assert text.startswith("PARSE.MATPOWER.MALFORMED: ")
+    # The Rust message already leads with the code; the tool wrapper must not
+    # prefix it a second time.
+    assert text.count("PARSE.MATPOWER.MALFORMED") == 1
+
+
+def test_unknown_format_code_is_not_doubled():
+    with pytest.raises(powerio.PowerIOError) as native:
+        powerio.parse_file(str(DATA / "case9.m"), "not-a-real-format")
+    assert native.value.code == "REQUEST.FORMAT.UNKNOWN"
+    with pytest.raises(ValueError) as mapped:
+        server.summary(path=str(DATA / "case9.m"), from_format="not-a-real-format")
+    text = str(mapped.value)
+    assert text.startswith("REQUEST.FORMAT.UNKNOWN: ")
+    assert text.count("REQUEST.FORMAT.UNKNOWN") == 1
 
 
 def test_empty_transport_text_means_unset():
@@ -637,15 +653,24 @@ def _split_dss_case(tmp_path):
     return root
 
 
+def _warning_texts(warnings: list) -> "list[str]":
+    """Each structured warning record (`code`/`severity`/`message`/`target`)
+    as one searchable string, for tests that check substrings a rendered
+    `CODE: message` line used to carry directly."""
+    return [
+        ": ".join(part for part in (item.get("code"), item.get("message")) if part)
+        for item in warnings
+    ]
+
+
 def test_mcp_parse_widens_dss_includes_to_the_allowed_root(monkeypatch, tmp_path):
     root = _split_dss_case(tmp_path)
     monkeypatch.setenv("POWERIO_MCP_ALLOWED_ROOTS", str(root))
 
     parsed = server.parse(path=str(root / "feeder" / "f.dss"))
     assert parsed["domain"] == "distribution"
-    assert not any("INCLUDE_REFUSED" in w for w in parsed["warnings"]), parsed[
-        "warnings"
-    ]
+    texts = _warning_texts(parsed["warnings"])
+    assert not any("INCLUDE_REFUSED" in text for text in texts), texts
     assert parsed["summary"]["elements"]["lines"] == 1
 
 
@@ -661,9 +686,8 @@ def test_mcp_parse_still_refuses_includes_outside_the_allowed_root(
     monkeypatch.setenv("POWERIO_MCP_ALLOWED_ROOTS", str(root))
 
     parsed = server.parse(path=str(deck))
-    assert any("escapes the include root" in w for w in parsed["warnings"]), parsed[
-        "warnings"
-    ]
+    texts = _warning_texts(parsed["warnings"])
+    assert any("escapes the include root" in text for text in texts), texts
     doc = json.loads(parsed["json"])
     assert "leaked" not in json.dumps(doc)
 
@@ -896,13 +920,13 @@ def test_module_diagnostics_reach_summary_and_convert_warnings():
     module_doc = _balanced_module_with_diagnostics([error, note])
     summary = server._summary_tool(module_json=module_doc)
     assert summary["warnings"] == [
-        {"code": "M.E.1", "severity": "error", "message": "an error finding", "id": "d-error"}
+        {"code": "M.E.1", "severity": "error", "message": "an error finding", "target": None, "id": "d-error"}
     ]
 
     # The note severity finding is filtered out, not merely unmatched.
     converted = server.convert(to="matpower", module_json=module_doc)
     assert converted["warnings"] == [
-        {"code": "M.E.1", "severity": "error", "message": "an error finding", "id": "d-error"}
+        {"code": "M.E.1", "severity": "error", "message": "an error finding", "target": None, "id": "d-error"}
     ]
 
     note_only_doc = _balanced_module_with_diagnostics([note])
@@ -918,7 +942,7 @@ def test_module_diagnostics_reach_summary_and_convert_warnings():
     )
     package_summary = server._summary_tool(module_json=json.dumps(package))
     assert package_summary["warnings"] == [
-        {"code": "M.E.1", "severity": "error", "message": "an error finding"}
+        {"code": "M.E.1", "severity": "error", "message": "an error finding", "target": None}
     ]
 
 
@@ -944,13 +968,36 @@ def test_multiconductor_module_diagnostics_survive_in_order():
 
     summary = server._summary_tool(module_json=module_doc)
     assert summary["warnings"] == [
-        {"code": "A.B.C", "severity": "warning", "message": "no span here", "id": "d0"},
+        {"code": "A.B.C", "severity": "warning", "message": "no span here", "target": None, "id": "d0"},
         {
             "code": "D.E.F",
             "severity": "error",
             "message": "in range span",
+            "target": None,
             "id": "d1",
             "spans": [{"source": source_id, "byte_start": 0, "byte_end": 10}],
         },
-        {"code": "G.H.I", "severity": "error", "message": "trailing error", "id": "d2"},
+        {"code": "G.H.I", "severity": "error", "message": "trailing error", "target": None, "id": "d2"},
     ]
+
+
+def test_parse_warnings_are_structured_records_on_every_transport():
+    """A PSS/E read reports six findings. The path transport used to publish
+    them as six plain rendered strings with no way back to code/severity/
+    target, while the package transport (which reads back through a stored
+    module) already published six dicts. Both now publish the identical
+    structured list."""
+    via_path = server.parse(path=str(PSSE_CASE5))
+    via_package = server.parse(path=str(PSSE_CASE5), transport="package")
+
+    for parsed in (via_path, via_package):
+        warnings = parsed["warnings"]
+        assert len(warnings) == 6, warnings
+        for record in warnings:
+            assert isinstance(record, dict), warnings
+            assert record.keys() >= {"code", "severity", "message"}
+            assert record["code"]
+            assert record["severity"] in ("error", "warning", "remark", "note")
+            assert record["message"]
+
+    assert via_path["warnings"] == via_package["warnings"]

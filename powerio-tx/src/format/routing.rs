@@ -1,6 +1,10 @@
 //! Shared format alias and JSON shape routing for the `powerio` crate.
 //!
-//! It maps format names and top level JSON markers without parsing a document.
+//! It maps format name aliases with no parsing at all, and classifies JSON
+//! content by deserializing a typed header instead of materializing the
+//! whole document into a generic value tree.
+
+use serde::Deserialize;
 
 /// A classification result that can be known, absent, or unsafe to choose.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -162,8 +166,8 @@ pub fn distribution_format_from_name(name: &str) -> Option<DistributionFormat> {
 /// Top level classification of bare JSON text: a `.pio.json` package, bare
 /// model JSON, or a case document with its format detection. The package and
 /// model JSON outcomes live in the classifier's result rather than in separate
-/// predicates, so every consumer handles them, and one parse answers every
-/// question.
+/// predicates, so every consumer handles them, and one header read answers
+/// every question instead of a full document parse per question.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum JsonClass {
     /// A `.pio.json` stored module document. The stored document is not a
@@ -230,21 +234,21 @@ impl JsonClass {
 pub fn classify_json_text(text: &str) -> JsonClass {
     // Windows tooling saves JSON with a UTF-8 byte order mark, which
     // serde_json rejects; strip it so a BOM never hides the format.
-    let Ok(shape) = JsonShape::try_from(text.trim_start_matches('\u{feff}')) else {
+    let Ok(header) = serde_json::from_str::<JsonHeader>(text.trim_start_matches('\u{feff}')) else {
         return JsonClass::Case(Detection::Unknown);
     };
     if matches!(
-        shape.string("model_kind"),
+        header.model_kind.as_deref(),
         Some("balanced" | "multiconductor")
-    ) && shape.has("model")
+    ) && header.model
     {
         return JsonClass::Module;
     }
     // The version 1 stored module names itself in its header.
-    if shape.string("schema") == Some("powerio.module") {
+    if header.schema.as_deref() == Some("powerio.module") {
         return JsonClass::Module;
     }
-    shape.classify()
+    header.classify()
 }
 
 /// Classify JSON bytes without performing lossy text replacement.
@@ -267,74 +271,219 @@ fn canonical_key(name: &str) -> String {
         .collect()
 }
 
-struct JsonShape {
-    object: serde_json::Map<String, serde_json::Value>,
+/// Reads `true` when a key is present, for whatever value it holds — a JSON
+/// `null` included, unlike a plain `Option<T>` field, which would treat a
+/// `null` value the same as a missing key. [`serde::de::IgnoredAny`] walks
+/// and discards the value without materializing it, so a marker key whose
+/// value is a large array or object (an unrelated top level table in the
+/// same document) costs one scan, not an allocation per element.
+fn present<'de, D>(deserializer: D) -> Result<bool, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    serde::de::IgnoredAny::deserialize(deserializer)?;
+    Ok(true)
 }
 
-impl TryFrom<&str> for JsonShape {
-    type Error = ();
+/// The key's string value, or `None` for a missing key, a `null`, or any
+/// other non-string value — matching `serde_json::Value::as_str`'s
+/// permissive read, so a marker key of the wrong type carries no marker
+/// instead of failing the whole header.
+fn maybe_str<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Ok(serde_json::Value::deserialize(deserializer)?
+        .as_str()
+        .map(str::to_owned))
+}
 
-    fn try_from(text: &str) -> Result<Self, Self::Error> {
-        let value = serde_json::from_str::<serde_json::Value>(text).map_err(|_| ())?;
-        let serde_json::Value::Object(object) = value else {
-            return Err(());
+/// `Some(header)` when the key's value is a JSON object, `None` for a
+/// missing key or any non-object value — matching the object guard the
+/// nested markers (`grid`, `solution`, `metadata`) read before checking a
+/// key within them.
+fn maybe_object<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    let value = serde_json::Value::deserialize(deserializer)?;
+    if value.is_object() {
+        T::deserialize(value)
+            .map(Some)
+            .map_err(serde::de::Error::custom)
+    } else {
+        Ok(None)
+    }
+}
+
+/// The `network` key's presence, independent of its shape (the surge marker
+/// only needs presence), paired with its nested markers when it does turn
+/// out to be an object (the GO Challenge 3 markers). One key answers both,
+/// since a `maybe_object` field alone would lose the presence signal for a
+/// non-object value.
+#[derive(Default)]
+struct NetworkField {
+    present: bool,
+    header: NetworkHeader,
+}
+
+impl<'de> Deserialize<'de> for NetworkField {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let value = serde_json::Value::deserialize(deserializer)?;
+        let header = if value.is_object() {
+            NetworkHeader::deserialize(value).map_err(serde::de::Error::custom)?
+        } else {
+            NetworkHeader::default()
         };
-        Ok(Self { object })
+        Ok(Self {
+            present: true,
+            header,
+        })
     }
 }
 
-impl JsonShape {
-    fn has(&self, key: &str) -> bool {
-        self.object.contains_key(key)
-    }
+#[derive(Default, Deserialize)]
+struct NetworkHeader {
+    #[serde(default, deserialize_with = "present")]
+    simple_dispatchable_device: bool,
+    #[serde(default, deserialize_with = "present")]
+    ac_line: bool,
+    #[serde(default, deserialize_with = "present")]
+    two_winding_transformer: bool,
+}
 
-    fn string(&self, key: &str) -> Option<&str> {
-        self.object.get(key).and_then(serde_json::Value::as_str)
-    }
+#[derive(Deserialize)]
+struct GridHeader {
+    #[serde(default, deserialize_with = "present")]
+    nodes: bool,
+    #[serde(default, deserialize_with = "present")]
+    edges: bool,
+    #[serde(default, deserialize_with = "present")]
+    context: bool,
+}
 
+#[derive(Deserialize)]
+struct SolutionHeader {
+    #[serde(default, deserialize_with = "present")]
+    nodes: bool,
+    #[serde(default, deserialize_with = "present")]
+    edges: bool,
+}
+
+#[derive(Deserialize)]
+struct MetadataHeader {
+    #[serde(default, deserialize_with = "present")]
+    objective: bool,
+}
+
+/// The top level markers [`JsonClass`] needs, read in one pass over the
+/// document: unlisted keys (every case format's actual data rows) are
+/// skipped by serde's derived `Deserialize` without being materialized, and
+/// the listed keys cost at most a presence check or one short string.
+// Every bool here is an independent named field a derived `Deserialize`
+// fills from its own JSON key, never a positional constructor argument, so
+// the excessive-bools lint's mix-up concern does not apply.
+#[allow(clippy::struct_excessive_bools)]
+#[derive(Default, Deserialize)]
+struct JsonHeader {
+    #[serde(default, deserialize_with = "maybe_str")]
+    model_kind: Option<String>,
+    #[serde(default, deserialize_with = "present")]
+    model: bool,
+    #[serde(default, deserialize_with = "maybe_str")]
+    schema: Option<String>,
+    #[serde(default, deserialize_with = "maybe_str", rename = "_class")]
+    pandapower_class: Option<String>,
+    #[serde(default, deserialize_with = "present")]
+    elements: bool,
+    #[serde(default, deserialize_with = "present")]
+    system: bool,
+    #[serde(default)]
+    network: NetworkField,
+    #[serde(default, deserialize_with = "present")]
+    time_series_input: bool,
+    #[serde(default, deserialize_with = "present")]
+    reliability: bool,
+    #[serde(default, deserialize_with = "maybe_str")]
+    format: Option<String>,
+    #[serde(default, deserialize_with = "present")]
+    schema_version: bool,
+    #[serde(default, deserialize_with = "maybe_object")]
+    grid: Option<GridHeader>,
+    #[serde(default, deserialize_with = "maybe_object")]
+    solution: Option<SolutionHeader>,
+    #[serde(default, deserialize_with = "maybe_object")]
+    metadata: Option<MetadataHeader>,
+    #[serde(default, deserialize_with = "present")]
+    buses: bool,
+    #[serde(default, deserialize_with = "present")]
+    branches: bool,
+    #[serde(default, deserialize_with = "present")]
+    base_mva: bool,
+    #[serde(default, deserialize_with = "present")]
+    loads: bool,
+    #[serde(default, deserialize_with = "present")]
+    generators: bool,
+    #[serde(default, deserialize_with = "present", rename = "baseMVA")]
+    base_mva_camel: bool,
+    #[serde(default, deserialize_with = "present")]
+    branch: bool,
+    #[serde(default, deserialize_with = "present")]
+    r#gen: bool,
+    #[serde(default, deserialize_with = "present")]
+    gencost: bool,
+    #[serde(default, deserialize_with = "present")]
+    data_model: bool,
+    #[serde(default, deserialize_with = "present")]
+    line: bool,
+    #[serde(default, deserialize_with = "present")]
+    linecode: bool,
+    #[serde(default, deserialize_with = "present")]
+    transformer: bool,
+    #[serde(default, deserialize_with = "present")]
+    voltage_source: bool,
+    #[serde(default, deserialize_with = "present")]
+    bus: bool,
+    #[serde(default, deserialize_with = "present")]
+    load: bool,
+    #[serde(default, deserialize_with = "present")]
+    generator: bool,
+    #[serde(default, deserialize_with = "present")]
+    shunt: bool,
+    #[serde(default, deserialize_with = "present")]
+    switch: bool,
+}
+
+impl JsonHeader {
     fn classify(&self) -> JsonClass {
-        let is_pandapower = self.string("_class") == Some("pandapowerNet");
-        let is_egret = self.has("elements") && self.has("system");
-        let is_goc3 = self.has("network")
-            && (self.has("time_series_input") || self.has("reliability"))
-            && self.object.get("network").is_some_and(|network| {
-                network.as_object().is_some_and(|obj| {
-                    obj.contains_key("simple_dispatchable_device")
-                        || obj.contains_key("ac_line")
-                        || obj.contains_key("two_winding_transformer")
-                })
-            });
-        let is_surge = self.string("format") == Some("surge-json")
-            && self.has("schema_version")
-            && self.has("network");
+        let is_pandapower = self.pandapower_class.as_deref() == Some("pandapowerNet");
+        let is_egret = self.elements && self.system;
+        let is_goc3 = (self.time_series_input || self.reliability)
+            && (self.network.header.simple_dispatchable_device
+                || self.network.header.ac_line
+                || self.network.header.two_winding_transformer);
+        let is_surge = self.format.as_deref() == Some("surge-json")
+            && self.schema_version
+            && self.network.present;
         let is_opfdata = self
-            .object
-            .get("grid")
-            .and_then(serde_json::Value::as_object)
-            .is_some_and(|grid| {
-                grid.contains_key("nodes")
-                    && grid.contains_key("edges")
-                    && grid.contains_key("context")
-            })
+            .grid
+            .as_ref()
+            .is_some_and(|grid| grid.nodes && grid.edges && grid.context)
             && self
-                .object
-                .get("solution")
-                .and_then(serde_json::Value::as_object)
-                .is_some_and(|solution| {
-                    solution.contains_key("nodes") && solution.contains_key("edges")
-                })
+                .solution
+                .as_ref()
+                .is_some_and(|solution| solution.nodes && solution.edges)
             && self
-                .object
-                .get("metadata")
-                .and_then(serde_json::Value::as_object)
-                .is_some_and(|metadata| metadata.contains_key("objective"));
-        let is_model_json = self.has("buses")
-            && (self.has("branches")
-                || self.has("base_mva")
-                || self.has("loads")
-                || self.has("generators"));
-        let is_power_models =
-            self.has("baseMVA") || self.has("branch") || self.has("gen") || self.has("gencost");
+                .metadata
+                .as_ref()
+                .is_some_and(|metadata| metadata.objective);
+        let is_model_json =
+            self.buses && (self.branches || self.base_mva || self.loads || self.generators);
+        let is_power_models = self.base_mva_camel || self.branch || self.r#gen || self.gencost;
         let transmission = is_pandapower
             || is_egret
             || is_goc3
@@ -343,16 +492,9 @@ impl JsonShape {
             || is_model_json
             || is_power_models;
 
-        let is_pmd = self.has("data_model");
-        let strong_bmopf = self.has("line")
-            || self.has("linecode")
-            || self.has("transformer")
-            || self.has("voltage_source");
-        let weak_bmopf = self.has("bus")
-            || self.has("load")
-            || self.has("generator")
-            || self.has("shunt")
-            || self.has("switch");
+        let is_pmd = self.data_model;
+        let strong_bmopf = self.line || self.linecode || self.transformer || self.voltage_source;
+        let weak_bmopf = self.bus || self.load || self.generator || self.shunt || self.switch;
         let distribution = is_pmd || strong_bmopf || (weak_bmopf && !transmission);
 
         match (transmission, distribution) {
@@ -658,6 +800,47 @@ mod tests {
         assert_eq!(
             classify_json_text(r#"{"baseMVA":100.0,"voltage_source":{}}"#),
             JsonClass::Case(Detection::Ambiguous)
+        );
+    }
+
+    /// A key's presence check is true even when its value is JSON `null`;
+    /// only a genuinely absent key is absent. Pins the header deserializer
+    /// against the shortcut that would otherwise treat a `null` value the
+    /// same as a missing key.
+    #[test]
+    fn a_null_valued_marker_key_still_counts_as_present() {
+        assert_eq!(
+            classify_json_text(r#"{"model_kind":"balanced","model":null}"#),
+            JsonClass::Module
+        );
+    }
+
+    /// A string marker (`schema`, `model_kind`, `_class`, `format`) whose
+    /// value is not a string carries no marker from that key, matching
+    /// `serde_json::Value::as_str`'s permissive read; classification still
+    /// proceeds over the document's other markers instead of erroring.
+    #[test]
+    fn a_non_string_value_at_a_string_marker_key_is_read_as_absent() {
+        assert_eq!(
+            classify_json_text(r#"{"schema":123,"baseMVA":100.0,"bus":{},"branch":{}}"#),
+            JsonClass::Case(Detection::Known(SourceFormat::Transmission(
+                TransmissionFormat::PowerModelsJson
+            )))
+        );
+    }
+
+    /// A `network` value that is not a JSON object carries no GO Challenge 3
+    /// marker, but does not stop the surge marker (also keyed off `network`,
+    /// as a presence check rather than a shape check) from resolving.
+    #[test]
+    fn a_non_object_network_value_does_not_stop_the_surge_marker() {
+        assert_eq!(
+            classify_json_text(
+                r#"{"format":"surge-json","schema_version":"0.1.0","network":"opaque"}"#
+            ),
+            JsonClass::Case(Detection::Known(SourceFormat::Transmission(
+                TransmissionFormat::SurgeJson
+            )))
         );
     }
 }

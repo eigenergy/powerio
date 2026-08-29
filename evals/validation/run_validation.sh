@@ -15,6 +15,13 @@
 #             compared by solved node voltage magnitude.
 #   BMOPF schema: distribution fixtures converted to canonical BMOPF JSON,
 #                  then checked by Python jsonschema against the task force schema.
+#   DC MATPOWER — powerio's DC surface (dc_data, weighted_laplacian, ptdf, lodf)
+#                 vs independent MATPOWER makeBdc/makePTDF/makeLODF oracles,
+#                 implemented from the published source rather than reusing
+#                 powerio's own incidence or susceptance construction.
+#   MC Yprim    — powerio's native multiconductor nodal admittance vs an
+#                 assembly of OpenDSS's own per element CktElement.YPrim,
+#                 over the distribution fixtures.
 #
 # Then the read sides and the full conversion matrix:
 #   PSSE-read   — powerio reads a real PSS/E .raw, emits PowerModels JSON, compared
@@ -38,7 +45,9 @@
 # instantiated (`julia --project=evals/validation -e 'using Pkg; Pkg.instantiate()'`),
 # and the Python oracle tools (`.venv/bin/python -m pip install -r
 # evals/validation/requirements.txt`). All oracle tools are benchmark scoped, not
-# powerio deps.
+# powerio deps. The MC Yprim leg builds its own small helper crate,
+# evals/validation/mccheck, so a `cargo` on PATH is the only extra requirement;
+# this script does that build itself.
 #
 #   bash evals/validation/run_validation.sh
 #
@@ -96,6 +105,14 @@ MCASES=(
 RAWCASES=(tests/data/psse/case5.raw tests/data/psse/case14.raw)
 EGCASES=(tests/data/egret/case9.json tests/data/egret/case14.json tests/data/egret/case30.json)
 
+# DC MATPOWER oracle cases. The large fixture is gitignored (fetch with
+# evals/validation/fetch_cases.sh); it is the only one of these with phase
+# shifting transformers, so it is the sole proof of the shift injection sign.
+# It is skipped, with a message, when absent, and never joins DCCASES: forming
+# a dense n x n PTDF/LODF over 10000+ buses is not worth the wall time.
+DCCASES=(tests/data/case118.m tests/data/case30.m)
+DC_SHIFT_CASE=tests/data/large/case13659pegase.m
+
 phase_fail=0
 run() { # <label> <command...>
     echo "=== $1 ==="
@@ -139,6 +156,35 @@ echo "=== OpenDSS distribution solve oracle ==="
 echo "=== BMOPF schema validation ==="
 "$PY" evals/validation/validate_bmopf_schema.py || true
 
+# 4f. powerio's native multiconductor admittance vs an assembly of OpenDSS's
+#     own per element YPrim. Builds its own small helper crate first: the
+#     admittance builder has no Python binding, so the helper is the only way
+#     an external oracle can reach it.
+run "build powerio-eval-mccheck" \
+    cargo build --release --manifest-path evals/validation/mccheck/Cargo.toml
+# Absolute: OpenDSS's own Compile command changes the process's working
+# directory as a side effect, which would break a relative path after the
+# first deck.
+export MCCHECK="$PWD/evals/validation/mccheck/target/release/powerio-eval-mccheck"
+echo "=== multiconductor admittance vs OpenDSS YPrim ==="
+"$PY" evals/validation/validate_opendss_admittance.py || true
+
+# 4g. powerio's DC surface vs independent MATPOWER makeBdc/makePTDF oracles.
+dc_args=("${DCCASES[@]}")
+if [ -f "$DC_SHIFT_CASE" ]; then
+    dc_args+=("$DC_SHIFT_CASE")
+else
+    echo "skip: $DC_SHIFT_CASE absent (fetch with evals/validation/fetch_cases.sh" \
+         "for the phase shift sign leg)"
+fi
+echo "=== DC MATPOWER oracle (makeBdc, weighted_laplacian, one PTDF check) ==="
+"$PY" evals/validation/validate_dc_matpower.py "${dc_args[@]}" || true
+
+# 4h. PTDF/LODF across all three susceptance formulas, with bridge handling.
+#     Small cases only: dc_data/ptdf/lodf are all n x n dense here.
+echo "=== DC MATPOWER oracle (PTDF/LODF, three formulas) ==="
+"$PY" evals/validation/validate_dc_ptdf_lodf.py "${DCCASES[@]}" || true
+
 # 5. Full reader x writer matrix (its own batched process).
 echo "=== full reader x writer matrix (PowerModels + egret oracles) ==="
 if "$PY" evals/validation/validate_matrix.py; then
@@ -161,10 +207,14 @@ awk -F'\t' '
 mark_fails=$(awk -F'\t' '$3 == "FAIL" { c++ } END { print c + 0 }' "$PIO_RESULTS_TSV")
 # 7 legs per .m case (PMjson, PMread, PSSE, Exa, pp, pp-json, pypsa)
 # + 1 per raw + 1 per egret + every OpenDSS micro fixture
-# + every emitted BMOPF schema fixture + 1 matrix.
+# + every emitted BMOPF schema fixture + every MC Yprim deck + 1 SystemY smoke
+# + 1 DC makeBdc case per dc_args entry + 1 DC PTDF/LODF case per DCCASES entry
+# + 1 matrix.
 opendss_expected=$("$PY" evals/validation/validate_opendss.py --count)
 bmopf_schema_expected=$("$PY" evals/validation/validate_bmopf_schema.py --count)
-expected=$((${#MCASES[@]} * 7 + ${#RAWCASES[@]} + ${#EGCASES[@]} + opendss_expected + bmopf_schema_expected + 1))
+mc_yprim_expected=$("$PY" evals/validation/validate_opendss_admittance.py --count)
+expected=$((${#MCASES[@]} * 7 + ${#RAWCASES[@]} + ${#EGCASES[@]} + opendss_expected \
+    + bmopf_schema_expected + mc_yprim_expected + 1 + ${#dc_args[@]} + ${#DCCASES[@]} + 1))
 got=$(wc -l <"$PIO_RESULTS_TSV")
 short=0
 [ "$got" -lt "$expected" ] && short=1

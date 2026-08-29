@@ -856,7 +856,7 @@ fn parse_opfdata_document(
 
     if !document.grid.nodes.generator.is_empty() {
         warnings.push(&codes::READ_OPFDATA_RETAINED_SOURCE_ONLY,
-            "OPFData generator pg/qg/vg grid features are solver initial values; the canonical snapshot uses solved pg/qg and terminal-bus voltage, so initial values remain only in the retained source"
+            "OPFData generator pg/qg/vg grid features are solver initial values; the canonical snapshot uses solved pg/qg and terminal-bus voltage, so the initial values are carried in the parsed solution's initial generator columns instead of the network snapshot"
                 ,
         );
     }

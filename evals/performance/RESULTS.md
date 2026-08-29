@@ -1,6 +1,6 @@
 # Benchmark and Validation
 
-Criterion benchmark suites live in `powerio/benches/parse.rs` and
+Criterion benchmark suites live in `powerio-tx/benches/parse.rs` and
 `powerio-matrix/benches/matrix.rs`. The first times parser and writer paths; the
 second times derived matrix construction from already parsed and indexed cases.
 This directory contains extractors, comparison harnesses, and validation
@@ -33,7 +33,7 @@ Benchmark run metadata:
 | --- | --- | --- | --- |
 | PowerIO.jl parse and Ybus | 2026-07-06T19:35:05.007Z | 7010271a4c05 | `julia --project=evals/validation evals/performance/bench_julia.jl --json` |
 | Python parse | 2026-07-06T19:15:26Z | 72e35ad566d2 | `python evals/performance/bench_parse.py --json tests/data/case2869pegase.m tests/data/large/case9241pegase.m tests/data/large/case13659pegase.m tests/data/large/case193k.m` |
-| PowerWorld readers | 2026-07-06T19:06:18Z | 72e35ad566d2 | `POWERIO_BENCH_AUX=<Texas7k_20210804.AUX> POWERIO_BENCH_PWB=<Texas7k_20210804.PWB> cargo bench -p powerio --bench parse -- "parse_aux_\|parse_pwb_" && python3 evals/performance/extract_powerworld_bench.py` |
+| PowerWorld readers | 2026-07-06T19:06:18Z | 72e35ad566d2 | `POWERIO_BENCH_AUX=<Texas7k_20210804.AUX> POWERIO_BENCH_PWB=<Texas7k_20210804.PWB> cargo bench -p powerio-tx --bench parse -- "parse_aux_\|parse_pwb_" && python3 evals/performance/extract_powerworld_bench.py` |
 | matrix builders | 2026-07-06T19:18:48Z | 72e35ad566d2 | `cargo bench -p powerio-matrix --bench matrix && python3 evals/performance/extract_matrix_bench.py` |
 <!-- BENCH:metadata END -->
 
@@ -41,7 +41,7 @@ Benchmark run metadata:
 
 All parser timings run in one Julia process under the same
 `BenchmarkTools.@benchmark` harness (`evals/performance/bench_julia.jl`). The headline
-PowerIO column calls the public `PowerIO.parse` API narrowed to the network handle. The raw Rust C ABI
+PowerIO column calls `PowerIO.parse_file` narrowed to the network handle. The raw Rust C ABI
 handle timing stays in the table as a lower bound. `net.data` measures the
 explicit JSON shaped view materialization that the narrowed parse avoids.
 
@@ -303,7 +303,7 @@ julia --project=evals/validation evals/performance/bench_julia.jl --json # parse
   tests/data/large/case193k.m
 POWERIO_BENCH_AUX=<Texas7k_20210804.AUX> \
 POWERIO_BENCH_PWB=<Texas7k_20210804.PWB> \
-  cargo bench -p powerio --bench parse                # parser, writer, PowerWorld, PWD
+  cargo bench -p powerio-tx --bench parse             # parser, writer, PowerWorld, PWD
 python3 evals/performance/extract_powerworld_bench.py
 cargo bench -p powerio-matrix --bench matrix           # sparse matrix and DC OPF builders
 python3 evals/performance/extract_matrix_bench.py
