@@ -278,7 +278,9 @@ def _format_from_json_class(
     where = f" in {path}" if path is not None else ""
     if status == "known" and domain is not None and format is not None:
         return domain, format
-    if status == "package":
+    # The Rust classifier's stored family label is `module`; this layer's
+    # transport vocabulary stays `package`.
+    if status == "module":
         raise ValueError(
             f"JSON{where} is a .pio.json package; pass it as "
             "`json_format=\"package\"` or read it with the package tools"
