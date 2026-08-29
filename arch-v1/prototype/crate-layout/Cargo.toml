@@ -1,0 +1,16 @@
+[workspace]
+members = [
+    "powerio-core",
+    "powerio-tx",
+    "powerio-dist",
+    "powerio-prob",
+    "powerio",
+]
+resolver = "3"
+
+[workspace.package]
+edition = "2024"
+publish = false
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
