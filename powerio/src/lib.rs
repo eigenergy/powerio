@@ -13,8 +13,8 @@
 //! type narrows the module:
 //!
 //! ```no_run
-//! let module = powerio::parse(powerio_core::Source::open("case9.m")?)?;
-//! let module: powerio_core::PioModule<powerio::BalancedNetwork> =
+//! let module = powerio::parse(powerio::Source::open("case9.m")?)?;
+//! let module: powerio::PioModule<powerio::BalancedNetwork> =
 //!     powerio::try_into_typed(module)?;
 //! # Ok::<(), Box<dyn std::error::Error>>(())
 //! ```
@@ -24,6 +24,12 @@
 //! [`powerio_dist::parse`] for multiconductor ones.
 
 pub use powerio_tx::*;
+
+/// Core types a consumer needs to name a module: the generic module wrapper,
+/// the source it was parsed from, a byte span into a source, and the two
+/// repeated-value containers. `Error` and `Diagnostic` already arrive through
+/// [`powerio_tx`]'s own re-export.
+pub use powerio_core::{PioModule, ScenarioSet, Source, SourceSpan, TimePoint, TimeSeries};
 
 pub mod package;
 mod value;
