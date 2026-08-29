@@ -41,6 +41,12 @@ test = false
 bench = false
 
 [[bin]]
+name = "stored_module"
+path = "fuzz_targets/stored_module.rs"
+test = false
+bench = false
+
+[[bin]]
 name = "json_classify"
 path = "fuzz_targets/json_classify.rs"
 test = false

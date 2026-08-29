@@ -182,6 +182,62 @@ mod tests {
         assert!((p_branch - 5.0 * (0.0 - shift)).abs() < 1e-12);
     }
 
+    /// Adversarial partition audit: every branch lands in exactly one of
+    /// included or omitted, whatever mix of degeneracies the case carries,
+    /// and the stable IDs across both sets are unique.
+    #[test]
+    fn every_branch_is_included_or_omitted_exactly_once() {
+        use crate::{Branch, Bus, BusId, BusType};
+        let mut branches = vec![
+            Branch::new(BusId(1), BusId(2), 0.0, 0.1),
+            Branch::new(BusId(2), BusId(2), 0.0, 0.1),
+            Branch::new(BusId(1), BusId(9), 0.01, 0.1),
+            Branch::new(BusId(1), BusId(3), 0.0, 0.0),
+            Branch::new(BusId(2), BusId(3), 0.0, f64::NAN),
+            Branch::new(BusId(1), BusId(3), 0.02, 0.2),
+        ];
+        branches[5].in_service = false;
+        let mut giant_tap = Branch::new(BusId(2), BusId(3), 0.0, 1.0e308);
+        giant_tap.tap = 1.0e308;
+        branches.push(giant_tap);
+        let network = crate::BalancedNetwork::in_memory(
+            "partition",
+            100.0,
+            vec![
+                Bus::new(BusId(1), BusType::Ref, 230.0),
+                Bus::new(BusId(2), BusType::Pq, 230.0),
+                Bus::new(BusId(3), BusType::Pq, 230.0),
+            ],
+            branches,
+        );
+        let view = crate::IndexedNetwork::new(&network);
+        for convention in [
+            DcConvention::SeriesSusceptance,
+            DcConvention::TapAdjustedReactance,
+            DcConvention::ReactanceOnly,
+        ] {
+            let data = dc_network_data(&view, convention);
+            let included = data.row_ids.len();
+            assert_eq!(included, data.susceptance.len());
+            assert_eq!(included, data.from_indices.len());
+            assert_eq!(
+                included + data.omitted.len(),
+                network.branches().len(),
+                "{convention:?}"
+            );
+            let mut ids: Vec<&str> = data
+                .row_ids
+                .iter()
+                .map(String::as_str)
+                .chain(data.omitted.iter().map(|(id, _)| id.as_str()))
+                .collect();
+            ids.sort_unstable();
+            ids.dedup();
+            assert_eq!(ids.len(), network.branches().len(), "{convention:?}");
+            assert!(data.susceptance.iter().all(|b| b.is_finite()));
+        }
+    }
+
     /// The degeneracy bound follows the selected formula: a purely resistive
     /// branch has a finite (zero) series susceptance and stays an included
     /// row under the series formula, while the two reactance formulas omit
