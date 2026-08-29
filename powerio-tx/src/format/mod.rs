@@ -321,6 +321,15 @@ pub fn parse_display_bytes(bytes: &[u8], from: &str) -> Result<DisplayData> {
     }
 }
 
+/// Render a file extension for a user-facing message: `` extension `xyz` ``
+/// when present, `no extension` otherwise.
+fn describe_extension(extension: Option<&str>) -> String {
+    match extension {
+        Some(ext) => format!("extension `{ext}`"),
+        None => "no extension".to_owned(),
+    }
+}
+
 /// Parse the display file at `path`, choosing the reader from `from` or, when
 /// `None`, from the extension. A `.pwd` extension selects PowerWorld display
 /// data.
@@ -361,8 +370,9 @@ pub fn parse_display_file(
             }
             other => {
                 return Err(Error::UnknownFormat(format!(
-                    "cannot infer display format from file extension {other:?}; \
-                     pass an explicit display format"
+                    "cannot infer display format from file with {}; \
+                     pass an explicit display format",
+                    describe_extension(other)
                 )));
             }
         },
@@ -586,8 +596,9 @@ fn parse_to_network(
                         None
                     } else {
                         return Err(Error::UnknownFormat(format!(
-                            "cannot infer from source name extension {other:?}; \
-                             declare a source format"
+                            "cannot infer from source name with {}; \
+                             declare a source format",
+                            describe_extension(other)
                         )));
                     }
                 }
