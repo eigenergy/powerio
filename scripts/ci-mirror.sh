@@ -13,8 +13,12 @@ run() { echo "=== $* ==="; "$@"; }
 run cargo fmt --all --check
 run ./scripts/ci-clippy.sh
 run bash scripts/terminology-gate.sh
+run bash scripts/deprecated-inventory.sh --assert-empty
 run ./scripts/capi-header-parity.sh
 run bash scripts/capi-removed-surface.sh
+run python3 scripts/abi-delta.py
+run bash scripts/check-value-kinds.sh
+run bash scripts/check-diagnostic-parity.sh
 run python3 scripts/capi-doc-integrity.py
 run bash scripts/capi-export-monotonicity.sh
 run python3 scripts/check-doc-symbols.py
@@ -51,7 +55,9 @@ fi
 # readers can run in a browser. Skipped rather than failing when the target
 # is not installed (rustup target add wasm32-unknown-unknown).
 if rustup target list --installed 2>/dev/null | grep -qx wasm32-unknown-unknown; then
-  run cargo check --target wasm32-unknown-unknown -p powerio -p powerio-tx -p powerio-dist
+  run cargo check --target wasm32-unknown-unknown -p powerio -p powerio-tx -p powerio-dist \
+      -p powerio-core -p powerio-prob -p powerio-matrix
+  run cargo check --target wasm32-unknown-unknown -p powerio --features matrix
 else
   echo "=== skipped: wasm32-unknown-unknown target not installed ==="
 fi
@@ -107,6 +113,10 @@ if [ -n "$(git status --porcelain -- docs/schema)" ]; then
   exit 1
 fi
 
+# Every shipped example compiles and the self-contained ones run, the BMOPF
+# example document check included.
+run bash scripts/check-examples.sh
+
 # crates.yml packages every publishable crate and audits each archive for the
 # license files a published crate must carry. The verify builds compile the freshly packaged siblings from cargo's overlay
 # registry, whose unpacks carry fixed tarball timestamps: a stale unpack or a
@@ -118,6 +128,7 @@ fi
 rm -rf "$HOME"/.cargo/registry/src/-*/powerio-0.* "$HOME"/.cargo/registry/src/-*/powerio-[a-z]*-0.* target/package-verify
 run env CARGO_TARGET_DIR=target/package-verify cargo package --workspace --exclude powerio-capi --exclude powerio-py --allow-dirty
 run python3 scripts/audit-release-archives.py target/package-verify/package/*.crate
+run bash scripts/check-release-versions.sh
 
 # fuzz.yml builds the detached fuzz workspace with cargo-fuzz on nightly; a
 # plain check catches source breakage (a renamed entry point, a moved type)
@@ -134,5 +145,25 @@ if command -v mdbook >/dev/null 2>&1; then
 else
   echo "=== skipped: mdbook not installed (cargo install mdbook) ==="
 fi
+
+# python.yml's quality and test lanes: ruff and mypy over the wrapper,
+# stubtest comparing the public stubs against the built extension, and the
+# suite itself. One throwaway venv, the same wheel a user builds. stubtest
+# runs from an empty directory so mypy sees the package once.
+PYVENV=target/ci-mirror-py
+# The mcp extra (and so the mypy pass over the server) needs python >= 3.10;
+# a stock macOS python3 is 3.9, so take the newest interpreter present.
+PYBIN=$(command -v python3.13 || command -v python3.12 || command -v python3.11 || command -v python3.10 || command -v python3)
+run "$PYBIN" -m venv "$PYVENV"
+run "$PYVENV/bin/pip" -q install '.[all,mcp]' ruff mypy pytest
+run "$PYVENV/bin/ruff" check --no-fix .
+run "$PYVENV/bin/python" -m mypy python/powerio
+STUBDIR=$(mktemp -d)
+echo "=== stubtest ==="
+(cd "$STUBDIR" && exec "$OLDPWD/$PYVENV/bin/python" -m mypy.stubtest powerio \
+    --mypy-config-file "$OLDPWD/mypy.ini" \
+    --ignore-missing-stub \
+    --allowlist "$OLDPWD/python/stubtest_allowlist.txt")
+run "$PYVENV/bin/python" -m pytest python/tests -q
 
 echo "=== all green ==="

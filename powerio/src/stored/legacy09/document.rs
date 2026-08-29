@@ -30,8 +30,23 @@ use crate::transform::{
     lower_multiconductor_to_balanced,
 };
 
+/// Whether a stated version belongs to the released 0.9 lineage this frozen
+/// decoder reads. The current build's own version never widens the gate: no
+/// 1.x release writes this layout.
+fn version_is_frozen_lineage(version: &str) -> bool {
+    let mut parts = version.split('.');
+    let (major, minor, patch) = (parts.next(), parts.next(), parts.next());
+    // A patch component must exist and open with a digit, so a bare "0.9"
+    // stays refused while a 0.9.x prerelease tag ("0.9.0-rc.1") loads.
+    major == Some("0")
+        && minor == Some("9")
+        && patch.is_some_and(|p| p.as_bytes().first().is_some_and(u8::is_ascii_digit))
+}
+
 fn default_powerio_version() -> String {
-    crate::VERSION.to_owned()
+    // The frozen decoder represents the released 0.9 lineage; its scaffold
+    // (test only) stamps that lineage, never the crate version.
+    "0.9.0".to_owned()
 }
 
 /// Optional derived metadata: matrix statistics, solver table metadata, and
@@ -691,10 +706,13 @@ impl NetworkPackage {
         // ("missing field `producer`") does not say what it failed to be.
         let pkg: Self =
             serde_json::from_str(text.trim_start_matches('\u{feff}')).map_err(Error::Malformed)?;
-        if !crate::version::supports(&pkg.powerio_version) {
-            return Err(Error::UnsupportedVersion(crate::version::reject(
+        if !version_is_frozen_lineage(&pkg.powerio_version) {
+            // The frozen decoder names the lineage it reads; the live
+            // build's label moves with the crate version.
+            return Err(Error::UnsupportedVersion(crate::version::reject_as(
                 ".pio.json",
                 &pkg.powerio_version,
+                "0.9.x",
             )));
         }
         if !pkg.kind_is_consistent() {
@@ -2279,12 +2297,9 @@ mod tests {
     fn a_package_states_the_powerio_version_that_wrote_it() {
         let net = crate::BalancedNetwork::in_memory("demo", 100.0, vec![], vec![]);
         let pkg = super::NetworkPackage::from_balanced(net);
-        assert_eq!(pkg.powerio_version, crate::VERSION);
+        assert_eq!(pkg.powerio_version, "0.9.0");
         let text = pkg.to_json().unwrap();
-        assert!(
-            text.contains(&format!("\"powerio_version\":\"{}\"", crate::VERSION)),
-            "{text}"
-        );
+        assert!(text.contains("\"powerio_version\":\"0.9.0\""), "{text}");
         assert!(
             !text.contains("schema_version"),
             "the per document schema number is gone: {text}"
@@ -2320,7 +2335,8 @@ mod tests {
             .unwrap_err()
             .to_string();
         assert!(err.contains("9.9.9"), "{err}");
-        assert!(err.contains(&crate::version::lineage_label()), "{err}");
+        // The frozen decoder names its own lineage, not the live label.
+        assert!(err.contains("0.9.x"), "{err}");
         // Diagnosis only: the remedy is the consumer's to state (#375).
         assert!(!err.contains("regenerate"), "{err}");
     }

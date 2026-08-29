@@ -21,20 +21,21 @@ standard deviation estimates. Re-run the scripts below before using the numbers
 in a paper, release note, or package page.
 
 Snapshot environment: MacBook Pro `Mac17,8`, Apple M5 Pro, 18 cores, 64 GB RAM,
-macOS 26.4.1 (`25E253`), arm64. Rust `rustc 1.95.0`, `cargo 1.95.0`; Apple
-clang 21.0.0; Julia 1.12.6; Python 3.12.13 in `.venv`. The metadata table
-records the commit and UTC time for each suite because the Julia suite was
-rerun after the other benchmark tables.
+macOS 26.5.1 (`25F80`), arm64. Rust `rustc 1.95.0`, `cargo 1.95.0`; Apple
+clang 21.0.0; Julia 1.12.6; Python 3.12.13 in `.venv-validate`. The metadata
+table records the commit and UTC time for each suite; the 0.10.0 candidate
+snapshot ran every suite on one machine state, so cross tool ratios within a
+table are comparable.
 
 Benchmark run metadata:
 
 <!-- BENCH:metadata START -->
 | suite | performed at (UTC) | commit | command |
 | --- | --- | --- | --- |
-| PowerIO.jl parse and Ybus | 2026-07-06T19:35:05.007Z | 7010271a4c05 | `julia --project=evals/validation evals/performance/bench_julia.jl --json` |
-| Python parse | 2026-07-06T19:15:26Z | 72e35ad566d2 | `python evals/performance/bench_parse.py --json tests/data/case2869pegase.m tests/data/large/case9241pegase.m tests/data/large/case13659pegase.m tests/data/large/case193k.m` |
-| PowerWorld readers | 2026-07-06T19:06:18Z | 72e35ad566d2 | `POWERIO_BENCH_AUX=<Texas7k_20210804.AUX> POWERIO_BENCH_PWB=<Texas7k_20210804.PWB> cargo bench -p powerio-tx --bench parse -- "parse_aux_\|parse_pwb_" && python3 evals/performance/extract_powerworld_bench.py` |
-| matrix builders | 2026-07-06T19:18:48Z | 72e35ad566d2 | `cargo bench -p powerio-matrix --bench matrix && python3 evals/performance/extract_matrix_bench.py` |
+| PowerIO.jl parse and Ybus | 2026-08-29T00:56:56.389Z | b2deb19d5bc4 | `julia --project=evals/validation evals/performance/bench_julia.jl --json` |
+| Python parse | 2026-08-29T00:59:32Z | b2deb19d5bc4 | `python evals/performance/bench_parse.py --json tests/data/case2869pegase.m tests/data/large/case9241pegase.m tests/data/large/case13659pegase.m tests/data/large/case193k.m` |
+| PowerWorld readers | 2026-08-28T18:43:03Z | df35926e80d3 | `POWERIO_BENCH_AUX=<Texas7k_20210804.AUX> POWERIO_BENCH_PWB=<Texas7k_20210804.PWB> cargo bench -p powerio-tx --bench parse -- "parse_aux_\|parse_pwb_" && python3 evals/performance/extract_powerworld_bench.py` |
+| matrix builders | 2026-08-28T18:41:02Z | 649c5ca1f5bf | `cargo bench -p powerio-matrix --bench matrix && python3 evals/performance/extract_matrix_bench.py` |
 <!-- BENCH:metadata END -->
 
 ## Speed
@@ -48,16 +49,16 @@ explicit JSON shaped view materialization that the narrowed parse avoids.
 <!-- BENCH:speed-julia START -->
 | case | buses / branches | PowerIO.jl parse | ExaPowerIO.jl parse | PowerModels.jl parse | Rust C ABI handle | net.data |
 | --- | --- | --- | --- | --- | --- | --- |
-| case2869pegase | 2869 / 4582 | 1.8 +/- 0.07 ms | 2.8 +/- 0.12 ms | 127.6 +/- 38 ms | 1.77 +/- 0.06 ms | 39.53 +/- 41.18 ms |
-| case_ACTIVSg2000 | 2000 / 3206 | 2.14 +/- 0.06 ms | 2.19 +/- 0.13 ms | 141.7 +/- 39.2 ms | 2.11 +/- 0.04 ms | 27.69 +/- 23.58 ms |
-| case9241pegase | 9241 / 16049 | 6.39 +/- 0.34 ms | 9.47 +/- 0.3 ms | 578.9 +/- 57.9 ms | 6.07 +/- 0.58 ms | 218.19 +/- 46.12 ms |
-| case13659pegase | 13659 / 20467 | 9.04 +/- 0.31 ms | 13.77 +/- 16.77 ms | 822.5 +/- 18.1 ms | 9.03 +/- 0.18 ms | 291.28 +/- 21.18 ms |
-| case_ACTIVSg10k | 10000 / 12706 | 9.43 +/- 0.2 ms | 9.47 +/- 1.41 ms | 715.2 +/- 69.7 ms | 9.4 +/- 0.15 ms | 169.26 +/- 44.86 ms |
-| case_ACTIVSg25k | 25000 / 32230 | 24.35 +/- 0.28 ms | 22.72 +/- 28.45 ms | 1819 +/- 12 ms | 24.3 +/- 0.3 ms | n/a |
-| case_ACTIVSg70k | 70000 / 88207 | 66.81 +/- 0.42 ms | 61.96 +/- 2.88 ms | 5382.2 +/- 191 ms | 67.55 +/- 0.43 ms | n/a |
-| case_SyntheticUSA | 82000 / 104121 | 81.03 +/- 0.93 ms | 77.65 +/- 43.29 ms | 6474.8 +/- 149.7 ms | 80.35 +/- 0.22 ms | n/a |
-| case99k | 99396 / 117860 | 91.17 +/- 0.48 ms | 97.81 +/- 47.6 ms | n/a | 92.01 +/- 0.51 ms | n/a |
-| case193k | 192768 / 228574 | 178.44 +/- 0.24 ms | 179.32 +/- 53.46 ms | n/a | 179.34 +/- 0.41 ms | n/a |
+| case2869pegase | 2869 / 4582 | 3.08 +/- 0.08 ms | 4.31 +/- 0.09 ms | 180.4 +/- 2.3 ms | 2.89 +/- 0.02 ms | 57.97 +/- 50.77 ms |
+| case_ACTIVSg2000 | 2000 / 3206 | 3.54 +/- 0.07 ms | 3.1 +/- 0.07 ms | 190.6 +/- 48 ms | 3.37 +/- 0.04 ms | 41.19 +/- 33.34 ms |
+| case9241pegase | 9241 / 16049 | 10.4 +/- 0.22 ms | 14.14 +/- 0.2 ms | 788.5 +/- 50.6 ms | 9.34 +/- 0.07 ms | 298.89 +/- 55.8 ms |
+| case13659pegase | 13659 / 20467 | 16.05 +/- 0.42 ms | 21.07 +/- 20.24 ms | 1117.7 +/- 23.7 ms | 14.34 +/- 0.21 ms | 406.38 +/- 61.5 ms |
+| case_ACTIVSg10k | 10000 / 12706 | 15.52 +/- 0.15 ms | 14.05 +/- 0.24 ms | 1026.2 +/- 18.3 ms | 14.7 +/- 0.12 ms | 193.18 +/- 57.44 ms |
+| case_ACTIVSg25k | 25000 / 32230 | 39.68 +/- 0.86 ms | 34.81 +/- 34.88 ms | 2536.1 +/- 18.9 ms | 37.26 +/- 0.9 ms | n/a |
+| case_ACTIVSg70k | 70000 / 88207 | 105.97 +/- 1.89 ms | 92.16 +/- 3.4 ms | 7763.4 +/- 182.5 ms | 102.69 +/- 0.6 ms | n/a |
+| case_SyntheticUSA | 82000 / 104121 | 125.8 +/- 1.89 ms | 119.21 +/- 61.63 ms | 9127.3 +/- 497.1 ms | 121.5 +/- 0.56 ms | n/a |
+| case99k | 99396 / 117860 | 146.28 +/- 3.84 ms | 145.27 +/- 57.25 ms | n/a | 140.15 +/- 2.78 ms | n/a |
+| case193k | 192768 / 228574 | 287.38 +/- 4.26 ms | 366.67 +/- 61.09 ms | n/a | 274.64 +/- 4.59 ms | n/a |
 <!-- BENCH:speed-julia END -->
 
 The Ybus table times the public PowerIO.jl sparse matrix API. The Rust C ABI
@@ -67,16 +68,16 @@ Julia `SparseMatrixCSC`.
 <!-- BENCH:speed-julia-ybus START -->
 | case | buses / branches | PowerIO.jl Ybus | ExaPowerIO.jl Ybus | Rust C ABI Arrow | PowerModels.jl Ybus |
 | --- | --- | --- | --- | --- | --- |
-| case2869pegase | 2869 / 4582 | 2.77 +/- 0.09 ms | 2.97 +/- 0.13 ms | 2.58 +/- 0.08 ms | 136.2 +/- 39.1 ms |
-| case_ACTIVSg2000 | 2000 / 3206 | 2.75 +/- 0.13 ms | 2.2 +/- 0.1 ms | 2.63 +/- 0.06 ms | 133.7 +/- 40.1 ms |
-| case9241pegase | 9241 / 16049 | 9.84 +/- 0.25 ms | 9.86 +/- 16.89 ms | 9.23 +/- 0.12 ms | 605.8 +/- 42.8 ms |
-| case13659pegase | 13659 / 20467 | 14.61 +/- 0.24 ms | 14.38 +/- 23.58 ms | 13.92 +/- 0.19 ms | 903.9 +/- 46.8 ms |
-| case_ACTIVSg10k | 10000 / 12706 | 13.02 +/- 0.36 ms | 9.87 +/- 17.08 ms | 12.52 +/- 0.17 ms | 751 +/- 14.7 ms |
-| case_ACTIVSg25k | 25000 / 32230 | 33.89 +/- 0.3 ms | 24.02 +/- 31.93 ms | 33.02 +/- 0.22 ms | 1921.1 +/- 38.6 ms |
-| case_ACTIVSg70k | 70000 / 88207 | 99.13 +/- 1.12 ms | 71.59 +/- 48.14 ms | 95.76 +/- 0.24 ms | 5684.7 +/- 135.2 ms |
-| case_SyntheticUSA | 82000 / 104121 | 120.98 +/- 0.96 ms | 169.2 +/- 47.32 ms | 116.39 +/- 1.24 ms | n/a |
-| case99k | 99396 / 117860 | 135.81 +/- 40.84 ms | 184.33 +/- 50.12 ms | 132.42 +/- 1.02 ms | n/a |
-| case193k | 192768 / 228574 | 277.18 +/- 49.58 ms | 276.64 +/- 4.29 ms | 263.4 +/- 2.31 ms | n/a |
+| case2869pegase | 2869 / 4582 | 5.19 +/- 0.8 ms | 4.51 +/- 0.2 ms | 4 +/- 0.03 ms | 197.9 +/- 47.1 ms |
+| case_ACTIVSg2000 | 2000 / 3206 | 4.97 +/- 0.08 ms | 3.33 +/- 0.1 ms | 4.11 +/- 0.02 ms | 194.5 +/- 49 ms |
+| case9241pegase | 9241 / 16049 | 18.59 +/- 2.24 ms | 15.01 +/- 20.64 ms | 13.96 +/- 0.07 ms | 853.2 +/- 55.6 ms |
+| case13659pegase | 13659 / 20467 | 28.06 +/- 5.18 ms | 22.13 +/- 20.91 ms | 21.26 +/- 0.34 ms | 1229.5 +/- 16.2 ms |
+| case_ACTIVSg10k | 10000 / 12706 | 23.82 +/- 1.97 ms | 14.69 +/- 20.57 ms | 19.38 +/- 0.31 ms | 1052.3 +/- 24 ms |
+| case_ACTIVSg25k | 25000 / 32230 | 67.98 +/- 26.98 ms | 36.48 +/- 40.91 ms | 53.45 +/- 1.85 ms | 2716 +/- 184.4 ms |
+| case_ACTIVSg70k | 70000 / 88207 | 169.83 +/- 4.71 ms | 105.28 +/- 60.73 ms | 142.17 +/- 0.71 ms | 8514.5 +/- 235.4 ms |
+| case_SyntheticUSA | 82000 / 104121 | 220.92 +/- 7.16 ms | 236.31 +/- 61.52 ms | 179.14 +/- 2.97 ms | n/a |
+| case99k | 99396 / 117860 | 245.57 +/- 54.55 ms | 251.53 +/- 45.77 ms | 201.12 +/- 3.41 ms | n/a |
+| case193k | 192768 / 228574 | 493.77 +/- 61.87 ms | 401.26 +/- 7.22 ms | 403.14 +/- 16.21 ms | n/a |
 <!-- BENCH:speed-julia-ybus END -->
 
 PowerModels `n/a` cells do not mean slow runs. In this run,
@@ -95,10 +96,10 @@ then `from_mpc` builds its `net`. `evals/performance/bench_parse.py`, same machi
 <!-- BENCH:speed-pandapower START -->
 | case | powerio parse | powerio parse + Y_bus + Bp | matpowercaseframes (pandapower's `.m` reader) |
 | --- | --- | --- | --- |
-| case2869pegase | 1.9 +/- 0.1 ms | 6.7 +/- 0.2 ms | n/a |
-| case9241pegase | 6.1 +/- 0.2 ms | 24.1 +/- 0.5 ms | n/a |
-| case13659pegase | 9.5 +/- 0.3 ms | 33.8 +/- 0.2 ms | 115.3 +/- 12.5 ms |
-| case193k | 190.5 +/- 14 ms | 530.1 +/- 5.5 ms | 1794.4 +/- 7.9 ms |
+| case2869pegase | 66.6 +/- 1.1 ms | 123.5 +/- 2 ms | n/a |
+| case9241pegase | 223.2 +/- 3.5 ms | 423.7 +/- 4.3 ms | n/a |
+| case13659pegase | 333.4 +/- 2.6 ms | 603.4 +/- 5.4 ms | 171.3 +/- 16.3 ms |
+| case193k | 6332.5 +/- 5.6 ms | 10318.9 +/- 9.8 ms | 2675.4 +/- 11 ms |
 <!-- BENCH:speed-pandapower END -->
 
 `from_mpc` raises `IndexError` on case118 and the pegase cases in pandapower
@@ -174,23 +175,22 @@ time, same machine as above.
 <!-- BENCH:matrix START -->
 | operation | case | buses / branches | median +/- std |
 | --- | --- | --- | --- |
-| Bp sparse | case118 | 118 / 186 | 0.0198 +/- 0.00018 ms |
-| Bpp sparse | case118 | 118 / 186 | 0.0126 +/- 0.00009 ms |
-| Y_bus sparse | case118 | 118 / 186 | 0.0199 +/- 0.00021 ms |
-| LACPF block | case118 | 118 / 186 | 0.0495 +/- 0.00022 ms |
-| adjacency | case118 | 118 / 186 | 0.0149 +/- 0.00009 ms |
-| Bp sparse | case2869pegase | 2869 / 4582 | 0.5883 +/- 0.00652 ms |
-| Bpp sparse | case2869pegase | 2869 / 4582 | 0.3729 +/- 0.00294 ms |
-| Y_bus sparse | case2869pegase | 2869 / 4582 | 0.598 +/- 0.00534 ms |
-| LACPF block | case2869pegase | 2869 / 4582 | 1.529 +/- 0.01364 ms |
-| adjacency | case2869pegase | 2869 / 4582 | 0.42 +/- 0.00317 ms |
-| DC OPF incidence | case118 | 118 / 186 | 0.0088 +/- 0.00007 ms |
-| DC OPF weighted Laplacian | case118 | 118 / 186 | 0.0099 +/- 0.0001 ms |
-| DC OPF grounded Laplacian | case118 | 118 / 186 | 0.0219 +/- 0.00022 ms |
-| DC OPF flow map | case118 | 118 / 186 | 0.0062 +/- 0.00022 ms |
-| DC OPF instance | case118 | 118 / 186 | 0.0024 +/- 0.00003 ms |
-| PTDF + LODF | case118 | 118 / 186 | 2.1657 +/- 0.03555 ms |
-| pipeline Y_bus pair | case2869pegase | 2869 / 4582 | 2.5867 +/- 0.1166 ms |
+| Bp sparse | case118 | 118 / 186 | 0.0242 +/- 0.00086 ms |
+| Bpp sparse | case118 | 118 / 186 | 0.0143 +/- 0.00068 ms |
+| Y_bus sparse | case118 | 118 / 186 | 0.0218 +/- 0.00107 ms |
+| LACPF block | case118 | 118 / 186 | 0.0526 +/- 0.00072 ms |
+| adjacency | case118 | 118 / 186 | 0.0155 +/- 0.00021 ms |
+| Bp sparse | case2869pegase | 2869 / 4582 | 0.6536 +/- 0.00977 ms |
+| Bpp sparse | case2869pegase | 2869 / 4582 | 0.4119 +/- 0.00577 ms |
+| Y_bus sparse | case2869pegase | 2869 / 4582 | 0.6639 +/- 0.01453 ms |
+| LACPF block | case2869pegase | 2869 / 4582 | 1.6909 +/- 0.07607 ms |
+| adjacency | case2869pegase | 2869 / 4582 | 0.4359 +/- 0.00595 ms |
+| DC OPF incidence | case118 | 118 / 186 | 0.0093 +/- 0.00011 ms |
+| DC OPF weighted Laplacian | case118 | 118 / 186 | 0.0105 +/- 0.00012 ms |
+| DC OPF grounded Laplacian | case118 | 118 / 186 | 0.0234 +/- 0.00017 ms |
+| DC OPF flow map | case118 | 118 / 186 | 0.0058 +/- 0.00011 ms |
+| PTDF + LODF | case118 | 118 / 186 | 1.1465 +/- 0.01407 ms |
+| pipeline Y_bus pair | case2869pegase | 2869 / 4582 | 18.9792 +/- 0.94841 ms |
 <!-- BENCH:matrix END -->
 
 Refresh those rows with:

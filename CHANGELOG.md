@@ -1,5 +1,31 @@
 # Changelog
 
+## 0.10.0
+
+PowerIO 0.10 is the public beta of the 1.0 API. API corrections may land before 1.0.0 as downstream integrations exercise the new design.
+
+One model of the work: every parse compiles one source into a typed module, one document stores it, and every language reads the same names. The 0.9 compatibility names are gone, so this is the release to read before upgrading; the [migration guide](https://powerio.dev/guide/migration-v1.html) walks each surface.
+
+**The universal parse.** `powerio::parse(source)` compiles any supported input into `PioModule<PioValue>`: balanced and multiconductor networks, PyPSA CSV folders (a declared snapshot axis produces a network or operating point time series), gridfm Parquet datasets (a scenario set), Egret JSON with time series, and stored `.pio.json`. A source that defines a calculation produces that calculation's value: GO Challenge 3 JSON parses to an AC SCUC instance, BMOPF JSON to a multiconductor AC OPF instance, and DeepMind OPFData JSON to a solved AC OPF. Routing reads the declared format, then the name and content; in memory text with no extension sniffs the same way a `.json` file does, and every failure retains the source.
+
+**The stored module document.** `.pio.json` version 1 stores one typed value under `"schema": "powerio.module"` beside the module's records: producer, source descriptors, source maps, diagnostics, history, and namespaced extensions. Twenty value kinds cover the networks, the collections, and the seven problem instances and seven solutions. A released 0.9 package upgrades one way through the same reader, its operating points becoming a typed operating point time series; a nonempty legacy study block is refused with the materialize instruction, and the pre 0.9 lineage is refused outright. The 0.9 `NetworkPackage` API is gone from every language: the lowering lives at `powerio::transform`, the distribution geo layer at `powerio::dist_geo`, and the diagnostic registry at `powerio::codes`.
+
+**The crate graph reads top down.** `powerio-core` holds sources, diagnostics, and modules; `powerio-tx` and `powerio-dist` the two network families; `powerio-prob` the instances and solutions over them; `powerio-matrix` the projections over everything below it; and the `powerio` facade composes the set, with the matrix surface behind its `matrix` feature. A cargo metadata test pins the direction, and the solver preparation rows that used to leak from `powerio-prob` are private to the builders that consume them.
+
+**C ABI 6 replaces the 0.9 surface.** Owned handles with `retain`/`release`, structured `PioError` handles instead of prose buffers on the new entry points, the stored module surface (`pio_module_*`), and the DC branch data (`pio_dc_data_*`). `pio_package_*`, `pio_scopf_*`, and the 0.9 solver row Arrow tables (ids 6 to 14, 21, and 22) are gone; the ids stay burned and the catalog lists only the live tables. The header regenerates from the source and CI holds the two identical.
+
+**`branch_susceptance` reverses sign against 0.9.** The 0.9 notes stated a positive Laplacian edge weight; 0.10 returns the PowerModels negative susceptance from every `DcConvention` formula (`series_susceptance` = `imag(inv(r + jx))`, `tap_adjusted_reactance` = `-1/(x·τ)`, `reactance_only` = `-1/x`), so one sign statement covers Rust, C, Python, and Julia, and a caller building a Laplacian negates once. A 0.9 caller of `branch_susceptance`/`branch_susceptances` that negated must stop; a caller that used the value raw must negate. The `pio_dc_data_*` C surface is new in ABI 6, and the FDPF B'/B'' Arrow tables do not route through `DcConvention`, so neither carries a 0.9 exposure.
+
+**The DC phase shift carries the correct sign.** The shared assembly publishes `p_shift = A' (b .* shift)` per bus (with the PowerModels negative susceptance, the fixed term MATPOWER's `makeBdc` states) and the complete affine branch flow `p_branch = -b (va_from - va_to) + b shift`. The 0.9 releases and the first v6 draft negated the shift term; a flat start pin on a shifted fixture now asserts the MATPOWER value through Rust and C, and the KCL identity `A' p_branch = -B va + p_shift` holds by test.
+
+**DC sensitivities move off the iterative solver.** `SensitivitySolver::Iterative` is renamed `Sparse` and `SensitivitySolverPath::IterativeCg` is renamed `SparseCholesky` (serde aliases on both keep a stored document loading under its old name); `cg_tolerance`, `cg_max_iterations`, and the `BUILD.SENSITIVITY.NO_CONVERGENCE` diagnostic are retired, since a sparse direct factorization through `faer` either succeeds or reports singularity rather than running out of iterations. The `Auto` crossover between the dense and sparse paths returns to a reduced dimension of 512, reversing the 0.8.1 change to 8192, now measured against a direct factorization rather than the conjugate gradient solve that justified the higher number. The trade is memory for speed: dense band peak memory is up about 3x at 2000 to 3000 buses for an 8 to 10x wall time win, measured against the committed allocation baseline in `evals/allocation`.
+
+**One Python entry.** `powerio.parse(source, from_, include_root=..., value_type=...)` reads a path or in memory bytes into a `PioModule`; `value_type` narrows to `BalancedNetwork` or `dist.MulticonductorNetwork` in the same call, and the typed accessors carry the module's retained source and findings, so a same format write still echoes the source bytes. `parse_file`, `parse_str`, `parse_bytes`, `read_pypsa_csv_folder`, `parse_scopf`, `to_dense` with the `Dense*` rows, the `Package` class, and the 0.8 renamed alias hooks are gone. The MCP server loads both stored generations through the same path.
+
+**The CLI reads what it writes.** `powerio module` emits the stored module for any input (`--scenario` exports one scenario of a set), and `summary`, `convert`, `verify`, `dcopf`, and `sensitivities` read a stored `.pio.json` directly; a module storing a collection or calculation names the export step. The matrix commands accept every case format, dropping their MATPOWER only loader.
+
+**No deprecated names.** `scripts/deprecated-inventory.sh --assert-empty` runs in CI and passes: the 0.8 aliases, the SCOPF projection with its index base selection, and the renamed hooks were removed rather than carried. A terminology gate holds the docs and public sources to the 1.0 controlled vocabulary.
+
 ## 0.9.0
 
 The API and C ABI that 1.0.0 ships. Everything here exists so a later change can be additive, so this release takes the breaks: C ABI 5, one version number across every document powerio authors, a registered code on every finding powerio reports, a DC susceptance that reads the whole series impedance, and one release of working compatibility names before 1.0 removes them. Read the headings below before upgrading; each one changes what a working consumer sees.
@@ -164,7 +190,9 @@ records. Upgrade if you write text formats from names you do not control.
   because a dense solve is faster than conjugate gradient well past 512
   buses. Set `SensitivityOptions::auto_dense_threshold` to keep the old
   value. PTDF and LODF results are unchanged: both paths were verified
-  bit-identical on case30.
+  bit-identical on case30. [0.10.0 returns the default to 512, measured
+  against a sparse direct factorization instead of conjugate gradient;
+  see the 0.10.0 entry above.]
 - The psse field splitter, the powerworld auxiliary token splitter, and
   the pandapower split-frame reader reuse their buffers and move rows
   instead of copying them. Reader output is unchanged.

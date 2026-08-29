@@ -51,7 +51,7 @@ def abi_version() -> int:
 
 def value_kinds() -> list[str]:
     text = (ROOT / "powerio/src/value.rs").read_text()
-    kinds = re.findall(r'ValueKind::[A-Za-z]+ => "([a-z0-9_]+)"', text)
+    kinds = re.findall(r'Self::[A-Za-z]+ => \{?\s*"([a-z0-9_]+)"', text)
     assert kinds, "value kind inventory not found in powerio/src/value.rs"
     return sorted(set(kinds))
 

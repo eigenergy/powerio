@@ -946,7 +946,7 @@ dependencies = [
 
 [[package]]
 name = "facade-only"
-version = "0.9.0"
+version = "0.10.0"
 dependencies = [
  "powerio",
 ]
@@ -2348,7 +2348,7 @@ checksum = "439ee305def115ba05938db6eb1644ff94165c5ab5e9420d1c1bcedbba909391"
 
 [[package]]
 name = "powerio"
-version = "0.9.0"
+version = "0.10.0"
 dependencies = [
  "arrow",
  "bytes",
@@ -2368,7 +2368,7 @@ dependencies = [
 
 [[package]]
 name = "powerio-capi"
-version = "0.9.0"
+version = "0.10.0"
 dependencies = [
  "arrow",
  "powerio",
@@ -2382,7 +2382,7 @@ dependencies = [
 
 [[package]]
 name = "powerio-cli"
-version = "0.9.0"
+version = "0.10.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -2405,7 +2405,7 @@ dependencies = [
 
 [[package]]
 name = "powerio-core"
-version = "0.9.0"
+version = "0.10.0"
 dependencies = [
  "libc",
  "schemars",
@@ -2415,7 +2415,7 @@ dependencies = [
 
 [[package]]
 name = "powerio-dist"
-version = "0.9.0"
+version = "0.10.0"
 dependencies = [
  "jsonschema",
  "libc",
@@ -2429,7 +2429,7 @@ dependencies = [
 
 [[package]]
 name = "powerio-matrix"
-version = "0.9.0"
+version = "0.10.0"
 dependencies = [
  "approx",
  "arrow",
@@ -2456,7 +2456,7 @@ dependencies = [
 
 [[package]]
 name = "powerio-prob"
-version = "0.9.0"
+version = "0.10.0"
 dependencies = [
  "num-complex",
  "powerio-core",
@@ -2471,7 +2471,7 @@ dependencies = [
 
 [[package]]
 name = "powerio-py"
-version = "0.9.0"
+version = "0.10.0"
 dependencies = [
  "powerio",
  "powerio-core",
@@ -2485,7 +2485,7 @@ dependencies = [
 
 [[package]]
 name = "powerio-tx"
-version = "0.9.0"
+version = "0.10.0"
 dependencies = [
  "criterion",
  "lexical-core",

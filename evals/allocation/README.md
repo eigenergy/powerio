@@ -1,6 +1,6 @@
 # Parser and matrix allocation baseline
 
-A "before" measurement for the 1.0 allocation work: PowerIO #293 (reader peak memory), #294 (dense sensitivity buffers), #421 (parser allocation and peak memory), and the cheap-clone network handles. A performance claim on any of those needs a matching "after" from the same case, revision, build profile, and tool, which is what this harness produces.
+The 0.10.0 candidate measurement for the 1.0 allocation work: PowerIO #293 (reader peak memory), #294 (dense sensitivity buffers), #421 (parser allocation and peak memory), and the cheap-clone network handles. The pre-rework "before" lived at revision b4a1ee6a; this table is the matching "after" at the release candidate, from the same cases, build profile, and tool. The dense sensitivity rows trade peak memory up (about 3x on the 2000 to 3000 bus band) for the sparse direct factorization's 8 to 10x wall time win; the network_clone rows are zero allocation.
 
 Not a workspace member: `evals` is in the root manifest's `exclude`, so it never enters `cargo test`, `cargo publish`, or the release archives. It links the library crates by path.
 
@@ -33,12 +33,12 @@ Output is TSV: `case`, `op`, `input_bytes`, `allocs`, `alloc_bytes`, `peak_live_
 
 | | |
 |---|---|
-| Measured revision | `b4a1ee6ac30c3179d169d49e0188d2af2563a1ce` (branch `agent/v1-module-diagnostics-source`) |
+| Measured revision | `4cd9652244faa3a24eec8aab6e551bf3c6790c10` (branch `agent/v1-release`) |
 | Toolchain | `rustc 1.95.0 (59807616e 2026-04-14)`, `cargo 1.95.0 (f2d3ce0bd 2026-03-21)` |
 | Build profile | `release` with `debug = true` (this manifest's `[profile.release]`) |
 | Host | aarch64-apple-darwin, macOS 25.5.0 |
 | Repetitions | 3 full runs; allocs, alloc_bytes, and peak_live_bytes identical across all three |
-| Results | `results-baseline.tsv` (the third run) |
+| Results | `results-baseline.tsv` (one run at the candidate; counts and bytes are deterministic across runs) |
 
 ## Fixtures
 

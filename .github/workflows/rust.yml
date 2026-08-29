@@ -129,6 +129,8 @@ jobs:
     # ext crates are linted in the Python workflow with their feature enabled.
     - name: Clippy
       run: bash scripts/ci-clippy.sh workspace
+    - name: Terminology gate
+      run: bash scripts/terminology-gate.sh
     - name: Documentation symbols
       run: python3 scripts/check-doc-symbols.py
     - name: Architecture map
@@ -136,6 +138,12 @@ jobs:
         sudo apt-get update -q
         sudo apt-get install -y -q --no-install-recommends graphviz
         python3 scripts/check-architecture-map.py
+    - name: No deprecated items
+      run: bash scripts/deprecated-inventory.sh --assert-empty
+    # The release decision paths a tag event would run, exercised on every
+    # pull request without writing anything.
+    - name: Release preflight
+      run: bash scripts/release-preflight.sh
     # Bare `cargo test` only covers the default-members; name the C ABI crate
     # explicitly so its end-to-end ABI tests run in CI too.
     - name: Run tests
@@ -213,8 +221,11 @@ jobs:
       with:
         targets: wasm32-unknown-unknown
     - uses: Swatinem/rust-cache@v2
-    - name: Check wasm32 parser crates
-      run: cargo check --target wasm32-unknown-unknown -p powerio -p powerio-dist
+    - name: Check wasm32 component crates
+      run: |
+        cargo check --target wasm32-unknown-unknown -p powerio -p powerio-tx -p powerio-dist \
+          -p powerio-core -p powerio-prob -p powerio-matrix
+        cargo check --target wasm32-unknown-unknown -p powerio --features matrix
 
   c-abi:
     name: C ABI (core no-default + C smoke test)
@@ -240,6 +251,12 @@ jobs:
     # header set difference; this job's full-history checkout has the tag.
     - name: Removed surface enumeration
       run: bash scripts/capi-removed-surface.sh
+    - name: ABI delta and necessity
+      run: python3 scripts/abi-delta.py
+    - name: Value kind parity
+      run: bash scripts/check-value-kinds.sh
+    - name: Diagnostic parity
+      run: bash scripts/check-diagnostic-parity.sh
     # Doc comments render verbatim into powerio.h; check they agree with the
     # signatures, table ids, and ownership verbs they describe.
     - name: Doc comment integrity
