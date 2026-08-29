@@ -185,22 +185,21 @@ fn bmopf_without_a_source_is_refused_as_an_instance_and_retains_the_bytes() {
 fn problem_format_sources_declare_their_format() {
     let goc3 = std::fs::read_to_string(concat!(
         env!("CARGO_MANIFEST_DIR"),
-        "/../tests/data/goc3/scenario_002.json"
-    ));
-    if let Ok(text) = goc3 {
-        let module = powerio_prob::parse_goc3_instance(
-            powerio_core::Source::from_bytes("scenario_002.json", text.into_bytes()).unwrap(),
-        )
-        .unwrap();
-        assert_eq!(
-            module
-                .sources()
-                .first()
-                .and_then(|s| s.format())
-                .map(powerio_core::FormatId::as_str),
-            Some("goc3-json")
-        );
-    }
+        "/../tests/data/goc3/goc3_small.json"
+    ))
+    .unwrap();
+    let module = powerio_prob::parse_goc3_instance(
+        powerio_core::Source::from_bytes("goc3_small.json", goc3.into_bytes()).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        module
+            .sources()
+            .first()
+            .and_then(|s| s.format())
+            .map(powerio_core::FormatId::as_str),
+        Some("goc3-json")
+    );
     let opf = std::fs::read_to_string(concat!(
         env!("CARGO_MANIFEST_DIR"),
         "/../tests/data/opfdataset/example_0.json"
