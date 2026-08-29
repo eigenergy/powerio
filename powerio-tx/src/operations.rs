@@ -147,7 +147,8 @@ impl BalancedNetwork {
             .iter()
             .filter(|l| in_scope.contains(&l.bus))
             .cloned()
-            .collect();
+            .collect::<Vec<_>>()
+            .into();
         let mut shunts: Vec<Shunt> = self
             .shunts()
             .iter()
@@ -165,7 +166,8 @@ impl BalancedNetwork {
             .iter()
             .filter(|s| in_scope.contains(&s.bus))
             .cloned()
-            .collect();
+            .collect::<Vec<_>>()
+            .into();
 
         let mut branches: Vec<Branch> = self
             .branches()
@@ -178,19 +180,22 @@ impl BalancedNetwork {
             .iter()
             .filter(|sw| kept.contains(&sw.from) && kept.contains(&sw.to))
             .cloned()
-            .collect();
+            .collect::<Vec<_>>()
+            .into();
         let hvdc = self
             .hvdc()
             .iter()
             .filter(|d| kept.contains(&d.from) && kept.contains(&d.to))
             .cloned()
-            .collect();
+            .collect::<Vec<_>>()
+            .into();
         let transformers_3w = self
             .transformers_3w()
             .iter()
             .filter(|t| t.windings.iter().all(|w| kept.contains(&w.bus)))
             .cloned()
-            .collect();
+            .collect::<Vec<_>>()
+            .into();
 
         // Clear control references that point outside the kept set.
         for br in &mut branches {
@@ -236,16 +241,16 @@ impl BalancedNetwork {
             base_mva: self.base_mva(),
             base_frequency: self.base_frequency(),
             geo: self.geo().clone(),
-            buses,
+            buses: buses.into(),
             loads,
-            shunts,
-            branches,
+            shunts: shunts.into(),
+            branches: branches.into(),
             switches,
-            generators,
+            generators: generators.into(),
             storage,
             hvdc,
             transformers_3w,
-            areas,
+            areas: areas.into(),
             solver: self.solver().clone(),
             source_format: SourceFormat::InMemory,
         });

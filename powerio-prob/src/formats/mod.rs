@@ -18,10 +18,12 @@
 mod bmopf;
 mod goc3;
 mod opfdata;
+mod pypsa;
 
 pub use bmopf::parse_bmopf_instance;
 pub use goc3::parse_goc3_instance;
 pub use opfdata::parse_opfdata_solution;
+pub use pypsa::{PypsaSequence, parse_pypsa_sequence};
 
 /// The text a reader decodes: the buffer's byte order mark free slice,
 /// validated as UTF-8.

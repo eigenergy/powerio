@@ -56,7 +56,7 @@ mod pypsa;
 pub mod routing;
 mod surge;
 
-pub use egret::write_egret_json;
+pub use egret::{egret_declares_time_series, parse_egret_time_series, write_egret_json};
 pub use goc3::parse_goc3_json;
 pub use matpower::write_matpower;
 pub use opfdata::{OpfDataSolution, parse_opfdata_json};
@@ -65,7 +65,10 @@ pub use powermodels::write_powermodels_json;
 pub use powerworld::{PwdDisplay, PwdSubstation, write_powerworld};
 pub use pslf::write_pslf;
 pub use psse::{write_psse, write_psse_rev};
-pub use pypsa::{PypsaCsvOutputs, write_pypsa_csv_folder};
+pub use pypsa::{
+    PypsaAxis, PypsaCsvOutputs, PypsaCsvSequence, parse_pypsa_csv_time_series, pypsa_axis,
+    write_pypsa_csv_folder,
+};
 pub use surge::write_surge_json;
 
 /// A target case format. See [`write_as`].
@@ -408,7 +411,7 @@ fn read_file_bytes(path: &std::path::Path) -> Result<Vec<u8>> {
 /// inputs, not text targets, so they have no [`TargetFormat`] arm; this is the
 /// companion alias matcher to [`target_format_from_name`] and the one place the
 /// PyPSA aliases live.
-fn is_pypsa_csv_name(name: &str) -> bool {
+pub fn is_pypsa_csv_name(name: &str) -> bool {
     matches!(
         name.to_ascii_lowercase().replace(['-', '_'], "").as_str(),
         "pypsacsv" | "pypsa"

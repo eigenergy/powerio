@@ -373,9 +373,17 @@ pub(crate) fn parse_egret_source(source: &str, name_hint: Option<&str>) -> Resul
     let system = obj(root, "system").ok_or_else(|| bad("missing `system` object"))?;
     if system.contains_key("time_keys") {
         return Err(bad(
-            "egret unit commitment cases (system.time_keys) are not supported; expected a power flow ModelData",
+            "egret unit commitment cases (system.time_keys) are not supported here; \
+             `parse_egret_time_series` reads the scalar network profile sequence",
         ));
     }
+    parse_egret_root(root, name_hint)
+}
+
+/// The shared element table reader both entries use: `root` is a scalar
+/// snapshot (any time series attributes already substituted).
+fn parse_egret_root(root: &Map<String, Value>, name_hint: Option<&str>) -> Result<BalancedNetwork> {
+    let system = obj(root, "system").ok_or_else(|| bad("missing `system` object"))?;
     let base_mva = system
         .get("baseMVA")
         .and_then(Value::as_f64)
@@ -430,21 +438,281 @@ pub(crate) fn parse_egret_source(source: &str, name_hint: Option<&str>) -> Resul
         base_mva,
         base_frequency: crate::network::DEFAULT_BASE_FREQUENCY,
         geo: None,
-        buses,
-        loads,
-        shunts,
-        branches,
-        switches: Vec::new(),
-        generators,
-        storage: Vec::new(),
-        hvdc,
-        transformers_3w: Vec::new(),
-        areas: Vec::new(),
+        buses: buses.into(),
+        loads: loads.into(),
+        shunts: shunts.into(),
+        branches: branches.into(),
+        switches: Vec::new().into(),
+        generators: generators.into(),
+        storage: Vec::new().into(),
+        hvdc: hvdc.into(),
+        transformers_3w: Vec::new().into(),
+        areas: Vec::new().into(),
         solver: None,
         source_format: SourceFormat::EgretJson,
     });
     net.check_references(FMT)?;
     Ok(net)
+}
+
+/// One time varying attribute of an Egret sequence: which element row it
+/// patches and its per point values (index 0 already substituted into the
+/// base document).
+struct VaryingAttribute {
+    section: String,
+    element: String,
+    attribute: String,
+    row: usize,
+    values: Vec<Value>,
+}
+
+/// Parse an Egret `ModelData` document with `system.time_keys` into a
+/// balanced network time series, applying Egret's own scalar snapshot rule:
+/// a `{"data_type": "time_series", "values": [...]}` attribute varies by
+/// point and everything else is one static statement. The static tables are
+/// shared between points — each point clones the network handle and copies
+/// only the tables a varying attribute touches.
+///
+/// # Errors
+/// A document without `time_keys` (parse it as one scalar snapshot), a
+/// varying attribute outside the supported scalar network profile, a values
+/// list whose length disagrees with `time_keys`, or any scalar profile error.
+pub fn parse_egret_time_series(
+    content: &str,
+    name_hint: Option<&str>,
+) -> Result<powerio_core::TimeSeries<BalancedNetwork>> {
+    let root: Value = serde_json::from_str(content).map_err(|e| bad(e.to_string()))?;
+    let Value::Object(mut root) = root else {
+        return Err(bad("top level is not a JSON object"));
+    };
+
+    let system = obj(&root, "system").ok_or_else(|| bad("missing `system` object"))?;
+    let time_keys: Vec<String> = match system.get("time_keys") {
+        Some(Value::Array(keys)) => keys
+            .iter()
+            .map(|k| match k {
+                Value::String(s) => s.clone(),
+                other => other.to_string(),
+            })
+            .collect(),
+        Some(other) => {
+            return Err(bad(format!("`system.time_keys` is not an array: {other}")));
+        }
+        None => {
+            return Err(bad(
+                "`system.time_keys` is absent; parse the document as one scalar snapshot",
+            ));
+        }
+    };
+    if time_keys.is_empty() {
+        return Err(bad("`system.time_keys` is empty"));
+    }
+
+    // Substitute every time series attribute with its first value, recording
+    // where it patches. The substituted document is then exactly the point 0
+    // scalar snapshot, and the scalar reader validates it as one.
+    let mut varying: Vec<VaryingAttribute> = Vec::new();
+    {
+        let elements = root
+            .get_mut("elements")
+            .and_then(Value::as_object_mut)
+            .ok_or_else(|| bad("missing `elements` object"))?;
+        for (section, table) in elements.iter_mut() {
+            let Some(table) = table.as_object_mut() else {
+                continue;
+            };
+            let order: Vec<String> = {
+                let frozen: &Map<String, Value> = table;
+                sorted_kv(frozen)
+                    .into_iter()
+                    .map(|(k, _)| k.clone())
+                    .collect()
+            };
+            for (row, key) in order.iter().enumerate() {
+                let Some(element) = table.get_mut(key).and_then(Value::as_object_mut) else {
+                    continue;
+                };
+                let series_attributes: Vec<String> = element
+                    .iter()
+                    .filter(|(_, value)| is_time_series(value))
+                    .map(|(attribute, _)| attribute.clone())
+                    .collect();
+                for attribute in series_attributes {
+                    let Some(slot) = element.get_mut(&attribute) else {
+                        continue;
+                    };
+                    let values =
+                        take_series_values(slot, time_keys.len(), section, key, &attribute)?;
+                    *slot = values[0].clone();
+                    varying.push(VaryingAttribute {
+                        section: section.clone(),
+                        element: key.clone(),
+                        attribute,
+                        row,
+                        values,
+                    });
+                }
+            }
+        }
+    }
+
+    let base = parse_egret_root(&root, name_hint)?;
+    let mut networks = Vec::with_capacity(time_keys.len());
+    networks.push(base.clone());
+    for point in 1..time_keys.len() {
+        let mut network = base.clone();
+        for attribute in &varying {
+            apply_varying(&mut network, attribute, point)?;
+        }
+        networks.push(network);
+    }
+
+    let time_points = time_keys
+        .iter()
+        .map(|key| powerio_core::TimePoint::new(key.clone(), None))
+        .collect::<std::result::Result<Vec<_>, powerio_core::Error>>()
+        .map_err(|e| bad(e.to_string()))?;
+    powerio_core::TimeSeries::new(time_points, networks).map_err(|e| bad(e.to_string()))
+}
+
+/// Whether the document declares the Egret time series axis: a
+/// `system.time_keys` value selects the sequence reader. A document this
+/// probe cannot decode answers `false` and fails in the scalar reader with
+/// its own wording.
+#[must_use]
+pub fn egret_declares_time_series(content: &str) -> bool {
+    #[derive(Default, serde::Deserialize)]
+    struct ProbedSystem {
+        time_keys: Option<serde_json::Value>,
+    }
+    #[derive(Default, serde::Deserialize)]
+    struct Probe {
+        #[serde(default)]
+        system: ProbedSystem,
+    }
+    serde_json::from_str::<Probe>(content).is_ok_and(|probe| probe.system.time_keys.is_some())
+}
+
+fn is_time_series(value: &Value) -> bool {
+    value
+        .as_object()
+        .is_some_and(|o| o.get("data_type").and_then(Value::as_str) == Some("time_series"))
+}
+
+/// The values list of one time series attribute, length checked against the
+/// time axis.
+fn take_series_values(
+    slot: &Value,
+    points: usize,
+    section: &str,
+    element: &str,
+    attribute: &str,
+) -> Result<Vec<Value>> {
+    let values = slot
+        .as_object()
+        .and_then(|o| o.get("values"))
+        .and_then(Value::as_array)
+        .ok_or_else(|| {
+            bad(format!(
+                "{section} {element}: time series `{attribute}` has no `values` list"
+            ))
+        })?;
+    if values.len() != points {
+        return Err(bad(format!(
+            "{section} {element}: time series `{attribute}` states {} values for {points} time keys",
+            values.len()
+        )));
+    }
+    Ok(values.clone())
+}
+
+/// Patch one varying attribute's value for `point` into the network, on the
+/// same row order the scalar reader used. An attribute outside the supported
+/// scalar network profile is refused by name.
+fn apply_varying(
+    network: &mut BalancedNetwork,
+    varying: &VaryingAttribute,
+    point: usize,
+) -> Result<()> {
+    let value = &varying.values[point];
+    let outside = || {
+        bad(format!(
+            "{} {}: time varying `{}` is outside the supported scalar network profile",
+            varying.section, varying.element, varying.attribute
+        ))
+    };
+    let number = || {
+        value.as_f64().ok_or_else(|| {
+            bad(format!(
+                "{} {}: time series `{}` value at point {point} is not a number: {value}",
+                varying.section, varying.element, varying.attribute
+            ))
+        })
+    };
+    let boolean = || match value {
+        Value::Bool(b) => Ok(*b),
+        other => Err(bad(format!(
+            "{} {}: time series `{}` value at point {point} is not a boolean: {other}",
+            varying.section, varying.element, varying.attribute
+        ))),
+    };
+    let row = varying.row;
+    match varying.section.as_str() {
+        "load" => {
+            let load = &mut network.loads_mut()[row];
+            match varying.attribute.as_str() {
+                "p_load" => load.p = number()?,
+                "q_load" => load.q = number()?,
+                "in_service" => load.in_service = boolean()?,
+                _ => return Err(outside()),
+            }
+        }
+        "generator" => {
+            let generator = &mut network.generators_mut()[row];
+            match varying.attribute.as_str() {
+                "pg" => generator.pg = number()?,
+                "qg" => generator.qg = number()?,
+                "p_min" => generator.pmin = number()?,
+                "p_max" => generator.pmax = number()?,
+                "q_min" => generator.qmin = number()?,
+                "q_max" => generator.qmax = number()?,
+                "vg" => generator.vg = number()?,
+                "in_service" => generator.in_service = boolean()?,
+                _ => return Err(outside()),
+            }
+        }
+        "shunt" => {
+            let shunt = &mut network.shunts_mut()[row];
+            match varying.attribute.as_str() {
+                "gs" => shunt.g = number()?,
+                "bs" => shunt.b = number()?,
+                "in_service" => shunt.in_service = boolean()?,
+                _ => return Err(outside()),
+            }
+        }
+        "branch" => {
+            let branch = &mut network.branches_mut()[row];
+            match varying.attribute.as_str() {
+                "rating_long_term" => branch.rate_a = number()?,
+                "rating_short_term" => branch.rate_b = number()?,
+                "rating_emergency" => branch.rate_c = number()?,
+                "transformer_tap_ratio" => branch.tap = number()?,
+                "transformer_phase_shift" => branch.shift = number()?,
+                "in_service" => branch.in_service = boolean()?,
+                _ => return Err(outside()),
+            }
+        }
+        "bus" => {
+            let bus = &mut network.buses_mut()[row];
+            match varying.attribute.as_str() {
+                "vm" => bus.vm = number()?,
+                "va" => bus.va = number()?,
+                _ => return Err(outside()),
+            }
+        }
+        _ => return Err(outside()),
+    }
+    Ok(())
 }
 
 fn bad(message: impl Into<String>) -> Error {
@@ -1005,5 +1273,80 @@ mod tests {
             "p_cost": {"data_type": "cost_curve", "cost_curve_type": "bogus", "values": {}}
         });
         assert!(matches!(read_gen(&v), Err(Error::FormatRead { .. })));
+    }
+
+    #[test]
+    fn time_keys_produce_a_series_with_shared_static_tables() {
+        let doc = r#"{
+            "model_name": "uc2",
+            "elements": {
+                "bus": {"1": {"matpower_bustype": "ref", "base_kv": 138.0},
+                        "2": {"matpower_bustype": "PQ", "base_kv": 138.0}},
+                "load": {"load_1": {"bus": "2",
+                    "p_load": {"data_type": "time_series", "values": [10.0, 20.0]},
+                    "q_load": 3.0}},
+                "generator": {"1": {"bus": "1", "pg": 12.0, "qg": 0.0,
+                    "p_min": 0.0, "p_max": 50.0, "q_min": -10.0, "q_max": 10.0}},
+                "branch": {"1": {"from_bus": "1", "to_bus": "2",
+                    "resistance": 0.01, "reactance": 0.1, "charging_susceptance": 0.0,
+                    "rating_long_term": 100.0, "rating_short_term": 100.0,
+                    "rating_emergency": 100.0, "transformer_phase_shift": 0.0}}
+            },
+            "system": {"baseMVA": 100.0, "time_keys": ["t1", "t2"]}
+        }"#;
+        let series = parse_egret_time_series(doc, None).unwrap();
+        assert_eq!(series.len(), 2);
+        let first = &series.values()[0];
+        let second = &series.values()[1];
+        assert!((first.loads()[0].p - 10.0).abs() < f64::EPSILON);
+        assert!((second.loads()[0].p - 20.0).abs() < f64::EPSILON);
+        // The untouched static tables are the same allocation on every point;
+        // only the varied load table was copied.
+        assert!(std::ptr::eq(
+            first.buses().as_ptr(),
+            second.buses().as_ptr()
+        ));
+        assert!(std::ptr::eq(
+            first.generators().as_ptr(),
+            second.generators().as_ptr()
+        ));
+        assert!(!std::ptr::eq(
+            first.loads().as_ptr(),
+            second.loads().as_ptr()
+        ));
+        assert_eq!(series.time_points()[1].label(), "t2");
+    }
+
+    #[test]
+    fn a_varying_attribute_outside_the_profile_is_refused() {
+        let doc = r#"{
+            "elements": {
+                "bus": {"1": {"matpower_bustype": "ref", "base_kv": 1.0}},
+                "load": {"load_1": {"bus": "1", "p_load": 1.0, "q_load": 0.0,
+                    "area": {"data_type": "time_series", "values": [1.0, 2.0]}}}
+            },
+            "system": {"baseMVA": 100.0, "time_keys": ["a", "b"]}
+        }"#;
+        let error = parse_egret_time_series(doc, None).unwrap_err().to_string();
+        assert!(
+            error.contains("outside the supported scalar network profile"),
+            "{error}"
+        );
+        assert!(error.contains("`area`"), "{error}");
+    }
+
+    #[test]
+    fn a_series_length_disagreement_is_refused() {
+        let doc = r#"{
+            "elements": {
+                "bus": {"1": {"matpower_bustype": "ref", "base_kv": 1.0}},
+                "load": {"load_1": {"bus": "1",
+                    "p_load": {"data_type": "time_series", "values": [1.0]},
+                    "q_load": 0.0}}
+            },
+            "system": {"baseMVA": 100.0, "time_keys": ["a", "b"]}
+        }"#;
+        let error = parse_egret_time_series(doc, None).unwrap_err().to_string();
+        assert!(error.contains("states 1 values for 2 time keys"), "{error}");
     }
 }

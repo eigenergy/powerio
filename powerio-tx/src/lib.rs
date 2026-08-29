@@ -66,10 +66,11 @@ pub use format::routing::{
 pub(crate) use format::test_parse::{parse_file, parse_str};
 pub use format::{
     Conversion, DisplayData, DisplayFormat, OpfDataSolution, PwdDisplay, PwdSubstation,
-    PypsaCsvOutputs, SOURCE_FORMAT_NAMES, TargetFormat, WriteOptions, convert_file,
-    convert_file_with_options, convert_str, convert_str_with_options, display_format_from_name,
-    format_id_for, parse, parse_display_bytes, parse_display_file, parse_goc3_json,
-    parse_opfdata_json, target_format_from_name, write, write_as, write_as_with_options, write_dir,
+    PypsaCsvOutputs, PypsaCsvSequence, SOURCE_FORMAT_NAMES, TargetFormat, WriteOptions,
+    convert_file, convert_file_with_options, convert_str, convert_str_with_options,
+    display_format_from_name, format_id_for, parse, parse_display_bytes, parse_display_file,
+    parse_egret_time_series, parse_goc3_json, parse_opfdata_json, parse_pypsa_csv_time_series,
+    target_format_from_name, write, write_as, write_as_with_options, write_dir,
     write_dir_with_options, write_egret_json, write_matpower, write_network, write_pandapower_json,
     write_powermodels_json, write_powerworld, write_pslf, write_psse, write_psse_rev,
     write_pypsa_csv, write_pypsa_csv_folder, write_surge_json, write_with_options,

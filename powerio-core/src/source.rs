@@ -177,6 +177,11 @@ struct FileAcquisition {
 struct AcquisitionState {
     root: Option<platform::RootHandle>,
     cache: BTreeMap<String, SourceBuffer>,
+    /// The one directory listing, cached on the first successful walk. Every
+    /// caller then reads the same immutable view, and a directory handle
+    /// whose stream position a platform shares across duplicated descriptors
+    /// cannot silently return an empty second listing.
+    listed: Option<Vec<crate::ArtifactPath>>,
     files: usize,
     bytes: u64,
 }
@@ -568,6 +573,7 @@ impl Source {
     /// touching the filesystem itself. Symbolic links are listed by name and
     /// refused if acquired. The listing is bounded by the referenced file
     /// budget; a directory holding more entries is refused.
+    #[allow(clippy::too_many_lines)] // one bounded walk, framed and budgeted in place
     pub fn entry_names(&self) -> Result<Vec<crate::ArtifactPath>, Error> {
         match &*self.provider {
             SourceProvider::Memory { named, .. } => named
@@ -601,6 +607,9 @@ impl Source {
                 }
 
                 let mut state = acquisition.lock();
+                if let Some(listed) = &state.listed {
+                    return Ok(listed.clone());
+                }
                 let root = state.pinned_root(&acquisition.root_display)?;
                 let budget_refusal = || {
                     Error::new(
@@ -687,6 +696,7 @@ impl Source {
                     }
                 }
                 names.sort();
+                state.listed = Some(names.clone());
                 Ok(names)
             }
         }
@@ -2232,6 +2242,26 @@ mod tests {
         let names = source.entry_names().unwrap();
         assert_eq!(names.len(), 1);
         assert_eq!(names[0].as_str(), "aux.dss");
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn a_directory_listing_repeats_and_survives_acquisition() {
+        // The walk runs once and its result is the source's one immutable
+        // listing: a second call between or after buffer acquisitions
+        // returns the same names rather than an empty second walk from a
+        // directory stream a platform shares across duplicated descriptors.
+        let root = test_root("repeat-listing");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("network.csv"), b"name\nseq\n").unwrap();
+        std::fs::write(root.join("buses.csv"), b"name\nB1\n").unwrap();
+        let source = Source::open(&root).unwrap();
+        let first = source.entry_names().unwrap();
+        assert_eq!(first.len(), 2);
+        let name = ArtifactPath::new("network.csv").unwrap();
+        source.buffer(&name).unwrap();
+        let second = source.entry_names().unwrap();
+        assert_eq!(first, second);
         std::fs::remove_dir_all(root).unwrap();
     }
 

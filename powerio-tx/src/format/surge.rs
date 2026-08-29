@@ -564,22 +564,24 @@ pub(crate) fn parse_surge_source(
         base_mva: f_map_or(network, "base_mva", 100.0)?,
         base_frequency: f_map_or(network, "freq_hz", crate::network::DEFAULT_BASE_FREQUENCY)?,
         geo: None,
-        buses,
+        buses: buses.into(),
         loads: array_field(network, "loads", false)?
             .into_iter()
             .map(read_load)
-            .collect::<Result<Vec<_>>>()?,
-        shunts,
+            .collect::<Result<Vec<_>>>()?
+            .into(),
+        shunts: shunts.into(),
         branches: array_field(network, "branches", false)?
             .into_iter()
             .map(read_branch)
-            .collect::<Result<Vec<_>>>()?,
-        switches: Vec::new(),
-        generators,
-        storage,
-        hvdc: read_hvdc(network)?,
-        transformers_3w: Vec::new(),
-        areas: Vec::new(),
+            .collect::<Result<Vec<_>>>()?
+            .into(),
+        switches: Vec::new().into(),
+        generators: generators.into(),
+        storage: storage.into(),
+        hvdc: read_hvdc(network)?.into(),
+        transformers_3w: Vec::new().into(),
+        areas: Vec::new().into(),
         solver: None,
         source_format: SourceFormat::SurgeJson,
     });

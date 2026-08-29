@@ -389,15 +389,15 @@ pub(crate) struct BalancedNetworkTables {
     pub base_frequency: f64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub geo: Option<GeoMeta>,
-    pub buses: Vec<Bus>,
-    pub loads: Vec<Load>,
-    pub shunts: Vec<Shunt>,
-    pub branches: Vec<Branch>,
+    pub buses: std::sync::Arc<Vec<Bus>>,
+    pub loads: std::sync::Arc<Vec<Load>>,
+    pub shunts: std::sync::Arc<Vec<Shunt>>,
+    pub branches: std::sync::Arc<Vec<Branch>>,
     #[serde(default)]
-    pub switches: Vec<Switch>,
-    pub generators: Vec<Generator>,
-    pub storage: Vec<Storage>,
-    pub hvdc: Vec<Hvdc>,
+    pub switches: std::sync::Arc<Vec<Switch>>,
+    pub generators: std::sync::Arc<Vec<Generator>>,
+    pub storage: std::sync::Arc<Vec<Storage>>,
+    pub hvdc: std::sync::Arc<Vec<Hvdc>>,
     /// Three-winding transformers, kept as typed records rather than folded into
     /// `branches`, so a star point and the per-winding data survive a round trip.
     /// `#[serde(default)]` so JSON written before the field existed still
@@ -407,13 +407,13 @@ pub(crate) struct BalancedNetworkTables {
     /// 3-winding transformer does appear in `Y_bus`/connectivity; the canonical
     /// model keeps the typed record for round-trip fidelity.
     #[serde(default)]
-    pub transformers_3w: Vec<Transformer3W>,
+    pub transformers_3w: std::sync::Arc<Vec<Transformer3W>>,
     /// Area records: scheduled interchange and per-area swing bus. Distinct from
     /// the bare `area` number on each [`Bus`]; this is the area's metadata, which
     /// every conversion dropped before. `#[serde(default)]` so older JSON still
     /// deserializes.
     #[serde(default)]
-    pub areas: Vec<Area>,
+    pub areas: std::sync::Arc<Vec<Area>>,
     /// Solver / solution-control metadata when the source carries it, else `None`.
     /// `#[serde(default)]` so older JSON still deserializes.
     #[serde(default)]
@@ -486,6 +486,38 @@ table_accessors! {
     name, name_mut: String;
     /// The geographic metadata when the source carries any.
     geo, geo_mut: Option<GeoMeta>;
+    /// Solver / solution-control metadata when the source carries it.
+    solver, solver_mut: Option<SolverParams>;
+}
+
+/// The element tables sit behind their own shared allocation inside the
+/// shared table set, so a time series of networks that varies one table
+/// clones only that table per point while every untouched table stays one
+/// allocation across the whole series.
+macro_rules! shared_table_accessors {
+    ($($(#[$doc:meta])* $field:ident, $field_mut:ident: $ty:ty;)+) => {
+        impl BalancedNetwork {
+            $(
+                $(#[$doc])*
+                #[must_use]
+                pub fn $field(&self) -> &$ty {
+                    &self.tables.$field
+                }
+
+                /// Mutable access to the same table. A shared handle copies
+                /// the table set spine and this one table here, so no other
+                /// handle observes the change and untouched tables stay
+                /// shared.
+                #[must_use]
+                pub fn $field_mut(&mut self) -> &mut $ty {
+                    std::sync::Arc::make_mut(&mut self.tables_mut().$field)
+                }
+            )+
+        }
+    };
+}
+
+shared_table_accessors! {
     buses, buses_mut: Vec<Bus>;
     loads, loads_mut: Vec<Load>;
     shunts, shunts_mut: Vec<Shunt>;
@@ -498,8 +530,6 @@ table_accessors! {
     transformers_3w, transformers_3w_mut: Vec<Transformer3W>;
     /// Area records: scheduled interchange and per-area swing bus.
     areas, areas_mut: Vec<Area>;
-    /// Solver / solution-control metadata when the source carries it.
-    solver, solver_mut: Option<SolverParams>;
 }
 
 impl BalancedNetwork {
@@ -1930,16 +1960,16 @@ impl BalancedNetwork {
             base_mva,
             base_frequency: DEFAULT_BASE_FREQUENCY,
             geo: None,
-            buses: Vec::new(),
-            loads: Vec::new(),
-            shunts: Vec::new(),
-            branches: Vec::new(),
-            switches: Vec::new(),
-            generators: Vec::new(),
-            storage: Vec::new(),
-            hvdc: Vec::new(),
-            transformers_3w: Vec::new(),
-            areas: Vec::new(),
+            buses: Vec::new().into(),
+            loads: Vec::new().into(),
+            shunts: Vec::new().into(),
+            branches: Vec::new().into(),
+            switches: Vec::new().into(),
+            generators: Vec::new().into(),
+            storage: Vec::new().into(),
+            hvdc: Vec::new().into(),
+            transformers_3w: Vec::new().into(),
+            areas: Vec::new().into(),
             solver: None,
             source_format: SourceFormat::InMemory,
         })
