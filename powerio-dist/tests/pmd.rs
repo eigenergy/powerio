@@ -935,6 +935,83 @@ fn wide_terminal_maps_do_not_expand_quadratically() {
 }
 
 #[test]
+fn twenty_thousand_colliding_linecode_names_decode_within_a_time_budget() {
+    // The inline-impedance materializer tries `ln_z`, `ln_z2`, `ln_z3`, ...
+    // until it finds a free name; every name up to `ln_z20000` already
+    // exists here, so a linear scan per candidate would turn decoding into
+    // O(n^2) string comparisons over the growing linecode table.
+    use std::fmt::Write as _;
+    let collisions = 20_000;
+    let mut linecodes = String::from("\"ln_z\":{}");
+    for k in 2..=collisions {
+        let _ = write!(linecodes, ",\"ln_z{k}\":{{}}");
+    }
+    let json = format!(
+        r#"{{"data_model":"ENGINEERING","linecode":{{{linecodes}}},
+        "line":{{"ln":{{"rs":[[0.1]]}}}}}}"#
+    );
+    let start = std::time::Instant::now();
+    let net = parse_pmd_str(&json).unwrap();
+    let elapsed = start.elapsed();
+    // The name set finds every candidate in well under a tenth of a second;
+    // a linear scan per candidate measured multiple seconds at this scale.
+    // One second stays generous for a slower CI machine while still well
+    // short of what the linear scan costs.
+    assert!(
+        elapsed < std::time::Duration::from_secs(1),
+        "decoding {collisions} colliding linecode names took {elapsed:?}"
+    );
+    assert!(
+        net.linecode(&format!("ln_z{}", collisions + 1)).is_some(),
+        "the materializer should have landed one past the last collision"
+    );
+}
+
+#[test]
+fn a_two_megabyte_dss_case_writes_pmd_json_within_a_time_budget() {
+    // branches() and loads() each ran net.linecode()/net.bus() once per
+    // element, a linear scan over the whole table; a large case turned
+    // writing PMD JSON into O(n^2) name comparisons.
+    use std::fmt::Write as _;
+    let mut dss = String::from("New Circuit.perf basekv=12.47 bus1=src\n");
+    let n = 15_000;
+    for i in 0..n {
+        let _ = writeln!(dss, "New Linecode.lc{i} nphases=1 r1=0.1 x1=0.1");
+    }
+    for i in 0..n {
+        let _ = writeln!(
+            dss,
+            "New Line.ln{i} bus1=b{i}.1 bus2=b{}.1 linecode=lc{i} length=1",
+            i + 1
+        );
+    }
+    for i in 0..n {
+        let _ = writeln!(dss, "New Load.ld{i} bus1=c{i}.1 phases=1 kw=1 kvar=0.5");
+    }
+    assert!(
+        dss.len() >= 2_000_000,
+        "fixture is only {} bytes, want at least 2 MB",
+        dss.len()
+    );
+    let net = parse_dss_str(&dss);
+    assert_eq!(net.lines().len(), n);
+    assert_eq!(net.loads().len(), n);
+
+    let start = std::time::Instant::now();
+    let out = write_pmd_json(&net);
+    let elapsed = start.elapsed();
+    // The index maps write this in about two seconds; a linear scan per
+    // line and per load measured over five and a half. Four seconds stays
+    // above the indexed cost for a slower CI machine while catching the
+    // linear scan back if it returns.
+    assert!(
+        elapsed < std::time::Duration::from_secs(4),
+        "writing a {n}-line, {n}-load network took {elapsed:?}"
+    );
+    assert!(!out.text.is_empty());
+}
+
+#[test]
 fn degenerate_matrix_shapes_do_not_panic() {
     // `rs` claims three columns but the third is short. Reading fills the
     // gaps, and the writer indexes defensively, so neither panics.
