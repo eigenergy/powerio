@@ -492,7 +492,7 @@ pub unsafe extern "C" fn pio_module_balanced_network(
             let inner = required_module(module)?;
             let powerio::PioValue::BalancedNetwork(network) = inner.module.value() else {
                 return Err(error_from_parts(
-                    powerio::codes::REQUEST_PACKAGE_WRONG_MODEL_KIND.code,
+                    powerio::codes::REQUEST_MODULE_WRONG_MODEL_KIND.code,
                     &format!(
                         "the module carries a {} value; pio_module_balanced_network takes a \
                          balanced network",
@@ -521,7 +521,7 @@ pub unsafe extern "C" fn pio_module_multiconductor_network(
             let inner = required_module(module)?;
             let powerio::PioValue::MulticonductorNetwork(network) = inner.module.value() else {
                 return Err(error_from_parts(
-                    powerio::codes::REQUEST_PACKAGE_WRONG_MODEL_KIND.code,
+                    powerio::codes::REQUEST_MODULE_WRONG_MODEL_KIND.code,
                     &format!(
                         "the module carries a {} value; pio_module_multiconductor_network takes \
                          a multiconductor network",
@@ -1755,7 +1755,7 @@ mod tests {
                 assert!(!error.is_null());
                 assert_eq!(
                     CStr::from_ptr(pio_error_code(error)).to_str().unwrap(),
-                    "REQUEST.PACKAGE.WRONG_MODEL_KIND"
+                    "REQUEST.MODULE.WRONG_MODEL_KIND"
                 );
                 pio_error_release(error);
             }
