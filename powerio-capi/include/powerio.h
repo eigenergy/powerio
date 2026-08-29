@@ -132,10 +132,15 @@ struct ArrowSchema;
  * and one module surface remains: `pio_parse_*` produce module handles,
  * typed accessors hand back independently owned network handles, every
  * fallible entry point reports through a structured `PioError`, and every
- * handle type carries a `retain`/`release` pair. A binding built against 5
- * would resolve missing symbols; the handshake refuses first. The 4 to 5
- * bump reshaped every ABI visible JSON document and the diagnostic
- * grammar.
+ * handle type carries a `retain`/`release` pair. Thirteen exported symbol
+ * names are common to the 0.9 and this header; seven of them
+ * (`pio_parse_file`, `pio_parse_str`, `pio_parse_bytes`, `pio_convert_file`,
+ * `pio_convert_str`, `pio_geo_parse`, `pio_arrow_catalog_json`) carry a
+ * different signature under the same name. A binding built against 5 would
+ * resolve every one of those thirteen symbols rather than failing to link,
+ * so the version handshake above is what actually catches the mismatch.
+ * The 4 to 5 bump reshaped every ABI visible JSON document and the
+ * diagnostic grammar.
  */
 #define PIO_ABI_VERSION 6
 

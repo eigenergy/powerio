@@ -260,10 +260,15 @@ fn make_network(net: BalancedNetwork, diagnostics: Vec<Diagnostic>) -> *mut PioB
 /// and one module surface remains: `pio_parse_*` produce module handles,
 /// typed accessors hand back independently owned network handles, every
 /// fallible entry point reports through a structured `PioError`, and every
-/// handle type carries a `retain`/`release` pair. A binding built against 5
-/// would resolve missing symbols; the handshake refuses first. The 4 to 5
-/// bump reshaped every ABI visible JSON document and the diagnostic
-/// grammar.
+/// handle type carries a `retain`/`release` pair. Thirteen exported symbol
+/// names are common to the 0.9 and this header; seven of them
+/// (`pio_parse_file`, `pio_parse_str`, `pio_parse_bytes`, `pio_convert_file`,
+/// `pio_convert_str`, `pio_geo_parse`, `pio_arrow_catalog_json`) carry a
+/// different signature under the same name. A binding built against 5 would
+/// resolve every one of those thirteen symbols rather than failing to link,
+/// so the version handshake above is what actually catches the mismatch.
+/// The 4 to 5 bump reshaped every ABI visible JSON document and the
+/// diagnostic grammar.
 pub const PIO_ABI_VERSION: u32 = 6;
 
 /// Frozen at 1 and no longer meaningful. It existed to absorb distribution
@@ -968,6 +973,16 @@ pub struct PioWriteOptions {
     pub gen_cost_csv: *const c_char,
 }
 
+/// The largest `struct_size` any options struct this library implements can
+/// legitimately declare. `declared` names how many bytes the tail check below
+/// reads past this build's own layout, so an unbounded caller-supplied value
+/// (a corrupted pointer, or a hostile one crossing an FFI boundary meant for a
+/// trusted binding but reachable from less trusted code) would turn that read
+/// into an out-of-bounds read of an attacker-chosen length. No options struct
+/// in this library is anywhere near this size; the bound exists to cap the
+/// read, not to accommodate a real one.
+const MAX_OPTIONS_STRUCT_SIZE: usize = 4096;
+
 /// Copy a caller's extensible options struct into a zero filled local of this
 /// build's layout, or `None` when `opts` is NULL and every default applies.
 ///
@@ -986,7 +1001,7 @@ unsafe fn options_from_c<T: Copy>(opts: *const T, name: &str) -> Result<Option<T
     }
     let own = size_of::<T>();
     let declared = unsafe { opts.cast::<usize>().read_unaligned() };
-    if declared < size_of::<usize>() {
+    if declared < size_of::<usize>() || declared > MAX_OPTIONS_STRUCT_SIZE {
         return Err(coded(
             &codes::BIND_CAPI_INVALID_OPTIONS,
             format!(
@@ -4572,6 +4587,86 @@ mpc.branch = [
             reserved.reserved = 1;
             let err = convert_case9_with("matpower", &reserved).unwrap_err();
             assert!(err.starts_with("BIND.CAPI.INVALID_OPTIONS: "), "got: {err}");
+        }
+    }
+
+    #[test]
+    fn oversized_struct_size_is_refused_before_the_tail_read() {
+        // `struct_size` past this build's own layout drives a
+        // `slice::from_raw_parts` read of `declared - own` bytes in
+        // `options_from_c`'s tail check; an unbounded caller-supplied value
+        // there is an out-of-bounds read of an attacker-chosen length, not
+        // merely an oversized request. `usize::MAX` and a merely-too-generous
+        // 1 MiB both have to be refused before that read runs, on every
+        // entry point that accepts an extensible options struct.
+        let c = angle_bounds_case();
+        let case9_text = std::fs::read_to_string(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../tests/data/case9.m"),
+        )
+        .unwrap();
+        unsafe {
+            for oversized in [usize::MAX, 1 << 20] {
+                let mut nopts = normalize_opts();
+                nopts.struct_size = oversized;
+                let err = normalize_with(c, &nopts).unwrap_err();
+                assert_eq!(
+                    err.split(':').next().unwrap(),
+                    "BIND.CAPI.INVALID_OPTIONS",
+                    "pio_balanced_network_normalize, struct_size {oversized}: got {err}"
+                );
+
+                let mut wopts = write_opts();
+                wopts.struct_size = oversized;
+                let err = convert_case9_with("matpower", &wopts).unwrap_err();
+                assert_eq!(
+                    err.split(':').next().unwrap(),
+                    "BIND.CAPI.INVALID_OPTIONS",
+                    "pio_convert_file, struct_size {oversized}: got {err}"
+                );
+
+                let text = CString::new(case9_text.clone()).unwrap();
+                let from = CString::new("matpower").unwrap();
+                let to = CString::new("psse").unwrap();
+                let mut error: *mut PioError = std::ptr::null_mut();
+                let s = pio_convert_str(
+                    text.as_ptr(),
+                    from.as_ptr(),
+                    to.as_ptr(),
+                    &wopts,
+                    std::ptr::null_mut(),
+                    &raw mut error,
+                );
+                assert!(
+                    s.is_null(),
+                    "pio_convert_str accepted struct_size {oversized}"
+                );
+                assert_eq!(
+                    CStr::from_ptr(pio_error_code(error)).to_str().unwrap(),
+                    "BIND.CAPI.INVALID_OPTIONS",
+                    "pio_convert_str, struct_size {oversized}"
+                );
+                pio_error_release(error);
+            }
+
+            // The accepted boundary is unchanged: exactly this build's size,
+            // and a genuinely wider (zero-tailed) struct still both work.
+            assert!(normalize_with(c, &normalize_opts()).is_ok());
+            assert!(convert_case9_with("matpower", &write_opts()).is_ok());
+            let mut wide = WideNormalizeOptions {
+                head: normalize_opts(),
+                future: 0.0,
+            };
+            wide.head.struct_size = size_of::<WideNormalizeOptions>();
+            let opts: *const PioNormalizeOptions = std::ptr::from_ref(&wide).cast();
+            assert!(normalize_with(c, opts).is_ok());
+            let mut wide_write = WideWriteOptions {
+                head: write_opts(),
+                future: 0.0,
+            };
+            wide_write.head.struct_size = size_of::<WideWriteOptions>();
+            let opts: *const PioWriteOptions = std::ptr::from_ref(&wide_write).cast();
+            assert!(convert_case9_with("matpower", opts).is_ok());
+            pio_balanced_network_release(c);
         }
     }
 
