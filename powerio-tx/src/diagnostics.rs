@@ -218,6 +218,8 @@ pub mod codes {
 
         READ_PANDAPOWER_FIELD_DROPPED = "READ.PANDAPOWER.FIELD_DROPPED", Warning,
             "a pandapower field with no canonical home was dropped";
+        READ_PANDAPOWER_VALUE_INFERRED = "READ.PANDAPOWER.VALUE_INFERRED", Warning,
+            "a value pandapower does not store was reconstructed on a declared convention";
         READ_PANDAPOWER_TABLE_UNSUPPORTED = "READ.PANDAPOWER.TABLE_UNSUPPORTED", Warning,
             "a pandapower table is not mapped into the canonical model";
 

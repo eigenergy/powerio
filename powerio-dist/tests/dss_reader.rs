@@ -8,7 +8,7 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 mod helpers;
-use helpers::{parse_dss_file, parse_dss_file_with_root, write_dss};
+use helpers::{parse_dss_file, parse_dss_file_with_root, parse_dss_str, write_dss};
 use powerio_dist::{
     Configuration, CoordinateSpace, DistCoordsKind, DistWindingConn, IbrPrimeMover, IbrTopology,
     MulticonductorNetwork, ReactivePowerReference, ReactivePowerUnit,
@@ -902,4 +902,34 @@ SetBusXY bus=a x=-80
         "{:?}",
         net.warnings
     );
+}
+
+/// The static circuit profile boundary: schedules, monitoring requests, and
+/// protection sequencing parse as retained source with one named diagnostic
+/// per class, and a parse never claims a solve occurred.
+#[test]
+fn calculation_constructs_are_named_outside_the_static_profile() {
+    let dss = "Clear\nNew Circuit.profile basekv=4.16 pu=1.0 phases=3 bus1=sb.1.2.3\n\
+               New Loadshape.daily npts=2 interval=1 mult=(0.5 1.0)\n\
+               New Loadshape.evening npts=2 interval=1 mult=(0.2 0.9)\n\
+               New Monitor.m1 element=Line.x terminal=1\n\
+               Solve\n";
+    let parsed = parse_dss_str(dss);
+    let rendered = &parsed.warnings;
+    assert!(
+        rendered
+            .iter()
+            .any(|w| w.contains("2 `loadshape` object(s) are outside the static circuit profile")),
+        "{rendered:?}"
+    );
+    assert!(
+        rendered
+            .iter()
+            .any(|w| w.contains("1 `monitor` object(s) are outside the static circuit profile")),
+        "{rendered:?}"
+    );
+    // Retained, not interpreted: the objects survive for exact writing.
+    assert_eq!(parsed.untyped().len(), 3);
+    // The solve command is preserved without execution.
+    assert!(parsed.commands().iter().any(|(verb, _)| verb == "solve"));
 }

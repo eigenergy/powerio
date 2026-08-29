@@ -10,7 +10,9 @@ use powerio_dist::{
 };
 
 mod helpers;
-use helpers::{parse_dss_file, parse_pmd_file, parse_pmd_str, write_bmopf_json, write_pmd_json};
+use helpers::{
+    parse_dss_file, parse_dss_str, parse_pmd_file, parse_pmd_str, write_bmopf_json, write_pmd_json,
+};
 
 fn fixture(rel: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -933,6 +935,84 @@ fn wide_terminal_maps_do_not_expand_quadratically() {
 }
 
 #[test]
+fn twenty_thousand_colliding_linecode_names_decode_within_a_time_budget() {
+    // The inline-impedance materializer tries `ln_z`, `ln_z2`, `ln_z3`, ...
+    // until it finds a free name; every name up to `ln_z20000` already
+    // exists here, so a linear scan per candidate would turn decoding into
+    // O(n^2) string comparisons over the growing linecode table.
+    use std::fmt::Write as _;
+    let collisions = 20_000;
+    let mut linecodes = String::from("\"ln_z\":{}");
+    for k in 2..=collisions {
+        let _ = write!(linecodes, ",\"ln_z{k}\":{{}}");
+    }
+    let json = format!(
+        r#"{{"data_model":"ENGINEERING","linecode":{{{linecodes}}},
+        "line":{{"ln":{{"rs":[[0.1]]}}}}}}"#
+    );
+    let start = std::time::Instant::now();
+    let net = parse_pmd_str(&json).unwrap();
+    let elapsed = start.elapsed();
+    // The name set finds every candidate in well under a tenth of a second;
+    // a linear scan per candidate measured multiple seconds at this scale.
+    // One second stays generous for a slower CI machine while still well
+    // short of what the linear scan costs.
+    assert!(
+        elapsed < std::time::Duration::from_secs(1),
+        "decoding {collisions} colliding linecode names took {elapsed:?}"
+    );
+    assert!(
+        net.linecode(&format!("ln_z{}", collisions + 1)).is_some(),
+        "the materializer should have landed one past the last collision"
+    );
+}
+
+#[test]
+fn a_two_megabyte_dss_case_writes_pmd_json_within_a_time_budget() {
+    // branches() and loads() each ran net.linecode()/net.bus() once per
+    // element, a linear scan over the whole table; a large case turned
+    // writing PMD JSON into O(n^2) name comparisons.
+    use std::fmt::Write as _;
+    let mut dss = String::from("New Circuit.perf basekv=12.47 bus1=src\n");
+    let n = 15_000;
+    for i in 0..n {
+        let _ = writeln!(dss, "New Linecode.lc{i} nphases=1 r1=0.1 x1=0.1");
+    }
+    for i in 0..n {
+        let _ = writeln!(
+            dss,
+            "New Line.ln{i} bus1=b{i}.1 bus2=b{}.1 linecode=lc{i} length=1",
+            i + 1
+        );
+    }
+    for i in 0..n {
+        let _ = writeln!(dss, "New Load.ld{i} bus1=c{i}.1 phases=1 kw=1 kvar=0.5");
+    }
+    assert!(
+        dss.len() >= 2_000_000,
+        "fixture is only {} bytes, want at least 2 MB",
+        dss.len()
+    );
+    let net = parse_dss_str(&dss);
+    assert_eq!(net.lines().len(), n);
+    assert_eq!(net.loads().len(), n);
+
+    let start = std::time::Instant::now();
+    let out = write_pmd_json(&net);
+    let elapsed = start.elapsed();
+    // The index maps write this in about two seconds; a linear scan per
+    // line and per load measured over five and a half. A loaded CI runner
+    // has taken 4.4s on the indexed path, so the budget sits at eight:
+    // roughly the linear cost on the authoring machine, still under it on
+    // a machine slow enough to double the indexed time.
+    assert!(
+        elapsed < std::time::Duration::from_secs(8),
+        "writing a {n}-line, {n}-load network took {elapsed:?}"
+    );
+    assert!(!out.text.is_empty());
+}
+
+#[test]
 fn degenerate_matrix_shapes_do_not_panic() {
     // `rs` claims three columns but the third is short. Reading fills the
     // gaps, and the writer indexes defensively, so neither panics.
@@ -1083,4 +1163,54 @@ fn bus_voltage_bounds_ride_vm_lb_and_vm_ub() {
         "{:?}",
         net.warnings
     );
+}
+
+/// #376: a rated capacitor bank converts to an ENGINEERING shunt — the
+/// nameplate reactive power at the nameplate voltage becomes the
+/// susceptance matrix over the bank's own conductors, the same equivalence
+/// the admittance builder stamps.
+#[test]
+fn a_rated_capacitor_converts_to_an_engineering_shunt() {
+    let dss = "Clear\nNew Circuit.capnet basekv=4.16 pu=1.0 phases=3 bus1=sb.1.2.3\n\
+               New Capacitor.cbank bus1=sb.1.2.3 phases=3 kv=4.16 kvar=300 conn=wye\n\
+               Solve\n";
+    let net = parse_dss_str(dss);
+    let out = write_pmd_json(&net);
+    let doc: serde_json::Value = serde_json::from_str(&out.text).unwrap();
+    let shunt = &doc["shunt"]["cbank"];
+    assert_eq!(shunt["model"], "CAPACITOR", "{doc}");
+    assert_eq!(shunt["configuration"], "WYE");
+    // Wye: line to neutral base 4160/sqrt(3), 100 kvar per phase.
+    let v_ln: f64 = 4160.0 / 3f64.sqrt();
+    let b = 100_000.0 / (v_ln * v_ln);
+    let stated = shunt["bs"][0][0].as_f64().unwrap();
+    assert!((stated - b).abs() < 1e-9 * b, "bs {stated} want {b}");
+    assert!(
+        !out.warnings
+            .iter()
+            .any(|w| w.contains("capacitor") && w.contains("dropped")),
+        "{:?}",
+        out.warnings
+    );
+}
+
+#[test]
+fn a_two_terminal_delta_capacitor_keeps_its_full_rating() {
+    // phases=1 conn=delta: one phase-to-phase leg. The whole rated power
+    // belongs to that single stamped loop.
+    let dss = "Clear\nNew Circuit.capnet basekv=4.16 pu=1.0 phases=3 bus1=sb.1.2.3\n\
+               New Capacitor.cpp bus1=sb.1.2 phases=1 kv=4.16 kvar=100 conn=delta\n\
+               Solve\n";
+    let net = parse_dss_str(dss);
+    let out = write_pmd_json(&net);
+    let doc: serde_json::Value = serde_json::from_str(&out.text).unwrap();
+    let shunt = &doc["shunt"]["cpp"];
+    assert_eq!(shunt["configuration"], "DELTA", "{doc}");
+    let b = 100_000.0 / (4160.0_f64 * 4160.0);
+    // One leg between the two terminals: the diagonal carries +b, the
+    // coupling -b, and nothing is halved.
+    let bs00 = shunt["bs"][0][0].as_f64().unwrap();
+    let bs01 = shunt["bs"][0][1].as_f64().unwrap();
+    assert!((bs00 - b).abs() < 1e-9 * b, "bs00 {bs00} want {b}");
+    assert!((bs01 + b).abs() < 1e-9 * b, "bs01 {bs01} want {}", -b);
 }

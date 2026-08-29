@@ -622,6 +622,15 @@ const TRANSMISSION_FORMATS: [TransmissionFormat; 8] = [
 // PSLF; egret lands on zero). What remains on that row is genuine: costs the
 // targets cannot carry and the one-of-three cost set MATPOWER's
 // all-or-nothing gencost drops.
+// pandapower piecewise costs map both ways (#360): a piecewise case's cost
+// now survives the into-pandapower hop as `pwl_cost` ranges. Reading that
+// payload declares the unstated absolute level once per parse, which every
+// cell of the source row counts (+1 across the row; the pandapower target
+// cell counts it twice, parse and readback), and the targets with no
+// piecewise slot declare the drop they used to get for free. The MATPOWER
+// cell nets zero: the curve it now receives replaces the cost drop it used
+// to declare.
+//
 // The MATPOWER reader reads `mpc.areas` and the writer emits it, so the one
 // case that states an area (PGLib 5) carries it into every payload built from
 // the .m file. MATPOWER and PSS/E hold the table (their cells do not move);
@@ -635,7 +644,7 @@ const TRANSMISSION_WARNING_BASELINE: [[usize; 8]; 8] = [
     [0, 1, 0, 2, 1, 3, 1, 2],
     [0, 0, 0, 0, 0, 2, 0, 0],
     [0, 0, 9, 9, 0, 8, 1, 7],
-    [1, 0, 7, 7, 0, 0, 0, 7],
+    [1, 1, 8, 8, 1, 2, 1, 8],
     [0, 0, 9, 9, 0, 7, 0, 7],
     [0, 0, 1, 1, 0, 4, 3, 0],
 ];

@@ -3628,3 +3628,51 @@ fn a_fixed_tap_open_delta_bank_emits_two_single_phase_units() {
         doc["transformer"]
     );
 }
+
+/// #383: a classified regulator bank read back out of a BMOPF document is
+/// typed transformer rows, so a dss regeneration keeps the bank instead of
+/// dropping untyped objects on both legs.
+#[test]
+fn regulator_banks_survive_a_dss_bmopf_dss_round_trip() {
+    let net = parse_dss_file(fixture("opendss/ieee13/IEEE13Nodeckt.dss")).unwrap();
+    let names_before: Vec<String> = net
+        .transformers()
+        .iter()
+        .map(|t| t.name.to_ascii_lowercase())
+        .collect();
+    assert!(
+        names_before.iter().any(|n| n.starts_with("reg")),
+        "{names_before:?}"
+    );
+
+    let bmopf = write_bmopf_json(&net);
+    let again = parse_bmopf_str(&bmopf.text).unwrap();
+    assert!(
+        again.untyped().is_empty(),
+        "untyped rows survived: {:?}",
+        again.untyped().iter().map(|u| &u.class).collect::<Vec<_>>()
+    );
+    let regs: Vec<&str> = again
+        .transformers()
+        .iter()
+        .map(|t| t.name.as_str())
+        .filter(|n| n.to_ascii_lowercase().starts_with("reg"))
+        .collect();
+    assert!(!regs.is_empty(), "no regulator rows read back");
+
+    let dss = write_dss(&again);
+    for reg in regs {
+        assert!(
+            dss.text.contains(&format!("Transformer.{reg} ")),
+            "regulator {reg} missing from the regenerated dss:\n{}",
+            dss.text
+        );
+    }
+    assert!(
+        !dss.warnings
+            .iter()
+            .any(|w| w.contains("RECORD_DROPPED") && w.contains("transformer")),
+        "{:?}",
+        dss.warnings
+    );
+}

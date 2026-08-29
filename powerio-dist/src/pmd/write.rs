@@ -98,6 +98,26 @@ fn renamed_terminals(net: &MulticonductorNetwork) -> BTreeMap<String, i64> {
     out
 }
 
+/// Linecode lookup by name, built once rather than searched per line:
+/// `net.linecode()` is a linear scan, and a line runs it once each.
+fn linecodes_by_name(net: &MulticonductorNetwork) -> BTreeMap<String, &DistLineCode> {
+    let mut by_name = BTreeMap::new();
+    for c in net.linecodes() {
+        by_name.entry(c.name.to_ascii_lowercase()).or_insert(c);
+    }
+    by_name
+}
+
+/// Bus lookup by id, built once rather than searched per load: `net.bus()`
+/// is a linear scan, and a single phase load runs it once each.
+fn buses_by_id(net: &MulticonductorNetwork) -> BTreeMap<String, &DistBus> {
+    let mut by_id = BTreeMap::new();
+    for b in net.buses() {
+        by_id.entry(b.id.to_ascii_lowercase()).or_insert(b);
+    }
+    by_id
+}
+
 impl Writer {
     /// Terminal names as PMD integer connections. A name that is not numeric
     /// takes the id [`renamed_terminals`] gave it, so the same name is the
@@ -150,6 +170,59 @@ fn all_terminal_names(net: &MulticonductorNetwork) -> impl Iterator<Item = &str>
 /// A matrix as PMD serializes it: array of columns (`hcat` rebuilds it).
 /// Rows shorter than the row count read as 0, so a degenerate model matrix
 /// emits a square block instead of panicking.
+/// The susceptance matrix of one rated capacitor bank over its own
+/// conductors, siemens: the nameplate reactive power at the nameplate
+/// voltage, the same equivalence the multiconductor admittance builder
+/// stamps. Wye nameplate voltage is line to line with the neutral mapped
+/// last; delta couples successive phase pairs; single phase spans its two
+/// terminals.
+fn capacitor_susceptance(c: &crate::model::DistCapacitor) -> std::result::Result<Mat, String> {
+    let finite_positive = |v: f64| v.is_finite() && v > 0.0;
+    if !finite_positive(c.v_nom) || !c.q_rated.is_finite() {
+        return Err("nameplate q_rated or v_nom is missing or nonpositive".into());
+    }
+    let n = c.terminal_map.len();
+    let mut bs = vec![vec![0.0; n]; n];
+    let mut couple = |a: usize, b: usize, y: f64| {
+        bs[a][a] += y;
+        bs[b][b] += y;
+        bs[a][b] -= y;
+        bs[b][a] -= y;
+    };
+    match c.configuration {
+        crate::model::Configuration::SinglePhase => {
+            if n != 2 {
+                return Err(format!("single phase bank maps {n} terminals"));
+            }
+            couple(0, 1, c.q_rated / (c.v_nom * c.v_nom));
+        }
+        crate::model::Configuration::Wye => {
+            let phases = n.saturating_sub(1);
+            if phases == 0 {
+                return Err("wye bank maps no phase terminal".into());
+            }
+            let v_ln = c.v_nom / 3f64.sqrt();
+            let b = c.q_rated / (phases as f64) / (v_ln * v_ln);
+            for phase in 0..phases {
+                couple(phase, phases, b);
+            }
+        }
+        crate::model::Configuration::Delta => {
+            if n < 2 {
+                return Err(format!("delta bank maps {n} terminals"));
+            }
+            // Two terminals form one phase-to-phase leg, not two; divide the
+            // rated power by the legs actually stamped.
+            let loops = if n == 2 { 1 } else { n };
+            let b = c.q_rated / (loops as f64) / (c.v_nom * c.v_nom);
+            for pair in 0..loops {
+                couple(pair, (pair + 1) % n, b);
+            }
+        }
+    }
+    Ok(bs)
+}
+
 fn matrix(m: &Mat) -> Value {
     let n = m.len();
     let cols: Vec<Value> = (0..n)
@@ -457,9 +530,13 @@ impl Writer {
         }
     }
 
+    // Two lines over the pedantic ceiling after the index lookup landed;
+    // the function is one linear pass and splitting it hides the flow.
+    #[allow(clippy::too_many_lines)]
     fn branches(&mut self, net: &MulticonductorNetwork, doc: &mut Map<String, Value>) {
         if !net.lines().is_empty() {
             let mut lines = Map::new();
+            let linecodes_by_name = linecodes_by_name(net);
             for l in net.lines() {
                 let mut o = Map::new();
                 o.insert("f_bus".into(), json!(l.bus_from.to_lowercase()));
@@ -478,7 +555,8 @@ impl Writer {
                 // its impedance, the dss2eng shape for rmatrix defined
                 // lines: matrices on the line, no linecode key.
                 let inline = l.extras.get("pmd_inline").and_then(Value::as_bool) == Some(true);
-                match net.linecode(&l.linecode) {
+                let lc = linecodes_by_name.get(l.linecode.to_ascii_lowercase().as_str());
+                match lc.copied() {
                     Some(c) if inline => {
                         insert_impedance_matrices(&mut o, c, net.base_frequency());
                         if let Some(i_max) = &c.i_max {
@@ -571,6 +649,7 @@ impl Writer {
     fn loads(&mut self, net: &MulticonductorNetwork, doc: &mut Map<String, Value>) {
         if !net.loads().is_empty() {
             let mut loads = Map::new();
+            let buses_by_id = buses_by_id(net);
             for l in net.loads() {
                 let mut o = Map::new();
                 let what = format!("load {}", l.name);
@@ -584,7 +663,11 @@ impl Writer {
                         let grounded_return = l
                             .terminal_map
                             .last()
-                            .zip(net.bus(&l.bus))
+                            .zip(
+                                buses_by_id
+                                    .get(l.bus.to_ascii_lowercase().as_str())
+                                    .copied(),
+                            )
                             .is_some_and(|(t, b)| b.grounded.contains(t));
                         if grounded_return { "WYE" } else { "DELTA" }
                     }
@@ -720,15 +803,51 @@ impl Writer {
     fn injections(&mut self, net: &MulticonductorNetwork, doc: &mut Map<String, Value>) {
         self.loads(net, doc);
         self.generators(net, doc);
-        // Typed BMOPF capacitor banks have no ENGINEERING conversion yet.
+        // Typed capacitor banks convert to ENGINEERING shunts: the nameplate
+        // reactive power at the nameplate voltage becomes the susceptance
+        // matrix over the bank's own conductors, the same equivalence the
+        // admittance builder stamps.
+        let mut capacitor_shunts = Map::new();
         for c in net.capacitors() {
-            self.warn(&C::EMIT_PMD_RECORD_DROPPED, format!(
-                "capacitor {}: rated capacitor banks are not converted to ENGINEERING JSON; dropped",
-                c.name
-            ));
+            let what = format!("capacitor {}", c.name);
+            match capacitor_susceptance(c) {
+                Ok(bs) => {
+                    let n = bs.len();
+                    let mut o = Map::new();
+                    o.insert("bus".into(), json!(c.bus.to_lowercase()));
+                    o.insert(
+                        "connections".into(),
+                        json!(self.conns(&c.terminal_map, &what)),
+                    );
+                    o.insert("gs".into(), matrix(&vec![vec![0.0; n]; n]));
+                    o.insert("bs".into(), matrix(&bs));
+                    o.insert(
+                        "configuration".into(),
+                        json!(match c.configuration {
+                            Configuration::Delta => "DELTA",
+                            _ => "WYE",
+                        }),
+                    );
+                    o.insert("model".into(), json!("CAPACITOR"));
+                    o.insert("dispatchable".into(), json!("NO"));
+                    o.insert("status".into(), Self::status(&c.extras));
+                    o.insert(
+                        "source_id".into(),
+                        json!(format!("capacitor.{}", c.name.to_lowercase())),
+                    );
+                    self.extras_dropped(&c.extras, &[], &what);
+                    capacitor_shunts.insert(c.name.to_lowercase(), Value::Object(o));
+                }
+                Err(reason) => {
+                    self.warn(
+                        &C::EMIT_PMD_RECORD_DROPPED,
+                        format!("{what}: {reason}; dropped"),
+                    );
+                }
+            }
         }
-        if !net.shunts().is_empty() {
-            let mut shunts = Map::new();
+        if !net.shunts().is_empty() || !capacitor_shunts.is_empty() {
+            let mut shunts = capacitor_shunts;
             for s in net.shunts() {
                 let mut o = Map::new();
                 let what = format!("shunt {}", s.name);
