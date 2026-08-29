@@ -49,6 +49,43 @@ fn typed_sibling<T>(module: &PioModule<PioValue>, value: T) -> Result<PioModule<
     })
 }
 
+/// The module's retained source's exact original text, when that source's
+/// content is already `format`: the byte exact echo tier every kind should
+/// get, not just [`PioValue::BalancedNetwork`] and
+/// [`PioValue::MulticonductorNetwork`] (whose family writers already carry
+/// it through `powerio_tx::format::write_as` and `powerio_dist::write_as`).
+/// `None` when there is no retained source, or its content is not `format`.
+///
+/// A source declared with an explicit format token (the C ABI and bindings
+/// route this way) is trusted directly; a source routed here by content (a
+/// bare `.json` file with no declared format, the common case for the CLI
+/// and a plain `Source::open`) is reclassified the same way `powerio::parse`'s
+/// own routing already did once to land on this kind in the first place.
+fn echo_retained_source(module: &PioModule<PioValue>, format: &str) -> Option<String> {
+    use powerio_tx::format::routing::{
+        Detection, JsonClass, classify_format_name, classify_json_text,
+    };
+
+    let source = module.source()?;
+    let requested = classify_format_name(format).known()?;
+    let buffer = source.primary_buffer().ok()?;
+    let actual = if let Some(declared) = source.format() {
+        classify_format_name(declared.as_str()).known()?
+    } else {
+        let text = std::str::from_utf8(buffer.content_bytes()).ok()?;
+        match classify_json_text(text) {
+            JsonClass::Case(Detection::Known(found)) => found,
+            _ => return None,
+        }
+    };
+    if requested != actual {
+        return None;
+    }
+    // The raw bytes, not the decoded/BOM stripped `content_bytes` used only
+    // to reclassify above: an echo must reproduce the source exactly.
+    std::str::from_utf8(buffer.bytes()).ok().map(str::to_owned)
+}
+
 fn unsupported_kind(module: &PioModule<PioValue>, format: &str) -> Error {
     Error::new(
         &codes::REQUEST_WRITE_UNSUPPORTED_VALUE_KIND,
@@ -113,6 +150,14 @@ pub fn write_module_as(
             powerio_dist::write(&typed, target, destination)
         }
         _ => {
+            if let Some(text) = echo_retained_source(module, format) {
+                let artifact = powerio_core::MemoryArtifact::new(
+                    powerio_core::ArtifactPath::new("case")
+                        .expect("static name is a valid artifact path"),
+                    text.into_bytes(),
+                );
+                return destination.__commit_artifacts(false, vec![artifact], Vec::new());
+            }
             if known_format_name(format) {
                 Err(unsupported_kind(module, format))
             } else {
@@ -181,6 +226,9 @@ pub fn write_module_str_with_options(
             Ok((conv.text, diagnostics))
         }
         _ => {
+            if let Some(text) = echo_retained_source(module, format) {
+                return Ok((text, Vec::new()));
+            }
             if known_format_name(format) {
                 Err(unsupported_kind(module, format))
             } else {

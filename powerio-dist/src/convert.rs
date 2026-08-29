@@ -365,15 +365,30 @@ pub fn parse(
     let mut warnings = crate::collect::Diagnostics::new();
     match parse_to_network(&source, &mut warnings) {
         Ok(network) => {
+            let format = *network.source_format();
             let mut module = powerio_core::PioModule::new(network);
             for buffer in source.acquired_buffers() {
+                // A stored descriptor is a display name, not a filesystem
+                // path; keep only the final component of a buffer name that
+                // came from Source::open.
+                let name = std::path::Path::new(buffer.name())
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .unwrap_or_else(|| buffer.name());
                 let descriptor = match powerio_core::SourceDescriptor::new(
                     buffer.id().clone(),
-                    buffer.name(),
+                    name,
                     buffer.bytes().len() as u64,
                 ) {
                     Ok(descriptor) => descriptor,
                     Err(error) => return Err(error.with_source(source)),
+                };
+                let descriptor = match format {
+                    Some(format) => descriptor.with_format(
+                        powerio_core::FormatId::new(format.name())
+                            .expect("DistSourceFormat::name is a valid format id"),
+                    ),
+                    None => descriptor,
                 };
                 if let Err(error) = module.add_source_descriptor(descriptor) {
                     return Err(error.with_source(source));

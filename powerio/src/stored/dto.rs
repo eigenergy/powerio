@@ -411,6 +411,30 @@ pub struct AcPfInstanceV1 {
     pub initial_state: Option<StoredOperatingPointV1>,
 }
 
+/// One typed objective term, mirroring `powerio_prob::ObjectiveTerm` with its
+/// weight wrapped for the nonfinite spelling: an internally tagged enum's
+/// derived `Deserialize` re-decodes its variant from a buffered generic
+/// value rather than the deserializer callers pass in, so wrapping the whole
+/// document's deserializer (as [`StoredModuleV1`] does for every plain
+/// struct field) never reaches this `f64`.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(JsonSchema))]
+#[serde(rename_all = "snake_case", tag = "term", deny_unknown_fields)]
+pub enum ObjectiveTermV1 {
+    NetworkGeneratorCost,
+    NetworkPerPhaseCost,
+    DifferentiabilityRegularization { weight: StoredF64 },
+}
+
+/// The complete typed objective, mirroring `powerio_prob::Objective`.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct ObjectiveV1 {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub terms: Vec<ObjectiveTermV1>,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(JsonSchema))]
 #[serde(deny_unknown_fields)]
@@ -419,7 +443,7 @@ pub struct DcOpfInstanceV1 {
     pub approximation: String,
     /// The typed objective the instance states, in the calculation crate's
     /// own serialization.
-    pub objective: powerio_prob::Objective,
+    pub objective: ObjectiveV1,
     pub constraints: powerio_prob::ActiveConstraints,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub initial_state: Option<StoredOperatingPointV1>,
@@ -430,7 +454,7 @@ pub struct DcOpfInstanceV1 {
 #[serde(deny_unknown_fields)]
 pub struct AcOpfInstanceV1 {
     pub network: Box<BalancedNetwork>,
-    pub objective: powerio_prob::Objective,
+    pub objective: ObjectiveV1,
     pub constraints: powerio_prob::ActiveConstraints,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub initial_state: Option<StoredOperatingPointV1>,
@@ -450,7 +474,7 @@ pub struct McAcPfInstanceV1 {
 #[serde(deny_unknown_fields)]
 pub struct McAcOpfInstanceV1 {
     pub network: Box<MulticonductorNetwork>,
-    pub objective: powerio_prob::Objective,
+    pub objective: ObjectiveV1,
     pub constraints: powerio_prob::MulticonductorActiveConstraints,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub initial_state: Option<StoredOperatingPointV1>,
@@ -876,7 +900,7 @@ pub struct HistoryEntryV1 {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(JsonSchema))]
-#[serde(deny_unknown_fields)]
+#[serde(deny_unknown_fields, remote = "Self")]
 pub struct StoredModuleV1 {
     pub schema: String,
     pub version: u32,
@@ -913,6 +937,28 @@ pub struct StoredModuleV1 {
         skip_serializing_if = "BTreeMap::is_empty"
     )]
     pub extensions: BTreeMap<String, serde_json::Value>,
+}
+
+// Same mechanism as the two network models and NetworkPackage: the whole
+// document, including `value`'s powerio-prob calculation payloads (whose own
+// f64/Option<f64> fields, defined outside this crate, are not individually
+// wrapped in StoredF64), spells a nonfinite float as a string, so nothing
+// this crate writes ever refuses to read back.
+impl Serialize for StoredModuleV1 {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        StoredModuleV1::serialize(
+            self,
+            powerio_core::__implementation::nonfinite::NonFiniteSer(serializer),
+        )
+    }
+}
+
+impl<'de> Deserialize<'de> for StoredModuleV1 {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        StoredModuleV1::deserialize(powerio_core::__implementation::nonfinite::NonFiniteDe(
+            deserializer,
+        ))
+    }
 }
 
 #[derive(Debug, Deserialize)]
