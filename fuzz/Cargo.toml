@@ -8,6 +8,7 @@ edition = "2024"
 cargo-fuzz = true
 
 [dependencies]
+tempfile = "3"
 libfuzzer-sys = "0.4"
 powerio = { path = "../powerio" }
 powerio-core = { path = "../powerio-core" }
@@ -25,75 +26,74 @@ debug = 1
 name = "matpower"
 path = "fuzz_targets/matpower.rs"
 test = false
-doc = false
 bench = false
 
 [[bin]]
 name = "psse"
 path = "fuzz_targets/psse.rs"
 test = false
-doc = false
 bench = false
 
 [[bin]]
 name = "model_json"
 path = "fuzz_targets/model_json.rs"
 test = false
-doc = false
 bench = false
 
 [[bin]]
 name = "json_classify"
 path = "fuzz_targets/json_classify.rs"
 test = false
-doc = false
 bench = false
 
 [[bin]]
 name = "powerworld_aux"
 path = "fuzz_targets/powerworld_aux.rs"
 test = false
-doc = false
 bench = false
 
 [[bin]]
 name = "pslf"
 path = "fuzz_targets/pslf.rs"
 test = false
-doc = false
 bench = false
 
 [[bin]]
 name = "pwb"
 path = "fuzz_targets/pwb.rs"
 test = false
-doc = false
 bench = false
 
 [[bin]]
 name = "pwd"
 path = "fuzz_targets/pwd.rs"
 test = false
-doc = false
 bench = false
 
 [[bin]]
 name = "dss"
 path = "fuzz_targets/dss.rs"
 test = false
-doc = false
 bench = false
 
 [[bin]]
 name = "pmd_json"
 path = "fuzz_targets/pmd_json.rs"
 test = false
-doc = false
 bench = false
 
 [[bin]]
 name = "dist_classify"
 path = "fuzz_targets/dist_classify.rs"
 test = false
-doc = false
 bench = false
+
+[[bin]]
+name = "dss_includes"
+path = "fuzz_targets/dss_includes.rs"
+test = false
+
+[[bin]]
+name = "dss_includes_fs"
+path = "fuzz_targets/dss_includes_fs.rs"
+test = false

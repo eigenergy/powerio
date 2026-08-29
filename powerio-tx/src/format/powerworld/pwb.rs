@@ -87,26 +87,81 @@ const RESYNC_WINDOW: usize = 1024;
 /// truncation fixture peaks at 42M; exceeding the cap means the bytes are not
 /// a decodable layout, so the search stops and reports a read error instead
 /// of spinning.
+///
+/// #338 measured the ceiling: a systematic truncation sweep of the vendored
+/// ACTIVSg200.pwb (every 4 KiB, plus every 512 bytes over the first 64 KiB)
+/// peaks at 43,259,735 probes at 122,880 bytes — `probe_budget_tests` re-runs
+/// the sweep and guards the 2x headroom. A tighter budget would refuse real
+/// truncated saves, so the fuzz throughput cost of a header-shaped input
+/// spending its budget is inherent to the nested chain search; the
+/// structural fix (a table index instead of the chain search) stays open on
+/// #338.
 const SEARCH_PROBE_BUDGET: u64 = 128_000_000;
+
+/// The retention ceiling across every run cache of one parse, in weighted
+/// units (one per retained record plus one per retained name byte). The
+/// count words of a hostile file can select long overlapping record runs;
+/// this bounds what all four search passes together may keep, and crossing
+/// it fails the parse loudly rather than shortening a table.
+const RETAINED_RUN_BUDGET: u64 = 16_000_000;
 
 /// Shared probe counter for one `parse_pwb` call. `tick` charges one probe and
 /// returns whether the budget still has room; `exhausted` reports afterward
 /// whether the search stopped because it ran out.
-struct SearchBudget(Cell<u64>);
+pub(crate) struct SearchBudget {
+    pub(crate) probes: Cell<u64>,
+    retained: Cell<u64>,
+}
 
 impl SearchBudget {
     fn new() -> Self {
-        Self(Cell::new(0))
+        Self {
+            probes: Cell::new(0),
+            retained: Cell::new(0),
+        }
     }
 
     fn tick(&self) -> bool {
-        let spent = self.0.get().saturating_add(1);
-        self.0.set(spent);
+        let spent = self.probes.get().saturating_add(1);
+        self.probes.set(spent);
         spent <= SEARCH_PROBE_BUDGET
     }
 
     fn exhausted(&self) -> bool {
-        self.0.get() > SEARCH_PROBE_BUDGET
+        self.probes.get() > SEARCH_PROBE_BUDGET
+    }
+
+    /// Charge `weight` retained units; false once the retention ceiling is
+    /// crossed, after which the parse boundary refuses the whole file.
+    fn retain(&self, weight: u64) -> bool {
+        let kept = self.retained.get().saturating_add(weight.max(1));
+        self.retained.set(kept);
+        kept <= RETAINED_RUN_BUDGET
+    }
+
+    fn retention_exhausted(&self) -> bool {
+        self.retained.get() > RETAINED_RUN_BUDGET
+    }
+}
+
+/// #338 measurement: after any parse, the probes that call spent are
+/// readable from the thread. The scheduled measurement test uses this to
+/// re-baseline `SEARCH_PROBE_BUDGET` against the vendored corpus and its
+/// truncations; nothing in production reads it.
+pub(crate) mod probe_report {
+    use std::cell::Cell;
+
+    thread_local! {
+        pub(crate) static LAST_PROBES: Cell<u64> = const { Cell::new(0) };
+    }
+
+    /// Records the budget's final count when the parse returns on any path.
+    pub(crate) struct Guard<'a>(pub(crate) &'a super::SearchBudget);
+
+    impl Drop for Guard<'_> {
+        fn drop(&mut self) {
+            LAST_PROBES.with(|slot| slot.set(self.0.probes.get()));
+        }
     }
 }
 
@@ -221,6 +276,7 @@ fn parse_pwb_inner(bytes: &[u8], name_hint: Option<&str>) -> Result<BalancedNetw
     // shares the bus run cache so nothing is walked twice.
     let bus_runs = RefCell::new(HashMap::new());
     let budget = SearchBudget::new();
+    let _probe_guard = probe_report::Guard(&budget);
     let found = search_table_chain(
         bytes,
         name_hint,
@@ -255,7 +311,7 @@ fn parse_pwb_inner(bytes: &[u8], name_hint: Option<&str>) -> Result<BalancedNetw
             })
     });
     found.unwrap_or_else(|| {
-        if budget.exhausted() {
+        if budget.exhausted() || budget.retention_exhausted() {
             return Err(Error::FormatRead {
                 format: FMT,
                 message: "table search exceeded its work budget; the bytes are not a \
@@ -959,6 +1015,8 @@ impl<T: Clone> Run<T> {
     fn prefix(
         &mut self,
         count: usize,
+        budget: &SearchBudget,
+        weight: impl Fn(&T) -> u64,
         mut next: impl FnMut(usize, &T) -> Option<(T, usize)>,
     ) -> Option<(Vec<T>, usize)> {
         if count == 0 {
@@ -968,6 +1026,13 @@ impl<T: Clone> Run<T> {
             let after = *self.ends.last().unwrap();
             match next(after, self.items.last().unwrap()) {
                 Some((item, end)) => {
+                    // Retention is charged before the push; once the ceiling
+                    // is crossed the run dies and the parse boundary turns
+                    // the exhaustion into the coded refusal.
+                    if !budget.retain(weight(&item)) {
+                        self.dead = true;
+                        break;
+                    }
                     self.items.push(item);
                     self.ends.push(end);
                 }
@@ -1105,23 +1170,31 @@ fn bus_run(
         Entry::Vacant(e) => {
             let (head, end) = read_bus_head(b, first).ok()?;
             let family = bus_family(head.unk);
+            if !budget.retain(1 + head.bus.name.as_deref().map_or(0, str::len) as u64) {
+                return None;
+            }
             e.insert((Run::start((head.bus, head.unk, head.shunt), end), family))
         }
     };
     let family = *family;
-    run.prefix(count, |after, prev| {
-        // The record tail (undecoded; longer when flag bit 4 inserts a
-        // count prefixed list) separates this record from the next; find
-        // the next head by bounded scan (see resync_end).
-        (after..resync_end(b, after, prev.1 & 0x10 != 0))
-            .take_while(|_| budget.tick())
-            .find_map(|p| {
-                read_bus_head(b, p)
-                    .ok()
-                    .filter(|(h, _)| bus_family(h.unk) == family)
-                    .map(|(h, end)| ((h.bus, h.unk, h.shunt), end))
-            })
-    })
+    run.prefix(
+        count,
+        budget,
+        |item| 1 + item.0.name.as_deref().map_or(0, str::len) as u64,
+        |after, prev| {
+            // The record tail (undecoded; longer when flag bit 4 inserts a
+            // count prefixed list) separates this record from the next; find
+            // the next head by bounded scan (see resync_end).
+            (after..resync_end(b, after, prev.1 & 0x10 != 0))
+                .take_while(|_| budget.tick())
+                .find_map(|p| {
+                    read_bus_head(b, p)
+                        .ok()
+                        .filter(|(h, _)| bus_family(h.unk) == family)
+                        .map(|(h, end)| ((h.bus, h.unk, h.shunt), end))
+                })
+        },
+    )
 }
 
 /// Parse one bus record head at `at`; everything through the voltage angle.
@@ -1345,15 +1418,23 @@ fn device_run<T: Clone>(
         // A failed head parse is not cached, as in the sibling run lookups.
         Entry::Vacant(e) => {
             let (item, end) = read(b, first, bus_ids).ok()?;
+            if !budget.retain(1) {
+                return None;
+            }
             e.insert(Run::start(item, end))
         }
     };
-    run.prefix(count, |after, _| {
-        // The undecoded record tail separates this record from the next.
-        (after..after.saturating_add(RESYNC_WINDOW).min(b.len()))
-            .take_while(|_| budget.tick())
-            .find_map(|p| read(b, p, bus_ids).ok())
-    })
+    run.prefix(
+        count,
+        budget,
+        |_| 1,
+        |after, _| {
+            // The undecoded record tail separates this record from the next.
+            (after..after.saturating_add(RESYNC_WINDOW).min(b.len()))
+                .take_while(|_| budget.tick())
+                .find_map(|p| read(b, p, bus_ids).ok())
+        },
+    )
 }
 
 /// Load record: one undecoded byte, then constant power P and Q in per unit
@@ -1719,20 +1800,28 @@ fn branch_run(
         // A failed head parse is not cached, as in the sibling run lookups.
         Entry::Vacant(e) => {
             let (br, end, flags) = read_branch_head(b, first, bus_ids, bus_names).ok()?;
+            if !budget.retain(1) {
+                return None;
+            }
             e.insert(Run::start((br, flags), end))
         }
     };
-    run.prefix(count, |after, prev| {
-        // The undecoded record tail separates this record from the next;
-        // find the next head by bounded scan (see resync_end).
-        (after..resync_end(b, after, prev.1 & 0x10 != 0))
-            .take_while(|_| budget.tick())
-            .find_map(|p| {
-                read_branch_head(b, p, bus_ids, bus_names)
-                    .ok()
-                    .map(|(br, end, flags)| ((br, flags), end))
-            })
-    })
+    run.prefix(
+        count,
+        budget,
+        |_| 1,
+        |after, prev| {
+            // The undecoded record tail separates this record from the next;
+            // find the next head by bounded scan (see resync_end).
+            (after..resync_end(b, after, prev.1 & 0x10 != 0))
+                .take_while(|_| budget.tick())
+                .find_map(|p| {
+                    read_branch_head(b, p, bus_ids, bus_names)
+                        .ok()
+                        .map(|(br, end, flags)| ((br, flags), end))
+                })
+        },
+    )
 }
 
 /// Branch record, validated field by field against the aux siblings of all
@@ -1995,6 +2084,23 @@ fn read_legacy_branch_tail(c: &mut Cur<'_>, tail_start: usize) -> Probe<(&'stati
 mod tests {
     use super::*;
 
+    #[test]
+    fn the_retention_ceiling_kills_runs_and_reports_exhaustion() {
+        // Charge the whole retention ceiling, then ask a run to extend: the
+        // run dies without retaining the record and the parse boundary's
+        // exhaustion check reads true, which turns into the coded refusal.
+        let budget = SearchBudget::new();
+        // One large charge spends the ceiling in a single step.
+        assert!(!budget.retain(RETAINED_RUN_BUDGET + 1));
+        assert!(budget.retention_exhausted());
+
+        let mut run = Run::start((), 4);
+        let extended = run.prefix(3, &budget, |()| 1, |after, ()| Some(((), after + 1)));
+        assert!(extended.is_none(), "the exhausted budget must stop the run");
+        assert!(run.dead);
+        assert_eq!(run.items.len(), 1, "nothing was retained past the ceiling");
+    }
+
     fn empty_network(name: &str) -> BalancedNetwork {
         BalancedNetwork::from_tables(BalancedNetworkTables {
             name: name.to_string(),
@@ -2041,5 +2147,70 @@ mod tests {
         assert!((load.p - 50.0).abs() < 1e-9);
         assert!((load.q - 25.0).abs() < 1e-9);
         assert_eq!(c.pos, 41);
+    }
+}
+
+#[cfg(test)]
+mod probe_budget_tests {
+    use super::*;
+
+    fn activsg200() -> Vec<u8> {
+        std::fs::read(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../tests/data/powerworld/ACTIVSg200.pwb"
+        ))
+        .unwrap()
+    }
+
+    fn probes_for(bytes: &[u8]) -> u64 {
+        let _ = parse_pwb(bytes, None);
+        probe_report::LAST_PROBES.with(std::cell::Cell::get)
+    }
+
+    /// #338: the recorded worst truncation offset stays under half the
+    /// budget. One point, fast enough for every run; the full sweep below is
+    /// the measurement harness.
+    #[test]
+    fn recorded_worst_truncation_keeps_its_headroom() {
+        let full = activsg200();
+        let cut = 122_880.min(full.len());
+        let probes = probes_for(&full[..cut]);
+        assert!(
+            probes <= SEARCH_PROBE_BUDGET / 2,
+            "recorded worst offset now spends {probes}"
+        );
+    }
+
+    /// #338 measurement harness: the worst probe spend across the vendored
+    /// file and a systematic truncation sweep, printed with its offset.
+    /// `cargo test -p powerio-tx --release --lib truncation_probe -- --ignored --nocapture`
+    #[test]
+    #[ignore = "minutes-long sweep; run for a re-baseline measurement"]
+    fn truncation_probe_spend_stays_within_headroom() {
+        let full = activsg200();
+        let mut worst = (probes_for(&full), full.len());
+        // Every 4 KiB, plus a fine sweep over the first 64 KiB where the
+        // recorded historical worst case lives.
+        let coarse = (0..full.len()).step_by(4096);
+        let fine = (0..full.len().min(65536)).step_by(512);
+        for cut in coarse.chain(fine) {
+            let probes = probes_for(&full[..cut]);
+            if probes > worst.0 {
+                worst = (probes, cut);
+            }
+        }
+        println!(
+            "worst probe spend: {} at {} bytes (budget {SEARCH_PROBE_BUDGET})",
+            worst.0, worst.1
+        );
+        // Measured 2026-08: 43,259,735 probes at 122,880 bytes. The budget
+        // holds about 3x that; this guards the 2x line so a search change
+        // that erodes the headroom is caught with the number in hand.
+        assert!(
+            worst.0 <= SEARCH_PROBE_BUDGET / 2,
+            "worst truncation spend {} at {} bytes leaves under 2x headroom",
+            worst.0,
+            worst.1
+        );
     }
 }

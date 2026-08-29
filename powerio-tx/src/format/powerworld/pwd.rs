@@ -56,6 +56,19 @@ const IDENTITY_TAG: [u8; 6] = [0xff, 0xff, 0xff, 0xff, 0x3d, 0x0f];
 /// otherwise force. Matches the probe-budget idiom of the `.pwb` reader.
 const IDENTITY_WALK_BUDGET: u64 = 128_000_000;
 
+/// Cap on identity rows retained across every candidate walk in one parse.
+/// The step budget above bounds the reader's *work*; this bounds what a
+/// densely packed file can make it *hold*: each retained row owns a name
+/// String, so without a retention cap a GB-scale file of valid-looking
+/// records could drive several GB of held rows before the walk finishes
+/// (#274). The vendored ACTIVSg200 display retains 200 rows; a display for
+/// the largest interconnection-scale case stays in the tens of thousands, so
+/// one million rows and 64 MiB of name bytes are far above any real layout
+/// while capping amplification near the input's own size. Exceeding either
+/// is a coded refusal, never a silent omission.
+const IDENTITY_ROW_BUDGET: usize = 1_000_000;
+const IDENTITY_NAME_BYTE_BUDGET: usize = 64 << 20;
+
 /// One substation symbol from a display file: the identity row joined with
 /// its drawing record, in identity table (display) order. `x` and `y` are
 /// diagram coordinates as stored, y north positive (see the module docs).
@@ -263,9 +276,10 @@ fn find_identity_table(b: &[u8]) -> Result<Vec<(u32, String)>> {
     // shared budget over every record step across every anchor keeps that
     // bounded; the largest real identity table is orders of magnitude below it.
     let mut budget = 0u64;
+    let mut retained = Retention::default();
     let mut tables = Vec::new();
     for at in memmem(b, &IDENTITY_TAG) {
-        if let Some(rows) = identity_walk(b, at + IDENTITY_TAG.len(), &mut budget) {
+        if let Some(rows) = identity_walk(b, at + IDENTITY_TAG.len(), &mut budget, &mut retained) {
             tables.push(rows);
         }
         if budget > IDENTITY_WALK_BUDGET {
@@ -273,6 +287,15 @@ fn find_identity_table(b: &[u8]) -> Result<Vec<(u32, String)>> {
                 format: FMT,
                 message: "substation identity search exceeded its probe budget; the file is \
                           not a decodable DisplaySubstation layout"
+                    .into(),
+            });
+        }
+        if retained.exceeded {
+            return Err(Error::FormatRead {
+                format: FMT,
+                message: "substation identity search exceeded its retention budget; the file \
+                          packs more identity rows than any decodable DisplaySubstation \
+                          layout states"
                     .into(),
             });
         }
@@ -294,7 +317,22 @@ fn find_identity_table(b: &[u8]) -> Result<Vec<(u32, String)>> {
 /// 0x02`) from `at` until the next `ff ff ff ff` sentinel, which must
 /// arrive exactly at a record boundary. At least one record, numbers
 /// unique and plausible, names printable.
-fn identity_walk(b: &[u8], mut at: usize, budget: &mut u64) -> Option<Vec<(u32, String)>> {
+/// Rows and name bytes retained across every walk of one parse, with the
+/// flag that turns exhaustion into the coded refusal rather than a silently
+/// shorter table (#274).
+#[derive(Default)]
+struct Retention {
+    rows: usize,
+    name_bytes: usize,
+    exceeded: bool,
+}
+
+fn identity_walk(
+    b: &[u8],
+    mut at: usize,
+    budget: &mut u64,
+    retained: &mut Retention,
+) -> Option<Vec<(u32, String)>> {
     let mut rows = Vec::new();
     let mut seen = HashSet::new();
     loop {
@@ -324,6 +362,12 @@ fn identity_walk(b: &[u8], mut at: usize, budget: &mut u64) -> Option<Vec<(u32, 
             return None;
         }
         if !seen.insert(number) {
+            return None;
+        }
+        retained.rows += 1;
+        retained.name_bytes += name.len();
+        if retained.rows > IDENTITY_ROW_BUDGET || retained.name_bytes > IDENTITY_NAME_BYTE_BUDGET {
+            retained.exceeded = true;
             return None;
         }
         rows.push((number, String::from_utf8_lossy(name).into_owned()));
@@ -374,4 +418,35 @@ fn f32_at(b: &[u8], i: usize) -> Option<f32> {
 
 fn f64_at(b: &[u8], i: usize) -> Option<f64> {
     Some(f64::from_le_bytes(*b.get(i..)?.first_chunk()?))
+}
+
+#[cfg(test)]
+mod retention_tests {
+    use super::*;
+
+    /// #274: the retention budget refuses a file densely packed with valid
+    /// identity rows, with a coded error rather than a silently shorter
+    /// table or GB-scale held rows.
+    #[test]
+    fn packed_identity_rows_hit_the_retention_budget() {
+        // Header word 50, nonzero canvas, then one anchor followed by more
+        // valid-looking rows than any decodable layout states.
+        let mut b = vec![0u8; 0x40];
+        b[0] = 50;
+        b[4] = 1; // canvas width
+        b[6] = 1; // canvas height
+        b[22] = 7; // nonzero stamp
+        b.extend_from_slice(&IDENTITY_TAG);
+        let name = b"S";
+        for number in 1..=(IDENTITY_ROW_BUDGET as u32 + 2) {
+            b.extend_from_slice(&number.to_le_bytes());
+            b.extend_from_slice(&number.to_le_bytes());
+            b.extend_from_slice(&(name.len() as u32).to_le_bytes());
+            b.extend_from_slice(name);
+            b.push(0x02);
+        }
+        b.extend_from_slice(&[0xff; 4]);
+        let error = parse_pwd(&b).unwrap_err().to_string();
+        assert!(error.contains("retention budget"), "{error}");
+    }
 }

@@ -237,6 +237,10 @@ pub struct RawDss {
     pub commands: Vec<RawCommand>,
     pub buscoords: Vec<BusCoord>,
     pub vars: VarMap,
+    /// Bumped by `clear`, so `run_command` can tell whether a `Clear` ran
+    /// during the command it just dispatched and, if so, skip restoring the
+    /// pre-command var snapshot over the empty table `clear` installed.
+    vars_generation: u64,
     /// The reader's findings as `CODE: message` lines, rendered from
     /// `diagnostics` so the text and the structure cannot disagree.
     pub warnings: Vec<String>,
@@ -245,6 +249,19 @@ pub struct RawDss {
     pub diagnostics: Vec<crate::diagnostics::Diagnostic>,
     index: BTreeMap<(String, String), usize>,
     active: Option<usize>,
+    /// Properties retained across every object, charged by each push and
+    /// each `like=` splice against `MAX_TOTAL_PROPS`.
+    total_props: usize,
+    /// Diagnostic records retained, against `MAX_TOTAL_DIAGNOSTICS`. Survives
+    /// `clear` with the channel it counts.
+    total_diagnostics: usize,
+    /// Preserved records retained (`commands`, `options`, `buscoords`),
+    /// against `MAX_TOTAL_PRESERVED`. Reset by `clear` with the collections
+    /// it counts.
+    total_preserved: usize,
+    /// One of the whole parse ceilings was crossed: the terminal refusal is
+    /// recorded and no further script text executes.
+    halted: bool,
 }
 
 impl RawDss {
@@ -263,11 +280,52 @@ impl RawDss {
     }
 
     /// Record one finding. Both channels move together: the line is rendered
-    /// from the record it is added with.
+    /// from the record it is added with. At the whole parse ceiling one
+    /// terminal refusal is recorded and the parse halts.
     fn record(&mut self, diagnostic: crate::diagnostics::Diagnostic) {
+        if self.total_diagnostics >= MAX_TOTAL_DIAGNOSTICS {
+            self.halt(format!(
+                "the script's retained findings reached the whole parse ceiling of \
+                 {MAX_TOTAL_DIAGNOSTICS}; execution stopped"
+            ));
+            return;
+        }
+        self.total_diagnostics += 1;
         self.warnings
             .push(crate::diagnostics::render_diagnostic(&diagnostic));
         self.diagnostics.push(diagnostic);
+    }
+
+    /// The one halt step: set the flag and emit the single terminal refusal
+    /// into both channels directly, indivisibly, whichever ceiling fired
+    /// first and whatever the other counter holds.
+    fn halt(&mut self, message: String) {
+        if self.halted {
+            return;
+        }
+        self.halted = true;
+        let refusal = crate::diagnostics::Diagnostic::of(
+            &crate::diagnostics::codes::READ_DSS_INCLUDE_BUDGET,
+            message,
+        );
+        self.warnings
+            .push(crate::diagnostics::render_diagnostic(&refusal));
+        self.diagnostics.push(refusal);
+    }
+
+    /// Charge one preserved record (`commands`, `options`, `buscoords`);
+    /// false once the ceiling is crossed, after which the terminal refusal
+    /// is recorded and the parse halts.
+    fn charge_preserved(&mut self) -> bool {
+        if self.total_preserved >= MAX_TOTAL_PRESERVED {
+            self.halt(format!(
+                "the script's preserved records reached the whole parse ceiling of \
+                 {MAX_TOTAL_PRESERVED}; execution stopped"
+            ));
+            return false;
+        }
+        self.total_preserved += 1;
+        true
     }
 
     fn clear(&mut self) {
@@ -281,9 +339,14 @@ impl RawDss {
             std::mem::take(&mut self.warnings),
             std::mem::take(&mut self.diagnostics),
         );
+        let (total_diagnostics, halted) = (self.total_diagnostics, self.halted);
+        let vars_generation = self.vars_generation.wrapping_add(1);
         *self = RawDss {
+            vars_generation,
             warnings,
             diagnostics,
+            total_diagnostics,
+            halted,
             ..RawDss::default()
         };
     }
@@ -312,6 +375,17 @@ const MAX_REDIRECT_DEPTH: usize = 64;
 /// fixture here (IEEE123Master.dss) follows 3.
 const MAX_TOTAL_INCLUDES: usize = 4096;
 
+/// Diagnostic records one parse retains, `warnings` and `diagnostics`
+/// together (they move in step). A re-executed include repeats its findings;
+/// the ceiling bounds what the whole parse may keep, independent of how many
+/// times a file re-executes. The largest legitimate feeders stay far under
+/// it.
+const MAX_TOTAL_DIAGNOSTICS: usize = 1 << 18;
+
+/// Preserved records one parse retains across `commands`, `options`, and
+/// `buscoords` together, on the same rule as the diagnostic ceiling.
+const MAX_TOTAL_PRESERVED: usize = 1 << 20;
+
 /// Script text a single parse may pull in through includes. The include count
 /// alone still admits amplification: one large file that redirects to itself is
 /// re-executed once per load, so a few megabytes of input buy thousands of
@@ -319,6 +393,16 @@ const MAX_TOTAL_INCLUDES: usize = 4096;
 /// costing about what a single case file of this size costs. The root file is
 /// not charged against it, so a case without includes is never truncated.
 const MAX_TOTAL_INCLUDE_BYTES: usize = 64 << 20;
+
+/// Parser variables (`var @name=value`) a single parse may define, on the
+/// same amplification concern as includes: a script that redirects into
+/// itself while defining one each time would otherwise grow the table
+/// without bound. The largest legitimate feeders define a handful.
+const MAX_TOTAL_VARS: usize = 4096;
+
+/// Bytes stored across every var name and value together, on the same rule
+/// as the include byte budget.
+const MAX_TOTAL_VAR_BYTES: usize = 1 << 20;
 
 /// Cap on the accumulated property assignments a single object may hold.
 /// `like=` splices the source object's whole prop list, so a self-referencing
@@ -328,6 +412,13 @@ const MAX_TOTAL_INCLUDE_BYTES: usize = 64 << 20;
 /// on the order of 100 properties and legitimate scripts edit an object a
 /// handful of times.
 const MAX_OBJECT_PROPS: usize = 1 << 16;
+
+/// Properties retained across every object of one parse. A short script can
+/// fill one object to its cap and then `like=` splice it into many new
+/// objects; the whole-parse budget bounds what all of them together may
+/// retain, refusing further splices and assignments through the clamp
+/// diagnostic. The largest legitimate feeders stay far under it.
+const MAX_TOTAL_PROPS: usize = 1 << 22;
 
 /// Which directory the include containment confines to, for diagnostic
 /// wording: the refusal names the boundary actually in force.
@@ -367,6 +458,13 @@ struct Executor<'l, L: Loader> {
     includes: usize,
     include_bytes: usize,
     budget_spent: bool,
+    /// Vars defined and bytes of their names and values stored, against
+    /// [`MAX_TOTAL_VARS`] and [`MAX_TOTAL_VAR_BYTES`]. Lives here rather than
+    /// on `RawDss`, which `Clear` resets, so a budget already spent stays
+    /// spent across a `Clear`, on the same rule as the include budget.
+    var_count: usize,
+    var_bytes: usize,
+    var_budget_spent: bool,
 }
 
 /// Collapses `.` and `..` lexically, without touching the filesystem. A
@@ -414,6 +512,9 @@ fn command_lines(text: &str) -> impl Iterator<Item = (usize, &str)> {
 impl<L: Loader> Executor<'_, L> {
     fn run_script(&mut self, text: &str, file: &str) {
         for (line_no, line) in command_lines(text) {
+            if self.raw.halted {
+                return;
+            }
             self.run_command(line, file, line_no);
         }
     }
@@ -423,8 +524,13 @@ impl<L: Loader> Executor<'_, L> {
         // live table stays free for mutation: `var` inserts into it directly
         // and redirected files both see and extend it. The snapshot only
         // diverges for a self referencing `var` line, which OpenDSS scripts
-        // do not write.
-        let vars = self.raw.vars.clone();
+        // do not write. Taking the table rather than cloning it avoids
+        // copying it on every command; `do_var` inserts land in the now
+        // empty live table and are merged back onto the snapshot afterward.
+        // A `Clear` during dispatch replaces the table outright, so the
+        // restore is skipped when `vars_generation` shows one ran.
+        let vars = std::mem::take(&mut self.raw.vars);
+        let generation = self.raw.vars_generation;
         let mut scan = Scanner::new(line, Some(&vars));
         let ctx = |msg: String| format!("{file}:{line_no}: {msg}");
         match scan.next_param() {
@@ -440,6 +546,10 @@ impl<L: Loader> Executor<'_, L> {
                 }
             }
         }
+        if self.raw.vars_generation == generation {
+            let added = std::mem::replace(&mut self.raw.vars, vars);
+            self.raw.vars.extend(added);
+        }
     }
 
     fn dispatch(&mut self, verb: String, scan: &mut Scanner, ctx: &dyn Fn(String) -> String) {
@@ -453,24 +563,28 @@ impl<L: Loader> Executor<'_, L> {
             Some("compile") => self.do_redirect(scan, true, ctx),
             Some("buscoords") => self.do_buscoords(scan, ctx),
             Some("setbusxy") => self.do_setbusxy(scan, ctx),
-            Some("var") => self.do_var(scan),
+            Some("var") => self.do_var(scan, ctx),
             Some("clear" | "clearall") => self.raw.clear(),
             Some("//") => {}
             Some(canonical) => {
-                self.raw.commands.push(RawCommand {
-                    verb: canonical.to_string(),
-                    args: scan.remainder().to_string(),
-                });
+                if self.raw.charge_preserved() {
+                    self.raw.commands.push(RawCommand {
+                        verb: canonical.to_string(),
+                        args: scan.remainder().to_string(),
+                    });
+                }
             }
             None => {
                 self.raw.warn(
                     &C::PARSE_DSS_SOURCE_MALFORMED,
                     ctx(format!("unknown command `{verb}`; line preserved verbatim")),
                 );
-                self.raw.commands.push(RawCommand {
-                    verb,
-                    args: scan.remainder().to_string(),
-                });
+                if self.raw.charge_preserved() {
+                    self.raw.commands.push(RawCommand {
+                        verb,
+                        args: scan.remainder().to_string(),
+                    });
+                }
             }
         }
     }
@@ -479,7 +593,7 @@ impl<L: Loader> Executor<'_, L> {
     /// stores every value brace wrapped unless it begins with `@`;
     /// CheckforVar unwraps the braces into a quoted token, so a definition
     /// like `var @z=(8 1000 /)` still evaluates as RPN where it is used.
-    fn do_var(&mut self, scan: &mut Scanner) {
+    fn do_var(&mut self, scan: &mut Scanner, ctx: &dyn Fn(String) -> String) {
         while let Some(p) = scan.next_param() {
             if p.value.text.is_empty() && p.name.is_none() {
                 break;
@@ -490,9 +604,38 @@ impl<L: Loader> Executor<'_, L> {
                 } else {
                     format!("{{{}}}", p.value.text)
                 };
-                self.raw.vars.insert(name.to_ascii_lowercase(), stored);
+                let key = name.to_ascii_lowercase();
+                if self.charge_var(&key, &stored, ctx) {
+                    self.raw.vars.insert(key, stored);
+                }
             }
         }
+    }
+
+    /// Charges one var definition against the budgets, returning whether to
+    /// store it. Charged at the attempt, so a definition right at either cap
+    /// is refused before insertion, on the same rule as [`Self::charge_include`].
+    fn charge_var(&mut self, name: &str, stored: &str, ctx: &dyn Fn(String) -> String) -> bool {
+        let bytes = name.len() + stored.len();
+        let over_budget = self.var_budget_spent
+            || self.var_count >= MAX_TOTAL_VARS
+            || self.var_bytes.saturating_add(bytes) > MAX_TOTAL_VAR_BYTES;
+        if !over_budget {
+            self.var_count += 1;
+            self.var_bytes += bytes;
+            return true;
+        }
+        if !self.var_budget_spent {
+            self.var_budget_spent = true;
+            let message = ctx(format!(
+                "var {name}: refused; the case exceeded the variable budget of {MAX_TOTAL_VARS} \
+                 entries and {} KiB, so further variables were not stored",
+                MAX_TOTAL_VAR_BYTES >> 10,
+            ));
+            self.raw
+                .warn(&crate::diagnostics::codes::READ_DSS_VALUE_CLAMPED, message);
+        }
+        false
     }
 
     /// A leading `name=value` parameter is a property reference
@@ -665,7 +808,9 @@ impl<L: Loader> Executor<'_, L> {
                 break;
             }
             let name = p.name.unwrap_or_default().to_ascii_lowercase();
-            self.raw.options.push((name, p.value));
+            if self.raw.charge_preserved() {
+                self.raw.options.push((name, p.value));
+            }
         }
     }
 
@@ -833,7 +978,23 @@ impl<L: Loader> Executor<'_, L> {
                 self.include_bytes += text.len();
                 let dir = path.parent().map(Path::to_path_buf).unwrap_or_default();
                 self.dirs.push(dir.clone());
+                // `run_command` took the live var table out for `scan` to
+                // borrow, so it reads empty here; reinstall the ambient
+                // table (one copy, bounded by the include budget rather than
+                // paid per command) so the include's own commands see and
+                // can extend it, exactly like a directly nested command
+                // would. A `Clear` inside the include bumps the generation
+                // and installs its own empty table, which the check below
+                // leaves alone instead of overwriting with the pre-redirect
+                // snapshot.
+                let ambient = scan.vars().cloned().unwrap_or_default();
+                let outer = std::mem::replace(&mut self.raw.vars, ambient);
+                let generation = self.raw.vars_generation;
                 self.run_script(&text, &path.display().to_string());
+                if self.raw.vars_generation == generation {
+                    let added = std::mem::replace(&mut self.raw.vars, outer);
+                    self.raw.vars.extend(added);
+                }
                 self.dirs.pop();
                 // The engine keeps one current directory: Redirect restores
                 // the caller's on return (SetCurrentDir(SaveDir)), Compile
@@ -868,6 +1029,9 @@ impl<L: Loader> Executor<'_, L> {
             Ok(text) => {
                 self.include_bytes += text.len();
                 for (line_no, line) in text.lines().enumerate() {
+                    if self.raw.halted {
+                        break;
+                    }
                     let mut s = Scanner::new(line, None);
                     let Some(bus) = s.next_param() else { continue };
                     if bus.value.text.is_empty() {
@@ -876,11 +1040,15 @@ impl<L: Loader> Executor<'_, L> {
                     let x = s.next_param().map(|p| p.value).unwrap_or_default();
                     let y = s.next_param().map(|p| p.value).unwrap_or_default();
                     match (x.to_f64(None), y.to_f64(None)) {
-                        (Ok(x), Ok(y)) => self.raw.buscoords.push(BusCoord {
-                            bus: bus.value.text,
-                            x,
-                            y,
-                        }),
+                        (Ok(x), Ok(y)) => {
+                            if self.raw.charge_preserved() {
+                                self.raw.buscoords.push(BusCoord {
+                                    bus: bus.value.text,
+                                    x,
+                                    y,
+                                });
+                            }
+                        }
                         _ => self.raw.warn(
                             &C::PARSE_DSS_SOURCE_MALFORMED,
                             ctx(format!(
@@ -925,7 +1093,9 @@ impl<L: Loader> Executor<'_, L> {
         }
         match (bus, x, y) {
             (Some(bus), Some(x), Some(y)) if !bus.is_empty() => {
-                self.raw.buscoords.push(BusCoord { bus, x, y });
+                if self.raw.charge_preserved() {
+                    self.raw.buscoords.push(BusCoord { bus, x, y });
+                }
             }
             _ => self.raw.warn(
                 &C::PARSE_DSS_SOURCE_MALFORMED,
@@ -1027,6 +1197,18 @@ impl<L: Loader> Executor<'_, L> {
                             );
                             continue;
                         }
+                        if self.raw.total_props.saturating_add(src_len) > MAX_TOTAL_PROPS {
+                            self.raw.warn(
+                                &C::READ_DSS_VALUE_CLAMPED,
+                                ctx(format!(
+                                    "like={}: the script's retained property count would exceed \
+                                 the supported maximum of {MAX_TOTAL_PROPS}; splice refused",
+                                    p.value.text
+                                )),
+                            );
+                            continue;
+                        }
+                        self.raw.total_props += src_len;
                         let cloned = self.raw.objects[src].props.clone();
                         let bounds: Vec<usize> = self.raw.objects[src]
                             .edit_bounds()
@@ -1053,6 +1235,18 @@ impl<L: Loader> Executor<'_, L> {
                 );
                 continue;
             }
+            if self.raw.total_props >= MAX_TOTAL_PROPS {
+                self.raw.warn(
+                    &C::READ_DSS_VALUE_CLAMPED,
+                    ctx(format!(
+                        "{}: the script's retained property count exceeds the supported maximum \
+                     of {MAX_TOTAL_PROPS}; further assignments dropped",
+                        self.raw.objects[idx].class
+                    )),
+                );
+                continue;
+            }
+            self.raw.total_props += 1;
             self.raw.objects[idx].props.push(p);
         }
         // This command line was one engine Edit; it ends in
@@ -1340,6 +1534,9 @@ fn run_executor(
         includes: 0,
         include_bytes: 0,
         budget_spent: false,
+        var_count: 0,
+        var_bytes: 0,
+        var_budget_spent: false,
     };
     exec.run_script(text, path);
     exec.raw
@@ -1476,6 +1673,199 @@ mod tests {
         let b = raw.find("load", "b").unwrap();
         assert_eq!(b.get("kw").unwrap().text, "20");
         assert_eq!(b.get("pf").unwrap().text, "0.9");
+    }
+
+    #[test]
+    fn the_whole_parse_record_ceilings_bound_repeated_execution() {
+        // A tiny loader-backed include re-executed many times repeats its
+        // preserved commands and findings; the ceilings bound what one parse
+        // may keep and stop execution with exactly one terminal refusal.
+        struct Repeat;
+        impl Loader for Repeat {
+            fn load(&mut self, _: &Path) -> std::io::Result<String> {
+                // Each load yields many preserved commands and one warning.
+                let mut text = String::new();
+                for _ in 0..8192 {
+                    text.push_str("Solve\n");
+                }
+                text.push_str("Bogus命令 arg\n");
+                Ok(text)
+            }
+        }
+        use std::fmt::Write as _;
+        let mut script = String::new();
+        for index in 0..512 {
+            let _ = writeln!(script, "Redirect inc{index}.dss");
+        }
+        let raw = parse_raw_with(&script, "test.dss", &mut Repeat);
+        assert!(raw.commands.len() <= MAX_TOTAL_PRESERVED);
+        assert!(raw.diagnostics.len() <= MAX_TOTAL_DIAGNOSTICS + 1);
+        let refusals = raw
+            .warnings
+            .iter()
+            .filter(|w| w.contains("whole parse ceiling"))
+            .count();
+        assert_eq!(refusals, 1, "exactly one terminal refusal: {refusals}");
+    }
+
+    #[test]
+    fn crossing_both_ceilings_in_either_order_leaves_one_refusal() {
+        // Whichever ceiling fires first, the halt is one indivisible step:
+        // exactly one READ.DSS.INCLUDE_BUDGET record lands in both channels
+        // and the other ceiling's later crossing adds nothing.
+        struct Warny;
+        impl Loader for Warny {
+            fn load(&mut self, _: &Path) -> std::io::Result<String> {
+                let mut text = String::new();
+                for _ in 0..8192 {
+                    text.push_str("Bogus命令 arg\n");
+                }
+                for _ in 0..8192 {
+                    text.push_str("Solve\n");
+                }
+                Ok(text)
+            }
+        }
+        struct Quiet;
+        impl Loader for Quiet {
+            fn load(&mut self, _: &Path) -> std::io::Result<String> {
+                let mut text = String::new();
+                for _ in 0..16384 {
+                    text.push_str("Solve\n");
+                }
+                text.push_str("Bogus命令 arg\n");
+                Ok(text)
+            }
+        }
+        let count = |raw: &RawDss| {
+            (
+                raw.warnings
+                    .iter()
+                    .filter(|w| w.contains("READ.DSS.INCLUDE_BUDGET"))
+                    .count(),
+                raw.diagnostics
+                    .iter()
+                    .filter(|d| d.code() == "READ.DSS.INCLUDE_BUDGET")
+                    .count(),
+            )
+        };
+        // Findings first: unknown commands warn AND preserve, so a warning
+        // heavy prefix crosses the diagnostic ceiling, then preserved lines
+        // keep arriving.
+        let mut script = String::new();
+        {
+            use std::fmt::Write as _;
+            for index in 0..64 {
+                let _ = writeln!(script, "Redirect winc{index}.dss");
+            }
+        }
+        let raw = parse_raw_with(&script, "test.dss", &mut Warny);
+        assert!(raw.commands.len() <= MAX_TOTAL_PRESERVED);
+        assert!(raw.diagnostics.len() <= MAX_TOTAL_DIAGNOSTICS + 1);
+        assert_eq!(count(&raw), (1, 1), "findings-first order");
+
+        // Preserved first: quiet preserved lines cross that ceiling, then
+        // warning lines keep arriving.
+        let mut script = String::new();
+        {
+            use std::fmt::Write as _;
+            for index in 0..80 {
+                let _ = writeln!(script, "Redirect qinc{index}.dss");
+            }
+        }
+        let raw = parse_raw_with(&script, "test.dss", &mut Quiet);
+        assert!(raw.commands.len() <= MAX_TOTAL_PRESERVED);
+        assert!(raw.diagnostics.len() <= MAX_TOTAL_DIAGNOSTICS + 1);
+        assert_eq!(count(&raw), (1, 1), "preserved-first order");
+    }
+
+    #[test]
+    fn a_ceiling_crossed_inside_buscoords_halts_without_false_malformed_findings() {
+        // Once the preserved ceiling fires partway through a coordinate
+        // file, the halt stops the scan: lines past the refusal are neither
+        // retained nor reported, and a well formed line is never called
+        // malformed just because its charge was refused. The unparseable
+        // tail after the crossing pins the latch itself: scanning past the
+        // halt would report those lines malformed.
+        use std::fmt::Write as _;
+        let root = std::env::temp_dir().join(format!("powerio-dist-fs008-{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        let extra = 64usize;
+        let mut coords = String::with_capacity((MAX_TOTAL_PRESERVED + 2 * extra) * 12);
+        for index in 0..MAX_TOTAL_PRESERVED + extra {
+            let _ = writeln!(coords, "b{index} 1 2");
+        }
+        for index in 0..extra {
+            let _ = writeln!(coords, "tail{index} xx yy");
+        }
+        std::fs::write(root.join("coords.csv"), coords).unwrap();
+        std::fs::write(root.join("master.dss"), "Buscoords coords.csv\n").unwrap();
+
+        let raw = parse_raw_file(root.join("master.dss")).unwrap();
+        std::fs::remove_dir_all(&root).unwrap();
+
+        let warned = raw
+            .warnings
+            .iter()
+            .filter(|w| w.contains("READ.DSS.INCLUDE_BUDGET"))
+            .count();
+        let recorded = raw
+            .diagnostics
+            .iter()
+            .filter(|d| d.code() == "READ.DSS.INCLUDE_BUDGET")
+            .count();
+        assert_eq!((warned, recorded), (1, 1), "exactly one terminal refusal");
+        let malformed_warned = raw
+            .warnings
+            .iter()
+            .filter(|w| w.contains("PARSE.DSS.SOURCE_MALFORMED"))
+            .count();
+        let malformed_recorded = raw
+            .diagnostics
+            .iter()
+            .filter(|d| d.code() == "PARSE.DSS.SOURCE_MALFORMED")
+            .count();
+        assert_eq!(
+            (malformed_warned, malformed_recorded),
+            (0, 0),
+            "lines past the halt were scanned and reported"
+        );
+        assert_eq!(
+            raw.buscoords.len(),
+            MAX_TOTAL_PRESERVED,
+            "retention must fill the budget exactly and stop"
+        );
+    }
+
+    #[test]
+    fn the_whole_parse_property_retention_is_bounded() {
+        // One object filled near its own cap, then spliced into many new
+        // objects: per object each splice is legal, but the script's total
+        // retained properties cross the whole-parse budget and further
+        // splices refuse through the clamp diagnostic.
+        use std::fmt::Write as _;
+        let mut script = String::from("New Load.seed kW=1\n");
+        // Grow the seed to ~32k props by doubling (self splice under the
+        // per-object cap).
+        for _ in 0..15 {
+            script.push_str("Edit Load.seed like=seed\n");
+        }
+        for index in 0..200 {
+            let _ = writeln!(script, "New Load.c{index} like=seed");
+        }
+        let raw = parse(&script);
+        let total: usize = raw.objects.iter().map(|object| object.props.len()).sum();
+        assert!(
+            total <= MAX_TOTAL_PROPS,
+            "retained {total} properties past the whole-parse budget"
+        );
+        assert!(
+            raw.warnings
+                .iter()
+                .any(|w| w.contains("retained property count")),
+            "expected the whole-parse refusal, got {} warnings",
+            raw.warnings.len()
+        );
     }
 
     #[test]
@@ -1820,6 +2210,74 @@ mod tests {
         assert_eq!(
             raw.find("load", "outer").unwrap().get("kw").unwrap().text,
             "42"
+        );
+    }
+
+    #[test]
+    fn var_defined_after_clear_does_not_see_the_pre_clear_table() {
+        // Without the generation guard, `run_command`'s restore after
+        // dispatching `Clear` would resurrect the pre-`Clear` var snapshot
+        // over the empty table `clear` just installed.
+        let raw = parse("var @a=1\nClear\nvar @b=2\nNew Load.ld kv=@a kw=@b");
+        let ld = raw.find("load", "ld").unwrap();
+        assert_eq!(ld.get("kw").unwrap().text, "2", "post-clear var resolves");
+        assert_eq!(
+            ld.get("kv").unwrap().text,
+            "@a",
+            "pre-clear var does not survive Clear"
+        );
+    }
+
+    #[test]
+    fn the_maximum_permitted_var_count_parses() {
+        use std::fmt::Write as _;
+        let mut script = String::new();
+        for i in 0..MAX_TOTAL_VARS {
+            let _ = writeln!(script, "var @v{i}={i}");
+        }
+        script.push_str("New Load.ld kv=@v0\n");
+        let raw = parse(&script);
+        assert_eq!(raw.warnings, Vec::<String>::new());
+        assert_eq!(raw.find("load", "ld").unwrap().get("kv").unwrap().text, "0");
+    }
+
+    #[test]
+    fn one_var_past_the_count_cap_is_refused() {
+        use std::fmt::Write as _;
+        let mut script = String::new();
+        for i in 0..=MAX_TOTAL_VARS {
+            let _ = writeln!(script, "var @v{i}={i}");
+        }
+        let _ = writeln!(script, "New Load.ld kv=@v{MAX_TOTAL_VARS}");
+        let raw = parse(&script);
+        assert_eq!(
+            raw.diagnostics
+                .iter()
+                .filter(|d| d.code() == crate::diagnostics::codes::READ_DSS_VALUE_CLAMPED.code)
+                .count(),
+            1,
+            "one refusal, however many follow"
+        );
+        // The var one past the cap was refused, so it never resolves.
+        assert_eq!(
+            raw.find("load", "ld").unwrap().get("kv").unwrap().text,
+            format!("@v{MAX_TOTAL_VARS}")
+        );
+    }
+
+    #[test]
+    fn one_byte_past_the_var_byte_cap_is_refused() {
+        // One var sized to fill the byte budget, then one more small var
+        // that must be refused for lack of budget rather than count.
+        let filler = "x".repeat(MAX_TOTAL_VAR_BYTES);
+        let raw = parse(&format!("var @big={filler}\nvar @small=1\n"));
+        assert_eq!(
+            raw.diagnostics
+                .iter()
+                .filter(|d| d.code() == crate::diagnostics::codes::READ_DSS_VALUE_CLAMPED.code)
+                .count(),
+            1,
+            "one refusal, however many follow"
         );
     }
 
