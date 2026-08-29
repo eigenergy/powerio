@@ -950,7 +950,7 @@ def test_parse_warnings_are_structured_records_on_every_transport():
     module) already published six dicts. Both now publish the identical
     structured list."""
     via_path = server.parse(path=str(PSSE_CASE5))
-    via_package = server.parse(path=str(PSSE_CASE5), transport="module")
+    via_package = server.parse(path=str(PSSE_CASE5), transport="package")
 
     for parsed in (via_path, via_package):
         warnings = parsed["warnings"]
