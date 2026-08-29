@@ -113,7 +113,7 @@ impl BusType {
 }
 
 /// A generator cost curve (`mpc.gencost` row).
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[non_exhaustive]
 pub struct GenCost {
@@ -517,6 +517,39 @@ macro_rules! shared_table_accessors {
     };
 }
 
+impl BalancedNetwork {
+    /// Replace each element table's allocation with `donor`'s wherever the
+    /// contents are equal, so equal tables across derived networks (the
+    /// scenarios of one dataset, the points of one series) are stored once.
+    /// No value changes; a table that differs anywhere keeps its own
+    /// allocation.
+    pub fn share_equal_tables(&mut self, donor: &Self) {
+        macro_rules! share {
+            ($($field:ident),+) => {
+                $(
+                    if !std::sync::Arc::ptr_eq(&self.tables.$field, &donor.tables.$field)
+                        && self.tables.$field == donor.tables.$field
+                    {
+                        self.tables_mut().$field = donor.tables.$field.clone();
+                    }
+                )+
+            };
+        }
+        share!(
+            buses,
+            loads,
+            shunts,
+            branches,
+            switches,
+            generators,
+            storage,
+            hvdc,
+            transformers_3w,
+            areas
+        );
+    }
+}
+
 shared_table_accessors! {
     buses, buses_mut: Vec<Bus>;
     loads, loads_mut: Vec<Load>;
@@ -567,7 +600,7 @@ impl BalancedNetwork {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[non_exhaustive]
 pub struct Bus {
@@ -628,7 +661,7 @@ impl Bus {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[non_exhaustive]
 pub struct Load {
@@ -729,7 +762,7 @@ impl LoadVoltageModel {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[non_exhaustive]
 pub struct Shunt {
@@ -781,7 +814,7 @@ pub enum SwitchedShuntMode {
 }
 
 /// One block of a switched shunt: `steps` equal increments of susceptance `b`.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[non_exhaustive]
 pub struct ShuntBlock {
@@ -801,7 +834,7 @@ impl ShuntBlock {
 /// the regulated voltage band and bus, the reactive-range percentage, and the
 /// adjustable susceptance blocks. The shunt's [`b`](Shunt::b) is the initial
 /// value within the blocks' total range.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[non_exhaustive]
 pub struct SwitchedShuntControl {
@@ -830,7 +863,7 @@ impl SwitchedShuntControl {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[non_exhaustive]
 pub struct Branch {
@@ -1182,7 +1215,7 @@ pub fn series_admittance_of(r: f64, x: f64, row: usize) -> Result<Option<(f64, f
 
 /// A transmission switch. Closed switches are preserved as data; matrix builders
 /// do not lower them into zero impedance branches.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[non_exhaustive]
 pub struct Switch {
@@ -1252,7 +1285,7 @@ pub enum TransformerControlMode {
 /// scheduled MW/MVAr). `ntp` is the number of discrete tap positions and
 /// `controlled_bus` is the regulated bus (`None` = the transformer's own
 /// terminal). `mva_base` is the winding MVA base the impedance is referred to.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[non_exhaustive]
 pub struct TransformerControl {
@@ -1292,7 +1325,7 @@ impl TransformerControl {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[non_exhaustive]
 pub struct Generator {
@@ -1412,7 +1445,7 @@ mod caps_serde {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[non_exhaustive]
 pub struct Storage {
@@ -1476,7 +1509,7 @@ impl Storage {
 /// PowerModels writer re-flips them on the way out (PowerModels.jl uses the
 /// opposite sign). The flip is a format-boundary translation, so a derived view
 /// like `to_normalized` keeps the MATPOWER convention and only scales to per unit.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[non_exhaustive]
 pub struct Hvdc {
@@ -1560,7 +1593,7 @@ impl Hvdc {
 /// [`Bus`]; this table holds the per-area metadata (the interchange target and
 /// the area slack) that the bus number alone can't. Maps to the PSS/E area record
 /// (`I, ISW, PDES, PTOL, ARNAME`).
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[non_exhaustive]
 pub struct Area {
@@ -1641,7 +1674,7 @@ impl SolverParams {
 /// reader has somewhere to put the winding base it must rebase from. Room to grow
 /// (winding voltage base, turns-ratio units) as the transformer control work
 /// lands without reshaping the [`Transformer3W::z`] array.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[non_exhaustive]
 pub struct Impedance {
@@ -1659,7 +1692,7 @@ impl Impedance {
 
 /// One winding of a [`Transformer3W`]: its terminal bus, off-nominal ratio, phase
 /// shift, nominal voltage, and thermal ratings.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[non_exhaustive]
 pub struct Winding {
@@ -1699,7 +1732,7 @@ impl Winding {
 /// star bus plus three branches for a consumer that works in the bus-branch model;
 /// [`IndexedNetwork`](crate::IndexedNetwork) applies it before building any matrix,
 /// so a 3-winding transformer contributes to `Y_bus` and connectivity.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[non_exhaustive]
 pub struct Transformer3W {

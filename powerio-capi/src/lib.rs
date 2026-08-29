@@ -820,7 +820,7 @@ pub unsafe extern "C" fn pio_read_dir(
         finish_network(errbuf, errlen, "panic while reading dataset", || {
             let dir = required_cstr(dir, "dir")?;
             let from = required_cstr(from, "from")?;
-            powerio_matrix::read_dataset_dir(std::path::Path::new(dir), from, scenario)
+            powerio::gridfm::read_dataset_dir(std::path::Path::new(dir), from, scenario)
                 .map(|read| (read.network, read.diagnostics))
                 .map_err(err_line)
         })
@@ -847,7 +847,7 @@ pub unsafe extern "C" fn pio_scenario_ids(
         let r = catch_unwind(AssertUnwindSafe(|| {
             let dir = required_cstr(dir, "dir")?;
             let from = required_cstr(from, "from")?;
-            powerio_matrix::dataset_scenario_ids(std::path::Path::new(dir), from).map_err(err_line)
+            powerio::gridfm::dataset_scenario_ids(std::path::Path::new(dir), from).map_err(err_line)
         }));
         match r {
             Ok(Ok(ids)) => {

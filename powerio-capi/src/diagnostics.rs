@@ -158,6 +158,11 @@ mod workspace {
                 "powerio (stored document)",
                 powerio::package::diagnostics::registry(),
             ),
+            #[cfg(feature = "gridfm")]
+            (
+                "powerio (gridfm reader)",
+                powerio::gridfm::codes::ALL.to_vec(),
+            ),
             ("powerio-dist", powerio_dist::diagnostics::registry()),
             ("powerio-matrix", powerio_matrix::diagnostics::registry()),
             ("powerio-prob", powerio_prob::diagnostics::registry()),
@@ -196,11 +201,13 @@ mod workspace {
             .into_iter()
             .flat_map(|(_, entries)| entries)
             .collect();
-        for code in [
-            "READ.TRANSMISSION.PARSE_WARNING",
-            "READ.GRIDFM.FIDELITY_WARNING",
-            "READ.DIST.PARSE_WARNING",
-        ] {
+        let mut codes = vec!["READ.TRANSMISSION.PARSE_WARNING", "READ.DIST.PARSE_WARNING"];
+        // registries() only contributes the gridfm registry under this
+        // feature, so the expectation follows the same gate.
+        if cfg!(feature = "gridfm") {
+            codes.push("READ.GRIDFM.FIDELITY_WARNING");
+        }
+        for code in codes {
             let entry = all
                 .iter()
                 .find(|entry| entry.code == code)

@@ -1230,7 +1230,7 @@ fn run_summary(input: &Path, from: Option<FormatArg>, scenario: i64) -> anyhow::
     let value = if from == Some(FormatArg::Gridfm)
         || (from.is_none() && looks_like_gridfm_dir(input))
     {
-        let read = powerio_matrix::read_gridfm_dataset(input, scenario)
+        let read = powerio::gridfm::read_gridfm_dataset(input, scenario)
             .with_context(|| format!("reading gridfm dataset {}", input.display()))?;
         transmission_summary_json(&read.network, &read.warnings)
     } else {
@@ -1297,7 +1297,7 @@ fn build_package(
     scenario: i64,
 ) -> anyhow::Result<NetworkPackage> {
     if from == Some(FormatArg::Gridfm) || (from.is_none() && looks_like_gridfm_dir(input)) {
-        let read = powerio_matrix::read_gridfm_dataset(input, scenario)
+        let read = powerio::gridfm::read_gridfm_dataset(input, scenario)
             .with_context(|| format!("reading gridfm dataset {}", input.display()))?;
         let mut pkg = NetworkPackage::from_balanced_with_read_diagnostics(
             read.network,
@@ -1555,7 +1555,7 @@ fn run_convert(
         // `parse_file` can't), so it routes through powerio-matrix's reader,
         // surfacing its fidelity notes.
         let conv = if matches!(from, Some(FormatArg::Gridfm)) {
-            let read = powerio_matrix::read_gridfm_dataset(input, scenario)
+            let read = powerio::gridfm::read_gridfm_dataset(input, scenario)
                 .with_context(|| format!("reading gridfm dataset {}", input.display()))?;
             for w in &read.warnings {
                 eprintln!("fidelity: {w}");
@@ -1917,7 +1917,7 @@ fn convert_to_pypsa_folder(
         anyhow::bail!("`--to pypsa-csv` writes a directory and cannot write to stdout");
     }
     let net = if from == Some(FormatArg::Gridfm) {
-        let read = powerio_matrix::read_gridfm_dataset(input, scenario)
+        let read = powerio::gridfm::read_gridfm_dataset(input, scenario)
             .with_context(|| format!("reading gridfm dataset {}", input.display()))?;
         for w in &read.warnings {
             eprintln!("fidelity: {w}");
