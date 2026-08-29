@@ -86,6 +86,31 @@ fn opfdata_parses_to_the_solved_ac_opf() {
     assert!((initial.generator_active_power("generators:0").unwrap() - 170.0).abs() < 1e-9);
     assert!((initial.generator_voltage_setpoint("generators:0").unwrap() - 1.0).abs() < 1e-12);
 
+    // The diagnostic naming this split must describe where the initial
+    // values live now, never claim they survive only in the retained
+    // source: the assertions above just read them from the initial state.
+    let initial_value_diagnostic = module
+        .diagnostics()
+        .iter()
+        .find(|d| {
+            d.code() == powerio_tx::diagnostics::codes::READ_OPFDATA_RETAINED_SOURCE_ONLY.code
+        })
+        .expect("the document's generators raise this diagnostic");
+    assert!(
+        initial_value_diagnostic
+            .message()
+            .contains("carried in the parsed solution"),
+        "{}",
+        initial_value_diagnostic.message()
+    );
+    assert!(
+        !initial_value_diagnostic
+            .message()
+            .contains("remain only in the retained source"),
+        "{}",
+        initial_value_diagnostic.message()
+    );
+
     // The solved dispatch is the solution section, in MW; solved voltages
     // land on the solution's bus columns.
     assert_eq!(instance.network().generators().len(), 5);
