@@ -32,9 +32,9 @@ Market files and `dcopf_meta.json`.
 - **DC convention.** `b.mtx` holds \\(b_e\\), positive for an inductive branch,
   the coefficient on \\(\theta_f - \theta_t\\). The complete flow is
   \\(f_e = b_e(\theta_f - \theta_t) - b_e\delta_e\\), where \\(\delta_e\\) is
-  the phase shift in `shift.mtx`. `SeriesImpedance` by default:
+  the phase shift in `shift.mtx`. `SeriesSusceptance` by default:
   \\(b_e = x/(r^2 + x^2)\\) plus the phase shift terms,
-  with no tap scaling. `Matpower` uses \\(b_e = 1/(x \tau)\\) plus `p_shift`.
+  with no tap scaling. `TapAdjustedReactance` uses \\(b_e = 1/(x \tau)\\) plus `p_shift`.
   `ReactanceOnly` (\\(b_e = 1/x\\), taps and shifts ignored) stays: it is the
   textbook DC linearization, and reproducing a published result needs it exactly
   as written. Recorded in the manifest.

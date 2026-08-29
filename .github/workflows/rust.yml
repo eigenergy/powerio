@@ -129,6 +129,13 @@ jobs:
     # ext crates are linted in the Python workflow with their feature enabled.
     - name: Clippy
       run: bash scripts/ci-clippy.sh workspace
+    - name: Documentation symbols
+      run: python3 scripts/check-doc-symbols.py
+    - name: Architecture map
+      run: |
+        sudo apt-get update -q
+        sudo apt-get install -y -q --no-install-recommends graphviz
+        python3 scripts/check-architecture-map.py
     # Bare `cargo test` only covers the default-members; name the C ABI crate
     # explicitly so its end-to-end ABI tests run in CI too.
     - name: Run tests
@@ -229,6 +236,10 @@ jobs:
     # of sync with include/powerio.h.
     - name: Header symbol parity
       run: bash scripts/capi-header-parity.sh
+    # The abi-v6 removed-surface enumeration must equal the v0.9.0 -> current
+    # header set difference; this job's full-history checkout has the tag.
+    - name: Removed surface enumeration
+      run: bash scripts/capi-removed-surface.sh
     # Doc comments render verbatim into powerio.h; check they agree with the
     # signatures, table ids, and ownership verbs they describe.
     - name: Doc comment integrity

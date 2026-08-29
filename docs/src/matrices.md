@@ -1,12 +1,12 @@
 # Matrix outputs and conventions
 
-`powerio-matrix` builds sparse matrices and graph views from a parsed `BalancedNetwork`.
-Builders take an `IndexedNetwork`, which maps source bus IDs to dense indices in
-\\([0,n)\\).
+`powerio-matrix` builds sparse matrices and graph data from the parsed
+networks. Every numerical result carries the element mappings needed to read
+its rows and columns: source bus identifiers are not dense indices, and the
+dense `[0, n)` space exists only inside results that state their own mapping.
 
-`powerio-prob` builds problem instances (matrix free DC OPF and AC OPF input
-data plus the GOC3 SCOPF instance) and its `matrix` feature projects those
-instances into sparse operators. The DC OPF bundle schema is in
+`powerio-prob` owns the calculation instances (matrix free by design), and
+the matrix crate projects them into sparse operators. The DC OPF bundle schema is in
 [the DC OPF bundle guide](https://eigenergy.github.io/powerio/guide/dcopf-bundle.html). Per-builder API detail is in the
 [crate docs](https://eigenergy.github.io/powerio/powerio_matrix/).
 
@@ -24,12 +24,12 @@ instances into sparse operators. The DC OPF bundle schema is in
 | PTDF | \\(m \times n\\) | `build_ptdf` | routes through `Auto` solver selection; `build_ptdf_lodf_with_options` exposes the choice |
 | LODF | \\(m \times m\\) | `build_lodf` | routes through `Auto` solver selection; option based builds can prune small output entries |
 | adjacency | \\(n \times n\\) | `build_adjacency` | sparse graph adjacency |
-| petgraph graph | n/a | `IndexedNetwork::to_petgraph` | `UnGraph<bus_idx, branch_idx>` |
+| petgraph graph | n/a | `IndexedNetwork::to_petgraph` | `UnGraph<usize, usize>` |
 
 Computing PTDF and LODF matrices requires a linear solve. Every builder —
 `build_ptdf`, `build_lodf`, `build_ptdf_lodf`, and the option based
 `build_ptdf_lodf_with_options` — routes through the same solver selection.
-`SensitivityOptions` names the choice: `Dense` forces the dense grounded
+`SensitivitySolver`, the `solver` field on `SensitivityOptions`, names the choice: `Dense` forces the dense grounded
 factorization, `Sparse` factors the grounded DC bus susceptance matrix once
 with a sparse Cholesky and reuses the factorization across every right hand
 side, and `Auto` selects dense up to a reduced dimension of 512 (with a memory
@@ -73,8 +73,9 @@ cubic costs, HVDC, or storage. These losses are returned as warnings.
   weight as \\(-L_{ij} > 0\\).
 - **Bus indexing.** Source bus IDs are preserved on the model as a newtype and
   need not be contiguous. `IndexedNetwork::bus_index(id)` maps them into dense
-  zero based indices in \\([0,n)\\). An unknown source ID returns
-  `Error::UnknownBus`.
+  zero based indices in \\([0,n)\\), returning `None` for an unknown source ID.
+  The matrix builders turn that into `Error::UnknownBus` at the point they
+  need a bus that is not in the network.
 - **Taps and shifts.** \\(\mathrm{tap} = 0\\) means \\(\mathrm{tap} = 1\\)
   (`Branch::effective_tap`). MATPOWER `Bp` clears bus shunts and line
   charging, sets tap magnitudes to one, and keeps phase shifts. MATPOWER `Bpp`
@@ -108,12 +109,12 @@ cubic costs, HVDC, or storage. These losses are returned as warnings.
   model convention MATPOWER `makeBdc` uses; the AC series susceptance
   \\(\operatorname{Im}\\left(1/(r + jx)\right)\\) is its negation.
 
-  The default `SeriesImpedance` uses \\(b = x/(r^2 + x^2)\\), so it reads the
+  The default `SeriesSusceptance` uses \\(b = x/(r^2 + x^2)\\), so it reads the
   whole series impedance, plus the phase shift
   injection vector `p_shift`. A tap does not scale it. It reduces to
   \\(b = 1/x\\) when the branch has no resistance.
 
-  `Matpower` reproduces MATPOWER's `makeBdc`:
+  `TapAdjustedReactance` reproduces MATPOWER's `makeBdc`:
   \\(b = 1/(x\tau)\\) for a transformer with tap ratio \\(\tau\\), plus `p_shift`.
 
   `ReactanceOnly` is the textbook \\(b = 1/x\\) with resistance, taps, and

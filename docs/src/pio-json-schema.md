@@ -1,14 +1,13 @@
 # `.pio.json` format
 
-A `.pio.json` file stores one typed network model payload and the record of how
-it was produced. The `model` field contains the JSON representation of either
-`powerio::BalancedNetwork` (balanced) or
-`powerio_dist::MulticonductorNetwork` (multiconductor). The document metadata records
-provenance, source maps, structured diagnostics, validation results, lowering
-history, optional operating points, and optional study commits.
-`powerio::package::NetworkPackage` is the
-implementation type; [Compiler model layers](compiler-ir.md) describes the
-payload types.
+A `.pio.json` file is the stored form of one `PioModule<PioValue>`: one
+typed value with the record of how it was produced. Version 1 is the 1.0
+document, described first below. The 0.9 `NetworkPackage` shape is the
+migration source: the same reader accepts every released 0.9 package and
+upgrades it one way, so the later sections describing the 0.9 layout are the
+specification of what upgrades; the decoder for that lineage is crate
+private inside `powerio::stored` and exists only for the upgrade.
+[Compiler model layers](compiler-ir.md) describes the payload types.
 
 ## Purpose
 
@@ -19,7 +18,7 @@ lowered to a balanced one. The metadata records that work next to the model, so
 a downstream tool can audit a conversion instead of trusting it.
 
 The `.pio.json` document is also the handoff object between PowerIO consumers:
-one artifact whose model kind is explicit, with provenance intact.
+one artifact whose value kind is explicit, carrying its sources, findings, and history.
 
 ## `.pio.json` is not a case format {#not-a-case-format}
 
@@ -30,26 +29,33 @@ PowerIO's compiled artifact: the model plus the record of how that model was
 produced.
 
 Pick a case format by what the receiving tool reads. Use `.pio.json` when the
-receiving consumer is PowerIO or a binding that wants provenance, diagnostics,
-operating points, and the explicit model kind. Use BMOPF, OpenDSS, PMD JSON, or
+receiving consumer is PowerIO or a binding that wants the source record,
+diagnostics, operating points, and the explicit value kind. Use BMOPF, OpenDSS, PMD JSON, or
 another supported case format when the next tool expects that format.
 
 Model JSON is bare balanced `BalancedNetwork` JSON, without package metadata or
 source maps. It is powerio's own document rather than a case format, so it has
-no format token: use `Network::to_json` and `Network::from_json`, which the C
-ABI exposes as `pio_to_json` and `pio_from_json`. ABI 4 accepted a
-`powerio-json` token in `pio_parse_str` and `pio_to_format`; ABI 5 removed it.
+no format token: use `BalancedNetwork::to_json` and `BalancedNetwork::from_json`,
+which the C ABI exposes as `pio_balanced_network_to_json` and
+`pio_balanced_network_from_json`. ABI 4 accepted a
+`powerio-json` format token; ABI 5 removed it.
 A bare `.json` file holding this document classifies as `model-json`.
 
 ## The version 1 stored module {#pio-module}
 
 PowerIO 1.0 stores `PioModule<PioValue>` as one versioned document. The header is `"schema": "powerio.module"` with an integer `"version": 1`, and the reader dispatches on that header before decoding the exact typed shape: unknown semantic fields, unknown versions, and the pre 0.9 lineage are refused with their stated identity, and released 0.9.x packages upgrade one way on read.
 
-The document carries `producer`, the typed `value` (`kind` and `data`: `balanced_network`, `multiconductor_network`, `balanced_network_time_series`, `balanced_operating_point_time_series`, or `balanced_network_scenario_set`), and the optional common records `sources`, `source_map`, `diagnostics`, `history`, and namespaced `extensions`, omitted when empty. Typed float positions spell nonfinite values `"Infinity"`, `"-Infinity"`, and `"NaN"` and refuse `null`.
+The document carries `producer`, the typed `value` (`kind` and `data`, over the complete built in registry: both network families, the three operating point and network series kinds, the scenario set, the seven calculation instances, and the seven solutions), and the optional common records `sources`, `source_map`, `diagnostics`, `history`, and namespaced `extensions`, omitted when empty. Typed float positions spell nonfinite values `"Infinity"`, `"-Infinity"`, and `"NaN"` and refuse `null`.
 
-The generated JSON Schema for the version 1 document is served at `https://powerio.dev/schema/pio-module/1/schema.json`; the `$id` names that location.
+A version 1 source descriptor carries `{id, name, byte_length, format?, digest?}` — the `name` is a file name, never a local path (the 0.9 package table below has a different, older shape). The generated JSON Schema for the version 1 document is served at `https://powerio.dev/schema/pio-module/1/schema.json`; the `$id` names that location.
 
-## Versioning {#pio-package}
+Spans, source digests, and `source_map` entries are reserved fields the version 1 document validates when present, but 0.10 producers do not yet emit any of the three; the reader and the decoder handle them end to end so an upgraded or hand written document with real values loads correctly. Diagnostic ids are assigned at write time (`d0`, `d1`, ...) for any record that reaches the writer without one, so a parse then write round trip is not identity on ids.
+
+## The 0.9 package and its versioning {#pio-package}
+
+Everything from here down describes the released 0.9 `NetworkPackage`
+document: the shape the one way upgrade reads. New documents are written as
+the version 1 stored module above.
 
 Every document powerio authors states one number, `powerio_version`: the
 powerio release that wrote it. There is no separate schema number for the
@@ -98,7 +104,7 @@ documents. It does not define a standalone case format.
 **must** branch on it and **must not** infer the model kind from which field is
 present. The model JSON is additionally self-describing: `model` is tagged by
 `kind`, so `model.kind` and `model_kind` carry the same value.
-`NetworkPackage::kind_is_consistent` asserts the two agree; a reader should
+The 0.9 reader asserted the two agree (`kind_is_consistent`); a reader should
 reject a document where they disagree.
 
 ```json
@@ -203,7 +209,7 @@ The block shape is:
 GO Challenge 3 documents use this block for the scheduling time series. The
 static `model` reflects the first interval that can be represented by
 `BalancedNetwork`; `operating_points` carries replayable updates for every interval.
-`NetworkPackage::materialize_operating_point(index)` returns a new static
+The 0.9 materialization (`materialize_operating_point(index)`) returned a new static
 document with `origin.kind = "derived"` and
 `origin.pass = "materialize-operating-point"`.
 
@@ -227,8 +233,8 @@ document with `origin.kind = "derived"` and
 `study` stores ordered cumulative edits to a balanced model payload.
 Materializing commit `k` applies commits 0 through `k`, clears the study and
 operating point blocks, and returns a static package. Study commits differ from
-operating points, which are independent overlays. See [Study blocks](study-block.md) for edit kinds,
-identity resolution, materialization, and language APIs.
+operating points, which are independent overlays. The 0.9 migration command materializes one selected commit; the version 1
+reader refuses a nonempty study with that instruction.
 
 ## Derived metadata
 
@@ -284,7 +290,7 @@ with `mapping_kind = defaulted`, and its retained source becomes
 `origin.retained_source`. Validation diagnostics attach the matching `source_ref`
 when the document has a source map for the reported field.
 
-`NetworkPackage::lower_multiconductor_to_balanced(options)` returns a new
+The 0.9 lowering (`lower_multiconductor_to_balanced(options)`) returned a new
 balanced document with `origin.kind = derived` and
 `origin.pass = "multiconductor-to-balanced"`. It preserves the parent
 `lowering_history` and appends a `LoweringRecord` whose options, assumptions,

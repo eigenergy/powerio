@@ -334,7 +334,7 @@ impl RawDss {
         // the caller wrote, and no later command un-writes it — dropping them
         // here returned a network that had refused an include, or skipped one
         // that escaped the case directory, with an empty `warnings` and nothing
-        // for `powerio package` to lift into a finding.
+        // for `powerio module` to lift into a finding.
         let (warnings, diagnostics) = (
             std::mem::take(&mut self.warnings),
             std::mem::take(&mut self.diagnostics),

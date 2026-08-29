@@ -410,7 +410,7 @@ impl<T> PioModule<T> {
     /// Internal cross-crate support for recoverable consuming narrowing.
     #[doc(hidden)]
     // Boxing the failure would allocate and violate the recoverable no-copy
-    // narrowing contract. The caller gets the original module by value.
+    // narrowing rule. The caller gets the original module by value.
     #[allow(clippy::result_large_err)]
     pub fn __try_map_value<U>(
         self,

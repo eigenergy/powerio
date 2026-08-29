@@ -43,6 +43,8 @@ jobs:
     - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
     - name: Install mdBook
       run: cargo install mdbook --version 0.5.2 --locked
+    - name: Terminology gate
+      run: bash scripts/terminology-gate.sh
     # -D warnings turns a broken intra-doc link into a failed build, so the docs
     # can't rot silently. --all-features renders each feature gated surface.
     - name: Build docs

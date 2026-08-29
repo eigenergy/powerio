@@ -44,21 +44,9 @@ over the alternatives. Review them before changing a public name or meaning.
   over the `powerio` facade and its component crates.
 - **`powerio-py`**: PyO3 extension behind the `powerio` Python package
   (`python/powerio/`); hands back COO triplets that scipy assembles.
-- **`powerio-capi`**: C ABI over `powerio` (`pio_*`, header `powerio.h`) for
-  C, C++, Julia, and other FFI users. The current ABI v5 feature and function
-  names for `.pio.json` are replaced consistently in ABI v6. `--features arrow` adds
-  `pio_to_arrow`, an Arrow C Data Interface export; `--features gridfm` adds
-  `pio_read_dir` / `pio_scenario_ids` (the gridfm-datakit Parquet
-  parser, pulling in `powerio-matrix`); `--features prob` adds the current
-  problem instance functions, which ABI v6 replaces with the 1.0 names.
-  Those v5 feature additions were additive. The 1.0 type and ownership changes
-  ship together as ABI v6. Matrix Arrow ABI v1 is COO tables plus append only
-  row and column mapping tables
-  `matrix_bus` and `matrix_branch`.
+- **`powerio-capi`**: C ABI over `powerio` (`pio_*`, header `powerio.h`) for C, C++, Julia, and other FFI users. The current ABI v5 feature and function names for `.pio.json` are replaced consistently in ABI v6. `--features arrow` adds `pio_to_arrow`, an Arrow C Data Interface export; `--features gridfm` adds `pio_read_dir` / `pio_scenario_ids` (the gridfm-datakit Parquet parser, pulling in `powerio-matrix`); `--features prob` adds the current problem instance functions, which ABI v6 replaces with the 1.0 names. Those v5 feature additions were additive. The 1.0 type and ownership changes ship together as ABI v6. The matrix Arrow tables are COO tables plus row and column mapping tables `matrix_bus` and `matrix_branch`, versioned append only with no separate number: a removed table's id is burned, never reused, and the Arrow catalog report is stamped with the package version.
 
-`BalancedNetwork` and `MulticonductorNetwork` are the two reusable electrical
-network types. `IndexedNetwork`, normalized tables, and dense row arrays are
-internal compiler data in 1.0, not public ontology types.
+`BalancedNetwork` and `MulticonductorNetwork` are the two reusable electrical network types. The normalized solver tables and dense row arrays are internal compiler data, hidden from the documented surface; `IndexedNetwork` stays a public derived index view in 0.10 because the matrix builders and downstream consumers take it directly.
 
 Formats. MATPOWER `.m`, PowerModels JSON, PSS/E `.raw` (v33/34/35),
 PowerWorld `.aux`, PSLF `.epc`, Egret JSON, pandapower JSON, PyPSA CSV directories,
@@ -154,16 +142,11 @@ PowerIO releases are tag driven.
    git push origin vX.Y.Z
    ```
 
-4. `.github/workflows/release-binaries.yml` runs on tag pushes. Its binding
-   gate tests PowerIO.jl `main` against the tagged library before it builds the
-   `powerio-capi` release tarballs for `aarch64-apple-darwin`,
-   `aarch64-linux-gnu`, `x86_64-apple-darwin`, `x86_64-linux-gnu`, and
-   `x86_64-w64-mingw32`, with the release features
-   `arrow,matrix,gridfm,dist,pkg,prob`.
+4. `.github/workflows/release-binaries.yml` runs on tag pushes. Its binding gate tests PowerIO.jl `main` against the tagged library before it builds the `powerio-capi` release tarballs for `aarch64-apple-darwin`, `aarch64-linux-gnu`, `x86_64-apple-darwin`, `x86_64-linux-gnu`, and `x86_64-w64-mingw32`, with the release features `arrow,matrix,gridfm,dist,prob`.
 5. That workflow creates or updates a **draft** GitHub release and attaches the
    five binary assets. Do not expect a draft release to exist before the tag
    workflow runs.
-6. A human inspects and publishes the draft release.
+6. A human inspects and publishes the draft release. Publishing also fires the crates.io publish workflow; `powerio-core` and `powerio-tx` are first publishes there, and trusted publishing cannot bootstrap a crate that does not exist yet, so their first upload needs a one time token before the trusted publisher configuration takes over (the same bootstrap `powerio-dist`, `powerio-prob`, and `powerio-diag` needed).
 7. Publishing the release triggers `.github/workflows/notify-powerio-jl.yml`.
    If `POWERIO_JL_DISPATCH_TOKEN` is configured, it sends a
    `powerio-release` repository dispatch to `eigenergy/PowerIO.jl`. If the
@@ -199,7 +182,7 @@ powerio-tx/                   # 1.0 name of the current balanced parser crate
 ├── src/operations.rs        # in place Network edit operations
 ├── src/solver_tables.rs     # current internal solver preparation data
 ├── src/format/
-│   ├── mod.rs               # parse_file, parse_str, convert_file, write_as,
+│   ├── mod.rs               # parse (Source based), convert_file, write_as,
 │   │                        #   TargetFormat, Conversion, target_format_from_name
 │   ├── routing.rs           # classify_json_text (bare .json routing)
 │   ├── matpower/            # tokens, matlab, locate, rows, writer
@@ -324,8 +307,9 @@ fuzz/                        # libFuzzer targets (detached workspace; see fuzz/R
   durable source map, diagnostic, and history records. Retained source is run
   time data and is not serialized. `TimeSeries<T>` and `ScenarioSet<T>` belong
   in the typed value rather than common module fields and compose as
-  `ScenarioSet<TimeSeries<T>>`. `NetworkPackage` and `powerio-pkg` disappear
-  before 1.0. Typed entry selection must not serialize and clone the network.
+  `ScenarioSet<TimeSeries<T>>`. The 0.9 `NetworkPackage` is gone: its
+  decode survives crate private under `powerio::stored` for the one way
+  upgrade. Typed entry selection must not serialize and clone the network.
 - **Bus IDs.** MATPOWER 1 based; `IndexedNetwork::bus_index(id)` is the only mapping into dense `[0, n)`. Don't clamp out of range; return `Error::UnknownBus`.
 - **`BR_B` is already per unit.** Never divide by `base_mva` again.
 - **`tap == 0` ⇒ `tap = 1`.** Use `Branch::effective_tap()`.

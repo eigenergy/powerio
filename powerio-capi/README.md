@@ -1,16 +1,13 @@
 # powerio-capi
 
-The C ABI parses, queries, and converts PowerIO networks through opaque handles.
-It also exposes copied numeric tables, Arrow tables, `.pio.json` packages, and
-SCOPF problem instances behind feature gates.
+The C ABI parses power system sources into module handles, exposes typed accessors and structured diagnostics over them, converts and writes supported formats, and serves numeric tables and Arrow exports for matrix assembly. It is how every non-Rust consumer except the PyO3 Python package reaches powerio; PowerIO.jl resolves these symbols from a pinned artifact.
 
-The header is
-[`include/powerio.h`](https://github.com/eigenergy/powerio/blob/main/powerio-capi/include/powerio.h).
+The header is [`include/powerio.h`](https://github.com/eigenergy/powerio/blob/main/powerio-capi/include/powerio.h). It is generated and checked in; its comment block states the naming, ownership, and error grammars and is authoritative where prose disagrees.
 
 ## Build
 
 ```
-cargo build -p powerio-capi --release
+cargo build -p powerio-capi --release --features arrow,matrix,gridfm,dist,prob
 # → target/release/libpowerio_capi.{so,dylib}  (cdylib)
 #   target/release/libpowerio_capi.a            (staticlib)
 ```
@@ -22,16 +19,13 @@ cbindgen --config powerio-capi/cbindgen.toml --crate powerio-capi \
   --output powerio-capi/include/powerio.h
 ```
 
-The test suite pins the checked-in header shape. Run the core and optional
-surfaces before changing `powerio.h` or an exported `pio_*` function:
+The test suite pins the checked-in header shape. Run the core and optional surfaces before changing `powerio.h` or an exported `pio_*` function:
 
 ```
 cargo test -p powerio-capi --no-default-features
 cargo test -p powerio-capi --features arrow
-cargo test -p powerio-capi --features arrow,matrix
-cargo test -p powerio-capi --features gridfm
 cargo test -p powerio-capi --features dist
-cargo test -p powerio-capi --features arrow,matrix,gridfm,dist,pkg,prob
+cargo test -p powerio-capi --features arrow,matrix,gridfm,dist,prob
 bash scripts/ci-clippy.sh capi-release
 scripts/capi-header-parity.sh
 scripts/capi-smoke.sh
@@ -45,230 +39,77 @@ scripts/capi-smoke.sh
 #include <stdlib.h>
 
 int main(void) {
-    char err[256];
-    PioNetwork *c = pio_parse_file("case9.m", NULL, err, sizeof err);
-    if (!c) { fprintf(stderr, "parse: %s\n", err); return 1; }
+    /* Check the handshake before anything else. */
+    if (pio_abi_version() != PIO_ABI_VERSION) return 1;
 
-    size_t n = pio_n_buses(c), m = pio_n_branches(c);
-    printf("%zu buses, %zu branches, baseMVA %g\n", n, m, pio_base_mva(c));
+    PioError *error = NULL;
+    PioModule *module = pio_parse_file("case9.m", NULL, &error);
+    if (!module) {
+        fprintf(stderr, "%s: %s\n", pio_error_code(error), pio_error_message(error));
+        pio_error_release(error);
+        return 1;
+    }
 
-    /* Pull the branch table to build a susceptance matrix yourself. Extractors
-     * write up to cap entries and return the total, so a short buffer is
-     * detectable; NULL out (or cap 0) is the count query. */
+    /* The detected value kind is a stable string. */
+    printf("kind %s\n", pio_module_kind(module));
+
+    /* The reader's findings, as structured records. */
+    PioDiagnostics *findings = pio_module_diagnostics(module, &error);
+    for (size_t i = 0; i < pio_diagnostics_len(findings); i++)
+        printf("%s %s: %s\n", pio_diagnostic_severity(findings, i),
+               pio_diagnostic_code(findings, i), pio_diagnostic_message(findings, i));
+    pio_diagnostics_release(findings);
+
+    /* The typed value: an independently owned network handle. */
+    PioBalancedNetwork *net = pio_module_balanced_network(module, &error);
+    size_t n = pio_balanced_network_n_buses(net);
+    size_t m = pio_balanced_network_n_branches(net);
+    printf("%zu buses, %zu branches, baseMVA %g\n",
+           n, m, pio_balanced_network_base_mva(net));
+
+    /* Pull the branch table to build a susceptance matrix yourself. The
+     * extractors write up to cap entries and return the total, so a short
+     * buffer is detectable; NULL out (or cap 0) is the count query. */
     int64_t *from = malloc(m * sizeof *from), *to = malloc(m * sizeof *to);
     double  *x    = malloc(m * sizeof *x);
-    pio_branches(c, from, to, NULL, x, NULL, NULL, NULL, NULL, m);
+    pio_balanced_network_branches(net, from, to, NULL, x, NULL, NULL, NULL, NULL, m);
     /* ... assemble L = A diag(1/x) A^T from (from, to, x) ... */
 
-    /* Every case format is a string. MATPOWER echoes byte exact; PowerModels
-     * JSON and PSS/E conversions can report findings. NULL opts is every
-     * write-time default; NULL out_diagnostics_json discards the findings. */
-    char *matpower = pio_to_format(c, "matpower", NULL, NULL, err, sizeof err);
-    if (matpower) { /* ... use MATPOWER text ... */ pio_string_free(matpower); }
+    /* One write operation on the module: the same format echoes byte exact,
+     * a cross format write reports its losses through the out handle. */
+    char *matpower = pio_module_write_str(module, "matpower", NULL, &error);
+    if (matpower) { /* ... byte exact MATPOWER text ... */ pio_string_release(matpower); }
 
-    char *diagnostics = NULL;
-    char *json = pio_to_format(c, "powermodels-json", NULL, &diagnostics, err, sizeof err);
-    if (json) { /* ... use PowerModels JSON text ... */ pio_string_free(json); }
-    if (diagnostics) { /* a JSON array of records */ pio_string_free(diagnostics); }
+    PioDiagnostics *losses = NULL;
+    char *json = pio_module_write_str(module, "powermodels-json", &losses, &error);
+    if (json) { /* ... PowerModels JSON text ... */ pio_string_release(json); }
+    pio_diagnostics_release(losses);
 
-    char *raw = pio_convert_file("case9.m", NULL, "psse", NULL, NULL, err, sizeof err);
-    if (raw) { /* ... use PSS/E text ... */ pio_string_free(raw); }
+    /* One call conversion without keeping a handle. */
+    char *raw = pio_convert_file("case9.m", NULL, "psse", NULL, NULL, &error);
+    if (raw) { /* ... PSS/E text ... */ pio_string_release(raw); }
 
     free(from); free(to); free(x);
-    pio_network_free(c);
+    pio_balanced_network_release(net);
+    pio_module_release(module);
     return 0;
 }
 ```
 
-## Julia (`ccall`)
+Every handle type has a `retain`/`release` pair; `release(NULL)` is a no-op, and releasing the module never invalidates the network handle taken from it. Every fallible entry point takes a `PioError **` out parameter (NULL to ignore) and catches panics at the boundary.
 
-For a typed Julia API, use [PowerIO.jl](https://github.com/eigenergy/PowerIO.jl),
-which wraps this ABI (`set_library!`, `parse_file`, `parse_str`, `convert_file`,
-and the `to_*` transforms). The raw `ccall` below is the low level reference it
-builds on.
+## Julia
 
-```julia
-const LIB = "libpowerio_capi"  # on the load path
-
-function parse_file(path)
-    err = zeros(UInt8, 256)
-    h = ccall((:pio_parse_file, LIB), Ptr{Cvoid},
-              (Cstring, Ptr{Cvoid}, Ptr{UInt8}, Csize_t),
-              path, C_NULL, err, length(err))
-    h == C_NULL && error(unsafe_string(pointer(err)))
-    h
-end
-
-h = parse_file("case9.m")
-n = ccall((:pio_n_buses, LIB), Csize_t, (Ptr{Cvoid},), h)
-m = ccall((:pio_n_branches, LIB), Csize_t, (Ptr{Cvoid},), h)
-
-from = Vector{Int64}(undef, m); to = Vector{Int64}(undef, m)
-x = Vector{Float64}(undef, m)
-ccall((:pio_branches, LIB), Csize_t,
-      (Ptr{Cvoid}, Ptr{Int64}, Ptr{Int64}, Ptr{Float64}, Ptr{Float64},
-       Ptr{Float64}, Ptr{Float64}, Ptr{Float64}, Ptr{UInt8}, Csize_t),
-      h, from, to, C_NULL, x, C_NULL, C_NULL, C_NULL, C_NULL, m)
-# build your matrices from (from, to, x), then:
-ccall((:pio_network_free, LIB), Cvoid, (Ptr{Cvoid},), h)
-```
+Use [PowerIO.jl](https://github.com/eigenergy/PowerIO.jl): `parse_file(path)` returns the typed `PioModule{T}` over this ABI, with the ownership rules held by finalizers and borrowed views that root their owner. The raw `ccall` shape it builds on is one symbol per operation, resolved with `dlsym` after the `pio_abi_version()` handshake.
 
 ## Balanced model JSON
 
-For consumers that want the whole case rather than the dense table slices, the
-`pio_to_json` and `pio_from_json` pair carries the entire balanced `Network`:
-buses, loads, shunts, branches, generators, storage, HVDC, and extras. The
-retained source text is excluded, so a reloaded handle converts from the model
-instead of echoing the original source.
+For consumers that want the whole case rather than the dense table slices, `pio_balanced_network_to_json` and `pio_balanced_network_from_json` carry the entire balanced network: buses, loads, shunts, branches, generators, storage, HVDC, and extras. It is a network serialization rather than a case format; a bare `.json` holding it classifies as `model-json`.
 
-ABI 4 accepted a `powerio-json` token in `pio_to_format` and `pio_parse_str`.
-ABI 5 removed it: model JSON is powerio's own document rather than a case
-format, so the two functions above are the only route to it. A bare `.json`
-file holding one classifies as `model-json` through `pio_classify_str`.
+## The stored module
 
-## The `.pio.json` document surface
+`pio_module_read_json` and `pio_module_write_json` carry the versioned `.pio.json` document for any value kind, including the one way upgrade of released 0.9 documents. State selection over series and scenario sets (`pio_module_export_state`, `pio_module_state_inventory_json`), the explicit balanced lowering (`pio_module_lower_to_balanced`), and DC branch data (`pio_dc_data_*`, feature `prob`) operate on the same handles.
 
-The default build includes the package surface (`PIO_PKG`). Probe it with
-`pio_has_feature("pkg")` when loading dynamically. `PioPackage` is an opaque
-`.pio.json` document handle, distinct from the parsed network handles:
+## Optional features
 
-- `pio_package_parse_file` and `pio_package_parse_str` read `.pio.json`.
-- `pio_package_to_json` returns compact `.pio.json`; free it with
-  `pio_string_free`.
-- `pio_package_from_balanced_network` wraps a `PioNetwork`, the historical C
-  handle for `powerio::BalancedNetwork`.
-- `pio_package_from_multiconductor_network` wraps a `PioDistNetwork`, the
-  historical C handle for `powerio_dist::MulticonductorNetwork`, when both
-  `PIO_PKG` and `PIO_DIST` are present.
-- `pio_package_validate`, `pio_package_validation_json`, and
-  `pio_package_diagnostics_json` expose structured validation state.
-- `pio_package_operating_points_json` returns the replayable operating point
-  series, or JSON `null` when the document has none.
-- `pio_package_set_operating_points` replaces the operating point series
-  from JSON. `null` or an empty series clears it. The call reruns package
-  validation before returning.
-- `pio_package_materialize_operating_point` returns a new static document with
-  one operating point applied. Updates resolve by the model rows' `uid`
-  identities; an unknown identity, an ambiguous (duplicated) uid, or a row that
-  contradicts a resolved identity returns `NULL` with the message in `errbuf`.
-- `pio_package_multiconductor_to_balanced_preflight_json` reports structured
-  blockers before lowering, and `pio_package_lower_multiconductor_to_balanced`
-  returns a new balanced document when the input is ready.
-
-Constructor and lowering options cross as typed parameters. The balanced
-constructor takes `include_solver_metadata`; any nonzero value records compact
-normalized solver table metadata. The multiconductor lowering calls take
-`base_mva`, the three phase system power base used for the balanced per-unit
-projection. The transform convention is fixed by these functions; if another
-convention becomes a real public option, it should get a new additive symbol.
-
-## Problem instances
-
-Build the library with `--features prob`; the generated header guards this
-surface with `PIO_PROB`. `pio_scopf_parse_str` accepts source text and a format
-name. It currently accepts `goc3-json` and returns an owned
-`PioScopfInstance` handle. A null result indicates a parse or assembly error;
-`errbuf` receives the message.
-
-`pio_scopf_to_json` returns the versioned SCOPF JSON document with 0-based
-ordinals. `pio_scopf_to_json_with_index_base` accepts
-`PIO_SCOPF_INDEX_BASE_ZERO` or `PIO_SCOPF_INDEX_BASE_ONE`. The document records
-the selected `index_base`. Free the returned string with `pio_string_free` and
-the instance with `pio_scopf_instance_free`.
-
-## API names
-
-The grammar is written out in the header preamble; the short version:
-
-- Verb-led names are operations, and the verb fixes the return family:
-  `pio_parse_file`, `pio_parse_str`, `pio_read_dir`, and `pio_normalize`
-  return a new handle; `pio_write_dir` writes the filesystem;
-  `pio_convert_file`/`pio_convert_str` transcode without keeping a handle.
-- `pio_to_format` serializes named case formats. `pio_to_json` serializes the
-  balanced model. `pio_to_arrow` fills Arrow C Data Interface structs.
-- `pio_package_*` functions operate on `.pio.json` document metadata and add
-  no new network handle family.
-- Case format names never appear in symbols: `matpower`, `psse`, `pypsa-csv`,
-  `gridfm`, `goc3-json`, `surge-json`, and future formats are strings.
-- Noun phrases are queries: `pio_n_*` counts, `pio_is_radial`,
-  `pio_bus_ids`/`pio_branches`/`pio_gens`/`pio_bus_demand`/`pio_bus_shunt`
-  extractors, `pio_warnings` for the handle's fidelity warnings.
-- One meaning per word, transmission and distribution alike: a *bus* is a
-  named connection point (this surface is bus granular), a *node* is one
-  conductor's point at a bus (reserved for the multiconductor surface), and a
-  *branch* is any two-terminal series element, lines and transformers alike.
-
-## Safety model
-
-Every entry point is hardened at the boundary:
-
-- With Rust's default unwind panic strategy, each function catches a panic and
-  returns its documented error value (a null handle, `-1`, or a zero count).
-- NULL is safe everywhere: a NULL handle returns the documented default, NULL
-  output pointers are skipped rather than written, and a NULL/zero-length
-  `errbuf` suppresses the message.
-- Error and warning buffers are always NUL-terminated; a message longer than
-  the buffer is truncated to fit. `PIO_ERRBUF_MIN` (256) is the recommended
-  size.
-- Input strings must be valid UTF-8 and NUL terminated. Invalid UTF-8 returns an
-  error.
-- Ownership is symmetric: handles from `pio_parse_*`/`pio_read_dir`/
-  `pio_normalize` are freed with `pio_network_free`, strings from
-  `pio_to_format`/`pio_convert_*` with `pio_string_free`, package handles with
-  `pio_package_free`, each exactly once.
-  The Arrow export hands the caller two C Data Interface structs whose
-  non-NULL `release` callbacks must each be invoked exactly once.
-- The table extractors (`pio_branches`, `pio_gens`, ...) write at most `cap`
-  elements into each non-NULL buffer and return the total available, so a
-  miscounted buffer reads short instead of overflowing, and `(NULL, 0)` sizes
-  it. `pio_warnings` returns the byte length needed the same way.
-- A handle is immutable after construction unless a function takes it
-  non-`const` (`pio_package_validate`, `pio_package_set_operating_points`):
-  concurrent reads from any number of threads are safe, while those two and
-  `pio_*_free` need exclusive access. Free exactly once.
-
-Input size is not capped. Callers that accept untrusted input must impose their
-own byte and resource limits. The panic guards require the default
-`panic = "unwind"`; a build with `panic = "abort"` terminates the process on a
-panic.
-
-## ABI version
-
-Compare `pio_abi_version()` against the `PIO_ABI_VERSION` your binary was
-compiled against before any other call. The comparison is equality: a mismatch
-means the library and the header disagree, and there is no partial
-compatibility to negotiate. Breaking changes bump the version, additive
-symbols do not.
-
-`PIO_ABI_VERSION` is 5, shipped with powerio 0.9.0. The versioning policy, the
-per-version history, and the ABI 5 migration guide live in the book, which is
-the one place to update when the integer moves:
-
-- <https://powerio.dev/guide/capi.html>
-- <https://powerio.dev/guide/abi-v5.html>
-
-`PIO_DIST_ABI_VERSION` is frozen at 1 and carries no meaning. It stays exported
-so a binding that gates distribution calls on resolving it keeps working; read
-foreign schema versions from `pio_build_info` instead. One-shot distribution
-conversion is ordered `pio_dist_convert_*(input, from, to, ...)`.
-
-Every public `PIO_*` macro, opaque typedef, and `pio_*` prototype in
-`powerio.h` is pinned by a Cargo test, and CI compiles the C smoke program
-against the no-default core ABI plus the arrow, matrix, gridfm, dist, pkg, and prob
-feature surfaces. CI also compiles and links a C++ header sanity program to keep the
-`extern "C"` path honest. Source/header symbol parity is checked separately, so
-adding, renaming, or deleting a public entry point fails CI.
-
-## Scope
-
-`powerio-capi` covers the `powerio` parse, convert, query, table,
-and JSON extraction. Build with `--features arrow,matrix` to export the first
-balanced sparse matrix family over `pio_to_arrow` as COO triplet tables:
-`ybus`, `incidence`, `bprime`, and `bdoubleprime`, all in dense solver bus index
-space with dimensions and axis names in Arrow schema metadata. The stable matrix
-ABI is Arrow COO plus `matrix_bus` and `matrix_branch` axis map tables; C stays
-language neutral, while Julia, Python, and other bindings own their native
-sparse matrix assembly. Runtime consumers can call
-`pio_matrix_available()` before selecting those table ids. Larger matrix
-PTDF and LODF remain in `powerio-matrix`. The `prob` feature exposes matrix free
-SCOPF instances. DC OPF instances and bundles do not yet have C entry points.
+Probe at runtime with `pio_has_feature("arrow" | "matrix" | "gridfm" | "dist" | "prob")`; each symbol's own header guard states what it needs, and a build without a feature exports nothing for it. `pio_build_info` reports the build's version, ABI integer, features, foreign schema versions, and stable token sets in one JSON document.

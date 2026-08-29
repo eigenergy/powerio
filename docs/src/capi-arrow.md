@@ -1,8 +1,11 @@
 # C ABI Arrow policy
 
-The C ABI stays handle based. Parsed transmission cases use `PioNetwork`,
-distribution cases use `PioDistNetwork`, and `.pio.json` documents use
-`PioPackage`. Callers get full model transport through JSON, small copied
+This page predates ABI 6. `pio_arrow_catalog_json` now takes a `PioError **` out parameter, `char *pio_arrow_catalog_json(PioError **error)`, replacing the `errbuf`/`errlen` form documented below; see [ABI 6](abi-v6.md) for the current surface.
+
+The C ABI stays handle based. Every source parses to a `PioModule`; balanced
+transmission networks read through `PioBalancedNetwork` and multiconductor
+distribution networks through `PioMulticonductorNetwork`. Callers get full
+model transport through JSON, small copied
 arrays through dense extractors, and bulk typed tables through the Arrow C Data
 Interface.
 
@@ -127,6 +130,5 @@ behavior.
 the cost curves the network states. They do not carry cost policy or a solver
 formulation: what to do with a generator that has no cost row, and which curve
 shapes a formulation accepts, stay outside the Arrow surface. `powerio-prob`
-owns complete problem instances. The C `prob` feature currently exposes a
-matrix free SCOPF instance through a JSON document. DC OPF
-instances and bundles have no C entry points.
+owns complete problem instances. The C `prob` feature exposes the DC branch
+data spans (`pio_dc_data_*`); DC OPF bundles have no C entry points.

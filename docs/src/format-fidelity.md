@@ -13,19 +13,19 @@ implementations and the matching powerio code:
 | Quantity | Convention | Reference | powerio |
 | --- | --- | --- | --- |
 | Bus type codes | \\(1 = \mathrm{PQ}\\), \\(2 = \mathrm{PV}\\), \\(3 = \mathrm{ref}\\), \\(4 = \mathrm{isolated}\\) | MATPOWER `idx_bus` | `network::BusType` |
-| Impedance, susceptance | per unit on `baseMVA`, never rescaled | MATPOWER `idx_brch` (`BR_B` already per unit) | `format::matpower` |
+| Impedance, susceptance | per unit on `baseMVA`, never rescaled | MATPOWER `idx_brch` (`BR_B` already per unit) | `matpower` |
 | Branch terminal admittance | MATPOWER `BR_B` splits half to each end; richer sources use canonical `g_fr`/`b_fr`/`g_to`/`b_to`; one-value targets receive the total susceptance projection | PowerModels `matpower.jl`; MATPOWER `idx_brch` | `network::BranchCharging`, `Branch::terminal_charging` |
 | Tap ratio | `0` means a line (treated as `1`); nonzero is a transformer | MATPOWER `idx_brch` `TAP` | `Branch::effective_tap` |
-| Phase shift, angle | degrees in the model; PowerModels JSON carries radians | PowerModels `make_per_unit!` | `format::powermodels` |
+| Phase shift, angle | degrees in the model; PowerModels JSON carries radians | PowerModels `make_per_unit!` | `powermodels-json` |
 | Angle limits | `angmin`/`angmax` default ±360 (unconstrained) | MATPOWER `idx_brch` `ANGMIN`/`ANGMAX` | `Branch::has_angle_limits` |
-| pandapower/PyPSA impedance | line `r/x` are converted between per unit and ohms with \\(Z_{\mathrm{base}} = V_{\mathrm{kV}}^2 / \mathrm{baseMVA}\\); pandapower line charging is capacitance per km (`c_nf_per_km`, converted via \\(2\pi f \ell Z_{\mathrm{base}}\\)); PyPSA line `b` is siemens | pandapower PPC conversion, PyPSA static components | `format::pandapower`, `format::pypsa` |
-| dcline `Pt`/`Qf`/`Qt` | sign flips vs MATPOWER | PowerModels `matpower.jl` | `format::powermodels` |
+| pandapower/PyPSA impedance | line `r/x` are converted between per unit and ohms with \\(Z_{\mathrm{base}} = V_{\mathrm{kV}}^2 / \mathrm{baseMVA}\\); pandapower line charging is capacitance per km (`c_nf_per_km`, converted via \\(2\pi f \ell Z_{\mathrm{base}}\\)); PyPSA line `b` is siemens | pandapower PPC conversion, PyPSA static components | `pandapower-json`, `pypsa-csv` |
+| dcline `Pt`/`Qf`/`Qt` | sign flips vs MATPOWER | PowerModels `matpower.jl` | `powermodels-json` |
 | Generator cost | \\(c_2 p^2 + c_1 p\\) maps to \\(q = 2c_2\\), \\(c = c_1\\); coefficients high order first | MATPOWER `idx_cost`, egret `matpower_parser` | `GenCost::quadratic` |
-| `source_id` | `["bus", id]` for bus-tied elements | PowerModels `matpower.jl` | `format::powermodels` |
-| PSLF shunts | EPC `pu_mw`/`pu_mvar` are per unit on `sbase`; `Network::Shunt` stores MW/MVAr at \\(V = 1\\) | paired EPC/RAW case checks | `format::pslf` |
-| GO Challenge 3 time series | `BalancedNetwork` stores the first interval as a static case; `.pio.json` documents carry replayable later intervals in `operating_points` | Rust GOC3 package tests | `format::goc3`, `powerio::package::operating` |
-| Surge angles | Surge JSON carries voltage angles, phase shifts, and angle limits in radians; `BalancedNetwork` stores degrees | Rust Surge round trip tests | `format::surge` |
-| DeepMind OPFData JSON | DeepMind OPFData carries p.u. powers and radian angles; `BalancedNetwork` stores the solved snapshot in MW/MVAr and degrees, with zero based links mapped to one based bus IDs | Paper Appendix A, the PyG loader, the smallest complete official fixture, and size independent FullTop and N-1 property tests | `format::opfdata` |
+| `source_id` | `["bus", id]` for bus-tied elements | PowerModels `matpower.jl` | `powermodels-json` |
+| PSLF shunts | EPC `pu_mw`/`pu_mvar` are per unit on `sbase`; `Shunt` stores MW/MVAr at \\(V = 1\\) | paired EPC/RAW case checks | `pslf` |
+| DOE GO Challenge 3 | parses to `AcScucInstance`: the complete scheduling horizon (time points, commitment, reserves, contingencies) beside the balanced network it shares | Rust GOC3 instance tests | `powerio_prob::parse_goc3_instance` |
+| Surge angles | Surge JSON carries voltage angles, phase shifts, and angle limits in radians; `BalancedNetwork` stores degrees | Rust Surge round trip tests | `surge-json` |
+| DeepMind OPFData JSON | DeepMind OPFData carries p.u. powers and radian angles; `BalancedNetwork` stores the solved snapshot in MW/MVAr and degrees, with zero based links mapped to one based bus IDs | Paper Appendix A, the PyG loader, the smallest complete official fixture, and size independent FullTop and N-1 property tests | `opfdata-json` |
 
 egret's own MATPOWER parser uses the same reductions (bus type as
 `matpower_bustype`, polynomial coefficients reversed to a `{degree: coefficient}`
@@ -103,13 +103,12 @@ is a setup failure.
 
 ## Known limits
 
-Write side losses are reported in `Conversion::warnings`; the pandapower and
-PyPSA readers itemize what they ignore in `Parsed::warnings` (`read_warnings`
-in Python), naming the table and counting the affected rows.
-`convert_file`/`convert_str` fold the read warnings into `Conversion::warnings`.
-Package builders lift balanced reader warnings into structured diagnostics with
-code `READ.TRANSMISSION.PARSE_WARNING`. GridFM package reads use
-`READ.GRIDFM.FIDELITY_WARNING`; distribution packages already carry
+Every loss is a coded diagnostic. Readers itemize what they keep only in the
+retained source (naming the table and counting the affected rows), writers
+report what a target cannot represent, and `convert_file`/`convert_str`
+return the reader's findings followed by the writer's. Balanced reader
+findings carry `READ.TRANSMISSION.PARSE_WARNING`, GridFM reads
+`READ.GRIDFM.FIDELITY_WARNING`, and distribution reads
 `READ.DIST.PARSE_WARNING`.
 
 - **PSS/E** reads revisions 33, 34, and 35. 3-winding transformers are kept as
@@ -125,7 +124,7 @@ code `READ.TRANSMISSION.PARSE_WARNING`. GridFM package reads use
   exists, so that writer is validated by powerio's own read back plus a
   PowerModels JSON bridge. The `.pwb` layouts are reverse engineered; the decode
   evidence and coverage matrix are maintainer notes at
-  [`powerio/src/format/powerworld/FORMAT.md`](https://github.com/eigenergy/powerio/blob/main/powerio/src/format/powerworld/FORMAT.md).
+  [`powerio-tx/src/format/powerworld/FORMAT.md`](https://github.com/eigenergy/powerio/blob/main/powerio-tx/src/format/powerworld/FORMAT.md).
 - **PSLF** `.epc` is read and written. The reader maps the static power flow core:
   buses, lines, two- and three-winding transformers, generators, loads, fixed
   shunts, controlled shunts at initial `g/b`, and limited two-terminal DC records.
@@ -170,22 +169,20 @@ code `READ.TRANSMISSION.PARSE_WARNING`. GridFM package reads use
   isolated buses, non-finite p limits, and slackless or normalized networks.
   Nonnumeric bus names read back as dense synthetic ids with the originals on
   `Bus.name`.
-- **GO Challenge 3 JSON** reads ARPA-E GO Competition Challenge 3 input data
-  into the balanced transmission model. `BalancedNetwork` is static, so the reader maps
-  the first time interval into generator/load bounds and status fields, keeps
-  the original JSON for byte exact source echo, and warns about scheduling data
-  left in the retained source. There is no canonical GOC3 writer from an
-  arbitrary `BalancedNetwork`; `TargetFormat::Goc3Json` only succeeds as a same format
-  source echo. When a GOC3 `BalancedNetwork` is wrapped in `.pio.json`, `powerio::package`
-  extracts the full input time axis into `operating_points`. Materializing one
-  point applies those updates to the static model JSON and clears the series.
+- **DOE GO Challenge 3 JSON** parses to `AcScucInstance`: the complete
+  declared scheduling horizon (time points and durations, initial states,
+  time varying bounds, costs and reserves, energy windows, contingencies)
+  beside the balanced network it shares. Asking for only the network is an
+  explicit step that reports the calculation data it discards. The format is
+  parse only; writing back to the source format is the byte exact echo of an
+  unchanged module.
 - **Surge JSON** reads and writes the versioned `surge-json` network document.
   The reader maps buses, loads, fixed shunts, branches, generators, storage, and
   HVDC links into `BalancedNetwork`, retains the original source for same format echo,
   and warns about source sections that stay only in the retained document. The
   writer emits a canonical Surge network body for the supported power flow core;
   richer MATPOWER generator capability or ramp columns and unsupported cost
-  shapes are reported in `Conversion::warnings`. An HVDC link carries the
+  shapes are reported in `Conversion::diagnostics`. An HVDC link carries the
   terminal voltage setpoints, the reactive limits, and the loss model on its
   converter terminals; a Surge link states no terminal reactive flow, no cost
   curve, and no received power (the reader derives it from the setpoint and the
@@ -219,19 +216,18 @@ code `READ.TRANSMISSION.PARSE_WARNING`. GridFM package reads use
   echo impossible.
   The raw source echoes byte exactly; there is no canonical writer, `.pt` cache
   reader, archive reader, downloader, or batch directory API.
-- **gridfm** (read, the `gridfm` feature in `powerio-matrix`) reconstructs a
-  `BalancedNetwork` from the gridfm-datakit Parquet dataset: lossy, but it recovers
-  everything a power flow needs. That is bus types/voltages/limits, nodal load
-  and shunt totals, generator
-  dispatch and bounds, branch `r/x/b/tap/shift/rate_a`/angle limits, and `baseMVA`;
-  it can't recover original bus ids (synthesized `1..n`), per element load/shunt
-  granularity (folded one synthetic element per bus), piecewise/cubic gen costs
-  (read as none), or HVDC/storage. Because the writer stores the *effective* tap,
-  a branch with unit tap and no phase shift is read back as a line (raw \\(\mathrm{tap} = 0\\));
-  a unity ratio, zero shift transformer in the source is thus read as a line (the
-  power flow is identical). The losses are returned as a warnings list on
-  `GridfmRead`, mirroring `Conversion::warnings`. The same direction writer is
-  documented in the
+- **GridFM Parquet datasets** (the `gridfm` feature) parse to a scenario set
+  of balanced networks over one shared element identity map: lossy, but each
+  scenario recovers everything a power flow needs. That is bus
+  types/voltages/limits, nodal load and shunt totals, generator dispatch and
+  bounds, branch `r/x/b/tap/shift/rate_a`/angle limits, and `baseMVA`; it
+  cannot recover original bus ids (synthesized `1..n`), per element
+  load/shunt granularity (folded one synthetic element per bus),
+  piecewise/cubic generator costs (read as none), or HVDC/storage. Because
+  the writer stores the *effective* tap, a unity ratio, zero shift
+  transformer in the source reads back as a line (the power flow is
+  identical). The losses are the module's diagnostics. The same direction
+  writer is documented in the
   [top level README](https://github.com/eigenergy/powerio#gridfm).
 
 ## Missing generator costs

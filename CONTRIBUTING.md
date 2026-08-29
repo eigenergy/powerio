@@ -46,8 +46,8 @@ updates `Cargo.lock`. Then:
 1. Merge the bump, tag the commit `vX.Y.Z`, push the tag. The release-binaries
    workflow builds the C ABI tarballs and stages a draft GitHub release.
 2. Publish the draft release. The release event fires the PyPI publish
-   (python.yml) and the crates.io publish (crates.yml: powerio, powerio-dist,
-   powerio-pkg, powerio-matrix, powerio-prob, powerio-cli, in dependency order). Both deploy
+   (python.yml) and the crates.io publish (crates.yml: powerio-core, powerio,
+   powerio-dist, powerio-matrix, powerio-prob, powerio-cli, in dependency order). Both deploy
    through reviewer protected environments (`pypi`, `crates-io`; the protection
    lives in the repo settings). PyPI skips already-uploaded files and crates.io
    skips versions already in the index, so a partial failure is recovered by
@@ -60,9 +60,10 @@ updates `Cargo.lock`. Then:
 
 The cross-language verb taxonomy lives in the
 [language API guide](https://eigenergy.github.io/powerio/guide/languages.html):
-`parse_file` / `parse_str` / `from_json` produce a `Network`, `to_*` derive from
-it, `convert_file` goes file to text in one call. A Network is the parsed model;
-a case is the file it came from.
+`parse` produces a stored module of whichever family claims the source,
+`from_json` rebuilds a network from its own serialization, `to_*` derive
+from a parsed value, and `convert_file` goes file to text in one call. A
+network is the parsed model; a case is the file it came from.
 
 ## Text encoding
 

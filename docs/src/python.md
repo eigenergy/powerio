@@ -1,7 +1,6 @@
 # Python API
 
-Install the base package for parsing, writing, JSON transport, and file
-conversion. It has no required third party Python packages:
+Install the base package for parsing, writing, JSON transport, and file conversion. It has no required third party Python packages:
 
 ```bash
 pip install powerio
@@ -17,63 +16,74 @@ pip install 'powerio[pandas]'   # pandas and pyarrow compatibility reads (Python
 pip install 'powerio[all]'      # matrix, graph, and gridfm reads
 ```
 
-`import powerio`, `parse_file`, `parse_str`, `convert_file`, `convert_str`,
-`to_matpower`, and `to_json` do not import NumPy, SciPy, NetworkX, Polars,
-pandas, or pyarrow.
+`import powerio`, `parse`, `convert_file`, `convert_str`, `to_matpower`, and `to_json` do not import NumPy, SciPy, NetworkX, Polars, pandas, or pyarrow.
 
-Transmission text and file format names accepted by `parse_*` and `convert_*` include
-`matpower`, `psse`, `powerworld`, `pslf`, `powermodels-json`, `egret-json`,
-`pandapower-json`, `goc3-json`, `surge-json`, and `opfdata-json`, plus their
-documented aliases. Balanced model JSON is not a case format and has no name
-here: read and write it with `powerio.from_json` and `Network.to_json`. `opfdata-json` reads one extracted JSON document from a
-DeepMind OPFData FullTop or N-1 release without PyTorch. PyPSA CSV folders and
-GridFM Parquet datasets are directory formats; use `read_pypsa_csv_folder`, `Network.write_pypsa_csv_folder`,
-`read_gridfm`, `Network.write_gridfm`, or the conversion/package helpers that
-take a path.
+## One call parses
 
-## Canonical use
+`powerio.parse(source)` reads a case path or in-memory bytes into a `PioModule` and detects the value kind from the extension and content. `from_` forces a format name; `value_type` asserts the expected value class and raises when the source parses to something else.
 
 ```python
 import powerio as pio
 
-net = pio.parse_file("case9.m")
-same_text = net.to_matpower()
-json_text = net.to_json()
-pm = net.to_format("powermodels-json")
-pp = net.to_format("pandapower-json")
-raw = pio.convert_file("case9.m", "psse")
-aux = pio.convert_str(json_text, "powerworld", from_="powermodels-json")
-pypsa_out = net.write_pypsa_csv_folder("case9-pypsa")
-display = pio.parse_display_file("case.pwd")
-pkg = pio.Package.from_file("goc3_case.json", from_="goc3-json")
-points = pkg.operating_points()
-period_1 = pkg.materialize_operating_point(1)
-
-normalized = net.to_normalized()
-dense = net.to_dense()       # needs powerio[matrix]
-bprime = net.bprime()        # needs powerio[matrix]
-graph = net.to_networkx()    # needs powerio[graph]
-dist_graph = pio.dist.parse_file("feeder.dss").graph()
-scopf = pio.parse_scopf(goc3_text, from_="goc3-json")
-scopf_for_julia = pio.parse_scopf(goc3_text, index_base=1)
+case = pio.parse("case9.m")          # PioModule, kind "balanced_network"
+net = case.value                     # BalancedNetwork
+case.diagnostics()                   # the reader's findings, typed records
+feeder = pio.parse("IEEE13Nodeckt.dss")  # kind "multiconductor_network"
+instance = pio.parse("goc3_case.json")  # kind "ac_scuc_instance"
+instance.inspect()                   # the operations the value supports
 ```
 
-## Model names
+Balanced network formats accepted by `parse` and the `convert_*` functions include `matpower`, `psse`, `powerworld`, `pslf`, `powermodels-json`, `egret-json`, `pandapower-json`, `goc3-json`, `surge-json`, and `opfdata-json`, plus their documented aliases. Multiconductor sources are OpenDSS (`dss`) and PMD engineering JSON. Balanced model JSON is the bindings' data transport rather than a case format and has no name here: read and write it with `powerio.from_json` and `BalancedNetwork.to_json`. `opfdata-json` reads one extracted JSON document from a DeepMind OPFData FullTop or N-1 release without PyTorch and parses to its solved calculation. PyPSA CSV folders and GridFM Parquet datasets are directory formats: `parse` takes the folder path, and `BalancedNetwork.write_pypsa_csv_folder`, `read_gridfm`, and `BalancedNetwork.write_gridfm` write and read them.
 
-`powerio.BalancedNetwork` is the existing balanced transmission handle. v0.4 also
-exports `powerio.BalancedNetwork` as the long term family name for the same
-handle.
-The old `powerio.Case` compatibility alias was removed in v0.4.
+When `include_root` is omitted, a file's referenced includes resolve only beneath its own containing directory; passing `include_root` widens that boundary to the named ancestor directory, and with it the set of files the parse may read.
 
-For distribution models, use `powerio.dist.MulticonductorNetwork` or the
-existing `powerio.dist.MulticonductorNetwork` handle name. The old
-`powerio.dist.DistCase` alias was removed in v0.4. `dist_net.graph()` returns
-the collapsed bus and terminal graph as Python data.
+## The module
 
-`parse_file(path, from_=None)` reads network case files (inferred from the
-extension, or forced with `from_`); `parse_str(text, from_)` reads in-memory
-case text. Display artifacts are not network cases, so they use the separate
-display API:
+`PioModule` carries one typed value with its records: the retained source, the reader's findings, and the descriptive history. `module.kind` names the value; `module.value` returns it. Balanced and multiconductor networks come back as the full network handles; the calculation instances, solutions, time series, and scenario sets come back as thin typed holders (`AcScucInstance`, `TimeSeries`, ...) that point back at the owning module.
+
+```python
+module = pio.parse("case9.m")
+module.kind                        # "balanced_network"
+net = module.as_balanced_network() # typed handle, provenance threaded on
+text = module.to_json()            # the .pio.json stored document
+```
+
+`as_balanced_network()` and `as_multiconductor_network()` assert the kind and hand back the typed network with the module's retained source and findings threaded on, so a same format write still echoes the source bytes. `PioModule.from_json` reads stored `.pio.json` text (a released 0.9 document upgrades one way on read); `PioModule.from_file`, `from_str`, and `from_bytes` parse case input, equivalent to `powerio.parse`.
+
+## Findings are records
+
+Every reader and converter reports what it could not represent as `Diagnostic` records: a stable dotted `code`, a `severity` (`error`, `warning`, `remark`, `note`), the rendered `message`, and, when stated, a `target`, a `suggested_action`, `spans` (byte ranges into the retained source, as `SourceSpan` records), `related` record ids, and an open `details` object. Branch on `code`, never on message text.
+
+```python
+for d in pio.parse("case.raw").diagnostics():
+    print(d.code, d.severity, d.message)
+    for span in d.spans:
+        print("  at", span.source, span.byte_start, span.byte_end)
+```
+
+Parse failures raise `PowerIOParseError` and data failures `PowerIODataError`, both `PowerIOError` (a `ValueError`); the message opens with the finding's code.
+
+## Networks and conversion
+
+`BalancedNetwork` is the balanced transmission value; `powerio.dist.MulticonductorNetwork` is the multiconductor distribution value. Conversion serializes through the typed model and reports fidelity as records:
+
+```python
+net = pio.parse("case9.m").value
+same_text = net.to_matpower()            # same format echo, byte exact
+psse_text, warnings = net.to_format("psse")
+raw = pio.convert_file("case9.m", "psse")         # Conversion(text, warnings)
+aux = pio.convert_str(json_text, "powerworld", from_="powermodels-json")
+report = net.write_file("case9.raw", "psse")
+normalized = net.to_normalized()
+```
+
+`Conversion` is a named tuple of the output text and the writer's `Diagnostic` records. A parsed, unchanged network writing its own format echoes the retained source bytes exactly; `to_canonical_format` bypasses the echo and serializes from the typed model.
+
+The matrix extra serves the sparse system matrices and DC data under the same names every language uses: `net.bprime()`, `net.bdoubleprime()`, `net.ybus()`, `net.ybus_parts()`, `net.incidence()`, `net.adjacency()`, `net.ptdf()`, `net.lodf()`, `net.weighted_laplacian()`, `net.lacpf()`, and `net.dc_data(formula)`. The graph extra adds `net.to_networkx()`, and `feeder.graph()` returns the multiconductor bus and terminal graph as Python data.
+
+## Display artifacts
+
+Display artifacts are drawings rather than network cases, so they use the separate display API:
 
 ```python
 from pathlib import Path
@@ -86,59 +96,45 @@ first = display.data.substations[0]
 print(first.number, first.name, first.x, first.y)
 ```
 
-`display.data` is a `PwdDisplay` with `canvas_width`,
-`canvas_height`, `stamp`, and `substations`.
+`display.data` is a `PwdDisplay` with `canvas_width`, `canvas_height`, `stamp`, and `substations`.
 
-## Problem instances
+## Problem data
 
-`parse_scopf(text, from_="goc3-json", index_base=0)` assembles a matrix free
-SCOPF problem instance and returns the language neutral `powerio.scopf`
-document as a Python dictionary. Python defaults to 0-based ordinals;
-`index_base=1` requests 1-based ordinals. The document records the selected
-base. Source UIDs and source bus IDs never change. Invalid JSON, duplicate
-identities, missing references, period length mismatches, and an index base
-other than 0 or 1 raise `PowerIOError` subclasses or `ValueError`.
+A source that defines a calculation parses to that calculation's typed value: GO Challenge 3 JSON to an AC SCUC instance, BMOPF JSON to a multiconductor AC OPF instance, and OPFData JSON to a solved AC OPF. `module.inspect()` names the operations the value supports, and `BalancedNetwork.dc_data(formula)` serves the DC branch data every language reads under the same names.
+
+## Collections and state selection
+
+Network time series, operating point time series, and scenario sets are collections. `module.state_inventory()` lists the typed time points or scenario ids; `module.select_state(...)` describes one selected item, and `module.export_state(...)` materializes it as an independent static module. A static or instance module refuses them with `REQUEST.STATE.NOT_A_COLLECTION`. Multiconductor values lower through `module.to_balanced_inspect()` and `module.to_balanced()`.
+
+```python
+series = pio.PioModule.from_json(stored_series_text)
+inventory = series.state_inventory()
+static_module = series.export_state(time_position=0)
+net = static_module.as_balanced_network()
+```
 
 ## PyPSA folders
 
-PyPSA CSV folders are multi-file datasets, so they use explicit read and write
-helpers instead of `Conversion.text`.
+PyPSA CSV folders are multi-file datasets, so they use explicit read and write helpers instead of `Conversion.text`.
 
 ```python
-import powerio as pio
-
-case = pio.parse_file("case14.m")
+case = pio.parse("case14.m").value
 out = case.write_pypsa_csv_folder("case14-pypsa")
-round_trip = pio.read_pypsa_csv_folder(out["dir"])
+round_trip = pio.parse(out["dir"], "pypsa-csv").value
 ```
 
-The written folder can be imported with
-`pypsa.Network().import_from_csv_folder(path)`. PyPSA itself is not a runtime
-dependency of powerio.
+The written folder can be imported with `pypsa.Network().import_from_csv_folder(path)`. PyPSA itself is not a runtime dependency of powerio.
 
-CSV folders are PyPSA's native static component format and carry the network
-topology: buses, lines, transformers, generators, loads, shunts, storage
-units, and links (read as HVDC).
-NetCDF and HDF5 time series are not supported. They are tracked in
-[#107](https://github.com/eigenergy/powerio/issues/107).
+CSV folders are PyPSA's native static component format and carry the network topology: buses, lines, transformers, generators, loads, shunts, storage units, and links (read as HVDC). NetCDF and HDF5 time series are not supported; they are tracked in [#107](https://github.com/eigenergy/powerio/issues/107).
 
 ## GridFM reads
 
 The native wheel includes the GridFM Parquet writer and reader.
 
-`read_gridfm(dir, scenario=0)` rebuilds a `BalancedNetwork` from a dataset, the inverse
-of `Network.write_gridfm`, returning a `GridfmRead(network, scenario, warnings)`
-namedtuple. The read is lossy but recovers everything a power flow needs;
-`warnings` lists what the gridfm schema couldn't round-trip (synthesized bus
-ids, folded per bus load/shunt, dropped HVDC/storage, piecewise costs).
-`read_gridfm_scenarios(dir)` returns one `GridfmRead` per scenario. `dir`
-resolves the `raw/` leaf, a `<case>/` directory, or a parent with one `*/raw/`
-child.
+`read_gridfm(dir, scenario=0)` rebuilds a `BalancedNetwork` from a dataset, the inverse of `BalancedNetwork.write_gridfm`, returning a `GridfmRead(network, scenario, warnings)` named tuple. The read is lossy but recovers everything a power flow needs; `warnings` lists what the gridfm schema could not round trip (synthesized bus ids, folded per bus load and shunt, dropped HVDC and storage, piecewise costs). `read_gridfm_scenarios(dir)` returns one `GridfmRead` per scenario. `dir` resolves the `raw/` leaf, a `<case>/` directory, or a parent with one `*/raw/` child.
 
 ```python
-import powerio as pio
-
-out = pio.parse_file("case14.m").write_gridfm("out")
+out = pio.parse("case14.m").value.write_gridfm("out")
 net, scenario, warnings = pio.read_gridfm(out["dir"])
 text = net.to_matpower()                 # gridfm → any classical format
 ```
@@ -153,64 +149,28 @@ bus = pl.read_parquet(f"{out['dir']}/bus_data.parquet")
 
 Use `powerio[pandas]` only for downstream code that expects pandas DataFrames.
 
-## `.pio.json` documents
+## Build identity
 
-`powerio.Package` is the handle for `.pio.json` documents: it parses the
-document metadata once and every accessor reuses the handle. `Package.from_file`
-and `Package.from_str` build documents from case input, `Package.from_json`
-reads document text, and `Package.from_balanced` /
-`Package.from_multiconductor` wrap existing networks. `pkg.model_kind` names
-the document family;
-`pkg.as_balanced()` / `pkg.as_multiconductor()` rebuild typed network handles
-from the model JSON.
+`powerio.versions()` returns the release API discovery document: the powerio release, the stored module schema name and version, and the BMOPF schema this build speaks. Its keys agree with the C `pio_schema_versions_json` report where both apply.
 
-`pkg.operating_points()` returns a Python dict for the replayable operating
-point series, or `None`. `pkg.materialize_operating_point(i)` returns a new
-static `Package` with one point applied; updates resolve by the model rows'
-`uid` identities, and an unknown identity or a row that contradicts one raises
-`ValueError`. GOC3 documents populate this series from the source time series
-while the static model JSON holds the first interval. Network table dicts
-(`net.buses`, `net.loads`, ...) expose each row's `uid`.
-`pkg.study()` returns a Python dict for the package study block, or `None`;
-`pkg.materialize_study_commit(i)` folds cumulative commits through `i` into a
-new static package and clears both replay blocks.
-`pkg.validate()`, `pkg.validation()`, and `pkg.diagnostics()` expose the
-document validation profile, and multiconductor documents lower through
-`pkg.multiconductor_to_balanced_preflight()` and
-`pkg.lower_multiconductor_to_balanced()`.
+## MCP server
+
+MCP clients can request stored module output from `parse` through the `module` transport and pass that same value back to the other network tools:
 
 ```python
-pkg = pio.Package.from_file("goc3_case.json", from_="goc3-json")
-series = pkg.operating_points()
-static_pkg = pkg.materialize_operating_point(0)
-net = static_pkg.as_balanced()
+parsed = parse(path="case9.m", transport="module")
+stored = parsed["module_json"]
+summary(module_json=stored)
+matrix("bprime", module_json=stored)
+save(out_path="case9.raw", to_format="psse", module_json=stored)
+diagnostics(stored)
 ```
 
-## MCP path handling
-
-MCP clients can request `.pio.json` document output from `parse` through the
-`package` transport and pass that same value back to the other network tools:
-
-```python
-parsed = parse(path="case9.m", transport="package")
-pkg = parsed["package_json"]
-summary(package_json=pkg)
-matrix("bprime", package_json=pkg)
-save(out_path="case9.raw", to_format="psse", package_json=pkg)
-diagnostics(pkg)
-```
-
-`summary`, `normalize`, `matrix`, and `save` also auto-detect `.pio.json`
-document JSON passed through the legacy `json` argument. The document
-metadata's `model_kind` routes balanced and multiconductor model JSON.
+`summary`, `normalize`, `matrix`, and `save` also detect stored module JSON passed through the `json` argument. The stored metadata routes balanced and multiconductor model JSON.
 
 `python -m powerio.mcp` and the `powerio-mcp` console script are consumer entry points and do not move without a version bump.
 
-The optional MCP server accepts local filesystem paths and `file://` URIs for
-`path` and `out_path` arguments. Remote URI schemes are rejected. Deployments
-that need filesystem containment can set `POWERIO_MCP_ALLOWED_ROOTS` to an
-`os.pathsep` separated list of directories; all MCP reads and writes must
-resolve under one of those roots. Two legacy single root spellings are read when it is unset, in order: `POWERIO_MCP_ROOT`, then `POWERIO_MCP_ALLOWED_ROOT`, an alternate legacy spelling. The first variable that is set and non-empty wins.
+The optional MCP server accepts local filesystem paths and `file://` URIs for `path` and `out_path` arguments. Remote URI schemes are rejected. Deployments that need filesystem containment can set `POWERIO_MCP_ALLOWED_ROOTS` to an `os.pathsep` separated list of directories; all MCP reads and writes must resolve under one of those roots. Two legacy single root spellings are read when it is unset, in order: `POWERIO_MCP_ROOT`, then `POWERIO_MCP_ALLOWED_ROOT`. The first variable that is set and non-empty wins.
 
 The policy itself is `powerio.mcp.sandbox`, which imports only the standard library, so a server built on another MCP SDK can apply the same rules:
 
@@ -221,9 +181,4 @@ path = checked_path(arg, purpose="path")
 out = checked_path(arg, purpose="out_path", for_write=True)
 ```
 
-`checked_path` decodes the argument (local path or `file://` URI), refuses
-remote schemes, resolves symlinks — including a dangling final component under
-`for_write`, so a link inside a root cannot redirect a write out of it — and
-raises `PathNotAllowed` (a `ValueError` subclass) when the result lands
-outside the roots. Its parts, `allowed_roots`, `decode_local_path`, and
-`check_allowed_path`, are public too, as is `PathNotAllowed`.
+`checked_path` decodes the argument (local path or `file://` URI), refuses remote schemes, resolves symlinks — including a dangling final component under `for_write`, so a link inside a root cannot redirect a write out of it — and raises `PathNotAllowed` (a `ValueError` subclass) when the result lands outside the roots. Its parts, `allowed_roots`, `decode_local_path`, and `check_allowed_path`, are public too, as is `PathNotAllowed`.

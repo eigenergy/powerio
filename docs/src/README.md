@@ -1,73 +1,33 @@
 # PowerIO guide
 
-Readers parse power system source formats into typed models. Explicit passes
-normalize, validate, and lower them, and writers emit supported target formats.
-The `.pio.json` document records how a source was interpreted: model kind,
-provenance, source maps,
-structured diagnostics, validation, and lowering history. Sparse matrices and
-graph views are built from the same models for solver and analysis code.
-Rustdoc covers API detail.
+PowerIO 0.10 is the public beta of the 1.0 API. API corrections may land before 1.0.0 as downstream integrations exercise the new design.
 
-Public conventions:
+PowerIO parses power system data into typed values, converts between supported formats, and builds sparse matrices and graph data for solvers and analysis code. One call reads any supported source:
 
-- writing a case back to the format it was read from returns the original
-  bytes when the reader kept them;
-- cross format conversion keeps the electrical core and reports losses as
-  warnings;
-- lowering between model families is always an explicit, recorded pass;
-- matrix builders state sign, tap, shift, shunt, and reference bus conventions;
-- C, Python, and Julia bindings share the same Rust core.
+```julia
+using PowerIO
+case = parse_file("case9.m")               # PioModule{BalancedNetwork}
+feeder = parse_file("IEEE13Nodeckt.dss")   # PioModule{MulticonductorNetwork}
+```
 
-Transmission readers cover MATPOWER, PSS/E revisions 33 through 35,
-PowerWorld AUX and PWB, PSLF EPC, PowerModels JSON, egret JSON, pandapower JSON,
-PyPSA CSV folders, GO Challenge 3 JSON, Surge JSON, DeepMind OPFData FullTop
-and N-1 dataset JSON, and GridFM Parquet
-datasets. PowerWorld PWD is a display artifact and uses the display API.
-Distribution readers and writers live in `powerio-dist` for OpenDSS,
-PowerModelsDistribution ENGINEERING JSON, and BMOPF JSON.
+```rust,ignore
+let module = powerio::parse(Source::open("case9.m")?)?;   // PioModule<PioValue>
+let case: PioModule<BalancedNetwork> = powerio::try_into_typed(module)?;
+```
 
-Where to look:
+```python
+import powerio
+case = powerio.parse("case9.m")    # PioModule, kind "balanced_network"
+```
 
-- [Compiler model layers](https://powerio.dev/guide/compiler-ir.html): the
-  `BalancedNetwork` and `MulticonductorNetwork` model families and the
-  `.pio.json` document.
-- [PIO JSON schema](https://powerio.dev/guide/pio-json-schema.html): the
-  `.pio.json` field reference, metadata and model JSON versioning, and row
-  identity.
-- [Format fidelity](https://powerio.dev/guide/format-fidelity.html): numeric
-  conventions, the validation oracles, known limits per format, and the missing
-  generator cost policy.
-- [Matrix outputs](https://powerio.dev/guide/matrices.html) and the
-  [DC OPF bundle](https://powerio.dev/guide/dcopf-bundle.html).
-- [C ABI](https://powerio.dev/guide/capi.html): the versioning policy, the
-  version history, and the [ABI 5 migration guide](https://powerio.dev/guide/abi-v5.html).
-- [Migrating](https://powerio.dev/guide/migration.html): one guide per release
-  that breaks something.
-- [Corpus harness](https://powerio.dev/guide/corpus-harness.html): running the
-  conversion invariants over a directory of case files.
-- [Language APIs](https://powerio.dev/guide/languages.html) and
-  [Python](https://powerio.dev/guide/python.html).
-- [Performance](https://powerio.dev/guide/performance.html) and
-  [testing and release checks](https://powerio.dev/guide/contributor-workflow.html).
-- Julia bindings: <https://github.com/eigenergy/PowerIO.jl>.
+The result is a module: one typed value plus the records that explain it, the retained source bytes, the reader's findings, and the operations that produced it. What the value is depends on what the source declares. A MATPOWER case is a balanced network. An OpenDSS feeder is a multiconductor network. A DOE GO Challenge 3 file defines a unit commitment calculation, so it parses to that calculation's input. A DeepMind OPFData file records a solved AC OPF, so it parses to a solution. A PyPSA folder with a snapshot axis parses to a time series, and a GridFM Parquet dataset to a scenario set. [Core Concepts](concepts.md) defines the families.
 
-Rendered API docs (rustdoc) for all crates: <https://powerio.dev>.
+Three rules hold everywhere:
 
-## Crates
+- writing an unchanged module back to its own format reproduces the source bytes exactly;
+- converting to another format keeps everything the target can represent and reports each loss as a coded finding;
+- moving between value families is an explicit, recorded operation, never a side effect.
 
-| crate | responsibility |
-| --- | --- |
-| `powerio` | entry facade: `PioValue`, universal parse, `.pio.json` documents (`powerio::package`), re-exports |
-| `powerio-tx` | parsers, writers, `BalancedNetwork`, `IndexedNetwork`, normalization, format routing |
-| `powerio-matrix` | generic sparse matrices, graph views, and GridFM datasets |
-| `powerio-prob` | complete problem instances and optional matrix projections |
-| `powerio-dist` | multiconductor distribution model and converters |
-| `powerio-cli` | command line interface and TUI |
-| `powerio-py` | PyO3 extension for the Python package |
-| `powerio-capi` | C ABI for C, C++, Julia, and other foreign function interfaces |
+Supported sources: MATPOWER, PSS/E revisions 33 through 35, PowerWorld AUX and PWB, PSLF EPC, PowerModels JSON, Egret JSON, pandapower JSON, PyPSA CSV folders, Surge JSON, DOE GO Challenge 3 JSON, DeepMind OPFData JSON, GridFM Parquet datasets, OpenDSS, PowerModelsDistribution engineering JSON, BMOPF JSON, and the stored `.pio.json` document. [Formats and Fidelity](format-fidelity.md) states each format's supported profile and write support.
 
-Adding a format means adding one reader or writer at the hub rather than
-pairwise converters. `IndexedNetwork` is the dense \\([0,n)\\) analysis view derived from
-a balanced `BalancedNetwork`; matrix builders work from that view. Code that maps
-source bus IDs to dense rows must use `IndexedNetwork::bus_index`; it must not
-clamp IDs or assume 1-based contiguous IDs.
+The same operations run from Rust, Python, Julia, C, the `powerio` command line tool, and the MCP server, with the same value kinds, format names, diagnostic codes, and conventions. [Rust, Python, Julia, and C](languages.md) maps the operations across languages; [0.10 Beta Scope and Known Limits](beta-scope.md) states what this beta includes and what waits for 1.0.

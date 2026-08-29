@@ -1,130 +1,28 @@
-# Language APIs
+# Rust, Python, Julia, and C
 
-PowerIO uses the same IO vocabulary across Rust, Python, Julia, and the C ABI,
-with language-specific spelling where needed. A new format or dataset appears
-as a format string or convenience wrapper rather than a new naming scheme.
-
-Verb taxonomy:
-
-- `parse_*`: bytes, paths, or text to typed parsed values. Transmission parsers
-  return a balanced network handle; distribution parsers return a
-  multiconductor network handle; display parsers return display data.
-- `to_*`: `BalancedNetwork` to a new value
-- `convert_file`: path to target text convenience
-- `write_*`: filesystem outputs (`write_gridfm`, `write_pypsa_csv_folder`,
-  `write_dcopf_bundle`); the Rust
-  hub also keeps `write_as` and per-format `write_*` text builders, the
-  internals behind `to_format` and the `to_*` writers, which the bindings do
-  not mirror
-- `read_*`: filesystem dataset inputs (`read_gridfm`, `read_pypsa_csv_folder`), the inverse of
-  `write_*`. Datasets are multi-file directories, so they read and write;
-  single documents parse and serialize (`parse_*`/`to_*`)
-- `export_*`: handoff to external memory or interface protocols
+One set of operations, one set of stable strings, four idioms. The table maps each concept to its spelling per surface; semantics, kinds, format names, diagnostic codes, signs, and units are identical everywhere, and each surface follows its own language's conventions for errors, ownership, and dispatch.
 
 | Concept | Rust | Python | Julia | C ABI |
 |---|---|---|---|---|
-| Parse path | `parse_file(path, from)` | `parse_file(path, from_=None)` | `parse_file(path; from=nothing)` | `pio_parse_file` |
-| Parse text | `parse_str(text, from)` | `parse_str(text, from_)` | `parse_str(text, format)` | `pio_parse_str` |
-| Parse display path | `parse_display_file(path, from)` | `parse_display_file(path, from_=None)` | — | n/a |
-| Parse display bytes | `parse_display_bytes(bytes, from)` | `parse_display_bytes(data, from_)` | — | n/a |
-| Parse IO | n/a | — | `parse_file(io, format)` | n/a |
-| JSON to Network | `BalancedNetwork::from_json` | `from_json` | `from_json` | `pio_from_json` |
-| File conversion | `convert_file(path, to, from)` | `convert_file(path, to, from_=None)` | `convert_file(path, to; from=nothing)` | `pio_convert_file` |
-| Text conversion | `convert_str(text, to, from)` | `convert_str(text, to, from_)` | `convert_str(text, to; from=format)` | `pio_convert_str` |
-| Parsed conversion | `net.to_format(to)` | `net.to_format(to)` | `to_format(net, to)` | `pio_to_format` |
-| MATPOWER text | `net.to_matpower()` | `net.to_matpower()` | `to_matpower(net)` | `pio_to_format` + `"matpower"` |
-| JSON text | `net.to_json()` | `net.to_json()` | `to_json(net)` | `pio_to_json` |
-| `.pio.json` document JSON | `NetworkPackage::to_json()` | `Package` class / package transport | `to_package` / `write_package` | `pio_package_*` |
-| `.pio.json` operating points | `pkg.operating_points()` | `pkg.operating_points()` | — | `pio_package_operating_points_json` |
-| Materialize operating point | `pkg.materialize_operating_point(i)` | `pkg.materialize_operating_point(i)` | — | `pio_package_materialize_operating_point` |
-| `.pio.json` study block | `pkg.study()` | `pkg.study()` | — | `pio_package_study_json` |
-| Materialize study commit | `pkg.materialize_study_commit(i)` | `pkg.materialize_study_commit(i)` | — | `pio_package_materialize_study_commit` |
-| Parse SCOPF instance | `parse_scopf_str` | `parse_scopf(text, from_="goc3-json", index_base=0)` | SCOPF document adapter | `pio_scopf_parse_str` |
-| Normalized copy | `net.to_normalized()` | `net.to_normalized()` | `to_normalized(net)` | `pio_normalize` |
-| Dense tables | typed table API | `to_dense` | `to_dense` | `pio_*` extractors |
-| PyPSA CSV folder | `read_pypsa_csv_folder` / `write_pypsa_csv_folder` | `read_pypsa_csv_folder` / `net.write_pypsa_csv_folder` | `parse_file(dir; from="pypsa-csv")` / `write_pypsa_csv_folder` | `pio_parse_file` / `pio_write_dir` + `"pypsa-csv"` |
-| gridfm write | `write_gridfm_dataset` / `write_gridfm_batch` | `net.write_gridfm` / `write_gridfm_batch` | — | — |
-| gridfm read | `read_gridfm_dataset(dir, scenario)` | `read_gridfm(dir, scenario=0)` | `read_gridfm(dir; scenario=0)` | `pio_read_dir` + `"gridfm"` |
-| PYPOWER ppc dict | — | `net.to_ppc()` / `from_ppc(ppc)` | — | — |
-| Arrow handoff | internal/C ABI | — | `to_arrow` | `pio_to_arrow` |
+| parse a source | `parse(Source::open(path)?)` → `PioModule<PioValue>` | `powerio.parse(path)` → `PioModule` | `parse_file(path)` → `PioModule{T}` | `pio_parse_file` → `PioModule *` |
+| parse named bytes | `parse(Source::from_bytes(name, bytes)?)` | `powerio.parse(bytes)` | `parse_bytes(bytes; name)` | `pio_parse_bytes` |
+| the value kind | `module.value().kind().as_str()` | `module.kind` | `kind(m)` (or the type parameter) | `pio_module_kind` |
+| typed narrowing | `try_into_typed::<T>(module)` (consuming, recoverable) | `value_type=` assertion + `module.value` | the `PioModule{T}` type itself; `m.value` | `pio_module_balanced_network`, `pio_module_multiconductor_network` |
+| diagnostics | `module.diagnostics()` → `&[Diagnostic]` | `module.diagnostics()` → native records | `diagnostics(m)` → `Vector{Diagnostic}` | `pio_module_diagnostics` → `PioDiagnostics *` |
+| failure | `Err(Error)` carrying diagnostics | raised `PowerIOError` family | thrown `PowerIOCError` with records | NULL/-1 + `PioError *` out |
+| same format write | `write_module_str(&module, fmt)` | `module.value.to_format(to)` / `.write_file(path, to)` | `write_str(m; format)` / `write_file` | `pio_module_write_str` / `_write_file` |
+| convert one call | `convert_file` | `powerio.convert_file` | `convert_file` | `pio_convert_file` |
+| stored document | `stored::write_module` / facade parse | `PioModule.from_json` / `to_json` | `write_json(m)` / `parse_file` | `pio_module_write_json` / `_read_json` |
+| state selection | `select` module ops | `module.export_state(...)` (zero based) | `select_state(m; time=…)` (one based) | `pio_module_export_state` (zero based) |
+| balanced lowering | `transform::lower_module_to_balanced` | `module.to_balanced()` | `lower_to_balanced(m)` | `pio_module_lower_to_balanced` |
+| DC branch data | `powerio_tx::dc_network_data()` | `net.dc_data()` | `dc_data` + `BorrowedVector` views | `pio_dc_data_*` spans |
+| feature probe | Cargo features | `powerio.features()` | `has_feature`, `features()` | `pio_has_feature`, `pio_build_info` |
 
-**Note:** the C ABI carries no per-format symbols: matpower, PyPSA CSV
-directories, and gridfm datasets are all format strings into
-`pio_to_format` / `pio_parse_str` / `pio_write_dir` / `pio_read_dir`. Removing
-or changing a documented format token is a C behavior change even though the C
-signature stays the same. The language APIs keep their per-format conveniences
-(`to_matpower`, `from_json`, ...) as wrappers over the same paths.
+The differences are deliberate, and small:
 
-## C ABI and binding compatibility
+- Rust owns and moves: narrowing consumes the dynamic module and hands it back on mismatch. Python and Julia share: the typed value and the module co-own the same native data, and finalizers or reference counts release it.
+- Index bases follow the language: element identifiers are the source's own everywhere, dense positions are zero based at the C and Python boundary and one based in Julia's `select_state`, each stated in its documentation.
+- Errors follow the language: `Result` in Rust, exceptions in Python and Julia, status plus `PioError` handles in C. All four carry the same coded records, except Python's `FileNotFoundError` for a missing file, which carries none (the deliberate Python idiom for a bad path).
+- Borrowed numerical views (`C` spans, Julia `BorrowedVector`, Python buffer views) stay valid until their owner releases; `copy` produces an ordinary mutable array.
 
-The C ABI is the stable boundary for non Rust callers. Handles own parsed
-networks. `PioPackage` handles own `.pio.json` documents. Callers free
-network handles with `pio_network_free`, package handles with
-`pio_package_free`, and SCOPF handles with `pio_scopf_instance_free`. They free
-returned text with `pio_string_free`, size output buffers before filling them,
-and treat every format name as a string routed through the same parser and
-writer hub.
-
-C ABI review points:
-
-- null handles must return documented defaults or errors and must never crash;
-- optional output buffers must be safe to pass as null; required output structs
-  such as Arrow exports must report an error when null;
-- returned text and warning buffers must be NUL terminated when capacity permits;
-- reported lengths must let callers allocate exact buffers;
-- header declarations and exported Rust symbols must match;
-- feature gated exports such as Arrow, GridFM, distribution, packages, and
-  problem instances must be additive;
-- ownership rules must be documented in the header, README, and binding code.
-
-Julia's `PowerIO.jl` uses the C ABI for handles, dense extractors, Arrow,
-GridFM, PyPSA CSV folders, distribution conversion, and `.pio.json` document
-construction. Programmatic whole-network JSON is `to_json` and `from_json` (`pio_to_json`
-and `pio_from_json` in C); file handoffs should use `.pio.json`. The Julia binding checks
-`pio_abi_version()` against `PIO_ABI_VERSION` on first use. Distribution calls
-also check `pio_dist_abi_version()`.
-
-GOC3 document construction is the first `.pio.json` operating point path backed
-by a source format. The static balanced model JSON carries the first interval;
-the replayable series is exposed through the package APIs above.
-
-During development, test the Julia binding against the local C ABI instead of
-a release artifact:
-
-```sh
-cargo build -p powerio-capi --release --features arrow,matrix,gridfm,dist,prob
-POWERIO_CAPI=$PWD/target/release/libpowerio_capi.dylib \
-  julia --project=../PowerIO.jl -e 'using Pkg; Pkg.test()'
-```
-
-Binding compatibility checks:
-
-| surface | behavior |
-| --- | --- |
-| Python base import | `import powerio` does not import NumPy, SciPy, NetworkX, Polars, pandas, pyarrow, or the MCP SDK |
-| Python optional paths | matrix, graph, GridFM inspection, pandas, MCP, and benchmark oracles live behind extras |
-| C ABI | `pio_abi_version()` is the core compatibility check; optional symbols are additive and feature probed |
-| Julia | `PowerIO.jl` checks the C ABI version before first use and checks `pio_dist_abi_version()` before distribution calls |
-| Arrow | C returns Arrow C Data Interface structs; Julia's default `to_arrow` copies to owned vectors, while `copy=false` keeps the wrapper alive for zero copy reads |
-| GridFM | Julia and C read GridFM through `pio_read_dir` / `"gridfm"` and surface schema losses as warnings |
-| Distribution | Python, Julia, Rust, and C use separate distribution handles; transmission and distribution conversion paths do not mix |
-
-## Distribution surface (`powerio-dist`)
-
-The multiconductor distribution model follows the same taxonomy under its own
-handle type; the two families do not mix. The C distribution surface ships
-behind the optional `dist` feature (`PIO_DIST`); a consumer probes it with
-`pio_has_feature("dist")`, then checks `pio_dist_abi_version()` against
-`PIO_DIST_ABI_VERSION`. PowerIO.jl uses the same runtime check before calling
-the distribution C conversion helpers.
-
-| Concept | Rust | Python | Julia | C ABI |
-|---|---|---|---|---|
-| Parse path | `powerio_dist::parse(Source::open(path)?)` | `dist.parse_file(path, from_=None)` | `parse_file(MulticonductorNetwork, path; from=nothing)` | `pio_dist_parse_file` |
-| Parse text | `powerio_dist::parse(Source::from_bytes(...))` | `dist.parse_str(text, from_)` | `parse_str(MulticonductorNetwork, text, format)` | `pio_dist_parse_str` |
-| File conversion | `powerio_dist::convert_source(source, to)` | `dist.convert_file(path, to, from_=None)` | `convert_file(MulticonductorNetwork, path, to; from=nothing)` | `pio_dist_convert_file(path, from, to, ...)` |
-| Target format type | `DistTargetFormat` (`FromStr`, `name()`) | format name strings | `MulticonductorNetwork` plus format strings | format name strings |
-| Text conversion | `powerio_dist::convert_source(source, to)` | `dist.convert_str(text, to, from_)` | `convert_str(MulticonductorNetwork, text, to, format)` | `pio_dist_convert_str(text, from, to, ...)` |
-| Parsed conversion | `powerio_dist::write_as(&module, to)` | `case.to_format(to)` | `to_format(net, to)` | `pio_dist_to_format` |
-| Parse warnings | `module.diagnostics()` | `case.warnings` | `warnings(net)` | `pio_dist_warnings` |
-| Graph projection | `net.graph()` | `case.graph()` | — | `pio_dist_graph_json` |
+The C page ([C ABI](capi.md)) and the Python page ([Python API](python.md)) carry each surface's full story; PowerIO.jl documents Julia at [eigenergy.github.io/PowerIO.jl](https://eigenergy.github.io/PowerIO.jl). The CLI and MCP server expose the same operations over their own boundaries: [CLI and MCP](cli-mcp.md).
