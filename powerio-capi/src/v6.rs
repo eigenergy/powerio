@@ -832,33 +832,10 @@ pub unsafe extern "C" fn pio_module_lower_to_balanced(
             .map_err(|(_, boxed)| {
                 // Best effort projection of the 0.9 legacy diagnostic list
                 // this failure still carries on this vintage onto the 1.0
-                // `Diagnostic` type, so the typed and JSON error channels
-                // agree in count instead of the JSON channel alone carrying
-                // the findings. Reads each entry through JSON rather than
-                // naming the legacy type, which is crate private to
-                // `powerio` (`stored::legacy09`) and so cannot be spelled
-                // here; an entry that fails to decode is dropped from both
-                // channels rather than only one. Severity collapses the same
-                // way the crate's own 0.9 upgrade path does: only `error`
-                // and `warning` keep their name, everything else becomes a
-                // note.
-                let records: Vec<powerio_core::Diagnostic> = boxed
-                    .diagnostics
-                    .iter()
-                    .filter_map(|entry| {
-                        let value = serde_json::to_value(entry).ok()?;
-                        let code = value.get("code")?.as_str()?;
-                        let message = value.get("message")?.as_str()?;
-                        let severity =
-                            match value.get("severity").and_then(serde_json::Value::as_str) {
-                                Some("error") => powerio_core::DiagnosticSeverity::Error,
-                                Some("warning") => powerio_core::DiagnosticSeverity::Warning,
-                                _ => powerio_core::DiagnosticSeverity::Note,
-                            };
-                        let code = powerio_core::DiagnosticCode::new(code).ok()?;
-                        Some(powerio_core::Diagnostic::new(code, severity, message))
-                    })
-                    .collect();
+                // The error's records are already 1.0 `Diagnostic` rows, so
+                // both channels carry them whole: targets, ids, spans, and
+                // details all survive instead of being projected away.
+                let records = boxed.diagnostics.clone();
                 let message = records
                     .first()
                     .map_or_else(|| boxed.to_string(), powerio_core::render_diagnostic);
@@ -2540,6 +2517,46 @@ mod tests {
             }
         }
         unsafe { crate::pio_string_release(text) };
+        unsafe { pio_module_release(module) };
+    }
+
+    /// A refused lowering's typed records keep their pointer targets on the
+    /// C channel; the projection that dropped them is gone.
+    #[cfg(feature = "dist")]
+    #[test]
+    fn refused_lowering_keeps_targets_on_the_typed_channel() {
+        let path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../tests/data/dist/opendss/ieee13/IEEE13Nodeckt.dss"
+        );
+        let c_path = std::ffi::CString::new(path).unwrap();
+        let mut error: *mut PioError = std::ptr::null_mut();
+        let module = unsafe { pio_parse_file(c_path.as_ptr(), std::ptr::null(), &raw mut error) };
+        assert!(!module.is_null());
+        let lowered = unsafe { pio_module_lower_to_balanced(module, 100.0, &raw mut error) };
+        assert!(lowered.is_null(), "IEEE13 must refuse the lowering");
+        assert!(!error.is_null());
+        let list = unsafe { pio_error_diagnostics(error) };
+        assert!(!list.is_null());
+        let len = unsafe { pio_diagnostics_len(list) };
+        assert!(len > 0);
+        let mut saw_target = false;
+        for index in 0..len {
+            let target = unsafe { pio_diagnostic_target(list, index) };
+            if !target.is_null() {
+                let text = unsafe { std::ffi::CStr::from_ptr(target) }
+                    .to_str()
+                    .unwrap();
+                assert!(text.starts_with('/'), "{text}");
+                saw_target = true;
+            }
+        }
+        assert!(
+            saw_target,
+            "at least one record must carry its pointer target"
+        );
+        unsafe { pio_diagnostics_release(list) };
+        unsafe { pio_error_release(error) };
         unsafe { pio_module_release(module) };
     }
 }

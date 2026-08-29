@@ -1948,20 +1948,20 @@ fn convert_stored(
             )
             .with_context(|| format!("serializing to {target}"))?;
             for w in conv.rendered_diagnostics() {
-                eprintln!("fidelity: {w}");
+                eprintln!("{w}");
             }
             write_conversion_output(&conv.text, &[], output)?;
             Ok(())
         }
         (FamilyCase::Distribution(parsed), _, Some(target)) => {
             for w in &parsed.warnings {
-                eprintln!("parse: {w}");
+                eprintln!("{w}");
             }
             let conv = parsed.to_format(target);
             let mut diagnostics = parsed.diagnostics.clone();
             diagnostics.extend(conv.diagnostics.iter().cloned());
             for w in conv.rendered_diagnostics() {
-                eprintln!("fidelity: {w}");
+                eprintln!("{w}");
             }
             write_conversion_output(&conv.text, &conv.sidecars, output)?;
             fail_on_parse_errors(&parse_error_lines(&diagnostics))
