@@ -51,8 +51,12 @@ fn solve_dense(matrix: &[Vec<f64>], rhs: &[f64]) -> Vec<f64> {
             if factor == 0.0 {
                 continue;
             }
-            for col in column..n {
-                a[row][col] -= factor * a[column][col];
+            let (pivot_row, target_row) = {
+                let value = a[column][column..n].to_vec();
+                (value, &mut a[row][column..n])
+            };
+            for (target, pivot) in target_row.iter_mut().zip(pivot_row.iter()) {
+                *target -= factor * pivot;
             }
             b[row] -= factor * b[column];
         }
@@ -177,7 +181,10 @@ fn the_reference_constrained_system_solves_the_stated_problem() {
     let reference = reference_rows_radians(&net);
     assert_eq!(reference.len(), 1, "case9 has one reference");
     let (ref_row, va_ref) = reference[0];
-    assert_eq!(va_ref, 0.0, "case9 states its reference angle at zero");
+    assert!(
+        va_ref.abs() < f64::EPSILON,
+        "case9 states its reference angle at zero"
+    );
 
     let instance = DcPfInstance::from_network(net).unwrap();
     let operators = DcOperators::build(&instance).unwrap();
