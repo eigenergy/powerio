@@ -16,6 +16,7 @@ import powerio
 DATA = Path(__file__).resolve().parents[2] / "tests" / "data"
 DSS = DATA / "dist" / "micro" / "xfmr_single_phase.dss"
 BMOPF = DATA / "dist" / "bmopf" / "example_ieee13.json"
+PSSE_CASE5 = DATA / "psse" / "case5.raw"
 PMD = DATA / "dist" / "pmd" / "ieee13.json"
 PWD = DATA / "powerworld" / "ACTIVSg200.pwd"
 MINIMAL_BMOPF = '{"bus":{"a":{"terminal_names":["1"]}}}'
@@ -638,15 +639,24 @@ def _split_dss_case(tmp_path):
     return root
 
 
+def _warning_texts(warnings: list) -> "list[str]":
+    """Each structured warning record (`code`/`severity`/`message`/`target`)
+    as one searchable string, for tests that check substrings a rendered
+    `CODE: message` line used to carry directly."""
+    return [
+        ": ".join(part for part in (item.get("code"), item.get("message")) if part)
+        for item in warnings
+    ]
+
+
 def test_mcp_parse_widens_dss_includes_to_the_allowed_root(monkeypatch, tmp_path):
     root = _split_dss_case(tmp_path)
     monkeypatch.setenv("POWERIO_MCP_ALLOWED_ROOTS", str(root))
 
     parsed = server.parse(path=str(root / "feeder" / "f.dss"))
     assert parsed["domain"] == "distribution"
-    assert not any("INCLUDE_REFUSED" in w for w in parsed["warnings"]), parsed[
-        "warnings"
-    ]
+    texts = _warning_texts(parsed["warnings"])
+    assert not any("INCLUDE_REFUSED" in text for text in texts), texts
     assert parsed["summary"]["elements"]["lines"] == 1
 
 
@@ -662,9 +672,8 @@ def test_mcp_parse_still_refuses_includes_outside_the_allowed_root(
     monkeypatch.setenv("POWERIO_MCP_ALLOWED_ROOTS", str(root))
 
     parsed = server.parse(path=str(deck))
-    assert any("escapes the include root" in w for w in parsed["warnings"]), parsed[
-        "warnings"
-    ]
+    texts = _warning_texts(parsed["warnings"])
+    assert any("escapes the include root" in text for text in texts), texts
     doc = json.loads(parsed["json"])
     assert "leaked" not in json.dumps(doc)
 
@@ -880,24 +889,30 @@ def test_module_diagnostics_reach_summary_and_convert_warnings():
 
     module_doc = _balanced_module_with_diagnostics([error, note])
     summary = server._summary_tool(package_json=module_doc)
-    assert summary["warnings"] == ["M.E.1: an error finding"]
+    # Only the error survives the warning/error filter; the note does not.
+    assert summary["warnings"] == [
+        {"code": "M.E.1", "severity": "error", "message": "an error finding", "target": None}
+    ]
 
     converted = server.convert(to="matpower", package_json=module_doc)
-    assert "M.E.1: an error finding" in converted["warnings"]
-    assert not any("M.N.1" in w for w in converted["warnings"])
+    texts = _warning_texts(converted["warnings"])
+    assert "M.E.1: an error finding" in texts
+    assert not any("M.N.1" in text for text in texts)
 
     note_only_doc = _balanced_module_with_diagnostics([note])
     assert server._summary_tool(package_json=note_only_doc)["warnings"] == []
 
     # The same finding, carried by the older released package transport,
-    # renders the identical "code: message" string: the two input forms agree.
+    # upgrades to the identical structured record: the two input forms agree.
     package = _legacy_package_doc(
         diagnostics=[
             {"code": error["code"], "severity": error["severity"], "message": error["message"]}
         ]
     )
     package_summary = server._summary_tool(package_json=json.dumps(package))
-    assert package_summary["warnings"] == ["M.E.1: an error finding"]
+    assert package_summary["warnings"] == [
+        {"code": "M.E.1", "severity": "error", "message": "an error finding", "target": None}
+    ]
 
 
 def test_multiconductor_module_diagnostics_survive_in_order():
@@ -922,7 +937,29 @@ def test_multiconductor_module_diagnostics_survive_in_order():
 
     summary = server._summary_tool(package_json=module_doc)
     assert summary["warnings"] == [
-        "A.B.C: no span here",
-        "D.E.F: in range span",
-        "G.H.I: trailing error",
+        {"code": "A.B.C", "severity": "warning", "message": "no span here", "target": None},
+        {"code": "D.E.F", "severity": "error", "message": "in range span", "target": None},
+        {"code": "G.H.I", "severity": "error", "message": "trailing error", "target": None},
     ]
+
+
+def test_parse_warnings_are_structured_records_on_every_transport():
+    """A PSS/E read reports six findings. The path transport used to publish
+    them as six plain rendered strings with no way back to code/severity/
+    target, while the package transport (which reads back through a stored
+    module) already published six dicts. Both now publish the identical
+    structured list."""
+    via_path = server.parse(path=str(PSSE_CASE5))
+    via_package = server.parse(path=str(PSSE_CASE5), transport="package")
+
+    for parsed in (via_path, via_package):
+        warnings = parsed["warnings"]
+        assert len(warnings) == 6, warnings
+        for record in warnings:
+            assert isinstance(record, dict), warnings
+            assert record.keys() >= {"code", "severity", "message"}
+            assert record["code"]
+            assert record["severity"] in ("error", "warning", "remark", "note")
+            assert record["message"]
+
+    assert via_path["warnings"] == via_package["warnings"]

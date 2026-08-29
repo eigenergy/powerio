@@ -281,6 +281,11 @@ class BalancedNetwork:
         """Serialize to the JSON transport."""
         return self._inner.to_json()
 
+    def diagnostics(self) -> Any:
+        """The same findings as ``read_warnings``, structured: a list of
+        dicts carrying ``code``, ``severity``, ``message``, and ``target``."""
+        return _json.loads(self._inner.diagnostics_json())
+
     def geo_layer(self) -> dict[str, Any]:
         """This case's coordinates as a canonical GeoJSON FeatureCollection.
 
