@@ -348,9 +348,9 @@ def _header(schema: str) -> Dict[str, Any]:
     return {"schema": schema, _VERSION_KEY: powerio.__version__}
 
 
-# The 0.9 package severities plus the stored module's remark/note; one count
-# table serves both generations.
-_SEVERITY_KEYS = ("fatal", "error", "warning", "remark", "note", "info", "debug")
+# The module record severities. A legacy stored document's own validation
+# counts pass through unaltered, extra keys and all.
+_SEVERITY_KEYS = ("error", "warning", "remark", "note")
 
 
 def _severity_counts(diagnostics: list[Dict[str, Any]]) -> Dict[str, int]:
@@ -514,15 +514,11 @@ def _diagnostics_payload(module_json: str, verbose: bool = False) -> Dict[str, A
         if counts.get("info", 0)
         else "ok"
     )
-    total = sum(int(counts.get(key, 0)) for key in _SEVERITY_KEYS)
-    if total == 0:
+    tallies = {key: int(value) for key, value in counts.items() if isinstance(value, (int, float))}
+    if sum(tallies.values()) == 0:
         text = "ok: no diagnostics"
     else:
-        parts = [
-            f"{key}={int(counts.get(key, 0))}"
-            for key in _SEVERITY_KEYS
-            if int(counts.get(key, 0))
-        ]
+        parts = [f"{key}={value}" for key, value in tallies.items() if value]
         text = f"{status}: " + ", ".join(parts)
     return {
         **_header("powerio.diagnostics"),
