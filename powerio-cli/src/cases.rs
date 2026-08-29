@@ -98,7 +98,7 @@ fn classify_case_json(text: &str, path: &Path) -> anyhow::Result<DetectedFormat>
         JsonClass::ModelJson => anyhow::bail!(
             "{} is bare powerio model JSON, which is not a case format; read it with \
              the bindings' from_json (powerio.from_json in Python, from_json in Julia, \
-             pio_from_json in C)",
+             pio_balanced_network_from_json in C)",
             path.display()
         ),
         JsonClass::Case(Detection::Ambiguous) => anyhow::bail!(
