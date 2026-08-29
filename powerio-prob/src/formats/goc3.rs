@@ -21,6 +21,10 @@ use crate::scopf::{ScopfError, parse_scopf_str};
 /// An invalid document from either half, or bus identities that disagree
 /// between the two; every failure retains the source.
 pub fn parse_goc3_instance(source: Source) -> Result<PioModule<AcScucInstance>, Error> {
+    let source = match source.format() {
+        Some(_) => source,
+        None => source.with_format(powerio_core::FormatId::new("goc3-json")?),
+    };
     match parse_goc3_text(&source) {
         Ok((instance, diagnostics)) => PioModule::parsed(instance, source, diagnostics),
         Err(error) => Err(error.with_source(source)),
