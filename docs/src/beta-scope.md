@@ -28,6 +28,6 @@ One package version covers the Rust crates, the Python package, and PowerIO.jl. 
 | package version | 0.10.0 | manifests, `powerio.versions()`, `build_info` | every release |
 | C ABI | 6 | `pio_abi_version` handshake at load | an existing C signature or documented behavior changes |
 | `.pio.json` schema | 1 | the stored document header | a document version 1 cannot represent is needed |
-| matrix Arrow tables | 1 | the Arrow catalog report | an existing table's identity or column order would change (append only) |
+| matrix Arrow tables | append only, no separate number | the Arrow catalog report, stamped with the package version | an existing table's identity or column order would change (a removed table's id is burned, never reused) |
 
-These answer different questions and never race each other: 0.10.0 is what you install, ABI 6 is what a compiled consumer must match, schema 1 is what stored documents declare.
+These answer different questions and never race each other: 0.10.0 is what you install, ABI 6 is what a compiled consumer must match, schema 1 is what stored documents declare, and the Arrow catalog is the one report a table consumer reads before addressing columns.

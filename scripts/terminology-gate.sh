@@ -17,4 +17,14 @@ if hits=$(grep -rn -iE "$pattern" "${paths[@]}" 2>/dev/null); then
   echo "$hits"
   exit 1
 fi
+
+# Retired diagnostic namespaces must not survive in prose or doc comments.
+# LOWER.* became TRANSFORM.*; only the legacy09 module, which documents the
+# 0.9 wire form, may still spell the old token.
+retired='\bLOWER\.[A-Z_]+'
+if hits=$(grep -rn -E "$retired" "${paths[@]}" 2>/dev/null | grep -v legacy09); then
+  echo "retired diagnostic namespace (see arch-v1/V1_TERMINOLOGY.md):"
+  echo "$hits"
+  exit 1
+fi
 echo "terminology: clean"
