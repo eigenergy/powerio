@@ -44,17 +44,7 @@ over the alternatives. Review them before changing a public name or meaning.
   over the `powerio` facade and its component crates.
 - **`powerio-py`**: PyO3 extension behind the `powerio` Python package
   (`python/powerio/`); hands back COO triplets that scipy assembles.
-- **`powerio-capi`**: C ABI over `powerio` (`pio_*`, header `powerio.h`) for
-  C, C++, Julia, and other FFI users. The current ABI v5 feature and function
-  names for `.pio.json` are replaced consistently in ABI v6. `--features arrow` adds
-  `pio_to_arrow`, an Arrow C Data Interface export; `--features gridfm` adds
-  `pio_read_dir` / `pio_scenario_ids` (the gridfm-datakit Parquet
-  parser, pulling in `powerio-matrix`); `--features prob` adds the current
-  problem instance functions, which ABI v6 replaces with the 1.0 names.
-  Those v5 feature additions were additive. The 1.0 type and ownership changes
-  ship together as ABI v6. Matrix Arrow ABI v1 is COO tables plus append only
-  row and column mapping tables
-  `matrix_bus` and `matrix_branch`.
+- **`powerio-capi`**: C ABI over `powerio` (`pio_*`, header `powerio.h`) for C, C++, Julia, and other FFI users. The current ABI v5 feature and function names for `.pio.json` are replaced consistently in ABI v6. `--features arrow` adds `pio_to_arrow`, an Arrow C Data Interface export; `--features gridfm` adds `pio_read_dir` / `pio_scenario_ids` (the gridfm-datakit Parquet parser, pulling in `powerio-matrix`); `--features prob` adds the current problem instance functions, which ABI v6 replaces with the 1.0 names. Those v5 feature additions were additive. The 1.0 type and ownership changes ship together as ABI v6. The matrix Arrow tables are COO tables plus row and column mapping tables `matrix_bus` and `matrix_branch`, versioned append only with no separate number: a removed table's id is burned, never reused, and the Arrow catalog report is stamped with the package version.
 
 `BalancedNetwork` and `MulticonductorNetwork` are the two reusable electrical
 network types. `IndexedNetwork`, normalized tables, and dense row arrays are
@@ -154,12 +144,7 @@ PowerIO releases are tag driven.
    git push origin vX.Y.Z
    ```
 
-4. `.github/workflows/release-binaries.yml` runs on tag pushes. Its binding
-   gate tests PowerIO.jl `main` against the tagged library before it builds the
-   `powerio-capi` release tarballs for `aarch64-apple-darwin`,
-   `aarch64-linux-gnu`, `x86_64-apple-darwin`, `x86_64-linux-gnu`, and
-   `x86_64-w64-mingw32`, with the release features
-   `arrow,matrix,gridfm,dist,pkg,prob`.
+4. `.github/workflows/release-binaries.yml` runs on tag pushes. Its binding gate tests PowerIO.jl `main` against the tagged library before it builds the `powerio-capi` release tarballs for `aarch64-apple-darwin`, `aarch64-linux-gnu`, `x86_64-apple-darwin`, `x86_64-linux-gnu`, and `x86_64-w64-mingw32`, with the release features `arrow,matrix,gridfm,dist,prob`.
 5. That workflow creates or updates a **draft** GitHub release and attaches the
    five binary assets. Do not expect a draft release to exist before the tag
    workflow runs.

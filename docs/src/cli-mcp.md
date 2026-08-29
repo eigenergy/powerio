@@ -21,7 +21,7 @@ Format names, value kinds, and diagnostic codes are the same stable strings the 
 
 ## The MCP server
 
-`powerio-mcp` (from the Python package) serves the same operations to MCP clients: parse, inspect, diagnostics, conversion, writing, state inventory and selection, the balanced lowering, and DC matrix data. Tool inputs and outputs use the stable kind and format strings, and diagnostics cross as structured records with code, severity, message, and target.
+`powerio-mcp` (from the Python package) serves the same operations to MCP clients: parse, inspect, diagnostics, conversion, writing, state inventory and selection, the balanced lowering, and DC matrix data. Tool inputs and outputs use the stable kind and format strings, and diagnostics cross as structured records with code, severity, message, and target. Every tool response also carries `schema` (a dotted name such as `powerio.parse`) and `powerio_version` (the release that produced it), so a client can identify a response's shape before reading further.
 
 ```sh
 pip install powerio
