@@ -185,7 +185,7 @@ pub mod codes {
         /// A leading UTF-8 byte order mark was removed before the reader saw
         /// the text, so a same-format echo differs by exactly those bytes.
         PARSE_SOURCE_BOM_STRIPPED = "PARSE.SOURCE.BOM_STRIPPED", Remark,
-            "a leading UTF-8 byte order mark was removed before the reader ran", retired = "1.0.0";
+            "a leading UTF-8 byte order mark was removed before the reader ran", retired = "0.10.0";
         PARSE_MATPOWER_MALFORMED = "PARSE.MATPOWER.MALFORMED", Error,
             "a MATPOWER matrix is missing, short, unparseable, or unbalanced", category = Parse;
         PARSE_SOURCE_MALFORMED = "PARSE.SOURCE.MALFORMED", Error,
