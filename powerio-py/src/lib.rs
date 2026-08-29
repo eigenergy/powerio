@@ -159,23 +159,29 @@ fn parse_scheme(s: &str) -> PyResult<Scheme> {
     }
 }
 
-/// Accepts `series`/`series-impedance`, `matpower`/`mp`, and
-/// `reactance-only` (case- and separator-insensitive).
+/// Accepts the 1.0 formula names (`series_susceptance`, `tap_adjusted_reactance`,
+/// `reactance_only`), their storage aliases (`series`, `matpower`), and two
+/// Python-only 0.9 aliases (`series-impedance`, `mp`); case- and
+/// separator-insensitive (`-` and `_` are interchangeable).
 fn parse_convention(s: &str) -> PyResult<DcConvention> {
-    match normalize(s).as_str() {
-        "series" | "seriesimpedance" => Ok(DcConvention::SeriesSusceptance),
-        "matpower" | "mp" => Ok(DcConvention::TapAdjustedReactance),
-        "reactanceonly" => Ok(DcConvention::ReactanceOnly),
+    let normalized = s.to_ascii_lowercase().replace('-', "_");
+    if let Some(convention) = DcConvention::from_formula_name(&normalized) {
+        return Ok(convention);
+    }
+    match normalized.as_str() {
+        "series_impedance" => Ok(DcConvention::SeriesSusceptance),
+        "mp" => Ok(DcConvention::TapAdjustedReactance),
         // 0.8 spelled b = 1/x "paper"/"paper-pure" and made it the default.
         // Name its successor: the nearest-looking option, "series", is a
         // different formula, so a caller who guesses gets numbers instead of
         // an error.
-        "paper" | "paperpure" | "pure" => Err(PyValueError::new_err(
+        "paper" | "paper_pure" | "pure" => Err(PyValueError::new_err(
             "convention 'paper-pure' is now 'reactance-only'; it is no longer \
              the default, and 'series' is a different formula (b = x/(r²+x²))",
         )),
         other => Err(PyValueError::new_err(format!(
-            "unknown convention {other:?}; expected 'series', 'matpower', or 'reactance-only'"
+            "unknown convention {other:?}; expected 'series_susceptance', \
+             'tap_adjusted_reactance', or 'reactance_only'"
         ))),
     }
 }

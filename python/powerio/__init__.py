@@ -441,7 +441,10 @@ class BalancedNetwork:
         return (g + 1j * b).tocsr()
 
     def ptdf(self, convention: str = "series", solver: str = "auto"):
-        """DC PTDF (m×n). ``convention`` is ``"series"`` or ``"matpower"``.
+        """DC PTDF (m×n). ``convention`` is ``"series_susceptance"``,
+        ``"tap_adjusted_reactance"``, or ``"reactance_only"`` (aliases
+        ``"series"``, ``"matpower"``, ``"series-impedance"``, ``"mp"`` also
+        accepted; case- and separator-insensitive).
 
         ``solver`` is ``"auto"``, ``"dense"``, or ``"sparse"``. ``"auto"``
         uses the dense factorization on small cases and the sparse Cholesky
@@ -450,15 +453,16 @@ class BalancedNetwork:
         return _to_csr(self._inner.ptdf(convention, solver))
 
     def lodf(self, convention: str = "series", solver: str = "auto"):
-        """DC LODF (m×m). ``solver`` as in :meth:`ptdf`."""
+        """DC LODF (m×m). ``convention`` and ``solver`` as in :meth:`ptdf`."""
         return _to_csr(self._inner.lodf(convention, solver))
 
     def weighted_laplacian(self, convention: str = "series"):
-        """Weighted Laplacian ``L = A diag(b) Aᵀ``."""
+        """Weighted Laplacian ``L = A diag(b) Aᵀ``. ``convention`` as in :meth:`ptdf`."""
         return _to_csr(self._inner.weighted_laplacian(convention))
 
     def incidence(self, convention: str = "series") -> "Incidence":
-        """Signed incidence factorization as an :data:`Incidence` tuple."""
+        """Signed incidence factorization as an :data:`Incidence` tuple.
+        ``convention`` as in :meth:`ptdf`."""
         np = _require("numpy", "matrix")
         a, b, p_shift, branch_of_col = self._inner.incidence(convention)
         return Incidence(
