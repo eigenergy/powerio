@@ -118,7 +118,7 @@ Calculation and dataset inputs:
 - GridFM Parquet produces `ScenarioSet<BalancedNetwork>`
 - Supported PyPSA and Egret profiles can produce typed time series
 
-[Formats and Fidelity](https://powerio.dev/guide/format-fidelity.html) lists
+[Formats and Fidelity](docs/src/format-fidelity.md) lists
 the supported profile and write behavior for every format.
 
 ## Package structure
@@ -142,13 +142,13 @@ preferred universal power system format.
 
 ## Documentation
 
-- [Guide](https://powerio.dev)
-- [Core concepts](https://powerio.dev/guide/concepts.html)
-- [PowerIO intermediate representations](https://powerio.dev/guide/architecture.html)
-- [Matrices and signs](https://powerio.dev/guide/matrices.html)
-- [Rust, Python, Julia, and C](https://powerio.dev/guide/languages.html)
-- [Python API](https://powerio.dev/guide/python.html)
-- [C ABI](https://powerio.dev/guide/capi.html)
+- [Guide](docs/src/README.md)
+- [Core concepts](docs/src/concepts.md)
+- [PowerIO intermediate representations](docs/src/architecture.md)
+- [Matrices and signs](docs/src/matrices.md)
+- [Rust, Python, Julia, and C](docs/src/languages.md)
+- [Python API](docs/src/python.md)
+- [C ABI](docs/src/capi.md)
 - [PowerIO.jl](https://eigenergy.github.io/PowerIO.jl)
 
 Migration notes, retired names, ABI history, internal crate rules, performance

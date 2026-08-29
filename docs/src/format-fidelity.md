@@ -124,7 +124,7 @@ findings carry `READ.TRANSMISSION.PARSE_WARNING`, GridFM reads
   exists, so that writer is validated by powerio's own read back plus a
   PowerModels JSON bridge. The `.pwb` layouts are reverse engineered; the decode
   evidence and coverage matrix are maintainer notes at
-  [`powerio-tx/src/format/powerworld/FORMAT.md`](https://github.com/eigenergy/powerio/blob/main/powerio-tx/src/format/powerworld/FORMAT.md).
+  [`powerio-tx/src/format/powerworld/FORMAT.md`](../../powerio-tx/src/format/powerworld/FORMAT.md).
 - **PSLF** `.epc` is read and written. The reader maps the static power flow core:
   buses, lines, two- and three-winding transformers, generators, loads, fixed
   shunts, controlled shunts at initial `g/b`, and limited two-terminal DC records.
