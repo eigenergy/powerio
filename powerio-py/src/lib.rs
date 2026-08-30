@@ -537,6 +537,11 @@ impl PyBalancedNetwork {
     }
 
     #[getter]
+    fn base_frequency(&self) -> f64 {
+        self.inner().base_frequency()
+    }
+
+    #[getter]
     fn source_format(&self) -> String {
         self.inner().source_format().name().to_owned()
     }
@@ -572,6 +577,12 @@ impl PyBalancedNetwork {
         self.inner().generators().len()
     }
 
+    /// Preferred spelling; `n_gens` remains for 0.10 compatibility.
+    #[getter]
+    fn n_generators(&self) -> usize {
+        self.inner().generators().len()
+    }
+
     #[getter]
     fn n_loads(&self) -> usize {
         self.inner().loads().len()
@@ -583,12 +594,43 @@ impl PyBalancedNetwork {
     }
 
     #[getter]
+    fn n_switches(&self) -> usize {
+        self.inner().switches().len()
+    }
+
+    #[getter]
+    fn n_storage(&self) -> usize {
+        self.inner().storage().len()
+    }
+
+    #[getter]
+    fn n_hvdc(&self) -> usize {
+        self.inner().hvdc().len()
+    }
+
+    #[getter]
+    fn n_transformers_3w(&self) -> usize {
+        self.inner().transformers_3w().len()
+    }
+
+    #[getter]
+    fn n_areas(&self) -> usize {
+        self.inner().areas().len()
+    }
+
+    #[getter]
     fn is_radial(&self) -> bool {
         IndexedNetwork::with_core(self.inner(), &self.core).is_radial()
     }
 
     #[getter]
     fn n_connected_components(&self) -> usize {
+        IndexedNetwork::with_core(self.inner(), &self.core).n_connected_components()
+    }
+
+    /// Power system terminology for `n_connected_components`.
+    #[getter]
+    fn n_islands(&self) -> usize {
         IndexedNetwork::with_core(self.inner(), &self.core).n_connected_components()
     }
 
@@ -775,6 +817,34 @@ impl PyBalancedNetwork {
             rows.push(d);
         }
         PyList::new(py, rows)
+    }
+
+    /// Complete storage rows using the balanced model's own serialized field
+    /// names. Returning copies keeps the native network immutable.
+    #[getter]
+    fn storage<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        balanced_field_to_py(py, self.inner(), "storage")
+    }
+
+    /// Complete HVDC rows using the balanced model's own serialized field
+    /// names. Returning copies keeps the native network immutable.
+    #[getter]
+    fn hvdc<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        balanced_field_to_py(py, self.inner(), "hvdc")
+    }
+
+    /// Complete three winding transformer rows using the balanced model's
+    /// own serialized field names.
+    #[getter]
+    fn transformers_3w<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        balanced_field_to_py(py, self.inner(), "transformers_3w")
+    }
+
+    /// Complete area rows using the balanced model's own serialized field
+    /// names.
+    #[getter]
+    fn areas<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        balanced_field_to_py(py, self.inner(), "areas")
     }
 
     fn connectivity_report<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
@@ -1249,7 +1319,29 @@ fn from_json(text: &str) -> PyResult<PyBalancedNetwork> {
     Ok(case_from_parts(inner, Vec::new()))
 }
 
-/// Convert a case file to another format through the network model. Returns
+/// Universal one-file conversion over the dynamic module dispatcher. Parse
+/// findings precede writer findings unless the writer returned the exact
+/// retained source bytes, which is the faithful echo tier.
+fn convert_module_text(
+    module: &powerio_core::PioModule<powerio::PioValue>,
+    to: &str,
+    options: &WriteOptions,
+) -> Result<(String, Vec<powerio_core::Diagnostic>), powerio_core::Error> {
+    let (text, writer_diagnostics) = powerio::write_module_str_with_options(module, to, options)?;
+    let echoed = module.source().is_some_and(|source| {
+        source
+            .primary_buffer()
+            .is_ok_and(|buffer| buffer.bytes() == text.as_bytes())
+    });
+    if echoed {
+        return Ok((text, writer_diagnostics));
+    }
+    let mut diagnostics = module.diagnostics().to_vec();
+    diagnostics.extend(writer_diagnostics);
+    Ok((text, diagnostics))
+}
+
+/// Convert a case file through the universal module model. Returns
 /// `(text, warnings)`: the converted file text and the list of fidelity warnings
 /// (fields the target couldn't represent). The input format is the file
 /// extension unless `from` overrides it. `out` writes the text to a file
@@ -1267,26 +1359,47 @@ fn convert_file(
     gen_cost_csv: Option<&str>,
     out: Option<&str>,
 ) -> PyResult<(String, Vec<PyDiagnostic>)> {
-    let target = to
-        .parse::<powerio_matrix::TargetFormat>()
-        .map_err(core_pyerr)?;
     let opts = write_options(
         missing_gen_cost,
         default_gen_cost,
         gen_cost_csv,
         MissingGenCostPolicy::Preserve,
     )?;
-    let conv =
-        powerio_matrix::convert_file_with_options(std::path::Path::new(path), target, from_, &opts)
-            .map_err(|e| core_open_pyerr(std::path::Path::new(path), &e))?;
-    if let Some(out) = out {
-        commit_text_file(std::path::Path::new(out), conv.text.clone().into_bytes())?;
+    let path = std::path::Path::new(path);
+    let mut source =
+        powerio_core::Source::open(path).map_err(|error| core_open_pyerr(path, &error))?;
+    if let Some(from) = from_ {
+        let format = powerio_core::FormatId::new(from.to_ascii_lowercase().replace('_', "-"))
+            .map_err(|error| core_error_pyerr(&error))?;
+        source = source.with_format(format);
     }
-    let rendered: Vec<PyDiagnostic> = conv.diagnostics.iter().map(PyDiagnostic::from).collect();
-    Ok((conv.text, rendered))
+    let module = powerio::parse(source).map_err(|error| core_open_pyerr(path, &error))?;
+    // The pre-module converter projected calculation-defining transmission
+    // sources to their embedded balanced network. Keep that 0.10 behavior;
+    // network values use the universal writer directly.
+    if !matches!(
+        module.value(),
+        powerio::PioValue::BalancedNetwork(_) | powerio::PioValue::MulticonductorNetwork(_)
+    ) && let Ok(target) = to.parse::<powerio_matrix::TargetFormat>()
+    {
+        let conv = powerio_matrix::convert_file_with_options(path, target, from_, &opts)
+            .map_err(|error| core_open_pyerr(path, &error))?;
+        if let Some(out) = out {
+            commit_text_file(std::path::Path::new(out), conv.text.clone().into_bytes())?;
+        }
+        let rendered = conv.diagnostics.iter().map(PyDiagnostic::from).collect();
+        return Ok((conv.text, rendered));
+    }
+    let (text, diagnostics) =
+        convert_module_text(&module, to, &opts).map_err(|error| core_error_pyerr(&error))?;
+    if let Some(out) = out {
+        commit_text_file(std::path::Path::new(out), text.clone().into_bytes())?;
+    }
+    let rendered = diagnostics.iter().map(PyDiagnostic::from).collect();
+    Ok((text, rendered))
 }
 
-/// Convert in-memory case `text` to another format through the network model,
+/// Convert in-memory case `text` through the universal module model,
 /// with no file staging. Returns `(text, warnings)` like `convert_file`.
 /// `from_` names the input format (default `matpower`).
 #[pyfunction]
@@ -1299,20 +1412,42 @@ fn convert_str(
     default_gen_cost: Option<&str>,
     gen_cost_csv: Option<&str>,
 ) -> PyResult<(String, Vec<PyDiagnostic>)> {
-    let target = to
-        .parse::<powerio_matrix::TargetFormat>()
-        .map_err(core_pyerr)?;
     let opts = write_options(
         missing_gen_cost,
         default_gen_cost,
         gen_cost_csv,
         MissingGenCostPolicy::Preserve,
     )?;
-    let conv =
-        powerio_matrix::convert_str_with_options(text, target, from_.unwrap_or("matpower"), &opts)
-            .map_err(|e| core_error_pyerr(&e))?;
-    let rendered: Vec<PyDiagnostic> = conv.diagnostics.iter().map(PyDiagnostic::from).collect();
-    Ok((conv.text, rendered))
+    let format = powerio_core::FormatId::new(
+        from_
+            .unwrap_or("matpower")
+            .to_ascii_lowercase()
+            .replace('_', "-"),
+    )
+    .map_err(|error| core_error_pyerr(&error))?;
+    let source = powerio_core::Source::from_bytes("<memory>", text.as_bytes().to_vec())
+        .map_err(|error| core_error_pyerr(&error))?
+        .with_format(format);
+    let module = powerio::parse(source).map_err(|error| core_error_pyerr(&error))?;
+    if !matches!(
+        module.value(),
+        powerio::PioValue::BalancedNetwork(_) | powerio::PioValue::MulticonductorNetwork(_)
+    ) && let Ok(target) = to.parse::<powerio_matrix::TargetFormat>()
+    {
+        let conv = powerio_matrix::convert_str_with_options(
+            text,
+            target,
+            from_.unwrap_or("matpower"),
+            &opts,
+        )
+        .map_err(|error| core_error_pyerr(&error))?;
+        let rendered = conv.diagnostics.iter().map(PyDiagnostic::from).collect();
+        return Ok((conv.text, rendered));
+    }
+    let (text, diagnostics) =
+        convert_module_text(&module, to, &opts).map_err(|error| core_error_pyerr(&error))?;
+    let rendered = diagnostics.iter().map(PyDiagnostic::from).collect();
+    Ok((text, rendered))
 }
 
 /// Writes `text` to `path` and every sidecar beside it.
@@ -1493,6 +1628,11 @@ impl PyMulticonductorNetwork {
         self.inner().source_format().map(|f| f.name())
     }
 
+    /// System base frequency in hertz.
+    fn base_frequency(&self) -> f64 {
+        self.inner().base_frequency()
+    }
+
     /// Parse warnings: everything the reader could not represent or had to
     /// assume.
     fn warnings(&self) -> Vec<String> {
@@ -1550,6 +1690,14 @@ impl PyMulticonductorNetwork {
         self.inner().lines().len()
     }
 
+    fn n_line_codes(&self) -> usize {
+        self.inner().linecodes().len()
+    }
+
+    fn n_switches(&self) -> usize {
+        self.inner().switches().len()
+    }
+
     fn n_transformers(&self) -> usize {
         self.inner().transformers().len()
     }
@@ -1562,8 +1710,87 @@ impl PyMulticonductorNetwork {
         self.inner().generators().len()
     }
 
+    fn n_ibrs(&self) -> usize {
+        self.inner().ibrs().len()
+    }
+
+    fn n_control_profiles(&self) -> usize {
+        self.inner().control_profiles().len()
+    }
+
+    fn n_shunts(&self) -> usize {
+        self.inner().shunts().len()
+    }
+
+    fn n_capacitors(&self) -> usize {
+        self.inner().capacitors().len()
+    }
+
     fn n_sources(&self) -> usize {
         self.inner().sources().len()
+    }
+
+    /// Preferred power system spelling; `n_sources` remains compatible.
+    fn n_voltage_sources(&self) -> usize {
+        self.inner().sources().len()
+    }
+
+    fn n_untyped_objects(&self) -> usize {
+        self.inner().untyped().len()
+    }
+
+    // --- complete read-only tables ------------------------------------
+
+    fn buses<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        dist_field_to_py(py, self.inner(), "buses")
+    }
+
+    fn line_codes<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        dist_field_to_py(py, self.inner(), "linecodes")
+    }
+
+    fn lines<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        dist_field_to_py(py, self.inner(), "lines")
+    }
+
+    fn switches<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        dist_field_to_py(py, self.inner(), "switches")
+    }
+
+    fn transformers<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        dist_field_to_py(py, self.inner(), "transformers")
+    }
+
+    fn loads<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        dist_field_to_py(py, self.inner(), "loads")
+    }
+
+    fn generators<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        dist_field_to_py(py, self.inner(), "generators")
+    }
+
+    fn ibrs<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        dist_field_to_py(py, self.inner(), "ibrs")
+    }
+
+    fn control_profiles<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        dist_field_to_py(py, self.inner(), "control_profiles")
+    }
+
+    fn shunts<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        dist_field_to_py(py, self.inner(), "shunts")
+    }
+
+    fn capacitors<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        dist_field_to_py(py, self.inner(), "capacitors")
+    }
+
+    fn voltage_sources<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        dist_field_to_py(py, self.inner(), "sources")
+    }
+
+    fn untyped_objects<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        dist_field_to_py(py, self.inner(), "untyped")
     }
 
     /// Serialize to `to` (`dss`, `pmd-json`, `bmopf-json`). Returns
@@ -1608,7 +1835,7 @@ impl PyMulticonductorNetwork {
 
     /// The collapsed bus and terminal graph projection as JSON.
     fn graph_json(&self) -> PyResult<String> {
-        serde_json::to_string(&self.inner().graph())
+        serde_json::to_string(&self.inner().to_graph())
             .map_err(|e| PowerIOError::new_err(format!("serializing graph JSON: {e}")))
     }
 
@@ -1724,6 +1951,47 @@ fn json_value_to_py<'py>(
         }
         J::Object(map) => json_map_to_py(py, map)?.into_any(),
     })
+}
+
+/// Return one serialized model field. The concrete helpers below keep the
+/// serde trait out of this crate's public dependency list.
+fn serialized_value_field_to_py<'py>(
+    py: Python<'py>,
+    value: serde_json::Value,
+    field: &str,
+) -> PyResult<Bound<'py, PyAny>> {
+    let field_value = value.get(field).ok_or_else(|| {
+        PowerIOError::new_err(format!(
+            "the native model serialization has no {field:?} field"
+        ))
+    })?;
+    json_value_to_py(py, field_value)
+}
+
+/// Return one balanced model field through that model's own serde surface.
+fn balanced_field_to_py<'py>(
+    py: Python<'py>,
+    model: &BalancedNetwork,
+    field: &str,
+) -> PyResult<Bound<'py, PyAny>> {
+    let value = serde_json::to_value(model).map_err(serialize_pyerr)?;
+    serialized_value_field_to_py(py, value, field)
+}
+
+/// Return one multiconductor model field through that model's own serde
+/// surface.
+fn dist_field_to_py<'py>(
+    py: Python<'py>,
+    model: &powerio_dist::MulticonductorNetwork,
+    field: &str,
+) -> PyResult<Bound<'py, PyAny>> {
+    let value = serde_json::to_value(model).map_err(serialize_pyerr)?;
+    // These tables omit their JSON key when empty. The Python table surface
+    // still returns an empty list so every declared table is always readable.
+    if value.get(field).is_none() && matches!(field, "ibrs" | "control_profiles" | "capacitors") {
+        return Ok(PyList::empty(py).into_any());
+    }
+    serialized_value_field_to_py(py, value, field)
 }
 
 /// [`json_value_to_py`] for a JSON object, kept separate so a diagnostic's
@@ -1925,6 +2193,40 @@ struct PyPioModule {
     module: Option<powerio_core::PioModule<powerio::PioValue>>,
 }
 
+/// Rebuild a typed module around one value with every common record and the
+/// retained source from the dynamic module. Sources are added first because
+/// source map and diagnostic spans validate against them.
+fn module_with_records<T>(
+    module: &powerio_core::PioModule<powerio::PioValue>,
+    value: T,
+) -> PyResult<powerio_core::PioModule<T>> {
+    let mut out = powerio_core::PioModule::new(value).with_producer(module.producer().clone());
+    for descriptor in module.sources() {
+        out.add_source_descriptor(descriptor.clone())
+            .map_err(|error| core_error_pyerr(&error))?;
+    }
+    for entry in module.source_map() {
+        out.add_source_map_entry(entry.clone())
+            .map_err(|error| core_error_pyerr(&error))?;
+    }
+    for diagnostic in module.diagnostics() {
+        out.add_diagnostic(diagnostic.clone())
+            .map_err(|error| core_error_pyerr(&error))?;
+    }
+    for entry in module.history() {
+        out.add_history_entry(entry.clone())
+            .map_err(|error| core_error_pyerr(&error))?;
+    }
+    for (namespace, value) in module.extensions() {
+        out.insert_extension(namespace.clone(), value.clone())
+            .map_err(|error| core_error_pyerr(&error))?;
+    }
+    Ok(match module.source() {
+        Some(source) => out.with_source(source.clone()),
+        None => out,
+    })
+}
+
 impl PyPioModule {
     fn module(&self) -> PyResult<&powerio_core::PioModule<powerio::PioValue>> {
         self.module
@@ -1977,26 +2279,80 @@ impl PyPioModule {
     fn operations(value: &powerio::PioValue) -> Vec<&'static str> {
         use powerio::PioValue as V;
         match value {
-            V::BalancedNetwork(_) => vec!["inspect", "diagnostics"],
-            V::MulticonductorNetwork(_) => {
-                vec![
-                    "inspect",
-                    "diagnostics",
-                    "to_balanced_inspect",
-                    "to_balanced",
-                ]
-            }
+            V::BalancedNetwork(_) => vec!["inspect", "diagnostics", "emit"],
+            V::MulticonductorNetwork(_) => vec![
+                "inspect",
+                "diagnostics",
+                "emit",
+                "to_balanced_report",
+                "to_balanced",
+            ],
             V::BalancedNetworkTimeSeries(_)
             | V::BalancedOperatingPointTimeSeries(_)
             | V::BalancedNetworkScenarioSet(_) => vec![
                 "inspect",
                 "diagnostics",
+                "emit",
                 "state_inventory",
-                "select_state",
+                "inspect_state",
                 "export_state",
             ],
-            _ => vec!["inspect", "diagnostics"],
+            _ => vec!["inspect", "diagnostics", "emit"],
         }
+    }
+
+    /// Infer the no-argument write target without guessing between JSON
+    /// families. Prefer an explicit `.pio.json` destination, then the durable
+    /// source descriptor recorded by the parser, then a network's source
+    /// format, and finally an unambiguous destination extension.
+    fn inferred_write_format(&self, path: &Path) -> PyResult<String> {
+        let path_text = path.to_string_lossy().to_ascii_lowercase();
+        if path_text.ends_with(".pio.json") {
+            return Ok("pio-json".to_owned());
+        }
+
+        let module = self.module()?;
+        if let Some(format) = module.sources().iter().find_map(|source| source.format()) {
+            return Ok(format.as_str().to_owned());
+        }
+
+        match module.value() {
+            powerio::PioValue::BalancedNetwork(network) => {
+                let format = network.source_format().name();
+                if powerio_matrix::target_format_from_name(format).is_some()
+                    || format == "pypsa-csv"
+                {
+                    return Ok(format.to_owned());
+                }
+            }
+            powerio::PioValue::MulticonductorNetwork(network) => {
+                if let Some(format) = network.source_format().map(|format| format.name())
+                    && powerio_dist::dist_target_from_name(format).is_some()
+                {
+                    return Ok(format.to_owned());
+                }
+            }
+            _ => {}
+        }
+
+        let inferred = match path
+            .extension()
+            .and_then(|extension| extension.to_str())
+            .map(str::to_ascii_lowercase)
+            .as_deref()
+        {
+            Some("m") => Some("matpower"),
+            Some("raw") => Some("psse"),
+            Some("aux") => Some("powerworld"),
+            Some("epc") => Some("pslf"),
+            Some("dss") => Some("dss"),
+            _ => None,
+        };
+        inferred.map(str::to_owned).ok_or_else(|| {
+            PyValueError::new_err(
+                "could not infer a write format; pass format= explicitly (JSON case formats are ambiguous)",
+            )
+        })
     }
 }
 
@@ -2081,6 +2437,76 @@ impl PyPioModule {
     /// The stored version 1 document.
     fn to_json(&self) -> PyResult<String> {
         powerio::stored::write_module(self.module()?).map_err(|error| core_error_pyerr(&error))
+    }
+
+    /// Serialize this module's typed value to `to`. The dynamic writer routes
+    /// to the balanced, multiconductor, or stored module family. Returns
+    /// `(text, diagnostics)`.
+    #[pyo3(signature = (to, missing_gen_cost=None, default_gen_cost=None, gen_cost_csv=None))]
+    fn to_format(
+        &self,
+        to: &str,
+        missing_gen_cost: Option<&str>,
+        default_gen_cost: Option<&str>,
+        gen_cost_csv: Option<&str>,
+    ) -> PyResult<(String, Vec<PyDiagnostic>)> {
+        let options = write_options(
+            missing_gen_cost,
+            default_gen_cost,
+            gen_cost_csv,
+            MissingGenCostPolicy::Preserve,
+        )?;
+        let (text, diagnostics) =
+            powerio::write_module_str_with_options(self.module()?, to, &options)
+                .map_err(|error| core_error_pyerr(&error))?;
+        Ok((text, diagnostics.iter().map(PyDiagnostic::from).collect()))
+    }
+
+    /// Write the complete artifact inventory to `path`. With no `format`,
+    /// retain the module's recorded source format when possible, or infer an
+    /// unambiguous format from `path`.
+    #[pyo3(signature = (path, format=None))]
+    fn write_file(&self, path: &str, format: Option<&str>) -> PyResult<Vec<PyDiagnostic>> {
+        let output_path = path;
+        let path = Path::new(output_path);
+        let inferred;
+        let format = match format {
+            Some(format) => format,
+            None => {
+                inferred = self.inferred_write_format(path)?;
+                &inferred
+            }
+        };
+        // The distribution artifact writer models DSS as a directory because
+        // it can carry sidecars. Python's established spelling takes the main
+        // `.dss` file path and puts sidecars beside it, so preserve that path
+        // behavior through the module entry too.
+        if let Some(target) = powerio_dist::dist_target_from_name(format)
+            && matches!(
+                self.module()?.value(),
+                powerio::PioValue::MulticonductorNetwork(_)
+            )
+        {
+            let network = self.as_multiconductor_network()?;
+            let conversion = powerio_dist::write_as(&network.module, target);
+            write_with_sidecars(output_path, &conversion.text, &conversion.sidecars)?;
+            return Ok(conversion
+                .diagnostics
+                .iter()
+                .map(PyDiagnostic::from)
+                .collect());
+        }
+        let result = powerio::write_module_as(
+            self.module()?,
+            format,
+            powerio_core::Destination::path(path),
+        )
+        .map_err(|error| core_error_pyerr(&error))?;
+        Ok(result
+            .diagnostics()
+            .iter()
+            .map(PyDiagnostic::from)
+            .collect())
     }
 
     /// The value's permanent kind identifier.
@@ -2204,7 +2630,7 @@ impl PyPioModule {
         scenario: Option<&str>,
     ) -> PyResult<Self> {
         let selector = Self::selector(time_position, scenario)?;
-        powerio::select::export_state(self.module()?.value(), selector)
+        powerio::select::export_module_state(self.module()?, selector)
             .map(|module| Self {
                 module: Some(module),
             })
@@ -2238,17 +2664,33 @@ impl PyPioModule {
     }
 
     /// Lower the multiconductor value to a balanced module. Common records
-    /// and source ownership carry over; the pass appends its findings and one
-    /// Transform history entry. On refusal the handle keeps its module and
+    /// carry over, retained source is severed after the kind-changing pass,
+    /// and the pass appends its findings and one Transform history entry. On
+    /// refusal the handle keeps its module and
     /// the raised `PowerIODataError` carries the refusal's diagnostic code as
     /// `.code` and its structured findings as `.diagnostics` (a list of
     /// dicts with `code`/`severity`/`message`/`target`).
     #[pyo3(signature = (base_mva=100.0))]
-    fn lower_to_balanced(&mut self, base_mva: f64) -> PyResult<Self> {
-        let module = self
-            .module
-            .take()
-            .ok_or_else(|| PyValueError::new_err("the module handle was consumed"))?;
+    fn lower_to_balanced(&self, base_mva: f64) -> PyResult<Self> {
+        let source = self.module()?;
+        let powerio::PioValue::MulticonductorNetwork(network) = source.value() else {
+            let Err(error) = powerio::transform::check_module_lowering(
+                source,
+                powerio::transform::MulticonductorToBalancedOptions {
+                    base_mva,
+                    ..Default::default()
+                },
+            ) else {
+                unreachable!("a non-multiconductor value cannot pass the kind check")
+            };
+            return Err(core_error_pyerr(&error));
+        };
+        // The transform owns its input. Give it a record-complete sibling so
+        // both success and refusal leave the caller's module usable.
+        let module = module_with_records(
+            source,
+            powerio::PioValue::MulticonductorNetwork(network.clone()),
+        )?;
         match powerio::transform::lower_module_to_balanced(
             module,
             powerio::transform::MulticonductorToBalancedOptions {
@@ -2259,8 +2701,7 @@ impl PyPioModule {
             Ok(lowered) => Ok(Self {
                 module: Some(lowered),
             }),
-            Err((module, error)) => {
-                self.module = Some(module);
+            Err((_module, error)) => {
                 let err = PowerIODataError::new_err(error.to_string());
                 let code = error.diagnostics.first().map(|d| d.code().to_owned());
                 let diagnostics: Vec<serde_json::Value> = error
@@ -2297,41 +2738,10 @@ impl PyPioModule {
                 module.value().kind().as_str()
             )));
         };
-        // Copy the module's source descriptors, diagnostics, and retained
-        // source onto the handle so the byte exact same format echo survives
-        // the universal parse. Sources come first because diagnostic spans
-        // validate against them.
-        let mut out = powerio_core::PioModule::new(network.clone());
-        for descriptor in module.sources() {
-            out.add_source_descriptor(descriptor.clone())
-                .map_err(|error| {
-                    PowerIODataError::new_err(format!(
-                        "failed to carry source `{}` onto the network handle: {error}",
-                        descriptor.id()
-                    ))
-                })?;
-        }
-        // Every diagnostic is attempted, in order, even after a failure: a
-        // partial copy that stops early would return fewer diagnostics than
-        // the module carries with no error to say so.
-        let mut first_error = None;
-        for diagnostic in module.diagnostics() {
-            if let Err(error) = out.add_diagnostic(diagnostic.clone())
-                && first_error.is_none()
-            {
-                first_error = Some(error);
-            }
-        }
-        if let Some(error) = first_error {
-            return Err(PowerIODataError::new_err(format!(
-                "failed to carry every diagnostic onto the network handle: {error}"
-            )));
-        }
-        let out = match module.source() {
-            Some(source) => out.with_source(source.clone()),
-            None => out,
-        };
-        Ok(case_from_module(out))
+        Ok(case_from_module(module_with_records(
+            module,
+            network.clone(),
+        )?))
     }
 
     /// The multiconductor network value as a network handle.
@@ -2344,39 +2754,10 @@ impl PyPioModule {
                 module.value().kind().as_str()
             )));
         };
-        let mut inner = powerio_core::PioModule::new(network.clone());
-        // Sources carry over first: a diagnostic's span validates against the
-        // sources on the module it is being added to, so an empty source list
-        // here would reject every span-bearing diagnostic below.
-        for source in module.sources() {
-            inner.add_source_descriptor(source.clone()).map_err(|error| {
-                PowerIODataError::new_err(format!(
-                    "failed to carry source `{}` onto the multiconductor network handle: {error}",
-                    source.id()
-                ))
-            })?;
-        }
-        // Every diagnostic is attempted, in order, even after a failure: a
-        // partial copy that stops early would return fewer diagnostics than
-        // the module carries with no error to say so.
-        let mut first_error = None;
-        for diagnostic in module.diagnostics() {
-            if let Err(error) = inner.add_diagnostic(diagnostic.clone())
-                && first_error.is_none()
-            {
-                first_error = Some(error);
-            }
-        }
-        if let Some(error) = first_error {
-            return Err(PowerIODataError::new_err(format!(
-                "failed to carry every diagnostic onto the multiconductor network handle: {error}"
-            )));
-        }
-        let inner = match module.source() {
-            Some(source) => inner.with_source(source.clone()),
-            None => inner,
-        };
-        Ok(PyMulticonductorNetwork::from_module(inner))
+        Ok(PyMulticonductorNetwork::from_module(module_with_records(
+            module,
+            network.clone(),
+        )?))
     }
 
     fn __repr__(&self) -> String {
@@ -2621,7 +3002,68 @@ fn _powerio(m: &Bound<'_, PyModule>) -> PyResult<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::sidecar_stays_in_output_dir;
+    use super::{module_with_records, sidecar_stays_in_output_dir};
+
+    #[test]
+    fn typed_module_copy_keeps_every_common_record_and_retained_source() {
+        use powerio_core::{
+            Diagnostic, DiagnosticCode, DiagnosticSeverity, HistoryEntry, HistoryId, HistoryKind,
+            PioModule, Producer, Source, SourceDescriptor, SourceId, SourceMapEntry,
+            SourceRelation, SourceSpan,
+        };
+
+        let network = powerio::BalancedNetwork::new("copy-test", 100.0);
+        let retained = Source::from_bytes("case.m", b"test".to_vec()).unwrap();
+        let source_id = SourceId::new("input").unwrap();
+        let span = SourceSpan::new(source_id.clone(), 0, 4).unwrap();
+        let mut source = PioModule::new(powerio::PioValue::BalancedNetwork(network.clone()))
+            .with_producer(Producer::new("binding-test", "1").unwrap())
+            .with_source(retained);
+        source
+            .add_source_descriptor(SourceDescriptor::new(source_id, "case.m", 4).unwrap())
+            .unwrap();
+        source
+            .add_source_map_entry(
+                SourceMapEntry::new("/buses", SourceRelation::Exact, vec![span.clone()]).unwrap(),
+            )
+            .unwrap();
+        source
+            .add_diagnostic(
+                Diagnostic::new(
+                    DiagnosticCode::new("PARTNER.TEST.COPY").unwrap(),
+                    DiagnosticSeverity::Note,
+                    "keep me",
+                )
+                .with_span(span)
+                .unwrap(),
+            )
+            .unwrap();
+        source
+            .add_history_entry(
+                HistoryEntry::new(HistoryId::new("h1").unwrap(), HistoryKind::Parse, "parse")
+                    .unwrap(),
+            )
+            .unwrap();
+        source
+            .insert_extension("org.example.test", serde_json::json!({"kept": true}))
+            .unwrap();
+
+        let copied = module_with_records(&source, network).unwrap();
+        assert_eq!(copied.producer(), source.producer());
+        assert_eq!(copied.sources(), source.sources());
+        assert_eq!(copied.source_map(), source.source_map());
+        assert_eq!(copied.diagnostics().len(), source.diagnostics().len());
+        assert_eq!(
+            copied.diagnostics()[0].code(),
+            source.diagnostics()[0].code()
+        );
+        assert_eq!(copied.history(), source.history());
+        assert_eq!(copied.extensions(), source.extensions());
+        assert_eq!(
+            copied.source().unwrap().primary_buffer().unwrap().bytes(),
+            b"test"
+        );
+    }
 
     /// `ConversionSidecar::path` is a public field, so a caller can set it to
     /// anything. Every path here reaches out of the output directory without

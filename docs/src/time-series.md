@@ -16,11 +16,12 @@ An operating point is a complete assignment of the instantaneous electrical vari
 ```julia
 using PowerIO
 dataset = parse_file("gridfm_case14/")     # PioModule{ScenarioSet{BalancedNetwork}}
-state_inventory(dataset)                   # the scenario identifiers
-one = select_state(dataset; scenario="7")  # PioModule{BalancedNetwork}, shared data
+keys(dataset)                              # the scenario identifiers
+one = dataset["7"]                         # PioModule{BalancedNetwork}, shared data
 
 series = parse_file("pypsa_folder/")       # PioModule{TimeSeries{BalancedNetwork}}
-first_hour = select_state(series; time=1)  # one based, like every Julia axis
+length(series)                             # number of declared time points
+first_hour = series[1]                     # one based, like every Julia axis
 ```
 
 Selection returns an independent module over the existing typed entry; nothing reparses and no numerical table is copied. Exporting the selection to a file or a stored document is the same write operation every module has.

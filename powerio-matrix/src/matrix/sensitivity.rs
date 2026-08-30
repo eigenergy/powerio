@@ -20,7 +20,9 @@ use sprs::CsMat;
 
 use crate::indexed::IndexedNetwork;
 use crate::matrix::BuildOptions;
-use crate::matrix::incidence::{DcConvention, IncidenceParts, build_flow_map, build_incidence};
+use crate::matrix::incidence::{
+    BranchSusceptanceFormula, IncidenceParts, build_flow_map, build_incidence,
+};
 use crate::matrix::laplacian::{Grounding, build_weighted_laplacian, ground_with};
 use crate::matrix::triplet::CooBuilder;
 use crate::{Error, Result};
@@ -97,7 +99,7 @@ impl SensitivitySolverPath {
 #[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
 pub struct SensitivityOptions {
     /// DC branch susceptance convention.
-    pub convention: DcConvention,
+    pub convention: BranchSusceptanceFormula,
     /// Solver selection policy.
     pub solver: SensitivitySolver,
     /// Entries with absolute value at or below this value are omitted from the
@@ -111,7 +113,7 @@ pub struct SensitivityOptions {
 impl Default for SensitivityOptions {
     fn default() -> Self {
         Self {
-            convention: DcConvention::default(),
+            convention: BranchSusceptanceFormula::default(),
             solver: SensitivitySolver::Auto,
             drop_tolerance: PRUNE,
             auto_dense_threshold: DEFAULT_AUTO_DENSE_THRESHOLD,
@@ -203,7 +205,7 @@ pub struct SensitivityMatrixMetadata {
 /// the whole reference set (`reference_bus_indices`), one row/column per slack.
 /// One reference per island handles disconnected networks; several references
 /// within one island fixes all of those bus angles to zero.
-pub fn build_ptdf(case: &IndexedNetwork, conv: DcConvention) -> Result<CsMat<f64>> {
+pub fn build_ptdf(case: &IndexedNetwork, conv: BranchSusceptanceFormula) -> Result<CsMat<f64>> {
     let options = SensitivityOptions {
         convention: conv,
         ..SensitivityOptions::default()
@@ -214,7 +216,7 @@ pub fn build_ptdf(case: &IndexedNetwork, conv: DcConvention) -> Result<CsMat<f64
 /// LODF (`m × m`): pre-outage flow on branch `k` redistributes onto branch `l`
 /// with factor `LODF[l, k]`. Diagonal is `−1`. A branch whose outage islands
 /// the network (denominator `≈ 0`) gets a zero column.
-pub fn build_lodf(case: &IndexedNetwork, conv: DcConvention) -> Result<CsMat<f64>> {
+pub fn build_lodf(case: &IndexedNetwork, conv: BranchSusceptanceFormula) -> Result<CsMat<f64>> {
     let options = SensitivityOptions {
         convention: conv,
         ..SensitivityOptions::default()
@@ -229,7 +231,7 @@ pub fn build_lodf(case: &IndexedNetwork, conv: DcConvention) -> Result<CsMat<f64
 /// [`build_ptdf`]/[`build_lodf`] calls.
 pub fn build_ptdf_lodf(
     case: &IndexedNetwork,
-    conv: DcConvention,
+    conv: BranchSusceptanceFormula,
 ) -> Result<(CsMat<f64>, CsMat<f64>)> {
     let options = SensitivityOptions {
         convention: conv,

@@ -132,9 +132,19 @@ fn the_branch_flow_identity_holds() {
     // Any angle vector: the identity is linear algebra over the emitted
     // operators, so a synthetic assignment proves the spelling.
     let va: Vec<f64> = (0..n).map(|row| 0.01 * row as f64).collect();
-    let bf = dense(&operators.branch_susceptance_matrix());
+    let bf = dense(&operators.calc_branch_susceptance_matrix());
     let b = operators.branch_susceptances();
     let a = dense(operators.incidence());
+    let power_models_a = dense(&operators.calc_incidence_matrix());
+    assert_eq!(power_models_a.len(), m);
+    assert_eq!(power_models_a[0].len(), n);
+    for (branch, row) in power_models_a.iter().enumerate() {
+        for (bus, &entry) in row.iter().enumerate() {
+            assert!((entry - a[bus][branch]).abs() < f64::EPSILON);
+        }
+    }
+
+    let calculated = operators.calc_branch_flow_dc(&va).unwrap();
 
     for column in 0..m {
         // p_branch = -Bf va + b .* shift; case9 states no phase shifts, so
@@ -145,6 +155,7 @@ fn the_branch_flow_identity_holds() {
             .iter()
             .sum();
         let p_branch = -bf_va;
+        assert!((calculated[column] - p_branch).abs() < 1e-12);
         // Independent spelling: the flow from angle difference over the
         // series reactance, f = (va_from - va_to) * (-b) for the PowerModels
         // sign of b.
@@ -157,10 +168,13 @@ fn the_branch_flow_identity_holds() {
         );
     }
 
+    let error = operators.calc_branch_flow_dc(&va[..n - 1]).unwrap_err();
+    assert!(error.to_string().contains("voltage_angles has length"));
+
     // The nodal balance ties the two matrix operators together:
     // -B va + p_shift equals A * (-Bf va + b .* shift).
-    let bus = dense(&operators.bus_susceptance_matrix());
-    let shift = operators.phase_shift_injection();
+    let bus = dense(&operators.calc_bus_susceptance_matrix());
+    let shift = operators.calc_phase_shift_injection();
     for row in 0..n {
         let b_va: f64 = (0..n).map(|col| bus[row][col] * va[col]).sum();
         let mut through_branches = 0.0;
@@ -188,7 +202,7 @@ fn the_reference_constrained_system_solves_the_stated_problem() {
 
     let instance = DcPfInstance::from_network(net).unwrap();
     let operators = DcOperators::build(&instance).unwrap();
-    let system = operators.reference_constrained_system().unwrap();
+    let system = operators.calc_reference_constrained_system().unwrap();
 
     let n = operators.bus_ids().len();
     assert_eq!(system.retained_rows.len(), n - 1, "case9 has one reference");
@@ -346,7 +360,7 @@ fn the_grounded_rhs_subtracts_the_shift_injection() {
     net.branches_mut()[0].shift = 10.0;
     let instance = DcPfInstance::from_network(net).unwrap();
     let operators = DcOperators::build(&instance).unwrap();
-    let system = operators.reference_constrained_system().unwrap();
+    let system = operators.calc_reference_constrained_system().unwrap();
 
     let p = operators.bus_power_injection().to_vec();
     let shift = operators.phase_shift_injection();
@@ -360,6 +374,9 @@ fn the_grounded_rhs_subtracts_the_shift_injection() {
             "row {row}"
         );
     }
+    let zero_angles = vec![0.0; operators.bus_ids().len()];
+    let branch_flow = operators.calc_branch_flow_dc(&zero_angles).unwrap();
+    assert!(branch_flow.iter().any(|value| value.abs() > 1e-9));
 }
 
 #[test]
@@ -379,7 +396,7 @@ fn reference_angles_couple_into_the_grounded_rhs() {
 
     let instance = DcPfInstance::from_network(net).unwrap();
     let operators = DcOperators::build(&instance).unwrap();
-    let system = operators.reference_constrained_system().unwrap();
+    let system = operators.calc_reference_constrained_system().unwrap();
 
     // Independent rhs, built from the already validated public susceptance
     // matrix (untouched by this fix) rather than any internal state it
@@ -444,7 +461,7 @@ fn two_reference_buses_in_one_island_carry_a_nonzero_flow() {
 
     let instance = DcPfInstance::from_network(net.clone()).unwrap();
     let operators = DcOperators::build(&instance).unwrap();
-    let system = operators.reference_constrained_system().unwrap();
+    let system = operators.calc_reference_constrained_system().unwrap();
     assert_eq!(system.retained_rows.len(), 1, "only bus 2 is retained");
 
     // Independent rhs, the same oracle spelling as the case118 test: p -

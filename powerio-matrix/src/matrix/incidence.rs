@@ -8,7 +8,7 @@
 
 use sprs::CsMat;
 
-pub use powerio_tx::DcConvention;
+pub use powerio_tx::{BranchSusceptanceFormula, DcConvention};
 
 use crate::Result;
 use crate::indexed::IndexedNetwork;
@@ -56,7 +56,7 @@ impl IncidenceParts {
 /// is [`powerio_tx::Error::DegenerateTap`] either way, as it is in Y_bus.
 pub fn build_incidence(
     case: &IndexedNetwork,
-    conv: DcConvention,
+    conv: BranchSusceptanceFormula,
     opts: &BuildOptions,
 ) -> Result<IncidenceParts> {
     let n = case.n();
@@ -83,7 +83,7 @@ pub fn build_incidence(
         // rules bound the reactance, and the series formula bounds the whole
         // impedance magnitude.
         let degenerate = match conv {
-            DcConvention::SeriesSusceptance => {
+            BranchSusceptanceFormula::SeriesSusceptance => {
                 br.r.hypot(br.x) < crate::matrix::MIN_DIVISIBLE_MAGNITUDE
             }
             _ => br.x.abs() < crate::matrix::MIN_DIVISIBLE_MAGNITUDE,

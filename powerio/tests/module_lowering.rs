@@ -3,7 +3,11 @@
 //! base conversion.
 
 use powerio::stored::{read_module, write_module};
-use powerio::transform::{MulticonductorToBalancedOptions, lower_module_to_balanced};
+use powerio::transform::{
+    MulticonductorToBalancedOptions, MulticonductorToBalancedReport, lower_module_to_balanced,
+    module_to_balanced, module_to_balanced_report, multiconductor_to_balanced,
+    multiconductor_to_balanced_report,
+};
 use powerio::{PioValue, VERSION};
 
 const TWO_WINDING_DSS: &str = r"Clear
@@ -19,6 +23,30 @@ fn parse_mc_module(text: &str) -> powerio_core::PioModule<PioValue> {
         .unwrap()
         .with_format(powerio_core::FormatId::new("dss").unwrap());
     powerio::parse(source).unwrap()
+}
+
+#[test]
+fn transformation_names_share_one_report_and_sever_the_source_echo() {
+    let module = parse_mc_module(TWO_WINDING_DSS);
+    assert!(module.source().is_some());
+    let options = MulticonductorToBalancedOptions::default();
+
+    let report: MulticonductorToBalancedReport =
+        module_to_balanced_report(&module, options).unwrap();
+    let PioValue::MulticonductorNetwork(network) = module.value() else {
+        panic!("wrong kind");
+    };
+    assert_eq!(report, multiconductor_to_balanced_report(network, options));
+    assert!(report.is_ready(), "{report:?}");
+    let direct = multiconductor_to_balanced(network, options).unwrap();
+    assert!(!direct.network.buses().is_empty());
+
+    let transformed = module_to_balanced(module, options).unwrap();
+    assert!(matches!(transformed.value(), PioValue::BalancedNetwork(_)));
+    assert!(
+        transformed.source().is_none(),
+        "a changed value must not retain bytes for same format echo"
+    );
 }
 
 /// A stored multiconductor module carrying a diagnostic whose target points

@@ -1,17 +1,19 @@
 /* powerio C ABI, version 6. Parse power system sources into module handles,
- * inspect and transform them through typed accessors, and write supported
+ * inspect and transform them through typed accessors, and emit supported
  * formats. Check pio_abi_version() against PIO_ABI_VERSION at load; the
  * integer is the compatibility check, the version string is informational.
  *
- * The surface in one paragraph: pio_parse_file / pio_parse_str /
- * pio_parse_bytes compile one source into a PioModule of whichever built in
- * value family claims it. pio_module_kind names the value; the typed
+ * The ordinary surface in one paragraph: pio_parse_file compiles one source
+ * into a PioModule of whichever built in value family claims it.
+ * pio_module_kind names the value; the typed
  * accessors (pio_module_balanced_network, pio_module_multiconductor_network)
  * hand back independently owned network handles; pio_module_diagnostics is
- * the structured findings list; pio_module_write_str / pio_module_write_file
- * write a supported target, echoing the retained source bytes exactly for an
- * unchanged same format write; and pio_module_read_json / write_json carry
- * the stored .pio.json document.
+ * the module's stored findings list; pio_module_emit_string /
+ * pio_module_emit_file emit a supported target, echoing the retained source
+ * bytes exactly for an unchanged same format emission; and
+ * pio_module_read_json / pio_module_write_json carry the stored .pio.json
+ * document. pio_parse_str, pio_parse_bytes, and pio_module_write_* remain
+ * ABI compatibility and in-memory acquisition functions.
  *
  * Naming grammar:
  * - pio_<handle noun>_<operation or field>: module, balanced_network,
@@ -808,11 +810,21 @@ char *pio_multiconductor_network_to_json(const PioMulticonductorNetwork *net, Pi
 
 #if defined(PIO_DIST)
 /**
- * Serialize the collapsed bus and terminal graph projection for `net` as JSON.
+ * Compatibility alias for [`pio_multiconductor_network_to_graph_json`].
  * The returned string is owned by the library; free it with
  * [`pio_string_release`].
  */
 char *pio_multiconductor_network_graph_json(const PioMulticonductorNetwork *net, PioError **error);
+#endif
+
+#if defined(PIO_DIST)
+/**
+ * Transform the collapsed bus and terminal graph projection for `net` to JSON.
+ * The returned string is owned by the library; free it with
+ * [`pio_string_release`].
+ */
+char *pio_multiconductor_network_to_graph_json(const PioMulticonductorNetwork *net,
+                                               PioError **error);
 #endif
 
 #if defined(PIO_DIST)
@@ -939,6 +951,27 @@ int32_t pio_module_write_file(const PioModule *module,
                               PioError **error);
 
 /**
+ * Emit the module as one text artifact in the named target format. Free the
+ * returned string with `pio_string_release`. This is the preferred
+ * compiler style spelling of `pio_module_write_str`.
+ */
+char *pio_module_emit_string(const PioModule *module,
+                             const char *format,
+                             PioDiagnostics **out_diagnostics,
+                             PioError **error);
+
+/**
+ * Emit the module in the named target format to `path`. The target can be a
+ * file or a directory format such as PyPSA CSV. This is the preferred
+ * compiler style spelling of `pio_module_write_file`.
+ */
+int32_t pio_module_emit_file(const PioModule *module,
+                             const char *format,
+                             const char *path,
+                             PioDiagnostics **out_diagnostics,
+                             PioError **error);
+
+/**
  * The stored version 1 document. Free with `pio_string_release`.
  */
 char *pio_module_write_json(const PioModule *module, PioError **error);
@@ -978,6 +1011,21 @@ PioModule *pio_module_export_state(const PioModule *module,
                                    PioError **error);
 
 /**
+ * Export one zero based time position as an independent static module.
+ * Use `pio_module_export_scenario` for a scenario set. This split form has
+ * no sentinel or conflicting selector combination.
+ */
+PioModule *pio_module_export_time_point(const PioModule *module, size_t position, PioError **error);
+
+/**
+ * Export one case sensitive scenario ID as an independent static module.
+ * Use `pio_module_export_time_point` for a time series.
+ */
+PioModule *pio_module_export_scenario(const PioModule *module,
+                                      const char *scenario,
+                                      PioError **error);
+
+/**
  * Readiness of the multiconductor value for the balanced lowering, as JSON.
  * Free with `pio_string_release`.
  */
@@ -986,11 +1034,28 @@ char *pio_module_lowering_readiness_json(const PioModule *module,
                                          PioError **error);
 
 /**
- * Explicitly lower the multiconductor value to a balanced module. Records
- * and source ownership carry over; the pass appends its findings and one
- * Transform history entry.
+ * Report whether the multiconductor value can be transformed to a balanced
+ * network, as JSON. Free with `pio_string_release`.
+ *
+ * This is the power system terminology spelling of
+ * `pio_module_lowering_readiness_json`.
+ */
+char *pio_module_to_balanced_report_json(const PioModule *module,
+                                         double base_mva,
+                                         PioError **error);
+
+/**
+ * Compatibility spelling for `pio_module_to_balanced`.
  */
 PioModule *pio_module_lower_to_balanced(const PioModule *module, double base_mva, PioError **error);
+
+/**
+ * Transform the multiconductor value to a balanced module. Common records
+ * carry over, the pass appends its findings and one Transform history entry,
+ * and the retained source is severed because its bytes describe the input
+ * value.
+ */
+PioModule *pio_module_to_balanced(const PioModule *module, double base_mva, PioError **error);
 
 /**
  * Mint an independent handle to the same module. NULL stays NULL.
@@ -1004,7 +1069,7 @@ void pio_module_release(PioModule *module);
 
 /**
  * The module's diagnostics as a structured list handle. This is the binding
- * inspection path; [`pio_module_diagnostics_json`] stays as the explicit
+ * inspection path; `pio_module_diagnostics_json` stays as the explicit
  * serialization helper.
  */
 PioDiagnostics *pio_module_diagnostics(const PioModule *module, PioError **error);
@@ -1111,6 +1176,12 @@ PioDcData *pio_dc_data_build(const PioModule *module, const char *formula, PioEr
 size_t pio_dc_data_n_rows(const PioDcData *data);
 
 /**
+ * Included branch count. This is the power system terminology spelling of
+ * `pio_dc_data_n_rows`.
+ */
+size_t pio_dc_data_n_branches(const PioDcData *data);
+
+/**
  * Incidence column count (`n`, the bus count).
  */
 size_t pio_dc_data_n_buses(const PioDcData *data);
@@ -1149,6 +1220,12 @@ const double *pio_dc_data_shift_injection(const PioDcData *data);
 const char *const *pio_dc_data_row_ids(const PioDcData *data);
 
 /**
+ * Stable module element ID per included branch, length `n_branches`. This is
+ * the power system terminology spelling of `pio_dc_data_row_ids`.
+ */
+const char *const *pio_dc_data_branch_ids(const PioDcData *data);
+
+/**
  * Stable bus element ID per incidence column, length `n_buses`.
  */
 const char *const *pio_dc_data_bus_ids(const PioDcData *data);
@@ -1179,8 +1256,21 @@ const char *pio_dc_data_formula(const PioDcData *data);
  * angles `va` (radians, length `n_buses`), writes
  * `-b[e] * (va[from] - va[to]) + b[e] * shift[e]` per included row into
  * `out` (length `n_rows`), so `A' * p_branch` equals the bus injection
- * including `shift_injection`. Returns false on a NULL argument or a length
- * mismatch. No temporary vector is allocated.
+ * including `shift_injection`. Returns false and stores a structured error
+ * on a NULL argument or a length mismatch. `va` and `out` must not overlap.
+ * No temporary vector is allocated.
+ */
+bool pio_dc_data_fill_branch_flow_checked(const PioDcData *data,
+                                          const double *va,
+                                          size_t va_len,
+                                          double *out,
+                                          size_t out_len,
+                                          PioError **error);
+
+/**
+ * Compatibility form of `pio_dc_data_fill_branch_flow_checked` without a
+ * structured error channel. Returns false on a NULL argument or length
+ * mismatch.
  */
 bool pio_dc_data_fill_branch_flow(const PioDcData *data,
                                   const double *va,

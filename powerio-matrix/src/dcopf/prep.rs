@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use powerio_tx::{BalancedNetwork, BusId, DcConvention, IndexedNetwork};
+use powerio_tx::{BalancedNetwork, BranchSusceptanceFormula, BusId, IndexedNetwork};
 
 use crate::{Error, Result};
 use powerio_prob::ReferenceBuses;
@@ -59,7 +59,7 @@ impl Units {
 /// Options for DC OPF instance assembly.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DcOpfOptions {
-    pub convention: DcConvention,
+    pub convention: BranchSusceptanceFormula,
     pub units: Units,
     /// Skip non-self-loop branches with zero reactance. Off by default:
     /// zero impedance branches are preserved in networks and instances, so
@@ -172,7 +172,7 @@ pub struct DcOpfPreparation {
     pub n_source_branches: usize,
     pub base_mva: f64,
     pub units: Units,
-    pub convention: DcConvention,
+    pub convention: BranchSusceptanceFormula,
     /// The objective represented by the generator cost columns.
     pub objective: PreparedObjective,
     pub skip_zero_impedance: bool,

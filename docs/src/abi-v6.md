@@ -114,7 +114,7 @@ How a v5 caller ports, group by group:
 | `pio_package_*` | the module surface: parse, `pio_module_write_json`, `pio_module_diagnostics`, `pio_module_export_state`, `pio_module_lower_to_balanced` |
 | `pio_scopf_*` | parse (an `ac_scuc_instance` module) plus `pio_module_inspect_json` / `pio_module_write_json` |
 | `pio_n_buses`, `pio_bus_ids`, the extractors, `pio_network_retain`/`_release`/`_free`, `pio_normalize`, `pio_to_json`/`pio_from_json`, `pio_to_arrow`, geo | the same operations under the `pio_balanced_network_` prefix, structured errors, no `free` verb |
-| `pio_dist_summary_json`, `pio_dist_to_json`, `pio_dist_from_json`, `pio_dist_graph_json`, dist geo | the `pio_multiconductor_network_` prefix |
+| `pio_dist_summary_json`, `pio_dist_to_json`, `pio_dist_from_json`, `pio_dist_graph_json`, dist geo | the `pio_multiconductor_network_` prefix; graph projection is `pio_multiconductor_network_to_graph_json` with the noun form retained for compatibility |
 | `pio_to_format`, `pio_write_dir`, `pio_dist_to_format` | `pio_module_write_str` / `pio_module_write_file` (wrap a bare network with `pio_module_of_balanced_network` / `_of_multiconductor_network`) |
 | `pio_warnings`, `pio_dist_warnings` | `pio_module_diagnostics` structured rows |
 | `pio_read_dir`, `pio_scenario_ids` | parse the dataset directory (a scenario set module), `pio_module_state_inventory_json`, `pio_module_export_state` |
@@ -147,11 +147,12 @@ errors.
 0.9 document upgraded one way), `pio_parse_file`/`pio_parse_str`/`pio_parse_bytes` compile
 any case family, `pio_module_write_json` writes the stored document, and
 `pio_module_inspect_json`, `pio_module_state_inventory_json`,
-`pio_module_export_state`, `pio_module_lowering_readiness_json`, and
-`pio_module_lower_to_balanced` carry inspection, typed state selection, and
-the explicit balanced lowering.
+`pio_module_export_state`, `pio_module_to_balanced_report_json`, and
+`pio_module_to_balanced` carry inspection, typed state selection, and the
+explicit balanced transformation. The released `lowering` and `lower` symbols
+remain ABI 6 compatibility aliases.
 
-## DC branch data
+## Low level DC coefficients
 
 `pio_dc_data_build` returns the owned DC branch data under a named
 susceptance formula (`series_susceptance`, `tap_adjusted_reactance`,
@@ -166,5 +167,10 @@ handle's release. `pio_dc_data_fill_branch_flow` writes the complete
 affine flow `p_branch = -b .* (va_from - va_to) + b .* shift` into the
 caller's buffer, so `A' p_branch` matches the bus injection.
 `pio_module_diagnostics_json` returns the module's findings as owned JSON.
-The same values reach Rust as `powerio_tx::dc_network_data`, Python as
-`BalancedNetwork.dc_data`, and Julia as `DcData`.
+
+This span based container is the C coefficient layer, not the ordinary matrix
+surface. Rust uses `DcOperators::calc_*`; Python and Julia expose direct
+`calc_incidence_matrix`, `calc_bus_susceptance_matrix`,
+`calc_branch_susceptance_matrix`, `calc_phase_shift_injection`, and
+`calc_branch_flow_dc` operations. Their released `dc_data` and `DcData`
+entries remain low level 0.10 compatibility functions.

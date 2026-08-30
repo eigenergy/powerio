@@ -24,6 +24,11 @@ pub type Extras = BTreeMap<String, serde_json::Value>;
 /// A square matrix in conductor order, row major.
 pub type Mat = Vec<Vec<f64>>;
 
+/// A square matrix whose rows and columns follow conductor order.
+///
+/// [`Mat`] remains available as the compact compatibility spelling.
+pub type ConductorMatrix = Mat;
+
 /// Where the network came from; fixes the echo tier target.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]

@@ -52,6 +52,11 @@ class MulticonductorNetwork:
         return self._inner.source_format()
 
     @property
+    def base_frequency(self) -> float:
+        """System base frequency in hertz."""
+        return self._inner.base_frequency()
+
+    @property
     def warnings(self) -> "list[str]":
         """Return source fields not represented and assumptions made while parsing."""
         return self._inner.warnings()
@@ -70,6 +75,14 @@ class MulticonductorNetwork:
         return self._inner.n_lines()
 
     @property
+    def n_line_codes(self) -> int:
+        return self._inner.n_line_codes()
+
+    @property
+    def n_switches(self) -> int:
+        return self._inner.n_switches()
+
+    @property
     def n_transformers(self) -> int:
         return self._inner.n_transformers()
 
@@ -82,8 +95,107 @@ class MulticonductorNetwork:
         return self._inner.n_generators()
 
     @property
+    def n_ibrs(self) -> int:
+        return self._inner.n_ibrs()
+
+    @property
+    def n_control_profiles(self) -> int:
+        return self._inner.n_control_profiles()
+
+    @property
+    def n_shunts(self) -> int:
+        return self._inner.n_shunts()
+
+    @property
+    def n_capacitors(self) -> int:
+        return self._inner.n_capacitors()
+
+    @property
     def n_sources(self) -> int:
         return self._inner.n_sources()
+
+    @property
+    def n_voltage_sources(self) -> int:
+        """Number of grid forming voltage sources.
+
+        ``n_sources`` remains as a compatibility spelling.
+        """
+        return self._inner.n_voltage_sources()
+
+    @property
+    def n_untyped_objects(self) -> int:
+        return self._inner.n_untyped_objects()
+
+    # These properties are copies of the native model tables. Nested field
+    # names come from the Rust model's serialization, so this wrapper does not
+    # maintain a second distribution schema.
+
+    @property
+    def buses(self) -> "list[dict[str, Any]]":
+        return self._inner.buses()
+
+    @property
+    def line_codes(self) -> "list[dict[str, Any]]":
+        return self._inner.line_codes()
+
+    @property
+    def linecodes(self) -> "list[dict[str, Any]]":
+        """Compatibility spelling for :attr:`line_codes`."""
+        return self.line_codes
+
+    @property
+    def lines(self) -> "list[dict[str, Any]]":
+        return self._inner.lines()
+
+    @property
+    def switches(self) -> "list[dict[str, Any]]":
+        return self._inner.switches()
+
+    @property
+    def transformers(self) -> "list[dict[str, Any]]":
+        return self._inner.transformers()
+
+    @property
+    def loads(self) -> "list[dict[str, Any]]":
+        return self._inner.loads()
+
+    @property
+    def generators(self) -> "list[dict[str, Any]]":
+        return self._inner.generators()
+
+    @property
+    def ibrs(self) -> "list[dict[str, Any]]":
+        return self._inner.ibrs()
+
+    @property
+    def control_profiles(self) -> "list[dict[str, Any]]":
+        return self._inner.control_profiles()
+
+    @property
+    def shunts(self) -> "list[dict[str, Any]]":
+        return self._inner.shunts()
+
+    @property
+    def capacitors(self) -> "list[dict[str, Any]]":
+        return self._inner.capacitors()
+
+    @property
+    def voltage_sources(self) -> "list[dict[str, Any]]":
+        return self._inner.voltage_sources()
+
+    @property
+    def sources(self) -> "list[dict[str, Any]]":
+        """Compatibility spelling for :attr:`voltage_sources`."""
+        return self.voltage_sources
+
+    @property
+    def untyped_objects(self) -> "list[dict[str, Any]]":
+        return self._inner.untyped_objects()
+
+    @property
+    def untyped(self) -> "list[dict[str, Any]]":
+        """Compatibility spelling for :attr:`untyped_objects`."""
+        return self.untyped_objects
 
     def to_format(self, to: str) -> Conversion:
         """Serialize to ``to`` (``dss``, ``pmd-json``, ``bmopf-json``).
@@ -112,7 +224,11 @@ class MulticonductorNetwork:
         return self._inner.write_file(str(path), to)
 
     def graph(self) -> Any:
-        """Collapsed bus and terminal graph as Python data."""
+        """Compatibility alias for :meth:`to_graph`."""
+        return self.to_graph()
+
+    def to_graph(self) -> Any:
+        """Transform the network to collapsed bus and terminal graph data."""
         return _json.loads(self._inner.graph_json())
 
     def geo_layer(self) -> Any:

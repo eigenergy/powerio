@@ -1,6 +1,7 @@
 """The powerio.dist surface: parse, echo, convert, warnings, errors."""
 
 import json
+import warnings
 from pathlib import Path
 
 import pytest
@@ -10,6 +11,13 @@ from powerio import dist
 
 DATA = Path(__file__).resolve().parents[2] / "tests" / "data" / "dist"
 FOURWIRE = DATA / "micro" / "fourwire_linecode.dss"
+LOWERABLE_DSS = """Clear
+Set DefaultBaseFrequency=60
+New Circuit.tiny basekv=12.47 pu=1.0 phases=3 bus1=src MVAsc3=2000 MVAsc1=2100
+New Transformer.t1 phases=3 windings=2 buses=(src, sec) conns=(delta, wye) kvs=(12.47, 0.416) kvas=(500, 300) %Rs=(0.5, 0.5) xhl=6
+New Load.l1 bus1=sec phases=3 conn=wye kv=0.416 kw=90 pf=0.95 model=1
+Set VoltageBases=[12.47, 0.416]
+"""
 
 
 def test_parse_file_counts_and_source_format():
@@ -18,6 +26,35 @@ def test_parse_file_counts_and_source_format():
     assert case.n_buses > 0
     assert case.n_lines > 0
     assert isinstance(case.warnings, list)
+
+
+def test_complete_read_only_tables_and_power_system_counts():
+    case = dist.parse_file(FOURWIRE)
+    assert case.base_frequency == 60.0
+    assert case.n_voltage_sources == case.n_sources == len(case.voltage_sources)
+    assert case.sources == case.voltage_sources
+    assert case.linecodes == case.line_codes
+    assert case.untyped == case.untyped_objects
+    for table, count in [
+        ("buses", "n_buses"),
+        ("line_codes", "n_line_codes"),
+        ("lines", "n_lines"),
+        ("switches", "n_switches"),
+        ("transformers", "n_transformers"),
+        ("loads", "n_loads"),
+        ("generators", "n_generators"),
+        ("ibrs", "n_ibrs"),
+        ("control_profiles", "n_control_profiles"),
+        ("shunts", "n_shunts"),
+        ("capacitors", "n_capacitors"),
+        ("voltage_sources", "n_voltage_sources"),
+        ("untyped_objects", "n_untyped_objects"),
+    ]:
+        rows = getattr(case, table)
+        assert isinstance(rows, list), table
+        assert len(rows) == getattr(case, count), table
+    assert case.buses[0]["id"]
+    assert case.line_codes[0]["name"]
 
 
 def test_multiconductor_is_the_only_model_name():
@@ -48,7 +85,7 @@ def test_cross_format_writes():
 
 
 def test_graph_projection():
-    graph = dist.parse_file(FOURWIRE).graph()
+    graph = dist.parse_file(FOURWIRE).to_graph()
     assert {bus["id"] for bus in graph["buses"]} == {"sourcebus", "loadbus"}
     source = next(bus for bus in graph["buses"] if bus["id"] == "sourcebus")
     assert source["has_source"] is True
@@ -77,6 +114,23 @@ def test_convert_str_and_convert_file():
     via_file = dist.convert_file(FOURWIRE, "pmd-json")
     assert via_str.text == via_file.text
     assert isinstance(via_str, powerio.Conversion)
+
+
+def test_top_level_conversion_routes_distribution_inputs():
+    text = FOURWIRE.read_text()
+    via_str = powerio.convert_str(text, "pmd-json", "dss")
+    via_file = powerio.convert_file(FOURWIRE, "pmd-json")
+    assert json.loads(via_str.text)["data_model"] == "ENGINEERING"
+    assert via_str.text == via_file.text
+    assert via_str.diagnostics is via_str.warnings
+
+
+def test_pio_module_distribution_writer_infers_source_format(tmp_path):
+    module = powerio.parse(FOURWIRE)
+    assert json.loads(module.to_format("pmd-json").text)["data_model"] == "ENGINEERING"
+    out = tmp_path / "echo.dss"
+    assert module.write_file(out) == []
+    assert out.read_bytes() == FOURWIRE.read_bytes()
 
 
 def test_dist_write_file_writes_sidecars_beside_the_case(tmp_path):
@@ -138,6 +192,11 @@ def test_lower_to_balanced_refusal_carries_code_and_diagnostics():
     # single-phase regulators, a wye-wye substation transformer): the
     # positive sequence projection refuses it outright rather than guess.
     module = powerio.parse(DATA / "opendss" / "ieee13" / "IEEE13Nodeckt.dss")
+    report = module.to_balanced_report(base_mva=100.0)
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        assert module.to_balanced_inspect(base_mva=100.0) == report
+    assert caught == []
     with pytest.raises(powerio.PowerIODataError) as excinfo:
         module.to_balanced(base_mva=100.0)
     error = excinfo.value
@@ -153,6 +212,35 @@ def test_lower_to_balanced_refusal_carries_code_and_diagnostics():
         assert diagnostic["message"]
     # The refusal leaves the handle usable, still carrying its module.
     assert module.kind == "multiconductor_network"
+
+
+def test_successful_lowering_leaves_the_source_module_usable_and_records_intact():
+    module = powerio.PioModule.from_str(LOWERABLE_DSS, "dss")
+    doc = json.loads(module.to_json())
+    doc["producer"] = {"name": "python-binding-test", "version": "1"}
+    doc["history"] = [
+        {"id": "before-lowering", "kind": "parse", "name": "test_parse"}
+    ]
+    doc["extensions"] = {"org.example.test": {"kept": True}}
+    module = powerio.PioModule.from_json(json.dumps(doc))
+    before = json.loads(module.to_json())
+
+    lowered = module.to_balanced()
+
+    # The native transform owns a record-complete sibling, not this handle.
+    assert module.kind == "multiconductor_network"
+    assert json.loads(module.to_json()) == before
+    assert module.value.n_buses > 0
+
+    lowered_doc = json.loads(lowered.to_json())
+    assert lowered.kind == "balanced_network"
+    assert lowered_doc["producer"] == before["producer"]
+    assert lowered_doc["extensions"] == before["extensions"]
+    assert lowered_doc["history"][0] == before["history"][0]
+    assert any(
+        entry["name"] == "lower_multiconductor_to_balanced"
+        for entry in lowered_doc["history"]
+    )
 
 
 def test_dist_write_file_echoes_bytes(tmp_path):

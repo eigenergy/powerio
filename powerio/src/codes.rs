@@ -136,7 +136,8 @@ powerio_core::diagnostic_codes! {
         category = Request;
     TRANSFORM_MULTI_TO_BALANCED_WRONG_MODEL_KIND =
         "TRANSFORM.MULTI_TO_BALANCED.WRONG_MODEL_KIND", Error,
-        "the module does not carry a multiconductor payload to lower";
+        "the module does not carry a multiconductor payload to lower",
+        category = Request;
 
     // Failures.
     PARSE_MODULE_MALFORMED = "PARSE.MODULE.MALFORMED", Error,

@@ -24,7 +24,7 @@
 
 use crate::SparseMatrix;
 use powerio_core::Error;
-use powerio_tx::{BusId, DcConvention};
+use powerio_tx::{BranchSusceptanceFormula, BusId};
 
 use powerio_prob::diagnostics::codes;
 use powerio_prob::{DcBusSpecification, DcPfInstance};
@@ -45,8 +45,8 @@ pub struct ReferenceConstrainedSystem {
     /// the internal positive factor weights, the negation of the public bus
     /// susceptance matrix with the reference rows and columns removed.
     pub matrix: SparseMatrix,
-    /// The right hand side: net injection plus phase shift injection at the
-    /// retained buses, per unit.
+    /// The right hand side: net injection minus phase shift injection at the
+    /// retained buses, plus coupling from eliminated reference buses, per unit.
     pub rhs: Vec<f64>,
     /// Reduced row to dense bus row.
     pub retained_rows: Vec<usize>,
@@ -74,7 +74,7 @@ pub struct DcOperators {
     /// Meaningful only at a row listed in `reference_rows`; every other row
     /// holds zero and is never read.
     reference_va_radians: Vec<f64>,
-    approximation: DcConvention,
+    approximation: BranchSusceptanceFormula,
 }
 
 impl DcOperators {
@@ -135,7 +135,7 @@ impl DcOperators {
             // formally nonzero impedance below it yields a finite weight big
             // enough to annihilate every real branch sharing a bus.
             let degenerate = match approximation {
-                DcConvention::SeriesSusceptance => {
+                BranchSusceptanceFormula::SeriesSusceptance => {
                     branch.r.hypot(branch.x) < powerio_tx::dc::MIN_DIVISIBLE_MAGNITUDE
                 }
                 // Any formula that reads a reactance is bounded by it.
@@ -243,7 +243,7 @@ impl DcOperators {
 
     /// The selected DC branch approximation.
     #[must_use]
-    pub const fn approximation(&self) -> DcConvention {
+    pub const fn approximation(&self) -> BranchSusceptanceFormula {
         self.approximation
     }
 
@@ -260,11 +260,22 @@ impl DcOperators {
         &self.branch_identities
     }
 
-    /// The incidence matrix `A`, `n × m`: `+1` at each branch's from bus and
-    /// `-1` at its to bus.
+    /// The bus by branch incidence factor, `n × m`: `+1` at each branch's
+    /// from bus and `-1` at its to bus.
+    ///
+    /// This transposed solver orientation predates the 1.0 surface. Use
+    /// [`Self::calc_incidence_matrix`] for the PowerModels branch by bus
+    /// matrix.
     #[must_use]
     pub const fn incidence(&self) -> &SparseMatrix {
         &self.incidence
+    }
+
+    /// The PowerModels incidence matrix `A`, `m × n`: each branch row has
+    /// `+1` at its from bus and `-1` at its to bus.
+    #[must_use]
+    pub fn calc_incidence_matrix(&self) -> SparseMatrix {
+        self.incidence.transpose_view().to_csr()
     }
 
     /// The public per branch susceptances `b`, PowerModels signs.
@@ -275,17 +286,35 @@ impl DcOperators {
 
     /// The branch susceptance matrix `Bf = diag(b) Aᵀ`, `m × n`, PowerModels
     /// signs: `p_branch = -Bf va + b .* shift`.
+    ///
+    /// This noun form predates the verb based 1.0 surface. Use
+    /// [`Self::calc_branch_susceptance_matrix`] in new code.
     #[must_use]
     pub fn branch_susceptance_matrix(&self) -> SparseMatrix {
+        self.calc_branch_susceptance_matrix()
+    }
+
+    /// Calculate the branch susceptance matrix `Bf = diag(b) A`, `m × n`.
+    #[must_use]
+    pub fn calc_branch_susceptance_matrix(&self) -> SparseMatrix {
         let transpose = self.incidence.transpose_view().to_csr();
         scale_rows(&transpose, &self.branch_susceptance)
     }
 
     /// The bus susceptance matrix `B = A diag(b) Aᵀ`, `n × n`, PowerModels
     /// signs: `p_bus = -B va + p_shift`.
+    ///
+    /// This noun form predates the verb based 1.0 surface. Use
+    /// [`Self::calc_bus_susceptance_matrix`] in new code.
     #[must_use]
     pub fn bus_susceptance_matrix(&self) -> SparseMatrix {
-        let bf = self.branch_susceptance_matrix();
+        self.calc_bus_susceptance_matrix()
+    }
+
+    /// Calculate the bus susceptance matrix `B = Aᵀ diag(b) A`, `n × n`.
+    #[must_use]
+    pub fn calc_bus_susceptance_matrix(&self) -> SparseMatrix {
+        let bf = self.calc_branch_susceptance_matrix();
         &self.incidence * &bf
     }
 
@@ -298,8 +327,17 @@ impl DcOperators {
 
     /// The phase shift injection `p_shift = A (b .* shift)`, per unit, in bus
     /// row order: the fixed nodal term of `p_bus = -B va + p_shift`.
+    ///
+    /// This noun form predates the verb based 1.0 surface. Use
+    /// [`Self::calc_phase_shift_injection`] in new code.
     #[must_use]
     pub fn phase_shift_injection(&self) -> Vec<f64> {
+        self.calc_phase_shift_injection()
+    }
+
+    /// Calculate `p_shift = Aᵀ (b .* shift)` in bus order.
+    #[must_use]
+    pub fn calc_phase_shift_injection(&self) -> Vec<f64> {
         let mut injection = vec![0.0; self.bus_ids.len()];
         for (column, (&susceptance, &shift)) in self
             .branch_susceptance
@@ -319,7 +357,46 @@ impl DcOperators {
         injection
     }
 
+    /// Calculate DC active power flow in branch order from bus voltage angles
+    /// in radians: `p_branch = -Bf va + b .* shift`.
+    ///
+    /// # Errors
+    /// The voltage angle length differs from the bus axis length.
+    pub fn calc_branch_flow_dc(&self, voltage_angles: &[f64]) -> Result<Vec<f64>, Error> {
+        if voltage_angles.len() != self.bus_ids.len() {
+            return Err(Error::new(
+                &codes::BUILD_INSTANCE_SHAPE_MISMATCH,
+                format!(
+                    "voltage_angles has length {}; expected {} for the bus axis",
+                    voltage_angles.len(),
+                    self.bus_ids.len()
+                ),
+            ));
+        }
+        Ok(self
+            .endpoints
+            .iter()
+            .zip(self.branch_susceptance.iter())
+            .zip(self.shift_radians.iter())
+            .map(|((&(from, to), &susceptance), &shift)| {
+                -susceptance * (voltage_angles[from] - voltage_angles[to]) + susceptance * shift
+            })
+            .collect())
+    }
+
     /// The reference constrained linear system over the internal positive
+    /// factor weights.
+    ///
+    /// This noun form predates the verb based 1.0 surface. Use
+    /// [`Self::calc_reference_constrained_system`] in new code.
+    ///
+    /// # Errors
+    /// An instance with no reference row.
+    pub fn reference_constrained_system(&self) -> Result<ReferenceConstrainedSystem, Error> {
+        self.calc_reference_constrained_system()
+    }
+
+    /// Calculate the reference constrained linear system over the internal positive
     /// factor weights: the reference grounded positive semidefinite matrix
     /// `L = -B` with reference rows and columns removed, and the right hand
     /// side at the retained buses is `p - p_shift` (from `p = -B va +
@@ -331,7 +408,7 @@ impl DcOperators {
     ///
     /// # Errors
     /// An instance with no reference row.
-    pub fn reference_constrained_system(&self) -> Result<ReferenceConstrainedSystem, Error> {
+    pub fn calc_reference_constrained_system(&self) -> Result<ReferenceConstrainedSystem, Error> {
         if self.reference_rows.is_empty() {
             return Err(Error::new(
                 &codes::BUILD_INSTANCE_NO_REFERENCE_BUS,
@@ -380,7 +457,7 @@ impl DcOperators {
                 (false, false) => {}
             }
         }
-        let shift_injection = self.phase_shift_injection();
+        let shift_injection = self.calc_phase_shift_injection();
         let rhs = retained_rows
             .iter()
             .zip(reference_coupling.iter())

@@ -156,9 +156,10 @@ Display files do not pass through `BalancedNetwork`, `Conversion`, or `.pio.json
 
 ## Distribution graph projection
 
-`MulticonductorNetwork::graph()` returns a bus and terminal graph without requiring
-coordinates. Python exposes `dist_net.graph()`, and the C `dist` feature
-exposes `pio_multiconductor_network_graph_json`. Graph topology and geographic placement remain
+`MulticonductorNetwork::to_graph()` returns a bus and terminal graph without requiring
+coordinates. Python exposes `dist_net.to_graph()`, and the C `dist` feature
+exposes `pio_multiconductor_network_to_graph_json`. The released noun forms
+remain 0.10 compatibility aliases. Graph topology and geographic placement remain
 separate data.
 
 PowerIO stores and transports coordinates; it does not compute them. Synthetic
@@ -169,7 +170,7 @@ survives.
 The C ABI exposes the document as strings: `pio_geo_parse` normalizes a
 tolerant sidecar to the canonical form and returns the reader's notes through
 its `PioDiagnostics **out_diagnostics` out parameter, `pio_balanced_network_geo_extract` and `pio_balanced_network_geo_apply`
-work on a parsed network handle (apply returns a new handle whose warnings
+work on a parsed network handle (apply returns a new handle whose diagnostics
 carry the match report), and `pio_multiconductor_network_geo_extract`/`pio_multiconductor_network_geo_apply` are
 the multiconductor equivalents. Python mirrors the surface with `parse_geo`
 and `geo_layer()`/`apply_geo_layer()` on both network types.
