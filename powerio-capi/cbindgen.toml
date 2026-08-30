@@ -12,19 +12,21 @@ usize_is_size_t = true
 # hand-written prose lives here; per-symbol docs come from the Rust doc comments.
 header = """
 /* powerio C ABI, version 6. Parse power system sources into module handles,
- * inspect and transform them through typed accessors, and write supported
+ * inspect and transform them through typed accessors, and emit supported
  * formats. Check pio_abi_version() against PIO_ABI_VERSION at load; the
  * integer is the compatibility check, the version string is informational.
  *
- * The surface in one paragraph: pio_parse_file / pio_parse_str /
- * pio_parse_bytes compile one source into a PioModule of whichever built in
- * value family claims it. pio_module_kind names the value; the typed
+ * The ordinary surface in one paragraph: pio_parse_file compiles one source
+ * into a PioModule of whichever built in value family claims it.
+ * pio_module_kind names the value; the typed
  * accessors (pio_module_balanced_network, pio_module_multiconductor_network)
  * hand back independently owned network handles; pio_module_diagnostics is
- * the structured findings list; pio_module_write_str / pio_module_write_file
- * write a supported target, echoing the retained source bytes exactly for an
- * unchanged same format write; and pio_module_read_json / write_json carry
- * the stored .pio.json document.
+ * the module's stored findings list; pio_module_emit_string /
+ * pio_module_emit_file emit a supported target, echoing the retained source
+ * bytes exactly for an unchanged same format emission; and
+ * pio_module_read_json / pio_module_write_json carry the stored .pio.json
+ * document. pio_parse_str, pio_parse_bytes, and pio_module_write_* remain
+ * ABI compatibility and in-memory acquisition functions.
  *
  * Naming grammar:
  * - pio_<handle noun>_<operation or field>: module, balanced_network,

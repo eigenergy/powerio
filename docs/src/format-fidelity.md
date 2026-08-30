@@ -130,7 +130,7 @@ findings carry `READ.TRANSMISSION.PARSE_WARNING`, GridFM reads
   shunts, controlled shunts at initial `g/b`, and limited two-terminal DC records.
   Three-winding transformers are kept as typed records and star-lowered into
   \\(Y_{\mathrm{bus}}\\)/connectivity by the indexed view. Unsupported sections stay in the
-  retained source text and emit warnings.
+  retained source text and emit diagnostics.
 - **MATPOWER** canonical output (for a case that did not originate as MATPOWER)
   omits dcline; the byte exact echo path keeps it when the case was read from
   MATPOWER. Storage is written as an `mpc.storage` block.

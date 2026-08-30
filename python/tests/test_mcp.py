@@ -804,7 +804,8 @@ def test_inspect_discovers_operations():
     assert inspected["kind"] == "multiconductor_network"
     assert "to_balanced" in inspected["operations"]
     series = server._inspect_tool(module_json=_series_module_json())
-    assert "select_state" in series["operations"]
+    assert "inspect_state" in series["operations"]
+    assert "select_state" not in series["operations"]
     assert "export_state" in series["operations"]
 
 

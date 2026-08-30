@@ -1,11 +1,15 @@
 //! Typed inventory, selection, and explicit export over `PioValue`.
 
 use powerio::select::{
-    ScenarioEntry, SelectedState, StateInventory, StateSelector, export_state, select_state,
-    state_inventory,
+    ScenarioEntry, SelectedState, StateInventory, StateSelector, export_module_state, export_state,
+    select_state, state_inventory,
 };
 use powerio::{BalancedNetwork, PioValue};
-use powerio_core::{HistoryKind, Scenario, ScenarioId, ScenarioSet, TimePoint};
+use powerio_core::{
+    Diagnostic, DiagnosticCode, DiagnosticSeverity, HistoryEntry, HistoryId, HistoryKind,
+    PioModule, Producer, Scenario, ScenarioId, ScenarioSet, Source, SourceDescriptor,
+    SourceMapEntry, SourceRelation, SourceSpan, TimePoint,
+};
 use powerio_tx::{Bus, BusId, BusType, Generator, Load};
 
 fn small_network() -> BalancedNetwork {
@@ -182,6 +186,91 @@ fn export_applies_typed_state_and_shares_untouched_tables() {
             .iter()
             .any(|entry| entry.kind() == HistoryKind::Transform
                 && entry.name() == "export_selected_state")
+    );
+}
+
+#[test]
+fn module_export_preserves_common_records_and_severs_value_bound_records() {
+    let source = Source::from_bytes("states.pio.json", b"state collection".to_vec()).unwrap();
+    let buffer = source.primary_buffer().unwrap();
+    let source_id = buffer.id().clone();
+    let source_len = buffer.bytes().len() as u64;
+    let mut module = PioModule::new(point_series())
+        .with_producer(Producer::new("selection-test", "1").unwrap())
+        .with_source(source);
+    module
+        .add_source_descriptor(
+            SourceDescriptor::new(source_id.clone(), "states.pio.json", source_len).unwrap(),
+        )
+        .unwrap();
+    let span = SourceSpan::new(source_id, 0, 5).unwrap();
+    module
+        .add_source_map_entry(
+            SourceMapEntry::new(
+                "/network/buses/0/vm",
+                SourceRelation::Exact,
+                vec![span.clone()],
+            )
+            .unwrap(),
+        )
+        .unwrap();
+    module
+        .add_diagnostic(
+            Diagnostic::new(
+                DiagnosticCode::new("READ.TEST.SELECTION").unwrap(),
+                DiagnosticSeverity::Note,
+                "kept finding",
+            )
+            .with_target("/network/buses/0/vm")
+            .unwrap()
+            .with_span(span)
+            .unwrap(),
+        )
+        .unwrap();
+    module
+        .add_history_entry(
+            HistoryEntry::new(
+                HistoryId::new("export-selected-state").unwrap(),
+                HistoryKind::Parse,
+                "parse_states",
+            )
+            .unwrap(),
+        )
+        .unwrap();
+    module
+        .insert_extension("org.example.selection", serde_json::json!({"kept": true}))
+        .unwrap();
+
+    let exported = export_module_state(&module, StateSelector::TimePosition(1)).unwrap();
+    let PioValue::BalancedNetwork(network) = exported.value() else {
+        panic!("expected a static network");
+    };
+    assert!((network.loads()[0].p - 55.0).abs() < 1e-12);
+    assert_eq!(exported.producer().name(), "selection-test");
+    assert_eq!(exported.sources(), module.sources());
+    assert!(exported.source_map().is_empty());
+    assert_eq!(exported.diagnostics().len(), 1);
+    assert_eq!(exported.diagnostics()[0].target(), None);
+    assert_eq!(
+        exported.diagnostics()[0].spans(),
+        &[SourceSpan::new(module.sources()[0].id().clone(), 0, 5,).unwrap()]
+    );
+    assert_eq!(exported.history().len(), 2);
+    assert_eq!(exported.history()[0].id().as_str(), "export-selected-state");
+    assert_eq!(
+        exported.history()[1].id().as_str(),
+        "export-selected-state-2"
+    );
+    assert_eq!(
+        exported.extensions().get("org.example.selection"),
+        Some(&serde_json::json!({"kept": true}))
+    );
+    assert!(exported.source().is_none());
+    assert!(module.source().is_some());
+    assert_eq!(module.source_map().len(), 1);
+    assert_eq!(
+        module.diagnostics()[0].target(),
+        Some("/network/buses/0/vm")
     );
 }
 

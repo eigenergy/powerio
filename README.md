@@ -10,7 +10,7 @@
 
 PowerIO 0.10 established the public beta of the 1.0 API. The 1.0 candidate
 applies the corrections found while building external solver consumers. It parses
-power system data into typed values, converts supported formats, and builds
+power system data into typed values, emits supported formats, and builds
 sparse matrices and graph data.
 
 A parse returns a `PioModule`: one typed value plus its sources, diagnostics,
@@ -35,17 +35,19 @@ pip install 'powerio[all]'
 
 Install the command line program with `cargo install powerio-cli`.
 
-## Parse and write
+## Parse and emit
 
 Rust:
 
 ```rust,ignore
-use powerio::{BalancedNetwork, Destination, PioModule, Source};
+use powerio::{Destination, PioValue};
 
-let module = powerio::parse(Source::open("case9.m")?)?;
-let module: PioModule<BalancedNetwork> = powerio::try_into_typed(module)?;
-let module = module.map_value(powerio::PioValue::from);
-powerio::write_module_as(&module, "matpower", Destination::path("copy.m"))?;
+let module = powerio::parse_file("case9.m")?;
+let PioValue::BalancedNetwork(network) = module.value() else {
+    panic!("expected a balanced network");
+};
+assert_eq!(network.buses().len(), 9);
+powerio::emit(&module, "matpower", Destination::path("copy.m"))?;
 # Ok::<(), Box<dyn std::error::Error>>(())
 ```
 
@@ -54,11 +56,11 @@ Python detects the kind without a type argument:
 ```python
 import powerio
 
-module = powerio.parse("case9.m")
+module = powerio.parse_file("case9.m")
 module.kind                         # "balanced_network"
 network = module.value
-module.diagnostics()               # native diagnostic records
-network.write_file("copy.m", "matpower")  # byte exact same format write
+module.diagnostics                 # native diagnostic records
+module.emit("matpower", "copy.m") # byte exact same format emission
 ```
 
 Pass `value_type=powerio.BalancedNetwork` only when the caller wants to assert
@@ -72,11 +74,11 @@ using PowerIO
 module_ = parse_file("case9.m")     # PioModule{BalancedNetwork}
 network = module_.value
 n_buses(network)                    # 9
-diagnostics(module_)
-write_file(module_, "copy.m")
+module_.diagnostics
+emit(module_, "matpower", "copy.m")
 ```
 
-The command line interface uses the same readers and writers:
+The command line interface uses the same parsers and emitters:
 
 ```sh
 powerio convert case9.m --to psse -o case9.raw
@@ -85,7 +87,7 @@ powerio verify case9.m --kind bdoubleprime
 powerio sensitivities case9.m -o out
 ```
 
-An unchanged module writes its source format byte for byte. Cross format
+An unchanged module emits its source format byte for byte. Cross format
 conversion keeps what the destination can represent and returns a diagnostic
 for each loss. `.pio.json` version 1 stores a module for exchange between
 PowerIO consumers; it does not replace domain formats such as MATPOWER,

@@ -109,7 +109,7 @@ for page in PAGES:
             for name in set(re.findall(r"(?<![.\w])([a-z][a-z_0-9]*[a-z0-9]!?)\(", fence)):
                 if name in {"println", "print", "read", "readdir", "joinpath", "string",
                             "length", "first", "filter", "endswith", "typeof", "show",
-                            "get", "sort", "collect", "pairs", "String"}:
+                            "get", "sort", "collect", "pairs", "keys", "haskey", "String"}:
                     continue
                 if name not in julia_exports and not is_history:
                     fail(page, f"julia example calls {name}(), not exported by PowerIO.jl")

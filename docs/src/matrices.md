@@ -18,9 +18,13 @@ the matrix crate projects them into sparse operators. The DC OPF bundle schema i
 | MATPOWER `Bpp` (FDPF) | \\(n \times n\\) | `build_bdoubleprime` | `-Im(Y_bus)` after the `makeB` `Bpp` edits |
 | \\(\Re(Y_{\mathrm{bus}})\\), \\(-\Im(Y_{\mathrm{bus}})\\) | \\(n \times n\\) | `build_ybus` | full admittance, keeps taps and shifts |
 | LACPF (linear AC power flow) block | \\(2n \times 2n\\) | `build_lacpf` | \\(\begin{bmatrix}G & -B \\\\ -B & -G\end{bmatrix}\\), flat start, indefinite |
-| signed incidence matrix \\(A\\) | \\(n \times m\\) | `build_incidence` | column \\(e\\) has \\(+1\\) at from-bus, \\(-1\\) at to-bus |
-| weighted bus Laplacian \\(L\\) | \\(n \times n\\) | `build_weighted_laplacian` | \\(L = A \operatorname{diag}(w) A^\mathsf{T}\\); for DC OPF and PTDF/LODF, \\(w\\) is the branch susceptance vector \\(b\\) |
-| flow map \\(B A^\mathsf{T}\\) | \\(m \times n\\) | `build_flow_map` | \\(f = B A^\mathsf{T}\theta\\) |
+| PowerModels DC incidence \\(A\\) | \\(m \times n\\) | `DcOperators::calc_incidence_matrix` | row \\(e\\) has \\(+1\\) at the from bus, \\(-1\\) at the to bus |
+| DC branch susceptance \\(B_f\\) | \\(m \times n\\) | `DcOperators::calc_branch_susceptance_matrix` | \\(B_f = \operatorname{diag}(b)A\\) |
+| DC bus susceptance \\(B\\) | \\(n \times n\\) | `DcOperators::calc_bus_susceptance_matrix` | \\(B = A^\mathsf{T}\operatorname{diag}(b)A\\) |
+| phase shift injection \\(p_{shift}\\) | \\(n\\) | `DcOperators::calc_phase_shift_injection` | \\(p_{shift} = A^\mathsf{T}(b .* shift)\\) |
+| solver incidence factor \\(C=A^\mathsf{T}\\) | \\(n \times m\\) | `build_incidence` | the transposed, column oriented factor used by matrix algorithms |
+| weighted bus factor \\(L\\) | \\(n \times n\\) | `build_weighted_laplacian` | \\(L = C \operatorname{diag}(w) C^\mathsf{T}\\); internal solver data |
+| solver flow factor | \\(m \times n\\) | `build_flow_map` | branch weights times \\(C^\mathsf{T}\\) |
 | PTDF | \\(m \times n\\) | `build_ptdf` | routes through `Auto` solver selection; `build_ptdf_lodf_with_options` exposes the choice |
 | LODF | \\(m \times m\\) | `build_lodf` | routes through `Auto` solver selection; option based builds can prune small output entries |
 | adjacency | \\(n \times n\\) | `build_adjacency` | sparse graph adjacency |
@@ -35,9 +39,10 @@ with a sparse Cholesky and reuses the factorization across every right hand
 side, and `Auto` selects dense up to a reduced dimension of 512 (with a memory
 ceiling) and sparse above it. The sparse path avoids forming the
 \\((n-r) \times (n-r)\\) dense inverse; the PTDF/LODF outputs themselves can still
-be large. The sparse path requires positive finite branch susceptances, so
-the grounded DC bus susceptance matrix is positive definite after reference
-coverage is checked; the dense path handles nonsingular indefinite cases.
+be large. The sparse path requires positive finite internal factor weights
+`w = -b`, so the grounded matrix `L = -B` is positive definite after
+reference coverage is checked; the dense path handles nonsingular indefinite
+cases.
 Every connected component must contain at least one reference bus. The DC OPF
 instance bundle (\\(A\\), \\(b\\), \\(L\\), costs, bounds, thermal limits,
 \\(C_g\\)) is produced by `powerio-prob` and documented in
@@ -49,6 +54,18 @@ angle updates, and reduce `Bpp` to PQ buses for reactive power mismatch to
 voltage magnitude updates. PowerIO exports the full \\(n \times n\\) matrices so
 callers can apply their own bus type reduction.
 
+`DcOperators` exposes the public DC calculations through
+`calc_incidence_matrix`, `calc_branch_susceptance_matrix`,
+`calc_bus_susceptance_matrix`, `calc_phase_shift_injection`, and
+`calc_branch_flow_dc`. The `calc_*` prefix marks a newly computed result;
+nouns remain stored fields or borrowed accessors. The incidence matrix follows
+PowerModels: branches by buses, with \\(+1\\) at the from bus and \\(-1\\) at the
+to bus. Phase shift injection stays separate. `build_incidence`,
+`build_weighted_laplacian`, and `build_flow_map` remain available to matrix
+crate users as transposed solver factors; they are not the binding level DC
+incidence API. The noun `DcOperators` calculation methods remain 0.10
+compatibility shims.
+
 ## GridFM datasets
 
 The GridFM export is a Parquet dataset under `<case>/raw/` with `bus_data`,
@@ -59,14 +76,14 @@ and uses the `scenario` column as the key.
 GridFM reads recover bus types, voltages, limits, nodal load and shunt totals,
 generator dispatch and bounds, branch parameters, and `base_mva`. They cannot
 recover source bus IDs, per element load and shunt granularity, piecewise and
-cubic costs, HVDC, or storage. These losses are returned as warnings.
+cubic costs, HVDC, or storage. These losses are returned as diagnostics.
 
 ## Conventions
 
-- **Weighted bus Laplacian matrices.** Stored nonzero off-diagonal entries are
+- **Weighted bus solver factors.** Stored nonzero off-diagonal entries are
   negative; diagonals are nonnegative and positive for buses incident to a
   positive weight branch. For
-  \\(L = A \operatorname{diag}(w) A^\mathsf{T}\\) with nonnegative branch weights
+  \\(L = C \operatorname{diag}(w) C^\mathsf{T}\\) with nonnegative branch weights
   \\(w\\), \\(L_{ii} = \sum_j \lvert L_{ij} \rvert\\). This is the M-matrix form
   an SDDM (symmetric diagonally dominant M-matrix) or Cholesky solver expects
   once the grounded matrix is positive definite; a consumer can recover an edge
@@ -100,36 +117,38 @@ cubic costs, HVDC, or storage. These losses are returned as warnings.
   and records `dropped_zero_impedance` in `gridfm_meta.json`.
 - **Reference coverage.** `IndexedNetwork::check_reference_coverage` verifies that
   every in-service island has a reference bus.
-- **Susceptance conventions for the DC approximation.** `DcConvention` selects
+- **Susceptance formulas for the DC approximation.** `BranchSusceptanceFormula` selects
   the branch susceptance vector \\(b\\) and, for conventions that carry shifts,
-  the phase shift injection. In this crate \\(A\\) is the \\(n \times m\\)
-  bus by branch incidence matrix: a column has \\(+1\\) at the from bus and
-  \\(-1\\) at the to bus. Public values carry PowerModels signs: \\(b\\) is
-  negative for an inductive branch, the imaginary part of the series
-  admittance the selected formula models. Therefore
-  \\(B = A \operatorname{diag}(b) A^\mathsf{T}\\),
-  \\(B_f = \operatorname{diag}(b) A^\mathsf{T}\\),
-  \\(p_{shift} = A(b \circ shift)\\), and
-  \\(p_{bus} = -B\,v_a + p_{shift}\\). The positive factor weight a sparse
-  solver assembles is the separate `DcConvention::solver_edge_weight`, the
-  elementwise negation of public \\(b\\); sign conversion happens while
-  filling public output buffers, never inside them. This reverses 0.9, whose
-  `branch_susceptance` returned the positive weight — the
-  [migration guide](migration-v1.md) states the consumer action.
+  the phase shift injection. The direct PowerModels operation
+  `DcOperators::calc_incidence_matrix` returns the \\(m \\times n\\) branch by
+  bus matrix \\(A_{pm}\\). Each branch row has \\(+1\\) at the from bus and
+  \\(-1\\) at the to bus. The signed matrix combines with
+  \\(b\\) to form the direct PowerModels operators
+  \\(B = A_{pm}^\mathsf{T} \operatorname{diag}(b) A_{pm}\\) and
+  \\(B_f = \operatorname{diag}(b) A_{pm}\\). The phase shift injection is
+  \\(p_{shift} = A_{pm}^\mathsf{T}(b \circ shift)\\), so
+  \\(p_{bus}=-B\theta+p_{shift}\\). \\(b\\) is negative for an inductive
+  branch, the PowerModels series susceptance sign.
 
-  The default `SeriesSusceptance` uses \\(b = -x/(r^2 + x^2)\\), so it reads
-  the whole series impedance, plus the phase shift injection vector
-  `p_shift`. A tap does not scale it. It reduces to \\(b = -1/x\\) when the
-  branch has no resistance.
+  Solver preparation retains the \\(n \\times m\\) bus by branch factor
+  \\(A_s=A_{pm}^\mathsf{T}\\). It uses the positive factor weight \\(w=-b\\),
+  so its sparse matrix is
+  \\(L=A_s \operatorname{diag}(w) A_s^\mathsf{T}=-B\\). The two
+  orientations have separate names because transposing an incidence matrix
+  silently is not acceptable at a language boundary.
 
-  `TapAdjustedReactance` matches MATPOWER's `makeBdc` up to MATPOWER's own
-  sign spelling: \\(b = -1/(x\tau)\\) for a transformer with tap ratio
-  \\(\tau\\), plus `p_shift`.
+  The default `SeriesSusceptance` uses \\(b = -x/(r^2 + x^2)\\), so it reads the
+  whole series impedance, plus the phase shift
+  injection vector `p_shift`. A tap does not scale it. It reduces to
+  \\(b = -1/x\\) when the branch has no resistance.
+
+  `TapAdjustedReactance` reproduces MATPOWER's `makeBdc`:
+  \\(b = -1/(x\tau)\\) for a transformer with tap ratio \\(\tau\\), plus `p_shift`.
 
   `ReactanceOnly` is the textbook \\(b = -1/x\\) with resistance, taps, and
-  shifts ignored. The resulting grounded system matches MATPOWER `Bp` under
-  `Scheme::Xb` when phase shifts are zero. Reproducing a published result
-  needs it exactly as written, so it stays.
+  shifts ignored. The resulting \\(-B\\) matches MATPOWER `Bp` under
+  `Scheme::Xb` when phase shifts are zero. Reproducing a published result needs
+  it exactly as written, so it stays.
 
 ## Output
 

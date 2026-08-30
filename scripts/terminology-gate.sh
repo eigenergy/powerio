@@ -80,7 +80,7 @@ if hits=$(grep -n -F 'PowerIO.parse(' "${current_docs[@]}" 2>/dev/null); then
 fi
 
 # Keep the three ordinary language quickstarts executable and stable.
-grep -Fq 'let module: PioModule<BalancedNetwork> = powerio::try_into_typed(module)?;' README.md
-grep -Fq 'module = powerio.parse("case9.m")' README.md
+grep -Fq 'let module = powerio::parse_file("case9.m")?;' README.md
+grep -Fq 'module = powerio.parse_file("case9.m")' README.md
 grep -Fq 'module_ = parse_file("case9.m")' README.md
 echo "terminology: clean"

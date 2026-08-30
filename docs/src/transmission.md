@@ -21,8 +21,8 @@ Conventions the accessors hold to:
 Writing an unchanged parsed module back to its own format is byte exact, comments and field layout included. Converting to another balanced format keeps everything the target can represent and reports the rest:
 
 ```julia
-write_file(case, "copy.m")                     # byte exact echo
-text, findings = to_format(net, "psse")        # conversion + reported losses
+emit(case, "matpower", "copy.m")               # byte exact echo
+text, findings = emit(case, "psse")             # conversion + reported losses
 for finding in findings
     println(finding.code, ": ", finding.message)
 end

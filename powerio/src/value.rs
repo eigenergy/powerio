@@ -74,9 +74,10 @@ impl fmt::Display for PioValueKind {
 
 /// The dynamic form of a compiled value: the finite set of built in concrete
 /// types a parse can produce, discovered at run time through
-/// [`PioValue::kind`]. `PioModule<PioValue>` is what [`crate::parse`]
-/// returns; a caller that expects one concrete type narrows with
-/// [`try_into_typed`]. Application defined types stay typed Rust
+/// [`PioValue::kind`]. `PioModule<PioValue>` is what [`crate::parse_file`]
+/// returns; ordinary callers inspect `module.value()` with enum matching.
+/// [`try_into_typed`] is the advanced owned conversion when generic code needs
+/// a concrete `PioModule<T>`. Application defined types stay typed Rust
 /// (`PioModule<MyValue>`) and never enter this enum.
 #[derive(Debug)]
 #[non_exhaustive]
@@ -201,9 +202,11 @@ pub trait FromPioValue: private::Sealed + Sized {
     fn try_from_pio_value(value: PioValue) -> Result<Self, PioValue>;
 }
 
-/// Check the dynamic kind and move the value and module records into a typed
-/// module. Successful narrowing moves the value, the retained source owner,
-/// and the common records without allocation.
+/// Move a dynamic module into one concrete `PioModule<T>` without cloning its
+/// value or records.
+///
+/// Ordinary code can match directly on `module.value()`. This helper is for
+/// generic code that requires an owned `PioModule<T>` after the match.
 ///
 /// # Errors
 /// [`ValueKindMismatch`] when the module holds another kind; it owns the

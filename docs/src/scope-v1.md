@@ -8,7 +8,7 @@ documentation state the shipped API.
 ## In 1.0
 
 - One parse for every supported source, returning the typed module; twenty built in value kinds across networks, series, scenario sets, instances, and solutions.
-- Byte exact same format writing, diagnosed cross format conversion, and the explicit multiconductor to balanced lowering.
+- Byte exact same format writing, diagnosed cross format conversion, and the explicit multiconductor to balanced transformation.
 - Structured diagnostics with stable codes and native record access in every language; the wire form carries span fields end to end, though 1.0 parsers do not yet emit them.
 - Balanced matrices (Y bus, FDPF B' and B'', LACPF, incidence, DC operators, AC power flow Jacobians, PTDF and LODF), all carrying element mappings; direct multiconductor admittance assembles in Rust only this release (see Known limits).
 - The stored `.pio.json` document, version 1, with the one way upgrade from released 0.9 documents.
@@ -21,7 +21,7 @@ documentation state the shipped API.
 - PowerIO does not solve: instances feed external solvers.
 - Balanced to multiconductor construction, load linearized multiconductor admittance from an operating point, and a general multi period planning instance wait for after 1.0.
 - Dynamic simulation data has no representation yet; QSTS interchange beyond complete sampled operating point series waits for named instance and solution types.
-- There is no one call facade `convert(source, format, destination)`: conversion uses `powerio_tx::convert_file`/`convert_str` for the balanced family plus the per family write paths, and the CLI provides `powerio convert`.
+- There is no one call facade `convert(source, format, destination)`: library callers compose `parse_file` with Destination based `emit`, while the CLI provides `powerio convert`.
 - Classifying an undeclared JSON source is one cheap typed pass, except that a document nesting its payload under a `network`, `grid`, `solution`, or `metadata` marker key (GO Challenge 3, Surge) still materializes that subtree once during classification; cost is linear in the nested payload and transient.
 - The parser allocation rules in the architecture record (`arch-v1/V1_ARCHITECTURE.md`) are implemented for MATPOWER, PSS/E, and PowerWorld AUX; PyPSA CSV, PSLF, and OpenDSS still tokenize through owned strings, and several JSON readers (Egret, GO Challenge 3, DeepMind OPFData, pandapower) decode through a `serde_json::Value` tree. Scheduled work, stated here so the architecture record is not read as already shipped.
 - Multiconductor admittance assembly (`powerio_matrix::build_multiconductor_admittance`) is Rust only in 1.0: no C entry point, and so no Python or Julia binding yet.

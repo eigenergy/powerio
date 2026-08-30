@@ -19,6 +19,7 @@
 - [1.0 Scope and Known Limits](scope-v1.md)
 - [Developer Guides](developer.md)
   - [Migration from 0.10](migration-v1.md)
+  - [Final 1.0 API cleanup](final-v1-api-cleanup.md)
   - [Migration from 0.9](migration-v0.10.md)
   - [Earlier migrations](migration.md)
     - [To 0.9](migration-v0.9.md)

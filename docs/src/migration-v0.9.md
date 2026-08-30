@@ -38,21 +38,28 @@ The retired `powerio-json` case format token is not part of this bridge. Model
 JSON moves through `to_json` and `from_json`, and classification reports
 `model-json`.
 
-## The DC susceptance default changed value
+## The 0.9 DC solver weight default changed value
 
 This one is silent. A caller that passed no convention gets different numbers.
 
-`DcConvention` offered `b = 1/x` and MATPOWER's `b = 1/(x·τ)`, and neither reads the branch resistance, so a case with a real r/x ratio had no convention describing it and every consumer computed one by hand. The new default is `SeriesImpedance`, `b = x/(r² + x²)`, with phase shift injections and no tap scaling.
+This section records the 0.8 to 0.9 behavior, when
+`DcConvention::branch_susceptance` returned the positive solver edge weight
+`w`. In 0.10 the public `BranchSusceptanceFormula::branch_susceptance` follows
+PowerModels and returns `b = -w`; `solver_edge_weight` returns the positive
+factor described below.
+
+`DcConvention` offered `w = 1/x` and MATPOWER's `w = 1/(x·τ)`, and neither reads the branch resistance, so a case with a real r/x ratio had no convention describing it and every consumer computed one by hand. The 0.9 default became `SeriesImpedance`, `w = x/(r² + x²)`, with phase shift injections and no tap scaling.
 
 | 0.8 | 0.9 | formula |
 |---|---|---|
-| `PaperPure` (default) | `ReactanceOnly` | `1/x` |
-| `Matpower` | `Matpower` | `1/(x·τ)` |
-| — | `SeriesImpedance` (default) | `x/(r² + x²)` |
+| `PaperPure` (default) | `ReactanceOnly` | `w = 1/x` |
+| `Matpower` | `Matpower` | `w = 1/(x·τ)` |
+| — | `SeriesImpedance` (default) | `w = x/(r² + x²)` |
 
 The gap grows with r/x: small on transmission cases, large on distribution ones. At `r = x = 0.1` the old default returned 10 and the new one returns 5. A resistanceless branch is unaffected, because `x/(r² + x²)` reduces to `1/x` exactly.
 
-`ReactanceOnly` is not deprecated. `b = 1/x` is the textbook DC linearization, so reproducing a published result needs it exactly as written.
+`ReactanceOnly` is not deprecated. The positive factor `w = 1/x` is the
+textbook DC linearization; the current public coefficient is `b = -1/x`.
 
 The method takes the resistance now:
 
@@ -61,7 +68,9 @@ conv.branch_susceptance(x, tap)       // 0.8
 conv.branch_susceptance(r, x, tap)    // 0.9
 ```
 
-It returns a **positive** Laplacian edge weight, in every variant. PowerModels and tellegen write the negative one; that is their convention, and a caller that negates once cannot get a sign flipped matrix from the choice of variant.
+The 0.9 method returned a **positive** Laplacian edge weight in every variant.
+Current code names that value `solver_edge_weight`; public matrices use the
+negative PowerModels coefficient from `branch_susceptance`.
 
 It also returns `NaN` for a denominator that is not finite, which `SeriesImpedance` already did. `1/±inf` is `0.0`, so `ReactanceOnly` and `Matpower` used to read an infinite reactance as a zero weight edge and drop the branch from the Laplacian without saying so; `Matpower` divides by `x * tap`, so two finite factors whose product overflows read the same way. The matrix and instance builders check the result and raise `NonFiniteSusceptance`. Every finite denominator is unchanged.
 
@@ -72,9 +81,9 @@ powerio matrices --convention series-susceptance   # was --convention paper-pure
 ```
 
 ```python
-net.ptdf()                        # convention="series" by default
-net.ptdf(convention="reactance-only")
-net.ptdf(convention="paper")      # ValueError, naming the successor
+net.calc_ptdf()                        # convention="series" by default
+net.calc_ptdf(convention="reactance-only")
+net.calc_ptdf(convention="paper")      # ValueError, naming the successor
 ```
 
 The old spellings raise rather than resolving, because the nearest-looking option is a different formula and a caller who guesses would get numbers instead of an error.

@@ -4,7 +4,7 @@ PowerIO borrows one idea from compiler infrastructure: source text and the data 
 
 ## The module is the unit
 
-`PioModule<T>` is the top level unit. It pairs one typed value with everything needed to understand how that value was produced: the retained source, the reader's diagnostics, the source map, and the history of transformations applied. Operations take modules and produce modules, so the record survives a pipeline: parse, select a scenario, lower to balanced, write, and the result still knows where its bytes came from.
+`PioModule<T>` is the top level unit. It pairs one typed value with everything needed to understand how that value was produced: the retained source, the reader's diagnostics, the source map, and the history of transformations applied. State selection and transformations take modules and produce modules, preserving those records. `emit` borrows a module and returns external artifacts plus writer diagnostics; matrix calculations borrow the typed value and return derived data with element mappings.
 
 ## The IR is a family, not a format
 
@@ -22,7 +22,7 @@ There is no one universal network format in this family. `BalancedNetwork` is th
 
 ## Transformations name their input and output
 
-Every transformation states its concrete input and output types and returns diagnostics. Multiconductor to balanced conversion is an explicit lossy lowering: it moves to a less detailed representation under stated assumptions. Constructing a calculation instance from a network is also a move to a more specific calculation representation. Ordinary format conversion is not called lowering; it is parse plus write at the same level.
+Every transformation states its concrete input and output types and returns diagnostics. Multiconductor to balanced conversion moves to a less detailed representation under stated assumptions and reports what it cannot carry. Constructing a calculation instance from a network moves to a more specific calculation representation. Ordinary format conversion is parse plus write at the same level.
 
 ## Derived data stays derived
 

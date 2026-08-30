@@ -56,7 +56,7 @@ mod operations;
 pub mod solver_tables;
 pub mod version;
 
-pub use dc::{DcConvention, DcNetworkData, dc_network_data};
+pub use dc::{BranchSusceptanceFormula, DcConvention, DcNetworkData, dc_network_data};
 pub use diagnostics::{Diagnostic, DiagnosticCode, DiagnosticSeverity, EmitFamily};
 pub use error::{Error, ErrorCategory, Result};
 pub use format::routing::{

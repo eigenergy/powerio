@@ -1,11 +1,10 @@
-//! Lowering records and preflight checks.
+//! Explicit transformations and their preflight checks.
 //!
-//! Lowering is where PowerIO is a compiler rather than a parser: every pass that
-//! transforms one model into another (normalization, multiconductor to balanced,
-//! emission to a target format) appends a [`LoweringRecord`] to the module's
-//! `history`, so the transformation is auditable. The most consequential
-//! case, multiconductor to balanced, must be an explicit pass with diagnostics,
-//! never a silent positive sequence projection.
+//! A pass that changes one model into another carries the module records
+//! forward and appends transformation history, so the result is auditable.
+//! Emission borrows the module and returns writer diagnostics separately. The
+//! most consequential transformation, multiconductor to balanced, is explicit
+//! and diagnosed, never a silent positive sequence projection.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::f64::consts::PI;
@@ -141,6 +140,11 @@ impl MulticonductorToBalancedReadiness {
     }
 }
 
+/// The preflight report for a multiconductor to balanced transformation.
+///
+/// [`MulticonductorToBalancedReadiness`] remains available for compatibility.
+pub type MulticonductorToBalancedReport = MulticonductorToBalancedReadiness;
+
 /// A successful raw multiconductor to balanced lowering result.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -155,6 +159,12 @@ pub struct MulticonductorToBalancedLowering {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub removed_switches: Vec<String>,
 }
+
+/// The result of a successful multiconductor to balanced transformation.
+///
+/// [`MulticonductorToBalancedLowering`] remains available for 0.10
+/// compatibility.
+pub type MulticonductorToBalancedTransformation = MulticonductorToBalancedLowering;
 
 /// Structured failure from the raw multiconductor to balanced lowering pass.
 ///
@@ -193,7 +203,7 @@ impl std::fmt::Display for MulticonductorToBalancedError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self.diagnostics.first() {
             Some(diagnostic) => write!(f, "{}", diagnostic.message()),
-            None => f.write_str("multiconductor to balanced lowering failed"),
+            None => f.write_str("multiconductor to balanced transformation failed"),
         }
     }
 }
@@ -255,6 +265,16 @@ pub fn check_multiconductor_to_balanced_lowering(
     report
 }
 
+/// Report whether `net` can be transformed to a balanced network under
+/// `options`, including every assumption, approximation, and refusal.
+#[must_use]
+pub fn multiconductor_to_balanced_report(
+    net: &MulticonductorNetwork,
+    options: MulticonductorToBalancedOptions,
+) -> MulticonductorToBalancedReport {
+    check_multiconductor_to_balanced_lowering(net, options)
+}
+
 /// Lower a transparent three phase multiconductor network to a balanced model.
 ///
 /// The pass is explicit. It does not run from readers, writers, matrix builders,
@@ -276,6 +296,18 @@ pub fn lower_multiconductor_to_balanced(
     state.lower()
 }
 
+/// Transform a supported three phase multiconductor network to a balanced
+/// network.
+///
+/// The returned record states the assumptions, approximations, merged buses,
+/// and removed switches. Unsupported input returns structured diagnostics.
+pub fn multiconductor_to_balanced(
+    net: &MulticonductorNetwork,
+    options: MulticonductorToBalancedOptions,
+) -> Result<MulticonductorToBalancedTransformation, MulticonductorToBalancedError> {
+    lower_multiconductor_to_balanced(net, options)
+}
+
 /// Readiness of one module's value for the balanced lowering: the #398
 /// inspect operation. The value must be a multiconductor network.
 ///
@@ -291,12 +323,24 @@ pub fn check_module_lowering(
     Ok(check_multiconductor_to_balanced_lowering(net, options))
 }
 
+/// Report whether a module's multiconductor value can be transformed to a
+/// balanced network.
+///
+/// # Errors
+/// The module carries any other value kind.
+pub fn module_to_balanced_report(
+    module: &powerio_core::PioModule<crate::PioValue>,
+    options: MulticonductorToBalancedOptions,
+) -> Result<MulticonductorToBalancedReport, powerio_core::Error> {
+    check_module_lowering(module, options)
+}
+
 /// Lower a multiconductor module to a balanced module: the #398 transform
-/// operation. The module's common records and runtime source ownership carry
-/// over unchanged; the pass appends its structured findings as module
-/// diagnostics and one Transform history entry stating the chosen base
-/// power, every assumption and approximation, the dropped fields, and the
-/// removed bus and switch identities.
+/// operation. The module's common records carry over, the retained source is
+/// severed because its bytes describe the input value, and the pass appends
+/// its structured findings as module diagnostics and one Transform history
+/// entry stating the chosen base power, every assumption and approximation,
+/// the dropped fields, and the removed bus and switch identities.
 ///
 /// # Errors
 /// A value of any other kind (the module comes back untouched), or the
@@ -362,7 +406,9 @@ pub fn lower_module_to_balanced(
         );
         return Err((module, Box::new(error)));
     }
-    let mut module = module.map_value(|_| crate::PioValue::BalancedNetwork(network));
+    let mut module = module
+        .map_value(|_| crate::PioValue::BalancedNetwork(network))
+        .sever_source();
     // The value's kind changed, so no RFC 6901 target survives the
     // transform: pre-existing diagnostic targets and the source map pointed
     // into the consumed multiconductor value and are severed here; the
@@ -408,6 +454,27 @@ pub fn lower_module_to_balanced(
         .add_history_entry(entry)
         .expect("room was checked and the history id is unique by construction");
     Ok(module)
+}
+
+/// Transform a module's multiconductor value to a balanced network while
+/// carrying its common records forward. The retained source is severed because
+/// its bytes no longer describe the transformed value.
+///
+/// # Errors
+/// Returns the original module with the transformation refusal when the value
+/// kind is wrong or the network cannot be transformed under `options`.
+#[allow(clippy::result_large_err)]
+pub fn module_to_balanced(
+    module: powerio_core::PioModule<crate::PioValue>,
+    options: MulticonductorToBalancedOptions,
+) -> Result<
+    powerio_core::PioModule<crate::PioValue>,
+    (
+        powerio_core::PioModule<crate::PioValue>,
+        Box<MulticonductorToBalancedError>,
+    ),
+> {
+    lower_module_to_balanced(module, options)
 }
 
 /// Cap a history note list at the record limit, replacing the overflow with

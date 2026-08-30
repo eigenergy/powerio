@@ -18,18 +18,18 @@
 //!
 //! # Conventions
 //!
-//! The DC bus susceptance matrix and other weighted bus Laplacians use the
-//! positive M-matrix form: stored nonzero off-diagonal entries are negative,
-//! diagonals are nonnegative, and `diag = Σ|off-diag|`. Source bus IDs remain on
-//! the model; [`IndexedNetwork`] maps them to dense indices in `[0, n)`. `tap == 0` means
-//! `tap = 1`. `build_bprime` and `build_bdoubleprime` follow MATPOWER `makeB`;
-//! Y_bus keeps tap magnitudes and phase shifts.
-//! Branch terminal admittance is stored per unit. Public DC susceptances
-//! carry PowerModels signs, negative for an inductive branch:
-//! `b = -x/(r² + x²)` by default, `-1/(x·τ)` under
-//! [`DcConvention::TapAdjustedReactance`], and both carry phase shift
-//! injection; the positive factor weight is the separate
-//! `DcConvention::solver_edge_weight`. The full reference across every matrix is in
+//! Public DC operators follow PowerModels: an inductive branch has negative
+//! `b`. Their branch by bus incidence matrix `A_pm` gives
+//! `B = A_pmᵀ diag(b) A_pm`, with nonpositive diagonals and nonnegative
+//! off-diagonals. Solver preparation retains its bus by branch factor
+//! `A_s = A_pmᵀ` and uses `w = -b`, so the sparse factor is the positive
+//! M-matrix `L = A_s diag(w) A_sᵀ = -B`. Source bus IDs remain on the model;
+//! [`IndexedNetwork`] maps them to dense indices in `[0, n)`.
+//! `tap == 0` means `tap = 1`. `build_bprime` and `build_bdoubleprime` follow
+//! MATPOWER `makeB`; Y_bus keeps tap magnitudes and phase shifts. Branch
+//! terminal admittance is stored per unit. The default public DC formula is
+//! `b = -x/(r² + x²)`. [`BranchSusceptanceFormula::TapAdjustedReactance`] uses
+//! `b = -1/(x·τ)`; both carry phase shift injection. The full reference is in
 //! [the matrix guide](https://eigenergy.github.io/powerio/guide/matrices.html).
 
 // Re-export the powerio data layer so one import covers model and matrix types,
@@ -87,13 +87,13 @@ pub use matrix::multiconductor::{
     build_multiconductor_admittance,
 };
 pub use matrix::{
-    BuildOptions, DcConvention, GroundedIndexMap, IncidenceParts, MatrixStats, Scheme,
-    SensitivityMatrices, SensitivityMatrixMetadata, SensitivityMetadata, SensitivityOptions,
-    SensitivitySolver, SensitivitySolverPath, ZeroImpedanceRule, ZeroImpedanceSkips,
-    build_adjacency, build_bdoubleprime, build_bprime, build_flow_map, build_incidence,
-    build_lacpf, build_lodf, build_ptdf, build_ptdf_lodf, build_ptdf_lodf_with_options,
-    build_weighted_laplacian, build_ybus, ground_at, ground_at_each, reference_indicator,
-    sddm_check, skipped_zero_impedance, susceptance_diag, unit_vector,
+    BranchSusceptanceFormula, BuildOptions, DcConvention, GroundedIndexMap, IncidenceParts,
+    MatrixStats, Scheme, SensitivityMatrices, SensitivityMatrixMetadata, SensitivityMetadata,
+    SensitivityOptions, SensitivitySolver, SensitivitySolverPath, ZeroImpedanceRule,
+    ZeroImpedanceSkips, build_adjacency, build_bdoubleprime, build_bprime, build_flow_map,
+    build_incidence, build_lacpf, build_lodf, build_ptdf, build_ptdf_lodf,
+    build_ptdf_lodf_with_options, build_weighted_laplacian, build_ybus, ground_at, ground_at_each,
+    reference_indicator, sddm_check, skipped_zero_impedance, susceptance_diag, unit_vector,
 };
 pub use pipeline::{
     MatrixKind, Pipeline, PipelineOutputs, RhsKind, build_kind, matrix_stats_for_kind,

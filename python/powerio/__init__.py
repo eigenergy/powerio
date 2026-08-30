@@ -1,31 +1,30 @@
-"""Parse, convert, and project power system data.
+"""Parse, transform, and emit power system data.
 
-Readers produce a format neutral network model. Writers return retained source
-bytes where supported or report fields that a target format cannot represent.
-Modules, sparse matrices, graphs, and problem instances use the same parsed
-data::
+``parse_file`` returns a module whose ``value`` is the typed power system
+object and whose ``diagnostics`` record what the parser found. ``emit`` writes
+the module to another format while preserving its source and diagnostic
+records::
 
     import powerio as pio
 
-    net = pio.parse("case9.m", value_type=pio.BalancedNetwork).value
+    module = pio.parse_file("case9.m", value_type=pio.BalancedNetwork)
+    net = module.value
     print(net.n_buses, net.base_mva)         # 9 100.0
-    text = net.to_matpower()                 # byte-exact MATPOWER echo
-    raw, warnings = pio.convert_file("case9.m", "psse")
-    pp_json, warnings = pio.convert_file("case9.m", "pandapower-json")
-    pypsa_out = net.write_pypsa_csv_folder("case9-pypsa")
+    matpower = module.emit("matpower")       # Conversion(text, diagnostics)
+    diagnostics = module.emit("psse", "case9.raw")
 
-    B = net.bprime()                         # scipy.sparse, MATPOWER Bp
-    Y = net.ybus()                           # complex csr, G + jB
+    B = net.calc_bprime_matrix()             # scipy.sparse, MATPOWER Bp
+    Y = net.calc_admittance_matrix()         # complex csr, G + jB
     G = net.to_networkx()                    # networkx.Graph keyed by bus id
 
 PyPSA CSV folders carry static network topology. NetCDF and HDF5 time series
 are tracked in https://github.com/eigenergy/powerio/issues/107.
 
-A source that defines a calculation parses to that calculation's typed
-value: :func:`parse` returns a :class:`PioModule` whose kind names it, and
-whose ``.value`` property reads the typed value back out.
+A source that defines a calculation parses to that calculation's typed value.
+:func:`parse_file` always returns a :class:`PioModule`; ``module.kind`` names
+the value and ``module.value`` reads it.
 
-``import powerio`` and the base parse, write, and conversion paths require no
+``import powerio`` and the base parse and emit paths require no
 third party Python package. Matrix methods require SciPy and NumPy. Graph
 methods require NetworkX. Install them with ``powerio[matrix]``,
 ``powerio[graph]``, or ``powerio[all]``. Missing extras raise ``ImportError``.
@@ -35,6 +34,8 @@ from __future__ import annotations
 
 import importlib
 import json as _json
+import operator as _operator
+import os as _os
 from collections import namedtuple
 from typing import Any, Optional
 
@@ -90,6 +91,7 @@ __all__ = [
     "parse",
     "parse_display_bytes",
     "parse_display_file",
+    "parse_file",
     "parse_geo",
     "read_gridfm",
     "read_gridfm_scenarios",
@@ -100,11 +102,30 @@ __all__ = [
     "write_gridfm_batch",
 ]
 
-Conversion = namedtuple("Conversion", ["text", "warnings"])
+_ConversionBase = namedtuple("Conversion", ["text", "warnings"])
+
+
+class Conversion(_ConversionBase):
+    """Output of a format conversion.
+
+    ``text`` is the converted file contents. ``diagnostics`` is the preferred
+    name for the writer's structured findings; ``warnings`` remains the same
+    list for compatibility with the 0.10 API.
+    """
+
+    __slots__ = ()
+
+    @property
+    def diagnostics(self):
+        """The conversion findings (the same list as ``warnings``)."""
+        return self.warnings
+
+
 Conversion.__doc__ = """Output of :func:`convert_file`.
 
-``text`` is the converted file contents; ``warnings`` lists the fields the
+``text`` is the converted file contents; ``diagnostics`` lists the fields the
 target format could not represent (empty for a faithful conversion).
+``warnings`` remains as a compatibility alias for the same list.
 """
 
 GridfmRead = namedtuple("GridfmRead", ["network", "scenario", "warnings"])
@@ -133,13 +154,13 @@ PwdSubstation = namedtuple("PwdSubstation", ["number", "name", "x", "y"])
 PwdSubstation.__doc__ = """One decoded PowerWorld display substation."""
 
 Incidence = namedtuple("Incidence", ["A", "b", "p_shift", "branch_of_col"])
-Incidence.__doc__ = """Output of :meth:`BalancedNetwork.incidence`.
+Incidence.__doc__ = """Output of :meth:`BalancedNetwork.calc_incidence_factors`.
 
 Shapes, with ``n`` buses and ``m`` in-service branches:
 - ``A``: signed incidence csr_matrix, ``(n, m)``.
 - ``b``: positive Laplacian edge weights, ``(m,)``; ``b[k]`` is column ``k``.
-  These are the factor weights a sparse solver uses; PowerModels sign
-  susceptances live on :meth:`BalancedNetwork.dc_data`.
+  These are the factor weights a sparse solver uses. For the PowerModels
+  branch by bus convention, use :meth:`BalancedNetwork.calc_incidence_matrix`.
 - ``p_shift``: phase-shift injection, ``(n,)`` (all zero unless
   ``convention="matpower"``).
 - ``branch_of_col``: column→branch index map, ``(m,)``; ``branch_of_col[k]``
@@ -148,8 +169,9 @@ Shapes, with ``n`` buses and ``m`` in-service branches:
 
 YbusParts = namedtuple("YbusParts", ["g", "b"])
 YbusParts.__doc__ = (
-    "Output of :meth:`BalancedNetwork.ybus_parts`: ``g`` = Re(Y_bus), ``b`` = Im(Y_bus), "
-    "each a real csr_matrix. ``BalancedNetwork.ybus()`` returns ``g + 1j*b``."
+    "Output of :meth:`BalancedNetwork.calc_admittance_matrix_parts`: ``g`` = Re(Y_bus), "
+    "``b`` = Im(Y_bus), each a real csr_matrix. "
+    "``BalancedNetwork.calc_admittance_matrix()`` returns ``g + 1j*b``."
 )
 
 def _require(module: str, extra: str):
@@ -173,6 +195,64 @@ def _to_csr(coo):
     sparse = _require("scipy.sparse", "matrix")
     data, row, col, shape = coo
     return sparse.coo_matrix((data, (row, col)), shape=shape).tocsr()
+
+
+def _dc_incidence_matrix(data):
+    """Assemble the public branch by bus incidence matrix from coefficients."""
+    sparse = _require("scipy.sparse", "matrix")
+    n_branches = len(data["susceptance"])
+    rows = list(range(n_branches)) * 2
+    columns = list(data["from_indices"]) + list(data["to_indices"])
+    values = [1.0] * n_branches + [-1.0] * n_branches
+    return sparse.coo_matrix(
+        (values, (rows, columns)),
+        shape=(n_branches, len(data["bus_ids"])),
+    ).tocsr()
+
+
+def _dc_branch_susceptance_matrix(data):
+    """Assemble ``Bf = diag(b) A`` from branch coefficients."""
+    np = _require("numpy", "matrix")
+    b = np.asarray(data["susceptance"], dtype=float)
+    return _dc_incidence_matrix(data).multiply(b[:, None]).tocsr()
+
+
+def _dc_angles(data, voltage_angles):
+    np = _require("numpy", "matrix")
+    angles = np.asarray(voltage_angles, dtype=float)
+    n_buses = len(data["bus_ids"])
+    if angles.ndim != 1 or angles.shape[0] != n_buses:
+        raise ValueError(
+            f"voltage_angles must be a one dimensional array of length {n_buses}"
+        )
+    return np, angles
+
+
+def _require_complete_dc_branch_axis(data, operation: str) -> None:
+    """Refuse a shortened branch result without hiding which rows are absent."""
+    omitted_ids = list(data["omitted_ids"])
+    if not omitted_ids:
+        return
+    omitted_reasons = list(data["omitted_reasons"])
+    details = ", ".join(
+        f"{branch_id} ({omitted_reasons[index]})"
+        if index < len(omitted_reasons)
+        else str(branch_id)
+        for index, branch_id in enumerate(omitted_ids)
+    )
+    noun = "branch" if len(omitted_ids) == 1 else "branches"
+    raise PowerIODataError(
+        f"{operation} cannot return the complete branch table axis because "
+        f"{len(omitted_ids)} {noun} were omitted: {details}; "
+        "inspect dc_data() for row_ids, omitted_ids, and omitted_reasons"
+    )
+
+
+class _DiagnosticList(list):
+    """Field value that keeps the released ``module.diagnostics()`` call valid."""
+
+    def __call__(self):
+        return self
 
 
 def _require_gridfm() -> None:
@@ -326,10 +406,10 @@ class BalancedNetwork:
         missing_gen_cost: Optional[str] = None,
         default_gen_cost: Optional[str] = None,
         gen_cost_csv: Optional[Any] = None,
-    ) -> list[str]:
+    ) -> "list[Diagnostic]":
         r"""Serialize this case to ``to`` and write it to ``path`` byte exact.
 
-        Returns the fidelity warnings. Prefer this over writing
+        Returns the fidelity diagnostics. Prefer this over writing
         :meth:`to_format` text through ``open(path, "w")``: Python's text mode
         translates newlines on Windows, so a case whose retained source has
         CRLF line endings comes out with doubled carriage returns
@@ -345,7 +425,9 @@ class BalancedNetwork:
 
     # --- matrix builders (scipy.sparse) ---------------------------------
 
-    def bprime(self, scheme: str = "bx", *, skip_zero_impedance: bool = False):
+    def calc_bprime_matrix(
+        self, scheme: str = "bx", *, skip_zero_impedance: bool = False
+    ):
         """MATPOWER FDPF Bp matrix. ``scheme`` is ``"bx"`` or ``"xb"``.
 
         ``skip_zero_impedance=False`` refuses a zero impedance branch
@@ -355,23 +437,89 @@ class BalancedNetwork:
             self._inner.bprime(scheme, skip_zero_impedance=skip_zero_impedance)
         )
 
-    def dc_data(self, formula: str = "series_susceptance"):
-        """DC branch data under one named susceptance formula.
+    def bprime(self, scheme: str = "bx", *, skip_zero_impedance: bool = False):
+        """Compatibility alias for :meth:`calc_bprime_matrix`."""
+        return self.calc_bprime_matrix(
+            scheme, skip_zero_impedance=skip_zero_impedance
+        )
 
-        Incidence row endpoints, susceptance, the phase shift injection,
-        stable element mappings for included rows and omitted branches, and
-        the selected formula. Key spellings match the C ``pio_dc_data_*``
-        accessors, so every language reads the same names in the same
-        element order.
+    def dc_data(self, formula: str = "series_susceptance"):
+        """Compatibility view of the DC branch coefficients as a dictionary.
+
+        New code should call :meth:`calc_incidence_matrix`,
+        :meth:`calc_bus_susceptance_matrix`,
+        :meth:`calc_branch_susceptance_matrix`, or :meth:`calc_branch_flow_dc`
+        directly. The dictionary remains unchanged throughout 0.10.
         """
         return self._inner.dc_data(formula)
 
-    def bdoubleprime(self, scheme: str = "bx", *, skip_zero_impedance: bool = False):
+    def calc_incidence_matrix(self, formula: str = "series_susceptance"):
+        """Return PowerModels incidence ``A`` (branches by buses)."""
+        data = self._inner.dc_data(formula)
+        _require_complete_dc_branch_axis(data, "calc_incidence_matrix")
+        return _dc_incidence_matrix(data)
+
+    def calc_branch_susceptance_matrix(
+        self, formula: str = "series_susceptance"
+    ):
+        """Return ``Bf = diag(b) A`` as a CSR matrix."""
+        data = self._inner.dc_data(formula)
+        _require_complete_dc_branch_axis(data, "calc_branch_susceptance_matrix")
+        return _dc_branch_susceptance_matrix(data)
+
+    def calc_bus_susceptance_matrix(self, formula: str = "series_susceptance"):
+        """Return ``B = A.T diag(b) A`` as a CSR matrix."""
+        data = self._inner.dc_data(formula)
+        incidence = _dc_incidence_matrix(data)
+        return (incidence.T @ _dc_branch_susceptance_matrix(data)).tocsr()
+
+    def calc_phase_shift_injection(self, formula: str = "series_susceptance"):
+        """Return ``A.T @ (b * shift)`` in bus order."""
+        np = _require("numpy", "matrix")
+        return np.asarray(self._inner.dc_data(formula)["shift_injection"], dtype=float)
+
+    def calc_branch_flow_dc(
+        self, voltage_angles, formula: str = "series_susceptance"
+    ):
+        """Compute ``-Bf @ va + b * shift`` in branch order."""
+        data = self._inner.dc_data(formula)
+        _require_complete_dc_branch_axis(data, "calc_branch_flow_dc")
+        np, angles = _dc_angles(data, voltage_angles)
+        b = np.asarray(data["susceptance"], dtype=float)
+        shift = np.asarray(data["shift"], dtype=float)
+        return -(_dc_branch_susceptance_matrix(data) @ angles) + b * shift
+
+    def calc_bdoubleprime_matrix(
+        self, scheme: str = "bx", *, skip_zero_impedance: bool = False
+    ):
         """MATPOWER FDPF Bpp matrix. ``scheme`` is ``"bx"`` or ``"xb"``.
-        ``skip_zero_impedance`` as in :meth:`bprime`.
+        ``skip_zero_impedance`` as in :meth:`calc_bprime_matrix`.
         """
         return _to_csr(
             self._inner.bdoubleprime(scheme, skip_zero_impedance=skip_zero_impedance)
+        )
+
+    def bdoubleprime(self, scheme: str = "bx", *, skip_zero_impedance: bool = False):
+        """Compatibility alias for :meth:`calc_bdoubleprime_matrix`."""
+        return self.calc_bdoubleprime_matrix(
+            scheme, skip_zero_impedance=skip_zero_impedance
+        )
+
+    def calc_lacpf_matrix(
+        self,
+        *,
+        include_taps: bool = True,
+        include_shifts: bool = True,
+        skip_zero_impedance: bool = False,
+    ):
+        """LACPF 2n×2n block ``[[G, -B], [-B, -G]]``. ``skip_zero_impedance``
+        as in :meth:`calc_bprime_matrix`."""
+        return _to_csr(
+            self._inner.lacpf(
+                include_taps=include_taps,
+                include_shifts=include_shifts,
+                skip_zero_impedance=skip_zero_impedance,
+            )
         )
 
     def lacpf(
@@ -381,19 +529,36 @@ class BalancedNetwork:
         include_shifts: bool = True,
         skip_zero_impedance: bool = False,
     ):
-        """LACPF 2n×2n block ``[[G, -B], [-B, -G]]``. ``skip_zero_impedance``
-        as in :meth:`bprime`."""
-        return _to_csr(
-            self._inner.lacpf(
-                include_taps=include_taps,
-                include_shifts=include_shifts,
-                skip_zero_impedance=skip_zero_impedance,
-            )
+        """Compatibility alias for :meth:`calc_lacpf_matrix`."""
+        return self.calc_lacpf_matrix(
+            include_taps=include_taps,
+            include_shifts=include_shifts,
+            skip_zero_impedance=skip_zero_impedance,
         )
 
-    def adjacency(self):
+    def calc_adjacency_matrix(self):
         """0/1 bus adjacency matrix."""
         return _to_csr(self._inner.adjacency())
+
+    def adjacency(self):
+        """Compatibility alias for :meth:`calc_adjacency_matrix`."""
+        return self.calc_adjacency_matrix()
+
+    def calc_admittance_matrix_parts(
+        self,
+        *,
+        include_taps: bool = True,
+        include_shifts: bool = True,
+        skip_zero_impedance: bool = False,
+    ):
+        """:class:`YbusParts` ``(g, b)`` = ``(Re(Y_bus), Im(Y_bus))``, two real
+        csr_matrix. ``skip_zero_impedance`` as in :meth:`calc_bprime_matrix`."""
+        g, b = self._inner.ybus_parts(
+            include_taps=include_taps,
+            include_shifts=include_shifts,
+            skip_zero_impedance=skip_zero_impedance,
+        )
+        return YbusParts(g=_to_csr(g), b=_to_csr(b))
 
     def ybus_parts(
         self,
@@ -402,14 +567,28 @@ class BalancedNetwork:
         include_shifts: bool = True,
         skip_zero_impedance: bool = False,
     ):
-        """:class:`YbusParts` ``(g, b)`` = ``(Re(Y_bus), Im(Y_bus))``, two real
-        csr_matrix. ``skip_zero_impedance`` as in :meth:`bprime`."""
-        g, b = self._inner.ybus_parts(
+        """Compatibility alias for :meth:`calc_admittance_matrix_parts`."""
+        return self.calc_admittance_matrix_parts(
             include_taps=include_taps,
             include_shifts=include_shifts,
             skip_zero_impedance=skip_zero_impedance,
         )
-        return YbusParts(g=_to_csr(g), b=_to_csr(b))
+
+    def calc_admittance_matrix(
+        self,
+        *,
+        include_taps: bool = True,
+        include_shifts: bool = True,
+        skip_zero_impedance: bool = False,
+    ):
+        """``Y_bus = G + jB`` as a complex csr_matrix. ``skip_zero_impedance``
+        as in :meth:`calc_bprime_matrix`."""
+        g, b = self.calc_admittance_matrix_parts(
+            include_taps=include_taps,
+            include_shifts=include_shifts,
+            skip_zero_impedance=skip_zero_impedance,
+        )
+        return (g + 1j * b).tocsr()
 
     def ybus(
         self,
@@ -418,16 +597,14 @@ class BalancedNetwork:
         include_shifts: bool = True,
         skip_zero_impedance: bool = False,
     ):
-        """``Y_bus = G + jB`` as a complex csr_matrix. ``skip_zero_impedance``
-        as in :meth:`bprime`."""
-        g, b = self.ybus_parts(
+        """Compatibility alias for :meth:`calc_admittance_matrix`."""
+        return self.calc_admittance_matrix(
             include_taps=include_taps,
             include_shifts=include_shifts,
             skip_zero_impedance=skip_zero_impedance,
         )
-        return (g + 1j * b).tocsr()
 
-    def ptdf(self, convention: str = "series", solver: str = "auto"):
+    def calc_ptdf(self, convention: str = "series", solver: str = "auto"):
         """DC PTDF (m×n). ``convention`` is ``"series_susceptance"``,
         ``"tap_adjusted_reactance"``, or ``"reactance_only"`` (aliases
         ``"series"``, ``"matpower"``, ``"series-impedance"``, ``"mp"`` also
@@ -439,27 +616,44 @@ class BalancedNetwork:
         """
         return _to_csr(self._inner.ptdf(convention, solver))
 
-    def lodf(self, convention: str = "series", solver: str = "auto"):
-        """DC LODF (m×m). ``convention`` and ``solver`` as in :meth:`ptdf`."""
+    def ptdf(self, convention: str = "series", solver: str = "auto"):
+        """Compatibility alias for :meth:`calc_ptdf`."""
+        return self.calc_ptdf(convention, solver)
+
+    def calc_lodf(self, convention: str = "series", solver: str = "auto"):
+        """DC LODF (m×m). ``convention`` and ``solver`` as in :meth:`calc_ptdf`."""
         return _to_csr(self._inner.lodf(convention, solver))
 
-    def weighted_laplacian(
+    def lodf(self, convention: str = "series", solver: str = "auto"):
+        """Compatibility alias for :meth:`calc_lodf`."""
+        return self.calc_lodf(convention, solver)
+
+    def calc_weighted_laplacian(
         self, convention: str = "series", *, skip_zero_impedance: bool = False
     ):
         """Weighted Laplacian ``L = A diag(b) Aᵀ``. ``convention`` as in
-        :meth:`ptdf`; ``skip_zero_impedance`` as in :meth:`bprime`."""
+        :meth:`calc_ptdf`; ``skip_zero_impedance`` as in
+        :meth:`calc_bprime_matrix`."""
         return _to_csr(
             self._inner.weighted_laplacian(
                 convention, skip_zero_impedance=skip_zero_impedance
             )
         )
 
-    def incidence(
+    def weighted_laplacian(
+        self, convention: str = "series", *, skip_zero_impedance: bool = False
+    ):
+        """Compatibility alias for :meth:`calc_weighted_laplacian`."""
+        return self.calc_weighted_laplacian(
+            convention, skip_zero_impedance=skip_zero_impedance
+        )
+
+    def calc_incidence_factors(
         self, convention: str = "series", *, skip_zero_impedance: bool = False
     ) -> "Incidence":
         """Signed incidence factorization as an :data:`Incidence` tuple.
-        ``convention`` as in :meth:`ptdf`; ``skip_zero_impedance`` as in
-        :meth:`bprime`."""
+        ``convention`` as in :meth:`calc_ptdf`; ``skip_zero_impedance`` as in
+        :meth:`calc_bprime_matrix`."""
         np = _require("numpy", "matrix")
         a, b, p_shift, branch_of_col = self._inner.incidence(
             convention, skip_zero_impedance=skip_zero_impedance
@@ -469,6 +663,14 @@ class BalancedNetwork:
             b=np.asarray(b, dtype=float),
             p_shift=np.asarray(p_shift, dtype=float),
             branch_of_col=np.asarray(branch_of_col, dtype=np.int64),
+        )
+
+    def incidence(
+        self, convention: str = "series", *, skip_zero_impedance: bool = False
+    ) -> "Incidence":
+        """Compatibility alias for :meth:`calc_incidence_factors`."""
+        return self.calc_incidence_factors(
+            convention, skip_zero_impedance=skip_zero_impedance
         )
 
     def write_gridfm(
@@ -992,12 +1194,55 @@ class _TypedValue:
 
 
 class TimeSeries(_TypedValue):
-    """A balanced network, balanced operating point, or multiconductor
-    operating point time series (kind ``*_time_series``)."""
+    """A typed time series whose items are independently usable modules."""
+
+    def _points(self):
+        return self.module.state_inventory().get("time_points", [])
+
+    def __len__(self) -> int:
+        return len(self._points())
+
+    def __getitem__(self, index: int) -> "PioModule":
+        try:
+            position = _operator.index(index)
+        except TypeError:
+            raise TypeError("time series indices must be integers") from None
+        length = len(self)
+        if position < 0:
+            position += length
+        if position < 0 or position >= length:
+            raise IndexError("time series index out of range")
+        return self.module.export_state(time_position=position)
+
+    def __iter__(self):
+        for position in range(len(self)):
+            yield self[position]
 
 
 class ScenarioSet(_TypedValue):
-    """A balanced network scenario set (kind ``balanced_network_scenario_set``)."""
+    """A typed scenario mapping whose values are independently usable modules."""
+
+    def keys(self) -> "tuple[str, ...]":
+        return tuple(
+            scenario["id"]
+            for scenario in self.module.state_inventory().get("scenarios", [])
+        )
+
+    def __len__(self) -> int:
+        return len(self.keys())
+
+    def __iter__(self):
+        return iter(self.keys())
+
+    def __contains__(self, scenario: object) -> bool:
+        return isinstance(scenario, str) and scenario in self.keys()
+
+    def __getitem__(self, scenario: str) -> "PioModule":
+        if not isinstance(scenario, str):
+            raise TypeError("scenario keys must be strings")
+        if scenario not in self:
+            raise KeyError(scenario)
+        return self.module.export_state(scenario=scenario)
 
 
 class DcPfInstance(_TypedValue):
@@ -1057,10 +1302,12 @@ class AcScucSolution(_TypedValue):
 
 
 class UnknownValue(_TypedValue):
-    """A module kind this release of powerio does not wrap in a typed class.
+    """A module kind this release does not expose as a typed Python value.
 
-    Reached only for a kind newer than this release recognizes; ``module``
-    and ``kind`` still work, so a caller can still inspect and re-export it.
+    This covers a kind newer than this release and a known value whose state
+    cannot yet be exported without inventing semantics, such as a
+    multiconductor operating point series. ``module`` and ``kind`` still work,
+    so a caller can inspect, store, or emit the module unchanged.
     """
 
 
@@ -1071,7 +1318,7 @@ class UnknownValue(_TypedValue):
 _VALUE_CLASSES: "dict[str, type]" = {
     "balanced_network_time_series": TimeSeries,
     "balanced_operating_point_time_series": TimeSeries,
-    "multiconductor_operating_point_time_series": TimeSeries,
+    "multiconductor_operating_point_time_series": UnknownValue,
     "balanced_network_scenario_set": ScenarioSet,
     "dc_pf_instance": DcPfInstance,
     "ac_pf_instance": AcPfInstance,
@@ -1087,6 +1334,33 @@ _VALUE_CLASSES: "dict[str, type]" = {
     "mc_ac_pf_solution": McAcPfSolution,
     "mc_ac_opf_solution": McAcOpfSolution,
     "ac_scuc_solution": AcScucSolution,
+}
+
+# The inverse is not one-to-one because TimeSeries covers two stable value
+# kinds. These sets make ``value_type`` an assertion for every typed value the
+# runtime already returns through ``PioModule.value``.
+_VALUE_TYPE_KINDS = {
+    TimeSeries: frozenset(
+        {
+            "balanced_network_time_series",
+            "balanced_operating_point_time_series",
+        }
+    ),
+    ScenarioSet: frozenset({"balanced_network_scenario_set"}),
+    DcPfInstance: frozenset({"dc_pf_instance"}),
+    AcPfInstance: frozenset({"ac_pf_instance"}),
+    DcOpfInstance: frozenset({"dc_opf_instance"}),
+    AcOpfInstance: frozenset({"ac_opf_instance"}),
+    McAcPfInstance: frozenset({"mc_ac_pf_instance"}),
+    McAcOpfInstance: frozenset({"mc_ac_opf_instance"}),
+    AcScucInstance: frozenset({"ac_scuc_instance"}),
+    DcPfSolution: frozenset({"dc_pf_solution"}),
+    AcPfSolution: frozenset({"ac_pf_solution"}),
+    DcOpfSolution: frozenset({"dc_opf_solution"}),
+    AcOpfSolution: frozenset({"ac_opf_solution"}),
+    McAcPfSolution: frozenset({"mc_ac_pf_solution"}),
+    McAcOpfSolution: frozenset({"mc_ac_opf_solution"}),
+    AcScucSolution: frozenset({"ac_scuc_solution"}),
 }
 
 
@@ -1151,9 +1425,9 @@ class PioModule:
         a thin wrapper — :class:`TimeSeries`, :class:`ScenarioSet`, or one of
         the calculation instance/solution classes (:class:`DcPfInstance`,
         :class:`AcOpfSolution`, and so on) — holding this module; a kind this
-        release does not recognize reads back as :class:`UnknownValue`. This
-        is the ordinary way to read the value :func:`parse` narrowed to with
-        ``value_type``.
+        release cannot expose without loss reads back as
+        :class:`UnknownValue`. This is the ordinary way to read the value
+        :func:`parse` narrowed to with ``value_type``.
         """
         kind = self.kind
         if kind == "balanced_network":
@@ -1180,6 +1454,55 @@ class PioModule:
         """Serialize to the stored version 1 document."""
         return self._inner.to_json()
 
+    def to_format(
+        self,
+        to: str,
+        missing_gen_cost: Optional[str] = None,
+        default_gen_cost: Optional[str] = None,
+        gen_cost_csv: Optional[Any] = None,
+    ) -> Conversion:
+        """Serialize the module's typed value to ``to``.
+
+        The module dispatcher selects the balanced, multiconductor, or stored
+        module writer from :attr:`kind` and uses the module's retained source
+        and records when preserving source text or reporting fidelity.
+        """
+        text, diagnostics = self._inner.to_format(
+            to,
+            missing_gen_cost=missing_gen_cost,
+            default_gen_cost=default_gen_cost,
+            gen_cost_csv=None if gen_cost_csv is None else str(gen_cost_csv),
+        )
+        return Conversion(text, diagnostics)
+
+    def write_file(
+        self, path: Any, format: Optional[str] = None
+    ) -> "list[_powerio.Diagnostic]":
+        """Serialize the module and write all output artifacts.
+
+        A one file target writes ``path``. A directory target such as
+        ``pypsa-csv`` writes the directory at ``path``. ``format`` defaults to
+        the module's recorded source format when one is available, then to an
+        unambiguous extension on ``path``. The returned list is the writer's
+        structured diagnostics.
+        """
+        return self._inner.write_file(str(path), format)
+
+    def emit(self, format: str, destination: Optional[Any] = None):
+        """Emit the module in a target format.
+
+        With no ``destination``, the result is a :class:`Conversion`
+        containing text and diagnostics. With a path destination, the complete
+        artifact inventory is committed there and the result is the diagnostic
+        list.
+
+        ``to_format`` and ``write_file`` remain quiet 0.10 compatibility
+        spellings for the two forms.
+        """
+        if destination is None:
+            return self.to_format(format)
+        return self.write_file(destination, format)
+
     @property
     def kind(self) -> str:
         """The value's permanent kind identifier."""
@@ -1189,16 +1512,20 @@ class PioModule:
         """Value inspection and supported operation discovery."""
         return _json.loads(self._inner.inspect_json())
 
+    @property
     def diagnostics(self) -> "list[_powerio.Diagnostic]":
-        """The module's diagnostics as native :class:`Diagnostic` objects, in
-        encounter order."""
-        return self._inner.diagnostics()
+        """The diagnostics stored on this module, in encounter order.
+
+        The returned list remains callable during 0.10, so the released
+        ``module.diagnostics()`` spelling continues to work without warnings.
+        """
+        return _DiagnosticList(self._inner.diagnostics())
 
     def state_inventory(self) -> Any:
         """The typed time or scenario inventory."""
         return _json.loads(self._inner.state_inventory_json())
 
-    def select_state(
+    def inspect_state(
         self,
         time_position: Optional[int] = None,
         scenario: Optional[str] = None,
@@ -1209,6 +1536,19 @@ class PioModule:
         the series or scenario set is position ``0``.
         """
         return _json.loads(self._inner.select_json(time_position, scenario))
+
+    def select_state(
+        self,
+        time_position: Optional[int] = None,
+        scenario: Optional[str] = None,
+    ) -> Any:
+        """Compatibility spelling for the report from :meth:`inspect_state`.
+
+        This keeps returning the summary dict. Index a :class:`TimeSeries` or
+        :class:`ScenarioSet`, or call :meth:`export_state`, to get a selected
+        :class:`PioModule`.
+        """
+        return self.inspect_state(time_position, scenario)
 
     def export_state(
         self,
@@ -1222,12 +1562,16 @@ class PioModule:
         """
         return PioModule(self._inner.export_selected(time_position, scenario))
 
-    def to_balanced_inspect(self, base_mva: float = 100.0) -> Any:
-        """Readiness of the multiconductor value for the balanced lowering."""
+    def to_balanced_report(self, base_mva: float = 100.0) -> Any:
+        """Report whether a multiconductor value can become balanced."""
         return _json.loads(self._inner.lowering_readiness_json(base_mva))
 
+    def to_balanced_inspect(self, base_mva: float = 100.0) -> Any:
+        """Compatibility alias for :meth:`to_balanced_report`."""
+        return self.to_balanced_report(base_mva)
+
     def to_balanced(self, base_mva: float = 100.0) -> "PioModule":
-        """Lower the multiconductor value to a balanced module.
+        """Transform the multiconductor value to a balanced module.
 
         On refusal, raises :class:`PowerIODataError` with the refusal's
         diagnostic code as ``.code`` and its structured findings as
@@ -1238,6 +1582,35 @@ class PioModule:
 
     def __repr__(self) -> str:
         return repr(self._inner)
+
+
+def _assert_value_type(
+    module: "PioModule", value_type: Optional[type]
+) -> "PioModule":
+    """Apply the optional typed-value assertion shared by parse entries."""
+    if value_type is None or value_type is PioModule:
+        return module
+    if value_type is BalancedNetwork:
+        expected = frozenset({"balanced_network"})
+    elif value_type is dist.MulticonductorNetwork:
+        expected = frozenset({"multiconductor_network"})
+    elif value_type in _VALUE_TYPE_KINDS:
+        expected = _VALUE_TYPE_KINDS[value_type]
+    else:
+        raise TypeError(
+            "value_type must be powerio.PioModule or a public powerio value class"
+        )
+    if module.kind not in expected:
+        expected_text = (
+            repr(next(iter(expected)))
+            if len(expected) == 1
+            else "one of " + repr(tuple(sorted(expected)))
+        )
+        raise ValueError(
+            f"parsed value has kind {module.kind!r}; value_type="
+            f"{value_type.__name__} asserts {expected_text}"
+        )
+    return module
 
 
 def parse(
@@ -1260,12 +1633,12 @@ def parse(
     (a calculation defining source produces that calculation rather than a
     bare network).
 
-    ``value_type`` is an optional assertion, not a different return: pass
-    :class:`BalancedNetwork` or :class:`dist.MulticonductorNetwork` to assert
-    the parsed value's kind, raising :class:`ValueError` naming both the
-    detected and the requested kind on a mismatch. Either way — assertion
-    passed, or ``value_type`` left at its default ``None`` — the call returns
-    the :class:`PioModule`; read `.value` to get the typed value.
+    ``value_type`` is an optional assertion, not a different return. Pass any
+    public value class to assert the parsed value's kind, raising
+    :class:`ValueError` naming both the detected and requested kind on a
+    mismatch. Either way — assertion passed, or ``value_type`` left at its
+    default ``None`` — the call returns the :class:`PioModule`; read ``.value``
+    to get the typed value.
     ``include_root`` widens the acquisition root for formats whose includes
     reference sibling files.
     """
@@ -1273,23 +1646,40 @@ def parse(
         module = PioModule.from_bytes(bytes(source), from_, name=name)
     else:
         module = PioModule.from_file(source, from_, include_root=include_root)
-    if value_type is None or value_type is PioModule:
-        return module
-    if value_type is BalancedNetwork:
-        expected = "balanced_network"
-    elif value_type is dist.MulticonductorNetwork:
-        expected = "multiconductor_network"
-    else:
+    return _assert_value_type(module, value_type)
+
+
+def parse_file(
+    path: Any,
+    format: Optional[str] = None,
+    *,
+    include_root: Optional[Any] = None,
+    value_type: Optional[type] = None,
+    from_: Optional[str] = None,
+) -> "PioModule":
+    """Parse a file into a :class:`PioModule`.
+
+    ``format`` overrides format detection. ``from_`` is its released 0.10
+    compatibility spelling and cannot be supplied at the same time.
+    :func:`parse` remains available for callers that already pass in-memory
+    bytes.
+    """
+    if format is not None and from_ is not None:
+        raise TypeError("parse_file accepts either format or from_, not both")
+    try:
+        path = _os.fspath(path)
+    except TypeError as error:
+        raise TypeError("parse_file path must be a string or path-like object") from error
+    if isinstance(path, bytes):
         raise TypeError(
-            "value_type must be powerio.PioModule, powerio.BalancedNetwork, or "
-            "powerio.dist.MulticonductorNetwork"
+            "parse_file path must be text, not bytes; use parse() for in-memory bytes"
         )
-    if module.kind != expected:
-        raise ValueError(
-            f"parsed value has kind {module.kind!r}; value_type="
-            f"{value_type.__name__} asserts {expected!r}"
-        )
-    return module
+    module = PioModule.from_file(
+        path,
+        format if format is not None else from_,
+        include_root=include_root,
+    )
+    return _assert_value_type(module, value_type)
 
 
 def features() -> dict[str, bool]:
@@ -1311,6 +1701,3 @@ def features() -> dict[str, bool]:
         "dist": True,
         "prob": True,
     }
-
-
-

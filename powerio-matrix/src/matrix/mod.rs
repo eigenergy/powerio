@@ -25,7 +25,8 @@ pub use adjacency::build_adjacency;
 pub use bdoubleprime::build_bdoubleprime;
 pub use bprime::build_bprime;
 pub use incidence::{
-    DcConvention, IncidenceParts, build_flow_map, build_incidence, susceptance_diag,
+    BranchSusceptanceFormula, DcConvention, IncidenceParts, build_flow_map, build_incidence,
+    susceptance_diag,
 };
 pub use lacpf::build_lacpf;
 pub use laplacian::{

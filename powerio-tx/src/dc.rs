@@ -69,6 +69,12 @@ pub enum DcConvention {
     SeriesSusceptance,
 }
 
+/// The formula used to compute one DC branch susceptance.
+///
+/// This power system name is the preferred public spelling. [`DcConvention`]
+/// remains available for compatibility.
+pub type BranchSusceptanceFormula = DcConvention;
+
 impl DcConvention {
     /// The public branch susceptance, in PowerModels signs: the imaginary
     /// part of the series admittance the selected formula models, negative

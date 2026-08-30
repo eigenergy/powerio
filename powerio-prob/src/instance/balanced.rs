@@ -21,7 +21,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use powerio_core::Error;
-use powerio_tx::{BalancedNetwork, BusId, BusType, DcConvention};
+use powerio_tx::{BalancedNetwork, BranchSusceptanceFormula, BusId, BusType};
 use serde::{Deserialize, Serialize};
 
 use crate::OperatingPoint;
@@ -67,7 +67,7 @@ pub enum AcBusSpecification {
 pub struct DcPfInstance {
     network: BalancedNetwork,
     specifications: Vec<DcBusSpecification>,
-    approximation: DcConvention,
+    approximation: BranchSusceptanceFormula,
     initial_state: Option<OperatingPoint<BalancedNetwork>>,
 }
 
@@ -97,7 +97,7 @@ impl DcPfInstance {
         Ok(Self {
             network,
             specifications,
-            approximation: DcConvention::default(),
+            approximation: BranchSusceptanceFormula::default(),
             initial_state: None,
         })
     }
@@ -105,7 +105,7 @@ impl DcPfInstance {
     /// Select the DC branch approximation, consuming the instance. The
     /// network handle moves; no table is copied.
     #[must_use]
-    pub fn with_approximation(mut self, approximation: DcConvention) -> Self {
+    pub fn with_approximation(mut self, approximation: BranchSusceptanceFormula) -> Self {
         self.approximation = approximation;
         self
     }
@@ -131,7 +131,7 @@ impl DcPfInstance {
 
     /// The selected DC branch approximation.
     #[must_use]
-    pub const fn approximation(&self) -> DcConvention {
+    pub const fn approximation(&self) -> BranchSusceptanceFormula {
         self.approximation
     }
 
@@ -239,7 +239,7 @@ impl AcPfInstance {
                     AcBusSpecification::Isolated => DcBusSpecification::Isolated,
                 })
                 .collect(),
-            approximation: DcConvention::default(),
+            approximation: BranchSusceptanceFormula::default(),
             initial_state: self.initial_state.clone(),
         };
         let diagnostics = vec![
@@ -260,7 +260,7 @@ pub struct DcOpfInstance {
     network: BalancedNetwork,
     objective: Objective,
     constraints: ActiveConstraints,
-    approximation: DcConvention,
+    approximation: BranchSusceptanceFormula,
     initial_state: Option<OperatingPoint<BalancedNetwork>>,
 }
 
@@ -283,7 +283,7 @@ impl DcOpfInstance {
             network,
             objective,
             constraints: ActiveConstraints::default(),
-            approximation: DcConvention::default(),
+            approximation: BranchSusceptanceFormula::default(),
             initial_state: None,
         })
     }
@@ -312,7 +312,7 @@ impl DcOpfInstance {
 
     /// Select the DC branch approximation, consuming the instance.
     #[must_use]
-    pub fn with_approximation(mut self, approximation: DcConvention) -> Self {
+    pub fn with_approximation(mut self, approximation: BranchSusceptanceFormula) -> Self {
         self.approximation = approximation;
         self
     }
@@ -363,7 +363,7 @@ impl DcOpfInstance {
 
     /// The selected DC branch approximation.
     #[must_use]
-    pub const fn approximation(&self) -> DcConvention {
+    pub const fn approximation(&self) -> BranchSusceptanceFormula {
         self.approximation
     }
 
@@ -526,7 +526,7 @@ impl AcOpfInstance {
             network: self.network.clone(),
             objective: self.objective.clone(),
             constraints,
-            approximation: DcConvention::default(),
+            approximation: BranchSusceptanceFormula::default(),
             initial_state: self.initial_state.clone(),
         };
         let diagnostics = vec![

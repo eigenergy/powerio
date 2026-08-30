@@ -6,33 +6,43 @@
 //! `powerio-dist` (the multiconductor distribution model), and `powerio-prob`
 //! (operating points, problem instances, and solutions). The facade owns the
 //! dynamic value boundary: [`PioValue`], [`PioValueKind`], the universal
-//! [`parse`], and [`try_into_typed`].
+//! [`parse_file`], and [`emit`].
 //!
-//! [`parse`] compiles one source into `PioModule<PioValue>`, routing to
-//! whichever built in family claims it. A caller that expects one concrete
-//! type narrows the module:
+//! [`parse_file`] compiles one file or case directory into
+//! `PioModule<PioValue>`, routing to whichever built in family claims it.
+//! Inspect the value with ordinary enum matching and emit the module without
+//! discarding its source or diagnostics:
 //!
 //! ```no_run
-//! let module = powerio::parse(powerio::Source::open("case9.m")?)?;
-//! let module: powerio::PioModule<powerio::BalancedNetwork> =
-//!     powerio::try_into_typed(module)?;
+//! let module = powerio::parse_file("case9.m")?;
+//! match module.value() {
+//!     powerio::PioValue::BalancedNetwork(network) => {
+//!         println!("{} buses", network.buses().len());
+//!     }
+//!     other => println!("parsed {}", other.kind()),
+//! }
+//! powerio::emit(
+//!     &module,
+//!     "matpower",
+//!     powerio::Destination::path("copy.m"),
+//! )?;
 //! # Ok::<(), Box<dyn std::error::Error>>(())
 //! ```
 //!
-//! The family entries stay available for callers that already know the
-//! family: [`format::parse`] for balanced network formats and
-//! [`powerio_dist::parse`] for multiconductor ones.
+//! [`parse`] remains the source-level entry for callers that already own a
+//! [`Source`] or need an in-memory buffer. [`try_into_typed`] remains a 0.10
+//! compatibility helper for code that needs an owned `PioModule<T>`.
 
 pub use powerio_tx::*;
 
-/// Core types a consumer needs to name a module: the generic module wrapper,
-/// the source it was parsed from, a byte span into a source, the output
-/// destination a write commits to, and the two repeated-value containers.
-/// `Diagnostic` already arrives through [`powerio_tx`]'s own re-export, since
-/// that one is itself `powerio_core::Diagnostic`.
+/// The common module records and containers. These explicit facade exports
+/// keep ordinary callers out of the component crate paths.
 pub use powerio_core::{
-    Destination, HistoryEntry, HistoryId, HistoryKind, PioModule, Producer, ScenarioSet, Source,
-    SourceSpan, TimePoint, TimeSeries,
+    ArtifactPath, Destination, Diagnostic, DiagnosticCode, DiagnosticId, DiagnosticInfo,
+    DiagnosticSeverity, DiagnosticStage, Digest, DigestAlgorithm, FormatId, HistoryEntry,
+    HistoryId, HistoryKind, MemoryArtifact, PioModule, Producer, Scenario, ScenarioId, ScenarioSet,
+    Source, SourceBuffer, SourceDescriptor, SourceId, SourceMapEntry, SourceRelation, SourceSpan,
+    TimePoint, TimeSeries, WriteResult, WrittenOutput,
 };
 
 /// `powerio_tx::*` above already re-exports an `Error`/`Result` pair, but
@@ -44,14 +54,17 @@ pub use powerio_core::{
 pub use powerio_core::Error;
 pub type Result<T> = std::result::Result<T, powerio_core::Error>;
 
-/// The distribution network type; [`powerio_dist::parse`] routes to it.
-pub use powerio_dist::MulticonductorNetwork;
+/// The distribution network and conductor matrix types;
+/// [`powerio_dist::parse`] routes to the network.
+pub use powerio_dist::{ConductorMatrix, MulticonductorNetwork};
 
 /// The balanced calculation types used by solver consumers. The full problem
 /// vocabulary lives in [`powerio_prob`]; these types sit at the facade root so
 /// a consumer does not need a second PowerIO dependency to name its boundary.
 pub use powerio_prob::{
-    AcOpfInstance, AcOpfSolution, AcPfInstance, AcPfSolution, DcOpfInstance, DcOpfSolution,
+    AcOpfInstance, AcOpfSolution, AcPfInstance, AcPfSolution, AcScucInstance, AcScucSolution,
+    DcOpfInstance, DcOpfSolution, DcPfInstance, DcPfSolution, McAcOpfInstance, McAcOpfSolution,
+    McAcPfInstance, McAcPfSolution,
 };
 
 /// Matrix and graph data, re-exported from `powerio-matrix` under the
@@ -70,7 +83,7 @@ pub mod gridfm;
 pub mod select;
 pub mod stored;
 pub mod write;
-pub use write::{write_module_as, write_module_str, write_module_str_with_options};
+pub use write::{emit, write_module_as, write_module_str, write_module_str_with_options};
 pub mod transform;
 
 /// The replayable operating state, named at the crate root beside the other
@@ -132,6 +145,20 @@ pub fn parse(
     }
 }
 
+/// Parse a file or supported case directory into one dynamic module.
+///
+/// This is the preferred PowerModels-compatible entry point for path input.
+/// [`parse`] remains the lower-level source entry point for memory buffers,
+/// explicit acquisition roots, and callers that already own a [`Source`].
+///
+/// # Errors
+/// Opening the path or parsing the routed source fails.
+pub fn parse_file(
+    path: impl Into<std::path::PathBuf>,
+) -> std::result::Result<powerio_core::PioModule<PioValue>, powerio_core::Error> {
+    parse(powerio_core::Source::open(path)?)
+}
+
 /// PyPSA CSV dispatch: one snapshot with no series siblings is the scalar
 /// profile through the balanced hub; a declared axis routes to the sequence
 /// reader, producing a network series or, when only complete solved state
@@ -143,6 +170,13 @@ fn parse_pypsa(
         // A file claiming the PyPSA token gets the hub's own refusal wording.
         return format::parse(source).map(|module| module.map_value(PioValue::from));
     }
+    // Directory routing identified the source before the typed reader runs.
+    // Record that decision on an undeclared source so same format emission
+    // can distinguish a PyPSA directory from the GridFM directory family.
+    let source = match source.format() {
+        Some(_) => source,
+        None => source.with_format(powerio_core::FormatId::new("pypsa-csv")?),
+    };
     let axis = match format::pypsa_axis(&source) {
         Ok(axis) => axis,
         Err(error) => {

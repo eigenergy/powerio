@@ -457,20 +457,32 @@ pub unsafe extern "C" fn pio_parse_bytes(
     }
 }
 
-/// Rebuild a typed module around one value with the source descriptors,
-/// diagnostics, and retained source from the dynamic module. Sources are
-/// added first because diagnostic spans validate against them.
+/// Rebuild a typed module around one value with every common record and the
+/// retained source from the dynamic module. Sources are added first because
+/// source map and diagnostic spans validate against them.
 fn with_module_records<T>(
     module: &powerio_core::PioModule<powerio::PioValue>,
     value: T,
 ) -> Result<powerio_core::PioModule<T>, *mut PioError> {
-    let mut out = powerio_core::PioModule::new(value);
+    let mut out = powerio_core::PioModule::new(value).with_producer(module.producer().clone());
     for descriptor in module.sources() {
         out.add_source_descriptor(descriptor.clone())
             .map_err(|error| error_from_core(&error))?;
     }
+    for entry in module.source_map() {
+        out.add_source_map_entry(entry.clone())
+            .map_err(|error| error_from_core(&error))?;
+    }
     for diagnostic in module.diagnostics() {
         out.add_diagnostic(diagnostic.clone())
+            .map_err(|error| error_from_core(&error))?;
+    }
+    for entry in module.history() {
+        out.add_history_entry(entry.clone())
+            .map_err(|error| error_from_core(&error))?;
+    }
+    for (namespace, value) in module.extensions() {
+        out.insert_extension(namespace.clone(), value.clone())
             .map_err(|error| error_from_core(&error))?;
     }
     Ok(match module.source() {
@@ -637,6 +649,33 @@ pub unsafe extern "C" fn pio_module_write_file(
     }
 }
 
+/// Emit the module as one text artifact in the named target format. Free the
+/// returned string with `pio_string_release`. This is the preferred
+/// compiler style spelling of `pio_module_write_str`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pio_module_emit_string(
+    module: *const PioModule,
+    format: *const c_char,
+    out_diagnostics: *mut *mut PioDiagnostics,
+    error: *mut *mut PioError,
+) -> *mut c_char {
+    unsafe { pio_module_write_str(module, format, out_diagnostics, error) }
+}
+
+/// Emit the module in the named target format to `path`. The target can be a
+/// file or a directory format such as PyPSA CSV. This is the preferred
+/// compiler style spelling of `pio_module_write_file`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pio_module_emit_file(
+    module: *const PioModule,
+    format: *const c_char,
+    path: *const c_char,
+    out_diagnostics: *mut *mut PioDiagnostics,
+    error: *mut *mut PioError,
+) -> i32 {
+    unsafe { pio_module_write_file(module, format, path, out_diagnostics, error) }
+}
+
 /// The stored version 1 document. Free with `pio_string_release`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_module_write_json(
@@ -732,6 +771,15 @@ unsafe fn selector<'a>(
     }
 }
 
+fn export_selected_state(
+    module: &ModuleInner,
+    selector: powerio::select::StateSelector<'_>,
+) -> Result<*mut PioModule, *mut PioError> {
+    powerio::select::export_module_state(&module.module, selector)
+        .map(module_handle)
+        .map_err(|error| error_from_core(&error))
+}
+
 /// Export one selected time point or scenario as an independent static
 /// module. `time_position >= 0` selects by position (scenario must be NULL);
 /// `scenario` non NULL selects by ID (time_position must be negative).
@@ -746,9 +794,44 @@ pub unsafe extern "C" fn pio_module_export_state(
         v6_entry(error, std::ptr::null_mut(), || {
             let inner = required_module(module)?;
             let selector = selector(time_position, scenario)?;
-            powerio::select::export_state(inner.module.value(), selector)
-                .map(module_handle)
-                .map_err(|error| error_from_core(&error))
+            export_selected_state(inner, selector)
+        })
+    }
+}
+
+/// Export one zero based time position as an independent static module.
+/// Use `pio_module_export_scenario` for a scenario set. This split form has
+/// no sentinel or conflicting selector combination.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pio_module_export_time_point(
+    module: *const PioModule,
+    position: usize,
+    error: *mut *mut PioError,
+) -> *mut PioModule {
+    unsafe {
+        v6_entry(error, std::ptr::null_mut(), || {
+            let inner = required_module(module)?;
+            export_selected_state(
+                inner,
+                powerio::select::StateSelector::TimePosition(position),
+            )
+        })
+    }
+}
+
+/// Export one case sensitive scenario ID as an independent static module.
+/// Use `pio_module_export_time_point` for a time series.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pio_module_export_scenario(
+    module: *const PioModule,
+    scenario: *const c_char,
+    error: *mut *mut PioError,
+) -> *mut PioModule {
+    unsafe {
+        v6_entry(error, std::ptr::null_mut(), || {
+            let inner = required_module(module)?;
+            let scenario = required_str(scenario, "scenario")?;
+            export_selected_state(inner, powerio::select::StateSelector::Scenario(scenario))
         })
     }
 }
@@ -802,9 +885,60 @@ pub unsafe extern "C" fn pio_module_lowering_readiness_json(
     }
 }
 
-/// Explicitly lower the multiconductor value to a balanced module. Records
-/// and source ownership carry over; the pass appends its findings and one
-/// Transform history entry.
+/// Report whether the multiconductor value can be transformed to a balanced
+/// network, as JSON. Free with `pio_string_release`.
+///
+/// This is the power system terminology spelling of
+/// `pio_module_lowering_readiness_json`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pio_module_to_balanced_report_json(
+    module: *const PioModule,
+    base_mva: f64,
+    error: *mut *mut PioError,
+) -> *mut c_char {
+    unsafe { pio_module_lowering_readiness_json(module, base_mva, error) }
+}
+
+fn transformed_balanced_module(
+    module: &powerio_core::PioModule<powerio::PioValue>,
+    base_mva: f64,
+) -> Result<*mut PioModule, *mut PioError> {
+    let powerio::PioValue::MulticonductorNetwork(network) = module.value() else {
+        let diagnostic = powerio_core::Diagnostic::of(
+            &powerio::codes::TRANSFORM_MULTI_TO_BALANCED_WRONG_MODEL_KIND,
+            format!(
+                "the module carries a {} value; the balanced transformation takes a \
+                 multiconductor network",
+                module.value().kind().as_str()
+            ),
+        );
+        let message = powerio_core::render_diagnostic(&diagnostic);
+        return Err(error_from_diagnostics(&message, vec![diagnostic]));
+    };
+    let owned = with_module_records(
+        module,
+        powerio::PioValue::MulticonductorNetwork(network.clone()),
+    )?;
+    powerio::transform::module_to_balanced(
+        owned,
+        powerio::transform::MulticonductorToBalancedOptions {
+            base_mva,
+            ..Default::default()
+        },
+    )
+    .map(module_handle)
+    .map_err(|(_, boxed)| {
+        // The error's records are already 1.0 `Diagnostic` rows, so both
+        // channels carry their targets, ids, spans, and details whole.
+        let records = boxed.diagnostics.clone();
+        let message = records
+            .first()
+            .map_or_else(|| boxed.to_string(), powerio_core::render_diagnostic);
+        error_from_diagnostics(&message, records)
+    })
+}
+
+/// Compatibility spelling for `pio_module_to_balanced`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_module_lower_to_balanced(
     module: *const PioModule,
@@ -814,33 +948,22 @@ pub unsafe extern "C" fn pio_module_lower_to_balanced(
     unsafe {
         v6_entry(error, std::ptr::null_mut(), || {
             let inner = required_module(module)?;
-            // The transform consumes a module; rebuilding from the stored
-            // form preserves every serializable record. The runtime retained
-            // source does not cross this copy.
-            let text = powerio::stored::write_module(&inner.module)
-                .map_err(|error| error_from_core(&error))?;
-            let owned =
-                powerio::stored::read_module(&text).map_err(|error| error_from_core(&error))?;
-            powerio::transform::lower_module_to_balanced(
-                owned,
-                powerio::transform::MulticonductorToBalancedOptions {
-                    base_mva,
-                    ..Default::default()
-                },
-            )
-            .map(module_handle)
-            .map_err(|(_, boxed)| {
-                // The error's records are already 1.0 `Diagnostic` rows, so
-                // both channels carry them whole: targets, ids, spans, and
-                // details all survive instead of being projected away.
-                let records = boxed.diagnostics.clone();
-                let message = records
-                    .first()
-                    .map_or_else(|| boxed.to_string(), powerio_core::render_diagnostic);
-                error_from_diagnostics(&message, records)
-            })
+            transformed_balanced_module(&inner.module, base_mva)
         })
     }
+}
+
+/// Transform the multiconductor value to a balanced module. Common records
+/// carry over, the pass appends its findings and one Transform history entry,
+/// and the retained source is severed because its bytes describe the input
+/// value.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pio_module_to_balanced(
+    module: *const PioModule,
+    base_mva: f64,
+    error: *mut *mut PioError,
+) -> *mut PioModule {
+    unsafe { pio_module_lower_to_balanced(module, base_mva, error) }
 }
 
 /// Mint an independent handle to the same module. NULL stays NULL.
@@ -879,24 +1002,43 @@ fn inspect_json(module: &powerio_core::PioModule<powerio::PioValue>) -> String {
         _ => serde_json::json!({}),
     };
     let operations: Vec<&str> = match value {
-        V::BalancedNetwork(_) => vec!["inspect", "diagnostics", "write", "dc_data"],
+        V::BalancedNetwork(_) => vec!["inspect", "diagnostics", "emit", "write", "dc_data"],
         V::MulticonductorNetwork(_) => vec![
             "inspect",
             "diagnostics",
+            "emit",
             "write",
+            "to_balanced_report",
+            "to_balanced",
             "lowering_readiness",
             "lower_to_balanced",
         ],
-        V::BalancedNetworkTimeSeries(_)
-        | V::BalancedOperatingPointTimeSeries(_)
-        | V::BalancedNetworkScenarioSet(_) => vec![
+        V::BalancedNetworkTimeSeries(_) | V::BalancedOperatingPointTimeSeries(_) => vec![
             "inspect",
             "diagnostics",
+            "emit",
             "write",
             "state_inventory",
+            "export_time_point",
             "export_state",
         ],
-        _ => vec!["inspect", "diagnostics", "write"],
+        // Selection can borrow this state in Rust, but its terminal voltages,
+        // transformer taps, and capacitor steps have no complete static
+        // MulticonductorNetwork representation yet. Do not advertise an
+        // index/export protocol that cannot return an independent value.
+        V::MulticonductorOperatingPointTimeSeries(_) => {
+            vec!["inspect", "diagnostics", "emit", "write"]
+        }
+        V::BalancedNetworkScenarioSet(_) => vec![
+            "inspect",
+            "diagnostics",
+            "emit",
+            "write",
+            "state_inventory",
+            "export_scenario",
+            "export_state",
+        ],
+        _ => vec!["inspect", "diagnostics", "emit", "write"],
     };
     // The value's own source format when the value kind carries one
     // (balanced and multiconductor networks always or optionally do); every
@@ -1052,7 +1194,7 @@ pub(crate) fn diagnostics_handle(records: &[powerio_core::Diagnostic]) -> *mut P
 }
 
 /// The module's diagnostics as a structured list handle. This is the binding
-/// inspection path; [`pio_module_diagnostics_json`] stays as the explicit
+/// inspection path; `pio_module_diagnostics_json` stays as the explicit
 /// serialization helper.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_module_diagnostics(
@@ -1452,6 +1594,13 @@ pub unsafe extern "C" fn pio_dc_data_n_rows(data: *const PioDcData) -> usize {
     }
 }
 
+/// Included branch count. This is the power system terminology spelling of
+/// `pio_dc_data_n_rows`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pio_dc_data_n_branches(data: *const PioDcData) -> usize {
+    unsafe { pio_dc_data_n_rows(data) }
+}
+
 /// Incidence column count (`n`, the bus count).
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_dc_data_n_buses(data: *const PioDcData) -> usize {
@@ -1525,6 +1674,13 @@ pub unsafe extern "C" fn pio_dc_data_row_ids(data: *const PioDcData) -> *const *
     }
 }
 
+/// Stable module element ID per included branch, length `n_branches`. This is
+/// the power system terminology spelling of `pio_dc_data_row_ids`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pio_dc_data_branch_ids(data: *const PioDcData) -> *const *const c_char {
+    unsafe { pio_dc_data_row_ids(data) }
+}
+
 /// Stable bus element ID per incidence column, length `n_buses`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_dc_data_bus_ids(data: *const PioDcData) -> *const *const c_char {
@@ -1580,13 +1736,80 @@ pub unsafe extern "C" fn pio_dc_data_formula(data: *const PioDcData) -> *const c
     }
 }
 
+unsafe fn fill_branch_flow(
+    data: *const PioDcData,
+    va: *const f64,
+    va_len: usize,
+    out: *mut f64,
+    out_len: usize,
+) -> Result<(), *mut PioError> {
+    let inner = unsafe { PioDcData::get(data) }.ok_or_else(|| {
+        error_from_parts(
+            codes::BIND_CAPI_NULL_HANDLE.code,
+            "DC data handle must not be NULL",
+        )
+    })?;
+    if va.is_null() {
+        return Err(error_from_parts(
+            codes::BIND_CAPI_NULL_ARGUMENT.code,
+            "va must not be NULL",
+        ));
+    }
+    if out.is_null() {
+        return Err(error_from_parts(
+            codes::BIND_CAPI_NULL_ARGUMENT.code,
+            "out must not be NULL",
+        ));
+    }
+    if va_len != inner.shift_injection.len() || out_len != inner.susceptance.len() {
+        return Err(error_from_parts(
+            codes::BIND_CAPI_LENGTH_MISMATCH.code,
+            &format!(
+                "branch flow needs va_len {} and out_len {}; received {va_len} and {out_len}",
+                inner.shift_injection.len(),
+                inner.susceptance.len()
+            ),
+        ));
+    }
+    let va = unsafe { std::slice::from_raw_parts(va, va_len) };
+    let out = unsafe { std::slice::from_raw_parts_mut(out, out_len) };
+    for (row, slot) in out.iter_mut().enumerate() {
+        let from = usize::try_from(inner.from_indices[row]).expect("stored nonnegative");
+        let to = usize::try_from(inner.to_indices[row]).expect("stored nonnegative");
+        *slot = -inner.susceptance[row] * (va[from] - va[to])
+            + inner.susceptance[row] * inner.shift[row];
+    }
+    Ok(())
+}
+
 /// Fill `out` with the complete affine branch flow
 /// `p_branch = -b .* (va_from - va_to) + b .* shift`: given bus voltage
 /// angles `va` (radians, length `n_buses`), writes
 /// `-b[e] * (va[from] - va[to]) + b[e] * shift[e]` per included row into
 /// `out` (length `n_rows`), so `A' * p_branch` equals the bus injection
-/// including `shift_injection`. Returns false on a NULL argument or a length
-/// mismatch. No temporary vector is allocated.
+/// including `shift_injection`. Returns false and stores a structured error
+/// on a NULL argument or a length mismatch. `va` and `out` must not overlap.
+/// No temporary vector is allocated.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pio_dc_data_fill_branch_flow_checked(
+    data: *const PioDcData,
+    va: *const f64,
+    va_len: usize,
+    out: *mut f64,
+    out_len: usize,
+    error: *mut *mut PioError,
+) -> bool {
+    unsafe {
+        v6_entry(error, false, || {
+            fill_branch_flow(data, va, va_len, out, out_len)?;
+            Ok(true)
+        })
+    }
+}
+
+/// Compatibility form of `pio_dc_data_fill_branch_flow_checked` without a
+/// structured error channel. Returns false on a NULL argument or length
+/// mismatch.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_dc_data_fill_branch_flow(
     data: *const PioDcData,
@@ -1596,26 +1819,7 @@ pub unsafe extern "C" fn pio_dc_data_fill_branch_flow(
     out_len: usize,
 ) -> bool {
     unsafe {
-        crate::guard(false, || {
-            let Some(inner) = PioDcData::get(data) else {
-                return false;
-            };
-            if va.is_null() || out.is_null() {
-                return false;
-            }
-            if va_len != inner.shift_injection.len() || out_len != inner.susceptance.len() {
-                return false;
-            }
-            let va = std::slice::from_raw_parts(va, va_len);
-            let out = std::slice::from_raw_parts_mut(out, out_len);
-            for (row, slot) in out.iter_mut().enumerate() {
-                let from = usize::try_from(inner.from_indices[row]).expect("stored nonnegative");
-                let to = usize::try_from(inner.to_indices[row]).expect("stored nonnegative");
-                *slot = -inner.susceptance[row] * (va[from] - va[to])
-                    + inner.susceptance[row] * inner.shift[row];
-            }
-            true
-        })
+        pio_dc_data_fill_branch_flow_checked(data, va, va_len, out, out_len, std::ptr::null_mut())
     }
 }
 
@@ -1674,6 +1878,19 @@ mod tests {
              mpc.branch = [1 2 0.01 0.1 0 250 250 250 0 0 1 -30 30; 2 3 0.02 0.2 0 250 250 250 0 0 0 -30 30;];\n",
         )
         .unwrap()
+    }
+
+    fn conformance_network() -> powerio::BalancedNetwork {
+        let source = powerio_core::Source::open(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../tests/data/api_conformance.m"
+        ))
+        .unwrap();
+        let module = powerio::parse(source).unwrap();
+        let powerio::PioValue::BalancedNetwork(network) = module.value() else {
+            panic!("wrong kind");
+        };
+        network.clone()
     }
 
     #[test]
@@ -1744,6 +1961,16 @@ mod tests {
             if !diag.is_null() {
                 pio_diagnostics_release(diag);
             }
+
+            let emitted =
+                pio_module_emit_string(net_module, to.as_ptr(), &raw mut diag, &raw mut error);
+            assert!(error.is_null());
+            assert!(!emitted.is_null());
+            assert_eq!(CStr::from_ptr(emitted).to_str().unwrap(), echoed);
+            crate::pio_string_release(emitted);
+            if !diag.is_null() {
+                pio_diagnostics_release(diag);
+            }
             pio_module_release(net_module);
             crate::pio_balanced_network_release(net);
 
@@ -1758,6 +1985,83 @@ mod tests {
                 );
                 pio_error_release(error);
             }
+            pio_module_release(module);
+        }
+    }
+
+    #[test]
+    fn module_network_module_round_trip_keeps_every_common_record() {
+        use powerio_core::{
+            Diagnostic, DiagnosticCode, DiagnosticSeverity, HistoryEntry, HistoryId, HistoryKind,
+            PioModule as CoreModule, Producer, Source, SourceDescriptor, SourceId, SourceMapEntry,
+            SourceRelation, SourceSpan,
+        };
+
+        unsafe {
+            let network = powerio::BalancedNetwork::new("record-test", 100.0);
+            let retained = Source::from_bytes("case.m", b"test".to_vec()).unwrap();
+            let source_id = SourceId::new("input").unwrap();
+            let span = SourceSpan::new(source_id.clone(), 0, 4).unwrap();
+            let mut original = CoreModule::new(powerio::PioValue::BalancedNetwork(network))
+                .with_producer(Producer::new("capi-test", "1").unwrap())
+                .with_source(retained);
+            original
+                .add_source_descriptor(SourceDescriptor::new(source_id, "case.m", 4).unwrap())
+                .unwrap();
+            original
+                .add_source_map_entry(
+                    SourceMapEntry::new("/buses", SourceRelation::Exact, vec![span.clone()])
+                        .unwrap(),
+                )
+                .unwrap();
+            original
+                .add_diagnostic(
+                    Diagnostic::new(
+                        DiagnosticCode::new("PARTNER.TEST.CAPI_RECORDS").unwrap(),
+                        DiagnosticSeverity::Note,
+                        "keep me",
+                    )
+                    .with_target("/buses")
+                    .unwrap()
+                    .with_span(span)
+                    .unwrap(),
+                )
+                .unwrap();
+            original
+                .add_history_entry(
+                    HistoryEntry::new(HistoryId::new("h1").unwrap(), HistoryKind::Parse, "parse")
+                        .unwrap(),
+                )
+                .unwrap();
+            original
+                .insert_extension("org.example.test", serde_json::json!({"kept": true}))
+                .unwrap();
+
+            let module = module_handle(original);
+            let mut error = std::ptr::null_mut();
+            let network = pio_module_balanced_network(module, &raw mut error);
+            assert!(error.is_null());
+            let wrapped = pio_module_of_balanced_network(network, &raw mut error);
+            assert!(error.is_null());
+
+            let expected = &required_module(module).unwrap().module;
+            let actual = &required_module(wrapped).unwrap().module;
+            assert_eq!(actual.producer(), expected.producer());
+            assert_eq!(actual.sources(), expected.sources());
+            assert_eq!(actual.source_map(), expected.source_map());
+            assert_eq!(
+                serde_json::to_value(actual.diagnostics()).unwrap(),
+                serde_json::to_value(expected.diagnostics()).unwrap()
+            );
+            assert_eq!(actual.history(), expected.history());
+            assert_eq!(actual.extensions(), expected.extensions());
+            assert_eq!(
+                actual.source().unwrap().primary_buffer().unwrap().bytes(),
+                expected.source().unwrap().primary_buffer().unwrap().bytes()
+            );
+
+            pio_module_release(wrapped);
+            crate::pio_balanced_network_release(network);
             pio_module_release(module);
         }
     }
@@ -1799,6 +2103,262 @@ mod tests {
             pio_module_release(retained);
             pio_module_release(module);
             pio_module_release(std::ptr::null_mut());
+        }
+    }
+
+    #[test]
+    fn split_time_and_scenario_exports_have_one_selector_each() {
+        unsafe {
+            let network = conformance_network();
+            let series = powerio_core::TimeSeries::new(
+                vec![powerio_core::TimePoint::new("h0", None).unwrap()],
+                vec![network.clone()],
+            )
+            .unwrap();
+            let series = module_handle(powerio_core::PioModule::new(
+                powerio::PioValue::BalancedNetworkTimeSeries(series),
+            ));
+            let mut error = std::ptr::null_mut();
+            let exported = pio_module_export_time_point(series, 0, &raw mut error);
+            assert!(error.is_null());
+            assert_eq!(
+                CStr::from_ptr(pio_module_kind(exported)).to_str().unwrap(),
+                "balanced_network"
+            );
+            pio_module_release(exported);
+            let id = CString::new("base").unwrap();
+            let wrong = pio_module_export_scenario(series, id.as_ptr(), &raw mut error);
+            assert!(wrong.is_null());
+            assert_eq!(
+                CStr::from_ptr(pio_error_code(error)).to_str().unwrap(),
+                "REQUEST.STATE.WRONG_SELECTOR"
+            );
+            pio_error_release(error);
+            pio_module_release(series);
+
+            let scenario = powerio_core::Scenario::new(
+                powerio_core::ScenarioId::new("base").unwrap(),
+                Some(1.0),
+                network,
+            );
+            let scenarios = powerio_core::ScenarioSet::new(vec![scenario]).unwrap();
+            let scenarios = module_handle(powerio_core::PioModule::new(
+                powerio::PioValue::BalancedNetworkScenarioSet(scenarios),
+            ));
+            let exported = pio_module_export_scenario(scenarios, id.as_ptr(), &raw mut error);
+            assert!(error.is_null());
+            assert_eq!(
+                CStr::from_ptr(pio_module_kind(exported)).to_str().unwrap(),
+                "balanced_network"
+            );
+            pio_module_release(exported);
+            let wrong = pio_module_export_time_point(scenarios, 0, &raw mut error);
+            assert!(wrong.is_null());
+            assert_eq!(
+                CStr::from_ptr(pio_error_code(error)).to_str().unwrap(),
+                "REQUEST.STATE.WRONG_SELECTOR"
+            );
+            pio_error_release(error);
+            pio_module_release(scenarios);
+        }
+    }
+
+    #[test]
+    fn c_state_export_preserves_module_records_and_severs_value_targets() {
+        unsafe {
+            let series = powerio_core::TimeSeries::new(
+                vec![powerio_core::TimePoint::new("h0", None).unwrap()],
+                vec![conformance_network()],
+            )
+            .unwrap();
+            let source =
+                powerio_core::Source::from_bytes("states.pio.json", b"state collection".to_vec())
+                    .unwrap();
+            let buffer = source.primary_buffer().unwrap();
+            let source_id = buffer.id().clone();
+            let source_len = buffer.bytes().len() as u64;
+            let mut module =
+                powerio_core::PioModule::new(powerio::PioValue::BalancedNetworkTimeSeries(series))
+                    .with_producer(powerio_core::Producer::new("c-selection-test", "1").unwrap())
+                    .with_source(source);
+            module
+                .add_source_descriptor(
+                    powerio_core::SourceDescriptor::new(
+                        source_id.clone(),
+                        "states.pio.json",
+                        source_len,
+                    )
+                    .unwrap(),
+                )
+                .unwrap();
+            let span = powerio_core::SourceSpan::new(source_id, 0, 5).unwrap();
+            module
+                .add_source_map_entry(
+                    powerio_core::SourceMapEntry::new(
+                        "/values/0",
+                        powerio_core::SourceRelation::Exact,
+                        vec![span.clone()],
+                    )
+                    .unwrap(),
+                )
+                .unwrap();
+            module
+                .add_diagnostic(
+                    powerio_core::Diagnostic::new(
+                        powerio_core::DiagnosticCode::new("READ.TEST.C_SELECTION").unwrap(),
+                        powerio_core::DiagnosticSeverity::Note,
+                        "kept finding",
+                    )
+                    .with_target("/values/0")
+                    .unwrap()
+                    .with_span(span)
+                    .unwrap(),
+                )
+                .unwrap();
+            module
+                .add_history_entry(
+                    powerio_core::HistoryEntry::new(
+                        powerio_core::HistoryId::new("before-selection").unwrap(),
+                        powerio_core::HistoryKind::Parse,
+                        "parse_states",
+                    )
+                    .unwrap(),
+                )
+                .unwrap();
+            module
+                .insert_extension("org.example.selection", serde_json::json!({"kept": true}))
+                .unwrap();
+            let input = module_handle(module);
+
+            let mut error = std::ptr::null_mut();
+            let exported = pio_module_export_time_point(input, 0, &raw mut error);
+            assert!(error.is_null());
+            assert!(!exported.is_null());
+            let input_module = &PioModule::get(input).unwrap().module;
+            let output = &PioModule::get(exported).unwrap().module;
+            assert_eq!(output.producer().name(), "c-selection-test");
+            assert_eq!(output.sources(), input_module.sources());
+            assert!(output.source_map().is_empty());
+            assert_eq!(output.diagnostics().len(), 1);
+            assert_eq!(output.diagnostics()[0].target(), None);
+            assert_eq!(output.diagnostics()[0].spans().len(), 1);
+            assert_eq!(output.history().len(), 2);
+            assert_eq!(output.history()[0].name(), "parse_states");
+            assert_eq!(output.history()[1].name(), "export_selected_state");
+            assert_eq!(
+                output.extensions().get("org.example.selection"),
+                Some(&serde_json::json!({"kept": true}))
+            );
+            assert!(output.source().is_none());
+            assert!(input_module.source().is_some());
+            assert_eq!(input_module.source_map().len(), 1);
+            assert_eq!(input_module.diagnostics()[0].target(), Some("/values/0"));
+
+            pio_module_release(exported);
+            pio_module_release(input);
+        }
+    }
+
+    #[test]
+    fn c_inspect_does_not_advertise_unbound_multiconductor_state_indexing() {
+        unsafe {
+            let stored =
+                include_str!("../../tests/data/module-v1/mc-operating-point-series.pio.json");
+            let module = module_handle(powerio::stored::read_module(stored).unwrap());
+            let mut error = std::ptr::null_mut();
+            let report_ptr = pio_module_inspect_json(module, &raw mut error);
+            assert!(error.is_null());
+            assert!(!report_ptr.is_null());
+            let report: serde_json::Value =
+                serde_json::from_str(CStr::from_ptr(report_ptr).to_str().unwrap()).unwrap();
+            let operations = report["operations"].as_array().unwrap();
+            assert!(!operations.iter().any(|item| item == "state_inventory"));
+            assert!(!operations.iter().any(|item| item == "export_time_point"));
+            assert!(!operations.iter().any(|item| item == "export_state"));
+            crate::pio_string_release(report_ptr);
+            pio_module_release(module);
+        }
+    }
+
+    #[cfg(feature = "dist")]
+    #[test]
+    fn to_balanced_aliases_preserve_records_and_sever_the_source() {
+        const DSS: &str = r"Clear
+Set DefaultBaseFrequency=60
+New Circuit.tiny basekv=12.47 pu=1.0 phases=3 bus1=src MVAsc3=2000 MVAsc1=2100
+New Transformer.t1 phases=3 windings=2 buses=(src, sec) conns=(delta, wye) kvs=(12.47, 0.416) kvas=(500, 300) %Rs=(0.5, 0.5) xhl=6
+New Load.l1 bus1=sec phases=3 conn=wye kv=0.416 kw=90 pf=0.95 model=1
+Set VoltageBases=[12.47, 0.416]
+";
+        unsafe {
+            let source = powerio_core::Source::from_bytes("feeder.dss", DSS.as_bytes().to_vec())
+                .unwrap()
+                .with_format(powerio_core::FormatId::new("dss").unwrap());
+            let mut module = powerio::parse(source)
+                .unwrap()
+                .with_producer(powerio_core::Producer::new("c-api-test", "1").unwrap());
+            module
+                .add_diagnostic(
+                    powerio_core::Diagnostic::new(
+                        powerio_core::DiagnosticCode::new("READ.TEST.KEPT").unwrap(),
+                        powerio_core::DiagnosticSeverity::Note,
+                        "kept",
+                    )
+                    .with_target("/transformers/0")
+                    .unwrap(),
+                )
+                .unwrap();
+            module
+                .add_history_entry(
+                    powerio_core::HistoryEntry::new(
+                        powerio_core::HistoryId::new("before-transform").unwrap(),
+                        powerio_core::HistoryKind::Parse,
+                        "test_parse",
+                    )
+                    .unwrap(),
+                )
+                .unwrap();
+            module
+                .insert_extension("test.binding", serde_json::json!({"kept": true}))
+                .unwrap();
+            let source_count = module.sources().len();
+            let diagnostic_count = module.diagnostics().len();
+            let history_count = module.history().len();
+            let input = module_handle(module);
+
+            let mut error = std::ptr::null_mut();
+            let old_report = pio_module_lowering_readiness_json(input, 100.0, &raw mut error);
+            assert!(error.is_null());
+            let report = pio_module_to_balanced_report_json(input, 100.0, &raw mut error);
+            assert!(error.is_null());
+            assert_eq!(CStr::from_ptr(old_report), CStr::from_ptr(report));
+            crate::pio_string_release(old_report);
+            crate::pio_string_release(report);
+
+            let output = pio_module_to_balanced(input, 100.0, &raw mut error);
+            assert!(error.is_null());
+            assert!(!output.is_null());
+            let input_inner = PioModule::get(input).unwrap();
+            assert!(input_inner.module.source().is_some());
+            let output_inner = PioModule::get(output).unwrap();
+            assert!(output_inner.module.source().is_none());
+            assert_eq!(output_inner.module.producer().name(), "c-api-test");
+            assert_eq!(output_inner.module.sources().len(), source_count);
+            assert!(output_inner.module.diagnostics().len() >= diagnostic_count);
+            assert_eq!(output_inner.module.history().len(), history_count + 1);
+            assert_eq!(
+                output_inner.module.extensions()["test.binding"],
+                serde_json::json!({"kept": true})
+            );
+            assert!(
+                output_inner
+                    .module
+                    .diagnostics()
+                    .iter()
+                    .all(|record| record.target().is_none())
+            );
+            pio_module_release(output);
+            pio_module_release(input);
         }
     }
 
@@ -1879,15 +2439,67 @@ mod tests {
     }
 
     fn shifted_case_text() -> CString {
-        CString::new(
-            "function mpc = case\n\
-             mpc.version = '2';\n\
-             mpc.baseMVA = 100;\n\
-             mpc.bus = [1 3 0 0 0 0 1 1.0 0 230 1 1.1 0.9; 2 1 30 10 0 0 1 1.0 0 230 1 1.1 0.9; 3 1 20 5 0 0 1 1.0 0 230 1 1.1 0.9;];\n\
-             mpc.gen = [1 40 0 30 -30 1.0 100 1 100 0;];\n\
-             mpc.branch = [1 2 0.01 0.1 0 250 250 250 0 0 1 -30 30; 1 3 0.02 0.2 0 250 250 250 0 10 1 -30 30;];\n",
-        )
-        .unwrap()
+        CString::new(include_str!("../../tests/data/api_conformance.m")).unwrap()
+    }
+
+    #[test]
+    fn dc_branch_names_and_checked_flow_share_the_existing_data() {
+        unsafe {
+            let mut error = std::ptr::null_mut();
+            let matpower = CString::new("matpower").unwrap();
+            let module = pio_parse_str(
+                std::ptr::null(),
+                shifted_case_text().as_ptr(),
+                matpower.as_ptr(),
+                &raw mut error,
+            );
+            assert!(error.is_null());
+            let formula = CString::new("series_susceptance").unwrap();
+            let data = pio_dc_data_build(module, formula.as_ptr(), &raw mut error);
+            assert!(error.is_null());
+            pio_module_release(module);
+
+            assert_eq!(pio_dc_data_n_branches(data), 2);
+            assert_eq!(pio_dc_data_n_branches(data), pio_dc_data_n_rows(data));
+            assert_eq!(pio_dc_data_branch_ids(data), pio_dc_data_row_ids(data));
+            let ids = checked_slice(pio_dc_data_branch_ids(data), pio_dc_data_n_branches(data));
+            assert_eq!(CStr::from_ptr(ids[0]).to_str().unwrap(), "branches:0");
+            assert_eq!(CStr::from_ptr(ids[1]).to_str().unwrap(), "branches:1");
+
+            let va = [0.03_f64, 0.01, -0.02];
+            let mut flow = [0.0_f64; 2];
+            assert!(pio_dc_data_fill_branch_flow_checked(
+                data,
+                va.as_ptr(),
+                va.len(),
+                flow.as_mut_ptr(),
+                flow.len(),
+                &raw mut error,
+            ));
+            assert!(error.is_null());
+            let b = checked_slice(pio_dc_data_susceptance(data), 2);
+            let shift = checked_slice(pio_dc_data_shift(data), 2);
+            assert!((flow[0] - (-b[0] * (va[0] - va[1]) + b[0] * shift[0])).abs() < 1e-12);
+            assert!((flow[1] - (-b[1] * (va[0] - va[2]) + b[1] * shift[1])).abs() < 1e-12);
+
+            let untouched = [41.0_f64, 42.0];
+            let mut refused = untouched;
+            assert!(!pio_dc_data_fill_branch_flow_checked(
+                data,
+                va.as_ptr(),
+                va.len() - 1,
+                refused.as_mut_ptr(),
+                refused.len(),
+                &raw mut error,
+            ));
+            assert_eq!(refused, untouched, "a refused fill must not touch out");
+            assert_eq!(
+                CStr::from_ptr(pio_error_code(error)).to_str().unwrap(),
+                "BIND.CAPI.LENGTH_MISMATCH"
+            );
+            pio_error_release(error);
+            pio_dc_data_release(data);
+        }
     }
 
     /// The complete affine flow: `p_branch = -b (va_from - va_to) + b shift`,
@@ -2276,10 +2888,15 @@ mod tests {
         let symbol_of = |op: &str| match op {
             "inspect" => "pio_module_inspect_json",
             "diagnostics" => "pio_module_diagnostics_json",
+            "emit" => "pio_module_emit_string",
             "write" => "pio_module_write_json",
             "dc_data" => "pio_dc_data_build",
             "state_inventory" => "pio_module_state_inventory_json",
             "export_state" => "pio_module_export_state",
+            "export_time_point" => "pio_module_export_time_point",
+            "export_scenario" => "pio_module_export_scenario",
+            "to_balanced_report" => "pio_module_to_balanced_report_json",
+            "to_balanced" => "pio_module_to_balanced",
             "lowering_readiness" => "pio_module_lowering_readiness_json",
             "lower_to_balanced" => "pio_module_lower_to_balanced",
             other => panic!("operation `{other}` has no symbol mapping"),

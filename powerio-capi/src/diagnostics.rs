@@ -21,6 +21,8 @@ pub mod codes {
             "a string argument is not valid UTF-8", category = Data;
         BIND_CAPI_INDEX_OUT_OF_RANGE = "BIND.CAPI.INDEX_OUT_OF_RANGE", Error,
             "an index argument cannot be converted or is out of range", category = Data;
+        BIND_CAPI_LENGTH_MISMATCH = "BIND.CAPI.LENGTH_MISMATCH", Error,
+            "a caller buffer length does not match the documented dimension", category = Data;
         BIND_CAPI_INTERIOR_NUL = "BIND.CAPI.INTERIOR_NUL", Error,
             "a string powerio produced holds an interior NUL and cannot cross as a C string",
             category = Data;

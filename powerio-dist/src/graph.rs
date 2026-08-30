@@ -84,6 +84,12 @@ impl MulticonductorNetwork {
     /// Project this network into a render ready bus and terminal graph.
     #[must_use]
     pub fn graph(&self) -> DistGraph {
+        self.to_graph()
+    }
+
+    /// Transform this network into a render ready bus and terminal graph.
+    #[must_use]
+    pub fn to_graph(&self) -> DistGraph {
         DistGraph::from_network(self)
     }
 }
@@ -431,7 +437,7 @@ mod tests {
     fn graph_projects_open_switch_fixture() {
         let net =
             crate::testkit::parse_file(fixture("micro/switch.dss"), None).expect("parse switch");
-        let graph = net.graph();
+        let graph = net.to_graph();
 
         let open = edge(&graph, DistGraphEdgeKind::Switch, "sw_open");
         assert!(!open.closed);
@@ -471,7 +477,7 @@ mod tests {
     fn graph_projects_one_edge_per_transformer_winding_pair() {
         let net = crate::testkit::parse_file(fixture("micro/xfmr_center_tap.dss"), None)
             .expect("parse xfmr");
-        let graph = net.graph();
+        let graph = net.to_graph();
         let transformer_edges: Vec<_> = graph
             .edges
             .iter()
@@ -503,7 +509,7 @@ mod tests {
     fn graph_projects_bmopf_fixture() {
         let net = crate::testkit::parse_file(fixture("bmopf/example_ieee13.json"), None)
             .expect("parse bmopf");
-        let graph = net.graph();
+        let graph = net.to_graph();
 
         assert!(graph.buses.len() >= net.buses().len());
         assert!(
@@ -549,7 +555,7 @@ mod tests {
             vec![0.0, 0.0, 0.0],
         ));
 
-        let graph = net.graph();
+        let graph = net.to_graph();
         let b1 = bus(&graph, "b1");
 
         assert_close(b1.load_kw, 1.0);
@@ -586,7 +592,7 @@ mod tests {
             ..MulticonductorNetworkTables::default()
         });
 
-        let graph = net.graph();
+        let graph = net.to_graph();
         let pairs = MAX_WINDING_PAIRS_DIM * (MAX_WINDING_PAIRS_DIM - 1) / 2;
         assert_eq!(graph.edges.len(), pairs);
         // Uncapped this would be n(n-1)/2 edges, three orders of magnitude

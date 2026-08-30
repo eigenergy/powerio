@@ -1,4 +1,71 @@
-from typing import Any, Dict, List, Literal, NamedTuple, Optional, Tuple, TypedDict
+from typing import (
+    Any,
+    Dict,
+    Generic,
+    Iterator,
+    List,
+    Literal,
+    NamedTuple,
+    Optional,
+    Tuple,
+    TypedDict,
+    TypeVar,
+    overload,
+)
+
+_T = TypeVar("_T")
+__all__ = [
+    "AcOpfInstance",
+    "AcOpfSolution",
+    "AcPfInstance",
+    "AcPfSolution",
+    "AcScucInstance",
+    "AcScucSolution",
+    "BalancedNetwork",
+    "Conversion",
+    "DcOpfInstance",
+    "DcOpfSolution",
+    "DcPfInstance",
+    "DcPfSolution",
+    "Diagnostic",
+    "DisplayData",
+    "GridfmRead",
+    "Incidence",
+    "McAcOpfInstance",
+    "McAcOpfSolution",
+    "McAcPfInstance",
+    "McAcPfSolution",
+    "PioModule",
+    "PowerIODataError",
+    "PowerIOError",
+    "PowerIOParseError",
+    "PwdDisplay",
+    "PwdSubstation",
+    "ScenarioSet",
+    "SourceSpan",
+    "TimeSeries",
+    "UnknownValue",
+    "YbusParts",
+    "__version__",
+    "convert_file",
+    "convert_str",
+    "dist",
+    "features",
+    "from_json",
+    "from_ppc",
+    "parse",
+    "parse_display_bytes",
+    "parse_display_file",
+    "parse_file",
+    "parse_geo",
+    "read_gridfm",
+    "read_gridfm_scenarios",
+    "to_format",
+    "to_json",
+    "to_matpower",
+    "versions",
+    "write_gridfm_batch",
+]
 
 __version__: str
 
@@ -177,6 +244,7 @@ class BalancedNetwork:
     def __init__(self, inner: Any) -> None: ...
     name: str
     base_mva: float
+    base_frequency: float
     source_format: Literal[
         "matpower",
         "powermodels-json",
@@ -198,16 +266,27 @@ class BalancedNetwork:
     n_buses: int
     n_branches: int
     n_gens: int
+    n_generators: int
     n_loads: int
     n_shunts: int
+    n_switches: int
+    n_storage: int
+    n_hvdc: int
+    n_transformers_3w: int
+    n_areas: int
     is_radial: bool
     n_connected_components: int
+    n_islands: int
     buses: List[Bus]
     loads: List[Load]
     shunts: List[Shunt]
     branches: List[Branch]
     switches: List[Switch]
     generators: List[Gen]
+    storage: List[Dict[str, Any]]
+    hvdc: List[Dict[str, Any]]
+    transformers_3w: List[Dict[str, Any]]
+    areas: List[Dict[str, Any]]
     def reference_bus_index(self) -> int: ...
     def reference_bus_indices(self) -> List[int]: ...
     def connectivity_report(self) -> Dict[str, Any]: ...
@@ -233,12 +312,25 @@ class BalancedNetwork:
         missing_gen_cost: Optional[str] = ...,
         default_gen_cost: Optional[str] = ...,
         gen_cost_csv: Optional[Any] = ...,
-    ) -> List[str]: ...
+    ) -> List[Diagnostic]: ...
     def bprime(
         self, scheme: Scheme = ..., *, skip_zero_impedance: bool = ...
     ) -> Any: ...
+    def calc_bprime_matrix(
+        self, scheme: Scheme = ..., *, skip_zero_impedance: bool = ...
+    ) -> Any: ...
     def dc_data(self, formula: str = ...) -> Dict[str, Any]: ...
+    def calc_incidence_matrix(self, formula: str = ...) -> Any: ...
+    def calc_bus_susceptance_matrix(self, formula: str = ...) -> Any: ...
+    def calc_branch_susceptance_matrix(self, formula: str = ...) -> Any: ...
+    def calc_phase_shift_injection(self, formula: str = ...) -> Any: ...
+    def calc_branch_flow_dc(
+        self, voltage_angles: Any, formula: str = ...
+    ) -> Any: ...
     def bdoubleprime(
+        self, scheme: Scheme = ..., *, skip_zero_impedance: bool = ...
+    ) -> Any: ...
+    def calc_bdoubleprime_matrix(
         self, scheme: Scheme = ..., *, skip_zero_impedance: bool = ...
     ) -> Any: ...
     def lacpf(
@@ -248,8 +340,23 @@ class BalancedNetwork:
         include_shifts: bool = ...,
         skip_zero_impedance: bool = ...,
     ) -> Any: ...
+    def calc_lacpf_matrix(
+        self,
+        *,
+        include_taps: bool = ...,
+        include_shifts: bool = ...,
+        skip_zero_impedance: bool = ...,
+    ) -> Any: ...
     def adjacency(self) -> Any: ...
+    def calc_adjacency_matrix(self) -> Any: ...
     def ybus_parts(
+        self,
+        *,
+        include_taps: bool = ...,
+        include_shifts: bool = ...,
+        skip_zero_impedance: bool = ...,
+    ) -> YbusParts: ...
+    def calc_admittance_matrix_parts(
         self,
         *,
         include_taps: bool = ...,
@@ -263,12 +370,31 @@ class BalancedNetwork:
         include_shifts: bool = ...,
         skip_zero_impedance: bool = ...,
     ) -> Any: ...
+    def calc_admittance_matrix(
+        self,
+        *,
+        include_taps: bool = ...,
+        include_shifts: bool = ...,
+        skip_zero_impedance: bool = ...,
+    ) -> Any: ...
     def ptdf(self, convention: Convention = ..., solver: SensitivitySolver = ...) -> Any: ...
+    def calc_ptdf(
+        self, convention: Convention = ..., solver: SensitivitySolver = ...
+    ) -> Any: ...
     def lodf(self, convention: Convention = ..., solver: SensitivitySolver = ...) -> Any: ...
+    def calc_lodf(
+        self, convention: Convention = ..., solver: SensitivitySolver = ...
+    ) -> Any: ...
     def weighted_laplacian(
         self, convention: Convention = ..., *, skip_zero_impedance: bool = ...
     ) -> Any: ...
+    def calc_weighted_laplacian(
+        self, convention: Convention = ..., *, skip_zero_impedance: bool = ...
+    ) -> Any: ...
     def incidence(
+        self, convention: Convention = ..., *, skip_zero_impedance: bool = ...
+    ) -> Incidence: ...
+    def calc_incidence_factors(
         self, convention: Convention = ..., *, skip_zero_impedance: bool = ...
     ) -> Incidence: ...
     def write_gridfm(
@@ -307,6 +433,8 @@ class BalancedNetwork:
 class Conversion(NamedTuple):
     text: str
     warnings: List[Diagnostic]
+    @property
+    def diagnostics(self) -> List[Diagnostic]: ...
 
 # Any reader/writer name or alias the Rust hub accepts (e.g. "matpower"/"m",
 # "psse"/"raw"). Kept as `str` so aliases type-check; the binding validates it.
@@ -349,12 +477,21 @@ def to_format(
 def to_matpower(network: BalancedNetwork) -> str: ...
 
 class _TypedValue:
-    module: PioModule
+    module: PioModule[Any]
     kind: str
-    def __init__(self, module: PioModule, kind: str) -> None: ...
+    def __init__(self, module: PioModule[Any], kind: str) -> None: ...
 
-class TimeSeries(_TypedValue): ...
-class ScenarioSet(_TypedValue): ...
+class TimeSeries(_TypedValue):
+    def __len__(self) -> int: ...
+    def __getitem__(self, index: int) -> PioModule[Any]: ...
+    def __iter__(self) -> Iterator[PioModule[Any]]: ...
+
+class ScenarioSet(_TypedValue):
+    def keys(self) -> Tuple[str, ...]: ...
+    def __len__(self) -> int: ...
+    def __iter__(self) -> Iterator[str]: ...
+    def __contains__(self, scenario: object) -> bool: ...
+    def __getitem__(self, scenario: str) -> PioModule[Any]: ...
 class DcPfInstance(_TypedValue): ...
 class AcPfInstance(_TypedValue): ...
 class DcOpfInstance(_TypedValue): ...
@@ -371,11 +508,14 @@ class McAcOpfSolution(_TypedValue): ...
 class AcScucSolution(_TypedValue): ...
 class UnknownValue(_TypedValue): ...
 
-class PioModule:
+class _DiagnosticList(List[Diagnostic]):
+    def __call__(self) -> _DiagnosticList: ...
+
+class PioModule(Generic[_T]):
     _inner: Any
     def __init__(self, inner: Any) -> None: ...
     @classmethod
-    def from_json(cls, text: str) -> PioModule: ...
+    def from_json(cls, text: str) -> PioModule[Any]: ...
     @classmethod
     def from_file(
         cls,
@@ -383,40 +523,106 @@ class PioModule:
         from_: Optional[str] = ...,
         *,
         include_root: Optional[Any] = ...,
-    ) -> PioModule: ...
+    ) -> PioModule[Any]: ...
     @classmethod
-    def from_str(cls, text: str, from_: Optional[str] = ...) -> PioModule: ...
+    def from_str(cls, text: str, from_: Optional[str] = ...) -> PioModule[Any]: ...
     @classmethod
     def from_bytes(
         cls, data: bytes, from_: Optional[str] = ..., *, name: Optional[str] = ...
-    ) -> PioModule: ...
+    ) -> PioModule[Any]: ...
     @property
-    def value(self) -> Any: ...
+    def value(self) -> _T: ...
     def as_balanced_network(self) -> BalancedNetwork: ...
     def as_multiconductor_network(self) -> dist.MulticonductorNetwork: ...
     def to_json(self) -> str: ...
+    def to_format(
+        self,
+        to: Format,
+        missing_gen_cost: Optional[str] = ...,
+        default_gen_cost: Optional[str] = ...,
+        gen_cost_csv: Optional[Any] = ...,
+    ) -> Conversion: ...
+    def write_file(
+        self, path: Any, format: Optional[Format] = ...
+    ) -> List[Diagnostic]: ...
+    @overload
+    def emit(self, format: Format, destination: None = ...) -> Conversion: ...
+    @overload
+    def emit(self, format: Format, destination: Any) -> List[Diagnostic]: ...
     @property
     def kind(self) -> str: ...
     def inspect(self) -> Any: ...
-    def diagnostics(self) -> List[Diagnostic]: ...
+    @property
+    def diagnostics(self) -> _DiagnosticList: ...
     def state_inventory(self) -> Any: ...
     def select_state(
         self, time_position: Optional[int] = ..., scenario: Optional[str] = ...
     ) -> Any: ...
+    def inspect_state(
+        self, time_position: Optional[int] = ..., scenario: Optional[str] = ...
+    ) -> Any: ...
     def export_state(
         self, time_position: Optional[int] = ..., scenario: Optional[str] = ...
-    ) -> PioModule: ...
+    ) -> PioModule[Any]: ...
+    def to_balanced_report(self, base_mva: float = ...) -> Any: ...
     def to_balanced_inspect(self, base_mva: float = ...) -> Any: ...
-    def to_balanced(self, base_mva: float = ...) -> PioModule: ...
+    def to_balanced(self, base_mva: float = ...) -> PioModule[BalancedNetwork]: ...
 
+@overload
 def parse(
     source: Any,
     from_: Optional[Format] = ...,
     *,
     include_root: Optional[Any] = ...,
-    value_type: Optional[type] = ...,
+    value_type: type[PioModule[Any]],
     name: Optional[str] = ...,
-) -> PioModule: ...
+) -> PioModule[Any]: ...
+@overload
+def parse(
+    source: Any,
+    from_: Optional[Format] = ...,
+    *,
+    include_root: Optional[Any] = ...,
+    value_type: type[_T],
+    name: Optional[str] = ...,
+) -> PioModule[_T]: ...
+@overload
+def parse(
+    source: Any,
+    from_: Optional[Format] = ...,
+    *,
+    include_root: Optional[Any] = ...,
+    value_type: None = ...,
+    name: Optional[str] = ...,
+) -> PioModule[Any]: ...
+
+@overload
+def parse_file(
+    path: Any,
+    format: Optional[Format] = ...,
+    *,
+    include_root: Optional[Any] = ...,
+    value_type: type[PioModule[Any]],
+    from_: Optional[Format] = ...,
+) -> PioModule[Any]: ...
+@overload
+def parse_file(
+    path: Any,
+    format: Optional[Format] = ...,
+    *,
+    include_root: Optional[Any] = ...,
+    value_type: type[_T],
+    from_: Optional[Format] = ...,
+) -> PioModule[_T]: ...
+@overload
+def parse_file(
+    path: Any,
+    format: Optional[Format] = ...,
+    *,
+    include_root: Optional[Any] = ...,
+    value_type: None = ...,
+    from_: Optional[Format] = ...,
+) -> PioModule[Any]: ...
 def write_gridfm_batch(
     networks: List[BalancedNetwork],
     out_dir: Any,

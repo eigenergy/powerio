@@ -6,7 +6,9 @@
 //! operating point item is the series' own small handle. Nothing here applies
 //! an update map, serializes through `.pio.json`, or selects a base state
 //! implicitly. Turning a selected item into an independent static module is
-//! the separate explicit [`export_state`] operation.
+//! the separate explicit [`export_state`] operation. When the collection is
+//! already in a module, [`export_module_state`] also carries its common
+//! records through the export.
 
 use powerio_core::{HistoryEntry, HistoryId, HistoryKind, PioModule};
 
@@ -174,6 +176,55 @@ pub fn select_state<'value>(
 /// Everything [`select_state`] refuses, plus an operating point quantity the
 /// static tables cannot carry.
 pub fn export_state(value: &PioValue, selector: StateSelector<'_>) -> Result<PioModule<PioValue>> {
+    let exported = exported_value(value, selector)?;
+    let mut module = PioModule::new(exported);
+    append_selection_history(&mut module, value.kind().as_str(), selector)?;
+    Ok(module)
+}
+
+/// Export one selected item from `module` as an independent static module.
+///
+/// Producer, source descriptors, diagnostics, history, and extensions carry
+/// forward. The retained source is severed because its bytes describe the
+/// collection, not the selected static value. The value kind changes, so
+/// source map entries are cleared and diagnostic targets are severed; their
+/// codes, messages, severities, and source spans remain. A Transform history
+/// entry records the selection.
+///
+/// # Errors
+/// Everything [`export_state`] refuses, or a common record that cannot be
+/// copied or appended under the module record limits.
+pub fn export_module_state(
+    module: &PioModule<PioValue>,
+    selector: StateSelector<'_>,
+) -> Result<PioModule<PioValue>> {
+    let source_kind = module.value().kind().as_str();
+    let exported = exported_value(module.value(), selector)?;
+    let mut out = PioModule::new(exported).with_producer(module.producer().clone());
+    for descriptor in module.sources() {
+        out.add_source_descriptor(descriptor.clone())?;
+    }
+    for entry in module.source_map() {
+        out.add_source_map_entry(entry.clone())?;
+    }
+    for diagnostic in module.diagnostics() {
+        out.add_diagnostic(diagnostic.clone())?;
+    }
+    for entry in module.history() {
+        out.add_history_entry(entry.clone())?;
+    }
+    for (namespace, value) in module.extensions() {
+        out.insert_extension(namespace.clone(), value.clone())?;
+    }
+    // Do not copy `module.source()`: the retained bytes describe the
+    // collection. The selected value has a different kind, so no RFC 6901
+    // target into the old value remains valid.
+    out.sever_value_targets();
+    append_selection_history(&mut out, source_kind, selector)?;
+    Ok(out)
+}
+
+fn exported_value(value: &PioValue, selector: StateSelector<'_>) -> Result<PioValue> {
     let network = match select_state(value, selector)? {
         SelectedState::BalancedNetwork(network) => network.clone(),
         SelectedState::BalancedOperatingPoint(point) => point.materialize_network()?,
@@ -186,17 +237,45 @@ pub fn export_state(value: &PioValue, selector: StateSelector<'_>) -> Result<Pio
             ));
         }
     };
-    let mut module = PioModule::new(PioValue::BalancedNetwork(network));
-    let entry = HistoryId::new("export-selected-state")
-        .and_then(|id| HistoryEntry::new(id, HistoryKind::Transform, "export_selected_state"))
-        .and_then(|entry| {
-            entry.with_assumption(format!(
-                "static export of {selector} from a {} value",
-                value.kind().as_str()
-            ))
-        })?;
+    Ok(PioValue::BalancedNetwork(network))
+}
+
+fn append_selection_history(
+    module: &mut PioModule<PioValue>,
+    source_kind: &str,
+    selector: StateSelector<'_>,
+) -> Result<()> {
+    let entry = HistoryEntry::new(
+        unused_history_id(module, "export-selected-state"),
+        HistoryKind::Transform,
+        "export_selected_state",
+    )
+    .and_then(|entry| {
+        entry.with_assumption(format!(
+            "static export of {selector} from a {source_kind} value"
+        ))
+    })?;
     module.add_history_entry(entry)?;
-    Ok(module)
+    Ok(())
+}
+
+fn unused_history_id(module: &PioModule<PioValue>, base: &str) -> HistoryId {
+    let taken: std::collections::BTreeSet<&str> = module
+        .history()
+        .iter()
+        .map(|entry| entry.id().as_str())
+        .collect();
+    if !taken.contains(base) {
+        return HistoryId::new(base).expect("static history ID is valid");
+    }
+    let mut counter = 2usize;
+    loop {
+        let candidate = format!("{base}-{counter}");
+        if !taken.contains(candidate.as_str()) {
+            return HistoryId::new(candidate).expect("numbered history ID is valid");
+        }
+        counter += 1;
+    }
 }
 
 fn time_entries(points: &[powerio_core::TimePoint]) -> Vec<TimePointEntry> {
