@@ -209,8 +209,8 @@ fn unknown_format(format: &str) -> Error {
 /// writer's findings.
 ///
 /// # Errors
-/// [`codes::REQUEST_WRITE_UNKNOWN_FORMAT`] for a format name nothing
-/// recognizes, [`codes::REQUEST_WRITE_UNSUPPORTED_VALUE_KIND`] for a kind the
+/// `REQUEST.WRITE.UNKNOWN_FORMAT` for a format name nothing recognizes,
+/// `REQUEST.WRITE.UNSUPPORTED_VALUE_KIND` for a kind the
 /// named format cannot state, and the family writer's own failure otherwise.
 ///
 /// # Panics
