@@ -22,7 +22,7 @@ pub enum DiagnosticSeverity {
     Error,
     /// The operation could not complete. An error is a diagnostic that ended
     /// the operation, and it is the one severity that also carries a
-    /// [`crate::ErrorCategory`].
+    /// [`powerio_tx::ErrorCategory`].
     Fatal,
 }
 

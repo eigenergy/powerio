@@ -49,7 +49,14 @@ The document carries `producer`, the typed `value` (`kind` and `data`, over the 
 
 A version 1 source descriptor carries `{id, name, byte_length, format?, digest?}` — the `name` is a file name, never a local path (the 0.9 package table below has a different, older shape). The generated JSON Schema for the version 1 document is served at `https://powerio.dev/schema/pio-module/1/schema.json`; the `$id` names that location.
 
-Spans, source digests, and `source_map` entries are reserved fields the version 1 document validates when present, but 1.0 producers do not yet emit any of the three; the reader and the decoder handle them end to end so an upgraded or hand written document with real values loads correctly. Diagnostic ids are assigned at write time (`d0`, `d1`, ...) for any record that reaches the writer without one, so a parse then write round trip is not identity on ids.
+Every parsed 1.0 module emits a coarse `source_map` entry from the root of
+`value.data` (the empty RFC 6901 pointer) to the
+complete span of each acquired source buffer. A parser or transformation can
+add field precise entries beside it. Source digests remain optional; the reader
+and decoder validate digests, spans, and source maps end to end when present.
+Diagnostic ids are assigned at write time (`d0`, `d1`, ...) for any record that
+reaches the writer without one, so a parse then write round trip is not identity
+on ids.
 
 ## The 0.9 package and its versioning {#pio-package}
 
@@ -238,10 +245,10 @@ reader refuses a nonempty study with that instruction.
 
 ## Derived metadata
 
-`derived.normalized_solver_tables` records the compact identity metadata for
-`powerio::BalancedNetwork::to_normalized_solver_tables()` without embedding every table
-row in the document. The full tables are a derived artifact; this metadata lets a
-compiler cache prove it was built from the same lowering pass and row order.
+`derived.normalized_solver_tables` records compact identity metadata produced
+by the frozen 0.9 upgrade reader. The dense solver rows are not part of the
+1.0 public surface. The metadata lets an older compiler cache prove that its
+derived artifact used the same lowering pass and row order.
 
 The block carries:
 

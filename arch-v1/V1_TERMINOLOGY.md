@@ -137,8 +137,9 @@ required for binding discovery belong in `PioValue`. Other `PioModule<T>` and
 container compositions remain ordinary typed Rust values but cannot cross the
 automatic parse, `.pio.json`, C, Python, Julia, or MCP boundary until PowerIO
 adds a variant, stored DTO, and binding tests. The automatic parser returns
-`PioModule<PioValue>`. `powerio::try_into_typed::<T>(module)` checks the variant
-and moves it into `PioModule<T>` without a copy. The facade's sealed
+`PioModule<PioValue>`. Ordinary Rust matches `module.value()`. Generic code
+that needs an owned concrete module calls `module.into_typed::<T>()`, which
+checks the variant and moves it into `PioModule<T>` without a copy. The facade's sealed
 `FromPioValue` trait performs that conversion for built in values. It is a
 behavioral registry, not a bound on `PioModule<T>`; downstream crates cannot
 add a dynamic kind without the matching schema and bindings. A

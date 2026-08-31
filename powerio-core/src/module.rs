@@ -6,7 +6,7 @@ use serde_json::Value;
 use crate::validation::valid_nonempty_text;
 use crate::{
     Diagnostic, DiagnosticId, Error, HistoryEntry, HistoryId, Producer, Source, SourceDescriptor,
-    SourceId, SourceMapEntry, SourceSpan,
+    SourceId, SourceMapEntry, SourceRelation, SourceSpan,
 };
 
 #[derive(Debug)]
@@ -378,13 +378,16 @@ impl<T> PioModule<T> {
     }
 
     /// Assemble the module a parser returns: the typed value, one descriptor
-    /// per acquired buffer of the retained source, and the reader's findings.
+    /// per acquired buffer of the retained source, a coarse root source map,
+    /// and the reader's findings.
     ///
     /// # Errors
-    /// A duplicate acquired buffer identity, an invalid buffer name, or a
-    /// finding that fails the record checks of [`PioModule::add_diagnostic`].
+    /// A duplicate acquired buffer identity, an invalid buffer name or span,
+    /// or a finding that fails the record checks of
+    /// [`PioModule::add_diagnostic`].
     pub fn parsed(value: T, source: Source, diagnostics: Vec<Diagnostic>) -> Result<Self, Error> {
         let mut module = Self::new(value);
+        let mut root_spans = Vec::new();
         for buffer in source.acquired_buffers() {
             // The stored descriptor names the file, never the local path,
             // and carries the resolved format so a same format write can
@@ -399,6 +402,24 @@ impl<T> PioModule<T> {
                 descriptor = descriptor.with_format(format.clone());
             }
             module.add_source_descriptor(descriptor)?;
+            root_spans.push(SourceSpan::new(
+                buffer.id().clone(),
+                0,
+                buffer.bytes().len() as u64,
+            )?);
+        }
+        // Parsers can add field precise mappings later. The root mapping is
+        // the minimum durable connection between the typed value and every
+        // buffer that produced it, so a module handed to another process does
+        // not retain source descriptors with no corresponding value target.
+        // Chunk it because one source map entry has a bounded span list while
+        // a directory source can acquire more files than that bound.
+        for spans in root_spans.chunks(crate::validation::MAX_SOURCE_MAP_SPANS) {
+            module.add_source_map_entry(SourceMapEntry::new(
+                "",
+                SourceRelation::Aggregated,
+                spans.to_vec(),
+            )?)?;
         }
         let mut module = module.with_source(source);
         for record in diagnostics {
@@ -539,6 +560,19 @@ mod tests {
             .expect_err("conversion fails");
         assert_eq!(recovered.value(), "value");
         assert_eq!(recovered.diagnostics().as_ptr(), diagnostics_pointer);
+    }
+
+    #[test]
+    fn parsed_module_maps_the_value_to_its_source() {
+        let source = Source::from_bytes("case.m", b"source".as_slice()).unwrap();
+        let module = PioModule::parsed(1_u8, source, Vec::new()).unwrap();
+        assert_eq!(module.source_map().len(), 1);
+        let entry = &module.source_map()[0];
+        assert_eq!(entry.target(), "");
+        assert_eq!(entry.relation(), SourceRelation::Aggregated);
+        assert_eq!(entry.spans().len(), 1);
+        assert_eq!(entry.spans()[0].byte_start(), 0);
+        assert_eq!(entry.spans()[0].byte_end(), 6);
     }
 
     #[test]

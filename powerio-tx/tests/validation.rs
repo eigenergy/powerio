@@ -6,8 +6,8 @@ use helpers::*;
 
 use std::path::Path;
 
+use powerio_tx::Error;
 use powerio_tx::network::{BalancedNetwork, Branch, Bus, BusId, BusType};
-use powerio_tx::{Error, write_powerworld};
 
 fn bus(id: usize, kind: BusType) -> Bus {
     Bus::new(BusId(id), kind, 1.0)
@@ -102,7 +102,7 @@ fn powerworld_rejects_malformed_numeric_field() {
         vec![bus(1, BusType::Ref), bus(2, BusType::Pq)],
         vec![br],
     );
-    let good = write_powerworld(&net).text;
+    let good = emit_powerworld(&net).text;
     assert!(
         parse_powerworld(&good).is_ok(),
         "pristine .aux should parse"
@@ -279,9 +279,9 @@ fn case9_with_gencost_removed_reports_the_zero_objective_at_normalize() {
     // The parse stays silent — a conversion leg must not count a property of
     // the case — and the solver-ready copy announces the zero objective.
     assert!(
-        parsed.rendered_diagnostics().is_empty(),
+        parsed.render_diagnostics().is_empty(),
         "{:?}",
-        parsed.rendered_diagnostics()
+        parsed.render_diagnostics()
     );
     let normalized = parsed
         .network

@@ -405,9 +405,9 @@ fn zero_padded_capability_columns_are_declared() {
     net.generators_mut().push(stated);
     net.generators_mut().push(Generator::new(BusId(2)));
 
-    let warnings = crate::format::write_conversion(&net, crate::format::TargetFormat::Matpower)
+    let warnings = crate::format::emit_value_text(&net, crate::format::TargetFormat::Matpower)
         .unwrap()
-        .rendered_diagnostics();
+        .render_diagnostics();
     assert!(
         warnings.iter().any(|w| w.contains("columns 11-21")),
         "the zero padding must be declared: {warnings:?}"
@@ -417,9 +417,9 @@ fn zero_padded_capability_columns_are_declared() {
     // says nothing.
     let mut plain = net.clone();
     plain.generators_mut()[0].caps = [None; 11];
-    let warnings = crate::format::write_conversion(&plain, crate::format::TargetFormat::Matpower)
+    let warnings = crate::format::emit_value_text(&plain, crate::format::TargetFormat::Matpower)
         .unwrap()
-        .rendered_diagnostics();
+        .render_diagnostics();
     assert!(
         !warnings.iter().any(|w| w.contains("columns 11-21")),
         "nothing to disclose when no generator states caps: {warnings:?}"
@@ -445,7 +445,7 @@ fn an_out_of_service_load_does_not_become_live_demand() {
         .push(crate::network::Load::new(BusId(2), 10.0, 5.0));
 
     let conversion =
-        crate::format::write_conversion(&net, crate::format::TargetFormat::Matpower).unwrap();
+        crate::format::emit_value_text(&net, crate::format::TargetFormat::Matpower).unwrap();
     let back = parse_mpc(&conversion.text).unwrap();
     let demand: f64 = back.loads().iter().map(|l| l.p).sum();
     assert!(
@@ -454,11 +454,11 @@ fn an_out_of_service_load_does_not_become_live_demand() {
     );
     assert!(
         conversion
-            .rendered_diagnostics()
+            .render_diagnostics()
             .iter()
             .any(|w| w.contains("out of service load(s) dropped")),
         "the dropped demand must be named: {:?}",
-        conversion.rendered_diagnostics()
+        conversion.render_diagnostics()
     );
 }
 
@@ -493,13 +493,13 @@ fn an_area_name_or_interchange_is_a_declared_drop() {
     });
 
     let conversion =
-        crate::format::write_conversion(&net, crate::format::TargetFormat::Matpower).unwrap();
+        crate::format::emit_value_text(&net, crate::format::TargetFormat::Matpower).unwrap();
     assert!(
         conversion
-            .rendered_diagnostics()
+            .render_diagnostics()
             .iter()
             .any(|w| w.contains("area record(s) carry a name or interchange data")),
         "the fields mpc.areas cannot hold must be declared: {:?}",
-        conversion.rendered_diagnostics()
+        conversion.render_diagnostics()
     );
 }

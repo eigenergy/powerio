@@ -26,7 +26,7 @@ fn invalid(message: impl Into<String>) -> powerio_core::Error {
 }
 
 /// The balanced instantaneous quantity vocabulary is
-/// [`powerio_prob::BALANCED_STATE_QUANTITIES`]: the set the writer emits is
+/// [`powerio_prob::BALANCED_STATE_QUANTITIES`]: the set emitted is
 /// exactly the set the reader accepts, from one definition.
 use powerio_prob::BALANCED_STATE_QUANTITIES;
 
@@ -34,7 +34,7 @@ use powerio_prob::BALANCED_STATE_QUANTITIES;
 ///
 /// # Errors
 /// A value whose stored form cannot be produced, or a serialization failure.
-pub fn write_module(module: &PioModule<PioValue>) -> Result<String> {
+pub fn emit_module(module: &PioModule<PioValue>) -> Result<String> {
     let stored = StoredModuleV1 {
         schema: dto::SCHEMA_NAME.to_string(),
         version: dto::SCHEMA_VERSION,
@@ -188,22 +188,22 @@ const MULTICONDUCTOR_QUANTITIES: [&str; 7] = [
 
 /// The stable cross language DC formula names, spelled locally because this
 /// branch precedes the shared helper.
-fn dc_formula_name(convention: crate::DcConvention) -> Result<&'static str> {
-    Ok(match convention {
-        crate::DcConvention::TapAdjustedReactance => "tap_adjusted_reactance",
-        crate::DcConvention::ReactanceOnly => "reactance_only",
-        crate::DcConvention::SeriesSusceptance => "series_susceptance",
+fn dc_formula_name(formula: crate::BranchSusceptanceFormula) -> Result<&'static str> {
+    Ok(match formula {
+        crate::BranchSusceptanceFormula::TapAdjustedReactance => "tap_adjusted_reactance",
+        crate::BranchSusceptanceFormula::ReactanceOnly => "reactance_only",
+        crate::BranchSusceptanceFormula::SeriesSusceptance => "series_susceptance",
         // The runtime enum is non_exhaustive for additive growth; a new
-        // convention must gain a stored spelling before it can be written.
-        _ => return Err(invalid("unmapped DC convention")),
+        // formula must gain a stored spelling before it can be written.
+        _ => return Err(invalid("unmapped branch susceptance formula")),
     })
 }
 
-fn dc_formula_from_name(name: &str) -> Result<crate::DcConvention> {
+fn dc_formula_from_name(name: &str) -> Result<crate::BranchSusceptanceFormula> {
     match name {
-        "series_susceptance" => Ok(crate::DcConvention::SeriesSusceptance),
-        "tap_adjusted_reactance" => Ok(crate::DcConvention::TapAdjustedReactance),
-        "reactance_only" => Ok(crate::DcConvention::ReactanceOnly),
+        "series_susceptance" => Ok(crate::BranchSusceptanceFormula::SeriesSusceptance),
+        "tap_adjusted_reactance" => Ok(crate::BranchSusceptanceFormula::TapAdjustedReactance),
+        "reactance_only" => Ok(crate::BranchSusceptanceFormula::ReactanceOnly),
         other => Err(invalid(format!(
             "unknown branch susceptance formula `{other}`"
         ))),
@@ -360,7 +360,7 @@ fn encode_mc_operating_points(
 fn encode_dc_pf_instance(instance: &powerio_prob::DcPfInstance) -> Result<dto::DcPfInstanceV1> {
     Ok(dto::DcPfInstanceV1 {
         network: Box::new(instance.network().clone()),
-        approximation: dc_formula_name(instance.approximation())?.to_string(),
+        approximation: dc_formula_name(instance.branch_susceptance_formula())?.to_string(),
         initial_state: instance
             .initial_state()
             .map(|point| encode_point(point, &BALANCED_STATE_QUANTITIES)),
@@ -379,7 +379,7 @@ fn encode_ac_pf_instance(instance: &powerio_prob::AcPfInstance) -> dto::AcPfInst
 fn encode_dc_opf_instance(instance: &powerio_prob::DcOpfInstance) -> Result<dto::DcOpfInstanceV1> {
     Ok(dto::DcOpfInstanceV1 {
         network: Box::new(instance.network().clone()),
-        approximation: dc_formula_name(instance.approximation())?.to_string(),
+        approximation: dc_formula_name(instance.branch_susceptance_formula())?.to_string(),
         objective: encode_objective(instance.objective())?,
         constraints: instance.constraints().clone(),
         initial_state: instance
@@ -832,7 +832,7 @@ fn decode_stored(stored: StoredModuleV1) -> Result<PioModule<PioValue>> {
         module
             .add_diagnostic(Diagnostic::of(
                 &codes::READ_MODULE_OBJECTIVE_TERM_RETIRED,
-                "the stored objective contains retired `differentiability_regularization`; this reader removes that solver setting from the decoded objective",
+                "PowerIO 0.10 stored `differentiability_regularization` in the portable objective; 1.0 removes that solver setting from the decoded objective",
             ))
             .map_err(|error| invalid(error.to_string()))?;
     }
@@ -840,7 +840,7 @@ fn decode_stored(stored: StoredModuleV1) -> Result<PioModule<PioValue>> {
         module
             .add_diagnostic(Diagnostic::of(
                 &codes::READ_MODULE_BRANCH_DUAL_SPLIT,
-                "the retired `branch_flow_dual` field stores one signed branch dual; this reader maps positive values to the from bound and negative values to the to bound. At a zero or unlimited rating the original two multipliers are not uniquely recoverable",
+                "PowerIO 0.10 stored one signed branch dual; 1.0 maps positive values to the from bound and negative values to the to bound. At a zero or unlimited rating the original two multipliers are not uniquely recoverable",
             ))
             .map_err(|error| invalid(error.to_string()))?;
     }
@@ -1120,7 +1120,7 @@ fn decode_value(value: StoredValueV1) -> Result<PioValue> {
                 (None, None) => {}
                 (Some(_), Some(_)) => {
                     return Err(invalid(
-                        "both `bus_price` and `bus_active_power_marginal` are present",
+                        "bus active power marginal appears under both its 0.10 and 1.0 names",
                     ));
                 }
             }
@@ -1193,7 +1193,7 @@ fn decode_value(value: StoredValueV1) -> Result<PioValue> {
                 (None, None) => {}
                 (Some(_), Some(_)) => {
                     return Err(invalid(
-                        "both `bus_active_price` and `bus_active_power_marginal` are present",
+                        "bus active power marginal appears under both its 0.10 and 1.0 names",
                     ));
                 }
             }
@@ -1209,7 +1209,7 @@ fn decode_value(value: StoredValueV1) -> Result<PioValue> {
                 (None, None) => {}
                 (Some(_), Some(_)) => {
                     return Err(invalid(
-                        "both `bus_reactive_price` and `bus_reactive_power_marginal` are present",
+                        "bus reactive power marginal appears under both its 0.10 and 1.0 names",
                     ));
                 }
             }
@@ -1375,7 +1375,7 @@ fn decode_dc_pf_instance(instance: dto::DcPfInstanceV1) -> Result<powerio_prob::
     let network = *instance.network;
     let mut decoded = powerio_prob::DcPfInstance::from_network(network)
         .map_err(|error| invalid(error.to_string()))?
-        .with_approximation(dc_formula_from_name(&instance.approximation)?);
+        .with_branch_susceptance_formula(dc_formula_from_name(&instance.approximation)?);
     if let Some(stored) = instance.initial_state {
         let point = decode_balanced_point(decoded.network(), stored)?;
         decoded = decoded.with_initial_state(point);
@@ -1396,7 +1396,7 @@ fn decode_ac_pf_instance(instance: dto::AcPfInstanceV1) -> Result<powerio_prob::
 fn decode_dc_opf_instance(instance: dto::DcOpfInstanceV1) -> Result<powerio_prob::DcOpfInstance> {
     let mut decoded = powerio_prob::DcOpfInstance::from_network(*instance.network)
         .map_err(|error| invalid(error.to_string()))?
-        .with_approximation(dc_formula_from_name(&instance.approximation)?)
+        .with_branch_susceptance_formula(dc_formula_from_name(&instance.approximation)?)
         .with_objective(decode_objective(instance.objective))
         .with_constraints(instance.constraints);
     if let Some(stored) = instance.initial_state {

@@ -1,21 +1,21 @@
-# powerio
+# powerio-tx
 
-`powerio` parses power system case files into a typed `Network`. Readers retain
-source text where supported, so writing back to the same format can return the
-original bytes. Cross format conversion passes through the format neutral
-network model and reports fields the target cannot represent.
+`powerio-tx` owns the balanced transmission model and its format parsers. A
+successful parse returns `PioModule<BalancedNetwork>`, retaining source bytes
+and structured diagnostics. The top level `powerio` facade adds universal
+format dispatch, dynamic values, stored modules, and `emit`.
 
-Read and write support covers MATPOWER, PSS/E, PowerWorld AUX, PSLF,
+Format support covers MATPOWER, PSS/E, PowerWorld AUX, PSLF,
 PowerModels JSON, egret JSON, pandapower JSON, PyPSA CSV folders, and Surge
 JSON. GOC3 JSON and PowerWorld PWB are read only inputs.
 
 ```rust
-use powerio::{TargetFormat, parse_file};
+use powerio_core::Source;
+use powerio_tx::parse;
 
-let parsed = parse_file("case14.m", None)?;
-let net = parsed.network;
-let converted = net.to_format(TargetFormat::PowerModelsJson)?;
-std::fs::write("case14.json", converted.text)?;
+let module = parse(Source::open("case14.m")?)?;
+let net = module.value();
+assert_eq!(net.buses().len(), 14);
 ```
 
 The [workspace README](https://github.com/eigenergy/powerio) lists the CLI,

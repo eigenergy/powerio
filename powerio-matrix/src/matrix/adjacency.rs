@@ -10,8 +10,8 @@ use crate::Result;
 use crate::indexed::IndexedNetwork;
 use crate::matrix::triplet::CooBuilder;
 
-/// Build the `n × n` 0/1 adjacency matrix.
-pub fn build_adjacency(case: &IndexedNetwork) -> Result<CsMat<f64>> {
+/// Calculate the `n × n` 0/1 adjacency matrix.
+pub fn calc_adjacency_matrix(case: &IndexedNetwork) -> Result<CsMat<f64>> {
     let n = case.n();
     let mut edges: HashSet<(usize, usize)> = HashSet::new();
     for (idx, br) in case.in_service_branches() {

@@ -490,7 +490,7 @@ impl BalancedNetwork {
             to: other_end(s2, m),
             r: s1.r + s2.r,
             x: s1.x + s2.x,
-            b: s1.total_charging_b() + s2.total_charging_b(),
+            b: s1.calc_total_charging_b() + s2.calc_total_charging_b(),
             charging: None,
             rate_a: combine_rate(s1.rate_a, s2.rate_a),
             rate_b: combine_rate(s1.rate_b, s2.rate_b),

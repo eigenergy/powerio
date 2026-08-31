@@ -25,8 +25,8 @@ result.diagnostics
 There is no implicit conversion between the multiconductor and balanced models. The balanced positive sequence equivalent is an explicit transformation that states its assumptions (voltage bases per zone, phase aggregation, switch merging) and refuses what it cannot state:
 
 ```julia
-report = to_balanced_report(feeder)         # the losses, before transforming
+report = to_balanced_report(feeder)         # ready plus assumptions, losses, and diagnostics
 balanced = to_balanced(feeder)              # PioModule{BalancedNetwork}
 ```
 
-Multiconductor admittance matrices build directly from the multiconductor network, without this transformation, through `powerio_matrix::build_multiconductor_admittance`. This entry point is Rust only in 1.0: there is no C ABI entry point yet, so no Python or Julia binding exists either.
+Multiconductor admittance matrices build directly from the multiconductor network, without this transformation, through `powerio_matrix::calc_multiconductor_admittance_matrix`. This entry point is Rust only in 1.0: there is no C ABI entry point yet, so no Python or Julia binding exists either.

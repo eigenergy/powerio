@@ -747,6 +747,7 @@ dependencies = [
  "powerio-core",
  "powerio-dist",
  "powerio-matrix",
+ "powerio-tx",
 ]
 
 [[package]]

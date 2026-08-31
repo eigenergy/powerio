@@ -60,10 +60,10 @@ pub struct AcBusData {
     /// Nodal reactive demand in the selected power unit.
     pub q_d: Vec<f64>,
     /// Nodal shunt conductance in the selected admittance unit. Includes the
-    /// folded pi model stamp of any self-loop branch, matching `build_ybus`.
+    /// folded pi model stamp of any self-loop branch, matching `calc_admittance_matrix`.
     pub g_s: Vec<f64>,
     /// Nodal shunt susceptance in the selected admittance unit. Includes the
-    /// folded pi model stamp of any self-loop branch, matching `build_ybus`.
+    /// folded pi model stamp of any self-loop branch, matching `calc_admittance_matrix`.
     pub b_s: Vec<f64>,
     /// Voltage magnitude lower bound, per unit.
     pub vm_min: Vec<f64>,
@@ -157,7 +157,7 @@ pub struct AcGeneratorData {
 }
 
 /// Generator data in dense bus order, aggregated over the generators at each
-/// bus. See [`AcOpfPreparation::nodal_generator_data`].
+/// bus. See [`AcOpfPreparation::calc_nodal_generator_data`].
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[non_exhaustive]
 pub struct NodalAcGeneratorData {
@@ -232,7 +232,7 @@ impl AcOpfPreparation {
     /// with generator space only while the split stays inside the bound of
     /// each generator. A bus with one generator keeps that generator's own
     /// coefficients.
-    pub fn nodal_generator_data(&self) -> Result<NodalAcGeneratorData> {
+    pub fn calc_nodal_generator_data(&self) -> Result<NodalAcGeneratorData> {
         let n = self.n_buses;
         let generators = &self.generators;
         if let Some(gen_index) = generators.piecewise_linear.iter().position(Option::is_some) {
@@ -260,7 +260,7 @@ impl AcOpfPreparation {
     /// The result is not clamped to `[vm_min, vm_max]`; feasibility repair is
     /// solver preparation and stays downstream.
     #[must_use]
-    pub fn vm_setpoints(&self) -> Vec<f64> {
+    pub fn calc_vm_setpoints(&self) -> Vec<f64> {
         let mut vm: Vec<f64> = self
             .buses
             .vm
@@ -431,22 +431,22 @@ fn preparation_from_view(
         ) else {
             continue;
         };
-        let Some((series_g, series_b)) = branch.series_admittance(source_row)? else {
+        let Some((series_g, series_b)) = branch.calc_series_admittance(source_row)? else {
             if options.skip_zero_impedance {
                 skipped_zero_impedance.push(source_row);
                 continue;
             }
             return Err(powerio_tx::Error::ZeroImpedance { row: source_row }.into());
         };
-        let charging = branch.terminal_charging();
+        let charging = branch.calc_terminal_charging();
         if from == to {
             // A self-loop is not a flow element; its whole pi model stamp
-            // lands on the bus diagonal, exactly as `build_ybus` folds it.
+            // lands on the bus diagonal, exactly as `calc_admittance_matrix` folds it.
             // With t = tap·e^{jθ}: Yff + Yft + Ytf + Ytt
             //   = (y + y_fr)/tap² + (y + y_to) − y·2cos(θ)/tap.
-            let tap = branch.divisible_tap(source_row)?;
+            let tap = branch.calc_divisible_tap(source_row)?;
             let tap_squared = tap * tap;
-            let cross = 2.0 * case.angle_radians(branch.shift).cos() / tap;
+            let cross = 2.0 * case.to_radians(branch.shift).cos() / tap;
             g_s[from] += ((series_g + charging.g_fr) / tap_squared + (series_g + charging.g_to)
                 - series_g * cross)
                 * y_scale;
@@ -468,10 +468,10 @@ fn preparation_from_view(
         b_fr.push(charging.b_fr * y_scale);
         g_to.push(charging.g_to * y_scale);
         b_to.push(charging.b_to * y_scale);
-        let amin = case.angle_radians(branch.angmin);
-        let amax = case.angle_radians(branch.angmax);
-        tap.push(branch.divisible_tap(source_row)?);
-        shift.push(case.angle_radians(branch.shift));
+        let amin = case.to_radians(branch.angmin);
+        let amax = case.to_radians(branch.angmax);
+        tap.push(branch.calc_divisible_tap(source_row)?);
+        shift.push(case.to_radians(branch.shift));
         s_max.push(thermal.of(
             branch,
             amin,

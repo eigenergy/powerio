@@ -23,18 +23,67 @@ DATA = ROOT / "tests" / "data"
 # The on-disk schema, byte-for-byte from gridfm-datakit's column_names.py. Same
 # lists the Rust round-trip test asserts.
 BUS_COLS = [
-    "scenario", "load_scenario_idx", "bus", "Pd", "Qd", "Pg", "Qg", "Vm", "Va",
-    "PQ", "PV", "REF", "vn_kv", "min_vm_pu", "max_vm_pu", "GS", "BS",
+    "scenario",
+    "load_scenario_idx",
+    "bus",
+    "Pd",
+    "Qd",
+    "Pg",
+    "Qg",
+    "Vm",
+    "Va",
+    "PQ",
+    "PV",
+    "REF",
+    "vn_kv",
+    "min_vm_pu",
+    "max_vm_pu",
+    "GS",
+    "BS",
 ]
 GEN_COLS = [
-    "scenario", "load_scenario_idx", "idx", "bus", "p_mw", "q_mvar", "min_p_mw",
-    "max_p_mw", "min_q_mvar", "max_q_mvar", "cp0_eur", "cp1_eur_per_mw",
-    "cp2_eur_per_mw2", "in_service", "is_slack_gen",
+    "scenario",
+    "load_scenario_idx",
+    "idx",
+    "bus",
+    "p_mw",
+    "q_mvar",
+    "min_p_mw",
+    "max_p_mw",
+    "min_q_mvar",
+    "max_q_mvar",
+    "cp0_eur",
+    "cp1_eur_per_mw",
+    "cp2_eur_per_mw2",
+    "in_service",
+    "is_slack_gen",
 ]
 BRANCH_COLS = [
-    "scenario", "load_scenario_idx", "idx", "from_bus", "to_bus", "pf", "qf",
-    "pt", "qt", "r", "x", "b", "Yff_r", "Yff_i", "Yft_r", "Yft_i", "Ytf_r",
-    "Ytf_i", "Ytt_r", "Ytt_i", "tap", "shift", "ang_min", "ang_max", "rate_a",
+    "scenario",
+    "load_scenario_idx",
+    "idx",
+    "from_bus",
+    "to_bus",
+    "pf",
+    "qf",
+    "pt",
+    "qt",
+    "r",
+    "x",
+    "b",
+    "Yff_r",
+    "Yff_i",
+    "Yft_r",
+    "Yft_i",
+    "Ytf_r",
+    "Ytf_i",
+    "Ytt_r",
+    "Ytt_i",
+    "tap",
+    "shift",
+    "ang_min",
+    "ang_max",
+    "rate_a",
     "br_status",
 ]
 YBUS_COLS = ["scenario", "load_scenario_idx", "index1", "index2", "G", "B"]
@@ -105,18 +154,55 @@ def test_satisfies_graphkit_feature_requirements(case14_raw):
 
     # Columns graphkit reads straight off bus_data (it derives min/max_q_mvar
     # itself, below).
-    bus_direct = ["Pd", "Qd", "Qg", "Vm", "Va", "PQ", "PV", "REF",
-                  "min_vm_pu", "max_vm_pu", "GS", "BS", "vn_kv"]
+    bus_direct = [
+        "Pd",
+        "Qd",
+        "Qg",
+        "Vm",
+        "Va",
+        "PQ",
+        "PV",
+        "REF",
+        "min_vm_pu",
+        "max_vm_pu",
+        "GS",
+        "BS",
+        "vn_kv",
+    ]
     assert set(bus_direct) <= set(bus.columns)
 
-    gen_feats = ["p_mw", "min_p_mw", "max_p_mw", "cp0_eur", "cp1_eur_per_mw",
-                 "cp2_eur_per_mw2", "in_service"]
+    gen_feats = [
+        "p_mw",
+        "min_p_mw",
+        "max_p_mw",
+        "cp0_eur",
+        "cp1_eur_per_mw",
+        "cp2_eur_per_mw2",
+        "in_service",
+    ]
     assert set(gen_feats) <= set(gen.columns)
 
-    edge_cols = ["from_bus", "to_bus", "pf", "qf", "pt", "qt",
-                 "Yff_r", "Yff_i", "Yft_r", "Yft_i", "Ytt_r", "Ytt_i",
-                 "Ytf_r", "Ytf_i", "tap", "ang_min", "ang_max", "rate_a",
-                 "br_status"]
+    edge_cols = [
+        "from_bus",
+        "to_bus",
+        "pf",
+        "qf",
+        "pt",
+        "qt",
+        "Yff_r",
+        "Yff_i",
+        "Yft_r",
+        "Yft_i",
+        "Ytt_r",
+        "Ytt_i",
+        "Ytf_r",
+        "Ytf_i",
+        "tap",
+        "ang_min",
+        "ang_max",
+        "rate_a",
+        "br_status",
+    ]
     assert set(edge_cols) <= set(branch.columns)
 
     # graphkit's bus-level reactive limits: sum gen min/max_q_mvar per (scenario,

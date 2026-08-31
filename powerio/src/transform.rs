@@ -2,7 +2,7 @@
 //!
 //! A pass that changes one model into another carries the module records
 //! forward and appends transformation history, so the result is auditable.
-//! Emission borrows the module and returns writer diagnostics separately. The
+//! Emission borrows the module and returns emission diagnostics separately. The
 //! most consequential transformation, multiconductor to balanced, is explicit
 //! and diagnosed, never a silent positive sequence projection.
 
@@ -14,52 +14,46 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     BalancedNetwork, Branch, BranchCharging, Bus, BusId, BusType, Extras as BalancedExtras,
-    Generator, Load, Shunt, SourceFormat,
+    Generator, Load, PioValueKind, Shunt, SourceFormat,
 };
+use powerio_core::{Diagnostic, DiagnosticSeverity, HistoryEntry, HistoryId, HistoryKind};
 use powerio_dist::{
     DistBus, DistLine, DistLineCode, DistLoadVoltageModel, Mat, MulticonductorNetwork,
 };
 
-use crate::stored::legacy09::diagnostics::{DiagnosticSeverity, StructuredDiagnostic, codes};
-use crate::stored::legacy09::model::ModelKind;
-use crate::stored::legacy09::validation::ValidationStatus;
+use crate::codes;
 
-/// One lowering/normalization/emission pass and what it changed.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-pub struct LoweringRecord {
-    /// A stable pass name, e.g. `normalize-balanced` or `multiconductor-to-balanced`.
-    pub pass: String,
-    pub input_kind: ModelKind,
-    pub output_kind: ModelKind,
-    #[serde(default, skip_serializing_if = "serde_json::Map::is_empty")]
-    pub options: serde_json::Map<String, serde_json::Value>,
-    /// Modeling assumptions the pass relied on (e.g. "balanced four-wire feeder").
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub assumptions: Vec<String>,
-    /// Approximations the pass introduced (e.g. "Kron reduction of neutral").
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub approximations: Vec<String>,
-    /// Fields/constraints dropped because the output family cannot carry them.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub dropped_fields: Vec<String>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub diagnostics: Vec<StructuredDiagnostic>,
-    pub validation_status: ValidationStatus,
+trait DiagnosticTargetExt {
+    fn with_value_target(self, target: String) -> Self;
 }
 
-impl LoweringRecord {
-    pub fn new(pass: impl Into<String>, input_kind: ModelKind, output_kind: ModelKind) -> Self {
+impl DiagnosticTargetExt for Diagnostic {
+    fn with_value_target(self, target: String) -> Self {
+        self.with_target(target)
+            .expect("transform targets are bounded RFC 6901 pointers")
+    }
+}
+
+/// Records accumulated while the transformation is being built. The public
+/// result exposes the current diagnostic and history records instead of this
+/// implementation detail.
+#[derive(Clone, Debug)]
+struct TransformRecords {
+    options: serde_json::Map<String, serde_json::Value>,
+    assumptions: Vec<String>,
+    approximations: Vec<String>,
+    dropped_fields: Vec<String>,
+    diagnostics: Vec<Diagnostic>,
+}
+
+impl TransformRecords {
+    fn new(options: MulticonductorToBalancedOptions) -> Self {
         Self {
-            pass: pass.into(),
-            input_kind,
-            output_kind,
-            options: serde_json::Map::new(),
+            options: options_map(options),
             assumptions: Vec::new(),
             approximations: Vec::new(),
             dropped_fields: Vec::new(),
             diagnostics: Vec::new(),
-            validation_status: ValidationStatus::Ok,
         }
     }
 }
@@ -107,94 +101,71 @@ impl Default for MulticonductorToBalancedOptions {
     }
 }
 
-/// Readiness report for the multiconductor to balanced lowering pass.
+/// Report for the multiconductor to balanced transformation.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-pub struct MulticonductorToBalancedReadiness {
+pub struct MulticonductorToBalancedReport {
     pub convention: SequenceTransformConvention,
     pub base_mva: f64,
-    pub status: ValidationStatus,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub assumptions: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub approximations: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub diagnostics: Vec<StructuredDiagnostic>,
+    pub diagnostics: Vec<Diagnostic>,
 }
 
-impl MulticonductorToBalancedReadiness {
+impl MulticonductorToBalancedReport {
     #[must_use]
     pub fn is_ready(&self) -> bool {
-        self.status <= ValidationStatus::Info
+        self.diagnostics
+            .iter()
+            .all(|diagnostic| diagnostic.severity() < DiagnosticSeverity::Error)
     }
 
-    /// This report's findings as 1.0 module records, `target` rebased onto
-    /// the multiconductor value's own pointer grammar instead of the retired
-    /// `/model/multiconductor_network/...` element path. `diagnostics` itself
-    /// stays the legacy shape for the internal preflight checks that build
-    /// it; a caller that publishes this report (a binding, an MCP tool)
-    /// should publish this instead.
+    /// The greatest severity among this report's findings, or `None` for a
+    /// clean report.
     #[must_use]
-    pub fn diagnostics_as_module_records(&self) -> Vec<powerio_core::Diagnostic> {
-        multiconductor_diagnostics_to_module_records(&self.diagnostics)
+    pub fn dominant_severity(&self) -> Option<DiagnosticSeverity> {
+        self.diagnostics
+            .iter()
+            .map(powerio_core::Diagnostic::severity)
+            .max()
     }
 }
 
-/// The preflight report for a multiconductor to balanced transformation.
-///
-/// [`MulticonductorToBalancedReadiness`] remains available for compatibility.
-pub type MulticonductorToBalancedReport = MulticonductorToBalancedReadiness;
-
 /// A successful raw multiconductor to balanced lowering result.
-#[derive(Clone, Debug, Serialize, Deserialize)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-pub struct MulticonductorToBalancedLowering {
+#[derive(Clone, Debug)]
+pub struct MulticonductorToBalancedTransformation {
     pub network: BalancedNetwork,
-    pub record: LoweringRecord,
+    /// Findings produced by the transformation itself.
+    pub diagnostics: Vec<Diagnostic>,
+    /// The current history record for this transformation. A module lowering
+    /// remints its ID when the default ID is already present.
+    pub history: HistoryEntry,
     /// Buses removed by closed switch merges: removed bus ID to the kept
     /// bus ID, in the source's spelling.
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub merged_buses: BTreeMap<String, String>,
     /// Closed switches whose merge removed them from the balanced model.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub removed_switches: Vec<String>,
 }
 
-/// The result of a successful multiconductor to balanced transformation.
-///
-/// [`MulticonductorToBalancedLowering`] remains available for 0.10
-/// compatibility.
-pub type MulticonductorToBalancedTransformation = MulticonductorToBalancedLowering;
-
 /// Structured failure from the raw multiconductor to balanced lowering pass.
 ///
-/// `diagnostics` are 1.0 module records: the same codes and severities the
-/// preflight computed, with `target` rebased from the retired
-/// `/model/multiconductor_network/...` element path onto the multiconductor
-/// value's own pointer grammar (e.g. `/sources/0/bus`), since a refusal never
-/// changes the module's value kind.
-///
-/// No `JsonSchema` derive: `powerio_core::Diagnostic` is the runtime record,
-/// not a schema DTO (the stored document schema mirrors it separately as
-/// `DiagnosticV1`, per `powerio::stored::dto`), and this type is not part of
-/// any generated schema family.
+/// `diagnostics` are current module records. Their targets use the
+/// multiconductor value's pointer grammar (for example `/sources/0/bus`)
+/// because a refusal leaves that value unchanged.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct MulticonductorToBalancedError {
     pub options: MulticonductorToBalancedOptions,
-    pub status: ValidationStatus,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub diagnostics: Vec<powerio_core::Diagnostic>,
+    pub diagnostics: Vec<Diagnostic>,
 }
 
 impl MulticonductorToBalancedError {
-    pub fn new(
-        options: MulticonductorToBalancedOptions,
-        diagnostics: &[StructuredDiagnostic],
-    ) -> Self {
+    pub fn new(options: MulticonductorToBalancedOptions, diagnostics: &[Diagnostic]) -> Self {
         Self {
             options,
-            status: status_from_diagnostics(diagnostics),
-            diagnostics: multiconductor_diagnostics_to_module_records(diagnostics),
+            diagnostics: diagnostics.to_vec(),
         }
     }
 }
@@ -210,40 +181,19 @@ impl std::fmt::Display for MulticonductorToBalancedError {
 
 impl std::error::Error for MulticonductorToBalancedError {}
 
-/// Convert legacy preflight findings, whose `element_path` (when present)
-/// reads `/model/multiconductor_network/...`, into 1.0 module records whose
-/// `target` is that same locator rebased onto the multiconductor value's own
-/// pointer grammar. Used by both [`MulticonductorToBalancedError`] and
-/// [`MulticonductorToBalancedReadiness::diagnostics_as_module_records`].
-fn multiconductor_diagnostics_to_module_records(
-    diagnostics: &[StructuredDiagnostic],
-) -> Vec<powerio_core::Diagnostic> {
-    diagnostics
-        .iter()
-        .map(|diagnostic| {
-            let target = crate::stored::legacy09::diagnostics::translate_legacy_target(
-                diagnostic.element_path.as_deref(),
-                "multiconductor_network",
-            );
-            crate::stored::legacy09::diagnostics::to_module_diagnostic(diagnostic, target)
-        })
-        .collect()
-}
-
 /// Check whether a multiconductor package is ready for the lowering pass.
 ///
 /// This is a preflight only: it reports the assumptions and blockers that the
 /// lowering would need to account for, but it does not produce a balanced model
 /// and does not append to `history`.
 #[must_use]
-pub fn check_multiconductor_to_balanced_lowering(
+pub fn to_balanced_network_report(
     net: &MulticonductorNetwork,
     options: MulticonductorToBalancedOptions,
-) -> MulticonductorToBalancedReadiness {
-    let mut report = MulticonductorToBalancedReadiness {
+) -> MulticonductorToBalancedReport {
+    let mut report = MulticonductorToBalancedReport {
         convention: options.convention,
         base_mva: options.base_mva,
-        status: ValidationStatus::Ok,
         assumptions: vec![format!(
             "sequence transform convention: {}",
             options.convention
@@ -260,31 +210,19 @@ pub fn check_multiconductor_to_balanced_lowering(
     check_switches(net, &mut report);
     check_transformers(net, &mut report);
     check_untyped_objects(net, &mut report);
-
-    report.status = status_from_diagnostics(&report.diagnostics);
     report
-}
-
-/// Report whether `net` can be transformed to a balanced network under
-/// `options`, including every assumption, approximation, and refusal.
-#[must_use]
-pub fn multiconductor_to_balanced_report(
-    net: &MulticonductorNetwork,
-    options: MulticonductorToBalancedOptions,
-) -> MulticonductorToBalancedReport {
-    check_multiconductor_to_balanced_lowering(net, options)
 }
 
 /// Lower a transparent three phase multiconductor network to a balanced model.
 ///
-/// The pass is explicit. It does not run from readers, writers, matrix builders,
+/// The pass is explicit. It does not run from parsers, emitters, matrix builders,
 /// bindings, or package deserialization. Unsupported inputs return structured
 /// `TRANSFORM.MULTI_TO_BALANCED.*` diagnostics in [`MulticonductorToBalancedError`].
-pub fn lower_multiconductor_to_balanced(
+pub fn to_balanced_network(
     net: &MulticonductorNetwork,
     options: MulticonductorToBalancedOptions,
-) -> Result<MulticonductorToBalancedLowering, MulticonductorToBalancedError> {
-    let readiness = check_multiconductor_to_balanced_lowering(net, options);
+) -> Result<MulticonductorToBalancedTransformation, MulticonductorToBalancedError> {
+    let readiness = to_balanced_network_report(net, options);
     if !readiness.is_ready() {
         return Err(MulticonductorToBalancedError::new(
             options,
@@ -296,43 +234,19 @@ pub fn lower_multiconductor_to_balanced(
     state.lower()
 }
 
-/// Transform a supported three phase multiconductor network to a balanced
-/// network.
-///
-/// The returned record states the assumptions, approximations, merged buses,
-/// and removed switches. Unsupported input returns structured diagnostics.
-pub fn multiconductor_to_balanced(
-    net: &MulticonductorNetwork,
-    options: MulticonductorToBalancedOptions,
-) -> Result<MulticonductorToBalancedTransformation, MulticonductorToBalancedError> {
-    lower_multiconductor_to_balanced(net, options)
-}
-
 /// Readiness of one module's value for the balanced lowering: the #398
 /// inspect operation. The value must be a multiconductor network.
 ///
 /// # Errors
 /// A value of any other kind, named.
-pub fn check_module_lowering(
-    module: &powerio_core::PioModule<crate::PioValue>,
-    options: MulticonductorToBalancedOptions,
-) -> Result<MulticonductorToBalancedReadiness, powerio_core::Error> {
-    let crate::PioValue::MulticonductorNetwork(net) = module.value() else {
-        return Err(wrong_kind_error(module.value()));
-    };
-    Ok(check_multiconductor_to_balanced_lowering(net, options))
-}
-
-/// Report whether a module's multiconductor value can be transformed to a
-/// balanced network.
-///
-/// # Errors
-/// The module carries any other value kind.
-pub fn module_to_balanced_report(
+pub fn to_balanced_report(
     module: &powerio_core::PioModule<crate::PioValue>,
     options: MulticonductorToBalancedOptions,
 ) -> Result<MulticonductorToBalancedReport, powerio_core::Error> {
-    check_module_lowering(module, options)
+    let crate::PioValue::MulticonductorNetwork(net) = module.value() else {
+        return Err(wrong_kind_error(module.value()));
+    };
+    Ok(to_balanced_network_report(net, options))
 }
 
 /// Lower a multiconductor module to a balanced module: the #398 transform
@@ -351,7 +265,7 @@ pub fn module_to_balanced_report(
 /// identity and no span, the note lists are capped, and the history id is
 /// minted unused, so every record append succeeds.
 #[allow(clippy::result_large_err)]
-pub fn lower_module_to_balanced(
+pub fn to_balanced(
     module: powerio_core::PioModule<crate::PioValue>,
     options: MulticonductorToBalancedOptions,
 ) -> Result<
@@ -361,12 +275,10 @@ pub fn lower_module_to_balanced(
         Box<MulticonductorToBalancedError>,
     ),
 > {
-    use powerio_core::{HistoryEntry, HistoryKind};
-
     let crate::PioValue::MulticonductorNetwork(net) = module.value() else {
         let error = MulticonductorToBalancedError::new(
             options,
-            &[StructuredDiagnostic::of(
+            &[Diagnostic::of(
                 &codes::TRANSFORM_MULTI_TO_BALANCED_WRONG_MODEL_KIND,
                 format!(
                     "the module carries a {} value; the balanced lowering takes a \
@@ -377,15 +289,15 @@ pub fn lower_module_to_balanced(
         );
         return Err((module, Box::new(error)));
     };
-    let lowering = match lower_multiconductor_to_balanced(net, options) {
+    let lowering = match to_balanced_network(net, options) {
         Ok(lowering) => lowering,
         Err(error) => return Err((module, Box::new(error))),
     };
-    let MulticonductorToBalancedLowering {
+    let MulticonductorToBalancedTransformation {
         network,
-        record,
-        merged_buses,
-        removed_switches,
+        diagnostics,
+        history,
+        ..
     } = lowering;
     // Room for the pass's own records is checked against the module maxima
     // before the value is consumed, so the additions below hold by
@@ -394,10 +306,10 @@ pub fn lower_module_to_balanced(
         powerio_core::limits::MAX_MODULE_DIAGNOSTICS.saturating_sub(module.diagnostics().len());
     let history_room =
         powerio_core::limits::MAX_MODULE_HISTORY_ENTRIES.saturating_sub(module.history().len());
-    if record.diagnostics.len() > diagnostics_room || history_room == 0 {
+    if diagnostics.len() > diagnostics_room || history_room == 0 {
         let error = MulticonductorToBalancedError::new(
             options,
-            &[StructuredDiagnostic::of(
+            &[Diagnostic::of(
                 &codes::TRANSFORM_MULTI_TO_BALANCED_RECORD_CAP,
                 "the module cannot hold the lowering's findings and history entry; export a \
                  fresh module before lowering"
@@ -414,67 +326,21 @@ pub fn lower_module_to_balanced(
     // into the consumed multiconductor value and are severed here; the
     // pass's own findings are emitted with no target for the same reason.
     module.sever_value_targets();
-    for diagnostic in &record.diagnostics {
+    for diagnostic in &diagnostics {
+        let mut diagnostic = diagnostic.clone();
+        diagnostic.clear_target();
         module
-            .add_diagnostic(crate::stored::legacy09::diagnostics::to_module_diagnostic(
-                diagnostic, None,
-            ))
+            .add_diagnostic(diagnostic)
             .expect("room was checked; pass diagnostics carry no identity and no span");
     }
-    let mut entry = HistoryEntry::new(
+    let entry = copy_history_with_id(
+        &history,
         unused_history_id(&module, "multiconductor-to-balanced"),
-        HistoryKind::Transform,
-        "lower_multiconductor_to_balanced",
-    )
-    .expect("static name is valid");
-    let mut notes = vec![format!("balanced power base: {} MVA", options.base_mva)];
-    notes.extend(record.assumptions.iter().cloned());
-    notes.extend(record.approximations.iter().cloned());
-    notes.extend(
-        merged_buses
-            .iter()
-            .map(|(removed, kept)| format!("bus {removed} merged into bus {kept}")),
     );
-    notes.extend(
-        removed_switches
-            .iter()
-            .map(|switch| format!("switch {switch} removed by its bus merge")),
-    );
-    for note in capped_history_notes(notes, "assumptions") {
-        entry = entry
-            .with_assumption(note)
-            .expect("the note list is under the history cap by construction");
-    }
-    for loss in capped_history_notes(record.dropped_fields.clone(), "dropped fields") {
-        entry = entry
-            .with_loss(loss)
-            .expect("the loss list is under the history cap by construction");
-    }
     module
         .add_history_entry(entry)
         .expect("room was checked and the history id is unique by construction");
     Ok(module)
-}
-
-/// Transform a module's multiconductor value to a balanced network while
-/// carrying its common records forward. The retained source is severed because
-/// its bytes no longer describe the transformed value.
-///
-/// # Errors
-/// Returns the original module with the transformation refusal when the value
-/// kind is wrong or the network cannot be transformed under `options`.
-#[allow(clippy::result_large_err)]
-pub fn module_to_balanced(
-    module: powerio_core::PioModule<crate::PioValue>,
-    options: MulticonductorToBalancedOptions,
-) -> Result<
-    powerio_core::PioModule<crate::PioValue>,
-    (
-        powerio_core::PioModule<crate::PioValue>,
-        Box<MulticonductorToBalancedError>,
-    ),
-> {
-    lower_module_to_balanced(module, options)
 }
 
 /// Cap a history note list at the record limit, replacing the overflow with
@@ -495,6 +361,81 @@ fn capped_history_notes(notes: Vec<String>, what: &str) -> Vec<String> {
         .collect();
     kept.push(format!("{elided} more {what} elided"));
     kept
+}
+
+fn transform_history(
+    id: HistoryId,
+    records: &TransformRecords,
+    merged_buses: &BTreeMap<String, String>,
+    removed_switches: &[String],
+) -> HistoryEntry {
+    let parameters: BTreeMap<String, serde_json::Value> =
+        records.options.clone().into_iter().collect();
+    let mut entry = HistoryEntry::new(id, HistoryKind::Transform, "to_balanced")
+        .expect("the static history name is valid")
+        .with_input_kind(PioValueKind::MulticonductorNetwork.as_str())
+        .expect("the registered input kind is valid")
+        .with_output_kind(PioValueKind::BalancedNetwork.as_str())
+        .expect("the registered output kind is valid")
+        .with_parameters(parameters)
+        .expect("the transformation has a bounded parameter set");
+
+    let mut assumptions = records.assumptions.clone();
+    assumptions.extend(
+        records
+            .approximations
+            .iter()
+            .map(|note| format!("approximation: {note}")),
+    );
+    assumptions.extend(
+        merged_buses
+            .iter()
+            .map(|(removed, kept)| format!("bus {removed} merged into bus {kept}")),
+    );
+    assumptions.extend(
+        removed_switches
+            .iter()
+            .map(|switch| format!("switch {switch} removed by its bus merge")),
+    );
+    for assumption in capped_history_notes(assumptions, "assumptions") {
+        entry = entry
+            .with_assumption(assumption)
+            .expect("the note list is under the history cap by construction");
+    }
+    for loss in capped_history_notes(records.dropped_fields.clone(), "losses") {
+        entry = entry
+            .with_loss(loss)
+            .expect("the loss list is under the history cap by construction");
+    }
+    entry
+}
+
+fn copy_history_with_id(history: &HistoryEntry, id: HistoryId) -> HistoryEntry {
+    let mut copied = HistoryEntry::new(id, history.kind(), history.name())
+        .expect("the existing history name is valid")
+        .with_parameters(history.parameters().clone())
+        .expect("the existing parameter set is valid");
+    if let Some(kind) = history.input_kind() {
+        copied = copied
+            .with_input_kind(kind)
+            .expect("the existing input kind is valid");
+    }
+    if let Some(kind) = history.output_kind() {
+        copied = copied
+            .with_output_kind(kind)
+            .expect("the existing output kind is valid");
+    }
+    for assumption in history.assumptions() {
+        copied = copied
+            .with_assumption(assumption.clone())
+            .expect("the existing assumption list is valid");
+    }
+    for loss in history.losses() {
+        copied = copied
+            .with_loss(loss.clone())
+            .expect("the existing loss list is valid");
+    }
+    copied
 }
 
 /// One history note made valid for the record layer, whatever the source
@@ -572,43 +513,38 @@ struct LoweringState<'a> {
     removed_switches: Vec<String>,
     /// Per bus (lowercase) line to line voltage base in volts.
     bus_base: BTreeMap<String, f64>,
-    record: LoweringRecord,
+    records: TransformRecords,
 }
 
 impl<'a> LoweringState<'a> {
     fn new(
         net: &'a MulticonductorNetwork,
         options: MulticonductorToBalancedOptions,
-        readiness: MulticonductorToBalancedReadiness,
+        readiness: MulticonductorToBalancedReport,
     ) -> Self {
-        let mut record = LoweringRecord::new(
-            "multiconductor-to-balanced",
-            ModelKind::Multiconductor,
-            ModelKind::Balanced,
-        );
-        record.options = options_map(options);
-        record.assumptions = readiness.assumptions;
-        record.approximations = readiness.approximations;
-        record.diagnostics = readiness.diagnostics;
-        record
+        let mut records = TransformRecords::new(options);
+        records.assumptions = readiness.assumptions;
+        records.approximations = readiness.approximations;
+        records.diagnostics = readiness.diagnostics;
+        records
             .assumptions
             .push(format!("balanced power base: {} MVA", options.base_mva));
-        record
+        records
             .assumptions
             .push("balanced bus ids are synthesized from multiconductor bus order".to_owned());
-        record.approximations.push(
+        records.approximations.push(
             "wire-coordinate branch and shunt matrices are projected to positive sequence"
                 .to_owned(),
         );
-        record.approximations.push(
+        records.approximations.push(
             "phase injection records are aggregated into scalar balanced injections".to_owned(),
         );
-        record.approximations.push(
+        records.approximations.push(
             "units are converted from W/var/V/ohm/siemens/radians to MW/MVAr/per-unit/degrees"
                 .to_owned(),
         );
         if net.switches().iter().any(|sw| sw.open) {
-            record
+            records
                 .dropped_fields
                 .push("open switches dropped from balanced model".to_owned());
         }
@@ -634,7 +570,7 @@ impl<'a> LoweringState<'a> {
             };
             union.join(from, to);
             removed_switches.push(sw.name.clone());
-            record.assumptions.push(format!(
+            records.assumptions.push(format!(
                 "closed switch {} merged bus {} into bus {} and was removed; no impedance \
                  was invented for it",
                 sw.name, sw.bus_to, sw.bus_from
@@ -672,16 +608,18 @@ impl<'a> LoweringState<'a> {
             merged_buses,
             removed_switches,
             bus_base: BTreeMap::new(),
-            record,
+            records,
         }
     }
 
     #[allow(clippy::too_many_lines)]
-    fn lower(&mut self) -> Result<MulticonductorToBalancedLowering, MulticonductorToBalancedError> {
+    fn lower(
+        &mut self,
+    ) -> Result<MulticonductorToBalancedTransformation, MulticonductorToBalancedError> {
         let Some(base) = self.voltage_base()? else {
             return Err(MulticonductorToBalancedError::new(
                 self.options,
-                &self.record.diagnostics,
+                &self.records.diagnostics,
             ));
         };
 
@@ -710,19 +648,19 @@ impl<'a> LoweringState<'a> {
         *network.generators_mut() = generators;
         *network.source_format_mut() = SourceFormat::InMemory;
         if let Err(err) = network.validate() {
-            self.record.diagnostics.push(StructuredDiagnostic::of(
+            self.records.diagnostics.push(Diagnostic::of(
                 &codes::TRANSFORM_MULTI_TO_BALANCED_INVALID_BALANCED_OUTPUT,
                 format!("lowered balanced network failed structural validation: {err}"),
             ));
             return Err(MulticonductorToBalancedError::new(
                 self.options,
-                &self.record.diagnostics,
+                &self.records.diagnostics,
             ));
         }
         for finding in network.validate_values() {
             let details = finding.details();
-            self.record.diagnostics.push(
-                StructuredDiagnostic::of(
+            self.records.diagnostics.push(
+                Diagnostic::of(
                     &codes::TRANSFORM_MULTI_TO_BALANCED_BALANCED_VALUE_DOMAIN,
                     format!(
                         "{} field `{}` is outside its value domain after lowering",
@@ -736,10 +674,16 @@ impl<'a> LoweringState<'a> {
             );
         }
 
-        self.record.validation_status = status_from_diagnostics(&self.record.diagnostics);
-        Ok(MulticonductorToBalancedLowering {
+        let history = transform_history(
+            HistoryId::new("multiconductor-to-balanced").expect("static history id is valid"),
+            &self.records,
+            &self.merged_buses,
+            &self.removed_switches,
+        );
+        Ok(MulticonductorToBalancedTransformation {
             network,
-            record: self.record.clone(),
+            diagnostics: self.records.diagnostics.clone(),
+            history,
             merged_buses: self.merged_buses.clone(),
             removed_switches: self.removed_switches.clone(),
         })
@@ -833,7 +777,7 @@ impl<'a> LoweringState<'a> {
         for (row, bus) in self.net.buses().iter().enumerate() {
             let zone = zones.root(row);
             let base = zone_base.get(&zone).copied().unwrap_or_else(|| {
-                self.record.dropped_fields.push(format!(
+                self.records.dropped_fields.push(format!(
                     "bus {} voltage base defaulted to the reference base",
                     bus.id
                 ));
@@ -854,15 +798,15 @@ impl<'a> LoweringState<'a> {
     fn voltage_base(&mut self) -> Result<Option<VoltageBase>, MulticonductorToBalancedError> {
         for (idx, source) in self.net.sources().iter().enumerate() {
             let Some(bus) = self.net.bus(&source.bus) else {
-                self.record.diagnostics.push(
-                    StructuredDiagnostic::of(
+                self.records.diagnostics.push(
+                    Diagnostic::of(
                         &codes::TRANSFORM_MULTI_TO_BALANCED_UNKNOWN_SOURCE_BUS,
                         format!(
                             "voltage source {} references unknown bus {}",
                             source.name, source.bus
                         ),
                     )
-                    .with_element_path(format!("/model/multiconductor_network/sources/{idx}/bus")),
+                    .with_value_target(format!("/sources/{idx}/bus")),
                 );
                 continue;
             };
@@ -872,33 +816,33 @@ impl<'a> LoweringState<'a> {
                 continue;
             }
             let Some(v1) = positive_sequence_voltage(source, &positions) else {
-                self.record.diagnostics.push(
-                    StructuredDiagnostic::of(
+                self.records.diagnostics.push(
+                    Diagnostic::of(
     &codes::TRANSFORM_MULTI_TO_BALANCED_INVALID_PHASE_REFERENCE,
 format!(
                             "voltage source {} does not carry finite three phase voltage magnitudes and angles",
                             source.name
                         ),
                     )
-                    .with_element_path(format!("/model/multiconductor_network/sources/{idx}")),
+                    .with_value_target(format!("/sources/{idx}")),
                 );
                 continue;
             };
             let line_to_line_volts = v1.norm();
             if !line_to_line_volts.is_finite() || line_to_line_volts <= 0.0 {
-                self.record.diagnostics.push(
-                    StructuredDiagnostic::of(
+                self.records.diagnostics.push(
+                    Diagnostic::of(
     &codes::TRANSFORM_MULTI_TO_BALANCED_INVALID_PHASE_REFERENCE,
 format!(
                             "voltage source {} produced a non-positive positive-sequence voltage base",
                             source.name
                         ),
                     )
-                    .with_element_path(format!("/model/multiconductor_network/sources/{idx}")),
+                    .with_value_target(format!("/sources/{idx}")),
                 );
                 continue;
             }
-            self.record.assumptions.push(format!(
+            self.records.assumptions.push(format!(
                 "voltage base synthesized from source {} positive-sequence voltage: {} kV line-to-line",
                 source.name,
                 line_to_line_volts / 1000.0
@@ -907,17 +851,17 @@ format!(
         }
 
         if self
-            .record
+            .records
             .diagnostics
             .iter()
-            .any(|d| d.severity >= DiagnosticSeverity::Error)
+            .any(|d| d.severity() >= DiagnosticSeverity::Error)
         {
             return Err(MulticonductorToBalancedError::new(
                 self.options,
-                &self.record.diagnostics,
+                &self.records.diagnostics,
             ));
         }
-        self.record.diagnostics.push(StructuredDiagnostic::of(
+        self.records.diagnostics.push(Diagnostic::of(
     &codes::TRANSFORM_MULTI_TO_BALANCED_MISSING_PHASE_REFERENCE,
 "multiconductor to balanced lowering requires a finite three phase voltage source reference",
         ));
@@ -953,7 +897,7 @@ format!(
                     (v.norm() / base_volts, radians_to_degrees(v.arg()))
                 });
             if sourced.is_none() {
-                self.record.dropped_fields.push(format!(
+                self.records.dropped_fields.push(format!(
                     "bus {} voltage magnitude and angle defaulted to 1.0 p.u. and 0 degrees",
                     canonical.id
                 ));
@@ -967,7 +911,7 @@ format!(
                 _ => None,
             });
             let (vmin, vmax) = stated.unwrap_or_else(|| {
-                self.record.dropped_fields.push(format!(
+                self.records.dropped_fields.push(format!(
                     "bus {} voltage bounds defaulted to 0.9/1.1 p.u.",
                     canonical.id
                 ));
@@ -1008,7 +952,7 @@ format!(
     /// reactive support the case depends on.
     fn record_capacitor_drops(&mut self) {
         for capacitor in self.net.capacitors() {
-            self.record.dropped_fields.push(format!(
+            self.records.dropped_fields.push(format!(
                 "capacitor {} dropped: a rated bank has no balanced shunt equivalent",
                 capacitor.name
             ));
@@ -1026,7 +970,7 @@ format!(
             || bus.vzero_max.is_some()
             || bus.vn_max.is_some()
         {
-            self.record.dropped_fields.push(format!(
+            self.records.dropped_fields.push(format!(
                 "bus {} conductor voltage bound families dropped",
                 bus.id
             ));
@@ -1058,17 +1002,15 @@ format!(
         let mut branches = Vec::with_capacity(self.net.lines().len());
         for (idx, line) in self.net.lines().iter().enumerate() {
             let Some(code) = self.net.linecode(&line.linecode) else {
-                self.record.diagnostics.push(
-                    StructuredDiagnostic::of(
+                self.records.diagnostics.push(
+                    Diagnostic::of(
                         &codes::TRANSFORM_MULTI_TO_BALANCED_UNKNOWN_LINECODE,
                         format!(
                             "line {} references unknown linecode `{}`",
                             line.name, line.linecode
                         ),
                     )
-                    .with_element_path(format!(
-                        "/model/multiconductor_network/lines/{idx}/linecode"
-                    )),
+                    .with_value_target(format!("/lines/{idx}/linecode")),
                 );
                 continue;
             };
@@ -1079,15 +1021,15 @@ format!(
                 &line.terminal_map_to,
                 &self.neutral_terminals,
             ) {
-                self.record.diagnostics.push(
-                    StructuredDiagnostic::of(
+                self.records.diagnostics.push(
+                    Diagnostic::of(
     &codes::TRANSFORM_MULTI_TO_BALANCED_PHASE_MAP_MISMATCH,
 format!(
                             "line {} connects different active terminal orders and cannot be lowered transparently",
                             line.name
                         ),
                     )
-                    .with_element_path(format!("/model/multiconductor_network/lines/{idx}")),
+                    .with_value_target(format!("/lines/{idx}")),
                 );
                 continue;
             }
@@ -1132,14 +1074,14 @@ format!(
                 y_to.im * y_scale,
             );
             let rate = line_rate_mva(line, code, &active, base_volts).unwrap_or_else(|| {
-                self.record.dropped_fields.push(format!(
+                self.records.dropped_fields.push(format!(
                     "line {} thermal rating defaulted to 0 MVA",
                     line.name
                 ));
                 0.0
             });
             let mut branch = Branch::new(from, to, z_ohm.re / z_base, z_ohm.im / z_base);
-            branch.b = charging.total_b();
+            branch.b = charging.calc_total_b();
             branch.charging = Some(charging);
             branch.rate_a = rate;
             branch.rate_b = rate;
@@ -1196,21 +1138,20 @@ format!(
         let seq = sequence_matrix(matrix);
         let coupling = sequence_coupling_norm(&seq);
         if coupling > COUPLING_TOLERANCE {
-            self.record.approximations.push(format!(
+            self.records.approximations.push(format!(
                 "linecode {code_name} {label} has sequence coupling norm {coupling}; positive-sequence diagonal retained"
             ));
-            let mut diagnostic = StructuredDiagnostic::of(
+            let mut diagnostic = Diagnostic::of(
     &codes::TRANSFORM_MULTI_TO_BALANCED_SEQUENCE_COUPLING_DROPPED,
 format!(
                     "linecode {code_name} {label} has nonzero sequence coupling; the balanced model keeps the positive-sequence diagonal"
                 ),
             )
-            .with_element_path(format!("/model/multiconductor_network/lines/{line_idx}/linecode"));
-            diagnostic.details.insert(
-                "sequence_coupling_norm".to_owned(),
-                serde_json::json!(coupling),
-            );
-            self.record.diagnostics.push(diagnostic);
+            .with_value_target(format!("/lines/{line_idx}/linecode"));
+            diagnostic
+                .insert_detail("sequence_coupling_norm", serde_json::json!(coupling))
+                .expect("the static detail key is valid");
+            self.records.diagnostics.push(diagnostic);
         }
         seq[1][1]
     }
@@ -1227,13 +1168,13 @@ format!(
         if length.is_finite() {
             return Ok(());
         }
-        let mut diagnostics = self.record.diagnostics.clone();
+        let mut diagnostics = self.records.diagnostics.clone();
         diagnostics.push(
-            StructuredDiagnostic::of(
+            Diagnostic::of(
     &codes::TRANSFORM_MULTI_TO_BALANCED_NONFINITE_LINE_LENGTH,
 format!("line {line_idx} has no finite length ({length}), so its impedance cannot be scaled"),
             )
-            .with_element_path(format!("/model/multiconductor_network/lines/{line_idx}/length"))
+            .with_value_target(format!("/lines/{line_idx}/length"))
             .with_suggested_action("give the line a length in meters, or drop it from the network"),
         );
         Err(MulticonductorToBalancedError::new(
@@ -1249,15 +1190,13 @@ format!("line {line_idx} has no finite length ({length}), so its impedance canno
         label: &str,
         message: &str,
     ) -> MulticonductorToBalancedError {
-        let mut diagnostics = self.record.diagnostics.clone();
+        let mut diagnostics = self.records.diagnostics.clone();
         diagnostics.push(
-            StructuredDiagnostic::of(
+            Diagnostic::of(
                 &codes::TRANSFORM_MULTI_TO_BALANCED_INVALID_LINECODE_MATRIX,
                 format!("linecode {code_name} {label} cannot be lowered: {message}"),
             )
-            .with_element_path(format!(
-                "/model/multiconductor_network/lines/{line_idx}/linecode"
-            )),
+            .with_value_target(format!("/lines/{line_idx}/linecode")),
         );
         MulticonductorToBalancedError::new(self.options, &diagnostics)
     }
@@ -1292,13 +1231,13 @@ format!("line {line_idx} has no finite length ({length}), so its impedance canno
             let x = (transformer.xsc_pct[0] / 100.0) * z_scale;
             let shift = if high.v_ref >= low.v_ref { 30.0 } else { -30.0 };
             let rate = high.s_rating / 1_000_000.0;
-            self.record.assumptions.push(format!(
+            self.records.assumptions.push(format!(
                 "transformer {} lowered as a balanced branch with tap {tap:.6} and the ANSI \
                  {shift} degree connection shift (high voltage side leads)",
                 transformer.name
             ));
             if (low_rating_scale - 1.0).abs() > 1e-9 {
-                self.record.assumptions.push(format!(
+                self.records.assumptions.push(format!(
                     "transformer {}: the low winding resistance was converted from its own \
                      {:.3} kVA base onto the high winding {:.3} kVA base",
                     transformer.name,
@@ -1311,13 +1250,13 @@ format!("line {line_idx} has no finite length ({length}), so its impedance canno
                 || low.r_neutral.is_some()
                 || low.x_neutral.is_some()
             {
-                self.record.dropped_fields.push(format!(
+                self.records.dropped_fields.push(format!(
                     "transformer {} neutral grounding impedance dropped",
                     transformer.name
                 ));
             }
             if transformer.xsc_pct.len() > 1 {
-                self.record.dropped_fields.push(format!(
+                self.records.dropped_fields.push(format!(
                     "transformer {} extra short circuit reactances dropped",
                     transformer.name
                 ));
@@ -1348,19 +1287,19 @@ format!("line {line_idx} has no finite length ({length}), so its impedance canno
                     load.voltage_model,
                     DistLoadVoltageModel::ConstantPower { .. }
                 ) {
-                    self.record.dropped_fields.push(format!(
+                    self.records.dropped_fields.push(format!(
                         "load {} voltage model dropped; balanced load is constant power",
                         load.name
                     ));
-                    self.record.diagnostics.push(
-                        StructuredDiagnostic::of(
+                    self.records.diagnostics.push(
+                        Diagnostic::of(
     &codes::TRANSFORM_MULTI_TO_BALANCED_DROPPED_LOAD_VOLTAGE_MODEL,
 format!(
                                 "load {} voltage model cannot be represented by the conservative balanced lowering",
                                 load.name
                             ),
                         )
-                        .with_element_path(format!("/model/multiconductor_network/loads/{idx}/voltage_model")),
+                        .with_value_target(format!("/loads/{idx}/voltage_model")),
                     );
                 }
                 let mut balanced = Load::new(
@@ -1391,7 +1330,7 @@ format!(
                 let seq = sequence_matrix(&reduced);
                 seq[1][1]
             } else {
-                self.record.approximations.push(format!(
+                self.records.approximations.push(format!(
                     "shunt {} has {} active terminal(s); diagonal admittance projected with missing phases as zero",
                     shunt.name,
                     active.len()
@@ -1414,13 +1353,13 @@ format!(
         name: &str,
         message: &str,
     ) -> MulticonductorToBalancedError {
-        let mut diagnostics = self.record.diagnostics.clone();
+        let mut diagnostics = self.records.diagnostics.clone();
         diagnostics.push(
-            StructuredDiagnostic::of(
+            Diagnostic::of(
                 &codes::TRANSFORM_MULTI_TO_BALANCED_INVALID_SHUNT_MATRIX,
                 format!("shunt {name} cannot be lowered: {message}"),
             )
-            .with_element_path(format!("/model/multiconductor_network/shunts/{shunt_idx}")),
+            .with_value_target(format!("/shunts/{shunt_idx}")),
         );
         MulticonductorToBalancedError::new(self.options, &diagnostics)
     }
@@ -1438,41 +1377,41 @@ format!(
                 let pg = si_power_to_mega(generator.p_nom.iter().sum());
                 let qg = si_power_to_mega(generator.q_nom.iter().sum());
                 let pmin = option_vec_sum_mw(generator.p_min.as_deref()).unwrap_or_else(|| {
-                    self.record.dropped_fields.push(format!(
+                    self.records.dropped_fields.push(format!(
                         "generator {} p_min defaulted to pg",
                         generator.name
                     ));
                     pg
                 });
                 let pmax = option_vec_sum_mw(generator.p_max.as_deref()).unwrap_or_else(|| {
-                    self.record.dropped_fields.push(format!(
+                    self.records.dropped_fields.push(format!(
                         "generator {} p_max defaulted to pg",
                         generator.name
                     ));
                     pg
                 });
                 let qmin = option_vec_sum_mw(generator.q_min.as_deref()).unwrap_or_else(|| {
-                    self.record.dropped_fields.push(format!(
+                    self.records.dropped_fields.push(format!(
                         "generator {} q_min defaulted to qg",
                         generator.name
                     ));
                     qg
                 });
                 let qmax = option_vec_sum_mw(generator.q_max.as_deref()).unwrap_or_else(|| {
-                    self.record.dropped_fields.push(format!(
+                    self.records.dropped_fields.push(format!(
                         "generator {} q_max defaulted to qg",
                         generator.name
                     ));
                     qg
                 });
                 if generator.cost.is_some() {
-                    self.record.dropped_fields.push(format!(
+                    self.records.dropped_fields.push(format!(
                         "generator {} scalar distribution cost dropped",
                         generator.name
                     ));
                 }
                 if generator.s_max.is_some() || generator.i_max.is_some() {
-                    self.record.dropped_fields.push(format!(
+                    self.records.dropped_fields.push(format!(
                         "generator {} per-conductor rating fields dropped",
                         generator.name
                     ));
@@ -1500,27 +1439,25 @@ format!(
     }
 
     fn unknown_bus_diag(&mut self, element: &str, name: &str, bus: &str, idx: usize, field: &str) {
-        self.record.diagnostics.push(
-            StructuredDiagnostic::of(
+        self.records.diagnostics.push(
+            Diagnostic::of(
                 &codes::TRANSFORM_MULTI_TO_BALANCED_UNKNOWN_BUS,
                 format!("{element} {name} references unknown bus {bus}"),
             )
-            .with_element_path(format!(
-                "/model/multiconductor_network/{element}s/{idx}/{field}"
-            )),
+            .with_value_target(format!("/{element}s/{idx}/{field}")),
         );
     }
 
     fn err_if_errors(&self) -> Result<(), MulticonductorToBalancedError> {
         if self
-            .record
+            .records
             .diagnostics
             .iter()
-            .any(|d| d.severity >= DiagnosticSeverity::Error)
+            .any(|d| d.severity() >= DiagnosticSeverity::Error)
         {
             Err(MulticonductorToBalancedError::new(
                 self.options,
-                &self.record.diagnostics,
+                &self.records.diagnostics,
             ))
         } else {
             Ok(())
@@ -1929,26 +1866,12 @@ fn radians_to_degrees(value: f64) -> f64 {
     value * 180.0 / PI
 }
 
-fn status_from_diagnostics(diagnostics: &[StructuredDiagnostic]) -> ValidationStatus {
-    diagnostics
-        .iter()
-        .map(|d| match d.severity {
-            DiagnosticSeverity::Debug => ValidationStatus::Ok,
-            DiagnosticSeverity::Info => ValidationStatus::Info,
-            DiagnosticSeverity::Warning => ValidationStatus::Warning,
-            DiagnosticSeverity::Error => ValidationStatus::Error,
-            DiagnosticSeverity::Fatal => ValidationStatus::Fatal,
-        })
-        .max()
-        .unwrap_or(ValidationStatus::Ok)
-}
-
 fn check_options(
     options: MulticonductorToBalancedOptions,
-    report: &mut MulticonductorToBalancedReadiness,
+    report: &mut MulticonductorToBalancedReport,
 ) {
     if !options.base_mva.is_finite() || options.base_mva <= 0.0 {
-        report.diagnostics.push(StructuredDiagnostic::of(
+        report.diagnostics.push(Diagnostic::of(
     &codes::TRANSFORM_MULTI_TO_BALANCED_INVALID_BASE_MVA,
 format!(
                 "base_mva must be positive and finite for multiconductor to balanced lowering; got {}",
@@ -1960,7 +1883,7 @@ format!(
 
 fn check_bus_conductor_sets(
     net: &MulticonductorNetwork,
-    report: &mut MulticonductorToBalancedReadiness,
+    report: &mut MulticonductorToBalancedReport,
 ) {
     let neutral_terminals = global_neutral_terminals(net);
     let mut saw_neutral = false;
@@ -1973,34 +1896,34 @@ fn check_bus_conductor_sets(
         match active_count {
             3 => {}
             2 => report.diagnostics.push(
-                StructuredDiagnostic::of(
+                Diagnostic::of(
     &codes::TRANSFORM_MULTI_TO_BALANCED_AMBIGUOUS_TERMINAL_MAP,
 format!(
                         "bus {} has two active terminals; no unique positive sequence projection is defined",
                         bus.id
                     ),
                 )
-                .with_element_path(format!("/model/multiconductor_network/buses/{i}/terminals")),
+                .with_value_target(format!("/buses/{i}/terminals")),
             ),
             0 | 1 => report.diagnostics.push(
-                StructuredDiagnostic::of(
+                Diagnostic::of(
     &codes::TRANSFORM_MULTI_TO_BALANCED_UNSUPPORTED_CONDUCTOR_SET,
 format!(
                         "bus {} has {active_count} active terminal; multiconductor to balanced lowering starts with three phase input",
                         bus.id
                     ),
                 )
-                .with_element_path(format!("/model/multiconductor_network/buses/{i}/terminals")),
+                .with_value_target(format!("/buses/{i}/terminals")),
             ),
             _ => report.diagnostics.push(
-                StructuredDiagnostic::of(
+                Diagnostic::of(
     &codes::TRANSFORM_MULTI_TO_BALANCED_UNSUPPORTED_CONDUCTOR_SET,
 format!(
                         "bus {} has {active_count} active terminals; multiconductor to balanced lowering starts with three phase input",
                         bus.id
                     ),
                 )
-                .with_element_path(format!("/model/multiconductor_network/buses/{i}/terminals")),
+                .with_value_target(format!("/buses/{i}/terminals")),
             ),
         }
     }
@@ -2009,7 +1932,7 @@ format!(
         report
             .approximations
             .push("Kron reduction of neutral conductor before sequence transform".to_owned());
-        report.diagnostics.push(StructuredDiagnostic::of(
+        report.diagnostics.push(Diagnostic::of(
             &codes::TRANSFORM_MULTI_TO_BALANCED_KRON_REDUCTION_REQUIRED,
             "neutral conductors require Kron reduction before the sequence transform",
         ));
@@ -2018,7 +1941,7 @@ format!(
 
 fn check_line_terminal_maps(
     net: &MulticonductorNetwork,
-    report: &mut MulticonductorToBalancedReadiness,
+    report: &mut MulticonductorToBalancedReport,
 ) {
     let neutral_terminals = global_neutral_terminals(net);
     for (i, line) in net.lines().iter().enumerate() {
@@ -2038,32 +1961,32 @@ fn check_line_terminal_maps(
             let active_count = active_terminal_count(terminal_map, bus, &neutral_terminals);
             if active_count != 3 {
                 report.diagnostics.push(
-                    StructuredDiagnostic::of(
+                    Diagnostic::of(
     &codes::TRANSFORM_MULTI_TO_BALANCED_UNSUPPORTED_CONDUCTOR_SET,
 format!(
                             "line {} {field} has {active_count} active terminal(s); balanced branch lowering requires three active phase conductors",
                             line.name
                         ),
                     )
-                    .with_element_path(format!("/model/multiconductor_network/lines/{i}/{field}")),
+                    .with_value_target(format!("/lines/{i}/{field}")),
                 );
             }
         }
     }
 }
 
-fn check_linecodes(net: &MulticonductorNetwork, report: &mut MulticonductorToBalancedReadiness) {
+fn check_linecodes(net: &MulticonductorNetwork, report: &mut MulticonductorToBalancedReport) {
     for (i, line) in net.lines().iter().enumerate() {
         let Some(code) = net.linecode(&line.linecode) else {
             report.diagnostics.push(
-                StructuredDiagnostic::of(
+                Diagnostic::of(
                     &codes::TRANSFORM_MULTI_TO_BALANCED_UNKNOWN_LINECODE,
                     format!(
                         "line {} references unknown linecode `{}`",
                         line.name, line.linecode
                     ),
                 )
-                .with_element_path(format!("/model/multiconductor_network/lines/{i}/linecode")),
+                .with_value_target(format!("/lines/{i}/linecode")),
             );
             continue;
         };
@@ -2071,7 +1994,7 @@ fn check_linecodes(net: &MulticonductorNetwork, report: &mut MulticonductorToBal
             || code.n_conductors != line.terminal_map_to.len()
         {
             report.diagnostics.push(
-                StructuredDiagnostic::of(
+                Diagnostic::of(
     &codes::TRANSFORM_MULTI_TO_BALANCED_LINECODE_TERMINAL_MISMATCH,
 format!(
                         "line {} uses linecode {} with {} conductor(s), but its terminal maps have {} and {} terminal(s)",
@@ -2082,7 +2005,7 @@ format!(
                         line.terminal_map_to.len()
                     ),
                 )
-                .with_element_path(format!("/model/multiconductor_network/lines/{i}/linecode")),
+                .with_value_target(format!("/lines/{i}/linecode")),
             );
         }
         if !square_matrix_shape(&code.r_series, code.n_conductors)
@@ -2093,17 +2016,14 @@ format!(
             || !square_matrix_shape(&code.b_to, code.n_conductors)
         {
             report.diagnostics.push(
-                StructuredDiagnostic::of(
+                Diagnostic::of(
                     &codes::TRANSFORM_MULTI_TO_BALANCED_INVALID_LINECODE_MATRIX,
                     format!(
                         "linecode {} does not carry square {} conductor matrices",
                         code.name, code.n_conductors
                     ),
                 )
-                .with_element_path(format!(
-                    "/model/multiconductor_network/linecodes/{}",
-                    code.name
-                )),
+                .with_value_target(format!("/lines/{i}/linecode")),
             );
         }
     }
@@ -2113,19 +2033,19 @@ fn square_matrix_shape(matrix: &Mat, n: usize) -> bool {
     matrix.len() == n && matrix.iter().all(|row| row.len() == n)
 }
 
-fn check_switches(net: &MulticonductorNetwork, report: &mut MulticonductorToBalancedReadiness) {
+fn check_switches(net: &MulticonductorNetwork, report: &mut MulticonductorToBalancedReport) {
     let neutral_terminals = global_neutral_terminals(net);
     for (i, sw) in net.switches().iter().enumerate() {
         if sw.open {
             report.diagnostics.push(
-                StructuredDiagnostic::of(
+                Diagnostic::of(
                     &codes::TRANSFORM_MULTI_TO_BALANCED_DROPPED_OPEN_SWITCH,
                     format!(
                         "open switch {} is dropped by multiconductor to balanced lowering",
                         sw.name
                     ),
                 )
-                .with_element_path(format!("/model/multiconductor_network/switches/{i}")),
+                .with_value_target(format!("/switches/{i}")),
             );
         } else {
             report
@@ -2144,8 +2064,8 @@ fn switch_merge_blockers(
     index: usize,
     sw: &powerio_dist::DistSwitch,
     neutral_terminals: &BTreeSet<String>,
-) -> Vec<StructuredDiagnostic> {
-    let path = format!("/model/multiconductor_network/switches/{index}");
+) -> Vec<Diagnostic> {
+    let path = format!("/switches/{index}");
     let mut blockers = Vec::new();
     if sw
         .i_max
@@ -2153,7 +2073,7 @@ fn switch_merge_blockers(
         .is_some_and(|limits| limits.iter().any(|limit| limit.is_finite()))
     {
         blockers.push(
-            StructuredDiagnostic::of(
+            Diagnostic::of(
                 &codes::TRANSFORM_MULTI_TO_BALANCED_RATED_CLOSED_SWITCH,
                 format!(
                     "closed switch {} carries a finite ampacity; merging its buses would \
@@ -2161,7 +2081,7 @@ fn switch_merge_blockers(
                     sw.name
                 ),
             )
-            .with_element_path(path.clone()),
+            .with_value_target(path.clone()),
         );
     }
     let from_bus = net.bus(&sw.bus_from);
@@ -2173,11 +2093,11 @@ fn switch_merge_blockers(
             &sw.bus_to
         };
         blockers.push(
-            StructuredDiagnostic::of(
+            Diagnostic::of(
                 &codes::TRANSFORM_MULTI_TO_BALANCED_UNKNOWN_BUS,
                 format!("switch {} references unknown bus {missing}", sw.name),
             )
-            .with_element_path(path.clone()),
+            .with_value_target(path.clone()),
         );
         return blockers;
     }
@@ -2189,7 +2109,7 @@ fn switch_merge_blockers(
         neutral_terminals,
     ) {
         blockers.push(
-            StructuredDiagnostic::of(
+            Diagnostic::of(
                 &codes::TRANSFORM_MULTI_TO_BALANCED_SWITCH_TERMINAL_MISMATCH,
                 format!(
                     "closed switch {} does not map identical conductors on both ends, so its \
@@ -2197,7 +2117,7 @@ fn switch_merge_blockers(
                     sw.name
                 ),
             )
-            .with_element_path(path.clone()),
+            .with_value_target(path.clone()),
         );
     }
     if !sw.bus_from.eq_ignore_ascii_case(&sw.bus_to) {
@@ -2208,7 +2128,7 @@ fn switch_merge_blockers(
         };
         if sourced(&sw.bus_from) && sourced(&sw.bus_to) {
             blockers.push(
-                StructuredDiagnostic::of(
+                Diagnostic::of(
                     &codes::TRANSFORM_MULTI_TO_BALANCED_SWITCH_MERGE_CONFLICT,
                     format!(
                         "closed switch {} joins two buses that both carry voltage source \
@@ -2216,7 +2136,7 @@ fn switch_merge_blockers(
                         sw.name
                     ),
                 )
-                .with_element_path(path.clone()),
+                .with_value_target(path.clone()),
             );
         }
         let (from_bus, to_bus) = (from_bus.expect("checked"), to_bus.expect("checked"));
@@ -2228,7 +2148,7 @@ fn switch_merge_blockers(
                 && (a - b).abs() > f64::EPSILON * a.abs().max(b.abs()).max(1.0)
             {
                 blockers.push(
-                    StructuredDiagnostic::of(
+                    Diagnostic::of(
                         &codes::TRANSFORM_MULTI_TO_BALANCED_SWITCH_MERGE_CONFLICT,
                         format!(
                             "closed switch {} joins buses stating different {label} bounds \
@@ -2236,7 +2156,7 @@ fn switch_merge_blockers(
                             sw.name
                         ),
                     )
-                    .with_element_path(path.clone()),
+                    .with_value_target(path.clone()),
                 );
             }
         }
@@ -2273,10 +2193,7 @@ fn is_neutral_terminal(
         || neutral_terminals.contains(terminal)
 }
 
-fn check_phase_reference(
-    net: &MulticonductorNetwork,
-    report: &mut MulticonductorToBalancedReadiness,
-) {
+fn check_phase_reference(net: &MulticonductorNetwork, report: &mut MulticonductorToBalancedReport) {
     let neutral_terminals = global_neutral_terminals(net);
     let has_three_phase_source = net.sources().iter().any(|source| {
         let bus = net.bus(&source.bus);
@@ -2284,23 +2201,23 @@ fn check_phase_reference(
     });
 
     if !has_three_phase_source {
-        report.diagnostics.push(StructuredDiagnostic::of(
+        report.diagnostics.push(Diagnostic::of(
             &codes::TRANSFORM_MULTI_TO_BALANCED_MISSING_PHASE_REFERENCE,
             "multiconductor to balanced lowering requires a three phase voltage source reference",
         ));
     }
 }
 
-fn check_transformers(net: &MulticonductorNetwork, report: &mut MulticonductorToBalancedReadiness) {
+fn check_transformers(net: &MulticonductorNetwork, report: &mut MulticonductorToBalancedReport) {
     let neutral_terminals = global_neutral_terminals(net);
     for (i, transformer) in net.transformers().iter().enumerate() {
         if let Err(reason) = classify_transformer(net, transformer, &neutral_terminals) {
             report.diagnostics.push(
-                StructuredDiagnostic::of(
+                Diagnostic::of(
                     &codes::TRANSFORM_MULTI_TO_BALANCED_UNSUPPORTED_TRANSFORMER,
                     format!("transformer {} {reason}", transformer.name),
                 )
-                .with_element_path(format!("/model/multiconductor_network/transformers/{i}")),
+                .with_value_target(format!("/transformers/{i}")),
             );
         }
     }
@@ -2383,20 +2300,17 @@ fn classify_transformer<'net>(
     Ok([high, low])
 }
 
-fn check_untyped_objects(
-    net: &MulticonductorNetwork,
-    report: &mut MulticonductorToBalancedReadiness,
-) {
+fn check_untyped_objects(net: &MulticonductorNetwork, report: &mut MulticonductorToBalancedReport) {
     for (i, obj) in net.untyped().iter().enumerate() {
         report.diagnostics.push(
-            StructuredDiagnostic::of(
+            Diagnostic::of(
                 &codes::TRANSFORM_MULTI_TO_BALANCED_UNSUPPORTED_OBJECT,
                 format!(
                     "{} {} is preserved as an untyped object and cannot be lowered",
                     obj.class, obj.name
                 ),
             )
-            .with_element_path(format!("/model/multiconductor_network/untyped/{i}")),
+            .with_value_target(format!("/untyped/{i}")),
         );
     }
 }
@@ -2433,7 +2347,7 @@ mod history_record_tests {
                     HistoryEntry::new(
                         HistoryId::new(id).unwrap(),
                         HistoryKind::Transform,
-                        "lower_multiconductor_to_balanced",
+                        "to_balanced",
                     )
                     .unwrap(),
                 )

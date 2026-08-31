@@ -11,10 +11,8 @@ use std::path::{Path, PathBuf};
 use powerio_tx::TransformerControlMode;
 use powerio_tx::{
     BalancedNetwork, Branch, BranchCharging, BranchCurrentRatings, BranchRatingSet, BranchSolution,
-    Bus, BusId, BusType, Load, LoadVoltageModel, MissingGenCostPolicy, SourceFormat, TargetFormat,
-    WriteOptions, convert_file, parse_gen_cost_csv, write_as_with_options, write_dir,
-    write_dir_with_options, write_egret_json, write_powermodels_json, write_powerworld, write_pslf,
-    write_psse, write_pypsa_csv_folder,
+    Bus, BusId, BusType, EmitOptions, Load, LoadVoltageModel, MissingGenCostPolicy, SourceFormat,
+    TargetFormat, parse_gen_cost_csv,
 };
 use serde_json::Value;
 
@@ -165,17 +163,17 @@ fn canonical_api_names_parse_and_convert() {
         TargetFormat::PowerModelsJson
     );
     assert_eq!(TargetFormat::Psse { rev: 33 }.to_string(), "psse");
-    assert_eq!(parsed.to_format(TargetFormat::Matpower).unwrap().text, src);
+    assert_eq!(parsed.emit(TargetFormat::Matpower).unwrap().text, src);
 
-    let pm = net.to_format(TargetFormat::PowerModelsJson).unwrap();
+    let pm = emit_value(&net, TargetFormat::PowerModelsJson).unwrap();
     assert_eq!(
         serde_json::from_str::<Value>(&pm.text).unwrap()["name"],
         "case14"
     );
 
-    let same = convert_file(&path, TargetFormat::Matpower, None).unwrap();
+    let same = parse_file_and_emit(&path, TargetFormat::Matpower, None).unwrap();
     assert_eq!(same.text, src);
-    assert!(same.rendered_diagnostics().is_empty());
+    assert!(same.render_diagnostics().is_empty());
 }
 
 #[test]
@@ -183,123 +181,123 @@ fn canonical_api_names_parse_and_convert() {
 fn rich_writer_warnings_cover_simple_formats() {
     let net = rich_audit_network();
 
-    let matpower = write_network(&net, TargetFormat::Matpower).unwrap();
+    let matpower = emit_value(&net, TargetFormat::Matpower).unwrap();
     assert!(has_warning(
-        &matpower.rendered_diagnostics(),
+        &matpower.render_diagnostics(),
         "branch terminal admittance"
     ));
     assert!(has_warning(
-        &matpower.rendered_diagnostics(),
+        &matpower.render_diagnostics(),
         "branch current rating"
     ));
     assert!(has_warning(
-        &matpower.rendered_diagnostics(),
+        &matpower.render_diagnostics(),
         "branch 1 (1 to 2) rating set RATE4=125"
     ));
     assert!(has_warning(
-        &matpower.rendered_diagnostics(),
+        &matpower.render_diagnostics(),
         "branch solution value"
     ));
     assert!(has_warning(
-        &matpower.rendered_diagnostics(),
+        &matpower.render_diagnostics(),
         "voltage dependent load model"
     ));
 
-    let pm = write_powermodels_json(&net);
+    let pm = emit_powermodels_json(&net);
     assert!(has_warning(
-        &pm.rendered_diagnostics(),
+        &pm.render_diagnostics(),
         "voltage dependent load model"
     ));
     assert!(!has_warning(
-        &pm.rendered_diagnostics(),
+        &pm.render_diagnostics(),
         "branch current rating"
     ));
     assert!(has_warning(
-        &pm.rendered_diagnostics(),
+        &pm.render_diagnostics(),
         "rating set RATE4=125"
     ));
     assert!(!has_warning(
-        &pm.rendered_diagnostics(),
+        &pm.render_diagnostics(),
         "branch solution value"
     ));
 
-    let egret = write_egret_json(&net);
+    let egret = emit_egret_json(&net);
     assert!(has_warning(
-        &egret.rendered_diagnostics(),
+        &egret.render_diagnostics(),
         "branch terminal admittance"
     ));
     assert!(has_warning(
-        &egret.rendered_diagnostics(),
+        &egret.render_diagnostics(),
         "branch current rating"
     ));
     assert!(has_warning(
-        &egret.rendered_diagnostics(),
+        &egret.render_diagnostics(),
         "rating set RATE4=125"
     ));
     assert!(has_warning(
-        &egret.rendered_diagnostics(),
+        &egret.render_diagnostics(),
         "branch solution value"
     ));
     assert!(has_warning(
-        &egret.rendered_diagnostics(),
+        &egret.render_diagnostics(),
         "voltage dependent load model"
     ));
 
-    let powerworld = write_powerworld(&net);
+    let powerworld = emit_powerworld(&net);
     assert!(has_warning(
-        &powerworld.rendered_diagnostics(),
+        &powerworld.render_diagnostics(),
         "branch terminal admittance"
     ));
     assert!(has_warning(
-        &powerworld.rendered_diagnostics(),
+        &powerworld.render_diagnostics(),
         "branch current rating"
     ));
     assert!(has_warning(
-        &powerworld.rendered_diagnostics(),
+        &powerworld.render_diagnostics(),
         "rating set RATE4=125"
     ));
     assert!(has_warning(
-        &powerworld.rendered_diagnostics(),
+        &powerworld.render_diagnostics(),
         "branch solution value"
     ));
     assert!(has_warning(
-        &powerworld.rendered_diagnostics(),
+        &powerworld.render_diagnostics(),
         "voltage dependent load model"
     ));
 
-    let psse = write_psse(&net);
+    let psse = emit_psse(&net);
     assert!(!has_warning(
-        &psse.rendered_diagnostics(),
+        &psse.render_diagnostics(),
         "branch terminal admittance"
     ));
     assert!(has_warning(
-        &psse.rendered_diagnostics(),
+        &psse.render_diagnostics(),
         "branch current rating"
     ));
     assert!(has_warning(
-        &psse.rendered_diagnostics(),
+        &psse.render_diagnostics(),
         "rating set RATE4=125"
     ));
     assert!(has_warning(
-        &psse.rendered_diagnostics(),
+        &psse.render_diagnostics(),
         "branch solution value"
     ));
 
-    let pslf = write_pslf(&net);
+    let pslf = emit_pslf(&net);
     assert!(has_warning(
-        &pslf.rendered_diagnostics(),
+        &pslf.render_diagnostics(),
         "branch terminal admittance"
     ));
     assert!(has_warning(
-        &pslf.rendered_diagnostics(),
+        &pslf.render_diagnostics(),
         "branch current rating"
     ));
     assert!(has_warning(
-        &pslf.rendered_diagnostics(),
+        &pslf.render_diagnostics(),
         "rating set RATE4=125"
     ));
     assert!(has_warning(
-        &pslf.rendered_diagnostics(),
+        &pslf.render_diagnostics(),
         "branch solution value"
     ));
 }
@@ -320,17 +318,17 @@ fn terminal_charging_projection_feeds_legacy_writer_b_fields() {
     let net = terminal_projection_network();
     let want_b = 0.07;
 
-    let matpower = write_network(&net, TargetFormat::Matpower).unwrap();
+    let matpower = emit_value(&net, TargetFormat::Matpower).unwrap();
     assert!(has_warning(
-        &matpower.rendered_diagnostics(),
+        &matpower.render_diagnostics(),
         "total susceptance"
     ));
     let back = parse_matpower(&matpower.text).unwrap();
     close(back.branches()[0].b, want_b);
 
-    let egret = write_egret_json(&net);
+    let egret = emit_egret_json(&net);
     assert!(has_warning(
-        &egret.rendered_diagnostics(),
+        &egret.render_diagnostics(),
         "total susceptance"
     ));
     let egret_json: Value = serde_json::from_str(&egret.text).unwrap();
@@ -341,19 +339,16 @@ fn terminal_charging_projection_feeds_legacy_writer_b_fields() {
         want_b,
     );
 
-    let powerworld = write_powerworld(&net);
+    let powerworld = emit_powerworld(&net);
     assert!(has_warning(
-        &powerworld.rendered_diagnostics(),
+        &powerworld.render_diagnostics(),
         "total susceptance"
     ));
     let back = parse_powerworld(&powerworld.text).unwrap();
     close(back.branches()[0].b, want_b);
 
-    let pslf = write_pslf(&net);
-    assert!(has_warning(
-        &pslf.rendered_diagnostics(),
-        "total susceptance"
-    ));
+    let pslf = emit_pslf(&net);
+    assert!(has_warning(&pslf.render_diagnostics(), "total susceptance"));
     let back = parse_pslf(&pslf.text).unwrap();
     close(back.branches()[0].b, want_b);
 }
@@ -399,24 +394,21 @@ fn core(net: &BalancedNetwork) -> Core {
 #[test]
 fn pandapower_json_round_trips_core_and_echoes_source() {
     let net = parse_matpower_file(data("case9.m")).unwrap();
-    let conv = write_network(&net, TargetFormat::PandapowerJson).unwrap();
+    let conv = emit_value(&net, TargetFormat::PandapowerJson).unwrap();
     assert!(
         !conv
-            .rendered_diagnostics()
+            .render_diagnostics()
             .iter()
             .any(|w| w.contains("dcline")),
         "case9 has no dclines, got warnings: {:?}",
-        conv.rendered_diagnostics()
+        conv.render_diagnostics()
     );
     let reparsed = parse_str(&conv.text, "pandapower-json").unwrap();
     let back = reparsed.network.clone();
     assert_eq!(back.source_format(), SourceFormat::PandapowerJson);
     assert_eq!(core(&back), core(&net));
     assert_eq!(
-        reparsed
-            .to_format(TargetFormat::PandapowerJson)
-            .unwrap()
-            .text,
+        reparsed.emit(TargetFormat::PandapowerJson).unwrap().text,
         conv.text
     );
 
@@ -430,7 +422,7 @@ fn pandapower_json_round_trips_core_and_echoes_source() {
 fn pypsa_csv_folder_round_trips_core() {
     let net = parse_matpower_file(data("case9.m")).unwrap();
     let out = tmp_dir("case9-pypsa-csv");
-    let written = write_pypsa_csv_folder(&net, &out).unwrap();
+    let written = emit_pypsa_csv_folder(&net, &out).unwrap();
     let names: std::collections::BTreeSet<_> = written
         .files
         .iter()
@@ -603,7 +595,7 @@ fn pandapower_line_rating_sentinel_reads_as_unlimited() {
 fn pandapower_writer_keeps_zero_rating_zero() {
     let mut net = parse_matpower_file(data("case9.m")).unwrap();
     net.branches_mut()[0].rate_a = 0.0;
-    let conv = write_network(&net, TargetFormat::PandapowerJson).unwrap();
+    let conv = emit_value(&net, TargetFormat::PandapowerJson).unwrap();
     let back = parse_str(&conv.text, "pandapower-json").unwrap().network;
     assert_eq!(back.branches()[0].rate_a, 0.0);
     assert!(back.branches()[1].rate_a > 0.0, "other ratings survive");
@@ -623,7 +615,7 @@ fn pypsa_csv_quoted_fields_round_trip() {
     let mut net = parse_matpower_file(data("case9.m")).unwrap();
     net.buses_mut()[0].name = Some("weird, name\nwith \"newline\"".into());
     let dir = tmp_dir("pypsa-quoted-names");
-    write_pypsa_csv_folder(&net, &dir).unwrap();
+    emit_pypsa_csv_folder(&net, &dir).unwrap();
     let back = read_pypsa_csv_folder(&dir).unwrap().network;
     assert_eq!(back.buses().len(), net.buses().len());
     assert!(
@@ -639,7 +631,7 @@ fn pypsa_csv_quoted_fields_round_trip() {
 fn parse_file_routes_pypsa_folders() {
     let net = parse_matpower_file(data("case9.m")).unwrap();
     let dir = tmp_dir("pypsa-parse-file-routing");
-    write_pypsa_csv_folder(&net, &dir).unwrap();
+    emit_pypsa_csv_folder(&net, &dir).unwrap();
 
     // Explicit format name, including alias spellings. Format IDs are lower
     // case with hyphens; the helper lowercases, so mixed case still lands.
@@ -671,11 +663,11 @@ fn tmp_path(label: &str, ext: &str) -> PathBuf {
 #[test]
 fn powermodels_structure_and_split() {
     let case = parse_matpower_file(data("case30.m")).unwrap();
-    let conv = write_powermodels_json(&case);
+    let conv = emit_powermodels_json(&case);
     assert!(
-        conv.rendered_diagnostics().is_empty(),
+        conv.render_diagnostics().is_empty(),
         "case30 should convert cleanly: {:?}",
-        conv.rendered_diagnostics()
+        conv.render_diagnostics()
     );
     let v: Value = serde_json::from_str(&conv.text).unwrap();
 
@@ -747,11 +739,11 @@ fn powermodels_preserves_rich_branch_and_switch_fields() {
     let parsed = parse_str(json, "powermodels").unwrap();
     assert!(
         parsed
-            .rendered_diagnostics()
+            .render_diagnostics()
             .iter()
             .any(|w| w.contains("multinetwork=true")),
         "expected multinetwork warning, got {:?}",
-        parsed.rendered_diagnostics()
+        parsed.render_diagnostics()
     );
     let net = parsed.network.clone();
     assert_eq!(net.loads().len(), 2);
@@ -759,7 +751,7 @@ fn powermodels_preserves_rich_branch_and_switch_fields() {
     assert_eq!(net.loads()[1].bus, BusId(1));
 
     let br = &net.branches()[0];
-    let charging = br.terminal_charging();
+    let charging = br.calc_terminal_charging();
     assert!((charging.g_fr - 0.001).abs() < 1e-12);
     assert!((charging.b_fr - 0.02).abs() < 1e-12);
     assert!((charging.g_to - 0.003).abs() < 1e-12);
@@ -774,21 +766,21 @@ fn powermodels_preserves_rich_branch_and_switch_fields() {
     assert_eq!(sw.current_rating, Some(9.0));
     assert_eq!(sw.pf, Some(1.0));
 
-    let out: Value = serde_json::from_str(&write_powermodels_json(&net).text).unwrap();
+    let out: Value = serde_json::from_str(&emit_powermodels_json(&net).text).unwrap();
     assert_eq!(out["branch"]["1"]["g_fr"], 0.001);
     assert_eq!(out["branch"]["1"]["b_to"], 0.04);
     assert_eq!(out["branch"]["1"]["c_rating_c"], 700.0);
     assert_eq!(out["branch"]["1"]["pf"], 0.125);
     assert_eq!(out["switch"]["1"]["thermal_rating"], 0.75);
 
-    let matpower = write_network(&net, TargetFormat::Matpower).unwrap();
+    let matpower = emit_value(&net, TargetFormat::Matpower).unwrap();
     assert!(
         matpower
-            .rendered_diagnostics()
+            .render_diagnostics()
             .iter()
             .any(|w| w.contains("terminal admittance")),
         "expected MATPOWER terminal admittance warning, got {:?}",
-        matpower.rendered_diagnostics()
+        matpower.render_diagnostics()
     );
 }
 
@@ -860,7 +852,7 @@ fn rich_powermodels_typed_fields_survive_json_transport() {
     assert!(net.loads().iter().all(|l| l.bus == BusId(1)));
 
     let br = &net.branches()[0];
-    let charging = br.terminal_charging();
+    let charging = br.calc_terminal_charging();
     close(charging.g_fr, 0.001);
     close(charging.b_to, 0.04);
     close(br.current_ratings.unwrap().c_rating_c, 700.0);
@@ -880,17 +872,17 @@ fn rich_powermodels_typed_fields_survive_json_transport() {
         close(*got, want);
     }
 
-    let out = write_powermodels_json(&net);
+    let out = emit_powermodels_json(&net);
     assert!(
-        out.rendered_diagnostics()
+        out.render_diagnostics()
             .iter()
             .all(|w| w.contains("dcline") || w.contains("storage")),
         "{:?}",
-        out.rendered_diagnostics()
+        out.render_diagnostics()
     );
     let back = parse_powermodels_json(&out.text).unwrap();
     assert_eq!(back.loads().len(), 2);
-    assert_eq!(back.branches()[0].terminal_charging(), charging);
+    assert_eq!(back.branches()[0].calc_terminal_charging(), charging);
     assert_eq!(back.switches()[0].current_rating, Some(9.0));
     assert_eq!(back.storage()[0].current_rating, Some(4.2));
     assert_eq!(
@@ -921,13 +913,13 @@ fn rich_matpower_terminal_admittance_warning_shape() {
         "gen": {}, "load": {}, "shunt": {}, "storage": {}, "switch": {}, "dcline": {}
     }"#;
     let net = parse_powermodels_json(base).unwrap();
-    let mp = write_network(&net, TargetFormat::Matpower).unwrap();
+    let mp = emit_value(&net, TargetFormat::Matpower).unwrap();
     assert!(
-        !mp.rendered_diagnostics()
+        !mp.render_diagnostics()
             .iter()
             .any(|w| w.contains("terminal admittance")),
         "{:?}",
-        mp.rendered_diagnostics()
+        mp.render_diagnostics()
     );
     let reread = parse_matpower(&mp.text).unwrap();
     close(reread.branches()[0].b, 0.04);
@@ -937,13 +929,13 @@ fn rich_matpower_terminal_admittance_warning_shape() {
         r#""g_to": 0.001, "b_to": 0.03"#,
     );
     let net = parse_powermodels_json(&asymmetric).unwrap();
-    let mp = write_network(&net, TargetFormat::Matpower).unwrap();
+    let mp = emit_value(&net, TargetFormat::Matpower).unwrap();
     assert!(
-        mp.rendered_diagnostics()
+        mp.render_diagnostics()
             .iter()
             .any(|w| w.contains("terminal admittance")),
         "{:?}",
-        mp.rendered_diagnostics()
+        mp.render_diagnostics()
     );
 }
 
@@ -993,14 +985,14 @@ COMMENT
 Q
 ";
     let net = parse_psse(raw).unwrap();
-    let pslf = write_pslf(&net);
+    let pslf = emit_pslf(&net);
     assert!(
         !pslf
-            .rendered_diagnostics()
+            .render_diagnostics()
             .iter()
             .any(|w| w.contains("voltage model")),
         "{:?}",
-        pslf.rendered_diagnostics()
+        pslf.render_diagnostics()
     );
     let back = parse_pslf(&pslf.text).unwrap();
     let Some(LoadVoltageModel::Zip {
@@ -1062,9 +1054,9 @@ fn rich_pandapower_zip_and_terminal_conductance_are_typed() {
     )
     .unwrap();
     assert!(
-        parsed.rendered_diagnostics().is_empty(),
+        parsed.render_diagnostics().is_empty(),
         "{:?}",
-        parsed.rendered_diagnostics()
+        parsed.render_diagnostics()
     );
     let Some(LoadVoltageModel::Zip {
         p_constant_power,
@@ -1085,7 +1077,7 @@ fn rich_pandapower_zip_and_terminal_conductance_are_typed() {
     close(*q_constant_current, 2.0);
     close(*q_constant_power, 2.5);
     assert!(
-        parsed.network.branches()[0].terminal_charging().g_fr > 0.0,
+        parsed.network.branches()[0].calc_terminal_charging().g_fr > 0.0,
         "line shunt conductance should be typed terminal admittance"
     );
 }
@@ -1099,7 +1091,7 @@ fn powermodels_transformer_flag_tracks_raw_tap() {
     // even though the effective ratio is 1 — while a pure phase shifter (tap 0,
     // shift ≠ 0) is a line. The writer must emit that same flag.
     let case = parse_matpower_file(data("case57.m")).unwrap();
-    let v: Value = serde_json::from_str(&write_powermodels_json(&case).text).unwrap();
+    let v: Value = serde_json::from_str(&emit_powermodels_json(&case).text).unwrap();
     let any_explicit_tap = case.branches().iter().any(|b| b.tap == 1.0);
     assert!(
         any_explicit_tap,
@@ -1120,14 +1112,14 @@ fn powermodels_warns_on_non_finite() {
     // pegase carries Inf reactive limits; JSON can't hold ±Inf, so we emit null
     // and must say so rather than fail silently.
     let case = parse_matpower_file(data("case2869pegase.m")).unwrap();
-    let conv = write_powermodels_json(&case);
+    let conv = emit_powermodels_json(&case);
     let v: Value = serde_json::from_str(&conv.text).unwrap();
     assert!(
-        conv.rendered_diagnostics()
+        conv.render_diagnostics()
             .iter()
             .any(|w| w.contains("non-finite")),
         "expected a non-finite warning, got: {:?}",
-        conv.rendered_diagnostics()
+        conv.render_diagnostics()
     );
     assert!(serde_json::to_string(&v).is_ok());
 }
@@ -1135,7 +1127,7 @@ fn powermodels_warns_on_non_finite() {
 #[test]
 fn egret_structure() {
     let case = parse_matpower_file(data("case30.m")).unwrap();
-    let v: Value = serde_json::from_str(&write_egret_json(&case).text).unwrap();
+    let v: Value = serde_json::from_str(&emit_egret_json(&case).text).unwrap();
     let elements = &v["elements"];
     assert_eq!(
         elements["bus"].as_object().unwrap().len(),
@@ -1166,9 +1158,9 @@ fn powermodels_json_reader_is_inverse_of_writer() {
     // is not bit-exact in f64.
     for case in ["case9", "case14", "case30", "case57", "case118"] {
         let net = parse_matpower_file(data(&format!("{case}.m"))).unwrap();
-        let json1 = write_powermodels_json(&net).text;
+        let json1 = emit_powermodels_json(&net).text;
         let net2 = parse_powermodels_json(&json1).unwrap();
-        let json2 = write_powermodels_json(&net2).text;
+        let json2 = emit_powermodels_json(&net2).text;
         let v1: Value = serde_json::from_str(&json1).unwrap();
         let v2: Value = serde_json::from_str(&json2).unwrap();
         assert!(
@@ -1182,13 +1174,10 @@ fn powermodels_json_reader_is_inverse_of_writer() {
 fn powermodels_json_same_format_is_byte_exact_echo() {
     // Same-format round-trip echoes the retained source byte-for-byte.
     let net = parse_matpower_file(data("case30.m")).unwrap();
-    let json = write_powermodels_json(&net).text;
+    let json = emit_powermodels_json(&net).text;
     let reparsed = parse_str(&json, "powermodels-json").unwrap();
     assert_eq!(
-        reparsed
-            .to_format(TargetFormat::PowerModelsJson)
-            .unwrap()
-            .text,
+        reparsed.emit(TargetFormat::PowerModelsJson).unwrap().text,
         json
     );
 }
@@ -1201,15 +1190,14 @@ fn powermodels_json_to_matpower_two_way() {
     // MATPOWER-only on the read side. Source is PowerModels, so the MATPOWER
     // target is canonical (not an echo).
     let orig = parse_matpower_file(data("case30.m")).unwrap();
-    let json = write_powermodels_json(&orig).text;
+    let json = emit_powermodels_json(&orig).text;
     let net = parse_powermodels_json(&json).unwrap();
     assert_eq!(
         net.source_format(),
         powerio_tx::SourceFormat::PowerModelsJson
     );
 
-    let reparsed =
-        parse_matpower(&write_network(&net, TargetFormat::Matpower).unwrap().text).unwrap();
+    let reparsed = parse_matpower(&emit_value(&net, TargetFormat::Matpower).unwrap().text).unwrap();
     assert_eq!(reparsed.buses().len(), orig.buses().len());
     assert_eq!(reparsed.branches().len(), orig.branches().len());
     assert_eq!(reparsed.generators().len(), orig.generators().len());
@@ -1281,13 +1269,11 @@ fn hvdc_converts_and_round_trips() {
     let net = parse_matpower_file(data("t_case9_dcline.m")).unwrap();
     assert!(!net.hvdc().is_empty(), "fixture should have dclines");
 
-    let pm = write_powermodels_json(&net);
+    let pm = emit_powermodels_json(&net);
     assert!(
-        !pm.rendered_diagnostics()
-            .iter()
-            .any(|w| w.contains("dcline")),
+        !pm.render_diagnostics().iter().any(|w| w.contains("dcline")),
         "every Hvdc field has a PowerModels slot, so nothing to warn about: {:?}",
-        pm.rendered_diagnostics()
+        pm.render_diagnostics()
     );
     let back = parse_powermodels_json(&pm.text).unwrap();
     assert_hvdc_survives(&net, &back, "PowerModels JSON");
@@ -1295,7 +1281,7 @@ fn hvdc_converts_and_round_trips() {
     // egret `dc_branch` states the same fields the MATPOWER dcline row does, and
     // the egret reader already read them. Only the usage cost (from
     // `mpc.dclinecost`, stated on dcline 5 -> 9 alone) has no egret slot.
-    let egret = write_egret_json(&net);
+    let egret = emit_egret_json(&net);
     assert_eq!(
         egret
             .diagnostics
@@ -1305,14 +1291,14 @@ fn hvdc_converts_and_round_trips() {
             .collect::<Vec<_>>(),
         ["dcline 5 -> 9 cost curve dropped: egret dc_branch records carry no cost"],
         "egret dc_branch carries every dcline field but the cost: {:?}",
-        egret.rendered_diagnostics()
+        egret.render_diagnostics()
     );
     let from_egret = parse_str(&egret.text, "egret-json").unwrap().network;
     assert_hvdc_survives(&net, &from_egret, "egret JSON");
 
     // PSS/E writes the dclines as two-terminal DC records; the endpoints and
     // power setpoint survive a re-read, with the converter detail defaulted.
-    let psse = write_psse(&net);
+    let psse = emit_psse(&net);
     let from_psse = parse_psse(&psse.text).unwrap();
     assert_eq!(
         from_psse.hvdc().len(),
@@ -1322,20 +1308,18 @@ fn hvdc_converts_and_round_trips() {
     assert_eq!(from_psse.hvdc()[0].from, net.hvdc()[0].from);
     assert_eq!(from_psse.hvdc()[0].to, net.hvdc()[0].to);
     assert!(
-        psse.rendered_diagnostics()
+        psse.render_diagnostics()
             .iter()
             .any(|w| w.contains("converter detail")),
         "PSS/E should note the defaulted converter detail, got {:?}",
-        psse.rendered_diagnostics()
+        psse.render_diagnostics()
     );
 
-    let pw = write_powerworld(&net);
+    let pw = emit_powerworld(&net);
     assert!(
-        pw.rendered_diagnostics()
-            .iter()
-            .any(|w| w.contains("dcline")),
+        pw.render_diagnostics().iter().any(|w| w.contains("dcline")),
         "expected a dropped-dcline warning, got {:?}",
-        pw.rendered_diagnostics()
+        pw.render_diagnostics()
     );
 
     // Cross-format → MATPOWER writes the same `mpc.dcline`/`mpc.dclinecost`
@@ -1343,14 +1327,14 @@ fn hvdc_converts_and_round_trips() {
     // would echo its source; convert through PowerModels first to reach the
     // canonical MATPOWER path with HVDC still present.
     assert_eq!(back.source_format(), SourceFormat::PowerModelsJson);
-    let to_mp = write_network(&back, TargetFormat::Matpower).unwrap();
+    let to_mp = emit_value(&back, TargetFormat::Matpower).unwrap();
     assert!(
         !to_mp
-            .rendered_diagnostics()
+            .render_diagnostics()
             .iter()
             .any(|w| w.contains("dcline")),
         "the canonical writer emits `mpc.dcline`, nothing to warn about: {:?}",
-        to_mp.rendered_diagnostics()
+        to_mp.render_diagnostics()
     );
     let from_mp = parse_str(&to_mp.text, "matpower").unwrap().network;
     assert_hvdc_survives(&net, &from_mp, "canonical MATPOWER .m");
@@ -1372,14 +1356,12 @@ fn hvdc_round_trips_through_pslf() {
     let net = parse_matpower_file(data("t_case9_dcline.m")).unwrap();
     assert!(!net.hvdc().is_empty(), "fixture should have dclines");
 
-    let pslf = write_pslf(&net);
+    let pslf = emit_pslf(&net);
     // The writer zeroes every converter field the model does not carry, and the
     // reader reads that shape as "nothing stated": its own output must come
     // back without the retained-control-fields warning. A real GE export with
     // firing angles or taps still gets it (pinned in the pslf unit tests).
-    let back_warnings = parse_str(&pslf.text, "pslf")
-        .unwrap()
-        .rendered_diagnostics();
+    let back_warnings = parse_str(&pslf.text, "pslf").unwrap().render_diagnostics();
     assert!(
         !back_warnings
             .iter()
@@ -1388,11 +1370,11 @@ fn hvdc_round_trips_through_pslf() {
     );
     assert!(
         !pslf
-            .rendered_diagnostics()
+            .render_diagnostics()
             .iter()
             .any(|w| w.contains("dcline")),
         "HVDC is now written, not dropped: {:?}",
-        pslf.rendered_diagnostics()
+        pslf.render_diagnostics()
     );
     let back = parse_pslf(&pslf.text).unwrap();
     assert_eq!(back.hvdc().len(), net.hvdc().len(), "every dcline survives");
@@ -1435,7 +1417,7 @@ fn surge_hvdc_carries_the_converter_terminal_fields_its_reader_reads() {
     // sending end's terminal voltage came back as 1.0 and the received power
     // came back negated.
     let net = parse_matpower_file(data("t_case9_dcline.m")).unwrap();
-    let surge = write_network(&net, TargetFormat::SurgeJson).unwrap();
+    let surge = emit_value(&net, TargetFormat::SurgeJson).unwrap();
     let back = parse_str(&surge.text, "surge-json").unwrap().network;
     assert_eq!(back.hvdc().len(), net.hvdc().len());
 
@@ -1463,7 +1445,7 @@ fn surge_hvdc_carries_the_converter_terminal_fields_its_reader_reads() {
     // dcline 2 states Pt = 1.96 with no losses, which the loss model cannot
     // reproduce, and dcline 4 states a usage cost (from `mpc.dclinecost`) that
     // a Surge link has no slot for; those are the two lines the writer reports.
-    let lines = surge.rendered_diagnostics();
+    let lines = surge.render_diagnostics();
     let dropped: Vec<_> = lines
         .iter()
         .filter(|w| w.contains("received power"))
@@ -1484,14 +1466,14 @@ fn pslf_carries_the_voltage_setpoint_of_a_bus_with_no_base_kv() {
         "case14 states no base kV, which is what makes reg_kv unusable"
     );
 
-    let pslf = write_network(&net, TargetFormat::Pslf).unwrap();
+    let pslf = emit_value(&net, TargetFormat::Pslf).unwrap();
     assert!(
         !pslf
-            .rendered_diagnostics()
+            .render_diagnostics()
             .iter()
             .any(|w| w.contains("voltage setpoint")),
         "the setpoint is carried, not dropped: {:?}",
-        pslf.rendered_diagnostics()
+        pslf.render_diagnostics()
     );
     let back = parse_pslf(&pslf.text).unwrap();
     assert_eq!(back.generators().len(), net.generators().len());
@@ -1560,8 +1542,8 @@ fn readers_reject_malformed_input() {
 #[test]
 fn matpower_target_round_trips() {
     let parsed = parse_file(data("case14.m"), Some("matpower")).unwrap();
-    let conv = parsed.to_format(TargetFormat::Matpower).unwrap();
-    assert!(conv.rendered_diagnostics().is_empty());
+    let conv = parsed.emit(TargetFormat::Matpower).unwrap();
+    assert!(conv.render_diagnostics().is_empty());
     // The matpower target of an unchanged parsed module is the lossless
     // echo: byte-identical to the source.
     let src = std::fs::read_to_string(data("case14.m")).unwrap();
@@ -1586,7 +1568,7 @@ mpc.branch = [
 ];
 ";
     let net = parse_matpower(src).unwrap();
-    let v: Value = serde_json::from_str(&write_powermodels_json(&net).text).unwrap();
+    let v: Value = serde_json::from_str(&emit_powermodels_json(&net).text).unwrap();
     let b1 = &v["branch"]["1"];
     assert_eq!(
         b1["transformer"],
@@ -1611,7 +1593,7 @@ fn powermodels_dcline_flips_pt_qf_qt_sign() {
         .iter()
         .find(|d| d.pt != 0.0)
         .expect("a dcline with nonzero Pt");
-    let v: Value = serde_json::from_str(&write_powermodels_json(&net).text).unwrap();
+    let v: Value = serde_json::from_str(&emit_powermodels_json(&net).text).unwrap();
     let obj = v["dcline"]
         .as_object()
         .unwrap()
@@ -1643,7 +1625,7 @@ fn powermodels_dcline_cost_round_trips() {
         vec![0.02, 3.0, 10.0],
     ));
 
-    let back = parse_powermodels_json(&write_powermodels_json(&net).text).unwrap();
+    let back = parse_powermodels_json(&emit_powermodels_json(&net).text).unwrap();
     let got = back.hvdc()[0].cost.as_ref().expect("dcline cost survives");
     assert_eq!(got.model, 2);
     assert_eq!(got.ncost, 3);
@@ -1681,9 +1663,9 @@ fn powermodels_unbounded_limit_round_trips_as_infinity() {
     let mut net = parse_matpower_file(data("case9.m")).unwrap();
     net.generators_mut()[0].qmax = f64::INFINITY;
     net.generators_mut()[0].qmin = f64::NEG_INFINITY;
-    let conv = write_powermodels_json(&net);
+    let conv = emit_powermodels_json(&net);
     assert!(
-        conv.rendered_diagnostics()
+        conv.render_diagnostics()
             .iter()
             .any(|w| w.contains("non-finite")),
         "expected null warning"
@@ -1717,8 +1699,8 @@ fn parse_file_accepts_uppercase_and_mixed_case_extensions() {
     let m_src = std::fs::read_to_string(data("case14.m")).unwrap();
     for (ext, src) in [
         ("M", m_src),
-        ("JSON", write_powermodels_json(&net).text),
-        ("AUX", write_powerworld(&net).text),
+        ("JSON", emit_powermodels_json(&net).text),
+        ("AUX", emit_powerworld(&net).text),
     ] {
         let path = dir.join(format!("powerio_test_issue97.{ext}"));
         std::fs::write(&path, &src).unwrap();
@@ -1849,7 +1831,7 @@ fn pandapower_genuine_fixture_reads() {
     // tap_pos == tap_neutral (0) on the hv side -> tap exactly 1.0, kept.
     assert_eq!(xf.tap, 1.0);
     assert!(
-        xf.terminal_charging().g_fr > 0.0,
+        xf.calc_terminal_charging().g_fr > 0.0,
         "pandapower pfe_kw should become typed magnetizing conductance"
     );
 
@@ -1890,16 +1872,16 @@ fn pandapower_genuine_fixture_reads() {
     // The 8-row switch table still warns; ZIP, line conductance, and transformer
     // magnetizing admittance are typed.
     assert_eq!(
-        parsed.rendered_diagnostics().len(),
+        parsed.render_diagnostics().len(),
         1,
         "{:?}",
-        parsed.rendered_diagnostics()
+        parsed.render_diagnostics()
     );
     assert!(
         parsed.diagnostics.iter().any(|d| d.message()
             == "`switch` table ignored (8 rows): switches are not modeled; open switches are not applied"),
         "{:?}",
-        parsed.rendered_diagnostics()
+        parsed.render_diagnostics()
     );
 }
 
@@ -1990,7 +1972,7 @@ fn pypsa_genuine_export_reads() {
 }
 
 #[test]
-fn read_warnings_flow_through_every_channel() {
+fn parse_and_emit_diagnostics_stay_in_their_own_channels() {
     let path = data("pandapower/example.json");
     let text = std::fs::read_to_string(&path).unwrap();
 
@@ -1998,44 +1980,55 @@ fn read_warnings_flow_through_every_channel() {
     let from_file = parse_file(&path, None).unwrap();
     assert!(
         from_file
-            .rendered_diagnostics()
+            .render_diagnostics()
             .iter()
             .any(|w| w.contains("`switch`")),
         "{:?}",
-        from_file.rendered_diagnostics()
+        from_file.render_diagnostics()
     );
     let from_str = parse_str(&text, "pandapower-json").unwrap();
     assert_eq!(
-        from_file.rendered_diagnostics(),
-        from_str.rendered_diagnostics()
+        from_file.render_diagnostics(),
+        from_str.render_diagnostics()
     );
 
     // A total reader yields no warnings.
     assert!(
         parse_file(data("case9.m"), None)
             .unwrap()
-            .rendered_diagnostics()
+            .render_diagnostics()
             .is_empty()
     );
 
-    // convert_file folds read warnings in front of write warnings...
-    let conv = convert_file(&path, TargetFormat::Matpower, None).unwrap();
+    // Parse findings stay on the module. Emission reports only fidelity
+    // findings produced by that operation, so callers never receive the same
+    // diagnostic through two owners.
+    let module = parse_module(&path, None).unwrap();
+    let conv = emit_module(&module, TargetFormat::Matpower).unwrap();
     assert!(
-        conv.rendered_diagnostics()
+        !conv
+            .render_diagnostics()
             .iter()
             .any(|w| w.contains("`switch`")),
         "{:?}",
-        conv.rendered_diagnostics()
+        conv.render_diagnostics()
     );
+    assert!(!conv.render_diagnostics().is_empty());
 
-    // ...except on an echo to the same format, which reproduces the source
-    // bytes and carries no fidelity loss.
-    let echo = convert_file(&path, TargetFormat::PandapowerJson, None).unwrap();
+    // A same format echo reproduces the source bytes and has no emission
+    // findings; the module still owns its parse findings.
+    let echo = emit_module(&module, TargetFormat::PandapowerJson).unwrap();
     assert_eq!(echo.text, text);
     assert!(
-        echo.rendered_diagnostics().is_empty(),
+        echo.render_diagnostics().is_empty(),
         "{:?}",
-        echo.rendered_diagnostics()
+        echo.render_diagnostics()
+    );
+    assert!(
+        module
+            .diagnostics()
+            .iter()
+            .any(|diagnostic| diagnostic.message().contains("`switch`"))
     );
 }
 
@@ -2079,7 +2072,7 @@ fn pandapower_json_round_trips_transformers_shunts_and_oos() {
         if case == "case14.m" {
             knock_out_case14(&mut net);
         }
-        let conv = write_network(&net, TargetFormat::PandapowerJson).unwrap();
+        let conv = emit_value(&net, TargetFormat::PandapowerJson).unwrap();
         let back = parse_str(&conv.text, "pandapower-json").unwrap().network;
         assert_eq!(core(&back), core(&net), "{case}");
         assert_eq!(
@@ -2099,7 +2092,7 @@ fn pandapower_json_round_trips_transformers_shunts_and_oos() {
                 .iter()
                 .find(|b| b.from == rb.from && b.to == rb.to)
                 .unwrap_or_else(|| panic!("{case}: branch {:?}-{:?} lost", rb.from, rb.to));
-            close(b.effective_tap(), rb.effective_tap());
+            close(b.calc_effective_tap(), rb.calc_effective_tap());
             assert_eq!(b.in_service, rb.in_service, "{case}: branch in_service");
         }
         for (g, rg) in back.generators().iter().zip(net.generators()) {
@@ -2120,14 +2113,14 @@ fn pypsa_csv_round_trips_transformers_shunts_and_oos() {
             knock_out_case14(&mut net);
         }
         let out = tmp_dir(&format!("pypsa-rt-{case}"));
-        let written = write_pypsa_csv_folder(&net, &out).unwrap();
+        let written = emit_pypsa_csv_folder(&net, &out).unwrap();
         assert!(
             !written
-                .rendered_diagnostics()
+                .render_diagnostics()
                 .iter()
                 .any(|w| w.contains("storage")),
             "{case}: {:?}",
-            written.rendered_diagnostics()
+            written.render_diagnostics()
         );
         let back = read_pypsa_csv_folder(&out).unwrap().network;
         assert_eq!(core(&back), core(&net), "{case}");
@@ -2148,7 +2141,7 @@ fn pypsa_csv_round_trips_transformers_shunts_and_oos() {
                 .iter()
                 .find(|b| b.from == rb.from && b.to == rb.to)
                 .unwrap_or_else(|| panic!("{case}: branch {:?}-{:?} lost", rb.from, rb.to));
-            close(b.effective_tap(), rb.effective_tap());
+            close(b.calc_effective_tap(), rb.calc_effective_tap());
             assert_eq!(b.in_service, rb.in_service, "{case}: branch in_service");
         }
         for (g, rg) in back.generators().iter().zip(net.generators()) {
@@ -2166,7 +2159,7 @@ fn gen_costs_round_trip_through_pandapower_json() {
     // case9 costs are quadratic [c2, c1, c0] = [0.11, 5.0, 150.0]; poly_cost
     // must carry all three back without reordering (a cp0/cp2 swap fails here).
     let net = parse_matpower_file(data("case9.m")).unwrap();
-    let conv = write_network(&net, TargetFormat::PandapowerJson).unwrap();
+    let conv = emit_value(&net, TargetFormat::PandapowerJson).unwrap();
     let back = parse_str(&conv.text, "pandapower-json").unwrap().network;
     assert_eq!(back.generators().len(), net.generators().len());
     for (g, rg) in back.generators().iter().zip(net.generators()) {
@@ -2185,7 +2178,7 @@ fn gen_costs_round_trip_through_pypsa_csv() {
     // the constant term comes back as 0.
     let net = parse_matpower_file(data("case9.m")).unwrap();
     let out = tmp_dir("pypsa-costs");
-    write_pypsa_csv_folder(&net, &out).unwrap();
+    emit_pypsa_csv_folder(&net, &out).unwrap();
     let back = read_pypsa_csv_folder(&out).unwrap().network;
     for (g, rg) in back.generators().iter().zip(net.generators()) {
         let got = &g.cost.as_ref().expect("cost survives").coeffs;
@@ -2255,7 +2248,7 @@ fn pypsa_written_folder_joins_on_bus_names() {
     // genuine fixture with named buses back out and check the join.
     let net = parse_file(data("pypsa/example"), None).unwrap().network;
     let out = tmp_dir("pypsa-named-write");
-    write_pypsa_csv_folder(&net, &out).unwrap();
+    emit_pypsa_csv_folder(&net, &out).unwrap();
 
     let column = |file: &str, name: &str| -> Vec<String> {
         let text =
@@ -2320,13 +2313,13 @@ fn slackless_network_conversion_warns_for_power_flow_targets() {
         TargetFormat::Psse { rev: 33 },
         TargetFormat::PowerModelsJson,
     ] {
-        let conv = write_network(&net, fmt).unwrap();
+        let conv = emit_value(&net, fmt).unwrap();
         assert!(
-            conv.rendered_diagnostics()
+            conv.render_diagnostics()
                 .iter()
                 .any(|w| w.contains("reference (slack) bus")),
             "{fmt:?} missing the slackless warning: {:?}",
-            conv.rendered_diagnostics()
+            conv.render_diagnostics()
         );
     }
     // A network with a slack stays warning free on this dimension.
@@ -2337,9 +2330,9 @@ fn slackless_network_conversion_warns_for_power_flow_targets() {
         vec![branch(1, 2)],
     );
     assert!(
-        !write_network(&with_ref, TargetFormat::Matpower)
+        !emit_value(&with_ref, TargetFormat::Matpower)
             .unwrap()
-            .rendered_diagnostics()
+            .render_diagnostics()
             .iter()
             .any(|w| w.contains("reference (slack) bus"))
     );
@@ -2396,18 +2389,15 @@ fn psse_to_matpower_omits_missing_costs_without_synthesizing_zero() {
     let net = parse_psse(&raw).unwrap();
     assert!(net.generators().iter().all(|g| g.cost.is_none()));
 
-    let conv = write_network(&net, TargetFormat::Matpower).unwrap();
+    let conv = emit_value(&net, TargetFormat::Matpower).unwrap();
     assert!(conv.text.contains("mpc.gen = ["));
     assert!(!conv.text.contains("mpc.gencost = ["));
     // No costs in the source means nothing was dropped: the omitted block is
     // the source's own shape, not a loss, so it earns no warning.
     assert!(
-        !conv
-            .rendered_diagnostics()
-            .iter()
-            .any(|w| w.contains("cost")),
+        !conv.render_diagnostics().iter().any(|w| w.contains("cost")),
         "{:?}",
-        conv.rendered_diagnostics()
+        conv.render_diagnostics()
     );
 }
 
@@ -2415,12 +2405,12 @@ fn psse_to_matpower_omits_missing_costs_without_synthesizing_zero() {
 fn psse_to_matpower_can_explicitly_fill_zero_costs() {
     let raw = std::fs::read_to_string(data("psse/case14.raw")).unwrap();
     let net = parse_psse(&raw).unwrap();
-    let opts = WriteOptions {
+    let opts = EmitOptions {
         missing_gen_cost: MissingGenCostPolicy::zero(),
         gen_cost_patches: Vec::new(),
     };
 
-    let conv = write_as_with_options(
+    let conv = emit_module_with_options(
         &powerio_core::PioModule::new(net.clone()),
         TargetFormat::Matpower,
         &opts,
@@ -2428,11 +2418,11 @@ fn psse_to_matpower_can_explicitly_fill_zero_costs() {
     .unwrap();
     assert!(conv.text.contains("mpc.gencost = ["));
     assert!(
-        conv.rendered_diagnostics()
+        conv.render_diagnostics()
             .iter()
             .any(|w| w.contains("generator cost synthesized")),
         "{:?}",
-        conv.rendered_diagnostics()
+        conv.render_diagnostics()
     );
     let back = parse_matpower(&conv.text).unwrap();
     assert_eq!(back.generators().len(), net.generators().len());
@@ -2450,22 +2440,22 @@ fn partial_matpower_costs_preserve_existing_rows_when_fill_policy_is_explicit() 
     let original = net.generators()[0].cost.clone().expect("case9 cost");
     net.generators_mut()[1].cost = None;
 
-    let default = write_network(&net, TargetFormat::Matpower).unwrap();
+    let default = emit_value(&net, TargetFormat::Matpower).unwrap();
     assert!(!default.text.contains("mpc.gencost = ["));
     assert!(
         default
-            .rendered_diagnostics()
+            .render_diagnostics()
             .iter()
             .any(|w| w.contains("all-or-nothing")),
         "{:?}",
-        default.rendered_diagnostics()
+        default.render_diagnostics()
     );
 
-    let opts = WriteOptions {
-        missing_gen_cost: MissingGenCostPolicy::quadratic(0.01, 2.0, 3.0),
+    let opts = EmitOptions {
+        missing_gen_cost: MissingGenCostPolicy::calc_quadratic(0.01, 2.0, 3.0),
         gen_cost_patches: Vec::new(),
     };
-    let filled = write_as_with_options(
+    let filled = emit_module_with_options(
         &powerio_core::PioModule::new(net.clone()),
         TargetFormat::Matpower,
         &opts,
@@ -2558,7 +2548,7 @@ fn nameless_json_text_sniffs_like_a_json_file() {
     let parsed = powerio_tx::parse(source).expect("nameless model JSON parses");
     assert_eq!(parsed.value().buses().len(), 14);
 
-    let pm = powerio_tx::write_as(
+    let pm = emit_module(
         &powerio_core::PioModule::new(net),
         TargetFormat::PowerModelsJson,
     )
@@ -2654,24 +2644,24 @@ fn parses_goc3_json_static_network() {
 
     assert!(
         parsed
-            .rendered_diagnostics()
+            .render_diagnostics()
             .iter()
             .any(|w| w.contains("time_series_input reduced")),
         "{:?}",
-        parsed.rendered_diagnostics()
+        parsed.render_diagnostics()
     );
     assert!(
         parsed
-            .rendered_diagnostics()
+            .render_diagnostics()
             .iter()
             .any(|w| w.contains("reliability contingencies")),
         "{:?}",
-        parsed.rendered_diagnostics()
+        parsed.render_diagnostics()
     );
 
-    let echo = parsed.to_format(TargetFormat::Goc3Json).unwrap();
+    let echo = parsed.emit(TargetFormat::Goc3Json).unwrap();
     assert_eq!(echo.text, GOC3_TINY);
-    let matpower = write_network(&net, TargetFormat::Matpower).unwrap();
+    let matpower = emit_value(&net, TargetFormat::Matpower).unwrap();
     assert!(matpower.text.contains("mpc.bus"));
 }
 
@@ -2680,7 +2670,7 @@ fn goc3_write_without_retained_source_is_write_unsupported() {
     // A goc3 source echoes byte for byte (asserted above); any other network
     // refuses with the read only error, not "unknown format".
     let net = rich_audit_network();
-    let err = write_network(&net, TargetFormat::Goc3Json).unwrap_err();
+    let err = emit_value(&net, TargetFormat::Goc3Json).unwrap_err();
     assert_eq!(err.category(), powerio_core::ErrorCategory::Request);
     assert!(
         err.to_string()
@@ -2742,7 +2732,7 @@ fn infers_goc3_json_file() {
 
     let parsed = parse_file(&path, None).unwrap();
     assert_eq!(parsed.network.source_format(), SourceFormat::Goc3Json);
-    let conv = convert_file(&path, TargetFormat::Matpower, None).unwrap();
+    let conv = parse_file_and_emit(&path, TargetFormat::Matpower, None).unwrap();
     assert!(conv.text.contains("mpc.branch"));
 
     let _ = std::fs::remove_file(path);
@@ -2822,12 +2812,12 @@ fn parses_surge_json_network() {
     assert_close(net.hvdc()[0].qmaxf, 6.0);
     assert_close(net.hvdc()[0].qmaxt, 5.0);
 
-    let echo = parsed.to_format(TargetFormat::SurgeJson).unwrap();
+    let echo = parsed.emit(TargetFormat::SurgeJson).unwrap();
     assert_eq!(echo.text, SURGE_TINY);
-    let matpower = write_network(&net, TargetFormat::Matpower).unwrap();
+    let matpower = emit_value(&net, TargetFormat::Matpower).unwrap();
     assert!(matpower.text.contains("mpc.branch"));
     assert!(has_warning(
-        &matpower.rendered_diagnostics(),
+        &matpower.render_diagnostics(),
         "system base frequency"
     ));
 }
@@ -2838,7 +2828,7 @@ fn surge_storage_generator_is_not_duplicated_after_canonical_write() {
     assert_eq!(net.generators().len(), 1);
     assert_eq!(net.storage().len(), 1);
 
-    let surge = write_network(&net, TargetFormat::SurgeJson).unwrap();
+    let surge = emit_value(&net, TargetFormat::SurgeJson).unwrap();
     let back = parse_str(&surge.text, "surge-json").unwrap().network;
 
     assert_eq!(back.generators().len(), 1);
@@ -2850,7 +2840,7 @@ fn surge_storage_generator_is_not_duplicated_after_canonical_write() {
 #[test]
 fn surge_writer_round_trips_supported_core_fields() {
     let net = rich_audit_network();
-    let conv = write_network(&net, TargetFormat::SurgeJson).unwrap();
+    let conv = emit_value(&net, TargetFormat::SurgeJson).unwrap();
     let back = parse_str(&conv.text, "surge-json").unwrap().network;
 
     assert_eq!(back.source_format(), SourceFormat::SurgeJson);
@@ -2884,14 +2874,14 @@ fn infers_surge_json_file() {
 
     let parsed = parse_file(&path, None).unwrap();
     assert_eq!(parsed.network.source_format(), SourceFormat::SurgeJson);
-    let conv = convert_file(&path, TargetFormat::Matpower, None).unwrap();
+    let conv = parse_file_and_emit(&path, TargetFormat::Matpower, None).unwrap();
     assert!(conv.text.contains("mpc.branch"));
 
     let _ = std::fs::remove_file(path);
 }
 
 #[test]
-fn write_dir_with_options_runs_the_cost_policy_and_reports_it() {
+fn pypsa_emission_options_run_the_cost_policy_and_report_it() {
     let raw = std::fs::read_to_string(data("psse/case14.raw")).unwrap();
     let net = parse_psse(&raw).unwrap();
     // Every write commits with no replacement, so each takes a fresh target.
@@ -2899,31 +2889,36 @@ fn write_dir_with_options_runs_the_cost_policy_and_reports_it() {
     let filled_dir = tmp_dir("write-dir-options-filled");
 
     // Default options are the plain directory write.
-    let plain = write_dir(&net, "pypsa-csv", &dir).unwrap();
-    assert!(!plain.iter().any(|d| d.code().contains("GEN_COST")));
+    let plain = emit_pypsa_csv_folder(&net, &dir).unwrap();
+    assert!(
+        !plain
+            .diagnostics
+            .iter()
+            .any(|d| d.code().contains("GEN_COST"))
+    );
 
-    let filled = write_dir_with_options(
+    let filled = emit_pypsa_csv_folder_with_options(
         &net,
-        "pypsa-csv",
         &filled_dir,
-        &WriteOptions {
+        &EmitOptions {
             missing_gen_cost: MissingGenCostPolicy::zero(),
             gen_cost_patches: Vec::new(),
         },
     )
     .unwrap();
     assert!(
-        filled.iter().any(|d| d.code().contains("GEN_COST")),
+        filled
+            .diagnostics
+            .iter()
+            .any(|d| d.code().contains("GEN_COST")),
         "{filled:#?}"
     );
 
-    // Require refuses the same case, and a non-directory target is still
-    // rejected by name rather than by the policy it never reaches.
-    let err = write_dir_with_options(
+    // Require refuses the same case.
+    let err = emit_pypsa_csv_folder_with_options(
         &net,
-        "pypsa-csv",
         tmp_dir("write-dir-options-require"),
-        &WriteOptions {
+        &EmitOptions {
             missing_gen_cost: MissingGenCostPolicy::Require,
             gen_cost_patches: Vec::new(),
         },
@@ -2934,22 +2929,6 @@ fn write_dir_with_options_runs_the_cost_policy_and_reports_it() {
         "{err:?}"
     );
     assert_eq!(err.category(), powerio_core::ErrorCategory::Data, "{err:?}");
-    let err = write_dir_with_options(
-        &net,
-        "matpower",
-        &dir,
-        &WriteOptions {
-            missing_gen_cost: MissingGenCostPolicy::Require,
-            gen_cost_patches: Vec::new(),
-        },
-    )
-    .unwrap_err();
-    assert_eq!(
-        err.category(),
-        powerio_core::ErrorCategory::Request,
-        "{err:?}"
-    );
-    assert!(err.to_string().contains("pypsa"), "{err:?}");
 
     let _ = std::fs::remove_dir_all(&dir);
     let _ = std::fs::remove_dir_all(&filled_dir);

@@ -1,24 +1,26 @@
 //! DC OPF matrix forge: incidence, Laplacian, OPF instance, and the export
 //! bundle. Run against vendored MATPOWER cases.
 //!
-//! These cases pin `b = 1/x`, so they name `DcConvention::ReactanceOnly`.
-//! `SeriesImpedance` gives a different weight for any branch that carries
+//! These cases pin `b = 1/x`, so they name `BranchSusceptanceFormula::ReactanceOnly`.
+//! `SeriesSusceptance` gives a different weight for any branch that carries
 //! resistance.
 mod helpers;
 #[allow(unused_imports)]
 use helpers::*;
 
+use powerio_matrix::DcOperators;
 use powerio_matrix::IndexedNetwork;
-use powerio_matrix::io::{read_mtx, write_sensitivity_mtx_with_options};
+use powerio_matrix::io::{emit_sensitivity_mtx_with_options, read_mtx};
 use powerio_matrix::{
-    BalancedNetwork, Branch, BuildOptions, Bus, BusId, BusType, DcConvention, Error, GenCost,
-    Generator, Scheme, build_adjacency, build_bprime, build_flow_map, build_incidence, build_lodf,
-    build_ptdf, build_weighted_laplacian, build_ybus, ground_at,
+    BalancedNetwork, Branch, BranchSusceptanceFormula, BuildOptions, Bus, BusId, BusType, Error,
+    GenCost, Generator, Scheme, calc_adjacency_matrix, calc_admittance_matrix, calc_bprime_matrix,
+    calc_lodf, calc_ptdf,
 };
 use powerio_matrix::{
-    SensitivityOptions, SensitivitySolver, SensitivitySolverPath, build_ptdf_lodf,
-    build_ptdf_lodf_with_options,
+    SensitivityOptions, SensitivitySolver, SensitivitySolverPath, calc_ptdf_lodf,
+    calc_ptdf_lodf_with_options,
 };
+use powerio_prob::DcPfInstance;
 use sprs::CsMat;
 
 const CASES: &[&str] = &[
@@ -31,6 +33,13 @@ const CASES: &[&str] = &[
 
 fn load(path: &str) -> BalancedNetwork {
     parse_matpower_file(path).unwrap_or_else(|e| panic!("parse {path}: {e}"))
+}
+
+fn dc_operators(network: &BalancedNetwork, formula: BranchSusceptanceFormula) -> DcOperators {
+    let instance = DcPfInstance::from_network(network.clone())
+        .expect("DC power flow instance")
+        .with_branch_susceptance_formula(formula);
+    DcOperators::build(&instance).expect("DC operators")
 }
 
 /// In-memory network from hand-built buses/branches (no loads/shunts/source).
@@ -108,7 +117,7 @@ fn parses_generators_and_costs() {
     let quads: Vec<(f64, f64)> = case
         .generators()
         .iter()
-        .map(|g| g.cost.as_ref().unwrap().quadratic().unwrap())
+        .map(|g| g.cost.as_ref().unwrap().calc_quadratic().unwrap())
         .collect();
     // MATPOWER c2 p² + c1 p + c0 → (q = 2 c2, c = c1), native units.
     let expected = [(0.22, 5.0), (0.17, 1.2), (0.245, 1.0)];
@@ -120,14 +129,13 @@ fn parses_generators_and_costs() {
 
 #[test]
 fn laplacian_equals_bprime_xb() {
-    // With zero phase shifts, L = A diag(1/x) Aᵀ matches Bp in the XB scheme.
+    // With zero phase shifts, -B matches Bp in the XB scheme.
     for path in CASES {
         let case = load(path);
         let view = IndexedNetwork::new(&case);
-        let inc =
-            build_incidence(&view, DcConvention::ReactanceOnly, &BuildOptions::default()).unwrap();
-        let l = build_weighted_laplacian(&inc.a, &inc.b);
-        let bp = build_bprime(
+        let operators = dc_operators(&case, BranchSusceptanceFormula::ReactanceOnly);
+        let bus_susceptance = operators.calc_bus_susceptance_matrix();
+        let bp = calc_bprime_matrix(
             &view,
             &powerio_matrix::BuildOptions {
                 scheme: Scheme::Xb,
@@ -135,14 +143,14 @@ fn laplacian_equals_bprime_xb() {
             },
         )
         .unwrap();
-        let (dl, db) = (dense(&l), dense(&bp));
-        assert_eq!(dl.len(), db.len(), "{path}: size");
-        for i in 0..dl.len() {
-            for j in 0..dl.len() {
+        let (dbus, db) = (dense(&bus_susceptance), dense(&bp));
+        assert_eq!(dbus.len(), db.len(), "{path}: size");
+        for i in 0..dbus.len() {
+            for j in 0..dbus.len() {
                 assert!(
-                    (dl[i][j] - db[i][j]).abs() < 1e-9,
-                    "{path}: L[{i}][{j}]={} != Bp[{i}][{j}]={}",
-                    dl[i][j],
+                    (-dbus[i][j] - db[i][j]).abs() < 1e-9,
+                    "{path}: -B[{i}][{j}]={} != Bp[{i}][{j}]={}",
+                    -dbus[i][j],
                     db[i][j]
                 );
             }
@@ -154,28 +162,25 @@ fn laplacian_equals_bprime_xb() {
 fn incidence_structure() {
     for path in CASES {
         let case = load(path);
-        let view = IndexedNetwork::new(&case);
-        let inc =
-            build_incidence(&view, DcConvention::ReactanceOnly, &BuildOptions::default()).unwrap();
-        let (n, m) = (inc.n(), inc.m());
-        assert_eq!(inc.a.rows(), n);
-        assert_eq!(inc.a.cols(), m);
-        assert_eq!(inc.a.nnz(), 2 * m, "{path}: two nonzeros per column");
-        assert_eq!(inc.b.len(), m);
-        assert_eq!(inc.branch_of_col.len(), m);
+        let operators = dc_operators(&case, BranchSusceptanceFormula::ReactanceOnly);
+        let incidence = operators.calc_incidence_matrix();
+        let (m, n) = (incidence.rows(), incidence.cols());
+        assert_eq!(incidence.nnz(), 2 * m, "{path}: two nonzeros per row");
+        assert_eq!(operators.branch_susceptances().len(), m);
 
-        // Each column sums to 0 with one +1 and one −1.
-        let mut col_sum = vec![0.0; m];
-        let mut col_cnt = vec![0usize; m];
-        for (&v, (_, j)) in &inc.a {
-            col_sum[j] += v;
-            col_cnt[j] += 1;
-            assert!((v.abs() - 1.0).abs() < 1e-12, "{path}: |A entry| != 1");
+        // Each branch row sums to 0 with one +1 and one −1.
+        let mut row_sum = vec![0.0_f64; m];
+        let mut row_count = vec![0usize; m];
+        for (&value, (row, _)) in &incidence {
+            row_sum[row] += value;
+            row_count[row] += 1;
+            assert!((value.abs() - 1.0).abs() < 1e-12, "{path}: |A entry| != 1");
         }
-        for j in 0..m {
-            assert_eq!(col_cnt[j], 2, "{path}: column {j} degree");
-            assert!(col_sum[j].abs() < 1e-12, "{path}: column {j} sum");
+        for row in 0..m {
+            assert_eq!(row_count[row], 2, "{path}: row {row} degree");
+            assert!(row_sum[row].abs() < 1e-12, "{path}: row {row} sum");
         }
+        assert_eq!(operators.bus_ids().len(), n);
     }
 }
 
@@ -185,11 +190,13 @@ fn incidence_structure() {
 fn laplacian_is_psd_with_constant_kernel() {
     for path in CASES {
         let case = load(path);
-        let view = IndexedNetwork::new(&case);
-        let inc =
-            build_incidence(&view, DcConvention::ReactanceOnly, &BuildOptions::default()).unwrap();
-        let l = build_weighted_laplacian(&inc.a, &inc.b);
-        let d = dense(&l);
+        let operators = dc_operators(&case, BranchSusceptanceFormula::ReactanceOnly);
+        let mut d = dense(&operators.calc_bus_susceptance_matrix());
+        for row in &mut d {
+            for value in row {
+                *value = -*value;
+            }
+        }
         let n = d.len();
         // Symmetric, and every row sums to ~0 (L·1 = 0).
         for i in 0..n {
@@ -207,11 +214,11 @@ fn grounded_laplacian_is_spd() {
     for path in CASES {
         let case = load(path);
         let view = IndexedNetwork::new(&case);
-        let r = view.reference_bus_index().unwrap();
-        let inc =
-            build_incidence(&view, DcConvention::ReactanceOnly, &BuildOptions::default()).unwrap();
-        let l = build_weighted_laplacian(&inc.a, &inc.b);
-        let lg = ground_at(&l, r);
+        let operators = dc_operators(&case, BranchSusceptanceFormula::ReactanceOnly);
+        let lg = operators
+            .calc_reference_constrained_system()
+            .unwrap()
+            .matrix;
         assert_eq!(lg.rows(), view.n() - 1);
         assert_eq!(lg.cols(), view.n() - 1);
         assert!(is_spd(&dense(&lg)), "{path}: grounded L not SPD");
@@ -219,29 +226,28 @@ fn grounded_laplacian_is_spd() {
 }
 
 #[test]
-fn flow_map_reconstructs_laplacian() {
+fn branch_susceptance_matrix_reconstructs_bus_susceptance_matrix() {
     for path in CASES {
         let case = load(path);
-        let view = IndexedNetwork::new(&case);
-        let inc =
-            build_incidence(&view, DcConvention::ReactanceOnly, &BuildOptions::default()).unwrap();
-        let flow = build_flow_map(&inc.a, &inc.b); // B Aᵀ, m×n
-        assert_eq!(flow.rows(), inc.m());
-        assert_eq!(flow.cols(), inc.n());
-        // A · (B Aᵀ) == L.
-        let l_from_flow = &inc.a * &flow;
-        let l = build_weighted_laplacian(&inc.a, &inc.b);
-        let (df, dl) = (dense(&l_from_flow), dense(&l));
-        for i in 0..dl.len() {
-            for j in 0..dl.len() {
-                assert!((df[i][j] - dl[i][j]).abs() < 1e-9, "{path}: flow≠L");
+        let operators = dc_operators(&case, BranchSusceptanceFormula::ReactanceOnly);
+        let incidence = operators.calc_incidence_matrix();
+        let branch = operators.calc_branch_susceptance_matrix();
+        assert_eq!(branch.rows(), incidence.rows());
+        assert_eq!(branch.cols(), incidence.cols());
+        // Aᵀ · Bf == B.
+        let from_branch = &incidence.transpose_view().to_csr() * &branch;
+        let bus = operators.calc_bus_susceptance_matrix();
+        let (df, db) = (dense(&from_branch), dense(&bus));
+        for i in 0..db.len() {
+            for j in 0..db.len() {
+                assert!((df[i][j] - db[i][j]).abs() < 1e-9, "{path}: AᵀBf≠B");
             }
         }
-        // Each row of B Aᵀ sums to 0.
-        let dflow = dense(&flow);
-        for (k, row) in dflow.iter().enumerate() {
+        // Each row of Bf sums to 0.
+        let dbranch = dense(&branch);
+        for (k, row) in dbranch.iter().enumerate() {
             let s: f64 = row.iter().sum();
-            assert!(s.abs() < 1e-9, "{path}: BAᵀ row {k} sum {s}");
+            assert!(s.abs() < 1e-9, "{path}: Bf row {k} sum {s}");
         }
     }
 }
@@ -273,7 +279,7 @@ fn adjacency_is_symmetric_01() {
     for path in CASES {
         let case = load(path);
         let view = IndexedNetwork::new(&case);
-        let a = build_adjacency(&view).unwrap();
+        let a = calc_adjacency_matrix(&view).unwrap();
         assert_eq!(a.rows(), view.n());
         assert_eq!(a.cols(), view.n());
         let d = dense(&a);
@@ -296,12 +302,12 @@ fn ptdf_satisfies_kcl() {
         let case = load(path);
         let view = IndexedNetwork::new(&case);
         let r = view.reference_bus_index().unwrap();
-        let inc =
-            build_incidence(&view, DcConvention::ReactanceOnly, &BuildOptions::default()).unwrap();
-        let ptdf = build_ptdf(&view, DcConvention::ReactanceOnly).unwrap();
-        assert_eq!(ptdf.rows(), inc.m());
+        let incidence =
+            dc_operators(&case, BranchSusceptanceFormula::ReactanceOnly).calc_incidence_matrix();
+        let ptdf = calc_ptdf(&view, BranchSusceptanceFormula::ReactanceOnly).unwrap();
+        assert_eq!(ptdf.rows(), incidence.rows());
         assert_eq!(ptdf.cols(), view.n());
-        let m = dense(&(&inc.a * &ptdf)); // n × n
+        let m = dense(&(&incidence.transpose_view().to_csr() * &ptdf)); // n × n
         let n = view.n();
         for i in 0..n {
             for k in 0..n {
@@ -315,7 +321,7 @@ fn ptdf_satisfies_kcl() {
         }
         // Reference column is zero.
         let dptdf = dense(&ptdf);
-        for l in 0..inc.m() {
+        for l in 0..incidence.rows() {
             assert!(dptdf[l][r].abs() < 1e-12, "{path}: PTDF slack col nonzero");
         }
     }
@@ -328,15 +334,16 @@ fn lodf_diagonal_is_minus_one() {
     for path in CASES {
         let case = load(path);
         let view = IndexedNetwork::new(&case);
-        let lodf = build_lodf(&view, DcConvention::ReactanceOnly).unwrap();
-        let inc =
-            build_incidence(&view, DcConvention::ReactanceOnly, &BuildOptions::default()).unwrap();
-        assert_eq!(lodf.rows(), inc.m());
-        assert_eq!(lodf.cols(), inc.m());
+        let lodf = calc_lodf(&view, BranchSusceptanceFormula::ReactanceOnly).unwrap();
+        let branch_count = dc_operators(&case, BranchSusceptanceFormula::ReactanceOnly)
+            .branch_identities()
+            .len();
+        assert_eq!(lodf.rows(), branch_count);
+        assert_eq!(lodf.cols(), branch_count);
         let d = dense(&lodf);
-        for k in 0..inc.m() {
+        for k in 0..branch_count {
             assert!((d[k][k] + 1.0).abs() < 1e-9, "{path}: LODF[{k}][{k}] != -1");
-            for l in 0..inc.m() {
+            for l in 0..branch_count {
                 assert!(d[l][k].is_finite(), "{path}: LODF not finite");
             }
         }
@@ -352,10 +359,11 @@ fn sparse_sensitivities_match_dense_oracle() {
     ] {
         let case = load(path);
         let view = IndexedNetwork::new(&case);
-        // Both paths take the same convention: this compares the two solvers,
+        // Both paths take the same formula: this compares the two solvers,
         // not two weightings.
-        let (dense_ptdf, dense_lodf) = build_ptdf_lodf(&view, DcConvention::default()).unwrap();
-        let sparse = build_ptdf_lodf_with_options(
+        let (dense_ptdf, dense_lodf) =
+            calc_ptdf_lodf(&view, BranchSusceptanceFormula::default()).unwrap();
+        let sparse = calc_ptdf_lodf_with_options(
             &view,
             &SensitivityOptions {
                 solver: SensitivitySolver::Sparse,
@@ -378,7 +386,7 @@ fn sparse_sensitivities_match_dense_oracle() {
 fn sensitivity_drop_tolerance_records_dropped_entries() {
     let case = load("../tests/data/case30.m");
     let view = IndexedNetwork::new(&case);
-    let full = build_ptdf_lodf_with_options(
+    let full = calc_ptdf_lodf_with_options(
         &view,
         &SensitivityOptions {
             solver: SensitivitySolver::Dense,
@@ -387,7 +395,7 @@ fn sensitivity_drop_tolerance_records_dropped_entries() {
         },
     )
     .unwrap();
-    let pruned = build_ptdf_lodf_with_options(
+    let pruned = calc_ptdf_lodf_with_options(
         &view,
         &SensitivityOptions {
             solver: SensitivitySolver::Dense,
@@ -431,7 +439,7 @@ fn a_sensitivity_write_never_replaces_an_existing_entry() {
     std::fs::write(&ptdf_path, b"precious ptdf").unwrap();
     std::fs::write(&lodf_path, b"precious lodf").unwrap();
     let error =
-        write_sensitivity_mtx_with_options(&view, &options, &ptdf_path, &lodf_path).unwrap_err();
+        emit_sensitivity_mtx_with_options(&view, &options, &ptdf_path, &lodf_path).unwrap_err();
     assert!(error.to_string().contains("already exists"), "{error}");
     assert_eq!(std::fs::read(&ptdf_path).unwrap(), b"precious ptdf");
     assert_eq!(std::fs::read(&lodf_path).unwrap(), b"precious lodf");
@@ -447,8 +455,8 @@ fn a_sensitivity_write_never_replaces_an_existing_entry() {
         let ptdf_path = temp.path().join("ptdf.mtx");
         let lodf_path = temp.path().join("lodf.mtx");
         std::os::unix::fs::symlink(&designated, &lodf_path).unwrap();
-        let error = write_sensitivity_mtx_with_options(&view, &options, &ptdf_path, &lodf_path)
-            .unwrap_err();
+        let error =
+            emit_sensitivity_mtx_with_options(&view, &options, &ptdf_path, &lodf_path).unwrap_err();
         assert!(error.to_string().contains("already exists"), "{error}");
         assert!(
             std::fs::symlink_metadata(&lodf_path)
@@ -466,13 +474,13 @@ fn a_sensitivity_write_never_replaces_an_existing_entry() {
     let temp = tempfile::tempdir().unwrap();
     let ptdf_path = temp.path().join("ptdf.mtx");
     let lodf_path = temp.path().join("lodf.mtx");
-    write_sensitivity_mtx_with_options(&view, &options, &ptdf_path, &lodf_path).unwrap();
+    emit_sensitivity_mtx_with_options(&view, &options, &ptdf_path, &lodf_path).unwrap();
     let ptdf_first = std::fs::read(&ptdf_path).unwrap();
     assert!(read_mtx(&ptdf_path).unwrap().nnz() > 0);
     assert!(read_mtx(&lodf_path).unwrap().nnz() > 0);
     residue_free(temp.path());
     let error =
-        write_sensitivity_mtx_with_options(&view, &options, &ptdf_path, &lodf_path).unwrap_err();
+        emit_sensitivity_mtx_with_options(&view, &options, &ptdf_path, &lodf_path).unwrap_err();
     assert!(error.to_string().contains("already exists"), "{error}");
     assert_eq!(std::fs::read(&ptdf_path).unwrap(), ptdf_first);
     residue_free(temp.path());
@@ -487,12 +495,12 @@ fn streamed_sparse_sensitivities_match_in_memory() {
         drop_tolerance: 1e-9,
         ..Default::default()
     };
-    let expected = build_ptdf_lodf_with_options(&view, &options).unwrap();
+    let expected = calc_ptdf_lodf_with_options(&view, &options).unwrap();
     let temp = tempfile::tempdir().unwrap();
     let ptdf_path = temp.path().join("ptdf.mtx");
     let lodf_path = temp.path().join("lodf.mtx");
 
-    let meta = write_sensitivity_mtx_with_options(&view, &options, &ptdf_path, &lodf_path).unwrap();
+    let meta = emit_sensitivity_mtx_with_options(&view, &options, &ptdf_path, &lodf_path).unwrap();
     let ptdf = read_mtx(&ptdf_path).unwrap();
     let lodf = read_mtx(&lodf_path).unwrap();
 
@@ -507,7 +515,7 @@ fn streamed_sparse_sensitivities_match_in_memory() {
 fn auto_sensitivity_solver_switches_to_sparse_above_threshold() {
     let case = load("../tests/data/case118.m");
     let view = IndexedNetwork::new(&case);
-    let out = build_ptdf_lodf_with_options(
+    let out = calc_ptdf_lodf_with_options(
         &view,
         &SensitivityOptions {
             solver: SensitivitySolver::Auto,
@@ -554,7 +562,7 @@ fn auto_writes_sparse_outputs_above_the_dense_threshold() {
     let temp = tempfile::tempdir().unwrap();
     let ptdf_path = temp.path().join("ptdf.mtx");
     let lodf_path = temp.path().join("lodf.mtx");
-    let meta = write_sensitivity_mtx_with_options(&view, &options, &ptdf_path, &lodf_path).unwrap();
+    let meta = emit_sensitivity_mtx_with_options(&view, &options, &ptdf_path, &lodf_path).unwrap();
     let ptdf = read_mtx(&ptdf_path).unwrap();
     let lodf = read_mtx(&lodf_path).unwrap();
 
@@ -578,7 +586,7 @@ fn auto_sparse_rejects_non_positive_susceptance() {
         vec![branch(1, 2, -0.1)],
     );
     let view = IndexedNetwork::new(&case);
-    let err = build_ptdf_lodf_with_options(
+    let err = calc_ptdf_lodf_with_options(
         &view,
         &SensitivityOptions {
             solver: SensitivitySolver::Auto,
@@ -595,7 +603,7 @@ fn auto_sparse_rejects_non_positive_susceptance() {
         other => panic!("unexpected error: {other}"),
     }
 
-    let dense = build_ptdf_lodf_with_options(
+    let dense = calc_ptdf_lodf_with_options(
         &view,
         &SensitivityOptions {
             solver: SensitivitySolver::Dense,
@@ -672,7 +680,7 @@ fn ptdf_matches_analytic_triangle() {
     // Inject at bus j, withdraw at slack; read the flow on each branch.
     let case = triangle();
     let view = IndexedNetwork::new(&case);
-    let ptdf = dense(&build_ptdf(&view, DcConvention::ReactanceOnly).unwrap());
+    let ptdf = dense(&calc_ptdf(&view, BranchSusceptanceFormula::ReactanceOnly).unwrap());
     let expected = [
         [0.0, -2.0 / 3.0, -1.0 / 3.0], // e0: 1→2
         [0.0, -1.0 / 3.0, -2.0 / 3.0], // e1: 1→3
@@ -696,7 +704,7 @@ fn lodf_matches_analytic_triangle() {
     // two, giving ±1 entries.
     let case = triangle();
     let view = IndexedNetwork::new(&case);
-    let lodf = dense(&build_lodf(&view, DcConvention::ReactanceOnly).unwrap());
+    let lodf = dense(&calc_lodf(&view, BranchSusceptanceFormula::ReactanceOnly).unwrap());
     let expected = [[-1.0, 1.0, -1.0], [1.0, -1.0, 1.0], [-1.0, 1.0, -1.0]];
     for (l, row) in expected.iter().enumerate() {
         for (k, &want) in row.iter().enumerate() {
@@ -710,7 +718,7 @@ fn lodf_matches_analytic_triangle() {
 }
 
 #[test]
-fn matpower_convention_tap_and_shift() {
+fn tap_adjusted_reactance_applies_tap_and_shift() {
     let (x, tap, shift_deg) = (0.2, 1.25, 10.0);
     let case = net(
         "shifter",
@@ -718,25 +726,27 @@ fn matpower_convention_tap_and_shift() {
         vec![branch_xts(1, 2, x, tap, shift_deg)],
     );
 
-    let view = IndexedNetwork::new(&case);
-
     // ReactanceOnly ignores tap and shift: b = 1/x, no phase injection.
-    let pp = build_incidence(&view, DcConvention::ReactanceOnly, &BuildOptions::default()).unwrap();
-    assert!((pp.b[0] - 1.0 / x).abs() < 1e-12);
-    assert!(pp.p_shift.iter().all(|&v| v == 0.0));
+    let pp = dc_operators(&case, BranchSusceptanceFormula::ReactanceOnly);
+    assert!((pp.branch_susceptances()[0] + 1.0 / x).abs() < 1e-12);
+    assert!(
+        pp.calc_phase_shift_injection()
+            .iter()
+            .all(|&value| value == 0.0)
+    );
 
-    // Matpower: b = 1/(x·τ); makeBdc injection ±b·shift at from/to.
-    let mp = build_incidence(
-        &view,
-        DcConvention::TapAdjustedReactance,
-        &BuildOptions::default(),
-    )
-    .unwrap();
+    // `TapAdjustedReactance`: b = 1/(x·τ); makeBdc injection ±b·shift at from/to.
+    let mp = dc_operators(&case, BranchSusceptanceFormula::TapAdjustedReactance);
     let b_e = 1.0 / (x * tap);
     let shift_rad = shift_deg.to_radians();
-    assert!((mp.b[0] - b_e).abs() < 1e-12, "b_e {} != {b_e}", mp.b[0]);
-    assert!((mp.p_shift[0] - (-b_e * shift_rad)).abs() < 1e-12);
-    assert!((mp.p_shift[1] - (b_e * shift_rad)).abs() < 1e-12);
+    assert!(
+        (mp.branch_susceptances()[0] + b_e).abs() < 1e-12,
+        "b {} != -{b_e}",
+        mp.branch_susceptances()[0]
+    );
+    let p_shift = mp.calc_phase_shift_injection();
+    assert!((p_shift[0] - (-b_e * shift_rad)).abs() < 1e-12);
+    assert!((p_shift[1] - (b_e * shift_rad)).abs() < 1e-12);
 }
 
 #[test]
@@ -755,7 +765,7 @@ fn radial_lodf_is_negative_identity() {
         vec![branch(1, 2, 0.1), branch(2, 3, 0.1)],
     );
     let view = IndexedNetwork::new(&case);
-    let lodf = dense(&build_lodf(&view, DcConvention::ReactanceOnly).unwrap());
+    let lodf = dense(&calc_lodf(&view, BranchSusceptanceFormula::ReactanceOnly).unwrap());
     for l in 0..2 {
         for k in 0..2 {
             let want = if l == k { -1.0 } else { 0.0 };
@@ -777,8 +787,8 @@ fn ptdf_handles_indefinite_but_invertible_laplacian() {
     );
     let view = IndexedNetwork::new(&case);
 
-    let ptdf = dense(&build_ptdf(&view, DcConvention::ReactanceOnly).unwrap());
-    let lodf = dense(&build_lodf(&view, DcConvention::ReactanceOnly).unwrap());
+    let ptdf = dense(&calc_ptdf(&view, BranchSusceptanceFormula::ReactanceOnly).unwrap());
+    let lodf = dense(&calc_lodf(&view, BranchSusceptanceFormula::ReactanceOnly).unwrap());
 
     assert_eq!(ptdf.len(), 1);
     assert!(ptdf[0][0].abs() < 1e-12);
@@ -801,20 +811,20 @@ fn ungrounded_island_errors() {
         vec![branch(1, 2, 0.1), branch(3, 4, 0.1)],
     );
     let view = IndexedNetwork::new(&case);
-    assert_eq!(view.n_connected_components(), 2);
-    let p = build_ptdf(&view, DcConvention::ReactanceOnly).unwrap_err();
+    assert_eq!(view.calc_island_count(), 2);
+    let p = calc_ptdf(&view, BranchSusceptanceFormula::ReactanceOnly).unwrap_err();
     assert!(
         matches!(
             p,
-            Error::Core(powerio_tx::Error::UngroundedComponent { components: 1 })
+            Error::Transmission(powerio_tx::Error::UngroundedComponent { components: 1 })
         ),
         "ptdf: {p:?}"
     );
-    let l = build_lodf(&view, DcConvention::ReactanceOnly).unwrap_err();
+    let l = calc_lodf(&view, BranchSusceptanceFormula::ReactanceOnly).unwrap_err();
     assert!(
         matches!(
             l,
-            Error::Core(powerio_tx::Error::UngroundedComponent { components: 1 })
+            Error::Transmission(powerio_tx::Error::UngroundedComponent { components: 1 })
         ),
         "lodf: {l:?}"
     );
@@ -837,7 +847,7 @@ fn two_grounded_islands_solve_block_diagonal() {
     );
     let view = IndexedNetwork::new(&case);
     assert_eq!(view.reference_bus_indices(), vec![0, 2]);
-    let ptdf = dense(&build_ptdf(&view, DcConvention::ReactanceOnly).unwrap());
+    let ptdf = dense(&calc_ptdf(&view, BranchSusceptanceFormula::ReactanceOnly).unwrap());
     // Branch 0 is in island {0,1}; its only nonzero sensitivity is to that
     // island's non-slack bus (col 1). Branch 1 is in island {2,3} → col 3.
     // Both reference columns (0 and 2) are zero. The sign is −1: a unit
@@ -879,7 +889,7 @@ fn multi_reference_two_refs_one_island() {
     );
     let view = IndexedNetwork::new(&case);
     assert_eq!(view.reference_bus_indices(), vec![0, 2]);
-    let ptdf = dense(&build_ptdf(&view, DcConvention::ReactanceOnly).unwrap());
+    let ptdf = dense(&calc_ptdf(&view, BranchSusceptanceFormula::ReactanceOnly).unwrap());
     // Both reference columns (0 and 2) are zero; the middle bus (col 1) splits.
     for (l, row) in ptdf.iter().enumerate() {
         assert!(row[0].abs() < 1e-12, "ref col 0 nonzero on branch {l}");
@@ -908,7 +918,7 @@ fn lodf_two_refs_multi_reference_triangle() {
     // nothing, while tripping 1-2 or 2-3 reroutes bus 2's flow fully onto the
     // other reference-connected branch. Hand-derived against the reduced 1x1
     // system (only bus 2 survives grounding, diag = 2, so PTDF col for bus 2 is
-    // [-1/2, 0, +1/2]). This pins the multi-grounded ptdf_dense -> build_lodf path.
+    // [-1/2, 0, +1/2]). This pins the multi-grounded ptdf_dense -> calc_lodf path.
     let case = net(
         "triangle-2ref",
         vec![
@@ -920,7 +930,7 @@ fn lodf_two_refs_multi_reference_triangle() {
     );
     let view = IndexedNetwork::new(&case);
     assert_eq!(view.reference_bus_indices(), vec![0, 2]);
-    let lodf = dense(&build_lodf(&view, DcConvention::ReactanceOnly).unwrap());
+    let lodf = dense(&calc_lodf(&view, BranchSusceptanceFormula::ReactanceOnly).unwrap());
     let expected = [[-1.0, 0.0, -1.0], [0.0, -1.0, 0.0], [-1.0, 0.0, -1.0]];
     for (l, row) in expected.iter().enumerate() {
         for (k, &want) in row.iter().enumerate() {
@@ -947,8 +957,8 @@ fn ybus_shift_invariant_to_normalization() {
     );
     let norm = raw.to_normalized().unwrap();
     let opts = BuildOptions::default();
-    let yr = build_ybus(&IndexedNetwork::new(&raw), &opts).unwrap();
-    let yn = build_ybus(&IndexedNetwork::new(&norm), &opts).unwrap();
+    let yr = calc_admittance_matrix(&IndexedNetwork::new(&raw), &opts).unwrap();
+    let yn = calc_admittance_matrix(&IndexedNetwork::new(&norm), &opts).unwrap();
     let (gr, gn) = (yr.g.to_dense(), yn.g.to_dense());
     let (br, bn) = (yr.b.to_dense(), yn.b.to_dense());
     for i in 0..2 {
@@ -973,7 +983,7 @@ fn ybus_shift_invariant_to_normalization() {
 
 #[test]
 fn incidence_matpower_pshift_invariant_to_normalization() {
-    // The MATPOWER DC convention injects a phase-shift term `p_shift` that scales
+    // The MATPOWER branch susceptance formula injects a phase shift term `p_shift` that scales
     // with the shift angle. Built from the raw (degrees) or normalized (radians)
     // network it must match, since incidence reads the shift via angle_radians.
     let raw = net_with_gens(
@@ -983,25 +993,17 @@ fn incidence_matpower_pshift_invariant_to_normalization() {
         vec![poly_gen(1, 100.0, 0.0, 1.0)],
     );
     let norm = raw.to_normalized().unwrap();
-    let ir = build_incidence(
-        &IndexedNetwork::new(&raw),
-        DcConvention::TapAdjustedReactance,
-        &BuildOptions::default(),
-    )
-    .unwrap();
-    let in_ = build_incidence(
-        &IndexedNetwork::new(&norm),
-        DcConvention::TapAdjustedReactance,
-        &BuildOptions::default(),
-    )
-    .unwrap();
-    assert_eq!(ir.p_shift.len(), in_.p_shift.len());
-    for (a, b) in ir.p_shift.iter().zip(&in_.p_shift) {
+    let raw_shift = dc_operators(&raw, BranchSusceptanceFormula::TapAdjustedReactance)
+        .calc_phase_shift_injection();
+    let normalized_shift = dc_operators(&norm, BranchSusceptanceFormula::TapAdjustedReactance)
+        .calc_phase_shift_injection();
+    assert_eq!(raw_shift.len(), normalized_shift.len());
+    for (a, b) in raw_shift.iter().zip(&normalized_shift) {
         assert!((a - b).abs() < 1e-12, "p_shift differs: {a} vs {b}");
     }
     // A nonzero shift produces a nonzero injection, so the test isn't vacuous.
     assert!(
-        ir.p_shift.iter().any(|&v| v.abs() > 1e-6),
+        raw_shift.iter().any(|&v| v.abs() > 1e-6),
         "30-degree shift should produce a nonzero p_shift"
     );
 }
@@ -1012,33 +1014,35 @@ fn gencost_quadratic_branches() {
         GenCost::with_ncost(model, 0.0, 0.0, ncost, coeffs)
     };
     // Quadratic: q = 2 c2, c = c1.
-    assert_eq!(mk(2, 3, vec![1.5, 2.0, 9.0]).quadratic(), Some((3.0, 2.0)));
+    assert_eq!(
+        mk(2, 3, vec![1.5, 2.0, 9.0]).calc_quadratic(),
+        Some((3.0, 2.0))
+    );
     // Linear: q = 0, c = c1.
-    assert_eq!(mk(2, 2, vec![4.0, 0.0]).quadratic(), Some((0.0, 4.0)));
+    assert_eq!(mk(2, 2, vec![4.0, 0.0]).calc_quadratic(), Some((0.0, 4.0)));
     // Constant: treated as free.
-    assert_eq!(mk(2, 1, vec![7.0]).quadratic(), Some((0.0, 0.0)));
+    assert_eq!(mk(2, 1, vec![7.0]).calc_quadratic(), Some((0.0, 0.0)));
     // Piecewise linear (model 1): unsupported.
-    assert_eq!(mk(1, 2, vec![0.0, 0.0, 1.0, 1.0]).quadratic(), None);
+    assert_eq!(mk(1, 2, vec![0.0, 0.0, 1.0, 1.0]).calc_quadratic(), None);
     // Cubic and higher: unsupported.
-    assert_eq!(mk(2, 4, vec![1.0, 2.0, 3.0, 4.0]).quadratic(), None);
+    assert_eq!(mk(2, 4, vec![1.0, 2.0, 3.0, 4.0]).calc_quadratic(), None);
     // Coefficient slice shorter than ncost: rejected, not misread by position.
-    assert_eq!(mk(2, 3, vec![1.0]).quadratic(), None);
+    assert_eq!(mk(2, 3, vec![1.0]).calc_quadratic(), None);
 }
 
 /// The consumer contract of the public preparation: an external solver
 /// formulates the complete DC OPF from `build_dc_opf_preparation` alone —
 /// demand, generator costs and bounds with source rows, thermal limits, and
 /// the reference set — and its positive solver edge weights are exactly the
-/// negation of the PowerModels signed susceptances `dc_network_data`
-/// reports, term for term, with an identical phase shift injection. That is
-/// the 0.10 sign relation between the two public assemblies: 0.9's
-/// `branch_susceptance` returned the positive weight, 0.10's returns the
-/// PowerModels value.
+/// negation of the PowerModels signed susceptances from [`DcOperators`], term
+/// for term, with an identical phase shift injection.
 #[test]
 fn public_preparation_formulates_the_complete_dc_opf() {
-    use powerio_matrix::{DcOpfAssemblyOptions, build_dc_opf_preparation as prepare_instance};
-    use powerio_prob::DcOpfInstance;
-    use powerio_tx::{Load, dc_network_data};
+    use powerio_matrix::{
+        DcOperators, DcOpfAssemblyOptions, build_dc_opf_preparation as prepare_instance,
+    };
+    use powerio_prob::{DcOpfInstance, DcPfInstance};
+    use powerio_tx::Load;
 
     let mut shifted = Branch::new(BusId(2), BusId(3), 0.0, 0.2);
     shifted.shift = 30.0;
@@ -1058,19 +1062,34 @@ fn public_preparation_formulates_the_complete_dc_opf() {
     generator.cost = Some(GenCost::new(2, 0.0, 0.0, vec![0.02, 11.0, 3.0]));
     network.generators_mut().push(generator);
 
-    let view = IndexedNetwork::new(&network);
-    let data = dc_network_data(&view, DcConvention::SeriesSusceptance);
-    assert!(data.omitted.is_empty(), "{:?}", data.omitted);
+    let flow_instance = DcPfInstance::from_network(network.clone())
+        .expect("power flow instance")
+        .with_branch_susceptance_formula(BranchSusceptanceFormula::SeriesSusceptance);
+    let operators = DcOperators::build(&flow_instance).expect("DC operators");
+    let incidence = dense(&operators.calc_incidence_matrix());
+    let from_indices = incidence
+        .iter()
+        .map(|row| row.iter().position(|&entry| entry > 0.0).unwrap())
+        .collect::<Vec<_>>();
+    let to_indices = incidence
+        .iter()
+        .map(|row| row.iter().position(|&entry| entry < 0.0).unwrap())
+        .collect::<Vec<_>>();
 
     let instance = DcOpfInstance::from_network(network.clone())
         .expect("instance")
-        .with_approximation(DcConvention::SeriesSusceptance);
+        .with_branch_susceptance_formula(BranchSusceptanceFormula::SeriesSusceptance);
     let prep = prepare_instance(&instance, &DcOpfAssemblyOptions::default()).expect("prepare");
 
     // The two public assemblies describe the same rows in the same order.
-    assert_eq!(prep.branches.from_bus, data.from_indices);
-    assert_eq!(prep.branches.to_bus, data.to_indices);
-    for (row, (&weight, &susceptance)) in prep.branches.b.iter().zip(&data.susceptance).enumerate()
+    assert_eq!(prep.branches.from_bus, from_indices);
+    assert_eq!(prep.branches.to_bus, to_indices);
+    for (row, (&weight, &susceptance)) in prep
+        .branches
+        .susceptance_magnitude
+        .iter()
+        .zip(operators.branch_susceptances())
+        .enumerate()
     {
         assert!(weight > 0.0, "row {row}: solver weight must be positive");
         assert!(
@@ -1083,8 +1102,9 @@ fn public_preparation_formulates_the_complete_dc_opf() {
         );
     }
     // One shared phase shift injection, entry for entry.
-    assert_eq!(prep.p_shift.len(), data.shift_injection.len());
-    for (bus, (&prepared, &public)) in prep.p_shift.iter().zip(&data.shift_injection).enumerate() {
+    let shift_injection = operators.calc_phase_shift_injection();
+    assert_eq!(prep.p_shift.len(), shift_injection.len());
+    for (bus, (&prepared, &public)) in prep.p_shift.iter().zip(&shift_injection).enumerate() {
         assert!(
             (prepared - public).abs() < 1e-12,
             "bus {bus}: p_shift {prepared} vs shift_injection {public}"
@@ -1108,7 +1128,7 @@ fn public_preparation_formulates_the_complete_dc_opf() {
         vec![0]
     );
     // The withdrawal helper agrees with the raw columns.
-    let withdrawal = prep.fixed_nodal_withdrawal();
+    let withdrawal = prep.calc_fixed_nodal_withdrawal();
     for (bus, &total) in withdrawal.iter().enumerate() {
         let expected = prep.p_d[bus] + prep.g_s[bus] + prep.p_shift[bus];
         assert!((total - expected).abs() < 1e-12);

@@ -59,7 +59,8 @@ impl Units {
 /// Options for DC OPF instance assembly.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DcOpfOptions {
-    pub convention: BranchSusceptanceFormula,
+    /// Formula used to calculate each branch susceptance.
+    pub formula: BranchSusceptanceFormula,
     pub units: Units,
     /// Skip non-self-loop branches with zero reactance. Off by default:
     /// zero impedance branches are preserved in networks and instances, so
@@ -78,10 +79,10 @@ pub struct DcOpfOptions {
     pub objective: PreparedObjective,
 }
 
-/// Generator data in generator column order.
+/// Generator parameters in generator column order.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[non_exhaustive]
-pub struct DcGeneratorData {
+pub struct DcGeneratorParameters {
     /// Stable generator identity aligned with every following column.
     pub identities: Vec<String>,
     /// Generator column to dense bus index.
@@ -111,18 +112,19 @@ pub struct DcGeneratorData {
     pub capability_active: Vec<bool>,
 }
 
-/// Branch data in active branch column order.
+/// Branch parameters in active branch column order.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[non_exhaustive]
-pub struct DcBranchData {
+pub struct DcBranchParameters {
     /// Stable branch identity aligned with every following column.
     pub identities: Vec<String>,
     pub from_bus: Vec<usize>,
     pub to_bus: Vec<usize>,
     /// Branch susceptance in the selected power unit per radian, positive for
     /// an inductive branch.
-    pub b: Vec<f64>,
-    /// Phase shift in radians. Zero unless the convention carries phase shift
+    #[serde(alias = "b")]
+    pub susceptance_magnitude: Vec<f64>,
+    /// Phase shift in radians. Zero unless the formula carries phase shift
     /// injections.
     pub shift: Vec<f64>,
     /// Thermal limit in the selected power unit. Zero means unlimited.
@@ -143,11 +145,11 @@ pub struct DcBranchData {
     pub angle_bound_active: Vec<bool>,
 }
 
-/// Generator data in dense bus order, aggregated over the generators at each
-/// bus. See [`DcOpfPreparation::nodal_generator_data`].
+/// Generator parameters in dense bus order, aggregated over the generators at each
+/// bus. See [`DcOpfPreparation::calc_nodal_generator_data`].
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[non_exhaustive]
-pub struct NodalGeneratorData {
+pub struct NodalGeneratorParameters {
     pub q: Vec<f64>,
     pub c: Vec<f64>,
     pub c0: Vec<f64>,
@@ -172,7 +174,8 @@ pub struct DcOpfPreparation {
     pub n_source_branches: usize,
     pub base_mva: f64,
     pub units: Units,
-    pub convention: BranchSusceptanceFormula,
+    /// Formula used to calculate each branch susceptance.
+    pub formula: BranchSusceptanceFormula,
     /// The objective represented by the generator cost columns.
     pub objective: PreparedObjective,
     pub skip_zero_impedance: bool,
@@ -195,7 +198,7 @@ pub struct DcOpfPreparation {
     pub p_d: Vec<f64>,
     /// Nodal shunt conductance in dense bus order.
     ///
-    /// The DC approximation holds the voltage magnitude at one per unit, so a
+    /// The DC power flow model holds voltage magnitude at one per unit, so a
     /// shunt draws the constant real power `g_s` and does not depend on the
     /// angle. It belongs in the injection: the bus susceptance matrix keeps
     /// zero row sums and carries no shunt. A nodal balance subtracts it
@@ -204,8 +207,8 @@ pub struct DcOpfPreparation {
     /// Nodal phase shift injection in dense bus order. The complete fixed
     /// withdrawal in `L theta = Cg pg - fixed` is `p_d + g_s + p_shift`.
     pub p_shift: Vec<f64>,
-    pub generators: DcGeneratorData,
-    pub branches: DcBranchData,
+    pub generators: DcGeneratorParameters,
+    pub branches: DcBranchParameters,
 }
 
 impl DcOpfPreparation {
@@ -216,7 +219,7 @@ impl DcOpfPreparation {
 
     #[must_use]
     pub fn n_branches(&self) -> usize {
-        self.branches.b.len()
+        self.branches.susceptance_magnitude.len()
     }
 
     /// Fixed nodal withdrawal in dense bus order.
@@ -225,7 +228,7 @@ impl DcOpfPreparation {
     /// `L = A diag(b) A^T`, the DC balance is
     /// `L theta = Cg pg - (p_d + g_s + p_shift)`.
     #[must_use]
-    pub fn fixed_nodal_withdrawal(&self) -> Vec<f64> {
+    pub fn calc_fixed_nodal_withdrawal(&self) -> Vec<f64> {
         (0..self.n_buses)
             .map(|bus| self.p_d[bus] + self.g_s[bus] + self.p_shift[bus])
             .collect()
@@ -241,9 +244,11 @@ impl DcOpfPreparation {
     /// form); the two agree term for term because this `b` is the negation
     /// of the public one.
     #[must_use]
-    pub fn branch_flow_offset(&self) -> Vec<f64> {
+    pub fn calc_branch_flow_offset(&self) -> Vec<f64> {
         (0..self.n_branches())
-            .map(|branch| -self.branches.b[branch] * self.branches.shift[branch])
+            .map(|branch| {
+                -self.branches.susceptance_magnitude[branch] * self.branches.shift[branch]
+            })
             .collect()
     }
 
@@ -256,7 +261,7 @@ impl DcOpfPreparation {
     /// with generator space only while the split stays inside the bound of
     /// each generator. A bus with one generator keeps that generator's own
     /// coefficients.
-    pub fn nodal_generator_data(&self) -> Result<NodalGeneratorData> {
+    pub fn calc_nodal_generator_data(&self) -> Result<NodalGeneratorParameters> {
         let n = self.n_buses;
         let generators = &self.generators;
         if let Some(gen_index) = generators.piecewise_linear.iter().position(Option::is_some) {
@@ -265,7 +270,7 @@ impl DcOpfPreparation {
         let bus_of_gen = &generators.bus_of_gen;
         let costs =
             nodal::combine_costs(n, bus_of_gen, &generators.q, &generators.c, &generators.c0);
-        Ok(NodalGeneratorData {
+        Ok(NodalGeneratorParameters {
             q: costs.q,
             c: costs.c,
             c0: costs.c0,
@@ -403,20 +408,20 @@ pub(crate) fn preparation_from_view(
             return Err(powerio_tx::Error::ZeroImpedance { row: source_row }.into());
         }
         // Only the tap-reading formula can be bounded by a tap (#324).
-        let tap = if options.convention.reads_tap() {
-            branch.divisible_tap(source_row)?
+        let tap = if options.formula.reads_tap() {
+            branch.calc_divisible_tap(source_row)?
         } else {
             1.0
         };
         let branch_b = options
-            .convention
-            .solver_edge_weight(branch.r, branch.x, tap)
+            .formula
+            .calc_solver_edge_weight(branch.r, branch.x, tap)
             * b_scale;
         if !branch_b.is_finite() {
             return Err(powerio_tx::Error::NonFiniteSusceptance { row: source_row }.into());
         }
-        let shift_rad = if options.convention.includes_phase_shifts() {
-            case.angle_radians(branch.shift)
+        let shift_rad = if options.formula.includes_phase_shifts() {
+            case.to_radians(branch.shift)
         } else {
             0.0
         };
@@ -424,8 +429,8 @@ pub(crate) fn preparation_from_view(
             p_shift[from] -= branch_b * shift_rad;
             p_shift[to] += branch_b * shift_rad;
         }
-        let amin = case.angle_radians(branch.angmin);
-        let amax = case.angle_radians(branch.angmax);
+        let amin = case.to_radians(branch.angmin);
+        let amax = case.to_radians(branch.angmax);
         from_bus.push(from);
         branch_identities.push(crate::opf::row_identity(
             branch.uid.as_deref(),
@@ -466,7 +471,7 @@ pub(crate) fn preparation_from_view(
         n_source_branches: case.branches().len(),
         base_mva: case.base_mva(),
         units: options.units,
-        convention: options.convention,
+        formula: options.formula,
         objective: options.objective,
         skip_zero_impedance: options.skip_zero_impedance,
         synthesize_unrated_limits: options.synthesize_unrated_limits,
@@ -477,7 +482,7 @@ pub(crate) fn preparation_from_view(
         p_d,
         g_s,
         p_shift,
-        generators: DcGeneratorData {
+        generators: DcGeneratorParameters {
             identities: generator_identities,
             bus_of_gen,
             analysis_rows: generator_rows.clone(),
@@ -490,11 +495,11 @@ pub(crate) fn preparation_from_view(
             pmin,
             capability_active: vec![true; n_active_generators],
         },
-        branches: DcBranchData {
+        branches: DcBranchParameters {
             identities: branch_identities,
             from_bus,
             to_bus,
-            b,
+            susceptance_magnitude: b,
             shift,
             f_max,
             angle_min,

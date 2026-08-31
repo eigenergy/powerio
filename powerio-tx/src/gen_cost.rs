@@ -37,7 +37,7 @@ impl MissingGenCostPolicy {
     }
 
     #[must_use]
-    pub fn quadratic(c2: f64, c1: f64, c0: f64) -> Self {
+    pub fn calc_quadratic(c2: f64, c1: f64, c0: f64) -> Self {
         Self::Fill {
             c2,
             c1,

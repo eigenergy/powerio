@@ -174,7 +174,7 @@ jobs:
         run: pip install '.[all,mcp]' pytest
       - name: Run tests
         run: pytest python/tests -q
-      # The core import path: parse/convert/write import nothing but the
+      # The core import path: parse/emit import nothing but the
       # interpreter. Without the gridfm feature the wrapper must fail with a
       # clear ImportError, not an AttributeError from the missing native symbol.
       - name: Zero-dep parse path
@@ -184,13 +184,13 @@ jobs:
           /tmp/zerodep/bin/python - <<'PY'
           import tempfile
           import sys, powerio
-          m = powerio.parse("tests/data/case14.m")
-          c = m.as_balanced_network()
-          assert c.to_matpower() == open("tests/data/case14.m").read()
+          m = powerio.parse_file("tests/data/case14.m", value_type=powerio.BalancedNetwork)
+          c = m.value
+          assert m.emit("matpower").text == open("tests/data/case14.m").read()
           assert "numpy" not in sys.modules and "scipy" not in sys.modules
           assert not powerio._powerio._has_gridfm
           try:
-              c.write_gridfm(tempfile.mkdtemp(prefix="powerio-gridfm-"))
+              c.emit_gridfm(tempfile.mkdtemp(prefix="powerio-gridfm-"))
           except ImportError as e:
               assert "gridfm" in str(e)
           else:

@@ -33,7 +33,8 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
-use powerio_matrix::{BalancedNetwork, TargetFormat};
+use powerio::BalancedNetwork;
+use powerio_tx::TargetFormat;
 use serde::{Deserialize, Serialize};
 
 use crate::invariants::{self, YbusUnavailable};
@@ -425,7 +426,7 @@ fn read_case(path: &Path) -> std::result::Result<Case, Unreadable> {
     };
     let balanced_error = match catch_panic(|| crate::compat::parse_file(path, None)) {
         Ok(Ok(parsed)) => {
-            let rendered = parsed.rendered_diagnostics();
+            let rendered = parsed.render_diagnostics();
             return Ok(Case::Balanced(Box::new(parsed.network), rendered));
         }
         Err(message) => return Err(unreadable(message, true)),
@@ -602,7 +603,7 @@ fn compare_transmission(bucket: &Bucket, out: &mut Vec<Comparison>) {
             continue;
         };
         for (j, other) in members.iter().enumerate() {
-            let Some(target) = powerio_matrix::target_format_from_name(&other.format) else {
+            let Some(target) = powerio_tx::format::parse_target_format(&other.format) else {
                 continue;
             };
             let via = if i == j {
@@ -643,7 +644,7 @@ fn compare_distribution(bucket: &Bucket, out: &mut Vec<Comparison>) {
             continue;
         };
         for (j, other) in members.iter().enumerate() {
-            let Some(target) = powerio_dist::dist_target_from_name(&other.format) else {
+            let Some(target) = powerio_dist::parse_dist_target_format(&other.format) else {
                 continue;
             };
             let via = if i == j {
@@ -674,16 +675,20 @@ fn dist_convert_leg(
             to_ordinal: to.ordinal,
         },
     );
-    let written = match catch_panic(|| powerio_dist::write_network(source, target)) {
-        Ok(conversion) => conversion,
+    let emission = match catch_panic(|| crate::compat::emit_dist_value(source, target)) {
+        Ok(Ok(emission)) => emission,
+        Ok(Err(error)) => {
+            out.failure = Some(format!("emit: {error}"));
+            return out;
+        }
         Err(message) => {
-            out.failure = Some(format!("write panicked: {message}"));
+            out.failure = Some(format!("emit panicked: {message}"));
             return out;
         }
     };
-    out.warnings.extend(written.rendered_diagnostics());
+    out.warnings.extend(emission.render_diagnostics());
     let token = to.format.clone();
-    let text = written.text;
+    let text = emission.text;
     // A deck that pulls in other files cannot be read back from a string:
     // `Redirect` and `Compile` resolve against a directory, and the corpus is
     // read-only, so there is nowhere to put the written master beside its
@@ -804,20 +809,20 @@ fn convert_leg(
             to_ordinal: to.ordinal,
         },
     );
-    let written = match catch_panic(|| powerio_matrix::write_network(source, target)) {
-        Ok(Ok(conversion)) => conversion,
+    let emission = match catch_panic(|| crate::compat::emit_tx_value(source, target)) {
+        Ok(Ok(emission)) => emission,
         Ok(Err(err)) => {
-            out.failure = Some(format!("write: {err}"));
+            out.failure = Some(format!("emit: {err}"));
             return out;
         }
         Err(message) => {
-            out.failure = Some(format!("write panicked: {message}"));
+            out.failure = Some(format!("emit panicked: {message}"));
             return out;
         }
     };
-    out.warnings.extend(written.rendered_diagnostics());
+    out.warnings.extend(emission.render_diagnostics());
     let token = to.format.clone();
-    let text = written.text;
+    let text = emission.text;
     let parsed = match catch_panic(|| crate::compat::parse_str(&text, &token)) {
         Ok(Ok(parsed)) => parsed,
         Ok(Err(err)) => {
@@ -829,7 +834,7 @@ fn convert_leg(
             return out;
         }
     };
-    out.warnings.extend(parsed.rendered_diagnostics());
+    out.warnings.extend(parsed.render_diagnostics());
     fill_invariants(&mut out, source, &parsed.network);
     out
 }

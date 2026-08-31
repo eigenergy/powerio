@@ -13,9 +13,7 @@ mod helpers;
 #[allow(unused_imports)]
 use helpers::*;
 
-use powerio_tx::{
-    BalancedNetwork, DEFAULT_BASE_FREQUENCY, TargetFormat, write_pandapower_json, write_psse,
-};
+use powerio_tx::{BalancedNetwork, DEFAULT_BASE_FREQUENCY, TargetFormat};
 
 /// A 50 Hz PSS/E header round-trips: the reader takes `BASFRQ`, the writer emits
 /// it, and a second read recovers it.
@@ -30,7 +28,7 @@ fn psse_base_frequency_round_trips() {
     let net = parse_psse(raw).unwrap();
     assert_eq!(net.base_frequency(), 50.0);
 
-    let text = write_psse(&net).text;
+    let text = emit_psse(&net).text;
     let reparsed = parse_psse(&text).unwrap();
     assert_eq!(reparsed.base_frequency(), 50.0);
 }
@@ -65,7 +63,7 @@ fn pandapower_f_hz_round_trips_with_line_charging() {
     *net.base_frequency_mut() = 50.0;
     let b0 = net.branches()[0].b;
 
-    let pp = write_pandapower_json(&net).text;
+    let pp = emit_pandapower_json(&net).text;
     let back = parse_pandapower_json(&pp).unwrap().network;
 
     assert_eq!(back.base_frequency(), 50.0);
@@ -91,25 +89,25 @@ fn dropped_frequency_warns_for_formats_without_a_field() {
         TargetFormat::EgretJson,
         TargetFormat::PowerWorld,
     ] {
-        let conv = write_network(&net, target).unwrap();
+        let conv = emit_value(&net, target).unwrap();
         assert!(
-            conv.rendered_diagnostics()
+            conv.render_diagnostics()
                 .iter()
                 .any(|w| w.contains("frequency")),
             "{target:?} should warn that it drops the 50 Hz label, got {:?}",
-            conv.rendered_diagnostics()
+            conv.render_diagnostics()
         );
     }
     // PSS/E and pandapower carry it, so no frequency warning there.
     for target in [TargetFormat::Psse { rev: 33 }, TargetFormat::PandapowerJson] {
-        let conv = write_network(&net, target).unwrap();
+        let conv = emit_value(&net, target).unwrap();
         assert!(
             !conv
-                .rendered_diagnostics()
+                .render_diagnostics()
                 .iter()
                 .any(|w| w.contains("frequency")),
             "{target:?} carries the frequency and should not warn, got {:?}",
-            conv.rendered_diagnostics()
+            conv.render_diagnostics()
         );
     }
 }

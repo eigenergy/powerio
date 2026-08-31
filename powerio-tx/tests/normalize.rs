@@ -114,7 +114,7 @@ fn no_false_write_back() {
 
     // Writing it serializes the per-unit/radian model, so it must NOT echo the
     // raw MATPOWER bytes.
-    let out = write_network(&n, TargetFormat::Matpower).unwrap();
+    let out = emit_value(&n, TargetFormat::Matpower).unwrap();
     assert_ne!(
         out.text.trim_end(),
         src.replace("\r\n", "\n").trim_end(),
@@ -136,20 +136,20 @@ fn warns_when_writing_normalized_lines_as_transformers() {
             .all(|b| approx(b.tap, 1.0) && approx(b.shift, 0.0))
     );
 
-    let out = write_network(&n, TargetFormat::Psse { rev: 33 }).unwrap();
+    let out = emit_value(&n, TargetFormat::Psse { rev: 33 }).unwrap();
     assert!(
-        out.rendered_diagnostics()
+        out.render_diagnostics()
             .iter()
             .any(|w| w.contains("line/transformer label is not preserved")),
         "expected a normalized line/transformer fidelity warning, got {:?}",
-        out.rendered_diagnostics()
+        out.render_diagnostics()
     );
 
     // A raw network keeps lines at tap 0, so the warning must not fire for it.
-    let raw_out = write_network(&raw, TargetFormat::Psse { rev: 33 }).unwrap();
+    let raw_out = emit_value(&raw, TargetFormat::Psse { rev: 33 }).unwrap();
     assert!(
         !raw_out
-            .rendered_diagnostics()
+            .render_diagnostics()
             .iter()
             .any(|w| w.contains("line/transformer label is not preserved")),
         "raw network must not trigger the normalized-tap warning"

@@ -2,7 +2,7 @@
 //! hostile documents are refused at their stated bounds, and record decode
 //! scales past six figure counts.
 
-use powerio::stored::{read_module, write_module};
+use powerio::stored::{emit_module, read_module};
 use powerio::{BalancedNetwork, PioValue};
 use powerio_core::{PioModule, TimePoint};
 use powerio_prob::BALANCED_STATE_QUANTITIES;
@@ -94,7 +94,7 @@ fn genuinely_carrying_more_than_the_maximum_periods_is_refused() {
 fn six_figure_record_counts_decode_within_the_ceiling() {
     const COUNT: usize = 131_072;
     let module = PioModule::new(PioValue::BalancedNetwork(small_network()));
-    let mut raw: serde_json::Value = serde_json::from_str(&write_module(&module).unwrap()).unwrap();
+    let mut raw: serde_json::Value = serde_json::from_str(&emit_module(&module).unwrap()).unwrap();
     let mut sources = Vec::with_capacity(COUNT);
     for index in 0..COUNT {
         sources.push(serde_json::json!({
@@ -141,7 +141,7 @@ fn series_module_json() -> serde_json::Value {
         .build()
         .unwrap();
     let module = PioModule::new(PioValue::BalancedOperatingPointTimeSeries(series));
-    serde_json::from_str(&write_module(&module).unwrap()).unwrap()
+    serde_json::from_str(&emit_module(&module).unwrap()).unwrap()
 }
 
 /// DESER-004: a stored quantity's values bind to the identities the document
@@ -203,7 +203,7 @@ fn the_switch_state_survives_the_round_trip() {
         .build()
         .unwrap();
     let module = PioModule::new(PioValue::BalancedOperatingPointTimeSeries(series));
-    let text = write_module(&module).unwrap();
+    let text = emit_module(&module).unwrap();
     let raw: serde_json::Value = serde_json::from_str(&text).unwrap();
     assert!(
         raw["value"]["data"]["quantities"]
@@ -218,7 +218,7 @@ fn the_switch_state_survives_the_round_trip() {
     };
     assert_eq!(series.values()[0].switch_closed("switches:0"), Some(true));
     assert_eq!(series.values()[1].switch_closed("switches:0"), Some(false));
-    assert_eq!(write_module(&back).unwrap(), text);
+    assert_eq!(emit_module(&back).unwrap(), text);
 }
 
 /// The exported vocabulary is exactly the set the builder accepts.
@@ -237,7 +237,7 @@ fn the_exported_vocabulary_matches_what_the_builder_accepts() {
 
 fn base_module_json() -> serde_json::Value {
     let module = PioModule::new(PioValue::BalancedNetwork(small_network()));
-    serde_json::from_str(&write_module(&module).unwrap()).unwrap()
+    serde_json::from_str(&emit_module(&module).unwrap()).unwrap()
 }
 
 fn expect_refused(raw: &serde_json::Value) {
@@ -531,10 +531,10 @@ fn legacy_record_lists_are_held_to_the_module_maxima() {
     assert!(error.to_string().contains("diagnostics"), "{error}");
 
     // An accepted upgrade satisfies the write/read law the fuzz target
-    // asserts: what read_module accepts, write_module emits and read_module
+    // asserts: what read_module accepts, emit_module emits and read_module
     // accepts again.
     let module = read_module(&legacy_package_json().to_string()).unwrap();
-    let written = write_module(&module).unwrap();
+    let written = emit_module(&module).unwrap();
     read_module(&written).expect("written module reads back");
 }
 
@@ -566,7 +566,7 @@ fn a_nested_network_that_fails_validation_is_refused_per_kind() {
         instance.inputs().clone(),
     );
     if let Ok(broken) = broken_instance {
-        let doc = write_module(&powerio_core::PioModule::new(
+        let doc = emit_module(&powerio_core::PioModule::new(
             powerio::PioValue::AcScucInstance(broken),
         ))
         .unwrap();
@@ -592,7 +592,7 @@ fn a_decoded_network_that_fails_validation_is_refused() {
     rogue.to = powerio_tx::BusId(9_999);
     net.branches_mut().push(rogue);
     let mut raw: serde_json::Value = serde_json::from_str(
-        &write_module(&powerio_core::PioModule::new(
+        &emit_module(&powerio_core::PioModule::new(
             powerio::PioValue::BalancedNetwork(net),
         ))
         .unwrap(),

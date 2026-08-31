@@ -5,7 +5,23 @@
 use std::path::{Path, PathBuf};
 
 use powerio_cli::corpus::{self, anonymize, fingerprint::Fingerprint};
-use powerio_matrix::TargetFormat;
+use powerio_tx::TargetFormat;
+
+fn emit_text(
+    network: &powerio_tx::BalancedNetwork,
+    target: TargetFormat,
+) -> Result<String, powerio_core::Error> {
+    let module = powerio_core::PioModule::new(network.clone());
+    let result = powerio_tx::emit(&module, target, powerio_core::Destination::memory("case")?)?;
+    let powerio_core::EmittedOutput::Memory { mut artifacts } = result.into_output() else {
+        unreachable!("memory destination returns memory output");
+    };
+    let bytes = artifacts
+        .pop()
+        .expect("text emission has one artifact")
+        .into_bytes();
+    Ok(String::from_utf8(bytes).expect("case text is UTF-8"))
+}
 
 fn data(rel: &str) -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -24,7 +40,7 @@ fn build_corpus(dir: &Path) {
         (TargetFormat::Psse { rev: 33 }, "utility_export_q3.raw"),
         (TargetFormat::EgretJson, "NDA_internal_model.json"),
     ] {
-        let text = powerio_matrix::write_network(&net, target).unwrap().text;
+        let text = emit_text(&net, target).unwrap();
         std::fs::write(dir.join(name), text).unwrap();
     }
     // A file no reader can make sense of. A corpus always has one.
@@ -286,5 +302,5 @@ fn parse_matpower_file(
 ) -> Result<powerio_matrix::BalancedNetwork, powerio_core::Error> {
     let source = powerio_core::Source::open(path.as_ref())?
         .with_format(powerio_core::FormatId::new("matpower")?);
-    powerio_matrix::parse(source).map(powerio_core::PioModule::into_value)
+    powerio_tx::format::parse(source).map(powerio_core::PioModule::into_value)
 }

@@ -4,8 +4,128 @@
 
 use std::path::Path;
 
-use powerio::BalancedNetwork;
-use powerio::diagnostics::Diagnostic;
+use powerio::{BalancedNetwork, Diagnostic};
+
+#[allow(dead_code)] // The binary consumes these fields; the library target does not.
+pub(crate) struct MemorySidecar {
+    pub path: String,
+    pub bytes: Vec<u8>,
+}
+
+pub(crate) struct MemoryEmission {
+    pub text: String,
+    #[allow(dead_code)] // The binary consumes sidecars; the library target does not.
+    pub sidecars: Vec<MemorySidecar>,
+    pub diagnostics: Vec<Diagnostic>,
+}
+
+impl MemoryEmission {
+    pub(crate) fn render_diagnostics(&self) -> Vec<String> {
+        powerio_core::render_diagnostics(&self.diagnostics)
+    }
+}
+
+fn unpack_memory_emission(
+    result: powerio_core::EmitResult,
+    primary_name: Option<&str>,
+) -> anyhow::Result<MemoryEmission> {
+    let diagnostics = result.diagnostics().to_vec();
+    let powerio_core::EmittedOutput::Memory { artifacts } = result.into_output() else {
+        anyhow::bail!("a memory destination returned path output")
+    };
+    let single_artifact = artifacts.len() == 1;
+    let mut text = None;
+    let mut sidecars = Vec::new();
+    for artifact in artifacts {
+        let full_name = artifact.name().as_str().to_owned();
+        let name = full_name
+            .strip_prefix("output/")
+            .unwrap_or(&full_name)
+            .to_owned();
+        let bytes = artifact.into_bytes();
+        let primary = primary_name.map_or(single_artifact, |expected| name == expected);
+        if primary {
+            text = Some(String::from_utf8(bytes).map_err(|error| {
+                anyhow::anyhow!("format serializer returned non-UTF-8 text: {error}")
+            })?);
+        } else {
+            sidecars.push(MemorySidecar { path: name, bytes });
+        }
+    }
+    let text = text.ok_or_else(|| anyhow::anyhow!("emission did not contain its primary text"))?;
+    Ok(MemoryEmission {
+        text,
+        sidecars,
+        diagnostics,
+    })
+}
+
+pub(crate) fn emit_tx_module(
+    module: &powerio_core::PioModule<BalancedNetwork>,
+    target: powerio_tx::TargetFormat,
+    options: &powerio_tx::EmitOptions,
+) -> anyhow::Result<MemoryEmission> {
+    let result = powerio_tx::emit_with_options(
+        module,
+        target,
+        options,
+        powerio_core::Destination::memory("output")?,
+    )?;
+    unpack_memory_emission(result, None)
+}
+
+pub(crate) fn emit_tx_value(
+    network: &BalancedNetwork,
+    target: powerio_tx::TargetFormat,
+) -> anyhow::Result<MemoryEmission> {
+    emit_tx_module(
+        &powerio_core::PioModule::new(network.clone()),
+        target,
+        &powerio_tx::EmitOptions::default(),
+    )
+}
+
+pub(crate) fn emit_dist_module(
+    module: &powerio_core::PioModule<powerio_dist::MulticonductorNetwork>,
+    target: powerio_dist::DistTargetFormat,
+) -> anyhow::Result<MemoryEmission> {
+    emit_dist_module_with_options(module, target, &powerio_dist::EmitOptions::default())
+}
+
+pub(crate) fn emit_dist_module_with_options(
+    module: &powerio_core::PioModule<powerio_dist::MulticonductorNetwork>,
+    target: powerio_dist::DistTargetFormat,
+    options: &powerio_dist::EmitOptions,
+) -> anyhow::Result<MemoryEmission> {
+    let result = powerio_dist::emit_with_options(
+        module,
+        target,
+        options,
+        powerio_core::Destination::memory("output")?,
+    )?;
+    let primary = matches!(target, powerio_dist::DistTargetFormat::Dss).then_some("case.dss");
+    unpack_memory_emission(result, primary)
+}
+
+pub(crate) fn emit_dist_value(
+    network: &powerio_dist::MulticonductorNetwork,
+    target: powerio_dist::DistTargetFormat,
+) -> anyhow::Result<MemoryEmission> {
+    emit_dist_module(&powerio_core::PioModule::new(network.clone()), target)
+}
+
+#[allow(dead_code)] // Used by the binary's format option tests only.
+pub(crate) fn emit_dist_value_with_options(
+    network: &powerio_dist::MulticonductorNetwork,
+    target: powerio_dist::DistTargetFormat,
+    options: &powerio_dist::EmitOptions,
+) -> anyhow::Result<MemoryEmission> {
+    emit_dist_module_with_options(
+        &powerio_core::PioModule::new(network.clone()),
+        target,
+        options,
+    )
+}
 
 pub(crate) struct ParsedCase {
     pub network: BalancedNetwork,
@@ -19,12 +139,12 @@ pub(crate) struct ParsedCase {
     /// TEMPORARY: the calculation instance types replace this hand-off. The
     /// binary reads it; the corpus library does not.
     #[allow(dead_code)]
-    pub document: Option<std::sync::Arc<powerio::format::goc3::Goc3Document>>,
+    pub document: Option<std::sync::Arc<powerio_tx::format::goc3::Goc3Document>>,
 }
 
 impl ParsedCase {
-    pub(crate) fn rendered_diagnostics(&self) -> Vec<String> {
-        powerio::diagnostics::render_diagnostics(&self.diagnostics)
+    pub(crate) fn render_diagnostics(&self) -> Vec<String> {
+        powerio_core::render_diagnostics(&self.diagnostics)
     }
 }
 
@@ -45,7 +165,7 @@ pub(crate) fn parse_module(
     from: Option<&str>,
 ) -> Result<powerio_core::PioModule<BalancedNetwork>, powerio_core::Error> {
     let source = declared(powerio_core::Source::open(path.as_ref())?, from)?;
-    powerio::format::parse(source)
+    powerio_tx::format::parse(source)
 }
 
 pub(crate) fn parse_file(
@@ -70,7 +190,7 @@ pub(crate) fn parse_file(
 }
 
 fn invalid_text(path: &Path) -> powerio_core::Error {
-    tx_error_to_core(powerio::error::Error::FormatRead {
+    tx_error_to_core(powerio_tx::Error::FormatRead {
         format: "case text",
         message: format!("{} is not valid UTF-8", path.display()),
     })
@@ -78,7 +198,7 @@ fn invalid_text(path: &Path) -> powerio_core::Error {
 
 fn goc3_parsed(text: &str) -> Result<ParsedCase, powerio_core::Error> {
     let (network, diagnostics, document) =
-        powerio::parse_goc3_json(text).map_err(tx_error_to_core)?;
+        powerio_tx::format::parse_goc3_json(text).map_err(tx_error_to_core)?;
     Ok(ParsedCase {
         network,
         diagnostics,
@@ -87,7 +207,7 @@ fn goc3_parsed(text: &str) -> Result<ParsedCase, powerio_core::Error> {
     })
 }
 
-pub(crate) fn tx_error_to_core(error: powerio::error::Error) -> powerio_core::Error {
+pub(crate) fn tx_error_to_core(error: powerio_tx::Error) -> powerio_core::Error {
     powerio_core::Error::new(error.code(), error.to_string()).with_cause(error)
 }
 
@@ -104,12 +224,20 @@ pub(crate) fn parse_str_with_name(
     if from.eq_ignore_ascii_case("goc3-json") {
         return goc3_parsed(text);
     }
+    parse_text_module(text, from, name_hint).map(module_to_parsed)
+}
+
+pub(crate) fn parse_text_module(
+    text: &str,
+    from: &str,
+    name_hint: Option<&str>,
+) -> Result<powerio_core::PioModule<BalancedNetwork>, powerio_core::Error> {
     let name = name_hint.map_or_else(|| "<memory>".to_owned(), str::to_owned);
     let source = declared(
         powerio_core::Source::from_bytes(name, text.as_bytes().to_vec())?,
         Some(from),
     )?;
-    powerio::format::parse(source).map(module_to_parsed)
+    powerio_tx::format::parse(source)
 }
 
 pub(crate) fn module_to_parsed(module: powerio_core::PioModule<BalancedNetwork>) -> ParsedCase {
@@ -134,11 +262,11 @@ pub(crate) struct ParsedDist {
 }
 
 impl ParsedDist {
-    /// Write through the module: a same format target echoes the retained
+    /// Emit through the module: a same format target echoes the retained
     /// source bytes exactly.
     #[allow(dead_code)] // the binary's convert path; the corpus library writes canonically
-    pub fn to_format(&self, target: powerio_dist::DistTargetFormat) -> powerio_dist::Conversion {
-        powerio_dist::write_as(&self.module, target)
+    pub fn emit(&self, target: powerio_dist::DistTargetFormat) -> anyhow::Result<MemoryEmission> {
+        emit_dist_module(&self.module, target)
     }
 }
 

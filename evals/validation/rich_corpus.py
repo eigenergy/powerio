@@ -129,14 +129,17 @@ def count_features(case) -> dict[str, int]:
 
 def parse_case(path: Path, fmt: str):
     if fmt == "pypsa-csv-folder":
-        return powerio.parse(str(path), "pypsa-csv", value_type=powerio.BalancedNetwork).value
-    return powerio.parse(str(path), value_type=powerio.BalancedNetwork).value
+        return powerio.parse_file(
+            path, format="pypsa-csv", value_type=powerio.BalancedNetwork
+        )
+    return powerio.parse_file(path, value_type=powerio.BalancedNetwork)
 
 
 def scan_one(root_label: str, root: Path, path: Path, fmt: str) -> Row:
     row = Row(root=root_label, path=rel_display(root_label, root, path), format=fmt, status="ok", message="")
     try:
-        case = parse_case(path, fmt)
+        module = parse_case(path, fmt)
+        case = module.value
     except Exception as exc:  # noqa: BLE001 - report corpus parser failures
         row.message = f"{type(exc).__name__}: {exc}".replace("\n", " ")[:500]
         if fmt == "json" and (
@@ -148,7 +151,7 @@ def scan_one(root_label: str, root: Path, path: Path, fmt: str) -> Row:
             row.status = "FAIL"
         return row
 
-    row.warnings = len(getattr(case, "read_warnings", []))
+    row.warnings = sum(d.severity == "warning" for d in module.diagnostics)
     for key, value in count_features(case).items():
         setattr(row, key, value)
     return row

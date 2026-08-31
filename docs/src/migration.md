@@ -4,8 +4,8 @@ One guide per release that breaks something, named for the release you are movin
 
 | guide | covers |
 |---|---|
-| [To 1.0](migration-v1.md) | OPF objectives and constraint masks, stable analysis identities, economic result derivatives, and the retired regularization term |
-| [To 0.10](migration-v0.10.md) | the module value model, the one way 0.9 document reader, C ABI 6, and the Python and Julia module interfaces |
+| [To 1.0](migration-v1.md) | the final source vocabulary, OPF objectives and constraint masks, stable analysis identities, economic result derivatives, and the retired regularization term |
+| [To 0.10](migration-v0.10.md) | `PioModule`, stored schema 1, typed state selection, balanced transformation, C ABI 6, and the Python and Julia module interfaces |
 | [To 0.9](migration-v0.9.md) | the Rust, Python and CLI surfaces: renamed types, the DC susceptance default, `ReferenceBuses`, the split error types, and `.pio.json` documents written before 0.9 |
 | [To 0.7](migration-v0.7.md) | DC OPF problem data moving from `powerio-matrix` to `powerio-prob` |
 

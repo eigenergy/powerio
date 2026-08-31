@@ -8,14 +8,14 @@
 
 use sprs::CsMat;
 
-use crate::matrix::incidence::diagonal;
+use crate::matrix::incidence::calc_diagonal;
 use crate::matrix::triplet::CooBuilder;
 
 /// `L = A diag(w) Aᵀ` (n×n). With `w = b` this is the DC bus susceptance matrix;
 /// with `w = b²·θ_f⁻¹` it is the reweighted bus Laplacian `L₁` from the KKT
 /// system.
-pub fn build_weighted_laplacian(a: &CsMat<f64>, w: &[f64]) -> CsMat<f64> {
-    let d = diagonal(w);
+pub fn calc_weighted_laplacian(a: &CsMat<f64>, w: &[f64]) -> CsMat<f64> {
+    let d = calc_diagonal(w);
     let at = a.transpose_view().to_csr();
     a * &(&d * &at)
 }
@@ -140,7 +140,7 @@ impl GroundedIndexMap {
 
     /// Full index → grounded index. `None` for the grounded-out bus `r`.
     #[inline]
-    pub fn full_to_reduced(&self, i: usize) -> Option<usize> {
+    pub fn map_full_to_reduced(&self, i: usize) -> Option<usize> {
         match i {
             _ if i == self.r => None,
             _ if i > self.r => Some(i - 1),
@@ -150,13 +150,13 @@ impl GroundedIndexMap {
 
     /// Grounded index → full index.
     #[inline]
-    pub fn reduced_to_full(&self, i: usize) -> usize {
+    pub fn map_reduced_to_full(&self, i: usize) -> usize {
         if i >= self.r { i + 1 } else { i }
     }
 }
 
 /// The unit vector `e_r`, length `n`.
-pub fn unit_vector(n: usize, r: usize) -> Vec<f64> {
+pub fn calc_unit_vector(n: usize, r: usize) -> Vec<f64> {
     let mut e = vec![0.0; n];
     if r < n {
         e[r] = 1.0;
@@ -165,9 +165,9 @@ pub fn unit_vector(n: usize, r: usize) -> Vec<f64> {
 }
 
 /// The reference indicator, length `n`: `1` at every grounded (slack) bus, `0`
-/// elsewhere. The multi-reference form of [`unit_vector`]; a downstream solver
+/// elsewhere. The multi-reference form of [`calc_unit_vector`]; a downstream solver
 /// reads it to recover which buses were grounded.
-pub fn reference_indicator(n: usize, refs: &[usize]) -> Vec<f64> {
+pub fn calc_reference_indicator(n: usize, refs: &[usize]) -> Vec<f64> {
     let mut e = vec![0.0; n];
     for &r in refs {
         if r < n {
@@ -230,10 +230,17 @@ mod tests {
 
     #[test]
     fn reference_indicator_marks_each_ref() {
-        assert_eq!(reference_indicator(4, &[0, 2]), vec![1.0, 0.0, 1.0, 0.0]);
+        assert_eq!(
+            calc_reference_indicator(4, &[0, 2]),
+            vec![1.0, 0.0, 1.0, 0.0]
+        );
+        assert_eq!(
+            calc_reference_indicator(4, &[0, 2]),
+            calc_reference_indicator(4, &[0, 2])
+        );
         // Out-of-range refs are ignored, not a panic.
-        assert_eq!(reference_indicator(3, &[5]), vec![0.0, 0.0, 0.0]);
+        assert_eq!(calc_reference_indicator(3, &[5]), vec![0.0, 0.0, 0.0]);
         // The single-reference case is exactly unit_vector.
-        assert_eq!(reference_indicator(3, &[1]), unit_vector(3, 1));
+        assert_eq!(calc_reference_indicator(3, &[1]), calc_unit_vector(3, 1));
     }
 }

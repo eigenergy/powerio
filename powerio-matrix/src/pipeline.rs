@@ -1,6 +1,6 @@
 //! Orchestrates a single case → output directory.
 //!
-//! Given a parsed `BalancedNetwork`, builds the requested matrix family, writes
+//! Given a parsed `BalancedNetwork`, calculates the requested matrix family, writes
 //! `.mtx` files, and emits a `meta.json` sidecar describing what was
 //! produced. Used by both the `batch` CLI subcommand and the TUI's
 //! batch export screen.
@@ -16,9 +16,9 @@ use crate::Result;
 use crate::indexed::IndexedNetwork;
 use crate::io::meta::{CaseMetadata, MatrixMetadata};
 use crate::matrix::{
-    BuildOptions, MatrixStats, ZeroImpedanceRule, ZeroImpedanceSkips, build_adjacency,
-    build_bdoubleprime, build_bprime, build_lacpf, build_ybus, negate_into, sddm_check,
-    skipped_zero_impedance,
+    BuildOptions, MatrixStats, ZeroImpedanceRule, ZeroImpedanceSkips, calc_adjacency_matrix,
+    calc_admittance_matrix, calc_bdoubleprime_matrix, calc_bprime_matrix, calc_lacpf_matrix,
+    calc_zero_impedance_skips, check_sddm, negate_into,
 };
 use crate::network::BalancedNetwork;
 
@@ -220,21 +220,21 @@ impl Pipeline {
         for &kind in &self.matrices {
             let name = format!("{stem}_{}.mtx", kind.slug());
             let matrix = self.build_for_run(&view, kind, &mut ybus_cache)?;
-            let stats = matrix_stats_for_kind(&matrix, &view, kind, &self.options);
-            let sddm = sddm_check(&matrix);
+            let stats = calc_matrix_stats_for_kind(&matrix, &view, kind, &self.options);
+            let sddm = check_sddm(&matrix);
             matrices_meta.push(MatrixMetadata {
                 kind: kind.slug().to_string(),
                 file: name.clone(),
                 stats,
                 sddm,
             });
-            inventory.push((name, crate::io::mtx::mtx_bytes(&matrix)?));
+            inventory.push((name, crate::io::mtx::to_mtx_bytes(&matrix)?));
 
             // RHS for matrices that take a RHS of length n (skip LACPF which is 2n).
             if let Some(rhs) = self.build_rhs(&view, kind) {
                 inventory.push((
                     format!("{stem}_{}_rhs.mtx", kind.slug()),
-                    crate::io::mtx::vector_mtx_bytes(&rhs)?,
+                    crate::io::mtx::to_vector_mtx_bytes(&rhs)?,
                 ));
             }
         }
@@ -244,7 +244,7 @@ impl Pipeline {
         let shunt: Vec<f64> = view.bs().iter().map(|&b| b / base).collect();
         inventory.push((
             format!("{stem}_shunt.mtx"),
-            crate::io::mtx::vector_mtx_bytes(&shunt)?,
+            crate::io::mtx::to_vector_mtx_bytes(&shunt)?,
         ));
 
         let metadata = CaseMetadata {
@@ -300,7 +300,7 @@ impl Pipeline {
         match kind {
             MatrixKind::YbusG => take_ybus_g(case, &self.options, ybus_cache),
             MatrixKind::YbusB => take_ybus_b(case, &self.options, ybus_cache),
-            _ => build_kind(case, kind, &self.options),
+            _ => calc_matrix(case, kind, &self.options),
         }
     }
 
@@ -354,7 +354,7 @@ fn fill_ybus_cache(
     opts: &BuildOptions,
     ybus_cache: &mut Option<YbusCache>,
 ) -> Result<()> {
-    let parts = build_ybus(view, opts)?;
+    let parts = calc_admittance_matrix(view, opts)?;
     *ybus_cache = Some(YbusCache {
         g: Some(parts.g),
         b: Some(parts.b),
@@ -391,25 +391,26 @@ fn take_ybus_b(
     Ok(negate_into(b))
 }
 
-/// Build the square matrix for one [`MatrixKind`] from an indexed network. The
-/// single dispatch shared by the [`Pipeline`], the `verify` CLI command, and the
-/// TUI inspect screen, so the `YbusB = -Im(Y_bus)` sign lives in one place.
-pub fn build_kind(
+/// Calculate the square matrix for one [`MatrixKind`] from an indexed network.
+/// This is the dispatch shared by the [`Pipeline`], the `verify` CLI command,
+/// and the TUI inspect screen, so the `YbusB = -Im(Y_bus)` sign lives in one
+/// place.
+pub fn calc_matrix(
     view: &IndexedNetwork,
     kind: MatrixKind,
     opts: &BuildOptions,
 ) -> Result<sprs::CsMat<f64>> {
     match kind {
-        MatrixKind::BPrime => build_bprime(view, opts),
-        MatrixKind::BDoublePrime => build_bdoubleprime(view, opts),
-        MatrixKind::YbusG => build_ybus(view, opts).map(|p| p.g),
-        MatrixKind::YbusB => build_ybus(view, opts).map(|p| negate_into(p.b)),
-        MatrixKind::Lacpf => build_lacpf(view, opts),
-        MatrixKind::Adjacency => build_adjacency(view),
+        MatrixKind::BPrime => calc_bprime_matrix(view, opts),
+        MatrixKind::BDoublePrime => calc_bdoubleprime_matrix(view, opts),
+        MatrixKind::YbusG => calc_admittance_matrix(view, opts).map(|p| p.g),
+        MatrixKind::YbusB => calc_admittance_matrix(view, opts).map(|p| negate_into(p.b)),
+        MatrixKind::Lacpf => calc_lacpf_matrix(view, opts),
+        MatrixKind::Adjacency => calc_adjacency_matrix(view),
     }
 }
 
-pub fn zero_impedance_rule_for_kind(
+pub fn select_zero_impedance_rule_for_kind(
     kind: MatrixKind,
     opts: &BuildOptions,
 ) -> Option<ZeroImpedanceRule> {
@@ -429,7 +430,7 @@ pub fn zero_impedance_rule_for_kind(
     }
 }
 
-pub fn zero_impedance_skips_for_kind(
+pub fn calc_zero_impedance_skips_for_kind(
     view: &IndexedNetwork,
     kind: MatrixKind,
     opts: &BuildOptions,
@@ -437,19 +438,20 @@ pub fn zero_impedance_skips_for_kind(
     if !opts.skip_zero_impedance {
         return ZeroImpedanceSkips::default();
     }
-    zero_impedance_rule_for_kind(kind, opts).map_or_else(ZeroImpedanceSkips::default, |rule| {
-        skipped_zero_impedance(view, rule)
-    })
+    select_zero_impedance_rule_for_kind(kind, opts)
+        .map_or_else(ZeroImpedanceSkips::default, |rule| {
+            calc_zero_impedance_skips(view, rule)
+        })
 }
 
-pub fn matrix_stats_for_kind(
+pub fn calc_matrix_stats_for_kind(
     matrix: &sprs::CsMat<f64>,
     view: &IndexedNetwork,
     kind: MatrixKind,
     opts: &BuildOptions,
 ) -> MatrixStats {
     MatrixStats::from_csr(matrix)
-        .with_zero_impedance_skips(zero_impedance_skips_for_kind(view, kind, opts))
+        .with_zero_impedance_skips(calc_zero_impedance_skips_for_kind(view, kind, opts))
 }
 
 fn sha256_hex(bytes: &[u8]) -> String {

@@ -5,7 +5,7 @@
 The `powerio` binary drives the same operations from a shell. With no subcommand it opens the interactive TUI.
 
 ```sh
-powerio convert case14.m --to psse -o case14.raw   # parse + write, findings on stderr
+powerio convert case14.m --to psse -o case14.raw   # parse + emit, findings on stderr
 powerio summary case14.m                           # the canonical network summary JSON
 powerio module case14.m -o case14.pio.json         # the stored module document
 powerio module gridfm_case14/ --scenario 7 -o one.pio.json  # one scenario as a static module
@@ -21,7 +21,7 @@ Format names, value kinds, and diagnostic codes are the same stable strings the 
 
 ## The MCP server
 
-`powerio-mcp` (from the Python package) serves the same operations to MCP clients: parse, inspect, diagnostics, conversion, writing, state inventory and selection, conversion to a balanced network, and DC matrix data. Tool inputs and outputs use the stable kind and format strings, and diagnostics cross as structured records with code, severity, message, and target. Every tool response also carries `schema` (a dotted name such as `powerio.parse`) and `powerio_version` (the release that produced it), so a client can identify a response's shape before reading further.
+`powerio-mcp` (from the Python package) serves the same operations to MCP clients. Its tools are `parse`, `inspect`, `diagnostics`, `list_states`, `inspect_state`, `export_state`, `to_normalized`, `calc_matrix`, `to_balanced_report`, `to_balanced`, `emit`, `summarize`, `display`, and `about`. `emit(format, destination)` writes a file or directory; omit `destination` to return text. Tool inputs and outputs use the stable kind and format strings, and diagnostics cross as structured records with code, severity, message, and target. Every tool response also carries `schema` (a dotted name such as `powerio.parse`) and `powerio_version` (the release that produced it), so a client can identify a response's shape before reading further.
 
 ```sh
 pip install 'powerio[mcp]'

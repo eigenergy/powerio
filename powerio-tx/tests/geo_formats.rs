@@ -8,10 +8,7 @@ use helpers::*;
 
 use std::path::PathBuf;
 
-use powerio_tx::{
-    CoordinateSpace, Location, TargetFormat, write_pandapower_json, write_powerworld,
-    write_pypsa_csv_folder,
-};
+use powerio_tx::{CoordinateSpace, Location, TargetFormat};
 
 fn data(name: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -50,7 +47,7 @@ fn aux_writes_locations_back_and_round_trips() {
     let net = parse_file(data("powerworld/ACTIVSg200.aux"), None)
         .unwrap()
         .network;
-    let conv = write_powerworld(&net);
+    let conv = emit_powerworld(&net);
     assert!(conv.text.contains("Latitude:1"));
     let back = parse_str(&conv.text, "powerworld").unwrap().network;
     assert_eq!(back.buses()[0].location, net.buses()[0].location);
@@ -64,7 +61,7 @@ fn aux_without_locations_writes_the_old_header() {
     for bus in net.buses_mut() {
         bus.location = None;
     }
-    assert!(!write_powerworld(&net).text.contains("Latitude:1"));
+    assert!(!emit_powerworld(&net).text.contains("Latitude:1"));
 }
 
 #[test]
@@ -83,7 +80,7 @@ fn pandapower_geo_points_round_trip() {
     });
     // Same-format writes echo the retained source byte for byte; drop it to
     // exercise the canonical writer.
-    let out = write_pandapower_json(&net);
+    let out = emit_pandapower_json(&net);
     let back = parse_pandapower_json(&out.text).unwrap().network;
     let location = back.buses()[0].location.expect("harvested location");
     assert!((location.x - 7.09).abs() < 1e-12);
@@ -107,7 +104,7 @@ fn out_of_bounds_coordinates_read_as_unknown_space() {
         y: 5_800_000.0,
         kind: None,
     });
-    let out = write_pandapower_json(&net);
+    let out = emit_pandapower_json(&net);
     let back = parse_pandapower_json(&out.text).unwrap().network;
     assert!(back.buses()[0].location.is_some());
     assert!(matches!(
@@ -129,7 +126,7 @@ fn pypsa_bus_xy_round_trips() {
         kind: None,
     });
     let out = tmp_dir("geo-pypsa-csv");
-    write_pypsa_csv_folder(&net, &out).unwrap();
+    emit_pypsa_csv_folder(&net, &out).unwrap();
     let back = read_pypsa_csv_folder(&out).unwrap().network;
     let location = back.buses()[0].location.expect("harvested location");
     assert!((location.x - 10.4).abs() < 1e-12);
@@ -152,25 +149,25 @@ fn formats_without_geometry_report_dropped_locations() {
         TargetFormat::Pslf,
         TargetFormat::SurgeJson,
     ] {
-        let conv = net.to_format(format).unwrap();
+        let conv = emit_value(&net, format).unwrap();
         assert!(
-            conv.rendered_diagnostics()
+            conv.render_diagnostics()
                 .iter()
                 .any(|w| w.contains("location") && w.contains("dropped")),
             "{format:?} did not warn: {:?}",
-            conv.rendered_diagnostics()
+            conv.render_diagnostics()
         );
     }
     // Formats with a coordinate representation stay silent.
     for format in [TargetFormat::PowerWorld, TargetFormat::PandapowerJson] {
-        let conv = net.to_format(format).unwrap();
+        let conv = emit_value(&net, format).unwrap();
         assert!(
             !conv
-                .rendered_diagnostics()
+                .render_diagnostics()
                 .iter()
                 .any(|w| w.contains("dropped: ")),
             "{format:?} warned: {:?}",
-            conv.rendered_diagnostics()
+            conv.render_diagnostics()
         );
     }
 }

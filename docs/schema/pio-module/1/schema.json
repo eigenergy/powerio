@@ -601,7 +601,7 @@
         },
         "transformers_3w": {
           "default": [],
-          "description": "Three-winding transformers, kept as typed records rather than folded into\n`branches`, so a star point and the per-winding data survive a round trip.\n`#[serde(default)]` so JSON written before the field existed still\ndeserializes. [`IndexedNetwork`](crate::IndexedNetwork) lowers each\nin-service record into a star bus plus three branches (via\n[`Transformer3W::star_expansion`]) before building any matrix, so a\n3-winding transformer does appear in `Y_bus`/connectivity; the canonical\nmodel keeps the typed record for round-trip fidelity.",
+          "description": "Three-winding transformers, kept as typed records rather than folded into\n`branches`, so a star point and the per-winding data survive a round trip.\n`#[serde(default)]` so JSON written before the field existed still\ndeserializes. [`IndexedNetwork`](crate::IndexedNetwork) lowers each\nin-service record into a star bus plus three branches (via\n[`Transformer3W::to_star_expansion`]) before building any matrix, so a\n3-winding transformer does appear in `Y_bus`/connectivity; the canonical\nmodel keeps the typed record for round-trip fidelity.",
           "items": {
             "$ref": "#/$defs/Transformer3W"
           },
@@ -1559,6 +1559,7 @@
       "additionalProperties": false,
       "properties": {
         "approximation": {
+          "description": "Frozen `powerio.module/1` key from 0.10. The value is the selected\n[`BranchSusceptanceFormula`](powerio_tx::BranchSusceptanceFormula) stable name.",
           "type": "string"
         },
         "constraints": {
@@ -1711,7 +1712,7 @@
       "additionalProperties": false,
       "properties": {
         "approximation": {
-          "description": "The selected branch susceptance formula's stable name.",
+          "description": "Frozen `powerio.module/1` key from 0.10. The value is the selected\n[`BranchSusceptanceFormula`](powerio_tx::BranchSusceptanceFormula) stable name.",
           "type": "string"
         },
         "initial_state": {
@@ -10667,7 +10668,7 @@
       "type": "object"
     },
     "Transformer3W": {
-      "description": "A three winding transformer with three terminal buses joined at a star point.\n\nSeries impedance is stored for winding pairs 1-2, 2-3, and 3-1. The record\nalso retains star point voltage and per winding control data. PSS/E three\nwinding records and PSLF tertiary winding records map to this type.\n[`star_expansion`](Transformer3W::star_expansion) turns it into the synthetic\nstar bus plus three branches for a consumer that works in the bus-branch model;\n[`IndexedNetwork`](crate::IndexedNetwork) applies it before building any matrix,\nso a 3-winding transformer contributes to `Y_bus` and connectivity.",
+      "description": "A three winding transformer with three terminal buses joined at a star point.\n\nSeries impedance is stored for winding pairs 1-2, 2-3, and 3-1. The record\nalso retains star point voltage and per winding control data. PSS/E three\nwinding records and PSLF tertiary winding records map to this type.\n[`to_star_expansion`](Transformer3W::to_star_expansion) turns it into the synthetic\nstar bus plus three branches for a consumer that works in the bus-branch model;\n[`IndexedNetwork`](crate::IndexedNetwork) applies it before building any matrix,\nso a 3-winding transformer contributes to `Y_bus` and connectivity.",
       "properties": {
         "extras": {
           "additionalProperties": true,

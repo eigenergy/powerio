@@ -630,7 +630,7 @@ impl DcOpfSolution {
     /// multiplier on `flow <= rating`; `to` is the multiplier on
     /// `-flow <= rating`. Increasing one symmetric rating by one MW changes
     /// the local optimal objective by the negative sum of the two values. A
-    /// branch omitted by the approximation carries zero in both columns.
+    /// branch absent from the DC calculation carries zero in both columns.
     ///
     /// # Errors
     /// A column whose length disagrees with the instance's branch table.

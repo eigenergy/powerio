@@ -4,7 +4,7 @@ mod helpers;
 #[allow(unused_imports)]
 use helpers::*;
 
-use powerio::dist_geo::{apply_dist_geo_layer, dist_geo_layer};
+use powerio::dist_geo::{apply_dist_geo_layer, to_dist_geo_layer};
 use powerio::{CoordinateSpace, CoordsKind, GeoLayer, GeoTarget};
 
 const MASTER: &str = "New Circuit.c1 bus1=sourcebus basekv=12.47\n\
@@ -44,7 +44,7 @@ fn dist_layer_extracts_and_applies_by_name() {
         kind: None,
     });
 
-    let layer = dist_geo_layer(&net);
+    let layer = to_dist_geo_layer(&net);
     let point = layer
         .features
         .iter()
@@ -63,7 +63,7 @@ fn dist_layer_extracts_and_applies_by_name() {
 
     // The canonical wire form round trips into a fresh parse of the same
     // master, matching case insensitively on the OpenDSS names.
-    let round = GeoLayer::parse_bytes(layer.to_geojson().as_bytes(), None)
+    let round = GeoLayer::parse_text(&layer.to_geojson(), None)
         .expect("reparse")
         .layer;
     let mut bare = dist_network();
@@ -84,7 +84,7 @@ fn dist_layer_extracts_and_applies_by_name() {
 #[test]
 fn dist_apply_reads_a_buscoords_sidecar() {
     let mut net = dist_network();
-    let parsed = GeoLayer::parse_bytes(b"SourceBus, -89.6, 40.6\nLoadBus, -89.2, 39.9\n", None)
+    let parsed = GeoLayer::parse_text("SourceBus, -89.6, 40.6\nLoadBus, -89.2, 39.9\n", None)
         .expect("parse buscoords");
     assert!(matches!(
         parsed.layer.space,

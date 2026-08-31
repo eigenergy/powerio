@@ -2,10 +2,10 @@
 
 `powerio dcopf <case>.m -o <out>` assembles a `DcOpfInstance` and writes
 `<out>/<case>_dcopf/`. Rust callers pass an assembled instance to
-`powerio_matrix::write_dcopf_bundle`. The directory contains Matrix
+`powerio_matrix::emit_dcopf_bundle`. The directory contains Matrix
 Market files and `dcopf_meta.json`.
 
-## Conventions
+## Definitions
 
 - **Format.** Matrix Market. Matrices are `coordinate real`; square symmetric
   ones (`L`, `L_grounded`) use the `symmetric` header and store the lower
@@ -29,7 +29,7 @@ Market files and `dcopf_meta.json`.
   as a 0-based dense index. Each in-service island needs at least one reference.
   If several references lie in one island, the bundle fixes all of those voltage
   angles to zero; it is not a participation factor slack model.
-- **DC convention.** `b.mtx` holds \\(b_e\\), positive for an inductive branch,
+- **Branch susceptance formula.** `b.mtx` holds \\(b_e\\), positive for an inductive branch,
   the coefficient on \\(\theta_f - \theta_t\\). The complete flow is
   \\(f_e = b_e(\theta_f - \theta_t) - b_e\delta_e\\), where \\(\delta_e\\) is
   the phase shift in `shift.mtx`. `SeriesSusceptance` by default:
@@ -46,7 +46,7 @@ Market files and `dcopf_meta.json`.
 | `A.mtx` | \\(n \times m\\) | signed incidence matrix; column \\(e\\) has \\(+1\\) at from-bus, \\(-1\\) at to-bus |
 | `L.mtx` | \\(n \times n\\) | DC bus susceptance matrix \\(L = A \operatorname{diag}(b) A^\mathsf{T}\\); with positive branch weights, its rank is \\(n-c\\) for \\(c\\) connected components |
 | `L_grounded.mtx` | \\((n-k) \times (n-k)\\) | \\(L\\) with \\(k\\) reference rows and columns removed; SPD when every island is grounded |
-| `BAt.mtx` | \\(m \times n\\) | angle dependent flow map \\(B A^\mathsf{T}\\) over the bundle's positive weights; complete flow adds `flow_offset`. In PowerModels signs the same flow is \\(p_\text{branch} = -B_f\,v_a + b \odot \text{shift}\\) with negated susceptances |
+| `BAt.mtx` | \\(m \times n\\) | branch flow matrix \\(B A^\mathsf{T}\\) over the bundle's positive susceptance magnitudes; complete flow adds `flow_offset`. In PowerModels signs the same flow is \\(p_\text{branch} = -B_f\,v_a + b \odot \text{shift}\\) with negated susceptances |
 | `Cg.mtx` | \\(n \times n_{\mathrm{gen}}\\) | generator-to-bus incidence, one \\(1\\) per column |
 
 ## Vectors
@@ -90,7 +90,7 @@ writes Matrix Market files plus structured metadata:
   `n_generators`, `n_reference_buses`, and `n_grounded_buses`.
 - `index_base`: `dense = 0` for manifest bus, branch, generator, and reference
   indices; `matrix_market = 1` for `.mtx` coordinates.
-- `dc_convention`, `units`, `build_options`, and `zero_impedance`.
+- `branch_susceptance_formula`, `units`, `build_options`, and `zero_impedance`.
   `build_options` records both `skip_zero_impedance` and
   `synthesize_unrated_limits`. The zero impedance block records the skip flag,
   denominator rule, skipped count, and skipped source branch rows.
@@ -99,9 +99,8 @@ writes Matrix Market files plus structured metadata:
 - `operators[]`: one entry per emitted operator with `name`, `file`, `kind`,
   `rows`, `cols`, `index_space`, and `units`.
 
-The legacy aliases `n`, `m`, `n_gen`, `reference_buses`, and `convention` remain
-for current readers. `cost_policy`, `synthesized_gen_costs`,
-`patched_gen_costs`, `files[]`, and `powerio_version` remain top level fields.
+`cost_policy`, `synthesized_gen_costs`, `patched_gen_costs`, `files[]`, and
+`powerio_version` are top level fields.
 
 ## Solving with it
 

@@ -81,12 +81,6 @@ pub enum DistGraphEdgeKind {
 }
 
 impl MulticonductorNetwork {
-    /// Project this network into a render ready bus and terminal graph.
-    #[must_use]
-    pub fn graph(&self) -> DistGraph {
-        self.to_graph()
-    }
-
     /// Transform this network into a render ready bus and terminal graph.
     #[must_use]
     pub fn to_graph(&self) -> DistGraph {
@@ -612,6 +606,6 @@ mod tests {
             ..MulticonductorNetworkTables::default()
         });
 
-        assert_eq!(net.graph().buses[0].xy, Some([-80.0, 35.0]));
+        assert_eq!(net.to_graph().buses[0].xy, Some([-80.0, 35.0]));
     }
 }

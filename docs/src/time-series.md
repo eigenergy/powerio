@@ -24,6 +24,6 @@ length(series)                             # number of declared time points
 first_hour = series[1]                     # one based, like every Julia axis
 ```
 
-Selection returns an independent module over the existing typed entry; nothing reparses and no numerical table is copied. Exporting the selection to a file or a stored document is the same write operation every module has.
+Selection returns an independent module over the existing typed entry; nothing reparses and no numerical table is copied. Emitting the selection to a file or a stored document uses the same operation as every other module.
 
-Data outside a source's supported profile (PyPSA investment periods, stochastic scenarios, unit commitment coupling; Egret reserve and contingency data) stays in the retained source, is reported as uninterpreted, and survives a same format write. [Formats and Fidelity](format-fidelity.md) states each profile's boundary.
+Data outside a source's supported profile (PyPSA investment periods, stochastic scenarios, unit commitment coupling; Egret reserve and contingency data) stays in the retained source, is reported as uninterpreted, and survives a same format emission. [Formats and Fidelity](format-fidelity.md) states each profile's boundary.

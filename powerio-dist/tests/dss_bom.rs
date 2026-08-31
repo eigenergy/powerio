@@ -32,7 +32,7 @@ fn byte_order_marks_are_retained_and_never_reach_the_reader() {
     assert!(net.linecodes().iter().any(|lc| lc.name == "lc1"));
     // The echo returns the root file's exact bytes, mark included.
     assert_eq!(
-        net.to_format(powerio_dist::DistTargetFormat::Dss).text,
+        net.emit(powerio_dist::DistTargetFormat::Dss).text,
         master_text
     );
 }

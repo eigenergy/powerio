@@ -2,10 +2,11 @@
 //! matrix and bundle builders derive from an instance.
 
 use super::prep::Units;
-use super::prep::{DcOpfOptions, preparation_from_view};
+use super::prep::{DcOpfOptions, DcOpfPreparation, preparation_from_view};
 use crate::Error;
 use powerio_tx::{
-    BalancedNetwork, Branch, Bus, BusId, BusType, DcConvention, GenCost, Generator, IndexedNetwork,
+    BalancedNetwork, Branch, BranchSusceptanceFormula, Bus, BusId, BusType, GenCost, Generator,
+    IndexedNetwork,
 };
 
 fn parse_matpower_file(
@@ -147,7 +148,7 @@ fn several_generators_at_one_bus_keep_separate_costs_and_aggregate() {
 
     let gens = &problem.generators;
     let nodal = problem
-        .nodal_generator_data()
+        .calc_nodal_generator_data()
         .expect("quadratic nodal costs");
     assert!(nodal.has_gen[shared]);
     let parallel_q = 1.0 / (1.0 / gens.q[0] + 1.0 / gens.q[3]);
@@ -256,14 +257,29 @@ fn a_network_of_two_islands_grounds_a_bus_in_each() {
     );
     assert!(matches!(
         problem.reference_buses.single(),
-        Err(powerio_prob::Error::Core(
+        Err(powerio_prob::Error::Transmission(
             powerio_tx::Error::ReferenceBusCount { found: 2, .. }
         ))
     ));
 
     // The set serializes as a plain array of dense bus indices.
-    let json = serde_json::to_value(&problem).expect("serialize");
+    let mut json = serde_json::to_value(&problem).expect("serialize");
     assert_eq!(json["reference_buses"], serde_json::json!([0, 2]));
+    assert!(json["branches"].get("susceptance_magnitude").is_some());
+    assert!(json["branches"].get("b").is_none());
+
+    // The 0.10 field remains readable even though 1.0 emits the explicit
+    // positive solver quantity name.
+    let branches = json["branches"].as_object_mut().expect("branch parameters");
+    let old_b = branches
+        .remove("susceptance_magnitude")
+        .expect("susceptance magnitudes");
+    branches.insert("b".to_owned(), old_b);
+    let decoded: DcOpfPreparation = serde_json::from_value(json).expect("read 0.10 field");
+    assert_eq!(
+        decoded.branches.susceptance_magnitude,
+        problem.branches.susceptance_magnitude
+    );
 
     let one_island = preparation_from_view(
         &IndexedNetwork::new(&small_network()),
@@ -301,7 +317,10 @@ fn per_unit_and_native_units_scale_all_power_coefficients() {
     assert_close(per_unit.generators.c[0], native.generators.c[0] * base);
     // The constant term carries no power dimension, so it never rescales.
     assert_close(per_unit.generators.c0[0], native.generators.c0[0]);
-    assert_close(native.branches.b[0], per_unit.branches.b[0] * base);
+    assert_close(
+        native.branches.susceptance_magnitude[0],
+        per_unit.branches.susceptance_magnitude[0] * base,
+    );
     assert_close(native.branches.f_max[0], per_unit.branches.f_max[0] * base);
 }
 
@@ -312,12 +331,12 @@ fn cost_constant_term_is_kept() {
         preparation_from_view(&IndexedNetwork::new(&net), DcOpfOptions::default()).expect("build");
     assert_close(problem.generators.c0[0], 5.0);
     let nodal = problem
-        .nodal_generator_data()
+        .calc_nodal_generator_data()
         .expect("quadratic nodal costs");
     assert_close(nodal.c0[problem.generators.bus_of_gen[0]], 5.0);
 }
 
-/// A bus shunt draws constant real power under the DC approximation. The
+/// A bus shunt draws constant real power in the DC power flow model. The
 /// instance must carry it: the bus susceptance matrix cannot, because its row
 /// sums are zero.
 #[test]
@@ -355,10 +374,10 @@ fn a_shuntless_case_carries_zero_conductance() {
 }
 
 #[test]
-fn a_non_finite_susceptance_is_refused_under_every_convention() {
-    // The DC conventions divide by the reactance, and `1/±inf` is `0.0`: the
+fn a_non_finite_susceptance_is_refused_under_every_formula() {
+    // The branch susceptance formulas divide by the reactance, and `1/±inf` is `0.0`: the
     // branch would join the instance as a zero-weight edge with nothing to
-    // report. The Matpower rule divides by `x * tap`, so two finite factors
+    // report. `TapAdjustedReactance` divides by `x * tap`, so two finite factors
     // whose product overflows collapse the same way.
     let cases: [(f64, f64); 5] = [
         (f64::NAN, 1.0),
@@ -372,41 +391,41 @@ fn a_non_finite_susceptance_is_refused_under_every_convention() {
         net.branches_mut()[0].x = x;
         net.branches_mut()[0].tap = tap;
         let view = IndexedNetwork::new(&net);
-        for convention in [
-            DcConvention::ReactanceOnly,
-            DcConvention::TapAdjustedReactance,
-            DcConvention::SeriesSusceptance,
+        for formula in [
+            BranchSusceptanceFormula::ReactanceOnly,
+            BranchSusceptanceFormula::TapAdjustedReactance,
+            BranchSusceptanceFormula::SeriesSusceptance,
         ] {
-            // Only Matpower divides by the tap, so a reactance that is finite
-            // on its own binds that convention alone; the others read a
+            // Only `TapAdjustedReactance` divides by the tap, so a reactance that is finite
+            // on its own binds that formula alone; the others read a
             // perfectly good `1/x` and must keep building.
-            if x.is_finite() && convention != DcConvention::TapAdjustedReactance {
+            if x.is_finite() && formula != BranchSusceptanceFormula::TapAdjustedReactance {
                 continue;
             }
             let got = preparation_from_view(
                 &view,
                 DcOpfOptions {
-                    convention,
+                    formula,
                     ..DcOpfOptions::default()
                 },
             );
             assert!(
                 matches!(
                     got,
-                    Err(Error::Core(
+                    Err(Error::Transmission(
                         powerio_tx::Error::NonFiniteSusceptance { row: 0 }
                             | powerio_tx::Error::DegenerateTap { row: 0, .. }
                     ))
                 ),
-                "{convention:?} accepted x = {x}, tap = {tap}: {:?}",
-                got.map(|p| p.branches.b)
+                "{formula:?} accepted x = {x}, tap = {tap}: {:?}",
+                got.map(|p| p.branches.susceptance_magnitude)
             );
         }
     }
 }
 
 #[test]
-fn matpower_convention_applies_tap_and_phase_shift() {
+fn tap_adjusted_reactance_applies_tap_and_phase_shift() {
     let mut net = small_network();
     net.branches_mut()[0].tap = 1.25;
     net.branches_mut()[0].shift = 10.0;
@@ -415,20 +434,20 @@ fn matpower_convention_applies_tap_and_phase_shift() {
     let matpower = preparation_from_view(
         &view,
         DcOpfOptions {
-            convention: DcConvention::TapAdjustedReactance,
+            formula: BranchSusceptanceFormula::TapAdjustedReactance,
             ..DcOpfOptions::default()
         },
     )
     .expect("matpower");
 
-    // Only Matpower scales the susceptance by the tap. This branch has no
+    // Only `TapAdjustedReactance` scales the susceptance by the tap. This branch has no
     // resistance, so the default reads the same `1/x` there.
-    assert_close(series.branches.b[0], 1.0 / 0.2);
+    assert_close(series.branches.susceptance_magnitude[0], 1.0 / 0.2);
     // Both live conventions carry the phase shift.
     assert_close(series.branches.shift[0], 10.0_f64.to_radians());
     let expected_b = 1.0 / (0.2 * 1.25);
     let expected_shift = 10.0_f64.to_radians();
-    assert!((matpower.branches.b[0] - expected_b).abs() < 1e-12);
+    assert!((matpower.branches.susceptance_magnitude[0] - expected_b).abs() < 1e-12);
     assert!((matpower.branches.shift[0] - expected_shift).abs() < 1e-12);
     assert!((matpower.p_shift[0] + expected_b * expected_shift).abs() < 1e-12);
     assert!((matpower.p_shift[1] - expected_b * expected_shift).abs() < 1e-12);
@@ -445,16 +464,18 @@ fn phase_shift_and_shunt_complete_the_dc_balance_and_flow_equations() {
     let problem = preparation_from_view(
         &IndexedNetwork::new(&net),
         DcOpfOptions {
-            convention: DcConvention::TapAdjustedReactance,
+            formula: BranchSusceptanceFormula::TapAdjustedReactance,
             ..DcOpfOptions::default()
         },
     )
     .expect("build shifted instance");
 
     assert_close(problem.p_shift.iter().sum::<f64>(), 0.0);
-    let fixed = problem.fixed_nodal_withdrawal();
-    let flow_offset = problem.branch_flow_offset();
-    let b = problem.branches.b[0];
+    let fixed = problem.calc_fixed_nodal_withdrawal();
+    let flow_offset = problem.calc_branch_flow_offset();
+    assert_eq!(problem.calc_fixed_nodal_withdrawal(), fixed);
+    assert_eq!(problem.calc_branch_flow_offset(), flow_offset);
+    let b = problem.branches.susceptance_magnitude[0];
     let shift = 10.0_f64.to_radians();
     assert_close(flow_offset[0], -b * shift);
     assert_close(fixed[0], -b * shift);
@@ -499,7 +520,7 @@ fn missing_piecewise_and_unsupported_costs_are_distinct() {
         .expect_err("missing cost");
     assert!(matches!(
         error,
-        Error::Core(powerio_tx::Error::MissingGenCost { gen_index: 0 })
+        Error::Transmission(powerio_tx::Error::MissingGenCost { gen_index: 0 })
     ));
 
     let mut piecewise = small_network();
@@ -519,7 +540,7 @@ fn missing_piecewise_and_unsupported_costs_are_distinct() {
     assert_eq!(cost.value, vec![1.0, 101.0, 251.0]);
     assert_eq!(prepared.generators.q, vec![0.0]);
     assert!(matches!(
-        prepared.nodal_generator_data(),
+        prepared.calc_nodal_generator_data(),
         Err(Error::PiecewiseNodalCost { gen_index: 0 })
     ));
 
@@ -600,7 +621,7 @@ fn zero_reactance_can_be_skipped_or_rejected() {
     let error = preparation_from_view(&view, DcOpfOptions::default()).expect_err("reject");
     assert!(matches!(
         error,
-        Error::Core(powerio_tx::Error::ZeroImpedance { row: 0 })
+        Error::Transmission(powerio_tx::Error::ZeroImpedance { row: 0 })
     ));
 }
 
@@ -626,7 +647,7 @@ fn a_reactance_the_instance_cannot_divide_by_reads_as_zero_impedance() {
     let error = preparation_from_view(&view, DcOpfOptions::default()).expect_err("reject");
     assert!(matches!(
         error,
-        Error::Core(powerio_tx::Error::ZeroImpedance { row: 0 })
+        Error::Transmission(powerio_tx::Error::ZeroImpedance { row: 0 })
     ));
 }
 
@@ -638,7 +659,7 @@ fn a_tap_the_instance_cannot_divide_by_is_refused() {
         let error = preparation_from_view(
             &IndexedNetwork::new(&net),
             DcOpfOptions {
-                convention: DcConvention::TapAdjustedReactance,
+                formula: BranchSusceptanceFormula::TapAdjustedReactance,
                 ..DcOpfOptions::default()
             },
         )
@@ -646,7 +667,7 @@ fn a_tap_the_instance_cannot_divide_by_is_refused() {
         assert!(
             matches!(
                 error,
-                Error::Core(powerio_tx::Error::DegenerateTap { row: 0, .. })
+                Error::Transmission(powerio_tx::Error::DegenerateTap { row: 0, .. })
             ),
             "tap {tap}: {error}"
         );
@@ -664,7 +685,7 @@ fn a_cost_rounding_artifact_reaches_neither_space() {
         preparation_from_view(&IndexedNetwork::new(&net), DcOpfOptions::default()).expect("build");
     assert_eq!(problem.generators.q[0].to_bits(), 0.0_f64.to_bits());
     assert_eq!(
-        problem.nodal_generator_data().unwrap().q[0].to_bits(),
+        problem.calc_nodal_generator_data().unwrap().q[0].to_bits(),
         0.0_f64.to_bits()
     );
 }
@@ -701,8 +722,9 @@ fn a_flat_row_and_a_convex_row_still_build() {
     let problem =
         preparation_from_view(&IndexedNetwork::new(&flat), DcOpfOptions::default()).expect("flat");
     let nodal = problem
-        .nodal_generator_data()
+        .calc_nodal_generator_data()
         .expect("quadratic nodal costs");
+    assert_eq!(problem.calc_nodal_generator_data().unwrap(), nodal);
     let bus = problem.generators.bus_of_gen[0];
     assert_eq!(nodal.q[bus].to_bits(), 0.0_f64.to_bits());
     assert_close(nodal.c[bus], 3.0 * 100.0);
@@ -722,39 +744,55 @@ fn zero_base_mva_is_rejected() {
         .expect_err("zero base");
     assert!(matches!(
         error,
-        Error::Core(powerio_tx::Error::InvalidBaseMva { .. })
+        Error::Transmission(powerio_tx::Error::InvalidBaseMva { .. })
     ));
 }
 
 mod matrix_tests {
     use crate::dcopf::{
-        DcOpfAssemblyOptions, DcOpfBundleMetadata, DcOpfBundleOptions, build_dc_opf_matrices,
-        write_dcopf_bundle,
+        DcOpfAssemblyOptions, DcOpfBundleMetadata, DcOpfBundleOptions, calc_dc_opf_matrices,
+        emit_dcopf_bundle,
     };
     use powerio_prob::DcOpfInstance;
     use powerio_tx::{GenCostPolicyReport, MissingGenCostPolicy};
 
     use super::*;
 
+    fn assert_branch_flow_matrix_manifest_name(manifest: &serde_json::Value) {
+        let operators = manifest["operators"].as_array().expect("operator list");
+        let has_name = |name| operators.iter().any(|operator| operator["name"] == name);
+        assert!(has_name("branch_flow_matrix"));
+        assert!(!has_name("flow_map"));
+    }
+
     #[test]
-    fn optional_matrices_match_generic_matrix_builders() {
+    fn root_emit_dcopf_bundle_reexport_works() {
+        let instance = DcOpfInstance::from_network(case9()).expect("instance");
+        let output = tempfile::tempdir().expect("tempdir");
+        let bundle =
+            crate::emit_dcopf_bundle(&instance, output.path(), &DcOpfBundleOptions::default())
+                .expect("bundle through root reexport");
+        assert!(bundle.dir.join("dcopf_meta.json").is_file());
+    }
+
+    #[test]
+    fn optional_matrices_match_generic_matrix_calculations() {
         let net = case9();
         let view = IndexedNetwork::new(&net);
         let problem = preparation_from_view(&view, DcOpfOptions::default()).expect("build");
         let instance = DcOpfInstance::from_network(net.clone()).expect("instance");
-        let matrices = build_dc_opf_matrices(&instance, &DcOpfAssemblyOptions::default())
+        let matrices = calc_dc_opf_matrices(&instance, &DcOpfAssemblyOptions::default())
             .expect("matrices from the instance");
-        assert_eq!(matrices.incidence.rows(), problem.n_buses);
-        assert_eq!(matrices.incidence.cols(), problem.n_branches());
+        assert_eq!(matrices.bus_branch_incidence.rows(), problem.n_buses);
+        assert_eq!(matrices.bus_branch_incidence.cols(), problem.n_branches());
         assert_eq!(matrices.generator_bus.cols(), problem.n_generators());
         assert_eq!(matrices.generator_cost.rows(), problem.n_generators());
 
         let incidence =
-            crate::build_incidence(&view, problem.convention, &crate::BuildOptions::default())
+            crate::matrix::build_incidence(&view, problem.formula, &crate::BuildOptions::default())
                 .expect("matrix incidence");
-        assert_eq!(matrices.incidence, incidence.a);
-        assert_eq!(problem.branches.b, incidence.b);
-        assert_eq!(problem.p_shift, incidence.p_shift);
+        assert_eq!(matrices.bus_branch_incidence, incidence.a);
+        assert_eq!(problem.branches.susceptance_magnitude, incidence.b);
     }
 
     #[test]
@@ -767,7 +805,7 @@ mod matrix_tests {
         let bundle_dir = output.path().join("case9_dcopf");
         std::fs::create_dir_all(&bundle_dir).unwrap();
         std::fs::write(bundle_dir.join("A.mtx"), b"precious").unwrap();
-        let error = write_dcopf_bundle(&instance, output.path(), &DcOpfBundleOptions::default())
+        let error = emit_dcopf_bundle(&instance, output.path(), &DcOpfBundleOptions::default())
             .unwrap_err();
         assert!(error.to_string().contains("already exists"), "{error}");
         assert_eq!(
@@ -784,9 +822,8 @@ mod matrix_tests {
             std::fs::write(designated.path().join("keep.txt"), b"kept").unwrap();
             std::os::unix::fs::symlink(designated.path(), linked.path().join("case9_dcopf"))
                 .unwrap();
-            let error =
-                write_dcopf_bundle(&instance, linked.path(), &DcOpfBundleOptions::default())
-                    .unwrap_err();
+            let error = emit_dcopf_bundle(&instance, linked.path(), &DcOpfBundleOptions::default())
+                .unwrap_err();
             assert!(error.to_string().contains("already exists"), "{error}");
             assert!(
                 std::fs::symlink_metadata(linked.path().join("case9_dcopf"))
@@ -803,7 +840,7 @@ mod matrix_tests {
         // The same write into a fresh output directory still produces the
         // complete inventory the metadata names.
         let fresh = tempfile::tempdir().expect("tempdir");
-        let bundle = write_dcopf_bundle(&instance, fresh.path(), &DcOpfBundleOptions::default())
+        let bundle = emit_dcopf_bundle(&instance, fresh.path(), &DcOpfBundleOptions::default())
             .expect("bundle");
         for file in &bundle.files {
             assert!(file.is_file(), "{file:?}");
@@ -824,7 +861,7 @@ mod matrix_tests {
         net.generators_mut().push(generator(1, 1.0, 2.0));
         let instance = DcOpfInstance::from_network(net).expect("instance");
         let output = tempfile::tempdir().expect("tempdir");
-        let bundle = write_dcopf_bundle(&instance, output.path(), &DcOpfBundleOptions::default())
+        let bundle = emit_dcopf_bundle(&instance, output.path(), &DcOpfBundleOptions::default())
             .expect("bundle");
         let canonical = bundle.dir.canonicalize().expect("canonical bundle dir");
         let root = output.path().canonicalize().expect("canonical out dir");
@@ -864,36 +901,45 @@ mod matrix_tests {
                 },
             },
         };
-        let bundle = write_dcopf_bundle(&instance, output.path(), &options).expect("bundle");
+        let bundle = emit_dcopf_bundle(&instance, output.path(), &options).expect("bundle");
 
         let incidence = crate::io::read_mtx(bundle.dir.join("A.mtx")).expect("A");
         let branch_b = crate::io::read_vector_mtx(bundle.dir.join("b.mtx")).expect("b");
         assert_eq!(
             incidence,
-            crate::dcopf::matrices_from_preparation(&problem).incidence
+            crate::dcopf::matrices_from_preparation(&problem).bus_branch_incidence
         );
-        assert_eq!(branch_b, problem.branches.b);
+        assert_eq!(branch_b, problem.branches.susceptance_magnitude);
         let manifest: serde_json::Value = serde_json::from_str(
             &std::fs::read_to_string(bundle.dir.join("dcopf_meta.json")).expect("manifest"),
         )
         .expect("manifest json");
         assert_eq!(manifest["schema"], "powerio.dcopf");
         assert_eq!(manifest["powerio_version"], powerio_tx::VERSION);
+        assert_eq!(manifest["branch_susceptance_formula"], "series_susceptance");
+        assert_branch_flow_matrix_manifest_name(&manifest);
+        for removed_alias in ["dc_convention", "convention", "n", "m", "n_gen"] {
+            assert!(
+                manifest.get(removed_alias).is_none(),
+                "manifest retained 1.0 alias {removed_alias}"
+            );
+        }
+        assert!(manifest.get("reference_buses").is_none());
         let c0_gen = crate::io::read_vector_mtx(bundle.dir.join("c0_gen.mtx")).expect("c0_gen");
         assert_eq!(c0_gen, problem.generators.c0);
         let shift = crate::io::read_vector_mtx(bundle.dir.join("shift.mtx")).expect("shift");
         assert_eq!(shift, problem.branches.shift);
         let flow_offset =
             crate::io::read_vector_mtx(bundle.dir.join("flow_offset.mtx")).expect("flow_offset");
-        assert_eq!(flow_offset, problem.branch_flow_offset());
+        assert_eq!(flow_offset, problem.calc_branch_flow_offset());
         let fixed_withdrawal = crate::io::read_vector_mtx(bundle.dir.join("fixed_withdrawal.mtx"))
             .expect("fixed_withdrawal");
-        assert_eq!(fixed_withdrawal, problem.fixed_nodal_withdrawal());
+        assert_eq!(fixed_withdrawal, problem.calc_fixed_nodal_withdrawal());
         // The shunt conductance a nodal balance subtracts beside `pd`.
         let g_s = crate::io::read_vector_mtx(bundle.dir.join("gs.mtx")).expect("gs");
         assert_eq!(g_s, problem.g_s);
         let c0 = crate::io::read_vector_mtx(bundle.dir.join("c0.mtx")).expect("c0");
-        assert_eq!(c0, problem.nodal_generator_data().unwrap().c0);
+        assert_eq!(c0, problem.calc_nodal_generator_data().unwrap().c0);
         assert_eq!(manifest["dimensions"]["n_buses"], problem.n_buses);
         assert_eq!(
             manifest["dimensions"]["n_generators"],
@@ -945,13 +991,13 @@ mod matrix_tests {
         // The default preserves the branch and refuses the finite projection
         // rather than skipping.
         let instance = DcOpfInstance::from_network(net.clone()).expect("instance");
-        let refused = build_dc_opf_matrices(&instance, &DcOpfAssemblyOptions::default());
+        let refused = calc_dc_opf_matrices(&instance, &DcOpfAssemblyOptions::default());
         assert!(refused.is_err(), "the default preserves and refuses");
 
         // The explicit merge resolves it, and the merged network projects.
         let (merged, _, _) = powerio_prob::merge_zero_impedance_buses(&net).expect("merge");
         let merged_instance = DcOpfInstance::from_network(merged).expect("merged instance");
-        build_dc_opf_matrices(&merged_instance, &DcOpfAssemblyOptions::default())
+        calc_dc_opf_matrices(&merged_instance, &DcOpfAssemblyOptions::default())
             .expect("the merged network projects without skipping");
     }
 }

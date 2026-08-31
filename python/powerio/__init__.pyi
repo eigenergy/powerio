@@ -22,15 +22,13 @@ __all__ = [
     "AcScucInstance",
     "AcScucSolution",
     "BalancedNetwork",
-    "Conversion",
     "DcOpfInstance",
     "DcOpfSolution",
     "DcPfInstance",
     "DcPfSolution",
     "Diagnostic",
     "DisplayData",
-    "GridfmRead",
-    "Incidence",
+    "EmitResult",
     "McAcOpfInstance",
     "McAcOpfSolution",
     "McAcPfInstance",
@@ -45,47 +43,33 @@ __all__ = [
     "SourceSpan",
     "TimeSeries",
     "UnknownValue",
-    "YbusParts",
     "__version__",
-    "convert_file",
-    "convert_str",
     "dist",
+    "emit_gridfm_batch",
     "features",
     "from_json",
     "from_ppc",
-    "parse",
-    "parse_display_bytes",
     "parse_display_file",
     "parse_file",
     "parse_geo",
-    "read_gridfm",
-    "read_gridfm_scenarios",
-    "to_format",
-    "to_json",
-    "to_matpower",
+    "parse_text",
     "versions",
-    "write_gridfm_batch",
 ]
 
 __version__: str
 
 Scheme = Literal["bx", "xb"]
-Convention = Literal[
+BranchSusceptanceFormula = Literal[
     "series_susceptance",
     "tap_adjusted_reactance",
     "reactance_only",
-    "series",
-    "series-impedance",
-    "matpower",
-    "mp",
-    "reactance-only",
 ]
 SensitivitySolver = Literal["auto", "dense", "sparse"]
 Units = Literal["perunit", "native"]
 GridfmOutputs = Dict[str, Any]
 
 class PowerIOError(ValueError):
-    """Base error from the powerio parser, converter, or matrix builders.
+    """Base error from the powerio parser, emitter, or matrix calculations.
 
     Failures mapped from the Rust core carry the diagnostic code string as
     ``code``; it is set at raise time, so it is instance-only.
@@ -206,21 +190,6 @@ class Gen(TypedDict):
     cost: Optional[GenCost]
     uid: Optional[str]
 
-class Incidence(NamedTuple):
-    A: Any  # scipy.sparse.csr_matrix, (n, m)
-    b: Any  # numpy.ndarray, (m,)
-    p_shift: Any  # numpy.ndarray, (n,)
-    branch_of_col: Any  # numpy.ndarray, (m,)
-
-class YbusParts(NamedTuple):
-    g: Any  # scipy.sparse.csr_matrix, Re(Y_bus)
-    b: Any  # scipy.sparse.csr_matrix, Im(Y_bus)
-
-class GridfmRead(NamedTuple):
-    network: "BalancedNetwork"
-    scenario: int
-    warnings: List[str]
-
 class PwdSubstation(NamedTuple):
     number: int
     name: str
@@ -262,10 +231,8 @@ class BalancedNetwork:
         "goc3-json",
         "surge-json",
     ]
-    read_warnings: List[str]
     n_buses: int
     n_branches: int
-    n_gens: int
     n_generators: int
     n_loads: int
     n_shunts: int
@@ -275,7 +242,6 @@ class BalancedNetwork:
     n_transformers_3w: int
     n_areas: int
     is_radial: bool
-    n_connected_components: int
     n_islands: int
     buses: List[Bus]
     loads: List[Load]
@@ -289,56 +255,23 @@ class BalancedNetwork:
     areas: List[Dict[str, Any]]
     def reference_bus_index(self) -> int: ...
     def reference_bus_indices(self) -> List[int]: ...
-    def connectivity_report(self) -> Dict[str, Any]: ...
-    def to_matpower(self) -> str: ...
+    def calc_connectivity_report(self) -> Dict[str, Any]: ...
     def to_json(self) -> str: ...
-    def diagnostics(self) -> Any: ...
-    def geo_layer(self) -> Dict[str, Any]: ...
+    def to_geo_layer(self) -> Dict[str, Any]: ...
     def apply_geo_layer(
         self, text: str, name_hint: Optional[str] = ...
     ) -> Tuple["BalancedNetwork", Dict[str, Any]]: ...
-    def to_format(
-        self,
-        to: str,
-        missing_gen_cost: Optional[str] = ...,
-        default_gen_cost: Optional[str] = ...,
-        gen_cost_csv: Optional[Any] = ...,
-    ) -> "Conversion": ...
-    def to_canonical_format(self, to: str) -> "Conversion": ...
-    def write_file(
-        self,
-        path: Any,
-        to: str,
-        missing_gen_cost: Optional[str] = ...,
-        default_gen_cost: Optional[str] = ...,
-        gen_cost_csv: Optional[Any] = ...,
-    ) -> List[Diagnostic]: ...
-    def bprime(
-        self, scheme: Scheme = ..., *, skip_zero_impedance: bool = ...
-    ) -> Any: ...
     def calc_bprime_matrix(
         self, scheme: Scheme = ..., *, skip_zero_impedance: bool = ...
     ) -> Any: ...
-    def dc_data(self, formula: str = ...) -> Dict[str, Any]: ...
     def calc_incidence_matrix(self, formula: str = ...) -> Any: ...
     def calc_bus_susceptance_matrix(self, formula: str = ...) -> Any: ...
     def calc_branch_susceptance_matrix(self, formula: str = ...) -> Any: ...
     def calc_phase_shift_injection(self, formula: str = ...) -> Any: ...
-    def calc_branch_flow_dc(
-        self, voltage_angles: Any, formula: str = ...
-    ) -> Any: ...
-    def bdoubleprime(
-        self, scheme: Scheme = ..., *, skip_zero_impedance: bool = ...
-    ) -> Any: ...
+    def calc_branch_flow_dc(self, voltage_angles: Any, formula: str = ...) -> Any: ...
+    def calc_bus_injection_dc(self, voltage_angles: Any, formula: str = ...) -> Any: ...
     def calc_bdoubleprime_matrix(
         self, scheme: Scheme = ..., *, skip_zero_impedance: bool = ...
-    ) -> Any: ...
-    def lacpf(
-        self,
-        *,
-        include_taps: bool = ...,
-        include_shifts: bool = ...,
-        skip_zero_impedance: bool = ...,
     ) -> Any: ...
     def calc_lacpf_matrix(
         self,
@@ -347,29 +280,7 @@ class BalancedNetwork:
         include_shifts: bool = ...,
         skip_zero_impedance: bool = ...,
     ) -> Any: ...
-    def adjacency(self) -> Any: ...
     def calc_adjacency_matrix(self) -> Any: ...
-    def ybus_parts(
-        self,
-        *,
-        include_taps: bool = ...,
-        include_shifts: bool = ...,
-        skip_zero_impedance: bool = ...,
-    ) -> YbusParts: ...
-    def calc_admittance_matrix_parts(
-        self,
-        *,
-        include_taps: bool = ...,
-        include_shifts: bool = ...,
-        skip_zero_impedance: bool = ...,
-    ) -> YbusParts: ...
-    def ybus(
-        self,
-        *,
-        include_taps: bool = ...,
-        include_shifts: bool = ...,
-        skip_zero_impedance: bool = ...,
-    ) -> Any: ...
     def calc_admittance_matrix(
         self,
         *,
@@ -377,27 +288,21 @@ class BalancedNetwork:
         include_shifts: bool = ...,
         skip_zero_impedance: bool = ...,
     ) -> Any: ...
-    def ptdf(self, convention: Convention = ..., solver: SensitivitySolver = ...) -> Any: ...
     def calc_ptdf(
-        self, convention: Convention = ..., solver: SensitivitySolver = ...
+        self,
+        formula: BranchSusceptanceFormula = ...,
+        solver: SensitivitySolver = ...,
     ) -> Any: ...
-    def lodf(self, convention: Convention = ..., solver: SensitivitySolver = ...) -> Any: ...
     def calc_lodf(
-        self, convention: Convention = ..., solver: SensitivitySolver = ...
-    ) -> Any: ...
-    def weighted_laplacian(
-        self, convention: Convention = ..., *, skip_zero_impedance: bool = ...
+        self,
+        formula: BranchSusceptanceFormula = ...,
+        solver: SensitivitySolver = ...,
     ) -> Any: ...
     def calc_weighted_laplacian(
-        self, convention: Convention = ..., *, skip_zero_impedance: bool = ...
+        self,
+        formula: BranchSusceptanceFormula = ...,
     ) -> Any: ...
-    def incidence(
-        self, convention: Convention = ..., *, skip_zero_impedance: bool = ...
-    ) -> Incidence: ...
-    def calc_incidence_factors(
-        self, convention: Convention = ..., *, skip_zero_impedance: bool = ...
-    ) -> Incidence: ...
-    def write_gridfm(
+    def emit_gridfm(
         self,
         out_dir: Any,
         *,
@@ -409,9 +314,7 @@ class BalancedNetwork:
         default_gen_cost: Optional[str] = ...,
         gen_cost_csv: Optional[Any] = ...,
     ) -> GridfmOutputs: ...
-    def write_pypsa_csv_folder(self, out_dir: Any) -> Dict[str, Any]: ...
-    def to_normalized(self) -> "BalancedNetwork": ...
-    def to_normalized_with_options(
+    def to_normalized(
         self,
         *,
         clamp_angle_bounds: bool = ...,
@@ -419,62 +322,31 @@ class BalancedNetwork:
     ) -> "BalancedNetwork": ...
     def to_ppc(self) -> Dict[str, Any]: ...
     def to_networkx(self) -> Any: ...
-    def write_dcopf_bundle(
+    def emit_dcopf_bundle(
         self,
         out_dir: str,
-        convention: Convention = ...,
+        formula: BranchSusceptanceFormula = ...,
         units: Units = ...,
         missing_gen_cost: Optional[str] = ...,
         default_gen_cost: Optional[str] = ...,
         gen_cost_csv: Optional[Any] = ...,
     ) -> Dict[str, Any]: ...
 
+class EmitResult(NamedTuple):
+    text: Optional[str]
+    diagnostics: List[Diagnostic]
 
-class Conversion(NamedTuple):
-    text: str
-    warnings: List[Diagnostic]
-    @property
-    def diagnostics(self) -> List[Diagnostic]: ...
-
-# Any reader/writer name or alias the Rust hub accepts (e.g. "matpower"/"m",
+# Any format name or alias the Rust hub accepts (e.g. "matpower"/"m",
 # "psse"/"raw"). Kept as `str` so aliases type-check; the binding validates it.
 Format = str
 
 from . import dist as dist
 
-def parse_display_file(path: Any, from_: Optional[Format] = ...) -> DisplayData: ...
-def parse_display_bytes(data: bytes, from_: Format) -> DisplayData: ...
-def to_json(network: BalancedNetwork) -> str: ...
+def parse_display_file(path: Any, format: Optional[Format] = ...) -> DisplayData: ...
 def versions() -> Any: ...
-
 def from_json(text: str) -> BalancedNetwork: ...
 def from_ppc(ppc: Dict[str, Any]) -> BalancedNetwork: ...
 def parse_geo(text: str, name_hint: Optional[str] = ...) -> Dict[str, Any]: ...
-def convert_file(
-    path: Any,
-    to: Format,
-    from_: Optional[Format] = ...,
-    missing_gen_cost: Optional[str] = ...,
-    default_gen_cost: Optional[str] = ...,
-    gen_cost_csv: Optional[Any] = ...,
-    out: Optional[Any] = ...,
-) -> Conversion: ...
-def convert_str(
-    text: str,
-    to: Format,
-    from_: Format = ...,
-    missing_gen_cost: Optional[str] = ...,
-    default_gen_cost: Optional[str] = ...,
-    gen_cost_csv: Optional[Any] = ...,
-) -> Conversion: ...
-def to_format(
-    network: BalancedNetwork,
-    to: Format,
-    missing_gen_cost: Optional[str] = ...,
-    default_gen_cost: Optional[str] = ...,
-    gen_cost_csv: Optional[Any] = ...,
-) -> Conversion: ...
-def to_matpower(network: BalancedNetwork) -> str: ...
 
 class _TypedValue:
     module: PioModule[Any]
@@ -492,6 +364,7 @@ class ScenarioSet(_TypedValue):
     def __iter__(self) -> Iterator[str]: ...
     def __contains__(self, scenario: object) -> bool: ...
     def __getitem__(self, scenario: str) -> PioModule[Any]: ...
+
 class DcPfInstance(_TypedValue): ...
 class AcPfInstance(_TypedValue): ...
 class DcOpfInstance(_TypedValue): ...
@@ -508,56 +381,28 @@ class McAcOpfSolution(_TypedValue): ...
 class AcScucSolution(_TypedValue): ...
 class UnknownValue(_TypedValue): ...
 
-class _DiagnosticList(List[Diagnostic]):
-    def __call__(self) -> _DiagnosticList: ...
-
 class PioModule(Generic[_T]):
     _inner: Any
     def __init__(self, inner: Any) -> None: ...
     @classmethod
-    def from_json(cls, text: str) -> PioModule[Any]: ...
+    @overload
+    def from_value(cls, value: BalancedNetwork) -> PioModule[BalancedNetwork]: ...
     @classmethod
-    def from_file(
-        cls,
-        path: Any,
-        from_: Optional[str] = ...,
-        *,
-        include_root: Optional[Any] = ...,
-    ) -> PioModule[Any]: ...
-    @classmethod
-    def from_str(cls, text: str, from_: Optional[str] = ...) -> PioModule[Any]: ...
-    @classmethod
-    def from_bytes(
-        cls, data: bytes, from_: Optional[str] = ..., *, name: Optional[str] = ...
-    ) -> PioModule[Any]: ...
+    @overload
+    def from_value(
+        cls, value: dist.MulticonductorNetwork
+    ) -> PioModule[dist.MulticonductorNetwork]: ...
     @property
     def value(self) -> _T: ...
     def as_balanced_network(self) -> BalancedNetwork: ...
     def as_multiconductor_network(self) -> dist.MulticonductorNetwork: ...
-    def to_json(self) -> str: ...
-    def to_format(
-        self,
-        to: Format,
-        missing_gen_cost: Optional[str] = ...,
-        default_gen_cost: Optional[str] = ...,
-        gen_cost_csv: Optional[Any] = ...,
-    ) -> Conversion: ...
-    def write_file(
-        self, path: Any, format: Optional[Format] = ...
-    ) -> List[Diagnostic]: ...
-    @overload
-    def emit(self, format: Format, destination: None = ...) -> Conversion: ...
-    @overload
-    def emit(self, format: Format, destination: Any) -> List[Diagnostic]: ...
+    def emit(self, format: Format, destination: Optional[Any] = ...) -> EmitResult: ...
     @property
     def kind(self) -> str: ...
     def inspect(self) -> Any: ...
     @property
-    def diagnostics(self) -> _DiagnosticList: ...
-    def state_inventory(self) -> Any: ...
-    def select_state(
-        self, time_position: Optional[int] = ..., scenario: Optional[str] = ...
-    ) -> Any: ...
+    def diagnostics(self) -> List[Diagnostic]: ...
+    def list_states(self) -> Any: ...
     def inspect_state(
         self, time_position: Optional[int] = ..., scenario: Optional[str] = ...
     ) -> Any: ...
@@ -565,45 +410,15 @@ class PioModule(Generic[_T]):
         self, time_position: Optional[int] = ..., scenario: Optional[str] = ...
     ) -> PioModule[Any]: ...
     def to_balanced_report(self, base_mva: float = ...) -> Any: ...
-    def to_balanced_inspect(self, base_mva: float = ...) -> Any: ...
     def to_balanced(self, base_mva: float = ...) -> PioModule[BalancedNetwork]: ...
 
 @overload
-def parse(
-    source: Any,
-    from_: Optional[Format] = ...,
-    *,
-    include_root: Optional[Any] = ...,
-    value_type: type[PioModule[Any]],
-    name: Optional[str] = ...,
-) -> PioModule[Any]: ...
-@overload
-def parse(
-    source: Any,
-    from_: Optional[Format] = ...,
-    *,
-    include_root: Optional[Any] = ...,
-    value_type: type[_T],
-    name: Optional[str] = ...,
-) -> PioModule[_T]: ...
-@overload
-def parse(
-    source: Any,
-    from_: Optional[Format] = ...,
-    *,
-    include_root: Optional[Any] = ...,
-    value_type: None = ...,
-    name: Optional[str] = ...,
-) -> PioModule[Any]: ...
-
-@overload
 def parse_file(
     path: Any,
     format: Optional[Format] = ...,
     *,
     include_root: Optional[Any] = ...,
     value_type: type[PioModule[Any]],
-    from_: Optional[Format] = ...,
 ) -> PioModule[Any]: ...
 @overload
 def parse_file(
@@ -612,7 +427,6 @@ def parse_file(
     *,
     include_root: Optional[Any] = ...,
     value_type: type[_T],
-    from_: Optional[Format] = ...,
 ) -> PioModule[_T]: ...
 @overload
 def parse_file(
@@ -621,9 +435,35 @@ def parse_file(
     *,
     include_root: Optional[Any] = ...,
     value_type: None = ...,
-    from_: Optional[Format] = ...,
 ) -> PioModule[Any]: ...
-def write_gridfm_batch(
+@overload
+def parse_text(
+    text: str,
+    *,
+    name: str,
+    format: Optional[Format] = ...,
+    include_root: Optional[Any] = ...,
+    value_type: type[PioModule[Any]],
+) -> PioModule[Any]: ...
+@overload
+def parse_text(
+    text: str,
+    *,
+    name: str,
+    format: Optional[Format] = ...,
+    include_root: Optional[Any] = ...,
+    value_type: type[_T],
+) -> PioModule[_T]: ...
+@overload
+def parse_text(
+    text: str,
+    *,
+    name: str,
+    format: Optional[Format] = ...,
+    include_root: Optional[Any] = ...,
+    value_type: None = ...,
+) -> PioModule[Any]: ...
+def emit_gridfm_batch(
     networks: List[BalancedNetwork],
     out_dir: Any,
     *,
@@ -635,6 +475,4 @@ def write_gridfm_batch(
     default_gen_cost: Optional[str] = ...,
     gen_cost_csv: Optional[Any] = ...,
 ) -> GridfmOutputs: ...
-def read_gridfm(dir: Any, scenario: int = ...) -> GridfmRead: ...
-def read_gridfm_scenarios(dir: Any) -> List[GridfmRead]: ...
 def features() -> Dict[str, bool]: ...

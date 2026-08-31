@@ -18,14 +18,14 @@ tests, release notes, and direct maintainer decisions.
   `TimeSeries<T>`, `ScenarioSet<T>`, and output destination types. It has no
   electrical network, matrix, or solver dependencies.
 - **`powerio-tx`**: the format neutral `BalancedNetwork`, balanced format
-  parsers and writers, normalization, and derived indexed views.
+  parsing and emission, normalization, and derived indexed views.
 - **`powerio-matrix`**: sparse matrices and graph data built on
   `powerio-core`, `powerio-tx`, `powerio-dist`, and `powerio-prob`. It must not
   depend on or re-export the top `powerio` facade, which would create a
   dependency cycle.
 - **`powerio-prob`**: operating points, problem instances, and solutions on
   `powerio-tx` and `powerio-dist`. It stays matrix free; sparse operators and
-  the DC OPF bundle writer live in `powerio-matrix` so dependencies continue
+  DC OPF bundle emission live in `powerio-matrix` so dependencies continue
   upward without a feature cycle.
 - **`powerio-dist`**: the multiconductor distribution model (`MulticonductorNetwork`)
   with OpenDSS `.dss`, PMD JSON, and BMOPF JSON converters. Deliberately does
@@ -50,14 +50,14 @@ tests, release notes, and direct maintainer decisions.
   `matrix_branch` mapping tables. Removed table IDs are not reused, and the
   Arrow catalog report carries the package version.
 
-`BalancedNetwork` and `MulticonductorNetwork` are the two reusable electrical network types. The normalized solver tables and dense row arrays are internal compiler data, hidden from the documented surface; `IndexedNetwork` stays a public derived index view in 1.0 because the matrix builders and downstream consumers take it directly.
+`BalancedNetwork` and `MulticonductorNetwork` are the two reusable electrical network types. The normalized solver tables and dense row arrays are internal compiler data, hidden from the documented surface; `IndexedNetwork` stays a public derived index view in 1.0 because matrix calculations and downstream consumers take it directly.
 
 Formats. MATPOWER `.m`, PowerModels JSON, PSS/E `.raw` (v33/34/35),
 PowerWorld `.aux`, PSLF `.epc`, Egret JSON, pandapower JSON, PyPSA CSV directories,
-and Surge JSON all parse and write. DOE GO Challenge 3 JSON and DeepMind OPFData
+and Surge JSON all parse and emit. DOE GO Challenge 3 JSON and DeepMind OPFData
 JSON are parse only inputs; PowerWorld `.pwb` is a parse only binary input with
-no writer. PowerWorld `.pwd` display files use the display API. GridFM Parquet
-directories parse and write through directory helpers. PowerIO network JSON
+no emitter. PowerWorld `.pwd` display files use the display API. GridFM Parquet
+directories parse and emit through directory helpers. PowerIO network JSON
 moves through `BalancedNetwork::to_json`/`from_json`; it is a network serialization
 rather than a case format, so 0.9 removed the last `powerio-json` token from
 every surface and a bare `.json` holding it classifies as `model-json`.
@@ -65,13 +65,13 @@ OpenDSS `.dss` and PMD engineering JSON meet at `powerio-dist`'s
 `MulticonductorNetwork`. BMOPF JSON defines an optimization calculation and
 produces `McAcOpfInstance`; its electrical decoding reuses `powerio-dist`.
 Traditional balanced network formats map to `BalancedNetwork`, so a new format
-needs one parser and writer rather than pairwise converters. Current PyPSA
+needs one parser and emitter rather than pairwise converters. Current PyPSA
 support is the documented CSV electrical profile and produces
 `BalancedNetwork`, `TimeSeries<BalancedNetwork>`, or, when only a complete
 electrical state varies, `TimeSeries<OperatingPoint<BalancedNetwork>>`.
 Snapshot-local electrical series in the profile are typed. Non-electrical
 components, intertemporal calculation data, investment periods, and stochastic
-data outside that profile are retained for exact same format writing and
+data outside that profile are retained for exact same format emission and
 diagnosed before cross-format projection. Full
 PyPSA and NetCDF support waits for source neutral multi-carrier, multi-period,
 capacity expansion, stochastic calculation, and result types.
@@ -91,7 +91,7 @@ Matrix outputs (powerio-matrix):
   `Bf = Diagonal(b) * A`. Phase shift injection stays separate.
 - petgraph `UnGraph<bus_idx, branch_idx>` data plus connectivity and radial
   diagnostics.
-- GridFM Parquet directory writing through `gridfm-datakit` compatible tables.
+- GridFM Parquet directory emission through `gridfm-datakit` compatible tables.
 - GridFM Parquet directory parsing reuses one balanced network identity set
   across scenarios rather than cloning one network per scenario.
 
@@ -176,7 +176,7 @@ PowerIO releases are tag driven.
 ## Layout
 
 ```
-powerio-tx/                   # balanced network model, parsers, and writers
+powerio-tx/                   # balanced network model, parsers, and emitters
 ├── src/lib.rs               # public re-exports
 ├── src/network.rs           # BalancedNetwork, Bus, Load, Shunt, Branch, Generator,
 │                            #   GenCost, Storage, Hvdc, BusType, SourceFormat;
@@ -193,22 +193,22 @@ powerio-tx/                   # balanced network model, parsers, and writers
 ├── src/operations.rs        # in place Network edit operations
 ├── src/solver_tables.rs     # current internal solver preparation data
 ├── src/format/
-│   ├── mod.rs               # parse (Source based), convert_file, write_as,
-│   │                        #   TargetFormat, Conversion, target_format_from_name
+│   ├── mod.rs               # parse (Source based), emit, emit_with_options,
+│   │                        #   TargetFormat, EmitOptions, parse_target_format
 │   ├── routing.rs           # classify_json_text (bare .json routing)
-│   ├── matpower/            # tokens, matlab, locate, rows, writer
+│   ├── matpower/            # tokens, matlab, locate, rows, serializer
 │   │                        #   (the lossless source retaining path)
-│   ├── powermodels.rs       # PowerModels JSON parser + writer
-│   ├── surge.rs             # Surge JSON parser + writer
-│   ├── pandapower.rs        # pandapower JSON parser + writer
-│   ├── pslf.rs              # PSLF EPC parser + writer
-│   ├── psse.rs              # PSS/E .raw parser + writer
-│   ├── powerworld/          # .aux parser + writer, .pwb parser, .pwd display
-│   └── egret.rs             # Egret JSON parser + writer
+│   ├── powermodels.rs       # PowerModels JSON parser + serializer
+│   ├── surge.rs             # Surge JSON parser + serializer
+│   ├── pandapower.rs        # pandapower JSON parser + serializer
+│   ├── pslf.rs              # PSLF EPC parser + serializer
+│   ├── psse.rs              # PSS/E .raw parser + serializer
+│   ├── powerworld/          # .aux parser + serializer, .pwb parser, .pwd display
+│   └── egret.rs             # Egret JSON parser + serializer
 └── tests/                   # convert, roundtrip, roundtrip_formats, ...
 
 powerio-matrix/               # matrices and graph data over component crates
-├── src/lib.rs               # current re-exports plus matrix builders
+├── src/lib.rs               # current re-exports plus matrix calculations
 ├── src/matrix/
 │   ├── mod.rs               # BuildOptions, Scheme, MatrixStats, sddm_check
 │   ├── triplet.rs           # CooBuilder (HashMap, O(nnz); new_rect for rectangular)
@@ -234,8 +234,8 @@ powerio-core/                 # dependency neutral shared foundation
 
 powerio-dist/                 # multiconductor distribution model (no powerio dep)
 ├── src/model.rs             # MulticonductorNetwork + element tables
-├── src/dss/ pmd/ bmopf/     # network parsers, writers, and BMOPF electrical decoder
-├── src/convert.rs           # parse/convert + structured diagnostics
+├── src/dss/ pmd/ bmopf/     # network parsers, serializers, and BMOPF electrical decoder
+├── src/convert.rs           # parse/emit + structured diagnostics
 └── src/{graph,geo,diagnostics,error}.rs
 
 powerio/                      # 1.0 facade, PioValue, dispatch, .pio.json, re-exports
@@ -277,20 +277,20 @@ fuzz/                        # libFuzzer targets (detached workspace; see fuzz/R
   wrapper (`python-source = python` in the root pyproject) that turns the
   extension's COO triplets into `scipy.sparse`/networkx. No numpy at the Rust
   layer: the triplets cross as plain Python lists, so `import powerio` and
-  parse/write/convert pull in nothing but the interpreter. scipy/numpy/networkx
+  parse/emit pull in nothing but the interpreter. scipy/numpy/networkx
   are optional extras (`powerio[matrix]`, `[graph]`, `[all]`); a missing one
   raises a clear ImportError. `maturin develop` drops the `.so` into
-  `python/powerio/`. One package surfaces both halves: parse/convert and the
+  `python/powerio/`. One package surfaces both halves: parse/emit and the
   matrices.
-- **Lossless writeback.** The MATPOWER parse retains the original source text
-  on `PioModule`, and the writer returns it, so `parse → write → parse` keeps
+- **Lossless same format emission.** The MATPOWER parse retains the original source text
+  on `PioModule`, and emission returns it, so `parse → emit → parse` keeps
   the exact bytes. The retained bytes do not belong to `BalancedNetwork`:
   every `mpc.*` field, in-matrix comments, and exact tokens like `7e-05`. Don't
   reformat through `f64` round-trips; don't drop fields the typed model ignores.
 - **Two-tier fidelity rules.** Same format round trip is byte exact.
-  Cross-format conversion keeps maximal fidelity and reports anything the target
+  Cross format emission keeps maximal fidelity and reports anything the target
   can't represent through `Diagnostic`; never drop it silently.
-- **Adding a format.** A parser or writer produces the network, instance,
+- **Adding a format.** A parser or emitter produces the network, instance,
   solution, time series, scenario set, or other `PioModule` value declared by
   its supported profile. Use the
   opaque `Source`: `Source::open(path)` acquires a file or directory and
@@ -324,10 +324,10 @@ fuzz/                        # libFuzzer targets (detached workspace; see fuzz/R
 - **Bus IDs.** MATPOWER 1 based; `IndexedNetwork::bus_index(id)` is the only mapping into dense `[0, n)`. Don't clamp out of range; return `Error::UnknownBus`.
 - **`BR_B` is already per unit.** Never divide by `base_mva` again.
 - **`tap == 0` ⇒ `tap = 1`.** Use `Branch::effective_tap()`.
-- **MATPOWER FDPF matrices.** `build_bprime` follows MATPOWER `makeB` `Bp`:
+- **MATPOWER FDPF matrices.** `calc_bprime_matrix` follows MATPOWER `makeB` `Bp`:
   it approximates the active power versus voltage angle Jacobian block, clears
   bus shunts and line charging, sets tap magnitudes to one, clears resistance
-  in the XB scheme, and keeps phase shifts. `build_bdoubleprime` follows
+  in the XB scheme, and keeps phase shifts. `calc_bdoubleprime_matrix` follows
   MATPOWER `Bpp`: it approximates the reactive power versus voltage magnitude
   Jacobian block, clears phase shifts, clears resistance in the BX scheme, and
   keeps shunts, line charging, and tap magnitudes. `Y_bus` keeps taps and
@@ -346,7 +346,7 @@ fuzz/                        # libFuzzer targets (detached workspace; see fuzz/R
   weights, but their names must describe their solver role and sign conversion
   happens while filling the public output buffer.
 - **DC OPF lives in `powerio-prob`.** `DcOpfInstance` keeps generator-space
-  data (`generators: DcGeneratorData`); `nodal_generator_data()` scatters it to
+  parameters (`generators: DcGeneratorParameters`); `calc_nodal_generator_data()` scatters them to
   bus space through `C_g` for length-n `Q`, `c`, bounds, and `has_gen`. Cost map: MATPOWER `c2 p² + c1 p` → `q = 2c2`, `c = c1`, constant `c0` retained. Per-unit by default (`Units::PerUnit` scales `q` by `base²`, `c` by `base`).
 - **A bus can host several generators.** `nodal_generator_data()` (DC and AC) sums the bounds, which is exact, and combines the cost curves by the parallel rule `q = 1/Σ(1/qᵢ)` in `powerio-prob/src/nodal.rs`, which is the curve of the least cost split and therefore an approximation. One generator at a bus passes through unchanged.
 - **A leading cost coefficient can be a rounding artifact.** A model 2 row that states a linear curve often carries a quadratic term near `1e-17`. `GenCost::quadratic_with_constant_tol(tol)` takes the leading coefficients at or below `tol` off the row before it counts the row; `GenCost::LEADING_COEFF_TOL` is `1e-12`. `quadratic_with_constant` interprets the row as stored and the OPF builders call it.
@@ -359,13 +359,13 @@ fuzz/                        # libFuzzer targets (detached workspace; see fuzz/R
   once and reuse scratch buffers. PTDF is dense `m×n`; sparse work computes
   selected columns or uses sparse factors rather than calling the complete PTDF
   sparse.
-- **MTX output is lower triangle, 1 based, spec compliant.** `sprs::io::write_matrix_market_sym` writes the *upper* triangle, so `io::mtx::write_mtx` ships its own writer.
+- **MTX output is lower triangle, 1 based, spec compliant.** `sprs::io::write_matrix_market_sym` writes the *upper* triangle, so `io::mtx::emit_mtx` ships its own emitter.
 - **`CooBuilder`.** HashMap COO with O(nnz) inserts; replaces the old O(nnz²) Vec search.
 - **TUI lives in the CLI crate.** `powerio-cli/src/tui/`, part of the `powerio` binary. Testable via `ratatui::backend::TestBackend`.
 - **petgraph data.** `IndexedNetwork::to_petgraph()` currently returns
   `UnGraph<usize, usize>` where node weight = dense bus index and edge weight =
   branch index. Use it for connectivity and radial detection.
-- **Format validation needs Julia.** `evals/validation/validate_powermodels.jl` and `validate_psse.jl` check the writers and parsers against PowerModels.jl; they don't run in plain `cargo test` (the all-pairs `powerio/tests/roundtrip_formats.rs` does).
+- **Format validation needs Julia.** `evals/validation/validate_powermodels.jl` and `validate_psse.jl` check the serializers and parsers against PowerModels.jl; they don't run in plain `cargo test` (the all-pairs `powerio/tests/roundtrip_formats.rs` does).
 
 ## Test fixtures
 
@@ -387,4 +387,4 @@ committing any new fixture.
 
 ## Relationship to GridFM
 
-Intended as the fast Rust data layer beneath `gridfm-datakit` (Python, scenario generation) and `gridfm-graphkit` (PyTorch Geometric, GNN training). The `gridfm` subcommand (`io::gridfm`, `--features gridfm`, issue #4) writes the `bus_data`/`gen_data`/`branch_data`/`y_bus_data` Parquet tables matching gridfm-datakit's column schema, under `<out>/<case>/raw/`, so gridfm-graphkit's `HeteroGridDatasetDisk` loads powerio output directly. powerio has no solver, so a case is one snapshot (`scenario 0`): voltages/dispatch are the case's stored values and branch flows are computed from them. A scenario batch (`write_gridfm_batch` / `GridfmSnapshot`, or multiple `gridfm` CLI inputs) row-stacks snapshots that share one base element set, keyed by the `scenario` column.
+Intended as the fast Rust data layer beneath `gridfm-datakit` (Python, scenario generation) and `gridfm-graphkit` (PyTorch Geometric, GNN training). The `gridfm` subcommand (`io::gridfm`, `--features gridfm`, issue #4) emits the `bus_data`/`gen_data`/`branch_data`/`y_bus_data` Parquet tables matching gridfm-datakit's column schema, under `<out>/<case>/raw/`, so gridfm-graphkit's `HeteroGridDatasetDisk` loads powerio output directly. powerio has no solver, so a case is one snapshot (`scenario 0`): voltages/dispatch are the case's stored values and branch flows are computed from them. A scenario batch (`emit_gridfm_batch` / `GridfmSnapshot`, or multiple `gridfm` CLI inputs) row-stacks snapshots that share one base element set, keyed by the `scenario` column.

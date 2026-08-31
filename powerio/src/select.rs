@@ -81,7 +81,7 @@ pub enum SelectedState<'value> {
 ///
 /// # Errors
 /// The value holds no time or scenario collection.
-pub fn state_inventory(value: &PioValue) -> Result<StateInventory> {
+pub fn list_states(value: &PioValue) -> Result<StateInventory> {
     match value {
         PioValue::BalancedNetworkTimeSeries(series) => Ok(StateInventory::TimePoints(
             time_entries(series.time_points()),

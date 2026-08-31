@@ -160,7 +160,7 @@ pub fn calc_power_flow_jacobian(
     // later `update` call trusts it instead (see `point_voltages`).
     let voltages = point_voltages(instance, point, &bus_ids, &view, true)?;
 
-    let parts = crate::build_ybus(
+    let parts = crate::calc_admittance_matrix(
         &view,
         &crate::BuildOptions {
             skip_zero_impedance: false,
@@ -306,7 +306,7 @@ fn point_voltages(
                 ));
             };
             magnitude.push(star.vm);
-            angle.push(view.angle_radians(star.va));
+            angle.push(view.to_radians(star.va));
         }
     }
     Ok(Voltages { magnitude, angle })

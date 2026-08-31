@@ -2,7 +2,7 @@
 
 use powerio::select::{
     ScenarioEntry, SelectedState, StateInventory, StateSelector, export_module_state, export_state,
-    select_state, state_inventory,
+    list_states, select_state,
 };
 use powerio::{BalancedNetwork, PioValue};
 use powerio_core::{
@@ -56,7 +56,12 @@ fn scenario_set() -> PioValue {
 
 #[test]
 fn inventories_state_the_exact_typed_keys() {
-    let StateInventory::TimePoints(points) = state_inventory(&point_series()).unwrap() else {
+    let points_value = point_series();
+    assert_eq!(
+        list_states(&points_value).unwrap(),
+        list_states(&points_value).unwrap()
+    );
+    let StateInventory::TimePoints(points) = list_states(&points_value).unwrap() else {
         panic!("expected a time inventory");
     };
     assert_eq!(points.len(), 2);
@@ -69,7 +74,7 @@ fn inventories_state_the_exact_typed_keys() {
     assert_eq!(points[1].label, "h1");
     assert_eq!(points[1].duration, None);
 
-    let StateInventory::Scenarios(scenarios) = state_inventory(&scenario_set()).unwrap() else {
+    let StateInventory::Scenarios(scenarios) = list_states(&scenario_set()).unwrap() else {
         panic!("expected a scenario inventory");
     };
     assert_eq!(
@@ -90,7 +95,7 @@ fn inventories_state_the_exact_typed_keys() {
 #[test]
 fn a_static_value_refuses_selection_by_code() {
     let value = PioValue::BalancedNetwork(small_network());
-    let error = state_inventory(&value).unwrap_err();
+    let error = list_states(&value).unwrap_err();
     assert_eq!(
         error.diagnostics()[0].code(),
         "REQUEST.STATE.NOT_A_COLLECTION"
@@ -281,7 +286,9 @@ fn an_exported_module_is_accepted_by_matrix_construction() {
         panic!("expected a static network");
     };
     let view = powerio_matrix::IndexedNetwork::new(network);
-    let ybus = powerio_matrix::build_ybus(&view, &powerio_matrix::BuildOptions::default()).unwrap();
+    let ybus =
+        powerio_matrix::calc_admittance_matrix(&view, &powerio_matrix::BuildOptions::default())
+            .unwrap();
     assert_eq!(ybus.g.rows(), 2);
 }
 
@@ -357,7 +364,7 @@ fn a_multiconductor_series_is_a_selectable_collection() {
     let value = PioValue::MulticonductorOperatingPointTimeSeries(series);
 
     // The inventory lists its time axis rather than refusing it as static.
-    let inventory = state_inventory(&value).expect("a time-indexed collection");
+    let inventory = list_states(&value).expect("a time-indexed collection");
     let StateInventory::TimePoints(points) = inventory else {
         panic!("time points expected");
     };

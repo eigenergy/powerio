@@ -259,6 +259,8 @@ fn sensitivities_write_solver_metadata() {
         out_dir.to_str().unwrap(),
         "--solver",
         "sparse",
+        "--formula",
+        "reactance-only",
         "--drop-tolerance",
         "1e-10",
     ]);
@@ -277,6 +279,8 @@ fn sensitivities_write_solver_metadata() {
     )
     .unwrap();
     assert_eq!(meta["case"], "case9");
+    assert_eq!(meta["branch_susceptance_formula"], "reactance_only");
+    assert!(meta.get("convention").is_none());
     assert_eq!(meta["sensitivity"]["requested_solver"], "sparse");
     assert_eq!(meta["sensitivity"]["solver_path"], "sparse_cholesky");
     assert_eq!(meta["sensitivity"]["drop_tolerance"], 1e-10);

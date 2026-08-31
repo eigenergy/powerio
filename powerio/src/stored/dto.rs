@@ -396,7 +396,8 @@ pub struct MulticonductorOperatingPointTimeSeriesV1 {
 #[serde(deny_unknown_fields)]
 pub struct DcPfInstanceV1 {
     pub network: Box<BalancedNetwork>,
-    /// The selected branch susceptance formula's stable name.
+    /// Frozen `powerio.module/1` key from 0.10. The value is the selected
+    /// [`BranchSusceptanceFormula`](powerio_tx::BranchSusceptanceFormula) stable name.
     pub approximation: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub initial_state: Option<StoredOperatingPointV1>,
@@ -445,6 +446,8 @@ pub struct ObjectiveV1 {
 #[serde(deny_unknown_fields)]
 pub struct DcOpfInstanceV1 {
     pub network: Box<BalancedNetwork>,
+    /// Frozen `powerio.module/1` key from 0.10. The value is the selected
+    /// [`BranchSusceptanceFormula`](powerio_tx::BranchSusceptanceFormula) stable name.
     pub approximation: String,
     /// The typed objective the instance states, in the calculation crate's
     /// own serialization.

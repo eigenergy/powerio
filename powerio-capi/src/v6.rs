@@ -1,6 +1,6 @@
 //! ABI v6: opaque owned handles with `retain`/`release`, structured
-//! [`PioError`] handles, the stored module surface, and the DC branch data
-//! a consumer needs to assemble or differentiate its own formulation.
+//! [`PioError`] handles, the stored module surface, and the `PioDcData` branch
+//! arrays a C consumer needs to assemble or differentiate its own formulation.
 //!
 //! Ownership rules, stated once and repeated in `powerio.h`:
 //!
@@ -23,7 +23,8 @@ use std::ffi::{CStr, CString, c_char};
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::Arc;
 
-use powerio::{BalancedNetwork, DcConvention, IndexedNetwork};
+use powerio::BalancedNetwork;
+use powerio_tx::{BranchSusceptanceFormula, IndexedNetwork};
 
 use crate::diagnostics::codes;
 
@@ -354,6 +355,36 @@ fn owned_string(text: String) -> Result<*mut c_char, *mut PioError> {
     })
 }
 
+fn emit_module_text(
+    module: &powerio_core::PioModule<powerio::PioValue>,
+    format: &str,
+) -> Result<(String, Vec<powerio_core::Diagnostic>), *mut PioError> {
+    let destination =
+        powerio_core::Destination::memory("case").map_err(|error| error_from_core(&error))?;
+    let result =
+        powerio::emit(module, format, destination).map_err(|error| error_from_core(&error))?;
+    let diagnostics = result.diagnostics().to_vec();
+    let powerio_core::EmittedOutput::Memory { mut artifacts } = result.into_output() else {
+        unreachable!("a memory destination returns memory artifacts")
+    };
+    if artifacts.len() != 1 {
+        return Err(error_from_parts(
+            codes::EMIT_CAPI_SERIALIZE_FAILED.code,
+            &format!(
+                "{format} emits {} artifacts; use pio_module_emit_file for a directory target",
+                artifacts.len()
+            ),
+        ));
+    }
+    let text = String::from_utf8(artifacts.remove(0).into_bytes()).map_err(|_| {
+        error_from_parts(
+            codes::EMIT_CAPI_SERIALIZE_FAILED.code,
+            &format!("{format} emitted bytes that are not UTF-8 text"),
+        )
+    })?;
+    Ok((text, diagnostics))
+}
+
 fn parse_source(
     source: powerio_core::Source,
     format: Option<&str>,
@@ -373,6 +404,9 @@ fn parse_source(
 
 /// Read stored `.pio.json` text: version 1, or a released 0.9 document
 /// upgraded one way. Returns a new module handle, or NULL with `error` set.
+/// This remains as an ABI convenience for callers that already hold the
+/// document in memory. The ordinary path is [`pio_parse_file`], which also
+/// recognizes `.pio.json`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_module_read_json(
     text: *const c_char,
@@ -426,6 +460,19 @@ pub unsafe extern "C" fn pio_parse_str(
             parse_source(source, format)
         })
     }
+}
+
+/// Preferred spelling of [`pio_parse_str`]. Parse in-memory case text into a
+/// module. `name` labels the text for diagnostics and format detection; NULL
+/// uses `<memory>`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pio_parse_text(
+    name: *const c_char,
+    text: *const c_char,
+    format: *const c_char,
+    error: *mut *mut PioError,
+) -> *mut PioModule {
+    unsafe { pio_parse_str(name, text, format, error) }
 }
 
 /// Parse in-memory case bytes into a module: the only in-memory way to read
@@ -547,9 +594,9 @@ pub unsafe extern "C" fn pio_module_multiconductor_network(
     }
 }
 
-/// A module over one balanced network handle's value, sharing that handle's
-/// records: the wrap for semantic writing of a network built in memory (for
-/// example through `pio_balanced_network_from_json`).
+/// Compatibility spelling for [`pio_balanced_network_to_module`]. Return a
+/// module over one balanced network handle's value, sharing that handle's
+/// records so the value can use module transformations and emission.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_module_of_balanced_network(
     network: *const crate::PioBalancedNetwork,
@@ -566,8 +613,22 @@ pub unsafe extern "C" fn pio_module_of_balanced_network(
     }
 }
 
-/// A module over one multiconductor network handle's value, sharing that
-/// handle's records: the wrap for semantic writing.
+/// Transform a balanced network handle into a module that shares its common
+/// records. This is the preferred receiver-first spelling of
+/// [`pio_module_of_balanced_network`]. The returned module is independently
+/// owned and the input network remains valid.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pio_balanced_network_to_module(
+    network: *const crate::PioBalancedNetwork,
+    error: *mut *mut PioError,
+) -> *mut PioModule {
+    unsafe { pio_module_of_balanced_network(network, error) }
+}
+
+/// Compatibility spelling for [`pio_multiconductor_network_to_module`].
+/// Return a module over one multiconductor network handle's value, sharing
+/// that handle's records so the value can use module transformations and
+/// emission.
 #[cfg(feature = "dist")]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_module_of_multiconductor_network(
@@ -585,12 +646,25 @@ pub unsafe extern "C" fn pio_module_of_multiconductor_network(
     }
 }
 
-/// Write the module as the named target format and return the text: the one
-/// write operation over the C surface. Writing an unchanged parsed module
-/// back to its source format returns the retained bytes exactly; any other
-/// target serializes the typed value. The writer's findings cross through
-/// `out_diagnostics` as a structured handle (NULL discards them). Free the
-/// text with `pio_string_release`.
+/// Transform a multiconductor network handle into a module that shares its
+/// common records. This is the preferred receiver-first spelling of
+/// [`pio_module_of_multiconductor_network`]. The returned module is
+/// independently owned and the input network remains valid.
+#[cfg(feature = "dist")]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pio_multiconductor_network_to_module(
+    network: *const crate::PioMulticonductorNetwork,
+    error: *mut *mut PioError,
+) -> *mut PioModule {
+    unsafe { pio_module_of_multiconductor_network(network, error) }
+}
+
+/// Compatibility spelling for [`pio_module_emit_string`]. Emit the module as
+/// the named target format and return its text. An unchanged module emitted to
+/// its source format returns the retained bytes exactly; any other target
+/// serializes the typed value. Findings cross through `out_diagnostics` as a
+/// structured handle (NULL discards them). Free the text with
+/// `pio_string_release`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_module_write_str(
     module: *const PioModule,
@@ -605,8 +679,7 @@ pub unsafe extern "C" fn pio_module_write_str(
         v6_entry(error, std::ptr::null_mut(), || {
             let inner = required_module(module)?;
             let format = required_str(format, "format")?;
-            let (text, diagnostics) = powerio::write_module_str(&inner.module, format)
-                .map_err(|error| error_from_core(&error))?;
+            let (text, diagnostics) = emit_module_text(&inner.module, format)?;
             let out = owned_string(text)?;
             if !out_diagnostics.is_null() {
                 *out_diagnostics = diagnostics_handle(&diagnostics);
@@ -616,9 +689,10 @@ pub unsafe extern "C" fn pio_module_write_str(
     }
 }
 
-/// Write the module as the named target format into `path`: the filesystem
-/// form of [`pio_module_write_str`], covering the directory targets (PyPSA
-/// CSV) a single text cannot state. The destination must not already exist.
+/// Compatibility spelling for [`pio_module_emit_file`]. Emit the module as the
+/// named target format into `path`, covering directory targets such as PyPSA
+/// CSV that a single text cannot state. The destination must not already
+/// exist.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_module_write_file(
     module: *const PioModule,
@@ -635,12 +709,9 @@ pub unsafe extern "C" fn pio_module_write_file(
             let inner = required_module(module)?;
             let format = required_str(format, "format")?;
             let path = required_str(path, "path")?;
-            let result = powerio::write_module_as(
-                &inner.module,
-                format,
-                powerio_core::Destination::path(path),
-            )
-            .map_err(|error| error_from_core(&error))?;
+            let result =
+                powerio::emit(&inner.module, format, powerio_core::Destination::path(path))
+                    .map_err(|error| error_from_core(&error))?;
             if !out_diagnostics.is_null() {
                 *out_diagnostics = diagnostics_handle(result.diagnostics());
             }
@@ -676,7 +747,10 @@ pub unsafe extern "C" fn pio_module_emit_file(
     unsafe { pio_module_write_file(module, format, path, out_diagnostics, error) }
 }
 
-/// The stored version 1 document. Free with `pio_string_release`.
+/// Return the stored version 1 document. Free with `pio_string_release`.
+/// This remains as an ABI convenience for callers that need the document in
+/// memory. The ordinary output path is [`pio_module_emit_string`] or
+/// [`pio_module_emit_file`] with format `pio-json`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_module_write_json(
     module: *const PioModule,
@@ -685,7 +759,7 @@ pub unsafe extern "C" fn pio_module_write_json(
     unsafe {
         v6_entry(error, std::ptr::null_mut(), || {
             let inner = required_module(module)?;
-            let text = powerio::stored::write_module(&inner.module)
+            let text = powerio::stored::emit_module(&inner.module)
                 .map_err(|error| error_from_core(&error))?;
             owned_string(text)
         })
@@ -722,7 +796,10 @@ pub unsafe extern "C" fn pio_module_kind(module: *const PioModule) -> *const c_c
     }
 }
 
-/// Value inspection and supported operation discovery, as JSON. Free with
+/// Value inspection and supported operation discovery, as JSON. The released
+/// `operations` array is unchanged. `preferred_operations` identifies the
+/// concise 1.0 path, while `compatibility_operations` identifies released
+/// ABI 6 spellings retained for existing callers. Free with
 /// `pio_string_release`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_module_inspect_json(
@@ -737,7 +814,9 @@ pub unsafe extern "C" fn pio_module_inspect_json(
     }
 }
 
-/// The typed time or scenario inventory as JSON. Free with `pio_string_release`.
+/// Compatibility spelling for [`pio_module_list_states_json`]. Return the
+/// typed time point or scenario inventory as JSON. Free with
+/// `pio_string_release`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_module_state_inventory_json(
     module: *const PioModule,
@@ -746,11 +825,23 @@ pub unsafe extern "C" fn pio_module_state_inventory_json(
     unsafe {
         v6_entry(error, std::ptr::null_mut(), || {
             let inner = required_module(module)?;
-            let inventory = powerio::select::state_inventory(inner.module.value())
+            let inventory = powerio::select::list_states(inner.module.value())
                 .map_err(|error| error_from_core(&error))?;
             owned_string(inventory_json(&inventory))
         })
     }
+}
+
+/// List the module's typed time points or scenarios as JSON. This is the
+/// preferred operation spelling. The released
+/// [`pio_module_state_inventory_json`] symbol remains as an ABI 6
+/// compatibility alias. Free the result with `pio_string_release`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pio_module_list_states_json(
+    module: *const PioModule,
+    error: *mut *mut PioError,
+) -> *mut c_char {
+    unsafe { pio_module_state_inventory_json(module, error) }
 }
 
 unsafe fn selector<'a>(
@@ -836,8 +927,9 @@ pub unsafe extern "C" fn pio_module_export_scenario(
     }
 }
 
-/// Readiness of the multiconductor value for the balanced lowering, as JSON.
-/// Free with `pio_string_release`.
+/// Compatibility spelling for [`pio_module_to_balanced_report_json`]. Return
+/// the multiconductor value's balanced transformation report as JSON. Free
+/// with `pio_string_release`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_module_lowering_readiness_json(
     module: *const PioModule,
@@ -847,7 +939,7 @@ pub unsafe extern "C" fn pio_module_lowering_readiness_json(
     unsafe {
         v6_entry(error, std::ptr::null_mut(), || {
             let inner = required_module(module)?;
-            let readiness = powerio::transform::check_module_lowering(
+            let readiness = powerio::transform::to_balanced_report(
                 &inner.module,
                 powerio::transform::MulticonductorToBalancedOptions {
                     base_mva,
@@ -855,27 +947,11 @@ pub unsafe extern "C" fn pio_module_lowering_readiness_json(
                 },
             )
             .map_err(|error| error_from_core(&error))?;
-            // Publish the 1.0 record shape: the readiness struct's own
-            // diagnostics field is the frozen 0.9 form its internal checks
-            // build, so the report swaps it for the module records.
             let mut value = serde_json::to_value(&readiness).map_err(|error| {
                 error_from_parts(codes::EMIT_CAPI_SERIALIZE_FAILED.code, &error.to_string())
             })?;
-            let records = readiness.diagnostics_as_module_records();
             if let serde_json::Value::Object(map) = &mut value {
-                if records.is_empty() {
-                    map.remove("diagnostics");
-                } else {
-                    map.insert(
-                        "diagnostics".to_owned(),
-                        serde_json::to_value(&records).map_err(|error| {
-                            error_from_parts(
-                                codes::EMIT_CAPI_SERIALIZE_FAILED.code,
-                                &error.to_string(),
-                            )
-                        })?,
-                    );
-                }
+                map.insert("ready".to_owned(), serde_json::json!(readiness.is_ready()));
             }
             let text = serde_json::to_string(&value).map_err(|error| {
                 error_from_parts(codes::EMIT_CAPI_SERIALIZE_FAILED.code, &error.to_string())
@@ -887,6 +963,11 @@ pub unsafe extern "C" fn pio_module_lowering_readiness_json(
 
 /// Report whether the multiconductor value can be transformed to a balanced
 /// network, as JSON. Free with `pio_string_release`.
+///
+/// This previews the named [`pio_module_to_balanced`] transformation; it does
+/// not return a transformed module. The `to_balanced_report` spelling matches
+/// the Python and Julia APIs and is the report exception to the `to_*` value
+/// transformation rule.
 ///
 /// This is the power system terminology spelling of
 /// `pio_module_lowering_readiness_json`.
@@ -919,7 +1000,7 @@ fn transformed_balanced_module(
         module,
         powerio::PioValue::MulticonductorNetwork(network.clone()),
     )?;
-    powerio::transform::module_to_balanced(
+    powerio::transform::to_balanced(
         owned,
         powerio::transform::MulticonductorToBalancedOptions {
             base_mva,
@@ -1040,12 +1121,69 @@ fn inspect_json(module: &powerio_core::PioModule<powerio::PioValue>) -> String {
         ],
         _ => vec!["inspect", "diagnostics", "emit", "write"],
     };
+    let preferred_operations: Vec<&str> = match value {
+        V::BalancedNetwork(_) => vec![
+            "inspect",
+            "diagnostics",
+            "emit",
+            "to_normalized",
+            "to_geo_layer_json",
+            "apply_geo_layer",
+        ],
+        V::MulticonductorNetwork(_) => vec![
+            "inspect",
+            "diagnostics",
+            "emit",
+            "to_balanced_report",
+            "to_balanced",
+            "to_geo_layer_json",
+            "apply_geo_layer",
+            "to_graph_json",
+        ],
+        V::BalancedNetworkTimeSeries(_) | V::BalancedOperatingPointTimeSeries(_) => vec![
+            "inspect",
+            "diagnostics",
+            "emit",
+            "list_states",
+            "export_time_point",
+            "export_state",
+        ],
+        V::MulticonductorOperatingPointTimeSeries(_) => {
+            vec!["inspect", "diagnostics", "emit"]
+        }
+        V::BalancedNetworkScenarioSet(_) => vec![
+            "inspect",
+            "diagnostics",
+            "emit",
+            "list_states",
+            "export_scenario",
+            "export_state",
+        ],
+        _ => vec!["inspect", "diagnostics", "emit"],
+    };
+    let compatibility_operations: Vec<&str> = match value {
+        V::BalancedNetwork(_) => {
+            vec!["write", "dc_data", "normalize", "geo_extract", "geo_apply"]
+        }
+        V::MulticonductorNetwork(_) => vec![
+            "write",
+            "lowering_readiness",
+            "lower_to_balanced",
+            "geo_extract",
+            "geo_apply",
+            "graph",
+        ],
+        V::BalancedNetworkTimeSeries(_)
+        | V::BalancedOperatingPointTimeSeries(_)
+        | V::BalancedNetworkScenarioSet(_) => vec!["write", "state_inventory"],
+        _ => vec!["write"],
+    };
     // The value's own source format when the value kind carries one
     // (balanced and multiconductor networks always or optionally do); every
     // other value kind has none of its own, so the first source descriptor's
     // declared format stands in. Omitted entirely when neither is known, so
     // PowerIO.jl's `source_format(m)` (`get(inspect(m), :source_format,
-    // nothing)`) and `write_file(m, path)` with no format see `nothing`
+    // nothing)`) and `emit(m, path)` with no explicit format see `nothing`
     // rather than an empty string.
     let source_format: Option<&str> = match value {
         V::BalancedNetwork(network) => Some(network.source_format().name()),
@@ -1067,6 +1205,8 @@ fn inspect_json(module: &powerio_core::PioModule<powerio::PioValue>) -> String {
             "extensions": module.extensions().len(),
         },
         "operations": operations,
+        "preferred_operations": preferred_operations,
+        "compatibility_operations": compatibility_operations,
     });
     if let (Some(format), serde_json::Value::Object(map)) = (source_format, &mut report) {
         map.insert(
@@ -1440,9 +1580,10 @@ pub unsafe extern "C" fn pio_diagnostic_related(
 
 // ---- pio_dc_data ------------------------------------------------------------
 
-/// The DC branch data of one balanced network under one susceptance formula,
-/// with the stable element mappings that interpret every row. Arrays are
-/// owned by the handle; spans stay valid until its last release.
+/// The C arrays grouped by `PioDcData`: branch endpoint positions,
+/// susceptances, phase shifts, bus injections, stable element ids, and
+/// omissions. Arrays are owned by the handle; spans stay valid until its last
+/// release.
 ///
 /// Rows and columns describe the analysis network after three winding
 /// transformer expansion: each in-service three winding transformer
@@ -1487,13 +1628,13 @@ unsafe impl Send for DcDataInner {}
 unsafe impl Sync for DcDataInner {}
 
 arc_handle!(
-    /// The opaque C DC data type.
+    /// The opaque owner for ABI 6 DC matrix input arrays.
     PioDcData,
     DcDataInner
 );
 
-fn dc_formula(name: &str) -> Result<DcConvention, *mut PioError> {
-    DcConvention::from_formula_name(name).ok_or_else(|| {
+fn dc_formula(name: &str) -> Result<BranchSusceptanceFormula, *mut PioError> {
+    BranchSusceptanceFormula::from_formula_name(name).ok_or_else(|| {
         error_from_parts(
             codes::REQUEST_CAPI_UNKNOWN_FORMULA.code,
             &format!(
@@ -1508,42 +1649,116 @@ fn pointer_table(strings: &[CString]) -> Vec<*const c_char> {
     strings.iter().map(|string| string.as_ptr()).collect()
 }
 
-/// Project the shared [`powerio::dc_network_data`] assembly into the owned C
-/// spans: the same values Rust and Python read, with the strings pinned as
-/// NUL terminated copies the pointer tables alias. Every table describes the
+/// Build the frozen ABI 6 arrays directly. This private implementation keeps
+/// the C handle's released omission and ownership behavior without exposing a
+/// corresponding high level Rust container. Every table describes the
 /// analysis network after three winding transformer expansion, so `bus_ids`
 /// has exactly `n_buses` entries by construction.
 fn build_dc_data(
     network: &BalancedNetwork,
-    convention: DcConvention,
+    convention: BranchSusceptanceFormula,
 ) -> Result<DcDataInner, *mut PioError> {
     let view = IndexedNetwork::new(network);
-    let data = powerio::dc_network_data(&view, convention);
-    let row_ids: Vec<CString> = data.row_ids.iter().map(|id| lossy_cstring(id)).collect();
-    let bus_ids: Vec<CString> = data.bus_ids.iter().map(|id| lossy_cstring(id)).collect();
-    let (omitted_ids, omitted_reasons): (Vec<CString>, Vec<CString>) = data
-        .omitted
+    let network = view.network();
+    let mut from_indices = Vec::new();
+    let mut to_indices = Vec::new();
+    let mut susceptance = Vec::new();
+    let mut shift = Vec::new();
+    let mut shift_injection = vec![0.0; view.n()];
+    let mut row_ids = Vec::new();
+    let bus_ids: Vec<CString> = network
+        .buses()
         .iter()
-        .map(|(id, reason)| (lossy_cstring(id), lossy_cstring(reason)))
-        .unzip();
+        .map(|bus| lossy_cstring(&bus.id.0.to_string()))
+        .collect();
+    let mut omitted_ids = Vec::new();
+    let mut omitted_reasons = Vec::new();
+
+    // ABI 6 published this divisibility floor. Keep it local so retaining the
+    // C behavior does not require a public high level data container.
+    const MIN_DIVISIBLE_MAGNITUDE: f64 = 1.491_668_146_240_041_3e-154;
+    let mut omit = |id: &str, reason: &str| {
+        omitted_ids.push(lossy_cstring(id));
+        omitted_reasons.push(lossy_cstring(reason));
+    };
+    for (row, branch) in network.branches().iter().enumerate() {
+        let id = branch
+            .uid
+            .clone()
+            .unwrap_or_else(|| format!("branches:{row}"));
+        if !branch.in_service {
+            omit(&id, "out of service");
+            continue;
+        }
+        let (Some(from), Some(to)) = (view.bus_index(branch.from), view.bus_index(branch.to))
+        else {
+            omit(&id, "references an undeclared bus");
+            continue;
+        };
+        if from == to {
+            omit(&id, "self loop");
+            continue;
+        }
+        let degenerate = match convention {
+            BranchSusceptanceFormula::SeriesSusceptance => {
+                branch.r.hypot(branch.x) < MIN_DIVISIBLE_MAGNITUDE
+            }
+            BranchSusceptanceFormula::TapAdjustedReactance
+            | BranchSusceptanceFormula::ReactanceOnly => branch.x.abs() < MIN_DIVISIBLE_MAGNITUDE,
+            _ => false,
+        };
+        if degenerate {
+            let reason = match convention {
+                BranchSusceptanceFormula::SeriesSusceptance => {
+                    "zero impedance: the series impedance magnitude is below the divisibility floor"
+                }
+                BranchSusceptanceFormula::TapAdjustedReactance
+                | BranchSusceptanceFormula::ReactanceOnly => {
+                    "zero reactance: the selected formula divides by reactance"
+                }
+                _ => "the selected formula cannot represent this branch",
+            };
+            omit(&id, reason);
+            continue;
+        }
+        let tap = match branch.calc_divisible_tap(row) {
+            Ok(tap) => tap,
+            Err(error) => {
+                omit(&id, &error.to_string());
+                continue;
+            }
+        };
+        let b = convention.calc_branch_susceptance(branch.r, branch.x, tap);
+        if !b.is_finite() {
+            omit(&id, "susceptance is not finite");
+            continue;
+        }
+        let row_shift = if convention.includes_phase_shifts() {
+            view.to_radians(branch.shift)
+        } else {
+            0.0
+        };
+        if row_shift != 0.0 {
+            shift_injection[from] += b * row_shift;
+            shift_injection[to] -= b * row_shift;
+        }
+        from_indices.push(i64::try_from(from).expect("bus count fits i64"));
+        to_indices.push(i64::try_from(to).expect("bus count fits i64"));
+        susceptance.push(b);
+        shift.push(row_shift);
+        row_ids.push(lossy_cstring(&id));
+    }
+
     let row_id_pointers = pointer_table(&row_ids);
     let bus_id_pointers = pointer_table(&bus_ids);
     let omitted_id_pointers = pointer_table(&omitted_ids);
     let omitted_reason_pointers = pointer_table(&omitted_reasons);
     Ok(DcDataInner {
-        from_indices: data
-            .from_indices
-            .iter()
-            .map(|&index| i64::try_from(index).expect("bus count fits i64"))
-            .collect(),
-        to_indices: data
-            .to_indices
-            .iter()
-            .map(|&index| i64::try_from(index).expect("bus count fits i64"))
-            .collect(),
-        susceptance: data.susceptance,
-        shift: data.shift,
-        shift_injection: data.shift_injection,
+        from_indices,
+        to_indices,
+        susceptance,
+        shift,
+        shift_injection,
         row_ids,
         row_id_pointers,
         bus_ids,
@@ -1552,14 +1767,14 @@ fn build_dc_data(
         omitted_id_pointers,
         omitted_reasons,
         omitted_reason_pointers,
-        formula: lossy_cstring(data.formula),
+        formula: lossy_cstring(convention.formula_name()),
     })
 }
 
-/// Build the DC branch data of a module's balanced network value under the
-/// named branch susceptance formula (`series_susceptance`,
-/// `tap_adjusted_reactance`, or `reactance_only`). The result is an
-/// independently owned handle: releasing the module never invalidates it.
+/// Build the ABI 6 `PioDcData` arrays for a module's balanced network under
+/// the named branch susceptance formula (`series_susceptance`,
+/// `tap_adjusted_reactance`, or `reactance_only`). The result is independently
+/// owned: releasing the module never invalidates it.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_dc_data_build(
     module: *const PioModule,
@@ -1574,7 +1789,7 @@ pub unsafe extern "C" fn pio_dc_data_build(
                 return Err(error_from_parts(
                     codes::REQUEST_CAPI_NOT_A_BALANCED_NETWORK.code,
                     &format!(
-                        "the module carries a {} value; DC data takes a balanced network",
+                        "the module carries a {} value; pio_dc_data_build requires a balanced network",
                         inner.module.value().kind().as_str()
                     ),
                 ));
@@ -1746,7 +1961,7 @@ unsafe fn fill_branch_flow(
     let inner = unsafe { PioDcData::get(data) }.ok_or_else(|| {
         error_from_parts(
             codes::BIND_CAPI_NULL_HANDLE.code,
-            "DC data handle must not be NULL",
+            "PioDcData handle must not be NULL",
         )
     })?;
     if va.is_null() {
@@ -1782,7 +1997,8 @@ unsafe fn fill_branch_flow(
     Ok(())
 }
 
-/// Fill `out` with the complete affine branch flow
+/// Compatibility spelling for [`pio_dc_data_calc_branch_flow`]. Fill `out`
+/// with the complete affine branch flow
 /// `p_branch = -b .* (va_from - va_to) + b .* shift`: given bus voltage
 /// angles `va` (radians, length `n_buses`), writes
 /// `-b[e] * (va[from] - va[to]) + b[e] * shift[e]` per included row into
@@ -1807,6 +2023,22 @@ pub unsafe extern "C" fn pio_dc_data_fill_branch_flow_checked(
     }
 }
 
+/// Calculate the complete affine DC branch flow into `out` from bus voltage
+/// angles `va`. This is the preferred calculation spelling of
+/// [`pio_dc_data_fill_branch_flow_checked`]. It has the same length rules,
+/// performs no allocation, and stores a structured error on failure.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pio_dc_data_calc_branch_flow(
+    data: *const PioDcData,
+    va: *const f64,
+    va_len: usize,
+    out: *mut f64,
+    out_len: usize,
+    error: *mut *mut PioError,
+) -> bool {
+    unsafe { pio_dc_data_fill_branch_flow_checked(data, va, va_len, out, out_len, error) }
+}
+
 /// Compatibility form of `pio_dc_data_fill_branch_flow_checked` without a
 /// structured error channel. Returns false on a NULL argument or length
 /// mismatch.
@@ -1823,13 +2055,13 @@ pub unsafe extern "C" fn pio_dc_data_fill_branch_flow(
     }
 }
 
-/// Mint an independent handle to the same DC data. NULL stays NULL.
+/// Mint an independent handle to the same PioDcData arrays. NULL stays NULL.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_dc_data_retain(data: *const PioDcData) -> *mut PioDcData {
     unsafe { crate::guard(std::ptr::null_mut(), || PioDcData::retain_raw(data)) }
 }
 
-/// Release one DC data handle. NULL is a no-op.
+/// Release one PioDcData handle. NULL is a no-op.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_dc_data_release(data: *mut PioDcData) {
     unsafe { crate::guard((), || PioDcData::release_raw(data)) }
@@ -1932,6 +2164,27 @@ mod tests {
     }
 
     #[test]
+    fn parse_text_is_the_preferred_in_memory_text_spelling() {
+        unsafe {
+            let mut error = std::ptr::null_mut();
+            let matpower = CString::new("matpower").unwrap();
+            let text = case_text();
+            let module = pio_parse_text(
+                std::ptr::null(),
+                text.as_ptr(),
+                matpower.as_ptr(),
+                &raw mut error,
+            );
+            assert!(error.is_null());
+            assert_eq!(
+                CStr::from_ptr(pio_module_kind(module)).to_str().unwrap(),
+                "balanced_network"
+            );
+            pio_module_release(module);
+        }
+    }
+
+    #[test]
     fn module_as_network_threads_provenance_and_refuses_other_kinds() {
         unsafe {
             let mut error = std::ptr::null_mut();
@@ -1946,11 +2199,18 @@ mod tests {
             let net = pio_module_balanced_network(module, &raw mut error);
             assert!(error.is_null());
             assert!(!net.is_null());
-            // The retained source threads through: wrapping the network back
-            // into a module and writing the same format echoes the exact
+            // The retained source threads through: transforming the network
+            // back into a module and emitting the same format echoes the exact
             // source bytes.
-            let net_module = pio_module_of_balanced_network(net, &raw mut error);
+            let net_module = pio_balanced_network_to_module(net, &raw mut error);
             assert!(error.is_null());
+            let compatibility_module = pio_module_of_balanced_network(net, &raw mut error);
+            assert!(error.is_null());
+            assert_eq!(
+                CStr::from_ptr(pio_module_kind(net_module)),
+                CStr::from_ptr(pio_module_kind(compatibility_module))
+            );
+            pio_module_release(compatibility_module);
             let to = CString::new("matpower").unwrap();
             let mut diag: *mut PioDiagnostics = std::ptr::null_mut();
             let text = pio_module_write_str(net_module, to.as_ptr(), &raw mut diag, &raw mut error);
@@ -2119,6 +2379,15 @@ mod tests {
                 powerio::PioValue::BalancedNetworkTimeSeries(series),
             ));
             let mut error = std::ptr::null_mut();
+            let listed = pio_module_list_states_json(series, &raw mut error);
+            assert!(error.is_null());
+            assert!(!listed.is_null());
+            let inventory = pio_module_state_inventory_json(series, &raw mut error);
+            assert!(error.is_null());
+            assert!(!inventory.is_null());
+            assert_eq!(CStr::from_ptr(listed), CStr::from_ptr(inventory));
+            crate::pio_string_release(inventory);
+            crate::pio_string_release(listed);
             let exported = pio_module_export_time_point(series, 0, &raw mut error);
             assert!(error.is_null());
             assert_eq!(
@@ -2275,6 +2544,8 @@ mod tests {
             assert!(!operations.iter().any(|item| item == "state_inventory"));
             assert!(!operations.iter().any(|item| item == "export_time_point"));
             assert!(!operations.iter().any(|item| item == "export_state"));
+            let preferred = report["preferred_operations"].as_array().unwrap();
+            assert!(!preferred.iter().any(|item| item == "list_states"));
             crate::pio_string_release(report_ptr);
             pio_module_release(module);
         }
@@ -2377,7 +2648,7 @@ Set VoltageBases=[12.47, 0.416]
             let formula = CString::new("series_susceptance").unwrap();
             let data = pio_dc_data_build(module, formula.as_ptr(), &raw mut error);
             assert!(error.is_null());
-            // The DC data is independently owned.
+            // The PioDcData arrays are independently owned.
             pio_module_release(module);
 
             assert_eq!(pio_dc_data_n_rows(data), 1);
@@ -2468,7 +2739,7 @@ Set VoltageBases=[12.47, 0.416]
 
             let va = [0.03_f64, 0.01, -0.02];
             let mut flow = [0.0_f64; 2];
-            assert!(pio_dc_data_fill_branch_flow_checked(
+            assert!(pio_dc_data_calc_branch_flow(
                 data,
                 va.as_ptr(),
                 va.len(),
@@ -2477,6 +2748,16 @@ Set VoltageBases=[12.47, 0.416]
                 &raw mut error,
             ));
             assert!(error.is_null());
+            let mut compatibility_flow = [0.0_f64; 2];
+            assert!(pio_dc_data_fill_branch_flow_checked(
+                data,
+                va.as_ptr(),
+                va.len(),
+                compatibility_flow.as_mut_ptr(),
+                compatibility_flow.len(),
+                &raw mut error,
+            ));
+            assert_eq!(flow, compatibility_flow);
             let b = checked_slice(pio_dc_data_susceptance(data), 2);
             let shift = checked_slice(pio_dc_data_shift(data), 2);
             assert!((flow[0] - (-b[0] * (va[0] - va[1]) + b[0] * shift[0])).abs() < 1e-12);
@@ -2649,8 +2930,9 @@ Set VoltageBases=[12.47, 0.416]
     }
 
     /// Every refusal carries its own registered code: NULL handles, an
-    /// unrecognized formula, conflicting selection keys, a value kind DC data
-    /// does not accept, and a static value's selection refusal all differ.
+    /// unrecognized formula, conflicting selection keys, a value kind
+    /// PioDcData does not accept, and a static value's selection refusal all
+    /// differ.
     #[test]
     fn refusals_carry_distinct_registered_codes() {
         unsafe {
@@ -2698,14 +2980,14 @@ Set VoltageBases=[12.47, 0.416]
             assert_eq!(code_of(error), "REQUEST.CAPI.SELECTOR_CONFLICT");
 
             // A static value's selection refusal comes from the library and
-            // differs from the DC data kind refusal below.
+            // differs from the PioDcData kind refusal below.
             let mut error = std::ptr::null_mut();
             let exported = pio_module_export_state(module, 0, std::ptr::null(), &raw mut error);
             assert!(exported.is_null());
             let selection_code = code_of(error);
             assert_eq!(selection_code, "REQUEST.STATE.NOT_A_COLLECTION");
 
-            // DC data against a value kind it does not accept.
+            // PioDcData against a value kind it does not accept.
             let dss = CString::new("dss").unwrap();
             let circuit = CString::new(
                 "Clear\nNew Circuit.tiny basekv=12.47 bus1=src\n\
@@ -2885,20 +3167,41 @@ Set VoltageBases=[12.47, 0.416]
     #[test]
     fn every_inspect_operation_maps_to_an_exported_symbol() {
         let header = include_str!("../include/powerio.h");
-        let symbol_of = |op: &str| match op {
-            "inspect" => "pio_module_inspect_json",
-            "diagnostics" => "pio_module_diagnostics_json",
-            "emit" => "pio_module_emit_string",
-            "write" => "pio_module_write_json",
-            "dc_data" => "pio_dc_data_build",
-            "state_inventory" => "pio_module_state_inventory_json",
-            "export_state" => "pio_module_export_state",
-            "export_time_point" => "pio_module_export_time_point",
-            "export_scenario" => "pio_module_export_scenario",
-            "to_balanced_report" => "pio_module_to_balanced_report_json",
-            "to_balanced" => "pio_module_to_balanced",
-            "lowering_readiness" => "pio_module_lowering_readiness_json",
-            "lower_to_balanced" => "pio_module_lower_to_balanced",
+        let symbols_of = |op: &str| match op {
+            "inspect" => vec!["pio_module_inspect_json"],
+            "diagnostics" => vec!["pio_module_diagnostics_json"],
+            "emit" => vec!["pio_module_emit_string"],
+            "write" => vec!["pio_module_write_json"],
+            "dc_data" => vec!["pio_dc_data_build"],
+            "list_states" => vec!["pio_module_list_states_json"],
+            "state_inventory" => vec!["pio_module_state_inventory_json"],
+            "export_state" => vec!["pio_module_export_state"],
+            "export_time_point" => vec!["pio_module_export_time_point"],
+            "export_scenario" => vec!["pio_module_export_scenario"],
+            "to_balanced_report" => vec!["pio_module_to_balanced_report_json"],
+            "to_balanced" => vec!["pio_module_to_balanced"],
+            "lowering_readiness" => vec!["pio_module_lowering_readiness_json"],
+            "lower_to_balanced" => vec!["pio_module_lower_to_balanced"],
+            "to_normalized" => vec!["pio_balanced_network_to_normalized"],
+            "to_geo_layer_json" => vec![
+                "pio_balanced_network_to_geo_layer_json",
+                "pio_multiconductor_network_to_geo_layer_json",
+            ],
+            "apply_geo_layer" => vec![
+                "pio_balanced_network_apply_geo_layer",
+                "pio_multiconductor_network_apply_geo_layer",
+            ],
+            "to_graph_json" => vec!["pio_multiconductor_network_to_graph_json"],
+            "normalize" => vec!["pio_balanced_network_normalize"],
+            "geo_extract" => vec![
+                "pio_balanced_network_geo_extract",
+                "pio_multiconductor_network_geo_extract",
+            ],
+            "geo_apply" => vec![
+                "pio_balanced_network_geo_apply",
+                "pio_multiconductor_network_geo_apply",
+            ],
+            "graph" => vec!["pio_multiconductor_network_graph_json"],
             other => panic!("operation `{other}` has no symbol mapping"),
         };
         let balanced = powerio::parse(
@@ -2927,19 +3230,101 @@ Set VoltageBases=[12.47, 0.416]
             .with_format(powerio_core::FormatId::new("dss").unwrap()),
         )
         .unwrap();
-        for module in [&balanced, &series_module, &dss_module] {
+        let inspected_modules = [
+            (
+                &balanced,
+                serde_json::json!(["inspect", "diagnostics", "emit", "write", "dc_data"]),
+            ),
+            (
+                &series_module,
+                serde_json::json!([
+                    "inspect",
+                    "diagnostics",
+                    "emit",
+                    "write",
+                    "state_inventory",
+                    "export_time_point",
+                    "export_state",
+                ]),
+            ),
+            (
+                &dss_module,
+                serde_json::json!([
+                    "inspect",
+                    "diagnostics",
+                    "emit",
+                    "write",
+                    "to_balanced_report",
+                    "to_balanced",
+                    "lowering_readiness",
+                    "lower_to_balanced",
+                ]),
+            ),
+        ];
+        for (module, expected_operations) in inspected_modules {
             let rendered = inspect_json(module);
             let parsed: serde_json::Value = serde_json::from_str(&rendered).unwrap();
-            let operations = parsed["operations"].as_array().unwrap();
-            assert!(!operations.is_empty());
-            for operation in operations {
-                let symbol = symbol_of(operation.as_str().unwrap());
-                assert!(
-                    header.contains(&format!("{symbol}(")),
-                    "{symbol} is not in the committed header"
-                );
+            assert_eq!(
+                parsed["operations"], expected_operations,
+                "the released operations array must not change"
+            );
+            for key in [
+                "operations",
+                "preferred_operations",
+                "compatibility_operations",
+            ] {
+                let operations = parsed[key].as_array().unwrap();
+                assert!(!operations.is_empty(), "{key} is empty");
+                for operation in operations {
+                    for symbol in symbols_of(operation.as_str().unwrap()) {
+                        assert!(
+                            header.contains(&format!("{symbol}(")),
+                            "{symbol} from {key} is not in the committed header"
+                        );
+                    }
+                }
             }
+            let preferred = parsed["preferred_operations"].as_array().unwrap();
+            let compatibility = parsed["compatibility_operations"].as_array().unwrap();
+            assert!(
+                preferred
+                    .iter()
+                    .all(|operation| !compatibility.contains(operation))
+            );
         }
+
+        let balanced_report: serde_json::Value =
+            serde_json::from_str(&inspect_json(&balanced)).unwrap();
+        assert!(
+            balanced_report["preferred_operations"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|operation| operation == "to_normalized")
+        );
+        assert!(
+            balanced_report["compatibility_operations"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|operation| operation == "normalize")
+        );
+        let series_report: serde_json::Value =
+            serde_json::from_str(&inspect_json(&series_module)).unwrap();
+        assert!(
+            series_report["preferred_operations"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|operation| operation == "list_states")
+        );
+        assert!(
+            series_report["compatibility_operations"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|operation| operation == "state_inventory")
+        );
     }
 
     /// `inspect_json`'s `source_format` key: present with the parsed
@@ -2947,7 +3332,7 @@ Set VoltageBases=[12.47, 0.416]
     /// multiconductor networks), and absent for a kind that carries none of
     /// its own and no source descriptor either. This is the field
     /// `PowerIO.jl`'s `source_format(m)` (`get(inspect(m), :source_format,
-    /// nothing)`) reads, and that `write_file(m, path)` with no `format`
+    /// nothing)`) reads, and that `emit(m, path)` with no `format`
     /// falls back to.
     #[test]
     fn inspect_json_carries_source_format_when_the_value_or_a_source_declares_one() {
@@ -2994,12 +3379,12 @@ Set VoltageBases=[12.47, 0.416]
         assert!(report.get("source_format").is_none(), "{report}");
     }
 
-    /// The end to end path Julia's `write_file(m, path)` with no `format`
+    /// The end to end path Julia's `emit(m, path)` with no `format`
     /// depends on: `pio_parse_file` on a real MATPOWER file reports
     /// `source_format` through the full C ABI surface, and it survives a
     /// `.pio.json` save and reload — the exact round trip a script doing
-    /// `m = parse_file(...); write_json(m, "case.pio.json")`, later reopened
-    /// with `parse_file("case.pio.json")` after `using PowerIO`, then `write_file(m2,
+    /// `m = parse_file(...); emit(m, "case.pio.json"; format="pio-json")`, later reopened
+    /// with `parse_file("case.pio.json")` after `using PowerIO`, then `emit(m2,
     /// "out.m")` with no format, depends on.
     #[test]
     fn source_format_reaches_pio_parse_file_and_survives_a_pio_json_round_trip() {
@@ -3118,6 +3503,7 @@ Set VoltageBases=[12.47, 0.416]
         assert!(!text.is_null());
         let json = unsafe { std::ffi::CStr::from_ptr(text) }.to_str().unwrap();
         let value: serde_json::Value = serde_json::from_str(json).unwrap();
+        assert_eq!(value["ready"], serde_json::Value::Bool(false));
         let records = value["diagnostics"].as_array().expect("records");
         assert!(!records.is_empty());
         for record in records {

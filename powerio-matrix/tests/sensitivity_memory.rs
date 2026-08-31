@@ -6,7 +6,7 @@
 
 use powerio_matrix::{
     BalancedNetwork, Branch, Bus, BusId, BusType, IndexedNetwork, SensitivityOptions,
-    SensitivitySolver, build_ptdf_lodf_with_options,
+    SensitivitySolver, calc_ptdf_lodf_with_options,
 };
 
 /// Peak live byte tracking global allocator, scoped to the one measuring
@@ -104,7 +104,7 @@ fn the_sparse_path_never_holds_a_dense_buffer() {
         ..SensitivityOptions::default()
     };
     let (sparse, sparse_peak) =
-        measured_peak(|| build_ptdf_lodf_with_options(&view, &sparse_options).unwrap());
+        measured_peak(|| calc_ptdf_lodf_with_options(&view, &sparse_options).unwrap());
     assert_eq!(sparse.lodf.rows(), 2 * n);
     // Every ring flow lands under the drop tolerance; the dropped count is
     // what proves the full PTDF sweep ran.
@@ -128,7 +128,7 @@ fn the_sparse_path_never_holds_a_dense_buffer() {
         ..SensitivityOptions::default()
     };
     let (dense, dense_peak) =
-        measured_peak(|| build_ptdf_lodf_with_options(&view, &dense_options).unwrap());
+        measured_peak(|| calc_ptdf_lodf_with_options(&view, &dense_options).unwrap());
     assert_eq!(dense.lodf.rows(), 2 * n);
     assert!(
         dense_peak > dense_buffer,

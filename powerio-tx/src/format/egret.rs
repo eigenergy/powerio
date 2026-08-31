@@ -14,7 +14,7 @@
 use serde_json::{Map, Value};
 
 use super::decode::lenient_table;
-use super::{Conversion, finish, jnum, warn_extra_branch_rating_sets};
+use super::{TextEmission, finish, jnum, warn_extra_branch_rating_sets};
 use crate::diagnostics::Diagnostics;
 use crate::diagnostics::codes::EMIT_EGRET as F;
 use crate::network::{
@@ -26,7 +26,7 @@ use crate::{Error, Result};
 const FMT: &str = "egret JSON";
 
 #[must_use]
-pub fn write_egret_json(net: &BalancedNetwork) -> Conversion {
+pub fn write_egret_json(net: &BalancedNetwork) -> TextEmission {
     let mut warnings = Diagnostics::new();
 
     let mut bus = Map::new();
@@ -235,13 +235,19 @@ fn branch_obj(br: &Branch) -> Value {
     m.insert("to_bus".into(), Value::String(br.to.to_string()));
     m.insert("resistance".into(), jnum(br.r));
     m.insert("reactance".into(), jnum(br.x));
-    m.insert("charging_susceptance".into(), jnum(br.total_charging_b()));
+    m.insert(
+        "charging_susceptance".into(),
+        jnum(br.calc_total_charging_b()),
+    );
     m.insert("in_service".into(), Value::Bool(br.in_service));
     m.insert("angle_diff_min".into(), jnum(br.angmin));
     m.insert("angle_diff_max".into(), jnum(br.angmax));
     if br.is_transformer() {
         m.insert("branch_type".into(), Value::String("transformer".into()));
-        m.insert("transformer_tap_ratio".into(), jnum(br.effective_tap()));
+        m.insert(
+            "transformer_tap_ratio".into(),
+            jnum(br.calc_effective_tap()),
+        );
         m.insert("transformer_phase_shift".into(), jnum(br.shift));
     } else {
         m.insert("branch_type".into(), Value::String("line".into()));

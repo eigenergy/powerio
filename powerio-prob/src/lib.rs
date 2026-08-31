@@ -13,7 +13,7 @@ pub(crate) mod scopf;
 pub mod solution;
 pub mod state;
 
-pub use powerio_tx::{BranchSusceptanceFormula, DcConvention};
+pub use powerio_tx::BranchSusceptanceFormula;
 
 pub mod diagnostics;
 pub mod error;

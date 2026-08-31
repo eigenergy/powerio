@@ -8,7 +8,7 @@ use helpers::*;
 use std::path::{Path, PathBuf};
 
 use powerio_tx::TargetFormat;
-use powerio_tx::format::powerworld::{AuxSection, parse_aux, write_aux};
+use powerio_tx::format::powerworld::{AuxSection, emit_aux, parse_aux};
 
 fn fixture(name: &str) -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -99,16 +99,16 @@ fn activsg200_values_survive_tokenizing() {
 #[test]
 fn activsg200_echo_is_byte_exact() {
     let parsed = parse_file(fixture("ACTIVSg200.aux"), None).unwrap();
-    let echo = parsed.to_format(TargetFormat::PowerWorld).unwrap();
+    let echo = parsed.emit(TargetFormat::PowerWorld).unwrap();
     assert!(echo.diagnostics.is_empty());
     assert_eq!(echo.text, activsg200());
 }
 
 /// Canonical generic serialization is idempotent on the real export.
 #[test]
-fn activsg200_canonical_write_is_idempotent() {
-    let first = write_aux(&parse_aux(&activsg200()).unwrap());
-    let again = write_aux(&parse_aux(&first).unwrap());
+fn activsg200_canonical_emission_is_idempotent() {
+    let first = emit_aux(&parse_aux(&activsg200()).unwrap());
+    let again = emit_aux(&parse_aux(&first).unwrap());
     assert_eq!(first, again);
 }
 

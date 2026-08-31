@@ -333,7 +333,7 @@ The Rust API has one public parse operation over a retained `Source`.
 | `Source::from_bytes` | one buffer's name and bytes | retained `Source` |
 | `Source::with_format` | an explicit parser selection for ambiguous or mislabeled input | retained `Source` |
 | `parse` | retained `Source` | `PioModule<PioValue>` |
-| `powerio::try_into_typed::<T>` | `PioModule<PioValue>` | one concrete `PioModule<T>` or recoverable `ValueKindMismatch` |
+| `module.into_typed::<T>()` | `PioModule<PioValue>` | one concrete `PioModule<T>` or recoverable `ValueKindMismatch` for advanced owned code |
 
 The Rust shape is:
 
@@ -341,14 +341,15 @@ The Rust shape is:
 parse(source: Source) -> Result<PioModule<PioValue>, Error>
 
 let module = parse(Source::open(path)?)?;
-let network: PioModule<BalancedNetwork> = powerio::try_into_typed(module)?;
+let network: PioModule<BalancedNetwork> = module.into_typed()?;
 ```
 
 `PioValue` is the finite runtime sum used at the automatic parsing, disk, and
 binding boundary because the source decides which declared value it contains.
 It is not the set of every conceptual module value: typed Rust can use a
 `PioModule<T>` that has not been promoted to the dynamic enum.
-`PioModule<T>::value()` borrows a concrete value after the checked move. One
+Ordinary code reads or matches `module.value()` directly. `into_typed` exists
+for generic code that needs to move one concrete module without cloning. One
 sealed facade `FromPioValue` implementation exists per built in variant;
 successful narrowing moves the value and common records without allocation.
 The trait performs extraction and does not constrain `PioModule<T>`. Standard

@@ -2,11 +2,10 @@
 //! change, the visible note cap, repeated lowering, and the winding rating
 //! base conversion.
 
-use powerio::stored::{read_module, write_module};
+use powerio::stored::{emit_module, read_module};
 use powerio::transform::{
-    MulticonductorToBalancedOptions, MulticonductorToBalancedReport, lower_module_to_balanced,
-    module_to_balanced, module_to_balanced_report, multiconductor_to_balanced,
-    multiconductor_to_balanced_report,
+    MulticonductorToBalancedOptions, MulticonductorToBalancedReport, to_balanced,
+    to_balanced_network, to_balanced_network_report, to_balanced_report,
 };
 use powerio::{PioValue, VERSION};
 
@@ -31,17 +30,16 @@ fn transformation_names_share_one_report_and_sever_the_source_echo() {
     assert!(module.source().is_some());
     let options = MulticonductorToBalancedOptions::default();
 
-    let report: MulticonductorToBalancedReport =
-        module_to_balanced_report(&module, options).unwrap();
+    let report: MulticonductorToBalancedReport = to_balanced_report(&module, options).unwrap();
     let PioValue::MulticonductorNetwork(network) = module.value() else {
         panic!("wrong kind");
     };
-    assert_eq!(report, multiconductor_to_balanced_report(network, options));
+    assert_eq!(report, to_balanced_network_report(network, options));
     assert!(report.is_ready(), "{report:?}");
-    let direct = multiconductor_to_balanced(network, options).unwrap();
+    let direct = to_balanced_network(network, options).unwrap();
     assert!(!direct.network.buses().is_empty());
 
-    let transformed = module_to_balanced(module, options).unwrap();
+    let transformed = to_balanced(module, options).unwrap();
     assert!(matches!(transformed.value(), PioValue::BalancedNetwork(_)));
     assert!(
         transformed.source().is_none(),
@@ -55,7 +53,7 @@ fn transformation_names_share_one_report_and_sever_the_source_echo() {
 #[test]
 fn stale_targets_are_severed_and_every_diagnostic_survives() {
     let module = parse_mc_module(TWO_WINDING_DSS).sever_source();
-    let mut raw: serde_json::Value = serde_json::from_str(&write_module(&module).unwrap()).unwrap();
+    let mut raw: serde_json::Value = serde_json::from_str(&emit_module(&module).unwrap()).unwrap();
     raw["diagnostics"] = serde_json::json!([
         {"id": "keep-1", "severity": "note", "code": "READ.TEST.FIRST", "message": "kept"},
         {
@@ -68,8 +66,7 @@ fn stale_targets_are_severed_and_every_diagnostic_survives() {
     assert_eq!(module.diagnostics().len(), 3);
     let input_count = module.diagnostics().len();
 
-    let lowered =
-        lower_module_to_balanced(module, MulticonductorToBalancedOptions::default()).unwrap();
+    let lowered = to_balanced(module, MulticonductorToBalancedOptions::default()).unwrap();
     assert!(matches!(lowered.value(), PioValue::BalancedNetwork(_)));
     // Every input diagnostic survives, plus the pass's own findings.
     assert!(lowered.diagnostics().len() >= input_count);
@@ -84,7 +81,7 @@ fn stale_targets_are_severed_and_every_diagnostic_survives() {
     }
     // The stale target is severed, so the lowered module still writes.
     assert!(lowered.diagnostics().iter().all(|d| d.target().is_none()));
-    let text = write_module(&lowered).unwrap();
+    let text = emit_module(&lowered).unwrap();
     assert!(text.contains("READ.TEST.TARGETED"));
 }
 
@@ -93,16 +90,15 @@ fn stale_targets_are_severed_and_every_diagnostic_survives() {
 #[test]
 fn repeated_lowering_records_every_pass() {
     let module = parse_mc_module(TWO_WINDING_DSS).sever_source();
-    let mut raw: serde_json::Value = serde_json::from_str(&write_module(&module).unwrap()).unwrap();
+    let mut raw: serde_json::Value = serde_json::from_str(&emit_module(&module).unwrap()).unwrap();
     raw["history"] = serde_json::json!([
         {
             "id": "multiconductor-to-balanced", "kind": "transform",
-            "name": "lower_multiconductor_to_balanced"
+            "name": "to_balanced"
         }
     ]);
     let module = read_module(&raw.to_string()).unwrap();
-    let lowered =
-        lower_module_to_balanced(module, MulticonductorToBalancedOptions::default()).unwrap();
+    let lowered = to_balanced(module, MulticonductorToBalancedOptions::default()).unwrap();
     let ids: Vec<&str> = lowered
         .history()
         .iter()
@@ -121,7 +117,7 @@ fn repeated_lowering_records_every_pass() {
 #[test]
 fn hostile_element_names_normalize_into_the_history_notes() {
     let module = parse_mc_module(TWO_WINDING_DSS).sever_source();
-    let mut raw: serde_json::Value = serde_json::from_str(&write_module(&module).unwrap()).unwrap();
+    let mut raw: serde_json::Value = serde_json::from_str(&emit_module(&module).unwrap()).unwrap();
     let network = &mut raw["value"]["data"];
     // A NUL bearing name and an overlong name on elements the lowering
     // names in its notes.
@@ -131,12 +127,11 @@ fn hostile_element_names_normalize_into_the_history_notes() {
     );
     network["transformers"][0]["name"] = serde_json::json!(hostile);
     let module = read_module(&raw.to_string()).unwrap();
-    let lowered =
-        lower_module_to_balanced(module, MulticonductorToBalancedOptions::default()).unwrap();
+    let lowered = to_balanced(module, MulticonductorToBalancedOptions::default()).unwrap();
     let entry = lowered
         .history()
         .iter()
-        .find(|entry| entry.name() == "lower_multiconductor_to_balanced")
+        .find(|entry| entry.name() == "to_balanced")
         .expect("the pass records its history entry");
     let mut saw_replacement = false;
     let mut saw_truncation = false;
@@ -161,8 +156,7 @@ fn hostile_element_names_normalize_into_the_history_notes() {
 #[test]
 fn mismatched_winding_ratings_convert_the_resistance_base() {
     let module = parse_mc_module(TWO_WINDING_DSS);
-    let lowered =
-        lower_module_to_balanced(module, MulticonductorToBalancedOptions::default()).unwrap();
+    let lowered = to_balanced(module, MulticonductorToBalancedOptions::default()).unwrap();
     let PioValue::BalancedNetwork(network) = lowered.value() else {
         panic!("wrong kind");
     };
@@ -184,7 +178,7 @@ fn mismatched_winding_ratings_convert_the_resistance_base() {
     let history = lowered
         .history()
         .iter()
-        .find(|entry| entry.name() == "lower_multiconductor_to_balanced")
+        .find(|entry| entry.name() == "to_balanced")
         .unwrap();
     assert!(
         history
@@ -216,8 +210,7 @@ fn a_module_at_a_record_cap_is_refused_intact() {
     };
     let before = full_diagnostics.diagnostics().len();
     let (returned, error) =
-        lower_module_to_balanced(full_diagnostics, MulticonductorToBalancedOptions::default())
-            .unwrap_err();
+        to_balanced(full_diagnostics, MulticonductorToBalancedOptions::default()).unwrap_err();
     assert!(
         error
             .diagnostics
@@ -248,8 +241,7 @@ fn a_module_at_a_record_cap_is_refused_intact() {
     };
     let before = full_history.history().len();
     let (returned, error) =
-        lower_module_to_balanced(full_history, MulticonductorToBalancedOptions::default())
-            .unwrap_err();
+        to_balanced(full_history, MulticonductorToBalancedOptions::default()).unwrap_err();
     assert!(
         error
             .diagnostics
@@ -272,11 +264,10 @@ fn refused_lowering_reports_1_0_severities_and_targets() {
     ))
     .expect("fixture reads");
     let module = parse_mc_module(&text);
-    let (_, error) = lower_module_to_balanced(module, MulticonductorToBalancedOptions::default())
-        .expect_err(
-            "the IEEE13 feeder mixes single, two, and three phase laterals and is not \
+    let (_, error) = to_balanced(module, MulticonductorToBalancedOptions::default()).expect_err(
+        "the IEEE13 feeder mixes single, two, and three phase laterals and is not \
                  balanced-lowerable",
-        );
+    );
     assert!(
         !error.diagnostics.is_empty(),
         "a refusal must carry findings"

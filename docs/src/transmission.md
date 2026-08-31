@@ -28,6 +28,8 @@ for finding in findings
 end
 ```
 
-The `convert` one call form parses and writes without keeping a handle: `convert_file("case118.m", "powermodels-json")` in Julia and Python, `powerio convert` on the command line.
+Library callers compose `parse_file` and `emit`, keeping the module and its
+diagnostics available between the operations. The command line keeps the one
+call `powerio convert` form.
 
 Matrix construction from a balanced network is its own chapter: [Matrices and Graphs](matrices.md).

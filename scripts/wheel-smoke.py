@@ -24,23 +24,32 @@ def main() -> None:
     assert powerio.__version__ == versions["powerio_version"], versions
     assert versions["module_schema"] == {"name": "powerio.module", "version": 1}, versions
 
-    module = powerio.parse(CASE.encode(), "matpower", value_type=powerio.BalancedNetwork)
+    module = powerio.parse_text(
+        CASE,
+        name="smoke.m",
+        format="matpower",
+        value_type=powerio.BalancedNetwork,
+    )
     assert module.kind == "balanced_network", module.kind
     net = module.value
     assert net.n_buses == 3 and net.n_branches == 3, (net.n_buses, net.n_branches)
 
-    document = module.to_json()
+    document = module.emit("pio-json").text
     decoded = json.loads(document)
     assert decoded["schema"] == "powerio.module" and decoded["version"] == 1
     # Deterministic release: the stored document is byte stable.
-    assert powerio.PioModule.from_json(document).to_json() == document
+    assert (
+        powerio.parse_text(document, name="smoke.pio.json").emit("pio-json").text
+        == document
+    )
 
-    data = net.dc_data()
-    assert data["formula"] == "series_susceptance"
-    assert len(data["susceptance"]) == 3 and len(data["bus_ids"]) == 3
+    incidence = net.calc_incidence_matrix()
+    branch_susceptance = net.calc_branch_susceptance_matrix()
+    assert incidence.shape == (3, 3), incidence.shape
+    assert branch_susceptance.shape == (3, 3), branch_susceptance.shape
 
     # The matrix path, with the `all` extra installed.
-    bprime = net.bprime()
+    bprime = net.calc_bprime_matrix()
     assert bprime.shape == (3, 3), bprime.shape
 
     print(

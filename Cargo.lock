@@ -2376,6 +2376,7 @@ dependencies = [
  "powerio-dist",
  "powerio-matrix",
  "powerio-prob",
+ "powerio-tx",
  "serde_json",
  "tempfile",
 ]
@@ -2392,6 +2393,7 @@ dependencies = [
  "powerio-dist",
  "powerio-matrix",
  "powerio-prob",
+ "powerio-tx",
  "ratatui",
  "schemars",
  "serde",
@@ -2478,6 +2480,7 @@ dependencies = [
  "powerio-dist",
  "powerio-matrix",
  "powerio-prob",
+ "powerio-tx",
  "pyo3",
  "serde_json",
  "sprs",

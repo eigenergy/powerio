@@ -1,12 +1,12 @@
 //! PowerWorld substation promotion into the geo model.
 //!
 //! Two PowerWorld files carry substation coordinates. The `.pwd` display
-//! holds symbols in diagram coordinates, which [`geo_layer_from_pwd`] lifts
-//! into a diagram space [`GeoLayer`]; [`pwd_mercator_to_lonlat`] is the
+//! holds symbols in diagram coordinates, which [`to_geo_layer_from_pwd`] lifts
+//! into a diagram space [`GeoLayer`]; [`to_lonlat_from_pwd_mercator`] is the
 //! documented, approximate inverse of the projection PowerWorld's auto
 //! generated layouts use, for consumers that want to place a diagram on a
 //! map. The `.aux` `Substation` table holds latitude and longitude, which
-//! [`geo_layer_from_aux_substations`] lifts into a geographic layer.
+//! [`to_geo_layer_from_aux_substations`] lifts into a geographic layer.
 //! [`apply_substation_points`] joins either layer onto buses through the
 //! `SubNum` extras key.
 
@@ -29,7 +29,7 @@ pub const PWD_MERCATOR_K: f64 = 535.816_08;
 /// is `x / K`, latitude the inverse Gudermannian of `y / K`. Hand edited
 /// diagrams drift from this, so treat the result as approximate.
 #[must_use]
-pub fn pwd_mercator_to_lonlat(x: f64, y: f64) -> (f64, f64) {
+pub fn to_lonlat_from_pwd_mercator(x: f64, y: f64) -> (f64, f64) {
     let lon = x / PWD_MERCATOR_K;
     let lat = ((y / PWD_MERCATOR_K).to_radians().sinh())
         .atan()
@@ -40,7 +40,7 @@ pub fn pwd_mercator_to_lonlat(x: f64, y: f64) -> (f64, f64) {
 /// Lift decoded `.pwd` substation symbols into a diagram space [`GeoLayer`]
 /// with substation targets keyed by substation number.
 #[must_use]
-pub fn geo_layer_from_pwd(display: &PwdDisplay) -> GeoLayer {
+pub fn to_geo_layer_from_pwd(display: &PwdDisplay) -> GeoLayer {
     GeoLayer {
         space: CoordinateSpace::Diagram {
             canvas: Some(Canvas {
@@ -72,7 +72,7 @@ pub fn geo_layer_from_pwd(display: &PwdDisplay) -> GeoLayer {
 /// skipped. Rows stay in file order, so a repeated substation number keeps
 /// the last point once [`apply_substation_points`] runs.
 #[must_use]
-pub fn geo_layer_from_aux_substations(aux: &AuxFile) -> GeoLayer {
+pub fn to_geo_layer_from_aux_substations(aux: &AuxFile) -> GeoLayer {
     let mut features = Vec::new();
     for object in aux.data_of("Substation") {
         let (Some(number), Some(latitude), Some(longitude)) = (

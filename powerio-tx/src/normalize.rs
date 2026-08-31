@@ -334,7 +334,7 @@ fn norm_branches(
             for set in &mut branch.rating_sets {
                 set.rate_mva /= base;
             }
-            branch.tap = br.effective_tap();
+            branch.tap = br.calc_effective_tap();
             branch.shift = br.shift * DEG_TO_RAD;
             branch.angmin = br.angmin * DEG_TO_RAD;
             branch.angmax = br.angmax * DEG_TO_RAD;

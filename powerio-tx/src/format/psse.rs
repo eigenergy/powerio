@@ -1,4 +1,4 @@
-//! Read and write PSS/E `.raw` (revisions 33-35; see [`write_psse_rev`]).
+//! Parse and emit PSS/E `.raw` (revisions 33-35; see [`write_psse_rev`]).
 //!
 //! Covers the core sections — bus, load, fixed shunt, generator, branch, and the
 //! 2- and 3-winding transformer records — which together carry a transmission
@@ -6,14 +6,14 @@
 //! as the shunt `b` and carries its mode, voltage band, regulated bus, RMPCT, and
 //! step blocks on [`SwitchedShuntControl`]. Transformer impedance and winding
 //! bases (`CZ`/`CW`) are normalized to the system base and per unit tap ratios;
-//! the writer emits the canonical `CZ = 1`, `CW = 1` form.
-//! Two-terminal DC lines read and write as the neutral
+//! the serializer emits the canonical `CZ = 1`, `CW = 1` form.
+//! Two-terminal DC lines parse and emit as the neutral
 //! [`Hvdc`] (power-setpoint model; converter firing-angle/transformer detail
 //! rides through in extras). The other advanced sections (VSC and multi-terminal
-//! DC, FACTS, GNE) are not modeled: on write they're emitted as empty sections,
+//! DC, FACTS, GNE) are not modeled: during emission they become empty sections,
 //! on read they're skipped, and storage carried on the `BalancedNetwork` is reported as
-//! dropped. Same-format round-trip is byte-exact via the retained source (see
-//! [`crate::write_as`]); this serializer is the cross-format path.
+//! dropped. Same format emission is byte exact through the retained source (see
+//! [`crate::emit`]); this serializer is the cross format path.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
@@ -21,7 +21,7 @@ use std::fmt::Write as _;
 use serde_json::Value;
 
 use super::{
-    Conversion, branch_rating_set_drop_warning, jnum, sanitize_quoted,
+    TextEmission, branch_rating_set_drop_warning, jnum, sanitize_quoted,
     warn_extra_branch_rating_sets,
 };
 use std::borrow::Cow;
@@ -37,6 +37,7 @@ use crate::network::{
 use crate::{Error, Result};
 
 const FMT: &str = "PSS/E .raw";
+#[cfg(test)]
 const REV: u32 = 33;
 const PSSE_EXTRA_BRANCH_RATINGS: usize = 9;
 
@@ -146,7 +147,8 @@ const NAME_FORBIDDEN: &[char] = &['\'', '/'];
 
 /// Serialize `net` to PSS/E `.raw` at the default revision (33).
 #[must_use]
-pub fn write_psse(net: &BalancedNetwork) -> Conversion {
+#[cfg(test)]
+fn write_psse(net: &BalancedNetwork) -> TextEmission {
     write_psse_rev(net, REV)
 }
 
@@ -159,13 +161,13 @@ pub fn write_psse(net: &BalancedNetwork) -> Conversion {
 /// the generator NREG/BASLOD columns and the switched shunt ID/NREG columns
 /// with (S, N, B) step triples. The reader keys each layout off the header
 /// revision. Any other `rev` falls back to the 33 layout. Same-format
-/// byte-exact echo still rides the retained source (see [`crate::write_as`]);
+/// byte exact echo still rides the retained source (see [`crate::emit`]);
 /// this serializer is the cross format path.
 #[must_use]
 // A flat serializer: one stanza per PSS/E record type; splitting it would add
 // indirection without clarity.
 #[expect(clippy::too_many_lines)]
-pub fn write_psse_rev(net: &BalancedNetwork, rev: u32) -> Conversion {
+pub fn write_psse_rev(net: &BalancedNetwork, rev: u32) -> TextEmission {
     // v34+ wraps the global parameters in a system-wide data section, names
     // branches and carries 12 ratings, and adds load DG / load-type columns.
     let modern = rev >= 34;
@@ -404,8 +406,8 @@ pub fn write_psse_rev(net: &BalancedNetwork, rev: u32) -> Conversion {
             &mut branch_ids,
             &mut sanitized_quoted,
         );
-        let charging = br.terminal_charging();
-        let b_total = charging.total_b();
+        let charging = br.calc_terminal_charging();
+        let b_total = charging.calc_total_b();
         let b_mid = b_total / 2.0;
         let bi = charging.b_fr - b_mid;
         let bj = charging.b_to - b_mid;
@@ -476,14 +478,14 @@ pub fn write_psse_rev(net: &BalancedNetwork, rev: u32) -> Conversion {
         // MAG1/MAG2 = the branch charging projected to one magnetizing
         // admittance (CM = 1, so p.u. on the system base); a 2-winding
         // transformer that carries line charging keeps the total.
-        let charging = br.terminal_charging();
+        let charging = br.calc_terminal_charging();
         let _ = writeln!(
             s,
             "{}, {}, 0, '1', 1, 1, 1, {}, {}, 2, '            ', {}, 1, 1, 0, 1, 0, 1, 0, 1, '            '",
             br.from,
             br.to,
-            num(charging.total_g()),
-            num(charging.total_b()),
+            num(charging.calc_total_g()),
+            num(charging.calc_total_b()),
             i32::from(br.in_service)
         );
         // Winding-1 control columns (COD, CONT, RMA/RMI, VMA/VMI, NTP) come from
@@ -507,7 +509,7 @@ pub fn write_psse_rev(net: &BalancedNetwork, rev: u32) -> Conversion {
                 s,
                 "{}, 0, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, \
                  {cod}, {cont}, 0, {}, {}, {}, {}, {ntp}, 0, 0, 0, 0",
-                num(br.effective_tap()),
+                num(br.calc_effective_tap()),
                 num(br.shift),
                 num(br.rate_a),
                 num(br.rate_b),
@@ -530,7 +532,7 @@ pub fn write_psse_rev(net: &BalancedNetwork, rev: u32) -> Conversion {
             let _ = writeln!(
                 s,
                 "{}, 0, {}, {}, {}, {}, {cod}, {cont}, {}, {}, {}, {}, {ntp}, 0, 0, 0, 0",
-                num(br.effective_tap()),
+                num(br.calc_effective_tap()),
                 num(br.shift),
                 num(br.rate_a),
                 num(br.rate_b),
@@ -843,7 +845,7 @@ pub fn write_psse_rev(net: &BalancedNetwork, rev: u32) -> Conversion {
         );
     }
 
-    Conversion::new(s, warnings)
+    TextEmission::new(s, warnings)
 }
 
 /// MATPOWER/neutral bus kind → PSS/E bus type code (IDE).
@@ -985,7 +987,7 @@ const EMPTY_SECTIONS: [&str; 13] = [
 
 /// The PSS/E revision declared in a retained `.raw` header (field 3, `REV`), or
 /// 33 when it is absent or unparseable. The format hub uses it to decide whether
-/// a same-format write can echo the source bytes or must re-emit at a different
+/// same format emission can echo the source bytes or must serialize at a different
 /// revision.
 pub(crate) fn header_rev(source: &str) -> u32 {
     let Some(header) = source
@@ -2779,7 +2781,7 @@ Q
 
     fn assert_terminal_charging_round_trip(text: &str) {
         let back = parse_psse(text).unwrap();
-        let charging = back.branches()[0].terminal_charging();
+        let charging = back.branches()[0].calc_terminal_charging();
         close(charging.g_fr, 0.01);
         close(charging.b_fr, 0.02);
         close(charging.g_to, 0.03);
@@ -2799,17 +2801,17 @@ Q
 
         let rev33 = write_psse(&net);
         assert!(
-            rev33.rendered_diagnostics().is_empty(),
+            rev33.render_diagnostics().is_empty(),
             "{:?}",
-            rev33.rendered_diagnostics()
+            rev33.render_diagnostics()
         );
         assert_terminal_charging_round_trip(&rev33.text);
 
         let rev35 = write_psse_rev(&net, 35);
         assert!(
-            rev35.rendered_diagnostics().is_empty(),
+            rev35.render_diagnostics().is_empty(),
             "{:?}",
-            rev35.rendered_diagnostics()
+            rev35.render_diagnostics()
         );
         assert_terminal_charging_round_trip(&rev35.text);
     }
@@ -2833,14 +2835,14 @@ Q
         let conv = write_psse(&net);
         assert!(
             !conv
-                .rendered_diagnostics()
+                .render_diagnostics()
                 .iter()
                 .any(|w| w.contains("magnetizing admittance")),
             "{:?}",
-            conv.rendered_diagnostics()
+            conv.render_diagnostics()
         );
         let back = parse_psse(&conv.text).unwrap();
-        let charging = back.branches()[0].terminal_charging();
+        let charging = back.branches()[0].calc_terminal_charging();
         close(charging.g_fr, 0.01);
         close(charging.b_fr, 0.02);
         close(charging.g_to, 0.0);
@@ -2866,14 +2868,14 @@ Q
 
         let conv = write_psse(&net);
         assert!(
-            conv.rendered_diagnostics()
+            conv.render_diagnostics()
                 .iter()
                 .any(|w| w.contains("magnetizing admittance")),
             "{:?}",
-            conv.rendered_diagnostics()
+            conv.render_diagnostics()
         );
         let back = parse_psse(&conv.text).unwrap();
-        let charging = back.branches()[0].terminal_charging();
+        let charging = back.branches()[0].calc_terminal_charging();
         close(charging.g_fr, 0.04);
         close(charging.b_fr, 0.07);
         close(charging.g_to, 0.0);
@@ -2975,11 +2977,11 @@ Q
         let matpower = crate::format::matpower::write_matpower_conversion(&net);
         assert!(
             matpower
-                .rendered_diagnostics()
+                .render_diagnostics()
                 .iter()
                 .any(|w| w.contains("voltage dependent load model")),
             "missing MATPOWER voltage model warning: {:?}",
-            matpower.rendered_diagnostics()
+            matpower.render_diagnostics()
         );
     }
 
@@ -3020,20 +3022,20 @@ Q
             conv.text
         );
         assert!(
-            conv.rendered_diagnostics()
+            conv.render_diagnostics()
                 .iter()
                 .any(|w| w.contains("nominal voltage")),
             "missing nominal voltage warning: {:?}",
-            conv.rendered_diagnostics()
+            conv.render_diagnostics()
         );
         let rev33 = write_psse(&net);
         assert!(
             rev33
-                .rendered_diagnostics()
+                .render_diagnostics()
                 .iter()
                 .any(|w| w.contains("load type requires revision 35")),
             "missing rev33 load type warning: {:?}",
-            rev33.rendered_diagnostics()
+            rev33.render_diagnostics()
         );
         let reparsed = parse_psse(&conv.text).unwrap();
         let Some(LoadVoltageModel::Zip {
@@ -3071,11 +3073,11 @@ Q
             conv.text
         );
         assert!(
-            conv.rendered_diagnostics()
+            conv.render_diagnostics()
                 .iter()
                 .any(|w| w.contains("stale voltage model components")),
             "missing stale voltage model warning: {:?}",
-            conv.rendered_diagnostics()
+            conv.render_diagnostics()
         );
         let reparsed = parse_psse(&conv.text).unwrap();
         close(reparsed.loads()[0].p, 20.0);
@@ -3179,11 +3181,11 @@ Q
         let parsed = crate::parse_str(raw, "psse").unwrap();
         assert!(
             !parsed
-                .rendered_diagnostics()
+                .render_diagnostics()
                 .iter()
                 .any(|w| w.contains("unsupported CZ") || w.contains("unsupported CW")),
             "unexpected transformer base warning: {:?}",
-            parsed.rendered_diagnostics()
+            parsed.render_diagnostics()
         );
         let br = &parsed.network.branches()[0];
         close(br.r, 0.02);
@@ -3213,11 +3215,11 @@ Q
         let parsed = crate::parse_str(raw, "psse").unwrap();
         assert!(
             !parsed
-                .rendered_diagnostics()
+                .render_diagnostics()
                 .iter()
                 .any(|w| w.contains("unsupported CZ") || w.contains("unsupported CW")),
             "unexpected transformer base warning: {:?}",
-            parsed.rendered_diagnostics()
+            parsed.render_diagnostics()
         );
         let br = &parsed.network.branches()[0];
         close(br.r, 0.01);
@@ -3249,11 +3251,11 @@ Q
         let parsed = crate::parse_str(raw, "psse").unwrap();
         assert!(
             !parsed
-                .rendered_diagnostics()
+                .render_diagnostics()
                 .iter()
                 .any(|w| w.contains("unsupported CZ") || w.contains("unsupported CW")),
             "unexpected transformer base warning: {:?}",
-            parsed.rendered_diagnostics()
+            parsed.render_diagnostics()
         );
         let t = &parsed.network.transformers_3w()[0];
         close(t.z[0].r, 0.02);
@@ -3329,11 +3331,11 @@ Q
         let written = write_psse_rev(&net, 34);
         assert!(
             !written
-                .rendered_diagnostics()
+                .render_diagnostics()
                 .iter()
                 .any(|w| w.contains("rating set")),
             "v34 should carry RATE4-RATE12, got {:?}",
-            written.rendered_diagnostics()
+            written.render_diagnostics()
         );
         let back = parse_psse(&written.text).unwrap();
         assert_eq!(back.branches()[0].rating_sets.len(), 2);
@@ -3414,13 +3416,13 @@ Q
         let written = write_psse_rev(&net, 34);
 
         assert!(
-            written.rendered_diagnostics().iter().any(|w| {
+            written.render_diagnostics().iter().any(|w| {
                 w.contains("rating set emergency=125")
                     && w.contains("emitted as RATE4")
                     && w.contains("names outside RATE4-RATE12 are not preserved")
             }),
             "missing rating rename warning: {:?}",
-            written.rendered_diagnostics()
+            written.render_diagnostics()
         );
         let back = parse_psse(&written.text).unwrap();
         assert_eq!(back.branches()[0].rating_sets.len(), 1);
@@ -3567,11 +3569,11 @@ Q
         // the reader has no reason to keep.
         assert_eq!(ids, vec!["A B"]);
         assert!(
-            conv.rendered_diagnostics()
+            conv.render_diagnostics()
                 .iter()
                 .any(|w| w.contains("2 quoted PSS/E field")),
             "missing sanitation warning: {:?}",
-            conv.rendered_diagnostics()
+            conv.render_diagnostics()
         );
     }
 
@@ -4264,11 +4266,11 @@ Q
         close(dc.pt, 0.0);
         assert!(
             parsed
-                .rendered_diagnostics()
+                .render_diagnostics()
                 .iter()
                 .any(|w| w.contains("cannot be priced into power")),
             "{:?}",
-            parsed.rendered_diagnostics()
+            parsed.render_diagnostics()
         );
         // The record still round trips: the amps are retained verbatim.
         let out = write_psse(&parsed.network).text;
@@ -4313,11 +4315,11 @@ Q
         let conv = write_psse(&net);
         assert!(
             !conv
-                .rendered_diagnostics()
+                .render_diagnostics()
                 .iter()
                 .any(|w| w.contains("converter detail")),
             "a record the rewrite reproduces exactly earns no warning: {:?}",
-            conv.rendered_diagnostics()
+            conv.render_diagnostics()
         );
         let reparsed = parse_psse(&conv.text).unwrap();
         let back = &reparsed.hvdc()[0];
@@ -4455,13 +4457,13 @@ Q
 
         // Cross-format write to MATPOWER drops the 3W but must report it, not drop
         // it silently.
-        let mpc = net.to_format(crate::TargetFormat::Matpower).unwrap();
+        let mpc = crate::format::emit_value_text(&net, crate::TargetFormat::Matpower).unwrap();
         assert!(
-            mpc.rendered_diagnostics()
+            mpc.render_diagnostics()
                 .iter()
                 .any(|w| w.contains("3-winding")),
             "MATPOWER write must warn on the dropped 3-winding transformer, got {:?}",
-            mpc.rendered_diagnostics()
+            mpc.render_diagnostics()
         );
 
         // The normalized form keeps the 3-winding transformer.
@@ -4494,9 +4496,10 @@ Q
         let module =
             crate::format::parse(source.with_format(powerio_core::FormatId::new("psse").unwrap()))
                 .unwrap();
-        let same = crate::write_as(&module, crate::TargetFormat::Psse { rev: 33 }).unwrap();
+        let same =
+            crate::format::emit_text(&module, crate::TargetFormat::Psse { rev: 33 }).unwrap();
         assert_eq!(same.text, raw, "same revision echoes the retained source");
-        let v34 = crate::write_as(&module, crate::TargetFormat::Psse { rev: 34 }).unwrap();
+        let v34 = crate::format::emit_text(&module, crate::TargetFormat::Psse { rev: 34 }).unwrap();
         assert_ne!(v34.text, raw, "a different revision must re-emit, not echo");
         assert!(
             v34.text.contains("END OF SYSTEM-WIDE DATA"),
@@ -4527,11 +4530,11 @@ Q
         let parsed = crate::parse_str(raw, "psse").unwrap();
         assert!(
             parsed
-                .rendered_diagnostics()
+                .render_diagnostics()
                 .iter()
                 .any(|w| w.contains("SUBSTATION") && w.contains("not modeled")),
             "an unmodeled substation section must be reported, got {:?}",
-            parsed.rendered_diagnostics()
+            parsed.render_diagnostics()
         );
     }
 
@@ -4574,13 +4577,13 @@ Q
         close(r1.evlo.unwrap(), 0.8);
 
         // A cross-format write to MATPOWER (single voltage band) reports the drop.
-        let mpc = net.to_format(crate::TargetFormat::Matpower).unwrap();
+        let mpc = crate::format::emit_value_text(&net, crate::TargetFormat::Matpower).unwrap();
         assert!(
-            mpc.rendered_diagnostics()
+            mpc.render_diagnostics()
                 .iter()
                 .any(|w| w.contains("emergency voltage band")),
             "MATPOWER write must warn on the dropped emergency band, got {:?}",
-            mpc.rendered_diagnostics()
+            mpc.render_diagnostics()
         );
     }
 
@@ -4692,11 +4695,11 @@ Q
         let name = reparsed.buses()[0].name.as_deref().unwrap();
         assert!(!name.contains('\'') && !name.contains('/'), "got {name:?}");
         assert!(
-            conv.rendered_diagnostics()
+            conv.render_diagnostics()
                 .iter()
                 .any(|w| w.contains("quoted PSS/E field")),
             "expected a sanitization warning, got {:?}",
-            conv.rendered_diagnostics()
+            conv.render_diagnostics()
         );
     }
 

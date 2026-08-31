@@ -12,6 +12,9 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use powerio_tx::TargetFormat;
 
+mod helpers;
+use helpers::emit_value;
+
 struct CountingAlloc;
 
 static TOTAL_BYTES: AtomicUsize = AtomicUsize::new(0);
@@ -51,7 +54,7 @@ fn powermodels_json_text() -> String {
     let net = powerio_tx::parse(powerio_core::Source::open(path).unwrap())
         .unwrap()
         .into_value();
-    powerio_tx::write_network(&net, TargetFormat::PowerModelsJson)
+    emit_value(&net, TargetFormat::PowerModelsJson)
         .unwrap()
         .text
 }

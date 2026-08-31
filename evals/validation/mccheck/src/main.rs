@@ -2,7 +2,7 @@
 //! `validate_opendss_admittance.py` validation leg to compare against
 //! OpenDSS's own per element primitive admittances (`CktElement.YPrim`).
 //!
-//! `build_multiconductor_admittance` lives in `powerio-matrix` with no Python
+//! `calc_multiconductor_admittance_matrix` lives in `powerio-matrix` with no Python
 //! binding, so this binary is the only way an external oracle can reach it:
 //! it parses one distribution deck, builds the admittance, and prints the
 //! node list, powerio's own bus/terminal to dense row resolution (so the
@@ -14,7 +14,7 @@
 //! stdout.
 
 use powerio_core::Source;
-use powerio_matrix::{NodeRef, build_multiconductor_admittance};
+use powerio_matrix::{NodeRef, calc_multiconductor_admittance_matrix};
 
 fn main() {
     let path = std::env::args()
@@ -22,7 +22,7 @@ fn main() {
         .expect("usage: powerio-eval-mccheck <deck.dss>");
     let module = powerio_dist::parse(Source::open(&path).unwrap()).unwrap();
     let net = module.value();
-    let y = build_multiconductor_admittance(net).unwrap();
+    let y = calc_multiconductor_admittance_matrix(net).unwrap();
     let idx = y.index();
     let nodes: Vec<String> = idx
         .nodes()

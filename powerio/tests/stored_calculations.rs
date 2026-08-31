@@ -4,8 +4,8 @@
 
 use std::sync::Arc;
 
-use powerio::DcConvention;
-use powerio::stored::{read_module, write_module};
+use powerio::BranchSusceptanceFormula;
+use powerio::stored::{emit_module, read_module};
 use powerio::{BalancedNetwork, PioValue};
 use powerio_core::{PioModule, TimePoint};
 use powerio_prob::{
@@ -65,13 +65,13 @@ fn initial_state(net: &BalancedNetwork) -> powerio_prob::OperatingPoint<Balanced
 
 fn round_trip(value: PioValue, kind: &str) -> String {
     let module = PioModule::new(value);
-    let text = write_module(&module).unwrap();
+    let text = emit_module(&module).unwrap();
     let raw: serde_json::Value = serde_json::from_str(&text).unwrap();
     assert_eq!(raw["value"]["kind"], kind);
     let back = read_module(&text).unwrap();
     assert_eq!(back.value().kind().as_str(), kind);
     assert_eq!(
-        write_module(&back).unwrap(),
+        emit_module(&back).unwrap(),
         text,
         "{kind} is not byte stable"
     );
@@ -241,20 +241,20 @@ fn every_solution_kind_round_trips() {
     );
 }
 
-/// SEC-9: the writer used to fold the default DC convention
+/// SEC-9: the writer used to fold the default branch susceptance formula
 /// (`SeriesSusceptance`) and a genuinely unmapped future variant into the
-/// same wildcard arm, so every explicitly requested convention must still
+/// same wildcard arm, so every explicitly requested formula must still
 /// round trip under its own name now that the arms are split.
 #[test]
-fn every_dc_convention_round_trips_under_its_own_name() {
-    for convention in [
-        DcConvention::SeriesSusceptance,
-        DcConvention::TapAdjustedReactance,
-        DcConvention::ReactanceOnly,
+fn every_branch_susceptance_formula_round_trips_under_its_own_name() {
+    for formula in [
+        BranchSusceptanceFormula::SeriesSusceptance,
+        BranchSusceptanceFormula::TapAdjustedReactance,
+        BranchSusceptanceFormula::ReactanceOnly,
     ] {
         let instance = DcOpfInstance::from_network(network())
             .unwrap()
-            .with_approximation(convention);
+            .with_branch_susceptance_formula(formula);
         let text = round_trip(PioValue::DcOpfInstance(instance), "dc_opf_instance");
         let raw: serde_json::Value = serde_json::from_str(&text).unwrap();
         let back = read_module(&text).unwrap();
@@ -262,8 +262,8 @@ fn every_dc_convention_round_trips_under_its_own_name() {
             panic!("expected the dc_opf_instance kind");
         };
         assert_eq!(
-            back.approximation(),
-            convention,
+            back.branch_susceptance_formula(),
+            formula,
             "{}",
             raw["value"]["data"]["approximation"]
         );
@@ -295,7 +295,7 @@ fn residuals_round_trip_every_nonfinite_value() {
     });
 
     let module = PioModule::new(PioValue::DcOpfSolution(solution));
-    let text = write_module(&module).unwrap();
+    let text = emit_module(&module).unwrap();
     let back = read_module(&text).unwrap();
     let PioValue::DcOpfSolution(back) = back.value() else {
         panic!("expected the dc_opf_solution kind");
@@ -326,7 +326,7 @@ fn residuals_round_trip_every_nonfinite_value() {
         residuals
     });
     let module = PioModule::new(PioValue::DcOpfSolution(unstated));
-    let text = write_module(&module).unwrap();
+    let text = emit_module(&module).unwrap();
     let back = read_module(&text).unwrap();
     let PioValue::DcOpfSolution(back) = back.value() else {
         panic!("expected the dc_opf_solution kind");
@@ -345,7 +345,7 @@ fn v010_differentiability_regularization_is_read_with_a_migration_diagnostic() {
     let instance = DcOpfInstance::from_network(network()).unwrap();
     let module = PioModule::new(PioValue::DcOpfInstance(instance));
     let mut stored: serde_json::Value =
-        serde_json::from_str(&write_module(&module).unwrap()).unwrap();
+        serde_json::from_str(&emit_module(&module).unwrap()).unwrap();
     stored["value"]["data"]["objective"]["terms"] = serde_json::json!([{
         "term": "differentiability_regularization",
         "weight": 1e-6
@@ -390,7 +390,7 @@ fn every_termination_kind_round_trips() {
         )
         .unwrap();
         let module = PioModule::new(PioValue::DcOpfSolution(solution));
-        let text = write_module(&module).unwrap();
+        let text = emit_module(&module).unwrap();
         let raw: serde_json::Value = serde_json::from_str(&text).unwrap();
         assert_eq!(raw["value"]["data"]["termination"]["kind"], name);
         let back = read_module(&text).unwrap();
@@ -519,7 +519,7 @@ fn v010_economic_output_names_upgrade_deterministically() {
             .any(|diagnostic| { diagnostic.code() == "READ.MODULE.BRANCH_DUAL_SPLIT" })
     );
     let rewritten: serde_json::Value =
-        serde_json::from_str(&write_module(&upgraded).unwrap()).unwrap();
+        serde_json::from_str(&emit_module(&upgraded).unwrap()).unwrap();
     let rewritten = rewritten["value"]["data"].as_object().unwrap();
     assert!(rewritten.contains_key("bus_active_power_marginal"));
     assert!(rewritten.contains_key("branch_from_limit_multiplier"));
@@ -557,7 +557,7 @@ fn v010_economic_output_names_upgrade_deterministically() {
     .unwrap()
     .with_bus_reactive_power_marginals(vec![0.0, 0.4])
     .unwrap();
-    let text = write_module(&PioModule::new(PioValue::AcOpfSolution(solution))).unwrap();
+    let text = emit_module(&PioModule::new(PioValue::AcOpfSolution(solution))).unwrap();
     let mut raw: serde_json::Value = serde_json::from_str(&text).unwrap();
     raw["producer"]["version"] = serde_json::json!("0.10.0");
     let data = raw["value"]["data"].as_object_mut().unwrap();
@@ -711,7 +711,7 @@ fn every_scuc_output_series_round_trips_under_its_exported_name() {
         Some(4.25e3),
     )
     .unwrap();
-    let text = write_module(&PioModule::new(PioValue::AcScucSolution(solution))).unwrap();
+    let text = emit_module(&PioModule::new(PioValue::AcScucSolution(solution))).unwrap();
 
     let raw: serde_json::Value = serde_json::from_str(&text).unwrap();
     let wire_network: Vec<&str> = raw["value"]["data"]["network_outputs"]
@@ -756,7 +756,7 @@ fn committed_calculation_fixtures_reread() {
         let text = std::fs::read_to_string(&path).unwrap();
         let module = read_module(&text).unwrap();
         assert_eq!(
-            write_module(&module).unwrap(),
+            emit_module(&module).unwrap(),
             text,
             "{} is not byte stable",
             path.display()
@@ -795,7 +795,7 @@ fn generate_calculation_fixtures() {
     let net = network();
     let objective = Objective::default().with_term(ObjectiveTerm::NetworkGeneratorCost);
     let write = |name: &str, value: PioValue| {
-        let text = write_module(&PioModule::new(value)).unwrap();
+        let text = emit_module(&PioModule::new(value)).unwrap();
         std::fs::write(format!("{dir}/{name}.pio.json"), text).unwrap();
     };
     write(

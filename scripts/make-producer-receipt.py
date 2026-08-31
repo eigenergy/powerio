@@ -105,7 +105,7 @@ def main() -> int:
         "value_kinds": value_kinds(),
         "semantics": {
             "element_identity": "source element ids verbatim; uid row identity in stored documents",
-            "index_spaces": "dense positions zero based at C and Python, one based in Julia select_state",
+            "index_spaces": "dense positions zero based at C and Python, one based in Julia export_state",
             "dc_susceptance_sign": "branch_susceptance is the signed series susceptance, "
                                     "negative for an inductive branch; the positive Laplacian "
                                     "edge weight is solver_edge_weight; "

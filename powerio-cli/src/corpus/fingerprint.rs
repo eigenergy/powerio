@@ -202,7 +202,7 @@ pub fn same_data(a: &BalancedNetwork, b: &BalancedNetwork) -> bool {
                     quantize(br.r, IMPEDANCE_QUANTUM),
                     quantize(br.x, IMPEDANCE_QUANTUM),
                     quantize(br.b, IMPEDANCE_QUANTUM),
-                    quantize(br.effective_tap(), IMPEDANCE_QUANTUM),
+                    quantize(br.calc_effective_tap(), IMPEDANCE_QUANTUM),
                     quantize(br.shift, IMPEDANCE_QUANTUM),
                 ]
             })

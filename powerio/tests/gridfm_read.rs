@@ -3,19 +3,23 @@
 //! writer's own structural tests stay in `powerio-matrix`.
 #![cfg(feature = "gridfm")]
 
-use powerio::gridfm::{
-    gridfm_base_case, read_gridfm_dataset, read_gridfm_network, read_gridfm_scenario_set,
+use powerio::__gridfm::{
+    read_gridfm_base_case, read_gridfm_dataset, read_gridfm_network, read_gridfm_scenario_set,
     read_gridfm_scenarios,
 };
 use powerio::{BalancedNetwork, Branch, Bus, BusId, BusType, GenCost, Generator, SourceFormat};
 use powerio_matrix::{
-    GridfmOptions, GridfmSnapshot, gridfm_record_batches_single, write_gridfm_batch,
-    write_gridfm_dataset,
+    GridfmOptions, GridfmSnapshot, emit_gridfm_batch, emit_gridfm_dataset,
+    to_gridfm_record_batches_single,
 };
+
+fn diagnostic_lines(read: &powerio::__gridfm::GridfmRead) -> Vec<String> {
+    powerio_core::render_diagnostics(&read.diagnostics)
+}
 
 fn case14() -> BalancedNetwork {
     let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../tests/data/case14.m");
-    powerio::format::parse(powerio_core::Source::open(path).unwrap())
+    powerio_tx::format::parse(powerio_core::Source::open(path).unwrap())
         .unwrap()
         .into_value()
 }
@@ -114,7 +118,7 @@ fn fingerprint(
 fn read_round_trips_power_flow_fingerprint() {
     let net = case14();
     let dir = tempfile::tempdir().unwrap();
-    write_gridfm_dataset(&net, 0, dir.path(), &GridfmOptions::default()).unwrap();
+    emit_gridfm_dataset(&net, 0, dir.path(), &GridfmOptions::default()).unwrap();
 
     let read = read_gridfm_dataset(dir.path().join("case14").join("raw"), 0).unwrap();
     assert_eq!(read.scenario, 0);
@@ -140,10 +144,10 @@ fn read_round_trips_power_flow_fingerprint() {
 
 #[test]
 fn read_gridfm_network_pure_path_matches_disk() {
-    // The in-memory inverse of gridfm_record_batches_single reproduces the same
+    // The in-memory inverse of to_gridfm_record_batches_single reproduces the same
     // fingerprint with no disk I/O.
     let net = case14();
-    let tables = gridfm_record_batches_single(&net, 0, &GridfmOptions::default()).unwrap();
+    let tables = to_gridfm_record_batches_single(&net, 0, &GridfmOptions::default()).unwrap();
     let read = read_gridfm_network(
         &tables.bus,
         &tables.generator,
@@ -164,7 +168,7 @@ fn read_recovers_shunt_at_base_mva() {
     let want_b: f64 = net.shunts().iter().map(|s| s.b).sum();
     assert!(want_b.abs() > 1.0, "fixture should have a real shunt");
 
-    let tables = gridfm_record_batches_single(&net, 0, &GridfmOptions::default()).unwrap();
+    let tables = to_gridfm_record_batches_single(&net, 0, &GridfmOptions::default()).unwrap();
     let read = read_gridfm_network(
         &tables.bus,
         &tables.generator,
@@ -184,12 +188,12 @@ fn read_recovers_shunt_at_base_mva() {
 #[test]
 fn read_scenarios_yields_distinct_networks() {
     // A 2-scenario batch (base + load×1.1): each scenario reads back to its own
-    // BalancedNetwork, and gridfm_base_case picks scenario 0.
+    // BalancedNetwork, and `read_gridfm_base_case` picks scenario 0.
     let base = case14();
     let up = scaled(&base, 1.1);
     let snaps = [GridfmSnapshot::new(&base, 0), GridfmSnapshot::new(&up, 1)];
     let dir = tempfile::tempdir().unwrap();
-    let out = write_gridfm_batch(&snaps, dir.path(), &GridfmOptions::default()).unwrap();
+    let out = emit_gridfm_batch(&snaps, dir.path(), &GridfmOptions::default()).unwrap();
 
     let reads = read_gridfm_scenarios(&out.dir).unwrap();
     assert_eq!(reads.len(), 2);
@@ -203,7 +207,7 @@ fn read_scenarios_yields_distinct_networks() {
         "scenario 1 load should be 1.1× scenario 0: {load1} vs {load0}"
     );
 
-    let base_case = gridfm_base_case(&out.dir).unwrap();
+    let base_case = read_gridfm_base_case(&out.dir).unwrap();
     assert_fingerprint_close(&base_case.network, &reads[0].network);
 }
 
@@ -213,7 +217,7 @@ fn read_resolves_lenient_directory_layouts() {
     // parent out/ dir.
     let net = case14();
     let dir = tempfile::tempdir().unwrap();
-    write_gridfm_dataset(&net, 0, dir.path(), &GridfmOptions::default()).unwrap();
+    emit_gridfm_dataset(&net, 0, dir.path(), &GridfmOptions::default()).unwrap();
     let out = dir.path(); // parent
     let case_dir = out.join("case14");
     let raw_dir = case_dir.join("raw");
@@ -227,7 +231,7 @@ fn read_resolves_lenient_directory_layouts() {
 #[test]
 fn read_missing_scenario_errors() {
     let net = case14();
-    let tables = gridfm_record_batches_single(&net, 0, &GridfmOptions::default()).unwrap();
+    let tables = to_gridfm_record_batches_single(&net, 0, &GridfmOptions::default()).unwrap();
     let err = read_gridfm_network(
         &tables.bus,
         &tables.generator,
@@ -286,7 +290,7 @@ fn read_defaults_unusable_base_mva_to_100() {
     // silently producing a network with zeroed shunts.
     let net = case14();
     let dir = tempfile::tempdir().unwrap();
-    let out = write_gridfm_dataset(&net, 0, dir.path(), &GridfmOptions::default()).unwrap();
+    let out = emit_gridfm_dataset(&net, 0, dir.path(), &GridfmOptions::default()).unwrap();
     let meta_path = out.dir.join("gridfm_meta.json");
     let mut meta: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(&meta_path).unwrap()).unwrap();
@@ -299,17 +303,17 @@ fn read_defaults_unusable_base_mva_to_100() {
         "base_mva should default to 100, got {}",
         read.network.base_mva()
     );
+    let diagnostics = diagnostic_lines(&read);
     assert!(
-        read.warnings.iter().any(|w| w.contains("base_mva")),
-        "expected a base_mva warning, got {:?}",
-        read.warnings
+        diagnostics.iter().any(|line| line.contains("base_mva")),
+        "expected a base_mva diagnostic, got {diagnostics:?}"
     );
 }
 
 #[test]
 fn read_surfaces_fidelity_warnings() {
     let net = case14();
-    let tables = gridfm_record_batches_single(&net, 0, &GridfmOptions::default()).unwrap();
+    let tables = to_gridfm_record_batches_single(&net, 0, &GridfmOptions::default()).unwrap();
     let read = read_gridfm_network(
         &tables.bus,
         &tables.generator,
@@ -319,17 +323,17 @@ fn read_surfaces_fidelity_warnings() {
         net.name(),
     )
     .unwrap();
-    assert!(!read.warnings.is_empty());
+    let diagnostics = diagnostic_lines(&read);
+    assert!(!diagnostics.is_empty());
     assert!(
-        read.warnings
+        diagnostics
             .iter()
-            .any(|w| w.contains("synthesized bus ids")),
-        "expected the bus-id synthesis warning, got {:?}",
-        read.warnings
+            .any(|line| line.contains("synthesized bus ids")),
+        "expected the bus-id synthesis diagnostic, got {diagnostics:?}"
     );
-    // case14 has loads and a shunt, so those folding warnings appear too.
-    assert!(read.warnings.iter().any(|w| w.contains("nodal load")));
-    assert!(read.warnings.iter().any(|w| w.contains("nodal shunts")));
+    // case14 has loads and a shunt, so those folding diagnostics appear too.
+    assert!(diagnostics.iter().any(|line| line.contains("nodal load")));
+    assert!(diagnostics.iter().any(|line| line.contains("nodal shunts")));
 }
 
 #[test]
@@ -338,7 +342,7 @@ fn read_recovers_gen_vg_from_bus_vm() {
     // case14's slack bus 1 sits at Vm = 1.06, so its generator reads vg ≈ 1.06
     // (not the old hard-coded 1.0).
     let net = case14();
-    let tables = gridfm_record_batches_single(&net, 0, &GridfmOptions::default()).unwrap();
+    let tables = to_gridfm_record_batches_single(&net, 0, &GridfmOptions::default()).unwrap();
     let read = read_gridfm_network(
         &tables.bus,
         &tables.generator,
@@ -390,7 +394,7 @@ fn read_maps_unit_tap_lines_back_to_zero() {
         "fixture needs both lines and transformers"
     );
 
-    let tables = gridfm_record_batches_single(&net, 0, &GridfmOptions::default()).unwrap();
+    let tables = to_gridfm_record_batches_single(&net, 0, &GridfmOptions::default()).unwrap();
     let read = read_gridfm_network(
         &tables.bus,
         &tables.generator,
@@ -420,10 +424,12 @@ fn read_maps_unit_tap_lines_back_to_zero() {
         read_xfmr, n_xfmr,
         "transformers must keep their off-nominal ratio"
     );
+    let diagnostics = diagnostic_lines(&read);
     assert!(
-        read.warnings.iter().any(|w| w.contains("read as lines")),
-        "expected the unit-tap warning, got {:?}",
-        read.warnings
+        diagnostics
+            .iter()
+            .any(|line| line.contains("read as lines")),
+        "expected the unit-tap diagnostic, got {diagnostics:?}"
     );
 }
 
@@ -438,7 +444,7 @@ fn read_allows_a_case_with_no_generators() {
         vec![bus(1, BusType::Ref), bus(2, BusType::Pq)],
         vec![branch(1, 2, 0.01, 0.1)],
     );
-    let tables = gridfm_record_batches_single(&net, 0, &GridfmOptions::default()).unwrap();
+    let tables = to_gridfm_record_batches_single(&net, 0, &GridfmOptions::default()).unwrap();
     let read = read_gridfm_network(
         &tables.bus,
         &tables.generator,
@@ -465,7 +471,7 @@ fn read_all_zero_cost_reads_as_none_with_ambiguity_warning() {
     );
     net.generators_mut()
         .push(gen_at(1, gencost(2, 3, vec![0.0, 0.0, 0.0])));
-    let tables = gridfm_record_batches_single(&net, 0, &GridfmOptions::default()).unwrap();
+    let tables = to_gridfm_record_batches_single(&net, 0, &GridfmOptions::default()).unwrap();
     let read = read_gridfm_network(
         &tables.bus,
         &tables.generator,
@@ -479,12 +485,12 @@ fn read_all_zero_cost_reads_as_none_with_ambiguity_warning() {
         read.network.generators()[0].cost.is_none(),
         "all-zero cost should read back as None"
     );
+    let diagnostics = diagnostic_lines(&read);
     assert!(
-        read.warnings
+        diagnostics
             .iter()
-            .any(|w| w.contains("read with no cost")),
-        "expected the no-cost ambiguity warning, got {:?}",
-        read.warnings
+            .any(|line| line.contains("read with no cost")),
+        "expected the no-cost ambiguity diagnostic, got {diagnostics:?}"
     );
 }
 
@@ -507,7 +513,7 @@ fn scenario_set_shares_unchanged_tables() {
         GridfmSnapshot::new(&base, 0),
         GridfmSnapshot::new(&varied, 1),
     ];
-    write_gridfm_batch(&snapshots, dir.path(), &GridfmOptions::default()).unwrap();
+    emit_gridfm_batch(&snapshots, dir.path(), &GridfmOptions::default()).unwrap();
 
     let (set, _diagnostics) = read_gridfm_scenario_set(dir.path()).unwrap();
     assert_eq!(set.len(), 2);
@@ -545,7 +551,7 @@ fn a_symlinked_dataset_entry_is_refused_by_the_acquisition() {
     let outside = tempfile::tempdir().unwrap();
     let dataset = tempfile::tempdir().unwrap();
     let snapshots = [powerio_matrix::GridfmSnapshot::new(&base, 0)];
-    powerio_matrix::write_gridfm_batch(
+    powerio_matrix::emit_gridfm_batch(
         &snapshots,
         dataset.path(),
         &powerio_matrix::GridfmOptions::default(),
@@ -562,7 +568,7 @@ fn a_symlinked_dataset_entry_is_refused_by_the_acquisition() {
     std::fs::rename(raw.join("bus_data.parquet"), &target).unwrap();
     std::os::unix::fs::symlink(&target, raw.join("bus_data.parquet")).unwrap();
 
-    let error = powerio::gridfm::read_gridfm_scenarios(dataset.path())
+    let error = powerio::__gridfm::read_gridfm_scenarios(dataset.path())
         .expect_err("the symlinked entry refuses");
     let text = error.to_string();
     assert!(

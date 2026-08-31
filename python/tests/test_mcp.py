@@ -27,68 +27,126 @@ gridfm_only = pytest.mark.skipif(
 )
 
 
+def _emit_text(*, format=None, **inputs):
+    return server.emit(format=format, **inputs)
+
+
+def _emit_to(*, destination, format=None, **inputs):
+    target = format or server._infer_format_from_destination(destination)
+    return server.emit(format=target, destination=destination, **inputs)
+
+
+def _parse(source, format=None, *, value_type=None):
+    if isinstance(source, (bytes, bytearray, memoryview)):
+        return powerio.parse_text(
+            bytes(source).decode(),
+            name="fixture",
+            format=format,
+            value_type=value_type,
+        )
+    return powerio.parse_file(source, format, value_type=value_type)
+
+
+def _emit_module(module):
+    return module.emit("pio-json").text
+
+
+def _parse_module(text):
+    return powerio.parse_text(text, name="module.pio.json")
+
+
 def test_tool_surface_is_semantic():
     tools = {t.name: t for t in asyncio.run(server.mcp.list_tools())}
     names = set(tools)
     assert names == {
-        "convert",
-        "save",
-        "summary",
+        "emit",
+        "summarize",
         "parse",
-        "normalize",
-        "matrix",
+        "to_normalized",
+        "calc_matrix",
         "diagnostics",
         "display",
         "inspect",
-        "state_inventory",
-        "select_state",
+        "list_states",
+        "inspect_state",
         "export_state",
-        "to_balanced_inspect",
+        "to_balanced_report",
         "to_balanced",
         "about",
-        "dc_data",
     }
-    for name in ("parse", "summary", "normalize", "matrix", "display"):
+    for name in (
+        "parse",
+        "summarize",
+        "to_normalized",
+        "calc_matrix",
+        "display",
+    ):
         props = tools[name].input_schema["properties"]
         assert "from_format" in props
         assert "format" not in props
-    convert_props = tools["convert"].input_schema["properties"]
-    assert "to_format" in convert_props and "from_format" in convert_props
-    assert "to" not in convert_props and "format" not in convert_props
-    save_schema = tools["save"].input_schema
-    assert save_schema["required"] == ["out_path"]
-    save_props = save_schema["properties"]
-    assert "to_format" in save_props and "from_format" in save_props
-    assert "to" not in save_props and "format" not in save_props
-    assert "module_json" in save_props
+    emit_schema = tools["emit"].input_schema
+    assert emit_schema["required"] == ["format"]
+    emit_props = emit_schema["properties"]
+    assert "format" in emit_props and "destination" in emit_props
+    assert "to_format" not in emit_props and "out_path" not in emit_props
+    assert "from_format" in emit_props
     assert "transport" in tools["parse"].input_schema["properties"]
     # The SDK 2.0 model field is snake_case `input_schema`; the wire format is
     # still the protocol's camelCase `inputSchema`.
-    assert "inputSchema" in tools["save"].model_dump(by_alias=True)
+    assert "inputSchema" in tools["emit"].model_dump(by_alias=True)
     # Transport text arguments are bare `str` with "" meaning unset: under any
     # other annotation the SDK re-parses JSON text before validation and the
     # tool receives an object instead of the document.
-    for name in ("convert", "save", "summary", "normalize", "matrix"):
+    for name in (
+        "emit",
+        "summarize",
+        "to_normalized",
+        "calc_matrix",
+    ):
         props = tools[name].input_schema["properties"]
         for arg in ("content", "json", "module_json"):
             assert props[arg]["type"] == "string"
             assert props[arg]["default"] == ""
+    for name in (
+        "inspect",
+        "list_states",
+        "inspect_state",
+        "export_state",
+        "to_balanced_report",
+        "to_balanced",
+    ):
+        props = tools[name].input_schema["properties"]
+        for arg in ("content", "module_json"):
+            assert props[arg]["type"] == "string"
+            assert props[arg]["default"] == ""
     parse_content = tools["parse"].input_schema["properties"]["content"]
     assert parse_content["type"] == "string" and parse_content["default"] == ""
-    # The closed sets are advertised as enums; the impls keep accepting aliases.
-    kind = tools["matrix"].input_schema["properties"]["kind"]
+    # Matrix kind aliases are advertised; JSON transport has one spelling per meaning.
+    kind = tools["calc_matrix"].input_schema["properties"]["kind"]
     assert kind["enum"] == sorted(server._MATRIX_KIND_ALIASES)
-    json_format = tools["summary"].input_schema["properties"]["json_format"]
+    json_format = tools["summarize"].input_schema["properties"]["json_format"]
     assert json_format["anyOf"][0]["enum"] == ["module", "model-json", "bmopf-json"]
     # The open ended format name sets are prose in the descriptions.
-    assert "matpower" in tools["convert"].description
-    assert "bmopf-json" in tools["save"].description
+    assert "matpower" in tools["emit"].description
+    assert "bmopf-json" in tools["emit"].description
     assert "matpower" in tools["parse"].description
+    for removed in (
+        "convert",
+        "save",
+        "normalize",
+        "matrix",
+        "summary",
+        "state_inventory",
+        "select_state",
+        "to_balanced_inspect",
+        "dc_data",
+    ):
+        assert removed not in tools
 
 
 def test_summary_transmission_schema():
-    s = server.summary(path=str(DATA / "case9.m"))
-    assert s["schema"] == "powerio.summary"
+    s = server.summarize(path=str(DATA / "case9.m"))
+    assert s["schema"] == "powerio.summarize"
     assert s["powerio_version"] == powerio.__version__
     assert s["domain"] == "transmission"
     assert s["model"] == "balanced"
@@ -99,13 +157,13 @@ def test_summary_transmission_schema():
     assert s["elements"]["branches"] == 9
     assert s["topology"]["connected_components"] == 1
     assert s["topology"]["reference_buses"] == [0]
-    assert s["warnings"] == []
+    assert s["diagnostics"] == []
 
 
 def test_summary_distribution_schema_and_json_sniffing():
     for path in (DSS, BMOPF, PMD):
-        s = server.summary(path=str(path))
-        assert s["schema"] == "powerio.summary"
+        s = server.summarize(path=str(path))
+        assert s["schema"] == "powerio.summarize"
         assert s["domain"] == "distribution"
         assert s["model"] == "multiconductor"
         assert s["json_format"] == "bmopf-json"
@@ -117,11 +175,14 @@ def test_summary_distribution_schema_and_json_sniffing():
 def test_distribution_aliases_route_to_core_parser():
     text = DSS.read_text()
     for fmt in ("dss", "opendss"):
-        assert server.summary(content=text, from_format=fmt)["domain"] == "distribution"
-    assert json.loads(server.convert(to_format="pmd", path=str(DSS))["text"])[
-        "data_model"
-    ] == "ENGINEERING"
-    assert "bus" in json.loads(server.convert(to_format="bmopf", path=str(DSS))["text"])
+        assert (
+            server.summarize(content=text, from_format=fmt)["domain"] == "distribution"
+        )
+    assert (
+        json.loads(_emit_text(format="pmd", path=str(DSS))["text"])["data_model"]
+        == "ENGINEERING"
+    )
+    assert "bus" in json.loads(_emit_text(format="bmopf", path=str(DSS))["text"])
 
 
 def test_parse_transmission_transport_round_trip(tmp_path):
@@ -133,22 +194,20 @@ def test_parse_transmission_transport_round_trip(tmp_path):
     assert parsed["source_format"] == "matpower"
     assert parsed["json_format"] == "model-json"
     assert powerio.from_json(parsed["json"]).n_buses == 9
-    assert server.summary(json=parsed["json"], json_format="model-json")[
-        "elements"
-    ]["buses"] == 9
-    # The pre-0.9 spellings stay accepted as inputs here.
-    assert server.summary(json=parsed["json"], json_format="powerio-json")[
-        "elements"
-    ]["buses"] == 9
-    assert server.summary(json=parsed["json"], json_format="powerio_json")[
-        "elements"
-    ]["buses"] == 9
+    assert (
+        server.summarize(json=parsed["json"], json_format="model-json")["elements"][
+            "buses"
+        ]
+        == 9
+    )
     # The transport is inferred from the document when no format is passed.
-    assert server.summary(json=parsed["json"])["elements"]["buses"] == 9
+    assert server.summarize(json=parsed["json"])["elements"]["buses"] == 9
 
     out = tmp_path / "case9.m"
-    server.save(out_path=str(out), json=parsed["json"], json_format=parsed["json_format"])
-    assert powerio.parse(out, value_type=powerio.BalancedNetwork).value.n_buses == 9
+    _emit_to(
+        destination=str(out), json=parsed["json"], json_format=parsed["json_format"]
+    )
+    assert _parse(out, value_type=powerio.BalancedNetwork).value.n_buses == 9
 
 
 def test_parse_distribution_uses_bmopf_transport(tmp_path):
@@ -159,16 +218,21 @@ def test_parse_distribution_uses_bmopf_transport(tmp_path):
     assert parsed["json_format"] == "bmopf-json"
     doc = json.loads(parsed["json"])
     assert "bus" in doc and "voltage_source" in doc
-    assert server.summary(json=parsed["json"], json_format="bmopf-json")[
-        "elements"
-    ]["sources"] >= 1
+    assert (
+        server.summarize(json=parsed["json"], json_format="bmopf-json")["elements"][
+            "sources"
+        ]
+        >= 1
+    )
 
     out = tmp_path / "feeder.dss"
-    server.save(out_path=str(out), json=parsed["json"], json_format=parsed["json_format"])
+    _emit_to(
+        destination=str(out), json=parsed["json"], json_format=parsed["json_format"]
+    )
     assert "new circuit" in out.read_text().lower()
 
 
-def test_module_transport_flows_through_summary_matrix_and_save(tmp_path):
+def test_module_transport_flows_through_summary_matrix_and_emit(tmp_path):
     parsed = server.parse(path=str(DATA / "case9.m"), transport="module")
     assert parsed["schema"] == "powerio.parse"
     assert parsed["transport"] == "module"
@@ -182,26 +246,29 @@ def test_module_transport_flows_through_summary_matrix_and_save(tmp_path):
     assert module["value"]["kind"] == "balanced_network"
 
     module_json = parsed["module_json"]
-    assert server.summary(json=module_json)["elements"]["buses"] == 9
-    assert server.summary(module_json=module_json)["elements"]["branches"] == 9
+    assert server.summarize(json=module_json)["elements"]["buses"] == 9
+    assert server.summarize(module_json=module_json)["elements"]["branches"] == 9
 
-    matrix = server.matrix("bprime", json=module_json)
+    matrix = server.calc_matrix("bprime", json=module_json)
     assert matrix["kind"] == "bprime"
     assert matrix["shape"] == [9, 9]
 
-    normalized = server.normalize(module_json=module_json)
+    normalized = server.to_normalized(module_json=module_json)
     assert normalized["domain"] == "transmission"
     assert normalized["summary"]["elements"]["buses"] == 9
 
     out = tmp_path / "case9.m"
-    server.save(out_path=str(out), module_json=module_json)
-    assert powerio.parse(out, value_type=powerio.BalancedNetwork).value.n_buses == 9
+    _emit_to(destination=str(out), module_json=module_json)
+    assert _parse(out, value_type=powerio.BalancedNetwork).value.n_buses == 9
 
     module_path = tmp_path / "case9.pio.json"
     module_path.write_text(module_json)
-    assert server.summary(path=str(module_path), from_format="module")["elements"][
-        "buses"
-    ] == 9
+    assert (
+        server.summarize(path=str(module_path), from_format="module")["elements"][
+            "buses"
+        ]
+        == 9
+    )
 
 
 def test_module_transport_routes_distribution_by_model_kind():
@@ -210,7 +277,7 @@ def test_module_transport_routes_distribution_by_model_kind():
     assert module["schema"] == "powerio.module"
     assert module["value"]["kind"] == "multiconductor_network"
 
-    summary = server.summary(json=parsed["module_json"])
+    summary = server.summarize(json=parsed["module_json"])
     assert summary["domain"] == "distribution"
     assert summary["model"] == "multiconductor"
     assert summary["elements"]["buses"] > 0
@@ -226,7 +293,9 @@ def test_module_diagnostics():
     assert isinstance(diag["diagnostics"], list)
 
     verbose = server.diagnostics(parsed["module_json"], verbose=True)
-    assert verbose["diagnostics"] == json.loads(parsed["module_json"]).get("diagnostics", [])
+    assert verbose["diagnostics"] == json.loads(parsed["module_json"]).get(
+        "diagnostics", []
+    )
 
 
 def test_pre_0_9_package_is_recognized_and_rejected_by_version():
@@ -248,15 +317,31 @@ def test_pre_0_9_package_is_recognized_and_rejected_by_version():
     assert "0.9" in message
 
 
-def test_removed_package_spellings_are_refused():
-    """`package`, `pio-package`, and `pio_package` carried the stored
-    transport before the 0.10 module rename; they are gone, not aliased, and
-    fall through to each site's normal unknown-format refusal."""
-    for spelling in ("package", "pio-package", "pio_package"):
+def test_removed_transport_spellings_are_refused():
+    for spelling in (
+        "package",
+        "pio-package",
+        "pio_package",
+        "pio",
+        "pio-json",
+        "pio_json",
+        "powerio",
+        "powerio-json",
+        "powerio_json",
+        "json",
+        "bmopf",
+        "bmopf_json",
+        "model_json",
+        "MODEL-JSON",
+        " model-json ",
+    ):
         with pytest.raises(ValueError, match=r"json_format.*must be `module`"):
-            server.summary(json="{}", json_format=spelling)
+            server.summarize(json="{}", json_format=spelling)
+    stored = _emit_module(powerio.parse_file(DATA / "case9.m"))
+    with pytest.raises(ValueError, match=r"json_format.*must be `module`"):
+        server.summarize(json=stored, json_format="pio-json")
     with pytest.raises(ValueError, match="unknown or unsupported case format"):
-        server.summary(content="{}", from_format="package")
+        server.summarize(content="{}", from_format="package")
 
 
 def test_minimal_bmopf_json_routes_without_format(tmp_path):
@@ -266,16 +351,17 @@ def test_minimal_bmopf_json_routes_without_format(tmp_path):
     assert parsed["json_format"] == "bmopf-json"
     assert parsed["summary"]["elements"]["buses"] == 1
 
-    s = server.summary(content=MINIMAL_BMOPF)
+    s = server.summarize(content=MINIMAL_BMOPF)
     assert s["domain"] == "distribution"
 
     out = tmp_path / "minimal.json"
-    server.save(to_format="bmopf-json", out_path=str(out), json=MINIMAL_BMOPF)
+    _emit_to(format="bmopf-json", destination=str(out), json=MINIMAL_BMOPF)
     assert json.loads(out.read_text())["bus"]["a"]["terminal_names"] == ["1"]
 
 
 def test_powermodels_json_still_routes_as_transmission():
-    pm = powerio.parse(str(DATA / "case9.m"), value_type=powerio.BalancedNetwork).value.to_format("powermodels-json").text
+    module = powerio.parse_file(DATA / "case9.m")
+    pm = module.emit("powermodels-json").text
     parsed = server.parse(content=pm)
     assert parsed["domain"] == "transmission"
     assert parsed["json_format"] == "model-json"
@@ -289,21 +375,20 @@ def test_powermodels_json_still_routes_as_transmission():
 
 def test_normalize_rejects_distribution():
     with pytest.raises(ValueError, match="not defined for distribution"):
-        server.normalize(path=str(DSS))
+        server._to_normalized_tool(path=str(DSS))
 
 
 def test_normalize_payload_has_schema_marker():
-    norm = server.normalize(path=str(DATA / "case9.m"))
-    assert norm["schema"] == "powerio.normalize"
+    norm = server._to_normalized_tool(path=str(DATA / "case9.m"))
+    assert norm["schema"] == "powerio.to_normalized"
     assert norm["powerio_version"] == powerio.__version__
     assert norm["domain"] == "transmission"
     assert norm["model"] == "balanced"
 
 
 def test_parse_reads_pypsa_folder(tmp_path):
-    net = powerio.parse(str(DATA / "case9.m"), value_type=powerio.BalancedNetwork).value
     folder = tmp_path / "case9-pypsa"
-    net.write_pypsa_csv_folder(str(folder))
+    powerio.parse_file(DATA / "case9.m").emit("pypsa-csv", folder)
 
     parsed = server.parse(path=str(folder))
     assert parsed["summary"]["domain"] == "transmission"
@@ -313,31 +398,36 @@ def test_parse_reads_pypsa_folder(tmp_path):
 @gridfm_only
 def test_gridfm_routes_through_generic_verbs(tmp_path):
     out_dir = tmp_path / "gfm"
-    write = server.save(to_format="gridfm", out_path=str(out_dir), path=str(DATA / "case9.m"))
+    write = server._emit_tool(
+        format="gridfm",
+        destination=str(out_dir),
+        path=str(DATA / "case9.m"),
+    )
     assert write["files"]
 
-    parsed = server.parse(path=str(out_dir), from_format="gridfm", options={"scenario": 0})
+    parsed = server.parse(
+        path=str(out_dir), from_format="gridfm", options={"scenario": 0}
+    )
     assert parsed["summary"]["domain"] == "transmission"
     assert parsed["summary"]["elements"]["buses"] == 9
 
-    converted = server.convert(
-        to_format="matpower", path=str(out_dir), from_format="gridfm"
+    converted = server._emit_tool(
+        format="matpower", path=str(out_dir), from_format="gridfm"
     )
     assert "mpc.bus" in converted["text"]
-    # convert and save carry the same response header as every other tool
-    # (cli-mcp.md's promise); a client branches on schema before shape.
-    assert converted["schema"] == "powerio.convert"
+    assert converted["schema"] == "powerio.emit"
+    assert write["schema"] == "powerio.emit"
     assert converted["powerio_version"] == powerio.__version__
 
 
 def test_matrix_kinds_aliases_and_errors():
-    m = server.matrix("b", path=str(DATA / "case9.m"))
-    assert m["schema"] == "powerio.matrix"
+    m = server._calc_matrix_tool("b", path=str(DATA / "case9.m"))
+    assert m["schema"] == "powerio.calc_matrix"
     assert m["powerio_version"] == powerio.__version__
     assert m["domain"] == "transmission"
     assert m["model"] == "balanced"
     assert m["source_format"] == "matpower"
-    assert m["warnings"] == []
+    assert m["diagnostics"] == []
     assert m["kind"] == "bprime"
     assert m["shape"] == [9, 9]
     assert type(m["data"][0]) is float and type(m["row"][0]) is int
@@ -352,26 +442,29 @@ def test_matrix_kinds_aliases_and_errors():
         ("laplacian", "laplacian"),
         ("lacpf", "lacpf"),
     ):
-        assert server.matrix(alias, path=str(DATA / "case9.m"))["kind"] == canonical
+        assert (
+            server._calc_matrix_tool(alias, path=str(DATA / "case9.m"))["kind"]
+            == canonical
+        )
 
     with pytest.raises(ValueError, match="bprime"):
-        server.matrix("nope", path=str(DATA / "case9.m"))
+        server._calc_matrix_tool("nope", path=str(DATA / "case9.m"))
     with pytest.raises(ValueError, match="transmission"):
-        server.matrix("b", path=str(DSS))
+        server._calc_matrix_tool("b", path=str(DSS))
 
 
 def test_bad_json_transport_leads_with_the_diagnostic_code():
     for bad in ("{}", "[]", "null", '{"buses": "nope"}'):
         with pytest.raises(ValueError, match=r"^PARSE\.SOURCE\.MALFORMED: "):
-            server.matrix("bprime", json=bad, json_format="model-json")
+            server._calc_matrix_tool("bprime", json=bad, json_format="model-json")
 
 
 def test_parse_failures_carry_the_code_and_the_tools_lead_with_it():
     with pytest.raises(powerio.PowerIOError) as native:
-        powerio.parse(("mpc.bus = [").encode(), "matpower", value_type=powerio.BalancedNetwork)
+        _parse(("mpc.bus = [").encode(), "matpower", value_type=powerio.BalancedNetwork)
     assert native.value.code == "PARSE.MATPOWER.MALFORMED"
     with pytest.raises(ValueError) as mapped:
-        server.summary(content="mpc.bus = [", from_format="matpower")
+        server.summarize(content="mpc.bus = [", from_format="matpower")
     text = str(mapped.value)
     assert text.startswith("PARSE.MATPOWER.MALFORMED: ")
     # The Rust message already leads with the code; the tool wrapper must not
@@ -381,10 +474,10 @@ def test_parse_failures_carry_the_code_and_the_tools_lead_with_it():
 
 def test_unknown_format_code_is_not_doubled():
     with pytest.raises(powerio.PowerIOError) as native:
-        powerio.parse(str(DATA / "case9.m"), "not-a-real-format")
+        _parse(str(DATA / "case9.m"), "not-a-real-format")
     assert native.value.code == "REQUEST.FORMAT.UNKNOWN"
     with pytest.raises(ValueError) as mapped:
-        server.summary(path=str(DATA / "case9.m"), from_format="not-a-real-format")
+        server.summarize(path=str(DATA / "case9.m"), from_format="not-a-real-format")
     text = str(mapped.value)
     assert text.startswith("REQUEST.FORMAT.UNKNOWN: ")
     assert text.count("REQUEST.FORMAT.UNKNOWN") == 1
@@ -392,59 +485,75 @@ def test_unknown_format_code_is_not_doubled():
 
 def test_empty_transport_text_means_unset():
     with pytest.raises(ValueError, match="provide exactly one"):
-        server._summary_tool()
-    assert server._summary_tool(path=str(DATA / "case9.m"))["elements"]["buses"] == 9
+        server._summarize_tool()
+    assert server._summarize_tool(path=str(DATA / "case9.m"))["elements"]["buses"] == 9
 
 
-def test_save_text_folder_and_overwrite(tmp_path):
-    out = tmp_path / "case9.json"
-    r = server.save(
-        to_format="powermodels-json", out_path=str(out), path=str(DATA / "case9.m")
+def test_emit_returns_text_or_writes_a_destination(tmp_path):
+    text = server._emit_tool(format="psse", path=str(DATA / "case9.m"))
+    assert text["schema"] == "powerio.emit"
+    assert text["text"].lstrip().startswith("0,")
+
+    destination = tmp_path / "case9.raw"
+    written = server._emit_tool(
+        format="psse",
+        destination=str(destination),
+        path=str(DATA / "case9.m"),
     )
-    assert r["schema"] == "powerio.save"
+    assert written["schema"] == "powerio.emit"
+    assert written["path"] == str(destination)
+    assert destination.read_text().lstrip().startswith("0,")
+
+
+def test_emit_text_folder_and_overwrite(tmp_path):
+    out = tmp_path / "case9.json"
+    r = _emit_to(
+        format="powermodels-json", destination=str(out), path=str(DATA / "case9.m")
+    )
+    assert r["schema"] == "powerio.emit"
     assert r["powerio_version"] == powerio.__version__
     assert r["path"] == str(out)
     assert r["bytes_written"] == out.stat().st_size
     with pytest.raises(ValueError):
-        server.save(
-            to_format="powermodels-json",
-            out_path=str(out),
+        _emit_to(
+            format="powermodels-json",
+            destination=str(out),
             path=str(DATA / "case9.m"),
         )
-    server.save(
-        to_format="matpower",
-        out_path=str(out),
+    _emit_to(
+        format="matpower",
+        destination=str(out),
         path=str(DATA / "case9.m"),
         overwrite=True,
     )
 
     folder = tmp_path / "pypsa"
-    w = server.save(
-        to_format="pypsa-csv", out_path=str(folder), path=str(DATA / "case9.m")
+    w = _emit_to(
+        format="pypsa-csv", destination=str(folder), path=str(DATA / "case9.m")
     )
     assert w["files"] and (folder / "buses.csv").exists()
 
 
-def test_convert_requires_to_format():
-    with pytest.raises(ValueError, match="to_format"):
-        server.convert(path=str(DATA / "case9.m"))
+def test_emit_requires_format():
+    with pytest.raises(ValueError, match="format"):
+        _emit_text(path=str(DATA / "case9.m"))
 
 
-def test_save_infers_unambiguous_output_format(tmp_path):
+def test_emit_infers_unambiguous_output_format(tmp_path):
     raw = tmp_path / "case9.raw"
-    server.save(out_path=str(raw), path=str(DATA / "case9.m"))
+    _emit_to(destination=str(raw), path=str(DATA / "case9.m"))
     assert raw.read_text().lstrip().startswith("0,")
 
-    with pytest.raises(ValueError, match="to_format"):
-        server.save(out_path=str(tmp_path / "case9.json"), path=str(DATA / "case9.m"))
+    with pytest.raises(ValueError, match="format"):
+        _emit_to(destination=str(tmp_path / "case9.json"), path=str(DATA / "case9.m"))
 
 
 def test_file_uri_paths_are_accepted(tmp_path):
     source_uri = (DATA / "case9.m").as_uri()
-    assert server.summary(path=source_uri)["elements"]["buses"] == 9
+    assert server.summarize(path=source_uri)["elements"]["buses"] == 9
 
     out = tmp_path / "case9.json"
-    server.save(to_format="powermodels-json", out_path=out.as_uri(), path=source_uri)
+    _emit_to(format="powermodels-json", destination=out.as_uri(), path=source_uri)
     assert json.loads(out.read_text())["name"] == "case9"
 
 
@@ -453,7 +562,9 @@ def test_file_uri_decoding_preserves_windows_drive_letters():
         return str(path).replace("\\", "/")
 
     assert (
-        text(server._decode_local_path("file:///C:/Users/Sam/case%209.m", purpose="path"))
+        text(
+            server._decode_local_path("file:///C:/Users/Sam/case%209.m", purpose="path")
+        )
         == "C:/Users/Sam/case 9.m"
     )
     assert (
@@ -473,9 +584,9 @@ def test_mcp_allowed_roots_restrict_filesystem_paths(monkeypatch, tmp_path):
     local_case.write_text((DATA / "case9.m").read_text())
     monkeypatch.setenv("POWERIO_MCP_ALLOWED_ROOTS", str(tmp_path))
 
-    assert server.summary(path=str(local_case))["elements"]["buses"] == 9
+    assert server.summarize(path=str(local_case))["elements"]["buses"] == 9
     with pytest.raises(ValueError, match="outside allowed MCP roots"):
-        server.summary(path=str(DATA / "case9.m"))
+        server.summarize(path=str(DATA / "case9.m"))
 
 
 @pytest.mark.skipif(os.name == "nt", reason="POSIX symlink semantics")
@@ -485,7 +596,7 @@ def test_mcp_refuses_pypsa_child_symlink_escape(monkeypatch, tmp_path):
     outside = tmp_path / "outside"
     root.mkdir()
     outside.mkdir()
-    powerio.parse(str(DATA / "case9.m"), value_type=powerio.BalancedNetwork).value.write_pypsa_csv_folder(str(folder))
+    powerio.parse_file(DATA / "case9.m").emit("pypsa-csv", folder)
     escaped = outside / "buses.csv"
     escaped.write_text((folder / "buses.csv").read_text())
     (folder / "buses.csv").unlink()
@@ -493,7 +604,7 @@ def test_mcp_refuses_pypsa_child_symlink_escape(monkeypatch, tmp_path):
     monkeypatch.setenv("POWERIO_MCP_ALLOWED_ROOTS", str(root))
 
     with pytest.raises(ValueError, match="outside its allowed MCP root"):
-        server.summary(path=str(folder), from_format="pypsa-csv")
+        server.summarize(path=str(folder), from_format="pypsa-csv")
 
 
 @pytest.mark.skipif(os.name == "nt", reason="POSIX symlink semantics")
@@ -509,26 +620,24 @@ def test_mcp_preflights_a_directory_before_format_detection(monkeypatch, tmp_pat
     monkeypatch.setenv("POWERIO_MCP_ALLOWED_ROOTS", str(root))
 
     with pytest.raises(ValueError, match="outside its allowed MCP root"):
-        server.summary(path=str(root / "dataset"))
+        server.summarize(path=str(root / "dataset"))
 
 
 @pytest.mark.parametrize("name", ["POWERIO_MCP_ROOT", "POWERIO_MCP_ALLOWED_ROOT"])
-def test_mcp_tools_honour_the_legacy_single_root_variables(
-    monkeypatch, tmp_path, name
-):
+def test_mcp_tools_honour_the_legacy_single_root_variables(monkeypatch, tmp_path, name):
     local_case = tmp_path / "case9.m"
     local_case.write_text((DATA / "case9.m").read_text())
     monkeypatch.setenv(name, str(tmp_path))
 
-    assert server.summary(path=str(local_case))["elements"]["buses"] == 9
+    assert server.summarize(path=str(local_case))["elements"]["buses"] == 9
     with pytest.raises(ValueError, match="outside allowed MCP roots"):
-        server.summary(path=str(DATA / "case9.m"))
+        server.summarize(path=str(DATA / "case9.m"))
 
 
 @pytest.mark.skipif(os.name == "nt", reason="POSIX symlink semantics")
 def test_mcp_write_refuses_symlink_escape_from_allowed_root(monkeypatch, tmp_path):
     # A dangling symlink named as the output file, sitting inside an allowed
-    # root but pointing outside it, must not let a save escape the sandbox:
+    # root but pointing outside it, must not let an emission escape the sandbox:
     # `path.exists()` is False for the dangling link, and joining its name onto
     # the resolved parent would leave the link unresolved, so the containment
     # check has to follow the final symlink itself.
@@ -541,20 +650,16 @@ def test_mcp_write_refuses_symlink_escape_from_allowed_root(monkeypatch, tmp_pat
     monkeypatch.setenv("POWERIO_MCP_ALLOWED_ROOTS", str(root))
 
     with pytest.raises(ValueError, match="outside allowed MCP roots"):
-        server.save(
-            to_format="bmopf-json", out_path=str(escape), json=MINIMAL_BMOPF
-        )
+        _emit_to(format="bmopf-json", destination=str(escape), json=MINIMAL_BMOPF)
     assert not (outside / "leaked.json").exists()
 
     # A genuine new file inside the root still writes.
-    server.save(
-        to_format="bmopf-json", out_path=str(root / "ok.json"), json=MINIMAL_BMOPF
-    )
+    _emit_to(format="bmopf-json", destination=str(root / "ok.json"), json=MINIMAL_BMOPF)
     assert (root / "ok.json").exists()
 
 
 @pytest.mark.skipif(os.name == "nt", reason="POSIX symlink semantics")
-def test_directory_save_refuses_symlink_escape_at_a_child_name(monkeypatch, tmp_path):
+def test_directory_emit_refuses_symlink_escape_at_a_child_name(monkeypatch, tmp_path):
     # The folder writers create children the single file containment check
     # never saw; every installed file must pass the same `for_write` resolution.
     root = tmp_path / "allowed"
@@ -568,25 +673,25 @@ def test_directory_save_refuses_symlink_escape_at_a_child_name(monkeypatch, tmp_
     monkeypatch.setenv("POWERIO_MCP_ALLOWED_ROOTS", str(root))
 
     with pytest.raises(ValueError, match="outside allowed MCP roots"):
-        server.save(
-            to_format="pypsa-csv", out_path=str(out), path=str(case), overwrite=True
+        _emit_to(
+            format="pypsa-csv", destination=str(out), path=str(case), overwrite=True
         )
     assert not (outside / "leaked.csv").exists()
     # Refusal happens before anything is installed.
     assert not (out / "network.csv").exists()
 
 
-def test_directory_save_honours_overwrite(tmp_path):
+def test_directory_emit_honours_overwrite(tmp_path):
     folder = tmp_path / "pypsa"
-    server.save(to_format="pypsa-csv", out_path=str(folder), path=str(DATA / "case9.m"))
+    _emit_to(format="pypsa-csv", destination=str(folder), path=str(DATA / "case9.m"))
     assert (folder / "buses.csv").exists()
     with pytest.raises(ValueError, match="refusing to overwrite"):
-        server.save(
-            to_format="pypsa-csv", out_path=str(folder), path=str(DATA / "case9.m")
+        _emit_to(
+            format="pypsa-csv", destination=str(folder), path=str(DATA / "case9.m")
         )
-    r = server.save(
-        to_format="pypsa-csv",
-        out_path=str(folder),
+    r = _emit_to(
+        format="pypsa-csv",
+        destination=str(folder),
         path=str(DATA / "case9.m"),
         overwrite=True,
     )
@@ -597,17 +702,17 @@ def test_directory_save_honours_overwrite(tmp_path):
 
 
 @gridfm_only
-def test_gridfm_save_honours_overwrite(tmp_path):
+def test_gridfm_emit_honours_overwrite(tmp_path):
     out_dir = tmp_path / "gfm"
-    first = server.save(
-        to_format="gridfm", out_path=str(out_dir), path=str(DATA / "case9.m")
+    first = _emit_to(
+        format="gridfm", destination=str(out_dir), path=str(DATA / "case9.m")
     )
     assert first["files"] and all(f.startswith(str(out_dir)) for f in first["files"])
     with pytest.raises(ValueError, match="refusing to overwrite"):
-        server.save(to_format="gridfm", out_path=str(out_dir), path=str(DATA / "case9.m"))
-    server.save(
-        to_format="gridfm",
-        out_path=str(out_dir),
+        _emit_to(format="gridfm", destination=str(out_dir), path=str(DATA / "case9.m"))
+    _emit_to(
+        format="gridfm",
+        destination=str(out_dir),
         path=str(DATA / "case9.m"),
         overwrite=True,
     )
@@ -634,12 +739,18 @@ def test_display_errors_map_cleanly(tmp_path):
         server.display(str(bad))
 
 
-def test_compatibility_aliases_are_not_tools(tmp_path):
-    assert server.case_summary(path=str(DATA / "case9.m")) == server.summary(path=str(DATA / "case9.m"))
-    assert server.convert(to="psse", format="matpower", content=(DATA / "case9.m").read_text())["text"]
-    assert server.compute_matrix("b", path=str(DATA / "case9.m"))["kind"] == "bprime"
-    out_dir = tmp_path / "pypsa"
-    assert server.write_pypsa_csv_folder(str(out_dir), path=str(DATA / "case9.m"))["files"]
+def test_compatibility_callables_are_removed():
+    for name in (
+        "summary",
+        "convert",
+        "save",
+        "normalize",
+        "matrix",
+        "compute_matrix",
+        "case_summary",
+        "write_pypsa_csv_folder",
+    ):
+        assert not hasattr(server, name)
 
 
 def _split_dss_case(tmp_path):
@@ -659,13 +770,13 @@ def _split_dss_case(tmp_path):
     return root
 
 
-def _warning_texts(warnings: list) -> "list[str]":
-    """Each structured warning record (`code`/`severity`/`message`/`target`)
+def _diagnostic_texts(diagnostics: list) -> "list[str]":
+    """Each structured diagnostic record (`code`/`severity`/`message`/`target`)
     as one searchable string, for tests that check substrings a rendered
     `CODE: message` line used to carry directly."""
     return [
         ": ".join(part for part in (item.get("code"), item.get("message")) if part)
-        for item in warnings
+        for item in diagnostics
     ]
 
 
@@ -675,7 +786,7 @@ def test_mcp_parse_widens_dss_includes_to_the_allowed_root(monkeypatch, tmp_path
 
     parsed = server.parse(path=str(root / "feeder" / "f.dss"))
     assert parsed["domain"] == "distribution"
-    texts = _warning_texts(parsed["warnings"])
+    texts = _diagnostic_texts(parsed["diagnostics"])
     assert not any("INCLUDE_REFUSED" in text for text in texts), texts
     assert parsed["summary"]["elements"]["lines"] == 1
 
@@ -692,7 +803,7 @@ def test_mcp_parse_still_refuses_includes_outside_the_allowed_root(
     monkeypatch.setenv("POWERIO_MCP_ALLOWED_ROOTS", str(root))
 
     parsed = server.parse(path=str(deck))
-    texts = _warning_texts(parsed["warnings"])
+    texts = _diagnostic_texts(parsed["diagnostics"])
     assert any("escapes the include root" in text for text in texts), texts
     doc = json.loads(parsed["json"])
     assert "leaked" not in json.dumps(doc)
@@ -716,7 +827,11 @@ New Load.la bus1=loadbus.1.2.3 phases=3 conn=wye kv=0.416 kw=24 pf=0.95 model=1
 
 def _legacy_package_doc(**extra) -> dict:
     """A released 0.9 package document, the lineage the stored reader upgrades."""
-    network = json.loads(powerio.parse(str(DATA / "case9.m"), value_type=powerio.BalancedNetwork).value.to_json())
+    network = json.loads(
+        _parse(
+            str(DATA / "case9.m"), value_type=powerio.BalancedNetwork
+        ).value.to_json()
+    )
     return {
         "powerio_version": "0.9.0",
         "producer": {"tool": "powerio", "version": "0.9.0"},
@@ -753,18 +868,18 @@ def _series_module_json() -> str:
             ],
         }
     )
-    return powerio.PioModule.from_json(json.dumps(legacy)).to_json()
+    return _emit_module(_parse_module(json.dumps(legacy)))
 
 
-def test_state_inventory_selection_and_export():
+def test_list_states_selection_and_export():
     module_json = _series_module_json()
 
-    inventory = server._state_inventory_tool(module_json=module_json)
+    inventory = server._list_states_tool(module_json=module_json)
     assert inventory["kind"] == "balanced_operating_point_time_series"
     assert inventory["keyed_by"] == "time_position"
     assert [p["label"] for p in inventory["time_points"]] == ["h0", "h1"]
-
-    selected = server._select_state_tool(module_json=module_json, time_position=1)
+    selected = server._inspect_state_tool(module_json=module_json, time_position=1)
+    assert selected["schema"] == "powerio.inspect_state"
     assert selected["selected"]["item"] == "balanced_operating_point"
     assert "generator_active_power" in selected["selected"]["stated_quantities"]
 
@@ -774,12 +889,12 @@ def test_state_inventory_selection_and_export():
     assert doc["schema"] == "powerio.module" and doc["version"] == 1
     # The exported static module is accepted by summary, matrix, conversion,
     # and diagnostics operations.
-    summary = server._summary_tool(module_json=exported["module_json"])
+    summary = server._summarize_tool(module_json=exported["module_json"])
     assert summary["domain"] == "transmission"
     assert summary["elements"]["buses"] == 9
-    matrix = server._matrix_tool("ybus_real", module_json=exported["module_json"])
+    matrix = server._calc_matrix_tool("ybus_real", module_json=exported["module_json"])
     assert matrix["shape"] == [9, 9]
-    converted = server.convert(to="matpower", module_json=exported["module_json"])
+    converted = _emit_text(format="matpower", module_json=exported["module_json"])
     assert "mpc.baseMVA" in converted["text"]
     inspected = server._inspect_tool(module_json=exported["module_json"])
     assert inspected["kind"] == "balanced_network"
@@ -789,14 +904,14 @@ def test_state_inventory_selection_and_export():
 def test_selection_refusals_carry_codes():
     module_json = _series_module_json()
     with pytest.raises(ValueError, match="REQUEST.STATE.OUT_OF_RANGE"):
-        server._select_state_tool(module_json=module_json, time_position=9)
+        server._inspect_state_tool(module_json=module_json, time_position=9)
     with pytest.raises(ValueError, match="REQUEST.STATE.WRONG_SELECTOR"):
-        server._select_state_tool(module_json=module_json, scenario="base")
-    static_module = powerio.PioModule.from_file(DATA / "case9.m").to_json()
+        server._inspect_state_tool(module_json=module_json, scenario="base")
+    static_module = _emit_module(powerio.parse_file(DATA / "case9.m"))
     with pytest.raises(ValueError, match="REQUEST.STATE.NOT_A_COLLECTION"):
-        server._state_inventory_tool(module_json=static_module)
+        server._list_states_tool(module_json=static_module)
     with pytest.raises(ValueError, match="exactly one of time_position"):
-        server._select_state_tool(module_json=module_json)
+        server._inspect_state_tool(module_json=module_json)
 
 
 def test_inspect_discovers_operations():
@@ -809,11 +924,12 @@ def test_inspect_discovers_operations():
     assert "export_state" in series["operations"]
 
 
-def test_to_balanced_inspect_and_transform():
-    readiness = server._to_balanced_inspect_tool(
+def test_to_balanced_report_and_transform():
+    readiness = server._to_balanced_report_tool(
         content=LOWERABLE_DSS, from_format="dss"
     )
-    assert readiness["status"] in ("ok", "info")
+    assert readiness["schema"] == "powerio.to_balanced_report"
+    assert readiness["ready"] is True
 
     lowered = server._to_balanced_tool(content=LOWERABLE_DSS, from_format="dss")
     assert lowered["kind"] == "balanced_network"
@@ -821,14 +937,13 @@ def test_to_balanced_inspect_and_transform():
     assert doc["schema"] == "powerio.module"
     history = doc.get("history", [])
     assert any(
-        entry["name"] == "lower_multiconductor_to_balanced"
-        and entry["kind"] == "transform"
+        entry["name"] == "to_balanced" and entry["kind"] == "transform"
         for entry in history
     )
     # The returned module is accepted by summary and matrix operations.
-    summary = server._summary_tool(module_json=lowered["module_json"])
+    summary = server._summarize_tool(module_json=lowered["module_json"])
     assert summary["domain"] == "transmission"
-    matrix = server._matrix_tool("ybus_real", module_json=lowered["module_json"])
+    matrix = server._calc_matrix_tool("ybus_real", module_json=lowered["module_json"])
     assert matrix["shape"][0] == summary["elements"]["buses"]
 
 
@@ -857,23 +972,19 @@ def test_hostile_element_names_lower_with_normalized_history(tmp_path):
     notes are normalized rather than dropped or crashing the pass."""
     feeder = tmp_path / "tiny.dss"
     feeder.write_text(TRANSFORMER_DSS)
-    module = powerio.PioModule.from_file(feeder, "dss")
-    doc = json.loads(module.to_json())
+    module = powerio.parse_file(feeder, "dss")
+    doc = json.loads(_emit_module(module))
     hostile = "t\u0000evil" + "x" * (70_000)
     doc["value"]["data"]["transformers"][0]["name"] = hostile
     lowered = server._to_balanced_tool(module_json=json.dumps(doc))
     assert lowered["kind"] == "balanced_network"
     history = json.loads(lowered["module_json"]).get("history", [])
-    entry = next(
-        e for e in history if e["name"] == "lower_multiconductor_to_balanced"
-    )
+    entry = next(e for e in history if e["name"] == "to_balanced")
     for note in entry.get("assumptions", []) + entry.get("losses", []):
         assert note
         assert "\u0000" not in note and "\x00" not in note
         assert len(note.encode()) <= 65_536
-    assert any(
-        "[truncated]" in note for note in entry.get("assumptions", [])
-    )
+    assert any("[truncated]" in note for note in entry.get("assumptions", []))
 
 
 def test_wrong_kind_lowering_is_refused_by_name():
@@ -885,32 +996,24 @@ def test_about_states_versions_and_tools():
     about = server._about_tool()
     assert about["powerio_version"] == powerio.versions()["powerio_version"]
     assert about["module_schema"] == {"name": "powerio.module", "version": 1}
-    assert "dc_data" in about["tools"] and "convert" in about["tools"]
+    assert "dc_data" not in about["tools"]
+    assert "convert" not in about["tools"]
 
 
-def test_dc_data_over_mcp_carries_the_shared_names():
-    data = server._dc_data_tool(path=str(DATA / "case9.m"))
-    assert data["formula"] == "series_susceptance"
-    assert len(data["from_indices"]) == 9
-    assert data["row_ids"][0] == "branches:0"
-    with pytest.raises(ValueError, match="balanced network"):
-        server._dc_data_tool(content=LOWERABLE_DSS, from_format="dss")
-
-
-# ---- module diagnostics reach the MCP warnings -------------------------------
+# ---- module diagnostics reach every MCP response -----------------------------
 
 
 def _balanced_module_with_diagnostics(diagnostics: list) -> str:
     """A static `balanced_network` module document (exported from the time
     series fixture) with the given diagnostics injected onto it."""
-    module = powerio.PioModule.from_json(_series_module_json())
+    module = _parse_module(_series_module_json())
     exported = module.export_state(time_position=1)
-    doc = json.loads(exported.to_json())
+    doc = json.loads(_emit_module(exported))
     doc["diagnostics"] = diagnostics
     return json.dumps(doc)
 
 
-def test_module_diagnostics_reach_summary_and_convert_warnings():
+def test_module_diagnostics_reach_summary_and_emission():
     error = {
         "id": "d-error",
         "severity": "error",
@@ -925,40 +1028,61 @@ def test_module_diagnostics_reach_summary_and_convert_warnings():
     }
 
     module_doc = _balanced_module_with_diagnostics([error, note])
-    summary = server._summary_tool(module_json=module_doc)
-    assert summary["warnings"] == [
-        {"code": "M.E.1", "severity": "error", "message": "an error finding", "target": None, "id": "d-error"}
+    summary = server._summarize_tool(module_json=module_doc)
+    assert summary["diagnostics"] == [
+        {
+            "code": "M.E.1",
+            "severity": "error",
+            "message": "an error finding",
+            "target": None,
+            "id": "d-error",
+        }
     ]
 
     # The note severity finding is filtered out, not merely unmatched.
-    converted = server.convert(to="matpower", module_json=module_doc)
-    assert converted["warnings"] == [
-        {"code": "M.E.1", "severity": "error", "message": "an error finding", "target": None, "id": "d-error"}
+    converted = _emit_text(format="matpower", module_json=module_doc)
+    assert converted["diagnostics"] == [
+        {
+            "code": "M.E.1",
+            "severity": "error",
+            "message": "an error finding",
+            "target": None,
+            "id": "d-error",
+        }
     ]
 
     note_only_doc = _balanced_module_with_diagnostics([note])
-    assert server._summary_tool(module_json=note_only_doc)["warnings"] == []
+    assert server._summarize_tool(module_json=note_only_doc)["diagnostics"] == []
 
     # The same finding, carried by the older released package transport,
     # narrows to the same record shape: the two input forms agree on
     # code/severity/message. The legacy row itself carries no `id`.
     package = _legacy_package_doc(
         diagnostics=[
-            {"code": error["code"], "severity": error["severity"], "message": error["message"]}
+            {
+                "code": error["code"],
+                "severity": error["severity"],
+                "message": error["message"],
+            }
         ]
     )
-    package_summary = server._summary_tool(module_json=json.dumps(package))
-    assert package_summary["warnings"] == [
-        {"code": "M.E.1", "severity": "error", "message": "an error finding", "target": None}
+    package_summary = server._summarize_tool(module_json=json.dumps(package))
+    assert package_summary["diagnostics"] == [
+        {
+            "code": "M.E.1",
+            "severity": "error",
+            "message": "an error finding",
+            "target": None,
+        }
     ]
 
 
 def test_multiconductor_module_diagnostics_survive_in_order():
     """Diagnostics carried by a stored multiconductor module reach the MCP
-    warnings in source order, including one whose span references the
+    diagnostics in source order, including one whose span references the
     module's own declared source and a trailing entry after it."""
-    module = powerio.PioModule.from_str(LOWERABLE_DSS, "dss")
-    doc = json.loads(module.to_json())
+    module = powerio.parse_text(LOWERABLE_DSS, name="lowerable.dss", format="dss")
+    doc = json.loads(_emit_module(module))
     source_id = doc["sources"][0]["id"]
     doc["diagnostics"] = [
         {"id": "d0", "severity": "warning", "code": "A.B.C", "message": "no span here"},
@@ -973,9 +1097,15 @@ def test_multiconductor_module_diagnostics_survive_in_order():
     ]
     module_doc = json.dumps(doc)
 
-    summary = server._summary_tool(module_json=module_doc)
-    assert summary["warnings"] == [
-        {"code": "A.B.C", "severity": "warning", "message": "no span here", "target": None, "id": "d0"},
+    summary = server._summarize_tool(module_json=module_doc)
+    assert summary["diagnostics"] == [
+        {
+            "code": "A.B.C",
+            "severity": "warning",
+            "message": "no span here",
+            "target": None,
+            "id": "d0",
+        },
         {
             "code": "D.E.F",
             "severity": "error",
@@ -984,11 +1114,17 @@ def test_multiconductor_module_diagnostics_survive_in_order():
             "id": "d1",
             "spans": [{"source": source_id, "byte_start": 0, "byte_end": 10}],
         },
-        {"code": "G.H.I", "severity": "error", "message": "trailing error", "target": None, "id": "d2"},
+        {
+            "code": "G.H.I",
+            "severity": "error",
+            "message": "trailing error",
+            "target": None,
+            "id": "d2",
+        },
     ]
 
 
-def test_parse_warnings_are_structured_records_on_every_transport():
+def test_parse_diagnostics_are_structured_records_on_every_transport():
     """A PSS/E read reports six findings. The path transport used to publish
     them as six plain rendered strings with no way back to code/severity/
     target, while the package transport (which reads back through a stored
@@ -998,10 +1134,10 @@ def test_parse_warnings_are_structured_records_on_every_transport():
     via_package = server.parse(path=str(PSSE_CASE5), transport="module")
 
     for parsed in (via_path, via_package):
-        warnings = parsed["warnings"]
-        assert len(warnings) == 6, warnings
-        for record in warnings:
-            assert isinstance(record, dict), warnings
+        diagnostics = parsed["diagnostics"]
+        assert len(diagnostics) == 6, diagnostics
+        for record in diagnostics:
+            assert isinstance(record, dict), diagnostics
             assert record.keys() >= {"code", "severity", "message"}
             assert record["code"]
             assert record["severity"] in ("error", "warning", "remark", "note")
@@ -1013,4 +1149,6 @@ def test_parse_warnings_are_structured_records_on_every_transport():
     def _without_ids(records):
         return [{k: v for k, v in r.items() if k != "id"} for r in records]
 
-    assert _without_ids(via_path["warnings"]) == _without_ids(via_package["warnings"])
+    assert _without_ids(via_path["diagnostics"]) == _without_ids(
+        via_package["diagnostics"]
+    )

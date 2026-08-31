@@ -547,7 +547,8 @@ fn draw_synth(frame: &mut Frame, app: &App, area: Rect) {
         .title(" Preview ");
     if let Some(case) = &app.synth.generated {
         let view = powerio_matrix::IndexedNetwork::new(case);
-        if let Ok(b) = powerio_matrix::build_bprime(&view, &powerio_matrix::BuildOptions::default())
+        if let Ok(b) =
+            powerio_matrix::calc_bprime_matrix(&view, &powerio_matrix::BuildOptions::default())
         {
             let inner = preview_block.inner(split[1]);
             frame.render_widget(preview_block, split[1]);

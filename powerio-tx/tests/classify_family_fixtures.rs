@@ -12,6 +12,9 @@ use powerio_tx::format::routing::{
     Detection, DistributionFormat, JsonClass, SourceFormat, TransmissionFormat, classify_json_text,
 };
 
+mod helpers;
+use helpers::emit_value;
+
 fn data_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../tests/data")
 }
@@ -97,7 +100,7 @@ fn a_powermodels_json_case_classifies_as_powermodels() {
     let net = powerio_tx::parse(powerio_core::Source::open(data_root().join("case118.m")).unwrap())
         .unwrap()
         .into_value();
-    let text = powerio_tx::write_network(&net, TargetFormat::PowerModelsJson)
+    let text = emit_value(&net, TargetFormat::PowerModelsJson)
         .unwrap()
         .text;
     assert_eq!(

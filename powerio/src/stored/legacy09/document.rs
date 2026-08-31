@@ -4,11 +4,11 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use serde::{Deserialize, Serialize};
 
-use crate::{
-    BalancedNetwork, BusId, NORMALIZED_SOLVER_TABLES_PASS, NormalizedSolverTables,
-    SolverTableUnits, SourceFormat,
-};
+use crate::{BalancedNetwork, BusId, SourceFormat};
 use powerio_dist::{DistSourceFormat, MulticonductorNetwork};
+use powerio_tx::{
+    NORMALIZED_SOLVER_TABLES_PASS, NormalizedSolverTables, SolverTableUnits, version,
+};
 
 use powerio_core::DiagnosticInfo;
 
@@ -23,11 +23,12 @@ use crate::stored::legacy09::provenance::{
 };
 use crate::stored::legacy09::study::{StudyBlock, apply_study_to_model, check_study_identities};
 use crate::stored::legacy09::summary::{ObjectSummary, ObjectTopology, ObjectUnits};
+use crate::stored::legacy09::transform::LoweringRecord;
 use crate::stored::legacy09::validation::{ValidationPass, ValidationStatus, ValidationSummary};
 use crate::transform::{
-    LoweringRecord, MulticonductorToBalancedError, MulticonductorToBalancedOptions,
-    MulticonductorToBalancedReadiness, check_multiconductor_to_balanced_lowering,
-    lower_multiconductor_to_balanced,
+    MulticonductorToBalancedError, MulticonductorToBalancedOptions, MulticonductorToBalancedReport,
+    to_balanced_network as multiconductor_to_balanced,
+    to_balanced_network_report as multiconductor_to_balanced_report,
 };
 
 /// Whether a stated version belongs to the released 0.9 lineage this frozen
@@ -510,7 +511,7 @@ impl NetworkPackage {
             producer: self.producer.clone(),
             // A derived package is new content: it records the parent's id in
             // its origin and never inherits it as its own (as in
-            // `lower_multiconductor_to_balanced`).
+            // `multiconductor_to_balanced`).
             package_id: None,
             created_at: self.created_at.clone(),
             model_kind: self.model_kind,
@@ -709,7 +710,7 @@ impl NetworkPackage {
         if !version_is_frozen_lineage(&pkg.powerio_version) {
             // The frozen decoder names the lineage it reads; the live
             // build's label moves with the crate version.
-            return Err(Error::UnsupportedVersion(crate::version::reject_as(
+            return Err(Error::UnsupportedVersion(version::reject_as(
                 ".pio.json",
                 &pkg.powerio_version,
                 "0.9.x",
@@ -794,14 +795,9 @@ impl NetworkPackage {
     /// Check whether this package's multiconductor payload is ready for the
     /// explicit multiconductor to balanced lowering pass.
     #[must_use]
-    pub fn check_multiconductor_to_balanced_lowering(
-        &self,
-    ) -> Option<MulticonductorToBalancedReadiness> {
+    pub fn multiconductor_to_balanced_report(&self) -> Option<MulticonductorToBalancedReport> {
         self.as_multiconductor().map(|net| {
-            check_multiconductor_to_balanced_lowering(
-                net,
-                MulticonductorToBalancedOptions::default(),
-            )
+            multiconductor_to_balanced_report(net, MulticonductorToBalancedOptions::default())
         })
     }
 
@@ -809,12 +805,12 @@ impl NetworkPackage {
     ///
     /// This method only accepts packages whose payload is
     /// [`ModelKind::Multiconductor`]. It does not mutate the input package.
-    pub fn lower_multiconductor_to_balanced(
+    pub fn multiconductor_to_balanced(
         &self,
         options: MulticonductorToBalancedOptions,
     ) -> Result<Self, MulticonductorToBalancedError> {
         let Some(net) = self.as_multiconductor() else {
-            let diagnostic = StructuredDiagnostic::of(
+            let diagnostic = powerio_core::Diagnostic::of(
                 &codes::TRANSFORM_MULTI_TO_BALANCED_WRONG_MODEL_KIND,
                 format!(
                     "multiconductor to balanced lowering requires a multiconductor package, got {:?}",
@@ -824,8 +820,27 @@ impl NetworkPackage {
             return Err(MulticonductorToBalancedError::new(options, &[diagnostic]));
         };
 
-        let lowered = lower_multiconductor_to_balanced(net, options)?;
-        let mut record = lowered.record;
+        let lowered = multiconductor_to_balanced(net, options)?;
+        let mut record = LoweringRecord::new(
+            "multiconductor-to-balanced",
+            ModelKind::Multiconductor,
+            ModelKind::Balanced,
+        );
+        record.options = lowered.history.parameters().clone().into_iter().collect();
+        for assumption in lowered.history.assumptions() {
+            if let Some(approximation) = assumption.strip_prefix("approximation: ") {
+                record.approximations.push(approximation.to_owned());
+            } else {
+                record.assumptions.push(assumption.clone());
+            }
+        }
+        record.dropped_fields = lowered.history.losses().to_vec();
+        record.diagnostics = lowered
+            .diagnostics
+            .iter()
+            .cloned()
+            .map(Into::into)
+            .collect();
         let mut output = NetworkPackage::from_balanced(lowered.network);
         output.origin = Origin::Derived {
             parent_package_id: self.package_id.clone(),
@@ -2286,7 +2301,7 @@ mod tests {
         let error = super::NetworkPackage::from_json(&text).unwrap_err();
         let rendered = error.to_string();
         assert!(
-            rendered.len() < crate::version::MAX_REJECTED_VERSION_BYTES + 200,
+            rendered.len() < super::version::MAX_REJECTED_VERSION_BYTES + 200,
             "{} bytes",
             rendered.len()
         );

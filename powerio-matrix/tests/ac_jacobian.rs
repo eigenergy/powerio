@@ -60,8 +60,8 @@ fn dense_ybus(net: &BalancedNetwork) -> Vec<Vec<Complex64>> {
         let f = index_of(branch.from);
         let t = index_of(branch.to);
         let ys = Complex64::new(1.0, 0.0) / Complex64::new(branch.r, branch.x);
-        let charging = branch.terminal_charging();
-        let tap = branch.effective_tap();
+        let charging = branch.calc_terminal_charging();
+        let tap = branch.calc_effective_tap();
         let shift = branch.shift.to_radians();
         let a = Complex64::from_polar(tap, shift);
         y[f][f] += (ys + Complex64::new(0.0, charging.b_fr)) / (a * a.conj());

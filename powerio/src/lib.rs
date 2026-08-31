@@ -2,11 +2,11 @@
 //!
 //! The short `powerio` name is the entry facade over the component crates:
 //! `powerio-core` (sources, diagnostics, errors, modules), `powerio-tx`
-//! (the balanced transmission model and its format parsers and writers),
+//! (the balanced transmission model and its format parsing and emission),
 //! `powerio-dist` (the multiconductor distribution model), and `powerio-prob`
 //! (operating points, problem instances, and solutions). The facade owns the
-//! dynamic value boundary: [`PioValue`], [`PioValueKind`], the universal
-//! [`parse_file`], and [`emit`].
+//! dynamic value boundary: [`PioValue`], [`PioValueKind`], [`parse_file`],
+//! [`parse_text`], and [`emit`].
 //!
 //! [`parse_file`] compiles one file or case directory into
 //! `PioModule<PioValue>`, routing to whichever built in family claims it.
@@ -30,27 +30,42 @@
 //! ```
 //!
 //! [`parse`] remains the source-level entry for callers that already own a
-//! [`Source`] or need an in-memory buffer. [`try_into_typed`] remains a 0.10
-//! compatibility helper for code that needs an owned `PioModule<T>`.
+//! [`Source`] or need binary input, named buffers, or an acquisition root.
 
-pub use powerio_tx::*;
+/// The facade version used in producer and stored module provenance.
+pub const VERSION: &str = env!("CARGO_PKG_VERSION");
+
+use powerio_tx::format;
+pub use powerio_tx::{
+    Area, BalancedNetwork, Branch, BranchCharging, BranchCurrentRatings, BranchRatingSet,
+    BranchSolution, BranchSusceptanceFormula, Bus, BusId, BusType, Canvas, CoordinateSpace,
+    CoordsKind, DEFAULT_BASE_FREQUENCY, Detection, DisplayData, DisplayFormat, ElementKey, Extras,
+    GenCaps, GenCost, Generator, GeoApplyReport, GeoFeature, GeoGeometry, GeoLayer, GeoMeta,
+    GeoParsed, GeoTarget, Hvdc, Impedance, JSON_CLASSES, JsonClass, Load, LoadVoltageModel,
+    Location, PwdDisplay, PwdSubstation, Selector, Shunt, ShuntBlock, SolverParams, SourceFormat,
+    Storage, Switch, SwitchedShuntControl, SwitchedShuntMode, Transformer3W, TransformerControl,
+    TransformerControlMode, Winding, apply_substation_points, calc_series_admittance_of,
+    classify_json_bytes, classify_json_text, parse_display_file, repair_values,
+    to_geo_layer_from_aux_substations, to_geo_layer_from_pwd, to_lonlat_from_pwd_mercator,
+};
+/// Balanced network records and the public network and geographic submodules.
+/// Derived indexes, normalization data, solver tables, and component error
+/// types remain available from `powerio-tx` rather than being duplicated at
+/// the facade root.
+pub use powerio_tx::{geo, network, version};
 
 /// The common module records and containers. These explicit facade exports
 /// keep ordinary callers out of the component crate paths.
 pub use powerio_core::{
     ArtifactPath, Destination, Diagnostic, DiagnosticCode, DiagnosticId, DiagnosticInfo,
-    DiagnosticSeverity, DiagnosticStage, Digest, DigestAlgorithm, FormatId, HistoryEntry,
-    HistoryId, HistoryKind, MemoryArtifact, PioModule, Producer, Scenario, ScenarioId, ScenarioSet,
-    Source, SourceBuffer, SourceDescriptor, SourceId, SourceMapEntry, SourceRelation, SourceSpan,
-    TimePoint, TimeSeries, WriteResult, WrittenOutput,
+    DiagnosticSeverity, DiagnosticStage, Digest, DigestAlgorithm, EmitResult, EmittedOutput,
+    FormatId, HistoryEntry, HistoryId, HistoryKind, MemoryArtifact, PioModule, Producer, Scenario,
+    ScenarioId, ScenarioSet, Source, SourceBuffer, SourceDescriptor, SourceId, SourceMapEntry,
+    SourceRelation, SourceSpan, TimePoint, TimeSeries,
 };
 
-/// `powerio_tx::*` above already re-exports an `Error`/`Result` pair, but
-/// those are powerio-tx's own 0.9 enum and its alias over it, tied to its
-/// text format readers, not what [`parse`] and the source layer return. An
-/// explicit `use` of a name shadows a glob import of the same name, so these
-/// two items are what make `powerio::Error`/`powerio::Result` name the type
-/// the facade's own functions actually use.
+/// The facade error covers source acquisition, routing, stored modules, and
+/// component failures converted at their boundary.
 pub use powerio_core::Error;
 pub type Result<T> = std::result::Result<T, powerio_core::Error>;
 
@@ -74,16 +89,20 @@ pub use powerio_prob::{
 #[cfg(feature = "matrix")]
 pub use powerio_matrix as matrix;
 
+#[cfg(feature = "gridfm")]
+#[doc(hidden)]
+#[path = "gridfm.rs"]
+pub mod __gridfm;
 pub mod codes;
 #[cfg(feature = "gridfm")]
 mod collect;
 pub mod dist_geo;
 #[cfg(feature = "gridfm")]
-pub mod gridfm;
+pub use __gridfm::codes as gridfm_codes;
 pub mod select;
 pub mod stored;
-pub mod write;
-pub use write::{emit, write_module_as, write_module_str, write_module_str_with_options};
+mod write;
+pub use write::emit;
 pub mod transform;
 
 /// The replayable operating state, named at the crate root beside the other
@@ -91,7 +110,7 @@ pub mod transform;
 /// one the module surface stores and selects.
 pub use powerio_prob::OperatingPoint;
 mod value;
-pub use value::{FromPioValue, PioValue, PioValueKind, ValueKindMismatch, try_into_typed};
+pub use value::{FromPioValue, IntoTypedModule, PioValue, PioValueKind, ValueKindMismatch};
 
 /// Parse one source into a compiled module of whichever built in family
 /// claims it. Balanced network formats produce
@@ -102,12 +121,12 @@ pub use value::{FromPioValue, PioValue, PioValueKind, ValueKindMismatch, try_int
 /// produces [`PioValue::AcScucInstance`], BMOPF JSON produces
 /// [`PioValue::McAcOpfInstance`], and DeepMind OPFData JSON, which explicitly
 /// represents a solved AC OPF, produces [`PioValue::AcOpfSolution`]. The
-/// reader's findings are the module's diagnostics and the source is retained
-/// for the byte exact echo tier of the family's `write_as`.
+/// parser's findings are the module's diagnostics and the source is retained
+/// for the byte exact same format tier of [`emit`].
 ///
 /// The family comes from the source's declared format when one was selected,
 /// and otherwise from the name and content: a `.dss` extension routes to the
-/// distribution reader, a `.json` document routes by its top level markers
+/// distribution parser, a `.json` document routes by its top level markers
 /// ([`format::routing::classify_json_text`]), a name with no recognized
 /// extension whose content opens a JSON document (an in-memory source has no
 /// extension to state) routes the same way, and every other name routes to
@@ -115,7 +134,7 @@ pub use value::{FromPioValue, PioValue, PioValueKind, ValueKindMismatch, try_int
 ///
 /// Bare model JSON, the network serialization, decodes to
 /// [`PioValue::BalancedNetwork`] like any other balanced source, and a
-/// `.pio.json` document loads through the stored reader, including its one
+/// `.pio.json` document loads through the stored parser, including its one
 /// way 0.9 upgrade, retaining the file as the module's runtime source.
 ///
 /// # Errors
@@ -159,9 +178,33 @@ pub fn parse_file(
     parse(powerio_core::Source::open(path)?)
 }
 
+/// Parse named UTF-8 text into one dynamic module.
+///
+/// `name` is retained as the source name used by format detection,
+/// diagnostics, and same format emission. Pass `format` to select a parser
+/// explicitly; `None` lets the name and text choose the parser. Binary input
+/// and in-memory sources with referenced buffers use [`parse`] and [`Source`]
+/// directly.
+///
+/// # Errors
+/// The source name or explicit format is invalid, or the selected parser
+/// rejects the text.
+pub fn parse_text(
+    name: &str,
+    text: &str,
+    format: Option<&str>,
+) -> std::result::Result<powerio_core::PioModule<PioValue>, powerio_core::Error> {
+    let mut source =
+        powerio_core::Source::from_bytes(name, std::sync::Arc::<[u8]>::from(text.as_bytes()))?;
+    if let Some(format) = format {
+        source = source.with_format(powerio_core::FormatId::new(format)?);
+    }
+    parse(source)
+}
+
 /// PyPSA CSV dispatch: one snapshot with no series siblings is the scalar
 /// profile through the balanced hub; a declared axis routes to the sequence
-/// reader, producing a network series or, when only complete solved state
+/// parser, producing a network series or, when only complete solved state
 /// varies, an operating point series over one shared network.
 fn parse_pypsa(
     source: powerio_core::Source,
@@ -219,7 +262,7 @@ fn parse_gridfm(
         Some(_) => source,
         None => source.with_format(powerio_core::FormatId::new("gridfm")?),
     };
-    match gridfm::parse_gridfm_source(&source) {
+    match __gridfm::parse_gridfm_source(&source) {
         Ok((set, diagnostics)) => powerio_core::PioModule::parsed(
             PioValue::BalancedNetworkScenarioSet(set),
             source,
@@ -230,13 +273,18 @@ fn parse_gridfm(
 }
 
 /// `.pio.json` dispatch: the versioned stored serialization of
-/// `PioModule<PioValue>` loads through the stored reader, including the one
+/// `PioModule<PioValue>` loads through the stored parser, including the one
 /// way 0.9 upgrade. The loaded module retains the `.pio.json` file as its
-/// runtime source, so a same format write echoes it and diagnostics can
+/// runtime source, so same format emission echoes it and diagnostics can
 /// reference it.
 fn parse_stored(
     source: powerio_core::Source,
 ) -> std::result::Result<powerio_core::PioModule<PioValue>, powerio_core::Error> {
+    let source = if source.format().is_some() {
+        source
+    } else {
+        source.with_format(powerio_core::FormatId::new("pio-json")?)
+    };
     let loaded = {
         let buffer = source.primary_buffer()?;
         match std::str::from_utf8(buffer.content_bytes()) {
@@ -257,7 +305,7 @@ fn parse_stored(
 }
 
 /// Egret dispatch: a document declaring `system.time_keys` routes to the
-/// sequence reader and produces a balanced network time series; a scalar
+/// sequence parser and produces a balanced network time series; a scalar
 /// document routes through the balanced hub.
 fn parse_egret(
     source: powerio_core::Source,
@@ -422,7 +470,14 @@ fn family_of_token(token: &str) -> RoutedFamily {
     use format::TargetFormat;
     use powerio_dist::DistTargetFormat;
 
-    if let Some(dist_format) = powerio_dist::dist_target_from_name(token) {
+    if token == "pio-json" {
+        return RoutedFamily::Stored;
+    }
+    if token == "model-json" {
+        return RoutedFamily::Balanced(None);
+    }
+
+    if let Some(dist_format) = powerio_dist::parse_dist_target_format(token) {
         return match dist_format {
             DistTargetFormat::BmopfJson => RoutedFamily::Bmopf,
             _ => RoutedFamily::Distribution,
@@ -435,7 +490,7 @@ fn family_of_token(token: &str) -> RoutedFamily {
     if token.eq_ignore_ascii_case("gridfm") {
         return RoutedFamily::Gridfm;
     }
-    match format::target_format_from_name(token) {
+    match format::parse_target_format(token) {
         Some(TargetFormat::Goc3Json) => RoutedFamily::Goc3,
         Some(TargetFormat::DeepMindOpfDataJson) => RoutedFamily::OpfData,
         Some(TargetFormat::EgretJson) => RoutedFamily::Egret,
@@ -467,6 +522,29 @@ mod tests {
     }
 
     #[test]
+    fn parse_text_retains_its_name_and_optional_format() {
+        let case = "function mpc = inline\n\
+                    mpc.version = '2';\n\
+                    mpc.baseMVA = 100;\n\
+                    mpc.bus = [1 3 0 0 0 0 1 1 0 230 1 1.1 0.9;];\n\
+                    mpc.gen = [1 0 0 10 -10 1 100 1 10 0;];\n\
+                    mpc.branch = [];\n";
+
+        let detected = parse_text("inline-case.m", case, None).expect("name detects MATPOWER");
+        assert_eq!(detected.source().unwrap().name(), "inline-case.m");
+        assert_eq!(
+            detected.source().unwrap().format().map(FormatId::as_str),
+            Some("matpower")
+        );
+
+        let declared =
+            parse_text("consumer-input", case, Some("matpower")).expect("declared MATPOWER");
+        let source = declared.source().expect("source retained");
+        assert_eq!(source.name(), "consumer-input");
+        assert_eq!(source.format().map(FormatId::as_str), Some("matpower"));
+    }
+
+    #[test]
     fn a_dss_source_parses_to_the_multiconductor_kind() {
         let module = parse(memory(
             "feeder.dss",
@@ -475,7 +553,7 @@ mod tests {
         .expect("dss parses");
         assert_eq!(module.value().kind(), PioValueKind::MulticonductorNetwork);
         let typed: powerio_core::PioModule<powerio_dist::MulticonductorNetwork> =
-            try_into_typed(module).expect("narrows to the parsed kind");
+            module.into_typed().expect("narrows to the parsed kind");
         assert_eq!(typed.value().name().as_deref(), Some("c"));
     }
 
@@ -534,7 +612,7 @@ mod tests {
         assert_eq!(module.value().kind(), PioValueKind::AcScucInstance);
         assert!(module.source().is_some());
         let typed: powerio_core::PioModule<powerio_prob::AcScucInstance> =
-            try_into_typed(module).expect("narrows to the parsed kind");
+            module.into_typed().expect("narrows to the parsed kind");
         assert_eq!(typed.value().network().buses().len(), 2);
     }
 
@@ -544,7 +622,7 @@ mod tests {
         let module = parse(memory("example_0.json", &text)).expect("opfdata parses");
         assert_eq!(module.value().kind(), PioValueKind::AcOpfSolution);
         let typed: powerio_core::PioModule<powerio_prob::AcOpfSolution> =
-            try_into_typed(module).expect("narrows to the parsed kind");
+            module.into_typed().expect("narrows to the parsed kind");
         assert_eq!(typed.value().instance().network().buses().len(), 14);
     }
 
@@ -729,7 +807,7 @@ mod tests {
             vec![Bus::new(BusId(1), BusType::Ref, 230.0)],
             vec![],
         );
-        let text = stored::write_module(&powerio_core::PioModule::new(PioValue::BalancedNetwork(
+        let text = stored::emit_module(&powerio_core::PioModule::new(PioValue::BalancedNetwork(
             network,
         )))
         .expect("module writes");
@@ -755,7 +833,7 @@ mod tests {
             powerio_matrix::GridfmSnapshot::new(&base, 0),
             powerio_matrix::GridfmSnapshot::new(&varied, 1),
         ];
-        powerio_matrix::write_gridfm_batch(
+        powerio_matrix::emit_gridfm_batch(
             &snapshots,
             out.path(),
             &powerio_matrix::GridfmOptions::default(),
@@ -770,7 +848,7 @@ mod tests {
         );
         assert!(module.source().is_some());
         let typed: powerio_core::PioModule<powerio_core::ScenarioSet<powerio_tx::BalancedNetwork>> =
-            try_into_typed(module).expect("narrows to the parsed kind");
+            module.into_typed().expect("narrows to the parsed kind");
         let set = typed.value();
         assert_eq!(set.len(), 2);
         assert!(set.get("0").is_some());

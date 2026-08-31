@@ -8,7 +8,7 @@ PowerIO borrows one idea from compiler infrastructure: source text and the data 
 
 ## The IR is a family, not a format
 
-PowerIO's intermediate representation is the family of typed, source neutral in-memory values it can parse, inspect, transform, and write: the two network models, operating points, time series, scenario sets, the seven calculation instances, and the seven solutions. Source neutral means independent of any source file's syntax: a `BalancedNetwork` parsed from PSS/E and one parsed from MATPOWER are the same type with the same meanings. It does not mean every source can be represented without limits; each format has a documented profile, and data outside it is retained and reported rather than silently absorbed.
+PowerIO's intermediate representation is the family of typed, source neutral in-memory values it can parse, inspect, transform, and emit: the two network models, operating points, time series, scenario sets, the seven calculation instances, and the seven solutions. Source neutral means independent of any source file's syntax: a `BalancedNetwork` parsed from PSS/E and one parsed from MATPOWER are the same type with the same meanings. It does not mean every source can be represented without limits; each format has a documented profile, and data outside it is retained and reported rather than silently absorbed.
 
 There is no one universal network format in this family. `BalancedNetwork` is the reusable typed value for the supported balanced electrical profile; it does not absorb multiconductor data, other energy carriers, or source specific calculation data. `MulticonductorNetwork` stands beside it, not below it.
 
@@ -22,7 +22,7 @@ There is no one universal network format in this family. `BalancedNetwork` is th
 
 ## Transformations name their input and output
 
-Every transformation states its concrete input and output types and returns diagnostics. Multiconductor to balanced conversion moves to a less detailed representation under stated assumptions and reports what it cannot carry. Constructing a calculation instance from a network moves to a more specific calculation representation. Ordinary format conversion is parse plus write at the same level.
+Every transformation states its concrete input and output types and returns diagnostics. Multiconductor to balanced conversion moves to a less detailed representation under stated assumptions and reports what it cannot carry. Constructing a calculation instance from a network moves to a more specific calculation representation. Ordinary format conversion is parse plus emit at the same level.
 
 ## Derived data stays derived
 

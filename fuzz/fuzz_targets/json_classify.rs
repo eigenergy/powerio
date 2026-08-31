@@ -8,7 +8,7 @@
 use std::ffi::CString;
 
 use libfuzzer_sys::fuzz_target;
-use powerio::format::routing::{JSON_CLASSES, classify_json_text};
+use powerio_tx::format::routing::{JSON_CLASSES, classify_json_text};
 
 fuzz_target!(|data: &[u8]| {
     let Ok(text) = std::str::from_utf8(data) else {

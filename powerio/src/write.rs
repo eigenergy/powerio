@@ -8,7 +8,7 @@
 //! emission serializes the typed value and reports what the target cannot
 //! represent through the returned diagnostics.
 
-use powerio_core::{Destination, Diagnostic, Error, PioModule, WriteResult};
+use powerio_core::{Destination, EmitResult, Error, PioModule};
 
 use crate::PioValue;
 
@@ -23,7 +23,7 @@ pub mod codes {
 
 /// True when `format` names the stored module document.
 fn is_pio_json(format: &str) -> bool {
-    matches!(format, "pio-json" | "pio_json" | "pio.json")
+    format == "pio-json"
 }
 
 /// True when `format` names the PyPSA CSV folder target.
@@ -105,8 +105,8 @@ fn typed_sibling<T>(module: &PioModule<PioValue>, value: T) -> Result<PioModule<
 /// The module's retained source's exact original text, when that source's
 /// content is already `format`: the byte exact echo tier every kind should
 /// get, not just [`PioValue::BalancedNetwork`] and
-/// [`PioValue::MulticonductorNetwork`] (whose family writers already carry
-/// it through `powerio_tx::format::write_as` and `powerio_dist::write_as`).
+/// [`PioValue::MulticonductorNetwork`] (whose family emitters already carry
+/// it through `powerio_tx::emit` and `powerio_dist::emit`).
 /// `None` when there is no retained source, or its content is not `format`.
 ///
 /// A source declared with an explicit format token (the C ABI and bindings
@@ -114,28 +114,74 @@ fn typed_sibling<T>(module: &PioModule<PioValue>, value: T) -> Result<PioModule<
 /// bare `.json` file with no declared format, the common case for the CLI
 /// and a plain `Source::open`) is reclassified the same way `powerio::parse`'s
 /// own routing already did once to land on this kind in the first place.
-fn echo_retained_source(module: &PioModule<PioValue>, format: &str) -> Option<String> {
+fn retained_source_matches_case_format(module: &PioModule<PioValue>, format: &str) -> bool {
     use powerio_tx::format::routing::{
         Detection, JsonClass, classify_format_name, classify_json_text,
     };
 
-    let source = module.source()?;
-    let requested = classify_format_name(format).known()?;
-    let buffer = source.primary_buffer().ok()?;
+    let Some(source) = module.source() else {
+        return false;
+    };
+    let Some(requested) = classify_format_name(format).known() else {
+        return false;
+    };
     let actual = if let Some(declared) = source.format() {
-        classify_format_name(declared.as_str()).known()?
+        let Some(actual) = classify_format_name(declared.as_str()).known() else {
+            return false;
+        };
+        actual
     } else {
-        let text = std::str::from_utf8(buffer.content_bytes()).ok()?;
+        let Ok(buffer) = source.primary_buffer() else {
+            return false;
+        };
+        let Ok(text) = std::str::from_utf8(buffer.content_bytes()) else {
+            return false;
+        };
         match classify_json_text(text) {
             JsonClass::Case(Detection::Known(found)) => found,
-            _ => return None,
+            _ => return false,
         }
     };
-    if requested != actual {
+    requested == actual
+}
+
+fn echo_retained_source(module: &PioModule<PioValue>, format: &str) -> Option<String> {
+    if !retained_source_matches_case_format(module, format) {
         return None;
     }
+    let source = module.source()?;
+    let buffer = source.primary_buffer().ok()?;
     // The raw bytes, not the decoded/BOM stripped `content_bytes` used only
     // to reclassify above: an echo must reproduce the source exactly.
+    std::str::from_utf8(buffer.bytes()).ok().map(str::to_owned)
+}
+
+fn echo_retained_pio_json(module: &PioModule<PioValue>) -> Option<String> {
+    let source = module.source()?;
+    let buffer = source.primary_buffer().ok()?;
+    let content = std::str::from_utf8(buffer.content_bytes()).ok()?;
+    let is_stored = match source.format() {
+        Some(format) => format.as_str() == "pio-json",
+        None => {
+            matches!(
+                powerio_tx::format::routing::classify_json_text(content),
+                powerio_tx::format::routing::JsonClass::Module
+            )
+        }
+    };
+    if !is_stored {
+        return None;
+    }
+    // A released 0.9 NetworkPackage is an upgrade input, not a version 1
+    // document eligible for exact echo. Retain it for provenance, but emit
+    // the decoded module through the current one-way writer.
+    let header: serde_json::Value = serde_json::from_str(content).ok()?;
+    if header.get("schema").and_then(serde_json::Value::as_str) != Some(crate::stored::SCHEMA_NAME)
+        || header.get("version").and_then(serde_json::Value::as_u64)
+            != Some(u64::from(crate::stored::SCHEMA_VERSION))
+    {
+        return None;
+    }
     std::str::from_utf8(buffer.bytes()).ok().map(str::to_owned)
 }
 
@@ -157,7 +203,7 @@ fn unknown_format(format: &str) -> Error {
     )
 }
 
-/// Write one dynamic module as `format` into `destination`. The kind routes
+/// Emit one dynamic module as `format` into `destination`. The kind routes
 /// to its family writer; `pio-json` serializes any kind as the stored module
 /// document. The result carries the complete artifact inventory and the
 /// writer's findings.
@@ -170,19 +216,22 @@ fn unknown_format(format: &str) -> Error {
 /// # Panics
 /// Never on external input: the stored document's fixed artifact name is
 /// valid by construction.
-pub fn write_module_as(
+pub fn emit(
     module: &PioModule<PioValue>,
     format: &str,
     destination: Destination,
-) -> Result<WriteResult, Error> {
+) -> Result<EmitResult, Error> {
     if is_pio_json(format) {
-        let text = crate::stored::write_module(module)?;
+        let (text, exact) = match echo_retained_pio_json(module) {
+            Some(text) => (text, true),
+            None => (crate::stored::emit_module(module)?, false),
+        };
         let artifact = powerio_core::MemoryArtifact::new(
             powerio_core::ArtifactPath::new("case.pio.json")
                 .expect("static name is a valid artifact path"),
             text.into_bytes(),
         );
-        return destination.__commit_artifacts(false, vec![artifact], Vec::new());
+        return destination.__commit_artifacts(exact, vec![artifact], Vec::new());
     }
     if let Some(artifacts) = echo_retained_directory(module, format)? {
         return destination.__commit_artifacts(true, artifacts, Vec::new());
@@ -190,20 +239,30 @@ pub fn write_module_as(
     match module.value() {
         PioValue::BalancedNetwork(net) => {
             let typed = typed_sibling(module, net.clone())?;
+            let typed = if retained_source_matches_case_format(module, format) {
+                typed
+            } else {
+                typed.sever_source()
+            };
             if is_pypsa_dir(format) {
-                return powerio_tx::format::write_pypsa_csv(&typed, destination);
+                return powerio_tx::__emit_pypsa_csv(&typed, destination);
             }
-            let Some(target) = powerio_tx::format::target_format_from_name(format) else {
+            let Some(target) = powerio_tx::format::parse_target_format(format) else {
                 return Err(unknown_format(format));
             };
-            powerio_tx::format::write(&typed, target, destination)
+            powerio_tx::emit(&typed, target, destination)
         }
         PioValue::MulticonductorNetwork(net) => {
-            let Some(target) = powerio_dist::dist_target_from_name(format) else {
+            let Some(target) = powerio_dist::parse_dist_target_format(format) else {
                 return Err(unknown_format(format));
             };
             let typed = typed_sibling(module, net.clone())?;
-            powerio_dist::write(&typed, target, destination)
+            let typed = if retained_source_matches_case_format(module, format) {
+                typed
+            } else {
+                typed.sever_source()
+            };
+            powerio_dist::emit(&typed, target, destination)
         }
         _ => {
             if let Some(text) = echo_retained_source(module, format) {
@@ -223,100 +282,13 @@ pub fn write_module_as(
     }
 }
 
-/// Emit a module in `format` to a path, directory, or memory destination.
-///
-/// This is the preferred compiler-style output operation. The existing
-/// [`write_module_as`] and text helpers remain available throughout 0.10 for
-/// compatibility.
-///
-/// # Errors
-/// As [`write_module_as`].
-pub fn emit(
-    module: &PioModule<PioValue>,
-    format: &str,
-    destination: Destination,
-) -> Result<WriteResult, Error> {
-    write_module_as(module, format, destination)
-}
-
-/// [`write_module_as`] for a single text artifact: the converted text and the
-/// writer's findings, without touching the filesystem. Directory targets
-/// (PyPSA CSV) are refused; write them through a path destination. A
-/// multiconductor target with a sidecar (georeferenced DSS and its buscoords
-/// CSV) returns the primary text and reports the dropped sidecar as a
-/// finding.
-///
-/// # Errors
-/// As [`write_module_as`].
-pub fn write_module_str(
-    module: &PioModule<PioValue>,
-    format: &str,
-) -> Result<(String, Vec<Diagnostic>), Error> {
-    write_module_str_with_options(module, format, &powerio_tx::WriteOptions::default())
-}
-
-/// [`write_module_str`] with the balanced write-time cost policies applied.
-/// The policies are a balanced network concern; a multiconductor or stored
-/// document target ignores them.
-///
-/// # Errors
-/// As [`write_module_as`].
-pub fn write_module_str_with_options(
-    module: &PioModule<PioValue>,
-    format: &str,
-    options: &powerio_tx::WriteOptions,
-) -> Result<(String, Vec<Diagnostic>), Error> {
-    if is_pypsa_dir(format) {
-        return Err(Error::new(
-            &codes::REQUEST_WRITE_UNSUPPORTED_VALUE_KIND,
-            "pypsa-csv is a directory target; write it through a path destination",
-        ));
-    }
-    if is_pio_json(format) {
-        let text = crate::stored::write_module(module)?;
-        return Ok((text, Vec::new()));
-    }
-    match module.value() {
-        PioValue::BalancedNetwork(net) => {
-            let typed = typed_sibling(module, net.clone())?;
-            let Some(target) = powerio_tx::format::target_format_from_name(format) else {
-                return Err(unknown_format(format));
-            };
-            let conv = powerio_tx::format::write_as_with_options(&typed, target, options)?;
-            Ok((conv.text, conv.diagnostics))
-        }
-        PioValue::MulticonductorNetwork(net) => {
-            let Some(target) = powerio_dist::dist_target_from_name(format) else {
-                return Err(unknown_format(format));
-            };
-            let typed = typed_sibling(module, net.clone())?;
-            let conv = powerio_dist::write_as(&typed, target);
-            let mut diagnostics = conv.diagnostics;
-            for sidecar in &conv.sidecars {
-                diagnostics.push(sidecar.dropped_diagnostic("the text form carries one file"));
-            }
-            Ok((conv.text, diagnostics))
-        }
-        _ => {
-            if let Some(text) = echo_retained_source(module, format) {
-                return Ok((text, Vec::new()));
-            }
-            if known_format_name(format) {
-                Err(unsupported_kind(module, format))
-            } else {
-                Err(unknown_format(format))
-            }
-        }
-    }
-}
-
 /// True when `format` is a name some family recognizes, used to tell "wrong
 /// kind for this format" apart from "no such format".
 fn known_format_name(format: &str) -> bool {
     is_pio_json(format)
         || is_pypsa_dir(format)
-        || powerio_tx::format::target_format_from_name(format).is_some()
-        || powerio_dist::dist_target_from_name(format).is_some()
+        || powerio_tx::format::parse_target_format(format).is_some()
+        || powerio_dist::parse_dist_target_format(format).is_some()
 }
 
 #[cfg(test)]

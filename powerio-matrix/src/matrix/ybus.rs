@@ -45,7 +45,12 @@ pub(crate) struct YbusFlags {
     pub skip_zero_impedance: bool,
 }
 
-pub fn build_ybus(case: &IndexedNetwork, opts: &super::BuildOptions) -> Result<YbusParts> {
+/// Calculate the bus admittance matrix, returned as separate real and
+/// imaginary sparse matrices.
+pub fn calc_admittance_matrix(
+    case: &IndexedNetwork,
+    opts: &super::BuildOptions,
+) -> Result<YbusParts> {
     let flags = YbusFlags {
         zero_resistance: false,
         zero_charging: false,
@@ -85,7 +90,7 @@ pub(crate) fn build_ybus_with_flags(case: &IndexedNetwork, flags: YbusFlags) -> 
         let shift_rad = if flags.zero_shifts {
             0.0
         } else {
-            case.angle_radians(br.shift)
+            case.to_radians(br.shift)
         };
         let Some([y_ii, y_ij, y_ji, y_jj]) = branch_admittance(br, flags, shift_rad, row_idx)?
         else {
@@ -155,7 +160,7 @@ pub(crate) fn branch_admittance(
     // Zero impedance in every sense the builder can act on; exact zero used to
     // be the whole test. The guard and the division are shared with the AC
     // path, so the two cannot drift; only the skip-vs-error policy is local.
-    let Some((g, b)) = powerio_tx::series_admittance_of(r, x, row)? else {
+    let Some((g, b)) = powerio_tx::calc_series_admittance_of(r, x, row)? else {
         if flags.skip_zero_impedance {
             return Ok(None);
         }
@@ -166,7 +171,7 @@ pub(crate) fn branch_admittance(
     let charging = if flags.zero_charging {
         crate::network::BranchCharging::new(0.0, 0.0, 0.0, 0.0)
     } else {
-        br.terminal_charging()
+        br.calc_terminal_charging()
     };
     let y_fr = Complex64::new(charging.g_fr, charging.b_fr);
     let y_to = Complex64::new(charging.g_to, charging.b_to);
@@ -176,7 +181,7 @@ pub(crate) fn branch_admittance(
     let tap_mag = if flags.unity_taps {
         1.0
     } else {
-        br.divisible_tap(row)?
+        br.calc_divisible_tap(row)?
     };
     // `shift_rad` is supplied already in radians and already zeroed when
     // `flags.zero_shifts` is set (the caller has the network, so it knows whether

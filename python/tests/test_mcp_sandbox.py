@@ -13,7 +13,11 @@ import pytest
 from powerio.mcp import sandbox
 
 DATA = Path(__file__).resolve().parents[2] / "tests" / "data"
-ENV_NAMES = ("POWERIO_MCP_ALLOWED_ROOTS", "POWERIO_MCP_ROOT", "POWERIO_MCP_ALLOWED_ROOT")
+ENV_NAMES = (
+    "POWERIO_MCP_ALLOWED_ROOTS",
+    "POWERIO_MCP_ROOT",
+    "POWERIO_MCP_ALLOWED_ROOT",
+)
 
 
 @pytest.fixture(autouse=True)
@@ -177,9 +181,7 @@ def test_admitting_root_names_the_containing_root(monkeypatch, tmp_path):
     b.mkdir()
     case = b / "case.dss"
     case.write_text("New Circuit.c\n")
-    monkeypatch.setenv(
-        sandbox.ALLOWED_ROOTS_ENV, os.pathsep.join([str(a), str(b)])
-    )
+    monkeypatch.setenv(sandbox.ALLOWED_ROOTS_ENV, os.pathsep.join([str(a), str(b)]))
     assert sandbox.admitting_root(case) == b.resolve()
     with pytest.raises(sandbox.PathNotAllowed):
         sandbox.admitting_root(tmp_path / "elsewhere.dss")
@@ -281,9 +283,7 @@ def test_staged_directory_write_refuses_collisions_before_install(tmp_path):
         sandbox.staged_directory_write(
             str(out),
             False,
-            lambda staging: _write_tree(
-                staging, {"same.csv": "new", "new.csv": "new"}
-            ),
+            lambda staging: _write_tree(staging, {"same.csv": "new", "new.csv": "new"}),
         )
 
     assert (out / "same.csv").read_text() == "old"
@@ -336,4 +336,6 @@ def test_staged_directory_write_rolls_back_a_failed_swap(monkeypatch, tmp_path):
         )
 
     assert (out / "same.csv").read_text() == "old"
-    assert not [path for path in tmp_path.iterdir() if path.name.startswith(".dataset.")]
+    assert not [
+        path for path in tmp_path.iterdir() if path.name.startswith(".dataset.")
+    ]

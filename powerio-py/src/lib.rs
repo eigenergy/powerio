@@ -1,7 +1,7 @@
 //! PyO3 extension behind the `powerio` Python package.
 //!
 //! The extension exposes parsing, writing, conversion, matrices, packages, and
-//! problem instances. Parse and conversion values cross as Python dictionaries
+//! problem instances. Parse and emission values cross as Python dictionaries
 //! and strings, so the base package does not import NumPy or SciPy.
 //!
 //! The matrix methods hand back COO triplets as plain Python lists
@@ -19,36 +19,34 @@ use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList};
 use sprs::CsMat;
 
+use powerio::{BalancedNetwork, BranchSusceptanceFormula, DisplayData, PwdDisplay};
+use powerio_matrix::DcOperators;
 use powerio_matrix::matrix::{
-    BuildOptions, DcConvention, Scheme, SensitivityOptions, SensitivitySolver, build_adjacency,
-    build_bdoubleprime, build_bprime, build_incidence, build_lacpf, build_ptdf_lodf_with_options,
-    build_weighted_laplacian, build_ybus,
-};
-use powerio_matrix::{
-    BalancedNetwork, DisplayData, IndexCore, IndexedNetwork, MissingGenCostPolicy,
-    NormalizeOptions, POWER_MODELS_ANGLE_BOUND_PAD, PwdDisplay, WriteOptions,
+    BuildOptions, Scheme, SensitivityOptions, SensitivitySolver, calc_adjacency_matrix,
+    calc_admittance_matrix, calc_bdoubleprime_matrix, calc_bprime_matrix, calc_lacpf_matrix,
+    calc_ptdf_lodf_with_options,
 };
 use powerio_matrix::{
     DcOpfAssemblyOptions, DcOpfBundleMetadata, DcOpfBundleOptions, Units,
-    write_dcopf_bundle as write_bundle,
+    emit_dcopf_bundle as write_bundle,
+};
+use powerio_tx::{
+    Detection, EmitOptions, IndexCore, IndexedNetwork, JsonClass, MissingGenCostPolicy,
+    NormalizeOptions, POWER_MODELS_ANGLE_BOUND_PAD, TargetFormat,
+    classify_json_text as classify_balanced_json_text, parse_gen_cost_csv, parse_target_format,
 };
 
 #[cfg(feature = "gridfm")]
-use powerio::gridfm::{
-    GridfmRead, read_gridfm_dataset as gridfm_read_dataset,
-    read_gridfm_scenarios as gridfm_read_scenarios,
-};
-#[cfg(feature = "gridfm")]
 use powerio_matrix::io::gridfm::{
-    GridfmOptions, GridfmOutputs, numbered_snapshots, write_gridfm_batch as gridfm_write_batch,
-    write_gridfm_dataset as gridfm_write_dataset,
+    GridfmOptions, GridfmOutputs, emit_gridfm_batch as gridfm_write_batch,
+    emit_gridfm_dataset as gridfm_write_dataset, number_snapshots as numbered_snapshots,
 };
 
 pyo3::create_exception!(
     powerio,
     PowerIOError,
     pyo3::exceptions::PyValueError,
-    "Base error raised by the powerio parser, converter, or matrix builders.\n\n\
+    "Base error raised by the powerio parser, emitter, or matrix calculations.\n\n\
      Subclasses `ValueError`: every failure it covers is a statement about a \
      value the caller supplied, and `except ValueError` was what callers wrote \
      before the hierarchy existed. I/O failures do not reach it; they raise the \
@@ -74,7 +72,7 @@ pyo3::create_exception!(
      shape mismatch, or a dimension/cost mismatch)."
 );
 
-/// Map a [`powerio_matrix::Error`] onto the right Python exception, driven by
+/// Map a PowerIO error onto the right Python exception, driven by
 /// [`Error::category`]. I/O failures become the matching `OSError` subclass
 /// (`FileNotFoundError`, `PermissionError`, …); an unknown/uninferable format
 /// becomes a `ValueError`; malformed input becomes [`PowerIOParseError`] and an
@@ -86,11 +84,11 @@ pyo3::create_exception!(
 /// Every crate's error carries the same `category()`, so one mapping serves
 /// all of them and the hierarchy cannot drift per surface.
 fn categorized_pyerr(
-    category: powerio_matrix::ErrorCategory,
+    category: powerio_tx::ErrorCategory,
     code: &'static str,
     msg: String,
 ) -> PyErr {
-    use powerio_matrix::ErrorCategory as C;
+    use powerio_tx::ErrorCategory as C;
     let err = match category {
         // A request refusal is a PowerIOError, never a bare ValueError, the
         // same rule core_error_pyerr states; PowerIOError subclasses
@@ -114,9 +112,9 @@ fn with_code(err: PyErr, code: &'static str) -> PyErr {
     err
 }
 
-fn core_pyerr(e: powerio_matrix::CoreError) -> PyErr {
+fn core_pyerr(e: powerio_tx::Error) -> PyErr {
     // Hand I/O to PyO3 by value so it picks the precise `OSError` subclass.
-    if let powerio_matrix::CoreError::Io(io) = e {
+    if let powerio_tx::Error::Io(io) = e {
         return io.into();
     }
     let category = e.category();
@@ -128,7 +126,7 @@ fn to_pyerr(e: powerio_matrix::Error) -> PyErr {
     use powerio_matrix::Error as E;
     match e {
         E::Io(io) => io.into(),
-        E::Core(inner) => core_pyerr(inner),
+        E::Transmission(inner) => core_pyerr(inner),
         other => {
             let category = other.category();
             let code = other.code().code;
@@ -159,31 +157,14 @@ fn parse_scheme(s: &str) -> PyResult<Scheme> {
     }
 }
 
-/// Accepts the 1.0 formula names (`series_susceptance`, `tap_adjusted_reactance`,
-/// `reactance_only`), their storage aliases (`series`, `matpower`), and two
-/// Python-only 0.9 aliases (`series-impedance`, `mp`); case- and
-/// separator-insensitive (`-` and `_` are interchangeable).
-fn parse_convention(s: &str) -> PyResult<DcConvention> {
-    let normalized = s.to_ascii_lowercase().replace('-', "_");
-    if let Some(convention) = DcConvention::from_formula_name(&normalized) {
-        return Ok(convention);
-    }
-    match normalized.as_str() {
-        "series_impedance" => Ok(DcConvention::SeriesSusceptance),
-        "mp" => Ok(DcConvention::TapAdjustedReactance),
-        // 0.8 spelled b = 1/x "paper"/"paper-pure" and made it the default.
-        // Name its successor: the nearest-looking option, "series", is a
-        // different formula, so a caller who guesses gets numbers instead of
-        // an error.
-        "paper" | "paper_pure" | "pure" => Err(PyValueError::new_err(
-            "convention 'paper-pure' is now 'reactance-only'; it is no longer \
-             the default, and 'series' is a different formula (b = x/(r²+x²))",
-        )),
-        other => Err(PyValueError::new_err(format!(
-            "unknown convention {other:?}; expected 'series_susceptance', \
-             'tap_adjusted_reactance', or 'reactance_only'"
-        ))),
-    }
+/// Parse one stable 1.0 branch susceptance formula name.
+fn parse_formula(s: &str) -> PyResult<BranchSusceptanceFormula> {
+    BranchSusceptanceFormula::from_formula_name(s).ok_or_else(|| {
+        PyValueError::new_err(format!(
+            "unknown branch susceptance formula {s:?}; expected \
+             'series_susceptance', 'tap_adjusted_reactance', or 'reactance_only'"
+        ))
+    })
 }
 
 /// PTDF/LODF options from the Python keywords. The solver defaults to `auto`,
@@ -192,10 +173,10 @@ fn parse_convention(s: &str) -> PyResult<DcConvention> {
 /// applies, so a very large case cannot force the dense n×n factorization
 /// from Python.
 fn sensitivity_options(
-    convention: Option<&str>,
+    formula: Option<&str>,
     solver: Option<&str>,
 ) -> PyResult<SensitivityOptions> {
-    let convention = parse_convention(convention.unwrap_or("series"))?;
+    let formula = parse_formula(formula.unwrap_or("series_susceptance"))?;
     let solver = match normalize(solver.unwrap_or("auto")).as_str() {
         "auto" => SensitivitySolver::Auto,
         "dense" => SensitivitySolver::Dense,
@@ -207,7 +188,7 @@ fn sensitivity_options(
         }
     };
     Ok(SensitivityOptions {
-        convention,
+        formula,
         solver,
         ..SensitivityOptions::default()
     })
@@ -265,7 +246,7 @@ fn parse_missing_gen_cost(
                 )
             })?;
             let [c2, c1, c0] = parse_cost_triple(value)?;
-            Ok(MissingGenCostPolicy::quadratic(c2, c1, c0))
+            Ok(MissingGenCostPolicy::calc_quadratic(c2, c1, c0))
         }
         other => Err(PyValueError::new_err(format!(
             "unknown missing_gen_cost {other:?}; expected 'preserve', 'require', 'zero', or 'quadratic'"
@@ -294,12 +275,12 @@ fn parse_cost_triple(value: &str) -> PyResult<[f64; 3]> {
     Ok(out)
 }
 
-fn write_options(
+fn emit_options(
     missing_gen_cost: Option<&str>,
     default_gen_cost: Option<&str>,
     gen_cost_csv: Option<&str>,
     default_policy: MissingGenCostPolicy,
-) -> PyResult<WriteOptions> {
+) -> PyResult<EmitOptions> {
     let missing_gen_cost =
         parse_missing_gen_cost(missing_gen_cost, default_gen_cost, default_policy)?;
     let gen_cost_patches = match gen_cost_csv {
@@ -307,14 +288,45 @@ fn write_options(
             let text = std::fs::read_to_string(path).map_err(|e| {
                 PyValueError::new_err(format!("reading gen_cost_csv {path:?}: {e}"))
             })?;
-            powerio_matrix::parse_gen_cost_csv(&text).map_err(core_pyerr)?
+            parse_gen_cost_csv(&text).map_err(core_pyerr)?
         }
         None => Vec::new(),
     };
-    Ok(WriteOptions {
+    Ok(EmitOptions {
         missing_gen_cost,
         gen_cost_patches,
     })
+}
+
+/// Extract the single UTF-8 artifact produced for an in-memory file target.
+/// Directory formats must name a destination when they produce companions;
+/// returning only their primary text would silently discard the inventory.
+fn emitted_text(
+    result: powerio_core::EmitResult,
+    format: &str,
+) -> PyResult<(String, Vec<powerio_core::Diagnostic>)> {
+    let diagnostics = result.diagnostics().to_vec();
+    let powerio_core::EmittedOutput::Memory { mut artifacts } = result.into_output() else {
+        unreachable!("a memory destination always returns memory artifacts")
+    };
+    if artifacts.len() != 1 {
+        return Err(PowerIOError::new_err(format!(
+            "{format} emits {} artifacts; provide a destination path",
+            artifacts.len()
+        )));
+    }
+    let text = String::from_utf8(artifacts.remove(0).into_bytes()).map_err(|_| {
+        PowerIOError::new_err(format!("{format} emitted bytes that are not UTF-8 text"))
+    })?;
+    Ok((text, diagnostics))
+}
+
+fn py_diagnostics(result: &powerio_core::EmitResult) -> Vec<PyDiagnostic> {
+    result
+        .diagnostics()
+        .iter()
+        .map(PyDiagnostic::from)
+        .collect()
 }
 
 /// A JSON serialization failure in this binding's own writer, raised on the
@@ -322,7 +334,7 @@ fn write_options(
 /// gave it when the stored document owned the writer.
 fn serialize_pyerr(e: serde_json::Error) -> PyErr {
     categorized_pyerr(
-        powerio_matrix::ErrorCategory::Output,
+        powerio_tx::ErrorCategory::Output,
         powerio::codes::EMIT_MODULE_SERIALIZE_FAILED.code,
         e.to_string(),
     )
@@ -407,7 +419,7 @@ fn build_options(
 /// straight to it, and the matrix methods turn its COO tuples into scipy.
 ///
 /// The derived [`IndexCore`] is built once and cached alongside `inner`, so the
-/// matrix builders and topology getters reuse it instead of rebuilding the
+/// matrix calculations and topology getters reuse it instead of rebuilding the
 /// bus-id map per call.
 #[pyclass(name = "_BalancedNetwork", module = "powerio._powerio")]
 pub struct PyBalancedNetwork {
@@ -416,8 +428,6 @@ pub struct PyBalancedNetwork {
     /// a handle built from a bare network writes canonically.
     module: powerio_core::PioModule<BalancedNetwork>,
     core: IndexCore,
-    /// The findings as `CODE: message` lines, rendered once at construction.
-    warnings: Vec<String>,
 }
 
 impl PyBalancedNetwork {
@@ -425,8 +435,16 @@ impl PyBalancedNetwork {
         self.module.value()
     }
 
-    fn diagnostics(&self) -> &[powerio_matrix::diagnostics::Diagnostic] {
+    fn diagnostics(&self) -> &[powerio_core::Diagnostic] {
         self.module.diagnostics()
+    }
+
+    fn dc_operators(&self, formula: &str) -> PyResult<DcOperators> {
+        let formula = parse_formula(formula)?;
+        let instance = powerio_prob::DcPfInstance::from_network(self.inner().clone())
+            .map_err(|error| core_error_pyerr(&error))?
+            .with_branch_susceptance_formula(formula);
+        DcOperators::build(&instance).map_err(|error| core_error_pyerr(&error))
     }
 }
 
@@ -472,18 +490,14 @@ fn core_open_pyerr(path: &std::path::Path, error: &powerio_core::Error) -> PyErr
 /// and keeping the reader's findings on the handle.
 fn case_from_module(module: powerio_core::PioModule<BalancedNetwork>) -> PyBalancedNetwork {
     let core = IndexCore::build(module.value());
-    PyBalancedNetwork {
-        core,
-        warnings: powerio_matrix::diagnostics::render_diagnostics(module.diagnostics()),
-        module,
-    }
+    PyBalancedNetwork { core, module }
 }
 
 /// Wrap a bare network with findings: derived handles carry no retained
 /// source and write canonically.
 fn case_from_parts(
     network: BalancedNetwork,
-    diagnostics: Vec<powerio_matrix::diagnostics::Diagnostic>,
+    diagnostics: Vec<powerio_core::Diagnostic>,
 ) -> PyBalancedNetwork {
     let mut module = powerio_core::PioModule::new(network);
     for diagnostic in diagnostics {
@@ -544,22 +558,6 @@ impl PyBalancedNetwork {
     #[getter]
     fn source_format(&self) -> String {
         self.inner().source_format().name().to_owned()
-    }
-
-    /// Fidelity findings rendered at read time: tables, columns, or values
-    /// the model cannot carry, reported instead of dropped silently. This is
-    /// the rendered text of the diagnostics the reader recorded, not a
-    /// per-format guarantee; the count varies by source and is often zero.
-    #[getter]
-    fn read_warnings(&self) -> Vec<String> {
-        self.warnings.clone()
-    }
-
-    /// The same read fidelity findings as `read_warnings`, structured: one
-    /// JSON array of code/severity/message/target records.
-    fn diagnostics_json(&self) -> PyResult<String> {
-        let diagnostics = diagnostics_json_array(self.diagnostics());
-        serde_json::to_string(&diagnostics).map_err(serialize_pyerr)
     }
 
     #[getter]
@@ -625,13 +623,13 @@ impl PyBalancedNetwork {
 
     #[getter]
     fn n_connected_components(&self) -> usize {
-        IndexedNetwork::with_core(self.inner(), &self.core).n_connected_components()
+        IndexedNetwork::with_core(self.inner(), &self.core).calc_island_count()
     }
 
     /// Power system terminology for `n_connected_components`.
     #[getter]
     fn n_islands(&self) -> usize {
-        IndexedNetwork::with_core(self.inner(), &self.core).n_connected_components()
+        IndexedNetwork::with_core(self.inner(), &self.core).calc_island_count()
     }
 
     /// Dense `[0, n)` index of the single reference bus. Raises if not exactly
@@ -725,8 +723,8 @@ impl PyBalancedNetwork {
             d.set_item("to_id", br.to.0)?;
             d.set_item("r", br.r)?;
             d.set_item("x", br.x)?;
-            let charging = br.terminal_charging();
-            d.set_item("b", br.total_charging_b())?;
+            let charging = br.calc_terminal_charging();
+            d.set_item("b", br.calc_total_charging_b())?;
             d.set_item("g_fr", charging.g_fr)?;
             d.set_item("b_fr", charging.b_fr)?;
             d.set_item("g_to", charging.g_to)?;
@@ -848,7 +846,11 @@ impl PyBalancedNetwork {
     }
 
     fn connectivity_report<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
-        let r = IndexedNetwork::with_core(self.inner(), &self.core).connectivity_report();
+        self.calc_connectivity_report(py)
+    }
+
+    fn calc_connectivity_report<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
+        let r = IndexedNetwork::with_core(self.inner(), &self.core).calc_connectivity_report();
         let d = PyDict::new(py);
         d.set_item("n_buses", r.n_buses)?;
         d.set_item("n_branches_in_service", r.n_branches_in_service)?;
@@ -860,9 +862,11 @@ impl PyBalancedNetwork {
     /// Serialize this case to MATPOWER `.m` text. For a MATPOWER-parsed case this
     /// is the byte-exact source echo, written through the module.
     fn to_matpower(&self) -> PyResult<String> {
-        powerio_matrix::write_as(&self.module, powerio_matrix::TargetFormat::Matpower)
-            .map(|conv| conv.text)
-            .map_err(|error| core_error_pyerr(&error))
+        let destination =
+            powerio_core::Destination::memory("case").map_err(|error| core_error_pyerr(&error))?;
+        let result = powerio_tx::emit(&self.module, TargetFormat::Matpower, destination)
+            .map_err(|error| core_error_pyerr(&error))?;
+        emitted_text(result, "matpower").map(|(text, _)| text)
     }
 
     /// Serialize this case to the JSON transport.
@@ -879,33 +883,32 @@ impl PyBalancedNetwork {
         default_gen_cost: Option<&str>,
         gen_cost_csv: Option<&str>,
     ) -> PyResult<(String, Vec<PyDiagnostic>)> {
-        let target = to
-            .parse::<powerio_matrix::TargetFormat>()
-            .map_err(core_pyerr)?;
-        let opts = write_options(
+        let target = to.parse::<TargetFormat>().map_err(core_pyerr)?;
+        let opts = emit_options(
             missing_gen_cost,
             default_gen_cost,
             gen_cost_csv,
             MissingGenCostPolicy::Preserve,
         )?;
-        let conv = powerio_matrix::write_as_with_options(&self.module, target, &opts)
-            .map_err(|e| core_error_pyerr(&e))?;
-        let rendered: Vec<PyDiagnostic> = conv.diagnostics.iter().map(PyDiagnostic::from).collect();
-        Ok((conv.text, rendered))
+        let destination =
+            powerio_core::Destination::memory("case").map_err(|error| core_error_pyerr(&error))?;
+        let result = powerio_tx::emit_with_options(&self.module, target, &opts, destination)
+            .map_err(|error| core_error_pyerr(&error))?;
+        let (text, diagnostics) = emitted_text(result, to)?;
+        Ok((text, diagnostics.iter().map(PyDiagnostic::from).collect()))
     }
 
     /// Serialize this case to `to`, bypassing source echo for the same
     /// format. Returns `(text, warnings)`.
     fn to_canonical_format(&self, to: &str) -> PyResult<(String, Vec<PyDiagnostic>)> {
-        let target = to
-            .parse::<powerio_matrix::TargetFormat>()
-            .map_err(core_pyerr)?;
-        let conv = self
-            .inner()
-            .to_canonical_format(target)
-            .map_err(core_pyerr)?;
-        let rendered: Vec<PyDiagnostic> = conv.diagnostics.iter().map(PyDiagnostic::from).collect();
-        Ok((conv.text, rendered))
+        let target = to.parse::<TargetFormat>().map_err(core_pyerr)?;
+        let module = powerio_core::PioModule::new(self.inner().clone());
+        let destination =
+            powerio_core::Destination::memory("case").map_err(|error| core_error_pyerr(&error))?;
+        let result = powerio_tx::emit(&module, target, destination)
+            .map_err(|error| core_error_pyerr(&error))?;
+        let (text, diagnostics) = emitted_text(result, to)?;
+        Ok((text, diagnostics.iter().map(PyDiagnostic::from).collect()))
     }
 
     /// Serialize this case to `to` and write it to `path` exactly as
@@ -923,10 +926,21 @@ impl PyBalancedNetwork {
         default_gen_cost: Option<&str>,
         gen_cost_csv: Option<&str>,
     ) -> PyResult<Vec<PyDiagnostic>> {
-        let (text, warnings) =
-            self.to_format(to, missing_gen_cost, default_gen_cost, gen_cost_csv)?;
-        commit_text_file(std::path::Path::new(path), text.into_bytes())?;
-        Ok(warnings)
+        let target = to.parse::<TargetFormat>().map_err(core_pyerr)?;
+        let options = emit_options(
+            missing_gen_cost,
+            default_gen_cost,
+            gen_cost_csv,
+            MissingGenCostPolicy::Preserve,
+        )?;
+        let result = powerio_tx::emit_with_options(
+            &self.module,
+            target,
+            &options,
+            powerio_core::Destination::path(path),
+        )
+        .map_err(|error| core_error_pyerr(&error))?;
+        Ok(py_diagnostics(&result))
     }
 
     /// A normalized, computation-ready copy of this case: per unit, radians,
@@ -957,7 +971,7 @@ impl PyBalancedNetwork {
         Ok(case_from_parts(normalized.network, diagnostics))
     }
 
-    // --- matrix builders: each returns a COO tuple ----------------------
+    // --- matrix calculations: each returns a COO tuple -----------------
 
     /// MATPOWER FDPF Bp matrix. `skip_zero_impedance=False` refuses a zero
     /// impedance branch (`r` and `x` both zero); pass `True` to drop it
@@ -975,40 +989,66 @@ impl PyBalancedNetwork {
             ..BuildOptions::default()
         };
         let view = IndexedNetwork::with_core(self.inner(), &self.core);
-        let m = build_bprime(&view, &opts).map_err(to_pyerr)?;
+        let m = calc_bprime_matrix(&view, &opts).map_err(to_pyerr)?;
         coo_triplets(py, &m)
     }
 
-    /// The DC branch data under one named susceptance formula: incidence
-    /// row endpoints, susceptance, phase shift injection, stable element
-    /// mappings for every included row and omitted branch, and the selected
-    /// formula. Key spellings match the C `pio_dc_data_*` accessors and the
-    /// Rust `DcNetworkData` fields, so every language reads the same names
-    /// in the same element order.
+    /// Calculate the PowerModels branch by bus incidence matrix.
     #[pyo3(signature = (formula="series_susceptance"))]
-    fn dc_data<'py>(&self, py: Python<'py>, formula: &str) -> PyResult<Bound<'py, PyDict>> {
-        let Some(convention) = powerio::DcConvention::from_formula_name(formula) else {
-            return Err(PyValueError::new_err(format!(
-                "unknown branch susceptance formula {formula:?}; expected \
-                 series_susceptance, tap_adjusted_reactance, or reactance_only"
-            )));
-        };
-        let view = IndexedNetwork::with_core(self.inner(), &self.core);
-        let data = powerio::dc_network_data(&view, convention);
-        let out = PyDict::new(py);
-        out.set_item("from_indices", data.from_indices)?;
-        out.set_item("to_indices", data.to_indices)?;
-        out.set_item("susceptance", data.susceptance)?;
-        out.set_item("shift", data.shift)?;
-        out.set_item("shift_injection", data.shift_injection)?;
-        out.set_item("row_ids", data.row_ids)?;
-        out.set_item("bus_ids", data.bus_ids)?;
-        let (omitted_ids, omitted_reasons): (Vec<String>, Vec<String>) =
-            data.omitted.into_iter().unzip();
-        out.set_item("omitted_ids", omitted_ids)?;
-        out.set_item("omitted_reasons", omitted_reasons)?;
-        out.set_item("formula", data.formula)?;
-        Ok(out)
+    fn calc_incidence_matrix<'py>(
+        &self,
+        py: Python<'py>,
+        formula: &str,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        coo_triplets(py, &self.dc_operators(formula)?.calc_incidence_matrix())
+    }
+
+    /// Calculate `Bf = diag(b) A`, branches by buses.
+    #[pyo3(signature = (formula="series_susceptance"))]
+    fn calc_branch_susceptance_matrix<'py>(
+        &self,
+        py: Python<'py>,
+        formula: &str,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        coo_triplets(
+            py,
+            &self.dc_operators(formula)?.calc_branch_susceptance_matrix(),
+        )
+    }
+
+    /// Calculate `B = A' diag(b) A`, buses by buses.
+    #[pyo3(signature = (formula="series_susceptance"))]
+    fn calc_bus_susceptance_matrix<'py>(
+        &self,
+        py: Python<'py>,
+        formula: &str,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        coo_triplets(
+            py,
+            &self.dc_operators(formula)?.calc_bus_susceptance_matrix(),
+        )
+    }
+
+    /// Calculate `A' (b .* shift)` in bus order.
+    #[pyo3(signature = (formula="series_susceptance"))]
+    fn calc_phase_shift_injection(&self, formula: &str) -> PyResult<Vec<f64>> {
+        Ok(self.dc_operators(formula)?.calc_phase_shift_injection())
+    }
+
+    /// Calculate `-Bf * va + b .* shift` in active branch order.
+    #[pyo3(signature = (voltage_angles, formula="series_susceptance"))]
+    fn calc_branch_flow_dc(&self, voltage_angles: Vec<f64>, formula: &str) -> PyResult<Vec<f64>> {
+        self.dc_operators(formula)?
+            .calc_branch_flow_dc(&voltage_angles)
+            .map_err(|error| core_error_pyerr(&error))
+    }
+
+    /// Calculate `-B * va + p_shift` in bus order.
+    #[pyo3(signature = (voltage_angles, formula="series_susceptance"))]
+    fn calc_bus_injection_dc(&self, voltage_angles: Vec<f64>, formula: &str) -> PyResult<Vec<f64>> {
+        self.dc_operators(formula)?
+            .calc_bus_injection_dc(&voltage_angles)
+            .map_err(|error| core_error_pyerr(&error))
     }
 
     /// MATPOWER FDPF Bpp matrix. `skip_zero_impedance` as in `bprime`.
@@ -1026,7 +1066,7 @@ impl PyBalancedNetwork {
             ..BuildOptions::default()
         };
         let view = IndexedNetwork::with_core(self.inner(), &self.core);
-        let m = build_bdoubleprime(&view, &opts).map_err(to_pyerr)?;
+        let m = calc_bdoubleprime_matrix(&view, &opts).map_err(to_pyerr)?;
         coo_triplets(py, &m)
     }
 
@@ -1046,13 +1086,13 @@ impl PyBalancedNetwork {
             skip_zero_impedance,
         );
         let view = IndexedNetwork::with_core(self.inner(), &self.core);
-        let m = build_lacpf(&view, &opts).map_err(to_pyerr)?;
+        let m = calc_lacpf_matrix(&view, &opts).map_err(to_pyerr)?;
         coo_triplets(py, &m)
     }
 
     fn adjacency<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let view = IndexedNetwork::with_core(self.inner(), &self.core);
-        let m = build_adjacency(&view).map_err(to_pyerr)?;
+        let m = calc_adjacency_matrix(&view).map_err(to_pyerr)?;
         coo_triplets(py, &m)
     }
 
@@ -1073,90 +1113,61 @@ impl PyBalancedNetwork {
             skip_zero_impedance,
         );
         let view = IndexedNetwork::with_core(self.inner(), &self.core);
-        let yb = build_ybus(&view, &opts).map_err(to_pyerr)?;
+        let yb = calc_admittance_matrix(&view, &opts).map_err(to_pyerr)?;
         let g = coo_triplets(py, &yb.g)?;
         let b = coo_triplets(py, &yb.b)?;
         Ok((g, b).into_pyobject(py)?.into_any())
     }
 
-    #[pyo3(signature = (convention=None, solver=None))]
+    #[pyo3(signature = (formula=None, solver=None))]
     fn ptdf<'py>(
         &self,
         py: Python<'py>,
-        convention: Option<&str>,
+        formula: Option<&str>,
         solver: Option<&str>,
     ) -> PyResult<Bound<'py, PyAny>> {
-        let opts = sensitivity_options(convention, solver)?;
+        let opts = sensitivity_options(formula, solver)?;
         let view = IndexedNetwork::with_core(self.inner(), &self.core);
-        let m = build_ptdf_lodf_with_options(&view, &opts).map_err(to_pyerr)?;
+        let m = calc_ptdf_lodf_with_options(&view, &opts).map_err(to_pyerr)?;
         coo_triplets(py, &m.ptdf)
     }
 
-    #[pyo3(signature = (convention=None, solver=None))]
+    #[pyo3(signature = (formula=None, solver=None))]
     fn lodf<'py>(
         &self,
         py: Python<'py>,
-        convention: Option<&str>,
+        formula: Option<&str>,
         solver: Option<&str>,
     ) -> PyResult<Bound<'py, PyAny>> {
-        let opts = sensitivity_options(convention, solver)?;
+        let opts = sensitivity_options(formula, solver)?;
         let view = IndexedNetwork::with_core(self.inner(), &self.core);
-        let m = build_ptdf_lodf_with_options(&view, &opts).map_err(to_pyerr)?;
+        let m = calc_ptdf_lodf_with_options(&view, &opts).map_err(to_pyerr)?;
         coo_triplets(py, &m.lodf)
     }
 
-    /// `(A_coo, b, p_shift, branch_of_col)`: signed incidence as a COO tuple,
-    /// then the branch susceptances, phase-shift injection, and column→branch
-    /// map as plain lists (the wrapper turns them into 1-D numpy arrays).
-    /// `skip_zero_impedance` as in `bprime`.
-    #[pyo3(signature = (convention=None, *, skip_zero_impedance=false))]
-    fn incidence<'py>(
-        &self,
-        py: Python<'py>,
-        convention: Option<&str>,
-        skip_zero_impedance: bool,
-    ) -> PyResult<Bound<'py, PyAny>> {
-        let conv = parse_convention(convention.unwrap_or("series"))?;
-        let opts = BuildOptions {
-            skip_zero_impedance,
-            ..BuildOptions::default()
-        };
-        let view = IndexedNetwork::with_core(self.inner(), &self.core);
-        let parts = build_incidence(&view, conv, &opts).map_err(to_pyerr)?;
-        let a = coo_triplets(py, &parts.a)?;
-        let b = parts.b;
-        let p_shift = parts.p_shift;
-        let branch_of_col: Vec<i64> = parts.branch_of_col.iter().map(|&x| x as i64).collect();
-        Ok((a, b, p_shift, branch_of_col).into_pyobject(py)?.into_any())
-    }
-
-    /// Weighted Laplacian `L = A diag(b) Aᵀ` for the chosen DC convention.
-    /// `skip_zero_impedance` as in `bprime`.
-    #[pyo3(signature = (convention=None, *, skip_zero_impedance=false))]
+    /// Weighted Laplacian `L = -B` for the chosen formula.
+    #[pyo3(signature = (formula=None))]
     fn weighted_laplacian<'py>(
         &self,
         py: Python<'py>,
-        convention: Option<&str>,
-        skip_zero_impedance: bool,
+        formula: Option<&str>,
     ) -> PyResult<Bound<'py, PyAny>> {
-        let conv = parse_convention(convention.unwrap_or("series"))?;
-        let opts = BuildOptions {
-            skip_zero_impedance,
-            ..BuildOptions::default()
-        };
-        let view = IndexedNetwork::with_core(self.inner(), &self.core);
-        let parts = build_incidence(&view, conv, &opts).map_err(to_pyerr)?;
-        let l = build_weighted_laplacian(&parts.a, &parts.b);
+        let mut l = self
+            .dc_operators(formula.unwrap_or("series_susceptance"))?
+            .calc_bus_susceptance_matrix();
+        l.data_mut().iter_mut().for_each(|value| *value = -*value);
         coo_triplets(py, &l)
     }
 
     /// This network's coordinates as the canonical GeoJSON layer. Raises when
     /// the network carries none.
     fn geo_layer_json(&self) -> PyResult<String> {
-        self.inner()
-            .geo_layer()
-            .extracted_geojson()
-            .map_err(|error| PyValueError::new_err(error.to_string()))
+        self.to_geo_layer_json()
+    }
+
+    /// Transform this network's coordinates to the canonical GeoJSON layer.
+    fn to_geo_layer_json(&self) -> PyResult<String> {
+        Ok(self.inner().to_geo_layer().to_geojson())
     }
 
     /// Apply a geographic sidecar (any form `parse_geo` accepts) and return
@@ -1170,7 +1181,7 @@ impl PyBalancedNetwork {
         text: &str,
         name_hint: Option<&str>,
     ) -> PyResult<(PyBalancedNetwork, Bound<'py, PyDict>)> {
-        let parsed = powerio_matrix::geo::GeoLayer::parse_bytes(text.as_bytes(), name_hint)
+        let parsed = powerio::GeoLayer::parse_text(text, name_hint)
             .map_err(|error| PowerIOParseError::new_err(error.to_string()))?;
         let mut inner = self.inner().clone();
         let report = inner.apply_geo_layer(&parsed.layer);
@@ -1188,18 +1199,18 @@ impl PyBalancedNetwork {
     /// Write the DC OPF bundle into `out_dir/<case>_dcopf/`. Returns
     /// `{"dir": str, "files": [str, ...]}`.
     #[allow(clippy::too_many_arguments)]
-    #[pyo3(signature = (out_dir, convention=None, units=None, missing_gen_cost=None, default_gen_cost=None, gen_cost_csv=None))]
+    #[pyo3(signature = (out_dir, formula=None, units=None, missing_gen_cost=None, default_gen_cost=None, gen_cost_csv=None))]
     fn write_dcopf_bundle<'py>(
         &self,
         py: Python<'py>,
         out_dir: &str,
-        convention: Option<&str>,
+        formula: Option<&str>,
         units: Option<&str>,
         missing_gen_cost: Option<&str>,
         default_gen_cost: Option<&str>,
         gen_cost_csv: Option<&str>,
     ) -> PyResult<Bound<'py, PyDict>> {
-        let cost_opts = write_options(
+        let cost_opts = emit_options(
             missing_gen_cost,
             default_gen_cost,
             gen_cost_csv,
@@ -1211,7 +1222,9 @@ impl PyBalancedNetwork {
             .map_err(core_pyerr)?;
         let instance = powerio_prob::DcOpfInstance::from_network(policy_network)
             .map_err(|error| core_error_pyerr(&error))?
-            .with_approximation(parse_convention(convention.unwrap_or("series"))?);
+            .with_branch_susceptance_formula(parse_formula(
+                formula.unwrap_or("series_susceptance"),
+            )?);
         let mut assembly = DcOpfAssemblyOptions::default();
         assembly.units = parse_units(units.unwrap_or("perunit"))?;
         let options = DcOpfBundleOptions {
@@ -1244,7 +1257,7 @@ impl PyBalancedNetwork {
         default_gen_cost: Option<&str>,
         gen_cost_csv: Option<&str>,
     ) -> PyResult<Bound<'py, PyDict>> {
-        let cost_opts = write_options(
+        let cost_opts = emit_options(
             missing_gen_cost,
             default_gen_cost,
             gen_cost_csv,
@@ -1260,18 +1273,6 @@ impl PyBalancedNetwork {
         let outputs =
             gridfm_write_dataset(self.inner(), scenario, out_dir, &opts).map_err(to_pyerr)?;
         gridfm_outputs_to_dict(py, &outputs)
-    }
-
-    /// Write this case as a PyPSA CSV folder. Returns
-    /// `{"dir", "files", "warnings"}`.
-    fn write_pypsa_csv_folder<'py>(
-        &self,
-        py: Python<'py>,
-        out_dir: &str,
-    ) -> PyResult<Bound<'py, PyDict>> {
-        let outputs = powerio_matrix::write_pypsa_csv_folder(self.inner(), out_dir)
-            .map_err(|error| core_error_pyerr(&error))?;
-        pypsa_outputs_to_dict(py, &outputs)
     }
 
     fn __repr__(&self) -> String {
@@ -1294,8 +1295,8 @@ fn parse_display_file<'py>(
     path: &str,
     from_: Option<&str>,
 ) -> PyResult<Bound<'py, PyAny>> {
-    let display = powerio_matrix::parse_display_file(std::path::Path::new(path), from_)
-        .map_err(core_pyerr)?;
+    let display =
+        powerio_tx::parse_display_file(std::path::Path::new(path), from_).map_err(core_pyerr)?;
     display_data_to_py(py, display)
 }
 
@@ -1308,26 +1309,45 @@ fn parse_display_bytes<'py>(
     data: &[u8],
     from_: &str,
 ) -> PyResult<Bound<'py, PyAny>> {
-    let display = powerio_matrix::parse_display_bytes(data, from_).map_err(core_pyerr)?;
+    let display = powerio_tx::parse_display(data, from_).map_err(core_pyerr)?;
     display_data_to_py(py, display)
 }
 
 /// Rebuild a case from JSON produced by `BalancedNetwork.to_json()`.
 #[pyfunction]
 fn from_json(text: &str) -> PyResult<PyBalancedNetwork> {
-    let inner = powerio_matrix::BalancedNetwork::from_json(text).map_err(core_pyerr)?;
+    let inner = powerio::BalancedNetwork::from_json(text).map_err(core_pyerr)?;
     Ok(case_from_parts(inner, Vec::new()))
 }
 
 /// Universal one-file conversion over the dynamic module dispatcher. Parse
 /// findings precede writer findings unless the writer returned the exact
 /// retained source bytes, which is the faithful echo tier.
+fn emit_dynamic(
+    module: &powerio_core::PioModule<powerio::PioValue>,
+    to: &str,
+    options: &EmitOptions,
+    destination: powerio_core::Destination,
+) -> PyResult<powerio_core::EmitResult> {
+    if let powerio::PioValue::BalancedNetwork(network) = module.value()
+        && let Ok(target) = to.parse::<TargetFormat>()
+    {
+        let typed = module_with_records(module, network.clone())?;
+        return powerio_tx::emit_with_options(&typed, target, options, destination)
+            .map_err(|error| core_error_pyerr(&error));
+    }
+    powerio::emit(module, to, destination).map_err(|error| core_error_pyerr(&error))
+}
+
 fn convert_module_text(
     module: &powerio_core::PioModule<powerio::PioValue>,
     to: &str,
-    options: &WriteOptions,
-) -> Result<(String, Vec<powerio_core::Diagnostic>), powerio_core::Error> {
-    let (text, writer_diagnostics) = powerio::write_module_str_with_options(module, to, options)?;
+    options: &EmitOptions,
+) -> PyResult<(String, Vec<powerio_core::Diagnostic>)> {
+    let destination =
+        powerio_core::Destination::memory("case").map_err(|error| core_error_pyerr(&error))?;
+    let result = emit_dynamic(module, to, options, destination)?;
+    let (text, writer_diagnostics) = emitted_text(result, to)?;
     let echoed = module.source().is_some_and(|source| {
         source
             .primary_buffer()
@@ -1359,7 +1379,7 @@ fn convert_file(
     gen_cost_csv: Option<&str>,
     out: Option<&str>,
 ) -> PyResult<(String, Vec<PyDiagnostic>)> {
-    let opts = write_options(
+    let opts = emit_options(
         missing_gen_cost,
         default_gen_cost,
         gen_cost_csv,
@@ -1374,26 +1394,9 @@ fn convert_file(
         source = source.with_format(format);
     }
     let module = powerio::parse(source).map_err(|error| core_open_pyerr(path, &error))?;
-    // The pre-module converter projected calculation-defining transmission
-    // sources to their embedded balanced network. Keep that 0.10 behavior;
-    // network values use the universal writer directly.
-    if !matches!(
-        module.value(),
-        powerio::PioValue::BalancedNetwork(_) | powerio::PioValue::MulticonductorNetwork(_)
-    ) && let Ok(target) = to.parse::<powerio_matrix::TargetFormat>()
-    {
-        let conv = powerio_matrix::convert_file_with_options(path, target, from_, &opts)
-            .map_err(|error| core_open_pyerr(path, &error))?;
-        if let Some(out) = out {
-            commit_text_file(std::path::Path::new(out), conv.text.clone().into_bytes())?;
-        }
-        let rendered = conv.diagnostics.iter().map(PyDiagnostic::from).collect();
-        return Ok((conv.text, rendered));
-    }
-    let (text, diagnostics) =
-        convert_module_text(&module, to, &opts).map_err(|error| core_error_pyerr(&error))?;
+    let (text, diagnostics) = convert_module_text(&module, to, &opts)?;
     if let Some(out) = out {
-        commit_text_file(std::path::Path::new(out), text.clone().into_bytes())?;
+        emit_dynamic(&module, to, &opts, powerio_core::Destination::path(out))?;
     }
     let rendered = diagnostics.iter().map(PyDiagnostic::from).collect();
     Ok((text, rendered))
@@ -1412,7 +1415,7 @@ fn convert_str(
     default_gen_cost: Option<&str>,
     gen_cost_csv: Option<&str>,
 ) -> PyResult<(String, Vec<PyDiagnostic>)> {
-    let opts = write_options(
+    let opts = emit_options(
         missing_gen_cost,
         default_gen_cost,
         gen_cost_csv,
@@ -1429,105 +1432,9 @@ fn convert_str(
         .map_err(|error| core_error_pyerr(&error))?
         .with_format(format);
     let module = powerio::parse(source).map_err(|error| core_error_pyerr(&error))?;
-    if !matches!(
-        module.value(),
-        powerio::PioValue::BalancedNetwork(_) | powerio::PioValue::MulticonductorNetwork(_)
-    ) && let Ok(target) = to.parse::<powerio_matrix::TargetFormat>()
-    {
-        let conv = powerio_matrix::convert_str_with_options(
-            text,
-            target,
-            from_.unwrap_or("matpower"),
-            &opts,
-        )
-        .map_err(|error| core_error_pyerr(&error))?;
-        let rendered = conv.diagnostics.iter().map(PyDiagnostic::from).collect();
-        return Ok((conv.text, rendered));
-    }
-    let (text, diagnostics) =
-        convert_module_text(&module, to, &opts).map_err(|error| core_error_pyerr(&error))?;
+    let (text, diagnostics) = convert_module_text(&module, to, &opts)?;
     let rendered = diagnostics.iter().map(PyDiagnostic::from).collect();
     Ok((text, rendered))
-}
-
-/// Writes `text` to `path` and every sidecar beside it.
-///
-/// A dss write of a network with bus coordinates emits a `Buscoords <name>`
-/// directive and returns the CSV as a sidecar. Writing the text alone leaves
-/// a case that names a file which does not exist, and OpenDSS then refuses
-/// to compile it. A sidecar path is relative by construction, but
-/// `ConversionSidecar::path` is a public field a caller can set, so the path
-/// is checked the way the CLI checks it: every component must be a plain
-/// name, and a path that reaches out of the output directory is refused.
-/// Whether a sidecar path names a file inside the output directory, which is
-/// the CLI's `is_relative_component_path` rule: every component must be a
-/// plain name.
-///
-/// Rejecting only an absolute path and `..` leaves three ways out. An empty
-/// path makes `join` resolve back to the output directory itself, so the
-/// write targets the directory. A Windows drive-relative path such as
-/// `C:x.csv` is not absolute, and its prefix component makes `join` discard
-/// the directory entirely. A rooted path with no drive letter is not absolute
-/// on Windows either. None of the three holds a `..` component.
-fn sidecar_stays_in_output_dir(path: &str) -> bool {
-    !path.is_empty()
-        && std::path::Path::new(path)
-            .components()
-            .all(|c| matches!(c, std::path::Component::Normal(_)))
-}
-
-/// The case file and its sidecars land beside each other in the caller's
-/// directory, which may hold unrelated files, so each file commits
-/// individually through the no-replace destination and a refusal removes the
-/// files this call created, leaving the directory as it was.
-fn write_with_sidecars(
-    path: &str,
-    text: &str,
-    sidecars: &[powerio_dist::ConversionSidecar],
-) -> PyResult<()> {
-    let path = std::path::Path::new(path);
-    let dir = path.parent().unwrap_or_else(|| std::path::Path::new("."));
-    let mut committed: Vec<std::path::PathBuf> = Vec::new();
-    let mut commit = |target: &std::path::Path, bytes: Vec<u8>| -> PyResult<()> {
-        commit_text_file(target, bytes)?;
-        committed.push(target.to_path_buf());
-        Ok(())
-    };
-    let result = (|| {
-        commit(path, text.as_bytes().to_vec())?;
-        for sidecar in sidecars {
-            if !sidecar_stays_in_output_dir(&sidecar.path) {
-                return Err(PowerIOError::new_err(format!(
-                    "refusing to write the sidecar `{}`: the path must stay in the output directory",
-                    sidecar.path
-                )));
-            }
-            commit(
-                dir.join(&sidecar.path).as_path(),
-                sidecar.text.clone().into_bytes(),
-            )?;
-        }
-        Ok(())
-    })();
-    if result.is_err() {
-        for created in &committed {
-            let _ = std::fs::remove_file(created);
-        }
-    }
-    result
-}
-
-/// Commit one complete text file through the no-replace destination: staged
-/// beside the target and moved into place only when no entry exists there.
-fn commit_text_file(path: &std::path::Path, bytes: Vec<u8>) -> PyResult<()> {
-    let artifact = powerio_core::MemoryArtifact::new(
-        powerio_core::ArtifactPath::new("case").expect("static placeholder name"),
-        bytes,
-    );
-    powerio_core::Destination::path(path)
-        .__commit_artifacts(false, vec![artifact], Vec::new())
-        .map(|_| ())
-        .map_err(|error| core_error_pyerr(&error))
 }
 
 fn dist_to_pyerr(e: powerio_dist::Error) -> PyErr {
@@ -1557,8 +1464,6 @@ struct PyMulticonductorNetwork {
     /// reader's findings. Same format writes echo the retained bytes; a
     /// handle built from a bare network writes canonically.
     module: powerio_core::PioModule<powerio_dist::MulticonductorNetwork>,
-    /// The findings as `CODE: message` lines, rendered once at construction.
-    rendered_warnings: Vec<String>,
 }
 
 impl PyMulticonductorNetwork {
@@ -1566,22 +1471,14 @@ impl PyMulticonductorNetwork {
         self.module.value()
     }
 
-    /// A parsed handle: warnings rendered from the module's findings.
     fn from_module(module: powerio_core::PioModule<powerio_dist::MulticonductorNetwork>) -> Self {
-        Self {
-            rendered_warnings: powerio_dist::diagnostics::render_diagnostics(module.diagnostics()),
-            module,
-        }
+        Self { module }
     }
 
     /// A derived handle: no retained source, so writes are canonical.
-    fn from_network(
-        net: powerio_dist::MulticonductorNetwork,
-        rendered_warnings: Vec<String>,
-    ) -> Self {
+    fn from_network(net: powerio_dist::MulticonductorNetwork) -> Self {
         Self {
             module: powerio_core::PioModule::new(net),
-            rendered_warnings,
         }
     }
 }
@@ -1633,25 +1530,15 @@ impl PyMulticonductorNetwork {
         self.inner().base_frequency()
     }
 
-    /// Parse warnings: everything the reader could not represent or had to
-    /// assume.
-    fn warnings(&self) -> Vec<String> {
-        self.rendered_warnings.clone()
-    }
-
-    /// The same read fidelity findings as `warnings`, structured: one JSON
-    /// array of code/severity/message/target records.
-    fn diagnostics_json(&self) -> PyResult<String> {
-        let diagnostics = diagnostics_json_array(self.module.diagnostics());
-        serde_json::to_string(&diagnostics).map_err(serialize_pyerr)
-    }
-
     /// This network's coordinates as the canonical GeoJSON layer. Raises when
     /// the network carries none.
     fn geo_layer_json(&self) -> PyResult<String> {
-        powerio::dist_geo::dist_geo_layer(self.inner())
-            .extracted_geojson()
-            .map_err(|error| PyValueError::new_err(error.to_string()))
+        self.to_geo_layer_json()
+    }
+
+    /// Transform this network's coordinates to the canonical GeoJSON layer.
+    fn to_geo_layer_json(&self) -> PyResult<String> {
+        Ok(powerio::dist_geo::to_dist_geo_layer(self.inner()).to_geojson())
     }
 
     /// Apply a geographic sidecar (any form `parse_geo` accepts) and return
@@ -1664,20 +1551,13 @@ impl PyMulticonductorNetwork {
         text: &str,
         name_hint: Option<&str>,
     ) -> PyResult<(PyMulticonductorNetwork, Bound<'py, PyDict>)> {
-        let parsed = powerio_matrix::geo::GeoLayer::parse_bytes(text.as_bytes(), name_hint)
+        let parsed = powerio::GeoLayer::parse_text(text, name_hint)
             .map_err(|error| PowerIOParseError::new_err(error.to_string()))?;
         let mut net = self.inner().clone();
         let report = powerio::dist_geo::apply_dist_geo_layer(&mut net, &parsed.layer);
         *net.source_format_mut() = None;
-        let mut rendered = self.rendered_warnings.clone();
-        rendered.extend(
-            parsed
-                .diagnostics
-                .iter()
-                .map(powerio_matrix::diagnostics::render_diagnostic),
-        );
         Ok((
-            PyMulticonductorNetwork::from_network(net, rendered),
+            PyMulticonductorNetwork::from_network(net),
             geo_report_dict(py, &report)?,
         ))
     }
@@ -1800,12 +1680,12 @@ impl PyMulticonductorNetwork {
         let target = to
             .parse::<powerio_dist::DistTargetFormat>()
             .map_err(dist_to_pyerr)?;
-        let conv = powerio_dist::write_as(&self.module, target);
-        {
-            let rendered: Vec<PyDiagnostic> =
-                conv.diagnostics.iter().map(PyDiagnostic::from).collect();
-            Ok((conv.text, rendered))
-        }
+        let destination =
+            powerio_core::Destination::memory("case").map_err(|error| core_error_pyerr(&error))?;
+        let result = powerio_dist::emit(&self.module, target, destination)
+            .map_err(|error| core_error_pyerr(&error))?;
+        let (text, diagnostics) = emitted_text(result, to)?;
+        Ok((text, diagnostics.iter().map(PyDiagnostic::from).collect()))
     }
 
     /// Serialize to `to`, bypassing source echo for the same format.
@@ -1813,24 +1693,26 @@ impl PyMulticonductorNetwork {
         let target = to
             .parse::<powerio_dist::DistTargetFormat>()
             .map_err(dist_to_pyerr)?;
-        let conv = powerio_dist::write_network(self.inner(), target);
-        {
-            let rendered: Vec<PyDiagnostic> =
-                conv.diagnostics.iter().map(PyDiagnostic::from).collect();
-            Ok((conv.text, rendered))
-        }
+        let module = powerio_core::PioModule::new(self.inner().clone());
+        let destination =
+            powerio_core::Destination::memory("case").map_err(|error| core_error_pyerr(&error))?;
+        let result = powerio_dist::emit(&module, target, destination)
+            .map_err(|error| core_error_pyerr(&error))?;
+        let (text, diagnostics) = emitted_text(result, to)?;
+        Ok((text, diagnostics.iter().map(PyDiagnostic::from).collect()))
     }
 
     /// Serialize to `to` and write it to `path` exactly as produced (no
     /// newline translation; see `BalancedNetwork.write_file`). Returns the fidelity
     /// warnings.
-    fn write_file(&self, path: &str, to: &str) -> PyResult<Vec<String>> {
+    fn write_file(&self, path: &str, to: &str) -> PyResult<Vec<PyDiagnostic>> {
         let target = to
             .parse::<powerio_dist::DistTargetFormat>()
             .map_err(dist_to_pyerr)?;
-        let conv = powerio_dist::write_as(&self.module, target);
-        write_with_sidecars(path, &conv.text, &conv.sidecars)?;
-        Ok(conv.rendered_diagnostics())
+        let result =
+            powerio_dist::emit(&self.module, target, powerio_core::Destination::path(path))
+                .map_err(|error| core_error_pyerr(&error))?;
+        Ok(py_diagnostics(&result))
     }
 
     /// The collapsed bus and terminal graph projection as JSON.
@@ -1879,6 +1761,28 @@ fn dist_parse_str(text: &str, from_: &str) -> PyResult<PyMulticonductorNetwork> 
         .map_err(|error| core_error_pyerr(&error))
 }
 
+fn convert_dist_module_text(
+    module: &powerio_core::PioModule<powerio_dist::MulticonductorNetwork>,
+    target: powerio_dist::DistTargetFormat,
+) -> PyResult<(String, Vec<powerio_core::Diagnostic>)> {
+    let destination =
+        powerio_core::Destination::memory("case").map_err(|error| core_error_pyerr(&error))?;
+    let result = powerio_dist::emit(module, target, destination)
+        .map_err(|error| core_error_pyerr(&error))?;
+    let (text, writer_diagnostics) = emitted_text(result, target.name())?;
+    let echoed = module.source().is_some_and(|source| {
+        source
+            .primary_buffer()
+            .is_ok_and(|buffer| buffer.bytes() == text.as_bytes())
+    });
+    if echoed {
+        return Ok((text, writer_diagnostics));
+    }
+    let mut diagnostics = module.diagnostics().to_vec();
+    diagnostics.extend(writer_diagnostics);
+    Ok((text, diagnostics))
+}
+
 /// Convert a distribution case file to `to`. Returns `(text, warnings)`; the
 /// warnings carry both the parse warnings and the writer's fidelity losses.
 #[pyfunction]
@@ -1892,12 +1796,9 @@ fn dist_convert_file(
         .parse::<powerio_dist::DistTargetFormat>()
         .map_err(dist_to_pyerr)?;
     let source = dist_source_from_path(std::path::Path::new(path), from_, None)?;
-    let conv =
-        powerio_dist::convert_source(source, to).map_err(|error| core_error_pyerr(&error))?;
-    {
-        let rendered: Vec<PyDiagnostic> = conv.diagnostics.iter().map(PyDiagnostic::from).collect();
-        Ok((conv.text, rendered))
-    }
+    let module = powerio_dist::parse(source).map_err(|error| core_error_pyerr(&error))?;
+    let (text, diagnostics) = convert_dist_module_text(&module, to)?;
+    Ok((text, diagnostics.iter().map(PyDiagnostic::from).collect()))
 }
 
 /// Convert an in-memory distribution case of the named source format `from_`
@@ -1910,12 +1811,9 @@ fn dist_convert_str(text: &str, to: &str, from_: &str) -> PyResult<(String, Vec<
         .parse::<powerio_dist::DistTargetFormat>()
         .map_err(dist_to_pyerr)?;
     let source = dist_source_from_bytes(text.as_bytes(), from_)?;
-    let conv =
-        powerio_dist::convert_source(source, to).map_err(|error| core_error_pyerr(&error))?;
-    {
-        let rendered: Vec<PyDiagnostic> = conv.diagnostics.iter().map(PyDiagnostic::from).collect();
-        Ok((conv.text, rendered))
-    }
+    let module = powerio_dist::parse(source).map_err(|error| core_error_pyerr(&error))?;
+    let (text, diagnostics) = convert_dist_module_text(&module, to)?;
+    Ok((text, diagnostics.iter().map(PyDiagnostic::from).collect()))
 }
 
 /// Convert a `serde_json::Value` to the equivalent Python object: an object
@@ -2194,10 +2092,10 @@ struct PyPioModule {
 }
 
 /// Rebuild a typed module around one value with every common record and the
-/// retained source from the dynamic module. Sources are added first because
+/// retained source from another module. Sources are added first because
 /// source map and diagnostic spans validate against them.
-fn module_with_records<T>(
-    module: &powerio_core::PioModule<powerio::PioValue>,
+fn module_with_records<S, T>(
+    module: &powerio_core::PioModule<S>,
     value: T,
 ) -> PyResult<powerio_core::PioModule<T>> {
     let mut out = powerio_core::PioModule::new(value).with_producer(module.producer().clone());
@@ -2293,7 +2191,7 @@ impl PyPioModule {
                 "inspect",
                 "diagnostics",
                 "emit",
-                "state_inventory",
+                "list_states",
                 "inspect_state",
                 "export_state",
             ],
@@ -2319,15 +2217,13 @@ impl PyPioModule {
         match module.value() {
             powerio::PioValue::BalancedNetwork(network) => {
                 let format = network.source_format().name();
-                if powerio_matrix::target_format_from_name(format).is_some()
-                    || format == "pypsa-csv"
-                {
+                if parse_target_format(format).is_some() || format == "pypsa-csv" {
                     return Ok(format.to_owned());
                 }
             }
             powerio::PioValue::MulticonductorNetwork(network) => {
                 if let Some(format) = network.source_format().map(|format| format.name())
-                    && powerio_dist::dist_target_from_name(format).is_some()
+                    && powerio_dist::parse_dist_target_format(format).is_some()
                 {
                     return Ok(format.to_owned());
                 }
@@ -2358,15 +2254,31 @@ impl PyPioModule {
 
 #[pymethods]
 impl PyPioModule {
-    /// Read stored `.pio.json` text: version 1, or a released 0.9 package
-    /// upgraded one way.
+    /// Wrap an existing balanced network value in a module without serializing
+    /// or reparsing it. Common records and retained source remain attached.
     #[staticmethod]
-    fn from_json(text: &str) -> PyResult<Self> {
-        powerio::stored::read_module(text)
-            .map(|module| Self {
-                module: Some(module),
-            })
-            .map_err(|error| core_error_pyerr(&error))
+    fn from_balanced_network(network: &PyBalancedNetwork) -> PyResult<Self> {
+        module_with_records(
+            &network.module,
+            powerio::PioValue::BalancedNetwork(network.inner().clone()),
+        )
+        .map(|module| Self {
+            module: Some(module),
+        })
+    }
+
+    /// Wrap an existing multiconductor network value in a module without
+    /// serializing or reparsing it. Common records and retained source remain
+    /// attached.
+    #[staticmethod]
+    fn from_multiconductor_network(network: &PyMulticonductorNetwork) -> PyResult<Self> {
+        module_with_records(
+            &network.module,
+            powerio::PioValue::MulticonductorNetwork(network.inner().clone()),
+        )
+        .map(|module| Self {
+            module: Some(module),
+        })
     }
 
     /// Parse a case file into a module of whichever family claims it.
@@ -2434,11 +2346,6 @@ impl PyPioModule {
             .map_err(|error| core_error_pyerr(&error))
     }
 
-    /// The stored version 1 document.
-    fn to_json(&self) -> PyResult<String> {
-        powerio::stored::write_module(self.module()?).map_err(|error| core_error_pyerr(&error))
-    }
-
     /// Serialize this module's typed value to `to`. The dynamic writer routes
     /// to the balanced, multiconductor, or stored module family. Returns
     /// `(text, diagnostics)`.
@@ -2450,15 +2357,16 @@ impl PyPioModule {
         default_gen_cost: Option<&str>,
         gen_cost_csv: Option<&str>,
     ) -> PyResult<(String, Vec<PyDiagnostic>)> {
-        let options = write_options(
+        let options = emit_options(
             missing_gen_cost,
             default_gen_cost,
             gen_cost_csv,
             MissingGenCostPolicy::Preserve,
         )?;
-        let (text, diagnostics) =
-            powerio::write_module_str_with_options(self.module()?, to, &options)
-                .map_err(|error| core_error_pyerr(&error))?;
+        let destination =
+            powerio_core::Destination::memory("case").map_err(|error| core_error_pyerr(&error))?;
+        let result = emit_dynamic(self.module()?, to, &options, destination)?;
+        let (text, diagnostics) = emitted_text(result, to)?;
         Ok((text, diagnostics.iter().map(PyDiagnostic::from).collect()))
     }
 
@@ -2467,8 +2375,7 @@ impl PyPioModule {
     /// unambiguous format from `path`.
     #[pyo3(signature = (path, format=None))]
     fn write_file(&self, path: &str, format: Option<&str>) -> PyResult<Vec<PyDiagnostic>> {
-        let output_path = path;
-        let path = Path::new(output_path);
+        let path = Path::new(path);
         let inferred;
         let format = match format {
             Some(format) => format,
@@ -2477,26 +2384,7 @@ impl PyPioModule {
                 &inferred
             }
         };
-        // The distribution artifact writer models DSS as a directory because
-        // it can carry sidecars. Python's established spelling takes the main
-        // `.dss` file path and puts sidecars beside it, so preserve that path
-        // behavior through the module entry too.
-        if let Some(target) = powerio_dist::dist_target_from_name(format)
-            && matches!(
-                self.module()?.value(),
-                powerio::PioValue::MulticonductorNetwork(_)
-            )
-        {
-            let network = self.as_multiconductor_network()?;
-            let conversion = powerio_dist::write_as(&network.module, target);
-            write_with_sidecars(output_path, &conversion.text, &conversion.sidecars)?;
-            return Ok(conversion
-                .diagnostics
-                .iter()
-                .map(PyDiagnostic::from)
-                .collect());
-        }
-        let result = powerio::write_module_as(
+        let result = powerio::emit(
             self.module()?,
             format,
             powerio_core::Destination::path(path),
@@ -2552,8 +2440,8 @@ impl PyPioModule {
     }
 
     /// The typed time or scenario inventory, as JSON.
-    fn state_inventory_json(&self) -> PyResult<String> {
-        let inventory = powerio::select::state_inventory(self.module()?.value())
+    fn list_states_json(&self) -> PyResult<String> {
+        let inventory = powerio::select::list_states(self.module()?.value())
             .map_err(|error| core_error_pyerr(&error))?;
         let payload = match inventory {
             powerio::select::StateInventory::TimePoints(points) => serde_json::json!({
@@ -2589,7 +2477,7 @@ impl PyPioModule {
     /// Select the existing typed item and describe it, as JSON. No clone, no
     /// materialization: the export operation is separate.
     #[pyo3(signature = (time_position=None, scenario=None))]
-    fn select_json(
+    fn inspect_state_json(
         &self,
         time_position: Option<usize>,
         scenario: Option<&str>,
@@ -2624,11 +2512,7 @@ impl PyPioModule {
 
     /// Export the selected item as an independent static module handle.
     #[pyo3(signature = (time_position=None, scenario=None))]
-    fn export_selected(
-        &self,
-        time_position: Option<usize>,
-        scenario: Option<&str>,
-    ) -> PyResult<Self> {
+    fn export_state(&self, time_position: Option<usize>, scenario: Option<&str>) -> PyResult<Self> {
         let selector = Self::selector(time_position, scenario)?;
         powerio::select::export_module_state(self.module()?, selector)
             .map(|module| Self {
@@ -2641,7 +2525,7 @@ impl PyPioModule {
     /// JSON: the inspect half of the transformation.
     #[pyo3(signature = (base_mva=100.0))]
     fn lowering_readiness_json(&self, base_mva: f64) -> PyResult<String> {
-        let readiness = powerio::transform::check_module_lowering(
+        let readiness = powerio::transform::to_balanced_report(
             self.module()?,
             powerio::transform::MulticonductorToBalancedOptions {
                 base_mva,
@@ -2649,13 +2533,11 @@ impl PyPioModule {
             },
         )
         .map_err(|error| core_error_pyerr(&error))?;
-        // `readiness.diagnostics` is the legacy preflight shape internally;
-        // publish the 1.0 module records instead, same as `diagnostics_json`.
-        let diagnostics = diagnostics_json_array(&readiness.diagnostics_as_module_records());
+        let diagnostics = diagnostics_json_array(&readiness.diagnostics);
         let payload = serde_json::json!({
             "convention": readiness.convention,
             "base_mva": readiness.base_mva,
-            "status": readiness.status,
+            "ready": readiness.is_ready(),
             "assumptions": readiness.assumptions,
             "approximations": readiness.approximations,
             "diagnostics": diagnostics,
@@ -2674,7 +2556,7 @@ impl PyPioModule {
     fn lower_to_balanced(&self, base_mva: f64) -> PyResult<Self> {
         let source = self.module()?;
         let powerio::PioValue::MulticonductorNetwork(network) = source.value() else {
-            let Err(error) = powerio::transform::check_module_lowering(
+            let Err(error) = powerio::transform::to_balanced_report(
                 source,
                 powerio::transform::MulticonductorToBalancedOptions {
                     base_mva,
@@ -2691,7 +2573,7 @@ impl PyPioModule {
             source,
             powerio::PioValue::MulticonductorNetwork(network.clone()),
         )?;
-        match powerio::transform::lower_module_to_balanced(
+        match powerio::transform::to_balanced(
             module,
             powerio::transform::MulticonductorToBalancedOptions {
                 base_mva,
@@ -2784,8 +2666,7 @@ impl PyPioModule {
 /// families.
 #[pyfunction]
 fn classify_json_text(text: &str) -> (String, Option<String>, Option<String>) {
-    use powerio_matrix::format::routing::{Detection, JsonClass};
-    let class = powerio_matrix::format::routing::classify_json_text(text);
+    let class = classify_balanced_json_text(text);
     match class {
         JsonClass::Case(Detection::Known(format)) => (
             "known".into(),
@@ -2800,7 +2681,7 @@ fn classify_json_text(text: &str) -> (String, Option<String>, Option<String>) {
 /// powerio surface uses. A new family appends to it; a spelling never changes.
 #[pyfunction]
 fn json_classes() -> Vec<String> {
-    powerio_matrix::format::routing::JSON_CLASSES
+    powerio_tx::JSON_CLASSES
         .iter()
         .map(|s| (*s).to_owned())
         .collect()
@@ -2808,7 +2689,7 @@ fn json_classes() -> Vec<String> {
 
 /// Tolerant read of a geographic sidecar (headerless buscoords CSV, aliased
 /// CSV/JSON records, GeoJSON): returns `{"geojson": <canonical form>,
-/// "warnings": [...]}`. `name_hint` (a file name) picks CSV against JSON;
+/// "diagnostics": [...]}`. `name_hint` (a file name) picks CSV against JSON;
 /// otherwise the content is sniffed.
 #[pyfunction(signature = (text, name_hint = None))]
 fn parse_geo<'py>(
@@ -2816,11 +2697,13 @@ fn parse_geo<'py>(
     text: &str,
     name_hint: Option<&str>,
 ) -> PyResult<Bound<'py, PyDict>> {
-    let parsed = powerio_matrix::geo::GeoLayer::parse_bytes(text.as_bytes(), name_hint)
+    let parsed = powerio::GeoLayer::parse_text(text, name_hint)
         .map_err(|error| PowerIOParseError::new_err(error.to_string()))?;
     let out = PyDict::new(py);
     out.set_item("geojson", parsed.layer.to_geojson())?;
-    out.set_item("warnings", parsed.warnings)?;
+    let diagnostics: Vec<PyDiagnostic> =
+        parsed.diagnostics.iter().map(PyDiagnostic::from).collect();
+    out.set_item("diagnostics", diagnostics)?;
     Ok(out)
 }
 
@@ -2828,7 +2711,7 @@ fn parse_geo<'py>(
 /// unlocated_branches, notes}` dict from one geo apply pass.
 fn geo_report_dict<'py>(
     py: Python<'py>,
-    report: &powerio_matrix::geo::GeoApplyReport,
+    report: &powerio::GeoApplyReport,
 ) -> PyResult<Bound<'py, PyDict>> {
     let out = PyDict::new(py);
     out.set_item("matched_buses", report.matched_buses)?;
@@ -2875,15 +2758,6 @@ fn gridfm_outputs_to_dict<'py>(
     Ok(d)
 }
 
-fn pypsa_outputs_to_dict<'py>(
-    py: Python<'py>,
-    outputs: &powerio_matrix::PypsaCsvOutputs,
-) -> PyResult<Bound<'py, PyDict>> {
-    let d = dir_files_dict(py, &outputs.dir, &outputs.files)?;
-    d.set_item("warnings", outputs.rendered_diagnostics())?;
-    Ok(d)
-}
-
 /// Write a batch of cases as one gridfm-datakit dataset, row stacked and keyed by
 /// the `scenario` column. The k-th case is stamped `base_scenario + k`; all cases
 /// must share one base element set (same bus/branch/gen counts and bus-id order).
@@ -2904,7 +2778,7 @@ fn write_gridfm_batch<'py>(
     default_gen_cost: Option<&str>,
     gen_cost_csv: Option<&str>,
 ) -> PyResult<Bound<'py, PyDict>> {
-    let cost_opts = write_options(
+    let cost_opts = emit_options(
         missing_gen_cost,
         default_gen_cost,
         gen_cost_csv,
@@ -2923,45 +2797,6 @@ fn write_gridfm_batch<'py>(
     let snapshots = numbered_snapshots(&net_refs, base_scenario).map_err(to_pyerr)?;
     let outputs = gridfm_write_batch(&snapshots, out_dir, &opts).map_err(to_pyerr)?;
     gridfm_outputs_to_dict(py, &outputs)
-}
-
-/// Turn a [`GridfmRead`] into the `(case, scenario, warnings)` triple the Python
-/// `read_gridfm*` functions return: the reconstructed network wrapped as a
-/// `PyBalancedNetwork` (with its index core, exactly as `parse_file` does), the scenario id,
-/// and the fidelity warnings the lossy read surfaced.
-#[cfg(feature = "gridfm")]
-fn gridfm_read_to_py(read: GridfmRead) -> (PyBalancedNetwork, i64, Vec<String>) {
-    (
-        case_from_parts(read.network, read.diagnostics.clone()),
-        read.scenario,
-        read.warnings,
-    )
-}
-
-/// Read one scenario of a gridfm-datakit Parquet dataset back into a case,
-/// returning `(case, scenario, warnings)` (the pure-Python layer wraps it as a
-/// `GridfmRead` namedtuple). `dir` resolves leniently: the `raw/` leaf, a
-/// `<case>/` directory, or a parent with one `*/raw/` child. The read is lossy but
-/// power flow complete; `warnings` lists what the gridfm schema couldn't
-/// round-trip. Available when the extension is built with the Rust `gridfm` feature.
-#[cfg(feature = "gridfm")]
-#[pyfunction]
-#[pyo3(signature = (dir, scenario=0))]
-fn read_gridfm(dir: &str, scenario: i64) -> PyResult<(PyBalancedNetwork, i64, Vec<String>)> {
-    gridfm_read_dataset(dir, scenario)
-        .map(gridfm_read_to_py)
-        .map_err(core_pyerr)
-}
-
-/// Read every scenario of a gridfm dataset, one `(case, scenario, warnings)`
-/// triple per scenario id (ascending) over the shared topology — the read side of
-/// the scenario batch. Available when the extension is built with the Rust
-/// `gridfm` feature.
-#[cfg(feature = "gridfm")]
-#[pyfunction]
-fn read_gridfm_scenarios(dir: &str) -> PyResult<Vec<(PyBalancedNetwork, i64, Vec<String>)>> {
-    let reads = gridfm_read_scenarios(dir).map_err(core_pyerr)?;
-    Ok(reads.into_iter().map(gridfm_read_to_py).collect())
 }
 
 #[pymodule]
@@ -2993,16 +2828,12 @@ fn _powerio(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add("_has_gridfm", cfg!(feature = "gridfm"))?;
     #[cfg(feature = "gridfm")]
     m.add_function(wrap_pyfunction!(write_gridfm_batch, m)?)?;
-    #[cfg(feature = "gridfm")]
-    m.add_function(wrap_pyfunction!(read_gridfm, m)?)?;
-    #[cfg(feature = "gridfm")]
-    m.add_function(wrap_pyfunction!(read_gridfm_scenarios, m)?)?;
     Ok(())
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{module_with_records, sidecar_stays_in_output_dir};
+    use super::module_with_records;
 
     #[test]
     fn typed_module_copy_keeps_every_common_record_and_retained_source() {
@@ -3063,39 +2894,5 @@ mod tests {
             copied.source().unwrap().primary_buffer().unwrap().bytes(),
             b"test"
         );
-    }
-
-    /// `ConversionSidecar::path` is a public field, so a caller can set it to
-    /// anything. Every path here reaches out of the output directory without
-    /// holding a `..` component, which is why the check is a whitelist of
-    /// plain-name components rather than a blacklist.
-    #[test]
-    fn a_sidecar_path_that_leaves_the_output_directory_is_refused() {
-        for path in [
-            "",            // `join` resolves back to the directory itself
-            "/etc/passwd", // rooted, and not absolute on Windows
-            "../up.csv",
-            "sub/../../up.csv",
-        ] {
-            assert!(
-                !sidecar_stays_in_output_dir(path),
-                "{path:?} must be refused"
-            );
-        }
-        // Only Windows reads a drive prefix. On every other platform these
-        // are ordinary file names, and `join` keeps them in the directory.
-        #[cfg(windows)]
-        for path in ["C:evil.csv", "C:\\evil.csv", "\\\\server\\share\\x.csv"] {
-            assert!(
-                !sidecar_stays_in_output_dir(path),
-                "{path:?} must be refused"
-            );
-        }
-        for path in ["coords.csv", "sub/coords.csv", "sub/deeper/coords.csv"] {
-            assert!(
-                sidecar_stays_in_output_dir(path),
-                "{path:?} must be allowed"
-            );
-        }
     }
 }

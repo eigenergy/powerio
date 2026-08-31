@@ -15,10 +15,9 @@
 #             compared by solved node voltage magnitude.
 #   BMOPF schema: distribution fixtures converted to canonical BMOPF JSON,
 #                  then checked by Python jsonschema against the task force schema.
-#   DC MATPOWER — powerio's DC surface (dc_data, weighted_laplacian, ptdf, lodf)
-#                 vs independent MATPOWER makeBdc/makePTDF/makeLODF oracles,
-#                 implemented from the published source rather than reusing
-#                 powerio's own incidence or susceptance construction.
+#   DC MATPOWER — PowerIO's incidence and susceptance matrices, phase shift
+#                 injection, DC flows, weighted Laplacian, PTDF, and LODF vs
+#                 independent MATPOWER makeBdc/makePTDF/makeLODF oracles.
 #   MC Yprim    — powerio's native multiconductor nodal admittance vs an
 #                 assembly of OpenDSS's own per element CktElement.YPrim,
 #                 over the distribution fixtures.
@@ -177,11 +176,11 @@ else
     echo "skip: $DC_SHIFT_CASE absent (fetch with evals/validation/fetch_cases.sh" \
          "for the phase shift sign leg)"
 fi
-echo "=== DC MATPOWER oracle (makeBdc, weighted_laplacian, one PTDF check) ==="
+echo "=== DC MATPOWER oracle (makeBdc, DC operations, one PTDF check) ==="
 "$PY" evals/validation/validate_dc_matpower.py "${dc_args[@]}" || true
 
 # 4h. PTDF/LODF across all three susceptance formulas, with bridge handling.
-#     Small cases only: dc_data/ptdf/lodf are all n x n dense here.
+#     Small cases only: PTDF and LODF are dense here.
 echo "=== DC MATPOWER oracle (PTDF/LODF, three formulas) ==="
 "$PY" evals/validation/validate_dc_ptdf_lodf.py "${DCCASES[@]}" || true
 

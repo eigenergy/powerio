@@ -173,16 +173,16 @@ impl GenCost {
     /// (model 2) row. MATPOWER stores `c2 p² + c1 p + c0`, so `q = 2·c2` and
     /// `c = c1`. Linear rows (`ncost == 2`) give `q = 0`. Piecewise (model 1)
     /// or cubic and higher return `None`.
-    pub fn quadratic(&self) -> Option<(f64, f64)> {
-        self.quadratic_with_constant().map(|(q, c, _)| (q, c))
+    pub fn calc_quadratic(&self) -> Option<(f64, f64)> {
+        self.calc_quadratic_with_constant().map(|(q, c, _)| (q, c))
     }
 
     /// `(q, c, c0)` for the quadratic cost `½ q p² + c p + c0` from a
     /// polynomial (model 2) row, keeping the constant term that
-    /// [`quadratic`](Self::quadratic) drops. Linear rows (`ncost == 2`) give
+    /// [`calc_quadratic`](Self::calc_quadratic) drops. Linear rows (`ncost == 2`) give
     /// `q = 0`; constant rows (`ncost == 1`) give `q = c = 0`. Piecewise
     /// (model 1) or cubic and higher return `None`.
-    pub fn quadratic_with_constant(&self) -> Option<(f64, f64, f64)> {
+    pub fn calc_quadratic_with_constant(&self) -> Option<(f64, f64, f64)> {
         if self.model != 2 {
             return None;
         }
@@ -203,11 +203,11 @@ impl GenCost {
     }
 
     /// Largest leading polynomial coefficient that
-    /// [`quadratic_with_constant_tol`](Self::quadratic_with_constant_tol)
+    /// [`calc_quadratic_with_constant_tol`](Self::calc_quadratic_with_constant_tol)
     /// reads as a rounding artifact of the source, not as a term of the curve.
     pub const LEADING_COEFF_TOL: f64 = 1e-12;
 
-    /// `(q, c, c0)` as [`quadratic_with_constant`](Self::quadratic_with_constant)
+    /// `(q, c, c0)` as [`calc_quadratic_with_constant`](Self::calc_quadratic_with_constant)
     /// gives it, after the leading coefficients at or below `tol` come off the
     /// row.
     ///
@@ -216,7 +216,7 @@ impl GenCost {
     /// reads as a quadratic one. Pass
     /// [`LEADING_COEFF_TOL`](Self::LEADING_COEFF_TOL) to strip the artifact,
     /// or `0.0` to strip an exact zero alone.
-    pub fn quadratic_with_constant_tol(&self, tol: f64) -> Option<(f64, f64, f64)> {
+    pub fn calc_quadratic_with_constant_tol(&self, tol: f64) -> Option<(f64, f64, f64)> {
         if self.model != 2 {
             return None;
         }
@@ -403,7 +403,7 @@ pub(crate) struct BalancedNetworkTables {
     /// `#[serde(default)]` so JSON written before the field existed still
     /// deserializes. [`IndexedNetwork`](crate::IndexedNetwork) lowers each
     /// in-service record into a star bus plus three branches (via
-    /// [`Transformer3W::star_expansion`]) before building any matrix, so a
+    /// [`Transformer3W::to_star_expansion`]) before building any matrix, so a
     /// 3-winding transformer does appear in `Y_bus`/connectivity; the canonical
     /// model keeps the typed record for round-trip fidelity.
     #[serde(default)]
@@ -972,12 +972,12 @@ impl BranchCharging {
     }
 
     #[must_use]
-    pub fn total_b(self) -> f64 {
+    pub fn calc_total_b(self) -> f64 {
         self.b_fr + self.b_to
     }
 
     #[must_use]
-    pub fn total_g(self) -> f64 {
+    pub fn calc_total_g(self) -> f64 {
         self.g_fr + self.g_to
     }
 
@@ -1058,11 +1058,11 @@ impl Branch {
 
     /// Effective tap ratio (0 ⇒ 1).
     #[must_use]
-    pub fn effective_tap(&self) -> f64 {
+    pub fn calc_effective_tap(&self) -> f64 {
         if self.tap == 0.0 { 1.0 } else { self.tap }
     }
 
-    /// [`effective_tap`](Self::effective_tap) for a builder that divides by it,
+    /// [`calc_effective_tap`](Self::calc_effective_tap) for a builder that divides by it,
     /// which the remap of an exact 0.0 does not make safe on its own.
     ///
     /// # Errors
@@ -1070,8 +1070,8 @@ impl Branch {
     /// [`MIN_DIVISIBLE_MAGNITUDE`](crate::dc::MIN_DIVISIBLE_MAGNITUDE), where a
     /// tap scales an admittance past anything a matrix can carry. `row` only
     /// labels the error.
-    pub fn divisible_tap(&self, row: usize) -> Result<f64> {
-        let tap = self.effective_tap();
+    pub fn calc_divisible_tap(&self, row: usize) -> Result<f64> {
+        let tap = self.calc_effective_tap();
         if !tap.is_finite() || tap.abs() < crate::dc::MIN_DIVISIBLE_MAGNITUDE {
             return Err(Error::DegenerateTap { row, tap });
         }
@@ -1081,14 +1081,14 @@ impl Branch {
     /// Per terminal shunt admittance, deriving the legacy symmetric MATPOWER
     /// charging model when the richer field is absent.
     #[must_use]
-    pub fn terminal_charging(&self) -> BranchCharging {
+    pub fn calc_terminal_charging(&self) -> BranchCharging {
         self.charging
             .unwrap_or_else(|| BranchCharging::from_total_b(self.b))
     }
 
     /// Series admittance `(g, b) = (r, −x) / (r² + x²)` of the branch pi
-    /// model, the primitive beside [`effective_tap`](Self::effective_tap) and
-    /// [`terminal_charging`](Self::terminal_charging). `Ok(None)` for a zero
+    /// model, the primitive beside [`calc_effective_tap`](Self::calc_effective_tap) and
+    /// [`calc_terminal_charging`](Self::calc_terminal_charging). `Ok(None)` for a zero
     /// impedance branch — one whose impedance magnitude is under
     /// [`MIN_DIVISIBLE_MAGNITUDE`](crate::dc::MIN_DIVISIBLE_MAGNITUDE); the
     /// caller decides whether that is a skip or an error.
@@ -1097,8 +1097,8 @@ impl Branch {
     /// [`Error::NonFiniteSusceptance`] when `r`/`x` are NaN/Inf, so a bad
     /// value cannot write NaN or a silent zero downstream. `row` only labels
     /// the error.
-    pub fn series_admittance(&self, row: usize) -> Result<Option<(f64, f64)>> {
-        series_admittance_of(self.r, self.x, row)
+    pub fn calc_series_admittance(&self, row: usize) -> Result<Option<(f64, f64)>> {
+        calc_series_admittance_of(self.r, self.x, row)
     }
 
     /// Apparent power bound, per unit, for a branch the source left unrated
@@ -1122,7 +1122,7 @@ impl Branch {
     /// [`angmin`](Self::angmin) and [`angmax`](Self::angmax) are degrees in
     /// the neutral model and radians in a normalized network, and a branch
     /// cannot tell which it holds. Convert them with
-    /// [`IndexedNetwork::angle_radians`](crate::IndexedNetwork::angle_radians),
+    /// [`IndexedNetwork::to_radians`](crate::IndexedNetwork::to_radians),
     /// which reads the convention of the network. The method takes the
     /// magnitude of the window and holds it at `π`, the widest phasor
     /// separation two terminals can have.
@@ -1133,7 +1133,7 @@ impl Branch {
         (fr_vmin, fr_vmax): (f64, f64),
         (to_vmin, to_vmax): (f64, f64),
     ) -> f64 {
-        // The same bound `series_admittance_of` divides by, so the two agree on
+        // The same bound `calc_series_admittance_of` divides by, so the two agree on
         // which branch has no impedance to bound a current with.
         let zmag = self.r.hypot(self.x);
         if zmag < crate::dc::MIN_DIVISIBLE_MAGNITUDE {
@@ -1159,8 +1159,8 @@ impl Branch {
     /// Total susceptance projection for MATPOWER shaped formats that only carry
     /// one line charging value.
     #[must_use]
-    pub fn total_charging_b(&self) -> f64 {
-        self.terminal_charging().total_b()
+    pub fn calc_total_charging_b(&self) -> f64 {
+        self.calc_terminal_charging().calc_total_b()
     }
 
     /// Whether this branch has charging that a MATPOWER branch row cannot carry.
@@ -1202,7 +1202,7 @@ impl Branch {
 /// cannot write NaN or a silent zero downstream. NaN leaves `hypot` NaN, which
 /// is not below the bound, so it arrives at that check rather than reading as
 /// zero impedance. `row` only labels the error.
-pub fn series_admittance_of(r: f64, x: f64, row: usize) -> Result<Option<(f64, f64)>> {
+pub fn calc_series_admittance_of(r: f64, x: f64, row: usize) -> Result<Option<(f64, f64)>> {
     let magnitude = r.hypot(x);
     if magnitude < crate::dc::MIN_DIVISIBLE_MAGNITUDE {
         return Ok(None);
@@ -1548,7 +1548,7 @@ impl Hvdc {
     /// reader spells the same rule: `loss0` and `pf` scale together, so this
     /// holds in per unit as in MW.
     #[must_use]
-    pub fn delivered_power(pf: f64, loss0: f64, loss1: f64) -> f64 {
+    pub fn calc_delivered_power(pf: f64, loss0: f64, loss1: f64) -> f64 {
         pf - loss0 - loss1 * pf
     }
 
@@ -1557,7 +1557,7 @@ impl Hvdc {
     /// that fail this, because those are the ones it cannot reproduce.
     #[must_use]
     pub fn pt_matches_loss_model(&self, tol: f64) -> bool {
-        (self.pt - Self::delivered_power(self.pf, self.loss0, self.loss1)).abs() <= tol
+        (self.pt - Self::calc_delivered_power(self.pf, self.loss0, self.loss1)).abs() <= tol
     }
 
     #[must_use]
@@ -1728,7 +1728,7 @@ impl Winding {
 /// Series impedance is stored for winding pairs 1-2, 2-3, and 3-1. The record
 /// also retains star point voltage and per winding control data. PSS/E three
 /// winding records and PSLF tertiary winding records map to this type.
-/// [`star_expansion`](Transformer3W::star_expansion) turns it into the synthetic
+/// [`to_star_expansion`](Transformer3W::to_star_expansion) turns it into the synthetic
 /// star bus plus three branches for a consumer that works in the bus-branch model;
 /// [`IndexedNetwork`](crate::IndexedNetwork) applies it before building any matrix,
 /// so a 3-winding transformer contributes to `Y_bus` and connectivity.
@@ -1780,7 +1780,7 @@ impl Transformer3W {
     /// Because the impedances are already on a common base, the split is linear in
     /// `r` and `x` separately.
     #[must_use]
-    pub fn star_impedances(&self) -> [(f64, f64); 3] {
+    pub fn calc_star_impedances(&self) -> [(f64, f64); 3] {
         let [z12, z23, z31] = self.z;
         let half = |a: f64, b: f64, c: f64| (a + b - c) / 2.0;
         [
@@ -1797,7 +1797,7 @@ impl Transformer3W {
     /// bus carries the stored star voltage and the magnetizing shunt is left to the
     /// caller; each branch takes its winding's tap, phase shift, and ratings.
     #[must_use]
-    pub fn star_expansion(&self, star_id: BusId) -> (Bus, [Branch; 3]) {
+    pub fn to_star_expansion(&self, star_id: BusId) -> (Bus, [Branch; 3]) {
         let star = Bus {
             id: star_id,
             kind: BusType::Pq,
@@ -1815,7 +1815,7 @@ impl Transformer3W {
             location: None,
             extras: Extras::new(),
         };
-        let zs = self.star_impedances();
+        let zs = self.calc_star_impedances();
         let branch = |w: &Winding, (r, x): (f64, f64)| Branch {
             from: w.bus,
             to: star_id,
@@ -2073,57 +2073,6 @@ impl BalancedNetwork {
         Ok((text, Vec::new()))
     }
 
-    /// Serialize this typed network to `format`, the semantic write. The byte
-    /// exact echo of an unchanged parsed module lives on the module write
-    /// path, [`write_as`](crate::write_as).
-    ///
-    /// # Errors
-    /// [`Error::WriteUnsupported`](crate::Error) for a read
-    /// only target, and the writer's own error on a case it cannot state.
-    pub fn to_format(&self, format: crate::TargetFormat) -> crate::Result<crate::Conversion> {
-        crate::format::write_conversion(self, format)
-    }
-
-    /// Serialize this network to `format` from the typed model, the balanced
-    /// twin of `MulticonductorNetwork::to_canonical_format` on the
-    /// distribution side. Identical to [`to_format`](Self::to_format) now that
-    /// source echo belongs to the module write path.
-    ///
-    /// # Errors
-    /// As [`to_format`](Self::to_format).
-    pub fn to_canonical_format(
-        &self,
-        format: crate::TargetFormat,
-    ) -> crate::Result<crate::Conversion> {
-        crate::format::write_conversion(self, format)
-    }
-
-    /// Serialize this network with write-time cost policies.
-    ///
-    /// The network itself is not mutated.
-    pub fn to_format_with_options(
-        &self,
-        format: crate::TargetFormat,
-        options: &crate::WriteOptions,
-    ) -> crate::Result<crate::Conversion> {
-        if options.is_default() {
-            return self.to_format(format);
-        }
-        let (working, policy_warnings) = crate::format::apply_write_cost_policy(self, options)?;
-        let mut conv = crate::format::write_conversion(&working, format)?;
-        conv.prepend(policy_warnings);
-        Ok(conv)
-    }
-
-    /// Serialize this network to MATPOWER `.m` text.
-    ///
-    /// This is byte-exact when the network was parsed from MATPOWER and still
-    /// carries its retained source text.
-    #[must_use]
-    pub fn to_matpower(&self) -> String {
-        crate::write_matpower(self)
-    }
-
     /// Rebuild a `BalancedNetwork` from JSON produced by [`to_json`](BalancedNetwork::to_json).
     ///
     /// A float position accepts a number or the nonfinite spellings
@@ -2148,22 +2097,6 @@ impl BalancedNetwork {
             });
         }
         Ok(net)
-    }
-
-    /// Rebuild a `BalancedNetwork` from UTF-8 JSON bytes produced by
-    /// [`to_json`](BalancedNetwork::to_json).
-    ///
-    /// Decoding is strict: invalid UTF-8 returns a coded JSON read error and
-    /// is never replaced with Unicode replacement characters. A leading UTF-8
-    /// byte order mark is accepted. The decoded document goes through
-    /// [`from_json`](BalancedNetwork::from_json), including its reference and
-    /// nonempty-network validation.
-    pub fn from_json_bytes(bytes: &[u8]) -> crate::Result<BalancedNetwork> {
-        let text = std::str::from_utf8(bytes).map_err(|error| Error::FormatRead {
-            format: "JSON",
-            message: format!("input is not valid UTF-8: {error}"),
-        })?;
-        Self::from_json(text)
     }
 
     /// Whether this is a normalized (per-unit, radian, filtered)
@@ -2359,7 +2292,7 @@ impl BalancedNetwork {
                     .checked_add(k)
                     .expect("bus id space exhausted for star expansion"),
             );
-            let (star, mut branches) = t.star_expansion(star_id);
+            let (star, mut branches) = t.to_star_expansion(star_id);
             let transformer_identity = t
                 .uid
                 .clone()
@@ -2587,39 +2520,47 @@ mod tests {
     #[test]
     fn quadratic_with_constant_keeps_c0_across_ncost() {
         let full = GenCost::new(2, 0.0, 0.0, vec![1.5, 2.0, 5.0]);
-        assert_eq!(full.quadratic_with_constant(), Some((3.0, 2.0, 5.0)));
-        assert_eq!(full.quadratic(), Some((3.0, 2.0)));
+        assert_eq!(full.calc_quadratic_with_constant(), Some((3.0, 2.0, 5.0)));
+        assert_eq!(full.calc_quadratic(), Some((3.0, 2.0)));
+        assert_eq!(
+            full.calc_quadratic_with_constant(),
+            full.calc_quadratic_with_constant()
+        );
+        assert_eq!(full.calc_quadratic(), full.calc_quadratic());
 
         let linear = GenCost::new(2, 0.0, 0.0, vec![2.0, 5.0]);
-        assert_eq!(linear.quadratic_with_constant(), Some((0.0, 2.0, 5.0)));
+        assert_eq!(linear.calc_quadratic_with_constant(), Some((0.0, 2.0, 5.0)));
 
         let constant = GenCost::new(2, 0.0, 0.0, vec![5.0]);
-        assert_eq!(constant.quadratic_with_constant(), Some((0.0, 0.0, 5.0)));
+        assert_eq!(
+            constant.calc_quadratic_with_constant(),
+            Some((0.0, 0.0, 5.0))
+        );
 
         let piecewise = GenCost::new(1, 0.0, 0.0, vec![0.0, 0.0, 1.0, 1.0]);
-        assert_eq!(piecewise.quadratic_with_constant(), None);
+        assert_eq!(piecewise.calc_quadratic_with_constant(), None);
 
         let cubic = GenCost::new(2, 0.0, 0.0, vec![1.0, 1.0, 1.0, 1.0]);
-        assert_eq!(cubic.quadratic_with_constant(), None);
+        assert_eq!(cubic.calc_quadratic_with_constant(), None);
 
         let truncated = GenCost::with_ncost(2, 0.0, 0.0, 3, vec![1.0]);
-        assert_eq!(truncated.quadratic_with_constant(), None);
+        assert_eq!(truncated.calc_quadratic_with_constant(), None);
     }
 
     #[test]
     fn a_leading_coefficient_below_the_tolerance_comes_off_the_row() {
         let artifact = GenCost::new(2, 0.0, 0.0, vec![1e-17, 2.0, 5.0]);
         assert_eq!(
-            artifact.quadratic_with_constant(),
+            artifact.calc_quadratic_with_constant(),
             Some((2e-17, 2.0, 5.0)),
             "the untouched reader keeps the artifact"
         );
         assert_eq!(
-            artifact.quadratic_with_constant_tol(GenCost::LEADING_COEFF_TOL),
+            artifact.calc_quadratic_with_constant_tol(GenCost::LEADING_COEFF_TOL),
             Some((0.0, 2.0, 5.0))
         );
         assert_eq!(
-            artifact.quadratic_with_constant_tol(0.0),
+            artifact.calc_quadratic_with_constant_tol(0.0),
             Some((2e-17, 2.0, 5.0)),
             "a zero tolerance strips an exact zero alone"
         );
@@ -2627,34 +2568,34 @@ mod tests {
         // A row states a curve of a lower order once the leading zeros are off,
         // so a cubic row the untouched reader refuses reads as a quadratic one.
         let padded = GenCost::new(2, 0.0, 0.0, vec![0.0, 1.5, 2.0, 5.0]);
-        assert_eq!(padded.quadratic_with_constant(), None);
+        assert_eq!(padded.calc_quadratic_with_constant(), None);
         assert_eq!(
-            padded.quadratic_with_constant_tol(0.0),
+            padded.calc_quadratic_with_constant_tol(0.0),
             Some((3.0, 2.0, 5.0))
         );
 
         let flat = GenCost::new(2, 0.0, 0.0, vec![1e-17, 1e-17, 1e-17]);
         assert_eq!(
-            flat.quadratic_with_constant_tol(GenCost::LEADING_COEFF_TOL),
+            flat.calc_quadratic_with_constant_tol(GenCost::LEADING_COEFF_TOL),
             Some((0.0, 0.0, 1e-17)),
             "the last coefficient stays, whatever its magnitude"
         );
 
         let piecewise = GenCost::new(1, 0.0, 0.0, vec![0.0, 0.0, 1.0, 1.0]);
         assert_eq!(
-            piecewise.quadratic_with_constant_tol(GenCost::LEADING_COEFF_TOL),
+            piecewise.calc_quadratic_with_constant_tol(GenCost::LEADING_COEFF_TOL),
             None
         );
 
         let truncated = GenCost::with_ncost(2, 0.0, 0.0, 3, vec![1.0]);
         assert_eq!(
-            truncated.quadratic_with_constant_tol(GenCost::LEADING_COEFF_TOL),
+            truncated.calc_quadratic_with_constant_tol(GenCost::LEADING_COEFF_TOL),
             None
         );
 
         let quartic = GenCost::new(2, 0.0, 0.0, vec![1.0, 1.0, 1.0, 1.0, 1.0]);
         assert_eq!(
-            quartic.quadratic_with_constant_tol(GenCost::LEADING_COEFF_TOL),
+            quartic.calc_quadratic_with_constant_tol(GenCost::LEADING_COEFF_TOL),
             None
         );
     }
@@ -2750,29 +2691,20 @@ mod tests {
     }
 
     #[test]
-    fn model_json_bytes_are_strict_utf8_and_keep_model_validation() {
-        let net = BalancedNetwork::in_memory("bytes", 100.0, vec![bus(1)], Vec::new());
+    fn model_json_text_keeps_bom_and_model_validation() {
+        let net = BalancedNetwork::in_memory("text", 100.0, vec![bus(1)], Vec::new());
         let json = net.to_json().expect("serialize model JSON");
-        let mut with_bom = b"\xef\xbb\xbf".to_vec();
-        with_bom.extend_from_slice(json.as_bytes());
-        let back = BalancedNetwork::from_json_bytes(&with_bom).expect("read BOM prefixed JSON");
-        assert_eq!(back.name(), "bytes");
+        let with_bom = format!("\u{feff}{json}");
+        let back = BalancedNetwork::from_json(&with_bom).expect("read BOM prefixed JSON");
+        assert_eq!(back.name(), "text");
         assert_eq!(back.buses().len(), 1);
-
-        let error = BalancedNetwork::from_json_bytes(b"{\"buses\":[]\xff}")
-            .expect_err("invalid UTF-8 must not be replaced");
-        assert!(
-            matches!(&error, crate::Error::FormatRead { format: "JSON", message } if message.starts_with("input is not valid UTF-8:")),
-            "{error}"
-        );
-        assert_eq!(error.code().code, "PARSE.SOURCE.MALFORMED");
 
         let empty = net
             .to_json()
             .expect("serialize model JSON")
             .replace(&serde_json::to_string(&net.buses()).unwrap(), "[]");
-        let error = BalancedNetwork::from_json_bytes(empty.as_bytes())
-            .expect_err("the byte API must keep no-bus validation");
+        let error = BalancedNetwork::from_json(&empty)
+            .expect_err("the text API must keep no-bus validation");
         assert!(error.to_string().contains("case has no buses"), "{error}");
     }
 
@@ -2811,7 +2743,7 @@ mod tests {
     #[test]
     fn star_impedances_split_the_pairwise_values() {
         // z1 = (z12 + z31 - z23)/2, z2 = (z12 + z23 - z31)/2, z3 = (z23 + z31 - z12)/2.
-        let [(r1, x1), (r2, x2), (r3, x3)] = transformer_3w().star_impedances();
+        let [(r1, x1), (r2, x2), (r3, x3)] = transformer_3w().calc_star_impedances();
         close(r1, 0.01);
         close(x1, 0.10);
         close(r2, 0.0);
@@ -2823,7 +2755,7 @@ mod tests {
     #[test]
     fn star_expansion_builds_a_star_bus_and_three_branches() {
         let t = transformer_3w();
-        let (star, branches) = t.star_expansion(BusId(99));
+        let (star, branches) = t.to_star_expansion(BusId(99));
 
         assert_eq!(star.id, BusId(99));
         close(star.vm, 0.98);

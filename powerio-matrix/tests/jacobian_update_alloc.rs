@@ -37,7 +37,7 @@ static ALLOCATOR: CountingAlloc = CountingAlloc;
 
 fn case(name: &str) -> BalancedNetwork {
     let path = format!("{}/../tests/data/{name}", env!("CARGO_MANIFEST_DIR"));
-    powerio_matrix::parse(powerio_core::Source::open(path).unwrap())
+    powerio_tx::parse(powerio_core::Source::open(path).unwrap())
         .unwrap()
         .into_value()
 }

@@ -11,7 +11,7 @@ use std::f64::consts::{FRAC_PI_2, PI, TAU};
 
 use serde_json::{Map, Value, json};
 
-use crate::convert::Conversion;
+use crate::convert::TextEmission;
 use crate::diagnostics::codes as C;
 use crate::diagnostics::{Diagnostic, DiagnosticInfo};
 use crate::geo::CoordinateSpace;
@@ -154,7 +154,7 @@ fn regulator_allowed_extras() -> Vec<&'static str> {
 /// Options for BMOPF JSON output.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 #[non_exhaustive]
-pub struct BmopfWriteOptions {
+pub struct BmopfEmitOptions {
     /// Emit the BMOPFTools coordinate sideload fields on buses.
     ///
     /// The default stays schema strict because the BMOPF schema rejects these
@@ -162,7 +162,7 @@ pub struct BmopfWriteOptions {
     pub sideload_coordinates: bool,
 }
 
-/// Writes the strict BMOPF document. Every field the schema cannot carry
+/// Emits the strict BMOPF document. Every field the schema cannot carry
 /// is reported in the warnings.
 ///
 /// Transformer taps, neutral impedance, no load admittance, and the tables
@@ -174,23 +174,24 @@ pub struct BmopfWriteOptions {
 ///
 /// Never in practice: the document is maps, strings, and finite numbers,
 /// which always serialize.
-pub fn write_bmopf_json(net: &MulticonductorNetwork) -> Conversion {
-    write_bmopf_json_with_options(net, &BmopfWriteOptions::default())
+#[cfg(test)]
+pub(crate) fn emit_bmopf_json_text(net: &MulticonductorNetwork) -> TextEmission {
+    emit_bmopf_json_text_with_options(net, BmopfEmitOptions::default())
 }
 
-/// Writes BMOPF JSON with explicit options. Parks the same fields under
-/// `extras` as [`write_bmopf_json`].
+/// Emits BMOPF JSON with explicit options. Parks the same fields under
+/// `extras` as [`emit_bmopf_json_text`].
 ///
 /// # Panics
 ///
 /// Never in practice: the document is maps, strings, and finite numbers,
 /// which always serialize.
-pub fn write_bmopf_json_with_options(
+pub(crate) fn emit_bmopf_json_text_with_options(
     net: &MulticonductorNetwork,
-    options: &BmopfWriteOptions,
-) -> Conversion {
+    options: BmopfEmitOptions,
+) -> TextEmission {
     let mut w = Writer {
-        options: *options,
+        options,
         warnings: crate::diagnostics::Diagnostics::new(),
         grounded: net
             .buses()
@@ -202,7 +203,7 @@ pub fn write_bmopf_json_with_options(
     };
     let doc = w.document(net);
     w.flush_dropped_extras();
-    Conversion::new(
+    TextEmission::new(
         serde_json::to_string_pretty(&doc).expect("maps and finite numbers") + "\n",
         Vec::new(),
         w.warnings,
@@ -210,7 +211,7 @@ pub fn write_bmopf_json_with_options(
 }
 
 struct Writer {
-    options: BmopfWriteOptions,
+    options: BmopfEmitOptions,
     warnings: crate::diagnostics::Diagnostics,
     grounded: BTreeMap<String, Vec<String>>,
     /// Transformer fields with no slot in the schema 0.1.0 subtype defs
@@ -3105,7 +3106,7 @@ mod tests {
     #[test]
     fn dropped_and_retained_bmopf_diagnostics_do_not_contradict_their_own_message() {
         let mut w = Writer {
-            options: BmopfWriteOptions::default(),
+            options: BmopfEmitOptions::default(),
             warnings: crate::diagnostics::Diagnostics::new(),
             grounded: BTreeMap::new(),
             transformer_overflow: Map::new(),
@@ -3202,11 +3203,11 @@ mod tests {
             DistLoadVoltageModel::Exponential { gamma_q, .. } if gamma_q == &vec![2.1, 2.1, 2.1]
         ));
 
-        let out = write_bmopf_json(&net);
+        let out = emit_bmopf_json_text(&net);
         assert!(
-            out.rendered_diagnostics().is_empty(),
+            out.render_diagnostics().is_empty(),
             "{:?}",
-            out.rendered_diagnostics()
+            out.render_diagnostics()
         );
         let v: Value = serde_json::from_str(&out.text).unwrap();
         assert_eq!(
@@ -3251,7 +3252,7 @@ mod tests {
             3,
         ));
 
-        let out = write_bmopf_json(&net);
+        let out = emit_bmopf_json_text(&net);
         let v: Value = serde_json::from_str(&out.text).unwrap();
         let count_keys = |m: &Value, prefix: &str| {
             m.as_object()
@@ -3273,11 +3274,11 @@ mod tests {
             MAX_DIM * (MAX_DIM - 1) / 2
         );
         assert!(
-            out.rendered_diagnostics()
+            out.render_diagnostics()
                 .iter()
                 .any(|w| w.contains("exceeds the supported maximum")),
             "{:?}",
-            out.rendered_diagnostics()
+            out.render_diagnostics()
         );
     }
 }

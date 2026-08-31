@@ -8,17 +8,26 @@
 //! and natively as an ordinary example.
 
 fn main() {
+    use powerio::IntoTypedModule;
+
     let bytes = include_bytes!("../../tests/data/case9.m").to_vec();
     let source = powerio_core::Source::from_bytes("case9.m", bytes.clone())
         .expect("named in-memory bytes acquire");
     let module = powerio::parse(source).expect("parse");
     assert_eq!(module.value().kind().as_str(), "balanced_network");
     let typed: powerio_core::PioModule<powerio::BalancedNetwork> =
-        powerio::try_into_typed(module).expect("narrow");
+        module.into_typed().expect("narrow");
     assert_eq!(typed.value().buses().len(), 9);
     let dynamic = typed.map_value(powerio::PioValue::from);
-    let (echo, _findings) =
-        powerio::write_module_str(&dynamic, "matpower").expect("same format write");
-    assert_eq!(echo.as_bytes(), &bytes[..], "byte exact echo");
+    let emitted = powerio::emit(
+        &dynamic,
+        "matpower",
+        powerio::Destination::memory("case9.m").expect("memory destination"),
+    )
+    .expect("same format write");
+    let powerio::EmittedOutput::Memory { artifacts } = emitted.output() else {
+        panic!("memory emission returned a path output");
+    };
+    assert_eq!(artifacts[0].bytes(), &bytes[..], "byte exact echo");
     println!("wasm smoke OK: balanced_network, 9 buses, byte exact echo");
 }

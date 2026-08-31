@@ -3,7 +3,6 @@
 from pathlib import Path
 
 import pytest
-from powerio.dist import parse_str as dist_parse_str
 
 import powerio as pio
 
@@ -23,7 +22,8 @@ def test_parse_geo_normalizes_a_buscoords_sidecar():
     assert doc["type"] == "FeatureCollection"
     assert doc["powerio_geo"]["space"] == "geographic"
     assert len(doc["features"]) == 2
-    assert parsed["warnings"] == []
+    assert parsed["diagnostics"] == []
+    assert "warnings" not in parsed
 
 
 def test_parse_geo_rejects_input_without_coordinates():
@@ -32,9 +32,8 @@ def test_parse_geo_rejects_input_without_coordinates():
 
 
 def test_network_apply_and_extract_round_trip():
-    net = pio.parse(DATA / "case9.m", value_type=pio.BalancedNetwork).value
-    with pytest.raises(ValueError):
-        net.geo_layer()
+    net = pio.parse_file(DATA / "case9.m", value_type=pio.BalancedNetwork).value
+    assert net.to_geo_layer()["features"] == []
 
     placed, report = net.apply_geo_layer(BUSCOORDS)
     assert report["matched_buses"] == 2
@@ -43,18 +42,21 @@ def test_network_apply_and_extract_round_trip():
     assert report["unlocated_buses"] == 7
     assert report["unlocated_branches"] == 9
     # The input case is unchanged; the placed copy carries the layer.
-    with pytest.raises(ValueError):
-        net.geo_layer()
-    layer = placed.geo_layer()
+    assert net.to_geo_layer()["features"] == []
+    layer = placed.to_geo_layer()
+    assert not hasattr(placed, "geo_layer")
     assert len(layer["features"]) == 2
 
 
 def test_dist_apply_returns_a_placed_copy():
-    net = dist_parse_str(DSS_MASTER, "dss")
+    net = pio.parse_text(
+        DSS_MASTER,
+        name="master.dss",
+        format="dss",
+    ).value
     placed, report = net.apply_geo_layer(
         "sourcebus, -89.6, 40.6\nloadbus, -89.2, 39.8\n"
     )
     assert report["matched_buses"] == 2
-    layer = placed.geo_layer()
+    layer = placed.to_geo_layer()
     assert len(layer["features"]) == 2
-

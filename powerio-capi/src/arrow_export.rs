@@ -24,8 +24,8 @@ use arrow::error::ArrowError;
 use arrow::ffi::{FFI_ArrowArray, FFI_ArrowSchema};
 use arrow::record_batch::RecordBatch;
 #[cfg(feature = "matrix")]
-use powerio::IndexedNetwork;
-use powerio::{BalancedNetwork, BusId, IndexCore};
+use powerio::{BalancedNetwork, BusId};
+use powerio_tx::{IndexCore, IndexedNetwork};
 
 /// Table selectors for `pio_balanced_network_to_arrow`; the C
 /// header mirrors these as `PIO_ARROW_TABLE_*`.
@@ -71,6 +71,59 @@ const _: () = assert!(
 /// type carries no registry entry, so it takes the boundary's own.
 fn export_err(e: impl std::fmt::Display) -> String {
     crate::diagnostics::coded(&crate::diagnostics::codes::EMIT_CAPI_SERIALIZE_FAILED, e)
+}
+
+#[cfg(feature = "matrix")]
+fn calc_abi_incidence(
+    view: &IndexedNetwork<'_>,
+) -> Result<(powerio_matrix::SparseMatrix, Vec<usize>), String> {
+    // Arrow table 16 is frozen as bus by branch and historically skipped a
+    // self-loop or a branch whose series impedance could not be divided by.
+    // Preserve that frozen schema here without making the compiler's transposed
+    // incidence factor public again.
+    let formula = powerio_tx::BranchSusceptanceFormula::SeriesSusceptance;
+    let mut endpoints = Vec::new();
+    let mut branch_rows = Vec::new();
+    for (row, branch) in view.in_service_branches() {
+        let from = view.bus_index(branch.from).ok_or_else(|| {
+            export_err(format_args!("branch row {row} names an unknown from bus"))
+        })?;
+        let to = view
+            .bus_index(branch.to)
+            .ok_or_else(|| export_err(format_args!("branch row {row} names an unknown to bus")))?;
+        if from == to || branch.r.hypot(branch.x) < powerio_tx::dc::MIN_DIVISIBLE_MAGNITUDE {
+            continue;
+        }
+        let susceptance = formula.calc_branch_susceptance(branch.r, branch.x, 1.0);
+        if !susceptance.is_finite() {
+            return Err(export_err(format_args!(
+                "branch row {row} has no finite series susceptance"
+            )));
+        }
+        endpoints.push((from, to));
+        branch_rows.push(row);
+    }
+
+    let mut rows = vec![Vec::new(); view.n()];
+    for (column, &(from, to)) in endpoints.iter().enumerate() {
+        rows[from].push((column, 1.0));
+        rows[to].push((column, -1.0));
+    }
+    let mut indptr = Vec::with_capacity(rows.len() + 1);
+    let mut indices = Vec::with_capacity(2 * endpoints.len());
+    let mut values = Vec::with_capacity(2 * endpoints.len());
+    indptr.push(0);
+    for row in rows {
+        for (column, value) in row {
+            indices.push(column);
+            values.push(value);
+        }
+        indptr.push(indices.len());
+    }
+    Ok((
+        powerio_matrix::SparseMatrix::new((view.n(), endpoints.len()), indptr, indices, values),
+        branch_rows,
+    ))
 }
 
 /// Build the requested table and export it over the C Data Interface. The
@@ -249,7 +302,10 @@ fn branch_batch(net: &BalancedNetwork) -> Result<RecordBatch, ArrowError> {
         ("to", i64s(br.iter().map(|x| ext(x.to)).collect())),
         ("r", f64s(br.iter().map(|x| x.r).collect())),
         ("x", f64s(br.iter().map(|x| x.x).collect())),
-        ("b", f64s(br.iter().map(|x| x.total_charging_b()).collect())),
+        (
+            "b",
+            f64s(br.iter().map(|x| x.calc_total_charging_b()).collect()),
+        ),
         ("rate_a", f64s(br.iter().map(|x| x.rate_a).collect())),
         ("rate_b", f64s(br.iter().map(|x| x.rate_b).collect())),
         ("rate_c", f64s(br.iter().map(|x| x.rate_c).collect())),
@@ -263,19 +319,19 @@ fn branch_batch(net: &BalancedNetwork) -> Result<RecordBatch, ArrowError> {
         ("angmax", f64s(br.iter().map(|x| x.angmax).collect())),
         (
             "g_fr",
-            f64s(br.iter().map(|x| x.terminal_charging().g_fr).collect()),
+            f64s(br.iter().map(|x| x.calc_terminal_charging().g_fr).collect()),
         ),
         (
             "b_fr",
-            f64s(br.iter().map(|x| x.terminal_charging().b_fr).collect()),
+            f64s(br.iter().map(|x| x.calc_terminal_charging().b_fr).collect()),
         ),
         (
             "g_to",
-            f64s(br.iter().map(|x| x.terminal_charging().g_to).collect()),
+            f64s(br.iter().map(|x| x.calc_terminal_charging().g_to).collect()),
         ),
         (
             "b_to",
-            f64s(br.iter().map(|x| x.terminal_charging().b_to).collect()),
+            f64s(br.iter().map(|x| x.calc_terminal_charging().b_to).collect()),
         ),
         (
             "c_rating_a",
@@ -440,7 +496,7 @@ macro_rules! real_matrix_batch {
 fn matrix_bus_batch(net: &BalancedNetwork, core: &IndexCore) -> Result<RecordBatch, String> {
     let view = IndexedNetwork::with_core(net, core);
     let refs = view.reference_bus_indices();
-    let components = view.connected_component_labels();
+    let components = view.calc_island_labels();
     let source_rows: HashMap<BusId, usize> = net
         .buses()
         .iter()
@@ -489,18 +545,13 @@ fn matrix_bus_batch(_net: &BalancedNetwork, _core: &IndexCore) -> Result<RecordB
 #[cfg(feature = "matrix")]
 fn matrix_branch_batch(net: &BalancedNetwork, core: &IndexCore) -> Result<RecordBatch, String> {
     let view = IndexedNetwork::with_core(net, core);
-    let parts = powerio_matrix::build_incidence(
-        &view,
-        powerio_matrix::DcConvention::default(),
-        &powerio_matrix::BuildOptions::default(),
-    )
-    .map_err(export_err)?;
+    let (_, branch_rows) = calc_abi_incidence(&view)?;
 
-    let mut index = Vec::with_capacity(parts.branch_of_col.len());
-    let mut source_row = Vec::with_capacity(parts.branch_of_col.len());
-    let mut from_bus_id = Vec::with_capacity(parts.branch_of_col.len());
-    let mut to_bus_id = Vec::with_capacity(parts.branch_of_col.len());
-    for (col, &idx) in parts.branch_of_col.iter().enumerate() {
+    let mut index = Vec::with_capacity(branch_rows.len());
+    let mut source_row = Vec::with_capacity(branch_rows.len());
+    let mut from_bus_id = Vec::with_capacity(branch_rows.len());
+    let mut to_bus_id = Vec::with_capacity(branch_rows.len());
+    for (col, &idx) in branch_rows.iter().enumerate() {
         let br = view.branches().get(idx).ok_or_else(|| {
             export_err(format_args!(
                 "incidence branch column {col} points to missing row {idx}"
@@ -532,8 +583,9 @@ fn matrix_branch_batch(_net: &BalancedNetwork, _core: &IndexCore) -> Result<Reco
 #[cfg(feature = "matrix")]
 fn matrix_ybus_batch(net: &BalancedNetwork, core: &IndexCore) -> Result<RecordBatch, String> {
     let view = IndexedNetwork::with_core(net, core);
-    let parts = powerio_matrix::build_ybus(&view, &powerio_matrix::BuildOptions::default())
-        .map_err(export_err)?;
+    let parts =
+        powerio_matrix::calc_admittance_matrix(&view, &powerio_matrix::BuildOptions::default())
+            .map_err(export_err)?;
     let mut cols = YbusColumns {
         row_index: Vec::with_capacity(parts.g.nnz() + parts.b.nnz()),
         col_index: Vec::with_capacity(parts.g.nnz() + parts.b.nnz()),
@@ -637,13 +689,8 @@ fn push_ybus_row(
 #[cfg(feature = "matrix")]
 fn matrix_incidence_batch(net: &BalancedNetwork, core: &IndexCore) -> Result<RecordBatch, String> {
     let view = IndexedNetwork::with_core(net, core);
-    let parts = powerio_matrix::build_incidence(
-        &view,
-        powerio_matrix::DcConvention::default(),
-        &powerio_matrix::BuildOptions::default(),
-    )
-    .map_err(export_err)?;
-    real_matrix_batch!("incidence", parts.a, "matrix_bus", "matrix_branch").map_err(export_err)
+    let (matrix, _) = calc_abi_incidence(&view)?;
+    real_matrix_batch!("incidence", matrix, "matrix_bus", "matrix_branch").map_err(export_err)
 }
 
 #[cfg(not(feature = "matrix"))]
@@ -657,8 +704,9 @@ fn matrix_incidence_batch(
 #[cfg(feature = "matrix")]
 fn matrix_bprime_batch(net: &BalancedNetwork, core: &IndexCore) -> Result<RecordBatch, String> {
     let view = IndexedNetwork::with_core(net, core);
-    let matrix = powerio_matrix::build_bprime(&view, &powerio_matrix::BuildOptions::default())
-        .map_err(export_err)?;
+    let matrix =
+        powerio_matrix::calc_bprime_matrix(&view, &powerio_matrix::BuildOptions::default())
+            .map_err(export_err)?;
     real_matrix_batch!("bprime", matrix, "matrix_bus", "matrix_bus").map_err(export_err)
 }
 
@@ -674,7 +722,7 @@ fn matrix_bdoubleprime_batch(
 ) -> Result<RecordBatch, String> {
     let view = IndexedNetwork::with_core(net, core);
     let matrix =
-        powerio_matrix::build_bdoubleprime(&view, &powerio_matrix::BuildOptions::default())
+        powerio_matrix::calc_bdoubleprime_matrix(&view, &powerio_matrix::BuildOptions::default())
             .map_err(export_err)?;
     real_matrix_batch!("bdoubleprime", matrix, "matrix_bus", "matrix_bus").map_err(export_err)
 }
@@ -827,7 +875,7 @@ mod tests {
             .join(name);
         {
             let source = powerio_core::Source::open(&path).unwrap();
-            powerio::format::parse(source).unwrap().into_value()
+            powerio_tx::format::parse(source).unwrap().into_value()
         }
     }
 
@@ -868,6 +916,7 @@ mod tests {
                     out
                 },
                 Branch::new(BusId(2), BusId(3), 0.0, 0.2),
+                Branch::new(BusId(1), BusId(3), 0.0, 0.0),
             ],
         )
     }
@@ -1356,7 +1405,7 @@ Q\n";
             let source = powerio_core::Source::from_bytes("case.raw", raw.as_bytes().to_vec())
                 .unwrap()
                 .with_format(powerio_core::FormatId::new("psse").unwrap());
-            powerio::format::parse(source).unwrap().into_value()
+            powerio_tx::format::parse(source).unwrap().into_value()
         }
     }
 
@@ -1437,23 +1486,9 @@ Q\n";
     #[test]
     fn matrix_branch_axis_matches_incidence_branch_columns() {
         let n = incidence_filter_net();
-        let core = IndexCore::build(&n);
-        let view = IndexedNetwork::with_core(&n, &core);
-        let incidence = powerio_matrix::build_incidence(
-            &view,
-            powerio_matrix::DcConvention::default(),
-            &powerio_matrix::BuildOptions::default(),
-        )
-        .unwrap();
 
         let branch = matrix_record_batch(&n, PIO_ARROW_TABLE_MATRIX_BRANCH);
         let source_rows = rb_i64_col(&branch, "source_row").values().to_vec();
-        let expected = incidence
-            .branch_of_col
-            .iter()
-            .map(|&idx| i64::try_from(idx).unwrap())
-            .collect::<Vec<_>>();
-        assert_eq!(source_rows, expected);
         assert_eq!(source_rows, vec![2]);
 
         let incidence_batch = matrix_record_batch(&n, PIO_ARROW_TABLE_INCIDENCE);

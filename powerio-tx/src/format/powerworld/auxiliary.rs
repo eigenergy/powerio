@@ -10,11 +10,11 @@
 //! `<SUBDATA Type> ... </SUBDATA>` blocks attach to the value row above them
 //! and their interior lines are kept verbatim.
 //!
-//! [`write_aux`] emits a canonical form: legacy headers, space delimited
-//! values, one row per line. Canonical output is idempotent (parsing it and
-//! writing again reproduces it byte for byte) but does not preserve the
-//! source's whitespace or comments; the byte exact same format round trip
-//! comes from the retained source (see [`crate::write_as`]).
+//! [`emit_aux`] serializes a canonical form: legacy headers, space delimited
+//! values, one row per line. Canonical output is idempotent (parsing and
+//! serializing it again reproduces it byte for byte) but does not preserve the
+//! source's whitespace or comments; [`crate::emit`] supplies the byte exact
+//! same format round trip from the module's retained source.
 
 use std::borrow::Cow;
 use std::fmt::Write as _;
@@ -549,13 +549,13 @@ fn split_values_into<'a>(line: &'a str, csv: bool, out: &mut Vec<Cow<'a, str>>) 
     }
 }
 
-// ---- Canonical writer -------------------------------------------------------
+// ---- Canonical emission -----------------------------------------------------
 
 /// Serialize an [`AuxFile`] in canonical form: legacy headers, space delimited
 /// values, one row per line, two space indentation. Idempotent under
 /// `parse_aux`.
 #[must_use]
-pub fn write_aux(file: &AuxFile) -> String {
+pub fn emit_aux(file: &AuxFile) -> String {
     let mut s = String::new();
     for section in &file.sections {
         match section {

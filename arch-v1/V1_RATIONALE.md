@@ -144,10 +144,11 @@ one facade function:
 ```rust
 let parsed = powerio::parse(source)?;
 let network: PioModule<BalancedNetwork> =
-    powerio::try_into_typed(parsed)?;
+    parsed.into_typed()?;
 ```
 
-The function checks `PioValueKind`, moves the concrete value, and moves the
+Ordinary code matches `parsed.value()`. The advanced method above checks
+`PioValueKind`, moves the concrete value, and moves the
 module records without allocation. `ValueKindMismatch` owns the original
 dynamic module, reports the expected and actual kinds, and returns the module
 through `into_module()`.

@@ -3,8 +3,8 @@
 //! independent of `nnz`). Replaces the previous Vec linear scan
 //! accumulator, which was O(nnz²) per case.
 //!
-//! Square by default (`new`), rectangular via `new_rect` for the incidence,
-//! flow map, and generator→bus matrices.
+//! Square by default (`new`), rectangular via `new_rect` for incidence,
+//! branch flow, and generator→bus matrices.
 
 use rustc_hash::{FxBuildHasher, FxHashMap};
 use sprs::{CsMat, TriMat};

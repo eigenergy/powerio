@@ -82,10 +82,10 @@ fn activsg200_aux_vs_matpower_structural() {
         assert!((ab.x - mb.x).abs() < 1e-5, "{key:?} X {} vs {}", ab.x, mb.x);
         assert!((ab.b - mb.b).abs() < 1e-5, "{key:?} B {} vs {}", ab.b, mb.b);
         assert!(
-            (ab.effective_tap() - mb.effective_tap()).abs() < 1e-5,
+            (ab.calc_effective_tap() - mb.calc_effective_tap()).abs() < 1e-5,
             "{key:?} tap {} vs {}",
-            ab.effective_tap(),
-            mb.effective_tap()
+            ab.calc_effective_tap(),
+            mb.calc_effective_tap()
         );
     }
 }
@@ -259,10 +259,10 @@ fn activsg2000_june2016_aux_vs_matpower_values() {
                 mb.x
             );
             assert!(
-                (ab.effective_tap() - mb.effective_tap()).abs() < 1e-5,
+                (ab.calc_effective_tap() - mb.calc_effective_tap()).abs() < 1e-5,
                 "{pair:?} tap {} vs {}",
-                ab.effective_tap(),
-                mb.effective_tap()
+                ab.calc_effective_tap(),
+                mb.calc_effective_tap()
             );
             assert!(
                 (ab.b - mb.b).abs() < 1e-5,

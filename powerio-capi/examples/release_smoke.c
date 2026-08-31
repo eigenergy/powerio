@@ -50,7 +50,7 @@ int main(int argc, char **argv) {
     error = NULL;
 
     const char *dss = "new circuit.probe basekv=12.47 bus1=src.1.2.3\n";
-    PioModule *feeder = pio_parse_str("probe.dss", dss, "dss", &error);
+    PioModule *feeder = pio_parse_text("probe.dss", dss, "dss", &error);
     CHECK(feeder != NULL, "distribution parse through the release library failed");
     CHECK(strcmp(pio_module_kind(feeder), "multiconductor_network") == 0,
           "distribution kind mismatch");

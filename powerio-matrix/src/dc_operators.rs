@@ -2,7 +2,7 @@
 //!
 //! The instance stays matrix free; these separate operations project it. The
 //! public values carry PowerModels signs — the branch susceptance is
-//! `imag(inv(series impedance))` under the selected approximation, negative
+//! `imag(inv(series impedance))` under the selected formula, negative
 //! for an inductive branch — and every axis carries stable element mappings:
 //! bus rows by [`BusId`] in bus table order, branch columns by payload
 //! identity in branch table order. With voltage angles `va` in radians, the
@@ -61,7 +61,7 @@ pub struct DcOperators {
     incidence: SparseMatrix,
     /// Public per branch susceptance, PowerModels signs.
     branch_susceptance: Vec<f64>,
-    /// Per branch phase shift, radians (zero when the approximation carries
+    /// Per branch phase shift, radians (zero when the formula carries
     /// no shift injections).
     shift_radians: Vec<f64>,
     /// Per column `(from row, to row)`, stored at build so no injection or
@@ -74,7 +74,7 @@ pub struct DcOperators {
     /// Meaningful only at a row listed in `reference_rows`; every other row
     /// holds zero and is never read.
     reference_va_radians: Vec<f64>,
-    approximation: BranchSusceptanceFormula,
+    branch_susceptance_formula: BranchSusceptanceFormula,
 }
 
 impl DcOperators {
@@ -90,7 +90,7 @@ impl DcOperators {
     /// an undeclared bus.
     pub fn build(instance: &DcPfInstance) -> Result<Self, Error> {
         let network = instance.network();
-        let approximation = instance.approximation();
+        let formula = instance.branch_susceptance_formula();
         let base = network.base_mva();
         let bus_ids: Vec<BusId> = network.buses().iter().map(|bus| bus.id).collect();
         let row_of: std::collections::BTreeMap<BusId, usize> = bus_ids
@@ -119,12 +119,12 @@ impl DcOperators {
                 ));
             };
             // Only the tap-reading formula can be bounded by a tap (#324).
-            let tap = if approximation.reads_tap() {
-                branch.divisible_tap(row).map_err(|_| {
+            let tap = if formula.reads_tap() {
+                branch.calc_divisible_tap(row).map_err(|_| {
                     Error::new(
                         &codes::BUILD_OPERATOR_NOT_A_NUMBER,
                         format!(
-                            "branch `{identity}` states a tap the selected approximation cannot divide by"
+                            "branch `{identity}` states a tap the selected formula cannot divide by"
                         ),
                     )
                 })?
@@ -134,7 +134,7 @@ impl DcOperators {
             // The same divisibility floor the other DC builders apply: a
             // formally nonzero impedance below it yields a finite weight big
             // enough to annihilate every real branch sharing a bus.
-            let degenerate = match approximation {
+            let degenerate = match formula {
                 BranchSusceptanceFormula::SeriesSusceptance => {
                     branch.r.hypot(branch.x) < powerio_tx::dc::MIN_DIVISIBLE_MAGNITUDE
                 }
@@ -149,20 +149,16 @@ impl DcOperators {
                     ),
                 ));
             }
-            let susceptance = approximation.branch_susceptance(branch.r, branch.x, tap);
+            let susceptance = formula.calc_branch_susceptance(branch.r, branch.x, tap);
             if !susceptance.is_finite() {
                 return Err(Error::new(
                     &codes::BUILD_OPERATOR_ZERO_IMPEDANCE,
                     format!(
-                        "branch `{identity}` has no finite DC susceptance under the selected approximation; resolve it explicitly with merge_zero_impedance_buses"
+                        "branch `{identity}` has no finite DC susceptance under the selected formula; resolve it explicitly with merge_zero_impedance_buses"
                     ),
                 ));
             }
-            let shift = if approximation.includes_phase_shifts() {
-                branch.shift.to_radians()
-            } else {
-                0.0
-            };
+            let shift = branch_phase_shift_radians(formula, network.is_normalized(), branch.shift);
             if !shift.is_finite() {
                 return Err(Error::new(
                     &codes::BUILD_OPERATOR_NOT_A_NUMBER,
@@ -192,7 +188,7 @@ impl DcOperators {
             net_injection: Vec::new(),
             reference_rows: Vec::new(),
             reference_va_radians: Vec::new(),
-            approximation,
+            branch_susceptance_formula: formula,
         };
         operators.refresh_injections(instance, base)?;
         Ok(operators)
@@ -241,10 +237,10 @@ impl DcOperators {
         Ok(())
     }
 
-    /// The selected DC branch approximation.
+    /// The selected branch susceptance formula.
     #[must_use]
-    pub const fn approximation(&self) -> BranchSusceptanceFormula {
-        self.approximation
+    pub const fn branch_susceptance_formula(&self) -> BranchSusceptanceFormula {
+        self.branch_susceptance_formula
     }
 
     /// Dense bus row to bus id, the row mapping of every bus axis.
@@ -260,17 +256,6 @@ impl DcOperators {
         &self.branch_identities
     }
 
-    /// The bus by branch incidence factor, `n × m`: `+1` at each branch's
-    /// from bus and `-1` at its to bus.
-    ///
-    /// This transposed solver orientation predates the 1.0 surface. Use
-    /// [`Self::calc_incidence_matrix`] for the PowerModels branch by bus
-    /// matrix.
-    #[must_use]
-    pub const fn incidence(&self) -> &SparseMatrix {
-        &self.incidence
-    }
-
     /// The PowerModels incidence matrix `A`, `m × n`: each branch row has
     /// `+1` at its from bus and `-1` at its to bus.
     #[must_use]
@@ -284,31 +269,11 @@ impl DcOperators {
         &self.branch_susceptance
     }
 
-    /// The branch susceptance matrix `Bf = diag(b) Aᵀ`, `m × n`, PowerModels
-    /// signs: `p_branch = -Bf va + b .* shift`.
-    ///
-    /// This noun form predates the verb based 1.0 surface. Use
-    /// [`Self::calc_branch_susceptance_matrix`] in new code.
-    #[must_use]
-    pub fn branch_susceptance_matrix(&self) -> SparseMatrix {
-        self.calc_branch_susceptance_matrix()
-    }
-
     /// Calculate the branch susceptance matrix `Bf = diag(b) A`, `m × n`.
     #[must_use]
     pub fn calc_branch_susceptance_matrix(&self) -> SparseMatrix {
         let transpose = self.incidence.transpose_view().to_csr();
         scale_rows(&transpose, &self.branch_susceptance)
-    }
-
-    /// The bus susceptance matrix `B = A diag(b) Aᵀ`, `n × n`, PowerModels
-    /// signs: `p_bus = -B va + p_shift`.
-    ///
-    /// This noun form predates the verb based 1.0 surface. Use
-    /// [`Self::calc_bus_susceptance_matrix`] in new code.
-    #[must_use]
-    pub fn bus_susceptance_matrix(&self) -> SparseMatrix {
-        self.calc_bus_susceptance_matrix()
     }
 
     /// Calculate the bus susceptance matrix `B = Aᵀ diag(b) A`, `n × n`.
@@ -323,16 +288,6 @@ impl DcOperators {
     #[must_use]
     pub fn bus_power_injection(&self) -> &[f64] {
         &self.net_injection
-    }
-
-    /// The phase shift injection `p_shift = A (b .* shift)`, per unit, in bus
-    /// row order: the fixed nodal term of `p_bus = -B va + p_shift`.
-    ///
-    /// This noun form predates the verb based 1.0 surface. Use
-    /// [`Self::calc_phase_shift_injection`] in new code.
-    #[must_use]
-    pub fn phase_shift_injection(&self) -> Vec<f64> {
-        self.calc_phase_shift_injection()
     }
 
     /// Calculate `p_shift = Aᵀ (b .* shift)` in bus order.
@@ -384,16 +339,19 @@ impl DcOperators {
             .collect())
     }
 
-    /// The reference constrained linear system over the internal positive
-    /// factor weights.
-    ///
-    /// This noun form predates the verb based 1.0 surface. Use
-    /// [`Self::calc_reference_constrained_system`] in new code.
+    /// Calculate DC active power injection in bus order from bus voltage
+    /// angles in radians: `p_bus = -B va + p_shift`.
     ///
     /// # Errors
-    /// An instance with no reference row.
-    pub fn reference_constrained_system(&self) -> Result<ReferenceConstrainedSystem, Error> {
-        self.calc_reference_constrained_system()
+    /// The voltage angle length differs from the bus axis length.
+    pub fn calc_bus_injection_dc(&self, voltage_angles: &[f64]) -> Result<Vec<f64>, Error> {
+        let branch_flows = self.calc_branch_flow_dc(voltage_angles)?;
+        let mut injections = vec![0.0; self.bus_ids.len()];
+        for (&(from, to), flow) in self.endpoints.iter().zip(branch_flows) {
+            injections[from] += flow;
+            injections[to] -= flow;
+        }
+        Ok(injections)
     }
 
     /// Calculate the reference constrained linear system over the internal positive
@@ -477,6 +435,20 @@ impl DcOperators {
     /// Endpoint rows per column, recovered from the incidence structure.
     fn endpoint_table(&self) -> &[(usize, usize)] {
         &self.endpoints
+    }
+}
+
+fn branch_phase_shift_radians(
+    formula: BranchSusceptanceFormula,
+    normalized: bool,
+    shift: f64,
+) -> f64 {
+    if !formula.includes_phase_shifts() {
+        0.0
+    } else if normalized {
+        shift
+    } else {
+        shift.to_radians()
     }
 }
 

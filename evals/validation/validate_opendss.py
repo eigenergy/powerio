@@ -9,7 +9,7 @@ import sys
 import tempfile
 from pathlib import Path
 
-import powerio.dist as dist
+import powerio
 from opendssdirect import dss
 
 
@@ -63,8 +63,8 @@ def append_result(case: Path, mark: str) -> None:
 
 def validate_case(case: Path) -> list[str]:
     expected = solve_voltage_magnitudes(case)
-    network = dist.parse_file(case, "dss")
-    generated = network.to_canonical_format("dss")
+    module = powerio.parse_file(case, "dss")
+    generated = module.emit("dss")
     with tempfile.TemporaryDirectory() as tmp:
         path = Path(tmp) / case.name
         path.write_text(generated.text, encoding="utf-8")

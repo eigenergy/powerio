@@ -98,7 +98,7 @@ pub const BASE_FREQUENCY: f64 = 60.0;
 /// `GetUnitsCode` + `To_Meters` from Shared/LineUnits.cpp. The engine
 /// matches on the first two characters; `no*` and anything unrecognized
 /// are UNITS_NONE, which has no conversion factor.
-pub fn unit_to_meters(code: &str) -> Option<f64> {
+pub fn calc_meters_per_unit(code: &str) -> Option<f64> {
     let two: String = code
         .chars()
         .take(2)
@@ -115,4 +115,14 @@ pub fn unit_to_meters(code: &str) -> Option<f64> {
         "mm" => 0.001,
         _ => return None,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn known_units_have_meter_factors() {
+        assert_eq!(calc_meters_per_unit("km"), Some(1000.0));
+    }
 }
